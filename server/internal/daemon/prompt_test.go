@@ -255,6 +255,9 @@ func TestBuildQuickCreatePromptRules(t *testing.T) {
 		// hard rules
 		"never invent requirements",
 		"never reduce multi-sentence input",
+		// LRM-731: reference images must land on the main issue
+		"MAIN `issue create`",
+		"carrier sub-issue",
 	}
 	for _, s := range mustContain {
 		if !strings.Contains(out, s) {
@@ -450,6 +453,8 @@ func TestBuildChatPromptAttachmentIDsCanBeBoundToCreatedIssues(t *testing.T) {
 		"id=019ec09d-6222-722b-bdfa-427b105d80be",
 		"multica attachment view --id <id> --output <path>",
 		"--attachment-id <id>",
+		"MAIN `multica issue create`",
+		"carrier sub-issue",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("chat prompt missing %q\n--- output ---\n%s", want, out)

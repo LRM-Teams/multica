@@ -106,7 +106,7 @@ func (h *Handler) resolveQuickCreateSourceContext(w http.ResponseWriter, r *http
 		}
 	}
 
-	attachmentIDs := h.quickCreateSourceAttachmentIDs(r.Context(), parseUUID(workspaceID), channelID, rootID, messageID)
+	attachmentIDs := uuidStrings(h.channelMessageAttachmentIDs(r.Context(), parseUUID(workspaceID), channelID, rootID, messageID))
 	summary := h.buildQuickCreateSourceSummary(r.Context(), parseUUID(workspaceID), channelID, channelKind, channelName, rootID)
 	source := protocol.QuickCreateSourceContext{
 		ChannelID:           uuidToString(channelID),
@@ -141,7 +141,27 @@ func (h *Handler) loadQuickCreateSourceMessage(ctx context.Context, workspaceID,
 	return msg, err
 }
 
-func (h *Handler) quickCreateSourceAttachmentIDs(ctx context.Context, workspaceID, channelID, rootID, messageID pgtype.UUID) []string {
+// channelMessageAttachmentIDs returns distinct attachment UUIDs referenced by
+// any of the given channel messages. Used by quick-create source context and
+// by CreateIssue auto-bind so chat→issue conversion cannot drop reference
+// images when the agent forgets --attachment-id (LRM-731).
+func (h *Handler) channelMessageAttachmentIDs(ctx context.Context, workspaceID, channelID pgtype.UUID, messageIDs ...pgtype.UUID) []pgtype.UUID {
+	ids := make([]pgtype.UUID, 0, len(messageIDs))
+	seen := make(map[string]struct{}, len(messageIDs))
+	for _, id := range messageIDs {
+		if !id.Valid {
+			continue
+		}
+		key := uuidToString(id)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
 	rows, err := h.DB.Query(ctx, `
 		SELECT DISTINCT attachment.id
 		FROM channel_message_attachment reference
@@ -153,16 +173,29 @@ func (h *Handler) quickCreateSourceAttachmentIDs(ctx context.Context, workspaceI
 		 AND attachment.id = reference.attachment_id
 		WHERE reference.workspace_id = $1
 		  AND message.channel_id = $2
-		  AND reference.channel_message_id IN ($3, $4)
-		ORDER BY attachment.id`, workspaceID, channelID, rootID, messageID)
+		  AND reference.channel_message_id = ANY($3::uuid[])
+		ORDER BY attachment.id`, workspaceID, channelID, ids)
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
-	var out []string
+	var out []pgtype.UUID
 	for rows.Next() {
 		var id pgtype.UUID
 		if err := rows.Scan(&id); err == nil && id.Valid {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func uuidStrings(ids []pgtype.UUID) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id.Valid {
 			out = append(out, uuidToString(id))
 		}
 	}

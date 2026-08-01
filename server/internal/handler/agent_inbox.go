@@ -2427,12 +2427,29 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 	if json.Unmarshal(event.Context, &quickCreate) == nil && quickCreate.Type == service.QuickCreateContextType {
 		resp.Kind = "quick_create"
 		resp.QuickCreatePrompt = quickCreate.Prompt
+		// Merge modal uploads + source-chat images into the CLI env so
+		// `issue create` binds them even when the agent omits --attachment-id
+		// (LRM-731). Source IDs remain listed separately in the prompt.
 		resp.QuickCreateAttachmentIDs = append([]string(nil), quickCreate.AttachmentIDs...)
 		resp.ThreadName = quickCreate.Prompt
 		if quickCreate.Source != nil {
 			source := *quickCreate.Source
 			source.AttachmentIDs = append([]string(nil), quickCreate.Source.AttachmentIDs...)
 			resp.QuickCreateSource = &source
+			seen := make(map[string]struct{}, len(resp.QuickCreateAttachmentIDs)+len(source.AttachmentIDs))
+			for _, id := range resp.QuickCreateAttachmentIDs {
+				seen[id] = struct{}{}
+			}
+			for _, id := range source.AttachmentIDs {
+				if id == "" {
+					continue
+				}
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+				resp.QuickCreateAttachmentIDs = append(resp.QuickCreateAttachmentIDs, id)
+			}
 		}
 		if projectID, err := util.ParseUUID(quickCreate.ProjectID); err == nil {
 			loadProject(projectID)

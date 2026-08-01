@@ -326,7 +326,7 @@ func buildQuickCreatePrompt(task Task) string {
 		}
 	}
 	b.WriteString("- **status**: omit (defaults to `todo`).\n")
-	b.WriteString("- **attachments**: pass existing attachment UUIDs with `--attachment-id` (from prior `multica attachment upload` or from this message's attachment list). Do NOT try to re-upload image URLs — keep markdown images inline in `--description`.\n\n")
+	b.WriteString("- **attachments**: when Source attachment IDs are listed (or `MULTICA_QUICK_CREATE_ATTACHMENT_IDS` is set), pass EVERY id with `--attachment-id` on this MAIN `issue create`. Also keep markdown image embeds inline in `--description`. Do NOT create a separate \"附件\" / carrier sub-issue as the only place for screenshots — sub-issues may back up designs, but the parent/main issue must show the reference images (attachments non-empty or description embeds). Do NOT try to re-upload image URLs.\n\n")
 
 	// output format
 	b.WriteString("Output format:\n")
@@ -554,7 +554,7 @@ func buildChatPrompt(task Task, agentRoot string) string {
 			}
 		}
 		b.WriteString("Use `multica attachment view --id <id> --output <path>` to fetch each file locally before referring to it.\n")
-		b.WriteString("When creating an issue that should preserve one of these attachments, pass `--attachment-id <id>` to `multica issue create` in addition to keeping the attachment markdown inline.\n")
+		b.WriteString("When creating an issue that should preserve these attachments, pass EVERY id with `--attachment-id <id>` on the MAIN `multica issue create` (plus markdown embeds in `--description`). Do NOT park screenshots only on an \"附件\" carrier sub-issue — the main issue must show the reference images.\n")
 	}
 	return b.String()
 }

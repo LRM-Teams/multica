@@ -344,6 +344,7 @@ func init() {
 	issueUpdateCmd.Flags().String("due-date", "", "New due date (calendar day, YYYY-MM-DD)")
 	issueUpdateCmd.Flags().StringArray("acceptance-criteria", nil, "Replace the issue's acceptance criteria / definition of done (repeatable; pass none of the flag to leave unchanged). Spec-owner action — implementers propose changes, they do not lower the bar to pass their own work.")
 	issueUpdateCmd.Flags().String("parent", "", "Parent issue ID (use --parent \"\" to clear)")
+	issueUpdateCmd.Flags().StringSlice("attachment-id", nil, "Existing attachment UUID(s) to bind (or clone if already on another issue) onto this issue (repeatable)")
 	issueUpdateCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// issue status
@@ -1056,6 +1057,11 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 			}
 			body["parent_issue_id"] = parent.ID
 		}
+	}
+	if cmd.Flags().Changed("attachment-id") {
+		attachmentIDs, _ := cmd.Flags().GetStringSlice("attachment-id")
+		attachmentIDs = appendUniqueStrings(nil, attachmentIDs...)
+		body["attachment_ids"] = attachmentIDs
 	}
 
 	if len(body) == 0 {

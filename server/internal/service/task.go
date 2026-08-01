@@ -854,6 +854,23 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 		sourceCopy := *source
 		sourceCopy.AttachmentIDs = append([]string(nil), source.AttachmentIDs...)
 		payload.Source = &sourceCopy
+		// Also stamp source-chat images onto AttachmentIDs so the daemon CLI
+		// env auto-binds them on issue create (LRM-731).
+		seen := make(map[string]struct{}, len(payload.AttachmentIDs)+len(sourceCopy.AttachmentIDs))
+		for _, id := range payload.AttachmentIDs {
+			seen[id] = struct{}{}
+		}
+		for _, id := range sourceCopy.AttachmentIDs {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			payload.AttachmentIDs = append(payload.AttachmentIDs, id)
+		}
 	}
 	contextJSON, err := json.Marshal(payload)
 	if err != nil {

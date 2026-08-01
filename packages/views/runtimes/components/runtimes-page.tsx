@@ -684,11 +684,9 @@ function MachineDetailView({
       })
     : "";
   const hostname = machineHostname(machine);
-  // Prefer real device_info; never fall back to "daemon …" subtitle filler.
-  const osLabel =
-    machine.deviceInfo && !/^daemon\b/i.test(machine.deviceInfo)
-      ? machine.deviceInfo
-      : null;
+  // Structured register field only (Alice #1723). Never parse device_info
+  // glue ("ubuntu · codex-cli …"). Missing → em dash (Parker; pending Frank).
+  const osLabel = machine.deviceName?.trim() || "—";
 
   const scanWorkspaces = () => {
     if (!primaryRuntimeId) {
@@ -827,11 +825,9 @@ function MachineDetailView({
                   <span className="truncate font-mono text-sm">{hostname}</span>
                 </InfoRow>
               )}
-              {osLabel && (
-                <InfoRow label={t(($) => $.machine.basics_os)}>
-                  <span className="truncate text-sm">{osLabel}</span>
-                </InfoRow>
-              )}
+              <InfoRow label={t(($) => $.machine.basics_os)}>
+                <span className="truncate text-sm">{osLabel}</span>
+              </InfoRow>
               {machine.cliVersion && (
                 <InfoRow label={t(($) => $.machine.basics_daemon)}>
                   <span className="truncate font-mono text-sm">

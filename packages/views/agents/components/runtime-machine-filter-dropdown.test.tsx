@@ -20,6 +20,7 @@ function makeMachine(
     title: "dev.local",
     subtitle: "x86_64 macOS",
     deviceInfo: "dev.local · x86_64 macOS",
+    deviceName: null,
     cliVersion: "1.0.0",
     mode: "local",
     section: "local",

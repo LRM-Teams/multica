@@ -55,6 +55,7 @@ function makeMachine(overrides: Partial<RuntimeMachine> = {}): RuntimeMachine {
     title: "ubuntu-2",
     subtitle: null,
     deviceInfo: null,
+    deviceName: null,
     cliVersion: "1.0.0",
     mode: "local",
     section: "local",

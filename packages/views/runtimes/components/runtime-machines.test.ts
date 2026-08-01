@@ -5,6 +5,7 @@ import {
   buildRuntimeMachines,
   filterRuntimeMachines,
   headerRuntimeHealthBadge,
+  machineDeviceName,
   runtimeDisplayLabel,
   runtimeMachineCounts,
   splitRuntimeName,
@@ -123,6 +124,45 @@ describe("runtime machine grouping", () => {
     // Falls back to the daemon-id descriptor — at minimum it must not be
     // the runtime CLI's marketing string.
     expect(subtitle).toMatch(/^daemon /);
+  });
+
+  it("Basics OS uses structured device_name; never parses device_info glue", () => {
+    // Frank 2026-08-01: OS showed "ubuntu · codex-cli 0.146.0". Alice #1723
+    // exposes device_name; FE must not invent it by splitting device_info.
+    expect(
+      machineDeviceName([
+        makeRuntime({
+          device_info: "ubuntu · codex-cli 0.146.0",
+          device_name: "ubuntu",
+        }),
+      ]),
+    ).toBe("ubuntu");
+
+    expect(
+      machineDeviceName([
+        makeRuntime({
+          device_info: "ubuntu · codex-cli 0.146.0",
+        }),
+      ]),
+    ).toBeNull();
+
+    const withName = buildRuntimeMachines(
+      [
+        makeRuntime({
+          device_info: "ubuntu · codex-cli 0.146.0",
+          device_name: "ubuntu",
+        }),
+      ],
+      { now: NOW },
+    );
+    expect(withName[0]?.deviceName).toBe("ubuntu");
+    expect(withName[0]?.deviceName?.toLowerCase()).not.toContain("codex");
+
+    const missing = buildRuntimeMachines(
+      [makeRuntime({ device_info: "ubuntu · codex-cli 0.146.0" })],
+      { now: NOW },
+    );
+    expect(missing[0]?.deviceName).toBeNull();
   });
 
   it("synthesizes a placeholder local machine when ensureLocalMachine is set and no runtime matches", () => {

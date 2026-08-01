@@ -135,6 +135,7 @@ services:
       # Doubao Speech ASR 2.0 + TTS 2.0. The API key is server-only and the
       # endpoints stay disabled when it is empty.
       DOUBAO_SPEECH_API_KEY: ${DOUBAO_SPEECH_API_KEY:-}
+      DOUBAO_DIALOG_API_KEY: ${DOUBAO_DIALOG_API_KEY:-}
       DOUBAO_TTS_SPEAKER_ID: ${DOUBAO_TTS_SPEAKER_ID:-zh_male_m191_uranus_bigtts}
       # Volcengine RTC conversational Agent. Any explicit credential, model,
       # or callback value opts in, and the backend rejects partial

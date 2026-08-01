@@ -109,14 +109,21 @@ describe("partitionMachineCodeAgents", () => {
     );
   });
 
-  it("ignores detected providers outside the catalog", () => {
+  it("lists every detected provider as installed, even outside the recommend catalog", () => {
     const { installed, notInstalled } = partitionMachineCodeAgents([
       runtime({ provider: "kimi", metadata: { version: "9.9.9" } }),
       runtime({ provider: "openclaw" }),
     ]);
 
-    expect(installed).toEqual([]);
+    expect(installed.map((row) => row.id).sort()).toEqual([
+      "kimi",
+      "openclaw",
+    ]);
+    expect(installed.find((row) => row.id === "kimi")?.version).toBe("9.9.9");
+    expect(installed.find((row) => row.id === "kimi")?.label).toBe("kimi");
+    // Recommend catalog still lists all six as not installed.
     expect(notInstalled).toHaveLength(KNOWN_PROVIDERS.length);
+    expect(notInstalled.map((row) => row.id)).not.toContain("kimi");
   });
 
   it("dedupes providers and keeps the first version seen", () => {

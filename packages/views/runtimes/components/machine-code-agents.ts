@@ -1,5 +1,9 @@
 import type { AgentRuntime } from "@multica/core/types";
-import { KNOWN_PROVIDERS, type KnownProvider } from "./provider-logo";
+import {
+  KNOWN_PROVIDERS,
+  knownProviderLabel,
+  type KnownProvider,
+} from "./provider-logo";
 import { providerDocsUrl } from "./provider-docs";
 
 export type MachineCodeAgentRow = {
@@ -51,9 +55,11 @@ export function codeAgentVersion(runtime: AgentRuntime): string | null {
 }
 
 /**
- * Split the catalog into installed vs not installed on this machine.
- * Only catalog entries appear in either group (Frank/Iris: six providers).
- * Other detected providers are ignored for this section.
+ * Split detected runtimes vs the recommend catalog on this machine.
+ *
+ * Parker/Frank 08-01:
+ * - Installed = facts: every provider the machine actually reported
+ * - Not installed = recommend list only (KNOWN_PROVIDERS, six entries)
  */
 export function partitionMachineCodeAgents(
   runtimes: AgentRuntime[],
@@ -70,13 +76,15 @@ export function partitionMachineCodeAgents(
 
   const installedSet = new Set(versionByProvider.keys());
 
-  const installed: MachineCodeAgentRow[] = known
-    .filter((entry) => installedSet.has(entry.id))
-    .map((entry) => ({
-      id: entry.id,
-      label: entry.label,
-      version: versionByProvider.get(entry.id) ?? null,
-      docsUrl: providerDocsUrl(entry.id),
+  const installed: MachineCodeAgentRow[] = Array.from(installedSet)
+    .sort((a, b) =>
+      (knownProviderLabel(a) ?? a).localeCompare(knownProviderLabel(b) ?? b),
+    )
+    .map((id) => ({
+      id,
+      label: knownProviderLabel(id) ?? id,
+      version: versionByProvider.get(id) ?? null,
+      docsUrl: providerDocsUrl(id),
     }));
 
   const notInstalled: MachineCodeAgentRow[] = known

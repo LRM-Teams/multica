@@ -121,6 +121,12 @@ type ConnectInput struct {
 	CallID      string
 }
 
+type AnswerInput struct {
+	WorkspaceID string
+	UserID      string
+	CallID      string
+}
+
 type ConversationContext struct {
 	WelcomeMessage string
 	SystemMessages []string
@@ -199,6 +205,7 @@ type Store interface {
 	CreateStarting(ctx context.Context, input NewSession) (Session, error)
 	Get(ctx context.Context, workspaceID, userID, callID string) (Session, error)
 	BeginProviderStart(ctx context.Context, workspaceID, callID string) (BeginProviderStartResult, error)
+	ApplyClientAnswered(ctx context.Context, workspaceID, userID, callID string) (Session, error)
 	MarkFailed(ctx context.Context, workspaceID, callID, errorCode string) (Session, error)
 	BeginEnding(ctx context.Context, workspaceID, userID, callID, reason string) (BeginEndingResult, error)
 	MarkEnded(ctx context.Context, workspaceID, callID, reason string) (Session, error)
@@ -413,6 +420,49 @@ func (service *Service) Connect(ctx context.Context, input ConnectInput) (Sessio
 		)
 	}
 	return session, nil
+}
+
+// Answer records that the caller heard the expected agent remote audio. Used
+// when Volcengine lifecycle callbacks cannot reach the public origin, so
+// connected_at / active still match the audible evidence path.
+func (service *Service) Answer(ctx context.Context, input AnswerInput) (Session, error) {
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.UserID = strings.TrimSpace(input.UserID)
+	input.CallID = strings.TrimSpace(input.CallID)
+	if input.WorkspaceID == "" || input.UserID == "" || input.CallID == "" {
+		return Session{}, errors.New("voice call workspace, user, and call IDs are required")
+	}
+
+	session, err := service.store.Get(ctx, input.WorkspaceID, input.UserID, input.CallID)
+	if err != nil {
+		return Session{}, fmt.Errorf("get voice call for client answer: %w", err)
+	}
+	if err := service.authorizer.Authorize(ctx, sessionScope(session)); err != nil {
+		return Session{}, fmt.Errorf("authorize voice call client answer: %w", err)
+	}
+	switch session.Status {
+	case StatusActive, StatusReconnecting:
+		if session.ConnectedAt != nil && session.Status == StatusActive {
+			return session, nil
+		}
+	case StatusStarting, StatusConnecting:
+	default:
+		return Session{}, ErrScopeUnavailable
+	}
+
+	answered, err := service.store.ApplyClientAnswered(
+		ctx,
+		input.WorkspaceID,
+		input.UserID,
+		input.CallID,
+	)
+	if err != nil {
+		if errors.Is(err, ErrCallNotFound) {
+			return Session{}, ErrScopeUnavailable
+		}
+		return Session{}, fmt.Errorf("apply voice call client answer: %w", err)
+	}
+	return answered, nil
 }
 
 func (service *Service) Get(ctx context.Context, workspaceID, userID, callID string) (Session, error) {

@@ -151,6 +151,49 @@ func TestVoiceCallHandlersUseAuthenticatedScopeAndServerStopReason(t *testing.T)
 	}) {
 		t.Fatalf("connect input = %+v", service.connectInput)
 	}
+	assertVoiceCallUpdatedEvent(
+		t,
+		published,
+		testVoiceAPIWorkspaceID,
+		testVoiceAPICallID,
+		testVoiceAPIUserID,
+	)
+
+	connectedAt := time.Date(2026, time.August, 1, 0, 12, 0, 0, time.UTC)
+	service.session.Status = voicecall.StatusActive
+	service.session.ConnectedAt = &connectedAt
+	published = events.Event{}
+	answerRequest := voiceCallAPIRequest(
+		http.MethodPost,
+		"/api/workspaces/"+testVoiceAPIWorkspaceID+"/voice-calls/"+testVoiceAPICallID+"/answer",
+		"",
+	)
+	answerRequest = withRouteParams(
+		answerRequest,
+		"id",
+		testVoiceAPIWorkspaceID,
+		"callId",
+		testVoiceAPICallID,
+	)
+	answerResponse := httptest.NewRecorder()
+	handler.AnswerVoiceCall(answerResponse, answerRequest)
+	if answerResponse.Code != http.StatusOK {
+		t.Fatalf("answer status = %d, body = %s", answerResponse.Code, answerResponse.Body.String())
+	}
+	if service.answerInput != (voicecall.AnswerInput{
+		WorkspaceID: testVoiceAPIWorkspaceID,
+		UserID:      testVoiceAPIUserID,
+		CallID:      testVoiceAPICallID,
+	}) {
+		t.Fatalf("answer input = %+v", service.answerInput)
+	}
+	assertVoiceCallUpdatedEvent(
+		t,
+		published,
+		testVoiceAPIWorkspaceID,
+		testVoiceAPICallID,
+		testVoiceAPIUserID,
+	)
 
 	getRequest := voiceCallAPIRequest(
 		http.MethodGet,
@@ -363,10 +406,13 @@ type fakeVoiceCallService struct {
 	startErr       error
 	getErr         error
 	stopErr        error
+	answerErr      error
 	startInput     voicecall.StartInput
 	connectInput   voicecall.ConnectInput
+	answerInput    voicecall.AnswerInput
 	stopInput      voicecall.StopInput
 	startCalls     int
+	answerCalls    int
 	getWorkspaceID string
 	getUserID      string
 	getCallID      string
@@ -377,6 +423,18 @@ func (service *fakeVoiceCallService) Connect(
 	input voicecall.ConnectInput,
 ) (voicecall.Session, error) {
 	service.connectInput = input
+	return service.session, nil
+}
+
+func (service *fakeVoiceCallService) Answer(
+	_ context.Context,
+	input voicecall.AnswerInput,
+) (voicecall.Session, error) {
+	service.answerCalls++
+	service.answerInput = input
+	if service.answerErr != nil {
+		return voicecall.Session{}, service.answerErr
+	}
 	return service.session, nil
 }
 

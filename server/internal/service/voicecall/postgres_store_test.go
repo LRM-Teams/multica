@@ -119,6 +119,20 @@ func TestPostgresStoreMapsSessionAndScopesEveryMutation(t *testing.T) {
 		t.Fatalf("provider active params = %+v", queries.providerActive)
 	}
 
+	if _, err := store.ApplyClientAnswered(
+		context.Background(),
+		testVoiceWorkspaceID,
+		testVoiceUserID,
+		testVoiceCallID,
+	); err != nil {
+		t.Fatalf("apply client answered: %v", err)
+	}
+	if uuidStringForTest(queries.clientAnswered.WorkspaceID) != testVoiceWorkspaceID ||
+		uuidStringForTest(queries.clientAnswered.UserID) != testVoiceUserID ||
+		uuidStringForTest(queries.clientAnswered.ID) != testVoiceCallID {
+		t.Fatalf("client answered params = %+v", queries.clientAnswered)
+	}
+
 	if _, err := store.ApplyProviderFailure(
 		context.Background(), "volcengine", "voice-task-1", "volcengine_1005002",
 	); err != nil {
@@ -614,6 +628,7 @@ type fakeVoiceCallQueries struct {
 	beginEnding       db.BeginVoiceCallEndingParams
 	ended             db.MarkVoiceCallEndedParams
 	providerActive    db.ApplyVoiceCallProviderActiveParams
+	clientAnswered    db.ApplyVoiceCallClientAnsweredParams
 	providerFailure   db.ApplyVoiceCallProviderFailureParams
 	providerTurn      db.UpsertVoiceCallProviderTurnParams
 	getCalls          int
@@ -680,6 +695,17 @@ func (queries *fakeVoiceCallQueries) ApplyVoiceCallProviderActive(
 	params db.ApplyVoiceCallProviderActiveParams,
 ) (db.VoiceCallSession, error) {
 	queries.providerActive = params
+	if queries.providerErr != nil {
+		return db.VoiceCallSession{}, queries.providerErr
+	}
+	return queries.session, nil
+}
+
+func (queries *fakeVoiceCallQueries) ApplyVoiceCallClientAnswered(
+	_ context.Context,
+	params db.ApplyVoiceCallClientAnsweredParams,
+) (db.VoiceCallSession, error) {
+	queries.clientAnswered = params
 	if queries.providerErr != nil {
 		return db.VoiceCallSession{}, queries.providerErr
 	}

@@ -56,6 +56,53 @@ func TestServiceStartPreparesMediaWithoutStartingProvider(t *testing.T) {
 	}
 }
 
+func TestServiceAnswerPromotesConnectingCallToActiveWithConnectedAt(t *testing.T) {
+	deps := newTestDependencies()
+	service := newTestService(t, deps)
+	if _, err := service.Start(context.Background(), validStartInput()); err != nil {
+		t.Fatalf("start call: %v", err)
+	}
+	if _, err := service.Connect(context.Background(), ConnectInput{
+		WorkspaceID: "workspace-1",
+		UserID:      "member-1",
+		CallID:      "call-1",
+	}); err != nil {
+		t.Fatalf("connect call: %v", err)
+	}
+	deps.order = nil
+
+	session, err := service.Answer(context.Background(), AnswerInput{
+		WorkspaceID: "workspace-1",
+		UserID:      "member-1",
+		CallID:      "call-1",
+	})
+	if err != nil {
+		t.Fatalf("answer call: %v", err)
+	}
+	if session.Status != StatusActive || session.ConnectedAt == nil {
+		t.Fatalf("session = %+v", session)
+	}
+	if !reflect.DeepEqual(deps.order, []string{"get", "authorize", "client_answer"}) {
+		t.Fatalf("order = %v", deps.order)
+	}
+
+	deps.order = nil
+	again, err := service.Answer(context.Background(), AnswerInput{
+		WorkspaceID: "workspace-1",
+		UserID:      "member-1",
+		CallID:      "call-1",
+	})
+	if err != nil {
+		t.Fatalf("repeat answer: %v", err)
+	}
+	if again.Status != StatusActive || again.ConnectedAt == nil {
+		t.Fatalf("repeat session = %+v", again)
+	}
+	if !reflect.DeepEqual(deps.order, []string{"get", "authorize"}) {
+		t.Fatalf("repeat order = %v", deps.order)
+	}
+}
+
 func TestServiceConnectStartsProviderWithWelcomeOnlyAfterCallerJoined(t *testing.T) {
 	deps := newTestDependencies()
 	service := newTestService(t, deps)
@@ -516,6 +563,31 @@ func (store *fakeStore) BeginProviderStart(
 		Session:               store.session,
 		ProviderStartRequired: required,
 	}, nil
+}
+
+func (store *fakeStore) ApplyClientAnswered(
+	_ context.Context,
+	workspaceID,
+	userID,
+	callID string,
+) (Session, error) {
+	*store.order = append(*store.order, "client_answer")
+	if store.session.WorkspaceID != workspaceID ||
+		store.session.UserID != userID ||
+		store.session.ID != callID {
+		return Session{}, ErrCallNotFound
+	}
+	switch store.session.Status {
+	case StatusStarting, StatusConnecting, StatusReconnecting, StatusActive:
+		store.session.Status = StatusActive
+		if store.session.ConnectedAt == nil {
+			now := time.Date(2026, time.August, 1, 0, 12, 0, 0, time.UTC)
+			store.session.ConnectedAt = &now
+		}
+		return store.session, nil
+	default:
+		return Session{}, ErrCallNotFound
+	}
 }
 
 func (store *fakeStore) MarkFailed(_ context.Context, workspaceID, callID, errorCode string) (Session, error) {

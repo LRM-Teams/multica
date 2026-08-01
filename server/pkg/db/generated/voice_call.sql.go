@@ -11,6 +11,66 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const applyVoiceCallClientAnswered = `-- name: ApplyVoiceCallClientAnswered :one
+UPDATE voice_call_session
+SET
+  status = CASE
+    WHEN status IN ('starting', 'connecting', 'reconnecting') THEN 'active'
+    ELSE status
+  END,
+  connected_at = CASE
+    WHEN status IN ('starting', 'connecting', 'reconnecting', 'active')
+      THEN COALESCE(connected_at, now())
+    ELSE connected_at
+  END,
+  updated_at = CASE
+    WHEN status IN ('starting', 'connecting', 'reconnecting')
+      OR (status = 'active' AND connected_at IS NULL)
+      THEN now()
+    ELSE updated_at
+  END
+WHERE id = $1
+  AND workspace_id = $2
+  AND user_id = $3
+  AND status IN ('starting', 'connecting', 'active', 'reconnecting')
+RETURNING id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at
+`
+
+type ApplyVoiceCallClientAnsweredParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+// Client-confirmed audible answer when Volcengine callbacks cannot reach the
+// public origin. Promotes starting/connecting/reconnecting to active and sets
+// connected_at; idempotent for an already-active session.
+func (q *Queries) ApplyVoiceCallClientAnswered(ctx context.Context, arg ApplyVoiceCallClientAnsweredParams) (VoiceCallSession, error) {
+	row := q.db.QueryRow(ctx, applyVoiceCallClientAnswered, arg.ID, arg.WorkspaceID, arg.UserID)
+	var i VoiceCallSession
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ChannelID,
+		&i.AgentID,
+		&i.UserID,
+		&i.Provider,
+		&i.ProviderTaskID,
+		&i.RoomID,
+		&i.Status,
+		&i.StartedAt,
+		&i.ConnectedAt,
+		&i.EndedAt,
+		&i.EndReason,
+		&i.ErrorCode,
+		&i.InputAudioMs,
+		&i.OutputAudioMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const applyVoiceCallProviderActive = `-- name: ApplyVoiceCallProviderActive :one
 UPDATE voice_call_session
 SET

@@ -1,6 +1,7 @@
 import {
   useCreateVoiceCall,
   useConnectVoiceCall,
+  useAnswerVoiceCall,
   useStopVoiceCall,
   voiceCallOptions,
 } from "@multica/core/voice-calls";
@@ -181,6 +182,7 @@ export function useVoiceCallController(
   const queryClient = useQueryClient();
   const createCallMutation = useCreateVoiceCall(workspaceId);
   const connectCallMutation = useConnectVoiceCall(workspaceId);
+  const answerCallMutation = useAnswerVoiceCall(workspaceId);
   const stopCallMutation = useStopVoiceCall(workspaceId);
   const [callId, setCallId] = useState("");
   const [localPhase, setLocalPhase] =
@@ -231,6 +233,18 @@ export function useVoiceCallController(
   }, [stopCallMutation]);
   const requestServerStopRef = useRef(requestServerStop);
   requestServerStopRef.current = requestServerStop;
+
+  const requestServerAnswer = useCallback((targetCallId: string) => {
+    if (!targetCallId || endingRef.current || cancelRequestedRef.current) {
+      return;
+    }
+    void answerCallMutation.mutateAsync(targetCallId).catch(() => {
+      // Audible local answer already moved the UI. A failed DB sync must not
+      // hang up the live RTC session; the next GET/realtime refresh can retry.
+    });
+  }, [answerCallMutation]);
+  const requestServerAnswerRef = useRef(requestServerAnswer);
+  requestServerAnswerRef.current = requestServerAnswer;
 
   const stopRingback = useCallback(() => {
     ringbackRef.current?.stop();
@@ -507,6 +521,7 @@ export function useVoiceCallController(
                 current === "muted" ? "muted" : "connected"
               );
             }
+            requestServerAnswerRef.current(createdCallId);
           },
           onError: setMediaFailure,
         };
@@ -550,6 +565,7 @@ export function useVoiceCallController(
               current === "muted" ? "muted" : "connected"
             );
           }
+          requestServerAnswerRef.current(createdCallId);
         } else {
           scheduleActivationTimeout(createdCallId);
         }

@@ -39,6 +39,10 @@ type VoiceCallQueries interface {
 		ctx context.Context,
 		params db.ApplyVoiceCallProviderActiveParams,
 	) (db.VoiceCallSession, error)
+	ApplyVoiceCallClientAnswered(
+		ctx context.Context,
+		params db.ApplyVoiceCallClientAnsweredParams,
+	) (db.VoiceCallSession, error)
 	ApplyVoiceCallProviderFailure(
 		ctx context.Context,
 		params db.ApplyVoiceCallProviderFailureParams,
@@ -286,6 +290,33 @@ func (store *PostgresStore) ApplyProviderActive(
 			err,
 			"apply voice call provider activity",
 		)
+	}
+	return voiceCallSessionFromDB(row)
+}
+
+func (store *PostgresStore) ApplyClientAnswered(
+	ctx context.Context,
+	workspaceID string,
+	userID string,
+	callID string,
+) (Session, error) {
+	params, err := scopedVoiceCallParams(workspaceID, userID, callID)
+	if err != nil {
+		return Session{}, err
+	}
+	row, err := store.queries.ApplyVoiceCallClientAnswered(
+		ctx,
+		db.ApplyVoiceCallClientAnsweredParams{
+			ID:          params.ID,
+			WorkspaceID: params.WorkspaceID,
+			UserID:      params.UserID,
+		},
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, ErrCallNotFound
+		}
+		return Session{}, fmt.Errorf("apply voice call client answer: %w", err)
 	}
 	return voiceCallSessionFromDB(row)
 }

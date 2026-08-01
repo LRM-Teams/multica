@@ -40,15 +40,18 @@ func sanitizeNullBytes(s string) string {
 // --- Response structs ---
 
 type SkillResponse struct {
-	ID          string  `json:"id"`
-	WorkspaceID string  `json:"workspace_id"`
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	Content     string  `json:"content"`
-	Config      any     `json:"config"`
-	CreatedBy   *string `json:"created_by"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID           string             `json:"id"`
+	WorkspaceID  string             `json:"workspace_id"`
+	Name         string             `json:"name"`
+	Description  string             `json:"description"`
+	Content      string             `json:"content"`
+	Config       any                `json:"config"`
+	CreatedBy    *string            `json:"created_by"`
+	CreatedAt    string             `json:"created_at"`
+	UpdatedAt    string             `json:"updated_at"`
+	GrantLevel   string             `json:"grant_level"`
+	ChannelID    *string            `json:"channel_id,omitempty"`
+	Capabilities *SkillCapabilities `json:"capabilities,omitempty"`
 }
 
 // SkillSummaryResponse is the list-endpoint shape: everything SkillResponse
@@ -57,14 +60,17 @@ type SkillResponse struct {
 // links (GH multica-ai/multica#2174). Detail endpoints still return the full
 // SkillResponse with content.
 type SkillSummaryResponse struct {
-	ID          string  `json:"id"`
-	WorkspaceID string  `json:"workspace_id"`
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	Config      any     `json:"config"`
-	CreatedBy   *string `json:"created_by"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID           string             `json:"id"`
+	WorkspaceID  string             `json:"workspace_id"`
+	Name         string             `json:"name"`
+	Description  string             `json:"description"`
+	Config       any                `json:"config"`
+	CreatedBy    *string            `json:"created_by"`
+	CreatedAt    string             `json:"created_at"`
+	UpdatedAt    string             `json:"updated_at"`
+	GrantLevel   string             `json:"grant_level"`
+	ChannelID    *string            `json:"channel_id,omitempty"`
+	Capabilities *SkillCapabilities `json:"capabilities,omitempty"`
 }
 
 // AgentSkillSummary is the still-narrower shape used for skills embedded in
@@ -130,6 +136,7 @@ func writeSkillImportDuplicateConflict(w http.ResponseWriter, existing ExistingS
 }
 
 func skillToResponse(s db.Skill) SkillResponse {
+	level := normalizeSkillGrantLevel(s.GrantLevel)
 	return SkillResponse{
 		ID:          uuidToString(s.ID),
 		WorkspaceID: uuidToString(s.WorkspaceID),
@@ -140,6 +147,8 @@ func skillToResponse(s db.Skill) SkillResponse {
 		CreatedBy:   uuidToPtr(s.CreatedBy),
 		CreatedAt:   timestampToString(s.CreatedAt),
 		UpdatedAt:   timestampToString(s.UpdatedAt),
+		GrantLevel:  level,
+		ChannelID:   skillGrantChannelIDPtr(level, s.ChannelID),
 	}
 }
 
@@ -188,7 +197,10 @@ func skillSummaryToResponse(
 	config []byte,
 	createdBy pgtype.UUID,
 	createdAt, updatedAt pgtype.Timestamptz,
+	grantLevel string,
+	channelID pgtype.UUID,
 ) SkillSummaryResponse {
+	level := normalizeSkillGrantLevel(grantLevel)
 	return SkillSummaryResponse{
 		ID:          uuidToString(id),
 		WorkspaceID: uuidToString(workspaceID),
@@ -198,6 +210,8 @@ func skillSummaryToResponse(
 		CreatedBy:   uuidToPtr(createdBy),
 		CreatedAt:   timestampToString(createdAt),
 		UpdatedAt:   timestampToString(updatedAt),
+		GrantLevel:  level,
+		ChannelID:   skillGrantChannelIDPtr(level, channelID),
 	}
 }
 
@@ -294,12 +308,16 @@ func (h *Handler) ListSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	baseCaps := h.skillPromoteBaseCapabilities(r, workspaceID)
 	resp := make([]SkillSummaryResponse, len(skills))
 	for i, s := range skills {
 		resp[i] = skillSummaryToResponse(
 			s.ID, s.WorkspaceID, s.Name, s.Description, s.Config,
 			s.CreatedBy, s.CreatedAt, s.UpdatedAt,
+			s.GrantLevel, s.ChannelID,
 		)
+		caps := filterSkillCapabilities(baseCaps, s.GrantLevel)
+		resp[i].Capabilities = &caps
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -435,10 +453,16 @@ func (h *Handler) GetSkill(w http.ResponseWriter, r *http.Request) {
 		fileResps[i] = skillFileToResponse(f)
 	}
 
-	writeJSON(w, http.StatusOK, SkillWithFilesResponse{
+	resp := SkillWithFilesResponse{
 		SkillResponse: skillToResponse(skill),
 		Files:         fileResps,
-	})
+	}
+	caps := filterSkillCapabilities(
+		h.skillPromoteBaseCapabilities(r, uuidToString(skill.WorkspaceID)),
+		skill.GrantLevel,
+	)
+	resp.Capabilities = &caps
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) CreateSkill(w http.ResponseWriter, r *http.Request) {
@@ -2193,12 +2217,16 @@ func (h *Handler) ListAgentSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	baseCaps := h.skillPromoteBaseCapabilities(r, uuidToString(agent.WorkspaceID))
 	resp := make([]SkillSummaryResponse, len(skills))
 	for i, s := range skills {
 		resp[i] = skillSummaryToResponse(
 			s.ID, s.WorkspaceID, s.Name, s.Description, s.Config,
 			s.CreatedBy, s.CreatedAt, s.UpdatedAt,
+			s.GrantLevel, s.ChannelID,
 		)
+		caps := filterSkillCapabilities(baseCaps, s.GrantLevel)
+		resp[i].Capabilities = &caps
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -2333,12 +2361,16 @@ func (h *Handler) writeUpdatedAgentSkills(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	baseCaps := h.skillPromoteBaseCapabilities(r, uuidToString(agent.WorkspaceID))
 	resp := make([]SkillSummaryResponse, len(skills))
 	for i, s := range skills {
 		resp[i] = skillSummaryToResponse(
 			s.ID, s.WorkspaceID, s.Name, s.Description, s.Config,
 			s.CreatedBy, s.CreatedAt, s.UpdatedAt,
+			s.GrantLevel, s.ChannelID,
 		)
+		caps := filterSkillCapabilities(baseCaps, s.GrantLevel)
+		resp[i].Capabilities = &caps
 	}
 	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(agent.WorkspaceID))
 	h.publishAgentVisibilityEvent(protocol.EventAgentStatus, uuidToString(agent.WorkspaceID), actorType, actorID, agent, map[string]any{"agent_id": uuidToString(agent.ID), "skills": resp})

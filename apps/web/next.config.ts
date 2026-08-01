@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import { config } from "dotenv";
 import { resolve } from "path";
 import { resolveRemoteApiUrl } from "./config/runtime-urls";
+import { RUNTIMES_TO_COMPUTERS_REDIRECTS } from "./config/route-redirects";
 import { createMDX } from "fumadocs-mdx/next";
 
 // Load root .env so REMOTE_API_URL is available to next.config.ts
@@ -47,22 +48,7 @@ const nextConfig: NextConfig = {
     qualities: [75, 80, 85],
   },
   async redirects() {
-    return [
-      // The "Runtimes" page was renamed to "Computers" (task #18) — keep old
-      // links/bookmarks working instead of 404ing. Not `permanent` (307, not
-      // 308): a 308 is aggressively cached by browsers, and we may still
-      // adjust this rename.
-      {
-        source: "/:workspaceSlug/runtimes",
-        destination: "/:workspaceSlug/computers",
-        permanent: false,
-      },
-      {
-        source: "/:workspaceSlug/runtimes/:id",
-        destination: "/:workspaceSlug/computers/:id",
-        permanent: false,
-      },
-    ];
+    return [...RUNTIMES_TO_COMPUTERS_REDIRECTS];
   },
   async rewrites() {
     return {

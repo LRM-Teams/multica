@@ -7,8 +7,8 @@
 export const OVERLAY_GAP_PX = 12;
 export const OVERLAY_INSET_PX = 16;
 
-/** Approximate Controls / dock height (toolbar pill). */
-export const CONTROLS_HEIGHT_PX = 56;
+/** Controls / dock height (toolbar pill; matches ResearchCanvasDock). */
+export const CONTROLS_HEIGHT_PX = 52;
 
 /** MiniMap box used for FAB stacking (matches MiniMap class sizing). */
 export const MINIMAP_HEIGHT_PX = 120;

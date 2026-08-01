@@ -15,6 +15,7 @@ import { StepHeader } from "../components/step-header";
 import { RuntimeAsidePanel } from "../components/runtime-aside-panel";
 import { useRuntimePicker } from "../components/use-runtime-picker";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
+import { runtimeDisplayLabel } from "../../runtimes/components/runtime-machines";
 import { useT } from "../../i18n";
 
 /**
@@ -624,7 +625,7 @@ function RuntimeCard({
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium text-foreground">
-          {runtime.name}
+          {runtimeDisplayLabel(runtime)}
         </div>
         <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
           <span

@@ -22,6 +22,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@multica/ui/components/ui/tooltip";
+import { runtimeDisplayLabel } from "../../runtimes/components/runtime-machines";
 import { readOrigin, isRuntimeManagedOrigin, totalFileCount } from "../lib/origin";
 
 // Per-row data assembled at the page level. The columns reach into
@@ -197,12 +198,16 @@ function SourceCell({
     label =
       origin.type === "runtime_shared"
         ? runtime
-          ? t(($) => $.table.source_runtime_shared_named, { name: runtime.name })
+          ? t(($) => $.table.source_runtime_shared_named, {
+              name: runtimeDisplayLabel(runtime),
+            })
           : origin.provider
             ? t(($) => $.table.source_runtime_shared_provider, { provider: origin.provider })
             : t(($) => $.table.source_runtime_shared_unknown)
         : runtime
-          ? t(($) => $.table.source_runtime_named, { name: runtime.name })
+          ? t(($) => $.table.source_runtime_named, {
+              name: runtimeDisplayLabel(runtime),
+            })
           : origin.provider
             ? t(($) => $.table.source_runtime_provider, { provider: origin.provider })
             : t(($) => $.table.source_runtime_unknown);

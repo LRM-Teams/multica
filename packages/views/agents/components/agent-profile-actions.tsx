@@ -43,9 +43,19 @@ import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 export function AgentProfileActions({
   agent,
   canManage,
+  forceRestartSupported,
 }: {
   agent: Agent;
   canManage: boolean;
+  /**
+   * From the bound runtime's `provider_capabilities.force_restart` (task
+   * #22) — providers that don't support forced restart never expose the
+   * button at all (not greyed out; the disabled-vs-hidden split is for
+   * "supported but not right now" vs "not a thing this system does").
+   * Missing/undefined (older backend, no runtime) means false — never
+   * default this to true.
+   */
+  forceRestartSupported: boolean;
 }) {
   const { t } = useT("agents");
   const qc = useQueryClient();
@@ -118,7 +128,7 @@ export function AgentProfileActions({
           </Button>
         ) : null}
 
-        {canManage && !isArchived && isRuntimeOnline ? (
+        {canManage && !isArchived && isRuntimeOnline && forceRestartSupported ? (
           <Button
             type="button"
             variant="outline"

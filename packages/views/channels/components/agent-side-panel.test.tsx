@@ -55,8 +55,18 @@ vi.mock("../../agents/components/tabs/reminders-tab", () => ({
 }));
 
 vi.mock("../../agents/components/agent-profile-actions", () => ({
-  AgentProfileActions: ({ canManage }: { canManage: boolean }) => (
-    <div data-testid="agent-profile-actions" data-can-manage={String(canManage)}>
+  AgentProfileActions: ({
+    canManage,
+    forceRestartSupported,
+  }: {
+    canManage: boolean;
+    forceRestartSupported: boolean;
+  }) => (
+    <div
+      data-testid="agent-profile-actions"
+      data-can-manage={String(canManage)}
+      data-force-restart-supported={String(forceRestartSupported)}
+    >
       <button type="button" data-testid="agent-profile-action-message">
         Message
       </button>
@@ -323,6 +333,40 @@ describe("AgentSidePanel", () => {
     ];
     renderPanel();
     expect(screen.getByText("ready_to_apply")).toBeInTheDocument();
+  });
+
+  // task #22: the panel must thread the bound runtime's real capability
+  // through to AgentProfileActions, not a hardcoded provider list or the
+  // wrong runtime's data.
+  it("passes forceRestartSupported=true when the bound runtime supports it", () => {
+    mockRuntimes.current = [
+      { id: "runtime-1", status: "online", provider_capabilities: { force_restart: true } },
+    ];
+    renderPanel();
+    expect(screen.getByTestId("agent-profile-actions")).toHaveAttribute(
+      "data-force-restart-supported",
+      "true",
+    );
+  });
+
+  it("passes forceRestartSupported=false when the bound runtime doesn't support it", () => {
+    mockRuntimes.current = [
+      { id: "runtime-1", status: "online", provider_capabilities: { force_restart: false } },
+    ];
+    renderPanel();
+    expect(screen.getByTestId("agent-profile-actions")).toHaveAttribute(
+      "data-force-restart-supported",
+      "false",
+    );
+  });
+
+  it("defaults forceRestartSupported to false when the capability object is missing (older backend)", () => {
+    mockRuntimes.current = [{ id: "runtime-1", status: "online" }];
+    renderPanel();
+    expect(screen.getByTestId("agent-profile-actions")).toHaveAttribute(
+      "data-force-restart-supported",
+      "false",
+    );
   });
 
   it("keeps non-owner access to profile only by default", () => {

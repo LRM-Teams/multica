@@ -8,7 +8,7 @@ const RuntimeDetailPage = lazyNamedRoute(
   "RuntimeDetailPage",
 );
 
-export default function RuntimeDetailRoute({
+export default function ComputerDetailRoute({
   params,
 }: {
   params: Promise<{ id: string }>;

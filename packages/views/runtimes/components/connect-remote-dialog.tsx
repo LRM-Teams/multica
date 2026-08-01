@@ -67,7 +67,7 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
     onClose();
     if (slug && newRuntimeIdRef.current) {
       navigation.push(
-        paths.workspace(slug).runtimeDetail(newRuntimeIdRef.current),
+        paths.workspace(slug).computerDetail(newRuntimeIdRef.current),
       );
     }
   };

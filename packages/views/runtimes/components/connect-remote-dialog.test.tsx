@@ -17,7 +17,7 @@ vi.mock("@multica/core/paths", () => ({
   paths: {
     workspace: () => ({
       agents: () => "/agents",
-      runtimeDetail: () => "/runtimes/rt-test",
+      computerDetail: () => "/computers/rt-test",
     }),
   },
   useWorkspaceSlug: () => "workspace-test",

@@ -9,7 +9,7 @@ import { RuntimeDetail } from "./runtime-detail";
 import { useT } from "../../i18n";
 
 /**
- * Routed entry for `/{slug}/runtimes/{id}`. Reads the workspace runtime list
+ * Routed entry for `/{slug}/computers/{id}`. Reads the workspace runtime list
  * from cache (the list page already populated it), finds the matching
  * runtime, and renders the shared detail surface. We deliberately avoid
  * adding a per-runtime fetch endpoint — the list query is already keyed

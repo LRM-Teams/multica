@@ -123,7 +123,7 @@ type NavKey =
   | "usage"
   | "evolution"
   | "planBilling"
-  | "runtimes"
+  | "computers"
   | "sandboxes"
   | "skills"
   | "settings";
@@ -141,7 +141,7 @@ type NavLabelKey =
   | "usage"
   | "evolution"
   | "plan_billing"
-  | "runtimes"
+  | "computers"
   | "sandboxes"
   | "skills"
   | "settings";
@@ -166,7 +166,7 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity 
 ];
 
 const configureNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity }[] = [
-  { key: "runtimes", labelKey: "runtimes", icon: Monitor },
+  { key: "computers", labelKey: "computers", icon: Monitor },
   { key: "sandboxes", labelKey: "sandboxes", icon: Box },
   { key: "skills", labelKey: "skills", icon: BookOpenText },
   { key: "settings", labelKey: "settings", icon: Settings },
@@ -732,7 +732,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                       >
                         <item.icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
-                        {item.key === "runtimes" && (
+                        {item.key === "computers" && (
                           <RuntimeAttentionAlert wsId={wsId} />
                         )}
                       </SidebarMenuButton>

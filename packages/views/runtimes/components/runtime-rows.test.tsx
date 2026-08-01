@@ -60,7 +60,7 @@ vi.mock("@multica/core/paths", () => ({
   useWorkspaceSlug: () => "acme",
   paths: {
     workspace: () => ({
-      runtimeDetail: (id: string) => `/acme/runtimes/${id}`,
+      computerDetail: (id: string) => `/acme/computers/${id}`,
     }),
   },
 }));
@@ -136,7 +136,7 @@ describe("RuntimeRows (LRM-745 row cards)", () => {
   it("navigates to the runtime detail route on row click", () => {
     renderRows([makeRuntime({ id: "rt-9" })]);
     fireEvent.click(screen.getByText("Wendy"));
-    expect(mockPush).toHaveBeenCalledWith("/acme/runtimes/rt-9");
+    expect(mockPush).toHaveBeenCalledWith("/acme/computers/rt-9");
   });
 
   it("shows the delete kebab only for runtimes the current user owns", () => {

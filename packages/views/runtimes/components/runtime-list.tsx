@@ -147,7 +147,7 @@ export function RuntimeRows({
           onOpen={() => {
             if (!slug) return;
             navigation.push(
-              paths.workspace(slug).runtimeDetail(runtime.id),
+              paths.workspace(slug).computerDetail(runtime.id),
             );
           }}
         />

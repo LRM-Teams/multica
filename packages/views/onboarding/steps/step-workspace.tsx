@@ -616,8 +616,8 @@ function WorkspacePreviewCard({
         />
         <EntityRow
           icon={<Monitor className="h-4 w-4" />}
-          label={t(($) => $.step_workspace.preview.runtimes_label)}
-          meta={t(($) => $.step_workspace.preview.runtimes_meta)}
+          label={t(($) => $.step_workspace.preview.computers_label)}
+          meta={t(($) => $.step_workspace.preview.computers_meta)}
         />
         <EntityRow
           icon={<BookOpenText className="h-4 w-4" />}

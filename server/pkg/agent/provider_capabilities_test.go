@@ -70,6 +70,21 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 			t.Errorf("%q must support model selection", name)
 		}
 	}
+
+	// Force restart — backends that implement ResidentRuntimeForceKillable (#62).
+	// Today equal to the canonical-resident set; pinned separately so a future
+	// split does not silently widen/narrow the FE restart button.
+	for _, name := range []string{"pi", "grok", "cursor", "opencode"} {
+		if !Capabilities(name).ForceRestart {
+			t.Errorf("%q must advertise ForceRestart", name)
+		}
+		if !ForceRestartSupported(name) {
+			t.Errorf("%q ForceRestartSupported wrapper must read true from the table", name)
+		}
+	}
+	if Capabilities("claude").ForceRestart || ForceRestartSupported("claude") {
+		t.Error("claude must not advertise ForceRestart")
+	}
 }
 
 func TestCapabilitiesUnknownProviderFailClosed(t *testing.T) {

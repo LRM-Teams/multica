@@ -181,6 +181,14 @@ func CustomModelIDSupported(providerType string) bool {
 	return Capabilities(providerType).CustomModelIDSupported
 }
 
+// ForceRestartSupported reports whether a busy/stuck agent of this provider
+// can be force-interrupted via lifecycle restart (task #62). Sourced from
+// providerCapabilities — FE should gate the restart button on this rather
+// than hardcoding the canonical-resident allow-list.
+func ForceRestartSupported(providerType string) bool {
+	return Capabilities(providerType).ForceRestart
+}
+
 // cachedDiscovery invokes fn and caches the result for modelCacheTTL.
 // The cache is keyed on providerType only; callers that need to
 // distinguish discovery by host/user should include that in the key

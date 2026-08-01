@@ -33,9 +33,17 @@ type ProviderCapabilities struct {
 	// reasoning/effort catalog for this provider? When false the UI hides
 	// the thinking-level picker for every model of this runtime (#59).
 	ThinkingDiscovery bool
+
+	// ForceRestart: can a busy/stuck agent of this provider be force-
+	// interrupted via restart (backend implements ResidentRuntimeForceKillable)?
+	// FE uses this to show/hide the restart button; the daemon also fail-closes
+	// when the interface is missing (task #62). Same allow-list as
+	// CanonicalResident today — keep as a separate field (Parker/Felix: same
+	// name ≠ same meaning).
+	ForceRestart bool
 }
 
-// caps is the only constructor for a table row. All five fields are required
+// caps is the only constructor for a table row. All six fields are required
 // parameters so omitting one is a compile-time error ("half-filled row").
 func caps(
 	canonicalResident bool,
@@ -43,6 +51,7 @@ func caps(
 	modelSelectionSupported bool,
 	customModelIDSupported bool,
 	thinkingDiscovery bool,
+	forceRestart bool,
 ) ProviderCapabilities {
 	return ProviderCapabilities{
 		CanonicalResident:       canonicalResident,
@@ -50,27 +59,28 @@ func caps(
 		ModelSelectionSupported: modelSelectionSupported,
 		CustomModelIDSupported:  customModelIDSupported,
 		ThinkingDiscovery:       thinkingDiscovery,
+		ForceRestart:            forceRestart,
 	}
 }
 
 // providerCapabilities covers every agent type accepted by New.
 // Adding a provider to New without a row here fails TestProviderCapabilitiesCoverAllKnownTypes.
 var providerCapabilities = map[string]ProviderCapabilities{
-	//                    canonical, inlinePrompt, modelSel, customID, thinking
-	"claude":      caps(false, false, true, true, true),
-	"codebuddy":   caps(false, false, true, false, true),
-	"codex":       caps(false, false, true, true, true),
-	"copilot":     caps(false, false, true, true, false),
-	"opencode":    caps(true, false, true, false, false),
-	"openclaw":    caps(false, true, true, false, false),
-	"hermes":      caps(false, false, true, false, false),
-	"gemini":      caps(false, false, true, false, false),
-	"pi":          caps(true, false, true, true, false),
-	"cursor":      caps(true, false, true, true, false),
-	"kimi":        caps(false, true, true, false, false),
-	"kiro":        caps(false, true, true, false, false),
-	"antigravity": caps(false, false, true, false, false),
-	"grok":        caps(true, false, true, false, false),
+	//                    canonical, inlinePrompt, modelSel, customID, thinking, forceRestart
+	"claude":      caps(false, false, true, true, true, false),
+	"codebuddy":   caps(false, false, true, false, true, false),
+	"codex":       caps(false, false, true, true, true, false),
+	"copilot":     caps(false, false, true, true, false, false),
+	"opencode":    caps(true, false, true, false, false, true),
+	"openclaw":    caps(false, true, true, false, false, false),
+	"hermes":      caps(false, false, true, false, false, false),
+	"gemini":      caps(false, false, true, false, false, false),
+	"pi":          caps(true, false, true, true, false, true),
+	"cursor":      caps(true, false, true, true, false, true),
+	"kimi":        caps(false, true, true, false, false, false),
+	"kiro":        caps(false, true, true, false, false, false),
+	"antigravity": caps(false, false, true, false, false, false),
+	"grok":        caps(true, false, true, false, false, true),
 }
 
 // KnownProviderTypes returns every provider that has a capability row

@@ -74,12 +74,6 @@ describe("ConnectRemoteDialog", () => {
     );
     expect(baseElement).toHaveTextContent("multica setup");
     expect(baseElement).not.toHaveTextContent("multica setup self-host");
-    expect(baseElement).toHaveTextContent(
-      "multica config set server_url https://api.multica.ai",
-    );
-    expect(baseElement).toHaveTextContent(
-      "multica config set app_url https://multica.ai",
-    );
   });
 
   it("uses self-host daemon URLs from runtime config", () => {
@@ -90,12 +84,6 @@ describe("ConnectRemoteDialog", () => {
 
     expect(baseElement).toHaveTextContent(
       "multica setup self-host --server-url https://api.example.com --app-url https://app.example.com",
-    );
-    expect(baseElement).toHaveTextContent(
-      "multica config set server_url https://api.example.com",
-    );
-    expect(baseElement).toHaveTextContent(
-      "multica config set app_url https://app.example.com",
     );
   });
 
@@ -118,14 +106,14 @@ describe("ConnectRemoteDialog", () => {
     expect(setupCode).toHaveClass(...ligatureClasses);
   });
 
-  it("disables font ligatures in fallback token command code", () => {
+  it("disables font ligatures in troubleshooting diagnostic command code", () => {
     const { baseElement } = renderDialog();
 
-    const tokenCode = Array.from(baseElement.querySelectorAll("code")).find((node) =>
-      node.textContent?.includes("multica login --token <YOUR_TOKEN>"),
+    const statusCode = Array.from(baseElement.querySelectorAll("code")).find((node) =>
+      node.textContent?.includes("multica daemon status"),
     );
 
-    expect(tokenCode).toHaveClass(...ligatureClasses);
+    expect(statusCode).toHaveClass(...ligatureClasses);
   });
 
   // Distinct from the "can't open a browser" troubleshooting section — this
@@ -141,5 +129,21 @@ describe("ConnectRemoteDialog", () => {
     expect(baseElement).toHaveTextContent(
       "it may be blocking outbound access to the install script",
     );
+  });
+
+  // Step 2 (`multica setup`) always ends in the device-code login flow,
+  // which already prints a link + one-time code confirmable from any
+  // device — headless machines never needed a manual token-paste fallback
+  // in the first place. This guards against that stale fallback creeping
+  // back in.
+  it("explains the device-code flow instead of a manual token fallback for headless machines", () => {
+    const { baseElement } = renderDialog();
+
+    expect(baseElement).toHaveTextContent("Can't open a browser on that computer?");
+    expect(baseElement).toHaveTextContent(
+      "Step 2 already handles this",
+    );
+    expect(baseElement).not.toHaveTextContent("multica config set server_url");
+    expect(baseElement).not.toHaveTextContent("multica login --token");
   });
 });

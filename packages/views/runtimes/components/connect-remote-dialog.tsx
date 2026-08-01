@@ -168,7 +168,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
   const [mode, setMode] = useState<DaemonSetupMode>(() => defaultDaemonSetupMode());
   const daemonServerUrl = useConfigStore((s) => s.daemonServerUrl);
   const daemonAppUrl = useConfigStore((s) => s.daemonAppUrl);
-  const { installCmd, setupCmd, tokenCmd } = daemonSetupCommands(
+  const { installCmd, setupCmd } = daemonSetupCommands(
     daemonServerUrl,
     daemonAppUrl,
     mode,
@@ -211,7 +211,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
 
           <LiveListening />
 
-          <TroubleshootingDetails tokenCmd={tokenCmd} />
+          <TroubleshootingDetails />
         </div>
       </div>
 
@@ -291,7 +291,7 @@ function InstallFailureDetails() {
   );
 }
 
-function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
+function TroubleshootingDetails() {
   const { t } = useT("runtimes");
   return (
     <details className="group rounded-lg border border-dashed">
@@ -304,19 +304,6 @@ function TroubleshootingDetails({ tokenCmd }: { tokenCmd: string }) {
       </summary>
       <div className="space-y-2 border-t px-3 pt-2.5 pb-3 text-[11px] leading-[1.55] text-muted-foreground">
         <p>{t(($) => $.connect.trouble_intro)}</p>
-        <CommandStep
-          n={2}
-          label={t(($) => $.connect.step2_label)}
-          cmd={tokenCmd}
-          copyAria={t(($) => $.connect.copy_aria)}
-        />
-        <p>
-          {t(($) => $.connect.trouble_token_hint_prefix)}
-          <span className="font-medium text-foreground">
-            {t(($) => $.connect.trouble_token_hint_destination)}
-          </span>
-          {t(($) => $.connect.trouble_token_hint_suffix)}
-        </p>
         <ul className="space-y-1">
           <li className="flex items-center gap-1.5">
             <span>{t(($) => $.connect.trouble_check_status)}</span>

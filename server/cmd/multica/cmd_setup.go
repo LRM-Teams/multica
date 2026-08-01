@@ -17,7 +17,7 @@ import (
 )
 
 var setupCmd = &cobra.Command{
-	Use:   "setup [workspace]",
+	Use:   "setup [/workspace]",
 	Short: "Configure the CLI, authenticate, and start the daemon",
 	Long: `Configures the CLI to connect to Multica Cloud (multica.ai), then
 authenticates via browser and starts the agent daemon.
@@ -25,7 +25,7 @@ authenticates via browser and starts the agent daemon.
 If a configuration already exists, you will be prompted before overwriting.
 
 Pass a workspace id or slug to set it as the default in this one step
-(equivalent to --workspace): multica setup my-workspace
+(equivalent to --workspace): multica setup /my-workspace
 
 Use 'multica setup self-host' to connect to a self-hosted server instead.
 
@@ -36,7 +36,7 @@ Use --profile to create an isolated configuration for a separate environment:
 }
 
 var setupCloudCmd = &cobra.Command{
-	Use:   "cloud [workspace]",
+	Use:   "cloud [/workspace]",
 	Short: "Configure the CLI for Multica Cloud (multica.ai)",
 	Long: `Explicitly configures the CLI to connect to Multica Cloud (multica.ai).
 
@@ -46,7 +46,7 @@ This is equivalent to running 'multica setup' without a subcommand.`,
 }
 
 var setupSelfHostCmd = &cobra.Command{
-	Use:   "self-host [workspace]",
+	Use:   "self-host [/workspace]",
 	Short: "Configure the CLI for a self-hosted Multica server",
 	Long: `Configures the CLI to connect to a self-hosted Multica server.
 
@@ -62,7 +62,7 @@ Pass a workspace id or slug to set it as the default in this one step
 
 Examples:
   multica setup self-host
-  multica setup self-host my-workspace
+  multica setup self-host /my-workspace
   multica setup self-host --server-url https://api.internal.co --app-url https://app.internal.co
   multica setup self-host --port 9090 --frontend-port 4000`,
 	Args: cobra.MaximumNArgs(1),
@@ -127,16 +127,22 @@ func confirmOverwrite(profile string) (bool, error) {
 	return true, nil
 }
 
-// applyWorkspacePositional wires `multica setup <workspace>` onto the same
+// applyWorkspacePositional wires `multica setup /<workspace>` onto the same
 // --workspace flag autoWatchWorkspaces already reads, so there is exactly
 // one place that resolves the id-or-slug against the workspace list. Does
 // nothing if the flag was already set explicitly (flag wins) or no
 // positional was given.
+//
+// The leading "/" (task #32 follow-up: aligning the command shape with
+// Raft's `raft-computer setup /<server-slug>`) is stripped if present, but
+// not required — a bare slug/id still works unchanged, so this is additive
+// and doesn't break any existing script or doc that already types
+// `multica setup my-workspace` without the slash.
 func applyWorkspacePositional(cmd *cobra.Command, args []string) error {
 	if len(args) == 0 || cmd.Flags().Changed("workspace") {
 		return nil
 	}
-	return cmd.Flags().Set("workspace", args[0])
+	return cmd.Flags().Set("workspace", strings.TrimPrefix(args[0], "/"))
 }
 
 func runSetupCloud(cmd *cobra.Command, args []string) error {

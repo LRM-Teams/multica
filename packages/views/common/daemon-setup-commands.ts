@@ -9,13 +9,9 @@ export const DAEMON_SETUP_MODES: DaemonSetupMode[] = ["unix", "windows-powershel
 
 export const POWERSHELL_INSTALL_COMMAND = MULTICA_POWERSHELL_INSTALL_COMMAND;
 
-const CLOUD_SERVER_URL = "https://api.multica.ai";
-const CLOUD_APP_URL = "https://multica.ai";
-
 export interface DaemonSetupCommands {
   installCmd: string;
   setupCmd: string;
-  tokenCmd: string;
 }
 
 export function defaultDaemonSetupMode(): DaemonSetupMode {
@@ -54,19 +50,11 @@ export function daemonSetupCommands(
         `--server-url ${normalizedServerUrl}`,
         `--app-url ${normalizedAppUrl}`,
       ].join(" "),
-      tokenCmd: `multica config set server_url ${normalizedServerUrl}
-multica config set app_url ${normalizedAppUrl}
-multica login --token <YOUR_TOKEN>
-multica daemon start`,
     };
   }
 
   return {
     installCmd,
     setupCmd: "multica setup",
-    tokenCmd: `multica config set server_url ${CLOUD_SERVER_URL}
-multica config set app_url ${CLOUD_APP_URL}
-multica login --token <YOUR_TOKEN>
-multica daemon start`,
   };
 }

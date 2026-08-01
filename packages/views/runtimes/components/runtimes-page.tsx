@@ -342,7 +342,7 @@ export function RuntimesPage({
   );
 
   const detailView = selectedMachine ? (
-    <MachineDetailView
+    <ComputersMachineDetail
       machine={selectedMachine}
       agents={agents}
       snapshot={snapshot}
@@ -600,6 +600,32 @@ export function MachineListView({
   );
 }
 
+type MachineDetailViewProps = {
+  machine: RuntimeMachine;
+  agents: Agent[];
+  snapshot: AgentTask[];
+  now: number;
+  wsId: string;
+  isMobile: boolean;
+  actions?: React.ReactNode;
+  bootstrapping?: boolean;
+  onBack: () => void;
+  onComputerDeleted?: () => void;
+  headerActions: React.ReactNode;
+  showBack: boolean;
+  showListActions: boolean;
+};
+
+/**
+ * List-page machine detail. Remounts when `machine.id` changes so
+ * destructive dialog state (`deleteOpen`, workspace scan, etc.) cannot
+ * leak across machines — e.g. delete confirm opened on A must not stay
+ * open after the user selects B.
+ */
+export function ComputersMachineDetail(props: MachineDetailViewProps) {
+  return <MachineDetailView key={props.machine.id} {...props} />;
+}
+
 function MachineDetailView({
   machine,
   agents,
@@ -614,21 +640,7 @@ function MachineDetailView({
   headerActions,
   showBack,
   showListActions,
-}: {
-  machine: RuntimeMachine;
-  agents: Agent[];
-  snapshot: AgentTask[];
-  now: number;
-  wsId: string;
-  isMobile: boolean;
-  actions?: React.ReactNode;
-  bootstrapping?: boolean;
-  onBack: () => void;
-  onComputerDeleted?: () => void;
-  headerActions: React.ReactNode;
-  showBack: boolean;
-  showListActions: boolean;
-}) {
+}: MachineDetailViewProps) {
   const { t } = useT("runtimes");
   const { getActorName } = useActorName();
   const openAgentPanel = useAgentPanelStore((s) => s.open);

@@ -43,8 +43,14 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {
 		t.Fatalf("capable registration missing %q: %#v", protocol.DaemonCapabilityAgentCredentialTransport, capable)
 	}
-	if containsString(capable, protocol.DaemonCapabilityAgentLifecycleActions) {
-		t.Fatalf("D6-dormant daemon must not advertise %q: %#v", protocol.DaemonCapabilityAgentLifecycleActions, capable)
+	// Task #62: advertised as of the atomic.Pointer deadlock fix + real
+	// end-to-end verification. Both legacy and credential-capable daemons
+	// advertise it — it does not depend on includeCredentialTransport.
+	if !containsString(legacy, protocol.DaemonCapabilityAgentLifecycleActions) {
+		t.Fatalf("legacy capabilities missing %q: %#v", protocol.DaemonCapabilityAgentLifecycleActions, legacy)
+	}
+	if !containsString(capable, protocol.DaemonCapabilityAgentLifecycleActions) {
+		t.Fatalf("capable registration missing %q: %#v", protocol.DaemonCapabilityAgentLifecycleActions, capable)
 	}
 }
 

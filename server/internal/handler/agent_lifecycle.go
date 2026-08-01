@@ -321,6 +321,15 @@ func (h *Handler) agentLifecyclePreflight(ctx context.Context, target db.Agent) 
 			actionReason = "agent_active"
 			actionMode = agentLifecycleImmediate
 		}
+		// Task #62: plain restart bypasses the busy-check entirely
+		// (CreateAgentLifecycleOperation always dispatches it immediately,
+		// even on an active agent) — the preview must match that, not the
+		// shared "mode" default, or the confirmation dialog tells the user
+		// their click will queue behind the current run when it will
+		// actually interrupt it right away.
+		if action == agentLifecycleRestart {
+			actionMode = agentLifecycleImmediate
+		}
 		actions[action] = AgentLifecycleActionPreflight{
 			Supported:      actionSupported,
 			DisabledReason: actionReason,

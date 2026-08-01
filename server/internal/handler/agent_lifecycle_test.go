@@ -60,11 +60,17 @@ func TestAgentLifecyclePreflightIsPerActionAndFullResetIsIdleOnly(t *testing.T) 
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode preflight: %v", err)
 	}
-	for _, action := range []AgentLifecycleActionKind{agentLifecycleRestart, agentLifecycleResetSessionRestart} {
-		got := response.Actions[action]
-		if !got.Supported || got.ExecutionMode != agentLifecycleAfterCurrentRun || got.DisabledReason != "" {
-			t.Fatalf("%s preflight = %+v", action, got)
-		}
+	// Task #62 follow-up: plain restart bypasses the busy-check entirely
+	// (CreateAgentLifecycleOperation dispatches it immediately even on an
+	// active agent), so its preview must say "immediate" too — unlike
+	// reset_session_restart, which still queues after the current run.
+	restart := response.Actions[agentLifecycleRestart]
+	if !restart.Supported || restart.ExecutionMode != agentLifecycleImmediate || restart.DisabledReason != "" {
+		t.Fatalf("restart preflight = %+v", restart)
+	}
+	resetSession := response.Actions[agentLifecycleResetSessionRestart]
+	if !resetSession.Supported || resetSession.ExecutionMode != agentLifecycleAfterCurrentRun || resetSession.DisabledReason != "" {
+		t.Fatalf("reset_session_restart preflight = %+v", resetSession)
 	}
 	full := response.Actions[agentLifecycleFullResetRestart]
 	if full.Supported || full.DisabledReason != "agent_active" || full.ExecutionMode != agentLifecycleImmediate {

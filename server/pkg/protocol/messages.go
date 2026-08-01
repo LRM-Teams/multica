@@ -294,8 +294,11 @@ const (
 	DaemonCapabilityMemoryCuration           = "memory_curation_v1"
 	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
 	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
-	// DaemonCapabilityAgentLifecycleActions is deliberately not advertised
-	// until D6 routes live wakes through the canonical agent runtime turn.
+	// DaemonCapabilityAgentLifecycleActions gates the restart/reset-session/
+	// full-reset lifecycle actions (task #62). Advertised as of the
+	// atomic.Pointer deadlock fix + real end-to-end verification (busy
+	// resident agent → restart → ForceKill → crash recovery → operation
+	// succeeded, confirmed against a live database, not mocked).
 	DaemonCapabilityAgentLifecycleActions = "agent_lifecycle_actions_v1"
 )
 

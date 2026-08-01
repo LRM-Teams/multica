@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw, X } from "lucide-react";
-import type { ChannelGoal, ChannelMember } from "@multica/core/types";
+import type { ChannelGoal, ChannelGoalProcessMarkdown, ChannelMember } from "@multica/core/types";
 import {
   channelGoalProcessOptions,
   channelGoalProcessesOptions,
@@ -21,10 +21,50 @@ import { useTimeAgo } from "../../i18n/use-time-ago";
 
 export const GOAL_PROCESS_PANEL_ID = "channel-goal-process-panel";
 
+const EMPTY_MEMBERS: ChannelMember[] = [];
+const EMPTY_PROCESSES: ChannelGoalProcessMarkdown[] = [];
+
 function managerAgents(members: ChannelMember[]): ChannelMember[] {
   return members.filter(
     (member) => member.member_type === "agent" && channelMemberRole(member) === "manager",
   );
+}
+
+function newestManagerId(
+  processes: ChannelGoalProcessMarkdown[],
+  managers: ChannelMember[],
+): string {
+  let bestId = "";
+  let bestTs = Number.NEGATIVE_INFINITY;
+  for (const doc of processes) {
+    if (!managers.some((m) => m.member_id === doc.manager_agent_id)) continue;
+    const ts = Date.parse(doc.updated_at);
+    if (Number.isFinite(ts) && ts > bestTs) {
+      bestTs = ts;
+      bestId = doc.manager_agent_id;
+    }
+  }
+  return bestId;
+}
+
+function resolveDefaultManagerId({
+  managerId,
+  currentUserId,
+  managers,
+  processes,
+}: {
+  managerId?: string;
+  currentUserId?: string;
+  managers: ChannelMember[];
+  processes: ChannelGoalProcessMarkdown[];
+}): string {
+  if (managerId && managers.some((m) => m.member_id === managerId)) return managerId;
+  if (currentUserId && managers.some((m) => m.member_id === currentUserId)) {
+    return currentUserId;
+  }
+  const newest = newestManagerId(processes, managers);
+  if (newest) return newest;
+  return managers[0]?.member_id ?? "";
 }
 
 /** LRM-932 (jianghp3 seq5569): process viewer under the top Goal card — not a forced right rail. */
@@ -45,36 +85,34 @@ export function GoalProcessPanel({
 }) {
   const { t } = useT("channels");
   const timeAgo = useTimeAgo();
-  const { data: members = [] } = useQuery(channelMembersOptions(channelId));
+  const { data: membersData } = useQuery(channelMembersOptions(channelId));
+  const members = membersData ?? EMPTY_MEMBERS;
   const managers = useMemo(() => managerAgents(members), [members]);
   const { data: processesData, refetch: refetchProcesses } = useQuery(
     channelGoalProcessesOptions(channelId),
   );
-  const processes = processesData?.processes ?? [];
+  const processes = processesData?.processes ?? EMPTY_PROCESSES;
 
-  const defaultManagerId = useMemo(() => {
-    if (managerId && managers.some((m) => m.member_id === managerId)) return managerId;
-    if (currentUserId && managers.some((m) => m.member_id === currentUserId)) {
-      return currentUserId;
-    }
-    const newest = [...processes].sort(
-      (a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at),
-    )[0];
-    if (newest && managers.some((m) => m.member_id === newest.manager_agent_id)) {
-      return newest.manager_agent_id;
-    }
-    return managers[0]?.member_id ?? "";
-  }, [managerId, managers, currentUserId, processes]);
+  const defaultManagerId = useMemo(
+    () =>
+      resolveDefaultManagerId({
+        managerId,
+        currentUserId,
+        managers,
+        processes,
+      }),
+    [managerId, managers, currentUserId, processes],
+  );
 
-  const [activeManagerId, setActiveManagerId] = useState(defaultManagerId);
-  useEffect(() => {
-    if (defaultManagerId && defaultManagerId !== activeManagerId) {
-      setActiveManagerId(defaultManagerId);
-    }
-  }, [defaultManagerId, activeManagerId]);
+  // User tab pick only; fall back to derived default (no effect sync).
+  const [pickedManagerId, setPickedManagerId] = useState<string | null>(null);
+  const activeManagerId =
+    pickedManagerId && managers.some((m) => m.member_id === pickedManagerId)
+      ? pickedManagerId
+      : defaultManagerId;
 
   const selectManager = (next: string) => {
-    setActiveManagerId(next);
+    setPickedManagerId(next);
     onManagerChange?.(next);
   };
 
@@ -197,7 +235,6 @@ export function GoalProcessPanel({
   return (
     <section
       id={GOAL_PROCESS_PANEL_ID}
-      role="region"
       aria-label={t(($) => $.goal.process)}
       data-testid="goal-process-panel"
       className="border-t border-border/40 bg-background"

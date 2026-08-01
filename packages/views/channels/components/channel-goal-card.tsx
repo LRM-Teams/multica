@@ -411,6 +411,7 @@ export function ChannelGoalCard({
         </div>
         {processOpen ? (
           <GoalProcessPanel
+            key={goal.id}
             channelId={channelId}
             goal={goal}
             onClose={() => setProcessOpen(false)}

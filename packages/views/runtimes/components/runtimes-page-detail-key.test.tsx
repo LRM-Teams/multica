@@ -123,6 +123,7 @@ function makeMachine(id: string, title: string): RuntimeMachine {
     title,
     subtitle: null,
     deviceInfo: null,
+    deviceName: null,
     cliVersion: "1.0.0",
     mode: "local",
     section: "local",

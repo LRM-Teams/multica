@@ -138,6 +138,7 @@ function makeMachine(
     title: "build-01",
     subtitle: null,
     deviceInfo: "build-01",
+    deviceName: null,
     cliVersion: "1.0.0",
     mode: "local",
     section: "remote",

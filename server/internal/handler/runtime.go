@@ -38,8 +38,15 @@ type AgentRuntimeResponse struct {
 	// advertise list. Older servers omit the object; treat missing as all-false.
 	ProviderCapabilities ProviderCapabilitiesWire    `json:"provider_capabilities"`
 	Status               string                      `json:"status"`
-	DeviceInfo           string                      `json:"device_info"`
-	Metadata             any                         `json:"metadata"`
+	// DeviceInfo is the legacy composite string daemons still register
+	// (e.g. "ubuntu · codex-cli 0.146.0"). Prefer DeviceName for the OS row.
+	DeviceInfo string `json:"device_info"`
+	// DeviceName is the machine label from registration (metadata.device_name).
+	// Daemon already sends device_name separately; we persist it so clients
+	// never re-parse device_info. Empty until the daemon re-registers after
+	// this persist landed. Older servers omit the field.
+	DeviceName string `json:"device_name"`
+	Metadata   any    `json:"metadata"`
 	Capabilities         []string                    `json:"capabilities"`
 	CurrentVersion       *string                     `json:"current_version"`
 	TargetVersion        *string                     `json:"target_version,omitempty"`
@@ -232,7 +239,6 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 	if runtimeHealth == "update_available" && availableUpdateTarget != nil {
 		targetVersion = availableUpdateTarget
 	}
-
 	return AgentRuntimeResponse{
 		ID:                   uuidToString(rt.ID),
 		WorkspaceID:          uuidToString(rt.WorkspaceID),
@@ -245,6 +251,7 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		ProviderCapabilities: providerCapabilitiesWire(rt.Provider),
 		Status:               rt.Status,
 		DeviceInfo:           rt.DeviceInfo,
+		DeviceName:           deviceNameFromRuntime(rt.DeviceInfo, metadata),
 		Metadata:             metadata,
 		Capabilities:         runtimeCapabilities(metadata),
 		CurrentVersion:       currentVersion,

@@ -106,7 +106,18 @@ export interface RuntimeDevice {
    */
   provider_capabilities?: ProviderCapabilities;
   status: "online" | "offline";
+  /**
+   * Legacy composite from daemon registration (e.g.
+   * "ubuntu · codex-cli 0.146.0"). Prefer `device_name` for the Basics →
+   * OS row. Older servers only send this field.
+   */
   device_info: string;
+  /**
+   * Machine label persisted from daemon register `device_name` (also in
+   * `metadata.device_name`). Not a parse of `device_info`. Absent/empty
+   * until the daemon re-registers after the server started persisting it.
+   */
+  device_name?: string;
   metadata: Record<string, unknown>;
   /**
    * Runtime/daemon-advertised protocol capabilities. Older daemons omit this;

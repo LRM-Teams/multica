@@ -434,6 +434,11 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			"launched_by":  req.LaunchedBy,
 			"capabilities": capabilities,
 		}
+		// Persist the structured device_name the daemon already sends so the
+		// API can expose it without re-parsing the glued device_info string.
+		if req.DeviceName != "" {
+			metadataMap["device_name"] = req.DeviceName
+		}
 		// sandbox_instance_id is forwarded only by daemon-enabled env-dispatch
 		// sandboxes; recording it on the runtime row lets env-dispatch discover
 		// the online runtime by (workspace, daemon_id, sandbox_instance_id).

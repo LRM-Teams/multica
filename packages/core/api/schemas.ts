@@ -223,6 +223,8 @@ export const AgentRuntimeSchema = z.object({
   launch_header: z.string().default(""),
   status: z.enum(["online", "offline"]),
   device_info: z.string().default(""),
+  // Machine label from daemon register (metadata.device_name). Older servers omit it.
+  device_name: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).catch({}),
   capabilities: z.array(z.string()).optional(),
   current_version: z.string().nullable(),

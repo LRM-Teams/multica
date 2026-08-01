@@ -50,11 +50,12 @@ type opencodeServeBackend struct {
 }
 
 type opencodeServeProcess struct {
-	cmd      *exec.Cmd
-	baseURL  string
-	password string
-	username string
-	client   *opencodeServeClient
+	cmd       *exec.Cmd
+	baseURL   string
+	password  string
+	username  string
+	client    *opencodeServeClient
+	stderrBuf *stderrTail
 
 	sessionMu sync.Mutex
 	sessionID string
@@ -139,8 +140,9 @@ func (b *opencodeServeBackend) executeTurn(ctx context.Context, prompt string, o
 		}
 		created, err := p.client.createSession(ctx, parentID)
 		if err != nil {
+			tail := p.stderrBuf.Tail()
 			b.disposeServer(p)
-			return Result{Status: "failed", Error: fmt.Sprintf("opencode serve create session: %v", err)}
+			return Result{Status: "failed", Error: withAgentStderr(fmt.Sprintf("opencode serve create session: %v", err), "opencode-serve", tail)}
 		}
 		sessionID = created
 		p.sessionMu.Lock()
@@ -156,20 +158,24 @@ func (b *opencodeServeBackend) executeTurn(ctx context.Context, prompt string, o
 		trySend(msgCh, msg)
 	})
 	if err != nil {
+		tail := p.stderrBuf.Tail()
 		b.disposeServer(p)
 		status := "failed"
+		errMsg := err.Error()
 		if ctx.Err() == context.DeadlineExceeded || errors.Is(err, errOpenCodeServeTurnTimeout) {
 			status = "timeout"
 		} else if ctx.Err() == context.Canceled {
 			status = "aborted"
+		} else {
+			errMsg = withAgentStderr(errMsg, "opencode-serve", tail)
 		}
-		return Result{Status: status, Output: output.String(), Error: err.Error(), SessionID: sessionID}
+		return Result{Status: status, Output: output.String(), Error: errMsg, SessionID: sessionID}
 	}
 	if turn.errMsg != "" {
 		return Result{
 			Status:    "failed",
 			Output:    output.String(),
-			Error:     turn.errMsg,
+			Error:     withAgentStderr(turn.errMsg, "opencode-serve", p.stderrBuf.Tail()),
 			SessionID: sessionID,
 			Usage:     turn.usage(opts.Model),
 		}
@@ -246,7 +252,11 @@ func (b *opencodeServeBackend) ensureServer(ctx context.Context, opts ExecOption
 	// a failed waitReady gave zero insight into what the subprocess itself
 	// was doing, because stdout was silently discarded.
 	cmd.Stdout = newLogWriter(b.cfg.Logger, "[opencode-serve:stdout] ")
-	cmd.Stderr = newLogWriter(b.cfg.Logger, "[opencode-serve:stderr] ")
+	// Buffered (not just logged) so a mid-turn crash can attach the
+	// subprocess's own error text to the surfaced Result.Error instead of a
+	// bare exit code — see stderrBuf.Tail() usage below and in executeTurn.
+	stderrBuf := newStderrTail(newLogWriter(b.cfg.Logger, "[opencode-serve:stderr] "), agentStderrTailBytes)
+	cmd.Stderr = stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start opencode serve: %w", err)
@@ -268,10 +278,10 @@ func (b *opencodeServeBackend) ensureServer(ctx context.Context, opts ExecOption
 		_ = cmd.Wait()
 		b.cfg.Logger.Warn("opencode serve readiness timeout",
 			"pid", cmd.Process.Pid, "port", port, "process_alive_at_timeout", alive, "liveness_check_known", known)
-		return nil, fmt.Errorf("opencode serve did not become ready: %w", err)
+		return nil, errors.New(withAgentStderr(fmt.Sprintf("opencode serve did not become ready: %v", err), "opencode-serve", stderrBuf.Tail()))
 	}
 
-	p := &opencodeServeProcess{cmd: cmd, baseURL: baseURL, password: password, username: username, client: client}
+	p := &opencodeServeProcess{cmd: cmd, baseURL: baseURL, password: password, username: username, client: client, stderrBuf: stderrBuf}
 	go client.runEventLoop(func(err error) {
 		b.cfg.Logger.Warn("opencode serve event stream ended", "error", err)
 	})
@@ -392,7 +402,7 @@ func newOpenCodeServeClient(baseURL, username, password string, logger *slog.Log
 		logger:   logger,
 		http:     &http.Client{Transport: transport},
 		waiters:  make(map[string]*opencodeServeWaiter),
-		closeCh: make(chan struct{}),
+		closeCh:  make(chan struct{}),
 	}
 }
 

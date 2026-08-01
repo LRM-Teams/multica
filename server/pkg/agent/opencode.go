@@ -133,7 +133,8 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		cancel()
 		return nil, fmt.Errorf("opencode stdout pipe: %w", err)
 	}
-	cmd.Stderr = newLogWriter(b.cfg.Logger, "[opencode:stderr] ")
+	stderrBuf := newStderrTail(newLogWriter(b.cfg.Logger, "[opencode:stderr] "), agentStderrTailBytes)
+	cmd.Stderr = stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -171,7 +172,9 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 			scanResult.errMsg = "execution cancelled"
 		} else if exitErr != nil && scanResult.status == "completed" {
 			scanResult.status = "failed"
-			scanResult.errMsg = fmt.Sprintf("opencode exited with error: %v", exitErr)
+			scanResult.errMsg = withAgentStderr(fmt.Sprintf("opencode exited with error: %v", exitErr), "opencode", stderrBuf.Tail())
+		} else if scanResult.status == "failed" && scanResult.errMsg != "" {
+			scanResult.errMsg = withAgentStderr(scanResult.errMsg, "opencode", stderrBuf.Tail())
 		}
 
 		b.cfg.Logger.Info("opencode finished", "pid", cmd.Process.Pid, "status", scanResult.status, "duration", duration.Round(time.Millisecond).String())

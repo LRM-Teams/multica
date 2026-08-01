@@ -23,7 +23,6 @@ import type { ResearchGraphNode, ResearchProductRoundCard } from "@multica/core/
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
-import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -62,6 +61,7 @@ import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchSessionChrome } from "./research-session-chrome";
+import { ResearchSessionPageSkeleton } from "./research-session-page-skeleton";
 import {
   ResearchStageChatMarker,
   ResearchStageTimeline,
@@ -218,13 +218,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   );
 
   // LRM-799: never keep a permanent skeleton on failure — only while loading.
+  // LRM-781: skeleton mirrors chrome + timeline + canvas/chat shell.
   if (isLoading) {
-    return (
-      <div className="flex h-full flex-col gap-0" aria-busy="true">
-        <Skeleton className="h-16 w-full" />
-        <Skeleton className="min-h-0 flex-1" />
-      </div>
-    );
+    return <ResearchSessionPageSkeleton />;
   }
 
   if (isError || !data) {

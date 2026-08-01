@@ -204,6 +204,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	if rdb != nil {
 		h.ModelListStore = handler.NewRedisModelListStore(rdb)
 		h.RestartStore = handler.NewRedisRestartStore(rdb)
+		h.AgentRestartStore = handler.NewRedisAgentRestartStore(rdb)
 		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
 		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
 		h.LivenessStore = handler.NewRedisLivenessStore(rdb)
@@ -1115,6 +1116,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/env", h.GetAgentEnv)
 					r.Put("/env", h.UpdateAgentEnv)
 					r.Post("/credentials", h.CreateAgentCredential)
+					// Manual single-agent restart (task #42①) — narrower than
+					// POST /api/runtimes/{runtimeId}/restart, which restarts
+					// the whole daemon process; this restarts only this
+					// agent's provider process, preserving its conversation
+					// session.
+					r.Post("/restart", h.InitiateAgentRestart)
+					r.Get("/restart/{restartId}", h.GetAgentRestart)
 				})
 			})
 

@@ -209,12 +209,16 @@ type canonicalAgentRuntimeAcquireRequest struct {
 type canonicalAgentRuntimePool struct {
 	mu    sync.Mutex
 	slots map[string]*canonicalAgentRuntimeSlot
+
+	crashMu          sync.Mutex
+	crashSubscribers []ResidentRuntimeCrashSubscriber
 }
 
 type canonicalAgentRuntimeSlot struct {
 	mu          sync.Mutex
 	fingerprint string
 	mode        canonicalRuntimeMode
+	provider    string
 	running     bool
 	idleSince   time.Time
 	backend     agent.Backend
@@ -291,6 +295,7 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 	prevMode := slot.mode
 	slot.fingerprint = fingerprint
 	slot.mode = request.Mode
+	slot.provider = request.Identity.Provider
 	slot.running = true
 
 	var backend agent.Backend
@@ -491,6 +496,112 @@ func (p *canonicalAgentRuntimePool) evictIdle(before time.Time) int {
 		slot.mu.Unlock()
 	}
 	return removed
+}
+
+// ResidentRuntimeCrashEvent describes a resident provider process found dead
+// while idle between turns — the case task #42 exists for. A turn's own
+// error path already surfaces a dead process; this is the proactive path for
+// when no turn happens to be running at the moment it died, which is exactly
+// how the ui-designer agent's opencode process sat crashed for 8 hours with
+// nothing noticing.
+type ResidentRuntimeCrashEvent struct {
+	AgentID    string
+	RuntimeID  string
+	Provider   string
+	DetectedAt time.Time
+}
+
+// ResidentRuntimeCrashSubscriber receives every crash checkResidentLiveness
+// finds. Multiple independent consumers (crash-recovery restart, external
+// status reporting) subscribe to the same detection pass instead of each
+// polling process liveness themselves.
+type ResidentRuntimeCrashSubscriber func(ResidentRuntimeCrashEvent)
+
+// subscribeResidentRuntimeCrash registers fn to run for every future crash
+// event. It does not replay past events.
+func (p *canonicalAgentRuntimePool) subscribeResidentRuntimeCrash(fn ResidentRuntimeCrashSubscriber) {
+	if p == nil || fn == nil {
+		return
+	}
+	p.crashMu.Lock()
+	defer p.crashMu.Unlock()
+	p.crashSubscribers = append(p.crashSubscribers, fn)
+}
+
+// checkResidentLiveness polls every idle resident slot's process liveness and
+// evicts + reports any found definitively dead (known=true, alive=false).
+// This must fail open: an in-flight turn, a non-resident slot, a backend that
+// doesn't implement agent.ResidentRuntimeLivenessChecker, or an unknown
+// liveness answer are all left untouched — none of those are proof of a
+// crash, and misclassifying a merely-quiet process as dead would kill a
+// perfectly healthy resident session.
+func (p *canonicalAgentRuntimePool) checkResidentLiveness(now time.Time) []ResidentRuntimeCrashEvent {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	type slotRef struct {
+		key  string
+		slot *canonicalAgentRuntimeSlot
+	}
+	refs := make([]slotRef, 0, len(p.slots))
+	for key, slot := range p.slots {
+		refs = append(refs, slotRef{key, slot})
+	}
+	p.mu.Unlock()
+
+	var events []ResidentRuntimeCrashEvent
+	for _, ref := range refs {
+		ref.slot.mu.Lock()
+		if ref.slot.running || ref.slot.mode != canonicalRuntimeResident || ref.slot.backend == nil {
+			ref.slot.mu.Unlock()
+			continue
+		}
+		checker, ok := ref.slot.backend.(agent.ResidentRuntimeLivenessChecker)
+		if !ok {
+			ref.slot.mu.Unlock()
+			continue
+		}
+		alive, known := checker.RuntimeAlive()
+		if !known || alive {
+			ref.slot.mu.Unlock()
+			continue
+		}
+		provider := ref.slot.provider
+		ref.slot.closeBackend()
+		ref.slot.fingerprint = ""
+		ref.slot.mode = ""
+		ref.slot.mu.Unlock()
+
+		agentID, runtimeID := splitCanonicalSlotKey(ref.key)
+		events = append(events, ResidentRuntimeCrashEvent{
+			AgentID:    agentID,
+			RuntimeID:  runtimeID,
+			Provider:   provider,
+			DetectedAt: now,
+		})
+	}
+
+	if len(events) == 0 {
+		return nil
+	}
+	p.crashMu.Lock()
+	subs := append([]ResidentRuntimeCrashSubscriber(nil), p.crashSubscribers...)
+	p.crashMu.Unlock()
+	for _, ev := range events {
+		for _, sub := range subs {
+			sub(ev)
+		}
+	}
+	return events
+}
+
+func splitCanonicalSlotKey(key string) (agentID, runtimeID string) {
+	parts := strings.SplitN(key, "\x00", 2)
+	if len(parts) != 2 {
+		return key, ""
+	}
+	return parts[0], parts[1]
 }
 
 func (p *canonicalAgentRuntimePool) closeAll() error {

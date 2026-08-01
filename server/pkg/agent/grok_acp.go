@@ -79,6 +79,12 @@ func (b *grokACPBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
 }
 
+// RuntimeAlive implements ResidentRuntimeLivenessChecker, letting a caller
+// poll process liveness between turns, not just during an in-flight one.
+func (b *grokACPBackend) RuntimeAlive() (bool, bool) {
+	return b.runtimeAlive()
+}
+
 func (b *grokACPBackend) runtimeAlive() (bool, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

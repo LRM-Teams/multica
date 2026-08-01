@@ -1162,6 +1162,34 @@ func (h *Handler) processHeartbeat(
 		}
 	}
 
+	// Probe then claim manual single-agent restart requests (task #42①).
+	// Unlike RestartStore above (whole daemon), this can deliver more than
+	// one request per heartbeat — several agents on the same runtime may
+	// each have a restart queued.
+	probeAgentRestartCtx, cancelProbeAgentRestart := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
+	hasAgentRestart, probeAgentRestartErr := h.AgentRestartStore.HasPending(probeAgentRestartCtx, runtimeID)
+	cancelProbeAgentRestart()
+	switch {
+	case probeAgentRestartErr == nil && hasAgentRestart:
+		pendingAgentRestarts, popAgentRestartErr := h.AgentRestartStore.PopAllPending(ctx, runtimeID)
+		if popAgentRestartErr != nil {
+			slog.Warn("agent restart PopAllPending failed", "error", popAgentRestartErr, "runtime_id", runtimeID)
+		}
+		for _, pending := range pendingAgentRestarts {
+			ack.PendingAgentRestarts = append(ack.PendingAgentRestarts, protocol.DaemonHeartbeatPendingAgentRestart{
+				ID:        pending.ID,
+				AgentID:   pending.AgentID,
+				RuntimeID: pending.RuntimeID,
+			})
+		}
+	case probeAgentRestartErr != nil:
+		if errors.Is(probeAgentRestartErr, context.DeadlineExceeded) || errors.Is(probeAgentRestartErr, context.Canceled) {
+			slog.Warn("agent restart HasPending timed out", "runtime_id", runtimeID)
+		} else {
+			slog.Warn("agent restart HasPending failed", "error", probeAgentRestartErr, "runtime_id", runtimeID)
+		}
+	}
+
 	// Probe then claim the model list queue. Same pattern as the local-skill
 	// queues below — a slow shared store cannot stall the heartbeat on
 	// empty-queue ticks, but the claim itself runs unbounded because its

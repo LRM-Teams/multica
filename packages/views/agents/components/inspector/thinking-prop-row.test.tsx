@@ -60,15 +60,22 @@ const NO_THINKING_MODEL: RuntimeModel = {
   default: true,
 };
 
-function listResult(models: RuntimeModel[]): RuntimeModelListRequest {
+function listResult(
+  models: RuntimeModel[],
+  overrides: Partial<RuntimeModelListRequest> = {},
+): RuntimeModelListRequest {
   return {
     id: "req-1",
     runtime_id: "runtime-1",
     status: "completed",
     models,
     supported: true,
+    // Runtime supports a reasoning catalog by default in these fixtures;
+    // the dedicated test below covers the false case explicitly (#59).
+    thinking_discovery: true,
     created_at: "2026-05-20T00:00:00Z",
     updated_at: "2026-05-20T00:00:00Z",
+    ...overrides,
   };
 }
 
@@ -131,6 +138,34 @@ describe("ThinkingPropRow", () => {
     await waitFor(() => {
       expect(screen.queryByText("Thinking")).toBeNull();
     });
+  });
+
+  it("hides the row when thinking_discovery is false, even if the model still has levels and nothing is persisted (#59)", async () => {
+    // Deliberately inconsistent fixture: CLAUDE_MODEL carries a full
+    // supported_levels catalog, but the runtime-level capability flag says
+    // no. thinking_discovery must win — it's the coarser, backend-owned
+    // signal, and per-model catalog data can lag or disagree in edge cases
+    // (stale cache, mid-rollout state). This is the exact acceptance
+    // scenario Parker asked for: mock capability=false, assert hidden,
+    // don't rely on "the providers I tested happened to also lack levels."
+    mockInitiateListModels.mockResolvedValue(
+      listResult([CLAUDE_MODEL], { thinking_discovery: false }),
+    );
+    renderRow({ value: "" });
+
+    // The row is also hidden at t=0, before the query resolves — asserting
+    // queryByText(...).toBeNull() inside waitFor would pass trivially on
+    // that first (pre-data) check and never actually confirm the SETTLED
+    // state once CLAUDE_MODEL's levels have loaded. Confirm the query
+    // actually resolved with our fixture first (findByText on something
+    // that only exists post-resolution would work too, but there's no such
+    // marker when the row is hidden — so explicitly wait past the mocked
+    // promise instead), then assert the row stayed hidden.
+    await waitFor(() => {
+      expect(mockInitiateListModels).toHaveBeenCalled();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText("Thinking")).toBeNull();
   });
 
   it("hides the row while the runtime is offline (no query fires)", () => {

@@ -38,16 +38,14 @@ type AgentRuntimeResponse struct {
 	// advertise list. Older servers omit the object; treat missing as all-false.
 	ProviderCapabilities ProviderCapabilitiesWire    `json:"provider_capabilities"`
 	Status               string                      `json:"status"`
-	// DeviceInfo is the legacy composite "device · runtime_version" string
-	// daemons still register. Prefer DeviceName + RuntimeVersion for display.
+	// DeviceInfo is the legacy composite string daemons still register
+	// (e.g. "ubuntu · codex-cli 0.146.0"). Prefer DeviceName for the OS row.
 	DeviceInfo string `json:"device_info"`
-	// DeviceName is the OS / machine label half of DeviceInfo (e.g. "ubuntu").
-	// Empty when DeviceInfo has no separator or is empty.
+	// DeviceName is the Basics → OS label derived from DeviceInfo: CA version
+	// halves are stripped; when a pretty OS-arch half is present it wins.
+	// Empty for daemon placeholders / CA-only strings. Older servers omit it.
 	DeviceName string `json:"device_name"`
-	// RuntimeVersion is the CLI/runtime half of DeviceInfo (e.g. "codex-cli 0.146.0").
-	// Empty when DeviceInfo has no separator or is empty.
-	RuntimeVersion string `json:"runtime_version"`
-	Metadata       any    `json:"metadata"`
+	Metadata   any    `json:"metadata"`
 	Capabilities         []string                    `json:"capabilities"`
 	CurrentVersion       *string                     `json:"current_version"`
 	TargetVersion        *string                     `json:"target_version,omitempty"`
@@ -240,8 +238,6 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 	if runtimeHealth == "update_available" && availableUpdateTarget != nil {
 		targetVersion = availableUpdateTarget
 	}
-	deviceName, runtimeVersion := splitDeviceInfo(rt.DeviceInfo)
-
 	return AgentRuntimeResponse{
 		ID:                   uuidToString(rt.ID),
 		WorkspaceID:          uuidToString(rt.WorkspaceID),
@@ -254,8 +250,7 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		ProviderCapabilities: providerCapabilitiesWire(rt.Provider),
 		Status:               rt.Status,
 		DeviceInfo:           rt.DeviceInfo,
-		DeviceName:           deviceName,
-		RuntimeVersion:       runtimeVersion,
+		DeviceName:           deviceNameFromDeviceInfo(rt.DeviceInfo),
 		Metadata:             metadata,
 		Capabilities:         runtimeCapabilities(metadata),
 		CurrentVersion:       currentVersion,

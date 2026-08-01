@@ -107,21 +107,17 @@ export interface RuntimeDevice {
   provider_capabilities?: ProviderCapabilities;
   status: "online" | "offline";
   /**
-   * Legacy composite "device · runtime_version" from daemon registration.
-   * Prefer `device_name` + `runtime_version` for display. Older servers
-   * only send this field.
+   * Legacy composite from daemon registration (e.g.
+   * "ubuntu · codex-cli 0.146.0"). Prefer `device_name` for the Basics →
+   * OS row. Older servers only send this field.
    */
   device_info: string;
   /**
-   * OS / machine label half of `device_info` (e.g. "ubuntu"). Empty when
-   * the server predates the split or `device_info` has no separator.
+   * Basics → OS label derived server-side from `device_info`: CA version
+   * halves stripped; pretty OS-arch (e.g. "Linux (x86_64)") wins over
+   * hostname. Empty for daemon placeholders. Older servers omit it.
    */
   device_name?: string;
-  /**
-   * CLI/runtime half of `device_info` (e.g. "codex-cli 0.146.0"). Empty
-   * when the server predates the split or `device_info` has no separator.
-   */
-  runtime_version?: string;
   metadata: Record<string, unknown>;
   /**
    * Runtime/daemon-advertised protocol capabilities. Older daemons omit this;

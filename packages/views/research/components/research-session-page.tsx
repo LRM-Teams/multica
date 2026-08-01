@@ -1,6 +1,6 @@
 "use client";
 
-import { useReducer, useRef } from "react";
+import { useMemo, useReducer, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageSquare } from "lucide-react";
 import { api } from "@multica/core/api";
@@ -25,10 +25,18 @@ import {
   type FleetStepCardModel,
 } from "../lib/fleet-step-cards";
 import {
+  buildExplorationDimensions,
+  buildHumanBoundary,
+  buildSourceStrategy,
+  dimensionFamilyOf,
+} from "../lib/m2-visibility";
+import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
   stageAnchorId,
 } from "../lib/research-stages";
+import { ExplorationRail } from "./exploration-rail";
+import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchCanvas } from "./research-canvas";
 import { ResearchChatCard } from "./research-chat-card";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
@@ -39,6 +47,8 @@ import {
   ResearchStageChatMarker,
   ResearchStageTimeline,
 } from "./research-stage-timeline";
+import { SourceStrategyStrip } from "./source-strategy-strip";
+import { VisibilityTabs } from "./visibility-tabs";
 
 type UiState = {
   selected: ResearchGraphNode | null;
@@ -46,6 +56,7 @@ type UiState = {
   createProject: boolean;
   createChannel: boolean;
   deliveryOpen: boolean;
+  selectedFamily: string | null;
 };
 
 type UiAction =
@@ -54,6 +65,7 @@ type UiAction =
   | { type: "setCreateProject"; value: boolean }
   | { type: "setCreateChannel"; value: boolean }
   | { type: "setDeliveryOpen"; value: boolean }
+  | { type: "setFamily"; family: string | null }
   | { type: "clearBody" };
 
 const initialUi: UiState = {
@@ -62,12 +74,17 @@ const initialUi: UiState = {
   createProject: true,
   createChannel: true,
   deliveryOpen: false,
+  selectedFamily: null,
 };
 
 function uiReducer(state: UiState, action: UiAction): UiState {
   switch (action.type) {
     case "select":
-      return { ...state, selected: action.node };
+      return {
+        ...state,
+        selected: action.node,
+        selectedFamily: action.node ? dimensionFamilyOf(action.node) : state.selectedFamily,
+      };
     case "setBody":
       return { ...state, body: action.body };
     case "setCreateProject":
@@ -76,6 +93,8 @@ function uiReducer(state: UiState, action: UiAction): UiState {
       return { ...state, createChannel: action.value };
     case "setDeliveryOpen":
       return { ...state, deliveryOpen: action.value };
+    case "setFamily":
+      return { ...state, selectedFamily: action.family };
     case "clearBody":
       return { ...state, body: "" };
     default:
@@ -121,6 +140,20 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
     },
   });
+
+  // LRM-890 M2 visibility models — derived from graph nodes / sources / report.
+  const explorationDims = useMemo(
+    () => buildExplorationDimensions(data?.nodes ?? []),
+    [data?.nodes],
+  );
+  const sourceStrategy = useMemo(
+    () => buildSourceStrategy(data?.sources ?? []),
+    [data?.sources],
+  );
+  const humanBoundary = useMemo(
+    () => buildHumanBoundary(data?.nodes ?? [], data?.report),
+    [data?.nodes, data?.report],
+  );
 
   if (isLoading || !data) {
     return (
@@ -210,7 +243,35 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         onSelectStage={scrollToStage}
       />
 
+      <VisibilityTabs
+        dimensions={explorationDims}
+        strategy={sourceStrategy}
+        boundary={humanBoundary}
+        selectedFamily={ui.selectedFamily}
+        selectedQuestionId={ui.selected?.id}
+        onSelectFamily={(family) => dispatch({ type: "setFamily", family })}
+        onSelectQuestion={(id) => {
+          const node = data.nodes.find((n) => n.id === id) ?? null;
+          dispatch({ type: "select", node });
+        }}
+      />
+
+      <div className="hidden border-b sm:block">
+        <SourceStrategyStrip model={sourceStrategy} />
+      </div>
+
       <div className="flex min-h-0 flex-1">
+        <ExplorationRail
+          className="hidden sm:flex"
+          dimensions={explorationDims}
+          selectedFamily={ui.selectedFamily}
+          selectedQuestionId={ui.selected?.id}
+          onSelectFamily={(family) => dispatch({ type: "setFamily", family })}
+          onSelectQuestion={(id) => {
+            const node = data.nodes.find((n) => n.id === id) ?? null;
+            dispatch({ type: "select", node });
+          }}
+        />
         <section className="relative min-h-0 min-w-0 flex-1">
           <ResearchCanvas
             nodes={data.nodes}
@@ -247,6 +308,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           ) : null}
         </section>
 
+        <aside className="hidden w-[260px] shrink-0 flex-col gap-3 overflow-y-auto border-l bg-background p-3 lg:flex">
+          <HumanBoundaryCard model={humanBoundary} />
+        </aside>
+
         {chatOpen ? (
           <aside className="flex w-[min(100%,380px)] shrink-0 flex-col border-l bg-background">
             <div className="flex items-center justify-between border-b px-3 py-2.5">
@@ -254,6 +319,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
               <Button type="button" size="sm" variant="ghost" onClick={() => setChatOpen(false)}>
                 {t(($) => $.panel.hide_chat)}
               </Button>
+            </div>
+            <div className="border-b p-3 lg:hidden">
+              <HumanBoundaryCard model={humanBoundary} />
             </div>
             <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
               {t(($) => $.panel.fleet)}:{" "}
@@ -451,6 +519,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         report={report}
         sources={sources}
         titleFallback={session.title}
+        boundary={humanBoundary}
       />
     </div>
   );

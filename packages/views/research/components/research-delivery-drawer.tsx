@@ -1,6 +1,7 @@
 "use client";
 
 import type { ResearchReport, ResearchSource } from "@multica/core/types";
+import type { HumanBoundaryModel } from "../lib/m2-visibility";
 import { ReportReader } from "../report/report-reader";
 
 /**
@@ -13,6 +14,8 @@ export function ResearchDeliveryDrawer(props: {
   report: ResearchReport | null | undefined;
   sources: ResearchSource[];
   titleFallback?: string;
+  /** LRM-890 — shared with session right rail. */
+  boundary?: HumanBoundaryModel;
 }) {
   return <ResearchDeliveryModal {...props} />;
 }
@@ -23,12 +26,14 @@ export function ResearchDeliveryModal({
   report,
   sources,
   titleFallback,
+  boundary,
 }: {
   open: boolean;
   onClose: () => void;
   report: ResearchReport | null | undefined;
   sources: ResearchSource[];
   titleFallback?: string;
+  boundary?: HumanBoundaryModel;
 }) {
   return (
     <ReportReader
@@ -37,6 +42,7 @@ export function ResearchDeliveryModal({
       report={report}
       sources={sources}
       titleFallback={titleFallback}
+      boundary={boundary}
     />
   );
 }

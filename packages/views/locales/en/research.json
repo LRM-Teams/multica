@@ -223,5 +223,32 @@
     "col_type": "Type",
     "col_source": "Source",
     "col_purpose": "Purpose"
+  },
+  "m2": {
+    "rail_title": "Exploration trail",
+    "rail_hint": "Dimension families · not a fixed checklist",
+    "rail_empty": "Dimension tree roots appear after kickoff…",
+    "required": "Required",
+    "status": {
+      "open": "Exploring",
+      "covered": "Covered",
+      "gap": "Gap",
+      "dead": "Dead end"
+    },
+    "strategy_label": "Source strategy",
+    "strategy_empty": "No strategy traces yet — general/domain chips appear after source upserts.",
+    "layer_general": "General",
+    "layer_domain": "Domain",
+    "why_label": "Why here:",
+    "boundary_title": "Human ↔ AI boundary",
+    "boundary_chip": "With report",
+    "boundary_empty": "Delivery will fill AI ceiling / must-have-human / human vs AI.",
+    "ai_ceiling": "AI ceiling",
+    "must_human": "Must have human",
+    "col_human": "Human",
+    "col_ai": "AI",
+    "tab_trail": "Trail",
+    "tab_sources": "Sources",
+    "tab_boundary": "Boundary"
   }
 }

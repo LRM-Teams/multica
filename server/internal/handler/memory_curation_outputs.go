@@ -179,7 +179,26 @@ type memoryCurationAgentRunStatsAggregate struct {
 	ConflictsFound        int  `json:"conflicts_found"`
 }
 
-type memoryCurationAgentRunStatusCounts struct{ pending, success, failed int }
+type memoryCurationAgentRunStatusCounts struct{ pending, success, failed, skipped int }
+
+// countMemoryCurationChildStatuses classifies agent-run statuses for parent
+// finalization. Offline skips are terminal and must not keep the parent pending.
+func countMemoryCurationChildStatuses(statuses []string) memoryCurationAgentRunStatusCounts {
+	counts := memoryCurationAgentRunStatusCounts{}
+	for _, childStatus := range statuses {
+		switch childStatus {
+		case "succeeded":
+			counts.success++
+		case "failed", "cancelled":
+			counts.failed++
+		case "skipped":
+			counts.skipped++
+		default:
+			counts.pending++
+		}
+	}
+	return counts
+}
 
 func aggregateMemoryCurationAgentRunStats(ctx context.Context, exec dbExecutor, parentRunID string) (memoryCurationAgentRunStatsAggregate, memoryCurationAgentRunStatusCounts, error) {
 	rows, err := exec.Query(ctx, `
@@ -192,13 +211,13 @@ func aggregateMemoryCurationAgentRunStats(ctx context.Context, exec dbExecutor, 
 		return memoryCurationAgentRunStatsAggregate{}, memoryCurationAgentRunStatusCounts{}, err
 	}
 	defer rows.Close()
-	counts := memoryCurationAgentRunStatusCounts{}
+	statuses := make([]string, 0)
 	aggregate := memoryCurationAgentRunStatsAggregate{}
 	for rows.Next() {
 		var childStatus string
 		var raw []byte
 		if err := rows.Scan(&childStatus, &raw); err != nil {
-			return aggregate, counts, err
+			return aggregate, memoryCurationAgentRunStatusCounts{}, err
 		}
 		if raw != nil {
 			var cs memoryCurationAgentRunStatsAggregate
@@ -210,16 +229,12 @@ func aggregateMemoryCurationAgentRunStats(ctx context.Context, exec dbExecutor, 
 			aggregate.EvidenceCollected += cs.EvidenceCollected
 			aggregate.ConflictsFound += cs.ConflictsFound
 		}
-		switch childStatus {
-		case "succeeded":
-			counts.success++
-		case "failed", "cancelled":
-			counts.failed++
-		default:
-			counts.pending++
-		}
+		statuses = append(statuses, childStatus)
 	}
-	return aggregate, counts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return aggregate, memoryCurationAgentRunStatusCounts{}, err
+	}
+	return aggregate, countMemoryCurationChildStatuses(statuses), nil
 }
 
 func mergeMemoryCurationParentStatsWithAgentRuns(ctx context.Context, exec dbExecutor, parentRunID string) error {
@@ -233,7 +248,7 @@ func mergeMemoryCurationParentStatsWithAgentRuns(ctx context.Context, exec dbExe
 	if err != nil {
 		return err
 	}
-	stats["agents_scanned"] = intFromStats(stats, "agents_scanned") + counts.success + counts.failed + counts.pending
+	stats["agents_scanned"] = intFromStats(stats, "agents_scanned") + counts.success + counts.failed + counts.skipped + counts.pending
 	stats["agents_changed"] = intFromStats(stats, "agents_changed") + boolToInt(child.Changed)
 	stats["daily_files_written"] = intFromStats(stats, "daily_files_written") + child.DailyFilesWritten
 	stats["review_candidates_added"] = intFromStats(stats, "review_candidates_added") + child.ReviewCandidatesAdded
@@ -242,6 +257,7 @@ func mergeMemoryCurationParentStatsWithAgentRuns(ctx context.Context, exec dbExe
 	stats["conflicts_found"] = intFromStats(stats, "conflicts_found") + child.ConflictsFound
 	stats["child_success_count"] = counts.success
 	stats["child_failed_count"] = counts.failed
+	stats["child_skipped_count"] = counts.skipped
 	stats["child_pending_count"] = counts.pending
 	merged, _ := json.Marshal(stats)
 	_, err = exec.Exec(ctx, `UPDATE memory_curation_run SET stats = $2::jsonb WHERE id = $1::uuid`, parentRunID, merged)
@@ -271,7 +287,7 @@ func finalizeMemoryCurationParentFromAgentRuns(ctx context.Context, exec dbExecu
 		EvidenceCollected     int  `json:"evidence_collected"`
 		ConflictsFound        int  `json:"conflicts_found"`
 	}
-	counts := struct{ pending, success, failed int }{}
+	statuses := make([]string, 0)
 	aggregate := childStats{}
 	for rows.Next() {
 		var childStatus string
@@ -289,20 +305,14 @@ func finalizeMemoryCurationParentFromAgentRuns(ctx context.Context, exec dbExecu
 			aggregate.EvidenceCollected += cs.EvidenceCollected
 			aggregate.ConflictsFound += cs.ConflictsFound
 		}
-		switch childStatus {
-		case "succeeded":
-			counts.success++
-		case "failed", "cancelled":
-			counts.failed++
-		default:
-			counts.pending++
-		}
+		statuses = append(statuses, childStatus)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	counts := countMemoryCurationChildStatuses(statuses)
 	stats, _ := json.Marshal(map[string]any{
-		"agents_scanned":          counts.success + counts.failed + counts.pending,
+		"agents_scanned":          counts.success + counts.failed + counts.skipped + counts.pending,
 		"agents_changed":          boolToInt(aggregate.Changed),
 		"daily_files_written":     aggregate.DailyFilesWritten,
 		"review_candidates_added": aggregate.ReviewCandidatesAdded,
@@ -311,11 +321,15 @@ func finalizeMemoryCurationParentFromAgentRuns(ctx context.Context, exec dbExecu
 		"conflicts_found":         aggregate.ConflictsFound,
 		"child_success_count":     counts.success,
 		"child_failed_count":      counts.failed,
+		"child_skipped_count":     counts.skipped,
 		"child_pending_count":     counts.pending,
 	})
 	if stage == "agent_self_review" {
 		parentStatus := "failed"
 		errorText := "all self-review child runs failed"
+		if counts.success == 0 && counts.failed == 0 && counts.skipped > 0 && counts.pending == 0 {
+			errorText = "no online agents available for self-review"
+		}
 		if counts.success > 0 && counts.pending == 0 {
 			parentStatus = "succeeded"
 			errorText = ""

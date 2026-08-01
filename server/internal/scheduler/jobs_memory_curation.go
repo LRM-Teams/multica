@@ -138,10 +138,12 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 						RETURNING id, workspace_id, runtime_id
 					), child_runs AS (
 						INSERT INTO memory_curation_agent_run (
-						  parent_run_id, workspace_id, agent_id, runtime_id, stage, status
+						  parent_run_id, workspace_id, agent_id, runtime_id, stage, status, error, finished_at
 						)
 						SELECT i.id, i.workspace_id, a.id, COALESCE(a.runtime_id, i.runtime_id), 'agent_self_review',
-						       CASE WHEN rt.status = 'online' THEN 'queued' ELSE 'waiting_runtime' END
+						       CASE WHEN rt.status = 'online' THEN 'queued' ELSE 'skipped' END,
+						       CASE WHEN rt.status = 'online' THEN '' ELSE 'runtime offline; skipped' END,
+						       CASE WHEN rt.status = 'online' THEN NULL ELSE now() END
 						  FROM inserted i
 						  JOIN agent a ON a.workspace_id = i.workspace_id AND a.id = ANY($13::uuid[])
 						  LEFT JOIN agent_runtime rt ON rt.id = COALESCE(a.runtime_id, i.runtime_id)
@@ -232,10 +234,12 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 		  RETURNING id, workspace_id
 		), child_runs AS (
 		  INSERT INTO memory_curation_agent_run (
-		    parent_run_id, workspace_id, agent_id, runtime_id, stage, status
+		    parent_run_id, workspace_id, agent_id, runtime_id, stage, status, error, finished_at
 		  )
 		  SELECT i.id, i.workspace_id, a.agent_id, a.runtime_id, 'agent_self_review',
-		         CASE WHEN a.runtime_status = 'online' THEN 'queued' ELSE 'waiting_runtime' END
+		         CASE WHEN a.runtime_status = 'online' THEN 'queued' ELSE 'skipped' END,
+		         CASE WHEN a.runtime_status = 'online' THEN '' ELSE 'runtime offline; skipped' END,
+		         CASE WHEN a.runtime_status = 'online' THEN NULL ELSE now() END
 		    FROM inserted i
 		    JOIN active_agents a ON a.workspace_id = i.workspace_id
 		  ON CONFLICT (parent_run_id, agent_id, stage) DO NOTHING

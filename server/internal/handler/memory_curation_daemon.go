@@ -266,7 +266,7 @@ func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, runtimeID, 
 	`, runtimeID, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts); err != nil {
 		return err
 	}
-	_, err := h.DB.Exec(ctx, `
+	if _, err := h.DB.Exec(ctx, `
 		UPDATE memory_curation_agent_run
 		   SET status = 'failed', finished_at = now(), updated_at = now(),
 		       error = CASE
@@ -281,8 +281,10 @@ func (h *Handler) failExpiredMemoryCurationRuns(ctx context.Context, runtimeID, 
 		     (started_at IS NOT NULL AND started_at < now() - make_interval(secs => $3::double precision))
 		     OR (claimed_at < now() - make_interval(secs => $4::double precision) AND attempt >= $5)
 		   )
-	`, runtimeID, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts)
-	return err
+	`, runtimeID, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts); err != nil {
+		return err
+	}
+	return h.reconcileOfflineMemoryCurationAgentRuns(ctx, uuidToString(workspaceID), "")
 }
 
 // failExpiredMemoryCurationRunsForWorkspace sweeps zombie running rows for an
@@ -307,7 +309,7 @@ func (h *Handler) failExpiredMemoryCurationRunsForWorkspace(ctx context.Context,
 	`, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts); err != nil {
 		return err
 	}
-	_, err := h.DB.Exec(ctx, `
+	if _, err := h.DB.Exec(ctx, `
 		UPDATE memory_curation_agent_run
 		   SET status = 'failed', finished_at = now(), updated_at = now(),
 		       error = CASE
@@ -321,8 +323,80 @@ func (h *Handler) failExpiredMemoryCurationRunsForWorkspace(ctx context.Context,
 		     (started_at IS NOT NULL AND started_at < now() - make_interval(secs => $2::double precision))
 		     OR (claimed_at < now() - make_interval(secs => $3::double precision) AND attempt >= $4)
 		   )
-	`, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts)
-	return err
+	`, workspaceID, memoryCurationMaxRunAge.Seconds(), memoryCurationReclaimTimeout.Seconds(), memoryCurationMaxAttempts); err != nil {
+		return err
+	}
+	return h.reconcileOfflineMemoryCurationAgentRuns(ctx, workspaceID, "")
+}
+
+const memoryCurationOfflineSkipError = "runtime offline; skipped"
+
+// reconcileOfflineMemoryCurationAgentRuns marks waiting_runtime children whose
+// runtime is missing/offline as skipped, then finalizes any parent whose
+// remaining children are all terminal. Offline agents must not block the
+// rest of a self-review wave.
+func (h *Handler) reconcileOfflineMemoryCurationAgentRuns(ctx context.Context, workspaceID, parentRunID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	parentRunID = strings.TrimSpace(parentRunID)
+	if workspaceID == "" && parentRunID == "" {
+		return nil
+	}
+	if _, err := h.DB.Exec(ctx, `
+		UPDATE memory_curation_agent_run cr
+		   SET status = 'skipped',
+		       error = $3,
+		       finished_at = COALESCE(finished_at, now()),
+		       updated_at = now()
+		 WHERE cr.status = 'waiting_runtime'
+		   AND ($1 = '' OR cr.workspace_id = $1::uuid)
+		   AND ($2 = '' OR cr.parent_run_id = $2::uuid)
+		   AND (
+		     cr.runtime_id IS NULL
+		     OR NOT EXISTS (
+		       SELECT 1 FROM agent_runtime rt
+		        WHERE rt.id = cr.runtime_id AND rt.status = 'online'
+		     )
+		   )
+	`, workspaceID, parentRunID, memoryCurationOfflineSkipError); err != nil {
+		return err
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT r.id::text
+		  FROM memory_curation_run r
+		 WHERE r.status IN ('queued', 'waiting_runtime', 'running')
+		   AND r.stage IN ('agent_self_review', 'all')
+		   AND ($1 = '' OR r.workspace_id = $1::uuid)
+		   AND ($2 = '' OR r.id = $2::uuid)
+		   AND EXISTS (
+		     SELECT 1 FROM memory_curation_agent_run cr WHERE cr.parent_run_id = r.id
+		   )
+		   AND NOT EXISTS (
+		     SELECT 1 FROM memory_curation_agent_run cr
+		      WHERE cr.parent_run_id = r.id
+		        AND cr.status IN ('queued', 'waiting_runtime', 'running')
+		   )
+	`, workspaceID, parentRunID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	parentIDs := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		parentIDs = append(parentIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range parentIDs {
+		if err := finalizeMemoryCurationParentFromAgentRuns(ctx, h.DB, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *Handler) memoryCurationEvidenceBundles(ctx context.Context, workspaceID string, agentIDs []string, dateFrom, dateTo string, teamCurationOnly bool) []protocol.DaemonMemoryCurationEvidenceBundle {
@@ -463,6 +537,28 @@ func (h *Handler) ReportMemoryCurationRunResult(w http.ResponseWriter, r *http.R
 				writeError(w, http.StatusInternalServerError, "failed to persist self-review outputs")
 				return
 			}
+		}
+		// Skip offline siblings inside the same transaction path via a post-commit
+		// reconcile is racy; mark them here before parent finalization so one
+		// finished online child can close the wave without waiting forever.
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE memory_curation_agent_run cr
+			   SET status = 'skipped',
+			       error = $2,
+			       finished_at = COALESCE(finished_at, now()),
+			       updated_at = now()
+			 WHERE cr.parent_run_id = $1::uuid
+			   AND cr.status = 'waiting_runtime'
+			   AND (
+			     cr.runtime_id IS NULL
+			     OR NOT EXISTS (
+			       SELECT 1 FROM agent_runtime rt
+			        WHERE rt.id = cr.runtime_id AND rt.status = 'online'
+			     )
+			   )
+		`, childParentRunID, memoryCurationOfflineSkipError); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to skip offline self-review children")
+			return
 		}
 		if err := finalizeMemoryCurationParentFromAgentRuns(r.Context(), tx, childParentRunID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to aggregate parent curation run")

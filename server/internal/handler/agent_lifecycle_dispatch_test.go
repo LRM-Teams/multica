@@ -2,13 +2,17 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestInMemoryAgentLifecycleDispatchStore_HasPending(t *testing.T) {
 	ctx := context.Background()
-	store := NewInMemoryAgentLifecycleDispatchStore()
+	store := NewInMemoryAgentLifecycleDispatchStore(nil)
 
 	has, err := store.HasPending(ctx, "runtime-none")
 	if err != nil {
@@ -37,7 +41,7 @@ func TestInMemoryAgentLifecycleDispatchStore_HasPending(t *testing.T) {
 // one per cycle.
 func TestInMemoryAgentLifecycleDispatchStore_PopAllPendingDeliversEveryAgentOnTheRuntime(t *testing.T) {
 	ctx := context.Background()
-	store := NewInMemoryAgentLifecycleDispatchStore()
+	store := NewInMemoryAgentLifecycleDispatchStore(nil)
 
 	if _, err := store.Create(ctx, "op-1", "agent-1", "runtime-shared", "workspace-a", "restart"); err != nil {
 		t.Fatalf("create first: %v", err)
@@ -89,7 +93,7 @@ func TestInMemoryAgentLifecycleDispatchStore_PopAllPendingDeliversEveryAgentOnTh
 
 func TestInMemoryAgentLifecycleDispatchStore_PendingTimesOut(t *testing.T) {
 	ctx := context.Background()
-	store := NewInMemoryAgentLifecycleDispatchStore()
+	store := NewInMemoryAgentLifecycleDispatchStore(nil)
 
 	if _, err := store.Create(ctx, "op-stale", "agent-stale", "runtime-stale", "workspace-a", "restart"); err != nil {
 		t.Fatalf("create: %v", err)
@@ -104,5 +108,62 @@ func TestInMemoryAgentLifecycleDispatchStore_PendingTimesOut(t *testing.T) {
 	}
 	if has {
 		t.Fatal("expected timed-out dispatch to no longer count as pending")
+	}
+}
+
+// TestAgentLifecycleDispatchTimeoutFailsTheOperation pins the fix Parker/Alice
+// asked for in #52 review: a dispatch that never gets claimed (the daemon
+// never heartbeats, or the runtime dies in the window between the create-time
+// online check and the next heartbeat) must not leave its
+// agent_lifecycle_operation row stuck at "running" forever — that permanently
+// overlays the agent's health as "restarting" with no way out. The dispatch
+// store's own timeout check is the single source of truth (task #52 review:
+// a second, independently-timed sweep would be a second clock that can drift
+// from this one) — it drives the operation-row update directly via the
+// injected onTimeout hook, not a separate poller.
+func TestAgentLifecycleDispatchTimeoutFailsTheOperation(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	idempotencyKey := uuid.NewString()
+	create := invokeCreateAgentLifecycle(t, agentID, idempotencyKey, agentLifecycleRestart)
+	if create.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var operation AgentLifecycleOperation
+	if err := json.Unmarshal(create.Body.Bytes(), &operation); err != nil {
+		t.Fatalf("decode operation: %v", err)
+	}
+
+	// Build a dispatch store wired to the real test DB (mirrors production
+	// wiring) instead of reusing testHandler.AgentLifecycleDispatchStore, so
+	// this test controls CreatedAt directly without racing the real store's
+	// 120s timeout window.
+	store := NewInMemoryAgentLifecycleDispatchStore(testPool)
+	ctx := context.Background()
+	if _, err := store.Create(ctx, operation.ID, agentID, runtimeID, testWorkspaceID, string(agentLifecycleRestart)); err != nil {
+		t.Fatalf("create dispatch: %v", err)
+	}
+	store.mu.Lock()
+	store.dispatches[operation.ID].CreatedAt = time.Now().Add(-(agentLifecycleDispatchPendingTimeout + time.Second))
+	store.mu.Unlock()
+
+	if _, err := store.HasPending(ctx, runtimeID); err != nil {
+		t.Fatalf("HasPending: %v", err)
+	}
+
+	got, err := getAgentLifecycleOperation(ctx, testPool, parseUUID(agentID), parseUUID(operation.ID))
+	if err != nil {
+		t.Fatalf("reload operation: %v", err)
+	}
+	if got == nil {
+		t.Fatal("operation not found")
+	}
+	if got.Status != agentLifecycleFailed {
+		t.Fatalf("operation status = %q, want %q (dispatch timeout must fail the operation, not leave it stuck)", got.Status, agentLifecycleFailed)
+	}
+	if got.FinishedAt == nil {
+		t.Fatal("expected finished_at to be set")
 	}
 }

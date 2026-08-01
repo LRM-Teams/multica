@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -40,6 +41,18 @@ import (
 // pre-dates this PR (nothing dispatched anything before) and isn't
 // introduced by it, but it is a known, explicitly-flagged remaining gap, not
 // a silent one.
+//
+// Timeout safety net (Parker/Alice, task #52 review): CreateAgentLifecycleOperation
+// already rejects at create time when the runtime is offline or its heartbeat
+// is stale (agentLifecycleRuntimeSupport checks last_seen_at freshness, not
+// the lying raw status column) — so most "will never be claimed" cases never
+// create an operation row at all. The remaining, narrower race is the
+// runtime going offline (or its resident process dying) in the window
+// between that check passing and the daemon's next heartbeat claiming the
+// dispatch. Without a backstop, that operation sits at status=running
+// forever and the agent's health permanently overlays "restarting" — this
+// sweep is the last-resort timeout for that narrow window, not the primary
+// defense (see SweepStuckAgentLifecycleOperations below).
 
 // AgentLifecycleDispatchStatus represents the lifecycle of a dispatch entry.
 type AgentLifecycleDispatchStatus string
@@ -81,13 +94,48 @@ type AgentLifecycleDispatchStore interface {
 	PopAllPending(ctx context.Context, runtimeID string) ([]*AgentLifecycleDispatch, error)
 }
 
-func applyAgentLifecycleDispatchTimeout(d *AgentLifecycleDispatch, now time.Time) bool {
+// agentLifecycleDispatchTimeoutHook is invoked exactly once, synchronously,
+// the moment a dispatch is discovered to have timed out (no heartbeat
+// claimed it within agentLifecycleDispatchPendingTimeout). This is
+// deliberately the ONLY place a dispatch timeout has a consequence — Parker's
+// #52 review call: a second, independently-timed sweep would be a second
+// clock telling a second truth, and the two drifting apart (someone changes
+// one duration, not the other) is exactly the "operation stuck at running
+// forever" bug this exists to prevent, just harder to find next time.
+type agentLifecycleDispatchTimeoutHook func(ctx context.Context, d *AgentLifecycleDispatch)
+
+func applyAgentLifecycleDispatchTimeout(ctx context.Context, d *AgentLifecycleDispatch, now time.Time, onTimeout agentLifecycleDispatchTimeoutHook) bool {
 	if d.Status == AgentLifecycleDispatchPending && now.Sub(d.CreatedAt) > agentLifecycleDispatchPendingTimeout {
 		d.Status = AgentLifecycleDispatchTimeout
 		d.UpdatedAt = now
+		if onTimeout != nil {
+			onTimeout(ctx, d)
+		}
 		return true
 	}
 	return false
+}
+
+// newAgentLifecycleDispatchTimeoutFailer builds the onTimeout hook that
+// fails the corresponding agent_lifecycle_operation row when its dispatch
+// times out unclaimed — the daemon never got (or never will get) the
+// instruction, so "running" would otherwise never resolve. Only touches rows
+// still in-flight (running/scheduled): if the daemon's result report won the
+// race and already landed, this is a no-op, not a double-write.
+func newAgentLifecycleDispatchTimeoutFailer(exec dbExecutor) agentLifecycleDispatchTimeoutHook {
+	return func(ctx context.Context, d *AgentLifecycleDispatch) {
+		if exec == nil {
+			return
+		}
+		if _, err := exec.Exec(ctx, `
+			UPDATE agent_lifecycle_operation
+			SET status = 'failed', step = 'dispatch_timeout', reason_code = 'daemon did not claim this operation before timeout', finished_at = now()
+			WHERE id = $1
+			  AND status IN ('running', 'scheduled')
+		`, parseUUID(d.OperationID)); err != nil {
+			slog.Warn("failed to fail timed-out agent lifecycle operation", "operation_id", d.OperationID, "error", err)
+		}
+	}
 }
 
 // InMemoryAgentLifecycleDispatchStore is the NewHandler default and the
@@ -96,10 +144,17 @@ func applyAgentLifecycleDispatchTimeout(d *AgentLifecycleDispatch, now time.Time
 type InMemoryAgentLifecycleDispatchStore struct {
 	mu         sync.Mutex
 	dispatches map[string]*AgentLifecycleDispatch // keyed by operation ID
+	onTimeout  agentLifecycleDispatchTimeoutHook
 }
 
-func NewInMemoryAgentLifecycleDispatchStore() *InMemoryAgentLifecycleDispatchStore {
-	return &InMemoryAgentLifecycleDispatchStore{dispatches: make(map[string]*AgentLifecycleDispatch)}
+// NewInMemoryAgentLifecycleDispatchStore wires exec as the timeout hook's
+// database access (see newAgentLifecycleDispatchTimeoutFailer); pass nil in
+// tests that don't care about the operation-row side effect.
+func NewInMemoryAgentLifecycleDispatchStore(exec dbExecutor) *InMemoryAgentLifecycleDispatchStore {
+	return &InMemoryAgentLifecycleDispatchStore{
+		dispatches: make(map[string]*AgentLifecycleDispatch),
+		onTimeout:  newAgentLifecycleDispatchTimeoutFailer(exec),
+	}
 }
 
 func (s *InMemoryAgentLifecycleDispatchStore) Create(_ context.Context, operationID, agentID, runtimeID, workspaceID, actionKind string) (*AgentLifecycleDispatch, error) {
@@ -121,7 +176,7 @@ func (s *InMemoryAgentLifecycleDispatchStore) Create(_ context.Context, operatio
 	return &copy, nil
 }
 
-func (s *InMemoryAgentLifecycleDispatchStore) HasPending(_ context.Context, runtimeID string) (bool, error) {
+func (s *InMemoryAgentLifecycleDispatchStore) HasPending(ctx context.Context, runtimeID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -129,7 +184,7 @@ func (s *InMemoryAgentLifecycleDispatchStore) HasPending(_ context.Context, runt
 		if d.RuntimeID != runtimeID {
 			continue
 		}
-		applyAgentLifecycleDispatchTimeout(d, now)
+		applyAgentLifecycleDispatchTimeout(ctx, d, now, s.onTimeout)
 		if d.Status == AgentLifecycleDispatchPending {
 			return true, nil
 		}
@@ -137,7 +192,7 @@ func (s *InMemoryAgentLifecycleDispatchStore) HasPending(_ context.Context, runt
 	return false, nil
 }
 
-func (s *InMemoryAgentLifecycleDispatchStore) PopAllPending(_ context.Context, runtimeID string) ([]*AgentLifecycleDispatch, error) {
+func (s *InMemoryAgentLifecycleDispatchStore) PopAllPending(ctx context.Context, runtimeID string) ([]*AgentLifecycleDispatch, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -146,7 +201,7 @@ func (s *InMemoryAgentLifecycleDispatchStore) PopAllPending(_ context.Context, r
 		if d.RuntimeID != runtimeID {
 			continue
 		}
-		applyAgentLifecycleDispatchTimeout(d, now)
+		applyAgentLifecycleDispatchTimeout(ctx, d, now, s.onTimeout)
 		if d.Status != AgentLifecycleDispatchPending {
 			continue
 		}

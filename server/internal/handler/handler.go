@@ -302,7 +302,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		EmailService:                emailService,
 		UpdateStore:                 NewPostgresUpdateStore(updateDB),
 		RestartStore:                NewInMemoryRestartStore(),
-		AgentLifecycleDispatchStore: NewInMemoryAgentLifecycleDispatchStore(),
+		AgentLifecycleDispatchStore: NewInMemoryAgentLifecycleDispatchStore(executor),
 		RuntimeReleaseSource:        NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
 		ModelListStore:              NewInMemoryModelListStore(),
 		LocalSkillListStore:         NewInMemoryLocalSkillListStore(),

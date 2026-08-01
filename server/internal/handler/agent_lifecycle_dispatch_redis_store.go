@@ -38,11 +38,15 @@ func agentLifecycleDispatchPendingKey(runtimeID string) string {
 // RedisAgentLifecycleDispatchStore stores dispatch entries in Redis so every
 // API node agrees on the same pending / delivered state.
 type RedisAgentLifecycleDispatchStore struct {
-	rdb *redis.Client
+	rdb       *redis.Client
+	onTimeout agentLifecycleDispatchTimeoutHook
 }
 
-func NewRedisAgentLifecycleDispatchStore(rdb *redis.Client) *RedisAgentLifecycleDispatchStore {
-	return &RedisAgentLifecycleDispatchStore{rdb: rdb}
+// NewRedisAgentLifecycleDispatchStore wires exec as the timeout hook's
+// database access (see newAgentLifecycleDispatchTimeoutFailer); pass nil in
+// tests that don't care about the operation-row side effect.
+func NewRedisAgentLifecycleDispatchStore(rdb *redis.Client, exec dbExecutor) *RedisAgentLifecycleDispatchStore {
+	return &RedisAgentLifecycleDispatchStore{rdb: rdb, onTimeout: newAgentLifecycleDispatchTimeoutFailer(exec)}
 }
 
 func (s *RedisAgentLifecycleDispatchStore) Create(ctx context.Context, operationID, agentID, runtimeID, workspaceID, actionKind string) (*AgentLifecycleDispatch, error) {
@@ -87,7 +91,7 @@ func (s *RedisAgentLifecycleDispatchStore) loadDispatch(ctx context.Context, ope
 	if err := json.Unmarshal(raw, &d); err != nil {
 		return nil, fmt.Errorf("decode agent lifecycle dispatch: %w", err)
 	}
-	if applyAgentLifecycleDispatchTimeout(&d, time.Now()) {
+	if applyAgentLifecycleDispatchTimeout(ctx, &d, time.Now(), s.onTimeout) {
 		if err := s.persistDispatch(ctx, &d); err != nil {
 			return nil, err
 		}

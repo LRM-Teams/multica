@@ -34,6 +34,20 @@ const (
 // attempted against a slot, but nothing previously noticed a crash before
 // that next attempt, which is exactly what let a dead resident process sit
 // undetected for hours.
+//
+// ⚠️ Load-bearing precondition for whoever builds task #50 ("don't dispatch
+// to a dead agent"): the actual relaunch in ② only happens on the NEXT
+// acquire() — this loop only detects+evicts, it does not itself recreate a
+// process. If #50 responds to "agent crashed" by blanket-blocking dispatch
+// to that agent, no task ever arrives to trigger the lazy recreate, and the
+// agent never comes back — the self-heal and the dispatch-gate deadlock each
+// other. #50 must distinguish "provider process died but the daemon/machine
+// is alive" (recoverable — keep dispatching, that's what triggers recovery)
+// from "the whole daemon/machine is offline" (not recoverable by
+// recreating a process — don't dispatch). Barry's signal for telling them
+// apart: whether every runtime under the same daemon_id went silent at the
+// same instant (whole-machine/daemon down) vs. just this one agent's
+// resident process (individually recoverable).
 func (d *Daemon) residentCrashWatchLoop(ctx context.Context) {
 	if d.canonicalRuntimes == nil {
 		return

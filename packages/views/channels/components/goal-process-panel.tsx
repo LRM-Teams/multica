@@ -47,8 +47,10 @@ export function GoalProcessPanel({
   const timeAgo = useTimeAgo();
   const { data: members = [] } = useQuery(channelMembersOptions(channelId));
   const managers = useMemo(() => managerAgents(members), [members]);
-  const processesQuery = useQuery(channelGoalProcessesOptions(channelId));
-  const processes = processesQuery.data?.processes ?? [];
+  const { data: processesData, refetch: refetchProcesses } = useQuery(
+    channelGoalProcessesOptions(channelId),
+  );
+  const processes = processesData?.processes ?? [];
 
   const defaultManagerId = useMemo(() => {
     if (managerId && managers.some((m) => m.member_id === managerId)) return managerId;
@@ -76,13 +78,19 @@ export function GoalProcessPanel({
     onManagerChange?.(next);
   };
 
-  const processQuery = useQuery(channelGoalProcessOptions(channelId, activeManagerId));
-  const processDoc = processQuery.data?.process ?? null;
+  const {
+    data: processData,
+    isPending: processPending,
+    isError: processError,
+    isFetching: processFetching,
+    refetch: refetchProcess,
+  } = useQuery(channelGoalProcessOptions(channelId, activeManagerId));
+  const processDoc = processData?.process ?? null;
   const activeManager = managers.find((m) => m.member_id === activeManagerId);
 
   const refresh = () => {
-    void processesQuery.refetch();
-    void processQuery.refetch();
+    void refetchProcesses();
+    void refetchProcess();
   };
 
   const shortStatus = (
@@ -134,7 +142,7 @@ export function GoalProcessPanel({
         {t(($) => $.goal.process_empty)}
       </div>
     );
-  } else if (processQuery.isPending && !processDoc) {
+  } else if (processPending && !processDoc) {
     body = (
       <div className="space-y-3">
         {shortStatus}
@@ -144,11 +152,11 @@ export function GoalProcessPanel({
         <Skeleton className="h-20 w-full" />
       </div>
     );
-  } else if (processQuery.isError) {
+  } else if (processError) {
     body = (
       <div className="flex flex-col items-center gap-3 py-8 text-center">
         <p className="text-sm text-destructive">{t(($) => $.goal.process_error)}</p>
-        <Button size="sm" variant="outline" onClick={() => void processQuery.refetch()}>
+        <Button size="sm" variant="outline" onClick={() => void refetchProcess()}>
           {t(($) => $.goal.retry)}
         </Button>
       </div>
@@ -176,7 +184,7 @@ export function GoalProcessPanel({
           </span>
           <span>v{processDoc.version}</span>
         </div>
-        {processQuery.isFetching ? (
+        {processFetching ? (
           <p className="text-[11px] text-muted-foreground">{t(($) => $.goal.process_updating)}</p>
         ) : null}
         <div className="prose prose-sm dark:prose-invert max-w-none text-sm">
@@ -208,7 +216,7 @@ export function GoalProcessPanel({
             aria-label={t(($) => $.goal.process_refresh)}
             onClick={refresh}
           >
-            <RefreshCw className={cn("size-3.5", processQuery.isFetching && "animate-spin")} />
+            <RefreshCw className={cn("size-3.5", processFetching && "animate-spin")} />
           </Button>
           <Button
             type="button"

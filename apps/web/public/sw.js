@@ -21,7 +21,8 @@ self.addEventListener("push", (event) => {
   // notifications on some Chrome/OS combos, and a missing icon makes the
   // toast easy to miss ("received in tray, no banner") (LRM-679).
   const origin = self.location && self.location.origin ? self.location.origin : "";
-  const icon = data.icon || (origin ? `${origin}/favicon.svg` : "/favicon.svg");
+  // Prefer PNG: WebKit/iOS push banners drop or hide SVG icons (LRM-684).
+  const icon = data.icon || (origin ? `${origin}/icon-192.png` : "/icon-192.png");
   const options = {
     body: data.body || "",
     tag,

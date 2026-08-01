@@ -711,11 +711,14 @@ func (c *client) handleReminderFireAttempt(raw json.RawMessage) {
 			_ = c.sendReminderFrame(protocol.EventDaemonAgentStop, protocol.DaemonAgentStopPayload{AgentID: ownerGone.AgentID, RuntimeID: ownerGone.RuntimeID, PlacementGeneration: ownerGone.PlacementGeneration})
 			return
 		}
-		slog.Warn("daemon websocket reminder fire failed", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID)
-		// The daemon removes a due timer before submitting the attempt. A
-		// transient server failure therefore has no local retry entry left;
-		// reconnect so the owner-scoped snapshot restores the canonical job.
-		_ = c.conn.Close()
+		// Task #68: the daemon now keeps a locally-retryable in-flight record
+		// for a fired reminder until it sees a fire_result confirmation (see
+		// reminderCache.fireAndScheduleRetryLocked), so a transient failure
+		// here no longer needs the connection torn down just to force a
+		// reconnect+snapshot recovery — the daemon's own retry timer resends
+		// this fire_attempt shortly. Forcing a reconnect on every processing
+		// hiccup made a single transient DB error pay for a full WS drop.
+		slog.Warn("daemon websocket reminder fire failed; daemon local retry will resend", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID, "reminder_id", payload.ReminderID)
 		return
 	}
 	if result != nil {

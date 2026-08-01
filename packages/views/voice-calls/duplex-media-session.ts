@@ -1,4 +1,7 @@
-import { VoiceCallMediaError } from "./volcengine-media-session";
+import {
+  VoiceCallMediaError,
+  type VoiceCallMediaErrorCode,
+} from "./volcengine-media-session";
 
 export const DUPLEX_INPUT_SAMPLE_RATE = 16_000;
 export const DUPLEX_OUTPUT_SAMPLE_RATE = 24_000;
@@ -38,7 +41,7 @@ export interface DuplexMediaSessionEvents {
   onReady?: (sessionId: string) => void;
   onASR?: (phase: DuplexAsrPhase, transcript: string) => void;
   onTool?: (event: DuplexToolEvent) => void;
-  onError?: (code: string, message: string) => void;
+  onError?: (code: VoiceCallMediaErrorCode, message: string) => void;
   onClosed?: () => void;
   onPlaybackStarted?: () => void;
 }
@@ -214,7 +217,9 @@ export function createDuplexMediaSession(
       floatSamples.length,
       sampleRate,
     );
-    buffer.copyToChannel(floatSamples, 0);
+    // getChannelData().set avoids Float32Array<ArrayBufferLike> vs
+    // Float32Array<ArrayBuffer> friction under newer lib DOM typings.
+    buffer.getChannelData(0).set(floatSamples);
     const node = playbackContext.createBufferSource();
     node.buffer = buffer;
     node.connect(playbackContext.destination);
@@ -281,8 +286,8 @@ export function createDuplexMediaSession(
       }
       case "duplex.error":
         events.onError?.(
-          event.code ?? "duplex_error",
-          event.message ?? "Duplex media failed",
+          "provider_error",
+          event.message ?? event.code ?? "Duplex media failed",
         );
         break;
       case "duplex.closed":
@@ -373,7 +378,10 @@ export function createDuplexMediaSession(
           const parsed = parseDuplexServerEvent(JSON.parse(message.data));
           if (parsed) handleServerEvent(parsed);
         } catch {
-          events.onError?.("duplex_parse_failed", "Invalid duplex server event");
+          events.onError?.(
+            "provider_error",
+            "Invalid duplex server event",
+          );
         }
       });
 

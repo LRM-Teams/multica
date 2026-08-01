@@ -884,6 +884,224 @@ func TestCanonicalAgentRuntimeSlotIdleTimestampAdvances(t *testing.T) {
 	}
 }
 
+// canonicalRuntimeLivenessTestBackend extends canonicalRuntimeTestBackend
+// with a controllable agent.ResidentRuntimeLivenessChecker answer, so tests
+// can simulate a resident process that has died between turns without
+// spawning a real subprocess.
+type canonicalRuntimeLivenessTestBackend struct {
+	canonicalRuntimeTestBackend
+	mu     sync.Mutex
+	alive  bool
+	known  bool
+	closed bool
+}
+
+func (b *canonicalRuntimeLivenessTestBackend) RuntimeAlive() (bool, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.alive, b.known
+}
+
+func (b *canonicalRuntimeLivenessTestBackend) setLiveness(alive, known bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.alive, b.known = alive, known
+}
+
+func (b *canonicalRuntimeLivenessTestBackend) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.closed = true
+}
+
+func newLivenessFactory(backend *canonicalRuntimeLivenessTestBackend) canonicalRuntimeBackendFactory {
+	return func(agent.Config) (agent.Backend, func(), error) {
+		return backend, backend.Close, nil
+	}
+}
+
+// TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots pins the
+// fail-open contract task #42 needs: a confirmed-dead idle resident slot is
+// evicted and reported exactly once; a slot that is alive, unknown, busy
+// (in-flight turn), or non-resident must never be touched or reported —
+// misclassifying any of those as a crash would kill a healthy session.
+func TestCheckResidentLivenessEvictsAndReportsOnlyConfirmedDeadIdleSlots(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+
+	dead := &canonicalRuntimeLivenessTestBackend{}
+	dead.setLiveness(false, true) // known dead
+	deadIdentity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+		AgentID: "agent-dead", RuntimeID: "runtime-dead", Provider: "opencode",
+		Executable: "/usr/local/bin/opencode", WorkDir: "/var/lib/multica/agent-dead",
+	})
+	if err != nil {
+		t.Fatalf("dead identity: %v", err)
+	}
+	deadLease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: deadIdentity, Mode: canonicalRuntimeResident, Factory: newLivenessFactory(dead),
+	})
+	if err != nil {
+		t.Fatalf("acquire dead: %v", err)
+	}
+	deadLease.release(true)
+
+	alive := &canonicalRuntimeLivenessTestBackend{}
+	alive.setLiveness(true, true) // known alive
+	aliveIdentity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+		AgentID: "agent-alive", RuntimeID: "runtime-alive", Provider: "opencode",
+		Executable: "/usr/local/bin/opencode", WorkDir: "/var/lib/multica/agent-alive",
+	})
+	if err != nil {
+		t.Fatalf("alive identity: %v", err)
+	}
+	aliveLease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: aliveIdentity, Mode: canonicalRuntimeResident, Factory: newLivenessFactory(alive),
+	})
+	if err != nil {
+		t.Fatalf("acquire alive: %v", err)
+	}
+	aliveLease.release(true)
+
+	unknown := &canonicalRuntimeLivenessTestBackend{}
+	unknown.setLiveness(false, false) // liveness undetermined — must fail open
+	unknownIdentity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+		AgentID: "agent-unknown", RuntimeID: "runtime-unknown", Provider: "opencode",
+		Executable: "/usr/local/bin/opencode", WorkDir: "/var/lib/multica/agent-unknown",
+	})
+	if err != nil {
+		t.Fatalf("unknown identity: %v", err)
+	}
+	unknownLease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: unknownIdentity, Mode: canonicalRuntimeResident, Factory: newLivenessFactory(unknown),
+	})
+	if err != nil {
+		t.Fatalf("acquire unknown: %v", err)
+	}
+	unknownLease.release(true)
+
+	busyDead := &canonicalRuntimeLivenessTestBackend{}
+	busyDead.setLiveness(false, true) // would report dead if it weren't mid-turn
+	busyIdentity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+		AgentID: "agent-busy", RuntimeID: "runtime-busy", Provider: "opencode",
+		Executable: "/usr/local/bin/opencode", WorkDir: "/var/lib/multica/agent-busy",
+	})
+	if err != nil {
+		t.Fatalf("busy identity: %v", err)
+	}
+	// Left running (no release) to simulate an in-flight turn.
+	if _, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: busyIdentity, Mode: canonicalRuntimeResident, Factory: newLivenessFactory(busyDead),
+	}); err != nil {
+		t.Fatalf("acquire busy: %v", err)
+	}
+
+	oneShotProbe := &canonicalRuntimeFactoryProbe{}
+	oneShotIdentity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+		AgentID: "agent-oneshot", RuntimeID: "runtime-oneshot", Provider: "claude",
+		Executable: "/usr/local/bin/claude", WorkDir: "/var/lib/multica/agent-oneshot",
+	})
+	if err != nil {
+		t.Fatalf("oneshot identity: %v", err)
+	}
+	oneShotLease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: oneShotIdentity, Mode: canonicalRuntimeOneShot, Factory: oneShotProbe.factory,
+	})
+	if err != nil {
+		t.Fatalf("acquire one-shot: %v", err)
+	}
+	oneShotLease.release(true)
+
+	var mu sync.Mutex
+	var received []ResidentRuntimeCrashEvent
+	pool.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		received = append(received, ev)
+	})
+
+	events := pool.checkResidentLiveness(time.Unix(500, 0))
+	if len(events) != 1 {
+		t.Fatalf("checkResidentLiveness returned %d events, want 1: %+v", len(events), events)
+	}
+	if events[0].AgentID != "agent-dead" || events[0].RuntimeID != "runtime-dead" || events[0].Provider != "opencode" {
+		t.Fatalf("unexpected event: %+v", events[0])
+	}
+	if !events[0].DetectedAt.Equal(time.Unix(500, 0)) {
+		t.Fatalf("DetectedAt = %v, want %v", events[0].DetectedAt, time.Unix(500, 0))
+	}
+
+	mu.Lock()
+	gotSubscriber := len(received) == 1 && received[0].AgentID == "agent-dead"
+	mu.Unlock()
+	if !gotSubscriber {
+		t.Fatalf("subscriber did not receive the crash event: %+v", received)
+	}
+
+	if !dead.closed {
+		t.Fatal("confirmed-dead backend was not closed")
+	}
+	if alive.closed {
+		t.Fatal("alive backend must not be closed")
+	}
+	if unknown.closed {
+		t.Fatal("unknown-liveness backend must not be closed (fail open)")
+	}
+	if busyDead.closed {
+		t.Fatal("busy (in-flight) backend must not be closed even though it would report dead")
+	}
+
+	// A second pass over the now-evicted dead slot must not re-report it —
+	// closeBackend already nils slot.backend, so the type assertion on nil
+	// backend naturally excludes it.
+	if events := pool.checkResidentLiveness(time.Unix(600, 0)); len(events) != 0 {
+		t.Fatalf("second pass reported %d events, want 0 (no duplicate crash reports): %+v", len(events), events)
+	}
+}
+
+// TestCheckResidentLivenessSupportsMultipleSubscribers pins the "one
+// detection pass, many independent consumers" contract Vera's #42③ status
+// reporting depends on — it must not have to run its own liveness poll.
+func TestCheckResidentLivenessSupportsMultipleSubscribers(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	dead := &canonicalRuntimeLivenessTestBackend{}
+	dead.setLiveness(false, true)
+	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+		AgentID: "agent-dead", RuntimeID: "runtime-dead", Provider: "opencode",
+		Executable: "/usr/local/bin/opencode", WorkDir: "/var/lib/multica/agent-dead",
+	})
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: identity, Mode: canonicalRuntimeResident, Factory: newLivenessFactory(dead),
+	})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	lease.release(true)
+
+	var mu sync.Mutex
+	var firstSeen, secondSeen int
+	pool.subscribeResidentRuntimeCrash(func(ResidentRuntimeCrashEvent) {
+		mu.Lock()
+		firstSeen++
+		mu.Unlock()
+	})
+	pool.subscribeResidentRuntimeCrash(func(ResidentRuntimeCrashEvent) {
+		mu.Lock()
+		secondSeen++
+		mu.Unlock()
+	})
+
+	pool.checkResidentLiveness(time.Unix(700, 0))
+
+	mu.Lock()
+	defer mu.Unlock()
+	if firstSeen != 1 || secondSeen != 1 {
+		t.Fatalf("subscriber call counts = %d, %d, want 1, 1", firstSeen, secondSeen)
+	}
+}
+
 func TestCanonicalAgentRuntimePoolIsActivatedForD6(t *testing.T) {
 	// Behavioral proof of reuse is TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs.
 	// This only pins the runTask call site so the entry is not left unhooked.

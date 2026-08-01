@@ -33,6 +33,18 @@ type AuthPreflight interface {
 	PreflightAuth(ctx context.Context) error
 }
 
+// ResidentRuntimeLivenessChecker is an optional contract for backends that
+// keep a long-lived provider child process alive across turns (the canonical
+// resident pool). Unlike Session.RuntimeAlive — which only exists while a
+// turn is in flight — this can be polled at any time, including while the
+// backend sits idle between turns, so a caller can detect a crashed resident
+// process without waiting for the next dispatched task to fail against it
+// (task #42). Implementers must fail open on an unknown answer: known=false
+// is not proof the process died.
+type ResidentRuntimeLivenessChecker interface {
+	RuntimeAlive() (alive bool, known bool)
+}
+
 // ExecOptions configures a single execution.
 type ExecOptions struct {
 	Cwd   string

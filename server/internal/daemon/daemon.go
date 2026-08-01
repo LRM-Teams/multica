@@ -256,6 +256,10 @@ type Daemon struct {
 	// canonicalRuntimes is the D4 provider pool; D6-1b acquires resident
 	// Grok/Pi backends so one agent×runtime shares one provider session slot.
 	canonicalRuntimes *canonicalAgentRuntimePool
+	// residentCrashBackoff tracks repeated crashes per agent×runtime (task
+	// #42②) so a resident process stuck crash-looping is flagged terminal
+	// instead of silently retried forever.
+	residentCrashBackoff *residentCrashBackoffTracker
 	// canonicalChatFactoryOverride is test-only; production uses
 	// defaultCanonicalRuntimeFactory for grok/pi resident adapters.
 	canonicalChatFactoryOverride canonicalRuntimeBackendFactory
@@ -291,7 +295,11 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		persistentRuntimes:        newPersistentRuntimePool(),
 		piPersistentRuntimes:      newPiPersistentPool(),
 		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
+		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 	}
+	d.canonicalRuntimes.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
+		d.onResidentRuntimeCrash(ev)
+	})
 	d.updateObservation = newUpdateObservationCoordinator(cfg, logger)
 	d.agentRuntimeTurns = newAgentRuntimeTurnCoordinator(cfg, logger)
 	d.runner = taskRunnerFunc(d.runTask)
@@ -802,6 +810,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.taskWakeupLoop(ctx, taskWakeups)
 	go d.heartbeatLoop(ctx)
 	go d.gcLoop(ctx)
+	go d.residentCrashWatchLoop(ctx)
 	go d.autoUpdateLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
 	go d.sharedSkillsSyncLoop(ctx)
@@ -1654,7 +1663,7 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp.ReleaseManifestBaseURL != "" {
 		d.serverReleaseManifestBaseURL.Store(resp.ReleaseManifestBaseURL)
 	}
-	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil {
+	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingMemoryCuration != nil || resp.PendingRestart != nil || len(resp.PendingAgentRestarts) > 0 {
 		d.logger.Debug("heartbeat: pending actions",
 			"runtime_id", runtimeID,
 			"update", resp.PendingUpdate != nil,
@@ -1663,6 +1672,7 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 			"local_skill_import", resp.PendingLocalSkillImport != nil,
 			"memory_curation", resp.PendingMemoryCuration != nil,
 			"restart", resp.PendingRestart != nil,
+			"agent_restarts", len(resp.PendingAgentRestarts),
 		)
 	}
 	if resp.PendingUpdate != nil {
@@ -1671,6 +1681,9 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp.PendingRestart != nil {
 		d.logger.Info("remote restart requested", "runtime_id", runtimeID, "restart_id", resp.PendingRestart.ID)
 		d.triggerRestart()
+	}
+	for _, pending := range resp.PendingAgentRestarts {
+		go d.handleAgentRestart(pending)
 	}
 	if resp.PendingModelList != nil {
 		if rt := d.findRuntime(runtimeID); rt != nil {

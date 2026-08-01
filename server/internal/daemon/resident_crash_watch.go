@@ -1,0 +1,198 @@
+package daemon
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
+)
+
+const (
+	// residentCrashCheckInterval is how often idle resident provider
+	// processes are polled for liveness (task #42②). It runs independently
+	// of any dispatched task, so a crash is caught even if nothing gets
+	// dispatched to the dead agent for hours — the exact gap that let the
+	// ui-designer agent's opencode process sit dead for 8 hours unnoticed.
+	residentCrashCheckInterval = 20 * time.Second
+	// residentCrashBackoffWindow bounds how far back repeated crashes are
+	// counted toward the retry cap. A crash outside this window does not
+	// count against a currently-healthy runtime.
+	residentCrashBackoffWindow = 10 * time.Minute
+	// residentCrashRetryCap is how many crashes within the window are
+	// treated as recoverable (silently evicted, left for the next task to
+	// recreate) before the runtime is flagged terminal and stops being
+	// auto-recovered.
+	residentCrashRetryCap = 5
+)
+
+// residentCrashWatchLoop periodically checks every idle resident canonical
+// runtime slot for a dead process and evicts/reports any it finds — see
+// canonicalAgentRuntimePool.checkResidentLiveness. Detection here is
+// deliberately decoupled from task dispatch: the pool's existing
+// reuse-or-recreate logic already self-heals the next time a turn is
+// attempted against a slot, but nothing previously noticed a crash before
+// that next attempt, which is exactly what let a dead resident process sit
+// undetected for hours.
+func (d *Daemon) residentCrashWatchLoop(ctx context.Context) {
+	if d.canonicalRuntimes == nil {
+		return
+	}
+	ticker := time.NewTicker(residentCrashCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			d.canonicalRuntimes.checkResidentLiveness(time.Now())
+		}
+	}
+}
+
+// handleAgentRestart carries out a manual single-agent restart (task #42①):
+// kill the agent's current provider process and clear its canonical pool
+// slot, so the next turn recreates a fresh process. This does not reset the
+// agent's conversation session — CanonicalSessionID/PriorSessionID live
+// server-side and are supplied fresh on every acquire(), not stored in the
+// pool or the OS process being replaced.
+func (d *Daemon) handleAgentRestart(pending protocol.DaemonHeartbeatPendingAgentRestart) {
+	if d.canonicalRuntimes == nil {
+		return
+	}
+	d.logger.Info("manual agent restart requested",
+		"restart_id", pending.ID, "agent_id", pending.AgentID, "runtime_id", pending.RuntimeID)
+	if err := d.canonicalRuntimes.invalidateSession(pending.AgentID, pending.RuntimeID); err != nil {
+		d.logger.Warn("manual agent restart failed",
+			"restart_id", pending.ID, "agent_id", pending.AgentID, "runtime_id", pending.RuntimeID, "error", err)
+		return
+	}
+	// A human explicitly asked for this restart, so give the runtime a fresh
+	// retry budget instead of leaving it flagged crash-looping from history
+	// predating the restart.
+	d.residentCrashBackoff.clear(pending.AgentID, pending.RuntimeID)
+}
+
+// onResidentRuntimeCrash is the daemon's own subscriber to crash events —
+// it tracks the retry-cap/backoff bookkeeping. Other subscribers (e.g.
+// Vera's #42③ status reporting) register independently via
+// subscribeResidentRuntimeCrash and do not depend on this one.
+func (d *Daemon) onResidentRuntimeCrash(ev ResidentRuntimeCrashEvent) {
+	if d.residentCrashBackoff == nil {
+		return
+	}
+	attempt, backoff, terminal := d.residentCrashBackoff.recordCrash(ev.AgentID, ev.RuntimeID, ev.DetectedAt)
+	if terminal {
+		d.logger.Warn("resident runtime crash-looping, auto-recovery stopped",
+			"agent_id", ev.AgentID, "runtime_id", ev.RuntimeID, "provider", ev.Provider,
+			"attempt", attempt, "window", residentCrashBackoffWindow, "cap", residentCrashRetryCap)
+		return
+	}
+	d.logger.Warn("resident runtime crashed, will recover on next dispatch",
+		"agent_id", ev.AgentID, "runtime_id", ev.RuntimeID, "provider", ev.Provider,
+		"attempt", attempt, "backoff", backoff)
+}
+
+// residentCrashBackoffTracker counts crashes per agent×runtime within a
+// rolling window and computes the backoff/retry-cap decision for task #42②.
+// It intentionally does not itself relaunch anything — the pool already
+// recreates a resident backend lazily on the next acquire() after an evicted
+// slot; this tracker's job is only to decide when repeated crashes stop
+// being "transient, let it recover" and become "crash-looping, needs a human
+// via manual restart (#42①)".
+type residentCrashBackoffTracker struct {
+	mu     sync.Mutex
+	window time.Duration
+	cap    int
+	// crashes maps agentID\x00runtimeID -> crash timestamps within window,
+	// oldest first.
+	crashes map[string][]time.Time
+	// terminal marks slots that exceeded the retry cap, until cleared by a
+	// manual restart (#42①) or a crash outside the window ages the count
+	// back under the cap.
+	terminal map[string]bool
+}
+
+func newResidentCrashBackoffTracker(window time.Duration, cap int) *residentCrashBackoffTracker {
+	return &residentCrashBackoffTracker{
+		window:   window,
+		cap:      cap,
+		crashes:  make(map[string][]time.Time),
+		terminal: make(map[string]bool),
+	}
+}
+
+// residentCrashBackoffSchedule is the delay suggested before the next
+// automatic recovery attempt, indexed by (1-based) attempt number within the
+// current window. The last entry repeats for any attempt beyond its index.
+var residentCrashBackoffSchedule = []time.Duration{
+	5 * time.Second,
+	15 * time.Second,
+	60 * time.Second,
+}
+
+func backoffForAttempt(attempt int) time.Duration {
+	if attempt <= 0 {
+		return 0
+	}
+	if attempt > len(residentCrashBackoffSchedule) {
+		return residentCrashBackoffSchedule[len(residentCrashBackoffSchedule)-1]
+	}
+	return residentCrashBackoffSchedule[attempt-1]
+}
+
+// recordCrash records a crash at now, prunes crashes older than the window,
+// and returns the attempt number (crashes within the window, including this
+// one), the suggested backoff before the next recovery attempt, and whether
+// the retry cap has now been exceeded (terminal — auto-recovery should stop
+// until a manual restart).
+func (t *residentCrashBackoffTracker) recordCrash(agentID, runtimeID string, now time.Time) (attempt int, backoff time.Duration, terminal bool) {
+	if t == nil {
+		return 0, 0, false
+	}
+	key := agentID + "\x00" + runtimeID
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	cutoff := now.Add(-t.window)
+	kept := t.crashes[key][:0]
+	for _, ts := range t.crashes[key] {
+		if ts.After(cutoff) {
+			kept = append(kept, ts)
+		}
+	}
+	kept = append(kept, now)
+	t.crashes[key] = kept
+
+	attempt = len(kept)
+	terminal = attempt > t.cap
+	t.terminal[key] = terminal
+	return attempt, backoffForAttempt(attempt), terminal
+}
+
+// isTerminal reports whether agentID/runtimeID is currently flagged
+// crash-looping (exceeded the retry cap and not yet manually restarted).
+// Dispatch-gating (task #50) and status reporting (task #42③) can consult
+// this instead of re-deriving it from raw crash history.
+func (t *residentCrashBackoffTracker) isTerminal(agentID, runtimeID string) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.terminal[agentID+"\x00"+runtimeID]
+}
+
+// clear resets the crash history for agentID/runtimeID — called after a
+// manual restart (task #42①) so the runtime gets a fresh retry budget
+// instead of immediately re-tripping the cap from stale crash history.
+func (t *residentCrashBackoffTracker) clear(agentID, runtimeID string) {
+	if t == nil {
+		return
+	}
+	key := agentID + "\x00" + runtimeID
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.crashes, key)
+	delete(t.terminal, key)
+}

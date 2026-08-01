@@ -677,6 +677,14 @@ type DaemonHeartbeatAckPayload struct {
 	// (task #43), independent of any CLI update — e.g. a stuck/unresponsive
 	// daemon a workspace admin restarts remotely from the web UI.
 	PendingRestart *DaemonHeartbeatPendingRestart `json:"pending_restart,omitempty"`
+	// PendingAgentRestarts are human-initiated "restart this one agent"
+	// requests (task #42①) — narrower than PendingRestart, which restarts
+	// the whole daemon process. One runtime (machine) can host several
+	// agents sharing the daemon's canonical resident pool, so this is a
+	// slice: a single heartbeat can deliver restarts for more than one of
+	// them at once. Each only kills and recreates that agent's provider
+	// process; it does not reset the agent's conversation session.
+	PendingAgentRestarts []DaemonHeartbeatPendingAgentRestart `json:"pending_agent_restarts,omitempty"`
 	// ReleaseManifestBaseURL, when non-empty, is the server's current opinion
 	// of where the daemon should download CLI update artifacts from. It takes
 	// precedence over the daemon's own MULTICA_RELEASE_MANIFEST_BASE_URL env
@@ -703,6 +711,15 @@ type DaemonHeartbeatPendingUpdate struct {
 // request the daemon should act on for this runtime.
 type DaemonHeartbeatPendingRestart struct {
 	ID string `json:"id"`
+}
+
+// DaemonHeartbeatPendingAgentRestart describes a human-initiated restart of
+// one agent's provider process (task #42①) — kill and recreate only that
+// agent's canonical resident slot, preserving its conversation session.
+type DaemonHeartbeatPendingAgentRestart struct {
+	ID        string `json:"id"`
+	AgentID   string `json:"agent_id"`
+	RuntimeID string `json:"runtime_id"`
 }
 
 // DaemonHeartbeatPendingModelList describes a request for the daemon to
@@ -813,9 +830,9 @@ type AgentMemoryUpdatedPayload struct {
 
 // AgentMemoryCenterSyncReport uploads durable local memory atoms to the center store.
 type AgentMemoryCenterSyncReport struct {
-	AgentID   string                     `json:"agent_id"`
-	RuntimeID string                     `json:"runtime_id,omitempty"`
-	TaskID    string                     `json:"task_id,omitempty"`
+	AgentID   string                      `json:"agent_id"`
+	RuntimeID string                      `json:"runtime_id,omitempty"`
+	TaskID    string                      `json:"task_id,omitempty"`
 	Entries   []AgentMemoryCenterSyncAtom `json:"entries"`
 }
 

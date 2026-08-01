@@ -234,6 +234,12 @@ func (b *piRPCBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
 }
 
+// RuntimeAlive implements ResidentRuntimeLivenessChecker, letting a caller
+// poll process liveness between turns, not just during an in-flight one.
+func (b *piRPCBackend) RuntimeAlive() (bool, bool) {
+	return b.runtimeAlive()
+}
+
 func (b *piRPCBackend) runtimeAlive() (bool, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -692,21 +698,21 @@ func buildPiRPCArgs(sessionPath string, opts ExecOptions, logger *slog.Logger) [
 	if opts.ThinkingLevel != "" {
 		args = append(args, "--thinking", opts.ThinkingLevel)
 	}
-		if opts.DisableTools {
-			args = append(args,
-				"--no-extensions",
-				"--no-skills",
-				"--no-prompt-templates",
-				"--no-context-files",
-				"--no-approve",
-				"--tools", "",
-			)
-			if len(opts.TrustedExtensionPaths) > 0 {
-				for _, p := range opts.TrustedExtensionPaths {
-					args = append(args, "--extension", p)
-				}
+	if opts.DisableTools {
+		args = append(args,
+			"--no-extensions",
+			"--no-skills",
+			"--no-prompt-templates",
+			"--no-context-files",
+			"--no-approve",
+			"--tools", "",
+		)
+		if len(opts.TrustedExtensionPaths) > 0 {
+			for _, p := range opts.TrustedExtensionPaths {
+				args = append(args, "--extension", p)
 			}
 		}
+	}
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}

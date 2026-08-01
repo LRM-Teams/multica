@@ -23,11 +23,12 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
   const { t } = useT("research");
   const wsId = useWorkspaceId();
   const n = data.research;
+  // Hooks must run before any early return — React Doctor blocks conditional hooks.
+  const actorId = n?.actor_agent_id ?? undefined;
+  const projection = useAgentActivityProjection(wsId, actorId);
   if (!n) return null;
 
   const visual = visualForNodeType(n.node_type);
-  const actorId = n.actor_agent_id ?? undefined;
-  const projection = useAgentActivityProjection(wsId, actorId);
   const presenceBusy = !!(data.presenceLabel && data.presenceLabel.trim());
   const actorBusy =
     presenceBusy || !!(projection && isCompactActivityLabel(projection.label));

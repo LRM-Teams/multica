@@ -369,6 +369,16 @@ export interface Agent {
   runtime_status?: "online" | "offline" | null;
   /** ISO heartbeat from the bound runtime; pairs with `runtime_status`. */
   runtime_last_seen_at?: string | null;
+  /**
+   * Honest, read-time status (task #42③) — freshness-gated the same way the
+   * Activity Health tab already is, so this never lags `runtime_status`'s
+   * up-to-180s sweeper delay. Prefer this over `runtime_status` for any
+   * live status badge. Only 4 of the eventual 8 states are emitted so far
+   * (no signal yet for starting/thinking/crashed/stopped) — values are kept
+   * hand-written in sync with `agentDisplayStatus*` in
+   * server/internal/handler/agent_health.go, not generated.
+   */
+  runtime_display_status?: "idle" | "working" | "disconnected" | "offline" | null;
   runtime_config: Record<string, unknown>;
   custom_args: string[];
   /**

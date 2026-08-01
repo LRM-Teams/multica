@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -388,4 +389,81 @@ func dbAgentForHealthTest(t *testing.T) db.Agent {
 	var agent db.Agent
 	agent.ID = parseUUID("11111111-1111-1111-1111-111111111111")
 	return agent
+}
+
+// Task #42③ "状态不撒谎": the agent list/detail surface must not pass through
+// the raw agent_runtime.status column uncritically — it lags reality by up
+// to ~180s (sweeper interval) and can say "online" indefinitely if the
+// sweeper hasn't run yet. agentRuntimeDisplayStatus is the read-time-honest
+// equivalent of runtimeConnectivity for that surface (agentHealthSummary
+// already does this for the separate Activity Health tab).
+
+func TestAgentRuntimeDisplayStatus_StaleOnlineRuntimeShowsDisconnectedNotOnline(t *testing.T) {
+	now := time.Now()
+	rt := db.AgentRuntime{
+		Status:     "online",
+		LastSeenAt: pgtimestamptz(now.Add(-3 * time.Minute)), // stale (> 150s)
+		UpdatedAt:  pgtimestamptz(now.Add(-2 * time.Minute)),
+	}
+	got := agentRuntimeDisplayStatus("idle", rt, now)
+	if got != agentDisplayStatusDisconnected {
+		t.Fatalf("display status = %q, want %q (stale heartbeat must not show as still working/idle-online)", got, agentDisplayStatusDisconnected)
+	}
+}
+
+func TestAgentRuntimeDisplayStatus_PersistedOfflineShowsOffline(t *testing.T) {
+	now := time.Now()
+	rt := db.AgentRuntime{
+		Status:     "offline",
+		LastSeenAt: pgtimestamptz(now.Add(-10 * time.Minute)),
+		UpdatedAt:  pgtimestamptz(now.Add(-6 * time.Minute)), // past reconnect window
+	}
+	got := agentRuntimeDisplayStatus("idle", rt, now)
+	if got != agentDisplayStatusOffline {
+		t.Fatalf("display status = %q, want %q", got, agentDisplayStatusOffline)
+	}
+}
+
+func TestAgentRuntimeDisplayStatus_FreshOnlineFollowsAgentWorkload(t *testing.T) {
+	now := time.Now()
+	rt := db.AgentRuntime{
+		Status:     "online",
+		LastSeenAt: pgtimestamptz(now.Add(-10 * time.Second)), // fresh
+		UpdatedAt:  pgtimestamptz(now.Add(-5 * time.Second)),
+	}
+	if got := agentRuntimeDisplayStatus("working", rt, now); got != agentDisplayStatusWorking {
+		t.Fatalf("display status = %q, want %q for a fresh runtime with a working agent", got, agentDisplayStatusWorking)
+	}
+	if got := agentRuntimeDisplayStatus("idle", rt, now); got != agentDisplayStatusIdle {
+		t.Fatalf("display status = %q, want %q for a fresh runtime with an idle agent", got, agentDisplayStatusIdle)
+	}
+}
+
+func pgtimestamptz(t time.Time) pgtype.Timestamptz {
+	return pgtype.Timestamptz{Time: t, Valid: true}
+}
+
+// End-to-end wiring check: attachAgentRuntimeNames is the actual code path
+// the agent list/detail response goes through, not just the pure function.
+// This catches the class of bug where the pure function is correct but
+// never gets called with real data (e.g. wrong column read, wrong field
+// assigned).
+func TestAttachAgentRuntimeNames_StaleOnlineRuntimeGetsHonestDisplayStatusNotRawOnline(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentHealthFixture(t, "online",
+		time.Now().Add(-3*time.Minute), // stale heartbeat
+		time.Now().Add(-2*time.Minute),
+	)
+
+	resps := []AgentResponse{{ID: agentID, RuntimeID: runtimeID, Status: "idle"}}
+	testHandler.attachAgentRuntimeNames(context.Background(), resps)
+
+	if resps[0].RuntimeStatus != "online" {
+		t.Fatalf("RuntimeStatus = %q, want raw %q (this field must stay a passthrough for callers that need the dispatch-relevant raw value)", resps[0].RuntimeStatus, "online")
+	}
+	if resps[0].RuntimeDisplayStatus != agentDisplayStatusDisconnected {
+		t.Fatalf("RuntimeDisplayStatus = %q, want %q — a stale-but-DB-online runtime must not display as online", resps[0].RuntimeDisplayStatus, agentDisplayStatusDisconnected)
+	}
 }

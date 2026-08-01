@@ -48,11 +48,19 @@ type AgentResponse struct {
 	// Presence-safe projection of the bound runtime. Always filled when the
 	// runtime row exists — even if ListVisibleAgentRuntimes would hide the
 	// private runtime details from this viewer (LRM-248 AC5).
-	RuntimeStatus     string          `json:"runtime_status,omitempty"`
-	RuntimeLastSeenAt *string         `json:"runtime_last_seen_at,omitempty"`
-	RuntimeConfig     any             `json:"runtime_config"`
-	CustomArgs        []string        `json:"custom_args"`
-	McpConfig         json.RawMessage `json:"mcp_config"`
+	RuntimeStatus     string  `json:"runtime_status,omitempty"`
+	RuntimeLastSeenAt *string `json:"runtime_last_seen_at,omitempty"`
+	// RuntimeDisplayStatus is the honest, read-time status for this surface
+	// (task #42③): unlike RuntimeStatus above (a raw passthrough of
+	// agent_runtime.status, which can read "online" for up to ~180s after
+	// the daemon actually went silent), this is freshness-gated the same
+	// way agentHealthSummary already gates the Activity Health tab. Prefer
+	// this field for any UI that shows a live status badge; RuntimeStatus
+	// stays for callers that need the raw dispatch-relevant value.
+	RuntimeDisplayStatus string          `json:"runtime_display_status,omitempty"`
+	RuntimeConfig        any             `json:"runtime_config"`
+	CustomArgs           []string        `json:"custom_args"`
+	McpConfig            json.RawMessage `json:"mcp_config"`
 	// custom_env is intentionally NOT serialized on agent resources. The
 	// agent_list/get/create/update/archive/restore responses and WS events
 	// only expose coarse metadata (has_custom_env, custom_env_key_count) so
@@ -208,7 +216,8 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		         CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END
 		       ),
 		       status,
-		       last_seen_at
+		       last_seen_at,
+		       updated_at
 		FROM agent_runtime
 		WHERE id = ANY($1::uuid[])`, runtimeIDs)
 	if err != nil {
@@ -216,21 +225,25 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		return
 	}
 	defer rows.Close()
+	now := time.Now()
 	for rows.Next() {
 		var id pgtype.UUID
 		var name string
 		var status string
 		var lastSeen pgtype.Timestamptz
-		if err := rows.Scan(&id, &name, &status, &lastSeen); err != nil {
+		var updatedAt pgtype.Timestamptz
+		if err := rows.Scan(&id, &name, &status, &lastSeen, &updatedAt); err != nil {
 			slog.Warn("failed to scan agent runtime name", "error", err)
 			continue
 		}
+		rt := db.AgentRuntime{Status: status, LastSeenAt: lastSeen, UpdatedAt: updatedAt}
 		for _, idx := range byRuntimeID[uuidToString(id)] {
 			resps[idx].RuntimeName = name
 			// Always project connectivity onto the agent so private-runtime
 			// filtering on the runtimes list cannot blank live presence.
 			resps[idx].RuntimeStatus = status
 			resps[idx].RuntimeLastSeenAt = timestampToPtr(lastSeen)
+			resps[idx].RuntimeDisplayStatus = agentRuntimeDisplayStatus(resps[idx].Status, rt, now)
 		}
 	}
 	if err := rows.Err(); err != nil {

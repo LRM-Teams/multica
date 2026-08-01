@@ -210,6 +210,12 @@ type Handler struct {
 	// Multica user token.
 	VoiceCallLLMProcessor VoiceCallLLMProcessor
 	VoiceCallLLMAPIKey    string
+	// VoiceCallAgentBridge dispatches voice transcripts into durable Multica
+	// agent turns. Shared by RTC function-call and Duplex tool bridges.
+	VoiceCallAgentBridge *VoiceCallAgentBridge
+	// DuplexGateway owns Doubao Realtime Duplex media sessions (LRM-949).
+	// Nil when DOUBAO_DIALOG_API_KEY is unset; RTC VoiceChat stays independent.
+	DuplexGateway DuplexGatewayAPI
 	// LarkHub owns the per-installation supervisor goroutines that
 	// hold the §4.4 WS lease and run the EventConnector. Nil only
 	// when the master at-rest key (MULTICA_LARK_SECRET_KEY) is unset.

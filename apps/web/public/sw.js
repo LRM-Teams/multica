@@ -17,10 +17,21 @@ self.addEventListener("push", (event) => {
   // Slack-like: same conversation replaces prior banner (channel_id / issue_key).
   // Fall back to item_id so unrelated pushes still show separately.
   const tag = data.channel_id || data.issue_key || data.item_id || undefined;
+  // Absolute icon URL — relative paths are unreliable for push-delivered
+  // notifications on some Chrome/OS combos, and a missing icon makes the
+  // toast easy to miss ("received in tray, no banner") (LRM-679).
+  const origin = self.location && self.location.origin ? self.location.origin : "";
+  const icon = data.icon || (origin ? `${origin}/favicon.svg` : "/favicon.svg");
   const options = {
     body: data.body || "",
     tag,
     renotify: Boolean(tag),
+    icon,
+    badge: data.badge || icon,
+    // Test pushes set this so the banner stays until dismissed — easier for
+    // Frank/self-test to confirm the OS toast path without racing tray collapse.
+    requireInteraction: Boolean(data.require_interaction),
+    timestamp: typeof data.timestamp === "number" ? data.timestamp : Date.now(),
     data: {
       url: data.url || "",
       slug: data.slug || "",

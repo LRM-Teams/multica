@@ -26,3 +26,11 @@ export interface WebPushSubscriptionResponse {
   user_agent?: string;
   last_active_at: string;
 }
+
+export interface WebPushTestResponse {
+  ok: boolean;
+  delivered: number;
+  failed: number;
+  gone: number;
+  attempted: number;
+}

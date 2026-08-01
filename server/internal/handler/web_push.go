@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service/webpush"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -49,6 +52,17 @@ type webPushSubscriptionResponse struct {
 	DeviceID       *string `json:"device_id,omitempty"`
 	UserAgent      *string `json:"user_agent,omitempty"`
 	LastActiveAt   string  `json:"last_active_at"`
+}
+
+// LRM-755 / LRM-679: settings "Send test notification" hits the real push
+// path (VAPID → push service → SW showNotification) so Frank can self-verify
+// closed-page OS banners without needing a second device to DM him.
+type webPushTestResponse struct {
+	OK         bool `json:"ok"`
+	Delivered  int  `json:"delivered"`
+	Failed     int  `json:"failed"`
+	Gone       int  `json:"gone"`
+	Attempted  int  `json:"attempted"`
 }
 
 func (h *Handler) GetWebPushPublicKey(w http.ResponseWriter, _ *http.Request) {
@@ -140,6 +154,146 @@ func (h *Handler) DeleteWebPushSubscription(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *Handler) SendTestWebPush(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return
+	}
+	userUUID, ok := parseUUIDOrBadRequest(w, userID, "user id")
+	if !ok {
+		return
+	}
+
+	sender := webpush.NewSender(webpush.Config{
+		PublicKey:  h.cfg.WebPushVAPIDPublicKey,
+		PrivateKey: h.cfg.WebPushVAPIDPrivateKey,
+		Subject:    h.cfg.WebPushVAPIDSubject,
+	})
+	if !sender.Enabled() {
+		writeError(w, http.StatusServiceUnavailable, "web push is not configured on this server")
+		return
+	}
+
+	subs, err := h.Queries.ListActiveWebPushSubscriptions(r.Context(), userUUID)
+	if err != nil {
+		slog.Warn("SendTestWebPush list failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to list web push subscriptions")
+		return
+	}
+	if len(subs) == 0 {
+		writeError(w, http.StatusNotFound, "no active web push subscription — enable browser notifications on this device first")
+		return
+	}
+
+	slug := ""
+	if ws, err := h.Queries.GetWorkspace(r.Context(), wsUUID); err == nil {
+		slug = ws.Slug
+	}
+	path := "/"
+	if slug != "" {
+		path = "/" + slug + "/settings?tab=notifications"
+	}
+	appBase := strings.TrimRight(h.cfg.WebPushAppURL, "/")
+	if appBase == "" {
+		appBase = strings.TrimRight(h.cfg.PublicURL, "/")
+	}
+	url := path
+	if appBase != "" {
+		url = appBase + path
+	}
+	icon := ""
+	if appBase != "" {
+		icon = appBase + "/favicon.svg"
+	}
+	payload := map[string]any{
+		"title":               "Multica",
+		"body":                "Test notification — Web Push works on this device.",
+		"url":                 url,
+		"slug":                slug,
+		"item_id":             "web-push-test",
+		"require_interaction": true,
+		"timestamp":           time.Now().UnixMilli(),
+	}
+	if icon != "" {
+		payload["icon"] = icon
+		payload["badge"] = icon
+	}
+
+	delivered, failed, gone := 0, 0, 0
+	var goneEndpoints []string
+	seen := make(map[string]struct{}, len(subs))
+	for _, sub := range subs {
+		if _, ok := seen[sub.Endpoint]; ok {
+			continue
+		}
+		seen[sub.Endpoint] = struct{}{}
+		res, sendErr := sender.Send(r.Context(), webpush.Subscription{
+			Endpoint: sub.Endpoint,
+			P256DH:   sub.P256dh,
+			Auth:     sub.Auth,
+		}, payload)
+		if res.Gone {
+			gone++
+			goneEndpoints = append(goneEndpoints, sub.Endpoint)
+			slog.Warn("web push test: delivery gone",
+				"workspace_id", workspaceID,
+				"recipient_id", userID,
+				"endpoint_hash", webPushEndpointHashForHandler(sub.Endpoint),
+				"status", res.StatusCode,
+			)
+			continue
+		}
+		if sendErr != nil {
+			failed++
+			slog.Warn("web push test: delivery failed",
+				"workspace_id", workspaceID,
+				"recipient_id", userID,
+				"endpoint_hash", webPushEndpointHashForHandler(sub.Endpoint),
+				"status", res.StatusCode,
+				"error", sendErr,
+			)
+			continue
+		}
+		delivered++
+	}
+	if len(goneEndpoints) > 0 {
+		if _, err := h.Queries.DeleteWebPushSubscriptionsByEndpoints(r.Context(), db.DeleteWebPushSubscriptionsByEndpointsParams{
+			UserID:    userUUID,
+			Endpoints: goneEndpoints,
+		}); err != nil {
+			slog.Warn("web push test: cleanup gone failed", append(logger.RequestAttrs(r), "error", err)...)
+		}
+	}
+
+	if delivered == 0 {
+		if gone > 0 && failed == 0 {
+			writeError(w, http.StatusGone, "push subscription expired — re-enable browser notifications on this device")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "push service rejected the test notification")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, webPushTestResponse{
+		OK:        true,
+		Delivered: delivered,
+		Failed:    failed,
+		Gone:      gone,
+		Attempted: delivered + failed + gone,
+	})
+}
+
+func webPushEndpointHashForHandler(endpoint string) string {
+	// Match listeners: 12-char sha256 prefix, no full endpoint in logs.
+	sum := sha256.Sum256([]byte(strings.TrimSpace(endpoint)))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 func firstNonEmptyPtr(values ...*string) *string {

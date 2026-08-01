@@ -189,6 +189,7 @@ import type {
   WebPushPublicKeyResponse,
   WebPushSubscriptionPayload,
   WebPushSubscriptionResponse,
+  WebPushTestResponse,
   GitHubPullRequest,
   ListGitHubInstallationsResponse,
   GitHubConnectResponse,
@@ -388,8 +389,10 @@ import {
   EMPTY_REMINDER_PAGE,
   EMPTY_WEB_PUSH_PUBLIC_KEY,
   EMPTY_WEB_PUSH_SUBSCRIPTION,
+  EMPTY_WEB_PUSH_TEST,
   WebPushPublicKeySchema,
   WebPushSubscriptionSchema,
+  WebPushTestSchema,
   DeleteComputerResponseSchema,
   EMPTY_DELETE_COMPUTER_RESPONSE,
   RemoveComputerAgentsResponseSchema,
@@ -2194,6 +2197,14 @@ export class ApiClient {
     return this.fetch("/api/web-push/subscriptions", {
       method: "DELETE",
       body: JSON.stringify({ endpoint }),
+    });
+  }
+
+  /** LRM-755: real VAPID push to the caller's bound devices (settings self-test). */
+  async sendTestWebPush(): Promise<WebPushTestResponse> {
+    const raw = await this.fetch<unknown>("/api/web-push/test", { method: "POST" });
+    return parseWithFallback<WebPushTestResponse>(raw, WebPushTestSchema, EMPTY_WEB_PUSH_TEST, {
+      endpoint: "POST /api/web-push/test",
     });
   }
 

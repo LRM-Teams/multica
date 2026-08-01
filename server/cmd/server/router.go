@@ -1468,6 +1468,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Web Push device binding. POST is workspace-scoped so the subscription
 			// captures the current workspace while the route still enforces membership.
 			r.Post("/api/web-push/subscriptions", h.UpsertWebPushSubscription)
+			// LRM-755: settings self-test — real VAPID push to the caller's devices.
+			r.Post("/api/web-push/test", h.SendTestWebPush)
 		})
 	})
 

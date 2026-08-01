@@ -420,6 +420,56 @@ describe("useVoiceCallController", () => {
       expect(media.session.disconnect).not.toHaveBeenCalled();
       expect(stopVoiceCall).not.toHaveBeenCalled();
       expect(ringback.ringback.stop).toHaveBeenCalled();
+      expect(answerVoiceCall).toHaveBeenCalledWith("workspace-1", "call-1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries /answer until connected_at syncs without hanging up audible media", async () => {
+    vi.useFakeTimers();
+    try {
+      answerVoiceCall
+        .mockRejectedValueOnce(new Error("answer temporarily unavailable"))
+        .mockResolvedValueOnce({
+          call: {
+            ...createdCall.call,
+            status: "active",
+            connected_at: "2026-08-01T00:12:00Z",
+          },
+        });
+      const media = createFakeMediaSession();
+      const { result } = renderHook(
+        () => useVoiceCallController("workspace-1", {
+          mediaSessionFactory: media.factory,
+          activationTimeoutMs: 30_000,
+        }),
+        { wrapper: wrapper(queryClient) },
+      );
+
+      await act(async () => {
+        await result.current.start({
+          channel_id: "channel-1",
+          agent_id: "agent-1",
+        });
+      });
+      act(() => {
+        media.events().onRemoteAudioStarted?.("voice-agent-1");
+      });
+      expect(result.current.phase).toBe("connected");
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(answerVoiceCall).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_500);
+        await Promise.resolve();
+      });
+      expect(answerVoiceCall).toHaveBeenCalledTimes(2);
+      expect(result.current.phase).toBe("connected");
+      expect(media.session.disconnect).not.toHaveBeenCalled();
+      expect(stopVoiceCall).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

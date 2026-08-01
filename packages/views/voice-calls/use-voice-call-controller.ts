@@ -87,6 +87,7 @@ export interface VoiceCallController {
 
 const TERMINAL_STATUSES = new Set(["ended", "failed"]);
 const DEFAULT_ACTIVATION_TIMEOUT_MS = 30_000;
+const ANSWER_RETRY_MS = 1_500;
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.trim()
@@ -203,7 +204,11 @@ export function useVoiceCallController(
   const mediaFailureRef = useRef<unknown>(null);
   const providerStartedRef = useRef(false);
   const providerAnsweredRef = useRef(false);
+  const serverAnswerSyncedRef = useRef(false);
+  const answerInFlightCallIdRef = useRef("");
   const activationTimeoutRef =
+    useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
+  const answerRetryTimeoutRef =
     useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   const stoppedCallIdsRef = useRef(new Set<string>());
   const stopInFlightRef = useRef<{
@@ -234,16 +239,66 @@ export function useVoiceCallController(
   const requestServerStopRef = useRef(requestServerStop);
   requestServerStopRef.current = requestServerStop;
 
+  const requestServerAnswerRef = useRef<(targetCallId: string) => void>(
+    () => undefined,
+  );
+
+  const clearAnswerRetry = useCallback(() => {
+    if (answerRetryTimeoutRef.current === null) return;
+    globalThis.clearTimeout(answerRetryTimeoutRef.current);
+    answerRetryTimeoutRef.current = null;
+  }, []);
+
+  const scheduleAnswerRetry = useCallback((targetCallId: string) => {
+    clearAnswerRetry();
+    answerRetryTimeoutRef.current = globalThis.setTimeout(() => {
+      answerRetryTimeoutRef.current = null;
+      if (
+        activeCallIdRef.current !== targetCallId ||
+        endingRef.current ||
+        cancelRequestedRef.current ||
+        !providerAnsweredRef.current ||
+        serverAnswerSyncedRef.current
+      ) {
+        return;
+      }
+      requestServerAnswerRef.current(targetCallId);
+    }, ANSWER_RETRY_MS);
+  }, [clearAnswerRetry]);
+
   const requestServerAnswer = useCallback((targetCallId: string) => {
-    if (!targetCallId || endingRef.current || cancelRequestedRef.current) {
+    if (
+      !targetCallId ||
+      endingRef.current ||
+      cancelRequestedRef.current ||
+      serverAnswerSyncedRef.current ||
+      answerInFlightCallIdRef.current === targetCallId
+    ) {
       return;
     }
-    void answerCallMutation.mutateAsync(targetCallId).catch(() => {
-      // Audible local answer already moved the UI. A failed DB sync must not
-      // hang up the live RTC session; the next GET/realtime refresh can retry.
-    });
-  }, [answerCallMutation]);
-  const requestServerAnswerRef = useRef(requestServerAnswer);
+    answerInFlightCallIdRef.current = targetCallId;
+    void answerCallMutation.mutateAsync(targetCallId)
+      .then((answered) => {
+        if (activeCallIdRef.current !== targetCallId) return;
+        if (answered.call.connected_at) {
+          serverAnswerSyncedRef.current = true;
+          clearAnswerRetry();
+          return;
+        }
+        // Audible local answer already moved the UI. Keep retrying DB sync
+        // without hanging up the live RTC session.
+        scheduleAnswerRetry(targetCallId);
+      })
+      .catch(() => {
+        if (activeCallIdRef.current !== targetCallId) return;
+        scheduleAnswerRetry(targetCallId);
+      })
+      .finally(() => {
+        if (answerInFlightCallIdRef.current === targetCallId) {
+          answerInFlightCallIdRef.current = "";
+        }
+      });
+  }, [answerCallMutation, clearAnswerRetry, scheduleAnswerRetry]);
   requestServerAnswerRef.current = requestServerAnswer;
 
   const stopRingback = useCallback(() => {
@@ -437,7 +492,10 @@ export function useVoiceCallController(
     mediaFailureRef.current = null;
     providerStartedRef.current = false;
     providerAnsweredRef.current = false;
+    serverAnswerSyncedRef.current = false;
+    answerInFlightCallIdRef.current = "";
     clearActivationTimeout();
+    clearAnswerRetry();
     setCallId("");
     setAutoplayBlockedUserId(null);
     setLocalError(null);
@@ -636,6 +694,7 @@ export function useVoiceCallController(
     createCallMutation,
     connectCallMutation,
     clearActivationTimeout,
+    clearAnswerRetry,
     mediaSessionFactory,
     scheduleActivationTimeout,
     setMediaFailure,
@@ -645,6 +704,7 @@ export function useVoiceCallController(
 
   const hangUp = useCallback(async (): Promise<void> => {
     clearActivationTimeout();
+    clearAnswerRetry();
     stopRingback();
     cancelRequestedRef.current = true;
     endingRef.current = true;
@@ -699,7 +759,7 @@ export function useVoiceCallController(
       }
       setLocalPhase("ended");
     }
-  }, [clearActivationTimeout, stopRingback]);
+  }, [clearActivationTimeout, clearAnswerRetry, stopRingback]);
 
   const setMuted = useCallback(async (muted: boolean): Promise<void> => {
     const session = mediaSessionRef.current;
@@ -758,6 +818,7 @@ export function useVoiceCallController(
     if (!callId) return;
     if (!TERMINAL_STATUSES.has(serverStatus ?? "")) return;
     clearActivationTimeout();
+    clearAnswerRetry();
     stopRingback();
     if (activeCallIdRef.current === callId) {
       activeCallIdRef.current = "";
@@ -765,7 +826,35 @@ export function useVoiceCallController(
     const session = mediaSessionRef.current;
     mediaSessionRef.current = null;
     void session?.disconnect().catch(() => undefined);
-  }, [callId, clearActivationTimeout, serverStatus, stopRingback]);
+  }, [
+    callId,
+    clearActivationTimeout,
+    clearAnswerRetry,
+    serverStatus,
+    stopRingback,
+  ]);
+
+  useEffect(() => {
+    if (!callId || !providerAnsweredRef.current) return;
+    if (serverCall?.connected_at) {
+      serverAnswerSyncedRef.current = true;
+      clearAnswerRetry();
+      return;
+    }
+    if (
+      endingRef.current ||
+      cancelRequestedRef.current ||
+      TERMINAL_STATUSES.has(serverStatus ?? "")
+    ) {
+      return;
+    }
+    requestServerAnswerRef.current(callId);
+  }, [
+    callId,
+    clearAnswerRetry,
+    serverCall?.connected_at,
+    serverStatus,
+  ]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -774,6 +863,7 @@ export function useVoiceCallController(
       cancelRequestedRef.current = true;
       endingRef.current = true;
       clearActivationTimeout();
+      clearAnswerRetry();
       stopRingback();
       const targetCallId = activeCallIdRef.current;
       activeCallIdRef.current = "";
@@ -783,7 +873,7 @@ export function useVoiceCallController(
         void requestServerStopRef.current(targetCallId).catch(() => undefined);
       }
     };
-  }, [clearActivationTimeout, stopRingback]);
+  }, [clearActivationTimeout, clearAnswerRetry, stopRingback]);
 
   const serverFailure = serverStatus === "failed" && serverCall
     ? {

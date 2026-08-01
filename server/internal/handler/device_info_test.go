@@ -17,38 +17,14 @@ func TestDeviceNameFromRuntime(t *testing.T) {
 		want       string
 	}{
 		{
-			name:       "structured_metadata_wins",
+			name:       "structured_metadata",
 			deviceInfo: "ubuntu · codex-cli 0.146.0",
 			metadata:   map[string]any{"device_name": "ubuntu", "version": "codex-cli 0.146.0"},
 			want:       "ubuntu",
 		},
 		{
-			name:       "structured_ignores_glued_noise",
-			deviceInfo: "anything · whatever",
-			metadata:   map[string]any{"device_name": "s144"},
-			want:       "s144",
-		},
-		{
-			name:       "legacy_glue_left_half",
+			name:       "no_metadata_no_compat_parse",
 			deviceInfo: "ubuntu · codex-cli 0.146.0",
-			metadata:   map[string]any{"version": "codex-cli 0.146.0"},
-			want:       "ubuntu",
-		},
-		{
-			name:       "legacy_claude_parens",
-			deviceInfo: "dev.local · 2.1.5 (Claude Code)",
-			metadata:   map[string]any{"version": "2.1.5 (Claude Code)"},
-			want:       "dev.local",
-		},
-		{
-			name:       "legacy_name_only",
-			deviceInfo: "host.local",
-			metadata:   map[string]any{},
-			want:       "host.local",
-		},
-		{
-			name:       "legacy_version_only",
-			deviceInfo: "codex-cli 0.146.0",
 			metadata:   map[string]any{"version": "codex-cli 0.146.0"},
 			want:       "",
 		},
@@ -75,9 +51,7 @@ func TestDeviceNameFromRuntime(t *testing.T) {
 	}
 }
 
-// Mutation-capable: if registration stops persisting metadata.device_name and
-// response stops reading it, this fixture reds.
-func TestAgentRuntimeResponsePrefersMetadataDeviceName(t *testing.T) {
+func TestAgentRuntimeResponseRequiresMetadataDeviceName(t *testing.T) {
 	t.Parallel()
 
 	rt := runtimeHealthTestRuntime(t, map[string]any{
@@ -87,18 +61,15 @@ func TestAgentRuntimeResponsePrefersMetadataDeviceName(t *testing.T) {
 	rt.DeviceInfo = "ubuntu · codex-cli 0.146.0"
 
 	resp := (&Handler{}).runtimeToResponse(t.Context(), rt)
-	if resp.DeviceInfo != rt.DeviceInfo {
-		t.Fatalf("device_info must stay composite: got %q", resp.DeviceInfo)
-	}
 	if resp.DeviceName != "ubuntu" {
 		t.Fatalf("device_name: got %q want ubuntu", resp.DeviceName)
 	}
 
-	// Mutation: wipe structured field — legacy glue inverse must still work.
+	// Mutation: no metadata.device_name → empty (no device_info compat parse).
 	rt = runtimeWithMetadata(t, rt, map[string]any{"version": "codex-cli 0.146.0"})
 	resp = (&Handler{}).runtimeToResponse(t.Context(), rt)
-	if resp.DeviceName != "ubuntu" {
-		t.Fatalf("legacy fallback device_name: got %q want ubuntu", resp.DeviceName)
+	if resp.DeviceName != "" {
+		t.Fatalf("without metadata.device_name got %q; want empty (no compat)", resp.DeviceName)
 	}
 }
 

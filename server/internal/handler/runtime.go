@@ -43,7 +43,8 @@ type AgentRuntimeResponse struct {
 	DeviceInfo string `json:"device_info"`
 	// DeviceName is the machine label from registration (metadata.device_name).
 	// Daemon already sends device_name separately; we persist it so clients
-	// never re-parse device_info. Empty when unknown. Older servers omit it.
+	// never re-parse device_info. Empty until the daemon re-registers after
+	// this persist landed. Older servers omit the field.
 	DeviceName string `json:"device_name"`
 	Metadata   any    `json:"metadata"`
 	Capabilities         []string                    `json:"capabilities"`

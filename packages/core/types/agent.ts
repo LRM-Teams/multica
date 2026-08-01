@@ -114,8 +114,8 @@ export interface RuntimeDevice {
   device_info: string;
   /**
    * Machine label persisted from daemon register `device_name` (also in
-   * `metadata.device_name`). Not a parse of `device_info`. Older servers
-   * / pre-persist rows may omit it.
+   * `metadata.device_name`). Not a parse of `device_info`. Absent/empty
+   * until the daemon re-registers after the server started persisting it.
    */
   device_name?: string;
   metadata: Record<string, unknown>;

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent } from "@multica/core/types";
 import { api } from "@multica/core/api";
+import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
@@ -55,6 +56,16 @@ export function AgentProfileActions({
 
   const isArchived = !!agent.archived_at;
   const displayName = resolveActorDisplayName(agent, agent.id);
+  // Frank, 2026-08-01: only offer restart while the bound computer is
+  // reachable — it comes back on its own once the computer reconnects.
+  // Derived, staleness-aware health (#10), never the raw `runtime_status`
+  // column: that field can say "online" for up to 180s after the daemon
+  // actually went silent.
+  const isRuntimeOnline =
+    deriveRuntimeHealth(
+      { status: agent.runtime_status ?? "offline", last_seen_at: agent.runtime_last_seen_at ?? null },
+      Date.now(),
+    ) === "online";
 
   const invalidateAgents = () => {
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) });
@@ -107,7 +118,7 @@ export function AgentProfileActions({
           </Button>
         ) : null}
 
-        {canManage && !isArchived ? (
+        {canManage && !isArchived && isRuntimeOnline ? (
           <Button
             type="button"
             variant="outline"

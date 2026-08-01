@@ -5,22 +5,14 @@ import (
 	"testing"
 )
 
-// knownTypesFromNew mirrors the switch arms in New. Kept as a literal so a
-// new New() case that forgets the capability table fails this test — the
-// whole point of task #47's "half-filled → test fails" acceptance.
-var knownTypesFromNew = []string{
-	"claude", "codebuddy", "codex", "copilot", "opencode", "openclaw",
-	"hermes", "gemini", "pi", "cursor", "kimi", "kiro", "antigravity", "grok",
-}
-
 func TestProviderCapabilitiesCoverAllKnownTypes(t *testing.T) {
 	t.Parallel()
-	for _, name := range knownTypesFromNew {
+	for _, name := range KnownAgentTypes() {
 		if _, ok := providerCapabilities[name]; !ok {
 			t.Errorf("New() accepts %q but providerCapabilities has no row — add caps(...) for it", name)
 		}
 	}
-	if got, want := len(providerCapabilities), len(knownTypesFromNew); got != want {
+	if got, want := len(providerCapabilities), len(KnownAgentTypes()); got != want {
 		extra := KnownProviderTypes()
 		sort.Strings(extra)
 		t.Errorf("providerCapabilities has %d rows, New() has %d arms; table=%v", got, want, extra)
@@ -73,7 +65,7 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 	}
 
 	// Model selection — every built-in currently true (hermes/antigravity regressions).
-	for _, name := range knownTypesFromNew {
+	for _, name := range KnownAgentTypes() {
 		if !Capabilities(name).ModelSelectionSupported {
 			t.Errorf("%q must support model selection", name)
 		}

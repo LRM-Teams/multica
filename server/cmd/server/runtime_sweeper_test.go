@@ -684,6 +684,122 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 	}
 }
 
+// TestExpireStaleQueuedTasksSkipsOfflineRuntimes verifies task #50: a task
+// queued behind a runtime that is confirmed 'offline' must not be reaped by
+// the blind-clock TTL — it stays 'pending' and waits for the runtime to come
+// back, however long that takes. This is what let ~20 real messages to an
+// offline daemon silently fail with "task expired in queue" over a 22h
+// window (see #50's incident writeup) instead of just waiting.
+//
+// An old task on a runtime that is still 'online' must still expire — this
+// sweeper's original backstop for a genuinely-stuck task behind a healthy
+// runtime (the MUL-1899 historical-backlog case) is preserved unchanged.
+func TestExpireStaleQueuedTasksSkipsOfflineRuntimes(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+
+	var agentID, ownerID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT a.id, m.user_id FROM agent a
+		JOIN member m ON m.workspace_id = a.workspace_id
+		JOIN "user" u ON u.id = m.user_id
+		WHERE u.email = $1
+		LIMIT 1
+	`, integrationTestEmail).Scan(&agentID, &ownerID); err != nil {
+		t.Fatalf("failed to find test agent: %v", err)
+	}
+
+	var offlineRT, onlineRT string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, owner_id)
+		VALUES ($1, 'offline-daemon-clock-test', 'clock test offline', 'local', 'pi', 'offline', $2)
+		RETURNING id
+	`, testWorkspaceID, ownerID).Scan(&offlineRT); err != nil {
+		t.Fatalf("failed to insert offline runtime: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, owner_id)
+		VALUES ($1, 'online-daemon-clock-test', 'clock test online', 'local', 'pi', 'online', $2)
+		RETURNING id
+	`, testWorkspaceID, ownerID).Scan(&onlineRT); err != nil {
+		t.Fatalf("failed to insert online runtime: %v", err)
+	}
+
+	mkIssue := func(label string) string {
+		var issueID string
+		if err := testPool.QueryRow(ctx, `
+			WITH bumped AS (
+				UPDATE workspace SET issue_counter = issue_counter + 1
+				WHERE id = $1 RETURNING issue_counter
+			)
+			INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, number)
+			SELECT $1, $3, 'todo', 'none', 'member', $2, 'agent', $4, (SELECT issue_counter FROM bumped)
+			FROM member m WHERE m.workspace_id = $1 LIMIT 1
+			RETURNING id
+		`, testWorkspaceID, ownerID, label, agentID).Scan(&issueID); err != nil {
+			t.Fatalf("failed to create %s issue: %v", label, err)
+		}
+		return issueID
+	}
+	oldOfflineIssue := mkIssue("Clock-skip test (old, offline runtime)")
+	oldOnlineIssue := mkIssue("Clock-skip test (old, online runtime)")
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE runtime_id IN ($1, $2)`, offlineRT, onlineRT)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id IN ($1, $2)`, oldOfflineIssue, oldOnlineIssue)
+		testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE id IN ($1, $2)`, offlineRT, onlineRT)
+	})
+
+	var oldOfflineTask, oldOnlineTask string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, created_at)
+		VALUES ($1, $2, $3, 'pending', 0, now() - interval '5 hours')
+		RETURNING id
+	`, agentID, offlineRT, oldOfflineIssue).Scan(&oldOfflineTask); err != nil {
+		t.Fatalf("failed to insert old task on offline runtime: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority, created_at)
+		VALUES ($1, $2, $3, 'pending', 0, now() - interval '5 hours')
+		RETURNING id
+	`, agentID, onlineRT, oldOnlineIssue).Scan(&oldOnlineTask); err != nil {
+		t.Fatalf("failed to insert old task on online runtime: %v", err)
+	}
+
+	queries := db.New(testPool)
+	failed, err := queries.ExpireStaleQueuedTasks(ctx, db.ExpireStaleQueuedTasksParams{
+		TtlSecs:    3600.0, // 1h TTL — both tasks are 5h old
+		MaxPerTick: 100,
+	})
+	if err != nil {
+		t.Fatalf("ExpireStaleQueuedTasks failed: %v", err)
+	}
+	if len(failed) != 1 {
+		t.Fatalf("expected exactly 1 expired task (the online-runtime one), got %d", len(failed))
+	}
+	if failed[0].ID.Bytes != parseUUIDBytes(oldOnlineTask) {
+		t.Fatalf("expired the wrong task: expected the online-runtime task, got %x", failed[0].ID.Bytes)
+	}
+
+	var offlineTaskStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, oldOfflineTask).Scan(&offlineTaskStatus); err != nil {
+		t.Fatalf("failed to read old-offline-runtime task: %v", err)
+	}
+	if offlineTaskStatus != "pending" {
+		t.Fatalf("task queued behind an offline runtime: expected status=pending (must keep waiting, however old), got %q", offlineTaskStatus)
+	}
+
+	var onlineTaskStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_inbox_event WHERE id = $1`, oldOnlineTask).Scan(&onlineTaskStatus); err != nil {
+		t.Fatalf("failed to read old-online-runtime task: %v", err)
+	}
+	if onlineTaskStatus != "acked" {
+		t.Fatalf("task queued behind an online runtime: expected status=acked (blind-clock backstop preserved for the healthy-runtime case), got %q", onlineTaskStatus)
+	}
+}
+
 // TestExpireQueuedTasksOnOfflineRuntimes verifies the Phase 2b env-dispatch
 // liveness backstop: a 'pending' task whose runtime is still 'offline' past the
 // TTL and carrying an ephemeral sandbox marker is failed with

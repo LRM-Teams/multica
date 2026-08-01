@@ -65,8 +65,8 @@ export function HumanBoundaryCard({
                   </tr>
                 </thead>
                 <tbody>
-                  {model.matrix.map((row, i) => (
-                    <tr key={i} className="border-t">
+                  {model.matrix.map((row) => (
+                    <tr key={`${row.human}\0${row.ai}`} className="border-t">
                       <td className="px-2 py-1.5">{row.human}</td>
                       <td className="px-2 py-1.5 text-muted-foreground">{row.ai}</td>
                     </tr>

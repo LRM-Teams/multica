@@ -123,18 +123,24 @@ export function buildExplorationDimensions(
       str(p.family_title) ||
       seed?.title ||
       family;
-    const questions: ExplorationQuestion[] = group
-      .filter((n) =>
-        ["subquestion", "probe", "finding", "dead_end", "conflict", "pivot"].includes(
-          n.node_type,
-        ),
-      )
-      .map((n) => ({
+    const questionTypes = new Set([
+      "subquestion",
+      "probe",
+      "finding",
+      "dead_end",
+      "conflict",
+      "pivot",
+    ]);
+    const questions: ExplorationQuestion[] = [];
+    for (const n of group) {
+      if (!questionTypes.has(n.node_type)) continue;
+      questions.push({
         id: n.id,
         title: n.title || n.node_type,
         nodeType: n.node_type,
         active: n.status === "active" || n.node_type === "probe",
-      }));
+      });
+    }
     const finding = group.find((n) => n.node_type === "finding");
     dims.push({
       family,
@@ -175,9 +181,10 @@ export function buildSourceStrategy(sources: ResearchSource[]): SourceStrategyMo
     const layer: SourceStrategyLayer = GENERAL_SOURCE_CLASSES.has(cls)
       ? "general"
       : "domain";
-    const whys = rows
-      .map((r) => str(asRecord(r.payload).why) || r.summary)
-      .filter(Boolean);
+    const whys = rows.flatMap((r) => {
+      const why = str(asRecord(r.payload).why) || r.summary;
+      return why ? [why] : [];
+    });
     return {
       id: cls,
       label: cls,

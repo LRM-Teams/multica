@@ -8,16 +8,20 @@ import { useT } from "../../../i18n";
 import { ThinkingPicker } from "./thinking-picker";
 
 /**
- * Thinking row for the agent inspector. Hidden when the active model has
- * no `supported_levels` advertised AND nothing is persisted, so providers
- * that don't expose reasoning never surface an empty row. If the agent
- * already has a `thinking_level` saved (model swap into a non-thinking
- * runtime, or the daemon / CLI catalog shrank and dropped the entry),
- * we still render the row so the user can see the orphan token the
- * backend is still sending and explicit-clear it via the picker footer.
- * PR1's per-model invalid behavior is daemon-side warn/drop, not a
- * synchronous DB clear, so the frontend has to surface the persisted
- * state honestly.
+ * Thinking row for the agent inspector. Hidden when the runtime doesn't
+ * expose a reasoning/effort catalog at all (`thinkingDiscovery`, #59 —
+ * backend-owned, never a hardcoded provider list) OR the active model
+ * specifically has no `supported_levels` advertised, AND nothing is
+ * persisted. `thinkingDiscovery` is checked first and independently of
+ * `levels`: it's the coarser, runtime-level capability signal and is
+ * treated as authoritative even in the (should-be-impossible) case where
+ * stale per-model catalog data disagrees with it. If the agent already
+ * has a `thinking_level` saved (model swap into a non-thinking runtime,
+ * or the daemon / CLI catalog shrank and dropped the entry), we still
+ * render the row so the user can see the orphan token the backend is
+ * still sending and explicit-clear it via the picker footer. PR1's
+ * per-model invalid behavior is daemon-side warn/drop, not a synchronous
+ * DB clear, so the frontend has to surface the persisted state honestly.
  *
  * Reuses the shared runtime-models query so it hits the same 60s cache
  * as the model picker; no extra round-trip on the inspector's hot path.
@@ -46,9 +50,11 @@ export function ThinkingPropRow({
   );
 
   const models = modelsQuery.data?.models ?? [];
+  // Missing/undefined from older servers ⇒ false ⇒ row stays hidden (#59).
+  const thinkingDiscovery = modelsQuery.data?.thinkingDiscovery === true;
   const entry = pickModelEntry(models, model);
   const levels = entry?.thinking?.supported_levels ?? [];
-  if (levels.length === 0 && !value) return null;
+  if (!value && (!thinkingDiscovery || levels.length === 0)) return null;
 
   return (
     <PropRow label={t(($) => $.inspector.prop_thinking)} interactive={false}>

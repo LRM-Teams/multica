@@ -1119,6 +1119,12 @@ export interface RuntimeModelListRequest {
    * treat missing as false so the free-form input stays hidden.
    */
   custom_model_id_supported?: boolean;
+  /**
+   * Backend-owned capability (agent.Capabilities.ThinkingDiscovery): whether
+   * this runtime exposes a reasoning/effort catalog. Older servers omit it —
+   * treat missing as false so the thinking-level picker stays hidden (#59).
+   */
+  thinking_discovery?: boolean;
   error?: string;
   created_at: string;
   updated_at: string;
@@ -1127,11 +1133,13 @@ export interface RuntimeModelListRequest {
 // Result shape returned by resolveRuntimeModels — includes the
 // "supported" bit so the UI can distinguish "no models discovered"
 // from "provider does not honour per-agent model selection", plus
-// whether a free-form Custom model ID input is allowed.
+// whether a free-form Custom model ID input is allowed, plus whether
+// the runtime exposes a thinking/effort catalog (#59).
 export interface RuntimeModelsResult {
   models: RuntimeModel[];
   supported: boolean;
   customModelIdSupported: boolean;
+  thinkingDiscovery: boolean;
 }
 
 export type RuntimeLocalSkillStatus =

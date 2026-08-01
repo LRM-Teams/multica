@@ -39,6 +39,8 @@ export async function resolveRuntimeModels(
     supported: current.supported,
     // Missing/undefined from older servers ⇒ hide the free-form input.
     customModelIdSupported: current.custom_model_id_supported === true,
+    // Missing/undefined from older servers ⇒ hide the thinking-level picker (#59).
+    thinkingDiscovery: current.thinking_discovery === true,
   };
 }
 

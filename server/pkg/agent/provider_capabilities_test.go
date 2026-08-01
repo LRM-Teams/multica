@@ -54,8 +54,10 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 		}
 	}
 
-	// Thinking discovery — providers that call annotate*Thinking in ListModels.
-	for _, name := range []string{"claude", "codex", "codebuddy"} {
+	// Thinking discovery — every provider that injects thinking/effort into
+	// the CLI today (#59). Keep this list in lockstep with backends that
+	// read ExecOptions.ThinkingLevel.
+	for _, name := range []string{"claude", "codex", "codebuddy", "pi", "grok", "opencode"} {
 		if !Capabilities(name).ThinkingDiscovery {
 			t.Errorf("%q must advertise ThinkingDiscovery", name)
 		}
@@ -90,5 +92,28 @@ func TestModelSelectionAndCustomIDWrappers(t *testing.T) {
 	}
 	if CustomModelIDSupported("opencode") {
 		t.Error("opencode wrapper must read CustomModelIDSupported=false from the table")
+	}
+}
+
+// TestThinkingEnumsStayInsideCapabilityTable pins that providerThinkingEnums
+// never invents a provider the capability table says has no thinking support
+// — otherwise IsKnownThinkingValue would accept tokens for a runtime that
+// Capabilities().ThinkingDiscovery=false (the #47 scatter failure mode).
+func TestThinkingEnumsStayInsideCapabilityTable(t *testing.T) {
+	t.Parallel()
+	for name := range providerThinkingEnums {
+		if !Capabilities(name).ThinkingDiscovery {
+			t.Errorf("providerThinkingEnums has %q but Capabilities(%q).ThinkingDiscovery=false", name, name)
+		}
+	}
+	// Every ThinkingDiscovery provider except opencode (dynamic variants)
+	// must have a server-side enum so CreateAgent can cheap-reject garbage.
+	for _, name := range KnownAgentTypes() {
+		if !Capabilities(name).ThinkingDiscovery || name == "opencode" {
+			continue
+		}
+		if _, ok := providerThinkingEnums[name]; !ok {
+			t.Errorf("Capabilities(%q).ThinkingDiscovery=true but providerThinkingEnums has no row", name)
+		}
 	}
 }

@@ -279,6 +279,8 @@ func TestIsKnownThinkingValue(t *testing.T) {
 		{"pi", "max", false},
 		{"hermes", "", true},
 		{"hermes", "low", false}, // hermes has no thinking concept
+		{"cursor", "", true},
+		{"cursor", "high", false}, // ThinkingDiscovery=false ⇒ reject even known-looking tokens
 		{"grok", "", true},
 		{"grok", "high", true},
 		{"grok", "max", true},

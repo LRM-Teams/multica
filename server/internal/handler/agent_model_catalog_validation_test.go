@@ -15,7 +15,7 @@ func TestValidateAgentModelCatalog(t *testing.T) {
 	runtimeID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
 	otherRuntimeID := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
 
-	request, err := store.Create(ctx, uuidToString(runtimeID), false)
+	request, err := store.Create(ctx, uuidToString(runtimeID), false, false)
 	if err != nil {
 		t.Fatalf("create catalog request: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestValidateAgentModelCatalog_UnsupportedRuntimeOnlyAcceptsDefaults(t *test
 	store := NewInMemoryModelListStore()
 	h := &Handler{ModelListStore: store}
 	runtimeID := pgtype.UUID{Bytes: [16]byte{3}, Valid: true}
-	request, err := store.Create(ctx, uuidToString(runtimeID), false)
+	request, err := store.Create(ctx, uuidToString(runtimeID), false, false)
 	if err != nil {
 		t.Fatalf("create catalog request: %v", err)
 	}

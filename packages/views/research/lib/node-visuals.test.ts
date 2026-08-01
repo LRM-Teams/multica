@@ -55,9 +55,12 @@ describe("node-visuals (LRM-798)", () => {
     expect(shouldPulseNode("done", "probe")).toBe(false);
   });
 
-  it("pulses when actor has live activity even for quiet types", () => {
+  it("pulses when actor has live activity even for quiet types / running", () => {
     expect(nodeIsVisuallyBusy("active", "goal", true)).toBe(true);
+    expect(nodeIsVisuallyBusy("running", "probe", true)).toBe(true);
+    expect(nodeIsVisuallyBusy("waiting", "finding", true)).toBe(true);
     expect(nodeIsVisuallyBusy("active", "goal", false)).toBe(false);
+    expect(nodeIsVisuallyBusy("done", "probe", true)).toBe(false);
   });
 
   it("normalizes status keys for i18n", () => {

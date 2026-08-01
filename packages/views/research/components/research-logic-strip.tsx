@@ -1,5 +1,6 @@
 "use client";
 
+import type { ResearchPresenceMap } from "@multica/core/research";
 import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
@@ -11,10 +12,12 @@ import {
   mainPathNodeIds,
   resolveLogicStatus,
 } from "../lib/logic-lanes";
+import { nodeIsVisuallyBusy } from "../lib/node-visuals";
 
 /**
  * LRM-908 C8: narrow-screen vertical logic strip — start → path → end,
  * card rows (not git dots). Desktop keeps the full swimlane canvas.
+ * LRM-775: presence activity → pulse + caption on related cards.
  */
 export function ResearchLogicStrip({
   nodes,
@@ -22,12 +25,14 @@ export function ResearchLogicStrip({
   selectedId,
   onSelect,
   onOpenDelivery,
+  presence,
 }: {
   nodes: ResearchGraphNode[];
   edges: ResearchGraphEdge[];
   selectedId?: string | null;
   onSelect?: (node: ResearchGraphNode | null) => void;
   onOpenDelivery?: () => void;
+  presence?: ResearchPresenceMap;
 }) {
   const { t } = useT("research");
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -67,6 +72,11 @@ export function ResearchLogicStrip({
           const end = isLogicEndNode(node);
           const laneId = laneForNode(node);
           const selected = selectedId === node.id || (end && selectedId === LOGIC_END_NODE_ID);
+          const presenceLabel = node.actor_agent_id
+            ? presence?.[node.actor_agent_id]?.activity?.trim()
+            : undefined;
+          const presenceBusy = !!presenceLabel;
+          const pulse = nodeIsVisuallyBusy(node.status, node.node_type, presenceBusy);
           const title = end
             ? t(($) => $.logic.end_title)
             : start
@@ -93,6 +103,7 @@ export function ResearchLogicStrip({
                     status.tone === "wait" && "bg-muted-foreground/45",
                     status.tone === "fail" && "bg-destructive",
                     status.tone === "mute" && "bg-muted-foreground/30",
+                    pulse && "motion-safe:animate-pulse",
                   )}
                   aria-hidden
                 />
@@ -114,17 +125,31 @@ export function ResearchLogicStrip({
                   "mb-2 min-w-0 flex-1 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
                   selected && "border-brand ring-2 ring-brand/30",
                   !selected && "border-border hover:bg-muted/30",
+                  pulse && "motion-safe:animate-pulse motion-safe:[animation-duration:2.2s]",
+                  presenceBusy &&
+                    "shadow-[0_0_18px_color-mix(in_oklch,var(--brand)_28%,transparent)]",
                 )}
+                data-presence-busy={presenceBusy ? "true" : undefined}
                 data-testid={
                   start
                     ? "research-logic-strip-start"
                     : end
                       ? "research-logic-strip-end"
-                      : "research-logic-strip-card"
+                      : presenceBusy
+                        ? "research-node-presence-busy"
+                        : "research-logic-strip-card"
                 }
               >
                 <div className="text-sm font-semibold text-foreground">{title}</div>
                 <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{summary}</p>
+                {presenceLabel ? (
+                  <p
+                    data-testid="research-node-presence-caption"
+                    className="mt-1 truncate text-[10px] font-medium text-primary"
+                  >
+                    {presenceLabel}
+                  </p>
+                ) : null}
               </button>
             </li>
           );

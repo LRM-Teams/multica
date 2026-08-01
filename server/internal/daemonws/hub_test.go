@@ -377,6 +377,70 @@ func TestReminderSnapshotTransientErrorClosesConnectionWithoutTerminalStop(t *te
 	}
 }
 
+// TestReminderFireAttemptTransientErrorKeepsConnectionOpenForLocalRetry pins
+// task #68's hub.go fix: unlike the snapshot path above, a transient
+// fire-attempt processing failure must NOT force-close the connection. The
+// daemon now keeps a locally-retryable in-flight record and resends the
+// fire_attempt itself on a short backoff (reminder_cache.go), so tearing
+// down the WS connection here would only add an unnecessary reconnect on
+// top of a retry that was already going to happen.
+func TestReminderFireAttemptTransientErrorKeepsConnectionOpenForLocalRetry(t *testing.T) {
+	hub := NewHub()
+	hub.SetReminderHandlers(nil, func(context.Context, ClientIdentity, protocol.ReminderFireAttemptPayload) (*protocol.ReminderFireResultPayload, error) {
+		return nil, errors.New("transient fire processing failure")
+	}, nil, nil)
+	hub.SetHeartbeatHandler(func(context.Context, ClientIdentity, protocol.DaemonHeartbeatRequestPayload) (*protocol.DaemonHeartbeatAckPayload, error) {
+		return &protocol.DaemonHeartbeatAckPayload{RuntimeID: "runtime-1", Status: "ok"}, nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	request, err := json.Marshal(protocol.Message{
+		Type: protocol.EventReminderFireAttempt,
+		Payload: mustMarshalRaw(protocol.ReminderFireAttemptPayload{
+			AgentID: "agent-1", RuntimeID: "runtime-1", PlacementGeneration: 1, ReminderID: "reminder-1", Version: 1,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, request); err != nil {
+		t.Fatal(err)
+	}
+	// A single read call after both writes, not two separate reads: gorilla's
+	// ReadMessage is not reliably reusable after a prior call returns any
+	// error (including a deadline timeout) — this proves both "no frame for
+	// the failure itself" and "connection survives" in one read, avoiding
+	// that pitfall. The heartbeat ack is the only frame that should arrive.
+	heartbeat, err := json.Marshal(protocol.Message{
+		Type:    protocol.EventDaemonHeartbeat,
+		Payload: mustMarshalRaw(protocol.DaemonHeartbeatRequestPayload{RuntimeID: "runtime-1"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, heartbeat); err != nil {
+		t.Fatalf("connection unusable after transient fire-attempt failure: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, raw, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("connection closed instead of surviving to answer a heartbeat: %v", err)
+	} else {
+		var msg protocol.Message
+		if json.Unmarshal(raw, &msg) != nil || msg.Type != protocol.EventDaemonHeartbeatAck {
+			t.Fatalf("post-failure frame = %s, want a heartbeat ack proving the connection survived", raw)
+		}
+	}
+}
+
 func TestReminderLifecycleReplayDrainsMoreThanSendBufferInOrder(t *testing.T) {
 	hub := NewHub()
 	const eventCount = 40

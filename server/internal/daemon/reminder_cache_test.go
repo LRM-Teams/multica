@@ -190,8 +190,11 @@ func TestReminderCacheOnlyFireResultRearmsSameVersionPendingFire(t *testing.T) {
 		t.Fatalf("apply due job = %v, %v", applied, err)
 	}
 	clock.fire(0)
-	if _, ok := cache.get("r1"); ok {
-		t.Fatal("due timer remained installed")
+	// Task #68: firing keeps the job as an in-flight local record instead of
+	// deleting it — a fire_attempt that never gets confirmed must still have
+	// something locally to retry from. Only a fire_result confirms and clears it.
+	if _, ok := cache.get("r1"); !ok {
+		t.Fatal("fired job dropped from cache before confirmation arrived")
 	}
 	if installed, err := cache.snapshot("runtime-a", "agent-a", 1, []protocol.ReminderTimerJob{job}); err != nil || installed != 0 {
 		t.Fatalf("same-version snapshot rearm = %d, %v", installed, err)
@@ -202,6 +205,89 @@ func TestReminderCacheOnlyFireResultRearmsSameVersionPendingFire(t *testing.T) {
 	}
 	if got, ok := cache.get("r1"); !ok || got.Version != 1 {
 		t.Fatalf("fire result did not rearm canonical job: %+v, %v", got, ok)
+	}
+}
+
+// TestReminderCacheFireRetriesLocallyUntilConfirmed pins task #68's main fix:
+// a fire_attempt that never gets a fire_result confirmation (dropped send,
+// transient server failure, WS hiccup — anything short of a full reconnect)
+// must not be lost. The daemon's own retry timer, not a server round trip,
+// is what resends it.
+func TestReminderCacheFireRetriesLocallyUntilConfirmed(t *testing.T) {
+	now := time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	var fired []protocol.ReminderTimerJob
+	cache := newReminderCache(clock, slog.New(slog.NewTextHandler(io.Discard, nil)), func(job protocol.ReminderTimerJob) {
+		fired = append(fired, job)
+	})
+	job := reminderJob("r1", "agent-a", 1, now.Add(-time.Minute))
+	if applied, err := cache.applyProjection(reminderProjection(1, "runtime-a", "upsert", job, false)); err != nil || !applied {
+		t.Fatalf("apply due job = %v, %v", applied, err)
+	}
+
+	clock.fire(0) // initial due-time fire
+	if len(fired) != 1 {
+		t.Fatalf("fired after initial timer = %d, want 1", len(fired))
+	}
+	if len(clock.timers) != 2 {
+		t.Fatalf("timers scheduled after initial fire = %d, want 2 (due + retry)", len(clock.timers))
+	}
+
+	// Confirmation never arrives. Firing the retry timer must resend.
+	clock.fire(1)
+	if len(fired) != 2 || fired[1].ReminderID != "r1" || fired[1].Version != 1 {
+		t.Fatalf("fired after first retry = %+v, want a second r1/v1 fire", fired)
+	}
+	if len(clock.timers) != 3 {
+		t.Fatalf("timers scheduled after first retry = %d, want 3 (due + 2 retries)", len(clock.timers))
+	}
+	if got, ok := cache.get("r1"); !ok || got.Version != 1 {
+		t.Fatalf("in-flight job lost across retries: %+v, %v", got, ok)
+	}
+
+	// Fire result arrives: retry must stop, not fire again.
+	result := reminderProjection(2, "runtime-a", "fire_result", job, true)
+	if applied, err := cache.applyProjection(result); err != nil || !applied {
+		t.Fatalf("terminal fire result = %v, %v", applied, err)
+	}
+	if !clock.timers[2].stopped {
+		t.Fatal("fire_result confirmation did not stop the pending local retry timer")
+	}
+	clock.timers[2].fn() // simulate a race: retry fires anyway right after confirmation
+	if len(fired) != 2 {
+		t.Fatalf("retry re-fired after confirmation: fired = %+v", fired)
+	}
+	if _, ok := cache.get("r1"); ok {
+		t.Fatal("terminal fire_result should have removed the confirmed job")
+	}
+}
+
+// TestReminderCacheSnapshotPreservesInFlightRetry pins task #68's snapshot()
+// fix: a job the cache is still locally retrying (pendingFires set, no
+// fire_result yet) must survive a snapshot call instead of being silently
+// dropped along with everything else not in the server's accepted list —
+// otherwise every snapshot (including the one right after reconnect) would
+// silently kill the very retry loop this fix adds.
+func TestReminderCacheSnapshotPreservesInFlightRetry(t *testing.T) {
+	now := time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	cache := newReminderCache(clock, slog.New(slog.NewTextHandler(io.Discard, nil)), func(protocol.ReminderTimerJob) {})
+	job := reminderJob("r1", "agent-a", 1, now.Add(-time.Minute))
+	if applied, err := cache.applyProjection(reminderProjection(1, "runtime-a", "upsert", job, false)); err != nil || !applied {
+		t.Fatalf("apply due job = %v, %v", applied, err)
+	}
+	clock.fire(0)
+	if _, ok := cache.get("r1"); !ok {
+		t.Fatal("job should be in-flight before snapshot")
+	}
+
+	// Snapshot omits r1 entirely (as it would if the server hasn't heard the
+	// fire_attempt back yet either) — the in-flight record must not vanish.
+	if installed, err := cache.snapshot("runtime-a", "agent-a", 1, nil); err != nil || installed != 0 {
+		t.Fatalf("snapshot with no jobs = %d, %v", installed, err)
+	}
+	if _, ok := cache.get("r1"); !ok {
+		t.Fatal("snapshot silently dropped an in-flight retry")
 	}
 }
 
@@ -1587,8 +1673,12 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 	if err := json.Unmarshal(<-writes, &duplicateAck); err != nil || duplicateAck.Type != protocol.EventReminderProjectionAck {
 		t.Fatalf("duplicate projection ack=%q err=%v", duplicateAck.Type, err)
 	}
-	if len(clock.timers) != 6 || len(writes) != 0 {
-		t.Fatalf("duplicate recovery timers/extra_frames=%d/%d", len(clock.timers), len(writes))
+	// 7, not 6: reminder-1 already fired above and (task #68) its entry stays
+	// alive with a local retry timer instead of being deleted, so the fired
+	// one now accounts for two scheduled timers (its due-time timer already
+	// consumed by clock.fire(0), plus the retry timer fireLocked scheduled).
+	if len(clock.timers) != 7 || len(writes) != 0 {
+		t.Fatalf("duplicate recovery timers/extra_frames=%d/%d, want 7/0", len(clock.timers), len(writes))
 	}
 }
 

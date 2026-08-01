@@ -500,6 +500,14 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 			continue
 		}
 		if pendingVersion, pending := c.pendingFires[job.ReminderID]; pending && pendingVersion == job.Version {
+			// Task #68: this was a silent `continue` — the daemon is still
+			// locally retrying this exact fire, waiting on a fire_result
+			// confirmation, and dropping it here without a trace made a
+			// stuck-forever case impossible to diagnose from logs alone.
+			if c.logger != nil {
+				c.logger.Info("reminder snapshot skipped job pending local fire confirmation",
+					"reminder_id", job.ReminderID, "agent_id", agentID, "version", job.Version)
+			}
 			continue
 		}
 		acceptedJobs[job.ReminderID] = job
@@ -510,6 +518,12 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 			continue
 		}
 		if _, present := acceptedJobs[id]; present {
+			continue
+		}
+		// Task #68: an in-flight job (fired, awaiting fire_result) is not
+		// cancelled — don't tombstone its fence or drop its entry below just
+		// because the server's job list didn't happen to include it.
+		if pendingVersion, pending := c.pendingFires[id]; pending && pendingVersion == entry.job.Version {
 			continue
 		}
 		fence := c.fences[id]
@@ -526,12 +540,16 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 	}
 	accepted := 0
 	for id, entry := range c.entries {
-		if entry.job.OwnerAgentID == agentID {
-			if entry.timer != nil {
-				entry.timer.Stop()
-			}
-			delete(c.entries, id)
+		if entry.job.OwnerAgentID != agentID {
+			continue
 		}
+		if pendingVersion, pending := c.pendingFires[id]; pending && pendingVersion == entry.job.Version {
+			continue
+		}
+		if entry.timer != nil {
+			entry.timer.Stop()
+		}
+		delete(c.entries, id)
 	}
 	for _, job := range acceptedJobs {
 		fireAt, _ := time.Parse(time.RFC3339, job.FireAt)
@@ -748,21 +766,43 @@ func (c *reminderCache) armLocked(job protocol.ReminderTimerJob, fireAt time.Tim
 	if delay < 0 {
 		delay = 0
 	}
-	timer := c.clock.AfterFunc(delay, func() {
-		c.mu.Lock()
-		current, ok := c.entries[job.ReminderID]
-		if !ok || current.job.Version != job.Version {
-			c.mu.Unlock()
-			return
-		}
-		delete(c.entries, job.ReminderID)
-		c.pendingFires[job.ReminderID] = job.Version
-		c.mu.Unlock()
-		if c.onFire != nil {
-			c.onFire(job)
-		}
-	})
+	timer := c.clock.AfterFunc(delay, func() { c.fireAndScheduleRetryLocked(job) })
 	entry := c.entries[job.ReminderID]
 	entry.timer = timer
 	c.entries[job.ReminderID] = entry
+}
+
+// reminderFireRetryInterval is the local backoff between fire_attempt resends
+// while a job stays unconfirmed (task #68). It is short and constant, not
+// exponential: an unconfirmed reminder is user-visible overdue time, so the
+// cost of resending too often is far lower than the cost of waiting too long.
+const reminderFireRetryInterval = 15 * time.Second
+
+// fireAndScheduleRetryLocked sends job to onFire and keeps its entries
+// record alive as an in-flight copy instead of deleting it (task #68's main
+// fix). Deleting it at fire time — the previous behavior — meant a
+// fire_attempt that never got confirmed (dropped send, transient server
+// error, WS hiccup short of a reconnect) had nothing left locally to retry
+// from; recovery depended entirely on a future reconnect's snapshot(),
+// which only happens if and when the connection actually drops and comes
+// back. Confirmation is a fire_result projection event: applyProjection
+// stops whatever timer is currently in this entry (initially the due-time
+// timer, later a retry timer scheduled here) and either deletes the entry
+// (terminal) or re-arms it fresh (next cadence occurrence) — so a
+// fire_result racing a retry always wins, never double-fires after
+// confirmation.
+func (c *reminderCache) fireAndScheduleRetryLocked(job protocol.ReminderTimerJob) {
+	c.mu.Lock()
+	current, ok := c.entries[job.ReminderID]
+	if !ok || current.job.Version != job.Version {
+		c.mu.Unlock()
+		return
+	}
+	c.pendingFires[job.ReminderID] = job.Version
+	current.timer = c.clock.AfterFunc(reminderFireRetryInterval, func() { c.fireAndScheduleRetryLocked(job) })
+	c.entries[job.ReminderID] = current
+	c.mu.Unlock()
+	if c.onFire != nil {
+		c.onFire(job)
+	}
 }

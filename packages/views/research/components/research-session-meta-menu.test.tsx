@@ -16,6 +16,8 @@ vi.mock("../../i18n/use-t", () => ({
           fleet_empty: "No fleet",
           sources_empty: "No sources",
           sources_hint: "Sorted",
+          sources_view_all: "View all · {{count}}",
+          sources_collapse: "Collapse",
           fleet_badge: { lead: "Lead", pending: "Pending" },
           weight: "Weight",
         },

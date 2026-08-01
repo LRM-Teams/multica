@@ -555,10 +555,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             <div className="border-t bg-card p-3">
               <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
                 <Textarea
+                  data-testid="research-chat-composer"
                   rows={2}
                   value={ui.body}
                   onChange={(e) => dispatch({ type: "setBody", body: e.target.value })}
                   onKeyDown={(e) => {
+                    // LRM-800 / cancelled LRM-782: Enter sends; Shift+Enter newline.
                     if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
                     e.preventDefault();
                     if (!ui.body.trim() || send.isPending) return;

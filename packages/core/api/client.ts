@@ -133,6 +133,7 @@ import type {
   ChannelActiveTask,
   ChannelMember,
   ChannelInviteCandidatesResponse,
+  ChannelMemberManagementCapabilities,
   ChannelMessage,
   ChannelMessagesPage,
   MarkChannelReadResult,
@@ -3107,6 +3108,16 @@ export class ApiClient {
 
   async listChannelMembers(channelId: string): Promise<ChannelMember[]> {
     return this.fetch(`/api/channels/${channelId}/members`);
+  }
+
+  /**
+   * LRM-872 / LRM-879 — per-row member-management gates (can_remove includes
+   * inviter-of-self-added-agent and workspace admin paths).
+   */
+  async getChannelMemberManagementCapabilities(
+    channelId: string,
+  ): Promise<ChannelMemberManagementCapabilities> {
+    return this.fetch(`/api/channels/${channelId}/member-management-capabilities`);
   }
 
   /** LRM-622 — single invite-picker pool (users + agents), server-filtered. */

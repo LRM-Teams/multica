@@ -20,6 +20,9 @@ export const channelKeys = {
   messageThread: (channelId: string, messageId: string) => ["channel-message-thread", channelId, messageId] as const,
   messageSearch: (channelId: string, query: string, limit?: number) => ["channel-message-search", channelId, query, limit] as const,
   members: (channelId: string) => ["channel-members", channelId] as const,
+  /** LRM-872 / LRM-879 — per-row can_remove / role-change gates from BE. */
+  memberManagementCapabilities: (channelId: string) =>
+    ["channel-member-management-capabilities", channelId] as const,
   inviteCandidates: (channelId: string) => ["channel-invite-candidates", channelId] as const,
   attachments: (channelId: string) => ["channel-attachments", channelId] as const,
   stats: (channelId: string) => ["channel-stats", channelId] as const,
@@ -464,6 +467,24 @@ export function channelMembersOptions(channelId: string) {
     queryFn: () => api.listChannelMembers(channelId),
     enabled: !!channelId,
   });
+}
+
+/** LRM-872 / LRM-879 — enable for ordinary group channels only. */
+export function channelMemberManagementCapabilitiesOptions(
+  channelId: string,
+  enabled = true,
+) {
+  return queryOptions({
+    queryKey: channelKeys.memberManagementCapabilities(channelId),
+    queryFn: () => api.getChannelMemberManagementCapabilities(channelId),
+    enabled: !!channelId && enabled,
+  });
+}
+
+/** Invalidate roster + capability projection together after membership writes. */
+export function invalidateChannelMemberRoster(qc: QueryClient, channelId: string): void {
+  qc.invalidateQueries({ queryKey: channelKeys.members(channelId) });
+  qc.invalidateQueries({ queryKey: channelKeys.memberManagementCapabilities(channelId) });
 }
 
 /** LRM-622/623 — invite picker pool; enable only while Add people is open. */

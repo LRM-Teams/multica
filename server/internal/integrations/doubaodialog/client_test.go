@@ -81,6 +81,7 @@ func TestParseServerEventFunctionCallAndAudio(t *testing.T) {
 func TestOpenSessionCreatesAndBridgesFunctionCall(t *testing.T) {
 	const apiKey = "test-dialog-key"
 	upgrader := websocket.Upgrader{}
+	var createdSessionID string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Api-Key") != apiKey {
 			t.Errorf("missing/wrong API key header")
@@ -105,14 +106,18 @@ func TestOpenSessionCreatesAndBridgesFunctionCall(t *testing.T) {
 		if create.Type != EventSessionCreate ||
 			create.Session == nil ||
 			create.Session.Model != DefaultModel ||
+			strings.TrimSpace(create.Session.ID) == "" ||
 			len(create.Session.Tools) != 1 ||
 			create.Session.Tools[0].Function.Name != MulticaDelegateToolName {
 			t.Errorf("unexpected create payload: %s", raw)
 			return
 		}
-		_ = conn.WriteMessage(websocket.TextMessage, []byte(
-			`{"type":"session.created","session":{"id":"dialog-1"}}`,
-		))
+		createdSessionID = create.Session.ID
+		createdPayload, _ := json.Marshal(map[string]any{
+			"type":    EventSessionCreated,
+			"session": map[string]string{"id": create.Session.ID},
+		})
+		_ = conn.WriteMessage(websocket.TextMessage, createdPayload)
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(
 			`{"type":"response.function_call_arguments.done","items":[{"call_id":"call-42","name":"delegate_work_to_multica_agent","arguments":"{\"request\":\"开一个修复登录的 issue\"}"}]}`,
 		))
@@ -160,8 +165,8 @@ func TestOpenSessionCreatesAndBridgesFunctionCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Type != EventSessionCreated || created.SessionID != "dialog-1" {
-		t.Fatalf("created = %+v", created)
+	if created.Type != EventSessionCreated || created.SessionID == "" || created.SessionID != createdSessionID {
+		t.Fatalf("created = %+v want session id %q", created, createdSessionID)
 	}
 
 	executor := &RecordingExecutor{Result: "已创建 issue。"}

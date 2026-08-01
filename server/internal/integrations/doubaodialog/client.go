@@ -89,6 +89,11 @@ func (c *Client) OpenSession(ctx context.Context, session SessionConfig) (*Sessi
 	if strings.TrimSpace(session.Audio.Output.Voice) == "" {
 		session.Audio.Output.Voice = c.config.Voice
 	}
+	// Upstream Duplex echoes client-provided session.id (dialog_id). Omitting it
+	// yields session.created with an empty id and breaks follow-up turns.
+	if strings.TrimSpace(session.ID) == "" {
+		session.ID = uuid.NewString()
+	}
 
 	dialCtx, cancel := context.WithTimeout(ctx, c.config.Timeout)
 	defer cancel()

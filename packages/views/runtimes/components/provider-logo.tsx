@@ -201,6 +201,37 @@ function GrokLogo({ className }: { className: string }) {
   );
 }
 
+/**
+ * Full catalog of known code-agent providers. Single source for ProviderLogo
+ * cases and machine-detail "installed / not installed" (task #17) — do not
+ * maintain a parallel list elsewhere.
+ */
+export type KnownProvider = {
+  id: string;
+  label: string;
+};
+
+export const KNOWN_PROVIDERS: readonly KnownProvider[] = [
+  { id: "claude", label: "Claude Code" },
+  { id: "codebuddy", label: "CodeBuddy" },
+  { id: "codex", label: "Codex" },
+  { id: "opencode", label: "OpenCode" },
+  { id: "openclaw", label: "OpenClaw" },
+  { id: "hermes", label: "Hermes" },
+  { id: "pi", label: "Pi" },
+  { id: "copilot", label: "Copilot" },
+  { id: "cursor", label: "Cursor" },
+  { id: "kimi", label: "Kimi" },
+  { id: "kiro", label: "Kiro" },
+  { id: "gemini", label: "Gemini" },
+  { id: "antigravity", label: "Antigravity" },
+  { id: "grok", label: "Grok" },
+] as const;
+
+export function knownProviderLabel(provider: string): string | undefined {
+  return KNOWN_PROVIDERS.find((entry) => entry.id === provider)?.label;
+}
+
 export function ProviderLogo({
   provider,
   className = "h-4 w-4",

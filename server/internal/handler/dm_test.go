@@ -110,8 +110,16 @@ func TestCreateOrFindAgentDM_Idempotent(t *testing.T) {
 	if item2.ID != item1.ID || item2.Source != dmSourceChannel {
 		t.Fatalf("not idempotent: first=%+v second=%+v", item1, item2)
 	}
+	// task #76: count only this test's own DM channel, not every kind='dm'
+	// row in the shared testWorkspaceID. Other tests in this package (and
+	// production paths like agentDMChannel/ensureAgentHumanDMChannel) create
+	// real user<->agent DM channels as a legitimate side effect, so counting
+	// the whole workspace fails whenever one of those runs earlier in the
+	// same `go test` invocation — this assertion should only care whether
+	// *this* create-or-find call produced a duplicate.
 	var n int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel WHERE workspace_id=$1 AND kind='dm'`, testWorkspaceID).Scan(&n); err != nil || n != 1 {
+	canonicalName := dmCanonicalName("user", testUserID, "agent", agentID)
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel WHERE workspace_id=$1 AND kind='dm' AND name=$2`, testWorkspaceID, canonicalName).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("agent DM channel count=%d err=%v, want 1", n, err)
 	}
 }
@@ -134,8 +142,12 @@ func TestCreateOrFindAgentDM_IgnoresLegacySession(t *testing.T) {
 	if item.Source != dmSourceChannel || item.ID == sessionID {
 		t.Fatalf("expected dm_channel separate from legacy session %s, got %+v", sessionID, item)
 	}
+	// task #76 sibling: same fix as TestCreateOrFindAgentDM_Idempotent — count
+	// only this test's own DM channel, not every kind='dm' row in the shared
+	// testWorkspaceID.
 	var channelCount, sessionCount int
-	testPool.QueryRow(ctx, `SELECT count(*) FROM channel WHERE workspace_id=$1 AND kind='dm'`, testWorkspaceID).Scan(&channelCount)
+	canonicalName := dmCanonicalName("user", testUserID, "agent", agentID)
+	testPool.QueryRow(ctx, `SELECT count(*) FROM channel WHERE workspace_id=$1 AND kind='dm' AND name=$2`, testWorkspaceID, canonicalName).Scan(&channelCount)
 	testPool.QueryRow(ctx, `SELECT count(*) FROM chat_session WHERE id=$1`, sessionID).Scan(&sessionCount)
 	if channelCount != 1 || sessionCount != 1 {
 		t.Fatalf("channelCount=%d sessionCount=%d, want both preserved", channelCount, sessionCount)

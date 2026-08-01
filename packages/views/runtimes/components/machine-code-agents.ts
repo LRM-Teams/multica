@@ -10,8 +10,9 @@ export type MachineCodeAgentRow = {
   id: string;
   label: string;
   /**
-   * Detected code-agent CLI version (from daemon `device_info`), not the
-   * Multica daemon `current_version`. Null when unknown / not installed.
+   * Detected code-agent CLI version. Prefer `metadata.version` (daemon
+   * registration field for the CA). Never use Multica `current_version` /
+   * `runtimeCurrentVersion` — that reads `metadata.cli_version` (daemon).
    */
   version: string | null;
   docsUrl: string | null;
@@ -26,11 +27,13 @@ function labelFor(provider: string): string {
   return knownProviderLabel(provider) ?? provider;
 }
 
+function normalizeVersion(raw: string): string {
+  return raw.trim().replace(/^v/i, "");
+}
+
 /**
- * `device_info` is assembled as `"hostname · <provider version half>"`
- * (e.g. `"host.local · 2.1.121 (Claude Code)"`, `"box · codex-cli 0.118.0"`).
- * Pull a semver-ish token from the second half — never use Multica
- * `current_version` here (that's the daemon, Parker 08-01).
+ * Fallback when `metadata.version` is missing: `device_info` is assembled as
+ * `"hostname · <version half>"` (e.g. `"host.local · 2.1.121 (Claude Code)"`).
  */
 export function codeAgentVersionFromDeviceInfo(
   deviceInfo: string | null | undefined,
@@ -43,7 +46,16 @@ export function codeAgentVersionFromDeviceInfo(
   if (!half) return null;
   const match = half.match(/v?\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?/);
   if (!match?.[0]) return half;
-  return match[0].replace(/^v/i, "");
+  return normalizeVersion(match[0]);
+}
+
+/** CA CLI version for a registered runtime — not the Multica daemon version. */
+export function codeAgentVersion(runtime: AgentRuntime): string | null {
+  const meta = runtime.metadata?.version;
+  if (typeof meta === "string" && meta.trim()) {
+    return normalizeVersion(meta);
+  }
+  return codeAgentVersionFromDeviceInfo(runtime.device_info);
 }
 
 /**
@@ -60,10 +72,7 @@ export function partitionMachineCodeAgents(
     const provider = runtime.provider?.trim();
     if (!provider) continue;
     if (!versionByProvider.has(provider)) {
-      versionByProvider.set(
-        provider,
-        codeAgentVersionFromDeviceInfo(runtime.device_info),
-      );
+      versionByProvider.set(provider, codeAgentVersion(runtime));
     }
   }
 

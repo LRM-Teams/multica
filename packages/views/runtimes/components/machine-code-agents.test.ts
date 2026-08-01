@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "@multica/core/types";
 import { KNOWN_PROVIDERS } from "./provider-logo";
 import {
+  codeAgentVersion,
   codeAgentVersionFromDeviceInfo,
   partitionMachineCodeAgents,
 } from "./machine-code-agents";
@@ -31,22 +32,46 @@ function runtime(partial: Partial<AgentRuntime> & { provider: string }): AgentRu
   };
 }
 
-describe("codeAgentVersionFromDeviceInfo", () => {
-  it("extracts the CA version from the device_info runtime half", () => {
+describe("codeAgentVersion", () => {
+  it("prefers metadata.version (CA) over current_version (Multica CLI)", () => {
+    expect(
+      codeAgentVersion(
+        runtime({
+          provider: "cursor",
+          current_version: "0.3.94",
+          metadata: { version: "1.2.3", cli_version: "0.3.94" },
+        }),
+      ),
+    ).toBe("1.2.3");
+  });
+
+  it("falls back to device_info when metadata.version is missing", () => {
     expect(
       codeAgentVersionFromDeviceInfo("host.local · 2.1.121 (Claude Code)"),
     ).toBe("2.1.121");
-    expect(codeAgentVersionFromDeviceInfo("box · codex-cli 0.118.0")).toBe(
-      "0.118.0",
-    );
-    expect(codeAgentVersionFromDeviceInfo("laptop · claude 1.0.0")).toBe(
-      "1.0.0",
-    );
+    expect(
+      codeAgentVersion(
+        runtime({
+          provider: "claude",
+          current_version: "0.3.94",
+          metadata: { cli_version: "0.3.94" },
+          device_info: "s144 · 2.1.5 (Claude Code)",
+        }),
+      ),
+    ).toBe("2.1.5");
   });
 
-  it("does not fall back to Multica daemon versions", () => {
-    expect(codeAgentVersionFromDeviceInfo("host.local")).toBeNull();
-    expect(codeAgentVersionFromDeviceInfo(null)).toBeNull();
+  it("does not treat Multica current_version as the CA version", () => {
+    expect(
+      codeAgentVersion(
+        runtime({
+          provider: "pi",
+          current_version: "0.3.94",
+          metadata: { cli_version: "0.3.94" },
+          device_info: "host.local",
+        }),
+      ),
+    ).toBeNull();
   });
 });
 
@@ -55,13 +80,14 @@ describe("partitionMachineCodeAgents", () => {
     const { installed, notInstalled } = partitionMachineCodeAgents([
       runtime({
         provider: "cursor",
-        // Multica daemon version — must NOT be shown as the CA version.
         current_version: "0.3.94",
-        device_info: "s144 · cursor 1.2.3",
+        metadata: { version: "1.2.3", cli_version: "0.3.94" },
+        device_info: "s144 · 1.2.3",
       }),
       runtime({
         provider: "claude",
         current_version: "0.3.94",
+        metadata: { version: "2.1.5", cli_version: "0.3.94" },
         device_info: "s144 · 2.1.5 (Claude Code)",
       }),
     ]);
@@ -71,6 +97,9 @@ describe("partitionMachineCodeAgents", () => {
     expect(installed.find((row) => row.id === "claude")?.version).toBe("2.1.5");
     expect(installed.find((row) => row.id === "claude")?.label).toBe(
       "Claude Code",
+    );
+    expect(installed.find((row) => row.id === "cursor")?.docsUrl).toContain(
+      "cursor.com",
     );
 
     const notIds = new Set(notInstalled.map((row) => row.id));
@@ -99,16 +128,21 @@ describe("partitionMachineCodeAgents", () => {
       runtime({
         id: "a",
         provider: "pi",
-        device_info: "box · pi 1.0.0",
+        metadata: { version: "1.0.0" },
       }),
       runtime({
         id: "b",
         provider: "pi",
-        device_info: "box · pi 2.0.0",
+        metadata: { version: "2.0.0" },
       }),
     ]);
 
     expect(installed).toHaveLength(1);
     expect(installed[0]?.version).toBe("1.0.0");
+  });
+
+  it("leaves openclaw docsUrl null until Parker decides", () => {
+    const { notInstalled } = partitionMachineCodeAgents([]);
+    expect(notInstalled.find((row) => row.id === "openclaw")?.docsUrl).toBeNull();
   });
 });

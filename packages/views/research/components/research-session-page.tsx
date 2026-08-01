@@ -304,6 +304,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             presence={presence}
             selectedId={ui.selected?.id}
             onSelect={(node) => dispatch({ type: "select", node })}
+            onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
             onRetry={(node) => {
               // LRM-848 entry → LRM-828 retry path. Until a dedicated BE API lands,
               // ask the fleet lead to re-explore from this dead_end via chat.

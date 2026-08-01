@@ -146,10 +146,36 @@
     "confidence": "置信",
     "detail_hint": "节点详情",
     "summary": "摘要 / 结论",
+    "doing": "正在做",
     "summary_empty": "暂无摘要。",
     "dead_end_reason": "死胡同原因",
     "evidence": "证据 / 来源",
     "evidence_empty": "暂无关联来源。"
+  },
+  "logic": {
+    "label": "调研逻辑",
+    "lr_hint": "左→右 · 非 Git",
+    "strip_label": "逻辑结构",
+    "start": "起点",
+    "end": "终点",
+    "end_title": "查看交付",
+    "end_summary": "打开精美阅读态交付",
+    "lane": {
+      "orchestrate": "编排",
+      "source": "寻源",
+      "deep_read": "深读",
+      "validate": "交叉验证",
+      "draft": "成稿"
+    },
+    "status": {
+      "kickoff": "开题",
+      "done": "完成",
+      "running": "进行中",
+      "waiting": "等待",
+      "pending_delivery": "待交付",
+      "failed": "失败",
+      "abandoned": "已放弃"
+    }
   },
   "home": {
     "composer_label": "创建调研会话",

@@ -11,6 +11,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/memorycuration"
+	"github.com/multica-ai/multica/server/internal/memoryscope"
 )
 
 const executionMemoryBudgetBytes = 16 * 1024
@@ -30,6 +31,7 @@ type executionMemoryCandidate struct {
 func prepareExecutionMemory(agentRoot string, task Task, serverMemories []execenv.MemoryContextForEnv) ([]execenv.MemoryContextForEnv, scopedMemoryPaths) {
 	paths := scopedMemoryPathsForTask(agentRoot, task)
 	ensureScopedMemoryFiles(paths)
+	includeUser := taskIncludesUserMemory(task)
 
 	candidates := make([]executionMemoryCandidate, 0, len(serverMemories)+10)
 	order := 0
@@ -43,6 +45,13 @@ func prepareExecutionMemory(agentRoot string, task Task, serverMemories []execen
 		order++
 	}
 	for _, memory := range serverMemories {
+		scope := strings.ToLower(strings.TrimSpace(memory.Scope))
+		if !includeUser && (scope == "user" || scope == "member") {
+			continue
+		}
+		if paths.ProjectDir == "" && scope == "project" {
+			continue
+		}
 		add(serverMemoryPriority(memory), memory)
 	}
 	addFile := func(priority int, name, path, scope, subjectType, subjectID, template string, maxBytes int) {
@@ -120,7 +129,7 @@ func scopedMemoryPathsForTask(agentRoot string, task Task) scopedMemoryPaths {
 		return scopedMemoryPaths{}
 	}
 	paths := scopedMemoryPaths{}
-	if task.InitiatorType == "member" && safeScopedMemoryID(task.InitiatorID) {
+	if task.InitiatorType == "member" && safeScopedMemoryID(task.InitiatorID) && taskIncludesUserMemory(task) {
 		paths.UserDir = filepath.Join(agentRoot, "users", task.InitiatorID)
 	}
 	if safeScopedMemoryID(task.ProjectID) {
@@ -130,6 +139,16 @@ func scopedMemoryPathsForTask(agentRoot string, task Task) scopedMemoryPaths {
 		paths.ChannelDir = filepath.Join(agentRoot, "channels", task.ChannelID)
 	}
 	return paths
+}
+
+func taskIncludesUserMemory(task Task) bool {
+	return memoryscope.IncludeUserMemory(
+		task.ChannelKind,
+		task.ChatSessionID,
+		task.ChatMessage,
+		task.TriggerCommentContent,
+		task.QuickCreatePrompt,
+	)
 }
 
 func safeScopedMemoryID(value string) bool {

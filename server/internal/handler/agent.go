@@ -320,6 +320,7 @@ type AgentTaskResponse struct {
 	Repos            []RepoData            `json:"repos,omitempty"`
 	ProjectID        string                `json:"project_id,omitempty"`        // issue's project, when present
 	ChannelID        string                `json:"channel_id,omitempty"`        // exact DM/channel surface, when present
+	ChannelKind      string                `json:"channel_kind,omitempty"`      // "dm" | "group" when ChannelID is set; personal-memory entry gate
 	ProjectTitle     string                `json:"project_title,omitempty"`     // for surfacing in agent context
 	ProjectResources []ProjectResourceData `json:"project_resources,omitempty"` // resources attached to the project
 	// ProvisionManagedWorkdir signals the daemon to lazily create a managed

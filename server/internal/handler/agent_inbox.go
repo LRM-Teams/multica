@@ -1620,6 +1620,10 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	resp := taskToResponse(task, runtimeWorkspaceID)
 	if event.ChannelID.Valid {
 		resp.ChannelID = uuidToString(event.ChannelID)
+		var channelKind string
+		if err := h.DB.QueryRow(ctx, `SELECT kind FROM channel WHERE id = $1`, event.ChannelID).Scan(&channelKind); err == nil {
+			resp.ChannelKind = strings.TrimSpace(channelKind)
+		}
 	}
 	resp.InboxEvent = &AgentInboxLeaseResponse{
 		ID:             uuidToString(event.ID),
@@ -1726,6 +1730,9 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			InitiatorID:   resp.InitiatorID,
 			ProjectID:     resp.ProjectID,
 			ChannelID:     resp.ChannelID,
+			ChannelKind:   resp.ChannelKind,
+			ChatSessionID: resp.ChatSessionID,
+			MessageTexts:  []string{resp.ChatMessage, resp.TriggerCommentContent, resp.QuickCreatePrompt},
 			TaskType:      resp.Kind,
 			Now:           time.Now(),
 		})

@@ -71,6 +71,71 @@ func TestPrepareExecutionMemoryLoadsOnlyCurrentScopesAndToday(t *testing.T) {
 	}
 }
 
+func TestPrepareExecutionMemoryExcludesUserMemoryOnGroupChat(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "agent")
+	if err := ensureMulticaAgentRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	task := Task{
+		AgentID:       "agent-1",
+		InitiatorType: "member",
+		InitiatorID:   "member-a",
+		ChannelID:     "channel-a",
+		ChannelKind:   "group",
+		ChatSessionID: "chat-1",
+		ChatMessage:   "设定个总目标",
+	}
+	userDir := filepath.Join(root, "users", "member-a")
+	channelDir := filepath.Join(root, "channels", "channel-a")
+	writes := map[string]string{
+		filepath.Join(userDir, "USER.md"):          "Private preference must stay out of group.\n",
+		filepath.Join(channelDir, "CONTEXT.md"):    "Channel context is shared.\n",
+		filepath.Join(root, "memory", "MEMORY.md"): "Agent-wide ok.\n",
+	}
+	for path, content := range writes {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	memories, paths := prepareExecutionMemory(root, task, []execenv.MemoryContextForEnv{
+		{Name: "User DB", Content: "DB personal preference", Scope: "user"},
+		{Name: "Orphan project", Content: "Project without bind", Scope: "project"},
+	})
+	if paths.UserDir != "" {
+		t.Fatalf("group chat UserDir = %q, want empty", paths.UserDir)
+	}
+	var combined strings.Builder
+	for _, memory := range memories {
+		combined.WriteString(memory.Content)
+	}
+	content := combined.String()
+	if !strings.Contains(content, "Channel context") || !strings.Contains(content, "Agent-wide") {
+		t.Fatalf("group pack missing shared memory:\n%s", content)
+	}
+	for _, unwanted := range []string{"Private preference", "DB personal", "Project without bind"} {
+		if strings.Contains(content, unwanted) {
+			t.Fatalf("group pack leaked %q:\n%s", unwanted, content)
+		}
+	}
+
+	task.ChatMessage = "请带上我的个人偏好再继续"
+	memories, paths = prepareExecutionMemory(root, task, nil)
+	if paths.UserDir == "" {
+		t.Fatal("explicit bring-in should restore UserDir")
+	}
+	combined.Reset()
+	for _, memory := range memories {
+		combined.WriteString(memory.Content)
+	}
+	if !strings.Contains(combined.String(), "Private preference") {
+		t.Fatalf("explicit bring-in missing user memory:\n%s", combined.String())
+	}
+}
+
 func TestPrepareExecutionMemoryEnforcesBudgetAndDeduplicates(t *testing.T) {
 	duplicate := strings.Repeat("same ", 300)
 	large := strings.Repeat("界", executionMemoryBudgetBytes)

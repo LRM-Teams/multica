@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/memoryscope"
 	"github.com/multica-ai/multica/server/internal/mention"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -778,7 +779,6 @@ func (s *TaskService) publishMentionTaskQueuedWithInterruptPolicy(ctx context.Co
 // non-empty the daemon claim handler resolves the project's title +
 // resources, and the prompt template instructs the agent to pass
 // `--project <uuid>` so the new issue lands in that project.
-//
 type QuickCreateContext struct {
 	Type          string   `json:"type"`
 	Prompt        string   `json:"prompt"`
@@ -2661,12 +2661,16 @@ type memoryApplicability struct {
 }
 
 type MemoryExecutionScope struct {
-	InitiatorType string
-	InitiatorID   string
-	ProjectID     string
-	ChannelID     string
-	TaskType      string
-	Now           time.Time
+	InitiatorType     string
+	InitiatorID       string
+	ProjectID         string
+	ChannelID         string
+	ChannelKind       string
+	ChatSessionID     string
+	IncludeUserMemory *bool // nil = compute from ChannelKind/ChatSessionID + message texts
+	MessageTexts      []string
+	TaskType          string
+	Now               time.Time
 }
 
 // LoadAgentMemoriesForExecution returns only memories that apply to the
@@ -2724,12 +2728,25 @@ func agentMemoryDeliveryForExecution(config []byte, execution MemoryExecutionSco
 	}
 	subjectType := strings.ToLower(strings.TrimSpace(cfg.Subject.Type))
 	subjectID := strings.TrimSpace(cfg.Subject.ID)
+	if scope == "project" && strings.TrimSpace(execution.ProjectID) == "" {
+		return scope, subjectType, subjectID, false
+	}
 	if scope == "user" || scope == "member" {
+		if !executionIncludesUserMemory(execution) {
+			return scope, subjectType, subjectID, false
+		}
 		matchesMember := strings.EqualFold(strings.TrimSpace(execution.InitiatorType), "member") &&
 			strings.TrimSpace(execution.InitiatorID) != "" && subjectType == "member" && subjectID == strings.TrimSpace(execution.InitiatorID)
 		return scope, subjectType, subjectID, matchesMember && memoryApplicabilityMatches(cfg.Applies, execution)
 	}
 	return scope, subjectType, subjectID, memoryApplicabilityMatches(cfg.Applies, execution)
+}
+
+func executionIncludesUserMemory(execution MemoryExecutionScope) bool {
+	if execution.IncludeUserMemory != nil {
+		return *execution.IncludeUserMemory
+	}
+	return memoryscope.IncludeUserMemory(execution.ChannelKind, execution.ChatSessionID, execution.MessageTexts...)
 }
 
 func teamKnowledgeAppliesForExecution(metadata []byte, execution MemoryExecutionScope) bool {

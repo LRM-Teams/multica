@@ -223,5 +223,32 @@
     "col_type": "类型",
     "col_source": "来源",
     "col_purpose": "用途"
+  },
+  "m2": {
+    "rail_title": "探索轨迹",
+    "rail_hint": "按维度族展开 · 非固定题库",
+    "rail_empty": "开题后生成问题树根…",
+    "required": "必探",
+    "status": {
+      "open": "探查中",
+      "covered": "已覆盖",
+      "gap": "未覆盖",
+      "dead": "死胡同"
+    },
+    "strategy_label": "信源策略",
+    "strategy_empty": "尚无信源策略痕迹；舰队 upsert 带来源后会显示通用层 / 领域层。",
+    "layer_general": "通用层",
+    "layer_domain": "领域层",
+    "why_label": "为何查这里：",
+    "boundary_title": "人机边界",
+    "boundary_chip": "与报告并存",
+    "boundary_empty": "交付阶段会补齐 AI 上限 / 必须有人 / 人做 vs AI 做。",
+    "ai_ceiling": "AI 上限",
+    "must_human": "必须有人",
+    "col_human": "人做",
+    "col_ai": "AI 做",
+    "tab_trail": "轨迹",
+    "tab_sources": "信源",
+    "tab_boundary": "边界"
   }
 }

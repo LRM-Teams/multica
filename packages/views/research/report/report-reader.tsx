@@ -8,6 +8,8 @@ import type { ResearchReport, ResearchSource } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
+import { HumanBoundaryCard } from "../components/human-boundary-card";
+import type { HumanBoundaryModel } from "../lib/m2-visibility";
 import { ReportProse } from "./report-prose";
 import { ReportSourceTable } from "./report-source-table";
 
@@ -58,12 +60,14 @@ export function ReportReader({
   report,
   sources,
   titleFallback,
+  boundary,
 }: {
   open: boolean;
   onClose: () => void;
   report: ResearchReport | null | undefined;
   sources: ResearchSource[];
   titleFallback?: string;
+  boundary?: HumanBoundaryModel;
 }) {
   const { t } = useT("research");
   const dialogRef = useRef<HTMLDialogElement | null>(null);
@@ -238,6 +242,11 @@ export function ReportReader({
             <div id="report-body" className="scroll-mt-4">
               <ReportProse report={report} />
             </div>
+            {boundary ? (
+              <div className="mt-8 scroll-mt-4">
+                <HumanBoundaryCard model={boundary} embedded />
+              </div>
+            ) : null}
             <section id="report-sources" className="mt-10 scroll-mt-4 space-y-3">
               <h2 className="border-t pt-5 text-lg font-semibold">
                 {t(($) => $.reader.sources_heading)}

@@ -404,7 +404,7 @@
     "preview_count": "{{count}} 条回复",
     "preview_count_with_new": "{{count}} 条回复 · {{newCount}} 条新",
     "preview_view_all": "查看全部 {{count}} 条 →",
-    "preview_open": "查看 thread →",
+    "preview_open": "查看回复 →",
     "preview_image": "[图片]",
     "preview_sticker": "[表情]",
     "preview_attachment": "[附件]",

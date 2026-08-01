@@ -97,6 +97,7 @@ function ResearchCanvasInner({
   const isMobile = useIsMobile();
   const [ringNodeId, setRingNodeId] = useState<string | null>(null);
   const [detailPinned, setDetailPinned] = useState(false);
+  const [pinnedNodeId, setPinnedNodeId] = useState<string | null>(null);
   const [zoomPct, setZoomPct] = useState(100);
   // Opacity-only enter motion (never touch transform — RF uses it for position).
   const enterClassById = useRef<Map<string, string> | null>(null);
@@ -196,10 +197,28 @@ function ResearchCanvasInner({
       ? nodes.find((n) => n.id === selectedId) ?? null
       : null;
   const ringNode = ringNodeId ? nodes.find((n) => n.id === ringNodeId) : null;
+  const pinnedNode = pinnedNodeId ? nodes.find((n) => n.id === pinnedNodeId) : null;
+  // Prefer prop selection; keep a local pin so detail still opens if parent select lags.
+  const detailNode = selectedNode ?? pinnedNode ?? (detailPinned ? ringNode : null);
   const sourceList = sources ?? [];
   const showDetail =
     detailPinned ||
-    (!!selectedNode && SYSTEM_NODE_TYPES.has(selectedNode.node_type));
+    (!!detailNode && SYSTEM_NODE_TYPES.has(detailNode.node_type));
+
+  const pinDetail = useCallback(
+    (node: ResearchGraphNode) => {
+      onSelect?.(node);
+      setPinnedNodeId(node.id);
+      setDetailPinned(true);
+    },
+    [onSelect],
+  );
+
+  const clearDetail = useCallback(() => {
+    setDetailPinned(false);
+    setPinnedNodeId(null);
+    onSelect?.(null);
+  }, [onSelect]);
 
   const handleRingAction = useCallback(
     async (action: NodeRingAction) => {
@@ -207,13 +226,11 @@ function ResearchCanvasInner({
       switch (action) {
         case "detail":
         case "more":
-          onSelect?.(ringNode);
-          setDetailPinned(true);
+          pinDetail(ringNode);
           closeRing();
           break;
         case "locate_source": {
-          onSelect?.(ringNode);
-          setDetailPinned(true);
+          pinDetail(ringNode);
           closeRing();
           break;
         }
@@ -235,7 +252,7 @@ function ResearchCanvasInner({
           break;
       }
     },
-    [ringNode, onSelect, onRetry, closeRing],
+    [ringNode, pinDetail, onRetry, closeRing],
   );
 
   // Narrow + detail sheet: hide FAB so it does not sit under the sheet.
@@ -276,7 +293,10 @@ function ResearchCanvasInner({
               return;
             }
             onSelect?.(node);
-            if (node) setDetailPinned(true);
+            if (node) {
+              setPinnedNodeId(node.id);
+              setDetailPinned(true);
+            }
           }}
           onOpenDelivery={onOpenDelivery}
         />
@@ -285,16 +305,13 @@ function ResearchCanvasInner({
           className="absolute top-3 right-3 z-20"
         />
         {chatFab}
-        {showDetail && selectedNode ? (
+        {showDetail && detailNode ? (
           <ResearchNodeDetail
-            node={selectedNode}
+            node={detailNode}
             sources={sourceList}
             open={showDetail}
             placement="sheet"
-            onClose={() => {
-              setDetailPinned(false);
-              onSelect?.(null);
-            }}
+            onClose={clearDetail}
           />
         ) : null}
         {ringNode ? (
@@ -374,19 +391,18 @@ function ResearchCanvasInner({
           }
           if (SYSTEM_NODE_TYPES.has(research.node_type)) {
             closeRing();
-            onSelect?.(research);
-            setDetailPinned(true);
+            pinDetail(research);
             return;
           }
           // Toggle ring; keep selection for halo.
           onSelect?.(research);
           setRingNodeId((prev) => (prev === research.id ? null : research.id));
           setDetailPinned(false);
+          setPinnedNodeId(null);
         }}
         onPaneClick={() => {
           closeRing();
-          onSelect?.(null);
-          setDetailPinned(false);
+          clearDetail();
         }}
         className="!bg-transparent"
       >
@@ -457,19 +473,17 @@ function ResearchCanvasInner({
           detailOpen={showDetail}
           onToggleDetail={() => {
             if (showDetail) {
-              setDetailPinned(false);
-              onSelect?.(null);
+              clearDetail();
             } else if (selectedNode || ringNode) {
               const n = selectedNode ?? ringNode!;
-              onSelect?.(n);
-              setDetailPinned(true);
+              pinDetail(n);
               closeRing();
             }
           }}
         />
       </div>
       {/* LRM-797: detail card 12px above Controls (substantial, not a chip). */}
-      {showDetail && selectedNode ? (
+      {showDetail && detailNode ? (
         <div
           className="pointer-events-auto absolute z-20"
           style={{
@@ -479,14 +493,11 @@ function ResearchCanvasInner({
           data-testid="research-detail-overlay-slot"
         >
           <ResearchNodeDetail
-            node={selectedNode}
+            node={detailNode}
             sources={sourceList}
             open={showDetail}
             placement="overlay-card"
-            onClose={() => {
-              setDetailPinned(false);
-              onSelect?.(null);
-            }}
+            onClose={clearDetail}
           />
         </div>
       ) : null}

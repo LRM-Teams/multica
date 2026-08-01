@@ -3,6 +3,7 @@
 import { normalizeReportStructured } from "@multica/core/research";
 import type { ResearchReport, ResearchSource } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../../i18n/use-t";
 import { Markdown } from "../../common/markdown";
 import { ReportCitationList } from "./report-citation-card";
 import { EMPTY_RESEARCH_SOURCES } from "./report-citation-resolve";
@@ -32,8 +33,15 @@ export function ReportProse({
   /** Live session sources — preferred when resolving citation.source_id. */
   sources?: ResearchSource[];
 }) {
+  const { t } = useT("research");
+
+  // LRM-800 (covers cancelled LRM-778): clear empty copy, not a bare em-dash.
   if (!report) {
-    return <p className="text-sm text-muted-foreground">—</p>;
+    return (
+      <p data-testid="research-report-empty" className="text-sm text-muted-foreground">
+        {t(($) => $.reader.report_empty)}
+      </p>
+    );
   }
 
   const normalized = normalizeReportStructured(report.structured);
@@ -81,7 +89,9 @@ export function ReportProse({
       {report.content_md ? (
         <Markdown mode="full">{report.content_md}</Markdown>
       ) : (
-        <p className="text-sm text-muted-foreground">—</p>
+        <p data-testid="research-report-empty" className="text-sm text-muted-foreground">
+          {t(($) => $.reader.report_empty)}
+        </p>
       )}
     </div>
   );

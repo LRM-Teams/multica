@@ -555,10 +555,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             <div className="border-t bg-card p-3">
               <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
                 <Textarea
+                  data-testid="research-chat-composer"
                   rows={2}
                   value={ui.body}
                   onChange={(e) => dispatch({ type: "setBody", body: e.target.value })}
                   onKeyDown={(e) => {
+                    // LRM-800 / cancelled LRM-782: Enter sends; Shift+Enter newline.
                     if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
                     e.preventDefault();
                     if (!ui.body.trim() || send.isPending) return;
@@ -571,11 +573,15 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   }
                   className="min-h-[56px] resize-none border-0 bg-transparent px-1 py-1 text-[13px] shadow-none focus-visible:ring-0"
                 />
-                <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5">
-                  <span className="text-[10px] text-muted-foreground">
+                <div className="mt-1.5 flex flex-col gap-1.5 px-0.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+                  <span
+                    data-testid="research-chat-composer-hint"
+                    className="min-w-0 text-[10px] leading-snug text-muted-foreground"
+                    title={t(($) => $.step_card.composer_hint)}
+                  >
                     {t(($) => $.step_card.composer_hint)}
                   </span>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex shrink-0 items-center justify-end gap-1.5">
                     {showStop ? (
                       <Button
                         type="button"

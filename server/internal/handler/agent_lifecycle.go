@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -215,6 +216,24 @@ func (h *Handler) CreateAgentLifecycleOperation(w http.ResponseWriter, r *http.R
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create agent lifecycle operation")
 		return
+	}
+	// Dispatch only the immediate case here. A "scheduled" (after_current_run)
+	// operation still has no trigger that dispatches it once the blocking
+	// turn ends — a known, pre-existing gap (see the package doc comment in
+	// agent_lifecycle_dispatch.go), not something this handler silently
+	// drops: it simply doesn't claim to solve it yet.
+	if status == agentLifecycleRunning && h.AgentLifecycleDispatchStore != nil {
+		if _, err := h.AgentLifecycleDispatchStore.Create(
+			r.Context(), op.ID, uuidToString(lockedAgent.ID), uuidToString(runtime.ID),
+			uuidToString(lockedAgent.WorkspaceID), string(req.ActionKind),
+		); err != nil {
+			// The operation row is already committed; a dispatch failure
+			// here must not roll that back or the client sees a phantom
+			// "running" operation nobody will ever act on. Log-and-continue:
+			// the operation sits at status=running until GetAgentLifecycleOperation
+			// polling eventually shows it stuck, which is visible, not silent.
+			slog.Warn("failed to create agent lifecycle dispatch", "operation_id", op.ID, "error", err)
+		}
 	}
 	writeJSON(w, http.StatusAccepted, op)
 }

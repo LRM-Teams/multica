@@ -205,6 +205,45 @@ func TestAgentLifecycleIdleActionsStartImmediately(t *testing.T) {
 	}
 }
 
+// TestAgentLifecycleCreateDispatchesImmediateOperationToDaemon pins task
+// #52's actual fix: before this, CreateAgentLifecycleOperation wrote a
+// status=running row that nothing ever picked up — the operation was
+// permanently inert. Now it must also create a pending dispatch entry the
+// daemon's heartbeat can claim, carrying the operation's own ID (so the
+// daemon reports its result back against the same row) plus the action kind
+// the executor needs.
+func TestAgentLifecycleCreateDispatchesImmediateOperationToDaemon(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	rec := invokeCreateAgentLifecycle(t, agentID, uuid.NewString(), agentLifecycleRestart)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var operation AgentLifecycleOperation
+	if err := json.Unmarshal(rec.Body.Bytes(), &operation); err != nil {
+		t.Fatalf("decode operation: %v", err)
+	}
+
+	claimed, err := testHandler.AgentLifecycleDispatchStore.PopAllPending(context.Background(), runtimeID)
+	if err != nil {
+		t.Fatalf("PopAllPending: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed %d dispatches, want 1: %+v", len(claimed), claimed)
+	}
+	if claimed[0].OperationID != operation.ID {
+		t.Fatalf("dispatch operation_id = %q, want %q (must match the operation row so the daemon's result report lands on it)", claimed[0].OperationID, operation.ID)
+	}
+	if claimed[0].AgentID != agentID {
+		t.Fatalf("dispatch agent_id = %q, want %q", claimed[0].AgentID, agentID)
+	}
+	if claimed[0].ActionKind != string(agentLifecycleRestart) {
+		t.Fatalf("dispatch action_kind = %q, want %q", claimed[0].ActionKind, agentLifecycleRestart)
+	}
+}
+
 func TestAgentLifecycleRunningOperationOverlaysExistingAgentHealth(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -273,6 +312,40 @@ func TestAgentLifecycleRejectsPlainMemberAndIncapableRuntime(t *testing.T) {
 	create := invokeCreateAgentLifecycle(t, agentID, uuid.NewString(), agentLifecycleRestart)
 	if create.Code != http.StatusConflict || !containsResponseBody(create, "unsupported_runtime_capability") {
 		t.Fatalf("incapable create status=%d body=%s", create.Code, create.Body.String())
+	}
+}
+
+// TestAgentLifecycleCreateRejectsStaleHeartbeatWithoutCreatingAnOperation pins
+// task #52's primary defense (Parker: "reject up-front" is the main path,
+// the dispatch timeout is only the backstop for the narrow race after this
+// check passes): a runtime whose last_seen_at is stale must be refused at
+// create time — not accepted and left to time out two minutes later. No
+// operation row means no window where the agent's health shows "restarting"
+// for a machine we already know is unreachable.
+func TestAgentLifecycleCreateRejectsStaleHeartbeatWithoutCreatingAnOperation(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_runtime SET last_seen_at = now() - interval '10 minutes' WHERE id = $1
+	`, runtimeID); err != nil {
+		t.Fatalf("stale last_seen_at: %v", err)
+	}
+
+	create := invokeCreateAgentLifecycle(t, agentID, uuid.NewString(), agentLifecycleRestart)
+	if create.Code != http.StatusConflict || !containsResponseBody(create, "agent_runtime_offline") {
+		t.Fatalf("stale-heartbeat create status=%d body=%s, want 409 agent_runtime_offline", create.Code, create.Body.String())
+	}
+
+	var count int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM agent_lifecycle_operation WHERE agent_id = $1
+	`, agentID).Scan(&count); err != nil {
+		t.Fatalf("count operations: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected zero operation rows for a rejected create, got %d", count)
 	}
 }
 

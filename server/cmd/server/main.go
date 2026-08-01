@@ -416,7 +416,7 @@ func main() {
 	}
 
 	// Start background sweeper to mark stale runtimes as offline.
-	go runRuntimeSweeper(sweepCtx, queries, pool, liveness, taskSvc, bus)
+	go runRuntimeSweeper(sweepCtx, queries, pool, liveness, taskSvc, bus, h.AgentLifecycleDispatchStore)
 	go runCollaborationTurnWorkers(sweepCtx, h)
 	go runChannelOnboardingPublisher(sweepCtx, h)
 	go heartbeatScheduler.Run(sweepCtx)

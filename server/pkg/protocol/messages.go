@@ -677,14 +677,15 @@ type DaemonHeartbeatAckPayload struct {
 	// (task #43), independent of any CLI update — e.g. a stuck/unresponsive
 	// daemon a workspace admin restarts remotely from the web UI.
 	PendingRestart *DaemonHeartbeatPendingRestart `json:"pending_restart,omitempty"`
-	// PendingAgentRestarts are human-initiated "restart this one agent"
-	// requests (task #42①) — narrower than PendingRestart, which restarts
-	// the whole daemon process. One runtime (machine) can host several
-	// agents sharing the daemon's canonical resident pool, so this is a
-	// slice: a single heartbeat can deliver restarts for more than one of
-	// them at once. Each only kills and recreates that agent's provider
-	// process; it does not reset the agent's conversation session.
-	PendingAgentRestarts []DaemonHeartbeatPendingAgentRestart `json:"pending_agent_restarts,omitempty"`
+	// PendingAgentLifecycleOperations are queued /api/agents/{id}/lifecycle
+	// operations (restart / reset_session_restart / full_reset_restart,
+	// task #52) — narrower than PendingRestart, which restarts the whole
+	// daemon process. One runtime (machine) can host several agents sharing
+	// the daemon's canonical resident pool, so this is a slice: a single
+	// heartbeat can deliver operations for more than one of them at once.
+	// The daemon executes each via agentLifecycleExecutor and reports the
+	// result back via ReportAgentLifecycleOperationResult.
+	PendingAgentLifecycleOperations []DaemonHeartbeatPendingAgentLifecycleOperation `json:"pending_agent_lifecycle_operations,omitempty"`
 	// ReleaseManifestBaseURL, when non-empty, is the server's current opinion
 	// of where the daemon should download CLI update artifacts from. It takes
 	// precedence over the daemon's own MULTICA_RELEASE_MANIFEST_BASE_URL env
@@ -713,13 +714,16 @@ type DaemonHeartbeatPendingRestart struct {
 	ID string `json:"id"`
 }
 
-// DaemonHeartbeatPendingAgentRestart describes a human-initiated restart of
-// one agent's provider process (task #42①) — kill and recreate only that
-// agent's canonical resident slot, preserving its conversation session.
-type DaemonHeartbeatPendingAgentRestart struct {
-	ID        string `json:"id"`
-	AgentID   string `json:"agent_id"`
-	RuntimeID string `json:"runtime_id"`
+// DaemonHeartbeatPendingAgentLifecycleOperation describes one queued
+// /api/agents/{id}/lifecycle operation the daemon should execute via
+// agentLifecycleExecutor (task #52). ActionKind is one of "restart",
+// "reset_session_restart", "full_reset_restart".
+type DaemonHeartbeatPendingAgentLifecycleOperation struct {
+	OperationID string `json:"operation_id"`
+	AgentID     string `json:"agent_id"`
+	RuntimeID   string `json:"runtime_id"`
+	WorkspaceID string `json:"workspace_id"`
+	ActionKind  string `json:"action_kind"`
 }
 
 // DaemonHeartbeatPendingModelList describes a request for the daemon to

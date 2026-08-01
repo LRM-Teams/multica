@@ -89,8 +89,8 @@ func TestGrokACPBackendReusesOneChildForCompatibleTurns(t *testing.T) {
 	if got := strings.Count(string(data), "x"); got != 1 {
 		t.Fatalf("grok children started = %d, want 1", got)
 	}
-	if b.process != nil {
-		b.disposeProcess(b.process)
+	if p := b.process.Load(); p != nil {
+		b.disposeProcess(p)
 	}
 }
 
@@ -141,8 +141,80 @@ done
 	if result.SessionID != "poisoned-session" {
 		t.Fatalf("session id = %q, want poisoned-session", result.SessionID)
 	}
-	if b.process != nil {
+	if b.process.Load() != nil {
 		t.Fatal("failed tool turn retained poisoned Grok process")
+	}
+}
+
+// fakeGrokACPHungHandshakeScript never responds to anything, including
+// initialize — simulating a grok process that started but is stuck before
+// completing its handshake. Mirrors
+// fakeCursorACPHungHandshakeScript/TestCursorACPBackendForceKillDuringHandshakeActuallyKillsNotDeadlock:
+// grokACPBackend had the identical b.mu-across-the-whole-handshake shape as
+// cursorACPBackend before the task #62 follow-up fix (confirmed by Vera's
+// cross-check), so it needs the same acceptance test.
+func fakeGrokACPHungHandshakeScript() string {
+	return `#!/bin/sh
+while IFS= read -r line; do
+  :
+done
+`
+}
+
+// TestGrokACPBackendForceKillDuringHandshakeActuallyKillsNotDeadlock is
+// grok's counterpart to
+// TestCursorACPBackendForceKillDuringHandshakeActuallyKillsNotDeadlock. See
+// that test's doc comment for the full deadlock background; the shape here
+// is identical (ensureProcess held b.mu across the whole handshake,
+// ForceKill needed the same b.mu just to read b.process). Asserts the real
+// acceptance criterion: ForceKill() during a stuck handshake must actually
+// kill the process and let the turn terminate, not just return an error.
+func TestGrokACPBackendForceKillDuringHandshakeActuallyKillsNotDeadlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "grok")
+	writeTestExecutable(t, path, []byte(fakeGrokACPHungHandshakeScript()))
+	if err := os.WriteFile(filepath.Join(dir, "auth.json"), []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := newGrokACPBackend(Config{ExecutablePath: path, Env: map[string]string{"GROK_HOME": dir}})
+	t.Cleanup(b.Close)
+
+	execDone := make(chan struct{})
+	var execResult Result
+	go func() {
+		defer close(execDone)
+		s, err := b.Execute(context.Background(), "prompt", ExecOptions{Cwd: dir})
+		if err != nil {
+			return
+		}
+		execResult = <-s.Result
+	}()
+
+	// Give Execute() time to actually enter ensureProcess() and start
+	// blocking on the initialize handshake before we try to interrupt it.
+	time.Sleep(200 * time.Millisecond)
+
+	killErr := make(chan error, 1)
+	go func() {
+		killErr <- b.ForceKill()
+	}()
+
+	select {
+	case err := <-killErr:
+		if err != nil {
+			t.Fatalf("ForceKill during a stuck handshake returned an error: %v — it should actually kill the process, not fail", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ForceKill() deadlocked instead of killing the stuck-handshake process")
+	}
+
+	select {
+	case <-execDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Execute()'s goroutine never returned after ForceKill() during handshake — the process was not actually killed, ensureProcess() is still stuck")
+	}
+	if execResult.Status != "failed" {
+		t.Fatalf("result status = %q, want failed (handshake was force-killed)", execResult.Status)
 	}
 }
 
@@ -168,10 +240,11 @@ func TestGrokACPBackendLiveTwoTurns(t *testing.T) {
 	if firstResult.Status != "completed" {
 		t.Fatalf("first ACP turn = %+v", firstResult)
 	}
-	if b.process == nil || b.process.cmd.Process == nil {
+	p := b.process.Load()
+	if p == nil || p.cmd.Process == nil {
 		t.Fatal("first ACP turn completed without a retained child")
 	}
-	pid := b.process.cmd.Process.Pid
+	pid := p.cmd.Process.Pid
 
 	second, err := b.Execute(ctx, "Reply with exactly: multica-acp-second-ok", ExecOptions{Cwd: workDir})
 	if err != nil {
@@ -181,7 +254,8 @@ func TestGrokACPBackendLiveTwoTurns(t *testing.T) {
 	if secondResult.Status != "completed" {
 		t.Fatalf("second ACP turn = %+v", secondResult)
 	}
-	if b.process == nil || b.process.cmd.Process == nil || b.process.cmd.Process.Pid != pid {
+	p2 := b.process.Load()
+	if p2 == nil || p2.cmd.Process == nil || p2.cmd.Process.Pid != pid {
 		t.Fatalf("second ACP turn did not reuse child pid %d", pid)
 	}
 }

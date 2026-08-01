@@ -294,7 +294,7 @@ done
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout")
 	}
-	if b.process != nil {
+	if b.process.Load() != nil {
 		t.Fatal("process should be disposed after failed prompt")
 	}
 }
@@ -375,7 +375,7 @@ done
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout")
 	}
-	if b.process == nil {
+	if b.process.Load() == nil {
 		t.Fatal("process should still be alive/reusable after a degraded set_model")
 	}
 }
@@ -415,7 +415,7 @@ done
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout")
 	}
-	if b.process != nil {
+	if b.process.Load() != nil {
 		t.Fatal("process should be disposed after a genuinely fatal set_model error")
 	}
 }
@@ -520,5 +520,91 @@ func TestCursorACPBackendForceKillInterruptsHungTurn(t *testing.T) {
 		_ = ok // either a terminal Result or the channel closing is acceptable
 	case <-time.After(3 * time.Second):
 		t.Fatal("Execute()'s goroutine did not observe the force-killed process")
+	}
+}
+
+// fakeCursorACPHungHandshakeScript never responds at all — not even to
+// initialize. This simulates a cursor-agent process that started but is
+// stuck before completing its auth handshake (e.g. waiting on a login
+// flow that will never complete), which is what task #62's real E2E
+// verification actually hit: a genuinely stuck agent is far more likely to
+// be stuck getting started than stuck mid-conversation.
+func fakeCursorACPHungHandshakeScript() string {
+	return `#!/bin/sh
+while IFS= read -r line; do
+  :
+done
+`
+}
+
+// TestCursorACPBackendForceKillDuringHandshakeActuallyKillsNotDeadlock pins
+// the real bug found during task #62's live E2E verification (not a
+// theoretical one): the previous design had ensureProcess() hold b.mu for
+// its entire body, including the blocking initialize/authenticate/
+// session/new handshake, while ForceKill() needed that same b.mu just to
+// read b.process. If a turn was stuck inside ensureProcess() — the process
+// started but never finished its handshake — the two deadlocked:
+// ForceKill() could never acquire b.mu, so it never returned, and the
+// caller (the daemon's lifecycle operation handler) hung forever with no
+// result ever reported. This reproduced live: the restart operation sat at
+// status=running indefinitely with the real cursor-agent process never
+// actually killed.
+//
+// The fix (task #62 follow-up) publishes b.process atomically the instant
+// cmd.Start() succeeds, before the handshake — so ForceKill() never needs
+// any lock a stuck handshake could be holding. The acceptance criterion
+// (Parker, explicit): this test must assert the stuck process is actually
+// killed and the turn actually terminates — not merely that ForceKill()
+// returns a well-formatted error while the underlying agent stays wedged
+// forever. An honest error with nothing actually recovered was rejected as
+// an interim mitigation (the earlier TryLock approach), not the real fix.
+func TestCursorACPBackendForceKillDuringHandshakeActuallyKillsNotDeadlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cursor-agent")
+	writeTestExecutable(t, path, []byte(fakeCursorACPHungHandshakeScript()))
+	b := newCursorACPBackend(cursorACPTestConfig(path, nil))
+	t.Cleanup(b.Close)
+
+	execDone := make(chan struct{})
+	var execResult Result
+	go func() {
+		defer close(execDone)
+		// Execute() blocks inside ensureProcess() -> initialize request,
+		// which never gets a response — exactly the stuck-handshake case.
+		s, err := b.Execute(context.Background(), "prompt", ExecOptions{Cwd: dir})
+		if err != nil {
+			return
+		}
+		execResult = <-s.Result
+	}()
+
+	// Give Execute() time to actually enter ensureProcess() and start
+	// blocking on the initialize handshake before we try to interrupt it.
+	time.Sleep(200 * time.Millisecond)
+
+	killErr := make(chan error, 1)
+	go func() {
+		killErr <- b.ForceKill()
+	}()
+
+	select {
+	case err := <-killErr:
+		if err != nil {
+			t.Fatalf("ForceKill during a stuck handshake returned an error: %v — it should actually kill the process, not fail", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ForceKill() deadlocked instead of killing the stuck-handshake process — this is the real bug found in task #62's live verification")
+	}
+
+	// The real acceptance criterion: the stuck turn must actually unblock
+	// and terminate, not just have ForceKill() return promptly while
+	// ensureProcess() stays wedged on the handshake forever.
+	select {
+	case <-execDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Execute()'s goroutine never returned after ForceKill() during handshake — the process was not actually killed, ensureProcess() is still stuck")
+	}
+	if execResult.Status != "failed" {
+		t.Fatalf("result status = %q, want failed (handshake was force-killed)", execResult.Status)
 	}
 }

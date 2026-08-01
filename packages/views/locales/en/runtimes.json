@@ -433,15 +433,5 @@
     "table_cache_r": "Cache R",
     "table_cache_w": "Cache W",
     "no_data": "No usage data yet"
-  },
-  "update_prompt": {
-    "title": "Update Multica CLI",
-    "description": "{{current}} → {{latest}}",
-    "more_runtimes": "{{count}} more runtime on this computer may also update.",
-    "later": "Not now",
-    "update_now": "Update now",
-    "status": {
-      "completed": "Updated. Waiting for the daemon to reconnect."
-    }
   }
 }

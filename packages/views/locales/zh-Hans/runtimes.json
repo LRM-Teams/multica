@@ -421,15 +421,5 @@
     "table_cache_r": "缓存读",
     "table_cache_w": "缓存写",
     "no_data": "还没有使用数据"
-  },
-  "update_prompt": {
-    "title": "更新 Multica CLI",
-    "description": "{{current}} → {{latest}}",
-    "more_runtimes": "这台电脑上还有 {{count}} 个运行时可能会一起更新。",
-    "later": "暂不更新",
-    "update_now": "立即更新",
-    "status": {
-      "completed": "已更新，正在等待守护进程重新连接。"
-    }
   }
 }

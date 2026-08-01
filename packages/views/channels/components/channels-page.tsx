@@ -36,7 +36,6 @@ import {
   channelsOptions,
   archivedChannelsOptions,
   channelMembersOptions,
-  channelGoalOptions,
   channelInviteCandidatesOptions,
   channelProjectOptions,
   useSetChannelProject,
@@ -74,7 +73,6 @@ import {
   type ComposerDraftKey,
 } from "@multica/core/channels";
 import { ChannelGoalCard } from "./channel-goal-card";
-import { GoalProcessPanel } from "./goal-process-panel";
 import { useAuthStore } from "@multica/core/auth";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
@@ -781,7 +779,6 @@ export function ChannelsPage({
   const [sidePanel, setSidePanel] = useState<
     | { kind: "none" }
     | { kind: "thread"; message: ChannelMessage }
-    | { kind: "goal-process"; managerId?: string }
     | {
         kind: "agent";
         agentId: string;
@@ -792,9 +789,6 @@ export function ChannelsPage({
   >({ kind: "none" });
   const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
   const openThreadRoot = sidePanel.kind === "thread" ? sidePanel.message : null;
-  const goalProcessOpen = sidePanel.kind === "goal-process";
-  const goalProcessManagerId =
-    sidePanel.kind === "goal-process" ? sidePanel.managerId : undefined;
   const selectedAgentPanelId = sidePanel.kind === "agent" ? sidePanel.agentId : null;
   const selectedAgentPanelSnapshot =
     sidePanel.kind === "agent" ? (sidePanel.snapshot ?? null) : null;
@@ -810,14 +804,6 @@ export function ChannelsPage({
   }, []);
   const setSelectedMemberPanelId = useCallback((next: string | null) => {
     setSidePanel(next ? { kind: "member", userId: next } : { kind: "none" });
-  }, []);
-  const toggleGoalProcessPanel = useCallback(() => {
-    setSidePanel((current) =>
-      current.kind === "goal-process" ? { kind: "none" } : { kind: "goal-process" },
-    );
-  }, []);
-  const setGoalProcessManagerId = useCallback((managerId: string) => {
-    setSidePanel({ kind: "goal-process", managerId });
   }, []);
   const openChannelDetails = useCallback(
     (tab: ChannelDetailsTab = "about") => {
@@ -1160,8 +1146,6 @@ export function ChannelsPage({
   // <ThreadPanel highlightMessageId> below) and skip it here.
   const isThreadDeepLink = !!threadDeepLinkId;
   const { data: channelMembers = [], isPending: membersPending } = useQuery(channelMembersOptions(active?.id ?? ""));
-  const { data: channelGoalEnvelope } = useQuery(channelGoalOptions(active?.id ?? ""));
-  const activeChannelGoal = channelGoalEnvelope?.goal ?? null;
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
   const [stoppingChannelTaskId, setStoppingChannelTaskId] = useState<string | null>(null);
@@ -3469,18 +3453,6 @@ export function ChannelsPage({
         }
       />
     ) : null;
-  const goalProcessPanel =
-    active && goalProcessOpen && activeChannelGoal ? (
-      <GoalProcessPanel
-        channelId={active.id}
-        goal={activeChannelGoal}
-        managerId={goalProcessManagerId}
-        onManagerChange={setGoalProcessManagerId}
-        onClose={() => setSidePanel({ kind: "none" })}
-        currentUserId={currentUserId ?? undefined}
-        variant={isMobile ? "page" : "panel"}
-      />
-    ) : null;
   const agentPanel =
     active && selectedAgentPanelId ? (
       <ResolvedAgentSidePanel
@@ -3807,8 +3779,6 @@ export function ChannelsPage({
             channelId={active.id}
             canManage={canArchive(active)}
             archived={isActiveArchived}
-            processOpen={goalProcessOpen}
-            onProcessToggle={toggleGoalProcessPanel}
           />
               {/* #562 — channel main-content tab switch: Chat (message list),
                   Tasks (channel-scoped board), and LRM-675 Files (channel
@@ -4138,8 +4108,7 @@ export function ChannelsPage({
   // (360–640, default 520 for Thread/details; persists separately from the
   // global overlay's 520). Opening/closing the dock does not remount the
   // conversation tree. Mobile: no drag — full-screen profile/page route instead.
-  const desktopSidePanel =
-    threadPanel ?? goalProcessPanel ?? agentPanel ?? memberPanel ?? detailsPanel;
+  const desktopSidePanel = threadPanel ?? agentPanel ?? memberPanel ?? detailsPanel;
   const detailPane = !isMobile ? (
     <div className="flex min-h-0 min-w-0 flex-1" data-testid="channel-detail-row">
       <div
@@ -4154,11 +4123,9 @@ export function ChannelsPage({
           data-testid={
             threadPanel
               ? "thread-side-slot"
-              : goalProcessPanel
-                ? "goal-process-side-slot"
-                : agentPanel
-                  ? "agent-side-slot"
-                  : "channel-details-side-slot"
+              : agentPanel
+                ? "agent-side-slot"
+                : "channel-details-side-slot"
           }
           className="relative flex shrink-0 flex-col border-l border-border/30 bg-background"
           style={{ width: detailSideWidth }}
@@ -4175,7 +4142,7 @@ export function ChannelsPage({
       ) : null}
     </div>
   ) : (
-    threadPanel ?? goalProcessPanel ?? channelConversationPane
+    threadPanel ?? channelConversationPane
   );
 
   // DM detail pane — rendered in place of the group detail when a DM is active.

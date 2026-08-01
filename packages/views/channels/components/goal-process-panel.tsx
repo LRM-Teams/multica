@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
 import type { ChannelGoal, ChannelMember } from "@multica/core/types";
 import {
   channelGoalProcessOptions,
@@ -14,13 +14,12 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { cn } from "@multica/ui/lib/utils";
-import { ConversationSidePanelShell } from "../../common/conversation-side-panel-shell";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { Markdown } from "../../common/markdown";
 import { useT } from "../../i18n";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 
-const PANEL_ID = "channel-goal-process-panel";
+export const GOAL_PROCESS_PANEL_ID = "channel-goal-process-panel";
 
 function managerAgents(members: ChannelMember[]): ChannelMember[] {
   return members.filter(
@@ -28,6 +27,7 @@ function managerAgents(members: ChannelMember[]): ChannelMember[] {
   );
 }
 
+/** LRM-932 (jianghp3 seq5569): process viewer under the top Goal card — not a forced right rail. */
 export function GoalProcessPanel({
   channelId,
   goal,
@@ -35,15 +35,13 @@ export function GoalProcessPanel({
   onManagerChange,
   onClose,
   currentUserId,
-  variant = "panel",
 }: {
   channelId: string;
   goal: ChannelGoal;
   managerId?: string;
-  onManagerChange: (managerId: string) => void;
+  onManagerChange?: (managerId: string) => void;
   onClose: () => void;
   currentUserId?: string;
-  variant?: "panel" | "page";
 }) {
   const { t } = useT("channels");
   const timeAgo = useTimeAgo();
@@ -75,7 +73,7 @@ export function GoalProcessPanel({
 
   const selectManager = (next: string) => {
     setActiveManagerId(next);
-    onManagerChange(next);
+    onManagerChange?.(next);
   };
 
   const processQuery = useQuery(channelGoalProcessOptions(channelId, activeManagerId));
@@ -88,15 +86,17 @@ export function GoalProcessPanel({
   };
 
   const shortStatus = (
-    <div className="space-y-2.5 rounded-md border border-border/50 bg-muted/20 px-3 py-2.5">
+    <div className="space-y-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2.5">
       <div>
         <div className="text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground">
           {t(($) => $.goal.current_step)}
         </div>
         <p className="mt-0.5 text-sm font-medium leading-snug">
-          {goal.current_step?.trim()
-            ? goal.current_step
-            : <span className="italic text-muted-foreground">{t(($) => $.goal.none)}</span>}
+          {goal.current_step?.trim() ? (
+            goal.current_step
+          ) : (
+            <span className="italic text-muted-foreground">{t(($) => $.goal.none)}</span>
+          )}
         </p>
       </div>
       <div>
@@ -106,7 +106,7 @@ export function GoalProcessPanel({
         <p
           className={cn(
             "mt-0.5 text-sm leading-snug",
-            goal.blocker?.trim() ? "text-destructive font-medium" : "italic text-muted-foreground",
+            goal.blocker?.trim() ? "font-medium text-destructive" : "italic text-muted-foreground",
           )}
         >
           {goal.blocker?.trim() ? goal.blocker : t(($) => $.goal.none)}
@@ -117,9 +117,11 @@ export function GoalProcessPanel({
           {t(($) => $.goal.progress)}
         </div>
         <p className="mt-0.5 text-sm leading-snug text-muted-foreground">
-          {goal.progress_summary?.trim()
-            ? goal.progress_summary
-            : <span className="italic">{t(($) => $.goal.none)}</span>}
+          {goal.progress_summary?.trim() ? (
+            goal.progress_summary
+          ) : (
+            <span className="italic">{t(($) => $.goal.none)}</span>
+          )}
         </p>
       </div>
     </div>
@@ -128,23 +130,23 @@ export function GoalProcessPanel({
   let body: ReactNode;
   if (!activeManagerId) {
     body = (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
-        <p className="text-sm text-muted-foreground">{t(($) => $.goal.process_empty)}</p>
+      <div className="px-1 py-6 text-center text-sm text-muted-foreground">
+        {t(($) => $.goal.process_empty)}
       </div>
     );
   } else if (processQuery.isPending && !processDoc) {
     body = (
-      <div className="space-y-3 p-4">
+      <div className="space-y-3">
         {shortStatus}
         <Skeleton className="h-4 w-2/3" />
         <Skeleton className="h-4 w-full" />
         <Skeleton className="h-4 w-5/6" />
-        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-20 w-full" />
       </div>
     );
   } else if (processQuery.isError) {
     body = (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+      <div className="flex flex-col items-center gap-3 py-8 text-center">
         <p className="text-sm text-destructive">{t(($) => $.goal.process_error)}</p>
         <Button size="sm" variant="outline" onClick={() => void processQuery.refetch()}>
           {t(($) => $.goal.retry)}
@@ -153,20 +155,18 @@ export function GoalProcessPanel({
     );
   } else if (!processDoc || !processDoc.content.trim()) {
     body = (
-      <div className="space-y-3 p-4">
+      <div className="space-y-3">
         {shortStatus}
-        <div className="flex flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border/60 px-4 py-10 text-center">
-          <p className="text-sm text-muted-foreground">
-            {t(($) => $.goal.process_empty_for, {
-              name: activeManager?.display_name || activeManager?.name || "—",
-            })}
-          </p>
+        <div className="rounded-md border border-dashed border-border/60 px-4 py-8 text-center text-sm text-muted-foreground">
+          {t(($) => $.goal.process_empty_for, {
+            name: activeManager?.display_name || activeManager?.name || "—",
+          })}
         </div>
       </div>
     );
   } else {
     body = (
-      <div className="space-y-3 p-4">
+      <div className="space-y-3">
         {shortStatus}
         <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
           <span>
@@ -187,78 +187,79 @@ export function GoalProcessPanel({
   }
 
   return (
-    <ConversationSidePanelShell
-      variant={variant}
-      header="bar"
-      onClose={onClose}
-      closeAriaLabel={t(($) => $.goal.process_close)}
-      actions={
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-8"
-          aria-label={t(($) => $.goal.process_refresh)}
-          onClick={refresh}
-        >
-          <RefreshCw className={cn("size-4", processQuery.isFetching && "animate-spin")} />
-        </Button>
-      }
-      leading={
-        <div className="min-w-0">
-          <div className="text-sm font-semibold leading-none">{t(($) => $.goal.process)}</div>
-          <p className="mt-1 truncate text-[11px] text-muted-foreground">{goal.title}</p>
-        </div>
-      }
+    <section
+      id={GOAL_PROCESS_PANEL_ID}
+      role="region"
+      aria-label={t(($) => $.goal.process)}
+      data-testid="goal-process-panel"
+      className="border-t border-border/40 bg-background"
     >
-      <aside
-        id={PANEL_ID}
-        role="complementary"
-        aria-label={t(($) => $.goal.process)}
-        data-testid="goal-process-panel"
-        className="flex min-h-0 flex-1 flex-col"
-      >
-        {managers.length >= 2 ? (
-          <Tabs
-            value={activeManagerId}
-            onValueChange={selectManager}
-            className="shrink-0 border-b border-border/40 px-2 pt-2"
+      <div className="flex items-center justify-between gap-2 px-4 py-2">
+        <div className="min-w-0">
+          <div className="text-xs font-semibold">{t(($) => $.goal.process)}</div>
+          <p className="truncate text-[11px] text-muted-foreground">{goal.title}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            aria-label={t(($) => $.goal.process_refresh)}
+            onClick={refresh}
           >
-            <TabsList
-              variant="line"
-              className="h-auto w-full justify-start overflow-x-auto rounded-none bg-transparent p-0"
-              role="tablist"
-            >
-              {managers.map((manager) => (
-                <TabsTrigger
-                  key={manager.member_id}
-                  value={manager.member_id}
-                  className="gap-1.5 px-2.5 py-2 text-xs data-active:shadow-none"
-                >
-                  <ActorAvatar
-                    actorType="agent"
-                    actorId={manager.member_id}
-                    size={18}
-                    name={manager.display_name || manager.name}
-                    avatarUrlHint={manager.avatar_url}
-                    showStatusDot={false}
-                    profileLink={false}
-                  />
-                  <span className="max-w-[7rem] truncate">
-                    {manager.display_name || manager.name}
-                  </span>
-                </TabsTrigger>
-              ))}
-            </TabsList>
+            <RefreshCw className={cn("size-3.5", processQuery.isFetching && "animate-spin")} />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            aria-label={t(($) => $.goal.process_close)}
+            onClick={onClose}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </div>
+      </div>
+      {managers.length >= 2 ? (
+        <Tabs
+          value={activeManagerId}
+          onValueChange={selectManager}
+          className="shrink-0 border-b border-border/40 px-2"
+        >
+          <TabsList
+            variant="line"
+            className="h-auto w-full justify-start overflow-x-auto rounded-none bg-transparent p-0"
+            role="tablist"
+          >
             {managers.map((manager) => (
-              <TabsContent key={manager.member_id} value={manager.member_id} className="m-0" />
+              <TabsTrigger
+                key={manager.member_id}
+                value={manager.member_id}
+                className="gap-1.5 px-2.5 py-2 text-xs data-active:shadow-none"
+              >
+                <ActorAvatar
+                  actorType="agent"
+                  actorId={manager.member_id}
+                  size={18}
+                  name={manager.display_name || manager.name}
+                  avatarUrlHint={manager.avatar_url}
+                  showStatusDot={false}
+                  profileLink={false}
+                />
+                <span className="max-w-[7rem] truncate">
+                  {manager.display_name || manager.name}
+                </span>
+              </TabsTrigger>
             ))}
-          </Tabs>
-        ) : null}
-        <div className="min-h-0 flex-1 overflow-y-auto">{body}</div>
-      </aside>
-    </ConversationSidePanelShell>
+          </TabsList>
+          {managers.map((manager) => (
+            <TabsContent key={manager.member_id} value={manager.member_id} className="m-0" />
+          ))}
+        </Tabs>
+      ) : null}
+      <div className="max-h-[min(50vh,28rem)] overflow-y-auto px-4 py-3">{body}</div>
+    </section>
   );
 }
-
-export const GOAL_PROCESS_PANEL_ID = PANEL_ID;

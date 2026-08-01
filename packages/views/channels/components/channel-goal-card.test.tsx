@@ -28,6 +28,11 @@ vi.mock("@multica/core/channels", async (importOriginal) => ({
     queryKey: ["channel-goal", channelId, "process"],
     queryFn: async () => ({ goal_id: "", processes: [] }),
   }),
+  channelGoalProcessOptions: (channelId: string, managerId: string) => ({
+    queryKey: ["channel-goal", channelId, "process", managerId],
+    queryFn: async () => ({ process: null }),
+    enabled: !!managerId,
+  }),
   useCreateChannelGoal: () => ({
     mutate: state.create,
     isPending: false,
@@ -120,28 +125,12 @@ describe("ChannelGoalCard", () => {
     );
   });
 
-  it("toggles the process entry when a handler is provided", async () => {
+  it("opens the inline process viewer from the top Goal entry", async () => {
     const user = userEvent.setup();
-    const onProcessToggle = vi.fn();
     state.goal = goal();
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
-    queryClient.setQueryData(["channel-goal", "channel-1"], { goal: state.goal });
-    render(
-      <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
-        <QueryClientProvider client={queryClient}>
-          <ChannelGoalCard
-            channelId="channel-1"
-            canManage
-            processOpen={false}
-            onProcessToggle={onProcessToggle}
-          />
-        </QueryClientProvider>
-      </I18nProvider>,
-    );
+    renderCard();
     await user.click(screen.getByTestId("channel-goal-process-entry"));
-    expect(onProcessToggle).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("goal-process-panel")).toBeInTheDocument();
   });
 
   it("updates progress, evidence, and criteria as one versioned write", async () => {

@@ -95,6 +95,45 @@ func TestUpdateAgentWorkspaceRole_ActorAuthorization(t *testing.T) {
 	}
 }
 
+// TestUpdateAgentWorkspaceRole_AdminCannotSetOwner pins that widening actor
+// authorization to owner+admin (task #32) did not open a path to granting
+// an agent the "owner" role. The target-role whitelist (member/admin only)
+// runs before the actor-role check and is unaffected by it — an admin who
+// posts role=owner must get a clean 400, never 200 or 500.
+func TestUpdateAgentWorkspaceRole_AdminCannotSetOwner(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "Role Owner Escalation Test Agent", nil)
+	adminID := createHandlerTestMember(t, "admin")
+
+	req := withRouteParams(
+		newRequest(http.MethodPatch, "/api/workspaces/"+testWorkspaceID+"/agents/"+agentID+"/role", map[string]string{
+			"role": "owner",
+		}),
+		"id", testWorkspaceID,
+		"agentId", agentID,
+	)
+	req.Header.Set("X-User-ID", adminID)
+
+	w := httptest.NewRecorder()
+	testHandler.UpdateAgentWorkspaceRole(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (role=owner must be rejected as an invalid target role): %s", w.Code, w.Body.String())
+	}
+
+	var role string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT workspace_role FROM agent WHERE id = $1
+	`, agentID).Scan(&role); err != nil {
+		t.Fatalf("read agent workspace role: %v", err)
+	}
+	if role == "owner" {
+		t.Fatalf("workspace_role = %q, want unchanged (owner escalation must not apply)", role)
+	}
+}
+
 // TestUpdateAgentWorkspaceRolePublishesCanonicalBroadcast reflects the
 // 2026-07-31 Wendy DM incident fix: a Wendy-named agent's workspace-role
 // change now broadcasts workspace-wide like any other agent — no owner-only

@@ -1030,6 +1030,24 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 func (h *Handler) recordHeartbeat(ctx context.Context, rt db.AgentRuntime) error {
 	now := time.Now()
 
+	// Daemon-level heartbeat (task #58): recorded unconditionally, separate
+	// from the per-runtime liveness bookkeeping below. One physical daemon
+	// can host several agent_runtime rows sharing the same daemon_id, and
+	// "is the computer connected" must not be derived by aggregating those
+	// rows' individual last_seen_at values — that answers "is some runtime
+	// on this machine alive", a different question that disagrees with
+	// real connectivity whenever the daemon is up but has no live runtime.
+	// This is a single tiny UPSERT (one row per daemon_id), so it isn't
+	// worth gating behind the same Redis-debounce path as the runtime row.
+	if daemonID := strings.TrimSpace(rt.DaemonID.String); rt.DaemonID.Valid && daemonID != "" {
+		if err := h.Queries.RecordDaemonHeartbeat(ctx, db.RecordDaemonHeartbeatParams{
+			WorkspaceID: rt.WorkspaceID,
+			DaemonID:    daemonID,
+		}); err != nil {
+			slog.Warn("record daemon heartbeat failed", "daemon_id", daemonID, "error", err)
+		}
+	}
+
 	// Decide whether the DB row needs a write *before* touching Redis, so a
 	// Touch failure can simply force needDBWrite=true without re-evaluating
 	// the structural reasons.

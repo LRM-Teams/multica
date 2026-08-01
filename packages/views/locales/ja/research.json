@@ -66,6 +66,15 @@
     "delete_done": "Research deleted",
     "cancel": "Cancel"
   },
+  "session_page": {
+    "load_failed": "セッションの読み込みに失敗しました",
+    "retry": "再試行",
+    "canvas_forming_title": "キャンバス準備中",
+    "canvas_forming_hint": "調査団がノードを配置しています。ここに表示されます。",
+    "confirm_failed": "確認に失敗しました",
+    "handoff_failed": "引き継ぎに失敗しました",
+    "send_failed": "メッセージの送信に失敗しました"
+  },
   "overlay": {
     "fleet_expand": "調査団を展開",
     "fleet_collapse": "調査団を折りたたむ",

@@ -66,6 +66,15 @@
     "delete_done": "Research deleted",
     "cancel": "Cancel"
   },
+  "session_page": {
+    "load_failed": "Failed to load session",
+    "retry": "Retry",
+    "canvas_forming_title": "Canvas forming",
+    "canvas_forming_hint": "The fleet is placing nodes — they will show up here.",
+    "confirm_failed": "Could not confirm research",
+    "handoff_failed": "Handoff failed",
+    "send_failed": "Could not send message"
+  },
   "overlay": {
     "fleet_expand": "Expand research fleet",
     "fleet_collapse": "Collapse research fleet",

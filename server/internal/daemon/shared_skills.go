@@ -231,6 +231,10 @@ func piAgentRoot(cfg Config, workspaceID, agentID string) string {
 	return multicaAgentRoot(cfg, workspaceID, agentID)
 }
 
+// multicaAgentRoot is the authoritative on-disk root for one Multica agent.
+// It is keyed only by workspace + agent ID (LRM-955): switching coding harness /
+// provider / runtime on the same machine must keep reading and writing this
+// same tree. Provider session state and task workdirs may diverge; memory must not.
 func multicaAgentRoot(cfg Config, workspaceID, agentID string) string {
 	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".multica", "agents", agentID)
 }

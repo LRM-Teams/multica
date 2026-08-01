@@ -770,6 +770,10 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			}
 		}
 		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Use `MULTICA_AGENT_MEMORY_DIR` / `MULTICA_AGENT_ROOT` for durable memory changes. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
+		b.WriteString("### Harness boundary (kernel vs shell)\n\n")
+		b.WriteString("- **Multica kernel (not swappable with the coding harness):** Issue status machine, Goal, channel permissions, group manager, daemon claim/inbox, audit.\n")
+		b.WriteString("- **Execution shell (swappable):** coding harness / provider (Codex, Claude, Pi, …), model choice, research backends.\n")
+		b.WriteString("- **Same-machine runtime switch:** Multica memory follows **Agent ID** (`MULTICA_AGENT_ROOT`); provider sessions and task workdirs may reset. Do not treat harness-private caches as canonical memory.\n\n")
 		if ctx.AgentRoot != "" || ctx.AgentMemoryDir != "" {
 			renderMemoryOperatingGuide(&b, ctx)
 		}
@@ -1085,6 +1089,7 @@ func renderPinnedRules(b *strings.Builder, ctx TaskContextForEnv) {
 		b.WriteString("- Agent-authored issue comments: never inline `--content`; use a non-inline input mode.\n")
 	}
 	b.WriteString("- Ship to acceptance criteria, not a shallow pass. Before reporting done: build · run · exercise behavior · test · UI screenshot vs target. Fix failures first; surface real blockers.\n")
+	b.WriteString("- Harness swap does not rewrite Multica kernel semantics (Issue/Goal/channel/claim). Durable Multica memory stays on `MULTICA_AGENT_ROOT` for this Agent ID across same-machine runtime changes.\n")
 	if ctx.IssueID != "" {
 		b.WriteString("- Issue description + acceptance criteria + attachments = spec. Chat/comments are context. Challenge a bad spec with its owner; never silently rewrite or lower it.\n")
 	}

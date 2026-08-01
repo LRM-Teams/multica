@@ -361,6 +361,8 @@ func TestAssignmentTriggeredProtocolHonorsAgentIdentity(t *testing.T) {
 		"Complete the task **to its acceptance criteria / definition of done** within your Agent Identity boundaries",
 		"self-verify before you treat it as done",
 		"Ship to acceptance criteria, not a shallow pass.",
+		"Harness swap does not rewrite Multica kernel semantics",
+		"Durable Multica memory stays on `MULTICA_AGENT_ROOT`",
 		"Issue description + acceptance criteria + attachments = spec.",
 		"Challenge a bad spec with its owner",
 		"Do not investigate, implement, create issues, update issues, or delegate if your Agent Identity forbids that action",
@@ -1146,6 +1148,10 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 		"Pi skill drafts root (`PI_SKILL_DRAFTS_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/skills/drafts`",
 		"report these Multica agent paths, not host-global runtime paths",
 		"Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`",
+		"### Harness boundary (kernel vs shell)",
+		"Multica kernel (not swappable with the coding harness)",
+		"Same-machine runtime switch",
+		"Multica memory follows **Agent ID**",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Multica memory scope missing %q\n%s", want, out)

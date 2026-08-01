@@ -50,23 +50,29 @@ const (
 //
 // CustomModelIDSupported is true when the provider accepts an arbitrary
 // typed model id (Raft: claude/codex/cursor/copilot/pi). Set from
-// agent.CustomModelIDSupported at enqueue time so the UI can hide the
-// free-form input without a frontend provider whitelist.
+// agent.Capabilities at enqueue time so the UI can hide the free-form
+// input without a frontend provider whitelist.
+//
+// ThinkingDiscovery is true when the provider exposes a reasoning/effort
+// catalog (agent.Capabilities.ThinkingDiscovery). Set at enqueue time so
+// the UI can hide the thinking-level picker for unsupported runtimes
+// without a frontend whitelist (#59).
 //
 // RunStartedAt is set when PopPending claims the request. It is
 // `json:"-"` because it's a server-side bookkeeping field — the UI only
 // needs Status / UpdatedAt to drive the polling loop.
 type ModelListRequest struct {
-	ID                      string          `json:"id"`
-	RuntimeID               string          `json:"runtime_id"`
-	Status                  ModelListStatus `json:"status"`
-	Models                  []ModelEntry    `json:"models,omitempty"`
-	Supported               bool            `json:"supported"`
-	CustomModelIDSupported  bool            `json:"custom_model_id_supported"`
-	Error                   string          `json:"error,omitempty"`
-	CreatedAt               time.Time       `json:"created_at"`
-	UpdatedAt               time.Time       `json:"updated_at"`
-	RunStartedAt            *time.Time      `json:"-"`
+	ID                     string          `json:"id"`
+	RuntimeID              string          `json:"runtime_id"`
+	Status                 ModelListStatus `json:"status"`
+	Models                 []ModelEntry    `json:"models,omitempty"`
+	Supported              bool            `json:"supported"`
+	CustomModelIDSupported bool            `json:"custom_model_id_supported"`
+	ThinkingDiscovery      bool            `json:"thinking_discovery"`
+	Error                  string          `json:"error,omitempty"`
+	CreatedAt              time.Time       `json:"created_at"`
+	UpdatedAt              time.Time       `json:"updated_at"`
+	RunStartedAt           *time.Time      `json:"-"`
 }
 
 // ModelEntry mirrors agent.Model for the wire. `Default` tags the
@@ -132,7 +138,7 @@ const (
 // implementation can honour the heartbeat-side timeout that gates a
 // slow shared store from stalling the rest of the heartbeat.
 type ModelListStore interface {
-	Create(ctx context.Context, runtimeID string, customModelIDSupported bool) (*ModelListRequest, error)
+	Create(ctx context.Context, runtimeID string, customModelIDSupported, thinkingDiscovery bool) (*ModelListRequest, error)
 	Get(ctx context.Context, id string) (*ModelListRequest, error)
 	// HasPending is a cheap read-only probe used by the heartbeat hot path
 	// to gate the side-effecting PopPending. A spurious "true" is fine —
@@ -182,7 +188,7 @@ func NewInMemoryModelListStore() *InMemoryModelListStore {
 	return &InMemoryModelListStore{requests: make(map[string]*ModelListRequest)}
 }
 
-func (s *InMemoryModelListStore) Create(_ context.Context, runtimeID string, customModelIDSupported bool) (*ModelListRequest, error) {
+func (s *InMemoryModelListStore) Create(_ context.Context, runtimeID string, customModelIDSupported, thinkingDiscovery bool) (*ModelListRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -202,6 +208,7 @@ func (s *InMemoryModelListStore) Create(_ context.Context, runtimeID string, cus
 		// for providers that don't support per-agent model selection.
 		Supported:              true,
 		CustomModelIDSupported: customModelIDSupported,
+		ThinkingDiscovery:      thinkingDiscovery,
 		CreatedAt:              now,
 		UpdatedAt:              now,
 	}
@@ -318,10 +325,12 @@ func (h *Handler) InitiateListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	caps := agent.Capabilities(rt.Provider)
 	req, err := h.ModelListStore.Create(
 		r.Context(),
 		uuidToString(rt.ID),
-		agent.CustomModelIDSupported(rt.Provider),
+		caps.CustomModelIDSupported,
+		caps.ThinkingDiscovery,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to enqueue model list request: "+err.Error())

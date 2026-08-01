@@ -56,7 +56,7 @@ func TestRedisModelListStore_CreateGetComplete(t *testing.T) {
 	ctx := context.Background()
 	store := NewRedisModelListStore(rdb)
 
-	req, err := store.Create(ctx, "runtime-1", false)
+	req, err := store.Create(ctx, "runtime-1", false, false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestRedisModelListStore_PopPendingAcrossInstances(t *testing.T) {
 	nodeA := NewRedisModelListStore(rdb)
 	nodeB := NewRedisModelListStore(rdb)
 
-	req, err := nodeA.Create(ctx, "runtime-cross", false)
+	req, err := nodeA.Create(ctx, "runtime-cross", false, false)
 	if err != nil {
 		t.Fatalf("node A create: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestRedisModelListStore_PopPendingConcurrent(t *testing.T) {
 	ctx := context.Background()
 	store := NewRedisModelListStore(rdb)
 
-	req, err := store.Create(ctx, "runtime-race", false)
+	req, err := store.Create(ctx, "runtime-race", false, false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestRedisModelListStore_PendingTimeout(t *testing.T) {
 	ctx := context.Background()
 	store := NewRedisModelListStore(rdb)
 
-	req, err := store.Create(ctx, "runtime-timeout", false)
+	req, err := store.Create(ctx, "runtime-timeout", false, false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestRedisModelListStore_RunningTimeout(t *testing.T) {
 	ctx := context.Background()
 	store := NewRedisModelListStore(rdb)
 
-	req, err := store.Create(ctx, "runtime-running-timeout", false)
+	req, err := store.Create(ctx, "runtime-running-timeout", false, false)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestRedisModelListStore_HasPending(t *testing.T) {
 		t.Fatalf("empty store should not report pending: has=%v err=%v", has, err)
 	}
 
-	if _, err := store.Create(ctx, "rt-1", false); err != nil {
+	if _, err := store.Create(ctx, "rt-1", false, false); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if has, err := store.HasPending(ctx, "rt-1"); err != nil || !has {

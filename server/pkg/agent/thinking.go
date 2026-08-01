@@ -656,6 +656,12 @@ func IsKnownThinkingValue(providerType, value string) bool {
 	if value == "" {
 		return true
 	}
+	// Capability table is the membership gate (#47/#59). Enums below only
+	// answer "is this a known token" — never "does this provider support
+	// thinking at all".
+	if !Capabilities(providerType).ThinkingDiscovery {
+		return false
+	}
 	if providerType == "opencode" {
 		return isValidOpenCodeVariantName(value)
 	}

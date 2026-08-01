@@ -67,20 +67,23 @@ func caps(
 // ForceRestart is filled by deriveForceRestart (not by caps).
 var providerCapabilities = map[string]ProviderCapabilities{
 	//                    canonical, inlinePrompt, modelSel, customID, thinking
-	"claude":      caps(false, false, true, true, true),
-	"codebuddy":   caps(false, false, true, false, true),
-	"codex":       caps(false, false, true, true, true),
-	"copilot":     caps(false, false, true, true, false),
-	"opencode":    caps(true, false, true, false, false),
+	"claude":    caps(false, false, true, true, true),
+	"codebuddy": caps(false, false, true, false, true),
+	"codex":     caps(false, false, true, true, true),
+	"copilot":   caps(false, false, true, true, false),
+	// opencode/pi/grok: thinking catalogs + CLI injection already exist;
+	// ThinkingDiscovery must stay true so IsKnownThinkingValue / FE gating
+	// don't silently reject a capability the adapters already honour (#59).
+	"opencode":    caps(true, false, true, false, true),
 	"openclaw":    caps(false, true, true, false, false),
 	"hermes":      caps(false, false, true, false, false),
 	"gemini":      caps(false, false, true, false, false),
-	"pi":          caps(true, false, true, true, false),
+	"pi":          caps(true, false, true, true, true),
 	"cursor":      caps(true, false, true, true, false),
 	"kimi":        caps(false, true, true, false, false),
 	"kiro":        caps(false, true, true, false, false),
 	"antigravity": caps(false, false, true, false, false),
-	"grok":        caps(true, false, true, false, false),
+	"grok":        caps(true, false, true, false, true),
 }
 
 // forceRestartResidentConstructors maps provider → the Backend the daemon

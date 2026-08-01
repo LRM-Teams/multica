@@ -432,15 +432,5 @@
     "table_cache_r": "캐시 R",
     "table_cache_w": "캐시 W",
     "no_data": "아직 사용량 데이터가 없습니다"
-  },
-  "update_prompt": {
-    "title": "Multica CLI 업데이트",
-    "description": "{{current}} → {{latest}}",
-    "more_runtimes": "이 컴퓨터의 런타임 {{count}}개도 함께 업데이트될 수 있습니다.",
-    "later": "지금은 안 함",
-    "update_now": "지금 업데이트",
-    "status": {
-      "completed": "업데이트되었습니다. 데몬이 다시 연결되기를 기다리는 중입니다."
-    }
   }
 }

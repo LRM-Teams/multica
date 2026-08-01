@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -288,6 +289,80 @@ func TestReminderCacheSnapshotPreservesInFlightRetry(t *testing.T) {
 	}
 	if _, ok := cache.get("r1"); !ok {
 		t.Fatal("snapshot silently dropped an in-flight retry")
+	}
+}
+
+// TestOnReminderTimerOwnerMissingLogsAndSelfHealsOnNextRetry pins task #69:
+// a due reminder timer firing while its owner is (transiently) absent from
+// the local residency map used to be a pure silent drop — armLocked already
+// deleted nothing (task #68 keeps the in-flight entry), but onReminderTimer
+// itself returned with zero trace: no fire_attempt queued, no error, no
+// reconnect forced. A perfectly healthy WS connection would show no symptom
+// at all while this specific reminder just never fired — this is the
+// leading candidate for why three machines with live heartbeats and
+// advancing projection cursors still had overdue reminders during the
+// 2026-08-01 incident. Fix: log it, and rely on task #68's existing local
+// retry loop (fireAndScheduleRetryLocked re-invokes onFire on a schedule)
+// to actually resend once the owner registers — this test proves both the
+// log and that composition, not just "didn't crash".
+func TestOnReminderTimerOwnerMissingLogsAndSelfHealsOnNextRetry(t *testing.T) {
+	now := time.Date(2026, 7, 22, 8, 0, 0, 0, time.UTC)
+	clock := &fakeReminderClock{now: now}
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mgr := newReminderAgentManager("", logger)
+	cache := newReminderCache(clock, logger, nil)
+	writes := make(chan []byte, 4)
+	var d *Daemon
+	cache.onFire = func(job protocol.ReminderTimerJob) { d.onReminderTimer(job) }
+	d = &Daemon{logger: logger, reminderAgents: mgr, reminderCache: cache}
+	d.setReminderWS(writes, make(chan struct{}), func() error { return nil })
+	cache.resume() // setReminderWS's beginConnection() suspends arming; mimic post-replay resume.
+
+	job := reminderJob("r1", "agent-x", 1, now.Add(-time.Minute))
+	if applied, err := cache.applyProjection(reminderProjection(1, "runtime-x", "upsert", job, false)); err != nil || !applied {
+		t.Fatalf("apply due job = %v, %v", applied, err)
+	}
+
+	// Timer fires while agent-x has no residency entry yet.
+	clock.fire(0)
+	select {
+	case frame := <-writes:
+		t.Fatalf("fire_attempt sent despite missing owner: %s", frame)
+	default:
+	}
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "owner missing from local residency map") ||
+		!strings.Contains(logOutput, "reminder_id=r1") ||
+		!strings.Contains(logOutput, "agent_id=agent-x") ||
+		!strings.Contains(logOutput, "version=1") {
+		t.Fatalf("expected a Warn log naming reminder_id/agent_id/version, got: %s", logOutput)
+	}
+
+	// Owner registers before the next local retry — task #68's retry loop
+	// (not this fix) is what re-invokes onReminderTimer; the fix's job is
+	// only to not have poisoned that path and to have made the gap visible.
+	if _, _, err := mgr.applyStart("agent-x", "runtime-x", "workspace-x", 1); err != nil {
+		t.Fatalf("applyStart: %v", err)
+	}
+	if len(clock.timers) != 2 {
+		t.Fatalf("timers scheduled after initial fire = %d, want 2 (due + retry)", len(clock.timers))
+	}
+	clock.fire(1)
+
+	select {
+	case frame := <-writes:
+		var msg protocol.Message
+		if err := json.Unmarshal(frame, &msg); err != nil || msg.Type != protocol.EventReminderFireAttempt {
+			t.Fatalf("retry frame = %s, want a fire_attempt", frame)
+		}
+		var attempt protocol.ReminderFireAttemptPayload
+		if err := json.Unmarshal(msg.Payload, &attempt); err != nil || attempt.ReminderID != "r1" || attempt.AgentID != "agent-x" || attempt.Version != 1 {
+			t.Fatalf("retry fire_attempt payload = %s", msg.Payload)
+		}
+	default:
+		t.Fatal("local retry never resent the fire_attempt once the owner registered")
 	}
 }
 

@@ -542,6 +542,88 @@ func (s *VersionStore) writeActivationState(state ActivationState) error {
 	return nil
 }
 
+// PruneResult records what PruneInactiveVersions removed.
+type PruneResult struct {
+	// RemovedVersions is the list of version tags whose directories were
+	// deleted (binary + metadata + directory itself).
+	RemovedVersions []string
+}
+
+// PruneInactiveVersions removes every version directory under versions/ that
+// is not the currently active version. It is safe to call after a successful
+// activation: the old "previous" version and any leftover staged-but-never-
+// activated directories are reclaimed.
+//
+// The active version — the one activation.json points at — is never touched.
+// If activation.json does not exist or has no active version, nothing is
+// pruned (we don't know what's live, so we don't delete anything).
+func (s *VersionStore) PruneInactiveVersions(ctx context.Context) (PruneResult, error) {
+	state, err := s.ReadActivationState()
+	if err != nil {
+		return PruneResult{}, fmt.Errorf("read activation state: %w", err)
+	}
+	if state.ActiveVersion == "" {
+		// No active version → don't touch anything.
+		return PruneResult{}, nil
+	}
+
+	activeDir := filepath.Join(s.VersionsRoot(), state.ActiveVersion)
+
+	entries, err := os.ReadDir(s.VersionsRoot())
+	if err != nil {
+		return PruneResult{}, fmt.Errorf("list versions root: %w", err)
+	}
+
+	var removed []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// Skip the active version at all costs.
+		if name == state.ActiveVersion {
+			continue
+		}
+		// Skip hidden temp directories (stage leftovers like .stage-vX.Y.Z-*).
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+
+		dirPath := filepath.Join(s.VersionsRoot(), name)
+
+		// Belt-and-suspenders: resolve the real path and compare it to the
+		// active directory. This catches symlinks, case-insensitive filesystems,
+		// and any other path trickery that would make name != ActiveVersion
+		// but still resolve to the same directory.
+		realPath, err := filepath.EvalSymlinks(dirPath)
+		if err != nil {
+			// Can't resolve — skip rather than risk deleting the wrong thing.
+			continue
+		}
+		realActive, err := filepath.EvalSymlinks(activeDir)
+		if err != nil {
+			// Active dir can't be resolved — be conservative and skip.
+			continue
+		}
+		if realPath == realActive {
+			continue
+		}
+
+		if err := os.RemoveAll(dirPath); err != nil {
+			return PruneResult{RemovedVersions: removed}, fmt.Errorf("remove old version %s: %w", name, err)
+		}
+		removed = append(removed, name)
+	}
+
+	if len(removed) > 0 {
+		if err := syncDirPath(s.VersionsRoot()); err != nil {
+			return PruneResult{RemovedVersions: removed}, fmt.Errorf("sync versions root after prune: %w", err)
+		}
+	}
+
+	return PruneResult{RemovedVersions: removed}, nil
+}
+
 func VerifyStagedBinaryVersion(
 	ctx context.Context,
 	binaryPath string,

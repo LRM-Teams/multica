@@ -646,3 +646,208 @@ func TestVersionStoreActiveBinaryPathMissingStagedFileFallsBackCleanly(t *testin
 		t.Fatalf("ActiveBinaryPath ok = true for a removed staged binary, path = %q", path)
 	}
 }
+
+// helper: stage + activate a version in one call.
+func stageAndActivate(t *testing.T, store *VersionStore, version string) {
+	t.Helper()
+	data := []byte("multica-" + version)
+	if _, err := store.StageBinary(
+		context.Background(),
+		version,
+		data,
+		testBinaryDigest(data),
+		0o755,
+	); err != nil {
+		t.Fatalf("stage %s: %v", version, err)
+	}
+	state, err := store.ReadActivationState()
+	if err != nil {
+		t.Fatalf("read activation state: %v", err)
+	}
+	if _, err := store.CompareAndSwapActivation(
+		context.Background(),
+		state.Generation,
+		version,
+	); err != nil {
+		t.Fatalf("activate %s: %v", version, err)
+	}
+}
+
+func listVersionDirs(t *testing.T, store *VersionStore) []string {
+	t.Helper()
+	entries, err := os.ReadDir(store.VersionsRoot())
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
+// TestPruneInactiveVersions_RemovesOldLeavesActive tests the positive case:
+// after two upgrades, only the currently active version directory survives.
+func TestPruneInactiveVersions_RemovesOldLeavesActive(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+
+	// Simulate two consecutive upgrades.
+	stageAndActivate(t, store, "v0.3.90")
+	stageAndActivate(t, store, "v0.3.91")
+	stageAndActivate(t, store, "v0.3.92")
+
+	state, err := store.ReadActivationState()
+	if err != nil {
+		t.Fatalf("read activation state: %v", err)
+	}
+	if state.ActiveVersion != "v0.3.92" {
+		t.Fatalf("expected active v0.3.92, got %s", state.ActiveVersion)
+	}
+
+	// All three should be present before prune.
+	dirs := listVersionDirs(t, store)
+	if len(dirs) != 3 {
+		t.Fatalf("expected 3 version dirs before prune, got %d: %v", len(dirs), dirs)
+	}
+
+	result, err := store.PruneInactiveVersions(context.Background())
+	if err != nil {
+		t.Fatalf("PruneInactiveVersions: %v", err)
+	}
+	if len(result.RemovedVersions) != 2 {
+		t.Fatalf("expected 2 removed, got %d: %v", len(result.RemovedVersions), result.RemovedVersions)
+	}
+
+	// After prune, only the active version directory remains.
+	dirs = listVersionDirs(t, store)
+	if len(dirs) != 1 || dirs[0] != "v0.3.92" {
+		t.Fatalf("expected only v0.3.92 after prune, got %v", dirs)
+	}
+
+	// The active binary must still exist and be readable.
+	activePath, ok, err := store.ActiveBinaryPath()
+	if err != nil || !ok {
+		t.Fatalf("ActiveBinaryPath after prune: ok=%v err=%v", ok, err)
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("active binary missing after prune: %v", err)
+	}
+}
+
+// TestPruneInactiveVersions_NeverDeletesActive is the guard test (negative):
+// it verifies that the active version is never removed, even when surrounded
+// by old versions. This test MUST fail if the protection check is removed.
+//
+// Mutation check: remove the `name == state.ActiveVersion` continue in
+// PruneInactiveVersions → this test fails because the active binary is
+// deleted.
+func TestPruneInactiveVersions_NeverDeletesActive(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+
+	stageAndActivate(t, store, "v0.3.90")
+	stageAndActivate(t, store, "v0.3.91")
+
+	state, _ := store.ReadActivationState()
+	activeVersion := state.ActiveVersion // v0.3.91
+
+	_, err := store.PruneInactiveVersions(context.Background())
+	if err != nil {
+		t.Fatalf("PruneInactiveVersions: %v", err)
+	}
+
+	// The active version directory must still exist.
+	activeDir := filepath.Join(store.VersionsRoot(), activeVersion)
+	if _, err := os.Stat(activeDir); err != nil {
+		t.Fatalf("active version directory was deleted: %v", err)
+	}
+	// The active binary must still exist.
+	activePath, ok, err := store.ActiveBinaryPath()
+	if err != nil || !ok {
+		t.Fatalf("ActiveBinaryPath after prune: ok=%v err=%v", ok, err)
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("active binary was deleted: %v", err)
+	}
+	// Activation state must be unchanged.
+	stateAfter, err := store.ReadActivationState()
+	if err != nil {
+		t.Fatalf("read activation state after prune: %v", err)
+	}
+	if stateAfter.ActiveVersion != activeVersion {
+		t.Fatalf("active version changed from %s to %s", activeVersion, stateAfter.ActiveVersion)
+	}
+}
+
+// TestPruneInactiveVersions_NoActiveVersionIsNoop verifies that prune does
+// nothing when there is no active version — we don't know what's live, so we
+// don't delete anything.
+func TestPruneInactiveVersions_NoActiveVersionIsNoop(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+
+	// Stage two versions but don't activate either.
+	data := []byte("multica-v0.3.90")
+	if _, err := store.StageBinary(
+		context.Background(),
+		"v0.3.90",
+		data,
+		testBinaryDigest(data),
+		0o755,
+	); err != nil {
+		t.Fatalf("stage v0.3.90: %v", err)
+	}
+	data2 := []byte("multica-v0.3.91")
+	if _, err := store.StageBinary(
+		context.Background(),
+		"v0.3.91",
+		data2,
+		testBinaryDigest(data2),
+		0o755,
+	); err != nil {
+		t.Fatalf("stage v0.3.91: %v", err)
+	}
+
+	result, err := store.PruneInactiveVersions(context.Background())
+	if err != nil {
+		t.Fatalf("PruneInactiveVersions: %v", err)
+	}
+	if len(result.RemovedVersions) != 0 {
+		t.Fatalf("expected 0 removed when no active version, got %v", result.RemovedVersions)
+	}
+
+	// All staged versions must still be present.
+	dirs := listVersionDirs(t, store)
+	if len(dirs) != 2 {
+		t.Fatalf("expected 2 version dirs preserved, got %d: %v", len(dirs), dirs)
+	}
+}
+
+// TestPruneInactiveVersions_SkipsStageTempDirs verifies that hidden temp
+// directories (left behind by interrupted staging) are not touched by prune —
+// they are owned by the staging code's own cleanup.
+func TestPruneInactiveVersions_SkipsStageTempDirs(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+
+	stageAndActivate(t, store, "v0.3.90")
+	stageAndActivate(t, store, "v0.3.91")
+
+	// Simulate a leftover staging temp directory.
+	tempDir := filepath.Join(store.VersionsRoot(), ".stage-v0.3.92-abcd1234")
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "partial"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	_, err := store.PruneInactiveVersions(context.Background())
+	if err != nil {
+		t.Fatalf("PruneInactiveVersions: %v", err)
+	}
+
+	// The temp directory must still exist — prune doesn't own it.
+	if _, err := os.Stat(tempDir); err != nil {
+		t.Fatalf("temp directory was deleted by prune: %v", err)
+	}
+}

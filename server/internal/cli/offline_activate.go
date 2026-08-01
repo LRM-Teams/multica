@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -79,6 +80,17 @@ func (s *VersionStore) OfflineActivateStaged(
 		// CAS already rotated — journal best-effort.
 		_ = err
 	}
+
+	// Best-effort prune of now-inactive version directories. The new version
+	// is already active and the old one is recorded as previous; neither is
+	// at risk. A prune failure must not fail the activation itself.
+	if _, pruneErr := s.PruneInactiveVersions(ctx); pruneErr != nil {
+		slog.Debug("version store prune failed after successful activation",
+			"active_version", staged.Version,
+			"previous_version", state.ActiveVersion,
+			"error", pruneErr)
+	}
+
 	return next, staged.BinaryPath, nil
 }
 

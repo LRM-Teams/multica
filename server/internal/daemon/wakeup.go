@@ -803,6 +803,10 @@ func (d *Daemon) queueReminderFrame(eventType string, payload any) bool {
 	case d.reminderWrites <- frame:
 		return true
 	case <-d.reminderWSDone:
+		// Task #69: same shape as the reminderWrites==nil case above — the
+		// connection this frame was headed for tore down between the nil
+		// check and this select. Previously silent too.
+		d.logger.Warn("reminder websocket frame dropped: connection closing", "type", eventType)
 		return false
 	default:
 		if d.reminderClose != nil {

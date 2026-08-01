@@ -1156,6 +1156,9 @@ func (h *Handler) queryAgentActivitySteps(ctx context.Context, taskID pgtype.UUI
 }
 
 func (h *Handler) agentActivityRowToItem(ctx context.Context, reqCtx agentActivityRequestContext, row agentActivityRawRow) (AgentActivityItem, bool, error) {
+	if row.Visibility.Valid && row.Visibility.String == "diagnostic_only" {
+		return AgentActivityItem{}, false, nil
+	}
 	targetRef, visible, detailAllowed, err := h.agentActivityVisibility(ctx, reqCtx, row)
 	if err != nil || !visible {
 		return AgentActivityItem{}, visible, err
@@ -2649,6 +2652,9 @@ func agentActivityTimelineEntries(row agentActivityRawRow, details map[string]an
 }
 
 func agentActivityTimelineRowIsNarrative(row agentActivityRawRow) bool {
+	if row.Visibility.Valid && row.Visibility.String == "diagnostic_only" {
+		return false
+	}
 	switch row.Kind {
 	case activityKindText,
 		activityKindWakeAttempt,

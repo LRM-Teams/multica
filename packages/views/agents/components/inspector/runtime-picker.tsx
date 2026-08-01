@@ -83,11 +83,23 @@ export function RuntimePicker({
           {selected ? runtimeDisplayLabel(selected) : t(($) => $.pickers.runtime_none)}
         </span>
         {selected && (
-          <span
-            className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${
-              isOnline ? "bg-success" : "bg-muted-foreground/40"
-            }`}
-          />
+          <>
+            <span
+              className={`ml-auto shrink-0 h-1.5 w-1.5 rounded-full ${
+                isOnline ? "bg-success" : "bg-muted-foreground/40"
+              }`}
+            />
+            <span className="shrink-0">
+              {isOnline
+                ? t(($) => $.pickers.computer_connected)
+                : t(($) => $.pickers.computer_disconnected)}
+            </span>
+            {selected.current_version && (
+              <span className="shrink-0 font-mono text-muted-foreground/70">
+                {t(($) => $.pickers.computer_version, { version: selected.current_version })}
+              </span>
+            )}
+          </>
         )}
       </span>
     );
@@ -135,11 +147,23 @@ export function RuntimePicker({
           <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate font-mono">{triggerLabel}</span>
           {selected && (
-            <span
-              className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${
-                isOnline ? "bg-success" : "bg-muted-foreground/40"
-              }`}
-            />
+            <>
+              <span
+                className={`ml-auto shrink-0 h-1.5 w-1.5 rounded-full ${
+                  isOnline ? "bg-success" : "bg-muted-foreground/40"
+                }`}
+              />
+              <span className="shrink-0 text-muted-foreground">
+                {isOnline
+                  ? t(($) => $.pickers.computer_connected)
+                  : t(($) => $.pickers.computer_disconnected)}
+              </span>
+              {selected.current_version && (
+                <span className="shrink-0 font-mono text-muted-foreground/70">
+                  {t(($) => $.pickers.computer_version, { version: selected.current_version })}
+                </span>
+              )}
+            </>
           )}
         </>
       }

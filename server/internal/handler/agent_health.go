@@ -33,6 +33,20 @@ const (
 	// unreachable and must not show as online in the health summary.
 	agentHealthStaleThreshold    = 150 * time.Second
 	defaultAgentHealthEventLimit = 50
+
+	// agentDisplayStatus* is the honest, read-time status vocabulary for the
+	// agent list/detail surface (task #42③). It deliberately does not reuse
+	// the agentHealthState* names: this is a coarser, workload-aware view
+	// meant for the primary status badge, not the Activity Health tab.
+	// "starting"/"thinking"/"crashed"/"stopped" are not emitted yet — they
+	// need signals (lifecycle-start marker, task phase, provider-crash
+	// event) that don't exist as agent-visible facts today. Leaving them
+	// unemitted is intentional: the family rule is status stays unknown
+	// rather than invented.
+	agentDisplayStatusIdle         = "idle"
+	agentDisplayStatusWorking      = "working"
+	agentDisplayStatusDisconnected = "disconnected"
+	agentDisplayStatusOffline      = "offline"
 )
 
 var agentHealthEventTypes = []string{
@@ -256,6 +270,66 @@ func agentHealthMissingRuntimeSummary(agent db.Agent) AgentHealthSummary {
 	}
 }
 
+// runtimeConnectivityTier is a read-time judgment of whether a runtime's
+// heartbeat is currently trustworthy. It is never written back to the
+// database — agent_runtime.status stays the sweeper's job (~150s+sweep
+// interval to flip offline) because dispatch/admission logic depends on
+// that column being stable and cheap to read. This tier exists purely to
+// stop display surfaces from repeating what the raw column says once it's
+// known to be stale. Shared by agentHealthSummary (Activity Health tab, 5
+// state vocab) and agentRuntimeDisplayStatus (agent list/detail badge, task
+// #42③, 4-of-8-word vocab so far).
+type runtimeConnectivityTier int
+
+const (
+	runtimeConnectivityOnline runtimeConnectivityTier = iota
+	runtimeConnectivityStale
+	runtimeConnectivityDead
+)
+
+// runtimeConnectivity applies the freshness gate agentHealthSummary has used
+// since #284: even if the DB row still says "online", a heartbeat older
+// than agentHealthStaleThreshold means the runtime is not actually
+// reachable right now. A row already persisted "offline" by the sweeper
+// gets the same tiering, just keyed off UpdatedAt (the sweeper's flip time)
+// instead of LastSeenAt.
+func runtimeConnectivity(rt db.AgentRuntime, now time.Time) runtimeConnectivityTier {
+	if rt.LastSeenAt.Valid && now.Sub(rt.LastSeenAt.Time) >= agentHealthStaleThreshold {
+		if now.Sub(rt.LastSeenAt.Time) >= agentHealthReconnectAfter {
+			return runtimeConnectivityDead
+		}
+		return runtimeConnectivityStale
+	}
+	if rt.Status == "offline" {
+		if rt.UpdatedAt.Valid && now.Sub(rt.UpdatedAt.Time) >= agentHealthReconnectAfter {
+			return runtimeConnectivityDead
+		}
+		return runtimeConnectivityStale
+	}
+	return runtimeConnectivityOnline
+}
+
+// agentRuntimeDisplayStatus derives an honest status for the agent
+// list/detail surface (task #42③). It does not pass through the raw
+// agent_runtime.status column: that column can read "online" for up to
+// ~180s after the daemon actually went silent (sweeper lag), and
+// indefinitely if the daemon's transport stays up while the provider
+// subprocess it spawned has died — that second case has no persisted signal
+// anywhere yet (tracked separately, needs a daemon-side crash-detection
+// hook; see #42①②).
+func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, now time.Time) string {
+	switch runtimeConnectivity(rt, now) {
+	case runtimeConnectivityDead:
+		return agentDisplayStatusOffline
+	case runtimeConnectivityStale:
+		return agentDisplayStatusDisconnected
+	}
+	if agentStatus == "working" {
+		return agentDisplayStatusWorking
+	}
+	return agentDisplayStatusIdle
+}
+
 func agentHealthSummary(agent db.Agent, rt db.AgentRuntime, events []AgentHealthEvent, now time.Time) AgentHealthSummary {
 	runtimeID := uuidToString(rt.ID)
 	lastSeenAt := timestampToPtr(rt.LastSeenAt)
@@ -272,21 +346,17 @@ func agentHealthSummary(agent db.Agent, rt db.AgentRuntime, events []AgentHealth
 	// heartbeat means the runtime is effectively unreachable. This closes
 	// the gap between a daemon going silent and the sweeper marking the
 	// row offline (~150s + sweep interval). (#284)
-	if rt.LastSeenAt.Valid && now.Sub(rt.LastSeenAt.Time) >= agentHealthStaleThreshold {
+	switch runtimeConnectivity(rt, now) {
+	case runtimeConnectivityStale:
 		state = agentHealthStateSuspectedDisconnect
 		reason = "heartbeat_stale"
-		if now.Sub(rt.LastSeenAt.Time) >= agentHealthReconnectAfter {
-			state = agentHealthStateReconnecting
-			reason = "probe_timeout"
-		}
-	} else if rt.Status == "offline" {
-		state = agentHealthStateSuspectedDisconnect
-		reason = "heartbeat_stale"
-		if rt.UpdatedAt.Valid && now.Sub(rt.UpdatedAt.Time) >= agentHealthReconnectAfter {
-			state = agentHealthStateReconnecting
-			reason = "probe_timeout"
-		}
-	} else if len(events) > 0 && events[0].Type == agentHealthEventTransportRecover {
+	case runtimeConnectivityDead:
+		state = agentHealthStateReconnecting
+		reason = "probe_timeout"
+	case runtimeConnectivityOnline:
+	}
+
+	if state == agentHealthStateOnline && len(events) > 0 && events[0].Type == agentHealthEventTransportRecover {
 		if events[0].OccurredAt != "" {
 			if recoveredAt, err := time.Parse(time.RFC3339, events[0].OccurredAt); err == nil && now.Sub(recoveredAt) < agentHealthRecoveredSummaryWindow {
 				state = agentHealthStateRecovered

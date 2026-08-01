@@ -20,7 +20,12 @@ func seedOwnerLookupUser(t *testing.T, queries *db.Queries) string {
 	ctx := context.Background()
 	stamp := time.Now().UnixNano()
 	user, err := queries.CreateUser(ctx, db.CreateUserParams{
-		Name:  "owner-lookup",
+		// Name has its own UNIQUE constraint (user_name_unique) — must be
+		// stamped the same as Email, not left as a fixed literal. A fixed
+		// name collides with any leftover row from a previous run (or a
+		// concurrent one against the shared test DB), which is exactly
+		// what made this test fail deterministically until this fix.
+		Name:  pgtypeUniqueName(stamp),
 		Email: pgtypeUniqueEmail(stamp),
 	})
 	if err != nil {
@@ -40,6 +45,13 @@ func seedOwnerLookupUser(t *testing.T, queries *db.Queries) string {
 // elsewhere in the repo.
 func pgtypeUniqueEmail(stamp int64) string {
 	return time.Unix(0, stamp).UTC().Format("20060102T150405.000000000") + "@owner-lookup.test"
+}
+
+// pgtypeUniqueName mirrors pgtypeUniqueEmail for the user table's separate
+// Name UNIQUE constraint (user_name_unique) — Email alone being unique
+// does not protect Name from colliding with a leftover or concurrent row.
+func pgtypeUniqueName(stamp int64) string {
+	return "owner-lookup-" + time.Unix(0, stamp).UTC().Format("20060102T150405.000000000")
 }
 
 // TestOwnerLookupFor_NilQueries pins the contract that a middleware

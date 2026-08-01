@@ -5,6 +5,7 @@ import {
   buildRuntimeMachines,
   filterRuntimeMachines,
   headerRuntimeHealthBadge,
+  machineOsLabel,
   runtimeDisplayLabel,
   runtimeMachineCounts,
   splitRuntimeName,
@@ -92,6 +93,15 @@ describe("runtime machine grouping", () => {
       issues: 1,
     });
     expect(filterRuntimeMachines(machines, "", "issues")).toHaveLength(1);
+  });
+
+  it("machineOsLabel drops the CA version half of device_info", () => {
+    // Frank 2026-08-01: Basics → OS showed "ubuntu · codex-cli 0.146.0".
+    expect(machineOsLabel("ubuntu · codex-cli 0.146.0")).toBe("ubuntu");
+    expect(machineOsLabel("dev.local · 2.1.5 (Claude Code)")).toBe("dev.local");
+    expect(machineOsLabel("host.local · Linux (x86_64)")).toBe("Linux (x86_64)");
+    expect(machineOsLabel("daemon abc123")).toBeNull();
+    expect(machineOsLabel(null)).toBeNull();
   });
 
   it("does not surface agent CLI version branding as the machine subtitle", () => {

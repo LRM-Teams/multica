@@ -62,6 +62,7 @@ import {
   headerRuntimeHealthBadge,
   isMineMachine,
   machineHostname,
+  machineOsLabel,
   machinePrimaryRuntimeId,
   splitRuntimeName,
   type RuntimeMachine,
@@ -684,11 +685,9 @@ function MachineDetailView({
       })
     : "";
   const hostname = machineHostname(machine);
-  // Prefer real device_info; never fall back to "daemon …" subtitle filler.
-  const osLabel =
-    machine.deviceInfo && !/^daemon\b/i.test(machine.deviceInfo)
-      ? machine.deviceInfo
-      : null;
+  // Strip CA version halves from the composite device_info — OS must not
+  // read "ubuntu · codex-cli 0.146.0" (Frank 2026-08-01).
+  const osLabel = machineOsLabel(machine.deviceInfo);
 
   const scanWorkspaces = () => {
     if (!primaryRuntimeId) {

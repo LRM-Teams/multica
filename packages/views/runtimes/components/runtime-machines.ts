@@ -452,6 +452,29 @@ function isAgentVersionLike(part: string): boolean {
   return /(?:^|\s)v?\d+\.\d+\.\d+/.test(part);
 }
 
+const PRETTY_OS_ARCH =
+  /^(macOS|Linux|Windows|FreeBSD|OpenBSD|NetBSD)\s+\([^)]+\)$/i;
+
+/**
+ * Basics → OS row. `device_info` is a daemon composite
+ * (`hostname · <CA version>` or `hostname · linux-amd64`); never show the
+ * CA half under OS — same filter the machine subtitle already uses.
+ */
+export function machineOsLabel(deviceInfo: string | null): string | null {
+  if (!deviceInfo || /^daemon\b/i.test(deviceInfo)) return null;
+  const parts = deviceInfo
+    .split(" · ")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !isAgentVersionLike(part));
+  if (parts.length === 0) return null;
+
+  const osArch = parts.find((part) => PRETTY_OS_ARCH.test(part));
+  if (osArch) return osArch;
+
+  return parts.join(" · ");
+}
+
 function latestLastSeenAt(runtimes: AgentRuntime[]): string | null {
   let latest: string | null = null;
   for (const runtime of runtimes) {

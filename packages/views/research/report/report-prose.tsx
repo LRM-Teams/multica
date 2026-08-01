@@ -5,6 +5,7 @@ import type { ResearchReport, ResearchSource } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { Markdown } from "../../common/markdown";
 import { ReportCitationList } from "./report-citation-card";
+import { EMPTY_RESEARCH_SOURCES } from "./report-citation-resolve";
 
 const proseClass = cn(
   "report-prose max-w-none text-[15px] leading-[1.7] text-foreground",
@@ -25,7 +26,7 @@ const proseClass = cn(
 
 export function ReportProse({
   report,
-  sources = [],
+  sources = EMPTY_RESEARCH_SOURCES,
 }: {
   report: ResearchReport | null | undefined;
   /** Live session sources — preferred when resolving citation.source_id. */

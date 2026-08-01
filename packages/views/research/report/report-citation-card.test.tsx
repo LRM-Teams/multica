@@ -1,11 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchReportCitation, ResearchSource } from "@multica/core/types";
-import {
-  isCitationSourceDegraded,
-  ReportCitationCard,
-  ReportCitationList,
-} from "./report-citation-card";
+import { ReportCitationCard, ReportCitationList } from "./report-citation-card";
+import { isCitationSourceDegraded } from "./report-citation-resolve";
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({

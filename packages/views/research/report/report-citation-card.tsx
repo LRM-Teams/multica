@@ -9,12 +9,13 @@ import type {
 } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
+import {
+  type CitationCardSource,
+  EMPTY_REPORT_SOURCE_REFS,
+  isCitationSourceDegraded,
+  resolveCitationSource,
+} from "./report-citation-resolve";
 import { weightTier } from "./report-weight";
-
-export type CitationCardSource = Pick<
-  ResearchSource,
-  "id" | "url" | "title" | "credibility_weight" | "summary" | "excerpt" | "payload"
->;
 
 function hostOf(url: string): string {
   try {
@@ -22,57 +23,6 @@ function hostOf(url: string): string {
   } catch {
     return "";
   }
-}
-
-function isFetchFailedPayload(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object") return false;
-  const p = payload as Record<string, unknown>;
-  return p.fetch_failed === true || p.status === "fetch_failed";
-}
-
-/** True when the source row is missing or scrape/fetch failed. */
-export function isCitationSourceDegraded(
-  source: CitationCardSource | ResearchReportSourceRef | null | undefined,
-): boolean {
-  if (!source) return true;
-  const payload =
-    "payload" in source ? (source as CitationCardSource).payload : undefined;
-  if (isFetchFailedPayload(payload)) return true;
-  const title = (source.title ?? "").trim();
-  const url = (source.url ?? "").trim();
-  // Empty shell with no recoverable identity → same as fetch failure.
-  if (!title && !url) return true;
-  if (url) {
-    try {
-      // eslint-disable-next-line no-new
-      new URL(url);
-    } catch {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function resolveCitationSource(
-  citation: ResearchReportCitation,
-  liveSources: ResearchSource[],
-  structuredSources: ResearchReportSourceRef[] = [],
-): CitationCardSource | ResearchReportSourceRef | null {
-  const live = liveSources.find((s) => s.id === citation.source_id);
-  if (live) return live;
-  const snap = structuredSources.find((s) => s.source_id === citation.source_id);
-  if (snap) {
-    return {
-      id: snap.source_id,
-      url: snap.url,
-      title: snap.title,
-      credibility_weight: snap.credibility_weight,
-      summary: "",
-      excerpt: "",
-      payload: {},
-    };
-  }
-  return null;
 }
 
 function WeightChip({ weight }: { weight: number }) {
@@ -199,7 +149,7 @@ export function ReportCitationCard({
 export function ReportCitationList({
   citations,
   liveSources,
-  structuredSources = [],
+  structuredSources = EMPTY_REPORT_SOURCE_REFS,
 }: {
   citations: ResearchReportCitation[];
   liveSources: ResearchSource[];

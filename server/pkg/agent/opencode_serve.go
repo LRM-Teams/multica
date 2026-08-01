@@ -47,6 +47,10 @@ type opencodeServeBackend struct {
 	mu      sync.Mutex
 	server  *opencodeServeProcess
 	running bool
+	// forceKilled is set by ForceKill() (task #62); see cursorACPBackend's
+	// field of the same name for the full explanation. Plain bool guarded by
+	// b.mu, matching this backend's existing convention for `running`.
+	forceKilled bool
 }
 
 type opencodeServeProcess struct {
@@ -92,12 +96,24 @@ func (b *opencodeServeBackend) Close() {
 func (b *opencodeServeBackend) ForceKill() error {
 	b.mu.Lock()
 	p := b.server
+	b.forceKilled = true
 	b.mu.Unlock()
 	if p == nil {
 		return nil
 	}
 	p.client.close()
 	return p.cmd.Process.Kill()
+}
+
+// takeForceKilled reports and clears whether ForceKill() was the cause of
+// the turn currently failing, mirroring the atomic CompareAndSwap pattern
+// the other three backends use for the same purpose.
+func (b *opencodeServeBackend) takeForceKilled() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	was := b.forceKilled
+	b.forceKilled = false
+	return was
 }
 
 func (b *opencodeServeBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
@@ -186,6 +202,9 @@ func (b *opencodeServeBackend) executeTurn(ctx context.Context, prompt string, o
 	if err != nil {
 		tail := p.stderrBuf.Tail()
 		b.disposeServer(p)
+		if b.takeForceKilled() {
+			return Result{Status: "failed", Output: output.String(), Error: AgentForceKilledMarker + ": " + err.Error(), SessionID: sessionID}
+		}
 		status := "failed"
 		errMsg := err.Error()
 		if ctx.Err() == context.DeadlineExceeded || errors.Is(err, errOpenCodeServeTurnTimeout) {

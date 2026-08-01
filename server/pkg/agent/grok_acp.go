@@ -35,6 +35,9 @@ type grokACPBackend struct {
 	mu      sync.Mutex
 	process *grokACPProcess
 	running atomic.Bool
+	// forceKilled is set by ForceKill() (task #62); see cursorACPBackend's
+	// field of the same name for the full explanation.
+	forceKilled atomic.Bool
 }
 
 type grokACPProcess struct {
@@ -73,6 +76,7 @@ func (b *grokACPBackend) ForceKill() error {
 	if p == nil {
 		return nil
 	}
+	b.forceKilled.Store(true)
 	_ = p.stdin.Close()
 	return p.cmd.Process.Kill()
 }
@@ -150,6 +154,9 @@ func (b *grokACPBackend) executeTurn(ctx context.Context, prompt string, opts Ex
 		// A cancelled/failed request leaves the native turn state unknown. Do
 		// not reuse it; the persistent-pool lease will replace this backend.
 		b.disposeProcess(p)
+		if b.forceKilled.CompareAndSwap(true, false) {
+			return Result{Status: "failed", Error: AgentForceKilledMarker + ": " + err.Error()}
+		}
 		status := "failed"
 		if ctx.Err() == context.DeadlineExceeded {
 			status = "timeout"

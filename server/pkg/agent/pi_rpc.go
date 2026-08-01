@@ -140,9 +140,12 @@ func (b *piRPCBackend) sendControlCommand(ctx context.Context, p *piRPCProcess, 
 type piRPCBackend struct {
 	cfg Config
 
-	mu                        sync.Mutex
-	process                   *piRPCProcess
-	running                   atomic.Bool
+	mu      sync.Mutex
+	process *piRPCProcess
+	running atomic.Bool
+	// forceKilled is set by ForceKill() (task #62); see cursorACPBackend's
+	// field of the same name for the full explanation.
+	forceKilled               atomic.Bool
 	afterResultPublishForTest func()
 }
 
@@ -215,6 +218,7 @@ func (b *piRPCBackend) ForceKill() error {
 	if p == nil {
 		return nil
 	}
+	b.forceKilled.Store(true)
 	_ = p.stdin.Close()
 	if p.cmd.Process == nil {
 		return nil
@@ -471,7 +475,11 @@ func (b *piRPCBackend) readEvents(p *piRPCProcess, stdout io.Reader) {
 	turn := p.turn
 	p.stateMu.Unlock()
 	if turn != nil {
-		trySendPiRPCCompletion(turn.done, piRPCCompletion{err: "Pi RPC process exited before agent_end"})
+		exitErr := "Pi RPC process exited before agent_end"
+		if b.forceKilled.CompareAndSwap(true, false) {
+			exitErr = AgentForceKilledMarker + ": " + exitErr
+		}
+		trySendPiRPCCompletion(turn.done, piRPCCompletion{err: exitErr})
 	}
 }
 

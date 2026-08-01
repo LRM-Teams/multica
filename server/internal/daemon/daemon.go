@@ -3502,6 +3502,14 @@ func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessi
 	if strings.Contains(errMsg, agent.ProviderAuthRequiredMarker) {
 		reasonCode = agent.ProviderAuthRequiredMarker
 	}
+	// Task #62: a turn interrupted by ForceKill() must never fall into
+	// taskfailure.Classify's generic substring taxonomy (that classifier's
+	// 21 categories are governed by an external SQL source of truth for
+	// genuine agent-side failures, and this isn't one) or read as an
+	// unexplained crash — the user asked for this restart.
+	if strings.Contains(errMsg, agent.AgentForceKilledMarker) {
+		reasonCode = "restarted_by_user"
+	}
 	if err := d.client.FailAgentInboxEvent(ctx, *task.InboxEvent, errMsg, sessionID, workDir, failureReason, reasonCode); err != nil {
 		taskLog.Error("report failed inbox event failed", "error", err)
 	}

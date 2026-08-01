@@ -25,6 +25,17 @@ type Backend interface {
 // provider-auth failure rather than retrying or launching an interactive login.
 const ProviderAuthRequiredMarker = "provider_auth_required"
 
+// AgentForceKilledMarker prefixes the Result.Error a resident backend
+// produces when its in-flight turn was interrupted by ForceKill() (task
+// #62), not by a genuine crash. Daemon code matches this the same way it
+// matches ProviderAuthRequiredMarker (see reportTaskFailure) to set
+// failure_reason="restarted_by_user" instead of running it through the
+// generic taskfailure.Classify substring taxonomy — that taxonomy's 21
+// categories are governed by an external SQL source of truth (MUL-1949) for
+// genuine agent-side failures, and a deliberate user-initiated restart isn't
+// one of those, so it must never fall into that classifier.
+const AgentForceKilledMarker = "agent_force_killed_by_user"
+
 // AuthPreflight is an optional contract for backends that can detect missing
 // non-interactive credentials before spawning their provider CLI. Implementers
 // must fail closed: return an error instead of entering the provider's

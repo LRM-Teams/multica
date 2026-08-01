@@ -407,7 +407,9 @@ func TestCancelTaskByUser_ChatTaskWithTranscript_PersistsAssistantSnapshot(t *te
 	`, sessionID).Scan(&role, &content, &messageTaskID); err != nil {
 		t.Fatalf("read cancelled assistant chat message: %v", err)
 	}
-	if role != "assistant" || content != "Stopped." || messageTaskID != taskID {
+	// LRM-820: cancel keeps already-streamed task_message text instead of a
+	// generic "Stopped." marker so research (and chat) stop does not erase output.
+	if role != "assistant" || content != "partial answer" || messageTaskID != taskID {
 		t.Fatalf("assistant snapshot mismatch: role=%q content=%q task_id=%q", role, content, messageTaskID)
 	}
 }

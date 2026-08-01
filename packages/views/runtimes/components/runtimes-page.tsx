@@ -74,6 +74,7 @@ import {
   useHealthLabel,
 } from "./shared";
 import { ProviderLogo } from "./provider-logo";
+import { MachineCodeAgentsSection } from "./machine-code-agents-section";
 import { formatLastSeen } from "../utils";
 import { useT } from "../../i18n/use-t";
 
@@ -822,6 +823,8 @@ function MachineDetailView({
               )}
             </div>
           </section>
+
+          <MachineCodeAgentsSection machine={machine} />
 
           <section>
             <SectionTitle>{t(($) => $.machine.agents_section)}</SectionTitle>

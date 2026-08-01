@@ -95,11 +95,15 @@ func ListModels(ctx context.Context, providerType, executablePath string) ([]Mod
 	switch providerType {
 	case "claude":
 		models := claudeStaticModels()
-		annotateClaudeThinking(ctx, models, executablePath)
+		if Capabilities(providerType).ThinkingDiscovery {
+			annotateClaudeThinking(ctx, models, executablePath)
+		}
 		return models, nil
 	case "codex":
 		models := codexStaticModels()
-		annotateCodexThinking(ctx, models, executablePath)
+		if Capabilities(providerType).ThinkingDiscovery {
+			annotateCodexThinking(ctx, models, executablePath)
+		}
 		return models, nil
 	case "gemini":
 		return geminiStaticModels(), nil
@@ -152,7 +156,9 @@ func ListModels(ctx context.Context, providerType, executablePath string) ([]Mod
 			if err != nil {
 				return nil, err
 			}
-			annotateCodebuddyThinking(ctx, models, executablePath)
+			if Capabilities(providerType).ThinkingDiscovery {
+				annotateCodebuddyThinking(ctx, models, executablePath)
+			}
 			return models, nil
 		})
 	default:
@@ -160,40 +166,19 @@ func ListModels(ctx context.Context, providerType, executablePath string) ([]Mod
 	}
 }
 
-// ModelSelectionSupported reports whether setting `agent.model` has
-// any effect for the given provider. Every built-in provider now honours
-// `opts.Model` end-to-end — Hermes routes it through the ACP
-// `session/set_model` RPC before each prompt; Claude / Codex / Cursor /
-// Gemini / Copilot / Kimi / Kiro / OpenCode / OpenClaw / Pi / Antigravity
-// pass it via flag or session config (Antigravity gained `--model` in agy
-// 1.0.6 — MUL-3125).
-//
-// The hook is retained — rather than inlining `true` at the call sites — so
-// a future model-less runtime can opt out in one place, which makes the UI
-// render a disabled "Managed by runtime" picker instead of an empty
-// dropdown plus a silently-ignored manual-entry field.
+// ModelSelectionSupported reports whether setting `agent.model` has any
+// effect for the given provider. Sourced from providerCapabilities
+// (task #47) — do not re-list providers here.
 func ModelSelectionSupported(providerType string) bool {
-	return true
+	return Capabilities(providerType).ModelSelectionSupported
 }
 
 // CustomModelIDSupported reports whether the provider accepts an arbitrary
-// model id typed by the user. Other runtimes are constrained to the
-// discovered dropdown list — showing a free-form input for them produces a
-// silent failure (backend stores any string; the CLI just won't run). Keep
-// this the single source of truth; the models API surfaces it as
-// custom_model_id_supported so the UI never hardcodes a provider whitelist.
-//
-// Source of the allow-list: Raft runtime handbook ("Custom model ID" for
-// Claude Code, Codex, Cursor, Copilot, Pi). Not independently verified
-// against our provider adapters yet — fold into daemon #47 when provider
-// capabilities are consolidated.
+// model id typed by the user. Sourced from providerCapabilities (task #47);
+// the models API surfaces it as custom_model_id_supported so the UI never
+// hardcodes a provider whitelist.
 func CustomModelIDSupported(providerType string) bool {
-	switch providerType {
-	case "claude", "codex", "cursor", "copilot", "pi":
-		return true
-	default:
-		return false
-	}
+	return Capabilities(providerType).CustomModelIDSupported
 }
 
 // cachedDiscovery invokes fn and caches the result for modelCacheTTL.

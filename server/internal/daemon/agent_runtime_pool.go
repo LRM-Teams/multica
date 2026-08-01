@@ -159,22 +159,12 @@ func cloneStringMap(source map[string]string) map[string]string {
 	return cloned
 }
 
-// isCanonicalResidentProvider is the single source of truth for which
-// providers use the shared agent×runtime canonical resident pool instead of
-// a one-shot per-turn backend. Every other canonical-path gate (tryCanonicalChatBackend's
-// entry switch, usesCanonicalResidentChatRuntime's dispatch) must consult this
-// instead of re-listing providers — #1623 added "opencode" here and to
-// usesCanonicalResidentChatRuntime's dispatch but not to tryCanonicalChatBackend's
-// separate hardcoded switch, so opencode full chat routed into the canonical
-// path and then failed closed as an "unrecognized provider" once it got there.
+// isCanonicalResidentProvider reports whether the provider uses the shared
+// agent×runtime canonical resident pool. Sourced from
+// agent.Capabilities (task #47) — do not re-list providers here.
 // See TestCanonicalResidentProviderListsStayInSync.
 func isCanonicalResidentProvider(provider string) bool {
-	switch provider {
-	case "pi", "grok", "cursor", "opencode":
-		return true
-	default:
-		return false
-	}
+	return agent.Capabilities(provider).CanonicalResident
 }
 
 func canonicalRuntimeModeFor(provider, executionProfile string) (canonicalRuntimeMode, error) {

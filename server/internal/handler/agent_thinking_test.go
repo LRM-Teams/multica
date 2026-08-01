@@ -264,7 +264,7 @@ func TestUpdateAgent_RuntimeSwitch_ReconcilesInvalidThinkingLevel(t *testing.T) 
 		if _, err := testPool.Exec(ctx, `UPDATE agent SET model = 'gpt-5' WHERE id = $1`, agentID); err != nil {
 			t.Fatalf("set agent model: %v", err)
 		}
-		catalog, err := testHandler.ModelListStore.Create(ctx, codexRuntimeID)
+		catalog, err := testHandler.ModelListStore.Create(ctx, codexRuntimeID, false)
 		if err != nil {
 			t.Fatalf("create model catalog: %v", err)
 		}

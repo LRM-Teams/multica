@@ -1113,6 +1113,12 @@ export interface RuntimeModelListRequest {
   status: RuntimeModelListStatus;
   models?: RuntimeModel[];
   supported: boolean;
+  /**
+   * Backend-owned capability (agent.CustomModelIDSupported): whether this
+   * runtime accepts an arbitrary typed model id. Older servers omit it —
+   * treat missing as false so the free-form input stays hidden.
+   */
+  custom_model_id_supported?: boolean;
   error?: string;
   created_at: string;
   updated_at: string;
@@ -1120,10 +1126,12 @@ export interface RuntimeModelListRequest {
 
 // Result shape returned by resolveRuntimeModels — includes the
 // "supported" bit so the UI can distinguish "no models discovered"
-// from "provider does not honour per-agent model selection".
+// from "provider does not honour per-agent model selection", plus
+// whether a free-form Custom model ID input is allowed.
 export interface RuntimeModelsResult {
   models: RuntimeModel[];
   supported: boolean;
+  customModelIdSupported: boolean;
 }
 
 export type RuntimeLocalSkillStatus =

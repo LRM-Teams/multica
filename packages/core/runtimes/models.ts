@@ -34,7 +34,12 @@ export async function resolveRuntimeModels(
   if (current.status === "failed" || current.status === "timeout") {
     throw new Error(current.error || "model discovery failed");
   }
-  return { models: current.models ?? [], supported: current.supported };
+  return {
+    models: current.models ?? [],
+    supported: current.supported,
+    // Missing/undefined from older servers ⇒ hide the free-form input.
+    customModelIdSupported: current.custom_model_id_supported === true,
+  };
 }
 
 export function runtimeModelsOptions(runtimeId: string | null | undefined) {

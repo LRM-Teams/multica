@@ -2,13 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Plus } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { runtimeModelsOptions } from "@multica/core/runtimes";
 import { Input } from "@multica/ui/components/ui/input";
 import {
   PickerItem,
   PropertyPicker,
 } from "../../../issues/components/pickers";
+import { CustomModelIdRow } from "../custom-model-id-row";
 import { CHIP_CLASS } from "./chip";
 import { useT } from "../../../i18n";
 
@@ -47,6 +48,9 @@ export function ModelPicker({
     runtimeModelsOptions(runtimeOnline ? runtimeId : null),
   );
   const supported = modelsQuery.data?.supported ?? true;
+  // Backend-owned capability — never infer from a frontend provider list.
+  const customModelIdSupported =
+    modelsQuery.data?.customModelIdSupported === true;
   // Memoise the model list so every downstream useMemo gets a stable
   // reference; `?? []` would mint a fresh array on every render and
   // invalidate filters needlessly.
@@ -63,12 +67,6 @@ export function ModelPicker({
         m.id.toLowerCase().includes(s) || m.label.toLowerCase().includes(s),
     );
   }, [models, search]);
-
-  const trimmedSearch = search.trim();
-  const exactMatch = models.some(
-    (m) => m.id === trimmedSearch || m.label === trimmedSearch,
-  );
-  const canCreate = trimmedSearch.length > 0 && !exactMatch;
 
   const triggerLabel = value || t(($) => $.pickers.model_default);
   const triggerTitle = t(($) => $.pickers.model_tooltip, { value: triggerLabel });
@@ -165,30 +163,23 @@ export function ModelPicker({
           </PickerItem>
         ))}
 
-      {!modelsQuery.isLoading && filtered.length === 0 && !canCreate && (
+      {!modelsQuery.isLoading && filtered.length === 0 && (
         <p className="px-3 py-3 text-center text-xs text-muted-foreground">
-          {t(($) => $.pickers.model_empty)}
+          {customModelIdSupported
+            ? t(($) => $.pickers.model_empty_custom_hint)
+            : t(($) => $.pickers.model_empty)}
         </p>
       )}
 
-      {canCreate && (
-        <PickerItem
-          selected={false}
-          onClick={() => void select(trimmedSearch)}
-          tooltip={t(($) => $.pickers.model_custom_tooltip, { value: trimmedSearch })}
-        >
-          <Plus className="h-3.5 w-3.5 shrink-0 text-primary" />
-          <span className="truncate text-primary">
-            {t(($) => $.pickers.model_custom_use, { value: trimmedSearch })}
-          </span>
-        </PickerItem>
+      {!modelsQuery.isLoading && customModelIdSupported && (
+        <CustomModelIdRow dense onSubmit={(id) => void select(id)} />
       )}
 
       {value && (
         <button
           type="button"
           onClick={() => void select("")}
-          className="mt-1 flex w-full items-center border-t px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50"
+          className="flex w-full items-center border-t px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50"
           title={t(($) => $.pickers.model_clear_title)}
         >
           {t(($) => $.pickers.model_clear)}

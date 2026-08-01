@@ -49,15 +49,16 @@ func NewRedisModelListStore(rdb *redis.Client) *RedisModelListStore {
 	return &RedisModelListStore{rdb: rdb}
 }
 
-func (s *RedisModelListStore) Create(ctx context.Context, runtimeID string) (*ModelListRequest, error) {
+func (s *RedisModelListStore) Create(ctx context.Context, runtimeID string, customModelIDSupported bool) (*ModelListRequest, error) {
 	now := time.Now()
 	req := &ModelListRequest{
-		ID:        randomID(),
-		RuntimeID: runtimeID,
-		Status:    ModelListPending,
-		Supported: true,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                     randomID(),
+		RuntimeID:              runtimeID,
+		Status:                 ModelListPending,
+		Supported:              true,
+		CustomModelIDSupported: customModelIDSupported,
+		CreatedAt:              now,
+		UpdatedAt:              now,
 	}
 	data, err := s.marshalRequest(req)
 	if err != nil {

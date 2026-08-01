@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Cpu, Loader2, Plus, Check, Info } from "lucide-react";
+import { ChevronDown, Cpu, Loader2, Check, Info } from "lucide-react";
 import { runtimeModelsOptions } from "@multica/core/runtimes";
 import type { RuntimeModel } from "@multica/core/types";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@multica/ui/components/ui/popover";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
+import { CustomModelIdRow } from "./custom-model-id-row";
 import { useT } from "../../i18n";
 
 // ModelDropdown renders a searchable, creatable model picker for an agent.
@@ -53,6 +54,9 @@ export function ModelDropdown({
   );
 
   const supported = modelsQuery.data?.supported ?? true;
+  // Backend-owned capability — never infer from a frontend provider list.
+  const customModelIdSupported =
+    modelsQuery.data?.customModelIdSupported === true;
   // Stable reference for the model list — `?? []` would mint a fresh
   // array each render and force every downstream useMemo to invalidate.
   const models = useMemo(
@@ -94,12 +98,6 @@ export function ModelDropdown({
     }
     return out;
   }, [grouped, search]);
-
-  const trimmedSearch = search.trim();
-  const exactMatch = models.some(
-    (m) => m.id === trimmedSearch || m.label === trimmedSearch,
-  );
-  const canCreate = trimmedSearch.length > 0 && !exactMatch;
 
   const select = (id: string) => {
     onChange(id);
@@ -221,32 +219,23 @@ export function ModelDropdown({
                 </div>
               ))}
 
-            {!modelsQuery.isLoading &&
-              Object.keys(filtered).length === 0 &&
-              !canCreate && (
-                <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                  {t(($) => $.pickers.model_empty_with_dot)}
-                </div>
-              )}
+            {!modelsQuery.isLoading && Object.keys(filtered).length === 0 && (
+              <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                {customModelIdSupported
+                  ? t(($) => $.pickers.model_empty_custom_hint)
+                  : t(($) => $.pickers.model_empty_with_dot)}
+              </div>
+            )}
 
-            {canCreate && (
-              <button
-                type="button"
-                onClick={() => select(trimmedSearch)}
-                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-primary transition-colors hover:bg-accent/50"
-              >
-                <Plus className="h-4 w-4 shrink-0" />
-                <span className="truncate">
-                  {t(($) => $.pickers.model_custom_use, { value: trimmedSearch })}
-                </span>
-              </button>
+            {!modelsQuery.isLoading && customModelIdSupported && (
+              <CustomModelIdRow onSubmit={select} />
             )}
 
             {value && !required && (
               <button
                 type="button"
                 onClick={() => select("")}
-                className="mt-1 flex w-full items-center gap-2 border-t border-border px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50"
+                className="flex w-full items-center gap-2 border-t border-border px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50"
               >
                 {t(($) => $.model_dropdown.clear_full)}
               </button>

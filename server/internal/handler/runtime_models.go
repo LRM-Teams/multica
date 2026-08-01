@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 // ---------------------------------------------------------------------------
@@ -47,19 +48,25 @@ const (
 // disable its dropdown rather than silently accepting a value the
 // backend will drop.
 //
+// CustomModelIDSupported is true when the provider accepts an arbitrary
+// typed model id (Raft: claude/codex/cursor/copilot/pi). Set from
+// agent.CustomModelIDSupported at enqueue time so the UI can hide the
+// free-form input without a frontend provider whitelist.
+//
 // RunStartedAt is set when PopPending claims the request. It is
 // `json:"-"` because it's a server-side bookkeeping field — the UI only
 // needs Status / UpdatedAt to drive the polling loop.
 type ModelListRequest struct {
-	ID           string          `json:"id"`
-	RuntimeID    string          `json:"runtime_id"`
-	Status       ModelListStatus `json:"status"`
-	Models       []ModelEntry    `json:"models,omitempty"`
-	Supported    bool            `json:"supported"`
-	Error        string          `json:"error,omitempty"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
-	RunStartedAt *time.Time      `json:"-"`
+	ID                      string          `json:"id"`
+	RuntimeID               string          `json:"runtime_id"`
+	Status                  ModelListStatus `json:"status"`
+	Models                  []ModelEntry    `json:"models,omitempty"`
+	Supported               bool            `json:"supported"`
+	CustomModelIDSupported  bool            `json:"custom_model_id_supported"`
+	Error                   string          `json:"error,omitempty"`
+	CreatedAt               time.Time       `json:"created_at"`
+	UpdatedAt               time.Time       `json:"updated_at"`
+	RunStartedAt            *time.Time      `json:"-"`
 }
 
 // ModelEntry mirrors agent.Model for the wire. `Default` tags the
@@ -125,7 +132,7 @@ const (
 // implementation can honour the heartbeat-side timeout that gates a
 // slow shared store from stalling the rest of the heartbeat.
 type ModelListStore interface {
-	Create(ctx context.Context, runtimeID string) (*ModelListRequest, error)
+	Create(ctx context.Context, runtimeID string, customModelIDSupported bool) (*ModelListRequest, error)
 	Get(ctx context.Context, id string) (*ModelListRequest, error)
 	// HasPending is a cheap read-only probe used by the heartbeat hot path
 	// to gate the side-effecting PopPending. A spurious "true" is fine —
@@ -175,7 +182,7 @@ func NewInMemoryModelListStore() *InMemoryModelListStore {
 	return &InMemoryModelListStore{requests: make(map[string]*ModelListRequest)}
 }
 
-func (s *InMemoryModelListStore) Create(_ context.Context, runtimeID string) (*ModelListRequest, error) {
+func (s *InMemoryModelListStore) Create(_ context.Context, runtimeID string, customModelIDSupported bool) (*ModelListRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -193,9 +200,10 @@ func (s *InMemoryModelListStore) Create(_ context.Context, runtimeID string) (*M
 		Status:    ModelListPending,
 		// Default to true; the daemon overrides this in the report
 		// for providers that don't support per-agent model selection.
-		Supported: true,
-		CreatedAt: now,
-		UpdatedAt: now,
+		Supported:              true,
+		CustomModelIDSupported: customModelIDSupported,
+		CreatedAt:              now,
+		UpdatedAt:              now,
 	}
 	s.requests[req.ID] = req
 	return req, nil
@@ -310,7 +318,11 @@ func (h *Handler) InitiateListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, err := h.ModelListStore.Create(r.Context(), uuidToString(rt.ID))
+	req, err := h.ModelListStore.Create(
+		r.Context(),
+		uuidToString(rt.ID),
+		agent.CustomModelIDSupported(rt.Provider),
+	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to enqueue model list request: "+err.Error())
 		return

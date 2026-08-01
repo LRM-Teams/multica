@@ -50,9 +50,7 @@ export function CustomModelIdRow({
   if (editing) {
     return (
       <div
-        className={`flex items-center gap-1.5 border-t border-border ${
-          dense ? "px-2 py-1.5" : "px-2 py-1.5"
-        }`}
+        className="flex items-center gap-1.5 border-t border-border px-2 py-1.5"
       >
         <Input
           ref={inputRef}

@@ -6,10 +6,12 @@ import { useWorkspaceId } from "@multica/core";
 import { agentRunCounts30dOptions } from "@multica/core/agents";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
-import { ActorIdentityRow } from "../common/actor-identity-row";
+import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { ActorIdentityRow } from "../common/actor-identity-row";
 import { ActorAvatar } from "../common/actor-avatar";
+import { useOpenAgentPanel } from "../common/agent-panel-context";
 import { AppLink } from "../navigation";
 import { useT } from "../i18n";
 
@@ -92,7 +94,9 @@ export function MemberProfileCard({ userId }: MemberProfileCardProps) {
       </div>
 
       {/* Owned agents */}
-      {ownedAgents.length > 0 && <OwnedAgentsSection agents={ownedAgents} />}
+      {ownedAgents.length > 0 && (
+        <OwnedAgentsSection userId={userId} agents={ownedAgents} />
+      )}
     </div>
   );
 }
@@ -110,46 +114,85 @@ function RoleBadge({ role }: { role: MemberRole }) {
   );
 }
 
-function OwnedAgentsSection({ agents }: { agents: Agent[] }) {
+function OwnedAgentsSection({
+  userId,
+  agents,
+}: {
+  userId: string;
+  agents: Agent[];
+}) {
   const { t } = useT("members");
-  // Full list (LRM-619 lock A) — each row links to the agent detail page.
-  // Presence via ActorAvatar showStatusDot; enableHoverCard omitted to avoid
-  // popover-in-popover. AppLink works on web + desktop without per-app branching.
+  // LRM-877 — in-session / hover: push Agent onto Dock Stack (panel), not
+  // hard-link to /agents/:id management page. Deep links stay for new-tab.
   const p = useWorkspacePaths();
+  const openAgentFromContext = useOpenAgentPanel();
+  const openAgentFromStore = useAgentPanelStore((s) => s.open);
+  const openAgent = openAgentFromContext ?? openAgentFromStore;
 
   return (
     <div className="flex flex-col gap-1.5 text-xs">
       <span className="text-muted-foreground">{t(($) => $.card.agents_section, { count: agents.length })}</span>
       <div className="flex flex-col gap-0.5">
-        {agents.map((a) => (
-          <AppLink
-            key={a.id}
-            href={p.agentDetail(a.id)}
-            className="group -mx-1 flex cursor-pointer items-start gap-2 rounded-md px-1 py-1 transition-colors hover:bg-accent"
-          >
-            <ActorAvatar
-              actorType="agent"
-              actorId={a.id}
-              size={20}
-              showStatusDot
-              className="mt-0.5 shrink-0 rounded-md"
-            />
-            <div className="min-w-0 flex-1">
-              <ActorIdentityRow identity={a} primaryClassName="truncate font-medium" />
-              {a.description && (
-                <div className="truncate text-muted-foreground">
-                  {a.description}
-                </div>
-              )}
-            </div>
-            <span
-              aria-hidden
-              className="mt-0.5 shrink-0 font-normal text-brand opacity-0 transition-opacity group-hover:opacity-100"
+        {agents.map((a) => {
+          const body = (
+            <>
+              <ActorAvatar
+                actorType="agent"
+                actorId={a.id}
+                size={20}
+                showStatusDot
+                profileLink={false}
+                className="mt-0.5 shrink-0 rounded-md"
+              />
+              <div className="min-w-0 flex-1">
+                <ActorIdentityRow identity={a} primaryClassName="truncate font-medium" />
+                {a.description && (
+                  <div className="truncate text-muted-foreground">
+                    {a.description}
+                  </div>
+                )}
+              </div>
+              <span
+                aria-hidden
+                className="mt-0.5 shrink-0 font-normal text-brand opacity-0 transition-opacity group-hover:opacity-100"
+              >
+                {t(($) => $.card.detail_link)}
+              </span>
+            </>
+          );
+          if (openAgent) {
+            return (
+              <button
+                key={a.id}
+                type="button"
+                data-testid="member-card-owned-agent"
+                onClick={() =>
+                  openAgent(
+                    a.id,
+                    {
+                      name: a.name,
+                      display_name: a.display_name,
+                      avatar_url: a.avatar_url,
+                    },
+                    { returnToMemberId: userId },
+                  )
+                }
+                className="group -mx-1 flex w-full cursor-pointer items-start gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-accent"
+              >
+                {body}
+              </button>
+            );
+          }
+          return (
+            <AppLink
+              key={a.id}
+              href={p.agentDetail(a.id)}
+              className="group -mx-1 flex cursor-pointer items-start gap-2 rounded-md px-1 py-1 transition-colors hover:bg-accent"
             >
-              {t(($) => $.card.detail_link)}
-            </span>
-          </AppLink>
-        ))}
+              {body}
+            </AppLink>
+          );
+        })}
       </div>
     </div>
   );

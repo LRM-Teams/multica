@@ -27,7 +27,10 @@ import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
-import { computeDuplicatedHandleLabels } from "@multica/core/identity";
+import {
+  computeDuplicatedHandleLabels,
+  resolveActorDisplayName,
+} from "@multica/core/identity";
 import { useActorName } from "@multica/core/workspace/hooks";
 import type {
   AgentPanelIdentitySnapshot,
@@ -472,6 +475,7 @@ function DmChannelConversation({
   deepLinkMessageId,
 }: DmConversationProps) {
   const { t } = useT("channels");
+  const { t: tAgents } = useT("agents");
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   const isMobile = useIsMobile();
@@ -494,28 +498,59 @@ function DmChannelConversation({
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
   const appliedDeepLinkMessageRef = useRef<string | null>(null);
   const appliedThreadDeepLinkRef = useRef<string | null>(null);
-  // #349 agent side panel — same slot as the thread panel (mutually
-  // exclusive), matching channels-page.tsx's inline-panel pattern per
-  // Frank's direction (replace the slot, don't route away).
-  const [selectedAgentPanelId, setSelectedAgentPanelId] = useState<string | null>(null);
-  const [selectedAgentPanelSnapshot, setSelectedAgentPanelSnapshot] =
-    useState<AgentPanelIdentitySnapshot | null>(null);
-  const [selectedMemberPanelId, setSelectedMemberPanelId] = useState<string | null>(null);
+  // #349 / LRM-877 — Dock Stack in one state object (react-doctor prefer-useReducer).
+  // Agent + optional returnToMember share the thread-panel slot with member Profile.
+  type DmDockStack = {
+    agentId: string | null;
+    agentSnapshot: AgentPanelIdentitySnapshot | null;
+    returnToMemberId: string | null;
+    memberId: string | null;
+  };
+  const [dock, setDock] = useState<DmDockStack>({
+    agentId: null,
+    agentSnapshot: null,
+    returnToMemberId: null,
+    memberId: null,
+  });
+  const {
+    agentId: selectedAgentPanelId,
+    agentSnapshot: selectedAgentPanelSnapshot,
+    returnToMemberId: selectedAgentReturnToMemberId,
+    memberId: selectedMemberPanelId,
+  } = dock;
   // LRM-682 — DM main-area view switch: 聊天 | 文件 (no Issues — DMs have no
   // issue context). DmConversation remounts per DM (key={source:id} at the
   // call site), so switching conversations lands back on chat for free.
   const [dmView, setDmView] = useState<"chat" | "files">("chat");
-  const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
-    dispatch({ type: "closeThread" });
-    setSelectedMemberPanelId(null);
-    setSelectedAgentPanelId(agentId);
-    setSelectedAgentPanelSnapshot(snapshot ?? null);
-  }, []);
+  const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>(
+    (agentId, snapshot, options) => {
+      dispatch({ type: "closeThread" });
+      setDock((prev) => ({
+        agentId,
+        agentSnapshot: snapshot ?? null,
+        returnToMemberId:
+          options?.returnToMemberId ?? prev.memberId ?? prev.returnToMemberId,
+        memberId: null,
+      }));
+    },
+    [],
+  );
   const handleOpenMemberPanel = useCallback((userId: string) => {
     dispatch({ type: "closeThread" });
-    setSelectedAgentPanelId(null);
-    setSelectedAgentPanelSnapshot(null);
-    setSelectedMemberPanelId(userId);
+    setDock({
+      agentId: null,
+      agentSnapshot: null,
+      returnToMemberId: null,
+      memberId: userId,
+    });
+  }, []);
+  const handlePopAgentToMember = useCallback(() => {
+    setDock((prev) => ({
+      agentId: null,
+      agentSnapshot: null,
+      returnToMemberId: null,
+      memberId: prev.returnToMemberId,
+    }));
   }, []);
   const { data: dmMembers = [] } = useQuery({
     ...memberListOptions(wsId),
@@ -1159,8 +1194,12 @@ function DmChannelConversation({
 
   const handleOpenThread = (message: ChannelMessage) => {
     focusThreadComposerOnOpenRef.current = true;
-    setSelectedAgentPanelId(null);
-    setSelectedMemberPanelId(null);
+    setDock({
+      agentId: null,
+      agentSnapshot: null,
+      returnToMemberId: null,
+      memberId: null,
+    });
     dispatch({ type: "openThread", message });
   };
 
@@ -1648,6 +1687,13 @@ function DmChannelConversation({
 
   // #349: the agent side panel shares the thread-panel slot (opening one
   // closes the other — see handleOpenThread / handleOpenAgentPanel).
+  // LRM-877: Agent may sit on a Dock Stack over a human Profile (returnTo).
+  const agentPanelBackLabel = selectedAgentReturnToMemberId
+    ? resolveActorDisplayName(
+        dmMembers.find((m) => m.user_id === selectedAgentReturnToMemberId) ?? null,
+        selectedAgentReturnToMemberId,
+      )
+    : undefined;
   const agentPanel =
     selectedAgentPanelId ? (
       <ResolvedAgentSidePanel
@@ -1656,16 +1702,34 @@ function DmChannelConversation({
         currentUserId={currentUserId}
         members={dmMembers}
         onClose={() => {
-          setSelectedAgentPanelId(null);
-          setSelectedAgentPanelSnapshot(null);
+          setDock({
+            agentId: null,
+            agentSnapshot: null,
+            returnToMemberId: null,
+            memberId: null,
+          });
         }}
+        variant={isMobile ? "page" : "panel"}
+        onBack={
+          selectedAgentReturnToMemberId ? handlePopAgentToMember : undefined
+        }
+        backLabel={agentPanelBackLabel}
       />
     ) : null;
   const memberPanel =
     selectedMemberPanelId ? (
       <MemberSidePanel
         userId={selectedMemberPanelId}
-        onClose={() => setSelectedMemberPanelId(null)}
+        onClose={() =>
+          setDock((prev) => ({
+            ...prev,
+            memberId: null,
+          }))
+        }
+        variant={isMobile ? "page" : "panel"}
+        doneLabel={
+          isMobile ? tAgents(($) => $.side_panel.back_to_messages) : undefined
+        }
       />
     ) : null;
   const detailPanel = threadPanel ?? agentPanel ?? memberPanel;

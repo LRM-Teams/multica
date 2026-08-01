@@ -95,8 +95,17 @@ vi.mock("@multica/core/agents/stores", () => ({
 
 vi.mock("@multica/core/workspace", () => ({
   useMemberPanelStore: (
-    selector: (s: { open: (id: string) => void; close: () => void }) => unknown,
-  ) => selector({ open: openMemberFromStoreMock, close: closePanelMock }),
+    selector: (s: {
+      open: (id: string) => void;
+      close: () => void;
+      selectedUserId: string | null;
+    }) => unknown,
+  ) =>
+    selector({
+      open: openMemberFromStoreMock,
+      close: closePanelMock,
+      selectedUserId: null,
+    }),
 }));
 
 vi.mock("./agent-panel-context", () => ({
@@ -367,7 +376,12 @@ describe("ActorAvatar agent panel click (#349 app-wide)", () => {
   it("plain-clicking an agent avatar opens the panel via the global store when no context is present", () => {
     render(<ActorAvatar actorType="agent" actorId="agent-1" />);
     fireEvent.click(screen.getByRole("button"));
-    expect(openFromStoreMock).toHaveBeenCalledWith("agent-1");
+    // LRM-877 Dock Stack: open(agentId, snapshot?, { returnToMemberId? })
+    expect(openFromStoreMock).toHaveBeenCalledWith(
+      "agent-1",
+      undefined,
+      undefined,
+    );
     expect(openInNewTabMock).not.toHaveBeenCalled();
   });
 
@@ -375,7 +389,11 @@ describe("ActorAvatar agent panel click (#349 app-wide)", () => {
     contextAvailable = true;
     render(<ActorAvatar actorType="agent" actorId="agent-1" />);
     fireEvent.click(screen.getByRole("button"));
-    expect(openFromContextMock).toHaveBeenCalledWith("agent-1");
+    expect(openFromContextMock).toHaveBeenCalledWith(
+      "agent-1",
+      undefined,
+      undefined,
+    );
     expect(openFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -419,7 +437,11 @@ describe("ActorAvatar agent panel click (#349 app-wide)", () => {
       (el) => el.getAttribute("data-testid") !== "row-button",
     )!;
     fireEvent.click(avatarTrigger);
-    expect(openFromStoreMock).toHaveBeenCalledWith("agent-1");
+    expect(openFromStoreMock).toHaveBeenCalledWith(
+      "agent-1",
+      undefined,
+      undefined,
+    );
     // The avatar consumed the event — the row's own action must not fire.
     expect(rowClick).not.toHaveBeenCalled();
   });

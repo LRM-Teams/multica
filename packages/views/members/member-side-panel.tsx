@@ -54,6 +54,8 @@ interface MemberSidePanelProps {
   onClose: () => void;
   onMessage?: (userId: string) => void;
   variant?: "panel" | "page";
+  /** LRM-877 — conversation Sheet trailing control (「回消息」). */
+  doneLabel?: string;
 }
 
 /**
@@ -66,6 +68,7 @@ export function MemberSidePanel({
   onClose,
   onMessage,
   variant = "panel",
+  doneLabel,
 }: MemberSidePanelProps) {
   const { t } = useT("members");
   const { t: tChannels } = useT("channels");
@@ -120,6 +123,7 @@ export function MemberSidePanel({
       onClose={onClose}
       onMessage={onMessage}
       variant={variant}
+      doneLabel={doneLabel}
       closeAriaLabel={closeAriaLabel}
     />
   );
@@ -160,6 +164,7 @@ function MemberSidePanelReady({
   onClose,
   onMessage,
   variant,
+  doneLabel,
   closeAriaLabel,
 }: {
   userId: string;
@@ -169,6 +174,7 @@ function MemberSidePanelReady({
   onClose: () => void;
   onMessage?: (userId: string) => void;
   variant: "panel" | "page";
+  doneLabel?: string;
   closeAriaLabel: string;
 }) {
   const { t } = useT("members");
@@ -345,6 +351,7 @@ function MemberSidePanelReady({
       variant={variant}
       onClose={onClose}
       closeAriaLabel={closeAriaLabel}
+      doneLabel={doneLabel}
       leading={identityLeading}
       actions={messageActions}
     >
@@ -528,11 +535,15 @@ function MemberSidePanelReady({
                   onOpenPanel={
                     openAgentFromContext
                       ? () =>
-                          openAgentFromContext(agent.id, {
-                            name: agent.name,
-                            display_name: agent.display_name,
-                            avatar_url: agent.avatar_url,
-                          })
+                          openAgentFromContext(
+                            agent.id,
+                            {
+                              name: agent.name,
+                              display_name: agent.display_name,
+                              avatar_url: agent.avatar_url,
+                            },
+                            { returnToMemberId: userId },
+                          )
                       : undefined
                   }
                 />

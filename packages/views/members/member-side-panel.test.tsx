@@ -114,6 +114,7 @@ vi.mock("../i18n/use-t", () => ({
           avatar_err_dimensions: "Too small",
         },
         profile_popover: { close_aria: "Close" },
+        side_panel: { back_to_messages: "Back to messages" },
       } as never),
   }),
 }));

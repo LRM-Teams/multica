@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Activity, BarChart3, Bell, FileText, User } from "lucide-react";
+import { Activity, ArrowLeft, BarChart3, Bell, FileText, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
@@ -50,6 +50,14 @@ interface AgentSidePanelProps {
   onClose: () => void;
   /** Mobile profile routes reuse this exact tab/body surface without dock chrome. */
   variant?: "panel" | "page";
+  /**
+   * LRM-877 Dock Stack — when set, chrome shows `← {backLabel}` to pop back to
+   * the human Profile. ✕ / Done still call `onClose` (clear whole stack).
+   */
+  onBack?: () => void;
+  backLabel?: string;
+  /** Mobile page trailing control (「回消息」). Defaults to channels Done. */
+  doneLabel?: string;
 }
 
 /**
@@ -69,6 +77,9 @@ export function AgentSidePanel({
   members,
   onClose,
   variant = "panel",
+  onBack,
+  backLabel,
+  doneLabel,
 }: AgentSidePanelProps) {
   const { t } = useT("agents");
   const isOwner = !!currentUserId && agent.owner_id === currentUserId;
@@ -122,20 +133,51 @@ export function AgentSidePanel({
     tabBodyRef.current.scrollTop = tabScrollTopRef.current[tab] ?? 0;
   }, [tab, variant]);
 
-  // LRM-542: header chrome is a floating close (no separate bar) — the
-  // identity row (avatar + name) IS the header, per the locked SoT.
+  // LRM-542: default chrome is a floating close — identity row IS the header.
+  // LRM-877: when stacked on a human Profile, switch to a bar with `← {name}`
+  // so pop-back is explicit; ✕ / Done still clears the whole stack via onClose.
+  const stackedBack = !!onBack && !!backLabel?.trim();
+  // Only inject 「回消息」 when stacked on a human Profile (or caller overrides).
+  // Non-stacked page hosts (e.g. ActorProfilePage) keep their own Back chrome.
+  const pageDoneLabel =
+    doneLabel ??
+    (variant === "page" && stackedBack
+      ? t(($) => $.side_panel.back_to_messages)
+      : undefined);
+
+  const backName = stackedBack ? backLabel!.trim() : "";
+  const leading = useMemo(() => {
+    if (!stackedBack) return undefined;
+    return (
+      <button
+        type="button"
+        data-testid="agent-panel-back-to-member"
+        onClick={onBack}
+        className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md px-1.5 py-1 text-xs font-semibold text-brand transition-colors hover:bg-brand/10"
+        aria-label={t(($) => $.side_panel.back_to_member_aria, {
+          name: backName,
+        })}
+      >
+        <ArrowLeft className="size-3.5 shrink-0" />
+        <span className="truncate">{backName}</span>
+      </button>
+    );
+  }, [stackedBack, onBack, backName, t]);
 
   return (
     <ConversationSidePanelShell
       variant={variant}
-      header="floating"
+      header={stackedBack ? "bar" : "floating"}
       onClose={onClose}
       closeAriaLabel={t(($) => $.side_panel.close_aria)}
+      doneLabel={pageDoneLabel}
+      leading={leading}
     >
       <div
         className={cn(
           "flex shrink-0 items-center gap-3 pb-3 pl-4 pr-10 pt-3.5",
           variant === "page" && "pl-0 pr-10",
+          stackedBack && "pr-4 pt-2",
         )}
         data-testid="agent-profile-identity"
       >

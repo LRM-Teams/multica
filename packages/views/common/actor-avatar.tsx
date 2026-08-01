@@ -250,6 +250,7 @@ function ActorAvatarPanelTrigger({
   const { openInNewTab } = useNavigation();
   const openFromContext = useOpenAgentPanel();
   const openFromStore = useAgentPanelStore((s) => s.open);
+  const selectedMemberId = useMemberPanelStore((s) => s.selectedUserId);
   const closeMember = useMemberPanelStore((s) => s.close);
   const open = openFromContext ?? openFromStore;
 
@@ -269,8 +270,16 @@ function ActorAvatarPanelTrigger({
       openInNewTab(paths.agentDetail(agentId));
       return;
     }
+    // LRM-877 — if a human Profile dock is open (global), push Agent with
+    // returnTo so `← {name}` can pop back. Local AgentPanelProvider hosts
+    // inherit returnTo from their own member sidePanel state.
+    const returnToMemberId = selectedMemberId ?? undefined;
     closeMember();
-    open(agentId);
+    open(
+      agentId,
+      undefined,
+      returnToMemberId ? { returnToMemberId } : undefined,
+    );
   };
 
   return (

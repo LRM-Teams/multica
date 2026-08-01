@@ -28,6 +28,7 @@ import {
   type AgentPresenceDetail,
   useWorkspacePresenceMap,
 } from "@multica/core/agents";
+import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -39,7 +40,6 @@ import { resolveActorDisplayName, resolveActorIdentityPresentation } from "@mult
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
-import { AppLink } from "../../navigation/app-link";
 import { useNavigation } from "../../navigation/context";
 import { availabilityConfig } from "../../agents/presence";
 import { presentAgentActivityBand, resolveAgentActivityBand } from "../../agents/resolve-agent-live-status";
@@ -83,6 +83,7 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
+  const openAgentPanel = useAgentPanelStore((s) => s.open);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
@@ -164,7 +165,7 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
             <ServingAgentsCard
               agents={servingAgents}
               presenceMap={presenceMap}
-              agentHref={(id) => paths.agentDetail(id)}
+              onOpenAgent={(id) => openAgentPanel(id)}
             />
             <DiagnosticsCard
               runtime={runtime}
@@ -354,11 +355,12 @@ function Fact({
 function ServingAgentsCard({
   agents,
   presenceMap,
-  agentHref,
+  onOpenAgent,
 }: {
   agents: Agent[];
   presenceMap: Map<string, AgentPresenceDetail>;
-  agentHref: (agentId: string) => string;
+  /** LRM-877 — open Agent via Dock Stack, not /agents/:id hard nav. */
+  onOpenAgent: (agentId: string) => void;
 }) {
   const { t } = useT("runtimes");
   const { t: tAgents } = useT("agents");
@@ -396,10 +398,11 @@ function ServingAgentsCard({
             const queued = detail?.queuedCount ?? 0;
             const presentation = resolveActorIdentityPresentation(agent, agent.id);
             return (
-              <AppLink
+              <button
                 key={agent.id}
-                href={agentHref(agent.id)}
-                className="group flex items-center gap-2 px-4 py-2 transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none"
+                type="button"
+                onClick={() => onOpenAgent(agent.id)}
+                className="group flex w-full items-center gap-2 px-4 py-2 text-left transition-colors hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none"
               >
                 <ActorAvatar actorType="agent" actorId={agent.id} size={20} enableHoverCard showStatusDot />
                 <div className="min-w-0 flex-1">
@@ -431,7 +434,7 @@ function ServingAgentsCard({
                   </div>
                 </div>
                 <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
-              </AppLink>
+              </button>
             );
           })}
         </div>

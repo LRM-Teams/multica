@@ -517,6 +517,8 @@
   },
   "side_panel": {
     "close_aria": "关闭 agent 面板",
+    "back_to_member_aria": "返回 {{name}}",
+    "back_to_messages": "回消息",
     "resize_aria": "调整 Profile 面板宽度",
     "no_description": "暂无简介",
     "model_label": "模型",

@@ -10,8 +10,18 @@ export type AgentPanelIdentitySnapshot = {
   avatar_url?: string | null;
 };
 
+/**
+ * LRM-877 — optional Dock Stack hint when opening Agent from a human Profile
+ * (or hover card). Hosts that own a member→agent panel stack keep
+ * `returnToMemberId` so `← {name}` can pop back to the human Profile.
+ */
+export type OpenAgentPanelOptions = {
+  returnToMemberId?: string;
+};
+
 /** Unified open(agent) entry — agentId required; snapshot optional. */
 export type OpenAgentPanelFn = (
   agentId: string,
   snapshot?: AgentPanelIdentitySnapshot,
+  options?: OpenAgentPanelOptions,
 ) => void;

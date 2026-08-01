@@ -55,6 +55,9 @@ export function ResolvedAgentSidePanel({
   members,
   onClose,
   variant = "panel",
+  onBack,
+  backLabel,
+  doneLabel,
 }: {
   agentId: string;
   /** Optional row-level identity for optimistic chrome while GetAgent loads. */
@@ -63,6 +66,10 @@ export function ResolvedAgentSidePanel({
   members: readonly MemberWithUser[];
   onClose: () => void;
   variant?: "panel" | "page";
+  /** LRM-877 — pop back to human Profile (Dock Stack). */
+  onBack?: () => void;
+  backLabel?: string;
+  doneLabel?: string;
 }) {
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
@@ -118,6 +125,9 @@ export function ResolvedAgentSidePanel({
         members={members}
         onClose={onClose}
         variant={variant}
+        onBack={onBack}
+        backLabel={backLabel}
+        doneLabel={doneLabel}
       />
     );
   }

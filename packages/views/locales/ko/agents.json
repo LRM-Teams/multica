@@ -527,6 +527,8 @@
   },
   "side_panel": {
     "close_aria": "에이전트 패널 닫기",
+    "back_to_member_aria": "{{name}}(으)로 돌아가기",
+    "back_to_messages": "메시지로 돌아가기",
     "resize_aria": "프로필 패널 너비 조절",
     "no_description": "아직 소개가 없습니다",
     "model_label": "모델",

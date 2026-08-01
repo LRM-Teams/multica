@@ -48,7 +48,7 @@ export function GlobalMemberPanel() {
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-40" />
         <Dialog.Popup
-          className="fixed inset-y-0 right-0 z-50 max-w-[90vw] border-l border-border/30 bg-background shadow-2xl transition-transform duration-200 ease-in-out data-starting-style:translate-x-full data-ending-style:translate-x-full"
+          className="fixed inset-y-0 right-0 z-50 max-w-[90vw] border-l border-border/30 bg-background shadow-2xl transition-transform duration-200 ease-in-out motion-reduce:transition-none data-starting-style:translate-x-full data-ending-style:translate-x-full"
           style={{ width }}
           data-testid="global-member-panel"
         >

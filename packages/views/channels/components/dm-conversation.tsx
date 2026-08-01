@@ -71,6 +71,7 @@ import {
 import { useComposerDraftHydrateSignal } from "../hooks/use-composer-draft-hydrate-signal";
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
+import { useJumpNotFoundToast } from "../hooks/use-jump-not-found-toast";
 import {
   buildRecordedVoiceMessageParts,
   type VoiceRecordingAttachment,
@@ -801,6 +802,24 @@ function DmChannelConversation({
     hasOlder: !!hasOlderMessages,
     isFetchingOlder: isFetchingOlderMessages,
     fetchOlder: fetchOlderMessages,
+  });
+  // LRM-736 AC — toast + keep the inline notice (#835 durable record).
+  useJumpNotFoundToast({
+    missing: jumpStatus === "exhausted",
+    targetId: highlightMessageId,
+    message: t(($) => $.message_loading.jump_not_found),
+  });
+  useJumpNotFoundToast({
+    missing:
+      !!threadDeepLinkId &&
+      !!deepLinkHighlightId &&
+      !!openThreadRoot &&
+      !threadLoading &&
+      !threadError &&
+      !!threadPage &&
+      !threadPage.messages.some((m) => m.id === deepLinkHighlightId),
+    targetId: deepLinkHighlightId,
+    message: t(($) => $.message_loading.jump_not_found),
   });
 
   // Debounced in-conversation search.

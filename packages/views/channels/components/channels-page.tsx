@@ -250,6 +250,7 @@ import {
 import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { useSidebarSectionCollapsed } from "../hooks/use-sidebar-section-collapsed";
+import { useJumpNotFoundToast } from "../hooks/use-jump-not-found-toast";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { MemberPanelProvider } from "../../common/member-panel-context";
@@ -1608,6 +1609,25 @@ export function ChannelsPage({
     hasOlder: !!hasOlderMessages,
     isFetchingOlder: isFetchingOlderMessages,
     fetchOlder: fetchOlderMessages,
+  });
+  // LRM-736 AC — toast + keep the inline notice (#835 durable record).
+  useJumpNotFoundToast({
+    missing: jumpStatus === "exhausted",
+    targetId: effectiveHighlightId,
+    message: t(($) => $.message_loading.jump_not_found),
+  });
+  // Thread deep-link: reply missing after the thread page settles (deleted).
+  useJumpNotFoundToast({
+    missing:
+      isThreadDeepLink &&
+      !!highlightMessageId &&
+      !!openThreadRoot &&
+      !threadLoading &&
+      !threadError &&
+      !!threadPage &&
+      !threadPage.messages.some((m) => m.id === highlightMessageId),
+    targetId: highlightMessageId,
+    message: t(($) => $.message_loading.jump_not_found),
   });
 
   useEffect(() => {

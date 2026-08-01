@@ -1,24 +1,39 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { ApiError } from "@multica/core/api";
-import { agentDetailOptions, memberProfileOptions, validateAgentUsername, agentFleetRankOptions } from "@multica/core/agents";
-import { memberListOptions } from "@multica/core/workspace/queries";
-import { useAgentPermissions } from "@multica/core/permissions";
+import { ApiError, api } from "@multica/core/api";
+import {
+  agentDetailKeys,
+  agentDetailOptions,
+  memberProfileOptions,
+  validateAgentUsername,
+  agentFleetRankOptions,
+} from "@multica/core/agents";
+import { memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
+import {
+  canChangeAgentWorkspaceRole,
+  useAgentPermissions,
+  useCurrentMember,
+} from "@multica/core/permissions";
 import { useAuthStore } from "@multica/core/auth";
+import type { Agent } from "@multica/core/types";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { MessageSquare, Pencil } from "lucide-react";
+import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { AppLink } from "../../navigation/app-link";
 import { useOpenDM } from "../../common/use-open-dm";
 import { PropRow } from "../../common/prop-row";
 import { deriveRuntimeHealth, deriveRuntimeHealthPresentation } from "@multica/core/runtimes";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
 import { ComputerInfoRow } from "./inspector/computer-info-row";
+import { AgentWorkspaceRolePicker } from "./inspector/agent-workspace-role-picker";
 import { RuntimePicker } from "./inspector/runtime-picker";
 import { ModelPicker } from "./inspector/model-picker";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
@@ -41,7 +56,14 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const handleUpdate = useUpdateAgent(wsId);
+  const qc = useQueryClient();
   const currentUser = useAuthStore((s) => s.user);
+  const { userId: viewerId, role: viewerRole } = useCurrentMember(wsId);
+  const canChangeRole = canChangeAgentWorkspaceRole({
+    userId: viewerId,
+    role: viewerRole,
+  });
+  const [roleSaving, setRoleSaving] = useState(false);
   const runtimeHealthLabel = useRuntimeHealthStateLabel();
 
   // LRM-292: panel/card body always from GetAgent — ListAgents is directory only.
@@ -207,15 +229,14 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
         />
       ) : null}
 
-      {/* Meta rows. Runtime / model / thinking are the SAME inline pickers
-          the detail inspector uses (reused, not reimplemented): editable for
-          owners/admins, static read-only displays for everyone else — so the
-          profile stays read-only for non-editors with no extra branching.
-          Model, previously omitted here, is now surfaced because it's part
-          of the unified execution-controls edit. Skills + owner round out
-          the "who/what it is" summary. */}
+      {/* Iris 08-01: INFO (identity + role + computer + owner) then
+          RUNTIME CONFIG (pickers). Role sits under username; Computer stays
+          immutable info. */}
       <div className="flex flex-col gap-2 text-xs">
         <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+          <h3 className="col-span-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {t(($) => $.profile_card.info_section)}
+          </h3>
           {/* Username / @handle — the stable ASCII routing handle (`agent.name`),
               distinct from the human display name. Editable by owners/admins
               via the same InlineEditPopover the detail inspector uses for the
@@ -252,12 +273,56 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
               </span>
             )}
           </PropRow>
+          <PropRow label={t(($) => $.profile_card.role_label)} interactive={false}>
+            <AgentWorkspaceRolePicker
+              value={agent.workspace_role === "admin" ? "admin" : "member"}
+              canEdit={canChangeRole.allowed}
+              saving={roleSaving}
+              onChange={async (role) => {
+                setRoleSaving(true);
+                try {
+                  const res = await api.updateAgentWorkspaceRole(
+                    wsId,
+                    agent.id,
+                    role,
+                  );
+                  const patch = { workspace_role: res.workspace_role } as Pick<
+                    Agent,
+                    "workspace_role"
+                  >;
+                  qc.setQueryData<Agent>(
+                    agentDetailKeys.detail(wsId, agent.id),
+                    (old) => (old ? { ...old, ...patch } : old),
+                  );
+                  qc.setQueryData<Agent[]>(workspaceKeys.agents(wsId), (old) =>
+                    old?.map((a) =>
+                      a.id === agent.id ? { ...a, ...patch } : a,
+                    ),
+                  );
+                  toast.success(t(($) => $.profile_card.role_updated));
+                } catch (e) {
+                  showErrorToast(
+                    e instanceof Error
+                      ? e.message
+                      : t(($) => $.profile_card.role_update_failed),
+                  );
+                  throw e;
+                } finally {
+                  setRoleSaving(false);
+                }
+              }}
+            />
+          </PropRow>
           <PropRow label={t(($) => $.inspector.prop_computer)} interactive={false}>
             <ComputerInfoRow runtime={runtime} />
           </PropRow>
-          {/* Frank 08-01: Computer is immutable info; Runtime/Model/Thinking are
-              runtime config. Group header separates the two (Iris). Pickers
-              unchanged — only visual grouping. */}
+          {owner && (
+            <PropRow label={t(($) => $.profile_card.owner_label)} interactive={false}>
+              <span className="min-w-0 truncate" title={owner.name}>
+                {owner.name}
+              </span>
+            </PropRow>
+          )}
           <h3 className="col-span-2 mt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             {t(($) => $.profile_card.runtime_config_section)}
           </h3>
@@ -295,13 +360,6 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
             canEdit={canEdit.allowed}
             onChange={(v) => update({ thinking_level: v })}
           />
-          {owner && (
-            <PropRow label={t(($) => $.profile_card.owner_label)} interactive={false}>
-              <span className="min-w-0 truncate" title={owner.name}>
-                {owner.name}
-              </span>
-            </PropRow>
-          )}
         </div>
         {/* Truthfulness hint (#527, Iris): editing runtime/model/thinking here
             configures the NEXT run — it does not retarget a task already

@@ -1273,6 +1273,25 @@ export class ApiClient {
     });
   }
 
+  /**
+   * Workspace-level agent authority (`member` | `admin`). Separate from
+   * PUT /api/agents/:id — that endpoint rejects `workspace_role`.
+   * Human route only; currently owner-gated server-side (admin gate TBD / Vera).
+   */
+  async updateAgentWorkspaceRole(
+    workspaceId: string,
+    agentId: string,
+    role: "member" | "admin",
+  ): Promise<{ status: string; agent_id: string; workspace_role: "member" | "admin" }> {
+    return this.fetch(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/agents/${encodeURIComponent(agentId)}/role`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
+      },
+    );
+  }
+
   async archiveAgent(id: string): Promise<Agent> {
     return this.fetch(`/api/agents/${id}/archive`, { method: "POST" });
   }

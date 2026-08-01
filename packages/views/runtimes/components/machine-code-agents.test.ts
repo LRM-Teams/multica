@@ -141,8 +141,8 @@ describe("partitionMachineCodeAgents", () => {
     expect(installed[0]?.version).toBe("1.0.0");
   });
 
-  it("leaves openclaw docsUrl null until Parker decides", () => {
+  it("omits openclaw from the not-installed catalog (Frank: 不用管了)", () => {
     const { notInstalled } = partitionMachineCodeAgents([]);
-    expect(notInstalled.find((row) => row.id === "openclaw")?.docsUrl).toBeNull();
+    expect(notInstalled.find((row) => row.id === "openclaw")).toBeUndefined();
   });
 });

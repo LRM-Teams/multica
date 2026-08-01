@@ -216,7 +216,8 @@ export const KNOWN_PROVIDERS: readonly KnownProvider[] = [
   { id: "codebuddy", label: "CodeBuddy" },
   { id: "codex", label: "Codex" },
   { id: "opencode", label: "OpenCode" },
-  { id: "openclaw", label: "OpenClaw" },
+  // openclaw: Frank 08-01 "不用管了" — still render via ProviderLogo if a
+  // machine actually has it installed; omit from the not-installed catalog.
   { id: "hermes", label: "Hermes" },
   { id: "pi", label: "Pi" },
   { id: "copilot", label: "Copilot" },

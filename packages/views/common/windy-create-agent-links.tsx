@@ -207,10 +207,16 @@ function InlineCreateAgentDialog({
   // app). Computed once so both dropdowns below agree.
   const selectedRuntimeOnline =
     !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
-  const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
+  // Workspace-level empty state (no usable runtime anywhere). Distinct from
+  // selectedRuntimeLocked below — a usable runtime on another machine must
+  // not keep Create enabled when the selected computer's runtime is locked.
+  const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, userId));
+  const selectedRuntimeLocked =
+    selectedRuntime != null &&
+    !isRuntimeUsableForUser(selectedRuntime, userId);
 
   const handleCreate = async () => {
-    if (!selectedRuntime || creating) return;
+    if (!selectedRuntime || creating || selectedRuntimeLocked) return;
     const trimmedModel = model.trim();
     if (!trimmedModel) {
       showErrorToast(t(($) => $.model_dropdown.select_required));
@@ -357,7 +363,18 @@ function InlineCreateAgentDialog({
           <Button type="button" variant="outline" onClick={onClose} disabled={creating} className="w-full sm:w-auto">
             {t(($) => $.windy.cancel)}
           </Button>
-          <Button type="button" onClick={handleCreate} disabled={!selectedRuntime || creating || !hasUsableRuntime || !model.trim()} className="w-full sm:w-auto">
+          <Button
+            type="button"
+            onClick={handleCreate}
+            disabled={
+              !selectedRuntime ||
+              creating ||
+              !hasUsableRuntime ||
+              selectedRuntimeLocked ||
+              !model.trim()
+            }
+            className="w-full sm:w-auto"
+          >
             {creating ? <Loader2 className="size-4 animate-spin" /> : null}
             {t(($) => $.windy.create_agent)}
           </Button>

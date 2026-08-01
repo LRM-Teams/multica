@@ -1,5 +1,6 @@
 import type { RuntimeDevice } from "@multica/core/types";
 import type { RuntimeMachine } from "../../runtimes/components/runtime-machines";
+import { isRuntimeUsableForUser } from "./runtime-picker";
 
 export function machineForRuntime(
   runtime: RuntimeDevice | null | undefined,
@@ -14,13 +15,7 @@ export function firstUsableMachine(
   currentUserId: string | null,
 ): RuntimeMachine | null {
   for (const machine of machines) {
-    if (
-      machine.runtimes.some((r) => {
-        if (!currentUserId) return true;
-        if (r.owner_id === currentUserId) return true;
-        return r.visibility === "public";
-      })
-    ) {
+    if (machine.runtimes.some((r) => isRuntimeUsableForUser(r, currentUserId))) {
       return machine;
     }
   }
@@ -33,10 +28,8 @@ export function firstUsableRuntimeIdOnMachine(
   currentUserId: string | null,
 ): string {
   if (!machine) return "";
-  const usable = machine.runtimes.find((r) => {
-    if (!currentUserId) return true;
-    if (r.owner_id === currentUserId) return true;
-    return r.visibility === "public";
-  });
+  const usable = machine.runtimes.find((r) =>
+    isRuntimeUsableForUser(r, currentUserId),
+  );
   return usable?.id ?? machine.runtimes[0]?.id ?? "";
 }

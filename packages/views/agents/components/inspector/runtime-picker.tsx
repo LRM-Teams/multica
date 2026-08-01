@@ -48,6 +48,10 @@ export function RuntimePicker({
   // hydration-mismatch rule doesn't flag a fresh Date.now() per row.
   const now = Date.now();
   // Lock computer: only peers that share the bound machine key are options.
+  // When the bound runtime is missing from `runtimes` (deleted / not loaded),
+  // boundMachineKey is null — fall back to the full list so the user can
+  // re-bind to a living runtime (orphan recovery). Not a cross-machine move
+  // of a still-present binding.
   const boundMachineKey = selected ? runtimeMachineKey(selected) : null;
   const sameComputerRuntimes = useMemo(() => {
     if (!boundMachineKey) return runtimes;

@@ -147,6 +147,30 @@ describe("RemindersTab", () => {
     expect(screen.queryByText(/One-time/i)).toBeNull();
   });
 
+  // 08-01 reminder-outage incident: the three status badges were visually
+  // identical grey — overdue must stand out at a glance, not just by text.
+  it("marks an overdue reminder with the destructive tone and a warning icon", async () => {
+    mockGetAgentReminders.mockResolvedValue(
+      page([definition({ next_fire_at: "2020-01-01T00:00:00Z" })]),
+    );
+
+    renderTab();
+
+    const badge = await screen.findByText("Overdue");
+    expect(badge.className).toMatch(/text-destructive/);
+    expect(badge.querySelector("svg")).toBeInTheDocument();
+  });
+
+  it("keeps a scheduled reminder in the neutral tone with no icon", async () => {
+    mockGetAgentReminders.mockResolvedValue(page([definition()]));
+
+    renderTab();
+
+    const badge = await screen.findByText("Scheduled");
+    expect(badge.className).not.toMatch(/text-destructive/);
+    expect(badge.querySelector("svg")).toBeNull();
+  });
+
   it("shows a safe anchor or an unavailable marker without leaking ids", async () => {
     mockGetAgentReminders.mockResolvedValue(
       page([

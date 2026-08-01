@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clock, Link2, Repeat } from "lucide-react";
+import { AlertTriangle, Clock, Link2, Repeat } from "lucide-react";
 import type { Agent } from "@multica/core/types";
 import { ApiError } from "@multica/core/api";
 import {
@@ -241,6 +241,11 @@ function resolveUpcomingStatus(row: ReminderDefinitionRow, nowMs = Date.now()): 
   return "scheduled";
 }
 
+// Overdue is the only "something is broken" state of the three — it must
+// read as distinct at a glance, not just by the label text (found during
+// the 08-01 reminder-outage incident: the three states were visually
+// identical grey badges, so an overdue reminder didn't stand out even to
+// someone actively looking at this tab).
 function StatusBadge({ status }: { status: DisplayStatus }) {
   const { t } = useT("agents");
   const label =
@@ -249,8 +254,17 @@ function StatusBadge({ status }: { status: DisplayStatus }) {
       : status === "firing"
         ? t(($) => $.reminders.status_firing)
         : t(($) => $.reminders.status_overdue);
+  const toneClass =
+    status === "firing"
+      ? "border-brand/30 bg-brand/10 text-brand"
+      : status === "overdue"
+        ? "border-destructive/30 bg-destructive/10 text-destructive"
+        : "border-border text-muted-foreground";
   return (
-    <span className="inline-flex shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${toneClass}`}
+    >
+      {status === "overdue" ? <AlertTriangle className="h-3 w-3" aria-hidden /> : null}
       {label}
     </span>
   );

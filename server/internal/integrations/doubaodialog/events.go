@@ -23,19 +23,19 @@ const (
 
 	EventFunctionCallArgumentsDone = "response.function_call_arguments.done"
 	EventOutputAudioDelta          = "response.output_audio.delta"
+	EventOutputAudioDone           = "response.output_audio.done"
 	EventOutputTextDelta           = "response.output_text.delta"
 	EventOutputTextDone            = "response.output_text.done"
+	EventResponseDone              = "response.done"
 	EventASRStarted                = "conversation.item.input_audio_transcription.started"
 	EventASRCompleted              = "conversation.item.input_audio_transcription.completed"
 	EventError                     = "error"
 )
 
+// Tool is a Duplex session.tools entry. Upstream uses a flat OpenAI-like shape
+// (name/description/parameters at the top level), not nested `function`.
 type Tool struct {
-	Type     string       `json:"type"`
-	Function ToolFunction `json:"function"`
-}
-
-type ToolFunction struct {
+	Type        string          `json:"type"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"`
@@ -163,8 +163,13 @@ func ParseServerEvent(raw []byte) (ServerEvent, error) {
 	if envelope.Session != nil {
 		event.SessionID = strings.TrimSpace(envelope.Session.ID)
 	}
-	if envelope.Audio != "" {
-		decoded, err := base64.StdEncoding.DecodeString(envelope.Audio)
+	audioB64 := strings.TrimSpace(envelope.Audio)
+	if audioB64 == "" && envelope.Type == EventOutputAudioDelta {
+		// Upstream puts PCM base64 in `delta` for response.output_audio.delta.
+		audioB64 = strings.TrimSpace(envelope.Delta)
+	}
+	if audioB64 != "" {
+		decoded, err := base64.StdEncoding.DecodeString(audioB64)
 		if err != nil {
 			return ServerEvent{}, fmt.Errorf("decode duplex audio delta: %w", err)
 		}

@@ -93,3 +93,11 @@ go test ./internal/integrations/doubaodialog/...
 # DOUBAO_DIALOG_API_KEY=... go test ./internal/integrations/doubaodialog -run Live -count=1
 # DOUBAO_DIALOG_API_KEY=... go run ./cmd/doubao-dialog-spike --text '帮我开一个 issue 修登录'
 ```
+
+## Live verification notes (2026-08-01)
+
+- Duplex ingress for model turns is **audio** (`input_audio_buffer.*`); plain text user items do not start a chat turn.
+- `session.tools` must be **flat** `{type,name,description,parameters}` (not nested OpenAI `function`).
+- `response.output_audio.delta` carries PCM in `delta` (base64).
+- Keep sending silence frames after `commit` while waiting for FC (matches upstream demo).
+- Live evidence: `DOUBAO_DIALOG_LIVE=1 go test ./internal/integrations/doubaodialog -run TestLiveFunctionCallToMultica` created child issue LRM-946.

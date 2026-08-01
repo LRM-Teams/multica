@@ -97,18 +97,25 @@ func TestMulticaToolBridgeIgnoresUnknownTools(t *testing.T) {
 
 func TestMulticaDelegateToolSchema(t *testing.T) {
 	tool := MulticaDelegateTool()
-	if tool.Type != "function" || tool.Function.Name != MulticaDelegateToolName {
+	if tool.Type != "function" || tool.Name != MulticaDelegateToolName {
 		t.Fatalf("unexpected tool: %+v", tool)
 	}
 	var params map[string]any
-	if err := json.Unmarshal(tool.Function.Parameters, &params); err != nil {
+	if err := json.Unmarshal(tool.Parameters, &params); err != nil {
 		t.Fatal(err)
 	}
 	required, _ := params["required"].([]any)
 	if len(required) != 1 || required[0] != "request" {
 		t.Fatalf("required = %#v", required)
 	}
-	if !strings.Contains(tool.Function.Description, "Multica") {
-		t.Fatalf("description missing Multica cue: %q", tool.Function.Description)
+	if !strings.Contains(tool.Description, "Multica") {
+		t.Fatalf("description missing Multica cue: %q", tool.Description)
+	}
+	encoded, err := json.Marshal(tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"function":`) {
+		t.Fatalf("duplex tools must be flat, got nested function: %s", encoded)
 	}
 }

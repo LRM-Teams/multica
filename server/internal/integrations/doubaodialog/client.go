@@ -188,6 +188,55 @@ func (s *Session) SendAudio(ctx context.Context, pcm []byte) error {
 	})
 }
 
+// CommitAudio force-commits the input audio buffer (end of user utterance).
+func (s *Session) CommitAudio(ctx context.Context) error {
+	return s.Send(ctx, ClientEvent{
+		Type:    EventInputAudioCommit,
+		EventID: uuid.NewString(),
+	})
+}
+
+// SendSpeechText asks the service to synthesize the given text (client TTS path).
+// Useful in Spike tests to obtain PCM that can be looped back as user audio.
+func (s *Session) SendSpeechText(ctx context.Context, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fmt.Errorf("speech text is required")
+	}
+	if err := s.Send(ctx, ClientEvent{
+		Type:    "speech_text_buffer.append",
+		EventID: uuid.NewString(),
+		Text:    text,
+	}); err != nil {
+		return err
+	}
+	return s.Send(ctx, ClientEvent{
+		Type:    "speech_text_buffer.commit",
+		EventID: uuid.NewString(),
+	})
+}
+
+// SendUserText inserts a user turn into the Duplex conversation context so the
+// model can decide whether to call session.tools (including Multica delegate).
+func (s *Session) SendUserText(ctx context.Context, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return fmt.Errorf("user text is required")
+	}
+	return s.Send(ctx, ClientEvent{
+		Type:    EventConversationCreate,
+		EventID: uuid.NewString(),
+		Items: []ConversationItem{{
+			Type: "message",
+			Role: "user",
+			Content: []ConversationItemContent{{
+				Type: "input_text",
+				Text: text,
+			}},
+		}},
+	})
+}
+
 func (s *Session) CancelResponse(ctx context.Context) error {
 	return s.Send(ctx, ClientEvent{
 		Type:    EventResponseCancel,

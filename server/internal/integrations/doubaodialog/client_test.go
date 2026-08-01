@@ -108,7 +108,7 @@ func TestOpenSessionCreatesAndBridgesFunctionCall(t *testing.T) {
 			create.Session.Model != DefaultModel ||
 			strings.TrimSpace(create.Session.ID) == "" ||
 			len(create.Session.Tools) != 1 ||
-			create.Session.Tools[0].Function.Name != MulticaDelegateToolName {
+			create.Session.Tools[0].Name != MulticaDelegateToolName {
 			t.Errorf("unexpected create payload: %s", raw)
 			return
 		}

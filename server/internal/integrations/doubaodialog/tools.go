@@ -25,12 +25,10 @@ func MulticaDelegateTool() Tool {
 		`"additionalProperties":false` +
 		`}`)
 	return Tool{
-		Type: "function",
-		Function: ToolFunction{
-			Name:        MulticaDelegateToolName,
-			Description: multicaDelegateToolDescription,
-			Parameters:  parameters,
-		},
+		Type:        "function",
+		Name:        MulticaDelegateToolName,
+		Description: multicaDelegateToolDescription,
+		Parameters:  parameters,
 	}
 }
 
@@ -46,7 +44,7 @@ func jsonString(value string) string {
 func DefaultDialogInstructions() string {
 	return "" +
 		"你是 Multica 语音助手。用自然口语简短回答。" +
-		"当用户要求创建 issue、推进任务或需要真实工具时，调用 " +
-		MulticaDelegateToolName + "。" +
+		"只要用户提到创建 issue、开发任务、派活或需要真实工具，必须先调用工具 " +
+		MulticaDelegateToolName + "，不要直接口头答应而不调用。" +
 		"不要使用 Markdown。工具结果返回后，用一句话向用户播报结果。"
 }

@@ -1,6 +1,10 @@
 package daemon
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/multica-ai/multica/server/pkg/agent"
+)
 
 func TestUsesCanonicalResidentChatRuntimeIncludesCursorFullChat(t *testing.T) {
 	chatTask := Task{ChatSessionID: "chat-1"}
@@ -43,8 +47,14 @@ func TestCanonicalResidentProviderListsStayInSync(t *testing.T) {
 				"but isCanonicalResidentProvider (tryCanonicalChatBackend's entry gate) does not recognize it "+
 				"— the provider lists have drifted out of sync", provider)
 		}
+		if !agent.Capabilities(provider).CanonicalResident {
+			t.Errorf("%q must be CanonicalResident in agent.Capabilities (task #47 table)", provider)
+		}
 	}
 	if usesCanonicalResidentChatRuntime("claude", chatTask) != isCanonicalResidentProvider("claude") {
 		t.Error("claude must be consistently rejected by both the dispatch switch and the entry gate")
+	}
+	if agent.Capabilities("claude").CanonicalResident {
+		t.Error("claude must not be CanonicalResident in the capability table")
 	}
 }

@@ -3544,13 +3544,10 @@ func gcMetaForTask(task Task) (execenv.GCMeta, bool) {
 	return meta, true
 }
 
+// providerNeedsInlineSystemPrompt is sourced from agent.Capabilities
+// (task #47) — do not re-list providers here.
 func providerNeedsInlineSystemPrompt(provider string) bool {
-	switch provider {
-	case "openclaw", "kiro", "kimi":
-		return true
-	default:
-		return false
-	}
+	return agent.Capabilities(provider).NeedsInlineSystemPrompt
 }
 
 // gateResumeToReusedWorkdir clears the task's prior session unless the task

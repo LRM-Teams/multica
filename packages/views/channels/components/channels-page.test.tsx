@@ -285,27 +285,28 @@ vi.mock("@multica/core/auth", () => ({
   ),
 }));
 
-vi.mock("@multica/core/hooks", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/hooks")>()),
-  useWorkspaceId: () => "ws-1",
-}));
+// Shared fixtures for byte-identical factories (#1364 direction D / LRM-694).
+// auth + dm stay inline: this merged suite needs getState() on useAuthStore and
+// a mutable dmListFixture — not the shared authMock/dmMock shapes.
+vi.mock("@multica/core/hooks", async (importOriginal) => {
+  const { hooksMock } = await import("./__fixtures/channels-page-mocks");
+  return hooksMock(importOriginal);
+});
 
-vi.mock("@multica/core/paths", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/paths")>()),
-  useWorkspacePaths: () => ({
-    channels: () => "/w/test/channels",
-    channelDetail: (id: string) => `/w/test/channels/${id}`,
-  }),
-}));
+vi.mock("@multica/core/paths", async (importOriginal) => {
+  const { pathsMock } = await import("./__fixtures/channels-page-mocks");
+  return pathsMock(importOriginal);
+});
 
-vi.mock("@multica/core/realtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/realtime")>()),
-  useWSEvent: vi.fn(),
-}));
+vi.mock("@multica/core/realtime", async (importOriginal) => {
+  const { realtimeMock } = await import("./__fixtures/channels-page-mocks");
+  return realtimeMock(importOriginal);
+});
 
-vi.mock("@multica/core/hooks/use-file-upload", () => ({
-  useFileUpload: () => ({ uploadWithToast: vi.fn() }),
-}));
+vi.mock("@multica/core/hooks/use-file-upload", async () => {
+  const { fileUploadMock } = await import("./__fixtures/channels-page-mocks");
+  return fileUploadMock();
+});
 
 // Mutable so the DM-open-never-resolves suite can simulate a DM disappearing
 // from the list after selection (the real 2026-07-31 Wendy DM incident shape:

@@ -1,7 +1,8 @@
 import { vi, type Mock } from "vitest";
 
 /**
- * Shared `vi.mock` factories for the `channels-page-*` test files (#1364 step 2).
+ * Shared `vi.mock` factories for the `channels-page-*` test files
+ * (#1364 direction D / LRM-694 — maintainability, not a CI-time claim).
  *
  * WHY THIS SHAPE. `vi.mock` is hoisted above imports, so a factory cannot be
  * referenced as an imported binding — doing so fails with
@@ -19,13 +20,15 @@ import { vi, type Mock } from "vitest";
  * shared factory there — no opt-out machinery needed.
  *
  * WHAT BELONGS HERE. Only factories that were already byte-identical across
- * every `channels-page-*` file. Measured 2026-07-29: 6 of the 15 commonly
- * mocked modules, 26 lines per file × 7 files = 182 duplicated lines.
+ * the consuming files. Currently 6 modules used by:
+ *   channels-page-routing, message-actions, sidebar-preview, sidebar-skeleton,
+ *   header-actions-overflow; plus hooks/paths/realtime/file-upload from
+ *   channels-page.test.tsx (auth + dm stay inline there — different shapes).
  *
  * WHAT DOES NOT BELONG HERE. `core/api`, `core/channels`, `channel-message-list`
- * and `dm-conversation` have a *different* factory in all seven files — they are
- * per-test fixtures, not duplication, and forcing them in would be the mistake
- * this document warns about. Keep them in the file that owns them.
+ * and per-suite auth/dm variants — they are per-test fixtures, not duplication.
+ * Keep them in the file that owns them. Do not merge test files (§4 E was
+ * SUPERSEDED by #1386).
  *
  * Every factory takes `importOriginal` and spreads it, so named exports the test
  * still needs (e.g. a real `ApiError` to construct) survive the mock.

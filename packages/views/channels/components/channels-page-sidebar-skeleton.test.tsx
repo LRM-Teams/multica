@@ -66,10 +66,10 @@ vi.mock("@multica/core/channels", async (importOriginal) => {
   };
 });
 
-vi.mock("@multica/core/dm", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/dm")>()),
-  dmListOptions: () => ({ queryKey: ["dm-list"], queryFn: async () => [] }),
-}));
+vi.mock("@multica/core/dm", async (importOriginal) => {
+  const { dmMock } = await import("./__fixtures/channels-page-mocks");
+  return dmMock(importOriginal);
+});
 
 vi.mock("@multica/core/workspace/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/workspace/queries")>()),
@@ -77,32 +77,30 @@ vi.mock("@multica/core/workspace/queries", async (importOriginal) => ({
   agentListOptions: () => ({ queryKey: ["agents"], queryFn: async () => [] }),
 }));
 
-vi.mock("@multica/core/auth", () => ({
-  useAuthStore: (selector: (s: { user: { id: string; name: string } }) => unknown) =>
-    selector({ user: { id: "user-1", name: "Alice" } }),
-}));
+vi.mock("@multica/core/auth", async () => {
+  const { authMock } = await import("./__fixtures/channels-page-mocks");
+  return authMock();
+});
 
-vi.mock("@multica/core/hooks", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/hooks")>()),
-  useWorkspaceId: () => "ws-1",
-}));
+vi.mock("@multica/core/hooks", async (importOriginal) => {
+  const { hooksMock } = await import("./__fixtures/channels-page-mocks");
+  return hooksMock(importOriginal);
+});
 
-vi.mock("@multica/core/paths", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/paths")>()),
-  useWorkspacePaths: () => ({
-    channels: () => "/w/test/channels",
-    channelDetail: (id: string) => `/w/test/channels/${id}`,
-  }),
-}));
+vi.mock("@multica/core/paths", async (importOriginal) => {
+  const { pathsMock } = await import("./__fixtures/channels-page-mocks");
+  return pathsMock(importOriginal);
+});
 
-vi.mock("@multica/core/realtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/realtime")>()),
-  useWSEvent: vi.fn(),
-}));
+vi.mock("@multica/core/realtime", async (importOriginal) => {
+  const { realtimeMock } = await import("./__fixtures/channels-page-mocks");
+  return realtimeMock(importOriginal);
+});
 
-vi.mock("@multica/core/hooks/use-file-upload", () => ({
-  useFileUpload: () => ({ uploadWithToast: vi.fn() }),
-}));
+vi.mock("@multica/core/hooks/use-file-upload", async () => {
+  const { fileUploadMock } = await import("./__fixtures/channels-page-mocks");
+  return fileUploadMock();
+});
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => false,

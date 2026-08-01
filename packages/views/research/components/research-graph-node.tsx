@@ -98,12 +98,15 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
       )}
       data-logic-role={logicRole}
       data-lane={laneId}
+      data-presence-busy={presenceBusy ? "true" : undefined}
       data-testid={
         logicRole === "start"
           ? "research-logic-start"
           : logicRole === "end"
             ? "research-logic-end"
-            : "research-logic-card"
+            : presenceBusy
+              ? "research-node-presence-busy"
+              : "research-logic-card"
       }
     >
       <div
@@ -157,7 +160,12 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
             </p>
           ) : null}
           {activityCaption ? (
-            <p className="mt-1 truncate text-[10px] font-medium text-primary">{activityCaption}</p>
+            <p
+              data-testid="research-node-presence-caption"
+              className="mt-1 truncate text-[10px] font-medium text-primary"
+            >
+              {activityCaption}
+            </p>
           ) : null}
         </div>
       </div>

@@ -121,7 +121,20 @@ export function nodeIsVisuallyBusy(
   nodeType: string,
   actorHasActivity: boolean,
 ): boolean {
-  if (actorHasActivity && status === "active") return true;
+  // LRM-775: presence / compact activity =「谁在工作」— pulse related nodes
+  // unless the node is already terminal (done / abandoned / failed).
+  if (actorHasActivity) {
+    const key = normalizeNodeStatusKey(status);
+    if (
+      key !== "done" &&
+      key !== "completed" &&
+      key !== "resolved" &&
+      key !== "abandoned" &&
+      key !== "failed"
+    ) {
+      return true;
+    }
+  }
   return shouldPulseNode(status, nodeType);
 }
 

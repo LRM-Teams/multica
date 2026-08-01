@@ -83,7 +83,10 @@ export function researchPresenceOptions(wsId: string, sessionId: string) {
       return normalizeResearchPresenceMap(res.presence);
     },
     enabled: !!wsId && !!sessionId,
-    staleTime: 30_000,
+    // WS `research_session:presence` patches the cache; poll as a backstop when
+    // the socket is quiet (LRM-775 — never Infinity stub).
+    staleTime: 8_000,
+    refetchInterval: 8_000,
   });
 }
 

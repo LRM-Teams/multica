@@ -23,6 +23,11 @@ export interface RuntimeMachine {
   title: string;
   subtitle: string | null;
   deviceInfo: string | null;
+  /**
+   * Structured machine label from runtime `device_name` (register metadata).
+   * Never derived by parsing `device_info`.
+   */
+  deviceName: string | null;
   cliVersion: string | null;
   mode: AgentRuntime["runtime_mode"];
   section: RuntimeMachineSection;
@@ -174,6 +179,7 @@ function placeholderLocalMachine(
     title: options.localMachineName ?? "This machine",
     subtitle: null,
     deviceInfo: null,
+    deviceName: null,
     cliVersion: null,
     mode: "local",
     section: "local",
@@ -261,6 +267,7 @@ function finalizeRuntimeMachine(
     localMachineName: options.localMachineName,
   });
   const deviceInfo = first ? formatDeviceInfo(first.device_info ?? null) : null;
+  const deviceName = machineDeviceName(runtimes);
   const subtitle = machineSubtitle({
     title,
     deviceInfo,
@@ -301,6 +308,7 @@ function finalizeRuntimeMachine(
     title,
     subtitle,
     deviceInfo,
+    deviceName,
     cliVersion: commonCliVersion(runtimes),
     mode: draft.mode,
     section: isCurrent ? "local" : draft.mode === "cloud" ? "cloud" : "remote",
@@ -346,6 +354,15 @@ export function runtimeDeviceName(runtime: AgentRuntime): string | null {
   const raw = runtime.device_info?.trim();
   if (!raw) return null;
   return raw.split(" · ")[0]?.trim() || null;
+}
+
+/** First non-empty structured `device_name` on the machine — never parse glue. */
+export function machineDeviceName(runtimes: AgentRuntime[]): string | null {
+  for (const runtime of runtimes) {
+    const value = runtime.device_name?.trim();
+    if (value) return value;
+  }
+  return null;
 }
 
 function firstNonEmptyDisplayName(runtimes: AgentRuntime[]): string | null {

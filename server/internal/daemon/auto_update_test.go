@@ -475,3 +475,44 @@ func TestAutoUpdateLoop_PinnedVersionLogsAndReturns(t *testing.T) {
 		t.Fatalf("expected log to contain pinned version v0.1.13, got: %s", logOutput)
 	}
 }
+
+// TestTryAutoUpdate_PinnedDifferentVersionInstallsIt verifies that when the
+// pinned version differs from the current version, tryAutoUpdate fetches and
+// installs the pinned version (not "latest").
+func TestTryAutoUpdate_PinnedDifferentVersionInstallsIt(t *testing.T) {
+	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
+	d.cfg.PinnedVersion = "v0.1.14"
+
+	// Stub fetchReleaseByTag to return the pinned version.
+	prevFetch := fetchReleaseByTagVar
+	fetchReleaseByTagVar = func(tag, _ string) (*cli.ReleaseManifest, error) {
+		if tag != "v0.1.14" {
+			t.Fatalf("expected fetch for pinned version v0.1.14, got %q", tag)
+		}
+		return &cli.ReleaseManifest{TagName: "v0.1.14"}, nil
+	}
+	defer func() { fetchReleaseByTagVar = prevFetch }()
+
+	// fetchLatestRelease should NOT be called when installing pinned version.
+	prevLatest := fetchLatestRelease
+	fetchLatestRelease = func(string) (*cli.ReleaseManifest, error) {
+		t.Fatal("fetchLatestRelease called when should use pinned version fetch")
+		return nil, nil
+	}
+	defer func() { fetchLatestRelease = prevLatest }()
+
+	var upgradedTarget string
+	d.runUpdateFn = func(target string) (string, error) {
+		upgradedTarget = target
+		return "staged " + target, nil
+	}
+
+	d.tryAutoUpdate(context.Background())
+
+	if upgradedTarget != "v0.1.14" {
+		t.Fatalf("expected upgrade to pinned v0.1.14, got %q", upgradedTarget)
+	}
+	if restartCalls.Load() != 1 {
+		t.Fatalf("expected restart after pinned install, got %d restart calls", restartCalls.Load())
+	}
+}

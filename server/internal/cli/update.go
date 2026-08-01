@@ -313,6 +313,12 @@ func fetchReleaseByTagWithOverride(tag, serverDispatched string) (*ReleaseManife
 	return fetchManifest(releaseManifestBaseURLWithOverride(serverDispatched) + "/" + tag + "/release.json")
 }
 
+// FetchReleaseByTagWithOverride is the exported form of
+// fetchReleaseByTagWithOverride, used by the daemon's pin-install path.
+func FetchReleaseByTagWithOverride(tag, serverDispatched string) (*ReleaseManifest, error) {
+	return fetchReleaseByTagWithOverride(tag, serverDispatched)
+}
+
 // FetchLatestRelease fetches the promoted "latest" release manifest from the
 // Multica release feed.
 func FetchLatestRelease() (*ReleaseManifest, error) {

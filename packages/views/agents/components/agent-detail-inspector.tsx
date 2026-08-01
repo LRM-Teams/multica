@@ -121,9 +121,6 @@ export function AgentDetailInspector({
           permission, each picker self-renders a static read-only display so
           the value is visible but not interactive. */}
       <Section label={t(($) => $.inspector.section_properties)}>
-        <PropRow label={t(($) => $.inspector.prop_computer)} interactive={false}>
-          <ComputerInfoRow runtime={runtime} />
-        </PropRow>
         <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
           <RuntimePicker
             value={agent.runtime_id}
@@ -162,6 +159,9 @@ export function AgentDetailInspector({
 
       {/* Details — read-only (no hover, no chip styling — these aren't clickable) */}
       <Section label={t(($) => $.inspector.section_details)}>
+        <PropRow label={t(($) => $.inspector.prop_computer)} interactive={false}>
+          <ComputerInfoRow runtime={runtime} />
+        </PropRow>
         {owner && (
           <PropRow label={t(($) => $.inspector.prop_owner)} interactive={false}>
             <span className="flex min-w-0 items-center gap-1.5">

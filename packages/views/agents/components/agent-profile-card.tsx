@@ -18,6 +18,7 @@ import { useOpenDM } from "../../common/use-open-dm";
 import { PropRow } from "../../common/prop-row";
 import { deriveRuntimeHealth, deriveRuntimeHealthPresentation } from "@multica/core/runtimes";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
+import { ComputerInfoRow } from "./inspector/computer-info-row";
 import { RuntimePicker } from "./inspector/runtime-picker";
 import { ModelPicker } from "./inspector/model-picker";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
@@ -250,6 +251,9 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
                 @{agent.name}
               </span>
             )}
+          </PropRow>
+          <PropRow label={t(($) => $.inspector.prop_computer)} interactive={false}>
+            <ComputerInfoRow runtime={runtime} />
           </PropRow>
           <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
             <div className="flex min-w-0 items-center gap-1.5">

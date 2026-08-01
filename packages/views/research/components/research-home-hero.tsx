@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { Compass } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
+import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
 
 /**
  * LRM-783 / LRM-784 lock — brand-hero façade for the research home:
@@ -24,16 +25,7 @@ export function ResearchHomeHero({
       data-testid="research-home-hero"
       aria-label={t(($) => $.home.composer_label)}
     >
-      {/* Dot-grid atmosphere — canvas chrome extension, fades down. */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 -top-2 h-[220px] opacity-70 [mask-image:linear-gradient(to_bottom,black_35%,transparent)]"
-        style={{
-          backgroundImage:
-            "radial-gradient(circle, color-mix(in oklab, var(--foreground) 12%, transparent) 1px, transparent 1.5px)",
-          backgroundSize: "24px 24px",
-        }}
-      />
+      <ResearchShellAtmosphere className="-top-2" heightClassName="h-[220px]" />
       <div className="relative flex flex-col gap-3 sm:gap-3.5">
         <div className="flex items-center gap-2.5">
           <span

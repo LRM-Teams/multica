@@ -146,10 +146,36 @@
     "confidence": "Confidence",
     "detail_hint": "Node detail",
     "summary": "Summary / conclusion",
+    "doing": "進行中",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources."
+  },
+  "logic": {
+    "label": "調査ロジック",
+    "lr_hint": "左→右 · not Git",
+    "strip_label": "ロジック構造",
+    "start": "起点",
+    "end": "終点",
+    "end_title": "成果物を見る",
+    "end_summary": "精読ビューを開く",
+    "lane": {
+      "orchestrate": "編成",
+      "source": "ソース",
+      "deep_read": "精読",
+      "validate": "検証",
+      "draft": "草稿"
+    },
+    "status": {
+      "kickoff": "キックオフ",
+      "done": "完了",
+      "running": "進行中",
+      "waiting": "待機",
+      "pending_delivery": "納品待ち",
+      "failed": "失敗",
+      "abandoned": "中止"
+    }
   },
   "home": {
     "composer_label": "調査セッションを作成",

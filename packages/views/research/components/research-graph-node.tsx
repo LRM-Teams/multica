@@ -5,6 +5,12 @@ import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspaceId } from "@multica/core/hooks";
 import type { ResearchFlowNodeData } from "../lib/layout-graph";
+import {
+  isLogicEndNode,
+  isLogicStartNode,
+  resolveLogicStatus,
+  type LogicLaneId,
+} from "../lib/logic-lanes";
 import { nodeIsVisuallyBusy, visualForNodeType } from "../lib/node-visuals";
 import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { isCompactActivityLabel } from "../../channels/components/is-compact-activity-label";
@@ -17,6 +23,8 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
   const { t } = useT("research");
   const wsId = useWorkspaceId();
   const n = data.research;
+  if (!n) return null;
+
   const visual = visualForNodeType(n.node_type);
   const actorId = n.actor_agent_id ?? undefined;
   const projection = useAgentActivityProjection(wsId, actorId);
@@ -27,7 +35,15 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
   const activityCaption =
     (data.presenceLabel && data.presenceLabel.trim()) ||
     (actorBusy && projection ? projection.label : "");
+  const logicRole =
+    data.logicRole ??
+    (isLogicEndNode(n) ? "end" : isLogicStartNode(n) ? "start" : "step");
+  const status = resolveLogicStatus(n);
+  const laneId = (data.laneId ?? "orchestrate") as LogicLaneId;
+
   const typeLabel = (() => {
+    if (logicRole === "start") return t(($) => $.logic.start);
+    if (logicRole === "end") return t(($) => $.logic.end);
     switch (n.node_type) {
       case "goal":
         return t(($) => $.node.goal);
@@ -52,26 +68,58 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
       case "agent_activity":
         return t(($) => $.node.agent_activity);
       default:
-        return n.node_type;
+        return t(($) => $.logic.lane[laneId]);
     }
   })();
+
+  const title =
+    logicRole === "end" ? t(($) => $.logic.end_title) : n.title || typeLabel;
+  const summary =
+    logicRole === "end" ? t(($) => $.logic.end_summary) : n.summary;
 
   return (
     <div
       className={cn(
-        "research-graph-node-shell relative w-[260px] overflow-hidden rounded-xl border bg-card/95 text-left shadow-sm backdrop-blur-sm transition-[box-shadow,transform] duration-300",
+        "research-graph-node-shell relative overflow-hidden rounded-xl border bg-card/95 text-left shadow-sm backdrop-blur-sm transition-[box-shadow,transform] duration-300",
+        logicRole === "start" || logicRole === "end" ? "w-[216px]" : "w-[200px]",
         n.status === "abandoned" && "opacity-85",
-        visual.ringClass,
-        // Selection halo is owned by the canvas (LRM-848 brand glow); keep a light lift here.
+        logicRole === "start" &&
+          "border-[color-mix(in_oklch,var(--success)_45%,var(--border))] ring-2 ring-[color-mix(in_oklch,var(--success)_28%,transparent)]",
+        logicRole === "end" &&
+          "border-[color-mix(in_oklch,var(--brand)_50%,var(--border))] ring-2 ring-brand/25",
+        logicRole === "step" && visual.ringClass,
         selected && "scale-[1.02]",
         pulse && "motion-safe:animate-pulse motion-safe:[animation-duration:2.2s]",
         actorBusy && "shadow-[0_0_22px_color-mix(in_oklch,var(--brand)_30%,transparent)]",
+        status.tone === "run" &&
+          !selected &&
+          "shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand)_18%,transparent)]",
       )}
+      data-logic-role={logicRole}
+      data-lane={laneId}
+      data-testid={
+        logicRole === "start"
+          ? "research-logic-start"
+          : logicRole === "end"
+            ? "research-logic-end"
+            : "research-logic-card"
+      }
     >
-      <div className={cn("absolute inset-y-0 left-0 w-1", visual.accentBarClass)} />
-      <Handle type="target" position={Position.Top} className="!h-2 !w-2 !border-border !bg-muted-foreground/40" />
+      <div
+        className={cn(
+          "absolute inset-y-0 left-0 w-1",
+          logicRole === "start" && "bg-success",
+          logicRole === "end" && "bg-brand",
+          logicRole === "step" && visual.accentBarClass,
+        )}
+      />
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!h-2 !w-2 !border-border !bg-muted-foreground/40"
+      />
       <div className="flex gap-2 px-3 py-2.5 pl-4">
-        {actorId ? (
+        {actorId && logicRole === "step" ? (
           <div className="pt-0.5" onClick={(e) => e.stopPropagation()}>
             <ActorAvatar
               actorType="agent"
@@ -84,32 +132,39 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
           </div>
         ) : null}
         <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-muted-foreground">
-            <span>{typeLabel}</span>
-            <span>{n.status}</span>
+          <div className="flex items-center justify-between gap-2 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+            <span className="truncate">
+              {logicRole === "step" ? t(($) => $.logic.lane[laneId]) : typeLabel}
+            </span>
+            <span
+              className={cn(
+                "shrink-0 rounded px-1.5 py-0.5 text-[9.5px] font-bold normal-case",
+                status.tone === "ok" && "bg-success/15 text-success",
+                status.tone === "run" && "bg-brand/15 text-brand",
+                status.tone === "wait" && "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+                status.tone === "fail" && "bg-destructive/15 text-destructive",
+                status.tone === "mute" && "bg-muted text-muted-foreground",
+              )}
+            >
+              {t(($) => $.logic.status[status.key])}
+            </span>
           </div>
-          <div className="mt-1 truncate text-sm font-semibold text-foreground">{n.title || typeLabel}</div>
-          {n.summary ? (
-            <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{n.summary}</p>
+          <div className="mt-1 truncate text-sm font-semibold text-foreground">{title}</div>
+          {summary ? (
+            <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+              {summary}
+            </p>
           ) : null}
           {activityCaption ? (
             <p className="mt-1 truncate text-[10px] font-medium text-primary">{activityCaption}</p>
           ) : null}
-          {n.node_type === "finding" ? (
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
-                {t(($) => $.node.finding)}
-              </span>
-              {typeof (n.payload as { source_class?: string } | null)?.source_class === "string" ? (
-                <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
-                  {(n.payload as { source_class: string }).source_class}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} className="!h-2 !w-2 !border-border !bg-muted-foreground/40" />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!h-2 !w-2 !border-border !bg-muted-foreground/40"
+      />
     </div>
   );
 }

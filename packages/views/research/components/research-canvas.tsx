@@ -26,15 +26,20 @@ import type {
 import type { ResearchPresenceMap } from "@multica/core/research";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { layoutResearchGraph, type ResearchFlowNodeData } from "../lib/layout-graph";
+import { LOGIC_END_NODE_ID, isLogicEndNode } from "../lib/logic-lanes";
 import { visualForEdgeType } from "../lib/node-visuals";
 import { ResearchCanvasDock } from "./research-canvas-dock";
 import { ResearchGraphNode as ResearchGraphNodeView } from "./research-graph-node";
+import { ResearchLaneBandNodeView } from "./research-lane-band-node";
+import { ResearchLogicStrip } from "./research-logic-strip";
 import { SYSTEM_NODE_TYPES, type NodeRingAction } from "../lib/node-action-ring";
 import { ResearchNodeActionRing } from "./research-node-action-ring";
 import { ResearchNodeDetail } from "./research-node-detail";
+import { useT } from "../../i18n/use-t";
 
 const nodeTypes: NodeTypes = {
   research: ResearchGraphNodeView,
+  laneBand: ResearchLaneBandNodeView,
 };
 
 function prefersReducedMotion(): boolean {
@@ -53,6 +58,7 @@ function ResearchCanvasInner({
   selectedId,
   onSelect,
   onRetry,
+  onOpenDelivery,
 }: {
   nodes: ResearchGraphNode[];
   edges: ResearchGraphEdge[];
@@ -62,7 +68,9 @@ function ResearchCanvasInner({
   selectedId?: string | null;
   onSelect?: (node: ResearchGraphNode | null) => void;
   onRetry?: (node: ResearchGraphNode) => void;
+  onOpenDelivery?: () => void;
 }) {
+  const { t } = useT("research");
   const laid = useMemo(() => layoutResearchGraph(nodes, edges), [nodes, edges]);
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState(laid.nodes);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState(laid.edges);
@@ -92,21 +100,23 @@ function ResearchCanvasInner({
       const prevById = new Map(prev.map((n) => [n.id, n]));
       return laid.nodes.map((n, index) => {
         const research = n.data.research;
-        const actorId = research.actor_agent_id;
+        const isBand = n.type === "laneBand" || !research;
+        const actorId = research?.actor_agent_id;
         const presenceLabel = actorId ? presence?.[actorId]?.activity : undefined;
-        if (!classMap.has(n.id) && !reduceMotion) {
+        if (!isBand && !classMap.has(n.id) && !reduceMotion) {
           classMap.set(n.id, `research-node-enter`);
         }
-        const dragged = posMap.get(n.id);
+        const dragged = isBand ? undefined : posMap.get(n.id);
         const previous = prevById.get(n.id);
         const position = dragged ?? previous?.position ?? n.position;
-        const delayMs = !posMap.has(n.id) && !previous ? Math.min(index, 12) * 45 : 0;
+        const delayMs =
+          !isBand && !posMap.has(n.id) && !previous ? Math.min(index, 12) * 45 : 0;
         return {
           ...n,
           position,
-          selected: n.id === selectedId || n.id === ringNodeId,
-          draggable: true,
-          className: classMap.get(n.id),
+          selected: !isBand && (n.id === selectedId || n.id === ringNodeId),
+          draggable: isBand ? false : true,
+          className: isBand ? undefined : classMap.get(n.id),
           style: {
             ...n.style,
             animationDelay: delayMs ? `${delayMs}ms` : undefined,
@@ -115,7 +125,7 @@ function ResearchCanvasInner({
             ...n.data,
             presenceLabel: presenceLabel || undefined,
             sourceBadgeCount:
-              research.node_type === "finding" &&
+              research?.node_type === "finding" &&
               research.payload &&
               typeof research.payload === "object" &&
               "source_id" in (research.payload as object)
@@ -162,10 +172,15 @@ function ResearchCanvasInner({
     setRingNodeId(null);
   }, []);
 
-  const selectedNode = selectedId ? nodes.find((n) => n.id === selectedId) : null;
+  const selectedNode =
+    selectedId && selectedId !== LOGIC_END_NODE_ID
+      ? nodes.find((n) => n.id === selectedId) ?? null
+      : null;
   const ringNode = ringNodeId ? nodes.find((n) => n.id === ringNodeId) : null;
   const sourceList = sources ?? [];
-  const showDetail = detailPinned || (!!selectedNode && SYSTEM_NODE_TYPES.has(selectedNode.node_type));
+  const showDetail =
+    detailPinned ||
+    (!!selectedNode && SYSTEM_NODE_TYPES.has(selectedNode.node_type));
 
   const handleRingAction = useCallback(
     async (action: NodeRingAction) => {
@@ -203,6 +218,38 @@ function ResearchCanvasInner({
     },
     [ringNode, onSelect, onRetry, closeRing],
   );
+
+  if (isMobile) {
+    return (
+      <div className="relative h-full w-full bg-canvas-bg text-foreground">
+        <ResearchLogicStrip
+          nodes={nodes}
+          edges={edges}
+          selectedId={selectedId}
+          onSelect={(node) => {
+            if (node && isLogicEndNode(node)) {
+              onOpenDelivery?.();
+              return;
+            }
+            onSelect?.(node);
+            if (node) setDetailPinned(true);
+          }}
+          onOpenDelivery={onOpenDelivery}
+        />
+        {showDetail && selectedNode ? (
+          <ResearchNodeDetail
+            node={selectedNode}
+            sources={sourceList}
+            open={showDetail}
+            onClose={() => {
+              setDetailPinned(false);
+              onSelect?.(null);
+            }}
+          />
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="relative h-full w-full bg-canvas-bg text-foreground">
@@ -255,8 +302,14 @@ function ResearchCanvasInner({
         nodesDraggable
         proOptions={{ hideAttribution: true }}
         onNodeClick={(_evt, node) => {
+          if (node.type === "laneBand") return;
           const research = node.data?.research as ResearchGraphNode | undefined;
           if (!research) return;
+          if (isLogicEndNode(research)) {
+            closeRing();
+            onOpenDelivery?.();
+            return;
+          }
           if (SYSTEM_NODE_TYPES.has(research.node_type)) {
             closeRing();
             onSelect?.(research);
@@ -281,11 +334,20 @@ function ResearchCanvasInner({
           size={1}
           color="var(--canvas-dot)"
         />
+        <Panel
+          position="top-left"
+          className="!m-3 flex items-center gap-2 rounded-lg border bg-card/90 px-2.5 py-1.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur-md"
+        >
+          <span className="font-semibold text-foreground">{t(($) => $.logic.label)}</span>
+          <span aria-hidden>·</span>
+          <span>{t(($) => $.logic.lr_hint)}</span>
+        </Panel>
         <MiniMap
           pannable
           zoomable
           className="!bottom-20 !left-4 !overflow-hidden !rounded-lg !border !border-border !bg-card/90 max-lg:!hidden"
           maskColor="color-mix(in oklch, var(--canvas-bg) 70%, transparent)"
+          nodeColor={(n) => (n.type === "laneBand" ? "transparent" : "var(--brand)")}
         />
         <Panel position="bottom-center" className="!m-0 !w-full !bg-transparent">
           <ResearchCanvasDock
@@ -366,6 +428,7 @@ export function ResearchCanvas(props: {
   selectedId?: string | null;
   onSelect?: (node: ResearchGraphNode | null) => void;
   onRetry?: (node: ResearchGraphNode) => void;
+  onOpenDelivery?: () => void;
 }) {
   return (
     <ReactFlowProvider>

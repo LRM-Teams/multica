@@ -146,10 +146,36 @@
     "confidence": "Confidence",
     "detail_hint": "Node detail",
     "summary": "Summary / conclusion",
+    "doing": "진행 중",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources."
+  },
+  "logic": {
+    "label": "리서치 로직",
+    "lr_hint": "왼쪽→오른쪽 · not Git",
+    "strip_label": "로직 구조",
+    "start": "시작",
+    "end": "종료",
+    "end_title": "결과물 보기",
+    "end_summary": "읽기 뷰 열기",
+    "lane": {
+      "orchestrate": "오케스트레이션",
+      "source": "소스",
+      "deep_read": "심독",
+      "validate": "검증",
+      "draft": "초안"
+    },
+    "status": {
+      "kickoff": "킥오프",
+      "done": "완료",
+      "running": "진행 중",
+      "waiting": "대기",
+      "pending_delivery": "전달 대기",
+      "failed": "실패",
+      "abandoned": "중단"
+    }
   },
   "home": {
     "composer_label": "리서치 세션 만들기",

@@ -146,10 +146,36 @@
     "confidence": "Confidence",
     "detail_hint": "Node detail",
     "summary": "Summary / conclusion",
+    "doing": "In progress",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources."
+  },
+  "logic": {
+    "label": "Research logic",
+    "lr_hint": "Left → right · not Git",
+    "strip_label": "Logic structure",
+    "start": "Start",
+    "end": "End",
+    "end_title": "View delivery",
+    "end_summary": "Open the polished reading view",
+    "lane": {
+      "orchestrate": "Orchestrate",
+      "source": "Sources",
+      "deep_read": "Deep read",
+      "validate": "Validate",
+      "draft": "Draft"
+    },
+    "status": {
+      "kickoff": "Kickoff",
+      "done": "Done",
+      "running": "Running",
+      "waiting": "Waiting",
+      "pending_delivery": "Pending delivery",
+      "failed": "Failed",
+      "abandoned": "Abandoned"
+    }
   },
   "home": {
     "composer_label": "Create a research session",

@@ -161,7 +161,9 @@ export function ResearchNodeDetail({
           {node.summary ? (
             <section>
               <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-                {t(($) => $.node.summary)}
+                {node.status === "active" || node.status === "running"
+                  ? t(($) => $.node.doing)
+                  : t(($) => $.node.summary)}
               </h3>
               <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
                 {node.summary}

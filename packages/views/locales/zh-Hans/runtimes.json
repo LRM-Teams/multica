@@ -341,6 +341,7 @@
       "windows": "Windows PowerShell"
     },
     "status": {
+      "queued": "已排队 — 这台机器下次上线时会自动开始。",
       "pending": "等待守护进程...",
       "running": "更新中...",
       "completed": "更新完成。守护进程正在重启...",

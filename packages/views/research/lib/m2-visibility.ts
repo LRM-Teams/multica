@@ -233,7 +233,9 @@ function extractBoundaryFromText(text: string): HumanBoundaryModel {
     const m =
       line.match(/人[做侧]?[:：]\s*(.+?)\s*[|/｜]\s*AI[做侧]?[:：]\s*(.+)/i) ||
       line.match(/人做[:：]?\s*(.+?)\s*[/／]\s*AI做[:：]?\s*(.+)/i);
-    if (m) matrix.push({ human: m[1].trim(), ai: m[2].trim() });
+    const humanCell = m?.[1]?.trim();
+    const aiCell = m?.[2]?.trim();
+    if (humanCell && aiCell) matrix.push({ human: humanCell, ai: aiCell });
     void lower;
   }
 

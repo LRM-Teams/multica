@@ -177,12 +177,16 @@ func ModelSelectionSupported(providerType string) bool {
 }
 
 // CustomModelIDSupported reports whether the provider accepts an arbitrary
-// model id typed by the user (Raft: Claude Code, Codex, Cursor, Copilot, Pi).
-// Other runtimes are constrained to the discovered dropdown list — showing a
-// free-form input for them produces a silent failure (backend stores any
-// string; the CLI just won't run). Keep this the single source of truth;
-// the models API surfaces it as custom_model_id_supported so the UI never
-// hardcodes a provider whitelist.
+// model id typed by the user. Other runtimes are constrained to the
+// discovered dropdown list — showing a free-form input for them produces a
+// silent failure (backend stores any string; the CLI just won't run). Keep
+// this the single source of truth; the models API surfaces it as
+// custom_model_id_supported so the UI never hardcodes a provider whitelist.
+//
+// Source of the allow-list: Raft runtime handbook ("Custom model ID" for
+// Claude Code, Codex, Cursor, Copilot, Pi). Not independently verified
+// against our provider adapters yet — fold into daemon #47 when provider
+// capabilities are consolidated.
 func CustomModelIDSupported(providerType string) bool {
 	switch providerType {
 	case "claude", "codex", "cursor", "copilot", "pi":

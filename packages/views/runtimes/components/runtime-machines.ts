@@ -140,7 +140,7 @@ export function buildRuntimeMachines(
   const drafts = new Map<string, RuntimeMachineDraft>();
 
   for (const runtime of runtimes) {
-    const id = runtimeMachineId(runtime);
+    const id = runtimeMachineKey(runtime);
     const draft =
       drafts.get(id) ??
       ({
@@ -321,7 +321,8 @@ function finalizeRuntimeMachine(
   };
 }
 
-function runtimeMachineId(runtime: AgentRuntime): string {
+/** Stable machine key used to group code agents that share one computer. */
+export function runtimeMachineKey(runtime: AgentRuntime): string {
   if (runtime.daemon_id) return `${runtime.runtime_mode}:${runtime.daemon_id}`;
   const deviceName = runtimeDeviceName(runtime);
   if (deviceName) return `${runtime.runtime_mode}:device:${deviceName}`;

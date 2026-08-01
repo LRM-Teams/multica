@@ -26,11 +26,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
+import { ComputerPicker } from "../agents/components/computer-picker";
+import {
+  firstUsableMachine,
+  firstUsableRuntimeIdOnMachine,
+  machineForRuntime,
+} from "../agents/components/computer-picker-utils";
 import { RuntimePicker, isRuntimeUsableForUser } from "../agents/components/runtime-picker";
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import { AvatarPicker, type AvatarPickerSelection } from "../agents/components/avatar-picker";
 import { randomPickedAvatarSelection } from "../agents/components/avatar-preset";
+import { buildRuntimeMachines } from "../runtimes/components/runtime-machines";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import { listParam, parseWindyCreateAgentURL } from "./windy-create-agent-link-utils";
@@ -158,10 +165,13 @@ function InlineCreateAgentDialog({
       ? randomPickedAvatarSelection()
       : null;
   };
-  const [selectedRuntimeId, setSelectedRuntimeId] = React.useState(() => {
-    const firstUsable = runtimes.find((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
-    return firstUsable?.id ?? "";
-  });
+  const userId = currentUser?.id ?? null;
+  const machines = React.useMemo(
+    () => buildRuntimeMachines(runtimes, { now: Date.now(), currentUserId: userId }),
+    [runtimes, userId],
+  );
+  const [selectedMachineId, setSelectedMachineId] = React.useState("");
+  const [selectedRuntimeId, setSelectedRuntimeId] = React.useState("");
   const [model, setModel] = React.useState("");
   const [thinkingLevel, setThinkingLevel] = React.useState("");
   const [creating, setCreating] = React.useState(false);
@@ -170,18 +180,43 @@ function InlineCreateAgentDialog({
     if (!open) onClose();
   };
 
-  const firstUsableRuntimeId = runtimes.find((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null))?.id ?? "";
-  const effectiveRuntimeId = selectedRuntimeId || firstUsableRuntimeId;
+  const effectiveMachineId =
+    selectedMachineId ||
+    firstUsableMachine(machines, userId)?.id ||
+    machineForRuntime(
+      runtimes.find((r) => isRuntimeUsableForUser(r, userId)),
+      machines,
+    )?.id ||
+    "";
+  const selectedMachine =
+    machines.find((m) => m.id === effectiveMachineId) ?? null;
+  const machineRuntimes = selectedMachine?.runtimes ?? [];
+  const handleMachineSelect = (machineId: string) => {
+    if (machineId === selectedMachineId) return;
+    setSelectedMachineId(machineId);
+    const next = machines.find((m) => m.id === machineId) ?? null;
+    setSelectedRuntimeId(firstUsableRuntimeIdOnMachine(next, userId));
+  };
+
+  const effectiveRuntimeId =
+    selectedRuntimeId ||
+    firstUsableRuntimeIdOnMachine(selectedMachine, userId);
   const selectedRuntime = runtimes.find((r) => r.id === effectiveRuntimeId) ?? null;
   // Derived, staleness-aware health instead of the raw `status` column
   // (#10 — "runtime online status" had two divergent sources across the
   // app). Computed once so both dropdowns below agree.
   const selectedRuntimeOnline =
     !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
-  const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
+  // Workspace-level empty state (no usable runtime anywhere). Distinct from
+  // selectedRuntimeLocked below — a usable runtime on another machine must
+  // not keep Create enabled when the selected computer's runtime is locked.
+  const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, userId));
+  const selectedRuntimeLocked =
+    selectedRuntime != null &&
+    !isRuntimeUsableForUser(selectedRuntime, userId);
 
   const handleCreate = async () => {
-    if (!selectedRuntime || creating) return;
+    if (!selectedRuntime || creating || selectedRuntimeLocked) return;
     const trimmedModel = model.trim();
     if (!trimmedModel) {
       showErrorToast(t(($) => $.model_dropdown.select_required));
@@ -284,13 +319,24 @@ function InlineCreateAgentDialog({
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2">
-                <RuntimePicker
+                <ComputerPicker
                   runtimes={runtimes}
                   runtimesLoading={runtimesLoading}
+                  currentUserId={userId}
+                  selectedMachineId={effectiveMachineId}
+                  onSelect={handleMachineSelect}
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <RuntimePicker
+                  runtimes={machineRuntimes}
+                  runtimesLoading={runtimesLoading}
                   members={members}
-                  currentUserId={currentUser?.id ?? null}
+                  currentUserId={userId}
                   selectedRuntimeId={effectiveRuntimeId}
                   onSelect={setSelectedRuntimeId}
+                  label={t(($) => $.create_dialog.runtime_label)}
+                  getItemLabel={(runtime) => runtime.name}
                 />
               </div>
               <ModelDropdown
@@ -317,7 +363,18 @@ function InlineCreateAgentDialog({
           <Button type="button" variant="outline" onClick={onClose} disabled={creating} className="w-full sm:w-auto">
             {t(($) => $.windy.cancel)}
           </Button>
-          <Button type="button" onClick={handleCreate} disabled={!selectedRuntime || creating || !hasUsableRuntime || !model.trim()} className="w-full sm:w-auto">
+          <Button
+            type="button"
+            onClick={handleCreate}
+            disabled={
+              !selectedRuntime ||
+              creating ||
+              !hasUsableRuntime ||
+              selectedRuntimeLocked ||
+              !model.trim()
+            }
+            className="w-full sm:w-auto"
+          >
             {creating ? <Loader2 className="size-4 animate-spin" /> : null}
             {t(($) => $.windy.create_agent)}
           </Button>

@@ -96,14 +96,36 @@ vi.mock("../agents/components/thinking-dropdown", () => ({
   ThinkingDropdown: () => null,
 }));
 
-vi.mock("../agents/components/runtime-picker", () => ({
-  isRuntimeUsableForUser: () => true,
-  RuntimePicker: ({ onSelect }: { onSelect: (id: string) => void }) => (
-    <button type="button" onClick={() => onSelect("rt-1")}>
-      pick-runtime
-    </button>
-  ),
-}));
+vi.mock("../agents/components/runtime-picker", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../agents/components/runtime-picker")>();
+  return {
+    ...actual,
+    // Keep real isRuntimeUsableForUser so hire Create gates match create-agent-dialog.
+    RuntimePicker: ({
+      runtimes,
+      selectedRuntimeId,
+      onSelect,
+    }: {
+      runtimes: { id: string; name: string }[];
+      selectedRuntimeId: string;
+      onSelect: (id: string) => void;
+    }) => (
+      <div>
+        <span data-testid="hire-selected-runtime">{selectedRuntimeId}</span>
+        {runtimes.map((runtime) => (
+          <button
+            key={runtime.id}
+            type="button"
+            onClick={() => onSelect(runtime.id)}
+          >
+            {runtime.name}
+          </button>
+        ))}
+      </div>
+    ),
+  };
+});
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
@@ -246,5 +268,76 @@ describe("Windy hire card create path", () => {
 
     expect(createAgentDraft).toHaveBeenCalled();
     expect(createAgentDraft.mock.calls[0]?.[0]).not.toHaveProperty("visibility");
+  });
+
+  it("disables Create when the selected computer only has a locked runtime", async () => {
+    listRuntimes.mockResolvedValue([
+      {
+        id: "rt-locked",
+        workspace_id: "ws-1",
+        daemon_id: "daemon-locked",
+        name: "Locked Private",
+        display_name: "locked-box",
+        runtime_mode: "local",
+        provider: "claude",
+        launch_header: "",
+        status: "online",
+        device_info: "locked-box",
+        metadata: {},
+        current_version: null,
+        update_state: "idle",
+        runtime_health: "ok",
+        owner_id: "user-other",
+        visibility: "private",
+        last_seen_at: "2026-04-27T11:59:50Z",
+        created_at: "2026-04-01T00:00:00Z",
+        updated_at: "2026-04-01T00:00:00Z",
+      },
+      {
+        id: "rt-mine",
+        workspace_id: "ws-1",
+        daemon_id: "daemon-mine",
+        name: "My Runtime",
+        display_name: "my-box",
+        runtime_mode: "local",
+        provider: "cursor",
+        launch_header: "",
+        status: "online",
+        device_info: "my-box",
+        metadata: {},
+        current_version: null,
+        update_state: "idle",
+        runtime_health: "ok",
+        owner_id: "user-me",
+        visibility: "private",
+        last_seen_at: "2026-04-27T11:59:50Z",
+        created_at: "2026-04-01T00:00:00Z",
+        updated_at: "2026-04-01T00:00:00Z",
+      },
+    ]);
+
+    renderHire();
+    fireEvent.click(screen.getByRole("button", { name: /Hire/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
+    });
+
+    // Default seeds to my-box (usable). Switch to locked-box — Create must
+    // disable even though another machine still has a usable runtime.
+    fireEvent.click(screen.getByText("my-box", { selector: "div.truncate" }));
+    fireEvent.click(
+      screen.getByText("locked-box", { selector: "div.truncate" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hire-selected-runtime").textContent).toBe(
+        "rt-locked",
+      );
+    });
+    expect(
+      (screen.getByRole("button", { name: /^Create Agent$/i }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(createAgent).not.toHaveBeenCalled();
   });
 });

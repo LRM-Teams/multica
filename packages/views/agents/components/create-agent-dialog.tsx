@@ -1,9 +1,15 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
 import { ThinkingDropdown } from "./thinking-dropdown";
+import { ComputerPicker } from "./computer-picker";
+import {
+  firstUsableMachine,
+  firstUsableRuntimeIdOnMachine,
+  machineForRuntime,
+} from "./computer-picker-utils";
 import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
@@ -39,6 +45,7 @@ import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { CharCounter } from "./char-counter";
 import { randomPickedAvatarSelection } from "./avatar-preset";
+import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 import { useT } from "../../i18n";
 
 export function CreateAgentDialog({
@@ -118,11 +125,25 @@ export function CreateAgentDialog({
   );
   const [creating, setCreating] = useState(false);
 
-  // Duplicate-mode pre-fill: clone lands on the source agent's runtime so
-  // the user doesn't have to re-pick. Skipped when that runtime is now
-  // locked for the caller (Create would 403). Empty fallback hands the
-  // job to RuntimePicker — it owns filter state, so it's the only place
-  // that knows which runtimes are visible right now.
+  // Computer → runtime selection (Frank 2026-08-01). Duplicate mode seeds
+  // from the template's computer+runtime when still usable; otherwise the
+  // parent derives the first usable machine (no effect-based seeding).
+  const initialMachines = buildRuntimeMachines(runtimes, {
+    now: Date.now(),
+    currentUserId,
+  });
+  const [selectedMachineId, setSelectedMachineId] = useState(() => {
+    const templateRuntime = template?.runtime_id
+      ? runtimes.find((r) => r.id === template.runtime_id)
+      : undefined;
+    if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
+      return machineForRuntime(templateRuntime, initialMachines)?.id ?? "";
+    }
+    const usableRuntime = runtimes.find((r) =>
+      isRuntimeUsableForUser(r, currentUserId),
+    );
+    return machineForRuntime(usableRuntime, initialMachines)?.id ?? "";
+  });
   const [selectedRuntimeId, setSelectedRuntimeId] = useState(() => {
     const templateRuntime = template?.runtime_id
       ? runtimes.find((r) => r.id === template.runtime_id)
@@ -130,11 +151,36 @@ export function CreateAgentDialog({
     if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
       return templateRuntime.id;
     }
-    const usableRuntime = runtimes.find((r) => isRuntimeUsableForUser(r, currentUserId));
-    return usableRuntime?.id ?? "";
+    const machine =
+      initialMachines.find((m) => m.id === selectedMachineId) ?? null;
+    return firstUsableRuntimeIdOnMachine(machine, currentUserId);
   });
 
-  const selectedRuntime = runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
+  const machines = useMemo(
+    () => buildRuntimeMachines(runtimes, { now: Date.now(), currentUserId }),
+    [runtimes, currentUserId],
+  );
+  const effectiveMachineId =
+    selectedMachineId ||
+    firstUsableMachine(machines, currentUserId)?.id ||
+    "";
+  const selectedMachine =
+    machines.find((m) => m.id === effectiveMachineId) ?? null;
+  // Runtime dropdown only lists providers on the chosen computer —
+  // never other machines' runtimes.
+  const machineRuntimes = selectedMachine?.runtimes ?? [];
+  const effectiveRuntimeId =
+    selectedRuntimeId ||
+    firstUsableRuntimeIdOnMachine(selectedMachine, currentUserId);
+
+  const handleMachineSelect = (machineId: string) => {
+    if (machineId === selectedMachineId) return;
+    setSelectedMachineId(machineId);
+    const next = machines.find((m) => m.id === machineId) ?? null;
+    setSelectedRuntimeId(firstUsableRuntimeIdOnMachine(next, currentUserId));
+  };
+
+  const selectedRuntime = runtimes.find((d) => d.id === effectiveRuntimeId) ?? null;
   // Derived, staleness-aware health instead of the raw `status` column
   // (#10 — "runtime online status" had two divergent sources across the
   // app). Computed once so both dropdowns below agree.
@@ -295,13 +341,23 @@ export function CreateAgentDialog({
             </div>
 
 
-            <RuntimePicker
+            <ComputerPicker
               runtimes={runtimes}
+              runtimesLoading={runtimesLoading}
+              currentUserId={currentUserId}
+              selectedMachineId={effectiveMachineId}
+              onSelect={handleMachineSelect}
+            />
+
+            <RuntimePicker
+              runtimes={machineRuntimes}
               runtimesLoading={runtimesLoading}
               members={members}
               currentUserId={currentUserId}
-              selectedRuntimeId={selectedRuntimeId}
+              selectedRuntimeId={effectiveRuntimeId}
               onSelect={setSelectedRuntimeId}
+              label={t(($) => $.create_dialog.runtime_label)}
+              getItemLabel={(runtime) => runtime.name}
             />
 
             <ModelDropdown

@@ -25,6 +25,18 @@ export function RuntimePicker({
   currentUserId,
   selectedRuntimeId,
   onSelect,
+  /**
+   * Create-flow label override. After computer-first selection, the second
+   * picker is the code agent on that computer — keep the default "Runtime"
+   * label elsewhere so we don't do a product-wide rename.
+   */
+  label,
+  /**
+   * Per-row label. Default keeps `runtimeDisplayLabel` (honours machine
+   * rename). Code-agent-after-computer passes `runtime.name` so Cursor vs
+   * Pi stay distinct when they share the machine `display_name`.
+   */
+  getItemLabel = runtimeDisplayLabel,
 }: {
   runtimes: RuntimeDevice[];
   runtimesLoading?: boolean;
@@ -32,10 +44,13 @@ export function RuntimePicker({
   currentUserId: string | null;
   selectedRuntimeId: string;
   onSelect: (id: string) => void;
+  label?: string;
+  getItemLabel?: (runtime: RuntimeDevice) => string;
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState<RuntimeFilter>("mine");
+  const pickerLabel = label ?? t(($) => $.create_dialog.runtime_label);
 
   const getOwnerMember = (ownerId: string | null) => {
     if (!ownerId) return null;
@@ -86,7 +101,7 @@ export function RuntimePicker({
     <div className="flex flex-col min-w-0">
       <div className="flex h-6 items-center justify-between">
         <Label className="text-xs text-muted-foreground">
-          {t(($) => $.create_dialog.runtime_label)}
+          {pickerLabel}
         </Label>
         {hasOtherRuntimes && (
           <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
@@ -136,7 +151,7 @@ export function RuntimePicker({
                 {runtimesLoading
                   ? t(($) => $.create_dialog.runtime_loading)
                   : (selectedRuntime
-                      ? runtimeDisplayLabel(selectedRuntime)
+                      ? getItemLabel(selectedRuntime)
                       : t(($) => $.create_dialog.runtime_none))}
               </span>
               {selectedRuntime?.runtime_mode === "cloud" && (
@@ -193,7 +208,7 @@ export function RuntimePicker({
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="truncate font-medium">{runtimeDisplayLabel(device)}</span>
+                    <span className="truncate font-medium">{getItemLabel(device)}</span>
                     {device.runtime_mode === "cloud" && (
                       <span className="shrink-0 rounded bg-brand/10 px-1.5 py-0.5 text-xs font-medium text-brand">
                         {t(($) => $.create_dialog.runtime_cloud_badge)}

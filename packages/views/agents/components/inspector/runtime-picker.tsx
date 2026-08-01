@@ -10,17 +10,17 @@ import {
   PropertyPicker,
 } from "../../../issues/components/pickers";
 import { ProviderLogo } from "../../../runtimes/components/provider-logo";
-import { runtimeDisplayLabel } from "../../../runtimes/components/runtime-machines";
+import { runtimeMachineKey } from "../../../runtimes/components/runtime-machines";
 import { CHIP_CLASS } from "./chip";
 import { useT } from "../../../i18n";
 
 type Filter = "mine" | "all";
 
 /**
- * Inline runtime picker for the agent inspector. Mirrors the runtime selector
- * the previous Settings tab embedded — same Mine/All filter, same provider
- * logos, same online dot — but renders inside the inspector's PropRow so
- * users don't have to leave the page to switch runtime.
+ * Inline runtime/code-agent picker for the agent inspector.
+ * Computer is bound at create time and shown as a separate read-only row —
+ * this picker only lists code agents on the same computer, so changing it
+ * cannot move the agent to another machine.
  */
 export function RuntimePicker({
   value,
@@ -47,6 +47,16 @@ export function RuntimePicker({
   // Computed once per render, outside JSX, so react:doctor's
   // hydration-mismatch rule doesn't flag a fresh Date.now() per row.
   const now = Date.now();
+  // Lock computer: only peers that share the bound machine key are options.
+  // When the bound runtime is missing from `runtimes` (deleted / not loaded),
+  // boundMachineKey is null — fall back to the full list so the user can
+  // re-bind to a living runtime (orphan recovery). Not a cross-machine move
+  // of a still-present binding.
+  const boundMachineKey = selected ? runtimeMachineKey(selected) : null;
+  const sameComputerRuntimes = useMemo(() => {
+    if (!boundMachineKey) return runtimes;
+    return runtimes.filter((r) => runtimeMachineKey(r) === boundMachineKey);
+  }, [runtimes, boundMachineKey]);
 
   // Compute filtered list unconditionally — the early `!canEdit` return
   // below would otherwise re-order this hook across renders.
@@ -56,23 +66,27 @@ export function RuntimePicker({
     return r.visibility !== "public";
   };
   const filtered = useMemo(() => {
+    const locked = (r: AgentRuntime): boolean => {
+      if (!currentUserId) return false;
+      if (r.owner_id === currentUserId) return false;
+      return r.visibility !== "public";
+    };
     const list =
       filter === "mine" && currentUserId
-        ? runtimes.filter((r) => r.owner_id === currentUserId)
-        : runtimes;
+        ? sameComputerRuntimes.filter((r) => r.owner_id === currentUserId)
+        : sameComputerRuntimes;
     return list.toSorted((a, b) => {
       const aMine = a.owner_id === currentUserId;
       const bMine = b.owner_id === currentUserId;
       if (aMine && !bMine) return -1;
       if (!aMine && bMine) return 1;
-      const aDisabled = isDisabled(a);
-      const bDisabled = isDisabled(b);
+      const aDisabled = locked(a);
+      const bDisabled = locked(b);
       if (!aDisabled && bDisabled) return -1;
       if (aDisabled && !bDisabled) return 1;
       return 0;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runtimes, filter, currentUserId]);
+  }, [sameComputerRuntimes, filter, currentUserId]);
 
   if (!canEdit) {
     const isOnline = !!selected && deriveRuntimeHealth(selected, now) === "online";
@@ -80,7 +94,7 @@ export function RuntimePicker({
       <span className="inline-flex min-w-0 items-center gap-1.5 px-1.5 py-0.5 text-xs text-muted-foreground">
         <Icon className="h-3 w-3 shrink-0" />
         <span className="min-w-0 truncate font-mono">
-          {selected ? runtimeDisplayLabel(selected) : t(($) => $.pickers.runtime_none)}
+          {selected ? selected.name : t(($) => $.pickers.runtime_none)}
         </span>
         {selected && (
           <span
@@ -92,21 +106,21 @@ export function RuntimePicker({
       </span>
     );
   }
-  // The chip shows the runtime's display label (user-editable name, falling
-  // back to the daemon-reported raw hostname — see runtimeDisplayLabel). We
-  // deliberately do NOT append `device_info` to the tooltip — that string
-  // also leads with the host and would just repeat what's already in the
-  // label, producing the "Claude (host) (host · 2.1.121 (Claude Code))" mess.
-  const triggerLabel = selected ? runtimeDisplayLabel(selected) : t(($) => $.pickers.runtime_none);
+  // Code-agent chip uses daemon-reported `name` (e.g. "Cursor (s144)"), not
+  // machine `display_name` — that label belongs on the Computer row. Using
+  // display_name here made every code agent on a renamed machine look identical.
+  const triggerLabel = selected ? selected.name : t(($) => $.pickers.runtime_none);
   const isOnline = !!selected && deriveRuntimeHealth(selected, now) === "online";
   const triggerTitle = selected
     ? t(($) => $.pickers.runtime_tooltip, {
-        name: runtimeDisplayLabel(selected),
+        name: selected.name,
         status: isOnline ? t(($) => $.pickers.runtime_online) : t(($) => $.pickers.runtime_offline),
       })
     : t(($) => $.pickers.runtime_tooltip_none);
 
-  const hasOtherRuntimes = runtimes.some((r) => r.owner_id !== currentUserId);
+  const hasOtherRuntimes = sameComputerRuntimes.some(
+    (r) => r.owner_id !== currentUserId,
+  );
 
   const getOwner = (id: string | null) =>
     id ? members.find((m) => m.user_id === id) ?? null : null;
@@ -174,7 +188,7 @@ export function RuntimePicker({
           const rtOnline = deriveRuntimeHealth(rt, now) === "online";
           const locked = isDisabled(rt);
           const tooltip = [
-            runtimeDisplayLabel(rt),
+            rt.name,
             owner ? t(($) => $.pickers.runtime_owned_by, { name: owner.name }) : null,
             rtOnline ? t(($) => $.pickers.runtime_online) : t(($) => $.pickers.runtime_offline),
             locked ? t(($) => $.create_dialog.runtime_private_locked_tooltip) : null,
@@ -199,7 +213,7 @@ export function RuntimePicker({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="truncate text-sm font-medium">
-                    {runtimeDisplayLabel(rt)}
+                    {rt.name}
                   </span>
                   {rt.runtime_mode === "cloud" && (
                     <span className="shrink-0 rounded bg-brand/10 px-1 text-[10px] font-medium text-brand">

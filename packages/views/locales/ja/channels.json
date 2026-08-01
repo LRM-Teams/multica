@@ -106,6 +106,7 @@
     "process_updating": "更新中",
     "process_refresh": "プロセスを更新",
     "process_close": "プロセスパネルを閉じる",
+    "process_version": "v{{version}}",
     "updated_at": "{{when}}に更新",
     "none": "なし",
     "set": "目標を設定",

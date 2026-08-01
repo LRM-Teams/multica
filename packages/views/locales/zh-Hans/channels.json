@@ -106,6 +106,7 @@
     "process_updating": "正在更新",
     "process_refresh": "刷新过程",
     "process_close": "关闭过程面板",
+    "process_version": "v{{version}}",
     "updated_at": "更新于 {{when}}",
     "none": "无",
     "set": "设定目标",

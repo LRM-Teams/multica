@@ -220,7 +220,9 @@ export function GoalProcessPanel({
               when: timeAgo(processDoc.updated_at),
             })}
           </span>
-          <span>v{processDoc.version}</span>
+          <span>
+            {t(($) => $.goal.process_version, { version: processDoc.version })}
+          </span>
         </div>
         {processFetching ? (
           <p className="text-[11px] text-muted-foreground">{t(($) => $.goal.process_updating)}</p>

@@ -106,6 +106,7 @@
     "process_updating": "업데이트 중",
     "process_refresh": "과정 새로고침",
     "process_close": "과정 패널 닫기",
+    "process_version": "v{{version}}",
     "updated_at": "{{when}}에 업데이트됨",
     "none": "없음",
     "set": "목표 설정",

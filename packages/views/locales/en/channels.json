@@ -106,6 +106,7 @@
     "process_updating": "Updating",
     "process_refresh": "Refresh process",
     "process_close": "Close process panel",
+    "process_version": "v{{version}}",
     "updated_at": "Updated {{when}}",
     "none": "None",
     "set": "Set goal",

@@ -767,6 +767,18 @@ export interface UpdateAgentEnvRequest {
  * multica-ai/multica#2174). Use `Skill` from a detail endpoint when you need
  * the body. For skills embedded in an `Agent` payload see `AgentSkillSummary`.
  */
+/**
+ * LRM-954 — Skill grant / promotion tier.
+ * L1=`agent` (default on import), L2=`channel`, L3=`workspace`.
+ */
+export type SkillGrantLevel = "agent" | "channel" | "workspace";
+
+/** Server-computed promote gates for the current caller (LRM-954). */
+export interface SkillCapabilities {
+  can_promote_to_channel: boolean;
+  can_promote_to_workspace: boolean;
+}
+
 export interface SkillSummary {
   id: string;
   workspace_id: string;
@@ -776,11 +788,41 @@ export interface SkillSummary {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  /** LRM-954; absent on older servers → treat as `"agent"`. */
+  grant_level?: SkillGrantLevel;
+  /** Set when `grant_level === "channel"`. */
+  channel_id?: string | null;
+  /** Promote buttons; absent → no promote entry. */
+  capabilities?: SkillCapabilities;
 }
 
 export interface Skill extends SkillSummary {
   content: string;
   files: SkillFile[];
+}
+
+/** One row from `GET /api/skills/{id}/promotions` (LRM-954). */
+export interface SkillPromotion {
+  id: string;
+  skill_id: string;
+  from_level: SkillGrantLevel;
+  to_level: SkillGrantLevel;
+  channel_id: string | null;
+  actor_type: "member" | "agent" | string;
+  actor_id: string;
+  actor_display_name?: string | null;
+  created_at: string;
+}
+
+export interface SkillPromotionsResponse {
+  items: SkillPromotion[];
+  total?: number;
+}
+
+export interface PromoteSkillRequest {
+  to_level: "channel" | "workspace";
+  /** Required when `to_level === "channel"`. */
+  channel_id?: string;
 }
 
 export interface SkillFile {

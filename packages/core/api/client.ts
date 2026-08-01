@@ -88,6 +88,8 @@ import type {
   User,
   Skill,
   SkillSummary,
+  PromoteSkillRequest,
+  SkillPromotionsResponse,
   PlatformSkillSummary,
   AgentMemory,
   ListAgentSkillSuggestionsResponse,
@@ -2480,6 +2482,19 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  /** LRM-954 — promote skill grant level (agent → channel → workspace). */
+  async promoteSkill(id: string, data: PromoteSkillRequest): Promise<Skill> {
+    return this.fetch(`/api/skills/${id}/promote`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  /** LRM-954 — promotion audit trail for a skill. */
+  async listSkillPromotions(id: string): Promise<SkillPromotionsResponse> {
+    return this.fetch(`/api/skills/${id}/promotions`);
   }
 
   async listAgentSkills(agentId: string): Promise<SkillSummary[]> {

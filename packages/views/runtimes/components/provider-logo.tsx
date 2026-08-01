@@ -213,7 +213,7 @@ export type KnownProvider = {
 
 export const KNOWN_PROVIDERS: readonly KnownProvider[] = [
   { id: "claude", label: "Claude Code" },
-  { id: "codex", label: "Codex" },
+  { id: "codex", label: "Codex CLI" },
   { id: "opencode", label: "OpenCode" },
   { id: "pi", label: "Pi" },
   { id: "cursor", label: "Cursor" },

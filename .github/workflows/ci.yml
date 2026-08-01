@@ -107,9 +107,14 @@ jobs:
       - name: Build, type check, lint
         # Web-only (Frank 2026-07-28): drop desktop/docs/mobile from the PR
         # frontend job so CI stays on the product surface that still ships.
-        # Mobile remains path-filtered in mobile-verify.yml; desktop packaging
-        # is out of the main release gate (#1320). Dependents of @multica/web
-        # (core/ui/views) are included via the `...` selector.
+        # Desktop packaging is out of the main release gate (#1320). Mobile
+        # has had ZERO CI coverage since mobile-verify.yml was deleted
+        # 2026-07-29 (#1405) — there is no other workflow watching it, despite
+        # what an earlier version of this comment claimed. Desktop typecheck
+        # and apps/docs are likewise uncovered here. See task #12 for the
+        # per-surface include/exempt decisions (in progress as of 2026-08-01).
+        # Dependents of @multica/web (core/ui/views) are included via the
+        # `...` selector.
         run: pnpm exec turbo build typecheck lint --filter='@multica/web...'
 
       - name: Report runner size

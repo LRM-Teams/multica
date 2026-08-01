@@ -397,6 +397,13 @@ test("example", async ({ page }) => {
 make check    # Runs all checks: typecheck, unit tests, Go tests, E2E
 ```
 
+⚠️ **CI does not run the E2E step of `make check`.** GitHub Actions
+(`.github/workflows/ci.yml`) runs typecheck/lint/unit tests and Go tests on
+every PR, but never `pnpm exec playwright test` — there is no CI job for it.
+`make check` locally is the only thing that exercises E2E; a PR merging
+green has NOT had its E2E suite verified. See task #12 (2026-08-01) for the
+decision on whether/how to close this gap.
+
 Run verification only when the user explicitly asks for it.
 
 For targeted checks when requested:

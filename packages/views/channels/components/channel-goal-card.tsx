@@ -1,12 +1,13 @@
 "use client";
 
-import { useReducer } from "react";
+import { useMemo, useReducer, useState } from "react";
 import {
   Ban,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Circle,
+  FileText,
   Flag,
   ListChecks,
   Pause,
@@ -17,6 +18,9 @@ import { useQuery } from "@tanstack/react-query";
 import type { ChannelGoal, UpdateChannelGoalRequest } from "@multica/core/types";
 import {
   channelGoalOptions,
+  channelGoalProcessesOptions,
+  channelMemberRole,
+  channelMembersOptions,
   useCreateChannelGoal,
   useUpdateChannelGoal,
 } from "@multica/core/channels";
@@ -45,8 +49,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
+import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n";
+import { GOAL_PROCESS_PANEL_ID, GoalProcessPanel } from "./goal-process-panel";
 
 interface ChannelGoalCardProps {
   channelId: string;
@@ -221,10 +228,30 @@ function GoalProgressDialog({
   );
 }
 
-export function ChannelGoalCard({ channelId, canManage, archived = false }: ChannelGoalCardProps) {
+export function ChannelGoalCard({
+  channelId,
+  canManage,
+  archived = false,
+}: ChannelGoalCardProps) {
   const { t } = useT("channels");
+  const isMobile = useIsMobile();
   const { data, isPending, isError, refetch } = useQuery(channelGoalOptions(channelId));
   const goal = data?.goal ?? null;
+  const { data: members = [] } = useQuery(channelMembersOptions(channelId));
+  const { data: processesData } = useQuery({
+    ...channelGoalProcessesOptions(channelId),
+    enabled: !!goal,
+  });
+  const managers = useMemo(
+    () =>
+      members.filter(
+        (member) => member.member_type === "agent" && channelMemberRole(member) === "manager",
+      ),
+    [members],
+  );
+  const [processOpen, setProcessOpen] = useState(false);
+  const hasProcessUpdates =
+    !processOpen && (processesData?.processes.some((doc) => doc.content.trim()) ?? false);
   const createGoal = useCreateChannelGoal(channelId);
   const updateGoal = useUpdateChannelGoal(channelId);
   const [ui, setUI] = useReducer(mergeState<GoalCardUIState>, {
@@ -270,12 +297,19 @@ export function ChannelGoalCard({ channelId, canManage, archived = false }: Chan
     if (!canManage || archived) return null;
     return (
       <>
-        <div className="flex shrink-0 items-center justify-between border-b border-border/40 bg-muted/15 px-4 py-1.5">
-          <span className="text-xs text-muted-foreground">{t(($) => $.goal.empty)}</span>
-          <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-xs" onClick={() => setUI({ intentMode: "create", actionError: null })}>
-            <Flag className="size-3.5" />
-            {t(($) => $.goal.set)}
-          </Button>
+        <div className="flex shrink-0 items-center gap-1 border-b border-border/40 bg-muted/15 px-4 py-1.5">
+          <Flag className="size-3.5 shrink-0 text-muted-foreground/70" />
+          <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+            {t(($) => $.goal.empty_nl)}
+            {" · "}
+            <button
+              type="button"
+              className="text-brand underline underline-offset-2 hover:opacity-90"
+              onClick={() => setUI({ intentMode: "create", actionError: null })}
+            >
+              {t(($) => $.goal.set_manually)}
+            </button>
+          </span>
         </div>
         {intentMode === "create" ? (
           <GoalIntentDialog
@@ -319,10 +353,70 @@ export function ChannelGoalCard({ channelId, canManage, archived = false }: Chan
             </div>
             {goal.current_step ? <p className="truncate text-xs text-muted-foreground">{goal.current_step}</p> : null}
           </button>
+          <button
+            type="button"
+            data-testid="channel-goal-process-entry"
+            aria-expanded={processOpen}
+            aria-controls={GOAL_PROCESS_PANEL_ID}
+            onClick={() => setProcessOpen((open) => !open)}
+            className={cn(
+              "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-input px-2.5 text-xs font-semibold transition-colors",
+              processOpen
+                ? "border-brand/45 bg-brand-soft text-brand"
+                : "bg-background text-foreground hover:bg-muted/60",
+            )}
+          >
+            {isMobile ? (
+              <>
+                <FileText className="size-3.5" />
+                {managers.length > 0 ? <span>{managers.length}</span> : null}
+              </>
+            ) : (
+              <>
+                {managers.length > 0 ? (
+                  <span className="flex items-center pl-1">
+                    {managers.slice(0, 3).map((manager, index) => (
+                      <span
+                        key={manager.member_id}
+                        className={cn("relative inline-flex", index > 0 && "-ml-1")}
+                        style={{ zIndex: 3 - index }}
+                      >
+                        <ActorAvatar
+                          actorType="agent"
+                          actorId={manager.member_id}
+                          size={18}
+                          className="ring-2 ring-background"
+                          name={manager.display_name || manager.name}
+                          avatarUrlHint={manager.avatar_url}
+                          showStatusDot={false}
+                          profileLink={false}
+                        />
+                      </span>
+                    ))}
+                  </span>
+                ) : null}
+                <span>{t(($) => $.goal.process)}</span>
+                {hasProcessUpdates ? (
+                  <span
+                    className="size-1.5 rounded-full bg-running"
+                    aria-label={t(($) => $.goal.process_updating)}
+                  />
+                ) : null}
+              </>
+            )}
+          </button>
           <Button size="icon" variant="ghost" className="size-7" aria-label={expanded ? t(($) => $.goal.collapse) : t(($) => $.goal.expand)} onClick={() => setUI({ expanded: !expanded })}>
             {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
           </Button>
         </div>
+        {processOpen ? (
+          <GoalProcessPanel
+            key={goal.id}
+            channelId={channelId}
+            goal={goal}
+            onClose={() => setProcessOpen(false)}
+          />
+        ) : null}
         {expanded ? (
           <div className="space-y-3 border-t border-border/40 px-4 py-3 text-sm">
             <p className="text-muted-foreground">{goal.objective}</p>

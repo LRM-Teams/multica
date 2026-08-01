@@ -94,6 +94,8 @@ export { classifyRoleChangeFailure, type RoleChangeFailure } from "./role-change
 export {
   channelGoalKeys,
   channelGoalOptions,
+  channelGoalProcessesOptions,
+  channelGoalProcessOptions,
   useCreateChannelGoal,
   useUpdateChannelGoal,
 } from "./goal";

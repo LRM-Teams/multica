@@ -1,11 +1,15 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import type { CreateChannelGoalRequest, UpdateChannelGoalRequest } from "../types";
 import type { ChannelGoalEnvelope } from "../types";
 
 export const channelGoalKeys = {
   all: () => ["channel-goal"] as const,
   detail: (channelId: string) => [...channelGoalKeys.all(), channelId] as const,
+  processes: (channelId: string) =>
+    [...channelGoalKeys.detail(channelId), "process"] as const,
+  process: (channelId: string, managerAgentId: string) =>
+    [...channelGoalKeys.processes(channelId), managerAgentId] as const,
 };
 
 export function channelGoalOptions(channelId: string) {
@@ -19,6 +23,36 @@ export function channelGoalOptions(channelId: string) {
         ? (await api.getChannelGoal(channelId)) ?? { goal: null }
         : { goal: null },
     enabled: !!channelId,
+  });
+}
+
+export function channelGoalProcessesOptions(channelId: string) {
+  return queryOptions({
+    queryKey: channelGoalKeys.processes(channelId),
+    queryFn: async () =>
+      typeof api.listChannelGoalProcesses === "function"
+        ? await api.listChannelGoalProcesses(channelId)
+        : { goal_id: "", processes: [] },
+    enabled: !!channelId,
+  });
+}
+
+export function channelGoalProcessOptions(channelId: string, managerAgentId: string) {
+  return queryOptions({
+    queryKey: channelGoalKeys.process(channelId, managerAgentId),
+    queryFn: async () => {
+      if (typeof api.getChannelGoalProcess !== "function") return { process: null };
+      try {
+        return await api.getChannelGoalProcess(channelId, managerAgentId);
+      } catch (error) {
+        // 404 = manager has not written process md yet (explicit empty, not failure).
+        if (error instanceof ApiError && error.status === 404) {
+          return { process: null };
+        }
+        throw error;
+      }
+    },
+    enabled: !!channelId && !!managerAgentId,
   });
 }
 

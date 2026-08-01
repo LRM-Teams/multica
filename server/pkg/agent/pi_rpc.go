@@ -305,9 +305,21 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 		b.dispose(p)
 		return Result{Status: "failed", Error: fmt.Sprintf("Pi RPC prompt write: %v", err)}
 	}
-	response, ok := waitPiRPCResponse(ctx, turn, "multica-turn")
+	response, dead, ok := waitPiRPCResponse(ctx, turn, "multica-turn")
 	if !ok {
 		b.dispose(p)
+		if dead != nil {
+			// Task #65: the process died (or an out-of-order terminal event
+			// arrived) before the initial prompt ack — surface readEvents'
+			// actual completion (which already carries AgentForceKilledMarker
+			// when applicable) instead of falling through to the generic
+			// ctx-based result, which would misreport this as "aborted" even
+			// though ctx was never cancelled.
+			if dead.err != "" {
+				return Result{Status: "failed", Error: dead.err}
+			}
+			return Result{Status: "failed", Error: "Pi RPC process ended before the prompt was acknowledged"}
+		}
 		return piRPCContextResult(ctx)
 	}
 	if !response.Success {
@@ -517,15 +529,27 @@ func piRPCDispatchEvent(event piRPCEvent, turn *piRPCTurn) {
 	}
 }
 
-func waitPiRPCResponse(ctx context.Context, turn *piRPCTurn, id string) (piRPCResponse, bool) {
+// waitPiRPCResponse waits for the id-matching response, or bails out early if
+// either ctx is done or turn.done fires first. Task #65: turn.done firing
+// here means readEvents' terminal signal (process exit, or an "error"/
+// "agent_end" event) landed before the id-matching response arrived — most
+// notably, ForceKill() killing the process during this wait doesn't cancel
+// ctx, so without this case the wait only unblocks via ctx.Done(), which may
+// have no deadline at all. The returned *piRPCCompletion is non-nil exactly
+// when turn.done was the reason for returning, so callers can surface its
+// actual error (which already carries AgentForceKilledMarker when
+// applicable) instead of guessing from ctx.Err().
+func waitPiRPCResponse(ctx context.Context, turn *piRPCTurn, id string) (piRPCResponse, *piRPCCompletion, bool) {
 	for {
 		select {
 		case response := <-turn.response:
 			if response.ID == id {
-				return response, true
+				return response, nil, true
 			}
+		case completion := <-turn.done:
+			return piRPCResponse{}, &completion, false
 		case <-ctx.Done():
-			return piRPCResponse{}, false
+			return piRPCResponse{}, nil, false
 		}
 	}
 }
@@ -567,7 +591,7 @@ func (p *piRPCProcess) queryRuntimeStats(ctx context.Context, turn *piRPCTurn, f
 		if err := p.writeCommand(map[string]any{"id": "multica-stats", "type": "get_session_stats"}); err != nil {
 			return nil
 		}
-		response, ok := waitPiRPCResponse(statsCtx, turn, "multica-stats")
+		response, _, ok := waitPiRPCResponse(statsCtx, turn, "multica-stats")
 		if !ok || !response.Success || len(response.Data) == 0 {
 			return nil
 		}
@@ -578,7 +602,7 @@ func (p *piRPCProcess) queryRuntimeStats(ctx context.Context, turn *piRPCTurn, f
 		if err := p.writeCommand(map[string]any{"id": "multica-state", "type": "get_state"}); err != nil {
 			return stats
 		}
-		stateResponse, ok := waitPiRPCResponse(statsCtx, turn, "multica-state")
+		stateResponse, _, ok := waitPiRPCResponse(statsCtx, turn, "multica-state")
 		if ok && stateResponse.Success && len(stateResponse.Data) > 0 {
 			applyPiRPCStateStats(stats, stateResponse.Data)
 		}

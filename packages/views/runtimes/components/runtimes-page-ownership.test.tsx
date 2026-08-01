@@ -149,3 +149,34 @@ describe("MachineListView — ownership grouping", () => {
     expect(screen.getByTestId("owner-avatar")).toHaveTextContent("user-other");
   });
 });
+
+describe("MachineListView — row select hit-target (LRM-923 / #23)", () => {
+  // jsdom doesn't implement CSS pointer-events for hit-testing (fireEvent
+  // dispatches directly at a named target, bypassing the browser's "which
+  // element actually receives this click" step) — so a click-simulation
+  // test on the name text would pass identically whether or not the bug is
+  // present, since both variants have the exact same DOM ancestor chain.
+  // Asserting the CSS class directly is what genuinely discriminates here:
+  // the row's absolute select button sits behind the name at z-0, and
+  // whichever sibling carries `pointer-events-auto` is the one a real
+  // browser routes the click to.
+  it("does not trap pointer events on the machine name — a real click must fall through to the row's select button", () => {
+    const machines = [makeMachine("m1", "My box", "user-mine")];
+    renderList(machines, "user-mine");
+
+    const nameWrapper = screen.getByText("My box").parentElement!;
+    expect(nameWrapper.className).not.toContain("pointer-events-auto");
+  });
+
+  it("keeps pointer-events-auto scoped to just the owner avatar badge, not the whole row content", () => {
+    const machines = [
+      makeMachine("m1", "My box", "user-mine"),
+      makeMachine("m2", "Their box", "user-other"),
+    ];
+    renderList(machines, "user-mine");
+    fireEvent.click(screen.getByText("Team public (1)"));
+
+    const avatarBadge = screen.getByTestId("owner-avatar").parentElement!;
+    expect(avatarBadge.className).toContain("pointer-events-auto");
+  });
+});

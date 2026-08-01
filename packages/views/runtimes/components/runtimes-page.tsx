@@ -510,14 +510,22 @@ export function MachineListView({
           <HealthDot health={machine.health} />
         </span>
         <div className="relative z-10 min-w-0 flex-1 pointer-events-none">
-          <div className="pointer-events-auto flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5">
             <MachineNameEditor
               machine={machine}
               wsId={wsId}
               variant="list"
             />
             {ownerId && (
-              <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+              // Scoped to just the avatar+name, not the whole row content —
+              // it's the only thing here with its own click handler
+              // (ActorAvatar opens a profile popover). The name text next to
+              // it has none, so it must stay pointer-events-none and let the
+              // click fall through to the row's select button underneath
+              // (LRM-923 / #23: this div used to carry pointer-events-auto
+              // for a pencil-rename button that list rows no longer render,
+              // silently eating clicks meant to select the row).
+              <span className="pointer-events-auto inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                 <ActorAvatar actorType="member" actorId={ownerId} size={18} />
                 <span className="max-w-20 truncate">
                   {getActorName("member", ownerId)}

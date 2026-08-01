@@ -102,9 +102,10 @@ const noopMarkRead = () => {};
  * ConversationAgentActivityLine (preparing / Thinking / Stop). Status
  * perception redesign is a separate issue.
  *
- * LRM-594 kept the heavy Working list / Stop chrome out of the 1:1 header
- * (Stop stays in AgentProfileActions). We still show a bubble-style short
- * cue (思考中 / Edit / Shell + breathe) so entering the DM is not silent
+ * LRM-594 kept the heavy Working list / Stop chrome out of the 1:1 header.
+ * LRM-909: Profile ACTIONS no longer exposes Stop either — stop lives on
+ * the DM live cue when present. We still show a bubble-style short cue
+ * (思考中 / Edit / Shell + breathe) so entering the DM is not silent
  * while the agent works — no path/command details, no Working list.
  *
  * The DM header chrome differs from the group header: peer avatar + name (+

@@ -34,6 +34,7 @@
   "list": {
     "loading": "正在加载调研会话",
     "load_failed": "调研会话加载失败",
+    "load_failed_hint": "网络或服务异常。已有调研不受影响，可以重试。",
     "retry": "重试",
     "empty_cta": "开始你的第一个调研",
     "goal_chip": "goal · {{summary}}",

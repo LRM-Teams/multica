@@ -34,6 +34,7 @@
   "list": {
     "loading": "리서치를 불러오는 중입니다",
     "load_failed": "리서치를 불러오지 못했습니다",
+    "load_failed_hint": "네트워크 또는 서비스 이상입니다. 기존 리서치는 영향받지 않으며 다시 시도할 수 있습니다.",
     "retry": "다시 시도",
     "empty_cta": "첫 리서치 시작하기",
     "goal_chip": "goal · {{summary}}",

@@ -251,13 +251,14 @@ export function ResearchListPage() {
               }}
             />
             <div className="flex flex-col gap-2 border-t px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-3.5">
+              {/* LRM-790: ⌘ hint yields on narrow; CTA goes full-width. */}
               <p className="hidden text-xs text-muted-foreground sm:block">
                 {t(($) => $.home.composer_hint)}
               </p>
               <Button
                 onClick={submitCreate}
                 disabled={!canSubmit || create.isPending}
-                className="h-9 w-full shrink-0 rounded-full bg-brand px-4 text-[13.5px] font-semibold text-brand-foreground hover:bg-brand/90 sm:w-auto"
+                className="h-10 w-full shrink-0 rounded-full bg-brand px-4 text-[13.5px] font-semibold text-brand-foreground hover:bg-brand/90 sm:h-9 sm:w-auto"
               >
                 {create.isPending ? (
                   <>
@@ -301,15 +302,28 @@ export function ResearchListPage() {
       ) : isError ? (
         <div
           role="alert"
-          className="flex flex-col items-center justify-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-6 py-12 text-center"
+          data-testid="research-list-error"
+          className="flex flex-col items-stretch gap-3 rounded-xl border border-destructive/25 bg-destructive/9 px-4 py-3.5 sm:flex-row sm:items-center"
         >
-          <AlertCircle className="size-6 text-destructive" />
-          <p className="text-sm text-destructive">
-            {error instanceof Error && error.message
-              ? error.message
-              : t(($) => $.list.load_failed)}
-          </p>
-          <Button variant="outline" size="sm" onClick={() => refetch()}>
+          <div className="flex min-w-0 flex-1 items-start gap-3">
+            <AlertCircle className="mt-0.5 size-5 shrink-0 text-destructive" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-foreground">
+                {error instanceof Error && error.message
+                  ? error.message
+                  : t(($) => $.list.load_failed)}
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {t(($) => $.list.load_failed_hint)}
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full shrink-0 sm:w-auto"
+            onClick={() => refetch()}
+          >
             {t(($) => $.list.retry)}
           </Button>
         </div>

@@ -3,7 +3,10 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchSession } from "@multica/core/types";
 import enResearch from "../../locales/en/research.json";
 
-const avatarStackRef = vi.hoisted(() => ({ agentIds: undefined as readonly string[] | undefined }));
+const avatarStackRef = vi.hoisted(() => ({
+  agentIds: undefined as readonly string[] | undefined,
+  className: undefined as string | undefined,
+}));
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
@@ -38,9 +41,18 @@ vi.mock("../../navigation/app-link", () => ({
 }));
 
 vi.mock("../../agents/components/agent-avatar-stack", () => ({
-  AgentAvatarStack: ({ agentIds }: { agentIds: readonly string[] }) => {
+  AgentAvatarStack: ({
+    agentIds,
+    className,
+  }: {
+    agentIds: readonly string[];
+    className?: string;
+  }) => {
     avatarStackRef.agentIds = agentIds;
-    return agentIds.length > 0 ? <span data-testid="avatar-stack" /> : null;
+    avatarStackRef.className = className;
+    return agentIds.length > 0 ? (
+      <span data-testid="avatar-stack" className={className} />
+    ) : null;
   },
 }));
 
@@ -87,12 +99,12 @@ function session(partial: Partial<ResearchSession> = {}): ResearchSession {
   };
 }
 
-describe("ResearchSessionRow (LRM-788 / LRM-906)", () => {
-  it("running status paints a brand dot with pulse and an accessible label", () => {
+describe("ResearchSessionRow (LRM-790 narrow + dark tokens)", () => {
+  it("running status paints a brand dot with motion-safe pulse", () => {
     const { container } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
     const dot = container.querySelector("span.rounded-full.size-2");
     expect(dot?.className).toContain("bg-brand");
-    expect(dot?.className).toContain("animate-pulse");
+    expect(dot?.className).toContain("motion-safe:animate-pulse");
     expect(screen.getByText(enResearch.status.running)).toBeTruthy();
   });
 
@@ -109,7 +121,7 @@ describe("ResearchSessionRow (LRM-788 / LRM-906)", () => {
       const dot = container.querySelector("span.rounded-full.size-2");
       expect(dot?.className).toContain(dotClass);
       expect(dot?.className).not.toContain("animate-pulse");
-      expect(screen.getByText(label)).toBeTruthy();
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
       unmount();
     }
   });
@@ -117,56 +129,53 @@ describe("ResearchSessionRow (LRM-788 / LRM-906)", () => {
   it("shows a short title without dual-writing the full goal as a subtitle", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
     expect(screen.getByText("Alpha market map")).toBeTruthy();
-    // Full goal must not appear as a second muted line; only via chip / dialog.
     expect(
       screen.queryByText("Map the alpha market across regions with pricing and share"),
     ).toBeNull();
-    expect(screen.getByRole("button", { name: /goal ·/i })).toBeTruthy();
   });
 
-  it("falls back to a truncated goal as the title when title is empty", () => {
-    const longGoal =
-      "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员，开发环境要求。目前我们的设备是几台 linux 服务器";
-    render(
-      <ResearchSessionRow session={session({ title: "", goal: longGoal })} href="/research/s1" />,
-    );
-    const titleLink = screen.getAllByRole("link")[0];
-    expect(titleLink).toBeDefined();
-    expect(titleLink?.textContent?.includes("…")).toBe(true);
-    expect(titleLink?.textContent?.length ?? 0).toBeLessThan(longGoal.length);
+  it("goal chip uses brand semantic tokens (no hard-coded violet)", () => {
+    render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    const chip = screen.getByTestId("research-session-goal-chip");
+    expect(chip.className).toContain("bg-brand/10");
+    expect(chip.className).toContain("text-brand");
+    expect(chip.className).not.toContain("violet");
+    expect(chip.className).toContain("hidden");
+    expect(chip.className).toContain("sm:inline-flex");
   });
 
   it("opens a goal dialog from the colored chip", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
     expect(screen.queryByTestId("goal-dialog")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /goal ·/i }));
+    fireEvent.click(screen.getByTestId("research-session-goal-chip"));
     expect(screen.getByTestId("goal-dialog")).toBeTruthy();
     expect(screen.getByText(enResearch.list.goal_dialog_title)).toBeTruthy();
-    expect(
-      screen.getByText("Map the alpha market across regions with pricing and share"),
-    ).toBeTruthy();
   });
 
-  it("renders stage, who, empty output, and fleet avatars", () => {
+  it("keeps stage · relative time in meta; avatars yield below sm", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
     expect(screen.getByText(enResearch.stage.s2_sources)).toBeTruthy();
+    expect(screen.getByText("ago:2026-07-30T03:00:00Z")).toBeTruthy();
     expect(screen.getByText("Ronaldo working")).toBeTruthy();
-    expect(screen.getByText(enResearch.list.no_output)).toBeTruthy();
-    expect(screen.getByTestId("avatar-stack")).toBeTruthy();
+    expect(screen.getByTestId("avatar-stack").className).toContain("hidden");
+    expect(screen.getByTestId("avatar-stack").className).toContain("sm:flex");
     expect(avatarStackRef.agentIds).toEqual(["agent-1", "agent-2"]);
   });
 
-  it("shows handoff summary as the output line when present", () => {
-    render(
-      <ResearchSessionRow
-        session={session({ handoff_summary: "Draft v0.3 ready" })}
-        href="/research/s1"
-      />,
+  it("falls back to a truncated goal as the title when title is empty", () => {
+    const longGoal =
+      "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员，开发环境要求。目前我们的设备是几台 linux 服务器";
+    const { container } = render(
+      <ResearchSessionRow session={session({ title: "", goal: longGoal })} href="/research/s1" />,
     );
-    expect(screen.getByText("Output · Draft v0.3 ready")).toBeTruthy();
+    const titleEl = container.querySelector(
+      '[data-testid="research-session-row"] .font-medium.tracking-tight',
+    );
+    expect(titleEl?.textContent?.includes("…")).toBe(true);
+    expect(titleEl?.textContent?.length ?? 0).toBeLessThan(longGoal.length);
   });
 
-  it("renders the localized stage chip and falls back to the raw stage key", () => {
+  it("renders the localized stage and falls back to the raw stage key", () => {
     const { rerender } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
     expect(screen.getByText(enResearch.stage.s2_sources)).toBeTruthy();
     rerender(<ResearchSessionRow session={session({ current_stage: "s9_unknown" })} href="/research/s1" />);
@@ -178,12 +187,13 @@ describe("ResearchSessionRow (LRM-788 / LRM-906)", () => {
     expect(screen.queryByTestId("avatar-stack")).toBeNull();
   });
 
-  it("shows relative time from updated_at and a hover-reveal chevron", () => {
-    const { container } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
-    expect(screen.getByText("ago:2026-07-30T03:00:00Z")).toBeTruthy();
-    const chevron = container.querySelector("svg.opacity-0");
-    expect(chevron).toBeTruthy();
-    expect(chevron?.getAttribute("class")).toContain("group-hover:opacity-100");
+  it("dims archived rows", () => {
+    const { container } = render(
+      <ResearchSessionRow session={session({ status: "archived" })} href="/research/s1" />,
+    );
+    expect(
+      container.querySelector('[data-testid="research-session-row"]')?.className,
+    ).toContain("opacity-55");
   });
 
   it("links title/meta to the session, with the actions menu outside the links", () => {

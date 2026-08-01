@@ -24,11 +24,24 @@ import type {
   ResearchSource,
 } from "@multica/core/types";
 import type { ResearchPresenceMap } from "@multica/core/research";
+import { Button } from "@multica/ui/components/ui/button";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { MessageSquare } from "lucide-react";
+import {
+  CONTROLS_BOTTOM_PX,
+  DETAIL_CARD_BOTTOM_PX,
+  FAB_ABOVE_MINIMAP_BOTTOM_PX,
+  FAB_NARROW_BOTTOM_PX,
+  FAB_SIZE_PX,
+  MINIMAP_HEIGHT_PX,
+  MINIMAP_WIDTH_PX,
+  OVERLAY_INSET_PX,
+} from "../lib/canvas-overlay-grid";
 import { layoutResearchGraph, type ResearchFlowNodeData } from "../lib/layout-graph";
 import { LOGIC_END_NODE_ID, isLogicEndNode } from "../lib/logic-lanes";
 import { visualForEdgeType } from "../lib/node-visuals";
 import { ResearchCanvasDock } from "./research-canvas-dock";
+import { ResearchFleetAvatarStack } from "./research-fleet-avatar-stack";
 import { ResearchGraphNode as ResearchGraphNodeView } from "./research-graph-node";
 import { ResearchLaneBandNodeView } from "./research-lane-band-node";
 import { ResearchLogicStrip } from "./research-logic-strip";
@@ -42,6 +55,8 @@ const nodeTypes: NodeTypes = {
   laneBand: ResearchLaneBandNodeView,
 };
 
+const EMPTY_FLEET_MEMBERS: ResearchFleetMember[] = [];
+
 function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) return false;
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -53,12 +68,14 @@ function ResearchCanvasInner({
   nodes,
   edges,
   sources,
-  members: _members,
+  members = EMPTY_FLEET_MEMBERS,
   presence,
   selectedId,
   onSelect,
   onRetry,
   onOpenDelivery,
+  onOpenChat,
+  chatOpen = false,
 }: {
   nodes: ResearchGraphNode[];
   edges: ResearchGraphEdge[];
@@ -69,6 +86,8 @@ function ResearchCanvasInner({
   onSelect?: (node: ResearchGraphNode | null) => void;
   onRetry?: (node: ResearchGraphNode) => void;
   onOpenDelivery?: () => void;
+  onOpenChat?: () => void;
+  chatOpen?: boolean;
 }) {
   const { t } = useT("research");
   const laid = useMemo(() => layoutResearchGraph(nodes, edges), [nodes, edges]);
@@ -78,6 +97,7 @@ function ResearchCanvasInner({
   const isMobile = useIsMobile();
   const [ringNodeId, setRingNodeId] = useState<string | null>(null);
   const [detailPinned, setDetailPinned] = useState(false);
+  const [pinnedNodeId, setPinnedNodeId] = useState<string | null>(null);
   const [zoomPct, setZoomPct] = useState(100);
   // Opacity-only enter motion (never touch transform — RF uses it for position).
   const enterClassById = useRef<Map<string, string> | null>(null);
@@ -177,10 +197,28 @@ function ResearchCanvasInner({
       ? nodes.find((n) => n.id === selectedId) ?? null
       : null;
   const ringNode = ringNodeId ? nodes.find((n) => n.id === ringNodeId) : null;
+  const pinnedNode = pinnedNodeId ? nodes.find((n) => n.id === pinnedNodeId) : null;
+  // Prefer prop selection; keep a local pin so detail still opens if parent select lags.
+  const detailNode = selectedNode ?? pinnedNode ?? (detailPinned ? ringNode : null);
   const sourceList = sources ?? [];
   const showDetail =
     detailPinned ||
-    (!!selectedNode && SYSTEM_NODE_TYPES.has(selectedNode.node_type));
+    (!!detailNode && SYSTEM_NODE_TYPES.has(detailNode.node_type));
+
+  const pinDetail = useCallback(
+    (node: ResearchGraphNode) => {
+      onSelect?.(node);
+      setPinnedNodeId(node.id);
+      setDetailPinned(true);
+    },
+    [onSelect],
+  );
+
+  const clearDetail = useCallback(() => {
+    setDetailPinned(false);
+    setPinnedNodeId(null);
+    onSelect?.(null);
+  }, [onSelect]);
 
   const handleRingAction = useCallback(
     async (action: NodeRingAction) => {
@@ -188,13 +226,11 @@ function ResearchCanvasInner({
       switch (action) {
         case "detail":
         case "more":
-          onSelect?.(ringNode);
-          setDetailPinned(true);
+          pinDetail(ringNode);
           closeRing();
           break;
         case "locate_source": {
-          onSelect?.(ringNode);
-          setDetailPinned(true);
+          pinDetail(ringNode);
           closeRing();
           break;
         }
@@ -216,12 +252,37 @@ function ResearchCanvasInner({
           break;
       }
     },
-    [ringNode, onSelect, onRetry, closeRing],
+    [ringNode, pinDetail, onRetry, closeRing],
   );
+
+  // Narrow + detail sheet: hide FAB so it does not sit under the sheet.
+  const chatFab =
+    !chatOpen && onOpenChat && !(isMobile && showDetail) ? (
+      <Button
+        type="button"
+        size="icon"
+        className="pointer-events-auto absolute z-20 rounded-full shadow-lg"
+        style={{
+          width: FAB_SIZE_PX,
+          height: FAB_SIZE_PX,
+          right: OVERLAY_INSET_PX,
+          bottom: isMobile ? FAB_NARROW_BOTTOM_PX : FAB_ABOVE_MINIMAP_BOTTOM_PX,
+        }}
+        onClick={onOpenChat}
+        aria-label={t(($) => $.panel.chat)}
+        data-testid="research-canvas-chat-fab"
+      >
+        <MessageSquare className="h-5 w-5" />
+      </Button>
+    ) : null;
 
   if (isMobile) {
     return (
-      <div className="relative h-full w-full bg-canvas-bg text-foreground">
+      <div
+        className="relative h-full w-full bg-canvas-bg text-foreground"
+        data-testid="research-canvas-overlay-grid"
+        data-overlay="narrow"
+      >
         <ResearchLogicStrip
           nodes={nodes}
           edges={edges}
@@ -232,19 +293,33 @@ function ResearchCanvasInner({
               return;
             }
             onSelect?.(node);
-            if (node) setDetailPinned(true);
+            if (node) {
+              setPinnedNodeId(node.id);
+              setDetailPinned(true);
+            }
           }}
           onOpenDelivery={onOpenDelivery}
         />
-        {showDetail && selectedNode ? (
+        <ResearchFleetAvatarStack
+          members={members}
+          className="absolute top-3 right-3 z-20"
+        />
+        {chatFab}
+        {showDetail && detailNode ? (
           <ResearchNodeDetail
-            node={selectedNode}
+            node={detailNode}
             sources={sourceList}
             open={showDetail}
-            onClose={() => {
-              setDetailPinned(false);
-              onSelect?.(null);
-            }}
+            placement="sheet"
+            onClose={clearDetail}
+          />
+        ) : null}
+        {ringNode ? (
+          <ResearchNodeActionRing
+            node={ringNode}
+            mode="sheet"
+            onAction={handleRingAction}
+            onClose={closeRing}
           />
         ) : null}
       </div>
@@ -252,7 +327,11 @@ function ResearchCanvasInner({
   }
 
   return (
-    <div className="relative h-full w-full bg-canvas-bg text-foreground">
+    <div
+      className="relative h-full w-full bg-canvas-bg text-foreground"
+      data-testid="research-canvas-overlay-grid"
+      data-overlay="desktop"
+    >
       <style>{`
         .research-node-enter {
           animation: research-node-enter 520ms ease both;
@@ -312,19 +391,18 @@ function ResearchCanvasInner({
           }
           if (SYSTEM_NODE_TYPES.has(research.node_type)) {
             closeRing();
-            onSelect?.(research);
-            setDetailPinned(true);
+            pinDetail(research);
             return;
           }
           // Toggle ring; keep selection for halo.
           onSelect?.(research);
           setRingNodeId((prev) => (prev === research.id ? null : research.id));
           setDetailPinned(false);
+          setPinnedNodeId(null);
         }}
         onPaneClick={() => {
           closeRing();
-          onSelect?.(null);
-          setDetailPinned(false);
+          clearDetail();
         }}
         className="!bg-transparent"
       >
@@ -342,44 +420,19 @@ function ResearchCanvasInner({
           <span aria-hidden>·</span>
           <span>{t(($) => $.logic.lr_hint)}</span>
         </Panel>
+        {/* LRM-797: MiniMap bottom-right; FAB stacks 12px above (outside RF). */}
         <MiniMap
           pannable
           zoomable
-          className="!bottom-20 !left-4 !overflow-hidden !rounded-lg !border !border-border !bg-card/90 max-lg:!hidden"
+          style={{
+            width: MINIMAP_WIDTH_PX,
+            height: MINIMAP_HEIGHT_PX,
+          }}
+          className="!absolute !top-auto !bottom-4 !left-auto !right-4 !m-0 !overflow-hidden !rounded-lg !border !border-border !bg-card/90"
           maskColor="color-mix(in oklch, var(--canvas-bg) 70%, transparent)"
           nodeColor={(n) => (n.type === "laneBand" ? "transparent" : "var(--brand)")}
         />
-        <Panel position="bottom-center" className="!m-0 !w-full !bg-transparent">
-          <ResearchCanvasDock
-            zoomPct={zoomPct}
-            onZoomIn={() => {
-              void zoomIn({ duration: 160 });
-              setZoomPct(Math.round(getZoom() * 100));
-            }}
-            onZoomOut={() => {
-              void zoomOut({ duration: 160 });
-              setZoomPct(Math.round(getZoom() * 100));
-            }}
-            onFit={() => {
-              void fitView({ padding: 0.18, duration: 240 });
-              setZoomPct(Math.round(getZoom() * 100));
-            }}
-            detailOpen={showDetail}
-            onToggleDetail={() => {
-              if (showDetail) {
-                setDetailPinned(false);
-                onSelect?.(null);
-              } else if (selectedNode || ringNode) {
-                const n = selectedNode ?? ringNode!;
-                onSelect?.(n);
-                setDetailPinned(true);
-                closeRing();
-              }
-            }}
-          />
-        </Panel>
-        {/* Desktop: NodeToolbar tracks the node — no DOM-measure sync effect. */}
-        {ringNode && !isMobile ? (
+        {ringNode ? (
           <NodeToolbar
             nodeId={ringNode.id}
             isVisible
@@ -396,25 +449,59 @@ function ResearchCanvasInner({
           </NodeToolbar>
         ) : null}
       </ReactFlow>
-      {showDetail && selectedNode ? (
-        <ResearchNodeDetail
-          node={selectedNode}
-          sources={sourceList}
-          open={showDetail}
-          onClose={() => {
-            setDetailPinned(false);
-            onSelect?.(null);
+      {/* LRM-797: Controls bottom-left (outside RF so Panel centering cannot win). */}
+      <div
+        className="pointer-events-auto absolute z-20"
+        style={{ left: OVERLAY_INSET_PX, bottom: CONTROLS_BOTTOM_PX }}
+        data-testid="research-canvas-controls-slot"
+      >
+        <ResearchCanvasDock
+          zoomPct={zoomPct}
+          className="!mb-0"
+          onZoomIn={() => {
+            void zoomIn({ duration: 160 });
+            setZoomPct(Math.round(getZoom() * 100));
+          }}
+          onZoomOut={() => {
+            void zoomOut({ duration: 160 });
+            setZoomPct(Math.round(getZoom() * 100));
+          }}
+          onFit={() => {
+            void fitView({ padding: 0.18, duration: 240 });
+            setZoomPct(Math.round(getZoom() * 100));
+          }}
+          detailOpen={showDetail}
+          onToggleDetail={() => {
+            if (showDetail) {
+              clearDetail();
+            } else if (selectedNode || ringNode) {
+              const n = selectedNode ?? ringNode!;
+              pinDetail(n);
+              closeRing();
+            }
           }}
         />
+      </div>
+      {/* LRM-797: detail card 12px above Controls (substantial, not a chip). */}
+      {showDetail && detailNode ? (
+        <div
+          className="pointer-events-auto absolute z-20"
+          style={{
+            left: OVERLAY_INSET_PX,
+            bottom: DETAIL_CARD_BOTTOM_PX,
+          }}
+          data-testid="research-detail-overlay-slot"
+        >
+          <ResearchNodeDetail
+            node={detailNode}
+            sources={sourceList}
+            open={showDetail}
+            placement="overlay-card"
+            onClose={clearDetail}
+          />
+        </div>
       ) : null}
-      {ringNode && isMobile ? (
-        <ResearchNodeActionRing
-          node={ringNode}
-          mode="sheet"
-          onAction={handleRingAction}
-          onClose={closeRing}
-        />
-      ) : null}
+      {chatFab}
     </div>
   );
 }
@@ -429,6 +516,8 @@ export function ResearchCanvas(props: {
   onSelect?: (node: ResearchGraphNode | null) => void;
   onRetry?: (node: ResearchGraphNode) => void;
   onOpenDelivery?: () => void;
+  onOpenChat?: () => void;
+  chatOpen?: boolean;
 }) {
   return (
     <ReactFlowProvider>

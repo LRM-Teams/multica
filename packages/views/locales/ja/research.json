@@ -66,6 +66,11 @@
     "delete_done": "Research deleted",
     "cancel": "Cancel"
   },
+  "overlay": {
+    "fleet_expand": "調査団を展開",
+    "fleet_collapse": "調査団を折りたたむ",
+    "detail_close": "詳細を閉じる"
+  },
   "panel": {
     "graph": "Exploration map",
     "sources": "Source map",

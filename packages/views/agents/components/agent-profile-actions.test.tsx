@@ -162,13 +162,13 @@ describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
   });
 
   it("renders Message as primary action and opens DM", () => {
-    render(<AgentProfileActions agent={agent} canManage />);
+    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
     fireEvent.click(screen.getByTestId("agent-profile-action-message"));
     expect(mocks.openDM).toHaveBeenCalledWith({ peer_type: "agent", peer_id: "agent-1" });
   });
 
   it("renders Message → Restart… → Delete and never Stop (LRM-909)", () => {
-    render(<AgentProfileActions agent={agent} canManage />);
+    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
     expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
     expect(screen.getByTestId("agent-profile-action-restart")).toBeInTheDocument();
     expect(screen.getByTestId("agent-profile-action-delete")).toBeInTheDocument();
@@ -178,7 +178,7 @@ describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
   });
 
   it("renders the #633 Restart entry for a manager; Copy diagnostic / Report stay out of scope", () => {
-    render(<AgentProfileActions agent={agent} canManage />);
+    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
     expect(screen.getByTestId("agent-profile-action-restart")).toBeInTheDocument();
     expect(screen.queryByTestId("agent-profile-action-copy")).not.toBeInTheDocument();
     expect(screen.queryByTestId("agent-profile-action-report")).not.toBeInTheDocument();
@@ -187,7 +187,7 @@ describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
   });
 
   it("hides the Restart entry for a non-manager", () => {
-    render(<AgentProfileActions agent={agent} canManage={false} />);
+    render(<AgentProfileActions agent={agent} canManage={false} forceRestartSupported />);
     expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
   });
 
@@ -196,7 +196,7 @@ describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
   // the computer reconnects (derived health, not the raw status column).
   it("hides the Restart entry when the bound computer is offline", () => {
     const offlineAgent = { ...agent, runtime_status: "offline" } as Agent;
-    render(<AgentProfileActions agent={offlineAgent} canManage />);
+    render(<AgentProfileActions agent={offlineAgent} canManage forceRestartSupported />);
     expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
   });
 
@@ -206,25 +206,38 @@ describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
       runtime_status: "online",
       runtime_last_seen_at: new Date(Date.now() - 10 * 60_000).toISOString(),
     } as Agent;
-    render(<AgentProfileActions agent={staleAgent} canManage />);
+    render(<AgentProfileActions agent={staleAgent} canManage forceRestartSupported />);
     expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
   });
 
+  // task #22: providers that don't support forced restart never get the
+  // button at all — not greyed, absent. All 4 shipped providers currently
+  // support it, so this can only be exercised via the prop, never real data.
+  it("hides the Restart entry when the runtime doesn't support forced restart", () => {
+    render(<AgentProfileActions agent={agent} canManage forceRestartSupported={false} />);
+    expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
+  });
+
+  it("shows the Restart entry when the runtime supports forced restart", () => {
+    render(<AgentProfileActions agent={agent} canManage forceRestartSupported={true} />);
+    expect(screen.getByTestId("agent-profile-action-restart")).toBeInTheDocument();
+  });
+
   it("hides Delete when canManage is false; keeps Message", () => {
-    render(<AgentProfileActions agent={agent} canManage={false} />);
+    render(<AgentProfileActions agent={agent} canManage={false} forceRestartSupported />);
     expect(screen.queryByTestId("agent-profile-action-delete")).not.toBeInTheDocument();
     expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
   });
 
   it("Delete is the only solid destructive in a border-t danger zone (LRM-593 lock A)", () => {
-    render(<AgentProfileActions agent={agent} canManage />);
+    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
     const del = screen.getByTestId("agent-profile-action-delete");
     expect(del.className).toMatch(/text-white/);
     expect(del.parentElement?.className).toMatch(/border-t/);
   });
 
   it("Delete confirms then deactivates via archiveAgent (LRM-448: Delete, not Archive)", async () => {
-    render(<AgentProfileActions agent={agent} canManage />);
+    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
     expect(screen.getByTestId("agent-profile-action-delete")).toHaveTextContent("Delete");
     expect(screen.queryByText("Archive agent")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("agent-profile-action-delete"));

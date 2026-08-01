@@ -288,6 +288,11 @@ function AgentProfileTabContent({
   const canEditIdentity = canEdit.allowed;
 
   const selectedRuntime = runtimes.find((r) => r.id === agent.runtime_id) ?? null;
+  // task #22: gate the profile restart button on the bound runtime's real
+  // capability, never a hardcoded provider list. Missing capabilities object
+  // (older backend, no runtime bound) means false, not "assume supported".
+  const forceRestartSupported =
+    selectedRuntime?.provider_capabilities?.force_restart ?? false;
   // Derived, staleness-aware health instead of the raw `status` column
   // (#10 — "runtime online status" had two divergent sources across the
   // app).
@@ -422,6 +427,7 @@ function AgentProfileTabContent({
           <AgentProfileActions
             agent={agent}
             canManage={canEdit.allowed}
+            forceRestartSupported={forceRestartSupported}
           />
         </div>
       </div>

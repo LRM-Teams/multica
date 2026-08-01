@@ -384,7 +384,7 @@
     "col_health": "Health",
     "col_owner": "Owner",
     "col_agents": "Agents",
-    "col_workload": "Workload",
+    "col_workload": "Activity",
     "col_cost": "Cost · 7d",
     "col_cli": "CLI",
     "cost_delta_flat": "flat",

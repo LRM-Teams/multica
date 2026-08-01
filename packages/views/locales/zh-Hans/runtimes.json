@@ -375,7 +375,7 @@
     "col_health": "健康度",
     "col_owner": "所有者",
     "col_agents": "智能体",
-    "col_workload": "工作负载",
+    "col_workload": "活动",
     "col_cost": "费用 · 7 天",
     "col_cli": "CLI",
     "cost_delta_flat": "持平",

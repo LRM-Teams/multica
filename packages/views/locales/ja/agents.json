@@ -495,7 +495,7 @@
     "role_dialog_title": "エージェントのロール",
     "role_dialog_subtitle": "このエージェントのチーム管理権限（ハンドブック「メンバーと権限」）。エージェントは Member または Admin のみで、Owner にはなれません。",
     "role_member_description": "メンバーの招待・削除はできません。",
-    "role_admin_description": "member や他の admin を招待/削除できますが、owner には触れません。",
+    "role_admin_description": "member や他の admin を招待/削除できますが、ワークスペースの所有者（人）には触れません。",
     "role_updated": "ロールを更新しました",
     "role_update_failed": "ロールの更新に失敗しました",
     "runtime_config_section": "ランタイム設定",

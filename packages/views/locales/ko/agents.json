@@ -513,7 +513,7 @@
     "role_dialog_title": "에이전트 역할",
     "role_dialog_subtitle": "이 에이전트의 팀 관리 권한입니다(핸드북 「멤버와 권한」). 에이전트는 Member 또는 Admin만 가능하며 Owner는 될 수 없습니다.",
     "role_member_description": "팀 멤버를 초대하거나 제거할 수 없습니다.",
-    "role_admin_description": "member와 다른 admin을 초대/제거할 수 있지만 owner는 건드릴 수 없습니다.",
+    "role_admin_description": "member와 다른 admin을 초대/제거할 수 있지만 워크스페이스 소유자(사람)는 건드릴 수 없습니다.",
     "role_updated": "역할이 업데이트되었습니다",
     "role_update_failed": "역할 업데이트에 실패했습니다",
     "runtime_config_section": "런타임 구성",

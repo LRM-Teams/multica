@@ -155,7 +155,19 @@
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
     "evidence": "Evidence / sources",
-    "evidence_empty": "No linked sources."
+    "evidence_empty": "No linked sources.",
+    "status": {
+      "active": "Active",
+      "done": "Done",
+      "running": "Running",
+      "waiting": "Waiting",
+      "abandoned": "Abandoned",
+      "failed": "Failed",
+      "completed": "Completed",
+      "resolved": "Resolved",
+      "pending": "Pending",
+      "unknown": "Unknown"
+    }
   },
   "logic": {
     "label": "Research logic",

@@ -13,7 +13,7 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { X } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
-import { visualForNodeType } from "../lib/node-visuals";
+import { normalizeNodeStatusKey, visualForNodeType } from "../lib/node-visuals";
 
 const EMPTY_SOURCES: ResearchSource[] = [];
 
@@ -77,6 +77,8 @@ function DetailBody({
   const { t } = useT("research");
   const visual = visualForNodeType(node.node_type);
   const typeLabel = typeLabelFor(node.node_type, t);
+  const statusKey = normalizeNodeStatusKey(node.status);
+  const statusLabel = t(($) => $.node.status[statusKey]);
 
   const sourceId = payloadString(node.payload, "source_id");
   const linked = sourceId ? sources.find((s) => s.id === sourceId) : undefined;
@@ -128,7 +130,7 @@ function DetailBody({
             {typeLabel}
           </Badge>
           <Badge variant="secondary" className="text-[10px]">
-            {node.status}
+            {statusLabel}
           </Badge>
           {sourceClass ? (
             <Badge variant="outline" className="text-[10px]">

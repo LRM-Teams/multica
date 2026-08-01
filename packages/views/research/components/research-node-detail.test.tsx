@@ -31,6 +31,18 @@ vi.mock("../../i18n/use-t", () => ({
           dead_end_reason: "Why blocked",
           evidence: "Evidence",
           evidence_empty: "No evidence",
+          status: {
+            active: "Active",
+            done: "Done",
+            running: "Running",
+            waiting: "Waiting",
+            abandoned: "Abandoned",
+            failed: "Failed",
+            completed: "Completed",
+            resolved: "Resolved",
+            pending: "Pending",
+            unknown: "Unknown",
+          },
         },
       }),
   }),
@@ -100,6 +112,8 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     expect(screen.getByText("价格区间已交叉验证")).toBeInTheDocument();
     expect(screen.getByText("挂牌中位价与成交价差约 8%。")).toBeInTheDocument();
     expect(screen.getByText("成交样本")).toBeInTheDocument();
+    expect(screen.getByText("Done")).toBeInTheDocument();
+    expect(screen.queryByText("done")).toBeNull();
     expect(document.querySelector(".absolute.bottom-4.left-4")).toBeNull();
   });
 

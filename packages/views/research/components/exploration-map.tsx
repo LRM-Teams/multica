@@ -3,20 +3,12 @@
 import { cn } from "@multica/ui/lib/utils";
 import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
+import { normalizeNodeStatusKey, visualForNodeType } from "../lib/node-visuals";
 
 const STATUS_CLASS: Record<string, string> = {
   active: "border-border bg-background",
   done: "border-border bg-muted/40",
   abandoned: "border-destructive/40 bg-destructive/5 opacity-80",
-};
-
-const TYPE_ACCENT: Record<string, string> = {
-  pivot: "ring-1 ring-orange-500/50",
-  dead_end: "ring-1 ring-destructive/40",
-  refuted: "ring-1 ring-destructive/40",
-  conflict: "ring-1 ring-amber-500/40",
-  stage_gate: "ring-1 ring-primary/30",
-  goal: "ring-1 ring-primary/40",
 };
 
 export function ExplorationMap({
@@ -42,6 +34,9 @@ export function ExplorationMap({
         ) : (
           sorted.map((node, idx) => {
             const inbound = edges.filter((e) => e.to_node_id === node.id);
+            const visual = visualForNodeType(node.node_type);
+            const statusKey = normalizeNodeStatusKey(node.status);
+            const statusLabel = t(($) => $.node.status[statusKey]);
             const typeLabel = (() => {
               switch (node.node_type) {
                 case "goal":
@@ -66,6 +61,8 @@ export function ExplorationMap({
                   return t(($) => $.node.stage_gate);
                 case "agent_activity":
                   return t(($) => $.node.agent_activity);
+                case "product_round_gate":
+                  return t(($) => $.node.product_round_gate);
                 default:
                   return node.node_type;
               }
@@ -78,16 +75,18 @@ export function ExplorationMap({
                 className={cn(
                   "w-full rounded-md border px-3 py-2 text-left transition-colors hover:bg-accent/40",
                   STATUS_CLASS[node.status] ?? STATUS_CLASS.active,
-                  TYPE_ACCENT[node.node_type] ?? "",
+                  visual.ringClass,
                   selectedId === node.id && "bg-accent",
                 )}
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
                     {typeLabel}
-                    {idx > 0 && inbound.length > 0 ? ` · ${inbound.map((e) => e.edge_type).join(",")}` : ""}
+                    {idx > 0 && inbound.length > 0
+                      ? ` · ${inbound.map((e) => e.edge_type).join(",")}`
+                      : ""}
                   </span>
-                  <span className="text-[10px] text-muted-foreground">{node.status}</span>
+                  <span className="text-[10px] text-muted-foreground">{statusLabel}</span>
                 </div>
                 <div className="truncate text-sm font-medium">{node.title || node.node_type}</div>
                 {node.summary ? (

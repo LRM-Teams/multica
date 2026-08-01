@@ -1,5 +1,11 @@
 import type { ResearchGraphEdgeType, ResearchGraphNodeType } from "@multica/core/types";
 
+/**
+ * LRM-798 — node/edge palette via semantic tokens only.
+ * Forbidden: hardcoded hex, Tailwind palette-*-500 (sky/emerald/amber/…).
+ * Allowed: brand / primary / success / warning / destructive / muted-foreground.
+ */
+
 export type NodeVisual = {
   ringClass: string;
   accentBarClass: string;
@@ -18,18 +24,18 @@ const NODE_VISUALS: Record<string, NodeVisual> = {
     labelTone: "default",
   },
   probe: {
-    ringClass: "ring-1 ring-sky-500/50",
-    accentBarClass: "bg-sky-500",
+    ringClass: "ring-1 ring-brand/50",
+    accentBarClass: "bg-brand",
     labelTone: "info",
   },
   finding: {
-    ringClass: "ring-1 ring-emerald-500/50",
-    accentBarClass: "bg-emerald-500",
+    ringClass: "ring-1 ring-success/50",
+    accentBarClass: "bg-success",
     labelTone: "success",
   },
   conflict: {
-    ringClass: "ring-1 ring-amber-500/55",
-    accentBarClass: "bg-amber-500",
+    ringClass: "ring-1 ring-warning/55",
+    accentBarClass: "bg-warning",
     labelTone: "warning",
   },
   dead_end: {
@@ -43,8 +49,8 @@ const NODE_VISUALS: Record<string, NodeVisual> = {
     labelTone: "danger",
   },
   pivot: {
-    ringClass: "ring-1 ring-orange-500/55",
-    accentBarClass: "bg-orange-500",
+    ringClass: "ring-1 ring-warning/55",
+    accentBarClass: "bg-warning",
     labelTone: "warning",
   },
   stage_gate: {
@@ -63,8 +69,8 @@ const NODE_VISUALS: Record<string, NodeVisual> = {
     labelTone: "default",
   },
   agent_activity: {
-    ringClass: "ring-1 ring-teal-500/50",
-    accentBarClass: "bg-teal-500",
+    ringClass: "ring-1 ring-brand/50",
+    accentBarClass: "bg-brand",
     labelTone: "info",
   },
 };
@@ -88,16 +94,20 @@ export type EdgeVisual = {
 export function visualForEdgeType(edgeType: ResearchGraphEdgeType | string): EdgeVisual {
   switch (edgeType) {
     case "supports":
-      return { stroke: "#10b981", animated: false };
+      return { stroke: "var(--success)", animated: false };
     case "contradicts":
-      return { stroke: "#ef4444", strokeDasharray: "6 4", animated: false };
+      return { stroke: "var(--destructive)", strokeDasharray: "6 4", animated: false };
     case "supersedes":
-      return { stroke: "#f97316", strokeDasharray: "5 5", animated: false };
+      return { stroke: "var(--warning)", strokeDasharray: "5 5", animated: false };
     case "abandons":
-      return { stroke: "#f87171", strokeDasharray: "2 6", animated: false };
+      return {
+        stroke: "color-mix(in oklch, var(--destructive) 70%, var(--muted-foreground))",
+        strokeDasharray: "2 6",
+        animated: false,
+      };
     case "leads_to":
     default:
-      return { stroke: "hsl(var(--muted-foreground))", animated: true };
+      return { stroke: "var(--muted-foreground)", animated: true };
   }
 }
 
@@ -113,4 +123,35 @@ export function nodeIsVisuallyBusy(
 ): boolean {
   if (actorHasActivity && status === "active") return true;
   return shouldPulseNode(status, nodeType);
+}
+
+/** Canonical graph-node status keys for i18n (`node.status.*`). */
+export type NodeStatusKey =
+  | "active"
+  | "done"
+  | "running"
+  | "waiting"
+  | "abandoned"
+  | "failed"
+  | "completed"
+  | "resolved"
+  | "pending"
+  | "unknown";
+
+export function normalizeNodeStatusKey(status: string): NodeStatusKey {
+  const key = (status || "").toLowerCase().trim();
+  switch (key) {
+    case "active":
+    case "done":
+    case "running":
+    case "waiting":
+    case "abandoned":
+    case "failed":
+    case "completed":
+    case "resolved":
+    case "pending":
+      return key;
+    default:
+      return "unknown";
+  }
 }

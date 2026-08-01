@@ -155,7 +155,19 @@
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
     "evidence": "Evidence / sources",
-    "evidence_empty": "No linked sources."
+    "evidence_empty": "No linked sources.",
+    "status": {
+      "active": "進行中",
+      "done": "完了",
+      "running": "実行中",
+      "waiting": "待機",
+      "abandoned": "放棄",
+      "failed": "失敗",
+      "completed": "完了済み",
+      "resolved": "解決済み",
+      "pending": "保留",
+      "unknown": "不明"
+    }
   },
   "logic": {
     "label": "調査ロジック",

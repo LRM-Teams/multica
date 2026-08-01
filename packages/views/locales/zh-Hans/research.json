@@ -155,7 +155,19 @@
     "summary_empty": "暂无摘要。",
     "dead_end_reason": "死胡同原因",
     "evidence": "证据 / 来源",
-    "evidence_empty": "暂无关联来源。"
+    "evidence_empty": "暂无关联来源。",
+    "status": {
+      "active": "进行中",
+      "done": "完成",
+      "running": "运行中",
+      "waiting": "等待",
+      "abandoned": "已放弃",
+      "failed": "失败",
+      "completed": "已完成",
+      "resolved": "已解决",
+      "pending": "待处理",
+      "unknown": "未知"
+    }
   },
   "logic": {
     "label": "调研逻辑",

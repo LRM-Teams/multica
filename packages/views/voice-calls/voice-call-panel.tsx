@@ -213,17 +213,16 @@ export function VoiceCallPanel({
           )}
 
           {toolStatus && toolLabel && (
-            <div
-              role="status"
+            <output
               className={cn(
-                "mt-4 w-full rounded-lg border px-3 py-2 text-left text-xs leading-5",
+                "mt-4 block w-full rounded-lg border px-3 py-2 text-left text-xs leading-5",
                 toolStatus.status === "error"
                   ? "border-destructive/20 bg-destructive/5 text-destructive"
                   : "border-primary/20 bg-primary/5 text-foreground/80",
               )}
             >
               <p>{toolLabel}</p>
-            </div>
+            </output>
           )}
 
           {mode === "duplex" && active && (

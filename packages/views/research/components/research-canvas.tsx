@@ -287,6 +287,7 @@ function ResearchCanvasInner({
           nodes={nodes}
           edges={edges}
           selectedId={selectedId}
+          presence={presence}
           onSelect={(node) => {
             if (node && isLogicEndNode(node)) {
               onOpenDelivery?.();

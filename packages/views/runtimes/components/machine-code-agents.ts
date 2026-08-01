@@ -1,9 +1,5 @@
 import type { AgentRuntime } from "@multica/core/types";
-import {
-  KNOWN_PROVIDERS,
-  knownProviderLabel,
-  type KnownProvider,
-} from "./provider-logo";
+import { KNOWN_PROVIDERS, type KnownProvider } from "./provider-logo";
 import { providerDocsUrl } from "./provider-docs";
 
 export type MachineCodeAgentRow = {
@@ -22,10 +18,6 @@ export type MachineCodeAgentGroups = {
   installed: MachineCodeAgentRow[];
   notInstalled: MachineCodeAgentRow[];
 };
-
-function labelFor(provider: string): string {
-  return knownProviderLabel(provider) ?? provider;
-}
 
 function normalizeVersion(raw: string): string {
   return raw.trim().replace(/^v/i, "");
@@ -59,9 +51,9 @@ export function codeAgentVersion(runtime: AgentRuntime): string | null {
 }
 
 /**
- * Split the known provider catalog into installed (present on this machine)
- * vs not installed. Installed providers that are not in the catalog still
- * appear in the installed group so custom / new providers aren't hidden.
+ * Split the catalog into installed vs not installed on this machine.
+ * Only catalog entries appear in either group (Frank/Iris: six providers).
+ * Other detected providers are ignored for this section.
  */
 export function partitionMachineCodeAgents(
   runtimes: AgentRuntime[],
@@ -76,17 +68,16 @@ export function partitionMachineCodeAgents(
     }
   }
 
-  const installedIds = Array.from(versionByProvider.keys()).sort((a, b) =>
-    labelFor(a).localeCompare(labelFor(b)),
-  );
-  const installedSet = new Set(installedIds);
+  const installedSet = new Set(versionByProvider.keys());
 
-  const installed: MachineCodeAgentRow[] = installedIds.map((id) => ({
-    id,
-    label: labelFor(id),
-    version: versionByProvider.get(id) ?? null,
-    docsUrl: providerDocsUrl(id),
-  }));
+  const installed: MachineCodeAgentRow[] = known
+    .filter((entry) => installedSet.has(entry.id))
+    .map((entry) => ({
+      id: entry.id,
+      label: entry.label,
+      version: versionByProvider.get(entry.id) ?? null,
+      docsUrl: providerDocsUrl(entry.id),
+    }));
 
   const notInstalled: MachineCodeAgentRow[] = known
     .filter((entry) => !installedSet.has(entry.id))

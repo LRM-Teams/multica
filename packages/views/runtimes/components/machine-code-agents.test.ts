@@ -76,25 +76,28 @@ describe("codeAgentVersion", () => {
 });
 
 describe("partitionMachineCodeAgents", () => {
-  it("puts detected providers in installed and the rest of the catalog in notInstalled", () => {
+  it("only catalogs the six Frank/Iris providers", () => {
+    expect(KNOWN_PROVIDERS.map((p) => p.id).sort()).toEqual(
+      ["claude", "codex", "cursor", "grok", "opencode", "pi"].sort(),
+    );
+  });
+
+  it("splits the catalog into installed vs not installed", () => {
     const { installed, notInstalled } = partitionMachineCodeAgents([
       runtime({
         provider: "cursor",
         current_version: "0.3.94",
         metadata: { version: "1.2.3", cli_version: "0.3.94" },
-        device_info: "s144 · 1.2.3",
       }),
       runtime({
         provider: "claude",
         current_version: "0.3.94",
         metadata: { version: "2.1.5", cli_version: "0.3.94" },
-        device_info: "s144 · 2.1.5 (Claude Code)",
       }),
     ]);
 
     expect(installed.map((row) => row.id).sort()).toEqual(["claude", "cursor"]);
     expect(installed.find((row) => row.id === "cursor")?.version).toBe("1.2.3");
-    expect(installed.find((row) => row.id === "claude")?.version).toBe("2.1.5");
     expect(installed.find((row) => row.id === "claude")?.label).toBe(
       "Claude Code",
     );
@@ -102,24 +105,18 @@ describe("partitionMachineCodeAgents", () => {
       "cursor.com",
     );
 
-    const notIds = new Set(notInstalled.map((row) => row.id));
-    expect(notIds.has("cursor")).toBe(false);
-    expect(notIds.has("claude")).toBe(false);
-    expect(notIds.has("codex")).toBe(true);
-    expect(notInstalled).toHaveLength(KNOWN_PROVIDERS.length - 2);
+    expect(notInstalled.map((row) => row.id).sort()).toEqual(
+      ["codex", "grok", "opencode", "pi"].sort(),
+    );
   });
 
-  it("keeps unknown installed providers visible even when not in the catalog", () => {
+  it("ignores detected providers outside the catalog", () => {
     const { installed, notInstalled } = partitionMachineCodeAgents([
-      runtime({ provider: "mystery-cli" }),
+      runtime({ provider: "kimi", metadata: { version: "9.9.9" } }),
+      runtime({ provider: "openclaw" }),
     ]);
 
-    expect(installed).toEqual([
-      expect.objectContaining({
-        id: "mystery-cli",
-        label: "mystery-cli",
-      }),
-    ]);
+    expect(installed).toEqual([]);
     expect(notInstalled).toHaveLength(KNOWN_PROVIDERS.length);
   });
 
@@ -139,10 +136,5 @@ describe("partitionMachineCodeAgents", () => {
 
     expect(installed).toHaveLength(1);
     expect(installed[0]?.version).toBe("1.0.0");
-  });
-
-  it("omits openclaw from the not-installed catalog (Frank: 不用管了)", () => {
-    const { notInstalled } = partitionMachineCodeAgents([]);
-    expect(notInstalled.find((row) => row.id === "openclaw")).toBeUndefined();
   });
 });

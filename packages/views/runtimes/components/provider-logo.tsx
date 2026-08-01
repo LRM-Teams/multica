@@ -202,9 +202,9 @@ function GrokLogo({ className }: { className: string }) {
 }
 
 /**
- * Full catalog of known code-agent providers. Single source for ProviderLogo
- * cases and machine-detail "installed / not installed" (task #17) — do not
- * maintain a parallel list elsewhere.
+ * Catalog for computer-detail "installed / not installed" (task #17).
+ * Frank/Iris 08-01: only these six. ProviderLogo still renders other
+ * providers elsewhere; they just don't appear in this catalog.
  */
 export type KnownProvider = {
   id: string;
@@ -213,19 +213,10 @@ export type KnownProvider = {
 
 export const KNOWN_PROVIDERS: readonly KnownProvider[] = [
   { id: "claude", label: "Claude Code" },
-  { id: "codebuddy", label: "CodeBuddy" },
   { id: "codex", label: "Codex" },
   { id: "opencode", label: "OpenCode" },
-  // openclaw: Frank 08-01 "不用管了" — still render via ProviderLogo if a
-  // machine actually has it installed; omit from the not-installed catalog.
-  { id: "hermes", label: "Hermes" },
   { id: "pi", label: "Pi" },
-  { id: "copilot", label: "Copilot" },
   { id: "cursor", label: "Cursor" },
-  { id: "kimi", label: "Kimi" },
-  { id: "kiro", label: "Kiro" },
-  { id: "gemini", label: "Gemini" },
-  { id: "antigravity", label: "Antigravity" },
   { id: "grok", label: "Grok" },
 ] as const;
 

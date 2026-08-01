@@ -201,6 +201,29 @@ function GrokLogo({ className }: { className: string }) {
   );
 }
 
+/**
+ * Catalog for computer-detail "installed / not installed" (task #17).
+ * Frank/Iris 08-01: only these six. ProviderLogo still renders other
+ * providers elsewhere; they just don't appear in this catalog.
+ */
+export type KnownProvider = {
+  id: string;
+  label: string;
+};
+
+export const KNOWN_PROVIDERS: readonly KnownProvider[] = [
+  { id: "claude", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+  { id: "opencode", label: "OpenCode" },
+  { id: "pi", label: "Pi" },
+  { id: "cursor", label: "Cursor" },
+  { id: "grok", label: "Grok" },
+] as const;
+
+export function knownProviderLabel(provider: string): string | undefined {
+  return KNOWN_PROVIDERS.find((entry) => entry.id === provider)?.label;
+}
+
 export function ProviderLogo({
   provider,
   className = "h-4 w-4",

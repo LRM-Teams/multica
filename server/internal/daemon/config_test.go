@@ -1031,3 +1031,53 @@ func agentKeys(m map[string]AgentEntry) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// TestLoadConfig_PinnedVersion_Valid tests that a valid release version in
+// MULTICA_PINNED_VERSION is accepted and stored in the config.
+func TestLoadConfig_PinnedVersion_Valid(t *testing.T) {
+	stageFakeAgent(t)
+	t.Setenv("MULTICA_PINNED_VERSION", "0.3.92")
+	cfg, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.PinnedVersion != "0.3.92" {
+		t.Fatalf("PinnedVersion = %q, want 0.3.92", cfg.PinnedVersion)
+	}
+}
+
+// TestLoadConfig_PinnedVersion_Invalid verifies that a non-release version
+// string is rejected with a clear error, not silently ignored.
+func TestLoadConfig_PinnedVersion_Invalid(t *testing.T) {
+	stageFakeAgent(t)
+	t.Setenv("MULTICA_PINNED_VERSION", "not-a-version")
+	_, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid pinned version, got nil")
+	}
+	if !strings.Contains(err.Error(), "MULTICA_PINNED_VERSION") {
+		t.Fatalf("expected error to mention MULTICA_PINNED_VERSION, got: %v", err)
+	}
+}
+
+// TestLoadConfig_PinnedVersion_EmptyIsNoop verifies that without the env var,
+// PinnedVersion is empty (no pin, normal auto-update behavior).
+func TestLoadConfig_PinnedVersion_EmptyIsNoop(t *testing.T) {
+	stageFakeAgent(t)
+	cfg, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.PinnedVersion != "" {
+		t.Fatalf("PinnedVersion = %q, want empty", cfg.PinnedVersion)
+	}
+}

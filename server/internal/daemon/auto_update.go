@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -12,9 +13,10 @@ import (
 // shelling out to brew/curl. Mirrors the pattern used at the top of daemon.go
 // for `isBrewInstall` / `getBrewPrefix` / `matchKnownBrewPrefix`.
 var (
-	fetchLatestRelease = cli.FetchLatestReleaseWithOverride
-	isReleaseVersion   = cli.IsReleaseVersion
-	isNewerVersion     = cli.IsNewerVersion
+	fetchLatestRelease   = cli.FetchLatestReleaseWithOverride
+	fetchReleaseByTagVar = cli.FetchReleaseByTagWithOverride
+	isReleaseVersion     = cli.IsReleaseVersion
+	isNewerVersion       = cli.IsNewerVersion
 )
 
 // autoUpdateInitialDelay is how long the loop waits after Run() returns before
@@ -58,6 +60,30 @@ func (d *Daemon) autoUpdateLoop(ctx context.Context) {
 		d.logger.Info("auto-update: skipped (not a release build)", "version", d.cfg.CLIVersion)
 		return
 	}
+	if d.cfg.PinnedVersion != "" {
+		// Operator explicitly pinned this machine to a specific version via
+		// MULTICA_PINNED_VERSION.
+		if d.cfg.CLIVersion == d.cfg.PinnedVersion {
+			// Already running the pinned version — stay put, no upgrades.
+			d.logger.Info("auto-update: skipped (version pinned)",
+				"pinned", d.cfg.PinnedVersion,
+				"current", d.cfg.CLIVersion)
+			if d.updateObservation != nil {
+				d.beginUpdateObservation("auto", "waiting", "")
+				d.finishUpdateObservation("waiting", "pinned", d.cfg.PinnedVersion, "",
+					fmt.Sprintf("This machine is pinned to version %s via MULTICA_PINNED_VERSION and will not auto-upgrade.", d.cfg.PinnedVersion))
+			}
+			return
+		}
+		// Pinned version differs from current — attempt to install it once,
+		// then stop. The install path is the same as tryAutoUpdate but
+		// targets the pinned version instead of fetching latest.
+		d.logger.Info("auto-update: pinned version differs from current, installing pinned version",
+			"pinned", d.cfg.PinnedVersion,
+			"current", d.cfg.CLIVersion)
+		// Fall through to the normal loop; tryAutoUpdate will be called with
+		// a pin-aware path that targets the pinned version.
+	}
 
 	interval := d.cfg.AutoUpdateCheckInterval
 	if interval <= 0 {
@@ -93,6 +119,21 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 		return
 	}
 
+	// Defense-in-depth: even if tryAutoUpdate is called directly (e.g. by a
+	// server-triggered update), respect the pin. The loop-level guard in
+	// autoUpdateLoop prevents the periodic ticker from reaching here, but a
+	// manual or server-initiated update request should also be blocked.
+	if d.cfg.PinnedVersion != "" && d.cfg.CLIVersion == d.cfg.PinnedVersion {
+		// Already on the pinned version — do not upgrade beyond it.
+		d.logger.Info("auto-update: skip — version pinned",
+			"pinned", d.cfg.PinnedVersion,
+			"current", d.cfg.CLIVersion)
+		return
+	}
+	// If pinned but not yet on the pinned version, fall through and let the
+	// normal upgrade path install it. The release fetch below will be
+	// overridden to target the pinned version instead of latest.
+
 	// Own the whole attempt before publishing any observation, including a
 	// busy result from the cheap pre-fetch check below. Checking the flag and
 	// publishing first allowed a concurrent server update to finish and then
@@ -124,17 +165,36 @@ func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 	if !d.beginUpdateObservation("auto", "checking", "") {
 		return
 	}
-	release, err := fetchLatestRelease(d.releaseManifestBaseURLOverride())
-	if err != nil {
-		d.logger.Warn("auto-update: fetch latest release failed — will retry", "error", err)
-		d.finishUpdateObservation("waiting", "fetch_failed", "", "release_fetch_failed", "Unable to fetch the latest release.")
-		return
+
+	// When pinned to a specific version that isn't the current version,
+	// fetch that specific release instead of "latest". This installs the
+	// pinned version exactly once; after restart the current version will
+	// match the pin and the loop exits early.
+	var release *cli.ReleaseManifest
+	var err error
+	if d.cfg.PinnedVersion != "" && d.cfg.CLIVersion != d.cfg.PinnedVersion {
+		release, err = fetchReleaseByTagVar(d.cfg.PinnedVersion, d.releaseManifestBaseURLOverride())
+		if err != nil {
+			d.logger.Warn("auto-update: fetch pinned release failed — will retry",
+				"pinned", d.cfg.PinnedVersion, "error", err)
+			d.finishUpdateObservation("waiting", "fetch_failed", d.cfg.PinnedVersion,
+				"release_fetch_failed",
+				fmt.Sprintf("Unable to fetch the pinned release %s.", d.cfg.PinnedVersion))
+			return
+		}
+	} else {
+		release, err = fetchLatestRelease(d.releaseManifestBaseURLOverride())
+		if err != nil {
+			d.logger.Warn("auto-update: fetch latest release failed — will retry", "error", err)
+			d.finishUpdateObservation("waiting", "fetch_failed", "", "release_fetch_failed", "Unable to fetch the latest release.")
+			return
+		}
 	}
 	if release == nil || release.TagName == "" {
 		d.finishUpdateObservation("waiting", "up_to_date", "", "", "")
 		return
 	}
-	if !isNewerVersion(release.TagName, d.cfg.CLIVersion) {
+	if d.cfg.PinnedVersion == "" && !isNewerVersion(release.TagName, d.cfg.CLIVersion) {
 		d.finishUpdateObservation("waiting", "up_to_date", release.TagName, "", "")
 		return
 	}

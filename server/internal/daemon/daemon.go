@@ -20,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/internal/secretscoped"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 	"github.com/multica-ai/multica/server/internal/turntransport"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -4060,20 +4061,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if rootsValue, ok := composeOpenclawIncludeRoots(env.OpenclawIncludeRoot, os.Getenv("OPENCLAW_INCLUDE_ROOTS")); ok {
 		agentEnv["OPENCLAW_INCLUDE_ROOTS"] = rootsValue
 	}
-	// Inject user-configured custom environment variables (e.g. ANTHROPIC_API_KEY,
-	// ANTHROPIC_BASE_URL for router/proxy mode, or CLAUDE_CODE_USE_BEDROCK for
-	// Bedrock). These are set per-agent via the agent settings UI.
-	// Critical internal variables are blocklisted to prevent accidental or
-	// malicious override of daemon-set values.
-	if task.Agent != nil {
-		for k, v := range task.Agent.CustomEnv {
-			if isBlockedEnvKey(k) {
-				d.logger.Warn("custom_env: blocked key skipped", "key", k)
-				continue
-			}
-			agentEnv[k] = v
-		}
-	}
+	// Inject user-configured custom_env (agent-scoped) plus claim-time
+	// scoped_secrets after channel/project filtering (LRM-953). Channel A
+	// secrets must not enter channel B; project secrets require a bound
+	// project. Critical Multica/internal keys stay blocklisted.
+	injectScopedSecrets(agentEnv, task, d.logger)
 	// AReaL RL proxy override (§4.4): when the claimed task carries an
 	// areal_proxy config, force the runtime onto the RL proxy provider. The
 	// base_url env must be injected before the backend is created (it is part
@@ -5513,6 +5505,35 @@ func arealProxyExecOverride(p *ArealProxy) (model string, extraArgs []string, en
 // isBlockedEnvKey returns true if the key must not be overridden by user-
 // configured custom_env. This prevents accidental or malicious override of
 // daemon-internal variables and critical system paths.
+func injectScopedSecrets(agentEnv map[string]string, task Task, logger *slog.Logger) {
+	secrets := make([]secretscoped.Secret, 0, 8)
+	if task.Agent != nil {
+		secrets = append(secrets, secretscoped.FromAgentEnv(task.Agent.CustomEnv)...)
+	}
+	for _, secret := range task.ScopedSecrets {
+		secrets = append(secrets, secretscoped.Secret{
+			Key:       secret.Key,
+			Value:     secret.Value,
+			Scope:     secret.Scope,
+			ChannelID: secret.ChannelID,
+			ProjectID: secret.ProjectID,
+		})
+	}
+	filtered := secretscoped.Filter(secrets, secretscoped.TaskScope{
+		ChannelID: task.ChannelID,
+		ProjectID: task.ProjectID,
+	})
+	for key, value := range filtered {
+		if isBlockedEnvKey(key) {
+			if logger != nil {
+				logger.Warn("scoped_secret/custom_env: blocked key skipped", "key", key)
+			}
+			continue
+		}
+		agentEnv[key] = value
+	}
+}
+
 func isBlockedEnvKey(key string) bool {
 	upper := strings.ToUpper(key)
 	if strings.HasPrefix(upper, "MULTICA_") {

@@ -57,6 +57,10 @@ type Task struct {
 	ProjectID        string                       `json:"project_id,omitempty"`        // issue's project, when present
 	ChannelID        string                       `json:"channel_id,omitempty"`        // exact DM/channel surface, when present
 	ChannelKind      string                       `json:"channel_kind,omitempty"`      // "dm" | "group" when ChannelID is set; drives personal-memory entry gate
+	// ScopedSecrets are channel/project (and optionally agent) secrets injected
+	// after filtering by the current task channel/project (LRM-953). Agent
+	// custom_env remains separate and is treated as agent-scoped.
+	ScopedSecrets []ScopedSecret `json:"scoped_secrets,omitempty"`
 	ChannelGoal      *protocol.ChannelGoalContext `json:"channel_goal,omitempty"`      // active channel goal, refreshed on every claim
 	ProjectTitle     string                       `json:"project_title,omitempty"`     // human-readable project title for context injection
 	ProjectResources []ProjectResourceData        `json:"project_resources,omitempty"` // project-scoped resources to expose to the agent
@@ -187,6 +191,15 @@ type ArealProxy struct {
 	Model    string `json:"model"`
 	APIKey   string `json:"api_key"`
 	BaseURL  string `json:"base_url"`
+}
+
+// ScopedSecret is one env entry with a hard scope boundary for injection.
+type ScopedSecret struct {
+	Key       string `json:"key"`
+	Value     string `json:"value"`
+	Scope     string `json:"scope,omitempty"` // agent | channel | project
+	ChannelID string `json:"channel_id,omitempty"`
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 // AgentData holds agent details returned by the claim endpoint.

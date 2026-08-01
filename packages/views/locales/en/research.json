@@ -66,6 +66,11 @@
     "delete_done": "Research deleted",
     "cancel": "Cancel"
   },
+  "overlay": {
+    "fleet_expand": "Expand research fleet",
+    "fleet_collapse": "Collapse research fleet",
+    "detail_close": "Close detail"
+  },
   "panel": {
     "graph": "Exploration map",
     "sources": "Source map",

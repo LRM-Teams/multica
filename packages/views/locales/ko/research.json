@@ -66,6 +66,11 @@
     "delete_done": "Research deleted",
     "cancel": "Cancel"
   },
+  "overlay": {
+    "fleet_expand": "조사단 펼치기",
+    "fleet_collapse": "조사단 접기",
+    "detail_close": "상세 닫기"
+  },
   "panel": {
     "graph": "Exploration map",
     "sources": "Source map",

@@ -2,7 +2,7 @@
 
 import { useMemo, useReducer, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare, Square } from "lucide-react";
+import { Square } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -305,6 +305,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             selectedId={ui.selected?.id}
             onSelect={(node) => dispatch({ type: "select", node })}
             onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
+            onOpenChat={() => setChatOpen(true)}
+            chatOpen={chatOpen}
             onRetry={(node) => {
               // LRM-848 entry → LRM-828 retry path. Until a dedicated BE API lands,
               // ask the fleet lead to re-explore from this dead_end via chat.
@@ -319,17 +321,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 );
             }}
           />
-          {!chatOpen ? (
-            <Button
-              type="button"
-              size="icon"
-              className="absolute bottom-5 right-5 z-10 h-12 w-12 rounded-full shadow-lg"
-              onClick={() => setChatOpen(true)}
-              aria-label={t(($) => $.panel.chat)}
-            >
-              <MessageSquare className="h-5 w-5" />
-            </Button>
-          ) : null}
         </section>
 
         <aside className="hidden w-[260px] shrink-0 flex-col gap-3 overflow-y-auto border-l bg-background p-3 lg:flex">

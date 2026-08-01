@@ -66,6 +66,11 @@
     "delete_done": "调研已删除",
     "cancel": "取消"
   },
+  "overlay": {
+    "fleet_expand": "展开调研团",
+    "fleet_collapse": "收起调研团",
+    "detail_close": "关闭详情"
+  },
   "panel": {
     "graph": "调研探索图",
     "sources": "来源图谱",

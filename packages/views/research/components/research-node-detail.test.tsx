@@ -8,6 +8,7 @@ vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (fn: (dict: Record<string, unknown>) => unknown) =>
       fn({
+        overlay: { detail_close: "Close detail" },
         panel: { weight: "Weight" },
         node: {
           goal: "Goal",
@@ -25,6 +26,7 @@ vi.mock("../../i18n/use-t", () => ({
           confidence: "Confidence",
           detail_hint: "Detail",
           summary: "Summary",
+          doing: "In progress",
           summary_empty: "No summary",
           dead_end_reason: "Why blocked",
           evidence: "Evidence",
@@ -52,8 +54,14 @@ vi.mock("@multica/ui/components/ui/sheet", () => ({
   }: {
     children?: ReactNode;
     "data-testid"?: string;
+    "data-placement"?: string;
   }) => (
-    <div data-testid={rest["data-testid"] ?? "sheet-content"}>{children}</div>
+    <div
+      data-testid={rest["data-testid"] ?? "sheet-content"}
+      data-placement={rest["data-placement"]}
+    >
+      {children}
+    </div>
   ),
   SheetHeader: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   SheetTitle: ({ children }: { children?: ReactNode }) => <h2>{children}</h2>,
@@ -83,14 +91,24 @@ const sources: ResearchSource[] = [
   } as ResearchSource,
 ];
 
-describe("ResearchNodeDetail (LRM-826)", () => {
-  it("renders as a sheet detail surface, not a corner float chip", () => {
+describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
+  it("desktop default is a substantial overlay card, not a corner float chip", () => {
     render(<ResearchNodeDetail node={node} sources={sources} open />);
-    expect(screen.getByTestId("research-node-detail")).toBeInTheDocument();
+    const el = screen.getByTestId("research-node-detail");
+    expect(el).toBeInTheDocument();
+    expect(el).toHaveAttribute("data-placement", "overlay-card");
     expect(screen.getByText("价格区间已交叉验证")).toBeInTheDocument();
     expect(screen.getByText("挂牌中位价与成交价差约 8%。")).toBeInTheDocument();
     expect(screen.getByText("成交样本")).toBeInTheDocument();
     expect(document.querySelector(".absolute.bottom-4.left-4")).toBeNull();
+  });
+
+  it("narrow placement uses bottom sheet", () => {
+    render(<ResearchNodeDetail node={node} sources={sources} open placement="sheet" />);
+    expect(screen.getByTestId("research-node-detail")).toHaveAttribute(
+      "data-placement",
+      "sheet",
+    );
   });
 
   it("shows dead-end reason when node is blocked", () => {

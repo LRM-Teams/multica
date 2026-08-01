@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/react";
-import type { ReactElement, ReactNode } from "react";
+import type { MouseEventHandler, ReactElement, ReactNode } from "react";
 import { readFileSync } from "node:fs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -41,19 +41,46 @@ vi.mock("../common/actor-profile-popover", () => ({
     memberType,
     memberId,
     children,
+    onClickCapture,
   }: {
     memberType: string;
     memberId: string;
     children: ReactNode;
+    onClickCapture?: MouseEventHandler;
   }) => (
     <span
       data-testid="actor-profile-trigger"
       data-member-type={memberType}
       data-member-id={memberId}
+      onClickCapture={onClickCapture}
     >
       {children}
     </span>
   ),
+}));
+
+const openAgentPanelMock = vi.fn<(id: string) => void>();
+const closeAgentPanelMock = vi.fn();
+const openMemberPanelMock = vi.fn<(id: string) => void>();
+vi.mock("@multica/core/agents/stores", () => ({
+  useAgentPanelStore: (
+    selector: (s: { open: (id: string) => void; close: () => void }) => unknown,
+  ) => selector({ open: openAgentPanelMock, close: closeAgentPanelMock }),
+}));
+vi.mock("@multica/core/workspace", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/workspace")>();
+  return {
+    ...actual,
+    useMemberPanelStore: (
+      selector: (s: { open: (id: string) => void; close: () => void }) => unknown,
+    ) => selector({ open: openMemberPanelMock, close: vi.fn() }),
+  };
+});
+vi.mock("../common/agent-panel-context", () => ({
+  useOpenAgentPanel: () => null,
+}));
+vi.mock("../common/member-panel-context", () => ({
+  useOpenMemberPanel: () => null,
 }));
 
 vi.mock("./extensions/image-view", () => ({
@@ -255,6 +282,30 @@ describe("ReadonlyContent issue mention Markdown", () => {
     expect(trigger).toHaveAttribute("data-member-type", "user");
     expect(trigger).toHaveAttribute("data-member-id", "user-1");
     expect(container.querySelector(".mention")?.textContent).toContain("@Alice");
+  });
+
+  it("opens the member panel when a member mention is clicked (LRM-893)", () => {
+    openAgentPanelMock.mockClear();
+    closeAgentPanelMock.mockClear();
+    openMemberPanelMock.mockClear();
+    const { getByTestId } = render(
+      <ReadonlyContent content="Hey [@Alice](mention://member/user-1)" />,
+    );
+    fireEvent.click(getByTestId("actor-profile-trigger"));
+    expect(closeAgentPanelMock).toHaveBeenCalled();
+    expect(openMemberPanelMock).toHaveBeenCalledWith("user-1");
+    expect(openAgentPanelMock).not.toHaveBeenCalled();
+  });
+
+  it("opens the agent panel when an agent mention is clicked", () => {
+    openAgentPanelMock.mockClear();
+    openMemberPanelMock.mockClear();
+    const { getByTestId } = render(
+      <ReadonlyContent content="Hey [@Bot](mention://agent/agent-9)" />,
+    );
+    fireEvent.click(getByTestId("actor-profile-trigger"));
+    expect(openAgentPanelMock).toHaveBeenCalledWith("agent-9");
+    expect(openMemberPanelMock).not.toHaveBeenCalled();
   });
 
   it("wraps agent mentions in the full profile popover trigger", () => {

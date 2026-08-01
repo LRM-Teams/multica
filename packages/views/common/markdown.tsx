@@ -13,8 +13,10 @@ import type { Attachment as AttachmentRecord } from "@multica/core/types";
 import { useWorkspacePaths, useCurrentWorkspace } from "@multica/core/paths";
 import { useAuthStore } from "@multica/core/auth";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
+import { useMemberPanelStore } from "@multica/core/workspace";
 import { ActorProfileTrigger } from "./actor-profile-popover";
 import { useOpenAgentPanel } from "./agent-panel-context";
+import { useOpenMemberPanel } from "./member-panel-context";
 import { IssueMentionCard } from "../issues/components/issue-mention-card";
 import { ProjectChip } from "../projects/components/project-chip";
 import { AppLink } from "../navigation/app-link";
@@ -87,12 +89,15 @@ export function ActorMention({
   highlightQuery?: string;
 }): React.JSX.Element {
   const viewerUserId = useAuthStore((s) => s.user?.id ?? null);
-  // #349/#447 parity for RENDERED messages: a rendered @agent mention opens the
-  // side panel on click, same as the editor's MentionView and agent avatars.
-  // Context (channels/DM) preferred, global store fallback everywhere else.
+  // #349/#447 / LRM-893: rendered @agent → agent side panel; @member → member
+  // Profile dock (same as avatar click). Context preferred, global store fallback.
   const openAgentPanelFromContext = useOpenAgentPanel();
   const openAgentPanelFromStore = useAgentPanelStore((s) => s.open);
+  const closeAgentPanel = useAgentPanelStore((s) => s.close);
   const openAgentPanel = openAgentPanelFromContext ?? openAgentPanelFromStore;
+  const openMemberPanelFromContext = useOpenMemberPanel();
+  const openMemberPanelFromStore = useMemberPanelStore((s) => s.open);
+  const openMemberPanel = openMemberPanelFromContext ?? openMemberPanelFromStore;
   // LRM-515: render-time display_name (not authored @handle slug). Handle is
   // peek-only via title when we resolved a real name.
   const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
@@ -115,14 +120,22 @@ export function ActorMention({
   );
 
   if (type === "member" || type === "agent") {
+    const openOnClick =
+      type === "agent" && openAgentPanel
+        ? () => openAgentPanel(id)
+        : type === "member" && openMemberPanel
+          ? () => {
+              // Exclusive dock: same as ActorAvatarMemberPanelTrigger.
+              closeAgentPanel();
+              openMemberPanel(id);
+            }
+          : undefined;
     return (
       <ActorProfileTrigger
         memberType={type === "agent" ? "agent" : "user"}
         memberId={id}
         triggerElement="span"
-        onClickCapture={
-          type === "agent" && openAgentPanel ? () => openAgentPanel(id) : undefined
-        }
+        onClickCapture={openOnClick}
       >
         {chip}
       </ActorProfileTrigger>

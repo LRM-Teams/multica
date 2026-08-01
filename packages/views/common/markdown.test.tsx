@@ -116,14 +116,29 @@ vi.mock("./actor-profile-popover", () => ({
 }));
 
 const openAgentPanelMock = vi.fn<(id: string) => void>();
+const closeAgentPanelMock = vi.fn();
+const openMemberPanelMock = vi.fn<(id: string) => void>();
 vi.mock("@multica/core/agents/stores", () => ({
-  useAgentPanelStore: (selector: (s: { open: (id: string) => void }) => unknown) =>
-    selector({ open: openAgentPanelMock }),
+  useAgentPanelStore: (
+    selector: (s: { open: (id: string) => void; close: () => void }) => unknown,
+  ) => selector({ open: openAgentPanelMock, close: closeAgentPanelMock }),
   useAgentXpBurstStore: (selector: (s: { bursts: Record<string, never> }) => unknown) =>
     selector({ bursts: {} }),
 }));
+vi.mock("@multica/core/workspace", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/workspace")>();
+  return {
+    ...actual,
+    useMemberPanelStore: (
+      selector: (s: { open: (id: string) => void; close: () => void }) => unknown,
+    ) => selector({ open: openMemberPanelMock, close: vi.fn() }),
+  };
+});
 vi.mock("./agent-panel-context", () => ({
   useOpenAgentPanel: () => null,
+}));
+vi.mock("./member-panel-context", () => ({
+  useOpenMemberPanel: () => null,
 }));
 
 const ligatureClasses = [
@@ -303,15 +318,23 @@ describe("Markdown", () => {
   // "editor mention wired but rendered mention wasn't" miss.
   it("opens the agent panel when a rendered agent mention is clicked", () => {
     openAgentPanelMock.mockClear();
+    openMemberPanelMock.mockClear();
     render(<Markdown>{"Ping [@Bot](mention://agent/agent-9)"}</Markdown>);
     fireEvent.click(screen.getByTestId("actor-profile-trigger"));
     expect(openAgentPanelMock).toHaveBeenCalledWith("agent-9");
+    expect(openMemberPanelMock).not.toHaveBeenCalled();
   });
 
-  it("does not open the panel for a rendered human member mention (v1: agents only)", () => {
+  // LRM-893: member @mention click opens the same Profile dock as avatar click
+  // (not the empty hover peek alone).
+  it("opens the member panel when a rendered member mention is clicked (LRM-893)", () => {
     openAgentPanelMock.mockClear();
+    closeAgentPanelMock.mockClear();
+    openMemberPanelMock.mockClear();
     render(<Markdown>{"Ping [@Alice](mention://member/user-1)"}</Markdown>);
     fireEvent.click(screen.getByTestId("actor-profile-trigger"));
+    expect(closeAgentPanelMock).toHaveBeenCalled();
+    expect(openMemberPanelMock).toHaveBeenCalledWith("user-1");
     expect(openAgentPanelMock).not.toHaveBeenCalled();
   });
 

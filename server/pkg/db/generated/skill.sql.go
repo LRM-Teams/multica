@@ -11,10 +11,73 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const actorCanPromoteSkillToAnyChannel = `-- name: ActorCanPromoteSkillToAnyChannel :one
+SELECT EXISTS (
+    SELECT 1
+    FROM channel_member cm
+    JOIN channel c ON c.id = cm.channel_id AND c.workspace_id = cm.workspace_id
+    WHERE cm.workspace_id = $1
+      AND cm.member_type = $2
+      AND cm.member_id = $3
+      AND cm.role IN ('owner', 'manager')
+      AND c.kind = 'group'
+      AND c.archived_at IS NULL
+) AS allowed
+`
+
+type ActorCanPromoteSkillToAnyChannelParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	MemberType  string      `json:"member_type"`
+	MemberID    pgtype.UUID `json:"member_id"`
+}
+
+// Capability gate for the promote-to-channel button (no target channel yet).
+func (q *Queries) ActorCanPromoteSkillToAnyChannel(ctx context.Context, arg ActorCanPromoteSkillToAnyChannelParams) (bool, error) {
+	row := q.db.QueryRow(ctx, actorCanPromoteSkillToAnyChannel, arg.WorkspaceID, arg.MemberType, arg.MemberID)
+	var allowed bool
+	err := row.Scan(&allowed)
+	return allowed, err
+}
+
+const actorCanPromoteSkillToChannel = `-- name: ActorCanPromoteSkillToChannel :one
+SELECT EXISTS (
+    SELECT 1
+    FROM channel_member cm
+    JOIN channel c ON c.id = cm.channel_id AND c.workspace_id = cm.workspace_id
+    WHERE cm.workspace_id = $1
+      AND cm.channel_id = $2
+      AND cm.member_type = $3
+      AND cm.member_id = $4
+      AND cm.role IN ('owner', 'manager')
+      AND c.kind = 'group'
+      AND c.archived_at IS NULL
+) AS allowed
+`
+
+type ActorCanPromoteSkillToChannelParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	MemberType  string      `json:"member_type"`
+	MemberID    pgtype.UUID `json:"member_id"`
+}
+
+// Channel owner (human) or channel manager (human/agent) may grant L2.
+func (q *Queries) ActorCanPromoteSkillToChannel(ctx context.Context, arg ActorCanPromoteSkillToChannelParams) (bool, error) {
+	row := q.db.QueryRow(ctx, actorCanPromoteSkillToChannel,
+		arg.WorkspaceID,
+		arg.ChannelID,
+		arg.MemberType,
+		arg.MemberID,
+	)
+	var allowed bool
+	err := row.Scan(&allowed)
+	return allowed, err
+}
+
 const addAgentSkill = `-- name: AddAgentSkill :exec
-INSERT INTO agent_skill (agent_id, skill_id)
-VALUES ($1, $2)
-ON CONFLICT DO NOTHING
+INSERT INTO agent_skill (agent_id, skill_id, source)
+VALUES ($1, $2, 'manual')
+ON CONFLICT (agent_id, skill_id) DO NOTHING
 `
 
 type AddAgentSkillParams struct {
@@ -127,7 +190,7 @@ func (q *Queries) CreateAgentSharedSkill(ctx context.Context, arg CreateAgentSha
 const createSkill = `-- name: CreateSkill :one
 INSERT INTO skill (workspace_id, name, description, content, config, created_by)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, workspace_id, name, description, content, config, created_by, created_at, updated_at
+RETURNING id, workspace_id, name, description, content, config, created_by, created_at, updated_at, source_evolution_unit_id, grant_level, channel_id
 `
 
 type CreateSkillParams struct {
@@ -159,6 +222,52 @@ func (q *Queries) CreateSkill(ctx context.Context, arg CreateSkillParams) (Skill
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceEvolutionUnitID,
+		&i.GrantLevel,
+		&i.ChannelID,
+	)
+	return i, err
+}
+
+const createSkillPromotion = `-- name: CreateSkillPromotion :one
+INSERT INTO skill_promotion (
+    skill_id, workspace_id, from_level, to_level, channel_id, actor_type, actor_id
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, skill_id, workspace_id, from_level, to_level, channel_id, actor_type, actor_id, created_at
+`
+
+type CreateSkillPromotionParams struct {
+	SkillID     pgtype.UUID `json:"skill_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	FromLevel   string      `json:"from_level"`
+	ToLevel     string      `json:"to_level"`
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	ActorType   string      `json:"actor_type"`
+	ActorID     pgtype.UUID `json:"actor_id"`
+}
+
+func (q *Queries) CreateSkillPromotion(ctx context.Context, arg CreateSkillPromotionParams) (SkillPromotion, error) {
+	row := q.db.QueryRow(ctx, createSkillPromotion,
+		arg.SkillID,
+		arg.WorkspaceID,
+		arg.FromLevel,
+		arg.ToLevel,
+		arg.ChannelID,
+		arg.ActorType,
+		arg.ActorID,
+	)
+	var i SkillPromotion
+	err := row.Scan(
+		&i.ID,
+		&i.SkillID,
+		&i.WorkspaceID,
+		&i.FromLevel,
+		&i.ToLevel,
+		&i.ChannelID,
+		&i.ActorType,
+		&i.ActorID,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -352,7 +461,7 @@ func (q *Queries) GetAgentSharedSkillByAgentAndSyncKey(ctx context.Context, arg 
 }
 
 const getSkill = `-- name: GetSkill :one
-SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at FROM skill
+SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, source_evolution_unit_id, grant_level, channel_id FROM skill
 WHERE id = $1
 `
 
@@ -369,12 +478,15 @@ func (q *Queries) GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error) {
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceEvolutionUnitID,
+		&i.GrantLevel,
+		&i.ChannelID,
 	)
 	return i, err
 }
 
 const getSkillByWorkspaceAndName = `-- name: GetSkillByWorkspaceAndName :one
-SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at FROM skill
+SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, source_evolution_unit_id, grant_level, channel_id FROM skill
 WHERE workspace_id = $1 AND name = $2
 `
 
@@ -400,6 +512,9 @@ func (q *Queries) GetSkillByWorkspaceAndName(ctx context.Context, arg GetSkillBy
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceEvolutionUnitID,
+		&i.GrantLevel,
+		&i.ChannelID,
 	)
 	return i, err
 }
@@ -424,7 +539,7 @@ func (q *Queries) GetSkillFile(ctx context.Context, id pgtype.UUID) (SkillFile, 
 }
 
 const getSkillInWorkspace = `-- name: GetSkillInWorkspace :one
-SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at FROM skill
+SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, source_evolution_unit_id, grant_level, channel_id FROM skill
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -446,6 +561,9 @@ func (q *Queries) GetSkillInWorkspace(ctx context.Context, arg GetSkillInWorkspa
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceEvolutionUnitID,
+		&i.GrantLevel,
+		&i.ChannelID,
 	)
 	return i, err
 }
@@ -533,7 +651,8 @@ func (q *Queries) ListAgentSharedSkillsByAgent(ctx context.Context, agentID pgty
 }
 
 const listAgentSkillSummaries = `-- name: ListAgentSkillSummaries :many
-SELECT s.id, s.workspace_id, s.name, s.description, s.config, s.created_by, s.created_at, s.updated_at
+SELECT s.id, s.workspace_id, s.name, s.description, s.config, s.created_by, s.created_at, s.updated_at,
+       s.grant_level, s.channel_id
 FROM skill s
 JOIN agent_skill ask ON ask.skill_id = s.id
 WHERE ask.agent_id = $1
@@ -549,6 +668,8 @@ type ListAgentSkillSummariesRow struct {
 	CreatedBy   pgtype.UUID        `json:"created_by"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	GrantLevel  string             `json:"grant_level"`
+	ChannelID   pgtype.UUID        `json:"channel_id"`
 }
 
 // Summary variant for the agent skills list endpoint — omits `content` for
@@ -571,6 +692,8 @@ func (q *Queries) ListAgentSkillSummaries(ctx context.Context, agentID pgtype.UU
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.GrantLevel,
+			&i.ChannelID,
 		); err != nil {
 			return nil, err
 		}
@@ -584,8 +707,10 @@ func (q *Queries) ListAgentSkillSummaries(ctx context.Context, agentID pgtype.UU
 
 const listAgentSkills = `-- name: ListAgentSkills :many
 
-SELECT s.id, s.workspace_id, s.name, s.description, s.content, s.config, s.created_by, s.created_at, s.updated_at, s.source_evolution_unit_id,
-       u.current_version_id AS source_evolution_unit_version_id
+SELECT s.id, s.workspace_id, s.name, s.description, s.content, s.config,
+       s.created_by, s.created_at, s.updated_at, s.source_evolution_unit_id,
+       u.current_version_id AS source_evolution_unit_version_id,
+       s.grant_level, s.channel_id
 FROM skill s
 JOIN agent_skill ask ON ask.skill_id = s.id
 LEFT JOIN shared_evolution_unit u
@@ -606,6 +731,8 @@ type ListAgentSkillsRow struct {
 	UpdatedAt                    pgtype.Timestamptz `json:"updated_at"`
 	SourceEvolutionUnitID        pgtype.UUID        `json:"source_evolution_unit_id"`
 	SourceEvolutionUnitVersionID pgtype.UUID        `json:"source_evolution_unit_version_id"`
+	GrantLevel                   string             `json:"grant_level"`
+	ChannelID                    pgtype.UUID        `json:"channel_id"`
 }
 
 // Agent-Skill junction
@@ -630,6 +757,8 @@ func (q *Queries) ListAgentSkills(ctx context.Context, agentID pgtype.UUID) ([]L
 			&i.UpdatedAt,
 			&i.SourceEvolutionUnitID,
 			&i.SourceEvolutionUnitVersionID,
+			&i.GrantLevel,
+			&i.ChannelID,
 		); err != nil {
 			return nil, err
 		}
@@ -716,8 +845,81 @@ func (q *Queries) ListSkillFiles(ctx context.Context, skillID pgtype.UUID) ([]Sk
 	return items, nil
 }
 
+const listSkillPromotionsBySkill = `-- name: ListSkillPromotionsBySkill :many
+SELECT
+    p.id,
+    p.skill_id,
+    p.workspace_id,
+    p.from_level,
+    p.to_level,
+    p.channel_id,
+    p.actor_type,
+    p.actor_id,
+    p.created_at,
+    CASE
+        WHEN p.actor_type = 'member' THEN COALESCE(u.display_name, u.name, '')
+        WHEN p.actor_type = 'agent' THEN COALESCE(a.display_name, a.name, '')
+        ELSE ''
+    END AS actor_display_name
+FROM skill_promotion p
+LEFT JOIN "user" u ON p.actor_type = 'member' AND u.id = p.actor_id
+LEFT JOIN agent a ON p.actor_type = 'agent' AND a.id = p.actor_id
+WHERE p.skill_id = $1 AND p.workspace_id = $2
+ORDER BY p.created_at DESC, p.id DESC
+`
+
+type ListSkillPromotionsBySkillParams struct {
+	SkillID     pgtype.UUID `json:"skill_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+type ListSkillPromotionsBySkillRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	SkillID          pgtype.UUID        `json:"skill_id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	FromLevel        string             `json:"from_level"`
+	ToLevel          string             `json:"to_level"`
+	ChannelID        pgtype.UUID        `json:"channel_id"`
+	ActorType        string             `json:"actor_type"`
+	ActorID          pgtype.UUID        `json:"actor_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	ActorDisplayName string             `json:"actor_display_name"`
+}
+
+func (q *Queries) ListSkillPromotionsBySkill(ctx context.Context, arg ListSkillPromotionsBySkillParams) ([]ListSkillPromotionsBySkillRow, error) {
+	rows, err := q.db.Query(ctx, listSkillPromotionsBySkill, arg.SkillID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSkillPromotionsBySkillRow{}
+	for rows.Next() {
+		var i ListSkillPromotionsBySkillRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SkillID,
+			&i.WorkspaceID,
+			&i.FromLevel,
+			&i.ToLevel,
+			&i.ChannelID,
+			&i.ActorType,
+			&i.ActorID,
+			&i.CreatedAt,
+			&i.ActorDisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSkillSummariesByWorkspace = `-- name: ListSkillSummariesByWorkspace :many
-SELECT id, workspace_id, name, description, config, created_by, created_at, updated_at
+SELECT id, workspace_id, name, description, config, created_by, created_at, updated_at,
+       grant_level, channel_id
 FROM skill
 WHERE workspace_id = $1
 ORDER BY name ASC
@@ -732,6 +934,8 @@ type ListSkillSummariesByWorkspaceRow struct {
 	CreatedBy   pgtype.UUID        `json:"created_by"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	GrantLevel  string             `json:"grant_level"`
+	ChannelID   pgtype.UUID        `json:"channel_id"`
 }
 
 // Same as ListSkillsByWorkspace but omits the SKILL.md `content` column. Used
@@ -756,6 +960,8 @@ func (q *Queries) ListSkillSummariesByWorkspace(ctx context.Context, workspaceID
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.GrantLevel,
+			&i.ChannelID,
 		); err != nil {
 			return nil, err
 		}
@@ -769,7 +975,7 @@ func (q *Queries) ListSkillSummariesByWorkspace(ctx context.Context, workspaceID
 
 const listSkillsByWorkspace = `-- name: ListSkillsByWorkspace :many
 
-SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at FROM skill
+SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, source_evolution_unit_id, grant_level, channel_id FROM skill
 WHERE workspace_id = $1
 ORDER BY name ASC
 `
@@ -794,6 +1000,9 @@ func (q *Queries) ListSkillsByWorkspace(ctx context.Context, workspaceID pgtype.
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SourceEvolutionUnitID,
+			&i.GrantLevel,
+			&i.ChannelID,
 		); err != nil {
 			return nil, err
 		}
@@ -929,7 +1138,7 @@ UPDATE skill SET
     config = COALESCE($5, config),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, description, content, config, created_by, created_at, updated_at
+RETURNING id, workspace_id, name, description, content, config, created_by, created_at, updated_at, source_evolution_unit_id, grant_level, channel_id
 `
 
 type UpdateSkillParams struct {
@@ -959,6 +1168,52 @@ func (q *Queries) UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceEvolutionUnitID,
+		&i.GrantLevel,
+		&i.ChannelID,
+	)
+	return i, err
+}
+
+const updateSkillGrantLevel = `-- name: UpdateSkillGrantLevel :one
+
+UPDATE skill SET
+    grant_level = $2,
+    channel_id = $3,
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $4
+RETURNING id, workspace_id, name, description, content, config, created_by, created_at, updated_at, source_evolution_unit_id, grant_level, channel_id
+`
+
+type UpdateSkillGrantLevelParams struct {
+	ID          pgtype.UUID `json:"id"`
+	GrantLevel  string      `json:"grant_level"`
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Skill grant promotion (LRM-961 / LRM-954)
+func (q *Queries) UpdateSkillGrantLevel(ctx context.Context, arg UpdateSkillGrantLevelParams) (Skill, error) {
+	row := q.db.QueryRow(ctx, updateSkillGrantLevel,
+		arg.ID,
+		arg.GrantLevel,
+		arg.ChannelID,
+		arg.WorkspaceID,
+	)
+	var i Skill
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Description,
+		&i.Content,
+		&i.Config,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SourceEvolutionUnitID,
+		&i.GrantLevel,
+		&i.ChannelID,
 	)
 	return i, err
 }

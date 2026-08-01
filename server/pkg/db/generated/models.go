@@ -942,6 +942,8 @@ type Skill struct {
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	SourceEvolutionUnitID pgtype.UUID        `json:"source_evolution_unit_id"`
+	GrantLevel            string             `json:"grant_level"`
+	ChannelID             pgtype.UUID        `json:"channel_id"`
 }
 
 type SkillFile struct {
@@ -951,6 +953,18 @@ type SkillFile struct {
 	Content   string             `json:"content"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type SkillPromotion struct {
+	ID          pgtype.UUID        `json:"id"`
+	SkillID     pgtype.UUID        `json:"skill_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	FromLevel   string             `json:"from_level"`
+	ToLevel     string             `json:"to_level"`
+	ChannelID   pgtype.UUID        `json:"channel_id"`
+	ActorType   string             `json:"actor_type"`
+	ActorID     pgtype.UUID        `json:"actor_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type EvolutionUnitSubmission struct {

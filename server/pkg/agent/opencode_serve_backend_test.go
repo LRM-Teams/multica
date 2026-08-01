@@ -135,16 +135,28 @@ func TestCloseTerminatesServeProcess(t *testing.T) {
 // TestExecuteEndToEndAgainstFakeServeProcess exercises the full path —
 // spawn, create session, send message, session.idle, reconcile — against a
 // real (fake) HTTP server running in a separate process, not just the
-// in-process httptest.Server used by the client-level tests. The timeout is
-// generous (30s, not the 10s locally-fast completion would suggest) because
-// this path involves real OS process spawn/exec, which CI runners under load
-// can preempt for reasons unrelated to correctness — task #44, observed as a
-// flake on v0.3.89 CI (confirmed non-reproducing on rerun).
+// in-process httptest.Server used by the client-level tests.
+//
+// Task #44 history: this used a fixed ExecOptions.Timeout (10s, then 30s) as
+// the pass/fail bound, and flaked twice under heavy CI load — once at each
+// value — because turnWatchdogTimeout races that same duration against the
+// real session.idle SSE event. Any fixed bound in the "normal completion"
+// range is a coin flip against scheduler preemption; raising it only lowers
+// the odds without removing them (30.13s was the second flake, confirmed by
+// timestamp to be *after* the first fix, not a stale CI run).
+//
+// The actual completion signal is already deterministic (session.idle), so
+// this test passes ExecOptions{} and lets turnWatchdogTimeout fall back to
+// its production default (10 minutes) — a pure deadlock backstop, not an
+// estimate of expected duration. On a loaded runner this test should get
+// slower, never red; the 200ms-timeout case in
+// opencode_serve_client_test.go covers the "watchdog actually fires"
+// behavior with a deliberately-short deadline instead.
 func TestExecuteEndToEndAgainstFakeServeProcess(t *testing.T) {
 	backend := newOpenCodeServeBackend(newTestOpenCodeServeBackendConfig(t))
 	t.Cleanup(backend.Close)
 
-	session, err := backend.Execute(context.Background(), "hello", ExecOptions{Timeout: 30 * time.Second})
+	session, err := backend.Execute(context.Background(), "hello", ExecOptions{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

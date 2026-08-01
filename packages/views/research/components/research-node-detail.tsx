@@ -252,17 +252,17 @@ export function ResearchNodeDetail({
 
   if (mode === "overlay-card") {
     return (
-      <aside
+      <dialog
+        open
         data-testid="research-node-detail"
         data-placement="overlay-card"
-        className="flex max-h-[min(52vh,420px)] w-[min(100%,320px)] flex-col overflow-hidden rounded-xl border bg-card/95 shadow-lg backdrop-blur-md"
-        role="dialog"
+        className="relative m-0 flex max-h-[min(52vh,420px)] w-[min(100%,320px)] translate-none flex-col overflow-hidden rounded-xl border bg-card/95 p-0 shadow-lg backdrop-blur-md open:flex"
         aria-label={t(($) => $.node.detail_hint)}
       >
         <div className="min-h-0 flex-1 overflow-y-auto">
           <DetailBody node={node} sources={sources} onClose={onClose} showClose />
         </div>
-      </aside>
+      </dialog>
     );
   }
 

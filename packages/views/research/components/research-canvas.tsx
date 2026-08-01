@@ -33,7 +33,6 @@ import {
   FAB_ABOVE_MINIMAP_BOTTOM_PX,
   FAB_NARROW_BOTTOM_PX,
   FAB_SIZE_PX,
-  MINIMAP_BOTTOM_PX,
   MINIMAP_HEIGHT_PX,
   MINIMAP_WIDTH_PX,
   OVERLAY_INSET_PX,
@@ -56,6 +55,8 @@ const nodeTypes: NodeTypes = {
   laneBand: ResearchLaneBandNodeView,
 };
 
+const EMPTY_FLEET_MEMBERS: ResearchFleetMember[] = [];
+
 function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) return false;
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -67,7 +68,7 @@ function ResearchCanvasInner({
   nodes,
   edges,
   sources,
-  members = [],
+  members = EMPTY_FLEET_MEMBERS,
   presence,
   selectedId,
   onSelect,
@@ -237,8 +238,9 @@ function ResearchCanvasInner({
     [ringNode, onSelect, onRetry, closeRing],
   );
 
+  // Narrow + detail sheet: hide FAB so it does not sit under the sheet.
   const chatFab =
-    !chatOpen && onOpenChat ? (
+    !chatOpen && onOpenChat && !(isMobile && showDetail) ? (
       <Button
         type="button"
         size="icon"
@@ -409,50 +411,11 @@ function ResearchCanvasInner({
           style={{
             width: MINIMAP_WIDTH_PX,
             height: MINIMAP_HEIGHT_PX,
-            bottom: MINIMAP_BOTTOM_PX,
-            right: OVERLAY_INSET_PX,
-            left: "auto",
-            top: "auto",
           }}
-          className="!m-0 !overflow-hidden !rounded-lg !border !border-border !bg-card/90"
+          className="!absolute !top-auto !bottom-4 !left-auto !right-4 !m-0 !overflow-hidden !rounded-lg !border !border-border !bg-card/90"
           maskColor="color-mix(in oklch, var(--canvas-bg) 70%, transparent)"
           nodeColor={(n) => (n.type === "laneBand" ? "transparent" : "var(--brand)")}
         />
-        {/* LRM-797: Controls bottom-left */}
-        <Panel
-          position="bottom-left"
-          className="!m-0 !bg-transparent"
-          style={{ left: OVERLAY_INSET_PX, bottom: CONTROLS_BOTTOM_PX }}
-        >
-          <ResearchCanvasDock
-            zoomPct={zoomPct}
-            className="!mb-0"
-            onZoomIn={() => {
-              void zoomIn({ duration: 160 });
-              setZoomPct(Math.round(getZoom() * 100));
-            }}
-            onZoomOut={() => {
-              void zoomOut({ duration: 160 });
-              setZoomPct(Math.round(getZoom() * 100));
-            }}
-            onFit={() => {
-              void fitView({ padding: 0.18, duration: 240 });
-              setZoomPct(Math.round(getZoom() * 100));
-            }}
-            detailOpen={showDetail}
-            onToggleDetail={() => {
-              if (showDetail) {
-                setDetailPinned(false);
-                onSelect?.(null);
-              } else if (selectedNode || ringNode) {
-                const n = selectedNode ?? ringNode!;
-                onSelect?.(n);
-                setDetailPinned(true);
-                closeRing();
-              }
-            }}
-          />
-        </Panel>
         {ringNode ? (
           <NodeToolbar
             nodeId={ringNode.id}
@@ -470,6 +433,41 @@ function ResearchCanvasInner({
           </NodeToolbar>
         ) : null}
       </ReactFlow>
+      {/* LRM-797: Controls bottom-left (outside RF so Panel centering cannot win). */}
+      <div
+        className="pointer-events-auto absolute z-20"
+        style={{ left: OVERLAY_INSET_PX, bottom: CONTROLS_BOTTOM_PX }}
+        data-testid="research-canvas-controls-slot"
+      >
+        <ResearchCanvasDock
+          zoomPct={zoomPct}
+          className="!mb-0"
+          onZoomIn={() => {
+            void zoomIn({ duration: 160 });
+            setZoomPct(Math.round(getZoom() * 100));
+          }}
+          onZoomOut={() => {
+            void zoomOut({ duration: 160 });
+            setZoomPct(Math.round(getZoom() * 100));
+          }}
+          onFit={() => {
+            void fitView({ padding: 0.18, duration: 240 });
+            setZoomPct(Math.round(getZoom() * 100));
+          }}
+          detailOpen={showDetail}
+          onToggleDetail={() => {
+            if (showDetail) {
+              setDetailPinned(false);
+              onSelect?.(null);
+            } else if (selectedNode || ringNode) {
+              const n = selectedNode ?? ringNode!;
+              onSelect?.(n);
+              setDetailPinned(true);
+              closeRing();
+            }
+          }}
+        />
+      </div>
       {/* LRM-797: detail card 12px above Controls (substantial, not a chip). */}
       {showDetail && selectedNode ? (
         <div

@@ -46,7 +46,8 @@ export function ResearchChatDrawer({
           data-placement="sheet"
           className={cn(
             // Full-screen sheet on narrow: canvas stays full-bleed underneath.
-            "flex h-[100dvh] max-h-[100dvh] w-full flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none",
+            // Sheet primitive sets `data-[side=bottom]:h-auto` — force viewport height.
+            "flex !h-[100dvh] !max-h-[100dvh] min-h-[100dvh] w-full flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none",
             className,
           )}
         >

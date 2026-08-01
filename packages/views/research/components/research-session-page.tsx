@@ -56,6 +56,7 @@ import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchCanvas } from "./research-canvas";
 import { ResearchChatCard } from "./research-chat-card";
+import { ResearchChatDrawer } from "./research-chat-drawer";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
@@ -428,8 +429,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           <HumanBoundaryCard model={humanBoundary} />
         </aside>
 
-        {chatOpen ? (
-          <aside className="flex w-[min(100%,380px)] shrink-0 flex-col border-l bg-background">
+        <ResearchChatDrawer open={chatOpen} onClose={() => setChatOpen(false)}>
             <div className="flex items-center justify-between border-b px-3 py-2.5">
               <div className="text-sm font-semibold text-foreground">{t(($) => $.panel.chat)}</div>
               <Button type="button" size="sm" variant="ghost" onClick={() => setChatOpen(false)}>
@@ -663,8 +663,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 </div>
               </div>
             </div>
-          </aside>
-        ) : null}
+        </ResearchChatDrawer>
 
         {!isMobile && agentPanelNode ? (
           <div

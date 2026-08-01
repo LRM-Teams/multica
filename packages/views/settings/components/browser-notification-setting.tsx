@@ -14,6 +14,7 @@ import {
 } from "@multica/core/web-push";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { toast } from "sonner";
 import { isDesktopShell } from "../../platform";
 import { useT } from "../../i18n";
@@ -38,6 +39,8 @@ export function BrowserNotificationSetting() {
   const [, refresh] = useState(0);
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
+  // Durable failure copy — toast alone auto-dismisses / can be evicted (#835).
+  const [testError, setTestError] = useState<string | null>(null);
   const permission: WebNotificationPermission = getWebNotificationPermission();
   const pushState = getWebPushSupportState();
 
@@ -66,6 +69,7 @@ export function BrowserNotificationSetting() {
   const handleSendTest = async () => {
     if (permission !== "granted" || pushState !== "supported") return;
     setTesting(true);
+    setTestError(null);
     try {
       // Ensure this device has a bound subscription before asking the server
       // to fan out — otherwise a stale "Enabled" badge looks like a false pass.
@@ -79,7 +83,8 @@ export function BrowserNotificationSetting() {
           : err instanceof Error && err.message
             ? err.message
             : t(($) => $.notifications.browser.test.failed_generic);
-      toast.error(message);
+      setTestError(message);
+      showErrorToast(message);
       console.error("[web-push] send test failed", err);
     } finally {
       setTesting(false);
@@ -113,6 +118,11 @@ export function BrowserNotificationSetting() {
             {canTest && permission !== "granted" && (
               <p className="text-xs text-muted-foreground">
                 {t(($) => $.notifications.browser.test.need_permission)}
+              </p>
+            )}
+            {testError && (
+              <p className="text-xs text-destructive" role="alert" data-testid="browser-notification-test-error">
+                {testError}
               </p>
             )}
           </div>

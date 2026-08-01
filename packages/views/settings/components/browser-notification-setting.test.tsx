@@ -26,8 +26,9 @@ const api = vi.hoisted(() => ({
 
 const toast = vi.hoisted(() => ({
   success: vi.fn(),
-  error: vi.fn(),
 }));
+
+const showErrorToast = vi.hoisted(() => vi.fn());
 
 vi.mock("../../platform", () => ({
   isDesktopShell: () => platform.isDesktopShell,
@@ -59,6 +60,8 @@ vi.mock("@multica/core/api", () => {
 });
 
 vi.mock("sonner", () => ({ toast }));
+
+vi.mock("@multica/ui/lib/error-toast", () => ({ showErrorToast }));
 
 vi.mock("../../i18n", () => ({
   useT: () => ({
@@ -106,7 +109,7 @@ describe("BrowserNotificationSetting test push (LRM-755)", () => {
       attempted: 1,
     });
     toast.success.mockClear();
-    toast.error.mockClear();
+    showErrorToast.mockClear();
   });
 
   it("sends a real test push when granted (ensure-bind then POST /test)", async () => {
@@ -128,7 +131,7 @@ describe("BrowserNotificationSetting test push (LRM-755)", () => {
     ).toBeInTheDocument();
   });
 
-  it("surfaces API failure reason in a toast", async () => {
+  it("surfaces API failure reason in toast + durable inline alert", async () => {
     const { ApiError } = await import("@multica/core/api");
     api.sendTestWebPush.mockRejectedValueOnce(
       new ApiError("no active web push subscription — enable browser notifications on this device first", 404, "Not Found"),
@@ -136,7 +139,10 @@ describe("BrowserNotificationSetting test push (LRM-755)", () => {
     render(<BrowserNotificationSetting />);
     fireEvent.click(screen.getByTestId("browser-notification-send-test"));
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(
+      expect(showErrorToast).toHaveBeenCalledWith(
+        "no active web push subscription — enable browser notifications on this device first",
+      );
+      expect(screen.getByTestId("browser-notification-test-error")).toHaveTextContent(
         "no active web push subscription — enable browser notifications on this device first",
       );
     });

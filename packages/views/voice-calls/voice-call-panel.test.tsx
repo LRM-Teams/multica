@@ -48,8 +48,12 @@ function renderPanel(overrides: Partial<VoiceCallPanelProps> = {}) {
     error: null,
     durationSeconds: 65,
     autoplayBlocked: false,
+    mode: "rtc",
+    toolStatus: null,
+    speakerphone: false,
     onRequestClose: vi.fn(),
     onToggleMute: vi.fn(),
+    onToggleSpeakerphone: vi.fn(),
     onHangUp: vi.fn(),
     onRetry: vi.fn(),
     onResumeAudio: vi.fn(),
@@ -210,5 +214,24 @@ describe("VoiceCallPanel", () => {
     await user.click(screen.getByRole("button", { name: "Play audio" }));
 
     expect(props.onResumeAudio).toHaveBeenCalledOnce();
+  });
+
+  it("shows duplex tool progress and speakerphone toggle", async () => {
+    const user = userEvent.setup();
+    const props = renderPanel({
+      mode: "duplex",
+      toolStatus: {
+        name: "delegate_work_to_multica_agent",
+        status: "started",
+      },
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Working on delegate_work_to_multica_agent…",
+    );
+    expect(screen.getByText("Duplex voice")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Speaker" }));
+    expect(props.onToggleSpeakerphone).toHaveBeenCalledOnce();
   });
 });

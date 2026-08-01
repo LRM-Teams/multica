@@ -220,6 +220,7 @@ import type {
   CreateVoiceCallRequest,
   CreateVoiceCallResponse,
   GetVoiceCallResponse,
+  StartVoiceCallDuplexResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -377,8 +378,10 @@ import {
   EMPTY_VOICE_TRANSCRIPT_RESPONSE,
   CreateVoiceCallResponseSchema,
   GetVoiceCallResponseSchema,
+  StartVoiceCallDuplexResponseSchema,
   EMPTY_CREATE_VOICE_CALL_RESPONSE,
   EMPTY_GET_VOICE_CALL_RESPONSE,
+  EMPTY_START_VOICE_CALL_DUPLEX_RESPONSE,
   RawReminderPageSchema,
   EMPTY_REMINDER_PAGE,
   EMPTY_WEB_PUSH_PUBLIC_KEY,
@@ -484,6 +487,26 @@ export class PreviewUnsupportedError extends Error {
 // a mis-fired timeout costs one extra retry tap, no longer lost text (a message
 // should send in ~1s anyway; 8s stays tolerant of slow networks).
 const SEND_TIMEOUT_MS = 8_000;
+
+/** Build a same-origin Duplex WebSocket URL from an HTTP API base URL. */
+export function voiceCallDuplexWsUrl(
+  baseUrl: string,
+  workspaceId: string,
+  callId: string,
+): string {
+  const wsBase = baseUrl.replace(/^http/i, "ws").replace(/\/$/, "");
+  return `${wsBase}/api/workspaces/${encodeURIComponent(workspaceId)}/voice-calls/${encodeURIComponent(callId)}/duplex/ws`;
+}
+
+/** Resolve a server-provided ws_path against an HTTP API base URL. */
+export function voiceCallDuplexWsUrlFromPath(
+  baseUrl: string,
+  wsPath: string,
+): string {
+  const wsBase = baseUrl.replace(/^http/i, "ws").replace(/\/$/, "");
+  const path = wsPath.startsWith("/") ? wsPath : `/${wsPath}`;
+  return `${wsBase}${path}`;
+}
 
 export class ApiClient {
   private baseUrl: string;
@@ -3485,6 +3508,37 @@ export class ApiClient {
       EMPTY_GET_VOICE_CALL_RESPONSE,
       { endpoint: "POST /api/workspaces/{workspaceId}/voice-calls/{callId}/stop" },
     );
+  }
+
+  async startVoiceCallDuplex(
+    workspaceId: string,
+    callId: string,
+  ): Promise<StartVoiceCallDuplexResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/voice-calls/${encodeURIComponent(callId)}/duplex`,
+      { method: "POST" },
+    );
+    const parsed = parseWithFallback(
+      raw,
+      StartVoiceCallDuplexResponseSchema,
+      EMPTY_START_VOICE_CALL_DUPLEX_RESPONSE,
+      {
+        endpoint: "POST /api/workspaces/{workspaceId}/voice-calls/{callId}/duplex",
+        receivedForLog: "[redacted duplex voice call response]",
+      },
+    );
+    if (parsed === EMPTY_START_VOICE_CALL_DUPLEX_RESPONSE) {
+      throw new ApiError(
+        "voice call duplex service returned an invalid response",
+        502,
+        "Bad Gateway",
+      );
+    }
+    return parsed;
+  }
+
+  voiceCallDuplexWsUrl(workspaceId: string, callId: string): string {
+    return voiceCallDuplexWsUrl(this.baseUrl, workspaceId, callId);
   }
 
   async sendChannelMessage(

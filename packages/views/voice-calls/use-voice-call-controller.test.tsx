@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { setApiInstance } from "@multica/core/api";
-import type { ApiClient } from "@multica/core/api/client";
+import { ApiError, type ApiClient } from "@multica/core/api/client";
 import { voiceCallKeys } from "@multica/core/voice-calls";
 import type {
   CreateVoiceCallResponse,
@@ -20,6 +20,10 @@ import {
   useVoiceCallController,
   type VoiceCallMediaSession,
 } from "./use-voice-call-controller";
+import type {
+  DuplexMediaSession,
+  DuplexMediaSessionEvents,
+} from "./duplex-media-session";
 
 const createdCall: CreateVoiceCallResponse = {
   call: {
@@ -103,6 +107,36 @@ function createFakeMediaSession(
   };
 }
 
+function createFakeDuplexSession(
+  connectImpl?: (
+    events: DuplexMediaSessionEvents,
+  ) => Promise<void>,
+) {
+  let events: DuplexMediaSessionEvents = {};
+  const session: DuplexMediaSession = {
+    connect: vi.fn(async () => {
+      if (connectImpl) {
+        await connectImpl(events);
+      } else {
+        events.onReady?.("duplex-session-1");
+      }
+    }),
+    setMuted: vi.fn(),
+    setSpeakerphone: vi.fn(),
+    interrupt: vi.fn(),
+    disconnect: vi.fn().mockResolvedValue(undefined),
+  };
+  const factory = vi.fn((nextEvents: DuplexMediaSessionEvents) => {
+    events = nextEvents;
+    return session;
+  });
+  return {
+    events: () => events,
+    factory,
+    session,
+  };
+}
+
 function createFakeRingback() {
   const ringback = {
     start: vi.fn(),
@@ -121,6 +155,7 @@ describe("useVoiceCallController", () => {
   let answerVoiceCall: ReturnType<typeof vi.fn>;
   let stopVoiceCall: ReturnType<typeof vi.fn>;
   let getVoiceCall: ReturnType<typeof vi.fn>;
+  let startVoiceCallDuplex: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -142,12 +177,22 @@ describe("useVoiceCallController", () => {
     });
     stopVoiceCall = vi.fn().mockResolvedValue(endedCall);
     getVoiceCall = vi.fn().mockResolvedValue({ call: createdCall.call });
+    startVoiceCallDuplex = vi.fn().mockRejectedValue(
+      new ApiError(
+        "duplex not configured",
+        503,
+        "Service Unavailable",
+        { code: "duplex_not_configured" },
+      ),
+    );
     setApiInstance({
       createVoiceCall,
       connectVoiceCall,
       answerVoiceCall,
       stopVoiceCall,
       getVoiceCall,
+      startVoiceCallDuplex,
+      getBaseUrl: () => "https://api.example.test",
     } as unknown as ApiClient);
   });
 
@@ -872,5 +917,118 @@ describe("useVoiceCallController", () => {
       expect(stopVoiceCall).toHaveBeenCalledWith("workspace-1", "call-1");
     });
     expect(media.session.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers duplex and falls back to RTC when duplex is not configured", async () => {
+    const media = createFakeMediaSession();
+    const duplex = createFakeDuplexSession();
+    const { result } = renderHook(
+      () => useVoiceCallController("workspace-1", {
+        mediaSessionFactory: media.factory,
+        duplexSessionFactory: duplex.factory,
+      }),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await act(async () => {
+      await result.current.start({
+        channel_id: "channel-1",
+        agent_id: "agent-1",
+      });
+    });
+
+    expect(startVoiceCallDuplex).toHaveBeenCalledWith("workspace-1", "call-1");
+    expect(duplex.factory).not.toHaveBeenCalled();
+    expect(media.factory).toHaveBeenCalledTimes(1);
+    expect(connectVoiceCall).toHaveBeenCalledWith("workspace-1", "call-1");
+    expect(result.current.mode).toBe("rtc");
+  });
+
+  it("connects duplex media when activation succeeds", async () => {
+    startVoiceCallDuplex.mockResolvedValue({
+      call: {
+        ...createdCall.call,
+        status: "active",
+        connected_at: "2026-08-01T00:12:00Z",
+      },
+      mode: "duplex",
+      ws_path: "/api/workspaces/workspace-1/voice-calls/call-1/duplex/ws",
+      audio: {
+        input_format: "pcm_s16le",
+        input_sample_rate: 16000,
+        output_format: "pcm_s16le",
+        output_sample_rate: 24000,
+      },
+      events: { client: [], server: [] },
+    });
+    const duplex = createFakeDuplexSession();
+    const media = createFakeMediaSession();
+    const ringback = createFakeRingback();
+    const { result } = renderHook(
+      () => useVoiceCallController("workspace-1", {
+        mediaSessionFactory: media.factory,
+        duplexSessionFactory: duplex.factory,
+        ringbackFactory: ringback.factory,
+      }),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await act(async () => {
+      await result.current.start({
+        channel_id: "channel-1",
+        agent_id: "agent-1",
+      });
+    });
+
+    expect(duplex.session.connect).toHaveBeenCalledWith(
+      "wss://api.example.test/api/workspaces/workspace-1/voice-calls/call-1/duplex/ws",
+      undefined,
+    );
+    expect(connectVoiceCall).not.toHaveBeenCalled();
+    expect(answerVoiceCall).not.toHaveBeenCalled();
+    expect(result.current.mode).toBe("duplex");
+    expect(result.current.phase).toBe("connected");
+    expect(ringback.ringback.stop).toHaveBeenCalled();
+  });
+
+  it("surfaces duplex tool progress from server events", async () => {
+    startVoiceCallDuplex.mockResolvedValue({
+      call: createdCall.call,
+      mode: "duplex",
+      ws_path: "/api/workspaces/workspace-1/voice-calls/call-1/duplex/ws",
+      audio: {
+        input_format: "pcm_s16le",
+        input_sample_rate: 16000,
+        output_format: "pcm_s16le",
+        output_sample_rate: 24000,
+      },
+      events: { client: [], server: [] },
+    });
+    const duplex = createFakeDuplexSession(async (events) => {
+      events.onTool?.({
+        name: "delegate_work_to_multica_agent",
+        status: "started",
+      });
+      events.onReady?.("duplex-session-1");
+    });
+    const { result } = renderHook(
+      () => useVoiceCallController("workspace-1", {
+        duplexSessionFactory: duplex.factory,
+        mediaSessionFactory: createFakeMediaSession().factory,
+      }),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await act(async () => {
+      await result.current.start({
+        channel_id: "channel-1",
+        agent_id: "agent-1",
+      });
+    });
+
+    expect(result.current.toolStatus).toMatchObject({
+      name: "delegate_work_to_multica_agent",
+      status: "started",
+    });
   });
 });

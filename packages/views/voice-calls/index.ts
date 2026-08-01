@@ -13,6 +13,8 @@ export {
   type VoiceCallControllerError,
   type VoiceCallControllerErrorSource,
   type VoiceCallControllerPhase,
+  type VoiceCallMode,
+  type VoiceCallToolStatus,
   type VoiceCallMediaSession,
   type VoiceCallMediaSessionFactory,
 } from "./use-voice-call-controller";

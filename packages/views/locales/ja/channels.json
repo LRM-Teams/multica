@@ -666,7 +666,14 @@
     "create_failed": "通話を開始できませんでした。もう一度お試しください。",
     "activation_timeout": "エージェントが時間内に応答しませんでした。もう一度お試しください。",
     "server_failed": "音声サービスのエラーにより通話が終了しました。",
-    "close": "閉じる"
+    "close": "閉じる",
+    "speakerphone_on": "Speaker",
+    "speakerphone_off": "Earpiece",
+    "tool_running": "Working on {{name}}…",
+    "tool_done": "{{name}} finished",
+    "tool_error": "{{name}} failed",
+    "duplex_mode": "Duplex voice",
+    "interrupt": "Interrupt"
   },
   "quote": {
     "action": "引用",

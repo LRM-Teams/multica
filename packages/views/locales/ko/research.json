@@ -223,5 +223,32 @@
     "col_type": "유형",
     "col_source": "출처",
     "col_purpose": "용도"
+  },
+  "m2": {
+    "rail_title": "탐색 트레일",
+    "rail_hint": "차원 패밀리 전개 · 고정 체크리스트 아님",
+    "rail_empty": "킥오프 후 문제 트리 루트가 나타납니다…",
+    "required": "필수",
+    "status": {
+      "open": "탐색 중",
+      "covered": "커버됨",
+      "gap": "미커버",
+      "dead": "막다른 길"
+    },
+    "strategy_label": "출처 전략",
+    "strategy_empty": "전략 흔적이 아직 없습니다. 출처 upsert 후 일반층 / 도메인층이 표시됩니다.",
+    "layer_general": "일반층",
+    "layer_domain": "도메인층",
+    "why_label": "왜 여기인가:",
+    "boundary_title": "인간↔AI 경계",
+    "boundary_chip": "보고서와 공존",
+    "boundary_empty": "전달 단계에서 AI 상한 / 사람 필수 / 사람 vs AI를 채웁니다.",
+    "ai_ceiling": "AI 상한",
+    "must_human": "사람 필수",
+    "col_human": "사람이",
+    "col_ai": "AI가",
+    "tab_trail": "트레일",
+    "tab_sources": "출처",
+    "tab_boundary": "경계"
   }
 }

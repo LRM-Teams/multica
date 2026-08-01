@@ -223,5 +223,32 @@
     "col_type": "種別",
     "col_source": "ソース",
     "col_purpose": "用途"
+  },
+  "m2": {
+    "rail_title": "探索トレイル",
+    "rail_hint": "次元ファミリー展開 · 固定チェックリストではない",
+    "rail_empty": "キックオフ後に問題ツリーの根が現れます…",
+    "required": "必須",
+    "status": {
+      "open": "探索中",
+      "covered": "カバー済み",
+      "gap": "未カバー",
+      "dead": "行き止まり"
+    },
+    "strategy_label": "ソース戦略",
+    "strategy_empty": "戦略トレースはまだありません。ソース upsert 後に汎用層 / 領域層が表示されます。",
+    "layer_general": "汎用層",
+    "layer_domain": "領域層",
+    "why_label": "なぜここを調べるか：",
+    "boundary_title": "人機境界",
+    "boundary_chip": "レポートと併存",
+    "boundary_empty": "納品段階で AI 上限 / 人が必須 / 人 vs AI を埋めます。",
+    "ai_ceiling": "AI 上限",
+    "must_human": "人が必須",
+    "col_human": "人が行う",
+    "col_ai": "AI が行う",
+    "tab_trail": "トレイル",
+    "tab_sources": "ソース",
+    "tab_boundary": "境界"
   }
 }

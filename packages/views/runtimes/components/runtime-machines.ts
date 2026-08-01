@@ -90,19 +90,24 @@ const OFFLINE_CONNECTIVITY: ReadonlySet<RuntimeHealth> = new Set([
 
 /**
  * Selects the runtimeHealth value (if any) the machine-detail title row should
- * render as a secondary badge. Plan A (LRM-624): the title carries a single
- * connectivity dot+label, so the secondary badge is reserved for *incremental*
- * information only — `update_available` / `ready_to_apply` / `updating` /
- * `failed`. When `runtimeHealth` is `offline` and connectivity is already
- * `offline` / `recently_lost` / `about_to_gc`, rendering another "Offline" is a
- * duplicate, so it is suppressed (returns null). `ok` / null never badge.
+ * render as a secondary badge. The only remaining case is `offline`: when a
+ * machine is reachable but one of its runtimes individually reports offline,
+ * that's a real signal, not a duplicate of the connectivity dot — unless
+ * connectivity is already `offline` / `recently_lost` / `about_to_gc`, in
+ * which case a second "Offline" badge would be a duplicate and is suppressed.
+ *
+ * `update_available` / `ready_to_apply` / `updating` / `failed` are
+ * deliberately never badged here: this page already has a dedicated upgrade
+ * control (task #1680) that states the same fact ("this machine needs an
+ * update" / "already on the latest version") — a second badge for it on the
+ * same page would say the same thing twice.
  */
 export function headerRuntimeHealthBadge(
   runtimeHealth: RuntimeHealthPresentation | null,
   connectivity: RuntimeHealth,
 ): RuntimeHealthPresentation | null {
-  if (!runtimeHealth || runtimeHealth === "ok") return null;
-  if (runtimeHealth === "offline" && OFFLINE_CONNECTIVITY.has(connectivity)) {
+  if (runtimeHealth !== "offline") return null;
+  if (OFFLINE_CONNECTIVITY.has(connectivity)) {
     return null;
   }
   return runtimeHealth;

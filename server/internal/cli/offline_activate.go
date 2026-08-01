@@ -79,6 +79,14 @@ func (s *VersionStore) OfflineActivateStaged(
 		// CAS already rotated — journal best-effort.
 		_ = err
 	}
+
+	// Best-effort prune of now-inactive version directories. The new version
+	// is already active and the old one is recorded as previous; neither is
+	// at risk. A prune failure must not fail the activation itself.
+	if _, pruneErr := s.PruneInactiveVersions(ctx); pruneErr != nil {
+		_ = pruneErr
+	}
+
 	return next, staged.BinaryPath, nil
 }
 

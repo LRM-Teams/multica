@@ -93,7 +93,6 @@ export default class ImportEnvBaselineReporter {
     };
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, `${JSON.stringify(artifact, null, 2)}\n`);
-    // eslint-disable-next-line no-console
     console.log(`[import-env-baseline] wrote ${dest} (${artifact.totals.files} files)`);
   }
 }

@@ -279,6 +279,34 @@ func TestEnsureMulticaAgentRootSeedsManagedFiles(t *testing.T) {
 	}
 }
 
+func TestMulticaAgentRootStableAcrossHarnessSwitch(t *testing.T) {
+	cfg := Config{WorkspacesRoot: filepath.Join(t.TempDir(), "multica_workspaces")}
+	workspaceID := "workspace-1"
+	agentID := "agent-shared-memory"
+
+	codexRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	claudeRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	piRoot := piAgentRoot(cfg, workspaceID, agentID)
+	if codexRoot != claudeRoot || codexRoot != piRoot {
+		t.Fatalf("memory roots diverged across harnesses: codex=%q claude=%q pi=%q", codexRoot, claudeRoot, piRoot)
+	}
+	if strings.Contains(codexRoot, "runtime") || strings.Contains(codexRoot, "codex") || strings.Contains(codexRoot, "claude") {
+		t.Fatalf("agent memory root must not embed provider/runtime: %q", codexRoot)
+	}
+
+	envCodex := map[string]string{}
+	envPi := map[string]string{}
+	addMulticaAgentEnv(envCodex, cfg, workspaceID, agentID, "")
+	addMulticaAgentEnv(envPi, cfg, workspaceID, agentID, "")
+	addPiAgentEnv(envPi, cfg, workspaceID, agentID)
+	if envCodex["MULTICA_AGENT_ROOT"] != envPi["MULTICA_AGENT_ROOT"] || envCodex["MULTICA_AGENT_MEMORY_DIR"] != envPi["MULTICA_AGENT_MEMORY_DIR"] {
+		t.Fatalf("MULTICA memory env diverged: %#v vs %#v", envCodex, envPi)
+	}
+	if envPi["PI_AGENT_ROOT"] != envPi["MULTICA_AGENT_ROOT"] || envPi["PI_MEMORY_DIR"] != envPi["MULTICA_AGENT_MEMORY_DIR"] {
+		t.Fatalf("Pi aliases must point at Multica agent root: %#v", envPi)
+	}
+}
+
 func TestLocalSkillScanFingerprintChangesWhenFileChanges(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "demo-skill")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

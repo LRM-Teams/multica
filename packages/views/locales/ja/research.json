@@ -2,7 +2,7 @@
   "title": "Research",
   "new": "New research",
   "empty_title": "No research yet",
-  "empty_desc": "Describe what you want to understand. The research fleet runs a multi-source methodology for you.",
+  "empty_desc": "上に最初の問いを書いてください。探索図・出典・レポートがここに育っていきます。",
   "empty_examples_label": "何から始めるか迷ったら、例を選んでみてください：",
   "empty_examples": {
     "q1": "2026年のAIコーディングアシスタント主要製品と違いを整理",
@@ -207,9 +207,9 @@
   },
   "home": {
     "composer_label": "調査セッションを作成",
-    "hero_title": "リサーチを、タブ地獄なしで",
-    "hero_desc": "ゴールを書くだけ——調査団がソースを探索し、発見を整理し、レポートまで届けます。",
-    "composer_hint": "⌘⏎ で開始",
+    "hero_title": "リサーチ",
+    "hero_desc": "知りたいことを一言で。調査団がソースを集め、回り道を示し、探索図にまとめます。",
+    "composer_hint": "⌘⏎ で開始 · 段階 S1–S4 を常に表示",
     "creating": "艦隊を編成中…",
     "create_failed": "調査セッションを作成できませんでした",
     "templates_label": "クイックテンプレート",

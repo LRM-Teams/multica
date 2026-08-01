@@ -2,7 +2,7 @@
   "title": "Research",
   "new": "New research",
   "empty_title": "No research yet",
-  "empty_desc": "Describe what you want to understand. The research fleet runs a multi-source methodology for you.",
+  "empty_desc": "Write your first question above — the exploration graph, sources, and report will grow here.",
   "empty_examples_label": "Not sure where to start? Pick an example:",
   "empty_examples": {
     "q1": "Map the leading AI coding assistants of 2026 and how they differ",
@@ -207,9 +207,9 @@
   },
   "home": {
     "composer_label": "Create a research session",
-    "hero_title": "Name the goal — the fleet researches and delivers",
-    "hero_desc": "Describe the goal — the research fleet explores sources, maps findings, and hands you a report.",
-    "composer_hint": "Press ⌘⏎ to start",
+    "hero_title": "Research",
+    "hero_desc": "State the question clearly — the fleet gathers sources, marks detours, and maps the answer onto an exploration graph.",
+    "composer_hint": "⌘⏎ to start · stages S1–S4 stay visible",
     "creating": "Assembling fleet…",
     "create_failed": "Couldn't create the research session",
     "templates_label": "Quick templates",

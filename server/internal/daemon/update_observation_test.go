@@ -201,3 +201,27 @@ func TestWSHeartbeatCarriesCurrentUpdateObservation(t *testing.T) {
 		t.Fatalf("heartbeat observation = %+v, current = %+v", heartbeat.UpdateObservation, current)
 	}
 }
+
+// TestUpdateObservationCoordinatorAcceptsPinnedOutcome verifies that "pinned"
+// is a valid LastOutcome value. Task #57 (#1690) writes this outcome when the
+// daemon is version-pinned; if it's missing from the validation whitelist,
+// the observation write is silently rejected and the pinned status is
+// invisible to operators.
+func TestUpdateObservationCoordinatorAcceptsPinnedOutcome(t *testing.T) {
+	coord := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
+
+	err := coord.Transition(func(o *protocol.DaemonUpdateObservation) {
+		o.Phase = "waiting"
+		o.LastOutcome = "pinned"
+		o.TargetVersion = "0.3.94"
+		o.ErrorMessage = "This machine is pinned to version 0.3.94."
+	})
+	if err != nil {
+		t.Fatalf("Transition with outcome 'pinned' was rejected: %v — 'pinned' must be in the valid outcomes whitelist", err)
+	}
+
+	snap := coord.Snapshot()
+	if snap.LastOutcome != "pinned" {
+		t.Fatalf("expected LastOutcome 'pinned', got %q", snap.LastOutcome)
+	}
+}

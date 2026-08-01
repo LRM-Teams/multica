@@ -311,7 +311,7 @@ func validateDaemonUpdateObservation(observation protocol.DaemonUpdateObservatio
 			return errors.New("auto-update last_attempt_at must be RFC3339")
 		}
 	}
-	if !oneOf(observation.LastOutcome, "never_checked", "up_to_date", "busy", "fetch_failed", "update_failed", "verification_failed", "update_succeeded", "interrupted") {
+	if !oneOf(observation.LastOutcome, "never_checked", "up_to_date", "busy", "pinned", "fetch_failed", "update_failed", "verification_failed", "update_succeeded", "interrupted") {
 		return fmt.Errorf("invalid auto-update last_outcome %q", observation.LastOutcome)
 	}
 	if len(observation.ErrorCode) > 80 {

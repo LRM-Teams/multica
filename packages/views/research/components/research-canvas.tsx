@@ -181,8 +181,7 @@ function ResearchCanvasInner({
                 : undefined,
           },
           data: {
-            ...e.data,
-            edgeRole: visual.role,
+            edgeType: String(edgeType),
           },
         };
       }),

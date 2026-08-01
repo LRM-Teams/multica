@@ -2237,3 +2237,65 @@ func TestExecutionDisciplineBriefAppearsOnceOnEveryRunKind(t *testing.T) {
 		})
 	}
 }
+
+// Task #51 / engineering-principles.md #1178: a standalone chat bubble
+// (ChatSessionID set, no ChannelID) and a real channel/DM transport
+// (ChannelID set) must render through two independent, non-branching
+// functions with no fallback between them. These two tests pin each path's
+// own delivery marker and assert the other path's marker is absent — a red
+// reverse assertion is exactly the failure mode Frank flagged (a fallback or
+// re-merged branch would leak the wrong contract into the wrong path).
+func TestStandaloneChatRuntimeBriefNeverLeaksChannelCLITransportContract(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChatSessionID: "standalone-chat-1",
+		Directed:      true,
+	})
+
+	for _, want := range []string{
+		"No `ChannelID` target: final assistant output is delivered to the current session.",
+		"This run has no `ChannelID`. A visible final response is required through final assistant output",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("standalone brief missing its own delivery marker %q\n---\n%s", want, out)
+		}
+	}
+
+	for _, banned := range []string{
+		"`ChannelID` target present: visible output is delivered only by the task-scoped Multica CLI transport",
+		"Visible reply required for human DM/@mention/direct question/task/continuation.",
+		"For visible chat replies, run `multica message send` or `multica message react`. After the command succeeds",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("standalone brief leaked channel-transport contract %q\n---\n%s", banned, out)
+		}
+	}
+}
+
+func TestChannelChatRuntimeBriefNeverLeaksStandaloneFinalOutputContract(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChatSessionID: "chat-1",
+		ChannelID:     "channel-1",
+		Directed:      true,
+	})
+
+	for _, want := range []string{
+		"`ChannelID` target present: visible output is delivered only by the task-scoped Multica CLI transport",
+		"Visible reply required for human DM/@mention/direct question/task/continuation.",
+		"For visible chat replies, run `multica message send` or `multica message react`. After the command succeeds",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("channel brief missing its own delivery marker %q\n---\n%s", want, out)
+		}
+	}
+
+	for _, banned := range []string{
+		"No `ChannelID` target: final assistant output is delivered to the current session.",
+		"This run has no `ChannelID`. A visible final response is required through final assistant output",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("channel brief leaked standalone final-output contract %q\n---\n%s", banned, out)
+		}
+	}
+}

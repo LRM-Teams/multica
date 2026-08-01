@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type { ResearchSession } from "@multica/core/types";
 import enResearch from "../../locales/en/research.json";
 
@@ -38,28 +38,22 @@ vi.mock("../../navigation/app-link", () => ({
 }));
 
 vi.mock("../../agents/components/agent-avatar-stack", () => ({
-  AgentAvatarStack: ({ agentIds }: { agentIds: readonly string[] }) => {
+  AgentAvatarStack: ({
+    agentIds,
+    className,
+  }: {
+    agentIds: readonly string[];
+    className?: string;
+  }) => {
     avatarStackRef.agentIds = agentIds;
-    return agentIds.length > 0 ? <span data-testid="avatar-stack" /> : null;
+    return agentIds.length > 0 ? (
+      <span data-testid="avatar-stack" className={className} />
+    ) : null;
   },
 }));
 
 vi.mock("./research-session-row-actions", () => ({
   ResearchSessionRowActions: () => <span data-testid="row-actions" />,
-}));
-
-vi.mock("@multica/ui/components/ui/dialog", () => ({
-  Dialog: ({
-    open,
-    children,
-  }: {
-    open: boolean;
-    children: React.ReactNode;
-  }) => (open ? <div data-testid="goal-dialog">{children}</div> : null),
-  DialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
-  DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
 import { ResearchSessionRow } from "./research-session-row";
@@ -87,12 +81,12 @@ function session(partial: Partial<ResearchSession> = {}): ResearchSession {
   };
 }
 
-describe("ResearchSessionRow (LRM-788 / LRM-906)", () => {
+describe("ResearchSessionRow (LRM-785 / LRM-784 dense row)", () => {
   it("running status paints a brand dot with pulse and an accessible label", () => {
     const { container } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
     const dot = container.querySelector("span.rounded-full.size-2");
     expect(dot?.className).toContain("bg-brand");
-    expect(dot?.className).toContain("animate-pulse");
+    expect(dot?.className).toContain("motion-safe:animate-pulse");
     expect(screen.getByText(enResearch.status.running)).toBeTruthy();
   });
 
@@ -109,7 +103,7 @@ describe("ResearchSessionRow (LRM-788 / LRM-906)", () => {
       const dot = container.querySelector("span.rounded-full.size-2");
       expect(dot?.className).toContain(dotClass);
       expect(dot?.className).not.toContain("animate-pulse");
-      expect(screen.getByText(label)).toBeTruthy();
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
       unmount();
     }
   });
@@ -117,56 +111,43 @@ describe("ResearchSessionRow (LRM-788 / LRM-906)", () => {
   it("shows a short title without dual-writing the full goal as a subtitle", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
     expect(screen.getByText("Alpha market map")).toBeTruthy();
-    // Full goal must not appear as a second muted line; only via chip / dialog.
     expect(
       screen.queryByText("Map the alpha market across regions with pricing and share"),
     ).toBeNull();
-    expect(screen.getByRole("button", { name: /goal ·/i })).toBeTruthy();
   });
 
   it("falls back to a truncated goal as the title when title is empty", () => {
     const longGoal =
       "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员，开发环境要求。目前我们的设备是几台 linux 服务器";
-    render(
+    const { container } = render(
       <ResearchSessionRow session={session({ title: "", goal: longGoal })} href="/research/s1" />,
     );
-    const titleLink = screen.getAllByRole("link")[0];
-    expect(titleLink).toBeDefined();
-    expect(titleLink?.textContent?.includes("…")).toBe(true);
-    expect(titleLink?.textContent?.length ?? 0).toBeLessThan(longGoal.length);
+    const titleEl = container.querySelector(
+      '[data-testid="research-session-row"] .font-medium',
+    );
+    expect(titleEl?.textContent?.includes("…")).toBe(true);
+    expect(titleEl?.textContent?.length ?? 0).toBeLessThan(longGoal.length);
   });
 
-  it("opens a goal dialog from the colored chip", () => {
-    render(<ResearchSessionRow session={session()} href="/research/s1" />);
-    expect(screen.queryByTestId("goal-dialog")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /goal ·/i }));
-    expect(screen.getByTestId("goal-dialog")).toBeTruthy();
-    expect(screen.getByText(enResearch.list.goal_dialog_title)).toBeTruthy();
-    expect(
-      screen.getByText("Map the alpha market across regions with pricing and share"),
-    ).toBeTruthy();
-  });
-
-  it("renders stage, who, empty output, and fleet avatars", () => {
+  it("renders stage · relative time meta and fleet avatars", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
     expect(screen.getByText(enResearch.stage.s2_sources)).toBeTruthy();
-    expect(screen.getByText("Ronaldo working")).toBeTruthy();
-    expect(screen.getByText(enResearch.list.no_output)).toBeTruthy();
+    expect(screen.getByText("ago:2026-07-30T03:00:00Z")).toBeTruthy();
     expect(screen.getByTestId("avatar-stack")).toBeTruthy();
     expect(avatarStackRef.agentIds).toEqual(["agent-1", "agent-2"]);
   });
 
-  it("shows handoff summary as the output line when present", () => {
+  it("surfaces awaiting status in the meta line", () => {
     render(
       <ResearchSessionRow
-        session={session({ handoff_summary: "Draft v0.3 ready" })}
+        session={session({ status: "awaiting_user_confirm" })}
         href="/research/s1"
       />,
     );
-    expect(screen.getByText("Output · Draft v0.3 ready")).toBeTruthy();
+    expect(screen.getAllByText(enResearch.status.awaiting_user_confirm).length).toBeGreaterThan(0);
   });
 
-  it("renders the localized stage chip and falls back to the raw stage key", () => {
+  it("renders the localized stage and falls back to the raw stage key", () => {
     const { rerender } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
     expect(screen.getByText(enResearch.stage.s2_sources)).toBeTruthy();
     rerender(<ResearchSessionRow session={session({ current_stage: "s9_unknown" })} href="/research/s1" />);
@@ -178,21 +159,25 @@ describe("ResearchSessionRow (LRM-788 / LRM-906)", () => {
     expect(screen.queryByTestId("avatar-stack")).toBeNull();
   });
 
-  it("shows relative time from updated_at and a hover-reveal chevron", () => {
+  it("uses a fixed dense row height", () => {
     const { container } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
-    expect(screen.getByText("ago:2026-07-30T03:00:00Z")).toBeTruthy();
-    const chevron = container.querySelector("svg.opacity-0");
-    expect(chevron).toBeTruthy();
-    expect(chevron?.getAttribute("class")).toContain("group-hover:opacity-100");
+    const row = container.querySelector('[data-testid="research-session-row"]');
+    expect(row?.className).toContain("h-[58px]");
   });
 
-  it("links title/meta to the session, with the actions menu outside the links", () => {
+  it("dims archived rows", () => {
+    const { container } = render(
+      <ResearchSessionRow session={session({ status: "archived" })} href="/research/s1" />,
+    );
+    const row = container.querySelector('[data-testid="research-session-row"]');
+    expect(row?.className).toContain("opacity-55");
+  });
+
+  it("links the row body to the session, with the actions menu outside the link", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
-    const links = screen.getAllByRole("link");
-    expect(links.some((a) => a.getAttribute("href") === "/research/s1")).toBe(true);
+    const link = screen.getByRole("link");
+    expect(link.getAttribute("href")).toBe("/research/s1");
     const actions = screen.getByTestId("row-actions");
-    for (const link of links) {
-      expect(link.contains(actions)).toBe(false);
-    }
+    expect(link.contains(actions)).toBe(false);
   });
 });

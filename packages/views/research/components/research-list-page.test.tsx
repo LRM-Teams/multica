@@ -149,10 +149,9 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(
       container.querySelectorAll('[data-testid="research-session-row-skeleton"]').length,
     ).toBe(4);
-    // Row shells are bordered cards, not a single h-16 bar.
+    // Dense 58px shells matching final rows (LRM-785 / LRM-784).
     const row = container.querySelector('[data-testid="research-session-row-skeleton"]');
-    expect(row?.className).toContain("rounded-xl");
-    expect(row?.className).toContain("border");
+    expect(row?.className).toContain("h-[58px]");
     expect(screen.queryByText(enResearch.groups.in_progress)).toBeNull();
     expect(screen.queryByText(enResearch.empty_title)).toBeNull();
   });
@@ -285,15 +284,14 @@ describe("ResearchListPage first-visit empty state (LRM-816)", () => {
   });
 });
 
-describe("ResearchListPage composer hero (LRM-787 / LRM-906)", () => {
+describe("ResearchListPage composer hero (LRM-785 / LRM-784 facade)", () => {
   beforeEach(() => {
     setQuery({ data: { sessions: [] } });
   });
 
-  it("renders compact hero title and start CTA inside a card", () => {
+  it("renders brand-level hero title, visible value line, and start CTA", () => {
     render(<ResearchListPage />);
-    expect(screen.getByText(enResearch.home.hero_title)).toBeInTheDocument();
-    // Description stays for a11y but is visually collapsed (sr-only).
+    expect(screen.getByRole("heading", { name: enResearch.home.hero_title })).toBeInTheDocument();
     expect(screen.getByText(enResearch.home.hero_desc)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: enResearch.start })).toBeInTheDocument();
   });

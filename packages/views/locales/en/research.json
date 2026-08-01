@@ -34,6 +34,7 @@
   "list": {
     "loading": "Loading research sessions",
     "load_failed": "Couldn't load research sessions",
+    "load_failed_hint": "Network or service issue — existing research is unaffected. You can retry.",
     "retry": "Retry",
     "empty_cta": "Start your first research",
     "goal_chip": "goal · {{summary}}",
@@ -207,9 +208,9 @@
   },
   "home": {
     "composer_label": "Create a research session",
-    "hero_title": "Name the goal — the fleet researches and delivers",
-    "hero_desc": "Describe the goal — the research fleet explores sources, maps findings, and hands you a report.",
-    "composer_hint": "Press ⌘⏎ to start",
+    "hero_title": "Research",
+    "hero_desc": "State the problem clearly — the fleet gathers sources, marks detours, and maps conclusions into an exploration graph.",
+    "composer_hint": "⌘⏎ to start · stages S1–S4 stay visible",
     "creating": "Assembling fleet…",
     "create_failed": "Couldn't create the research session",
     "templates_label": "Quick templates",

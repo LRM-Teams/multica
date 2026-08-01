@@ -34,6 +34,7 @@
   "list": {
     "loading": "正在加载调研会话",
     "load_failed": "调研会话加载失败",
+    "load_failed_hint": "网络或服务异常。已有调研不受影响，可以重试。",
     "retry": "重试",
     "empty_cta": "开始你的第一个调研",
     "goal_chip": "goal · {{summary}}",
@@ -207,9 +208,9 @@
   },
   "home": {
     "composer_label": "创建调研会话",
-    "hero_title": "说清目标——调研团多源取证并交付报告",
-    "hero_desc": "说清目标——调研团去多源取证、梳理发现，并把报告交到你手上。",
-    "composer_hint": "按 ⌘⏎ 开始",
+    "hero_title": "调研",
+    "hero_desc": "说清想搞懂的问题，剩下的交给舰队：多源取证、标出弯路、把结论画成一张探索图。",
+    "composer_hint": "⌘⏎ 发起 · 阶段 S1–S4 全程可见",
     "creating": "组建舰队中…",
     "create_failed": "调研会话创建失败",
     "templates_label": "快捷模板",

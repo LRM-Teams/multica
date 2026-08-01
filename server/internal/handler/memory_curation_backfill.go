@@ -246,16 +246,20 @@ func insertMemoryCurationAgentRuns(ctx context.Context, exec dbExecutor, runID, 
 	for _, agentID := range agentIDs {
 		if _, err := exec.Exec(ctx, `
 			INSERT INTO memory_curation_agent_run (
-			  parent_run_id, workspace_id, agent_id, runtime_id, stage, status
+			  parent_run_id, workspace_id, agent_id, runtime_id, stage, status, error, finished_at
 			)
 			SELECT $1::uuid, $2::uuid, a.id, COALESCE(a.runtime_id, NULLIF($4,'')::uuid), 'agent_self_review',
-			       CASE WHEN rt.status = 'online' THEN 'queued' ELSE 'waiting_runtime' END
+			       CASE WHEN rt.status = 'online' THEN 'queued' ELSE 'skipped' END,
+			       CASE WHEN rt.status = 'online' THEN '' ELSE 'runtime offline; skipped' END,
+			       CASE WHEN rt.status = 'online' THEN NULL ELSE now() END
 			  FROM agent a
 			  LEFT JOIN agent_runtime rt ON rt.id = COALESCE(a.runtime_id, NULLIF($4,'')::uuid)
 			 WHERE a.id = $3::uuid AND a.workspace_id = $2::uuid
 			ON CONFLICT (parent_run_id, agent_id, stage) DO UPDATE SET
 			  runtime_id = EXCLUDED.runtime_id,
 			  status = CASE WHEN memory_curation_agent_run.status IN ('queued','waiting_runtime') THEN EXCLUDED.status ELSE memory_curation_agent_run.status END,
+			  error = CASE WHEN memory_curation_agent_run.status IN ('queued','waiting_runtime') THEN EXCLUDED.error ELSE memory_curation_agent_run.error END,
+			  finished_at = CASE WHEN memory_curation_agent_run.status IN ('queued','waiting_runtime') THEN EXCLUDED.finished_at ELSE memory_curation_agent_run.finished_at END,
 			  updated_at = now()
 		`, runID, workspaceID, agentID, runtimeID); err != nil {
 			return err

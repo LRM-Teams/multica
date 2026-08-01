@@ -48,3 +48,16 @@ func TestCurationOutputMetadataIgnoresInvalidApplicability(t *testing.T) {
 		t.Fatalf("invalid applies was retained: %#v", metadata)
 	}
 }
+
+func TestCountMemoryCurationChildStatusesSkipsDoNotBlock(t *testing.T) {
+	got := countMemoryCurationChildStatuses([]string{
+		"succeeded", "succeeded", "failed", "skipped", "skipped", "waiting_runtime", "queued",
+	})
+	if got.success != 2 || got.failed != 1 || got.skipped != 2 || got.pending != 2 {
+		t.Fatalf("counts = %+v", got)
+	}
+	terminal := countMemoryCurationChildStatuses([]string{"succeeded", "skipped", "failed"})
+	if terminal.pending != 0 || terminal.success != 1 || terminal.skipped != 1 || terminal.failed != 1 {
+		t.Fatalf("terminal counts = %+v", terminal)
+	}
+}

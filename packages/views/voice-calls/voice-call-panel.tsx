@@ -6,6 +6,7 @@ import {
   PhoneOff,
   RotateCcw,
   Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
@@ -21,6 +22,8 @@ import { useT } from "../i18n/use-t";
 import type {
   VoiceCallControllerError,
   VoiceCallControllerPhase,
+  VoiceCallMode,
+  VoiceCallToolStatus,
 } from "./use-voice-call-controller";
 import { formatVoiceCallDuration } from "./voice-call-format";
 
@@ -32,8 +35,12 @@ export interface VoiceCallPanelProps {
   error: VoiceCallControllerError | null;
   durationSeconds: number;
   autoplayBlocked: boolean;
+  mode: VoiceCallMode;
+  toolStatus: VoiceCallToolStatus | null;
+  speakerphone: boolean;
   onRequestClose: () => void;
   onToggleMute: () => void;
+  onToggleSpeakerphone: () => void;
   onHangUp: () => void;
   onRetry: () => void;
   onResumeAudio: () => void;
@@ -53,8 +60,12 @@ export function VoiceCallPanel({
   error,
   durationSeconds,
   autoplayBlocked,
+  mode,
+  toolStatus,
+  speakerphone,
   onRequestClose,
   onToggleMute,
+  onToggleSpeakerphone,
   onHangUp,
   onRetry,
   onResumeAudio,
@@ -65,8 +76,22 @@ export function VoiceCallPanel({
   const active = activeCallPhase(phase);
   const stopFailed = error?.source === "stop";
   const canMute = phase === "connected" || muted;
+  const canSpeakerphone = active && mode === "duplex";
   const canHangUp =
     phase !== "idle" && phase !== "ending" && phase !== "ended";
+
+  const toolLabel = toolStatus
+    ? t(($) => {
+      switch (toolStatus.status) {
+        case "started":
+          return $.voice_call.tool_running;
+        case "done":
+          return $.voice_call.tool_done;
+        case "error":
+          return $.voice_call.tool_error;
+      }
+    }, { name: toolStatus.name })
+    : null;
 
   const status = (() => {
     switch (phase) {
@@ -187,6 +212,26 @@ export function VoiceCallPanel({
             </div>
           )}
 
+          {toolStatus && toolLabel && (
+            <div
+              role="status"
+              className={cn(
+                "mt-4 w-full rounded-lg border px-3 py-2 text-left text-xs leading-5",
+                toolStatus.status === "error"
+                  ? "border-destructive/20 bg-destructive/5 text-destructive"
+                  : "border-primary/20 bg-primary/5 text-foreground/80",
+              )}
+            >
+              <p>{toolLabel}</p>
+            </div>
+          )}
+
+          {mode === "duplex" && active && (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              {t(($) => $.voice_call.duplex_mode)}
+            </p>
+          )}
+
           {autoplayBlocked && (
             <div className="mt-4 flex w-full items-center gap-3 rounded-lg border bg-background/90 p-2.5 text-left shadow-sm">
               <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -245,6 +290,31 @@ export function VoiceCallPanel({
                     : t(($) => $.voice_call.mute)}
                 </span>
               </div>
+              {canSpeakerphone && (
+                <div className="flex flex-col items-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="icon-lg"
+                    className="size-12 rounded-full"
+                    aria-label={
+                      speakerphone
+                        ? t(($) => $.voice_call.speakerphone_off)
+                        : t(($) => $.voice_call.speakerphone_on)
+                    }
+                    onClick={onToggleSpeakerphone}
+                  >
+                    {speakerphone
+                      ? <Volume2 className="size-5" />
+                      : <VolumeX className="size-5" />}
+                  </Button>
+                  <span className="text-[11px] text-muted-foreground">
+                    {speakerphone
+                      ? t(($) => $.voice_call.speakerphone_off)
+                      : t(($) => $.voice_call.speakerphone_on)}
+                  </span>
+                </div>
+              )}
               <div className="flex flex-col items-center gap-1.5">
                 <Button
                   type="button"

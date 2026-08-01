@@ -3,8 +3,11 @@ import {
   useConnectVoiceCall,
   useAnswerVoiceCall,
   useStopVoiceCall,
+  useStartVoiceCallDuplex,
   voiceCallOptions,
 } from "@multica/core/voice-calls";
+import { api, ApiError } from "@multica/core/api";
+import { voiceCallDuplexWsUrlFromPath } from "@multica/core/api/client";
 import type {
   CreateVoiceCallRequest,
   VoiceCall,
@@ -28,6 +31,13 @@ import {
   type VoiceCallRingback,
   type VoiceCallRingbackFactory,
 } from "./voice-call-ringback";
+import {
+  createDuplexMediaSession,
+  type DuplexMediaSession,
+  type DuplexMediaSessionEvents,
+  type DuplexMediaSessionFactory,
+  type DuplexToolStatus,
+} from "./duplex-media-session";
 
 export type VoiceCallControllerPhase =
   | "idle"
@@ -64,10 +74,21 @@ export type VoiceCallMediaSessionFactory = (
   events: VoiceCallMediaEvents,
 ) => VoiceCallMediaSession;
 
+export type VoiceCallMode = "rtc" | "duplex" | null;
+
+export interface VoiceCallToolStatus {
+  name: string;
+  status: DuplexToolStatus;
+  result?: string;
+  message?: string;
+}
+
 export interface UseVoiceCallControllerOptions {
   mediaSessionFactory?: VoiceCallMediaSessionFactory;
+  duplexSessionFactory?: DuplexMediaSessionFactory;
   ringbackFactory?: VoiceCallRingbackFactory;
   activationTimeoutMs?: number;
+  preferDuplex?: boolean;
 }
 
 export interface VoiceCallController {
@@ -76,6 +97,9 @@ export interface VoiceCallController {
   phase: VoiceCallControllerPhase;
   error: VoiceCallControllerError | null;
   autoplayBlockedUserId: string | null;
+  mode: VoiceCallMode;
+  toolStatus: VoiceCallToolStatus | null;
+  speakerphone: boolean;
   start(
     input: CreateVoiceCallRequest,
     microphoneDeviceId?: string,
@@ -83,11 +107,20 @@ export interface VoiceCallController {
   hangUp(): Promise<void>;
   setMuted(muted: boolean): Promise<void>;
   resumeRemoteAudio(): Promise<void>;
+  setSpeakerphone(enabled: boolean): void;
+  interrupt(): void;
 }
 
 const TERMINAL_STATUSES = new Set(["ended", "failed"]);
 const DEFAULT_ACTIVATION_TIMEOUT_MS = 30_000;
 const ANSWER_RETRY_MS = 1_500;
+
+function isDuplexNotConfigured(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 503) return false;
+  const body = error.body;
+  if (!body || typeof body !== "object") return false;
+  return (body as { code?: unknown }).code === "duplex_not_configured";
+}
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.trim()
@@ -176,8 +209,11 @@ export function useVoiceCallController(
 ): VoiceCallController {
   const mediaSessionFactory =
     options.mediaSessionFactory ?? createVolcengineVoiceMediaSession;
+  const duplexSessionFactory =
+    options.duplexSessionFactory ?? createDuplexMediaSession;
   const ringbackFactory =
     options.ringbackFactory ?? createVoiceCallRingback;
+  const preferDuplex = options.preferDuplex !== false;
   const activationTimeoutMs =
     options.activationTimeoutMs ?? DEFAULT_ACTIVATION_TIMEOUT_MS;
   const queryClient = useQueryClient();
@@ -185,6 +221,7 @@ export function useVoiceCallController(
   const connectCallMutation = useConnectVoiceCall(workspaceId);
   const answerCallMutation = useAnswerVoiceCall(workspaceId);
   const stopCallMutation = useStopVoiceCall(workspaceId);
+  const startDuplexMutation = useStartVoiceCallDuplex(workspaceId);
   const [callId, setCallId] = useState("");
   const [localPhase, setLocalPhase] =
     useState<VoiceCallControllerPhase>("idle");
@@ -192,11 +229,15 @@ export function useVoiceCallController(
     useState<VoiceCallControllerError | null>(null);
   const [autoplayBlockedUserId, setAutoplayBlockedUserId] =
     useState<string | null>(null);
+  const [mode, setMode] = useState<VoiceCallMode>(null);
+  const [toolStatus, setToolStatus] = useState<VoiceCallToolStatus | null>(null);
+  const [speakerphone, setSpeakerphoneState] = useState(false);
   const callQuery = useQuery(voiceCallOptions(workspaceId, callId));
 
   const mountedRef = useRef(true);
   const activeCallIdRef = useRef("");
   const mediaSessionRef = useRef<VoiceCallMediaSession | null>(null);
+  const duplexSessionRef = useRef<DuplexMediaSession | null>(null);
   const ringbackRef = useRef<VoiceCallRingback | null>(null);
   const startPromiseRef = useRef<Promise<string> | null>(null);
   const cancelRequestedRef = useRef(false);
@@ -371,8 +412,11 @@ export function useVoiceCallController(
           }
           const session = mediaSessionRef.current;
           mediaSessionRef.current = null;
+          const duplexSession = duplexSessionRef.current;
+          duplexSessionRef.current = null;
           const [, stopResult] = await Promise.allSettled([
             session?.disconnect() ?? Promise.resolve(),
+            duplexSession?.disconnect() ?? Promise.resolve(),
             requestServerStopRef.current(targetCallId),
           ]);
           if (stopResult.status === "fulfilled") {
@@ -415,8 +459,11 @@ export function useVoiceCallController(
         }
         const session = mediaSessionRef.current;
         mediaSessionRef.current = null;
+        const duplexSession = duplexSessionRef.current;
+        duplexSessionRef.current = null;
         const [, stopResult] = await Promise.allSettled([
           session?.disconnect() ?? Promise.resolve(),
+          duplexSession?.disconnect() ?? Promise.resolve(),
           requestServerStopRef.current(targetCallId),
         ]);
         if (stopResult.status === "fulfilled") {
@@ -499,6 +546,9 @@ export function useVoiceCallController(
     setCallId("");
     setAutoplayBlockedUserId(null);
     setLocalError(null);
+    setMode(null);
+    setToolStatus(null);
+    setSpeakerphoneState(false);
     setLocalPhase("creating");
     startRingback();
 
@@ -536,6 +586,97 @@ export function useVoiceCallController(
             "cancelled",
             "Voice call startup was cancelled",
           );
+        }
+
+        if (preferDuplex) {
+          try {
+            const duplexStarted = await startDuplexMutation.mutateAsync(
+              createdCallId,
+            );
+            const wsUrl = voiceCallDuplexWsUrlFromPath(
+              api.getBaseUrl(),
+              duplexStarted.ws_path,
+            );
+            const duplexEvents: DuplexMediaSessionEvents = {
+              onReady: () => {
+                if (endingRef.current || cancelRequestedRef.current) return;
+                providerAnsweredRef.current = true;
+                providerStartedRef.current = true;
+                serverAnswerSyncedRef.current = true;
+                clearActivationTimeout();
+                stopRingback();
+                if (mountedRef.current) {
+                  setAutoplayBlockedUserId(null);
+                  setLocalPhase((current) =>
+                    current === "muted" ? "muted" : "connected",
+                  );
+                }
+              },
+              onTool: (event) => {
+                if (!mountedRef.current) return;
+                setToolStatus({
+                  name: event.name,
+                  status: event.status,
+                  result: event.result,
+                  message: event.status === "error"
+                    ? event.result
+                    : undefined,
+                });
+              },
+              onError: (code, message) => {
+                setMediaFailure(new VoiceCallMediaError(code, message));
+              },
+              onClosed: () => {
+                if (endingRef.current || cancelRequestedRef.current) return;
+                if (mountedRef.current) setLocalPhase("ended");
+              },
+            };
+            const duplexSession = duplexSessionFactory(duplexEvents);
+            duplexSessionRef.current = duplexSession;
+            failureSource = "media";
+            await duplexSession.connect(wsUrl, microphoneDeviceId);
+            if (mediaFailureRef.current) {
+              throw mediaFailureRef.current;
+            }
+            if (cancelRequestedRef.current) {
+              await duplexSession.disconnect().catch(() => undefined);
+              duplexSessionRef.current = null;
+              cleanupAttempted = true;
+              await requestServerStopRef.current(createdCallId).catch(
+                (stopError: unknown) => {
+                  if (mountedRef.current) {
+                    setLocalError(controllerError(
+                      "stop",
+                      "stop_failed",
+                      stopError,
+                      "Cancelled voice call could not be stopped on the server",
+                    ));
+                  }
+                  throw stopError;
+                },
+              );
+              activeCallIdRef.current = "";
+              if (mountedRef.current) setLocalPhase("ended");
+              throw new VoiceCallMediaError(
+                "cancelled",
+                "Voice call startup was cancelled",
+              );
+            }
+            if (mountedRef.current) {
+              setMode("duplex");
+              setLocalPhase(providerAnsweredRef.current ? "connected" : "joining");
+            }
+            providerStartedRef.current = true;
+            if (!providerAnsweredRef.current) {
+              scheduleActivationTimeout(createdCallId);
+            }
+            return createdCallId;
+          } catch (error) {
+            duplexSessionRef.current = null;
+            if (!isDuplexNotConfigured(error)) {
+              throw error;
+            }
+          }
         }
 
         const events: VoiceCallMediaEvents = {
@@ -613,6 +754,9 @@ export function useVoiceCallController(
             "Voice call startup was cancelled",
           );
         }
+        if (mountedRef.current) {
+          setMode("rtc");
+        }
         failureSource = "server";
         await connectCallMutation.mutateAsync(createdCallId);
         providerStartedRef.current = true;
@@ -634,8 +778,12 @@ export function useVoiceCallController(
         const cancelled =
           error instanceof VoiceCallMediaError && error.code === "cancelled";
         if (createdCallId && !cancelled && !cleanupAttempted) {
-          await mediaSessionRef.current?.disconnect().catch(() => undefined);
+          await Promise.allSettled([
+            mediaSessionRef.current?.disconnect(),
+            duplexSessionRef.current?.disconnect(),
+          ]);
           mediaSessionRef.current = null;
+          duplexSessionRef.current = null;
           let stopFailed = false;
           await requestServerStopRef.current(createdCallId).catch(
             (stopError: unknown) => {
@@ -695,9 +843,12 @@ export function useVoiceCallController(
     connectCallMutation,
     clearActivationTimeout,
     clearAnswerRetry,
+    duplexSessionFactory,
     mediaSessionFactory,
+    preferDuplex,
     scheduleActivationTimeout,
     setMediaFailure,
+    startDuplexMutation,
     startRingback,
     stopRingback,
   ]);
@@ -728,7 +879,9 @@ export function useVoiceCallController(
     }
 
     const [mediaResult, stopResult] = await Promise.allSettled([
-      mediaSessionRef.current?.disconnect() ?? Promise.resolve(),
+      duplexSessionRef.current?.disconnect()
+        ?? mediaSessionRef.current?.disconnect()
+        ?? Promise.resolve(),
       requestServerStopRef.current(targetCallId),
     ]);
     if (stopResult.status === "rejected") {
@@ -747,6 +900,7 @@ export function useVoiceCallController(
 
     activeCallIdRef.current = "";
     mediaSessionRef.current = null;
+    duplexSessionRef.current = null;
     endingRef.current = false;
     if (mountedRef.current) {
       if (mediaResult.status === "rejected") {
@@ -762,6 +916,14 @@ export function useVoiceCallController(
   }, [clearActivationTimeout, clearAnswerRetry, stopRingback]);
 
   const setMuted = useCallback(async (muted: boolean): Promise<void> => {
+    const duplexSession = duplexSessionRef.current;
+    if (duplexSession) {
+      duplexSession.setMuted(muted);
+      if (mountedRef.current) {
+        setLocalPhase(muted ? "muted" : "connected");
+      }
+      return;
+    }
     const session = mediaSessionRef.current;
     if (!session) {
       throw new VoiceCallMediaError(
@@ -811,6 +973,15 @@ export function useVoiceCallController(
     }
   }, [autoplayBlockedUserId]);
 
+  const setSpeakerphone = useCallback((enabled: boolean) => {
+    setSpeakerphoneState(enabled);
+    duplexSessionRef.current?.setSpeakerphone(enabled);
+  }, []);
+
+  const interrupt = useCallback(() => {
+    duplexSessionRef.current?.interrupt();
+  }, []);
+
   const serverCall = callQuery.data?.call ?? null;
   const serverStatus = serverCall?.status;
 
@@ -825,7 +996,12 @@ export function useVoiceCallController(
     }
     const session = mediaSessionRef.current;
     mediaSessionRef.current = null;
-    void session?.disconnect().catch(() => undefined);
+    const duplexSession = duplexSessionRef.current;
+    duplexSessionRef.current = null;
+    void Promise.allSettled([
+      session?.disconnect(),
+      duplexSession?.disconnect(),
+    ]);
   }, [
     callId,
     clearActivationTimeout,
@@ -867,8 +1043,12 @@ export function useVoiceCallController(
       stopRingback();
       const targetCallId = activeCallIdRef.current;
       activeCallIdRef.current = "";
-      void mediaSessionRef.current?.disconnect().catch(() => undefined);
+      void Promise.allSettled([
+        mediaSessionRef.current?.disconnect(),
+        duplexSessionRef.current?.disconnect(),
+      ]);
       mediaSessionRef.current = null;
+      duplexSessionRef.current = null;
       if (targetCallId) {
         void requestServerStopRef.current(targetCallId).catch(() => undefined);
       }
@@ -889,9 +1069,14 @@ export function useVoiceCallController(
     phase: phaseFromServer(serverStatus, localPhase),
     error: localError ?? serverFailure,
     autoplayBlockedUserId,
+    mode,
+    toolStatus,
+    speakerphone,
     start,
     hangUp,
     setMuted,
     resumeRemoteAudio,
+    setSpeakerphone,
+    interrupt,
   };
 }

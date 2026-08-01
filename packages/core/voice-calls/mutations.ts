@@ -90,3 +90,18 @@ export function useStopVoiceCall(workspaceId: string) {
     },
   });
 }
+
+export function useStartVoiceCallDuplex(workspaceId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: [...voiceCallKeys.all(workspaceId), "duplex"],
+    mutationFn: (callId: string) =>
+      api.startVoiceCallDuplex(workspaceId, callId),
+    onSuccess: (started, callId) => {
+      queryClient.setQueryData(
+        voiceCallKeys.detail(workspaceId, callId),
+        { call: started.call },
+      );
+    },
+  });
+}

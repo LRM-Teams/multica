@@ -3,6 +3,8 @@ export {
   ApiError,
   PreviewTooLargeError,
   PreviewUnsupportedError,
+  voiceCallDuplexWsUrl,
+  voiceCallDuplexWsUrlFromPath,
 } from "./client";
 export type { ApiClientOptions, DevicePending, DeviceConfirmResponse } from "./client";
 export { parseWithFallback, setSchemaLogger } from "./schema";

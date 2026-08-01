@@ -202,4 +202,43 @@ describe("ApiClient voice calls", () => {
       expect.objectContaining({ method: "POST" }),
     );
   });
+
+  it("activates duplex media on an existing call", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        call: {
+          ...call,
+          status: "active",
+          connected_at: "2026-08-01T00:12:00Z",
+        },
+        mode: "duplex",
+        ws_path: "/api/workspaces/workspace-1/voice-calls/call-1/duplex/ws",
+        audio: {
+          input_format: "pcm_s16le",
+          input_sample_rate: 16000,
+          output_format: "pcm_s16le",
+          output_sample_rate: 24000,
+        },
+        events: {
+          client: ["client.audio.append"],
+          server: ["duplex.ready"],
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.startVoiceCallDuplex("workspace-1", "call-1"))
+      .resolves.toMatchObject({
+        mode: "duplex",
+        ws_path: "/api/workspaces/workspace-1/voice-calls/call-1/duplex/ws",
+      });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/workspaces/workspace-1/voice-calls/call-1/duplex",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(client.voiceCallDuplexWsUrl("workspace-1", "call-1")).toBe(
+      "wss://api.example.test/api/workspaces/workspace-1/voice-calls/call-1/duplex/ws",
+    );
+  });
 });

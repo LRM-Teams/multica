@@ -7,4 +7,5 @@ export {
   useConnectVoiceCall,
   useAnswerVoiceCall,
   useStopVoiceCall,
+  useStartVoiceCallDuplex,
 } from "./mutations";

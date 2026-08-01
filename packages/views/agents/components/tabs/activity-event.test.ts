@@ -5,6 +5,7 @@ import {
   activityExpansionContent,
   activityPresentation,
   collapseConsecutiveIdle,
+  isDecayedFailure,
   isIdleStatusEvent,
   isNarrativeActivityEvent,
   normalizeActivityExpandedText,
@@ -624,5 +625,27 @@ describe("activityPresentation — held-freshness projection (#441)", () => {
 
   it("uses the canonical detail kind, not the empty reason code from the transport event", () => {
     expect(activityPresentation({ ...evtBase("text"), reason_code: "send_freshness_hold_detail" }).labelKey).toBe("output");
+  });
+});
+
+describe("isDecayedFailure (task #13)", () => {
+  it("is not decayed when fresh and nothing newer exists", () => {
+    const now = Date.parse("2026-08-01T10:00:00Z");
+    expect(isDecayedFailure("2026-08-01T09:55:00Z", false, now)).toBe(false);
+  });
+
+  it("decays once older than the 15-minute threshold", () => {
+    const now = Date.parse("2026-08-01T10:00:00Z");
+    expect(isDecayedFailure("2026-08-01T09:44:00Z", false, now)).toBe(true);
+    expect(isDecayedFailure("2026-08-01T09:46:00Z", false, now)).toBe(false);
+  });
+
+  it("decays immediately when a newer event exists, regardless of age", () => {
+    const now = Date.parse("2026-08-01T10:00:00Z");
+    expect(isDecayedFailure("2026-08-01T09:59:30Z", true, now)).toBe(true);
+  });
+
+  it("does not decay on an invalid timestamp when nothing newer exists", () => {
+    expect(isDecayedFailure("not-a-date", false)).toBe(false);
   });
 });

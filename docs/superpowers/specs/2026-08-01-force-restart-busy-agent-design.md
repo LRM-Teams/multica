@@ -39,7 +39,15 @@ Both from Frank, via Parker, 2026-08-01:
 
 This fix targets **`action_kind=restart` only**, for **canonical-resident
 providers only** (`pi`, `grok`, `cursor`, `opencode` — the four gated by
-`isCanonicalResidentProvider`). Two things are deliberately **out of scope**:
+`isCanonicalResidentProvider`). Two things are deliberately **out of scope**
+(confirmed with Parker/Frank, not an assumption on my part):
+
+Rationale for the split: Frank's stated need all day has been "the agent is
+stuck, I want it to come back" — he has never asked to clear a session or
+delete a workspace. `restart` maps to that intent; `reset_session_restart`
+and `full_reset_restart` are different user intents (reset, not restart) and
+whether *they* should also interrupt a busy turn is a separate product
+question, not answered here.
 
 - **`reset_session_restart`** keeps its current scheduled-when-busy behavior.
   It also calls `sessionReset.ResetAgentRuntimeSession` before invalidating
@@ -154,14 +162,41 @@ type ResidentRuntimeForceKillable interface {
 
 Implement it on the four canonical-resident backends
 (`cursorACPBackend`, and grok/pi/opencode's persistent equivalents).
-For `cursorACPBackend`, this likely reuses the existing `disposeProcessLocked`
-call already used by `Close()` — same termination logic, just reachable
-while `b.running` is true rather than gated behind it. `Close()`'s existing
-`b.mu`-guarded access to `b.process` (consistent across
+
+**`ForceKill()` must NOT simply call the existing `disposeProcessLocked`.**
+Nash (original #1682 author) reviewed this and found a concrete stdlib-level
+hazard, not a hypothetical one: `disposeProcessLocked` is
+`p.stdin.Close() → p.cmd.Process.Kill() → p.cmd.Wait()`. This backend uses
+`cmd.StdoutPipe()`/`cmd.StdinPipe()`, and the Go documentation for those is
+explicit: *"it is incorrect to call Wait before all reads from the pipe
+have completed."* `Execute()`'s own goroutine is the one reading that pipe.
+If `ForceKill()` (a second goroutine) also calls `cmd.Wait()` via
+`disposeProcessLocked`, two goroutines can end up calling `Wait()` on the
+same process concurrently — undefined behavior per the stdlib contract, not
+a bug in our own locking.
+
+This is exactly why "I `kill -9`'d it from outside SSH and it recovered
+cleanly" (today's informal test) didn't catch this: an external kill never
+introduces a second goroutine into the Go process at all, so `Wait()` was
+only ever called once, by `Execute()`'s own cleanup. A same-process
+`ForceKill()` call is a different scenario.
+
+**Fix**: `ForceKill()` does only the first two steps —
+`p.stdin.Close()` + `p.cmd.Process.Kill()` — and never calls `p.cmd.Wait()`.
+`Wait()` stays the sole responsibility of `Execute()`'s own goroutine, which
+already needs to reap the process once it observes the pipe read failing
+(this is presumably already true, since it's how `Execute()` returns from a
+real crash today — confirm this explicitly when implementing, don't assume).
+Each of the four backends must be checked individually for whether its own
+`Close`/`dispose*` path has a similar "only one caller may do this" step
+before assuming `ForceKill()` can reuse it — don't copy this pattern
+mechanically across all four without checking each one's actual shutdown
+sequence.
+
+`Close()`'s existing `b.mu`-guarded access to `b.process` (consistent across
 `Close`/`RuntimeAlive`/`getOrCreateProcess`/`disposeProcessLocked` — checked
-today) is a good sign this is already structured for concurrent-safe access,
-but each of the four backends needs its own check — they aren't guaranteed
-to share this implementation detail.
+today) still means `b.process` field access itself is safe; the hazard is
+specifically the double-`Wait()` call, not general lock discipline.
 
 If a backend does **not** implement `ResidentRuntimeForceKillable` (there's
 a bug, or a future provider is added without it), `forceInvalidateSession`
@@ -200,7 +235,20 @@ human-readable reason, no auto-retry.
 
 ### 6. Safety verification required before merge
 
-Not a proof by inspection — a real, adversarial test:
+Not a proof by inspection — a real, adversarial test. Parker raised the
+right objection to today's informal evidence: I proved the OS process can
+be `kill -9`'d **from outside the Go process entirely** (an SSH shell
+command) while `slot.running` was true, and the daemon recovered cleanly
+4/4 times. That is real evidence the *existing crash-recovery path*
+(task #42②) handles an unexpectedly-dead process correctly. It is **not**
+the same claim as "a second goroutine, inside the same process, taking
+`b.mu` to read `b.process` and calling `Process.Kill()`, concurrently with
+the first goroutine's in-flight `Execute()` (which may itself be reading/
+writing that process's stdio, possibly while holding or about to take
+`b.mu`), is race-free." An external `kill -9` never touches Go's own
+memory or locks — it only proves the *downstream* recovery is sound, not
+that the *new concurrent code path to get there* is safe. Both need
+checking, and only the first has evidence so far.
 
 - Integration/unit test that starts a fake long-running backend `Execute()`
   call (blocked on a channel, simulating a hung process), calls `ForceKill()`
@@ -208,14 +256,20 @@ Not a proof by inspection — a real, adversarial test:
   in-flight, and asserts: no panic, no data race (run with `-race`), the
   in-flight `Execute()` returns (doesn't hang forever), `slot.running`
   clears, and the pool ends up in the same clean state as the existing
-  idle-eviction path.
+  idle-eviction path. This is the test that actually exercises the new
+  concurrent path — the informal `kill -9` result does not substitute for it.
+  For `cursorACPBackend` specifically, this test must use a real `exec.Cmd`
+  with real `StdoutPipe()`/`StdinPipe()` (not a stubbed/mocked process), so
+  it can actually surface the double-`Wait()` hazard Nash found — a fake
+  backend that never calls the real `cmd.Wait()` contract would pass without
+  proving anything.
 - A real end-to-end pass on at least one real canonical-resident provider
   (cursor is the one already exercised informally today) mirroring what I
-  did manually: trigger a real turn, force-kill it via the **new formal
-  path** (not `kill -9` on the OS process from outside), confirm the
-  operation record reaches `succeeded`, confirm a follow-up chat message
-  gets a real response (the self-heal path actually still works end to end,
-  not just "the slot got cleared").
+  did manually, but through the **new formal path**, not a manual
+  `kill -9`: trigger a real turn, call the real restart API against the
+  busy agent, confirm the operation record reaches `succeeded`, confirm a
+  follow-up chat message gets a real response (the self-heal path actually
+  still works end to end, not just "the slot got cleared").
 - Reverse case: force-kill an agent that is **not** currently busy — must
   behave identically to today's already-tested idle-restart path (no
   regression for the common case).

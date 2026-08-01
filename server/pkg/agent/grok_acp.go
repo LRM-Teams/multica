@@ -32,8 +32,11 @@ type GrokACPBackend interface {
 type grokACPBackend struct {
 	cfg Config
 
-	mu      sync.Mutex
-	process *grokACPProcess
+	// process is published atomically the instant cmd.Start() succeeds (task
+	// #62 follow-up), before the initialize/session/new handshake begins —
+	// see cursorACPBackend.process's doc comment for the full deadlock this
+	// fixes and why it applies identically here.
+	process atomic.Pointer[grokACPProcess]
 	running atomic.Bool
 	// forceKilled is set by ForceKill() (task #62); see cursorACPBackend's
 	// field of the same name for the full explanation.
@@ -50,6 +53,11 @@ type grokACPProcess struct {
 
 	stateMu sync.Mutex
 	message func(Message)
+
+	// disposeOnce guards the actual Kill+Wait teardown — see
+	// cursorACPProcess.disposeOnce's doc comment for why this is needed once
+	// the process is published before its handshake completes.
+	disposeOnce sync.Once
 }
 
 func newGrokACPBackend(cfg Config) *grokACPBackend { return &grokACPBackend{cfg: cfg} }
@@ -57,22 +65,21 @@ func newGrokACPBackend(cfg Config) *grokACPBackend { return &grokACPBackend{cfg:
 func NewGrokACPBackend(cfg Config) GrokACPBackend { return newGrokACPBackend(cfg) }
 
 func (b *grokACPBackend) Close() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.process != nil {
-		b.disposeProcessLocked(b.process)
+	if p := b.process.Load(); p != nil {
+		b.disposeProcess(p)
 	}
 }
 
 // ForceKill implements agent.ResidentRuntimeForceKillable (task #62). Same
-// shape and same reason as cursorACPBackend.ForceKill: must not call
-// disposeProcessLocked (or cmd.Wait() at all) while a turn may still be
-// reading this process's stdio — see that function's doc comment for the
-// full explanation. Execute()'s own goroutine remains the sole reader/reaper.
+// shape and same reason as cursorACPBackend.ForceKill: a plain atomic load,
+// published before the handshake, so ForceKill never contends with anything
+// a stuck initialize/session/new could be holding, and never itself calls
+// cmd.Wait() while a turn may still be reading this process's stdio — see
+// that function's doc comment for the full explanation. Execute()'s own
+// goroutine (or ensureProcess's own handshake failure path) remains the
+// sole caller of Wait(), via disposeProcess.
 func (b *grokACPBackend) ForceKill() error {
-	b.mu.Lock()
-	p := b.process
-	b.mu.Unlock()
+	p := b.process.Load()
 	if p == nil {
 		return nil
 	}
@@ -106,17 +113,23 @@ func (b *grokACPBackend) RuntimeAlive() (bool, bool) {
 }
 
 func (b *grokACPBackend) runtimeAlive() (bool, bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.process == nil {
+	p := b.process.Load()
+	if p == nil {
 		return false, false
 	}
-	return processAlive(b.process.cmd.Process)
+	return processAlive(p.cmd.Process)
 }
 
 func (b *grokACPBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
 	p, err := b.ensureProcess(ctx, opts)
 	if err != nil {
+		// ForceKill() can now interrupt a process stuck in ensureProcess's own
+		// handshake (task #62 follow-up), not just a turn already past it —
+		// check forceKilled here too so a user-initiated restart during
+		// handshake is reported as such, not misclassified as a generic crash.
+		if b.forceKilled.CompareAndSwap(true, false) {
+			return Result{Status: "failed", Error: AgentForceKilledMarker + ": " + err.Error()}
+		}
 		return Result{Status: "failed", Error: err.Error()}
 	}
 
@@ -169,11 +182,12 @@ func (b *grokACPBackend) executeTurn(ctx context.Context, prompt string, opts Ex
 }
 
 func (b *grokACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*grokACPProcess, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.process != nil {
-		return b.process, nil
+	if p := b.process.Load(); p != nil {
+		return p, nil
 	}
+	// Execute() serializes turns via running.CompareAndSwap, so at most one
+	// goroutine ever reaches this point at a time — no concurrent creator to
+	// race against.
 	execPath := b.cfg.ExecutablePath
 	if execPath == "" {
 		execPath = "grok"
@@ -225,6 +239,10 @@ func (b *grokACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*
 			}
 		},
 	}
+	// Publish before the handshake, not after — this is the fix. ForceKill()
+	// can now find and kill this process even if initialize/session/new
+	// below hangs forever.
+	b.process.Store(p)
 	go func() {
 		defer close(p.readerDone)
 		scanner := bufio.NewScanner(stdout)
@@ -247,12 +265,12 @@ func (b *grokACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*
 		"clientCapabilities": map[string]any{},
 	})
 	if err != nil {
-		b.disposeProcessLocked(p)
+		b.disposeProcess(p)
 		return nil, fmt.Errorf("grok ACP initialize: %w", err)
 	}
 	mcp, err := buildACPMcpServers(opts.McpConfig, b.cfg.Logger)
 	if err != nil {
-		b.disposeProcessLocked(p)
+		b.disposeProcess(p)
 		return nil, fmt.Errorf("grok ACP invalid mcp_config: %w", err)
 	}
 	mcp = filterACPMcpServersByCapability(mcp, extractACPMcpCapabilities(init), "grok", b.cfg.Logger)
@@ -264,43 +282,41 @@ func (b *grokACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*
 	if opts.ResumeSessionID != "" {
 		created, err = p.client.request(ctx, "session/load", map[string]any{"cwd": cwd, "sessionId": opts.ResumeSessionID, "mcpServers": mcp})
 		if err != nil {
-			b.disposeProcessLocked(p)
+			b.disposeProcess(p)
 			return nil, fmt.Errorf("grok ACP session/load: %w", err)
 		}
 		p.sessionID, _ = resolveResumedSessionID(opts.ResumeSessionID, created)
 	} else {
 		created, err = p.client.request(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": mcp})
 		if err != nil {
-			b.disposeProcessLocked(p)
+			b.disposeProcess(p)
 			return nil, fmt.Errorf("grok ACP session/new: %w", err)
 		}
 		p.sessionID = extractACPSessionID(created)
 	}
 	if p.sessionID == "" {
-		b.disposeProcessLocked(p)
+		b.disposeProcess(p)
 		return nil, fmt.Errorf("grok ACP session/new returned no session ID")
 	}
 	if opts.Model != "" {
 		if _, err := p.client.request(ctx, "session/set_model", map[string]any{"sessionId": p.sessionID, "modelId": opts.Model}); err != nil {
-			b.disposeProcessLocked(p)
+			b.disposeProcess(p)
 			return nil, fmt.Errorf("grok ACP set model: %w", err)
 		}
 	}
-	b.process = p
 	return p, nil
 }
 
+// disposeProcess tears down p and clears it from b.process if it is still
+// the current one. Safe to call concurrently for the same p from multiple
+// paths (Close(), a failed handshake in ensureProcess, a failed in-flight
+// turn in executeTurn) — see cursorACPBackend.disposeProcess for the full
+// rationale; the shape here is identical.
 func (b *grokACPBackend) disposeProcess(p *grokACPProcess) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.disposeProcessLocked(p)
-}
-
-func (b *grokACPBackend) disposeProcessLocked(p *grokACPProcess) {
-	if b.process == p {
-		b.process = nil
-	}
-	_ = p.stdin.Close()
-	_ = p.cmd.Process.Kill()
-	_ = p.cmd.Wait()
+	b.process.CompareAndSwap(p, nil)
+	p.disposeOnce.Do(func() {
+		_ = p.stdin.Close()
+		_ = p.cmd.Process.Kill()
+		_ = p.cmd.Wait()
+	})
 }

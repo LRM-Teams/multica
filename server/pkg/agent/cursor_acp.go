@@ -43,8 +43,16 @@ type CursorACPBackend interface {
 type cursorACPBackend struct {
 	cfg Config
 
-	mu      sync.Mutex
-	process *cursorACPProcess
+	// process is published atomically the instant cmd.Start() succeeds (task
+	// #62 follow-up), before the initialize/authenticate/session/new
+	// handshake begins. This is what lets ForceKill() always find and kill
+	// the process without ever contending with a lock a stuck handshake
+	// could hold forever — a real, live-reproduced deadlock the previous
+	// mutex-guarded design had (ensureProcess held that mutex across the
+	// whole handshake, and ForceKill needed the same mutex just to read the
+	// pointer). See disposeProcess for how double-dispose of an
+	// early-published-but-still-handshaking process is made safe.
+	process atomic.Pointer[cursorACPProcess]
 	running atomic.Bool
 	// forceKilled is set by ForceKill() (task #62) so the in-flight
 	// Execute() goroutine can tell "interrupted on purpose" apart from a
@@ -67,6 +75,15 @@ type cursorACPProcess struct {
 
 	stateMu sync.Mutex
 	message func(Message)
+
+	// disposeOnce guards the actual Kill+Wait teardown (see disposeProcess).
+	// Publishing the process before the handshake completes means Close(),
+	// a failed handshake, and a failed in-flight turn can all independently
+	// decide "this process needs disposing" for the same *cursorACPProcess;
+	// disposeOnce ensures cmd.Wait() — which exec's docs require exactly one
+	// caller for when using StdoutPipe/StdinPipe — only ever runs once no
+	// matter how many of those paths race to call disposeProcess with it.
+	disposeOnce sync.Once
 }
 
 func newCursorACPBackend(cfg Config) *cursorACPBackend {
@@ -82,27 +99,26 @@ func newCursorACPBackend(cfg Config) *cursorACPBackend {
 func NewCursorACPBackend(cfg Config) CursorACPBackend { return newCursorACPBackend(cfg) }
 
 func (b *cursorACPBackend) Close() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.process != nil {
-		b.disposeProcessLocked(b.process)
+	if p := b.process.Load(); p != nil {
+		b.disposeProcess(p)
 	}
 }
 
 // ForceKill implements agent.ResidentRuntimeForceKillable (task #62). Unlike
 // Close(), this may be called while a turn is in flight (running.Load() ==
-// true) — it must NOT call disposeProcessLocked, because that ends in
-// cmd.Wait(), and the Go documentation for exec.Cmd with StdoutPipe/
-// StdinPipe is explicit that only the goroutine reading the pipes may call
-// Wait. Execute()'s own goroutine is that reader; it already reaps the
-// process once it observes the pipe read failing (the same path a genuine
-// crash takes today). ForceKill only needs to make the process die — it
-// deliberately leaves reaping to that goroutine so there is exactly one
-// caller of Wait(), not two.
+// true) — it must NOT itself call disposeProcess's cmd.Wait(), because the
+// Go documentation for exec.Cmd with StdoutPipe/StdinPipe is explicit that
+// only the goroutine reading the pipes may call Wait. Reading b.process is a
+// plain atomic load: it is published the instant cmd.Start() succeeds (see
+// ensureProcess), before the handshake, so ForceKill never needs to wait on
+// anything a stuck handshake might be holding — that was the real deadlock
+// task #62's live end-to-end verification found in the previous mutex-based
+// design. Killing the process here unblocks whichever goroutine is
+// currently waiting on it (executeTurn's in-flight request, or
+// ensureProcess's handshake); that goroutine's own error path calls
+// disposeProcess, so there remains exactly one caller of Wait(), not two.
 func (b *cursorACPBackend) ForceKill() error {
-	b.mu.Lock()
-	p := b.process
-	b.mu.Unlock()
+	p := b.process.Load()
 	if p == nil {
 		return nil
 	}
@@ -151,17 +167,23 @@ func (b *cursorACPBackend) RuntimeAlive() (bool, bool) {
 }
 
 func (b *cursorACPBackend) runtimeAlive() (bool, bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.process == nil {
+	p := b.process.Load()
+	if p == nil {
 		return false, false
 	}
-	return processAlive(b.process.cmd.Process)
+	return processAlive(p.cmd.Process)
 }
 
 func (b *cursorACPBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
 	p, err := b.ensureProcess(ctx, opts)
 	if err != nil {
+		// ForceKill() can now interrupt a process stuck in ensureProcess's own
+		// handshake (task #62 follow-up), not just a turn already past it —
+		// check forceKilled here too so a user-initiated restart during
+		// handshake is reported as such, not misclassified as a generic crash.
+		if b.forceKilled.CompareAndSwap(true, false) {
+			return Result{Status: "failed", Error: AgentForceKilledMarker + ": " + err.Error()}
+		}
 		return Result{Status: "failed", Error: err.Error()}
 	}
 
@@ -209,11 +231,12 @@ func (b *cursorACPBackend) executeTurn(ctx context.Context, prompt string, opts 
 }
 
 func (b *cursorACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*cursorACPProcess, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.process != nil {
-		return b.process, nil
+	if p := b.process.Load(); p != nil {
+		return p, nil
 	}
+	// Execute() serializes turns via running.CompareAndSwap, so at most one
+	// goroutine ever reaches this point at a time — no concurrent creator to
+	// race against.
 	execPath := b.cfg.ExecutablePath
 	if execPath == "" {
 		execPath = "cursor-agent"
@@ -257,6 +280,10 @@ func (b *cursorACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) 
 			}
 		},
 	}
+	// Publish before the handshake, not after — this is the fix. ForceKill()
+	// can now find and kill this process even if initialize/authenticate/
+	// session/new below hangs forever.
+	b.process.Store(p)
 	go func() {
 		defer close(p.readerDone)
 		scanner := bufio.NewScanner(stdout)
@@ -279,16 +306,16 @@ func (b *cursorACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) 
 		"clientCapabilities": map[string]any{},
 	})
 	if err != nil {
-		b.disposeProcessLocked(p)
+		b.disposeProcess(p)
 		return nil, fmt.Errorf("cursor ACP initialize: %w", err)
 	}
 	if err := cursorACPRequireAuthMethod(init, "cursor_login"); err != nil {
-		b.disposeProcessLocked(p)
+		b.disposeProcess(p)
 		return nil, err
 	}
 	// Live CLI requires authenticate after agent login; methodId must be cursor_login.
 	if _, err := p.client.request(ctx, "authenticate", map[string]any{"methodId": "cursor_login"}); err != nil {
-		b.disposeProcessLocked(p)
+		b.disposeProcess(p)
 		if isCursorACPAuthError(err) {
 			return nil, fmt.Errorf("%w: %v", ErrCursorACPAuthRequired, err)
 		}
@@ -297,7 +324,7 @@ func (b *cursorACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) 
 
 	mcp, err := buildACPMcpServers(opts.McpConfig, b.cfg.Logger)
 	if err != nil {
-		b.disposeProcessLocked(p)
+		b.disposeProcess(p)
 		return nil, fmt.Errorf("cursor ACP invalid mcp_config: %w", err)
 	}
 	// Live CLI rejects missing/non-array mcpServers; never omit the field.
@@ -315,7 +342,7 @@ func (b *cursorACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) 
 			"cwd": cwd, "sessionId": opts.ResumeSessionID, "mcpServers": mcp,
 		})
 		if err != nil {
-			b.disposeProcessLocked(p)
+			b.disposeProcess(p)
 			if isCursorACPAuthError(err) {
 				return nil, fmt.Errorf("%w: %v", ErrCursorACPAuthRequired, err)
 			}
@@ -325,7 +352,7 @@ func (b *cursorACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) 
 	} else {
 		created, err = p.client.request(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": mcp})
 		if err != nil {
-			b.disposeProcessLocked(p)
+			b.disposeProcess(p)
 			if isCursorACPAuthError(err) {
 				return nil, fmt.Errorf("%w: %v", ErrCursorACPAuthRequired, err)
 			}
@@ -334,7 +361,7 @@ func (b *cursorACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) 
 		p.sessionID = extractACPSessionID(created)
 	}
 	if p.sessionID == "" {
-		b.disposeProcessLocked(p)
+		b.disposeProcess(p)
 		return nil, fmt.Errorf("cursor ACP session/new returned no session ID")
 	}
 	if opts.Model != "" {
@@ -361,30 +388,30 @@ func (b *cursorACPBackend) ensureProcess(ctx context.Context, opts ExecOptions) 
 			// couldn't apply the requested model," not "this session is
 			// broken" — every other error (auth, transport, crash) still
 			// fails the session, since those really are broken.
-			b.disposeProcessLocked(p)
+			b.disposeProcess(p)
 			return nil, fmt.Errorf("cursor ACP set model: %w", err)
 		} else if err != nil {
 			b.cfg.Logger.Warn("cursor ACP: CLI rejected configured model, leaving CLI default",
 				"configured_model", opts.Model, "error", err)
 		}
 	}
-	b.process = p
 	return p, nil
 }
 
+// disposeProcess tears down p and clears it from b.process if it is still
+// the current one (a subsequent ensureProcess may already have replaced it
+// with a newer process, in which case this must not clobber that). It is
+// safe to call concurrently for the same p from multiple paths — Close(),
+// a failed handshake in ensureProcess, and a failed in-flight turn in
+// executeTurn can all reach here for the same early-published process — the
+// actual Kill+Wait teardown happens at most once, guarded by p.disposeOnce.
 func (b *cursorACPBackend) disposeProcess(p *cursorACPProcess) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.disposeProcessLocked(p)
-}
-
-func (b *cursorACPBackend) disposeProcessLocked(p *cursorACPProcess) {
-	if b.process == p {
-		b.process = nil
-	}
-	_ = p.stdin.Close()
-	_ = p.cmd.Process.Kill()
-	_ = p.cmd.Wait()
+	b.process.CompareAndSwap(p, nil)
+	p.disposeOnce.Do(func() {
+		_ = p.stdin.Close()
+		_ = p.cmd.Process.Kill()
+		_ = p.cmd.Wait()
+	})
 }
 
 func cursorACPRequireAuthMethod(init json.RawMessage, wantID string) error {

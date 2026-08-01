@@ -403,7 +403,7 @@
     "reply_count": "답글 {{count}}개",
     "preview_count": "답글 {{count}}개",
     "preview_count_with_new": "답글 {{count}}개 · 새 답글 {{newCount}}개",
-    "preview_view_all": "답글 {{count}}개 모두 보기 →",
+    "preview_view_all": "모두 보기 {{count}}개 →",
     "preview_open": "스레드 보기 →",
     "preview_image": "[이미지]",
     "preview_sticker": "[스티커]",

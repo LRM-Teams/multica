@@ -403,7 +403,7 @@
     "reply_count": "{{count}} 件の返信",
     "preview_count": "{{count}} 件の返信",
     "preview_count_with_new": "{{count}} 件の返信 · {{newCount}} 件の新着",
-    "preview_view_all": "{{count}} 件の返信をすべて表示 →",
+    "preview_view_all": "すべて表示 {{count}} 件 →",
     "preview_open": "スレッドを表示 →",
     "preview_image": "[画像]",
     "preview_sticker": "[スタンプ]",

@@ -33,12 +33,11 @@ export function AgentWorkspaceRolePicker({
     value === "admin"
       ? tSettings(($) => $.members.roles.admin.label)
       : tSettings(($) => $.members.roles.member.label);
-  // Frank B: meaning text from handbook / Roles dialog descriptions — not
-  // an "click to edit" affordance hint.
+  // Frank B + Iris: handbook team-management meanings (not "click to edit").
   const description =
     value === "admin"
-      ? tSettings(($) => $.members.roles.admin.description)
-      : tSettings(($) => $.members.roles.member.description);
+      ? t(($) => $.profile_card.role_admin_description)
+      : t(($) => $.profile_card.role_member_description);
 
   return (
     <div className="flex min-w-0 flex-col gap-0.5">

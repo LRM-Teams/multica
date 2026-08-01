@@ -70,6 +70,18 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// `multica setup` / `multica setup self-host` already do server_url +
+	// app_url + login + daemon start in one step (including device-code
+	// sign-in, which works without a browser on this machine — see
+	// ConnectRemoteDialog's troubleshooting copy). Warn, don't block: this
+	// command is also how self-host operators repoint an already-configured
+	// install, which must keep working. The signal for "someone is hand-
+	// rolling first-time setup instead of using it" is server_url going
+	// from unset to set — that's the exact step `multica setup` replaces.
+	if key == "server_url" && cfg.ServerURL == "" && value != "" {
+		fmt.Fprintln(os.Stderr, "Note: `multica setup` (or `multica setup self-host --server-url ... --app-url ...`) configures this, signs you in, and starts the daemon in one step. Continuing with `config set` still works, but skips that.")
+	}
+
 	switch key {
 	case "server_url":
 		cfg.ServerURL = value

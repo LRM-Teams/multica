@@ -209,6 +209,23 @@ export function canManageMembers(ctx: PermissionContext): Decision {
 }
 
 /**
+ * Change an agent's workspace role (`member` | `admin`). Frank 2026-08-01:
+ * workspace owner AND admin. Backend historically owner-only
+ * (`UpdateAgentWorkspaceRole`); FE gates on this rule so the control is
+ * hidden for members — Vera expands the server gate to match.
+ */
+export function canChangeAgentWorkspaceRole(ctx: PermissionContext): Decision {
+  if (ctx.userId === null) {
+    return deny("not_authenticated", "Sign in to change an agent role.");
+  }
+  if (isAdminLike(ctx.role)) return ALLOW;
+  return deny(
+    "not_admin_role",
+    "Only workspace owners and admins can change an agent role.",
+  );
+}
+
+/**
  * Encodes the role-change matrix from `workspace.go:458-530`:
  *   - admins cannot touch the owner role (neither demote owners nor promote)
  *   - the last owner cannot be demoted

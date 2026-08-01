@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Agent, Comment, Member, RuntimeDevice, Skill } from "../types";
 import {
   canAssignAgentToIssue,
+  canChangeAgentWorkspaceRole,
   canChangeMemberRole,
   canDeleteComment,
   canDeleteRuntime,
@@ -423,5 +424,26 @@ describe("canChangeMemberRole", () => {
   });
   it("owner can change owner role when 2+ owners exist", () => {
     expect(canChangeMemberRole(targetOwner, 2, ctxOwner).allowed).toBe(true);
+  });
+});
+
+describe("canChangeAgentWorkspaceRole", () => {
+  it("allows workspace owner and admin", () => {
+    expect(
+      canChangeAgentWorkspaceRole({ userId: ALICE, role: "owner" }).allowed,
+    ).toBe(true);
+    expect(
+      canChangeAgentWorkspaceRole({ userId: ALICE, role: "admin" }).allowed,
+    ).toBe(true);
+  });
+  it("denies plain members", () => {
+    const d = canChangeAgentWorkspaceRole({ userId: ALICE, role: "member" });
+    expect(d.allowed).toBe(false);
+    expect(d.reason).toBe("not_admin_role");
+  });
+  it("denies signed-out viewers", () => {
+    const d = canChangeAgentWorkspaceRole({ userId: null, role: null });
+    expect(d.allowed).toBe(false);
+    expect(d.reason).toBe("not_authenticated");
   });
 });

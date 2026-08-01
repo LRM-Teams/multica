@@ -38,6 +38,8 @@ export function RolesDialog({
   disabledReasons,
   saving = false,
   onSave,
+  title,
+  subtitle,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -49,6 +51,9 @@ export function RolesDialog({
   disabledReasons?: Partial<Record<MemberRole, string>>;
   saving?: boolean;
   onSave?: (role: MemberRole) => void | Promise<void>;
+  /** Optional overrides (e.g. agent workspace-role picker). */
+  title?: string;
+  subtitle?: string;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -62,6 +67,8 @@ export function RolesDialog({
           saving={saving}
           onOpenChange={onOpenChange}
           onSave={onSave}
+          title={title}
+          subtitle={subtitle}
         />
       ) : null}
     </Dialog>
@@ -76,6 +83,8 @@ function RolesDialogBody({
   saving,
   onOpenChange,
   onSave,
+  title,
+  subtitle,
 }: {
   mode: "info" | "select";
   value: MemberRole;
@@ -84,6 +93,8 @@ function RolesDialogBody({
   saving: boolean;
   onOpenChange: (open: boolean) => void;
   onSave?: (role: MemberRole) => void | Promise<void>;
+  title?: string;
+  subtitle?: string;
 }) {
   const { t } = useT("settings");
   // Draft starts null (not copied from props). Parent remounts via `key` on
@@ -115,10 +126,10 @@ function RolesDialogBody({
     >
       <DialogHeader className="gap-1 px-5 pb-3 pt-5 text-left max-sm:px-2 sm:px-5">
         <DialogTitle className="text-base font-semibold">
-          {t(($) => $.members.roles_dialog.title)}
+          {title ?? t(($) => $.members.roles_dialog.title)}
         </DialogTitle>
         <DialogDescription className="text-xs text-muted-foreground">
-          {t(($) => $.members.roles_dialog.subtitle)}
+          {subtitle ?? t(($) => $.members.roles_dialog.subtitle)}
         </DialogDescription>
       </DialogHeader>
 

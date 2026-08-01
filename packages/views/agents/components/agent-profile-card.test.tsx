@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enAgents from "../../locales/en/agents.json";
@@ -40,9 +41,6 @@ vi.mock("@multica/core/auth", () => ({
 // The card's job is to gate the shared pickers on this decision; the test
 // flips it to prove editable vs read-only wiring.
 const mockCanEdit = vi.hoisted(() => ({ current: { allowed: true } }));
-vi.mock("@multica/core/permissions", () => ({
-  useAgentPermissions: () => ({ canEdit: mockCanEdit.current }),
-}));
 
 // Capture what the card feeds each shared picker instead of pulling in the
 // picker internals (PropertyPicker + runtime-models discovery query). This
@@ -63,6 +61,38 @@ vi.mock("./inspector/thinking-prop-row", () => ({
     <span data-testid="thinking-picker">thinking:{canEdit ? "editable" : "readonly"}</span>
   ),
 }));
+vi.mock("./inspector/agent-workspace-role-picker", () => ({
+  AgentWorkspaceRolePicker: ({
+    value,
+    canEdit,
+  }: {
+    value: string;
+    canEdit: boolean;
+  }) => (
+    <span data-testid="workspace-role-picker">
+      role:{value}:{canEdit ? "editable" : "readonly"}
+    </span>
+  ),
+}));
+
+const mockViewerRole = vi.hoisted(() => ({
+  current: "owner" as "owner" | "admin" | "member" | null,
+}));
+vi.mock("@multica/core/permissions", async () => {
+  const actual = await vi.importActual<typeof import("@multica/core/permissions")>(
+    "@multica/core/permissions",
+  );
+  return {
+    ...actual,
+    useAgentPermissions: () => ({ canEdit: mockCanEdit.current }),
+    useCurrentMember: () => ({
+      userId: "user-me",
+      role: mockViewerRole.current,
+      member: null,
+      isLoading: false,
+    }),
+  };
+});
 
 const mockUpdate = vi.hoisted(() => vi.fn());
 vi.mock("../hooks/use-update-agent", () => ({
@@ -147,6 +177,7 @@ function makeAgent(overrides: Record<string, unknown> = {}) {
     max_concurrent_tasks: 1,
     model: "claude-sonnet-4-6",
     thinking_level: "",
+    workspace_role: "member",
     owner_id: "user-me",
     skills: [],
     created_at: "2026-04-01T00:00:00Z",
@@ -158,10 +189,15 @@ function makeAgent(overrides: Record<string, unknown> = {}) {
 }
 
 function renderCard() {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <AgentProfileCard agentId="agent-1" />
-    </I18nProvider>,
+    <QueryClientProvider client={qc}>
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <AgentProfileCard agentId="agent-1" />
+      </I18nProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -174,19 +210,31 @@ beforeEach(() => {
     { id: "rt-1", name: "Claude (host.local)", status: "online" },
   ];
   mockCanEdit.current = { allowed: true };
+  mockViewerRole.current = "owner";
 });
 
 describe("AgentProfileCard execution controls", () => {
-  it("groups Runtime/Model/Thinking under a Runtime config section heading", () => {
+  it("groups INFO then Runtime config; Role under username is editable for owner/admin", () => {
     renderCard();
 
-    // Iris: Computer stays info; config rows sit under this heading.
+    expect(screen.getByRole("heading", { name: "Info" })).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Runtime config" }),
     ).toBeInTheDocument();
+    expect(screen.getByTestId("workspace-role-picker")).toHaveTextContent(
+      "role:member:editable",
+    );
     expect(screen.getByTestId("runtime-picker")).toBeInTheDocument();
     expect(screen.getByTestId("model-picker")).toBeInTheDocument();
     expect(screen.getByTestId("thinking-picker")).toBeInTheDocument();
+  });
+
+  it("shows Role read-only for plain workspace members", () => {
+    mockViewerRole.current = "member";
+    renderCard();
+    expect(screen.getByTestId("workspace-role-picker")).toHaveTextContent(
+      "role:member:readonly",
+    );
   });
 
   it("renders all three shared pickers as editable when the viewer can edit", () => {

@@ -306,6 +306,7 @@
     "managed_by_sandbox": "サンドボックスで管理",
     "managed_by_sandbox_title": "このマシンはサンドボックス環境によって管理されているため、ここからは自己更新できません。",
     "latest": "最新",
+    "up_to_date": "最新版です — v{{version}}",
     "available": "利用可能",
     "action": "更新",
     "retry": "再試行",

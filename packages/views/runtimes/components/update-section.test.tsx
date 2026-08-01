@@ -64,3 +64,21 @@ describe("UpdateSection sandbox gating (task #8)", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
   });
 });
+
+// Frank, 2026-08-01: a runtime with nothing to update used to render a bare
+// checkmark span with no button at all — indistinguishable from "the feature
+// isn't there". These tests lock in the fix: the button always renders, and
+// its own label carries the reason when disabled.
+describe("UpdateSection up-to-date state (2026-08-01)", () => {
+  it("shows a disabled button carrying the version, not a bare checkmark span", () => {
+    renderSection({ runtimeHealth: "ok", currentVersion: "0.3.93" });
+    const button = screen.getByRole("button", { name: "Up to date — v0.3.93" });
+    expect(button).toBeDisabled();
+  });
+
+  it("does not render the up-to-date button when an update is actually available", () => {
+    renderSection({ runtimeHealth: "update_available" });
+    expect(screen.queryByText(/Up to date/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Update" })).toBeEnabled();
+  });
+});

@@ -314,6 +314,7 @@
     "managed_by_sandbox": "샌드박스에서 관리",
     "managed_by_sandbox_title": "이 머신은 샌드박스 환경에서 관리되므로 여기서 자동 업데이트할 수 없습니다.",
     "latest": "최신",
+    "up_to_date": "최신 버전입니다 — v{{version}}",
     "available": "사용 가능",
     "action": "업데이트",
     "retry": "다시 시도",

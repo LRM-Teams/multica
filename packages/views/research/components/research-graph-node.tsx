@@ -202,9 +202,8 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
           {lowConf ? (
             <p
               data-testid="research-node-low-confidence-label"
-              className="mt-1.5 flex items-center gap-1 text-[10.5px] font-medium text-warning"
+              className="mt-1.5 text-[10.5px] font-medium text-warning"
             >
-              <span aria-hidden>◌</span>
               {t(($) => $.node.low_confidence)}
             </p>
           ) : null}

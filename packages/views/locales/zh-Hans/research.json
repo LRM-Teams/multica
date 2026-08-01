@@ -161,7 +161,7 @@
     "product_round_gate": "产品轮判定",
     "agent_activity": "活动",
     "confidence": "置信",
-    "low_confidence": "低置信度",
+    "low_confidence": "◌ 低置信度",
     "detail_hint": "节点详情",
     "summary": "摘要 / 结论",
     "doing": "正在做",

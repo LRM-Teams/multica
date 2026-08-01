@@ -223,6 +223,10 @@ export const AgentRuntimeSchema = z.object({
   launch_header: z.string().default(""),
   status: z.enum(["online", "offline"]),
   device_info: z.string().default(""),
+  // Structured halves of legacy device_info ("ubuntu · codex-cli 0.146.0").
+  // Older servers omit these — clients fall back to parsing device_info.
+  device_name: z.string().optional(),
+  runtime_version: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).catch({}),
   capabilities: z.array(z.string()).optional(),
   current_version: z.string().nullable(),

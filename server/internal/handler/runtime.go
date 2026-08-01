@@ -38,8 +38,16 @@ type AgentRuntimeResponse struct {
 	// advertise list. Older servers omit the object; treat missing as all-false.
 	ProviderCapabilities ProviderCapabilitiesWire    `json:"provider_capabilities"`
 	Status               string                      `json:"status"`
-	DeviceInfo           string                      `json:"device_info"`
-	Metadata             any                         `json:"metadata"`
+	// DeviceInfo is the legacy composite "device · runtime_version" string
+	// daemons still register. Prefer DeviceName + RuntimeVersion for display.
+	DeviceInfo string `json:"device_info"`
+	// DeviceName is the OS / machine label half of DeviceInfo (e.g. "ubuntu").
+	// Empty when DeviceInfo has no separator or is empty.
+	DeviceName string `json:"device_name"`
+	// RuntimeVersion is the CLI/runtime half of DeviceInfo (e.g. "codex-cli 0.146.0").
+	// Empty when DeviceInfo has no separator or is empty.
+	RuntimeVersion string `json:"runtime_version"`
+	Metadata       any    `json:"metadata"`
 	Capabilities         []string                    `json:"capabilities"`
 	CurrentVersion       *string                     `json:"current_version"`
 	TargetVersion        *string                     `json:"target_version,omitempty"`
@@ -232,6 +240,7 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 	if runtimeHealth == "update_available" && availableUpdateTarget != nil {
 		targetVersion = availableUpdateTarget
 	}
+	deviceName, runtimeVersion := splitDeviceInfo(rt.DeviceInfo)
 
 	return AgentRuntimeResponse{
 		ID:                   uuidToString(rt.ID),
@@ -245,6 +254,8 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		ProviderCapabilities: providerCapabilitiesWire(rt.Provider),
 		Status:               rt.Status,
 		DeviceInfo:           rt.DeviceInfo,
+		DeviceName:           deviceName,
+		RuntimeVersion:       runtimeVersion,
 		Metadata:             metadata,
 		Capabilities:         runtimeCapabilities(metadata),
 		CurrentVersion:       currentVersion,

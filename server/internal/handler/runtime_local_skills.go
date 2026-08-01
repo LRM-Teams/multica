@@ -543,7 +543,12 @@ func (h *Handler) requireRuntimeLocalSkillAccess(w http.ResponseWriter, r *http.
 			runtimeID:   uuidToString(rt.ID),
 			workspaceID: wsID,
 			provider:    rt.Provider,
-			status:      rt.Status,
+			// Task #53: derived from heartbeat freshness (runtimeConnectivity),
+			// not the raw status column — that column can still read "online"
+			// for up to ~180s after the runtime actually went silent (sweeper
+			// lag), which would let a local-skills request be accepted against
+			// a runtime that's actually unreachable.
+			online: runtimeConnectivity(rt, time.Now()) == runtimeConnectivityOnline,
 		}, true
 	}
 
@@ -555,7 +560,7 @@ type runtimeIDAndWorkspace struct {
 	runtimeID   string
 	workspaceID string
 	provider    string
-	status      string
+	online      bool
 }
 
 func (h *Handler) InitiateListLocalSkills(w http.ResponseWriter, r *http.Request) {
@@ -564,7 +569,7 @@ func (h *Handler) InitiateListLocalSkills(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if rt.status != "online" {
+	if !rt.online {
 		writeError(w, http.StatusServiceUnavailable, "runtime is offline")
 		return
 	}
@@ -604,7 +609,7 @@ func (h *Handler) InitiateImportLocalSkill(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	if rt.status != "online" {
+	if !rt.online {
 		writeError(w, http.StatusServiceUnavailable, "runtime is offline")
 		return
 	}

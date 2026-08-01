@@ -95,7 +95,7 @@ describe("MachineCodeAgentsSection", () => {
 
     // Section stays mounted — heading is the lock that it did not early-return null.
     expect(
-      screen.getByRole("heading", { name: "Runtimes" }),
+      screen.getByRole("heading", { name: "Code agents on this computer" }),
     ).toBeInTheDocument();
 
     const installedHeading = screen.getByText("Installed");
@@ -113,11 +113,11 @@ describe("MachineCodeAgentsSection", () => {
     renderSection(makeMachine([]));
 
     expect(
-      screen.getByRole("heading", { name: "Runtimes" }),
+      screen.getByRole("heading", { name: "Code agents on this computer" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Installed")).toBeInTheDocument();
     expect(
-      screen.getByText("No runtimes detected on this computer yet."),
+      screen.getByText("No code agents detected on this computer yet."),
     ).toBeInTheDocument();
     // Recommend catalog still listed under Not installed — section is not null.
     expect(screen.getByText("Not installed")).toBeInTheDocument();

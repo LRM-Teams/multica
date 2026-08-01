@@ -124,7 +124,7 @@ function providerLabel(runtime: AgentRuntime | null): string {
     case "claude-code":
       return "Claude Code";
     case "codex":
-      return "Codex";
+      return "Codex CLI";
     case "cursor":
       return "Cursor";
     case "opencode":
@@ -157,18 +157,16 @@ function formatMachineLastSeen(
   return formatLastSeen(machine.lastSeenAt);
 }
 
-// task #7 (2026-07-31): was tAgents($.workload[...]) (Working/Queued/Idle) —
-// aligned to the same Activity vocabulary as the rest of the product
-// (ACTIVITY_LABEL_EN). "Queued" folds into "Working" — this function has no
-// presence/availability data, only task counts, so it can't distinguish
-// online/offline; it only ever needed the idle-vs-active distinction anyway.
+// LRM-922 / LRM-863: Agents table uses User Activity vocabulary — never the
+// old Workload Idle/Working primary labels. Without a per-row activity-event
+// subscription here, active work falls back to Thinking (same as the
+// timeline opener when a task is on the plate but nothing has streamed yet).
 function formatAgentActivity(agentId: string, snapshot: AgentTask[]): string {
   const tasks = snapshot.filter((task) => task.agent_id === agentId);
   const detail = deriveWorkloadDetail(tasks);
-  const label =
-    detail.workload === "idle" ? ACTIVITY_LABEL_EN.idle : ACTIVITY_LABEL_EN.working;
 
   if (detail.workload === "working" || detail.workload === "queued") {
+    const label = ACTIVITY_LABEL_EN.thinking;
     const active = tasks.find(
       (task) =>
         task.status === "running" ||
@@ -186,6 +184,7 @@ function formatAgentActivity(agentId: string, snapshot: AgentTask[]): string {
     return label;
   }
 
+  const label = ACTIVITY_LABEL_EN.idle;
   const terminal = tasks
     .filter(
       (task) =>
@@ -886,15 +885,18 @@ function MachineDetailView({
               <div className="overflow-hidden rounded-xl border bg-card">
                 <table className="w-full border-collapse">
                   <thead>
-                    <tr className="border-b text-left text-[11px] font-medium text-muted-foreground">
+                    <tr className="border-b text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                       <th className="px-4 py-2.5">
-                        {t(($) => $.machine.agents_section)}
+                        {t(($) => $.machine.table_agent)}
                       </th>
                       <th className="px-4 py-2.5">
-                        {t(($) => $.list.col_runtime)}
+                        {t(($) => $.list.col_host_runtime)}
                       </th>
                       <th className="px-4 py-2.5">
-                        {t(($) => $.list.col_workload)}
+                        {t(($) => $.list.col_code_agent)}
+                      </th>
+                      <th className="px-4 py-2.5">
+                        {t(($) => $.list.col_activity)}
                       </th>
                     </tr>
                   </thead>
@@ -906,6 +908,7 @@ function MachineDetailView({
                         (task) => task.agent_id === agent.id,
                       );
                       const wl = deriveWorkloadDetail(tasks).workload;
+                      const codeAgent = providerLabel(runtime);
                       return (
                         <tr
                           key={agent.id}
@@ -929,6 +932,9 @@ function MachineDetailView({
                             </span>
                           </td>
                           <td className="px-4 py-3 text-sm text-muted-foreground">
+                            {codeAgent}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-muted-foreground">
                             <span className="inline-flex items-center gap-1.5">
                               {runtime && (
                                 <ProviderLogo
@@ -936,16 +942,14 @@ function MachineDetailView({
                                   className="h-3.5 w-3.5"
                                 />
                               )}
-                              {providerLabel(runtime)}
+                              {codeAgent}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-sm text-muted-foreground">
                             <span className="inline-flex items-center gap-1">
-                              {/* task #7: genuinely running keeps the spinning
-                                  loader; purely-queued keeps the static clock
-                                  (folded into the same "Working" label in
-                                  `activity`, but nothing's actually moving
-                                  yet). */}
+                              {/* Active task: spinner; queued-only: clock.
+                                  Labels use Activity vocabulary (Thinking /
+                                  Idle), never Workload Working. */}
                               {wl === "working" && (
                                 <Loader2 className="h-3 w-3 animate-spin text-running" />
                               )}

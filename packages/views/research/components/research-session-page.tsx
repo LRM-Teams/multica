@@ -62,6 +62,7 @@ import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchSessionChrome } from "./research-session-chrome";
 import { ResearchSessionPageSkeleton } from "./research-session-page-skeleton";
+import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
 import {
   ResearchStageChatMarker,
   ResearchStageTimeline,
@@ -320,9 +321,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
 
   const sessionBody = (
     <div
-      className="relative flex h-full min-h-0 flex-col"
+      className="relative flex h-full min-h-0 flex-col bg-background"
       data-testid="research-session-page"
     >
+      {/* LRM-971: homepage-family shell atmosphere behind chrome + canvas. */}
+      <ResearchShellAtmosphere heightClassName="h-[320px]" />
       <ResearchSessionChrome
         session={session}
         canConfirm={canConfirm}
@@ -378,7 +381,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             dispatch({ type: "select", node });
           }}
         />
-        <section className="relative min-h-0 min-w-0 flex-1">
+        <section className="relative z-[1] min-h-0 min-w-0 flex-1">
           <ResearchCanvas
             nodes={data.nodes}
             edges={data.edges}

@@ -55,7 +55,9 @@ export function ResearchChatDrawer({
             <SheetTitle>{t(($) => $.panel.chat)}</SheetTitle>
             <SheetDescription>{t(($) => $.panel.chat)}</SheetDescription>
           </SheetHeader>
-          <div className="flex min-h-0 flex-1 flex-col bg-background">{children}</div>
+          <div className="flex min-h-0 flex-1 flex-col bg-card/95 backdrop-blur-sm">
+            {children}
+          </div>
         </SheetContent>
       </Sheet>
     );
@@ -68,7 +70,8 @@ export function ResearchChatDrawer({
       data-testid="research-chat-drawer"
       data-placement="aside"
       className={cn(
-        "flex w-[min(100%,380px)] shrink-0 flex-col border-l bg-background",
+        // LRM-971: drawer shell matches homepage card language (not flat gray slab).
+        "relative z-[1] flex w-[min(100%,380px)] shrink-0 flex-col border-l border-border/55 bg-card/95 backdrop-blur-sm",
         className,
       )}
     >

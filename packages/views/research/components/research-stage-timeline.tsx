@@ -55,7 +55,7 @@ export function ResearchStageTimeline({
   return (
     <nav
       aria-label={t(($) => $.timeline.label)}
-      className="shrink-0 border-b bg-background/70"
+      className="relative z-[1] shrink-0 border-b border-border/55 bg-background/55 backdrop-blur-sm"
     >
       <ol
         className={cn(

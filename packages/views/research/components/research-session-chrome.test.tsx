@@ -173,7 +173,8 @@ describe("ResearchSessionChrome", () => {
     });
     expect(screen.getByText("偏离度 8.2% — 高置信")).toBeTruthy();
     expect(screen.queryByText("分析知春路沿线 3 公里二手房挂牌与成交")).toBeNull();
-    expect(container.querySelectorAll("header > div")).toHaveLength(2);
+    // Row 0 may be the LRM-971 brand hairline; content stays two flex rows.
+    expect(container.querySelectorAll("header > div.flex")).toHaveLength(2);
   });
 
   it("unknown status falls back to muted tone and raw status text", () => {

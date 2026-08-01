@@ -11,6 +11,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
+import { Compass } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { ResearchSessionMetaMenu } from "./research-session-meta-menu";
@@ -97,8 +98,22 @@ export function ResearchSessionChrome({
   const primaryClass = "bg-brand text-brand-foreground hover:bg-brand/90";
 
   return (
-    <header className="shrink-0 border-b bg-background/85 backdrop-blur">
+    <header
+      data-testid="research-session-chrome"
+      className="relative z-[1] shrink-0 border-b border-border/55 bg-background/70 backdrop-blur-md"
+    >
+      {/* LRM-971: brand hairline — same family as homepage façade. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-brand/45 to-transparent"
+      />
       <div className="flex items-center gap-2.5 px-4 pt-2.5 pb-1">
+        <span
+          className="hidden size-7 shrink-0 items-center justify-center rounded-[8px] bg-brand/12 text-brand sm:flex"
+          aria-hidden
+        >
+          <Compass className="size-3.5" strokeWidth={2} />
+        </span>
         <h1 className="min-w-0 truncate text-base font-semibold tracking-tight">
           {session.title}
         </h1>

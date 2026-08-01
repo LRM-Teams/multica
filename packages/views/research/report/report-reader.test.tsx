@@ -23,6 +23,13 @@ vi.mock("../../i18n/use-t", () => ({
           col_type: "Type",
           col_source: "Source",
           col_purpose: "Purpose",
+          citation_expand: "Show summary",
+          citation_collapse: "Hide summary",
+          citation_unavailable: "Source unavailable",
+          citation_untitled: "Untitled source",
+          citation_fetch_failed: "Fetch failed",
+          citation_fetch_failed_hint: "Could not fetch this source.",
+          citation_summary_empty: "No summary.",
         },
       });
       return value;
@@ -106,5 +113,72 @@ describe("ReportReader", () => {
     const card = dialog.querySelector("[role='document']");
     expect(card?.className).toMatch(/sm:max-w-/);
     expect(card?.className).toMatch(/sm:rounded/);
+  });
+
+  it("renders in-body citation cards for structured report sections (LRM-821)", () => {
+    const structuredReport: ResearchReport = {
+      ...report,
+      structured: {
+        schema_version: 1,
+        title: "Vector DB comparison",
+        outline: [{ id: "sec-find", title: "Findings", level: 1, children: [] }],
+        sections: [
+          {
+            id: "sec-find",
+            title: "Findings",
+            level: 1,
+            markdown: "Milvus recall higher.[^1]",
+            citation_ids: ["c1", "c2"],
+          },
+        ],
+        citations: [
+          {
+            id: "c1",
+            index: 1,
+            source_id: "src1",
+            label: "[1]",
+            quote: "0.94",
+          },
+          {
+            id: "c2",
+            index: 2,
+            source_id: "src-fail",
+            label: "[2]",
+          },
+        ],
+        sources: [
+          {
+            source_id: "src1",
+            title: "Milvus Docs",
+            url: "https://milvus.io",
+            credibility_weight: 0.92,
+            source_class: "docs",
+          },
+        ],
+        conclusion: "Milvus leads.",
+      },
+    };
+    const failSource: ResearchSource = {
+      ...sources[0]!,
+      id: "src-fail",
+      title: "",
+      url: "https://example.invalid/x",
+      payload: { fetch_failed: true },
+    };
+    render(
+      <ReportReader
+        open
+        onClose={vi.fn()}
+        report={structuredReport}
+        sources={[sources[0]!, failSource]}
+      />,
+    );
+    const cards = screen.getAllByTestId("research-citation-card");
+    expect(cards).toHaveLength(2);
+    const citationLink = cards[0]!.querySelector("a");
+    expect(citationLink).toHaveAttribute("href", "https://milvus.io");
+    expect(citationLink).toHaveAttribute("target", "_blank");
+    expect(screen.getByText("Source unavailable")).toBeInTheDocument();
+    expect(cards[1]).toHaveAttribute("data-degraded", "true");
   });
 });

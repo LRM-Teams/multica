@@ -208,7 +208,24 @@ const sourcePgvector: ResearchSource = {
   updated_at: now(),
 };
 
-const mockSources: ResearchSource[] = [sourceMilvus, sourcePgvector];
+/** LRM-821 — fetch-failed shell so citation UI can render the degraded card. */
+const sourceFetchFailed: ResearchSource = {
+  id: "src-00000000-0000-0000-0000-000000000003",
+  session_id: sessionBase.id,
+  url: "https://example.invalid/pinecone-quota",
+  title: "",
+  source_class: "secondary",
+  credibility_weight: 0,
+  stance: "unknown",
+  relevance: 0,
+  summary: "",
+  excerpt: "",
+  payload: { fetch_failed: true, status: "fetch_failed" },
+  created_at: now(),
+  updated_at: now(),
+};
+
+const mockSources: ResearchSource[] = [sourceMilvus, sourcePgvector, sourceFetchFailed];
 
 const mockReport: ResearchReport = {
   id: "rep-00000000-0000-0000-0000-000000000001",
@@ -235,8 +252,8 @@ const mockReport: ResearchReport = {
         id: "sec-find",
         title: "发现",
         level: 1,
-        markdown: "Milvus recall higher.[^1]",
-        citation_ids: ["c1"],
+        markdown: "Milvus recall higher.[^1] Pinecone quota page failed.[^2]",
+        citation_ids: ["c1", "c2"],
       },
     ],
     citations: [
@@ -247,6 +264,13 @@ const mockReport: ResearchReport = {
         label: "[1]",
         quote: "recall@10 0.94",
       },
+      {
+        id: "c2",
+        index: 2,
+        source_id: sourceFetchFailed.id,
+        label: "[2]",
+        quote: "",
+      },
     ],
     sources: [
       {
@@ -255,6 +279,13 @@ const mockReport: ResearchReport = {
         url: sourceMilvus.url,
         credibility_weight: sourceMilvus.credibility_weight,
         source_class: sourceMilvus.source_class,
+      },
+      {
+        source_id: sourceFetchFailed.id,
+        title: "",
+        url: sourceFetchFailed.url,
+        credibility_weight: 0,
+        source_class: sourceFetchFailed.source_class,
       },
     ],
     gaps: ["Pinecone burst quota data missing"],

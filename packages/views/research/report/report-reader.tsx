@@ -240,7 +240,7 @@ export function ReportReader({
           </aside>
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-6">
             <div id="report-body" className="scroll-mt-4">
-              <ReportProse report={report} />
+              <ReportProse report={report} sources={sources} />
             </div>
             {boundary ? (
               <div className="mt-8 scroll-mt-4">

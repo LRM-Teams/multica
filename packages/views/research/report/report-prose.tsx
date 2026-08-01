@@ -1,9 +1,10 @@
 "use client";
 
 import { normalizeReportStructured } from "@multica/core/research";
-import type { ResearchReport } from "@multica/core/types";
+import type { ResearchReport, ResearchSource } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { Markdown } from "../../common/markdown";
+import { ReportCitationList } from "./report-citation-card";
 
 const proseClass = cn(
   "report-prose max-w-none text-[15px] leading-[1.7] text-foreground",
@@ -22,7 +23,14 @@ const proseClass = cn(
   "[&_pre]:my-4 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:bg-muted/40 [&_pre]:p-3",
 );
 
-export function ReportProse({ report }: { report: ResearchReport | null | undefined }) {
+export function ReportProse({
+  report,
+  sources = [],
+}: {
+  report: ResearchReport | null | undefined;
+  /** Live session sources — preferred when resolving citation.source_id. */
+  sources?: ResearchSource[];
+}) {
   if (!report) {
     return <p className="text-sm text-muted-foreground">—</p>;
   }
@@ -31,6 +39,8 @@ export function ReportProse({ report }: { report: ResearchReport | null | undefi
 
   if (normalized.render_mode === "structured" && normalized.structured) {
     const structured = normalized.structured;
+    const byId = new Map(structured.citations.map((c) => [c.id, c]));
+
     return (
       <div className={proseClass}>
         {structured.title ? <h1>{structured.title}</h1> : null}
@@ -41,12 +51,20 @@ export function ReportProse({ report }: { report: ResearchReport | null | undefi
           const Heading = (
             section.level <= 1 ? "h2" : section.level === 2 ? "h3" : "h4"
           ) as "h2" | "h3" | "h4";
+          const sectionCitations = section.citation_ids
+            .map((id) => byId.get(id))
+            .filter((c): c is NonNullable<typeof c> => Boolean(c));
           return (
             <section key={section.id} id={`report-sec-${section.id}`} className="scroll-mt-4">
               <Heading>{section.title}</Heading>
               {section.markdown ? (
                 <Markdown mode="full">{section.markdown}</Markdown>
               ) : null}
+              <ReportCitationList
+                citations={sectionCitations}
+                liveSources={sources}
+                structuredSources={structured.sources}
+              />
             </section>
           );
         })}

@@ -233,7 +233,14 @@
     "col_weight": "Weight",
     "col_type": "Type",
     "col_source": "Source",
-    "col_purpose": "Purpose"
+    "col_purpose": "Purpose",
+    "citation_expand": "Show summary",
+    "citation_collapse": "Hide summary",
+    "citation_unavailable": "Source unavailable",
+    "citation_untitled": "Untitled source",
+    "citation_fetch_failed": "Fetch failed",
+    "citation_fetch_failed_hint": "This source could not be fetched. The citation stays as a placeholder until a good URL is available.",
+    "citation_summary_empty": "No summary for this source yet."
   },
   "m2": {
     "rail_title": "Exploration trail",

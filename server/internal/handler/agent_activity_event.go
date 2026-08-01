@@ -149,7 +149,21 @@ func activityVisibilityFor(eventKind, eventType, severity, reasonCode string) st
 	if strings.Contains(reasonCode, "freshness") {
 		visibility = "diagnostic_only"
 	}
+	if internalHousekeepingFailureReason(reasonCode) {
+		visibility = "diagnostic_only"
+	}
 	return visibility
+}
+
+// internalHousekeepingFailureReason identifies terminal outcomes that are
+// internal bookkeeping working as designed, not something the user needs to
+// react to. Task #48: agent_reassigned_elsewhere is #1628's stale-daemon
+// self-eviction working correctly (a daemon that lost ownership of an agent
+// stops retrying and reports a clean terminus instead of retrying forever)
+// — but shown raw in the user's activity feed it reads exactly like an
+// error, which is what prompted the confusion this fix addresses.
+func internalHousekeepingFailureReason(reasonCode string) bool {
+	return reasonCode == "agent_reassigned_elsewhere"
 }
 
 func customActivityEventIsNarrative(eventType, reasonCode string) bool {

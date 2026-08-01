@@ -527,7 +527,12 @@ func TestAgentWorkspaceAdminCannotChangeItsOwnRole(t *testing.T) {
 	}
 }
 
-func TestAgentWorkspaceRoleIsHumanOwnerOnly(t *testing.T) {
+// TestAgentWorkspaceRoleIsHumanOwnerOrAdminOnly pins task #32: workspace
+// admins (not just the owner) can edit an agent's workspace role, but plain
+// members still cannot. It also covers the surrounding invariants that were
+// never actor-role-specific (invalid target role, unknown agent, agent
+// credentials, the generic agent PUT route).
+func TestAgentWorkspaceRoleIsHumanOwnerOrAdminOnly(t *testing.T) {
 	fixture := newAgentMemberManagementFixture(t, 0)
 	ctx := context.Background()
 	suffix := uuid.NewString()
@@ -552,6 +557,29 @@ func TestAgentWorkspaceRoleIsHumanOwnerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate workspace admin token: %v", err)
 	}
+
+	var memberUserID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, display_name, email)
+		VALUES ($1, $2, $3)
+		RETURNING id::text
+	`, "workspace-member-"+suffix, "Workspace member", suffix+"@workspace-role-member.test").Scan(&memberUserID); err != nil {
+		t.Fatalf("create workspace member: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')
+	`, testWorkspaceID, memberUserID); err != nil {
+		t.Fatalf("add workspace member: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, memberUserID)
+	})
+	memberToken, err := generateTestJWT(memberUserID, suffix+"@workspace-role-member.test", "Workspace member")
+	if err != nil {
+		t.Fatalf("generate workspace member token: %v", err)
+	}
+
 	var auditBefore int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*)
@@ -559,7 +587,7 @@ func TestAgentWorkspaceRoleIsHumanOwnerOnly(t *testing.T) {
 		WHERE workspace_id = $1
 		  AND action = 'agent_workspace_role_changed'
 	`, testWorkspaceID).Scan(&auditBefore); err != nil {
-		t.Fatalf("count role-change audit before denied requests: %v", err)
+		t.Fatalf("count role-change audit before requests: %v", err)
 	}
 
 	path := fmt.Sprintf(
@@ -567,10 +595,24 @@ func TestAgentWorkspaceRoleIsHumanOwnerOnly(t *testing.T) {
 		testWorkspaceID,
 		fixture.agentID,
 	)
+
+	// fixture.agentID is a shared, pre-existing workspace agent (the oldest
+	// row, reused by every test in this file via newAgentMemberManagementFixture),
+	// not a fresh fixture — so any mutation this test makes must be undone via
+	// t.Cleanup, which still runs on t.Fatal, unlike inline reset code below it.
+	// A prior version of this test mutated the role without a guaranteed reset
+	// and left "admin" behind for TestAgentWorkspaceRoleSchemaExcludesOwner to
+	// trip over.
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `
+			UPDATE agent SET workspace_role = 'member' WHERE id = $1
+		`, fixture.agentID)
+	})
+
 	adminResp := agentCredentialRequest(t, adminToken, http.MethodPatch, path, map[string]string{
 		"role": "admin",
 	})
-	requireResponseStatus(t, adminResp, http.StatusForbidden)
+	requireResponseStatus(t, adminResp, http.StatusOK)
 
 	var role string
 	if err := testPool.QueryRow(ctx, `
@@ -580,8 +622,104 @@ func TestAgentWorkspaceRoleIsHumanOwnerOnly(t *testing.T) {
 	`, fixture.agentID).Scan(&role); err != nil {
 		t.Fatalf("read agent workspace role: %v", err)
 	}
+	if role != "admin" {
+		t.Fatalf("workspace admin actor set agent role to %q, want admin", role)
+	}
+	var auditAfterAdmin int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = 'agent_workspace_role_changed'
+	`, testWorkspaceID).Scan(&auditAfterAdmin); err != nil {
+		t.Fatalf("count role-change audit after admin request: %v", err)
+	}
+	if auditAfterAdmin != auditBefore+1 {
+		t.Fatalf("admin role-change audit count = %d, want %d", auditAfterAdmin, auditBefore+1)
+	}
+
+	// Reset out-of-band (bypassing the handler, so no extra audit row) now, in
+	// addition to the guaranteed t.Cleanup above, so the remaining
+	// denied-request assertions below observe the same "member" baseline the
+	// rest of this test expects.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent SET workspace_role = 'member' WHERE id = $1
+	`, fixture.agentID); err != nil {
+		t.Fatalf("reset agent workspace role after admin request: %v", err)
+	}
+
+	memberResp := agentCredentialRequest(t, memberToken, http.MethodPatch, path, map[string]string{
+		"role": "admin",
+	})
+	requireResponseStatus(t, memberResp, http.StatusForbidden)
+	if err := testPool.QueryRow(ctx, `
+		SELECT workspace_role
+		FROM agent
+		WHERE id = $1
+	`, fixture.agentID).Scan(&role); err != nil {
+		t.Fatalf("read agent workspace role: %v", err)
+	}
 	if role != "member" {
-		t.Fatalf("workspace admin changed agent role to %q, want unchanged member", role)
+		t.Fatalf("workspace member actor changed agent role to %q, want unchanged member", role)
+	}
+	auditBefore = auditAfterAdmin
+
+	// An agent cannot self-expand via this route even when its own
+	// workspace_role is already "admin" — rejectAgentOnHumanRoute fails
+	// closed on principal type before the actor-role check task #32 widened
+	// is ever reached. UpdateAgentWorkspaceRole documents "has no /api/agent
+	// alias", so this is the real human path, not the always-404 alias below.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent SET workspace_role = 'admin' WHERE id = $1
+	`, fixture.agentID); err != nil {
+		t.Fatalf("set fixture agent to admin for self-expansion probe: %v", err)
+	}
+	agentSelfResp := agentCredentialRequest(t, fixture.token, http.MethodPatch, path, map[string]string{
+		"role": "admin",
+	})
+	agentSelfBody, err := io.ReadAll(agentSelfResp.Body)
+	if err != nil {
+		t.Fatalf("read agent self-request body: %v", err)
+	}
+	agentSelfResp.Body.Close()
+	if agentSelfResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("agent self-request status = %d, want 403: %s", agentSelfResp.StatusCode, agentSelfBody)
+	}
+	var agentSelfError struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(agentSelfBody, &agentSelfError); err != nil {
+		t.Fatalf("decode agent self-request error body: %v", err)
+	}
+	if agentSelfError.Error != "agent must use dedicated /api/agent/* route" {
+		t.Fatalf("agent self-request error = %q, want %q", agentSelfError.Error, "agent must use dedicated /api/agent/* route")
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT workspace_role
+		FROM agent
+		WHERE id = $1
+	`, fixture.agentID).Scan(&role); err != nil {
+		t.Fatalf("read agent workspace role: %v", err)
+	}
+	if role != "admin" {
+		t.Fatalf("rejected agent self-request changed workspace role to %q, want unchanged admin", role)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent SET workspace_role = 'member' WHERE id = $1
+	`, fixture.agentID); err != nil {
+		t.Fatalf("reset agent workspace role after self-expansion probe: %v", err)
+	}
+	var auditAfterAgentSelf int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = 'agent_workspace_role_changed'
+	`, testWorkspaceID).Scan(&auditAfterAgentSelf); err != nil {
+		t.Fatalf("count role-change audit after agent self-request: %v", err)
+	}
+	if auditAfterAgentSelf != auditBefore {
+		t.Fatalf("rejected agent self-request added audit row: got %d, want %d", auditAfterAgentSelf, auditBefore)
 	}
 
 	invalidResp := authRequest(t, http.MethodPatch, path, map[string]string{

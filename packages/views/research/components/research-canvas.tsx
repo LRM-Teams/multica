@@ -39,7 +39,7 @@ import {
 } from "../lib/canvas-overlay-grid";
 import { layoutResearchGraph, type ResearchFlowNodeData } from "../lib/layout-graph";
 import { LOGIC_END_NODE_ID, isLogicEndNode } from "../lib/logic-lanes";
-import { visualForEdgeType } from "../lib/node-visuals";
+import { edgeVisualForConnection } from "../lib/node-visuals";
 import { ResearchCanvasDock } from "./research-canvas-dock";
 import { ResearchFleetAvatarStack } from "./research-fleet-avatar-stack";
 import { ResearchGraphNode as ResearchGraphNodeView } from "./research-graph-node";
@@ -155,21 +155,34 @@ function ResearchCanvasInner({
         } satisfies FlowNode;
       });
     });
+    const typeById = new Map(
+      laid.nodes
+        .filter((n) => n.data.research)
+        .map((n) => [n.id, n.data.research!.node_type as string]),
+    );
     setRfEdges(
       laid.edges.map((e) => {
         const edgeType = e.data?.edgeType ?? "leads_to";
-        const visual = visualForEdgeType(edgeType);
-        const isMain = edgeType === "leads_to" || visual.animated;
+        const toType = typeById.get(e.target);
+        const visual = edgeVisualForConnection(edgeType, toType);
+        const isMain = visual.role === "main" || visual.role === "active";
+        const isDetour = visual.role === "recessed";
         return {
           ...e,
-          animated: visual.animated,
+          animated: visual.animated && !isDetour,
           style: {
             stroke: isMain ? "var(--brand)" : visual.stroke,
             strokeDasharray: visual.strokeDasharray,
-            strokeWidth: isMain ? 2.5 : 1.5,
-            filter: isMain
-              ? "drop-shadow(0 0 5px color-mix(in oklch, var(--brand) 45%, transparent))"
-              : undefined,
+            strokeWidth: visual.strokeWidth ?? (isMain ? 2.5 : 1.5),
+            strokeOpacity: visual.strokeOpacity,
+            filter:
+              isMain && !isDetour
+                ? "drop-shadow(0 0 5px color-mix(in oklch, var(--brand) 45%, transparent))"
+                : undefined,
+          },
+          data: {
+            ...e.data,
+            edgeRole: visual.role,
           },
         };
       }),

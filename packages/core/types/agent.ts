@@ -98,6 +98,14 @@ export interface RuntimeDevice {
   runtime_mode: AgentRuntimeMode;
   provider: string;
   launch_header: string;
+  /**
+   * Backend-owned capability (agent.ForceRestartSupported / task #62): whether
+   * a busy/stuck agent on this runtime can be force-interrupted via restart.
+   * Older servers omit it — treat missing as false so the restart button stays
+   * hidden. Prefer lifecycle preflight's same field when deciding the profile
+   * restart control; this is the runtime-list mirror.
+   */
+  force_restart_supported?: boolean;
   status: "online" | "offline";
   device_info: string;
   metadata: Record<string, unknown>;
@@ -901,6 +909,13 @@ export interface AgentLifecycleOperation {
 export interface AgentLifecyclePreflight {
   actions: Record<AgentLifecycleActionKind, AgentLifecycleActionState>;
   active_operation?: AgentLifecycleOperation | null;
+  /**
+   * Backend-owned capability (agent.ForceRestartSupported / task #62): whether
+   * this agent's runtime provider can force-interrupt a busy/stuck turn.
+   * Gate the profile restart button on this — do not hardcode a provider
+   * allow-list. Older servers omit it; treat missing as false.
+   */
+  force_restart_supported?: boolean;
 }
 
 export interface DecideAgentSkillSuggestionRequest {

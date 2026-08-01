@@ -70,6 +70,34 @@ func TestAgentLifecyclePreflightIsPerActionAndFullResetIsIdleOnly(t *testing.T) 
 	if full.Supported || full.DisabledReason != "agent_active" || full.ExecutionMode != agentLifecycleImmediate {
 		t.Fatalf("full reset preflight = %+v", full)
 	}
+	// Fixture provider is "lifecycle-test" — not ForceKillable → false.
+	if response.ForceRestartSupported {
+		t.Fatalf("force_restart_supported=%v, want false for non-ForceKillable fixture provider", response.ForceRestartSupported)
+	}
+}
+
+func TestAgentLifecyclePreflightForceRestartSupportedFollowsProvider(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	// cursor is in forceRestartResidentConstructors and implements ForceKill.
+	agentID, _ := createAgentLifecycleFixtureWithProvider(t, true, "cursor")
+	rec := httptest.NewRecorder()
+	req := withURLParam(
+		newRequestAs(testUserID, http.MethodGet, "/api/agents/"+agentID+"/lifecycle", nil),
+		"id", agentID,
+	)
+	testHandler.GetAgentLifecycle(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preflight status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response AgentLifecyclePreflight
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode preflight: %v", err)
+	}
+	if !response.ForceRestartSupported {
+		t.Fatalf("force_restart_supported=%v, want true for cursor", response.ForceRestartSupported)
+	}
 }
 
 // TestAgentLifecycleCreateIsIdempotentAndForceRestartsBusyAgent pins task
@@ -400,6 +428,11 @@ func TestAgentLifecycleNoRuntimeIsUnsupported(t *testing.T) {
 
 func createAgentLifecycleFixture(t *testing.T, capable bool) (agentID, runtimeID string) {
 	t.Helper()
+	return createAgentLifecycleFixtureWithProvider(t, capable, "lifecycle-test")
+}
+
+func createAgentLifecycleFixtureWithProvider(t *testing.T, capable bool, provider string) (agentID, runtimeID string) {
+	t.Helper()
 	capabilities := `[]`
 	if capable {
 		capabilities = `["agent_lifecycle_actions_v1"]`
@@ -411,11 +444,11 @@ func createAgentLifecycleFixture(t *testing.T, capable bool) (agentID, runtimeID
 			device_info, metadata, owner_id, visibility, last_seen_at
 		)
 		VALUES (
-			$1, $2, 'local', 'lifecycle-test', 'online',
-			'', jsonb_build_object('capabilities', $3::jsonb), $4, 'private', now()
+			$1, $2, 'local', $3, 'online',
+			'', jsonb_build_object('capabilities', $4::jsonb), $5, 'private', now()
 		)
 		RETURNING id
-	`, testWorkspaceID, "lifecycle-runtime-"+randomID(), capabilities, testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, "lifecycle-runtime-"+randomID(), provider, capabilities, testUserID).Scan(&runtimeID); err != nil {
 		t.Fatalf("create lifecycle runtime: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `

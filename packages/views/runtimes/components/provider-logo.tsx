@@ -217,7 +217,7 @@ export const KNOWN_PROVIDERS: readonly KnownProvider[] = [
   { id: "opencode", label: "OpenCode" },
   { id: "pi", label: "Pi" },
   { id: "cursor", label: "Cursor" },
-  { id: "grok", label: "Grok" },
+  { id: "grok", label: "Grok Build" },
 ] as const;
 
 export function knownProviderLabel(provider: string): string | undefined {

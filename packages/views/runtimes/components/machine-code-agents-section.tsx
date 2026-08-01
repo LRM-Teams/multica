@@ -17,8 +17,9 @@ function SectionTitle({ children }: { children: ReactNode }) {
 }
 
 /**
- * LRM-922 / LRM-863 — Code agents inventory (design-lrm922-runtime-code-agents):
- * summary + provider grid with Installed / Supported·not installed + install guide.
+ * LRM-922 / LRM-863 / LRM-960 — Code agents inventory:
+ * section title + short count + provider grid.
+ * Install guide only on supported-not-installed cards (no long summary strip).
  */
 export function MachineCodeAgentsSection({
   machine,
@@ -52,93 +53,70 @@ export function MachineCodeAgentsSection({
             {t(($) => $.machine.code_agents_installed_empty)}
           </p>
         ) : (
-          <>
-            <div className="border-b px-4 py-3 text-xs text-muted-foreground">
-              <span className="font-medium text-foreground">
-                {t(($) => $.machine.code_agents_summary_installed, {
-                  count: installedCount,
-                })}
-              </span>
-              {" · "}
-              {t(($) => $.machine.code_agents_summary_installed_hint)}
-              {supportedMore > 0 ? (
-                <>
-                  <span className="mx-1.5 text-muted-foreground/50">|</span>
-                  <span className="font-medium text-foreground">
-                    {t(($) => $.machine.code_agents_summary_more, {
-                      count: supportedMore,
-                    })}
-                  </span>
-                  {" · "}
-                  {t(($) => $.machine.code_agents_summary_more_hint)}
-                </>
-              ) : null}
-            </div>
-            <div className="grid grid-cols-2 divide-x divide-y md:grid-cols-4">
-              {rows.map((row, idx) => {
-                const isInstalled = idx < installedCount;
-                return (
-                  <article
-                    key={row.id}
-                    className="min-h-[96px] p-3.5 md:min-h-[110px]"
-                  >
-                    <div className="flex items-center gap-2 text-sm font-semibold">
-                      <span
-                        className={cn(
-                          "shrink-0",
-                          !isInstalled && "opacity-40 grayscale",
-                        )}
-                      >
-                        <ProviderLogo
-                          provider={row.id}
-                          className="h-5 w-5"
+          <div className="grid grid-cols-2 divide-x divide-y md:grid-cols-4">
+            {rows.map((row, idx) => {
+              const isInstalled = idx < installedCount;
+              return (
+                <article
+                  key={row.id}
+                  className="min-h-[96px] p-3.5 md:min-h-[110px]"
+                >
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <span
+                      className={cn(
+                        "shrink-0",
+                        !isInstalled && "opacity-40 grayscale",
+                      )}
+                    >
+                      <ProviderLogo
+                        provider={row.id}
+                        className="h-5 w-5"
+                      />
+                    </span>
+                    <span className="min-w-0 truncate">{row.label}</span>
+                  </div>
+                  {isInstalled ? (
+                    <p className="mt-2 text-[11px] text-emerald-700 dark:text-emerald-400">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span
+                          className="inline-block h-1.5 w-1.5 rounded-full bg-current"
+                          aria-hidden
                         />
+                        {row.version
+                          ? t(($) => $.machine.code_agents_status_installed_ver, {
+                              version: row.version,
+                            })
+                          : t(($) => $.machine.code_agents_status_installed)}
                       </span>
-                      <span className="min-w-0 truncate">{row.label}</span>
-                    </div>
-                    {isInstalled ? (
-                      <p className="mt-2 text-[11px] text-emerald-700 dark:text-emerald-400">
+                    </p>
+                  ) : (
+                    <div className="mt-2">
+                      <p className="text-[11px] text-muted-foreground">
                         <span className="inline-flex items-center gap-1.5">
                           <span
-                            className="inline-block h-1.5 w-1.5 rounded-full bg-current"
+                            className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/55"
                             aria-hidden
                           />
-                          {row.version
-                            ? t(($) => $.machine.code_agents_status_installed_ver, {
-                                version: row.version,
-                              })
-                            : t(($) => $.machine.code_agents_status_installed)}
+                          {t(($) => $.machine.code_agents_status_supported)}
                         </span>
                       </p>
-                    ) : (
-                      <div className="mt-2">
-                        <p className="text-[11px] text-muted-foreground">
-                          <span className="inline-flex items-center gap-1.5">
-                            <span
-                              className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/55"
-                              aria-hidden
-                            />
-                            {t(($) => $.machine.code_agents_status_supported)}
-                          </span>
-                        </p>
-                        {row.docsUrl ? (
-                          <a
-                            href={row.docsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-brand underline-offset-2 hover:underline"
-                          >
-                            {t(($) => $.machine.code_agents_docs)}
-                            <ExternalLink className="h-3 w-3" aria-hidden />
-                          </a>
-                        ) : null}
-                      </div>
-                    )}
-                  </article>
-                );
-              })}
-            </div>
-          </>
+                      {row.docsUrl ? (
+                        <a
+                          href={row.docsUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-brand underline-offset-2 hover:underline"
+                        >
+                          {t(($) => $.machine.code_agents_docs)}
+                          <ExternalLink className="h-3 w-3" aria-hidden />
+                        </a>
+                      ) : null}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
         )}
       </div>
     </section>

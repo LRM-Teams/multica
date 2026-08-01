@@ -94,11 +94,21 @@ describe("MachineCodeAgentsSection", () => {
     );
 
     expect(
-      screen.getByRole("heading", { name: "Code agents on this computer" }),
+      screen.getByRole("heading", { name: "Runtimes on this computer" }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/1 installed/i)).toBeInTheDocument();
+    // Short count only — no long summary strip under the title.
+    expect(
+      screen.getByText(/Installed 1 of \d+ supported runtimes/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Available to agents on this computer/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Install to make them selectable/i),
+    ).not.toBeInTheDocument();
     expect(screen.getByText(/Installed · v1\.4\.2/)).toBeInTheDocument();
     expect(screen.getByTestId("provider-logo-cursor")).toBeInTheDocument();
+    expect(screen.getByText("Grok Build")).toBeInTheDocument();
     // Recommend catalog still listed as supported · not installed.
     expect(
       screen.getAllByText("Supported · not installed").length,
@@ -119,7 +129,7 @@ describe("MachineCodeAgentsSection", () => {
     );
 
     expect(
-      screen.getByRole("heading", { name: "Code agents on this computer" }),
+      screen.getByRole("heading", { name: "Runtimes on this computer" }),
     ).toBeInTheDocument();
     expect(screen.getByText("kimi")).toBeInTheDocument();
     expect(screen.getByTestId("provider-logo-kimi")).toBeInTheDocument();
@@ -130,12 +140,15 @@ describe("MachineCodeAgentsSection", () => {
     renderSection(makeMachine([]));
 
     expect(
-      screen.getByRole("heading", { name: "Code agents on this computer" }),
+      screen.getByRole("heading", { name: "Runtimes on this computer" }),
     ).toBeInTheDocument();
     // Empty install still shows the recommend catalog (supported · not installed).
     expect(
-      screen.getByText(/0 installed/i),
+      screen.getByText(/Installed 0 of \d+ supported runtimes/i),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Available to agents on this computer/i),
+    ).not.toBeInTheDocument();
     expect(
       screen.getAllByText("Supported · not installed").length,
     ).toBeGreaterThan(0);

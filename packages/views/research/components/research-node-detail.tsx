@@ -29,7 +29,7 @@ function payloadNumber(payload: unknown, key: string): number | null {
 
 function typeLabelFor(
   nodeType: string,
-  t: ReturnType<typeof useT>["t"],
+  t: ReturnType<typeof useT<"research">>["t"],
 ): string {
   switch (nodeType) {
     case "goal":

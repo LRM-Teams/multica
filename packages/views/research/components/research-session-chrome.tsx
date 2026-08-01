@@ -28,6 +28,11 @@ const DEFAULT_TONE: StatusTone = {
   dot: "bg-muted-foreground",
 };
 
+// Module-level so the default doesn't allocate a new array identity on every
+// render — an inline `= []` default breaks memo comparison downstream.
+const EMPTY_MEMBERS: ResearchFleetMember[] = [];
+const EMPTY_SOURCES: ResearchSource[] = [];
+
 function StageChip({ label, className }: { label: string; className?: string }) {
   return (
     <span
@@ -55,8 +60,8 @@ export function ResearchSessionChrome({
   handoffPending,
   onOpenDelivery,
   selectedSummary,
-  members = [],
-  sources = [],
+  members = EMPTY_MEMBERS,
+  sources = EMPTY_SOURCES,
 }: {
   session: ResearchSession;
   canConfirm: boolean;

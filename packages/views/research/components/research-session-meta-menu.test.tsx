@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchFleetMember, ResearchSource } from "@multica/core/types";
+import type { ReactNode } from "react";
 import { ResearchSessionMetaMenu } from "./research-session-meta-menu";
 
 vi.mock("../../i18n/use-t", () => ({
@@ -54,22 +55,19 @@ vi.mock("@multica/ui/components/ui/dropdown-menu", async () => {
   };
 });
 
-vi.mock("@multica/ui/components/ui/sheet", async () => {
-  const React = await import("react");
-  return {
-    Sheet: ({
-      open,
-      children,
-    }: {
-      open?: boolean;
-      children?: React.ReactNode;
-    }) => (open ? <div data-testid="sheet">{children}</div> : null),
-    SheetContent: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
-    SheetHeader: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
-    SheetTitle: ({ children }: { children?: React.ReactNode }) => <h2>{children}</h2>,
-    SheetDescription: ({ children }: { children?: React.ReactNode }) => <p>{children}</p>,
-  };
-});
+vi.mock("@multica/ui/components/ui/sheet", () => ({
+  Sheet: ({
+    open,
+    children,
+  }: {
+    open?: boolean;
+    children?: ReactNode;
+  }) => (open ? <div data-testid="sheet">{children}</div> : null),
+  SheetContent: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  SheetHeader: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  SheetTitle: ({ children }: { children?: ReactNode }) => <h2>{children}</h2>,
+  SheetDescription: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
+}));
 
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: () => <div data-testid="avatar" />,

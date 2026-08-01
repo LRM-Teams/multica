@@ -484,6 +484,16 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if watermark < c.runtimeCursors[runtimeID] {
+		// Task #69: this whole snapshot used to be dropped with zero trace.
+		// A server watermark behind the daemon's own persisted cursor should
+		// be rare (it means the server regressed relative to what this
+		// daemon already ACKed) — worth a Warn every time it happens, not
+		// silence, since a genuinely stale watermark here means the daemon
+		// is about to miss every job in this snapshot.
+		if c.logger != nil {
+			c.logger.Warn("reminder snapshot rejected: server watermark behind local cursor",
+				"runtime_id", runtimeID, "agent_id", agentID, "watermark", watermark, "local_cursor", c.runtimeCursors[runtimeID])
+		}
 		return 0, nil
 	}
 	previousFences := cloneReminderFences(c.fences)
@@ -497,6 +507,17 @@ func (c *reminderCache) snapshot(runtimeID, agentID string, watermark int64, job
 		}
 		fence, exists := c.fences[job.ReminderID]
 		if exists && (fence.LastSeq > watermark || job.Version < fence.Version || (fence.Terminal && job.Version <= fence.Version)) {
+			// Task #69: also silent before. Legitimate most of the time
+			// (a stale/superseded job the daemon already knows is done),
+			// but silence is exactly what let three separate drop points in
+			// this file go unnoticed for 20+ hours — logging one skip is
+			// cheap, re-discovering "which of four silent branches did it"
+			// from scratch is not.
+			if c.logger != nil {
+				c.logger.Debug("reminder snapshot skipped job behind local fence",
+					"reminder_id", job.ReminderID, "agent_id", agentID, "job_version", job.Version,
+					"fence_version", fence.Version, "fence_terminal", fence.Terminal, "fence_last_seq", fence.LastSeq, "watermark", watermark)
+			}
 			continue
 		}
 		if pendingVersion, pending := c.pendingFires[job.ReminderID]; pending && pendingVersion == job.Version {
@@ -770,6 +791,14 @@ func (c *reminderCache) armLocked(job protocol.ReminderTimerJob, fireAt time.Tim
 	entry := c.entries[job.ReminderID]
 	entry.timer = timer
 	c.entries[job.ReminderID] = entry
+	// Task #69: whether a timer ever actually got armed for a given
+	// reminder was previously answerable nowhere — not in the persisted
+	// fence (which only records confirmed projection state, not local
+	// timer state) and not in any debug/introspection endpoint (none
+	// exists). This is the only place in the codebase that arms a timer.
+	if c.logger != nil {
+		c.logger.Debug("reminder timer armed", "reminder_id", job.ReminderID, "agent_id", job.OwnerAgentID, "version", job.Version, "delay", delay)
+	}
 }
 
 // reminderFireRetryInterval is the local backoff between fire_attempt resends

@@ -792,6 +792,11 @@ func (d *Daemon) queueReminderFrame(eventType string, payload any) bool {
 	d.reminderWSMu.RLock()
 	defer d.reminderWSMu.RUnlock()
 	if d.reminderWrites == nil {
+		// Task #69: previously silent. No WS established yet (or torn
+		// down) — the caller's local retry (task #68) will re-attempt this
+		// send once a connection exists, so this isn't fatal, but it is
+		// exactly the kind of drop that went unlogged for 20+ hours.
+		d.logger.Warn("reminder websocket frame dropped: no connection established", "type", eventType)
 		return false
 	}
 	select {
@@ -1094,6 +1099,22 @@ func (d *Daemon) handleReminderProjectionReplayEnd(payload protocol.ReminderProj
 func (d *Daemon) onReminderTimer(job protocol.ReminderTimerJob) {
 	owner, ok := d.reminderAgents.get(job.OwnerAgentID)
 	if !ok {
+		// Task #69: this used to be a silent return — a due reminder whose
+		// owner isn't (yet, or anymore) in the local residency map produced
+		// zero trace: no fire_attempt sent, no error, no reconnect forced.
+		// A perfectly healthy WS connection (heartbeat alive, projection
+		// cursor advancing) would show no symptom at all while this
+		// specific reminder just never fires. Owner-not-present-yet is a
+		// legitimate transient state (e.g. an agent lifecycle race), so
+		// this does not fail closed here — reminderCache's local retry
+		// (task #68's fireAndScheduleRetryLocked) already re-invokes this
+		// function on a schedule, so a transient gap self-heals the moment
+		// the owner registers; logging is what makes a *persistent* gap
+		// (owner genuinely never resolves) visible instead of invisible.
+		if d.logger != nil {
+			d.logger.Warn("reminder timer fired for an owner missing from local residency map; local retry will re-check",
+				"reminder_id", job.ReminderID, "agent_id", job.OwnerAgentID, "version", job.Version)
+		}
 		return
 	}
 	d.queueReminderFrame(protocol.EventReminderFireAttempt, protocol.ReminderFireAttemptPayload{

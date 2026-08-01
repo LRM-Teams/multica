@@ -24,8 +24,10 @@ import { useNavigation } from "../../navigation";
 import { IssueChip } from "../../issues/components/issue-chip";
 import { ProjectChip } from "../../projects/components/project-chip";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
+import { useMemberPanelStore } from "@multica/core/workspace";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { useOpenAgentPanel } from "../../common/agent-panel-context";
+import { useOpenMemberPanel } from "../../common/member-panel-context";
 import { useActorMentionChipLabel } from "../../common/actor-mention-chip-label";
 import {
   mentionTokenClassName,
@@ -39,7 +41,11 @@ export function MentionView({ node }: NodeViewProps) {
   // or anywhere else an editor can render one (issue comments, etc.).
   const openAgentPanelFromContext = useOpenAgentPanel();
   const openAgentPanelFromStore = useAgentPanelStore((s) => s.open);
+  const closeAgentPanel = useAgentPanelStore((s) => s.close);
   const openAgentPanel = openAgentPanelFromContext ?? openAgentPanelFromStore;
+  const openMemberPanelFromContext = useOpenMemberPanel();
+  const openMemberPanelFromStore = useMemberPanelStore((s) => s.open);
+  const openMemberPanel = openMemberPanelFromContext ?? openMemberPanelFromStore;
   const { type, id, label } = node.attrs;
 
   if (type === "issue") {
@@ -72,6 +78,8 @@ export function MentionView({ node }: NodeViewProps) {
         label={label}
         viewerUserId={viewerUserId}
         openAgentPanel={openAgentPanel}
+        openMemberPanel={openMemberPanel}
+        closeAgentPanel={closeAgentPanel}
       />
     </NodeViewWrapper>
   );
@@ -83,12 +91,16 @@ function ActorMentionEditorChip({
   label,
   viewerUserId,
   openAgentPanel,
+  openMemberPanel,
+  closeAgentPanel,
 }: {
   type: string;
   id: string;
   label?: string;
   viewerUserId: string | null;
   openAgentPanel: ((id: string) => void) | null | undefined;
+  openMemberPanel: ((id: string) => void) | null | undefined;
+  closeAgentPanel: () => void;
 }): ReactNode {
   const { name, unresolved, handlePeek } = useActorMentionChipLabel(type, id, label);
   const kind = resolveMentionTokenKind(type, id, viewerUserId);
@@ -110,14 +122,21 @@ function ActorMentionEditorChip({
   );
 
   if (type === "member" || type === "agent") {
+    const openOnClick =
+      type === "agent" && openAgentPanel
+        ? () => openAgentPanel(id)
+        : type === "member" && openMemberPanel
+          ? () => {
+              closeAgentPanel();
+              openMemberPanel(id);
+            }
+          : undefined;
     return (
       <ActorProfileTrigger
         memberType={type === "agent" ? "agent" : "user"}
         memberId={id}
         triggerElement="span"
-        onClickCapture={
-          type === "agent" && openAgentPanel ? () => openAgentPanel(id) : undefined
-        }
+        onClickCapture={openOnClick}
       >
         {chip}
       </ActorProfileTrigger>

@@ -499,15 +499,14 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
               )}
             </div>
             {isPaused ? (
-              <div
+              <output
                 data-testid="research-paused-banner"
-                className="border-t border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[12px] leading-snug text-foreground"
-                role="status"
+                className="block border-t border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[12px] leading-snug text-foreground"
               >
                 <span className="font-medium">{t(($) => $.panel.paused_title)}</span>
                 {" · "}
                 <span className="text-muted-foreground">{t(($) => $.panel.paused_hint)}</span>
-              </div>
+              </output>
             ) : null}
             <div className="border-t bg-card p-3">
               <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">

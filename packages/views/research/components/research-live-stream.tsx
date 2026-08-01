@@ -30,10 +30,13 @@ export function ResearchLiveStream({ sessionId }: { sessionId: string }) {
     staleTime: 30_000,
   });
 
-  const wakeSessionIds = useMemo(
-    () => sessions.filter((s) => s.title === wakeTitle).map((s) => s.id),
-    [sessions, wakeTitle],
-  );
+  const wakeSessionIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const s of sessions) {
+      if (s.title === wakeTitle) ids.push(s.id);
+    }
+    return ids;
+  }, [sessions, wakeTitle]);
 
   const pendingQueries = useQueries({
     queries: wakeSessionIds.map((id) => ({

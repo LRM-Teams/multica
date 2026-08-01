@@ -74,9 +74,15 @@ export const metadata: Metadata = {
     statusBarStyle: "black-translucent",
   },
   icons: {
-    icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
     shortcut: ["/favicon.svg"],
-    apple: [{ url: "/favicon.svg", type: "image/svg+xml" }],
+    // Apple ignores SVG apple-touch-icon; PNG 180 is required for a real
+    // Home Screen / standalone PWA (Web Push gate on iOS 16.4+, LRM-684).
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
   },
   openGraph: {
     type: "website",

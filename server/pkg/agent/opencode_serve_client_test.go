@@ -22,6 +22,11 @@ type fakeOpenCodeServeServer struct {
 	mu       sync.Mutex
 	sessions map[string]*fakeOpenCodeServeSession
 	sseConns []chan string
+	// pending holds events published before any SSE subscriber attached.
+	// Without this, a POST /message that races ahead of GET /event drops
+	// session.idle forever and TestExecuteEndToEndAgainstFakeServeProcess
+	// hangs until the package 10m timeout (CI flake on LRM-684 #1754).
+	pending []string
 	// scriptEvents is called after a message send completes, returning the
 	// raw SSE `data: ...` payloads (without the "data:" prefix) to publish
 	// for that session, in order.
@@ -93,9 +98,17 @@ func (f *fakeOpenCodeServeServer) handler() http.Handler {
 		ch := make(chan string, 64)
 		f.mu.Lock()
 		f.sseConns = append(f.sseConns, ch)
+		// Drain events that raced ahead of this subscription (POST /message
+		// can complete before GET /event registers).
+		pending := f.pending
+		f.pending = nil
 		f.mu.Unlock()
 		fmt.Fprintf(w, "data: %s\n\n", `{"type":"server.connected","properties":{}}`)
 		flusher.Flush()
+		for _, payload := range pending {
+			fmt.Fprintf(w, "data: %s\n\n", payload)
+			flusher.Flush()
+		}
 		for {
 			select {
 			case payload, ok := <-ch:
@@ -115,6 +128,10 @@ func (f *fakeOpenCodeServeServer) handler() http.Handler {
 func (f *fakeOpenCodeServeServer) publish(payload string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if len(f.sseConns) == 0 {
+		f.pending = append(f.pending, payload)
+		return
+	}
 	for _, ch := range f.sseConns {
 		select {
 		case ch <- payload:

@@ -210,7 +210,8 @@ func (h *Handler) SendTestWebPush(w http.ResponseWriter, r *http.Request) {
 	}
 	icon := ""
 	if appBase != "" {
-		icon = appBase + "/favicon.svg"
+		// PNG — WebKit/iOS drops or hides SVG notification icons (LRM-684).
+		icon = appBase + "/icon-192.png"
 	}
 	payload := map[string]any{
 		"title":               "Multica",

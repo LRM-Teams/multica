@@ -208,6 +208,13 @@
       "ios_needs_pwa": "iPhone에서는 먼저 Multica를 홈 화면에 추가한 뒤 홈 화면에서 열어 알림을 켜세요.",
       "ios_pwa_hint": "이 홈 화면 웹 앱이 받은함, DM, 그룹 @멘션 알림 배너를 표시하도록 허용합니다.",
       "ios_requires_pwa": "iOS에서는 먼저 Multica를 홈 화면에 추가한 뒤 홈 화면에서 열어 백그라운드 Push를 켜세요.",
+      "test": {
+        "send": "테스트 알림 보내기",
+        "sending": "보내는 중…",
+        "success": "보냈습니다. 시스템 알림 배너를 확인하세요.",
+        "failed_generic": "테스트 알림을 보내지 못했습니다.",
+        "need_permission": "테스트를 보내려면 먼저 브라우저 알림을 켜세요."
+      },
       "prompt": {
         "title": "알림 켜기",
         "description": "누군가 DM을 보내거나 @멘션할 때 Multica가 백그라운드여도 바로 알려드립니다.",

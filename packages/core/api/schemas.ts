@@ -42,6 +42,7 @@ import type {
   SandboxSnapshot,
   WebPushPublicKeyResponse,
   WebPushSubscriptionResponse,
+  WebPushTestResponse,
   VoiceCall,
   VoiceCallMedia,
   CreateVoiceCallResponse,
@@ -436,6 +437,22 @@ export const EMPTY_WEB_PUSH_SUBSCRIPTION: WebPushSubscriptionResponse = {
   user_id: "",
   endpoint: "",
   last_active_at: "",
+};
+
+export const WebPushTestSchema = z.object({
+  ok: BooleanWithDefaultSchema(false),
+  delivered: z.number().default(0),
+  failed: z.number().default(0),
+  gone: z.number().default(0),
+  attempted: z.number().default(0),
+}).loose();
+
+export const EMPTY_WEB_PUSH_TEST: WebPushTestResponse = {
+  ok: false,
+  delivered: 0,
+  failed: 0,
+  gone: 0,
+  attempted: 0,
 };
 
 export const CommentSchema = z.object({

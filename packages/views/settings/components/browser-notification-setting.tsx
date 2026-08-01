@@ -1,17 +1,20 @@
 "use client";
 
 import { useState, useSyncExternalStore } from "react";
+import { api, ApiError } from "@multica/core/api";
 import {
   getWebNotificationPermission,
   isWebNotificationSupported,
   type WebNotificationPermission,
 } from "@multica/core/platform";
 import {
+  bindCurrentWebPushSubscription,
   getWebPushSupportState,
   requestAndBindWebPushSubscription,
 } from "@multica/core/web-push";
 import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
+import { toast } from "sonner";
 import { isDesktopShell } from "../../platform";
 import { useT } from "../../i18n";
 
@@ -34,6 +37,7 @@ export function BrowserNotificationSetting() {
   );
   const [, refresh] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
   const permission: WebNotificationPermission = getWebNotificationPermission();
   const pushState = getWebPushSupportState();
 
@@ -59,6 +63,30 @@ export function BrowserNotificationSetting() {
     }
   };
 
+  const handleSendTest = async () => {
+    if (permission !== "granted" || pushState !== "supported") return;
+    setTesting(true);
+    try {
+      // Ensure this device has a bound subscription before asking the server
+      // to fan out — otherwise a stale "Enabled" badge looks like a false pass.
+      await bindCurrentWebPushSubscription();
+      await api.sendTestWebPush();
+      toast.success(t(($) => $.notifications.browser.test.success));
+    } catch (err) {
+      const message =
+        err instanceof ApiError && err.message
+          ? err.message
+          : err instanceof Error && err.message
+            ? err.message
+            : t(($) => $.notifications.browser.test.failed_generic);
+      toast.error(message);
+      console.error("[web-push] send test failed", err);
+    } finally {
+      setTesting(false);
+      refresh((version) => version + 1);
+    }
+  };
+
   const statusHint =
     pushState === "ios_requires_pwa"
       ? t(($) => $.notifications.browser.ios_requires_pwa)
@@ -70,6 +98,9 @@ export function BrowserNotificationSetting() {
             ? t(($) => $.notifications.browser.denied)
             : t(($) => $.notifications.browser.hint);
 
+  const canTest = pushState === "supported";
+  const testEnabled = canTest && permission === "granted" && !testing && !busy;
+
   return (
     <Card>
       <CardContent>
@@ -79,17 +110,37 @@ export function BrowserNotificationSetting() {
               {t(($) => $.notifications.browser.label)}
             </p>
             <p className="text-xs text-muted-foreground">{statusHint}</p>
+            {canTest && permission !== "granted" && (
+              <p className="text-xs text-muted-foreground">
+                {t(($) => $.notifications.browser.test.need_permission)}
+              </p>
+            )}
           </div>
-          {permission !== "granted" && pushState === "supported" && (
-            <Button size="sm" variant="outline" onClick={handleEnable} disabled={busy}>
-              {t(($) => $.notifications.browser.enable)}
-            </Button>
-          )}
-          {permission === "granted" && (
-            <span className="shrink-0 text-xs font-medium text-muted-foreground">
-              {t(($) => $.notifications.browser.enabled_badge)}
-            </span>
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {permission !== "granted" && pushState === "supported" && (
+              <Button size="sm" variant="outline" onClick={handleEnable} disabled={busy || testing}>
+                {t(($) => $.notifications.browser.enable)}
+              </Button>
+            )}
+            {permission === "granted" && (
+              <span className="text-xs font-medium text-muted-foreground">
+                {t(($) => $.notifications.browser.enabled_badge)}
+              </span>
+            )}
+            {canTest && (
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="browser-notification-send-test"
+                onClick={() => void handleSendTest()}
+                disabled={!testEnabled}
+              >
+                {testing
+                  ? t(($) => $.notifications.browser.test.sending)
+                  : t(($) => $.notifications.browser.test.send)}
+              </Button>
+            )}
+          </div>
         </div>
       </CardContent>
     </Card>

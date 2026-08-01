@@ -490,6 +490,7 @@
     "runtime_label": "ランタイム",
     "skills_label": "スキル",
     "owner_label": "オーナー",
+    "runtime_config_section": "ランタイム設定",
     "unknown_runtime": "不明なランタイム",
     "username_label": "ユーザー名",
     "username_edit_title": "ユーザー名を編集",

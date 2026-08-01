@@ -498,6 +498,7 @@
     "runtime_label": "运行时",
     "skills_label": "Skills",
     "owner_label": "所有者",
+    "runtime_config_section": "运行时配置",
     "unknown_runtime": "未知运行时",
     "username_label": "用户名",
     "username_edit_title": "编辑用户名",

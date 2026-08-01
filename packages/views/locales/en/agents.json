@@ -508,6 +508,7 @@
     "runtime_label": "Runtime",
     "skills_label": "Skills",
     "owner_label": "Owner",
+    "runtime_config_section": "Runtime config",
     "unknown_runtime": "Unknown runtime",
     "username_label": "Username",
     "username_edit_title": "Edit username",

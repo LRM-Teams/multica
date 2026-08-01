@@ -64,6 +64,9 @@ export function ResearchFleetAvatarStack({
         aria-expanded={open}
         aria-label={open ? t(($) => $.overlay.fleet_collapse) : t(($) => $.overlay.fleet_expand)}
         data-testid="research-fleet-avatar-stack-toggle"
+        // LRM-776: keep avatar → Agent panel entry inside this expand control
+        // (otherwise ActorAvatarPanelTrigger defers to the outer button).
+        data-avatar-profile-entry="true"
       >
         <span className="flex -space-x-2">
           {visible.map((m) => (
@@ -73,6 +76,8 @@ export function ResearchFleetAvatarStack({
                 actorId={m.agent_id}
                 size={28}
                 showStatusDot
+                enableHoverCard
+                profileLink
               />
             </span>
           ))}

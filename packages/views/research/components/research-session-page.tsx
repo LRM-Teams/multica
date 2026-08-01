@@ -1,10 +1,15 @@
 "use client";
 
-import { useMemo, useReducer, useRef } from "react";
+import { useCallback, useMemo, useReducer, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
+import { useAuthStore } from "@multica/core/auth";
+import type {
+  AgentPanelIdentitySnapshot,
+  OpenAgentPanelFn,
+} from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   dedupeResearchFleetMembers,
@@ -15,12 +20,20 @@ import {
   useResearchUiStore,
 } from "@multica/core/research";
 import type { ResearchGraphNode, ResearchProductRoundCard } from "@multica/core/types";
+import { memberListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { AgentPanelProvider } from "../../common/agent-panel-context";
+import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { useT } from "../../i18n/use-t";
+import {
+  CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
+  useProfilePanelWidth,
+} from "../../layout/use-profile-panel-width";
 import {
   buildFleetChatFeed,
   nextStageWaitingCard,
@@ -113,8 +126,11 @@ function mutationErrorToast(fallback: string, err: unknown) {
 
 export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { t } = useT("research");
+  const { t: tAgents } = useT("agents");
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
+  const isMobile = useIsMobile();
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
   const { data, isLoading, isError, error, refetch } = useQuery(
@@ -123,6 +139,22 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
+  // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
+  const [agentDock, setAgentDock] = useState<{
+    agentId: string;
+    snapshot: AgentPanelIdentitySnapshot | null;
+  } | null>(null);
+  const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
+    setAgentDock({ agentId, snapshot: snapshot ?? null });
+  }, []);
+  const { data: workspaceMembers = [] } = useQuery({
+    ...memberListOptions(wsId),
+    enabled: !!agentDock,
+  });
+  const {
+    width: agentSideWidth,
+    onResizePointerDown: onAgentSideResizePointerDown,
+  } = useProfilePanelWidth(CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
@@ -275,8 +307,25 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     });
   };
 
-  return (
-    <div className="relative flex h-full min-h-0 flex-col">
+  const agentPanelNode = agentDock ? (
+    <ResolvedAgentSidePanel
+      agentId={agentDock.agentId}
+      identitySnapshot={agentDock.snapshot}
+      currentUserId={currentUserId}
+      members={workspaceMembers}
+      onClose={() => setAgentDock(null)}
+      variant={isMobile ? "page" : "panel"}
+      doneLabel={
+        isMobile ? tAgents(($) => $.side_panel.back_to_messages) : undefined
+      }
+    />
+  ) : null;
+
+  const sessionBody = (
+    <div
+      className="relative flex h-full min-h-0 flex-col"
+      data-testid="research-session-page"
+    >
       <ResearchSessionChrome
         session={session}
         canConfirm={canConfirm}
@@ -616,6 +665,23 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             </div>
           </aside>
         ) : null}
+
+        {!isMobile && agentPanelNode ? (
+          <div
+            data-testid="research-agent-side-slot"
+            className="relative flex shrink-0 flex-col border-l border-border/30 bg-background"
+            style={{ width: agentSideWidth }}
+          >
+            <button
+              type="button"
+              data-testid="research-agent-side-resize"
+              aria-label={tAgents(($) => $.side_panel.resize_aria)}
+              className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10"
+              onPointerDown={onAgentSideResizePointerDown}
+            />
+            {agentPanelNode}
+          </div>
+        ) : null}
       </div>
 
       {/* Portal-friendly mount: keep delivery modal outside the canvas
@@ -629,5 +695,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         boundary={humanBoundary}
       />
     </div>
+  );
+
+  return (
+    <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
+      {isMobile && agentPanelNode ? agentPanelNode : sessionBody}
+    </AgentPanelProvider>
   );
 }

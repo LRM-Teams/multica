@@ -124,7 +124,11 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
       />
       <div className="flex gap-2 px-3 py-2.5 pl-4">
         {actorId && logicRole === "step" ? (
-          <div className="pt-0.5" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="nodrag nopan pt-0.5"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
             <ActorAvatar
               actorType="agent"
               actorId={actorId}

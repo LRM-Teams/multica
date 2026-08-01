@@ -1109,6 +1109,11 @@ export interface DashboardRunTimeDaily {
 }
 
 export type RuntimeUpdateStatus =
+  // Update requested but not yet delivered — the server is durably holding
+  // the request until the runtime's next heartbeat proves it reachable
+  // (2026-08-02: replaces the old one-shot 120s delivery window that a
+  // sleeping laptop could simply miss). Not terminal, not yet "running".
+  | "queued"
   | "pending"
   | "running"
   | "completed"

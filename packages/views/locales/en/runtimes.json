@@ -347,6 +347,7 @@
       "windows": "Windows PowerShell"
     },
     "status": {
+      "queued": "Queued — will start when this runtime is next online.",
       "pending": "Waiting for daemon...",
       "running": "Updating...",
       "completed": "Update complete. Daemon is restarting...",

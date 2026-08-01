@@ -1140,6 +1140,15 @@ func (h *Handler) processHeartbeat(
 		ack.PendingMemoryCuration = pendingCuration
 	}
 
+	// A heartbeat arriving IS the runtime being reachable right now — this is
+	// the fix for the 2026-08-01/02 incident where InitiateUpdate's old
+	// 120-second delivery window meant a sleeping laptop simply missed its
+	// update with no retry. If there's a live UpdateIntent (durable, created
+	// by InitiateUpdate) and no attempt already in flight, materialize it
+	// into a real attempt right here so the HasPending/PopPending block below
+	// picks it up and delivers it in this same heartbeat response.
+	h.maybeMaterializeUpdateIntent(ctx, runtimeID)
+
 	probeUpdateCtx, cancelProbeUpdate := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
 	hasUpdate, probeUpdateErr := h.UpdateStore.HasPending(probeUpdateCtx, runtimeID)
 	cancelProbeUpdate()

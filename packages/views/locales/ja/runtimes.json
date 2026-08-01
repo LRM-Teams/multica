@@ -338,6 +338,7 @@
       "windows": "Windows PowerShell"
     },
     "status": {
+      "queued": "キューに入りました — このランタイムが次にオンラインになると開始します。",
       "pending": "デーモンを待っています...",
       "running": "更新中...",
       "completed": "更新が完了しました。デーモンを再起動しています...",

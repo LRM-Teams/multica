@@ -8,6 +8,7 @@ import {
   Check,
   Copy,
   Terminal,
+  Clock,
 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -50,6 +51,7 @@ const statusConfig: Record<
   RuntimeUpdateStatus,
   { icon: typeof Loader2; color: string }
 > = {
+  queued: { icon: Clock, color: "text-muted-foreground" },
   pending: { icon: Loader2, color: "text-muted-foreground" },
   running: { icon: Loader2, color: "text-brand" },
   completed: { icon: CheckCircle2, color: "text-success" },

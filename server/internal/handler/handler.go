@@ -135,6 +135,7 @@ type Handler struct {
 	EmailService                *service.EmailService
 	EnvCheckpointService        EnvCheckpointServiceAPI
 	UpdateStore                 UpdateStore
+	UpdateIntentStore           UpdateIntentStore
 	RestartStore                RestartStore
 	AgentLifecycleDispatchStore AgentLifecycleDispatchStore
 	RuntimeReleaseSource        RuntimeReleaseSource
@@ -307,6 +308,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		AutopilotService:            service.NewAutopilotService(queries, txStarter, bus, taskSvc),
 		EmailService:                emailService,
 		UpdateStore:                 NewPostgresUpdateStore(updateDB),
+		UpdateIntentStore:           NewPostgresUpdateIntentStore(updateDB),
 		RestartStore:                NewInMemoryRestartStore(),
 		AgentLifecycleDispatchStore: NewInMemoryAgentLifecycleDispatchStore(executor),
 		RuntimeReleaseSource:        NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),

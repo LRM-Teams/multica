@@ -67,12 +67,15 @@ export function applyResearchWSEvent(
     case "research_session:message": {
       const msg = payload.message as ResearchSessionSnapshot["messages"][number] | undefined;
       if (!msg) break;
-      patchSnapshot(qc, wsId, sessionId, (prev) => ({
-        ...prev,
-        messages: prev.messages.some((m) => m.id === msg.id)
-          ? prev.messages
-          : [...prev.messages, msg],
-      }));
+      // Upsert by id so streaming/stop mirrors can grow body in place (LRM-820)
+      // without remounting the whole feed as a new card.
+      patchSnapshot(qc, wsId, sessionId, (prev) => {
+        const idx = prev.messages.findIndex((m) => m.id === msg.id);
+        if (idx < 0) return { ...prev, messages: [...prev.messages, msg] };
+        const next = prev.messages.slice();
+        next[idx] = { ...next[idx], ...msg };
+        return { ...prev, messages: next };
+      });
       break;
     }
     case "research_session:stage_eval": {

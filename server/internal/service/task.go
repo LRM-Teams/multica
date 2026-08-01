@@ -1116,6 +1116,19 @@ func (s *TaskService) CaptureCancelledTasks(ctx context.Context, cancelled []db.
 	}
 }
 
+// FinalizeCancelledResearchWakes finishes research-session Stop for rows that
+// CancelInFlightChatTasksByResearchTitle already flipped to cancelled: persist
+// partial assistant transcript, mirror into research_message (LRM-820),
+// reconcile agent status, and broadcast task:cancelled.
+func (s *TaskService) FinalizeCancelledResearchWakes(ctx context.Context, cancelled []db.AgentInboxEvent) {
+	for _, t := range cancelled {
+		s.finalizeCancelledTask(ctx, t)
+		s.finalizeCancelledChatMessage(ctx, t)
+		s.ReconcileAgentStatus(ctx, t.AgentID)
+		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
+	}
+}
+
 type CancelledChatMessageResult struct {
 	ChatSessionID  string
 	MessageID      string
@@ -1174,6 +1187,7 @@ func (s *TaskService) finalizeCancelledChatMessage(ctx context.Context, task db.
 		return nil
 	}
 	var cancelled *CancelledChatMessageResult
+	var assistantSnapshot *db.ChatMessage
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
 		messages, err := qtx.ListTaskMessages(ctx, task.ID)
 		if err != nil {
@@ -1195,15 +1209,22 @@ func (s *TaskService) finalizeCancelledChatMessage(ctx context.Context, task db.
 			}
 			return nil
 		}
-		if _, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
+		// LRM-820: keep already-streamed text; fall back to a short stop marker.
+		content := coalesceTaskMessageText(messages)
+		if content == "" {
+			content = "Stopped."
+		}
+		row, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
 			ChatSessionID: task.ChatSessionID,
 			Role:          "assistant",
-			Content:       "Stopped.",
+			Content:       content,
 			TaskID:        task.ID,
 			ElapsedMs:     computeChatElapsedMs(task),
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("create cancelled chat message: %w", err)
 		}
+		assistantSnapshot = &row
 		return nil
 	}); err != nil {
 		slog.Error("failed to finalize cancelled chat message",
@@ -1212,6 +1233,11 @@ func (s *TaskService) finalizeCancelledChatMessage(ctx context.Context, task db.
 			"error", err,
 		)
 		return nil
+	}
+	if assistantSnapshot != nil {
+		// Research fleet wakes (title research:<sessionUUID>) must keep the
+		// partial reply in the session drawer after Stop.
+		s.MirrorResearchChatStoppedReply(ctx, task, *assistantSnapshot)
 	}
 	return cancelled
 }

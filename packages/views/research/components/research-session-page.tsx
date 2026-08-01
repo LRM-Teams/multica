@@ -2,7 +2,8 @@
 
 import { useMemo, useReducer, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, Square } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
@@ -17,6 +18,8 @@ import type { ResearchGraphNode, ResearchProductRoundCard } from "@multica/core/
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../i18n/use-t";
 import {
   buildFleetChatFeed,
@@ -30,6 +33,7 @@ import {
   buildSourceStrategy,
   dimensionFamilyOf,
 } from "../lib/m2-visibility";
+import { isResearchSessionStoppable } from "../lib/research-stream";
 import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
@@ -41,6 +45,7 @@ import { ResearchCanvas } from "./research-canvas";
 import { ResearchChatCard } from "./research-chat-card";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchFleetStepCard } from "./research-fleet-step-card";
+import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchSessionChrome } from "./research-session-chrome";
 import {
@@ -113,6 +118,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  // Stick-to-bottom while content grows (live stream / new cards); releases if
+  // the user scrolls up to read history — no jump-scroll (LRM-820).
+  useAutoScroll(chatScrollRef, chatOpen);
 
   const send = useMutation({
     mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
@@ -121,6 +129,18 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
       void qc.invalidateQueries({ queryKey: researchKeys.productRounds(wsId, sessionId) });
     },
+  });
+
+  const stop = useMutation({
+    mutationFn: () => api.stopResearchSession(sessionId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.presence(wsId, sessionId) });
+      toast.success(t(($) => $.actions.stop_done));
+    },
+    onError: (err) =>
+      showErrorToast(err instanceof Error ? err.message : String(err)),
   });
 
   const confirm = useMutation({
@@ -169,6 +189,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const fleet = { ...data.fleet, members: fleetMembers };
   const canConfirm = session.status === "awaiting_user_confirm" || session.status === "running";
   const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
+  const canStop = isResearchSessionStoppable(session.status);
+  const isPaused = session.status === "paused";
   const startedStages = RESEARCH_STAGE_ORDER.filter(
     (stage) =>
       resolveStageStepState(stage, session.current_stage, session.status) !== "upcoming",
@@ -182,6 +204,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const chatFeed = buildFleetChatFeed(messages);
   const runningCards = presenceRunningCards(presence, fleet.members);
   const waitingCard = nextStageWaitingCard(session.current_stage, session.status);
+  const showStop = canStop || runningCards.length > 0;
 
   const postFleetAction = (body: string) => {
     void api
@@ -412,7 +435,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   label={t(($) => $.stage[stage])}
                 />
               ))}
-              {messages.length === 0 && runningCards.length === 0 ? (
+              {messages.length === 0 && runningCards.length === 0 && !showStop ? (
                 <p className="px-1 text-xs text-muted-foreground">{t(($) => $.chat.empty)}</p>
               ) : (
                 <>
@@ -471,9 +494,21 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   {waitingCard ? (
                     <ResearchFleetStepCard key={waitingCard.id} card={waitingCard} />
                   ) : null}
+                  {showStop ? <ResearchLiveStream sessionId={sessionId} /> : null}
                 </>
               )}
             </div>
+            {isPaused ? (
+              <div
+                data-testid="research-paused-banner"
+                className="border-t border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[12px] leading-snug text-foreground"
+                role="status"
+              >
+                <span className="font-medium">{t(($) => $.panel.paused_title)}</span>
+                {" · "}
+                <span className="text-muted-foreground">{t(($) => $.panel.paused_hint)}</span>
+              </div>
+            ) : null}
             <div className="border-t bg-card p-3">
               <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
                 <Textarea
@@ -486,24 +521,47 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                     if (!ui.body.trim() || send.isPending) return;
                     send.mutate(ui.body.trim());
                   }}
-                  placeholder={t(($) => $.panel.chat_placeholder)}
+                  placeholder={
+                    isPaused
+                      ? t(($) => $.panel.chat_placeholder_paused)
+                      : t(($) => $.panel.chat_placeholder)
+                  }
                   className="min-h-[56px] resize-none border-0 bg-transparent px-1 py-1 text-[13px] shadow-none focus-visible:ring-0"
                 />
                 <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5">
                   <span className="text-[10px] text-muted-foreground">
                     {t(($) => $.step_card.composer_hint)}
                   </span>
-                  <Button
-                    type="button"
-                    size="default"
-                    className="h-9 min-w-[88px] px-4 text-[13px] font-semibold shadow-sm"
-                    disabled={!ui.body.trim() || send.isPending}
-                    onClick={() => send.mutate(ui.body.trim())}
-                  >
-                    {send.isPending
-                      ? t(($) => $.step_card.sending)
-                      : t(($) => $.panel.send)}
-                  </Button>
+                  <div className="flex items-center gap-1.5">
+                    {showStop ? (
+                      <Button
+                        type="button"
+                        size="default"
+                        variant="outline"
+                        className="h-9 min-w-[88px] gap-1.5 px-3 text-[13px] font-semibold"
+                        disabled={stop.isPending}
+                        aria-label={t(($) => $.panel.stop_aria)}
+                        title={t(($) => $.panel.stop_tooltip)}
+                        onClick={() => stop.mutate()}
+                      >
+                        <Square className="h-3.5 w-3.5 fill-current" />
+                        {stop.isPending
+                          ? t(($) => $.panel.stopping)
+                          : t(($) => $.actions.stop)}
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="button"
+                      size="default"
+                      className="h-9 min-w-[88px] px-4 text-[13px] font-semibold shadow-sm"
+                      disabled={!ui.body.trim() || send.isPending}
+                      onClick={() => send.mutate(ui.body.trim())}
+                    >
+                      {send.isPending
+                        ? t(($) => $.step_card.sending)
+                        : t(($) => $.panel.send)}
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>

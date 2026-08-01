@@ -660,10 +660,8 @@ func (h *Handler) stopResearchSessionWakes(ctx context.Context, workspaceID, ses
 	if h.TaskService == nil {
 		return
 	}
-	for _, task := range rows {
-		h.TaskService.CaptureCancelledTasks(ctx, []db.AgentInboxEvent{task})
-		h.TaskService.ReconcileAgentStatus(ctx, task.AgentID)
-	}
+	// Rows are already cancelled in SQL; finalize chat/research snapshot + broadcast.
+	h.TaskService.FinalizeCancelledResearchWakes(ctx, rows)
 }
 
 // StopResearchSession pauses a running research session. The session remains

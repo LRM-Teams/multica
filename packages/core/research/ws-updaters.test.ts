@@ -78,6 +78,47 @@ describe("applyResearchWSEvent", () => {
     expect(presence.a1.updatedAt).toBe(100);
   });
 
+  it("updates an existing message body in place (streaming upsert)", () => {
+    const qc = makeQc({
+      ...EMPTY_RESEARCH_SNAPSHOT,
+      session: { ...EMPTY_RESEARCH_SNAPSHOT.session, id: "s1" },
+      messages: [
+        {
+          id: "m1",
+          session_id: "s1",
+          sender_type: "agent",
+          sender_id: "a1",
+          target_agent_id: null,
+          body: "Hel",
+          card_kind: "chat",
+          meta: { mirrored_from: "chat" },
+          created_at: "2026-08-01T00:00:00Z",
+        },
+      ],
+    });
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:message",
+      payload: {
+        session_id: "s1",
+        message: {
+          id: "m1",
+          session_id: "s1",
+          sender_type: "agent",
+          sender_id: "a1",
+          target_agent_id: null,
+          body: "Hello fleet",
+          card_kind: "chat",
+          meta: { mirrored_from: "chat", stopped: true },
+          created_at: "2026-08-01T00:00:00Z",
+        },
+      },
+    });
+    const data = qc.getData() as typeof EMPTY_RESEARCH_SNAPSHOT;
+    expect(data.messages).toHaveLength(1);
+    expect(data.messages[0]?.body).toBe("Hello fleet");
+    expect((data.messages[0]?.meta as { stopped?: boolean }).stopped).toBe(true);
+  });
+
   it("clears presence when activity is empty", () => {
     const store = new Map<string, unknown>();
     store.set(JSON.stringify(researchKeys.presence("ws", "s1")), {

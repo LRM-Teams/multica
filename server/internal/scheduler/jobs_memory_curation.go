@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 const (
@@ -74,7 +76,7 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 			SELECT p.id::text, p.workspace_id::text, p.user_id::text,
 			       p.runtime_id::text, p.curator_agent_id::text, p.model_override,
 			       p.mode, p.confidence_threshold, p.target_scope, p.timezone,
-			       p.schedule_hour, p.catch_up_enabled, p.config_version, rt.status
+			       p.schedule_hour, p.catch_up_enabled, p.config_version, rt.last_seen_at
 			  FROM memory_curator_profile p
 			  JOIN agent_runtime rt ON rt.id = p.runtime_id
 			  JOIN agent curator ON curator.id = p.curator_agent_id
@@ -89,12 +91,13 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 		defer rows.Close()
 		created := int64(0)
 		for rows.Next() {
-			var profileID, workspaceID, userID, runtimeID, curatorAgentID, model, mode, targetScope, timezone, runtimeStatus string
+			var profileID, workspaceID, userID, runtimeID, curatorAgentID, model, mode, targetScope, timezone string
+			var runtimeLastSeenAt time.Time
 			var confidenceThreshold float64
 			var scheduleHour int
 			var catchUp bool
 			var configVersion int64
-			if err := rows.Scan(&profileID, &workspaceID, &userID, &runtimeID, &curatorAgentID, &model, &mode, &confidenceThreshold, &targetScope, &timezone, &scheduleHour, &catchUp, &configVersion, &runtimeStatus); err != nil {
+			if err := rows.Scan(&profileID, &workspaceID, &userID, &runtimeID, &curatorAgentID, &model, &mode, &confidenceThreshold, &targetScope, &timezone, &scheduleHour, &catchUp, &configVersion, &runtimeLastSeenAt); err != nil {
 				return HandlerResult{}, err
 			}
 			loc, err := time.LoadLocation(timezone)
@@ -121,7 +124,7 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 				continue
 			}
 			runStatus := "queued"
-			if runtimeStatus != "online" {
+			if time.Since(runtimeLastSeenAt) > service.AgentHealthStaleThreshold {
 				runStatus = "waiting_runtime"
 			}
 			if stageName == "agent_self_review" && agentRunTableAvailable {
@@ -141,9 +144,9 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 						  parent_run_id, workspace_id, agent_id, runtime_id, stage, status, error, finished_at
 						)
 						SELECT i.id, i.workspace_id, a.id, COALESCE(a.runtime_id, i.runtime_id), 'agent_self_review',
-						       CASE WHEN rt.status = 'online' THEN 'queued' ELSE 'skipped' END,
-						       CASE WHEN rt.status = 'online' THEN '' ELSE 'runtime offline; skipped' END,
-						       CASE WHEN rt.status = 'online' THEN NULL ELSE now() END
+						       CASE WHEN rt.last_seen_at >= now() - make_interval(secs => $14::double precision) THEN 'queued' ELSE 'skipped' END,
+						       CASE WHEN rt.last_seen_at >= now() - make_interval(secs => $14::double precision) THEN '' ELSE 'runtime offline; skipped' END,
+						       CASE WHEN rt.last_seen_at >= now() - make_interval(secs => $14::double precision) THEN NULL ELSE now() END
 						  FROM inserted i
 						  JOIN agent a ON a.workspace_id = i.workspace_id AND a.id = ANY($13::uuid[])
 						  LEFT JOIN agent_runtime rt ON rt.id = COALESCE(a.runtime_id, i.runtime_id)
@@ -151,7 +154,7 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 						RETURNING 1
 					)
 					SELECT count(*) FROM inserted
-				`, workspaceID, stageName, runStatus, planDate, profileID, userID, runtimeID, curatorAgentID, model, mode, confidenceThreshold, configVersion, agentIDs).Scan(&inserted)
+				`, workspaceID, stageName, runStatus, planDate, profileID, userID, runtimeID, curatorAgentID, model, mode, confidenceThreshold, configVersion, agentIDs, service.AgentHealthStaleThreshold.Seconds()).Scan(&inserted)
 				if err != nil {
 					return HandlerResult{}, err
 				}
@@ -200,7 +203,8 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 	var created int64
 	err = pool.QueryRow(ctx, `
 		WITH active_agents AS MATERIALIZED (
-		  SELECT DISTINCT a.workspace_id, a.id AS agent_id, a.runtime_id, rt.status AS runtime_status
+		  SELECT DISTINCT a.workspace_id, a.id AS agent_id, a.runtime_id,
+		         rt.last_seen_at >= now() - make_interval(secs => $4::double precision) AS runtime_fresh
 		    FROM agent a
 		    JOIN agent_runtime rt ON rt.id = a.runtime_id
 		    JOIN (`+activeSources+`
@@ -210,7 +214,7 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 		), workspace_targets AS (
 		  SELECT workspace_id,
 		         array_agg(agent_id ORDER BY agent_id) AS target_agent_ids,
-		         bool_or(runtime_status = 'online') AS has_online_runtime
+		         bool_or(runtime_fresh) AS has_online_runtime
 		    FROM active_agents
 		   GROUP BY workspace_id
 		), inserted AS (
@@ -237,16 +241,16 @@ func scheduleDefaultAgentSelfReviewRuns(ctx context.Context, pool *pgxpool.Pool,
 		    parent_run_id, workspace_id, agent_id, runtime_id, stage, status, error, finished_at
 		  )
 		  SELECT i.id, i.workspace_id, a.agent_id, a.runtime_id, 'agent_self_review',
-		         CASE WHEN a.runtime_status = 'online' THEN 'queued' ELSE 'skipped' END,
-		         CASE WHEN a.runtime_status = 'online' THEN '' ELSE 'runtime offline; skipped' END,
-		         CASE WHEN a.runtime_status = 'online' THEN NULL ELSE now() END
+		         CASE WHEN a.runtime_fresh THEN 'queued' ELSE 'skipped' END,
+		         CASE WHEN a.runtime_fresh THEN '' ELSE 'runtime offline; skipped' END,
+		         CASE WHEN a.runtime_fresh THEN NULL ELSE now() END
 		    FROM inserted i
 		    JOIN active_agents a ON a.workspace_id = i.workspace_id
 		  ON CONFLICT (parent_run_id, agent_id, stage) DO NOTHING
 		  RETURNING 1
 		)
 		SELECT count(*) FROM inserted
-	`, planDate, defaultAgentSelfReviewMode, defaultAgentSelfReviewConfidence).Scan(&created)
+	`, planDate, defaultAgentSelfReviewMode, defaultAgentSelfReviewConfidence, service.AgentHealthStaleThreshold.Seconds()).Scan(&created)
 	if err != nil {
 		return HandlerResult{}, err
 	}
@@ -369,9 +373,10 @@ func activeMemoryCurationAgentIDs(ctx context.Context, pool *pgxpool.Pool, works
 		SELECT t.id::text
 		  FROM targets t
 		  JOIN active act ON act.agent_id = t.id
-		  JOIN agent_runtime rt ON rt.id = t.runtime_id AND rt.status = 'online'
+		  JOIN agent_runtime rt ON rt.id = t.runtime_id
+		   AND rt.last_seen_at >= now() - make_interval(secs => $6::double precision)
 		 ORDER BY t.id
-	`, workspaceID, userID, day, targetScope, profileID)
+	`, workspaceID, userID, day, targetScope, profileID, service.AgentHealthStaleThreshold.Seconds())
 	if err != nil {
 		return nil, err
 	}

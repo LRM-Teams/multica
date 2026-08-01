@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -25,14 +26,15 @@ const (
 	agentHealthStateReconnecting        = "reconnecting"
 	agentHealthStateRecovered           = "recovered"
 	agentHealthStateOffline             = "offline"
-	agentHealthReconnectAfter           = 5 * time.Minute
-	agentHealthRecoveredSummaryWindow   = 5 * time.Minute
-	// agentHealthStaleThreshold mirrors the runtime sweeper's stale threshold
-	// (150s in cmd/server/runtime_sweeper.go). Even if the DB row still says
-	// "online", a heartbeat older than this means the runtime is effectively
-	// unreachable and must not show as online in the health summary.
-	agentHealthStaleThreshold    = 150 * time.Second
-	defaultAgentHealthEventLimit = 50
+	// agentHealthReconnectAfter/agentHealthStaleThreshold are local aliases
+	// for the shared thresholds in service.RuntimeConnectivity (task #53
+	// consolidated what used to be an independent handler-package copy) —
+	// kept as local names so agent_lifecycle.go/squad.go's existing inline
+	// freshness checks don't need to change in the same pass.
+	agentHealthReconnectAfter         = service.AgentHealthReconnectAfter
+	agentHealthRecoveredSummaryWindow = 5 * time.Minute
+	agentHealthStaleThreshold         = service.AgentHealthStaleThreshold
+	defaultAgentHealthEventLimit      = 50
 
 	// agentDisplayStatus* is the honest, read-time status vocabulary for the
 	// agent list/detail surface (task #42③). It deliberately does not reuse
@@ -279,34 +281,21 @@ func agentHealthMissingRuntimeSummary(agent db.Agent) AgentHealthSummary {
 // known to be stale. Shared by agentHealthSummary (Activity Health tab, 5
 // state vocab) and agentRuntimeDisplayStatus (agent list/detail badge, task
 // #42③, 4-of-8-word vocab so far).
-type runtimeConnectivityTier int
+// runtimeConnectivityTier and runtimeConnectivity are local aliases for
+// service.RuntimeConnectivity (task #53 consolidated what used to be an
+// independent duplicate implementation here — service.AgentReadiness needed
+// the same tiering and couldn't import this package, so the canonical
+// version now lives in service and this package delegates to it).
+type runtimeConnectivityTier = service.RuntimeConnectivityTier
 
 const (
-	runtimeConnectivityOnline runtimeConnectivityTier = iota
-	runtimeConnectivityStale
-	runtimeConnectivityDead
+	runtimeConnectivityOnline = service.RuntimeConnectivityOnline
+	runtimeConnectivityStale  = service.RuntimeConnectivityStale
+	runtimeConnectivityDead   = service.RuntimeConnectivityDead
 )
 
-// runtimeConnectivity applies the freshness gate agentHealthSummary has used
-// since #284: even if the DB row still says "online", a heartbeat older
-// than agentHealthStaleThreshold means the runtime is not actually
-// reachable right now. A row already persisted "offline" by the sweeper
-// gets the same tiering, just keyed off UpdatedAt (the sweeper's flip time)
-// instead of LastSeenAt.
 func runtimeConnectivity(rt db.AgentRuntime, now time.Time) runtimeConnectivityTier {
-	if rt.LastSeenAt.Valid && now.Sub(rt.LastSeenAt.Time) >= agentHealthStaleThreshold {
-		if now.Sub(rt.LastSeenAt.Time) >= agentHealthReconnectAfter {
-			return runtimeConnectivityDead
-		}
-		return runtimeConnectivityStale
-	}
-	if rt.Status == "offline" {
-		if rt.UpdatedAt.Valid && now.Sub(rt.UpdatedAt.Time) >= agentHealthReconnectAfter {
-			return runtimeConnectivityDead
-		}
-		return runtimeConnectivityStale
-	}
-	return runtimeConnectivityOnline
+	return service.RuntimeConnectivity(rt, now)
 }
 
 // agentRuntimeDisplayStatus derives an honest status for the agent

@@ -10,6 +10,49 @@ import (
 	"time"
 )
 
+// Task #53: InitiateListModels trusted agent_runtime.status directly, which
+// can read "online" for up to ~180s after the runtime actually went silent
+// (sweeper lag). This let a model-list request be accepted (200, enqueued)
+// against a runtime that's actually unreachable, instead of failing fast
+// with the intended 503 "runtime is offline".
+func TestInitiateListModels_StaleHeartbeatRejectsAsOffline(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	_, runtimeID := createAgentHealthFixture(t, "online",
+		time.Now().Add(-10*time.Minute), // stale heartbeat
+		time.Now().Add(-9*time.Minute),
+	)
+
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/models", nil), "runtimeId", runtimeID)
+
+	testHandler.InitiateListModels(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("stale-heartbeat runtime (status column still 'online'): expected 503, got %d: %s (must key off heartbeat freshness, not the raw status column)", w.Code, w.Body.String())
+	}
+}
+
+func TestInitiateListModels_FreshOnlineSucceeds(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	_, runtimeID := createAgentHealthFixture(t, "online",
+		time.Now().Add(-5*time.Second),
+		time.Now().Add(-5*time.Second),
+	)
+
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/models", nil), "runtimeId", runtimeID)
+
+	testHandler.InitiateListModels(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("fresh-online runtime: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestModelListStore_RunningRequestTimesOut pins the escape hatch for
 // requests that were claimed (PopPending → Running) but whose result was
 // never reported — usually because the heartbeat response carrying the

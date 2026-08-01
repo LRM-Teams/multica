@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/multica-ai/multica/server/internal/memorycuration"
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 const memoryCurationBackfillMaxDays = 30
@@ -242,16 +243,32 @@ func memoryCurationStageIncludesSelfReview(stage memorycuration.Stage) bool {
 	return stage == memorycuration.StageAgentSelfReview || stage == memorycuration.StageAll
 }
 
+// memoryCurationRuntimeStaleSecs is the heartbeat-freshness threshold used
+// to decide whether a runtime is reachable enough to queue curation work
+// against (task #53). Sourced from service.AgentHealthStaleThreshold — the
+// same threshold the sweeper/handler packages already use — passed as a
+// query parameter rather than hardcoded, so there is exactly one place this
+// number lives.
+var memoryCurationRuntimeStaleSecs = service.AgentHealthStaleThreshold.Seconds()
+
 func insertMemoryCurationAgentRuns(ctx context.Context, exec dbExecutor, runID, workspaceID, runtimeID string, agentIDs []string) error {
 	for _, agentID := range agentIDs {
+		// Task #53: was `rt.status = 'online'`, trusting the raw column
+		// directly — that column can read "online" for up to ~180s after
+		// the runtime actually went silent (sweeper lag), which would
+		// queue self-review work against a runtime that's actually
+		// unreachable instead of correctly marking it 'skipped'. Keyed off
+		// last_seen_at freshness instead; NULL last_seen_at (never
+		// heartbeated) or no matching runtime row both fall through to the
+		// same 'skipped' outcome the raw check already had for those cases.
 		if _, err := exec.Exec(ctx, `
 			INSERT INTO memory_curation_agent_run (
 			  parent_run_id, workspace_id, agent_id, runtime_id, stage, status, error, finished_at
 			)
 			SELECT $1::uuid, $2::uuid, a.id, COALESCE(a.runtime_id, NULLIF($4,'')::uuid), 'agent_self_review',
-			       CASE WHEN rt.status = 'online' THEN 'queued' ELSE 'skipped' END,
-			       CASE WHEN rt.status = 'online' THEN '' ELSE 'runtime offline; skipped' END,
-			       CASE WHEN rt.status = 'online' THEN NULL ELSE now() END
+			       CASE WHEN rt.last_seen_at >= now() - make_interval(secs => $5::double precision) THEN 'queued' ELSE 'skipped' END,
+			       CASE WHEN rt.last_seen_at >= now() - make_interval(secs => $5::double precision) THEN '' ELSE 'runtime offline; skipped' END,
+			       CASE WHEN rt.last_seen_at >= now() - make_interval(secs => $5::double precision) THEN NULL ELSE now() END
 			  FROM agent a
 			  LEFT JOIN agent_runtime rt ON rt.id = COALESCE(a.runtime_id, NULLIF($4,'')::uuid)
 			 WHERE a.id = $3::uuid AND a.workspace_id = $2::uuid
@@ -261,7 +278,7 @@ func insertMemoryCurationAgentRuns(ctx context.Context, exec dbExecutor, runID, 
 			  error = CASE WHEN memory_curation_agent_run.status IN ('queued','waiting_runtime') THEN EXCLUDED.error ELSE memory_curation_agent_run.error END,
 			  finished_at = CASE WHEN memory_curation_agent_run.status IN ('queued','waiting_runtime') THEN EXCLUDED.finished_at ELSE memory_curation_agent_run.finished_at END,
 			  updated_at = now()
-		`, runID, workspaceID, agentID, runtimeID); err != nil {
+		`, runID, workspaceID, agentID, runtimeID, memoryCurationRuntimeStaleSecs); err != nil {
 			return err
 		}
 	}

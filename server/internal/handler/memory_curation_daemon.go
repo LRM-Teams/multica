@@ -354,10 +354,11 @@ func (h *Handler) reconcileOfflineMemoryCurationAgentRuns(ctx context.Context, w
 		     cr.runtime_id IS NULL
 		     OR NOT EXISTS (
 		       SELECT 1 FROM agent_runtime rt
-		        WHERE rt.id = cr.runtime_id AND rt.status = 'online'
+		        WHERE rt.id = cr.runtime_id
+		          AND rt.last_seen_at >= now() - make_interval(secs => $4::double precision)
 		     )
 		   )
-	`, workspaceID, parentRunID, memoryCurationOfflineSkipError); err != nil {
+	`, workspaceID, parentRunID, memoryCurationOfflineSkipError, memoryCurationRuntimeStaleSecs); err != nil {
 		return err
 	}
 	rows, err := h.DB.Query(ctx, `
@@ -553,10 +554,11 @@ func (h *Handler) ReportMemoryCurationRunResult(w http.ResponseWriter, r *http.R
 			     cr.runtime_id IS NULL
 			     OR NOT EXISTS (
 			       SELECT 1 FROM agent_runtime rt
-			        WHERE rt.id = cr.runtime_id AND rt.status = 'online'
+			        WHERE rt.id = cr.runtime_id
+			          AND rt.last_seen_at >= now() - make_interval(secs => $3::double precision)
 			     )
 			   )
-		`, childParentRunID, memoryCurationOfflineSkipError); err != nil {
+		`, childParentRunID, memoryCurationOfflineSkipError, memoryCurationRuntimeStaleSecs); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to skip offline self-review children")
 			return
 		}

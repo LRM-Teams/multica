@@ -11,6 +11,67 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+// Task #53: insertMemoryCurationAgentRuns trusted agent_runtime.status
+// directly (rt.status = 'online'), which can read "online" for up to ~180s
+// after the runtime actually went silent (sweeper lag). This would queue
+// self-review work against a runtime that's actually unreachable instead of
+// correctly marking the run 'skipped' the way the check intends.
+func TestInsertMemoryCurationAgentRuns_StaleHeartbeatSkipsNotQueues(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test database unavailable")
+	}
+	ctx := context.Background()
+
+	var staleRuntimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+		  workspace_id, daemon_id, name, runtime_mode, provider, status,
+		  device_info, metadata, owner_id, visibility, last_seen_at, updated_at
+		) VALUES ($1, 'memory-curation-insert-stale-daemon', 'Memory Curation Insert Stale Runtime', 'local', 'codex', 'online',
+		          '', '{}'::jsonb, $2, 'private', now() - interval '10 minutes', now() - interval '9 minutes')
+		RETURNING id::text
+	`, testWorkspaceID, testUserID).Scan(&staleRuntimeID); err != nil {
+		t.Fatal(err)
+	}
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, display_name, runtime_mode, runtime_id, owner_id, model)
+		VALUES ($1, 'memory-curation-insert-stale-agent', 'Memory Curation Insert Stale Agent', 'local', $2, $3, 'composer-1.5')
+		RETURNING id::text
+	`, testWorkspaceID, staleRuntimeID, testUserID).Scan(&agentID); err != nil {
+		t.Fatal(err)
+	}
+	var runID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO memory_curation_run (
+		  workspace_id, stage, trigger_kind, status, date_from, date_to, runtime_id, execution_owner
+		) VALUES ($1, 'agent_self_review', 'manual', 'running', '2026-08-01', '2026-08-01', $2, 'daemon')
+		RETURNING id::text
+	`, testWorkspaceID, staleRuntimeID).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM memory_curation_agent_run WHERE parent_run_id = $1`, runID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM memory_curation_run WHERE id = $1`, runID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, staleRuntimeID)
+	})
+
+	if err := insertMemoryCurationAgentRuns(ctx, testPool, runID, testWorkspaceID, staleRuntimeID, []string{agentID}); err != nil {
+		t.Fatalf("insertMemoryCurationAgentRuns: %v", err)
+	}
+
+	var status, errMsg string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, error FROM memory_curation_agent_run WHERE parent_run_id = $1 AND agent_id = $2
+	`, runID, agentID).Scan(&status, &errMsg); err != nil {
+		t.Fatalf("read inserted run: %v", err)
+	}
+	if status != "skipped" {
+		t.Fatalf("stale-heartbeat runtime (status column still 'online'): agent run status = %q, want %q (must key off heartbeat freshness, not the raw status column); error=%q", status, "skipped", errMsg)
+	}
+}
+
 func TestResolveMemoryCurationBackfillRangeDefaultsToOneMonth(t *testing.T) {
 	now := time.Date(2026, 7, 21, 15, 0, 0, 0, time.UTC)
 	since, until, err := resolveMemoryCurationBackfillRange("", "", "Asia/Shanghai", now)

@@ -263,6 +263,74 @@ func TestGetLocalSkillImportRequest_RequiresRuntimeOwner(t *testing.T) {
 	}
 }
 
+// Task #53: InitiateListLocalSkills/InitiateImportLocalSkill trusted
+// agent_runtime.status directly (via runtimeIDAndWorkspace.status), which
+// can read "online" for up to ~180s after the runtime actually went silent
+// (sweeper lag). This let a request be accepted (200, request enqueued)
+// against a runtime that's actually unreachable, instead of failing fast
+// with 503 "runtime is offline" the way the check intends.
+func TestInitiateListLocalSkills_StaleHeartbeatRejectsAsOffline(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID := createStaleHeartbeatRuntimeLocalSkillTestRuntime(t, testUserID)
+
+	w := httptest.NewRecorder()
+	req := withURLParams(
+		newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/local-skills", nil),
+		"runtimeId", runtimeID,
+	)
+
+	testHandler.InitiateListLocalSkills(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("stale-heartbeat runtime (status column still 'online'): expected 503, got %d: %s (must key off heartbeat freshness, not the raw status column)", w.Code, w.Body.String())
+	}
+}
+
+func TestInitiateImportLocalSkill_StaleHeartbeatRejectsAsOffline(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	runtimeID := createStaleHeartbeatRuntimeLocalSkillTestRuntime(t, testUserID)
+
+	w := httptest.NewRecorder()
+	req := withURLParams(
+		newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/local-skills/import", map[string]string{"skill_key": "review-helper"}),
+		"runtimeId", runtimeID,
+	)
+
+	testHandler.InitiateImportLocalSkill(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("stale-heartbeat runtime (status column still 'online'): expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func createStaleHeartbeatRuntimeLocalSkillTestRuntime(t *testing.T, ownerID string) string {
+	t.Helper()
+
+	runtimeName := fmt.Sprintf("runtime-local-skill-stale-%d", time.Now().UnixNano())
+	daemonID := fmt.Sprintf("runtime-local-skill-stale-daemon-%d", time.Now().UnixNano())
+
+	var runtimeID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at, updated_at
+		)
+		VALUES ($1, $2, $3, 'local', 'claude', 'online', 'Runtime Local Skills Stale Test', '{}'::jsonb, $4, now() - interval '10 minutes', now() - interval '9 minutes')
+		RETURNING id
+	`, testWorkspaceID, daemonID, runtimeName, ownerID).Scan(&runtimeID); err != nil {
+		t.Fatalf("create stale-heartbeat local runtime: %v", err)
+	}
+
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+
+	return runtimeID
+}
+
 func TestRuntimeLocalSkillImportFlow_EndToEnd(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

@@ -300,7 +300,12 @@ func (h *Handler) InitiateListModels(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
 		return
 	}
-	if rt.Status != "online" {
+	// Task #53: keyed off runtimeConnectivity (heartbeat freshness), not the
+	// raw status column — that column can still read "online" for up to
+	// ~180s after the runtime actually went silent (sweeper lag), which
+	// would let a model-list request be accepted against a runtime that's
+	// actually unreachable.
+	if runtimeConnectivity(rt, time.Now()) != runtimeConnectivityOnline {
 		writeError(w, http.StatusServiceUnavailable, "runtime is offline")
 		return
 	}

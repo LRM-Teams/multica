@@ -85,8 +85,8 @@ func TestMemoryCurationSchedulerCreatesDefaultSelfReviewRunIntent(t *testing.T) 
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id)
-		VALUES ($1, $2, 'Default Self Review Runtime', 'local', 'codex', 'online', 'test', $3)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
+		VALUES ($1, $2, 'Default Self Review Runtime', 'local', 'codex', 'online', 'test', $3, now())
 		RETURNING id::text
 	`, workspaceID, "default-self-review-"+suffix, userID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
@@ -172,8 +172,8 @@ func TestMemoryCurationSchedulerSkipsInactiveTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id)
-		VALUES ($1, $2, 'Default Self Review Inactive Runtime', 'local', 'codex', 'online', 'test', $3)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
+		VALUES ($1, $2, 'Default Self Review Inactive Runtime', 'local', 'codex', 'online', 'test', $3, now())
 		RETURNING id::text
 	`, workspaceID, "default-self-review-inactive-"+suffix, userID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
@@ -253,8 +253,8 @@ func TestMemoryCurationSchedulerCountsLegacyTaskQueueActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id)
-		VALUES ($1, $2, 'Default Self Review Legacy Runtime', 'local', 'codex', 'online', 'test', $3)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
+		VALUES ($1, $2, 'Default Self Review Legacy Runtime', 'local', 'codex', 'online', 'test', $3, now())
 		RETURNING id::text
 	`, workspaceID, "default-self-review-legacy-"+suffix, userID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
@@ -326,8 +326,8 @@ func TestMemoryCurationSchedulerCountsMemoryWriteMaterial(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id)
-		VALUES ($1, $2, 'Default Self Review Memory Write Runtime', 'local', 'codex', 'online', 'test', $3)
+		INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, owner_id, last_seen_at)
+		VALUES ($1, $2, 'Default Self Review Memory Write Runtime', 'local', 'codex', 'online', 'test', $3, now())
 		RETURNING id::text
 	`, workspaceID, "default-self-review-memory-write-"+suffix, userID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)

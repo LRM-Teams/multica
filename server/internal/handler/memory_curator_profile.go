@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 var errInvalidMemoryCuratorProfile = errors.New("invalid memory curator profile")
@@ -314,23 +316,27 @@ func (h *Handler) memoryCuratorRunStatus(ctx context.Context, profile memoryCura
 	if profile.RuntimeID == "" || profile.CuratorAgentID == "" {
 		return "", errInvalidMemoryCuratorProfile
 	}
-	var runtimeStatus string
+	var runtimeLastSeenAt time.Time
 	err := h.DB.QueryRow(ctx, `
-		SELECT rt.status
+		SELECT rt.last_seen_at
 		  FROM agent_runtime rt
 		  JOIN agent curator ON curator.id = $2
 		 WHERE rt.id = $1 AND rt.workspace_id = $3
 		   AND (rt.owner_id = $4 OR rt.visibility = 'public')
 		   AND curator.workspace_id = $3 AND curator.owner_id = $4
 		   AND curator.runtime_id = rt.id AND curator.archived_at IS NULL
-	`, profile.RuntimeID, profile.CuratorAgentID, profile.WorkspaceID, profile.UserID).Scan(&runtimeStatus)
+	`, profile.RuntimeID, profile.CuratorAgentID, profile.WorkspaceID, profile.UserID).Scan(&runtimeLastSeenAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", errInvalidMemoryCuratorProfile
 	}
 	if err != nil {
 		return "", err
 	}
-	if runtimeStatus != "online" {
+	// Task #53: this decides the *initial* status shown to the user right
+	// after they start a run (StartMemoryCurationRun writes it straight into
+	// the response), so it must reflect real-time reachability, not the
+	// sweeper-lagged agent_runtime.status column.
+	if time.Since(runtimeLastSeenAt) > service.AgentHealthStaleThreshold {
 		return "waiting_runtime", nil
 	}
 	return "queued", nil
@@ -382,9 +388,10 @@ func (h *Handler) resolveActiveMemoryCurationTargetAgentIDs(ctx context.Context,
 		SELECT t.id::text
 		  FROM targets t
 		  JOIN active act ON act.agent_id = t.id
-		  JOIN agent_runtime rt ON rt.id = t.runtime_id AND rt.status = 'online'
+		  JOIN agent_runtime rt ON rt.id = t.runtime_id
+		   AND rt.last_seen_at >= now() - make_interval(secs => $6::double precision)
 		 ORDER BY t.id
-	`, profile.WorkspaceID, profile.UserID, day, profile.TargetScope, profile.TargetAgentIDs)
+	`, profile.WorkspaceID, profile.UserID, day, profile.TargetScope, profile.TargetAgentIDs, service.AgentHealthStaleThreshold.Seconds())
 	if err != nil {
 		return nil, err
 	}

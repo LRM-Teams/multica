@@ -155,11 +155,11 @@ function ResearchCanvasInner({
         } satisfies FlowNode;
       });
     });
-    const typeById = new Map(
-      laid.nodes
-        .filter((n) => n.data.research)
-        .map((n) => [n.id, n.data.research!.node_type as string]),
-    );
+    const typeById = new Map<string, string>();
+    for (const n of laid.nodes) {
+      const research = n.data.research;
+      if (research) typeById.set(n.id, research.node_type);
+    }
     setRfEdges(
       laid.edges.map((e) => {
         const edgeType = e.data?.edgeType ?? "leads_to";

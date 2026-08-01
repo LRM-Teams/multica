@@ -85,6 +85,7 @@ export type {
   AgentLifecycleActionState,
   AgentLifecycleOperation,
   AgentLifecyclePreflight,
+  ProviderCapabilities,
   CreateSkillRequest,
   UpdateSkillRequest,
   SetAgentSkillsRequest,

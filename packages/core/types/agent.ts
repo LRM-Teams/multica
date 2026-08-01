@@ -99,13 +99,12 @@ export interface RuntimeDevice {
   provider: string;
   launch_header: string;
   /**
-   * Backend-owned capability (agent.ForceRestartSupported / task #62): whether
-   * a busy/stuck agent on this runtime can be force-interrupted via restart.
-   * Older servers omit it — treat missing as false so the restart button stays
-   * hidden. Prefer lifecycle preflight's same field when deciding the profile
-   * restart control; this is the runtime-list mirror.
+   * FE-facing projection of server/pkg/agent ProviderCapabilities for this
+   * runtime's provider. Distinct from `capabilities` (daemon protocol string
+   * list). Older servers omit it — treat missing as all-false. Prefer
+   * lifecycle preflight's same object when gating the profile restart button.
    */
-  force_restart_supported?: boolean;
+  provider_capabilities?: ProviderCapabilities;
   status: "online" | "offline";
   device_info: string;
   metadata: Record<string, unknown>;
@@ -906,16 +905,30 @@ export interface AgentLifecycleOperation {
   finished_at?: string | null;
 }
 
+/**
+ * FE-facing projection of server/pkg/agent ProviderCapabilities. Exposed as a
+ * set on runtime + lifecycle preflight — do not add one-off top-level bools
+ * per capability. Older servers omit the object; treat missing keys as false.
+ */
+export interface ProviderCapabilities {
+  force_restart: boolean;
+  custom_model_id: boolean;
+  model_selection: boolean;
+  thinking_discovery: boolean;
+  canonical_resident: boolean;
+  needs_inline_system_prompt: boolean;
+}
+
 export interface AgentLifecyclePreflight {
   actions: Record<AgentLifecycleActionKind, AgentLifecycleActionState>;
   active_operation?: AgentLifecycleOperation | null;
   /**
-   * Backend-owned capability (agent.ForceRestartSupported / task #62): whether
-   * this agent's runtime provider can force-interrupt a busy/stuck turn.
-   * Gate the profile restart button on this — do not hardcode a provider
-   * allow-list. Older servers omit it; treat missing as false.
+   * Provider capability set for this agent's runtime. Gate the profile restart
+   * button on `provider_capabilities.force_restart` — do not hardcode a
+   * provider allow-list. Older servers omit the object; treat missing as
+   * all-false.
    */
-  force_restart_supported?: boolean;
+  provider_capabilities?: ProviderCapabilities;
 }
 
 export interface DecideAgentSkillSuggestionRequest {

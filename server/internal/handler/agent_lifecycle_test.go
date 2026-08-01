@@ -71,12 +71,12 @@ func TestAgentLifecyclePreflightIsPerActionAndFullResetIsIdleOnly(t *testing.T) 
 		t.Fatalf("full reset preflight = %+v", full)
 	}
 	// Fixture provider is "lifecycle-test" — not ForceKillable → false.
-	if response.ForceRestartSupported {
-		t.Fatalf("force_restart_supported=%v, want false for non-ForceKillable fixture provider", response.ForceRestartSupported)
+	if response.ProviderCapabilities.ForceRestart {
+		t.Fatalf("provider_capabilities.force_restart=%v, want false for non-ForceKillable fixture provider", response.ProviderCapabilities.ForceRestart)
 	}
 }
 
-func TestAgentLifecyclePreflightForceRestartSupportedFollowsProvider(t *testing.T) {
+func TestAgentLifecyclePreflightProviderCapabilitiesFollowProvider(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -95,8 +95,12 @@ func TestAgentLifecyclePreflightForceRestartSupportedFollowsProvider(t *testing.
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode preflight: %v", err)
 	}
-	if !response.ForceRestartSupported {
-		t.Fatalf("force_restart_supported=%v, want true for cursor", response.ForceRestartSupported)
+	caps := response.ProviderCapabilities
+	if !caps.ForceRestart || !caps.CanonicalResident || !caps.CustomModelID || !caps.ModelSelection {
+		t.Fatalf("provider_capabilities=%+v, want force_restart+canonical_resident+custom_model_id+model_selection for cursor", caps)
+	}
+	if caps.NeedsInlineSystemPrompt {
+		t.Fatalf("cursor must not need inline system prompt, got %+v", caps)
 	}
 }
 

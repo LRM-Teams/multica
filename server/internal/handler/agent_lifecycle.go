@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -53,12 +52,12 @@ type AgentLifecycleOperation struct {
 type AgentLifecyclePreflight struct {
 	Actions         map[AgentLifecycleActionKind]AgentLifecycleActionPreflight `json:"actions"`
 	ActiveOperation *AgentLifecycleOperation                                   `json:"active_operation"`
-	// ForceRestartSupported is true when this agent's runtime provider can
-	// force-interrupt a busy/stuck turn (task #62). Sourced from
-	// agent.ForceRestartSupported — FE must gate the restart button on this
-	// rather than hardcoding a provider allow-list. Older clients that omit
-	// the field should treat missing as false.
-	ForceRestartSupported bool `json:"force_restart_supported"`
+	// ProviderCapabilities is the FE-facing projection of
+	// agent.ProviderCapabilities for this agent's runtime provider.
+	// Gate the restart button on provider_capabilities.force_restart — do
+	// not hardcode a provider allow-list. Older servers omit the object;
+	// treat missing as all-false.
+	ProviderCapabilities ProviderCapabilitiesWire `json:"provider_capabilities"`
 }
 
 type AgentLifecycleActionPreflight struct {
@@ -329,9 +328,9 @@ func (h *Handler) agentLifecyclePreflight(ctx context.Context, target db.Agent) 
 		}
 	}
 	return AgentLifecyclePreflight{
-		Actions:               actions,
-		ActiveOperation:       activeOperation,
-		ForceRestartSupported: agent.ForceRestartSupported(runtime.Provider),
+		Actions:              actions,
+		ActiveOperation:      activeOperation,
+		ProviderCapabilities: providerCapabilitiesWire(runtime.Provider),
 	}, nil
 }
 

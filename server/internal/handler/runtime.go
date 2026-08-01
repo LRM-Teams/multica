@@ -32,23 +32,22 @@ type AgentRuntimeResponse struct {
 	RuntimeMode  string `json:"runtime_mode"`
 	Provider     string `json:"provider"`
 	LaunchHeader string `json:"launch_header"`
-	// ForceRestartSupported mirrors agent.ForceRestartSupported for this
-	// runtime's provider (task #62). FE gates the agent restart button on
-	// this (or on lifecycle preflight's same field) — do not hardcode a
-	// provider allow-list client-side. Older servers omit it; treat missing
-	// as false.
-	ForceRestartSupported bool                        `json:"force_restart_supported"`
-	Status                string                      `json:"status"`
-	DeviceInfo            string                      `json:"device_info"`
-	Metadata              any                         `json:"metadata"`
-	Capabilities          []string                    `json:"capabilities"`
-	CurrentVersion        *string                     `json:"current_version"`
-	TargetVersion         *string                     `json:"target_version,omitempty"`
-	UpdateState           string                      `json:"update_state"`
-	RuntimeHealth         string                      `json:"runtime_health"`
-	UpdateError           *string                     `json:"update_error,omitempty"`
-	AutoUpdate            *DaemonUpdateStatusResponse `json:"auto_update"`
-	OwnerID               *string                     `json:"owner_id"`
+	// ProviderCapabilities is the FE-facing projection of
+	// agent.ProviderCapabilities for this runtime's provider (task #62).
+	// Distinct from Capabilities ([]string), which is the daemon protocol
+	// advertise list. Older servers omit the object; treat missing as all-false.
+	ProviderCapabilities ProviderCapabilitiesWire    `json:"provider_capabilities"`
+	Status               string                      `json:"status"`
+	DeviceInfo           string                      `json:"device_info"`
+	Metadata             any                         `json:"metadata"`
+	Capabilities         []string                    `json:"capabilities"`
+	CurrentVersion       *string                     `json:"current_version"`
+	TargetVersion        *string                     `json:"target_version,omitempty"`
+	UpdateState          string                      `json:"update_state"`
+	RuntimeHealth        string                      `json:"runtime_health"`
+	UpdateError          *string                     `json:"update_error,omitempty"`
+	AutoUpdate           *DaemonUpdateStatusResponse `json:"auto_update"`
+	OwnerID              *string                     `json:"owner_id"`
 	// Visibility is "private" (default — only the owner / workspace admins
 	// can bind agents) or "public" (any workspace member can). See migration
 	// 083 and canUseRuntimeForAgent.
@@ -235,30 +234,30 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 	}
 
 	return AgentRuntimeResponse{
-		ID:                    uuidToString(rt.ID),
-		WorkspaceID:           uuidToString(rt.WorkspaceID),
-		DaemonID:              textToPtr(rt.DaemonID),
-		Name:                  rt.Name,
-		DisplayName:           rt.DisplayName,
-		RuntimeMode:           rt.RuntimeMode,
-		Provider:              rt.Provider,
-		LaunchHeader:          agent.LaunchHeader(rt.Provider),
-		ForceRestartSupported: agent.ForceRestartSupported(rt.Provider),
-		Status:                rt.Status,
-		DeviceInfo:            rt.DeviceInfo,
-		Metadata:              metadata,
-		Capabilities:          runtimeCapabilities(metadata),
-		CurrentVersion:        currentVersion,
-		TargetVersion:         targetVersion,
-		UpdateState:           updateState,
-		RuntimeHealth:         runtimeHealth,
-		UpdateError:           runtimeUpdateError(update, currentVersion, updateState),
-		AutoUpdate:            autoUpdate,
-		OwnerID:               uuidToPtr(rt.OwnerID),
-		Visibility:            rt.Visibility,
-		LastSeenAt:            timestampToPtr(rt.LastSeenAt),
-		CreatedAt:             timestampToString(rt.CreatedAt),
-		UpdatedAt:             timestampToString(rt.UpdatedAt),
+		ID:                   uuidToString(rt.ID),
+		WorkspaceID:          uuidToString(rt.WorkspaceID),
+		DaemonID:             textToPtr(rt.DaemonID),
+		Name:                 rt.Name,
+		DisplayName:          rt.DisplayName,
+		RuntimeMode:          rt.RuntimeMode,
+		Provider:             rt.Provider,
+		LaunchHeader:         agent.LaunchHeader(rt.Provider),
+		ProviderCapabilities: providerCapabilitiesWire(rt.Provider),
+		Status:               rt.Status,
+		DeviceInfo:           rt.DeviceInfo,
+		Metadata:             metadata,
+		Capabilities:         runtimeCapabilities(metadata),
+		CurrentVersion:       currentVersion,
+		TargetVersion:        targetVersion,
+		UpdateState:          updateState,
+		RuntimeHealth:        runtimeHealth,
+		UpdateError:          runtimeUpdateError(update, currentVersion, updateState),
+		AutoUpdate:           autoUpdate,
+		OwnerID:              uuidToPtr(rt.OwnerID),
+		Visibility:           rt.Visibility,
+		LastSeenAt:           timestampToPtr(rt.LastSeenAt),
+		CreatedAt:            timestampToString(rt.CreatedAt),
+		UpdatedAt:            timestampToString(rt.UpdatedAt),
 	}
 }
 

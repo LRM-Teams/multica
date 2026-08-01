@@ -316,11 +316,14 @@ type AgentTaskResponse struct {
 	// routes through the bridge and its trajectory is captured. Nil for the
 	// overwhelming majority of (non-trained) tasks; omitempty so old daemons
 	// ignore it. See §4.4.
-	ArealProxy       *ArealProxyData       `json:"areal_proxy,omitempty"`
-	Repos            []RepoData            `json:"repos,omitempty"`
-	ProjectID        string                `json:"project_id,omitempty"`        // issue's project, when present
-	ChannelID        string                `json:"channel_id,omitempty"`        // exact DM/channel surface, when present
-	ChannelKind      string                `json:"channel_kind,omitempty"`      // "dm" | "group" when ChannelID is set; personal-memory entry gate
+	ArealProxy  *ArealProxyData `json:"areal_proxy,omitempty"`
+	Repos       []RepoData      `json:"repos,omitempty"`
+	ProjectID   string          `json:"project_id,omitempty"`   // issue's project, when present
+	ChannelID   string          `json:"channel_id,omitempty"`   // exact DM/channel surface, when present
+	ChannelKind string          `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; personal-memory entry gate
+	// ScopedSecrets carries channel/project secrets for daemon injection after
+	// scope filtering (LRM-953). Empty until a secret store populates them.
+	ScopedSecrets []ScopedSecretData `json:"scoped_secrets,omitempty"`
 	ProjectTitle     string                `json:"project_title,omitempty"`     // for surfacing in agent context
 	ProjectResources []ProjectResourceData `json:"project_resources,omitempty"` // resources attached to the project
 	// ProvisionManagedWorkdir signals the daemon to lazily create a managed
@@ -437,6 +440,16 @@ type ChatAttachmentMeta struct {
 	ID          string `json:"id"`
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type,omitempty"`
+}
+
+// ScopedSecretData is a claim-time secret with a hard channel/project/agent
+// scope for daemon injection filtering (LRM-953).
+type ScopedSecretData struct {
+	Key       string `json:"key"`
+	Value     string `json:"value"`
+	Scope     string `json:"scope,omitempty"` // agent | channel | project
+	ChannelID string `json:"channel_id,omitempty"`
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 // TaskAgentData holds agent info included in claim responses so the daemon

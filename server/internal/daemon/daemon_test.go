@@ -2598,6 +2598,36 @@ func TestBlockedEnvKeyBlocksPiMemoryOverrides(t *testing.T) {
 	}
 }
 
+func TestInjectScopedSecretsFiltersByChannelAndProject(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{}
+	task := Task{
+		ChannelID: "chan-a",
+		ProjectID: "proj-a",
+		Agent: &AgentData{CustomEnv: map[string]string{
+			"AGENT_KEY":       "agent",
+			"MULTICA_TASK_ID": "blocked",
+			"PI_AGENT_ROOT":   "blocked",
+		}},
+		ScopedSecrets: []ScopedSecret{
+			{Key: "CHANNEL_A", Value: "a", Scope: "channel", ChannelID: "chan-a"},
+			{Key: "CHANNEL_B", Value: "b", Scope: "channel", ChannelID: "chan-b"},
+			{Key: "PROJ_A", Value: "pa", Scope: "project", ProjectID: "proj-a"},
+			{Key: "PROJ_B", Value: "pb", Scope: "project", ProjectID: "proj-b"},
+		},
+	}
+	injectScopedSecrets(env, task, slog.Default())
+	if env["AGENT_KEY"] != "agent" || env["CHANNEL_A"] != "a" || env["PROJ_A"] != "pa" {
+		t.Fatalf("expected allowed secrets, got %#v", env)
+	}
+	for _, key := range []string{"CHANNEL_B", "PROJ_B", "MULTICA_TASK_ID", "PI_AGENT_ROOT"} {
+		if _, ok := env[key]; ok {
+			t.Fatalf("leaked or blocked key %q present: %#v", key, env)
+		}
+	}
+}
+
 func TestMergeUsage(t *testing.T) {
 	t.Parallel()
 

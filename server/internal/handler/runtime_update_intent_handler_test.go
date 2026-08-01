@@ -247,7 +247,7 @@ func TestMaybeMaterializeUpdateIntent_DoesNotDoubleCreateWhileAttemptInFlight(t 
 	}
 }
 
-func TestMaybeMaterializeUpdateIntent_RetriesAfterAttemptFails(t *testing.T) {
+func TestMaybeMaterializeUpdateIntent_RetriesAfterAttemptFailsOnceBackoffElapses(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -267,18 +267,188 @@ func TestMaybeMaterializeUpdateIntent_RetriesAfterAttemptFails(t *testing.T) {
 		t.Fatalf("fail attempt: %v", err)
 	}
 
-	// Intent must still be live — a failed delivery attempt is exactly what
-	// this mechanism exists to survive without requiring a manual re-click.
+	// The heartbeat that observes this failure folds it into backoff — it
+	// must NOT immediately materialize a fresh attempt on the same call
+	// (that would defeat the whole point of backoff: a machine heartbeating
+	// every 15s would get hammered exactly as before).
+	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	stillFirst, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
+	if err != nil || stillFirst == nil || stillFirst.ID != first.ID {
+		t.Fatalf("must not create a new attempt before backoff elapses, got %+v err=%v", stillFirst, err)
+	}
 	intent, err := testHandler.UpdateIntentStore.Get(context.Background(), runtimeID)
-	if err != nil || intent == nil || !intent.Live() {
-		t.Fatalf("intent should still be live after a failed attempt: %+v err=%v", intent, err)
+	if err != nil || intent == nil || !intent.Live() || intent.ConsecutiveFailures != 1 {
+		t.Fatalf("intent should be live with ConsecutiveFailures=1 after one failure: %+v err=%v", intent, err)
 	}
 
-	// Next heartbeat retries automatically.
+	// A heartbeat arriving again before the backoff elapses (very plausible
+	// at a 15s interval) must not double-count the same failed attempt.
+	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	unchanged, err := testHandler.UpdateIntentStore.Get(context.Background(), runtimeID)
+	if err != nil || unchanged == nil || unchanged.ConsecutiveFailures != 1 {
+		t.Fatalf("re-observing the same failed attempt must not increment again: %+v err=%v", unchanged, err)
+	}
+
+	// Once backoff has elapsed (simulated here — real time would be the
+	// updateIntentRetryBackoff(1) = 1 minute this test isn't going to sleep
+	// for), the next heartbeat retries automatically.
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE daemon_runtime_update_intent SET next_retry_at = now() - interval '1 second' WHERE runtime_id = $1
+	`, runtimeID); err != nil {
+		t.Fatalf("simulate elapsed backoff: %v", err)
+	}
 	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
 	second, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
 	if err != nil || second == nil || second.ID == first.ID || second.Status != UpdatePending {
-		t.Fatalf("expected a fresh retried attempt, got first=%+v second=%+v err=%v", first, second, err)
+		t.Fatalf("expected a fresh retried attempt once backoff elapsed, got first=%+v second=%+v err=%v", first, second, err)
+	}
+}
+
+func TestMaybeMaterializeUpdateIntent_NoHeartbeatNeverCountsAsFailure(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	// Parker's non-negotiable, 2026-08-02: a runtime that's simply asleep —
+	// never heartbeating — must not consume any of its retry budget. This
+	// function is ONLY ever called from the heartbeat handler, so "no
+	// heartbeat" means this function literally never runs for that runtime.
+	// This test locks that structural property in explicitly rather than
+	// leaving it as an inference from where the call site happens to live.
+	runtimeID := createUpdateIntentTestRuntime(t, testUserID)
+	doInitiateUpdate(t, testUserID, runtimeID)
+
+	// Simulate "days pass, this runtime never heartbeats" by simply not
+	// calling maybeMaterializeUpdateIntent at all — the passage of time
+	// itself must not degrade the intent.
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE daemon_runtime_update_intent SET created_at = now() - interval '10 days' WHERE runtime_id = $1
+	`, runtimeID); err != nil {
+		t.Fatalf("simulate elapsed time with no heartbeat: %v", err)
+	}
+
+	intent, err := testHandler.UpdateIntentStore.Get(context.Background(), runtimeID)
+	if err != nil || intent == nil {
+		t.Fatalf("Get: %+v err=%v", intent, err)
+	}
+	if intent.ConsecutiveFailures != 0 {
+		t.Fatalf("ConsecutiveFailures = %d after 10 days with zero heartbeats, want 0 — a sleeping runtime must never be charged a failure", intent.ConsecutiveFailures)
+	}
+	if intent.GivenUpAt != nil {
+		t.Fatalf("a runtime that's simply asleep must never be marked given up: %+v", intent)
+	}
+	if !intent.Live() {
+		t.Fatalf("intent should still be live: %+v", intent)
+	}
+}
+
+func TestMaybeMaterializeUpdateIntent_GivenUpStopsRetryingAndGetUpdateReflectsIt(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	withFakeRuntimeReleaseSource(t, "v9.9.9")
+	runtimeID := createUpdateIntentTestRuntime(t, testUserID)
+	initiated := decodeUpdateResponse(t, doInitiateUpdate(t, testUserID, runtimeID))
+
+	for i := 0; i < updateIntentMaxConsecutiveFailures; i++ {
+		testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+		attempt, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
+		if err != nil || attempt == nil {
+			t.Fatalf("round %d: expected a materialized attempt: %+v err=%v", i, attempt, err)
+		}
+		if _, err := testHandler.UpdateStore.PopPending(context.Background(), runtimeID); err != nil {
+			t.Fatalf("round %d: pop pending: %v", i, err)
+		}
+		if err := testHandler.UpdateStore.Fail(context.Background(), attempt.ID, "rename failed: Access is denied"); err != nil {
+			t.Fatalf("round %d: fail attempt: %v", i, err)
+		}
+		testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID) // folds the failure in
+		if _, err := testPool.Exec(context.Background(), `
+			UPDATE daemon_runtime_update_intent SET next_retry_at = now() - interval '1 second' WHERE runtime_id = $1
+		`, runtimeID); err != nil {
+			t.Fatalf("round %d: simulate elapsed backoff: %v", i, err)
+		}
+	}
+
+	intent, err := testHandler.UpdateIntentStore.Get(context.Background(), runtimeID)
+	if err != nil || intent == nil || intent.GivenUpAt == nil {
+		t.Fatalf("expected the intent to have given up after %d consecutive failures: %+v err=%v", updateIntentMaxConsecutiveFailures, intent, err)
+	}
+
+	// One more heartbeat must not create yet another attempt — the whole
+	// point of giving up is to stop.
+	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	final, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
+	if err != nil || final == nil || updateRequestBlocksNewRequest(final.Status) {
+		t.Fatalf("no new attempt should be in flight after giving up: %+v err=%v", final, err)
+	}
+
+	// Parker's rule, 2026-08-02: the polling surface must not keep saying
+	// "queued" once the system has stopped trying — that would be a UI lie.
+	got := decodeUpdateResponse(t, doGetUpdate(t, testUserID, runtimeID, initiated.ID))
+	if got.Status == UpdateQueued {
+		t.Fatalf("GetUpdate must not report queued once given up, got %+v", got)
+	}
+	if got.Status != UpdateFailed {
+		t.Fatalf("expected a terminal failed status once given up, got %q", got.Status)
+	}
+}
+
+func TestInitiateUpdate_AfterGivenUpResetsAndRetriesImmediately(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	withFakeRuntimeReleaseSource(t, "v9.9.9")
+	runtimeID := createUpdateIntentTestRuntime(t, testUserID)
+	doInitiateUpdate(t, testUserID, runtimeID)
+
+	for i := 0; i < updateIntentMaxConsecutiveFailures; i++ {
+		testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+		attempt, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
+		if err != nil || attempt == nil {
+			t.Fatalf("round %d: expected a materialized attempt: %+v err=%v", i, attempt, err)
+		}
+		if _, err := testHandler.UpdateStore.PopPending(context.Background(), runtimeID); err != nil {
+			t.Fatalf("round %d: pop pending: %v", i, err)
+		}
+		if err := testHandler.UpdateStore.Fail(context.Background(), attempt.ID, "rename failed"); err != nil {
+			t.Fatalf("round %d: fail attempt: %v", i, err)
+		}
+		testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+		if _, err := testPool.Exec(context.Background(), `
+			UPDATE daemon_runtime_update_intent SET next_retry_at = now() - interval '1 second' WHERE runtime_id = $1
+		`, runtimeID); err != nil {
+			t.Fatalf("round %d: simulate elapsed backoff: %v", i, err)
+		}
+	}
+	givenUp, err := testHandler.UpdateIntentStore.Get(context.Background(), runtimeID)
+	if err != nil || givenUp == nil || givenUp.Live() {
+		t.Fatalf("precondition: expected the intent to have given up: %+v err=%v", givenUp, err)
+	}
+
+	// Parker's requirement, 2026-08-02: this is very plausibly the exact
+	// machine an admin most wants to fix (persistent failure = a real
+	// problem) — it must not be permanently stuck just because the system
+	// gave up automatically. Clicking Update again is the only recovery path
+	// required (no separate "un-give-up" action).
+	w := doInitiateUpdate(t, testUserID, runtimeID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("InitiateUpdate after giving up = %d: %s", w.Code, w.Body.String())
+	}
+	got := decodeUpdateResponse(t, w)
+	if got.Status != UpdateQueued {
+		t.Fatalf("re-request after giving up should queue fresh, got status=%q", got.Status)
+	}
+
+	reset, err := testHandler.UpdateIntentStore.Get(context.Background(), runtimeID)
+	if err != nil || reset == nil || !reset.Live() || reset.ConsecutiveFailures != 0 {
+		t.Fatalf("re-created intent should be live with failures reset: %+v err=%v", reset, err)
+	}
+
+	// And materialization actually resumes — not just the bookkeeping.
+	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	fresh, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
+	if err != nil || fresh == nil || fresh.Status != UpdatePending {
+		t.Fatalf("expected a fresh attempt after re-requesting past a given-up intent: %+v err=%v", fresh, err)
 	}
 }
 

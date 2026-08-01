@@ -131,4 +131,50 @@ describe("UpdateSection queued state (2026-08-02)", () => {
       vi.useRealTimers();
     }
   });
+
+  // Parker's explicit rule, 2026-08-02: once the server gives up after
+  // repeated failures (see server-side updateIntentMaxConsecutiveFailures),
+  // the poll result flips to a terminal "failed" status carrying the
+  // give-up reason — this must render as a real failure, not keep showing
+  // "queued" (which would be a UI lie the moment auto-retry actually stops).
+  it("shows the give-up reason as a failure once the server stops auto-retrying, not a stale queued label", async () => {
+    vi.mocked(api.initiateUpdate).mockResolvedValue({
+      id: "intent:rt-1",
+      runtime_id: "rt-1",
+      status: "queued",
+      target_version: "latest",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    vi.mocked(api.getUpdateResult).mockResolvedValue({
+      id: "intent:rt-1",
+      runtime_id: "rt-1",
+      status: "failed",
+      target_version: "latest",
+      error:
+        "gave up after 8 consecutive failed attempts — cancel and retry manually once the underlying issue is resolved",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    vi.useFakeTimers();
+    try {
+      renderSection();
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(
+        screen.queryByText("Queued — will start when this runtime is next online."),
+      ).toBeNull();
+      expect(
+        screen.getByText(
+          "gave up after 8 consecutive failed attempts — cancel and retry manually once the underlying issue is resolved",
+        ),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

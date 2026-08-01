@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -518,9 +519,34 @@ func (h *Handler) maybeMaterializeUpdateIntent(ctx context.Context, runtimeID st
 			}
 			return
 		}
-		// Otherwise latest is a terminal failed/timeout from a prior
-		// attempt (possibly from before this intent existed, or a retry
-		// that didn't land) — fall through and materialize a fresh one.
+		if (latest.Status == UpdateFailed || latest.Status == UpdateTimeout) &&
+			latest.ID != intent.LastFailedAttemptID &&
+			!latest.UpdatedAt.Before(intent.CreatedAt) {
+			// A real attempt, belonging to THIS intent (created at/after
+			// intent.CreatedAt — a re-request via Create() resets
+			// LastFailedAttemptID, so without this temporal guard a stale
+			// failed attempt from a prior, already-given-up cycle would be
+			// misread as a fresh failure and immediately re-trigger backoff
+			// on a request that should retry right away), was materialized
+			// and failed — this, and only this, is what counts toward the
+			// retry budget (Parker's non-negotiable, 2026-08-02): a runtime
+			// with no heartbeat never reaches this line at all, since this
+			// whole function only runs when a heartbeat just arrived. Fold
+			// it in and wait out the backoff instead of retrying on this
+			// same heartbeat.
+			if err := h.UpdateIntentStore.RecordFailure(ctx, runtimeID, latest.ID); err != nil {
+				slog.Warn("record update intent failure failed", "error", err, "runtime_id", runtimeID)
+			}
+			return
+		}
+		// Otherwise latest is a terminal failed/timeout attempt already
+		// folded into the backoff above on a prior heartbeat, or predates
+		// this intent entirely (a fresh re-request past a prior give-up) —
+		// fall through to the DueForRetry check below.
+	}
+
+	if !intent.DueForRetry(time.Now()) {
+		return // backing off after a recent failure — not due yet
 	}
 
 	release, err := h.RuntimeReleaseSource.Latest(ctx)
@@ -545,9 +571,20 @@ func queuedUpdateFromIntent(intent *UpdateIntent) *UpdateRequest {
 	}
 	status := UpdateQueued
 	errMsg := ""
-	if intent.ExpiredAt != nil {
+	switch {
+	case intent.ExpiredAt != nil:
+		// Never got a chance — the runtime was never seen online in time.
 		status = UpdateTimeout
 		errMsg = "queued update expired after " + UpdateIntentTTL.String() + " without the runtime coming online"
+	case intent.GivenUpAt != nil:
+		// Got plenty of chances — every one of them failed. Distinct status
+		// from "expired" (Parker's rule, 2026-08-02): a stale "queued" label
+		// here would be a UI lie the moment auto-retry actually stops.
+		status = UpdateFailed
+		errMsg = fmt.Sprintf(
+			"gave up after %d consecutive failed attempts — cancel and retry manually once the underlying issue is resolved",
+			intent.ConsecutiveFailures,
+		)
 	}
 	return &UpdateRequest{
 		ID:            intentUpdateID(intent.RuntimeID),

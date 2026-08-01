@@ -17,6 +17,48 @@ import (
 // See docs/superpowers/specs/2026-08-01-daemon-update-mechanism-design.md.
 const UpdateIntentTTL = 14 * 24 * time.Hour
 
+// updateIntentBaseRetryBackoff/updateIntentMaxRetryBackoff/
+// updateIntentMaxConsecutiveFailures bound how hard a persistently-failing
+// (reachable but broken — not asleep) runtime gets hammered. Without this, a
+// runtime that heartbeats every ~15s (DefaultHeartbeatInterval) and fails
+// every single attempt would get a freshly materialized attempt on nearly
+// every heartbeat for up to 14 days — tens of thousands of attempts against
+// one machine (Parker's review catch, 2026-08-02, using 群管理/MAOZH2's
+// Windows stage-commit rename failure as the concrete case: every attempt
+// against it fails, so without backoff this exact machine would get hammered
+// the hardest). Exponential backoff starting at 1 minute, doubling, capped at
+// 6h — the 6h cap deliberately matches autoUpdateLoop's own
+// DefaultAutoUpdateCheckInterval, an existing "don't check more often than
+// this" convention in this codebase. After
+// updateIntentMaxConsecutiveFailures (8, chosen to allow ~4h of real-time
+// backed-off retries — long enough to rule out a genuinely transient failure
+// like a few-second AV scan, short enough not to hammer a truly broken
+// machine for 14 days straight) the intent stops auto-retrying and is marked
+// GivenUpAt — visible, not silently abandoned.
+const (
+	updateIntentBaseRetryBackoff       = time.Minute
+	updateIntentMaxRetryBackoff        = 6 * time.Hour
+	updateIntentMaxConsecutiveFailures = 8
+)
+
+// updateIntentRetryBackoff returns how long to wait before the next
+// materialization attempt after consecutiveFailures in a row. 0 failures
+// means "eligible now".
+func updateIntentRetryBackoff(consecutiveFailures int) time.Duration {
+	if consecutiveFailures <= 0 {
+		return 0
+	}
+	shift := consecutiveFailures - 1
+	if shift > 62 { // guard against overflow before the cap comparison below
+		return updateIntentMaxRetryBackoff
+	}
+	backoff := updateIntentBaseRetryBackoff * time.Duration(int64(1)<<uint(shift))
+	if backoff > updateIntentMaxRetryBackoff || backoff <= 0 {
+		return updateIntentMaxRetryBackoff
+	}
+	return backoff
+}
+
 // UpdateIntent is a durable "this runtime should be updated" record, separate
 // from any single delivery attempt (UpdateRequest / daemon_runtime_update).
 // It has no target version: it always resolves to whatever
@@ -25,33 +67,55 @@ const UpdateIntentTTL = 14 * 24 * time.Hour
 // intent that outlives its target by days must not install a version we've
 // since found and fixed a bug in.
 type UpdateIntent struct {
-	RuntimeID   string
-	CreatedBy   string
-	CreatedAt   time.Time
-	ExpiresAt   time.Time
-	CancelledAt *time.Time
-	ExpiredAt   *time.Time
+	RuntimeID           string
+	CreatedBy           string
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+	CancelledAt         *time.Time
+	ExpiredAt           *time.Time
+	ConsecutiveFailures int
+	NextRetryAt         time.Time
+	LastFailedAttemptID string
+	GivenUpAt           *time.Time
 }
 
 // Live reports whether the intent is still eligible to be materialized into
-// an attempt — not cancelled, not yet marked expired.
+// an attempt — not cancelled, not expired, and hasn't given up after
+// repeated failures.
 func (i *UpdateIntent) Live() bool {
-	return i != nil && i.CancelledAt == nil && i.ExpiredAt == nil
+	return i != nil && i.CancelledAt == nil && i.ExpiredAt == nil && i.GivenUpAt == nil
+}
+
+// DueForRetry reports whether enough backoff time has passed since the last
+// recorded failure (or immediately, if there's never been one) to attempt
+// materialization again.
+func (i *UpdateIntent) DueForRetry(now time.Time) bool {
+	return i != nil && !now.Before(i.NextRetryAt)
 }
 
 type UpdateIntentStore interface {
 	// Create replaces any existing intent for runtimeID (last-write-wins —
 	// mirrors InitiateUpdate's existing single-active-request semantics).
+	// Resets any prior failure/backoff bookkeeping — a fresh request deserves
+	// an immediate attempt, not to inherit a previous request's penalty box.
 	Create(ctx context.Context, runtimeID, createdBy string, ttl time.Duration) (*UpdateIntent, error)
 	// Get returns the current intent for runtimeID, or nil if none exists.
 	Get(ctx context.Context, runtimeID string) (*UpdateIntent, error)
 	// Cancel marks a live intent cancelled. No-op if none exists or it's
-	// already cancelled/expired.
+	// already cancelled/expired/given-up.
 	Cancel(ctx context.Context, runtimeID string) error
 	// MarkExpired marks a live intent expired. Never deletes the row — an
 	// expired intent stays visible (not silently gone) until superseded by a
 	// fresh Create or explicitly cancelled.
 	MarkExpired(ctx context.Context, runtimeID string) error
+	// RecordFailure folds a newly observed failed/timed-out attempt into the
+	// intent's backoff state: increments ConsecutiveFailures, advances
+	// NextRetryAt by updateIntentRetryBackoff, and — once
+	// updateIntentMaxConsecutiveFailures is reached — sets GivenUpAt so
+	// materialization stops. Idempotent per attemptID: calling it again with
+	// the same attemptID (e.g. from a heartbeat that arrives before
+	// NextRetryAt) is a no-op, since last_failed_attempt_id already matches.
+	RecordFailure(ctx context.Context, runtimeID, attemptID string) error
 	// Delete removes the intent row entirely. Only called once its
 	// materialized attempt reaches UpdateCompleted — a fulfilled intent has
 	// nothing left to track.
@@ -88,8 +152,14 @@ func (s *PostgresUpdateIntentStore) Create(ctx context.Context, runtimeID, creat
 			created_at = now(),
 			expires_at = EXCLUDED.expires_at,
 			cancelled_at = NULL,
-			expired_at = NULL
-		RETURNING runtime_id::text, created_by::text, created_at, expires_at, cancelled_at, expired_at
+			expired_at = NULL,
+			consecutive_failures = 0,
+			next_retry_at = now(),
+			last_failed_attempt_id = NULL,
+			given_up_at = NULL
+		RETURNING
+			runtime_id::text, created_by::text, created_at, expires_at, cancelled_at, expired_at,
+			consecutive_failures, next_retry_at, COALESCE(last_failed_attempt_id, ''), given_up_at
 	`, runtimeID, createdBy, ttl.Seconds()))
 	if err != nil {
 		return nil, fmt.Errorf("create daemon runtime update intent: %w", err)
@@ -102,7 +172,9 @@ func (s *PostgresUpdateIntentStore) Get(ctx context.Context, runtimeID string) (
 		return nil, err
 	}
 	intent, err := scanUpdateIntent(s.db.QueryRow(ctx, `
-		SELECT runtime_id::text, created_by::text, created_at, expires_at, cancelled_at, expired_at
+		SELECT
+			runtime_id::text, created_by::text, created_at, expires_at, cancelled_at, expired_at,
+			consecutive_failures, next_retry_at, COALESCE(last_failed_attempt_id, ''), given_up_at
 		FROM daemon_runtime_update_intent
 		WHERE runtime_id = $1
 	`, runtimeID))
@@ -119,7 +191,7 @@ func (s *PostgresUpdateIntentStore) Cancel(ctx context.Context, runtimeID string
 	if _, err := s.db.Exec(ctx, `
 		UPDATE daemon_runtime_update_intent
 		SET cancelled_at = now()
-		WHERE runtime_id = $1 AND cancelled_at IS NULL AND expired_at IS NULL
+		WHERE runtime_id = $1 AND cancelled_at IS NULL AND expired_at IS NULL AND given_up_at IS NULL
 	`, runtimeID); err != nil {
 		return fmt.Errorf("cancel daemon runtime update intent: %w", err)
 	}
@@ -133,9 +205,48 @@ func (s *PostgresUpdateIntentStore) MarkExpired(ctx context.Context, runtimeID s
 	if _, err := s.db.Exec(ctx, `
 		UPDATE daemon_runtime_update_intent
 		SET expired_at = now()
-		WHERE runtime_id = $1 AND cancelled_at IS NULL AND expired_at IS NULL AND expires_at < now()
+		WHERE runtime_id = $1 AND cancelled_at IS NULL AND expired_at IS NULL AND given_up_at IS NULL AND expires_at < now()
 	`, runtimeID); err != nil {
 		return fmt.Errorf("mark daemon runtime update intent expired: %w", err)
+	}
+	return nil
+}
+
+// RecordFailure computes the new consecutive-failure count and its backoff
+// window in Go (updateIntentRetryBackoff — the single source of truth also
+// used anywhere else backoff needs explaining/testing) and writes both
+// atomically, guarded by last_failed_attempt_id so a heartbeat that observes
+// the same terminal attempt more than once (e.g. arriving again before
+// NextRetryAt) doesn't double-count it.
+func (s *PostgresUpdateIntentStore) RecordFailure(ctx context.Context, runtimeID, attemptID string) error {
+	if err := s.requireDB(); err != nil {
+		return err
+	}
+	intent, err := s.Get(ctx, runtimeID)
+	if err != nil {
+		return err
+	}
+	if !intent.Live() || intent.LastFailedAttemptID == attemptID {
+		return nil // already recorded, or no longer live — nothing to do
+	}
+	newCount := intent.ConsecutiveFailures + 1
+	nextRetryAt := time.Now().Add(updateIntentRetryBackoff(newCount))
+	var givenUp any
+	if newCount >= updateIntentMaxConsecutiveFailures {
+		givenUp = time.Now()
+	}
+	if _, err := s.db.Exec(ctx, `
+		UPDATE daemon_runtime_update_intent
+		SET
+			consecutive_failures = $2,
+			last_failed_attempt_id = $3,
+			next_retry_at = $4,
+			given_up_at = $5
+		WHERE runtime_id = $1
+		  AND cancelled_at IS NULL AND expired_at IS NULL AND given_up_at IS NULL
+		  AND last_failed_attempt_id IS DISTINCT FROM $3
+	`, runtimeID, newCount, attemptID, nextRetryAt, givenUp); err != nil {
+		return fmt.Errorf("record daemon runtime update intent failure: %w", err)
 	}
 	return nil
 }
@@ -158,7 +269,7 @@ type updateIntentScanner interface {
 
 func scanUpdateIntent(row updateIntentScanner) (*UpdateIntent, error) {
 	var intent UpdateIntent
-	var cancelledAt, expiredAt *time.Time
+	var cancelledAt, expiredAt, givenUpAt *time.Time
 	err := row.Scan(
 		&intent.RuntimeID,
 		&intent.CreatedBy,
@@ -166,6 +277,10 @@ func scanUpdateIntent(row updateIntentScanner) (*UpdateIntent, error) {
 		&intent.ExpiresAt,
 		&cancelledAt,
 		&expiredAt,
+		&intent.ConsecutiveFailures,
+		&intent.NextRetryAt,
+		&intent.LastFailedAttemptID,
+		&givenUpAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -175,6 +290,7 @@ func scanUpdateIntent(row updateIntentScanner) (*UpdateIntent, error) {
 	}
 	intent.CancelledAt = cancelledAt
 	intent.ExpiredAt = expiredAt
+	intent.GivenUpAt = givenUpAt
 	return &intent, nil
 }
 

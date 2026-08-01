@@ -27,11 +27,33 @@ CREATE TABLE daemon_runtime_update_intent (
     -- admin re-requests (a fresh InitiateUpdate replaces the row) or
     -- explicitly cancels it. Parker's explicit "no silent disappearance"
     -- rule, same session as the reminder-subsystem silent-drop fixes.
-    expired_at TIMESTAMPTZ
+    expired_at TIMESTAMPTZ,
+    -- Backoff/give-up bookkeeping (Parker's review catch, 2026-08-02): a
+    -- reachable-but-persistently-broken runtime (the concrete case at hand —
+    -- 群管理/MAOZH2, whose Windows stage-commit rename fails every attempt)
+    -- would otherwise get a fresh materialized attempt on every single
+    -- heartbeat for up to 14 days straight — not a timing-guess problem
+    -- anymore, a hammering problem (repeated .stage- temp dirs, repeated AV
+    -- scans on a machine someone is actually using).
+    consecutive_failures INT NOT NULL DEFAULT 0,
+    -- Eligible for materialization immediately by default; pushed forward by
+    -- exponential backoff (updateIntentRetryBackoff) after each observed
+    -- failure.
+    next_retry_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- The daemon_runtime_update.id whose failure was last folded into
+    -- consecutive_failures — makes the failure bookkeeping idempotent across
+    -- repeated heartbeats that observe the same terminal attempt before the
+    -- next materialization is due.
+    last_failed_attempt_id TEXT,
+    -- Terminal marker distinct from expired_at: this intent stopped
+    -- auto-retrying after too many consecutive failures (updateIntentMaxConsecutiveFailures),
+    -- not because nobody was ever online to receive it. Same visibility rule
+    -- as expired_at — never deleted, an admin has to look at it.
+    given_up_at TIMESTAMPTZ
 );
 
 CREATE INDEX daemon_runtime_update_intent_live_idx
     ON daemon_runtime_update_intent (runtime_id)
-    WHERE cancelled_at IS NULL AND expired_at IS NULL;
+    WHERE cancelled_at IS NULL AND expired_at IS NULL AND given_up_at IS NULL;
 
 COMMIT;

@@ -1018,14 +1018,71 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // linkAttachmentsByIssueIDs links the given attachment IDs to an issue.
-// Only updates attachments that have no issue_id yet.
+// Unbound rows are linked in place; rows already bound to another issue are
+// cloned (same URL/bytes, new attachment id) so the target issue still gets
+// reference material (LRM-731). Failures are logged; callers that need a
+// hard error should use IssueService.Create instead.
 func (h *Handler) linkAttachmentsByIssueIDs(ctx context.Context, issueID, workspaceID pgtype.UUID, ids []pgtype.UUID) {
-	if err := h.Queries.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{
-		IssueID:     issueID,
-		WorkspaceID: workspaceID,
-		Column3:     ids,
-	}); err != nil {
-		slog.Error("failed to link attachments to issue", "error", err)
+	ids = uniqueAttachmentUUIDs(ids)
+	if len(ids) == 0 {
+		return
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, issue_id
+		FROM attachment
+		WHERE workspace_id = $1
+		  AND id = ANY($2::uuid[])
+	`, workspaceID, ids)
+	if err != nil {
+		slog.Error("failed to load attachments for issue link", "error", err)
+		return
+	}
+	defer rows.Close()
+	var unbound []pgtype.UUID
+	var clone []pgtype.UUID
+	for rows.Next() {
+		var id, existingIssue pgtype.UUID
+		if err := rows.Scan(&id, &existingIssue); err != nil {
+			slog.Error("failed to scan attachment for issue link", "error", err)
+			return
+		}
+		if !existingIssue.Valid {
+			unbound = append(unbound, id)
+			continue
+		}
+		if uuidToString(existingIssue) == uuidToString(issueID) {
+			continue
+		}
+		clone = append(clone, id)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("failed to iterate attachments for issue link", "error", err)
+		return
+	}
+	if len(unbound) > 0 {
+		if err := h.Queries.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{
+			IssueID:     issueID,
+			WorkspaceID: workspaceID,
+			Column3:     unbound,
+		}); err != nil {
+			slog.Error("failed to link attachments to issue", "error", err)
+		}
+	}
+	for _, srcID := range clone {
+		if _, err := h.DB.Exec(ctx, `
+			INSERT INTO attachment (
+			  workspace_id, issue_id, comment_id, chat_session_id, channel_id,
+			  uploader_type, uploader_id, filename, url, content_type, size_bytes
+			)
+			SELECT
+			  workspace_id, $1, NULL, NULL, channel_id,
+			  uploader_type, uploader_id, filename, url, content_type, size_bytes
+			FROM attachment
+			WHERE id = $2 AND workspace_id = $3`,
+			issueID, srcID, workspaceID,
+		); err != nil {
+			slog.Error("failed to clone attachment onto issue", "error", err, "attachment_id", uuidToString(srcID))
+		}
 	}
 }
 

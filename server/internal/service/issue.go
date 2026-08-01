@@ -126,9 +126,10 @@ var ErrParentIssueNotFound = errors.New("parent issue not found in this workspac
 var ErrProjectNotFound = errors.New("project not found in this workspace")
 
 // ErrAttachmentNotFound signals that at least one requested attachment is
-// absent, belongs to another workspace, or is already bound to another issue.
-// Issue creation is rejected atomically instead of succeeding without the
-// caller's reference material.
+// absent or belongs to another workspace. Already-bound rows are cloned onto
+// the new issue (LRM-731) so carrier sub-issues cannot block main-issue
+// reference material. Issue creation is rejected atomically instead of
+// succeeding without the caller's reference material.
 var ErrAttachmentNotFound = errors.New("attachment not available for issue creation")
 
 // IssueCreateResult is the typed return from IssueService.Create.
@@ -184,32 +185,38 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
+	var unboundAttachmentIDs []pgtype.UUID
+	var cloneAttachmentIDs []pgtype.UUID
 	if len(attachmentIDs) > 0 {
 		rows, err := tx.Query(ctx, `
-			SELECT id
+			SELECT id, issue_id
 			FROM attachment
 			WHERE workspace_id = $1
-			  AND issue_id IS NULL
 			  AND id = ANY($2::uuid[])
 			FOR UPDATE
 		`, p.WorkspaceID, attachmentIDs)
 		if err != nil {
 			return IssueCreateResult{}, fmt.Errorf("lock issue attachments: %w", err)
 		}
-		available := 0
+		found := make(map[string]struct{}, len(attachmentIDs))
 		for rows.Next() {
-			var id pgtype.UUID
-			if err := rows.Scan(&id); err != nil {
+			var id, issueID pgtype.UUID
+			if err := rows.Scan(&id, &issueID); err != nil {
 				rows.Close()
 				return IssueCreateResult{}, fmt.Errorf("scan issue attachment: %w", err)
 			}
-			available++
+			found[util.UUIDToString(id)] = struct{}{}
+			if issueID.Valid {
+				cloneAttachmentIDs = append(cloneAttachmentIDs, id)
+			} else {
+				unboundAttachmentIDs = append(unboundAttachmentIDs, id)
+			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return IssueCreateResult{}, fmt.Errorf("list issue attachments: %w", err)
 		}
-		if available != len(attachmentIDs) {
+		if len(found) != len(attachmentIDs) {
 			return IssueCreateResult{}, ErrAttachmentNotFound
 		}
 	}
@@ -324,13 +331,29 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 			return IssueCreateResult{}, fmt.Errorf("persist issue source message: %w", err)
 		}
 	}
-	if len(attachmentIDs) > 0 {
+	if len(unboundAttachmentIDs) > 0 {
 		if err := qtx.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{
 			IssueID:     issue.ID,
 			WorkspaceID: issue.WorkspaceID,
-			Column3:     attachmentIDs,
+			Column3:     unboundAttachmentIDs,
 		}); err != nil {
 			return IssueCreateResult{}, fmt.Errorf("link issue attachments: %w", err)
+		}
+	}
+	for _, srcID := range cloneAttachmentIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO attachment (
+			  workspace_id, issue_id, comment_id, chat_session_id, channel_id,
+			  uploader_type, uploader_id, filename, url, content_type, size_bytes
+			)
+			SELECT
+			  workspace_id, $1, NULL, NULL, channel_id,
+			  uploader_type, uploader_id, filename, url, content_type, size_bytes
+			FROM attachment
+			WHERE id = $2 AND workspace_id = $3`,
+			issue.ID, srcID, issue.WorkspaceID,
+		); err != nil {
+			return IssueCreateResult{}, fmt.Errorf("clone issue attachment: %w", err)
 		}
 	}
 	attachments, err := qtx.ListAttachmentsByIssue(ctx, db.ListAttachmentsByIssueParams{
@@ -339,6 +362,9 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	})
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("list linked issue attachments: %w", err)
+	}
+	if len(attachmentIDs) > 0 && len(attachments) < len(attachmentIDs) {
+		return IssueCreateResult{}, fmt.Errorf("link issue attachments: expected %d bound, got %d", len(attachmentIDs), len(attachments))
 	}
 
 	if err := tx.Commit(ctx); err != nil {

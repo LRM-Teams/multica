@@ -2178,6 +2178,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	attachmentIDs = uniqueAttachmentUUIDs(attachmentIDs)
 
 	var startDate pgtype.Date
 	if req.StartDate != nil && *req.StartDate != "" {
@@ -2205,6 +2206,21 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	sourceAnchor, ok := h.resolveIssueSourceMessageAnchor(w, r, workspaceID, creatorID, req.Source)
 	if !ok {
 		return
+	}
+	// Chat→issue: auto-bind images on the source root and the originally
+	// cited message so reference screenshots land on the main issue even
+	// when the agent omits --attachment-id (LRM-731 / former LRM-732).
+	if sourceAnchor.ChannelID.Valid && sourceAnchor.MessageID.Valid {
+		msgIDs := []pgtype.UUID{sourceAnchor.MessageID}
+		if req.Source != nil {
+			if originalID, err := util.ParseUUID(strings.TrimSpace(req.Source.MessageID)); err == nil && originalID.Valid {
+				msgIDs = append(msgIDs, originalID)
+			}
+		}
+		autoIDs := h.channelMessageAttachmentIDs(r.Context(), wsUUID, sourceAnchor.ChannelID, msgIDs...)
+		if len(autoIDs) > 0 {
+			attachmentIDs = uniqueAttachmentUUIDs(append(attachmentIDs, autoIDs...))
+		}
 	}
 	channelID, ok := h.resolveIssueSourceChannelAnchor(w, r, workspaceID, creatorID, req.ChannelID)
 	if !ok {

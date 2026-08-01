@@ -5,6 +5,7 @@ import type {
   ResearchMessage,
   ResearchProductRoundCard,
 } from "@multica/core/types";
+import { StreamingMarkdown } from "@multica/ui/markdown";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n/use-t";
@@ -107,6 +108,8 @@ export function ResearchChatCard({
       ? target?.display_name || target?.name || t(($) => $.chat.to_lead)
       : null;
   const roundCard = isProcess ? cardFromProcessMeta(message) : null;
+  const wasStopped = metaBool(message.meta, "stopped");
+  const useMarkdown = !isUser && !isProcess && !roundCard;
 
   return (
     <article
@@ -115,6 +118,7 @@ export function ResearchChatCard({
         isProcess && "border-dashed bg-muted/40",
         isUser && !isProcess && "ml-3 border-primary/25 bg-primary/10",
         !isUser && !isProcess && "mr-1 bg-card",
+        wasStopped && "border-amber-500/30",
       )}
     >
       <header className="mb-1.5 flex items-center gap-2">
@@ -143,6 +147,7 @@ export function ResearchChatCard({
             {isProcess ? t(($) => $.chat.process_tag) : role}
             {op && isProcess ? ` · ${op}` : ""}
             {routedTo ? ` · → ${routedTo}` : ""}
+            {wasStopped ? ` · ${t(($) => $.chat.stopped_tag)}` : ""}
             {message.created_at ? ` · ${formatTime(message.created_at)}` : ""}
           </div>
         </div>
@@ -164,6 +169,10 @@ export function ResearchChatCard({
             onRejectGoalPatch={() => onRejectGoalPatch?.(roundCard)}
             onEditGoalPatch={(text) => onEditGoalPatch?.(roundCard, text)}
           />
+        </div>
+      ) : useMarkdown ? (
+        <div className="text-[13px] leading-relaxed text-foreground/90">
+          <StreamingMarkdown content={message.body} isStreaming={false} />
         </div>
       ) : (
         <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">

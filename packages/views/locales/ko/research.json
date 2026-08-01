@@ -72,9 +72,15 @@
     "report": "Report",
     "chat": "Fleet chat",
     "chat_placeholder": "Course-correct with Ronaldo when needed…",
+    "chat_placeholder_paused": "Say something to resume the fleet…",
     "hide_chat": "Close",
     "delivery": "Sources & report",
     "send": "Send",
+    "stopping": "Stopping…",
+    "stop_aria": "Stop generation",
+    "stop_tooltip": "Stop the fleet mid-generation. Keep what already streamed; send again to resume.",
+    "paused_title": "Research paused",
+    "paused_hint": "Output so far is kept. Send a message to resume.",
     "fleet": "Research fleet",
     "fleet_empty": "No active fleet members.",
     "sources_empty": "No weighted sources yet.",
@@ -102,7 +108,12 @@
     "process": "Process",
     "system": "System",
     "process_tag": "Process",
-    "empty": "Fleet dialogue and process events will appear here as the canvas fills in."
+    "empty": "Fleet dialogue and process events will appear here as the canvas fills in.",
+    "streaming": "Streaming…",
+    "streaming_from": "Fleet reply",
+    "streaming_wait": "Generating…",
+    "stream_settled": "Settled",
+    "stopped_tag": "Stopped"
   },
   "step_card": {
     "status": {

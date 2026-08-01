@@ -15,6 +15,11 @@ vi.mock("../../i18n/use-t", () => ({
           process: "Process",
           system: "System",
           process_tag: "Process",
+          stopped_tag: "Stopped",
+          streaming: "Streaming…",
+          streaming_from: "Fleet",
+          streaming_wait: "Generating…",
+          stream_settled: "Done",
         },
       }),
   }),
@@ -22,6 +27,10 @@ vi.mock("../../i18n/use-t", () => ({
 
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: () => <div data-testid="avatar" />,
+}));
+
+vi.mock("@multica/ui/markdown", () => ({
+  StreamingMarkdown: ({ content }: { content: string }) => <div>{content}</div>,
 }));
 
 const lead: ResearchFleetMember = {

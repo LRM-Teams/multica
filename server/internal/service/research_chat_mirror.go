@@ -19,7 +19,19 @@ import (
 //
 // Called from both TaskService.CompleteTask and the agent-inbox complete
 // handler — production chat completions primarily use the inbox path.
+// Also called after research-session Stop so partial streamed output is kept
+// (LRM-820).
 func (s *TaskService) MirrorResearchChatReply(ctx context.Context, task db.AgentInboxEvent, msg db.ChatMessage) {
+	s.mirrorResearchChatReply(ctx, task, msg, false)
+}
+
+// MirrorResearchChatStoppedReply mirrors a stopped wake's assistant snapshot
+// into the research drawer so already-streamed text survives Stop.
+func (s *TaskService) MirrorResearchChatStoppedReply(ctx context.Context, task db.AgentInboxEvent, msg db.ChatMessage) {
+	s.mirrorResearchChatReply(ctx, task, msg, true)
+}
+
+func (s *TaskService) mirrorResearchChatReply(ctx context.Context, task db.AgentInboxEvent, msg db.ChatMessage, stopped bool) {
 	if s == nil || s.Queries == nil || !task.ChatSessionID.Valid {
 		return
 	}
@@ -54,6 +66,15 @@ func (s *TaskService) MirrorResearchChatReply(ctx context.Context, task db.Agent
 		return
 	}
 
+	meta := map[string]any{"mirrored_from": "chat"}
+	if stopped {
+		meta["stopped"] = true
+	}
+	metaBytes := []byte(`{"mirrored_from":"chat"}`)
+	if stopped {
+		metaBytes = []byte(`{"mirrored_from":"chat","stopped":true}`)
+	}
+
 	row, err := s.Queries.CreateResearchMessage(ctx, db.CreateResearchMessageParams{
 		WorkspaceID:   researchSession.WorkspaceID,
 		SessionID:     researchSession.ID,
@@ -62,7 +83,7 @@ func (s *TaskService) MirrorResearchChatReply(ctx context.Context, task db.Agent
 		TargetAgentID: pgtype.UUID{},
 		Body:          body,
 		CardKind:      "chat",
-		Meta:          []byte(`{"mirrored_from":"chat"}`),
+		Meta:          metaBytes,
 	})
 	if err != nil {
 		slog.Warn("research chat mirror: create message failed",
@@ -86,7 +107,7 @@ func (s *TaskService) MirrorResearchChatReply(ctx context.Context, task db.Agent
 			"target_agent_id": nil,
 			"body":            row.Body,
 			"card_kind":       row.CardKind,
-			"meta":            map[string]any{"mirrored_from": "chat"},
+			"meta":            meta,
 			"created_at":      createdAt,
 		},
 	}
@@ -99,4 +120,27 @@ func (s *TaskService) MirrorResearchChatReply(ctx context.Context, task db.Agent
 			Payload:     payload,
 		})
 	}
+}
+
+// coalesceTaskMessageText joins user-facing text fragments from a task's
+// execution transcript (same order as chat live TimelineView).
+func coalesceTaskMessageText(messages []db.TaskMessage) string {
+	var b strings.Builder
+	for _, m := range messages {
+		if m.Type != "text" {
+			continue
+		}
+		if m.Visibility == "diagnostic_only" {
+			continue
+		}
+		if !m.Content.Valid {
+			continue
+		}
+		chunk := m.Content.String
+		if chunk == "" {
+			continue
+		}
+		b.WriteString(chunk)
+	}
+	return strings.TrimSpace(b.String())
 }

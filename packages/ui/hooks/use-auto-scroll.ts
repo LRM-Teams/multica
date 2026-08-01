@@ -7,7 +7,11 @@ import { type RefObject, useEffect, useRef, useCallback } from "react"
  * Returns a `lockRef` that can be set to `true` to temporarily suppress
  * auto-scroll (e.g. during history prepend operations).
  */
-export function useAutoScroll(ref: RefObject<HTMLElement | null>) {
+export function useAutoScroll(
+  ref: RefObject<HTMLElement | null>,
+  /** Re-bind when the scroll host mounts/unmounts (e.g. drawer open). */
+  bindKey?: unknown,
+) {
   const stickRef = useRef(true)
   const lockRef = useRef(false)
   // Re-running the initial scroll-to-bottom on every effect mount would
@@ -19,7 +23,9 @@ export function useAutoScroll(ref: RefObject<HTMLElement | null>) {
   useEffect(() => {
     const el = ref.current
     if (!el) return
-
+    // New host element (drawer reopen) should pin once to bottom again.
+    didInitialScrollRef.current = false
+    stickRef.current = true
     const scrollToBottom = () => {
       el.scrollTo({ top: el.scrollHeight })
     }
@@ -68,7 +74,7 @@ export function useAutoScroll(ref: RefObject<HTMLElement | null>) {
       ro.disconnect()
       mo.disconnect()
     }
-  }, [ref])
+  }, [ref, bindKey])
 
   /** Temporarily suppress auto-scroll during prepend operations */
   const suppressAutoScroll = useCallback(() => {

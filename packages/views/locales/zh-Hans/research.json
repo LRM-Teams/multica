@@ -72,9 +72,15 @@
     "report": "调研报告",
     "chat": "舰队对话",
     "chat_placeholder": "方向不对时，告诉罗纳尔多你的纠偏…",
+    "chat_placeholder_paused": "继续发言即可恢复舰队推进…",
     "hide_chat": "关闭",
     "delivery": "来源与报告",
     "send": "发送",
+    "stopping": "停止中…",
+    "stop_aria": "停止生成",
+    "stop_tooltip": "中断当前生成。已产出内容会保留；再发一条即可恢复。",
+    "paused_title": "调研已暂停",
+    "paused_hint": "已产出内容保留。在对话里继续发言即可恢复。",
     "fleet": "调研团",
     "fleet_empty": "当前没有在编成员。",
     "sources_empty": "尚无加权来源。",
@@ -102,7 +108,12 @@
     "process": "过程",
     "system": "系统",
     "process_tag": "过程事件",
-    "empty": "画布推进时，舰队对话与过程事件会出现在这里。"
+    "empty": "画布推进时，舰队对话与过程事件会出现在这里。",
+    "streaming": "流式输出中…",
+    "streaming_from": "舰队回复",
+    "streaming_wait": "生成中…",
+    "stream_settled": "已落盘",
+    "stopped_tag": "已停止"
   },
   "step_card": {
     "status": {

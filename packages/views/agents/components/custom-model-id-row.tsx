@@ -6,10 +6,11 @@ import { Input } from "@multica/ui/components/ui/input";
 import { useT } from "../../i18n";
 
 /**
- * Always-visible "Custom model ID…" row (Frank 2026-08-01 / Iris spec).
+ * "Custom model ID…" row (Frank 2026-08-01 / Iris spec). Parent only
+ * mounts this when the models API reports custom_model_id_supported
+ * (backend agent.CustomModelIDSupported — not a frontend whitelist).
  * Click → inline input (not the search box). Enter / confirm submits;
- * Escape / blur without submit returns to the static row. Replaces the
- * old canCreate-from-search path so search stays search-only.
+ * Escape / blur cancels. Replaces the old canCreate-from-search path.
  */
 export function CustomModelIdRow({
   onSubmit,

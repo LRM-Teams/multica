@@ -176,6 +176,22 @@ func ModelSelectionSupported(providerType string) bool {
 	return true
 }
 
+// CustomModelIDSupported reports whether the provider accepts an arbitrary
+// model id typed by the user (Raft: Claude Code, Codex, Cursor, Copilot, Pi).
+// Other runtimes are constrained to the discovered dropdown list — showing a
+// free-form input for them produces a silent failure (backend stores any
+// string; the CLI just won't run). Keep this the single source of truth;
+// the models API surfaces it as custom_model_id_supported so the UI never
+// hardcodes a provider whitelist.
+func CustomModelIDSupported(providerType string) bool {
+	switch providerType {
+	case "claude", "codex", "cursor", "copilot", "pi":
+		return true
+	default:
+		return false
+	}
+}
+
 // cachedDiscovery invokes fn and caches the result for modelCacheTTL.
 // The cache is keyed on providerType only; callers that need to
 // distinguish discovery by host/user should include that in the key

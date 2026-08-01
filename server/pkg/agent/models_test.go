@@ -896,6 +896,20 @@ func TestAntigravityModelSelectionSupported(t *testing.T) {
 	}
 }
 
+func TestCustomModelIDSupported(t *testing.T) {
+	// Raft: free-form Custom model ID only for these providers.
+	for _, provider := range []string{"claude", "codex", "cursor", "copilot", "pi"} {
+		if !CustomModelIDSupported(provider) {
+			t.Errorf("%q should support custom model IDs", provider)
+		}
+	}
+	for _, provider := range []string{"opencode", "hermes", "gemini", "grok", "antigravity", "openclaw"} {
+		if CustomModelIDSupported(provider) {
+			t.Errorf("%q must not support custom model IDs", provider)
+		}
+	}
+}
+
 // TestParseAntigravityModels covers the `agy models` line-per-name format:
 // each non-blank line becomes a Model whose ID and Label are the verbatim
 // display string `--model` expects, duplicates collapse, and blanks drop.

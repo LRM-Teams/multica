@@ -48,6 +48,9 @@ export function ModelPicker({
     runtimeModelsOptions(runtimeOnline ? runtimeId : null),
   );
   const supported = modelsQuery.data?.supported ?? true;
+  // Backend-owned capability — never infer from a frontend provider list.
+  const customModelIdSupported =
+    modelsQuery.data?.customModelIdSupported === true;
   // Memoise the model list so every downstream useMemo gets a stable
   // reference; `?? []` would mint a fresh array on every render and
   // invalidate filters needlessly.
@@ -162,11 +165,13 @@ export function ModelPicker({
 
       {!modelsQuery.isLoading && filtered.length === 0 && (
         <p className="px-3 py-3 text-center text-xs text-muted-foreground">
-          {t(($) => $.pickers.model_empty)}
+          {customModelIdSupported
+            ? t(($) => $.pickers.model_empty_custom_hint)
+            : t(($) => $.pickers.model_empty)}
         </p>
       )}
 
-      {!modelsQuery.isLoading && (
+      {!modelsQuery.isLoading && customModelIdSupported && (
         <CustomModelIdRow dense onSubmit={(id) => void select(id)} />
       )}
 

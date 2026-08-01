@@ -54,6 +54,9 @@ export function ModelDropdown({
   );
 
   const supported = modelsQuery.data?.supported ?? true;
+  // Backend-owned capability — never infer from a frontend provider list.
+  const customModelIdSupported =
+    modelsQuery.data?.customModelIdSupported === true;
   // Stable reference for the model list — `?? []` would mint a fresh
   // array each render and force every downstream useMemo to invalidate.
   const models = useMemo(
@@ -218,11 +221,13 @@ export function ModelDropdown({
 
             {!modelsQuery.isLoading && Object.keys(filtered).length === 0 && (
               <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                {t(($) => $.pickers.model_empty_with_dot)}
+                {customModelIdSupported
+                  ? t(($) => $.pickers.model_empty_custom_hint)
+                  : t(($) => $.pickers.model_empty_with_dot)}
               </div>
             )}
 
-            {!modelsQuery.isLoading && (
+            {!modelsQuery.isLoading && customModelIdSupported && (
               <CustomModelIdRow onSubmit={select} />
             )}
 

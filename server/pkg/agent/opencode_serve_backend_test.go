@@ -135,12 +135,16 @@ func TestCloseTerminatesServeProcess(t *testing.T) {
 // TestExecuteEndToEndAgainstFakeServeProcess exercises the full path —
 // spawn, create session, send message, session.idle, reconcile — against a
 // real (fake) HTTP server running in a separate process, not just the
-// in-process httptest.Server used by the client-level tests.
+// in-process httptest.Server used by the client-level tests. The timeout is
+// generous (30s, not the 10s locally-fast completion would suggest) because
+// this path involves real OS process spawn/exec, which CI runners under load
+// can preempt for reasons unrelated to correctness — task #44, observed as a
+// flake on v0.3.89 CI (confirmed non-reproducing on rerun).
 func TestExecuteEndToEndAgainstFakeServeProcess(t *testing.T) {
 	backend := newOpenCodeServeBackend(newTestOpenCodeServeBackendConfig(t))
 	t.Cleanup(backend.Close)
 
-	session, err := backend.Execute(context.Background(), "hello", ExecOptions{Timeout: 10 * time.Second})
+	session, err := backend.Execute(context.Background(), "hello", ExecOptions{Timeout: 30 * time.Second})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

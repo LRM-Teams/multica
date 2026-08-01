@@ -48,6 +48,21 @@ func TestApplyWorkspacePositional(t *testing.T) {
 		}
 	})
 
+	// Task #32 follow-up: `multica setup /<workspace>` aligns the command
+	// shape with Raft's `raft-computer setup /<server-slug>`. The leading
+	// slash is optional sugar stripped before hitting the flag — the bare
+	// form above must keep working unchanged for existing scripts/docs.
+	t.Run("leading slash is stripped (Raft-aligned form)", func(t *testing.T) {
+		cmd := newCmd()
+		if err := applyWorkspacePositional(cmd, []string{"/my-workspace"}); err != nil {
+			t.Fatalf("applyWorkspacePositional: %v", err)
+		}
+		got, _ := cmd.Flags().GetString("workspace")
+		if got != "my-workspace" {
+			t.Fatalf("workspace flag = %q, want %q (leading slash stripped)", got, "my-workspace")
+		}
+	})
+
 	t.Run("no positional leaves the flag untouched", func(t *testing.T) {
 		cmd := newCmd()
 		if err := applyWorkspacePositional(cmd, nil); err != nil {

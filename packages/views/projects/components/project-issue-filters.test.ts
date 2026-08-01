@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { Issue, IssueAssigneeGroup } from "@multica/core/types";
 import { filterRunningAssigneeGroups } from "./project-issue-filters";

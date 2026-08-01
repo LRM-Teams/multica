@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
 import { layoutResearchGraph } from "./layout-graph";

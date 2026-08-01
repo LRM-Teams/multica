@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { Agent, AgentTask } from "@multica/core/types";
 import { buildWorkloadIndex } from "./runtime-list";

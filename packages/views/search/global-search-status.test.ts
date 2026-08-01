@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { deriveGlobalSearchStatus, scopeCount } from "./global-search-status";
 import type { WorkspaceSearchResponse } from "@multica/core/types";

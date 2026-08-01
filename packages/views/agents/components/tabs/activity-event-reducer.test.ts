@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { ActivityEvent } from "./activity-event";
 import { projectLatestActivity, upsertActivityEvents } from "./activity-event-reducer";

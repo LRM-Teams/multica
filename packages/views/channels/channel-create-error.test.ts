@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@multica/core/api";
 import { isChannelNameTakenError } from "./channel-create-error";

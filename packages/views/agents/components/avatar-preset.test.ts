@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, it, expect } from "vitest";
 import { AGENT_AVATAR_PRESETS } from "@multica/core/workspace/avatar-url";
 import {

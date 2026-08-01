@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { ChannelActiveTask } from "@multica/core/types";
 import { listStoppableChannelTasks } from "./conversation-activity-tasks";

@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { Attachment, ChannelMessage } from "@multica/core/types";
 import { resolveVoiceMessagePresentation } from "./voice-message-presentation";

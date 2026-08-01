@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { isConversationMuted, sumUnmutedUnreadCounts } from "./conversation-muted";
 import { isTypingActorVisible } from "./conversation-typing";

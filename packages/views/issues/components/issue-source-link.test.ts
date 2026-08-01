@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, it, expect } from "vitest";
 import type { IssueSourceMessageRef } from "@multica/core/types";
 import { issueSourceMessageHref } from "./issue-source-link";

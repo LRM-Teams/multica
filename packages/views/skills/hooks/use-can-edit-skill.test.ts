@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, it, expect } from "vitest";
 import type { Skill } from "@multica/core/types";
 import { canEditSkill } from "./use-can-edit-skill";

@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { TimelineEntry } from "@multica/core/types";
 import { collectThreadReplies } from "./thread-utils";

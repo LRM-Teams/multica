@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { resolveVoiceBlockReason, type VoiceBlockInputs } from "./voice-block-reason";
 

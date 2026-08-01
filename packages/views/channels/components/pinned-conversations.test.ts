@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, it, expect } from "vitest";
 import type { DMItem } from "@multica/core/dm";
 import type { Channel } from "@multica/core/types";

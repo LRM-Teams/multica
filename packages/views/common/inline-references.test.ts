@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { MessagePart } from "@multica/core/types";
 import { projectInlineReferences, type InlineSegment } from "./inline-references";

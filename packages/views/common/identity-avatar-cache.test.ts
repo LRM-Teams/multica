@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
   __resetIdentityAvatarOkCacheForTests,

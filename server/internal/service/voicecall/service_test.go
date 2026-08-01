@@ -680,6 +680,45 @@ func (provider *fakeProvider) Prepare(
 	return provider.prepareResult, provider.prepareErr
 }
 
+func TestServiceActivateDuplexSkipsProviderConnectAndStop(t *testing.T) {
+	deps := newTestDependencies()
+	service := newTestService(t, deps)
+	if _, err := service.Start(context.Background(), validStartInput()); err != nil {
+		t.Fatalf("prepare call: %v", err)
+	}
+
+	session, err := service.ActivateDuplex(context.Background(), AnswerInput{
+		WorkspaceID: "workspace-1",
+		UserID:      "member-1",
+		CallID:      "call-1",
+	})
+	if err != nil {
+		t.Fatalf("activate duplex: %v", err)
+	}
+	if session.Status != StatusActive || session.ConnectedAt == nil {
+		t.Fatalf("session = %+v, want active with connected_at", session)
+	}
+	if deps.provider.connectCalls != 0 {
+		t.Fatalf("provider connect calls = %d, want 0", deps.provider.connectCalls)
+	}
+
+	ended, err := service.EndWithoutProviderStop(context.Background(), StopInput{
+		WorkspaceID: "workspace-1",
+		UserID:      "member-1",
+		CallID:      "call-1",
+		Reason:      "duplex_client_stop",
+	})
+	if err != nil {
+		t.Fatalf("end duplex: %v", err)
+	}
+	if ended.Status != StatusEnded || ended.EndReason != "duplex_client_stop" {
+		t.Fatalf("ended = %+v", ended)
+	}
+	if deps.provider.stopCalls != 0 {
+		t.Fatalf("provider stop calls = %d, want 0", deps.provider.stopCalls)
+	}
+}
+
 func (provider *fakeProvider) Connect(
 	_ context.Context,
 	input ProviderConnectInput,

@@ -3,12 +3,15 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/handler"
+	"github.com/multica-ai/multica/server/internal/integrations/doubaodialog"
 	"github.com/multica-ai/multica/server/internal/integrations/volcenginertc"
+	"github.com/multica-ai/multica/server/internal/service/duplexcall"
 	"github.com/multica-ai/multica/server/internal/service/voicecall"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -313,5 +316,32 @@ func configureVoiceCallService(
 	h.VoiceCallCallbackProcessor = callbackService
 	h.VoiceCallFunctionProcessor = functionBridge
 	h.VoiceCallCallbackSignature = config.CallbackSignature
+	h.VoiceCallAgentBridge = agentBridge
+	if err := wireDuplexGateway(h); err != nil {
+		return err
+	}
+	return nil
+}
+
+// wireDuplexGateway enables Doubao Realtime Duplex when DOUBAO_DIALOG_API_KEY is set.
+// Failure to configure leaves RTC VoiceChat intact and duplex endpoints return 503.
+func wireDuplexGateway(h *handler.Handler) error {
+	cfg := doubaodialog.ConfigFromEnv()
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		slog.Info("duplex voice gateway disabled", "reason", "DOUBAO_DIALOG_API_KEY unset")
+		return nil
+	}
+	client, err := doubaodialog.New(cfg)
+	if err != nil {
+		slog.Error("duplex voice gateway disabled", "error", err)
+		return nil
+	}
+	gateway, err := duplexcall.NewGateway(client, cfg)
+	if err != nil {
+		slog.Error("duplex voice gateway disabled", "error", err)
+		return nil
+	}
+	h.DuplexGateway = gateway
+	slog.Info("duplex voice gateway enabled", "provider", "doubao-dialog")
 	return nil
 }

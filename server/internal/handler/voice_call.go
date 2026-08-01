@@ -273,12 +273,27 @@ func (h *Handler) StopVoiceCall(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	session, err := h.VoiceCallService.Stop(r.Context(), voicecall.StopInput{
+	stopInput := voicecall.StopInput{
 		WorkspaceID: workspaceID,
 		UserID:      userID,
 		CallID:      callID,
 		Reason:      "user_hangup",
-	})
+	}
+	var (
+		session voicecall.Session
+		err     error
+	)
+	// Duplex media never started RTC VoiceChat; skip provider.Stop.
+	if h.DuplexGateway != nil && h.DuplexGateway.Has(callID) {
+		h.DuplexGateway.Close(callID)
+		if duplex, ok := h.VoiceCallService.(VoiceCallDuplexAPI); ok {
+			session, err = duplex.EndWithoutProviderStop(r.Context(), stopInput)
+		} else {
+			session, err = h.VoiceCallService.Stop(r.Context(), stopInput)
+		}
+	} else {
+		session, err = h.VoiceCallService.Stop(r.Context(), stopInput)
+	}
 	if err != nil {
 		writeVoiceCallServiceError(w, "stop", err)
 		return

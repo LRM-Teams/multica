@@ -684,6 +684,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Post("/{callId}/connect", h.ConnectVoiceCall)
 						r.Post("/{callId}/answer", h.AnswerVoiceCall)
 						r.Post("/{callId}/stop", h.StopVoiceCall)
+						// Duplex product path (LRM-949): activate + WS media.
+						// Independent of RTC VoiceChat connect; requires DOUBAO_DIALOG_API_KEY.
+						r.Post("/{callId}/duplex", h.StartVoiceCallDuplex)
+						r.Get("/{callId}/duplex/ws", h.VoiceCallDuplexWS)
 					})
 					r.Post("/leave", h.LeaveWorkspace)
 					r.Get("/invitations", h.ListWorkspaceInvitations)

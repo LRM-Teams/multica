@@ -30,6 +30,7 @@ import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { PropRow } from "../../common/prop-row";
 import { InlineFieldEditor } from "./inline-field-editor";
 import { useT } from "../../i18n";
+import { ComputerInfoRow } from "./inspector/computer-info-row";
 import { ConcurrencyPicker } from "./inspector/concurrency-picker";
 import { ModelPicker } from "./inspector/model-picker";
 import { RuntimePicker } from "./inspector/runtime-picker";
@@ -120,6 +121,9 @@ export function AgentDetailInspector({
           permission, each picker self-renders a static read-only display so
           the value is visible but not interactive. */}
       <Section label={t(($) => $.inspector.section_properties)}>
+        <PropRow label={t(($) => $.inspector.prop_computer)} interactive={false}>
+          <ComputerInfoRow runtime={runtime} />
+        </PropRow>
         <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
           <RuntimePicker
             value={agent.runtime_id}

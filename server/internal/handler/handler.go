@@ -118,30 +118,30 @@ type cloudRuntimeProxy interface {
 }
 
 type Handler struct {
-	Queries               *db.Queries
-	DB                    dbExecutor
-	TxStarter             txStarter
-	Hub                   *realtime.Hub
-	DaemonHub             *daemonws.Hub
-	ReminderNotifier      daemonws.ReminderNotifier
-	SandboxHub            *sandboxws.Hub
-	Bus                   *events.Bus
-	TaskService           *service.TaskService
-	AgentFleetRankService *service.AgentFleetRankService
-	AgentHonorService     *service.AgentHonorService
-	IssueService          *service.IssueService
-	HonorService          *service.HonorService
-	AutopilotService      *service.AutopilotService
-	EmailService          *service.EmailService
-	EnvCheckpointService  EnvCheckpointServiceAPI
-	UpdateStore           UpdateStore
-	RestartStore          RestartStore
-	AgentRestartStore     AgentRestartStore
-	RuntimeReleaseSource  RuntimeReleaseSource
-	ModelListStore        ModelListStore
-	LocalSkillListStore   LocalSkillListStore
-	LocalSkillImportStore LocalSkillImportStore
-	LivenessStore         LivenessStore
+	Queries                     *db.Queries
+	DB                          dbExecutor
+	TxStarter                   txStarter
+	Hub                         *realtime.Hub
+	DaemonHub                   *daemonws.Hub
+	ReminderNotifier            daemonws.ReminderNotifier
+	SandboxHub                  *sandboxws.Hub
+	Bus                         *events.Bus
+	TaskService                 *service.TaskService
+	AgentFleetRankService       *service.AgentFleetRankService
+	AgentHonorService           *service.AgentHonorService
+	IssueService                *service.IssueService
+	HonorService                *service.HonorService
+	AutopilotService            *service.AutopilotService
+	EmailService                *service.EmailService
+	EnvCheckpointService        EnvCheckpointServiceAPI
+	UpdateStore                 UpdateStore
+	RestartStore                RestartStore
+	AgentLifecycleDispatchStore AgentLifecycleDispatchStore
+	RuntimeReleaseSource        RuntimeReleaseSource
+	ModelListStore              ModelListStore
+	LocalSkillListStore         LocalSkillListStore
+	LocalSkillImportStore       LocalSkillImportStore
+	LivenessStore               LivenessStore
 	// MemberPresenceStore tracks human online/offline from realtime WS
 	// sessions (LRM-462). Distinct from LivenessStore (daemon heartbeats).
 	MemberPresenceStore MemberPresenceStore
@@ -287,34 +287,34 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	}
 	agentFleetRankService := service.NewAgentFleetRankService(queries)
 	h := &Handler{
-		Queries:               queries,
-		DB:                    executor,
-		TxStarter:             txStarter,
-		Hub:                   hub,
-		DaemonHub:             daemonHub,
-		Bus:                   bus,
-		TaskService:           taskSvc,
-		AgentFleetRankService: agentFleetRankService,
-		AgentHonorService:     service.NewAgentHonorService(queries, agentFleetRankService),
-		IssueService:          service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
-		HonorService:          service.NewHonorService(queries),
-		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),
-		EmailService:          emailService,
-		UpdateStore:           NewPostgresUpdateStore(updateDB),
-		RestartStore:          NewInMemoryRestartStore(),
-		AgentRestartStore:     NewInMemoryAgentRestartStore(),
-		RuntimeReleaseSource:  NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
-		ModelListStore:        NewInMemoryModelListStore(),
-		LocalSkillListStore:   NewInMemoryLocalSkillListStore(),
-		LocalSkillImportStore: NewInMemoryLocalSkillImportStore(),
-		LivenessStore:         NewNoopLivenessStore(),
-		MemberPresenceStore:   NewMemoryMemberPresenceStore(),
-		HeartbeatScheduler:    NewPassthroughHeartbeatScheduler(queries),
-		Storage:               store,
-		CFSigner:              cfSigner,
-		Analytics:             analyticsClient,
-		WebhookRateLimiter:    NewMemoryWebhookRateLimiter(DefaultWebhookRateLimit()),
-		WebhookIPRateLimiter:  NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
+		Queries:                     queries,
+		DB:                          executor,
+		TxStarter:                   txStarter,
+		Hub:                         hub,
+		DaemonHub:                   daemonHub,
+		Bus:                         bus,
+		TaskService:                 taskSvc,
+		AgentFleetRankService:       agentFleetRankService,
+		AgentHonorService:           service.NewAgentHonorService(queries, agentFleetRankService),
+		IssueService:                service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
+		HonorService:                service.NewHonorService(queries),
+		AutopilotService:            service.NewAutopilotService(queries, txStarter, bus, taskSvc),
+		EmailService:                emailService,
+		UpdateStore:                 NewPostgresUpdateStore(updateDB),
+		RestartStore:                NewInMemoryRestartStore(),
+		AgentLifecycleDispatchStore: NewInMemoryAgentLifecycleDispatchStore(),
+		RuntimeReleaseSource:        NewCachedRuntimeReleaseSource(DefaultRuntimeReleaseCacheTTL),
+		ModelListStore:              NewInMemoryModelListStore(),
+		LocalSkillListStore:         NewInMemoryLocalSkillListStore(),
+		LocalSkillImportStore:       NewInMemoryLocalSkillImportStore(),
+		LivenessStore:               NewNoopLivenessStore(),
+		MemberPresenceStore:         NewMemoryMemberPresenceStore(),
+		HeartbeatScheduler:          NewPassthroughHeartbeatScheduler(queries),
+		Storage:                     store,
+		CFSigner:                    cfSigner,
+		Analytics:                   analyticsClient,
+		WebhookRateLimiter:          NewMemoryWebhookRateLimiter(DefaultWebhookRateLimit()),
+		WebhookIPRateLimiter:        NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
 		CloudRuntime: cloudruntime.NewClient(cloudruntime.Config{
 			BaseURL: cfg.CloudRuntimeFleetURL,
 			Timeout: cfg.CloudRuntimeFleetTimeout,

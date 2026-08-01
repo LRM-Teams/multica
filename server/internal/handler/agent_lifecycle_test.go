@@ -205,6 +205,45 @@ func TestAgentLifecycleIdleActionsStartImmediately(t *testing.T) {
 	}
 }
 
+// TestAgentLifecycleCreateDispatchesImmediateOperationToDaemon pins task
+// #52's actual fix: before this, CreateAgentLifecycleOperation wrote a
+// status=running row that nothing ever picked up — the operation was
+// permanently inert. Now it must also create a pending dispatch entry the
+// daemon's heartbeat can claim, carrying the operation's own ID (so the
+// daemon reports its result back against the same row) plus the action kind
+// the executor needs.
+func TestAgentLifecycleCreateDispatchesImmediateOperationToDaemon(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	rec := invokeCreateAgentLifecycle(t, agentID, uuid.NewString(), agentLifecycleRestart)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var operation AgentLifecycleOperation
+	if err := json.Unmarshal(rec.Body.Bytes(), &operation); err != nil {
+		t.Fatalf("decode operation: %v", err)
+	}
+
+	claimed, err := testHandler.AgentLifecycleDispatchStore.PopAllPending(context.Background(), runtimeID)
+	if err != nil {
+		t.Fatalf("PopAllPending: %v", err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed %d dispatches, want 1: %+v", len(claimed), claimed)
+	}
+	if claimed[0].OperationID != operation.ID {
+		t.Fatalf("dispatch operation_id = %q, want %q (must match the operation row so the daemon's result report lands on it)", claimed[0].OperationID, operation.ID)
+	}
+	if claimed[0].AgentID != agentID {
+		t.Fatalf("dispatch agent_id = %q, want %q", claimed[0].AgentID, agentID)
+	}
+	if claimed[0].ActionKind != string(agentLifecycleRestart) {
+		t.Fatalf("dispatch action_kind = %q, want %q", claimed[0].ActionKind, agentLifecycleRestart)
+	}
+}
+
 func TestAgentLifecycleRunningOperationOverlaysExistingAgentHealth(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

@@ -85,23 +85,30 @@ describe("MachineNameEditor", () => {
     vi.clearAllMocks();
   });
 
-  it("shows hostname placeholder when display_name is unset", () => {
-    const { container, unmount } = render(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant="list" />
-      </I18nProvider>,
-    );
-    expect(editButton(container)).toBeTruthy();
-    unmount();
-  });
+  // Same field used to have 3 simultaneous edit entry points (list row,
+  // detail title, basics table row) — Frank 07-31: "到处都是铅笔修改".
+  // list/title are now pure display; only basics is editable.
+  it.each(["list", "title"] as const)(
+    "%s variant is pure display: no edit button, shows the hostname placeholder",
+    (variant) => {
+      const { container, unmount } = render(
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant={variant} />
+        </I18nProvider>,
+      );
+      expect(within(container).queryAllByRole("button")).toHaveLength(0);
+      expect(within(container).getByText("ubuntu-2")).toBeTruthy();
+      unmount();
+    },
+  );
 
-  it("list variant: only the pencil button starts rename (row click can select)", () => {
+  it("basics variant: only the pencil button starts rename", () => {
     const { container, unmount } = render(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant="list" />
+        <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant="basics" />
       </I18nProvider>,
     );
-    // Name text itself is not a button — avoids swallowing list-row select (LRM-923).
+    // Name text itself is not a button — only the pencil starts editing.
     expect(within(container).getAllByRole("button")).toHaveLength(1);
     fireEvent.click(editButton(container));
     expect(within(container).getByRole("textbox")).toBeTruthy();
@@ -111,7 +118,7 @@ describe("MachineNameEditor", () => {
   it("patches display_name on all runtimes when saved", () => {
     const { container, unmount } = render(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant="title" />
+        <MachineNameEditor machine={makeMachine()} wsId="ws-1" variant="basics" />
       </I18nProvider>,
     );
     fireEvent.click(editButton(container));

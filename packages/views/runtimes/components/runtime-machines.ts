@@ -108,6 +108,17 @@ export function headerRuntimeHealthBadge(
   return runtimeHealth;
 }
 
+// A machine belongs to "mine" if the current user owns any runtime on it —
+// a machine's runtimes normally share one owner, so this is unambiguous in
+// practice. No dedicated query: reuses the owner_id the runtime list query
+// already returns.
+export function isMineMachine(
+  machine: RuntimeMachine,
+  currentUserId: string | null,
+): boolean {
+  return machine.runtimes.some((r) => r.owner_id === currentUserId);
+}
+
 export function splitRuntimeName(name: string): {
   base: string;
   hostname: string | null;

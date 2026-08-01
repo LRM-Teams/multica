@@ -37,6 +37,8 @@
     "section_local": "本机",
     "section_remote": "远程",
     "section_cloud": "云端",
+    "section_mine": "我的机器",
+    "section_team_public_other": "团队公开 ({{count}})",
     "this_machine": "本机",
     "local_badge": "本地 · 这台机器",
     "runtime_count_other": "{{count}} 个运行时",

@@ -41,7 +41,6 @@ export function MachineNameEditor({
   const savedName = optimistic ?? currentDisplayName(machine);
   const visibleName = savedName || hostname;
   const isPlaceholder = !savedName;
-
   const canEdit = machine.runtimes.length > 0;
 
   const beginEdit = useCallback(
@@ -109,14 +108,29 @@ export function MachineNameEditor({
     setDraft(savedName);
   }, [savedName]);
 
-  if (!canEdit) {
+  // The same machine-name field used to have 3 simultaneous edit entry
+  // points (this list row, the detail title, the basics table row) —
+  // Frank 07-31: "到处都是铅笔修改". Editing now lives in exactly one
+  // place (the basics table row); list/title are pure display.
+  if (variant !== "basics") {
     return (
       <span
         className={cn(
+          "truncate",
+          isPlaceholder && "text-muted-foreground",
           variant === "title" ? "text-lg font-semibold" : "text-sm font-medium",
           className,
         )}
+        title={visibleName}
       >
+        {visibleName}
+      </span>
+    );
+  }
+
+  if (!canEdit) {
+    return (
+      <span className={cn("text-sm font-medium", className)}>
         {visibleName}
       </span>
     );
@@ -139,12 +153,7 @@ export function MachineNameEditor({
           }
         }}
         className={cn(
-          "rounded-md border border-brand bg-background px-2 py-0.5 outline-none",
-          variant === "title"
-            ? "text-lg font-semibold"
-            : variant === "basics"
-              ? "text-sm font-medium"
-              : "text-sm font-medium",
+          "rounded-md border border-brand bg-background px-2 py-0.5 text-sm font-medium outline-none",
           className,
         )}
         aria-label={t(($) => $.machine.basics_display_name)}
@@ -153,41 +162,7 @@ export function MachineNameEditor({
   }
 
   const saving = updateRuntime.isPending;
-  const nameClass = cn(
-    "truncate",
-    isPlaceholder && "text-muted-foreground",
-    variant === "title" ? "text-lg font-semibold" : "text-sm font-medium",
-  );
   const editAria = `${t(($) => $.machine.basics_display_name)}: ${visibleName}`;
-
-  // List rows select on row click (LRM-923). Only the pencil starts rename so
-  // the title no longer swallows the select hit target.
-  if (variant === "list") {
-    return (
-      <span
-        className={cn(
-          "group/name inline-flex min-w-0 items-center gap-1.5",
-          className,
-        )}
-      >
-        <span className={nameClass} title={visibleName}>
-          {visibleName}
-        </span>
-        {saving ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
-        ) : (
-          <button
-            type="button"
-            onClick={beginEdit}
-            aria-label={editAria}
-            className="inline-flex shrink-0 rounded p-0.5 text-muted-foreground/55 hover:bg-accent hover:text-muted-foreground"
-          >
-            <Pencil className="h-3 w-3" aria-hidden />
-          </button>
-        )}
-      </span>
-    );
-  }
 
   return (
     <span
@@ -196,30 +171,24 @@ export function MachineNameEditor({
         className,
       )}
     >
-      <button
-        type="button"
-        onClick={beginEdit}
-        aria-label={editAria}
-        className={cn(
-          "inline-flex min-w-0 items-center gap-1.5 text-left",
-          variant === "title" ? "text-lg font-semibold" : "text-sm font-medium",
-        )}
+      <span
+        className={cn("truncate text-sm font-medium", isPlaceholder && "text-muted-foreground")}
+        title={visibleName}
       >
-        <span
-          className={cn("truncate", isPlaceholder && "text-muted-foreground")}
-          title={visibleName}
+        {visibleName}
+      </span>
+      {saving ? (
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+      ) : (
+        <button
+          type="button"
+          onClick={beginEdit}
+          aria-label={editAria}
+          className="inline-flex shrink-0 rounded p-0.5 text-muted-foreground/55 opacity-0 transition-opacity hover:bg-accent hover:text-muted-foreground focus-visible:opacity-100 group-hover/name:opacity-100"
         >
-          {visibleName}
-        </span>
-        {saving ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
-        ) : (
-          <Pencil
-            className="h-3 w-3 shrink-0 text-muted-foreground/55"
-            aria-hidden
-          />
-        )}
-      </button>
+          <Pencil className="h-3 w-3" aria-hidden />
+        </button>
+      )}
     </span>
   );
 }

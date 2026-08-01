@@ -37,6 +37,8 @@
     "section_local": "로컬",
     "section_remote": "원격",
     "section_cloud": "클라우드",
+    "section_mine": "내 머신",
+    "section_team_public_other": "팀 공개 ({{count}})",
     "this_machine": "이 Mac",
     "local_badge": "로컬 · 이 기기",
     "runtime_count_one": "런타임 {{count}}개",

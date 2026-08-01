@@ -2,21 +2,18 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Agent, ChannelActiveTask } from "@multica/core/types";
-import type { DMItem } from "@multica/core/dm";
+import type { Agent } from "@multica/core/types";
 import { AgentProfileActions } from "./agent-profile-actions";
 import { pickStoppableDmTask } from "./agent-profile-stoppable-task";
+import type { ChannelActiveTask } from "@multica/core/types";
 
 const mocks = vi.hoisted(() => ({
   openDM: vi.fn(),
   isPending: false,
   archiveAgent: vi.fn(async (..._args: unknown[]) => ({})),
-  cancelChannelInboxEvent: vi.fn(async (..._args: unknown[]) => ({})),
   invalidateQueries: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
-  dms: [] as DMItem[],
-  activeTasks: [] as ChannelActiveTask[],
 }));
 
 vi.mock("../../common/use-open-dm", () => ({
@@ -26,50 +23,11 @@ vi.mock("../../common/use-open-dm", () => ({
 vi.mock("@multica/core/api", () => ({
   api: {
     archiveAgent: (...args: unknown[]) => mocks.archiveAgent(...args),
-    cancelChannelInboxEvent: (...args: unknown[]) =>
-      mocks.cancelChannelInboxEvent(...args),
   },
-}));
-
-vi.mock("@multica/core/hooks", () => ({
-  useWorkspaceId: () => "ws-1",
-}));
-
-vi.mock("@multica/core/dm", () => ({
-  dmKeys: { list: (wsId: string) => ["dm", wsId, "list"] },
-  dmListOptions: () => ({
-    queryKey: ["dm", "ws-1", "list"],
-    queryFn: async () => mocks.dms,
-  }),
-}));
-
-vi.mock("@multica/core/channels", () => ({
-  activeChannelTasksKeys: {
-    all: (channelId: string) => ["channel-active-tasks", channelId],
-  },
-  activeChannelTasksOptions: (channelId: string) => ({
-    queryKey: ["channel-active-tasks", channelId],
-    queryFn: async () => mocks.activeTasks,
-    enabled: !!channelId,
-  }),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ invalidateQueries: mocks.invalidateQueries }),
-  useQuery: (options: {
-    queryKey: unknown[];
-    queryFn?: () => Promise<unknown>;
-    enabled?: boolean;
-  }) => {
-    const key0 = String(options.queryKey[0] ?? "");
-    if (key0 === "dm") {
-      return { data: mocks.dms };
-    }
-    if (options.enabled === false || key0 !== "channel-active-tasks") {
-      return { data: [] };
-    }
-    return { data: mocks.activeTasks };
-  },
 }));
 
 vi.mock("sonner", () => ({
@@ -110,10 +68,6 @@ const RESOURCES = {
     actions_section: "Actions",
     message_button: "Message",
     message_opening: "Opening…",
-    actions_stop: "Stop",
-    actions_stop_aria: "Stop {{name}}'s current task",
-    actions_stop_success: "Stopped {{name}}",
-    actions_stop_failed: "Failed to stop agent task",
     actions_delete: "Delete",
     agent_deleted_toast: "Deleted",
     delete_failed_toast: "Delete failed",
@@ -148,11 +102,6 @@ const agent = {
   archived_at: null,
   archived_by: null,
 } as Agent;
-
-const dm = {
-  id: "dm-1",
-  peer: { type: "agent", id: "agent-1", name: "Atlas" },
-} as DMItem;
 
 function runningTask(over: Partial<ChannelActiveTask> = {}): ChannelActiveTask {
   return {
@@ -200,17 +149,14 @@ describe("pickStoppableDmTask (LRM-589)", () => {
   });
 });
 
-describe("AgentProfileActions (LRM-468 / LRM-589)", () => {
+describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
   beforeEach(() => {
     mocks.openDM.mockReset();
     mocks.archiveAgent.mockReset().mockResolvedValue({});
-    mocks.cancelChannelInboxEvent.mockReset().mockResolvedValue({});
     mocks.toastSuccess.mockReset();
     mocks.toastError.mockReset();
     mocks.invalidateQueries.mockReset();
     mocks.isPending = false;
-    mocks.dms = [];
-    mocks.activeTasks = [];
   });
 
   it("renders Message as primary action and opens DM", () => {
@@ -219,11 +165,19 @@ describe("AgentProfileActions (LRM-468 / LRM-589)", () => {
     expect(mocks.openDM).toHaveBeenCalledWith({ peer_type: "agent", peer_id: "agent-1" });
   });
 
+  it("renders Message → Restart… → Delete and never Stop (LRM-909)", () => {
+    render(<AgentProfileActions agent={agent} canManage />);
+    expect(screen.getByTestId("agent-profile-action-message")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-profile-action-restart")).toBeInTheDocument();
+    expect(screen.getByTestId("agent-profile-action-delete")).toBeInTheDocument();
+    expect(screen.queryByTestId("agent-profile-action-stop")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stop")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stop all")).not.toBeInTheDocument();
+  });
+
   it("renders the #633 Restart entry for a manager; Copy diagnostic / Report stay out of scope", () => {
     render(<AgentProfileActions agent={agent} canManage />);
-    // #633 reinstates a Restart entry (opens the three-tier restart modal).
     expect(screen.getByTestId("agent-profile-action-restart")).toBeInTheDocument();
-    // The other LRM-468 items remain out of scope.
     expect(screen.queryByTestId("agent-profile-action-copy")).not.toBeInTheDocument();
     expect(screen.queryByTestId("agent-profile-action-report")).not.toBeInTheDocument();
     expect(screen.queryByText("Copy diagnostic info")).not.toBeInTheDocument();
@@ -244,14 +198,12 @@ describe("AgentProfileActions (LRM-468 / LRM-589)", () => {
   it("Delete is the only solid destructive in a border-t danger zone (LRM-593 lock A)", () => {
     render(<AgentProfileActions agent={agent} canManage />);
     const del = screen.getByTestId("agent-profile-action-delete");
-    // Solid destructive: white text on a filled bg-destructive (not the wash).
     expect(del.className).toMatch(/text-white/);
     expect(del.parentElement?.className).toMatch(/border-t/);
   });
 
   it("Delete confirms then deactivates via archiveAgent (LRM-448: Delete, not Archive)", async () => {
     render(<AgentProfileActions agent={agent} canManage />);
-    // Button is labeled Delete (never "Archive agent") — LRM-448 AC#2.
     expect(screen.getByTestId("agent-profile-action-delete")).toHaveTextContent("Delete");
     expect(screen.queryByText("Archive agent")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("agent-profile-action-delete"));
@@ -260,45 +212,5 @@ describe("AgentProfileActions (LRM-468 / LRM-589)", () => {
       expect(mocks.archiveAgent).toHaveBeenCalledWith("agent-1");
     });
     expect(mocks.toastSuccess).toHaveBeenCalledWith("Deleted");
-  });
-
-  it("hides Stop when the agent has no live DM task", () => {
-    mocks.dms = [dm];
-    mocks.activeTasks = [];
-    render(<AgentProfileActions agent={agent} canManage />);
-    expect(screen.queryByTestId("agent-profile-action-stop")).not.toBeInTheDocument();
-    expect(screen.queryByText("Stop all")).not.toBeInTheDocument();
-  });
-
-  it("shows Stop (not Stop all) for a live DM task and cancels inbox", async () => {
-    mocks.dms = [dm];
-    mocks.activeTasks = [runningTask()];
-    render(<AgentProfileActions agent={agent} canManage />);
-    const stop = screen.getByTestId("agent-profile-action-stop");
-    expect(stop).toHaveAttribute("aria-label", "Stop Atlas's current task");
-    expect(screen.queryByText("Stop all")).not.toBeInTheDocument();
-    fireEvent.click(stop);
-    await waitFor(() => {
-      expect(mocks.cancelChannelInboxEvent).toHaveBeenCalledWith("dm-1", "inbox-1");
-    });
-    expect(mocks.toastSuccess).toHaveBeenCalledWith("Stopped Atlas");
-  });
-
-  it("Stop is a danger wash outline, not solid (LRM-593 lock A hierarchy)", () => {
-    mocks.dms = [dm];
-    mocks.activeTasks = [runningTask()];
-    render(<AgentProfileActions agent={agent} canManage />);
-    const stop = screen.getByTestId("agent-profile-action-stop");
-    // Wash outline: a destructive border, and NOT promoted to solid (no white text).
-    expect(stop.className).toMatch(/border-destructive/);
-    expect(stop.className).not.toMatch(/text-white/);
-  });
-
-  it("keeps Stop out of the Delete danger zone", () => {
-    mocks.dms = [dm];
-    mocks.activeTasks = [runningTask()];
-    render(<AgentProfileActions agent={agent} canManage />);
-    const stop = screen.getByTestId("agent-profile-action-stop");
-    expect(stop.parentElement?.className).not.toMatch(/border-t/);
   });
 });

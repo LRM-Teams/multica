@@ -1,18 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Loader2, MessageSquare, RotateCcw, Square, Trash2 } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { Loader2, MessageSquare, RotateCcw, Trash2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent } from "@multica/core/types";
 import { api } from "@multica/core/api";
-import {
-  activeChannelTasksKeys,
-  activeChannelTasksOptions,
-} from "@multica/core/channels";
-import { dmKeys, dmListOptions } from "@multica/core/dm";
-import { useWorkspaceId } from "@multica/core/hooks";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import { Button } from "@multica/ui/components/ui/button";
@@ -20,7 +14,6 @@ import { useOpenDM } from "../../common/use-open-dm";
 import { useT } from "../../i18n/use-t";
 import { AgentRestartModal } from "./agent-restart-modal";
 import { ConfirmDeleteAgent } from "./confirm-delete-agent";
-import { pickStoppableDmTask } from "./agent-profile-stoppable-task";
 
 /**
  * LRM-448 · Profile v4 Actions stack (Computer IA + Multica tokens).
@@ -39,18 +32,12 @@ import { pickStoppableDmTask } from "./agent-profile-stoppable-task";
  * LRM-480: actions use the standard project Button variants (outline /
  * destructive) — no custom thick-bordered button style.
  *
- * LRM-589: DM Agent Stop lives here (not beside the DM header cue). Show
- * Stop only when this agent has a stoppable 1:1 DM task — never "Stop all".
+ * LRM-909 (Frank「stop按钮删掉，留restart就行」): Profile ACTIONS no longer
+ * renders Stop. Keep Message → Restart… → Delete. DM stop remains on the
+ * conversation live cue, not here.
  *
- * LRM-593 (Frank lock A, carrier LRM-592): pull the three buttons apart by
- * weight so they stop reading as a flat red wall (Frank「就是这几个按钮问题」).
- *   Message = outline · default (lightest)
- *   Stop    = danger wash OUTLINE  (destructive variant wash + destructive
- *             border; subordinate — temporary cancel)
- *   Delete  = the ONLY solid destructive (filled bg-destructive + white),
- *             above a `border-t` danger zone (heaviest — permanent).
- * No second destructive variant is invented: Stop reuses the existing
- * destructive wash + a border; only Delete is promoted to a solid fill.
+ * LRM-593 (Frank lock A): Delete is the only solid destructive, above a
+ * `border-t` danger zone.
  */
 export function AgentProfileActions({
   agent,
@@ -61,32 +48,13 @@ export function AgentProfileActions({
 }) {
   const { t } = useT("agents");
   const qc = useQueryClient();
-  const wsId = useWorkspaceId();
   const { openDM, isPending: openingDM } = useOpenDM();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [stopping, setStopping] = useState(false);
   const [restartOpen, setRestartOpen] = useState(false);
 
   const isArchived = !!agent.archived_at;
   const displayName = resolveActorDisplayName(agent, agent.id);
-
-  const { data: dms = [] } = useQuery(dmListOptions(wsId));
-  const dmChannelId = useMemo(() => {
-    const dm = dms.find(
-      (row) => row.peer.type === "agent" && row.peer.id === agent.id,
-    );
-    return dm?.id ?? "";
-  }, [agent.id, dms]);
-
-  const { data: activeTasks = [] } = useQuery(
-    activeChannelTasksOptions(dmChannelId),
-  );
-
-  const stoppableTask = useMemo(
-    () => pickStoppableDmTask(activeTasks, agent.id),
-    [activeTasks, agent.id],
-  );
 
   const invalidateAgents = () => {
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) });
@@ -109,30 +77,6 @@ export function AgentProfileActions({
       );
     } finally {
       setDeleting(false);
-    }
-  };
-
-  const handleStop = async () => {
-    if (!dmChannelId || !stoppableTask || stopping) return;
-    const inboxEventId = stoppableTask.inbox_event_id?.trim();
-    if (!inboxEventId) {
-      showErrorToast(t(($) => $.side_panel.actions_stop_failed));
-      return;
-    }
-    setStopping(true);
-    try {
-      await api.cancelChannelInboxEvent(dmChannelId, inboxEventId);
-      toast.success(
-        t(($) => $.side_panel.actions_stop_success, { name: displayName }),
-      );
-      qc.invalidateQueries({
-        queryKey: activeChannelTasksKeys.all(dmChannelId),
-      });
-      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    } catch {
-      showErrorToast(t(($) => $.side_panel.actions_stop_failed));
-    } finally {
-      setStopping(false);
     }
   };
 
@@ -163,30 +107,6 @@ export function AgentProfileActions({
           </Button>
         ) : null}
 
-        {!isArchived && stoppableTask ? (
-          <Button
-            type="button"
-            // LRM-593 lock A: Stop = danger wash OUTLINE (existing destructive
-            // wash + destructive border). NOT solid — only Delete is solid.
-            variant="destructive"
-            size="lg"
-            className="w-full gap-2 border-destructive/40"
-            data-testid="agent-profile-action-stop"
-            disabled={stopping}
-            onClick={() => void handleStop()}
-            aria-label={t(($) => $.side_panel.actions_stop_aria, {
-              name: displayName,
-            })}
-          >
-            {stopping ? (
-              <Loader2 className="size-2.5 shrink-0 animate-spin" aria-hidden />
-            ) : (
-              <Square className="size-2.5 shrink-0 fill-current" aria-hidden />
-            )}
-            {t(($) => $.side_panel.actions_stop)}
-          </Button>
-        ) : null}
-
         {canManage && !isArchived ? (
           <Button
             type="button"
@@ -206,7 +126,7 @@ export function AgentProfileActions({
             <Button
               type="button"
               // LRM-593 lock A: Delete = the ONLY solid destructive (filled
-              // bg-destructive + white text) so it outweighs the wash Stop.
+              // bg-destructive + white text).
               variant="destructive"
               size="lg"
               className="w-full gap-2 bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive dark:hover:bg-destructive/90"

@@ -257,10 +257,17 @@ func (s *EmailService) SendVerificationCode(to, code string) error {
 
 // SendInvitationEmail notifies the invitee that they have been invited to a workspace.
 // invitationID is included in the URL so the email deep-links to /invite/{id}.
+//
+// A real send backend (SMTP or Resend) requires FRONTEND_ORIGIN to build that
+// link and refuses to send without it — guessing a hardcoded domain here
+// previously sent invitees to the wrong deployment silently (task #63). The
+// DEV console-print path is exempt: it never leaves this machine, so there is
+// no wrong domain to guess.
 func (s *EmailService) SendInvitationEmail(to, inviterName, workspaceName, invitationID string) error {
 	appURL := strings.TrimSpace(os.Getenv("FRONTEND_ORIGIN"))
-	if appURL == "" {
-		appURL = "https://app.multica.ai"
+	realBackend := s.smtpHost != "" || s.client != nil
+	if realBackend && appURL == "" {
+		return fmt.Errorf("cannot send invitation email: FRONTEND_ORIGIN is not set")
 	}
 	inviteURL := fmt.Sprintf("%s/invite/%s", appURL, invitationID)
 

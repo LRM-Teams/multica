@@ -4,6 +4,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/resend/resend-go/v2"
 )
 
 func TestSanitizeSubjectField(t *testing.T) {
@@ -248,5 +250,69 @@ func TestBuildInvitationParams_ToAndFromPassedThrough(t *testing.T) {
 	}
 	if !strings.Contains(p.Html, "https://app.multica.ai/invite/abc") {
 		t.Errorf("body missing invite URL: %s", p.Html)
+	}
+}
+
+// TestSendInvitationEmail_SMTPBackendRejectsMissingOrigin pins the task #63
+// fix: a real send backend (SMTP here) must refuse to guess a domain when
+// FRONTEND_ORIGIN is unset, instead of silently linking invitees to a
+// hardcoded production URL that may not even be this deployment.
+func TestSendInvitationEmail_SMTPBackendRejectsMissingOrigin(t *testing.T) {
+	t.Setenv("FRONTEND_ORIGIN", "")
+	s := &EmailService{smtpHost: "smtp.example.com", smtpPort: "25"}
+
+	err := s.SendInvitationEmail("invitee@example.com", "Alice", "Acme", "abc")
+	if err == nil {
+		t.Fatal("expected an error when FRONTEND_ORIGIN is unset, got nil")
+	}
+	if !strings.Contains(err.Error(), "FRONTEND_ORIGIN") {
+		t.Errorf("error = %q, want it to mention FRONTEND_ORIGIN", err.Error())
+	}
+}
+
+// TestSendInvitationEmail_ResendBackendRejectsMissingOrigin mirrors the SMTP
+// case for the Resend client path — both real-send branches must refuse
+// rather than guess.
+func TestSendInvitationEmail_ResendBackendRejectsMissingOrigin(t *testing.T) {
+	t.Setenv("FRONTEND_ORIGIN", "")
+	s := &EmailService{client: resend.NewClient("test-key"), fromEmail: "noreply@multica.ai"}
+
+	err := s.SendInvitationEmail("invitee@example.com", "Alice", "Acme", "abc")
+	if err == nil {
+		t.Fatal("expected an error when FRONTEND_ORIGIN is unset, got nil")
+	}
+	if !strings.Contains(err.Error(), "FRONTEND_ORIGIN") {
+		t.Errorf("error = %q, want it to mention FRONTEND_ORIGIN", err.Error())
+	}
+}
+
+// TestSendInvitationEmail_SMTPBackendUsesConfiguredOrigin confirms the guard
+// only blocks the missing-config case: with FRONTEND_ORIGIN set, the SMTP
+// path proceeds past the guard (and fails later, on the network dial against
+// a nonexistent host — proving the rejection above was config-driven, not a
+// permanent block).
+func TestSendInvitationEmail_SMTPBackendUsesConfiguredOrigin(t *testing.T) {
+	t.Setenv("FRONTEND_ORIGIN", "https://selfhost.example.com")
+	s := &EmailService{smtpHost: "smtp.invalid.example", smtpPort: "25"}
+
+	err := s.SendInvitationEmail("invitee@example.com", "Alice", "Acme", "abc")
+	if err == nil {
+		t.Fatal("expected a network error dialing the fake SMTP host, got nil")
+	}
+	if strings.Contains(err.Error(), "FRONTEND_ORIGIN") {
+		t.Errorf("got the FRONTEND_ORIGIN guard error even though it was set: %v", err)
+	}
+}
+
+// TestSendInvitationEmail_DevPathIgnoresMissingOrigin confirms the guard is
+// scoped to real send backends: the DEV console-print path (no SMTP, no
+// Resend client) never delivers mail to a real domain, so it must keep
+// working without FRONTEND_ORIGIN — this is what local dev relies on today.
+func TestSendInvitationEmail_DevPathIgnoresMissingOrigin(t *testing.T) {
+	t.Setenv("FRONTEND_ORIGIN", "")
+	s := &EmailService{}
+
+	if err := s.SendInvitationEmail("invitee@example.com", "Alice", "Acme", "abc"); err != nil {
+		t.Fatalf("DEV path (no backend configured) must not require FRONTEND_ORIGIN, got error: %v", err)
 	}
 }

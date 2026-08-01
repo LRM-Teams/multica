@@ -233,7 +233,14 @@
     "col_weight": "权重",
     "col_type": "类型",
     "col_source": "来源",
-    "col_purpose": "用途"
+    "col_purpose": "用途",
+    "citation_expand": "展开摘要",
+    "citation_collapse": "收起摘要",
+    "citation_unavailable": "来源不可用",
+    "citation_untitled": "未命名来源",
+    "citation_fetch_failed": "抓取失败",
+    "citation_fetch_failed_hint": "该来源未能抓取。在可用链接恢复前，此处显示降级占位卡。",
+    "citation_summary_empty": "暂无摘要。"
   },
   "m2": {
     "rail_title": "探索轨迹",

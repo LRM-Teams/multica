@@ -233,7 +233,14 @@
     "col_weight": "重み",
     "col_type": "種別",
     "col_source": "ソース",
-    "col_purpose": "用途"
+    "col_purpose": "用途",
+    "citation_expand": "要約を表示",
+    "citation_collapse": "要約を隠す",
+    "citation_unavailable": "ソース利用不可",
+    "citation_untitled": "無題のソース",
+    "citation_fetch_failed": "取得失敗",
+    "citation_fetch_failed_hint": "このソースは取得できませんでした。有効な URL が戻るまでプレースホルダーを表示します。",
+    "citation_summary_empty": "要約はまだありません。"
   },
   "m2": {
     "rail_title": "探索トレイル",

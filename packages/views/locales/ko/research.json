@@ -233,7 +233,14 @@
     "col_weight": "가중치",
     "col_type": "유형",
     "col_source": "출처",
-    "col_purpose": "용도"
+    "col_purpose": "용도",
+    "citation_expand": "요약 펼치기",
+    "citation_collapse": "요약 접기",
+    "citation_unavailable": "출처 사용 불가",
+    "citation_untitled": "제목 없는 출처",
+    "citation_fetch_failed": "가져오기 실패",
+    "citation_fetch_failed_hint": "이 출처를 가져오지 못했습니다. 유효한 URL이 생길 때까지 자리 표시 카드로 둡니다.",
+    "citation_summary_empty": "아직 요약이 없습니다."
   },
   "m2": {
     "rail_title": "탐색 트레일",

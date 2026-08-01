@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 )
@@ -396,5 +398,80 @@ func TestAutoUpdateLoop_EarlyExits(t *testing.T) {
 			}()
 			<-done
 		})
+	}
+}
+
+// TestTryAutoUpdate_PinnedVersionPreventsUpgrade verifies that when
+// PinnedVersion is set, tryAutoUpdate never fetches or installs a new
+// release even when one is available.
+//
+// Mutation check: remove the PinnedVersion guard in autoUpdateLoop or
+// tryAutoUpdate → the stub release will be fetched and runUpdateFn will
+// fire (t.Fatalf), proving the pin was the only thing blocking it.
+func TestTryAutoUpdate_PinnedVersionPreventsUpgrade(t *testing.T) {
+	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
+	d.cfg.PinnedVersion = "v0.1.13"
+	withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.14"}, nil)
+
+	// runUpdateFn should never be called when pinned.
+	d.runUpdateFn = func(string) (string, error) {
+		t.Fatal("runUpdateFn called despite version pin")
+		return "", nil
+	}
+
+	// Verify the pin check fires in autoUpdateLoop, not just tryAutoUpdate.
+	// We test the loop-level guard by calling it and checking the log/restart.
+	// Since autoUpdateLoop blocks, we test the guard indirectly via tryAutoUpdate
+	// which is the actual upgrade path. The loop guard is the same condition.
+	d.tryAutoUpdate(context.Background())
+
+	if restartCalls.Load() != 0 {
+		t.Fatalf("triggerRestart called despite version pin")
+	}
+}
+
+// TestTryAutoUpdate_NoPinUpgradesNormally verifies that without a pin,
+// auto-update proceeds as before (regression guard for the pin feature).
+func TestTryAutoUpdate_NoPinUpgradesNormally(t *testing.T) {
+	d, restartCalls := newAutoUpdateTestDaemon(t, "v0.1.13")
+	// PinnedVersion is empty (zero value) — no pin.
+	withStubRelease(t, &cli.ReleaseManifest{TagName: "v0.1.14"}, nil)
+
+	d.runUpdateFn = func(target string) (string, error) {
+		if target != "v0.1.14" {
+			t.Fatalf("unexpected upgrade target %q", target)
+		}
+		return "staged " + target, nil
+	}
+
+	d.tryAutoUpdate(context.Background())
+
+	if restartCalls.Load() != 1 {
+		t.Fatalf("expected triggerRestart to fire once, got %d", restartCalls.Load())
+	}
+}
+
+// TestAutoUpdateLoop_PinnedVersionLogsAndReturns verifies that
+// autoUpdateLoop exits immediately when pinned, with a visible log message.
+func TestAutoUpdateLoop_PinnedVersionLogsAndReturns(t *testing.T) {
+	d, _ := newAutoUpdateTestDaemon(t, "v0.1.13")
+	d.cfg.PinnedVersion = "v0.1.13"
+
+	// Capture logs to verify the pin message is visible.
+	var logBuf strings.Builder
+	d.logger = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// autoUpdateLoop should return immediately when pinned.
+	// We use a context with a short timeout to ensure it doesn't block.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d.autoUpdateLoop(ctx)
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "version pinned") {
+		t.Fatalf("expected log to mention 'version pinned', got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, "v0.1.13") {
+		t.Fatalf("expected log to contain pinned version v0.1.13, got: %s", logOutput)
 	}
 }

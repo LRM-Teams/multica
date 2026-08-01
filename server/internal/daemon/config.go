@@ -99,6 +99,7 @@ type Config struct {
 	AutoUpdateEnabled             bool                  // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
 	AutoUpdateConfigSource        string                // resolved source: official_host_default, self_host_default, env_enabled, env_disabled, or cli_disabled
 	AutoUpdateCheckInterval       time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
+	PinnedVersion                 string                // when non-empty, the daemon stays on this version and never auto-upgrades (env: MULTICA_PINNED_VERSION)
 	UpdateObservationPath         string                // daemon-local durable update truth; empty is in-memory only for explicitly constructed test configs
 	SharedSkillsDir               string                // optional global override; when empty each provider uses its own shared root
 	SharedSkillsSyncInterval      time.Duration         // how often to scan and sync SharedSkillsDir
@@ -507,6 +508,19 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if overrides.AutoUpdateCheckInterval > 0 {
 		autoUpdateInterval = overrides.AutoUpdateCheckInterval
 	}
+
+	// Pinned version: when set, the daemon stays on this version and never
+	// auto-upgrades. The value must be a valid release tag (e.g. "0.3.92").
+	// An invalid or non-release value is a configuration error — we fail
+	// loud rather than silently ignoring the pin and letting the daemon
+	// upgrade past the intended version.
+	pinnedVersion := ""
+	if v := strings.TrimSpace(os.Getenv("MULTICA_PINNED_VERSION")); v != "" {
+		if !cli.IsReleaseVersion(v) {
+			return Config{}, fmt.Errorf("MULTICA_PINNED_VERSION: %q is not a valid release version", v)
+		}
+		pinnedVersion = v
+	}
 	versionStoreRoot, err := cli.DefaultVersionStoreRoot()
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve daemon update observation path: %w", err)
@@ -573,6 +587,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		AutoUpdateEnabled:              autoUpdateEnabled,
 		AutoUpdateConfigSource:         autoUpdateConfigSource,
 		AutoUpdateCheckInterval:        autoUpdateInterval,
+		PinnedVersion:                  pinnedVersion,
 		UpdateObservationPath:          updateObservationPath,
 		SharedSkillsDir:                sharedSkillsDir,
 		SharedSkillsSyncInterval:       sharedSkillsInterval,

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/cli"
@@ -58,6 +59,21 @@ func (d *Daemon) autoUpdateLoop(ctx context.Context) {
 		d.logger.Info("auto-update: skipped (not a release build)", "version", d.cfg.CLIVersion)
 		return
 	}
+	if d.cfg.PinnedVersion != "" {
+		// Operator explicitly pinned this machine to a specific version via
+		// MULTICA_PINNED_VERSION. Do not poll for upgrades — the daemon
+		// stays on the pinned version until the env var is removed/changed
+		// and the process is restarted.
+		d.logger.Info("auto-update: skipped (version pinned)",
+			"pinned", d.cfg.PinnedVersion,
+			"current", d.cfg.CLIVersion)
+		if d.updateObservation != nil {
+			d.beginUpdateObservation("auto", "waiting", "")
+			d.finishUpdateObservation("waiting", "pinned", d.cfg.PinnedVersion, "",
+				fmt.Sprintf("This machine is pinned to version %s via MULTICA_PINNED_VERSION and will not auto-upgrade.", d.cfg.PinnedVersion))
+		}
+		return
+	}
 
 	interval := d.cfg.AutoUpdateCheckInterval
 	if interval <= 0 {
@@ -90,6 +106,17 @@ func (d *Daemon) autoUpdateLoop(ctx context.Context) {
 // network blip to escalate to a process-level shutdown.
 func (d *Daemon) tryAutoUpdate(ctx context.Context) {
 	if ctx.Err() != nil {
+		return
+	}
+
+	// Defense-in-depth: even if tryAutoUpdate is called directly (e.g. by a
+	// server-triggered update), respect the pin. The loop-level guard in
+	// autoUpdateLoop prevents the periodic ticker from reaching here, but a
+	// manual or server-initiated update request should also be blocked.
+	if d.cfg.PinnedVersion != "" {
+		d.logger.Info("auto-update: skip — version pinned",
+			"pinned", d.cfg.PinnedVersion,
+			"current", d.cfg.CLIVersion)
 		return
 	}
 

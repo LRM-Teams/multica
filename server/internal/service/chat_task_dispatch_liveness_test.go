@@ -13,21 +13,25 @@ import (
 // Task #50: chat/@mention task dispatch (createChatTaskRow, called by
 // enqueueChatTask) does not call AgentReadiness and never checks runtime or
 // daemon connectivity before creating a task row — unlike the autopilot
-// admission path (shouldSkipDispatch/dispatchRunOnly). This is intentional,
-// not a gap: delivery is pull-only (the daemon claims 'pending' rows via its
+// admission path (shouldSkipDispatch/dispatchRunOnly).
+//
+// This is deliberate, not a gap — do not "fix" it by adding a connectivity
+// gate here. Delivery is pull-only (the daemon claims 'pending' rows via its
 // own heartbeat/poll cycle; nothing here pushes to a possibly-unreachable
 // daemon), so there is no "wrongly reject/fail because the daemon looked
 // offline at creation time" failure mode to guard against. A daemon that
 // never comes back simply never claims the row (matching #1673's
 // ExpireStaleQueuedTasks, which explicitly protects offline-runtime rows
-// from TTL expiry instead of failing them); a daemon that does come back —
-// whether or not the specific agent's resident process is still alive —
-// claims it and triggers #42②'s crash-recovery rebuild.
+// from TTL expiry instead of failing them). More importantly: when the
+// daemon IS alive but this specific agent's resident process died, task
+// arrival is the trigger that rebuilds it (#42②'s crash-recovery). A
+// connectivity gate added here would block that arrival — turning a
+// recoverable crashed process into one that can never come back, the exact
+// deadlock Parker flagged when reviewing this fix ("兜底的触发器长在了它要兜的
+// 那个东西身上").
 //
-// This test pins that behavior so a future change doesn't accidentally
-// start gating createChatTaskRow on runtime/daemon connectivity and
-// reintroduce the "silently reject work behind a slow-to-reconnect
-// machine" failure mode #50 exists to prevent.
+// This test pins the current (correct) behavior so a future well-intentioned
+// change doesn't add that gate back in.
 func TestCreateChatTaskRow_SucceedsRegardlessOfRuntimeConnectivity(t *testing.T) {
 	pool := interactionDAGTestPool(t)
 	defer pool.Close()

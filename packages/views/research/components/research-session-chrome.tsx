@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { ResearchFleetMember, ResearchSession, ResearchSource } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import {
@@ -11,8 +12,8 @@ import {
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
 import { cn } from "@multica/ui/lib/utils";
-import type { ResearchSession } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
+import { ResearchSessionMetaMenu } from "./research-session-meta-menu";
 
 type StatusTone = { text: string; dot: string };
 
@@ -26,6 +27,11 @@ const DEFAULT_TONE: StatusTone = {
   text: "text-muted-foreground",
   dot: "bg-muted-foreground",
 };
+
+// Module-level so the default doesn't allocate a new array identity on every
+// render — an inline `= []` default breaks memo comparison downstream.
+const EMPTY_MEMBERS: ResearchFleetMember[] = [];
+const EMPTY_SOURCES: ResearchSource[] = [];
 
 function StageChip({ label, className }: { label: string; className?: string }) {
   return (
@@ -54,6 +60,8 @@ export function ResearchSessionChrome({
   handoffPending,
   onOpenDelivery,
   selectedSummary,
+  members = EMPTY_MEMBERS,
+  sources = EMPTY_SOURCES,
 }: {
   session: ResearchSession;
   canConfirm: boolean;
@@ -68,6 +76,8 @@ export function ResearchSessionChrome({
   handoffPending?: boolean;
   onOpenDelivery?: () => void;
   selectedSummary?: string | null;
+  members?: ResearchFleetMember[];
+  sources?: ResearchSource[];
 }) {
   const { t } = useT("research");
   const [handoffOpen, setHandoffOpen] = useState(false);
@@ -187,6 +197,7 @@ export function ResearchSessionChrome({
               {t(($) => $.panel.view_delivery)}
             </Button>
           ) : null}
+          <ResearchSessionMetaMenu members={members} sources={sources} />
         </div>
       </div>
     </header>

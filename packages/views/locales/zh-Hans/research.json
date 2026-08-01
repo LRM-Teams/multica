@@ -76,6 +76,11 @@
     "delivery": "来源与报告",
     "send": "发送",
     "fleet": "调研团",
+    "fleet_empty": "当前没有在编成员。",
+    "sources_empty": "尚无加权来源。",
+    "sources_hint": "按可信度排序。权重高的为权威基线，低权重仅作旁证。",
+    "session_tools": "会话工具",
+    "session_tools_hint": "调研团编制与来源图谱按需打开，不常驻画布。",
     "confirm": "确认调研完成",
     "confirm_continue": "确认并继续",
     "handoff_title": "交付移交",
@@ -126,7 +131,14 @@
     "roster_change": "编制变更",
     "stage_gate": "阶段门",
     "product_round_gate": "产品轮判定",
-    "agent_activity": "活动"
+    "agent_activity": "活动",
+    "confidence": "置信",
+    "detail_hint": "节点详情",
+    "summary": "摘要 / 结论",
+    "summary_empty": "暂无摘要。",
+    "dead_end_reason": "死胡同原因",
+    "evidence": "证据 / 来源",
+    "evidence_empty": "暂无关联来源。"
   },
   "home": {
     "composer_label": "创建调研会话",

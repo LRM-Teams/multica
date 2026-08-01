@@ -76,6 +76,11 @@
     "delivery": "Sources & report",
     "send": "Send",
     "fleet": "Research fleet",
+    "fleet_empty": "No active fleet members.",
+    "sources_empty": "No weighted sources yet.",
+    "sources_hint": "Sorted by credibility. High-weight sources are the baseline; low-weight rows are corroboration only.",
+    "session_tools": "Session tools",
+    "session_tools_hint": "Open fleet roster and source map on demand — not pinned on the canvas.",
     "confirm": "Confirm research complete",
     "confirm_continue": "Confirm & continue",
     "handoff_title": "Handoff delivery",
@@ -126,7 +131,14 @@
     "roster_change": "Roster change",
     "stage_gate": "Stage gate",
     "agent_activity": "Activity",
-    "product_round_gate": "Product round"
+    "product_round_gate": "Product round",
+    "confidence": "Confidence",
+    "detail_hint": "Node detail",
+    "summary": "Summary / conclusion",
+    "summary_empty": "No summary yet.",
+    "dead_end_reason": "Dead-end reason",
+    "evidence": "Evidence / sources",
+    "evidence_empty": "No linked sources."
   },
   "home": {
     "composer_label": "Create a research session",

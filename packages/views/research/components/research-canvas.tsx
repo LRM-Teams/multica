@@ -28,12 +28,10 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { layoutResearchGraph, type ResearchFlowNodeData } from "../lib/layout-graph";
 import { visualForEdgeType } from "../lib/node-visuals";
 import { ResearchCanvasDock } from "./research-canvas-dock";
-import { ResearchFleetStrip } from "./research-fleet-strip";
 import { ResearchGraphNode as ResearchGraphNodeView } from "./research-graph-node";
 import { SYSTEM_NODE_TYPES, type NodeRingAction } from "../lib/node-action-ring";
 import { ResearchNodeActionRing } from "./research-node-action-ring";
 import { ResearchNodeDetail } from "./research-node-detail";
-import { ResearchSourceBadges } from "./research-source-badges";
 
 const nodeTypes: NodeTypes = {
   research: ResearchGraphNodeView,
@@ -50,7 +48,7 @@ function ResearchCanvasInner({
   nodes,
   edges,
   sources,
-  members,
+  members: _members,
   presence,
   selectedId,
   onSelect,
@@ -336,10 +334,16 @@ function ResearchCanvasInner({
           </NodeToolbar>
         ) : null}
       </ReactFlow>
-      {members && members.length > 0 ? <ResearchFleetStrip members={members} /> : null}
-      {sourceList.length > 0 ? <ResearchSourceBadges sources={sourceList} /> : null}
       {showDetail && selectedNode ? (
-        <ResearchNodeDetail node={selectedNode} sources={sourceList} />
+        <ResearchNodeDetail
+          node={selectedNode}
+          sources={sourceList}
+          open={showDetail}
+          onClose={() => {
+            setDetailPinned(false);
+            onSelect?.(null);
+          }}
+        />
       ) : null}
       {ringNode && isMobile ? (
         <ResearchNodeActionRing

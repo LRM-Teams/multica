@@ -169,6 +169,18 @@ const IDLE_STATUS: ActivityEvent = {
   status: "idle",
   target_ref: { kind: "agent", id: "agent-1" },
 };
+function errorEvent(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
+  return {
+    id: "err1",
+    agent_id: "agent-1",
+    occurred_at: new Date().toISOString(),
+    activity_kind: "error",
+    detail_kind: "error",
+    text: "cursor-agent exited with error: exit status 1",
+    target_ref: { kind: "agent", id: "agent-1" },
+    ...overrides,
+  };
+}
 
 describe("ActivityTimeline", () => {
   beforeEach(() => {
@@ -215,9 +227,12 @@ describe("ActivityTimeline", () => {
     expect(screen.getAllByTestId("activity-idle-row")).toHaveLength(1);
     // Label is `Idle · 3` (the merged count), not three separate `Idle` rows.
     expect(screen.getByText("Idle · 3")).toBeInTheDocument();
-    // Latest timestamp wins (09:36:48), not the first.
-    expect(idleRow).toHaveTextContent("09:36:48");
-    expect(idleRow).not.toHaveTextContent("09:36:14");
+    // Latest timestamp wins (09:36:48), not the first — task #13: the visible
+    // text is now relative ("Xd ago"), the exact clock time lives in the
+    // hover title so precision isn't lost.
+    const idleTimeTitle = idleRow.querySelector("[title]")?.getAttribute("title");
+    expect(idleTimeTitle).toContain("09:36:48");
+    expect(idleTimeTitle).not.toContain("09:36:14");
 
     // De-emphasized per SoT: tight row + dimmed medium label.
     expect(idleRow.className).toContain("py-0.5");
@@ -248,9 +263,9 @@ describe("ActivityTimeline", () => {
     const idleRows = screen.getAllByTestId("activity-idle-row");
     expect(idleRows).toHaveLength(2);
     expect(idleRows[0]).toHaveAttribute("data-idle-count", "2");
-    expect(idleRows[0]).toHaveTextContent("09:00:10");
+    expect(idleRows[0]!.querySelector("[title]")?.getAttribute("title")).toContain("09:00:10");
     expect(idleRows[1]).toHaveAttribute("data-idle-count", "1");
-    expect(idleRows[1]).toHaveTextContent("09:01:00");
+    expect(idleRows[1]!.querySelector("[title]")?.getAttribute("title")).toContain("09:01:00");
   });
 
   it("shows the empty state when there are no mainline events", () => {
@@ -595,5 +610,55 @@ describe("formatActivityRelativeTime", () => {
     expect(formatActivityRelativeTime("2026-07-06T09:55:00Z", now)).toBe("5m ago");
     expect(formatActivityRelativeTime("2026-07-06T08:00:00Z", now)).toBe("2h ago");
     expect(formatActivityRelativeTime("2026-07-04T10:00:00Z", now)).toBe("2d ago");
+  });
+});
+
+// task #13 (Frank, 2026-08-01): a resolved failure from 55 minutes ago read as
+// "broken right now" — no time context, full-strength red forever. These lock
+// in the fix: the row decays (dims) once it's old or superseded, and the
+// visible time is relative with the exact clock time preserved on hover.
+describe("ActivityTimeline failure row decay (task #13)", () => {
+  it("shows a fresh failure at full strength", () => {
+    render(<ActivityTimeline events={[errorEvent()]} />);
+    const label = screen.getByText("Failed");
+    expect(label.className).toContain("font-semibold");
+    expect(label.className).toContain("text-foreground");
+  });
+
+  it("dims a failure once it's older than the decay threshold", () => {
+    const old = errorEvent({
+      occurred_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+    });
+    render(<ActivityTimeline events={[old]} />);
+    const label = screen.getByText("Failed");
+    expect(label.className).toContain("font-medium");
+    expect(label.className).toContain("text-muted-foreground");
+    expect(label.className).not.toContain("font-semibold");
+  });
+
+  it("dims a failure once a later event exists, even if it's recent", () => {
+    const recentError = errorEvent({
+      id: "err-recent",
+      occurred_at: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const laterText: ActivityEvent = {
+      ...TEXT,
+      id: "later-text",
+      occurred_at: new Date().toISOString(),
+    };
+    render(<ActivityTimeline events={[recentError, laterText]} />);
+    const label = screen.getByText("Failed");
+    expect(label.className).toContain("font-medium");
+    expect(label.className).toContain("text-muted-foreground");
+  });
+
+  it("shows the exact clock time on hover via title, and a relative time as the visible text", () => {
+    const old = errorEvent({ occurred_at: "2026-07-06T09:36:48Z" });
+    render(<ActivityTimeline events={[old]} />);
+    const row = screen.getByTestId("activity-row");
+    const timeEl = row.querySelector("[title]");
+    expect(timeEl?.getAttribute("title")).toContain("09:36:48");
+    // Visible text is relative, not the raw clock time.
+    expect(timeEl?.textContent).not.toContain("09:36:48");
   });
 });

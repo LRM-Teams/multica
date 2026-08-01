@@ -19,7 +19,9 @@ import {
   activityExpansionContent,
   activityPresentation,
   collapseConsecutiveIdle,
+  formatActivityRelativeTime,
   formatActivityTime,
+  isDecayedFailure,
   isNarrativeActivityEvent,
   normalizeActivityExpandedText,
 } from "./activity-event";
@@ -134,10 +136,16 @@ function ActivitySpineDot({
 function ActivityRow({
   event,
   time,
+  timeTitle,
+  decayed = false,
   compact = false,
 }: {
   event: ActivityEvent;
   time: string;
+  /** Exact clock time, shown on hover so precision isn't lost to the relative format. */
+  timeTitle?: string;
+  /** task #13: true once a failure row is old or superseded — dims it like MergedIdleRow. */
+  decayed?: boolean;
   compact?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -148,6 +156,11 @@ function ActivityRow({
   const updateDetailOverflowRef = useRef<() => void>(() => {});
   const detailId = useId();
   const presentation = activityPresentation(event);
+  const isDecayedFailureRow = decayed && presentation.tone === "failure";
+  const dotTone = isDecayedFailureRow ? "neutral" : presentation.tone;
+  const labelClass = isDecayedFailureRow
+    ? "text-[13.5px] font-medium text-muted-foreground"
+    : "text-[13.5px] font-semibold text-foreground";
   // Activity is English-only (Frank 2026-07-14): the label/fixed-subtext come
   // from the canonical English maps, not a locale lookup.
   const rawLabel = ACTIVITY_LABEL_EN[presentation.labelKey];
@@ -250,7 +263,7 @@ function ActivityRow({
       >
         <div className="flex items-start gap-2">
           <span className={cn("flex shrink-0 justify-center", SPINE_COL)}>
-            <ActivitySpineDot tone={presentation.tone} className="mt-2" />
+            <ActivitySpineDot tone={dotTone} className="mt-2" />
           </span>
           <div className="min-w-0 flex-1 pt-0.5">
             <button
@@ -262,7 +275,7 @@ function ActivityRow({
             >
               <span className="min-w-0 flex-1">
                 {/* LRM-560 tier 1: action label weight 600 */}
-                <span className="block text-[13.5px] font-semibold leading-snug text-foreground">
+                <span className={cn("block leading-snug", labelClass)}>
                   {label}
                 </span>
                 {!expanded && !isCommand && subtext ? (
@@ -271,7 +284,7 @@ function ActivityRow({
                   </span>
                 ) : null}
               </span>
-              <span className={cn(timestampClass, "pt-0.5")}>{time}</span>
+              <span className={cn(timestampClass, "pt-0.5")} title={timeTitle}>{time}</span>
               <span
                 className="mt-0.5 shrink-0 text-muted-foreground/70 transition-colors group-hover:text-foreground"
                 aria-hidden
@@ -381,21 +394,21 @@ function ActivityRow({
       data-activity-kind={event.activity_kind}
     >
       <span className={cn("flex shrink-0 justify-center self-start", SPINE_COL)}>
-        <ActivitySpineDot tone={presentation.tone} />
+        <ActivitySpineDot tone={dotTone} />
       </span>
       {compact ? (
         // LRM-650: Profile compact = state type only — suppress command/path detail.
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
-          <span className="min-w-0 truncate text-[13.5px] font-semibold text-foreground">
+          <span className={cn("min-w-0 truncate", labelClass)}>
             {label}
           </span>
-          <span className={timestampClass}>{time}</span>
+          <span className={timestampClass} title={timeTitle}>{time}</span>
         </div>
       ) : (
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
-          <span className="shrink-0 text-[13.5px] font-semibold text-foreground">{label}</span>
+          <span className={cn("shrink-0", labelClass)}>{label}</span>
           {subtextNode}
-          <span className={timestampClass}>{time}</span>
+          <span className={timestampClass} title={timeTitle}>{time}</span>
         </div>
       )}
     </div>
@@ -417,7 +430,8 @@ function MergedIdleRow({ events, tz }: { events: ActivityEvent[]; tz: string }) 
     count > 1 ? `${ACTIVITY_LABEL_EN.idle} · ${count}` : ACTIVITY_LABEL_EN.idle;
   // Events arrive chronological; the last in the run is the most recent idle.
   const latest = events[events.length - 1]!;
-  const time = formatActivityTime(latest.occurred_at, tz);
+  const time = formatActivityRelativeTime(latest.occurred_at);
+  const timeTitle = formatActivityTime(latest.occurred_at, tz);
   return (
     <div
       className="flex items-baseline gap-2 py-0.5"
@@ -431,7 +445,7 @@ function MergedIdleRow({ events, tz }: { events: ActivityEvent[]; tz: string }) 
       <span className="shrink-0 text-[12px] font-medium text-muted-foreground">
         {label}
       </span>
-      <span className={TIMESTAMP_CLASS}>{time}</span>
+      <span className={TIMESTAMP_CLASS} title={timeTitle}>{time}</span>
     </div>
   );
 }
@@ -566,7 +580,7 @@ export function ActivityTimeline({
           data-testid="activity-timeline-spine"
         />
       ) : null}
-      {shown.map((item) =>
+      {shown.map((item, index) =>
         item.kind === "idle" ? (
           <MergedIdleRow
             key={`idle-${item.events[0]!.id}`}
@@ -577,7 +591,9 @@ export function ActivityTimeline({
           <ActivityRow
             key={item.event.id}
             event={item.event}
-            time={formatActivityTime(item.event.occurred_at, tz)}
+            time={formatActivityRelativeTime(item.event.occurred_at)}
+            timeTitle={formatActivityTime(item.event.occurred_at, tz)}
+            decayed={isDecayedFailure(item.event.occurred_at, index < shown.length - 1)}
             compact={compact}
           />
         ),

@@ -734,6 +734,30 @@ export function formatActivityTime(iso: string, tz: string): string {
   return timeFormatter(tz).format(ms);
 }
 
+// A failure row stays full-strength red until either it's old enough that
+// it's clearly history, or something newer has already happened (the agent
+// moved on). Below this age it's still "current" even if superseded.
+const FAILURE_DECAY_AGE_MS = 15 * 60_000;
+
+/**
+ * task #13 (Frank, 2026-08-01): a failure row with no time context and no
+ * fading, sitting at the newest end of the timeline hours after it resolved,
+ * reads as "broken right now" — Frank hit exactly this. Decay the row's
+ * visual weight (same treatment as MergedIdleRow) once it's old or has been
+ * superseded by a later event; the label stays "Failed", only the emphasis
+ * drops. Pure so it's testable without a clock mock at the call site.
+ */
+export function isDecayedFailure(
+  occurredAt: string,
+  hasNewerEvent: boolean,
+  nowMs = Date.now(),
+): boolean {
+  if (hasNewerEvent) return true;
+  const ms = Date.parse(occurredAt);
+  if (Number.isNaN(ms)) return false;
+  return nowMs - ms > FAILURE_DECAY_AGE_MS;
+}
+
 /**
  * Compact English relative time for the Activity page header status line
  * (LRM-563). Activity chrome is English-only — do not route through i18n.

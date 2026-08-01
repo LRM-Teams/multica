@@ -223,8 +223,7 @@ export const AgentRuntimeSchema = z.object({
   launch_header: z.string().default(""),
   status: z.enum(["online", "offline"]),
   device_info: z.string().default(""),
-  // Basics → OS label derived from device_info (CA halves stripped).
-  // Older servers omit it — clients may fall back to parsing device_info.
+  // Machine label from daemon register (metadata.device_name). Older servers omit it.
   device_name: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).catch({}),
   capabilities: z.array(z.string()).optional(),

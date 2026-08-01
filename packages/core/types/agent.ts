@@ -113,9 +113,9 @@ export interface RuntimeDevice {
    */
   device_info: string;
   /**
-   * Basics → OS label derived server-side from `device_info`: CA version
-   * halves stripped; pretty OS-arch (e.g. "Linux (x86_64)") wins over
-   * hostname. Empty for daemon placeholders. Older servers omit it.
+   * Machine label persisted from daemon register `device_name` (also in
+   * `metadata.device_name`). Not a parse of `device_info`. Older servers
+   * / pre-persist rows may omit it.
    */
   device_name?: string;
   metadata: Record<string, unknown>;

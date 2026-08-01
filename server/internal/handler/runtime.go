@@ -41,9 +41,9 @@ type AgentRuntimeResponse struct {
 	// DeviceInfo is the legacy composite string daemons still register
 	// (e.g. "ubuntu · codex-cli 0.146.0"). Prefer DeviceName for the OS row.
 	DeviceInfo string `json:"device_info"`
-	// DeviceName is the Basics → OS label derived from DeviceInfo: CA version
-	// halves are stripped; when a pretty OS-arch half is present it wins.
-	// Empty for daemon placeholders / CA-only strings. Older servers omit it.
+	// DeviceName is the machine label from registration (metadata.device_name).
+	// Daemon already sends device_name separately; we persist it so clients
+	// never re-parse device_info. Empty when unknown. Older servers omit it.
 	DeviceName string `json:"device_name"`
 	Metadata   any    `json:"metadata"`
 	Capabilities         []string                    `json:"capabilities"`
@@ -250,7 +250,7 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		ProviderCapabilities: providerCapabilitiesWire(rt.Provider),
 		Status:               rt.Status,
 		DeviceInfo:           rt.DeviceInfo,
-		DeviceName:           deviceNameFromDeviceInfo(rt.DeviceInfo),
+		DeviceName:           deviceNameFromRuntime(rt.DeviceInfo, metadata),
 		Metadata:             metadata,
 		Capabilities:         runtimeCapabilities(metadata),
 		CurrentVersion:       currentVersion,

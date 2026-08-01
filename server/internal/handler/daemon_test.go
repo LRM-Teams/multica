@@ -917,7 +917,14 @@ func TestDaemonRegister_WithDaemonToken(t *testing.T) {
 	if _, ok := resp["repos_version"].(string); !ok {
 		t.Fatalf("DaemonRegister: expected repos_version in response, got %v", resp)
 	}
-	metadata := runtimes[0].(map[string]any)["metadata"].(map[string]any)
+	rt0 := runtimes[0].(map[string]any)
+	if got := rt0["device_name"]; got != "test-device" {
+		t.Fatalf("runtime.device_name = %v, want test-device", got)
+	}
+	metadata := rt0["metadata"].(map[string]any)
+	if got := metadata["device_name"]; got != "test-device" {
+		t.Fatalf("metadata.device_name = %v, want test-device", got)
+	}
 	if got := metadata["cli_version"]; got != "v0.3.0" {
 		t.Fatalf("metadata.cli_version = %v, want v0.3.0", got)
 	}

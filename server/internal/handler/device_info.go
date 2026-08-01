@@ -1,55 +1,52 @@
 package handler
 
-import (
-	"regexp"
-	"strings"
-)
+import "strings"
 
 // deviceInfoSeparator is the glue daemon registration uses when composing
-// DeviceInfo (see daemon.go: fmt.Sprintf("%s · %s", deviceName, version)).
+// DeviceInfo from req.DeviceName and runtime.Version (see daemon.go).
 const deviceInfoSeparator = " · "
 
-// isAgentVersionLike matches parts that carry an agent CLI version, not
-// machine/OS info — e.g. "2.1.5 (Claude Code)", "codex-cli 0.118.0",
-// "claude 1.0.0". Same filter the FE machine subtitle / machineOsLabel used.
-var isAgentVersionLike = regexp.MustCompile(`(?:^|\s)v?\d+\.\d+\.\d+`)
-
-// prettyOSArch matches reshaped OS+arch halves such as "Linux (x86_64)".
-var prettyOSArch = regexp.MustCompile(`(?i)^(macOS|Linux|Windows|FreeBSD|OpenBSD|NetBSD)\s+\([^)]+\)$`)
-
-var daemonPlaceholder = regexp.MustCompile(`(?i)^daemon\b`)
-
-// deviceNameFromDeviceInfo derives the Basics → OS label from a legacy
-// composite device_info string. CA version halves are dropped; when a
-// pretty OS-arch half is present it wins over a hostname half.
+// deviceNameFromRuntime returns the machine/OS label for the Basics → OS row.
+// Prefer the structured metadata.device_name persisted at registration (daemon
+// already sends device_name separately). Only when that is missing — older
+// rows written before we stored it — invert our own glue:
 //
-// Examples (Iris / #1722 fixtures):
-//   - "ubuntu · codex-cli 0.146.0" → "ubuntu"
-//   - "dev.local · 2.1.5 (Claude Code)" → "dev.local"
-//   - "host.local · Linux (x86_64)" → "Linux (x86_64)"
-//   - "daemon abc123" → ""
-func deviceNameFromDeviceInfo(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || daemonPlaceholder.MatchString(raw) {
-		return ""
+//	device_info = device_name · version   → left half
+//	device_info = device_name             → whole string
+//	device_info = version                 → empty (matches metadata.version)
+//
+// No version-shape heuristics: we do not guess whether a half "looks like" a CA.
+func deviceNameFromRuntime(deviceInfo string, metadata any) string {
+	if name := metadataString(metadata, "device_name"); name != "" {
+		return name
 	}
+	return deviceNameFromLegacyDeviceInfo(deviceInfo, metadataString(metadata, "version"))
+}
 
-	parts := strings.Split(raw, deviceInfoSeparator)
-	kept := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" || isAgentVersionLike.MatchString(part) {
-			continue
-		}
-		kept = append(kept, part)
-	}
-	if len(kept) == 0 {
+func metadataString(metadata any, key string) string {
+	m, ok := metadata.(map[string]any)
+	if !ok {
 		return ""
 	}
-	for _, part := range kept {
-		if prettyOSArch.MatchString(part) {
-			return part
-		}
+	value, ok := m[key].(string)
+	if !ok {
+		return ""
 	}
-	return strings.Join(kept, deviceInfoSeparator)
+	return strings.TrimSpace(value)
+}
+
+func deviceNameFromLegacyDeviceInfo(deviceInfo, agentVersion string) string {
+	deviceInfo = strings.TrimSpace(deviceInfo)
+	if deviceInfo == "" {
+		return ""
+	}
+	if name, version, found := strings.Cut(deviceInfo, deviceInfoSeparator); found {
+		_ = version
+		return strings.TrimSpace(name)
+	}
+	// Registration wrote version alone when DeviceName was empty.
+	if agentVersion != "" && deviceInfo == strings.TrimSpace(agentVersion) {
+		return ""
+	}
+	return deviceInfo
 }

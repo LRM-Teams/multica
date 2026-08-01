@@ -1,54 +1,62 @@
 package handler
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
 
-func TestDeviceNameFromDeviceInfo(t *testing.T) {
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+func TestDeviceNameFromRuntime(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name string
-		raw  string
-		want string
+		name       string
+		deviceInfo string
+		metadata   map[string]any
+		want       string
 	}{
 		{
-			name: "parker_fixture_ubuntu_codex",
-			raw:  "ubuntu · codex-cli 0.146.0",
-			want: "ubuntu",
+			name:       "structured_metadata_wins",
+			deviceInfo: "ubuntu · codex-cli 0.146.0",
+			metadata:   map[string]any{"device_name": "ubuntu", "version": "codex-cli 0.146.0"},
+			want:       "ubuntu",
 		},
 		{
-			name: "claude_code_parens",
-			raw:  "dev.local · 2.1.5 (Claude Code)",
-			want: "dev.local",
+			name:       "structured_ignores_glued_noise",
+			deviceInfo: "anything · whatever",
+			metadata:   map[string]any{"device_name": "s144"},
+			want:       "s144",
 		},
 		{
-			name: "os_arch_half_wins",
-			raw:  "host.local · Linux (x86_64)",
-			want: "Linux (x86_64)",
+			name:       "legacy_glue_left_half",
+			deviceInfo: "ubuntu · codex-cli 0.146.0",
+			metadata:   map[string]any{"version": "codex-cli 0.146.0"},
+			want:       "ubuntu",
 		},
 		{
-			name: "daemon_placeholder_filtered",
-			raw:  "daemon abc123",
-			want: "",
+			name:       "legacy_claude_parens",
+			deviceInfo: "dev.local · 2.1.5 (Claude Code)",
+			metadata:   map[string]any{"version": "2.1.5 (Claude Code)"},
+			want:       "dev.local",
 		},
 		{
-			name: "empty",
-			raw:  "",
-			want: "",
+			name:       "legacy_name_only",
+			deviceInfo: "host.local",
+			metadata:   map[string]any{},
+			want:       "host.local",
 		},
 		{
-			name: "hostname_only",
-			raw:  "just-a-hostname",
-			want: "just-a-hostname",
+			name:       "legacy_version_only",
+			deviceInfo: "codex-cli 0.146.0",
+			metadata:   map[string]any{"version": "codex-cli 0.146.0"},
+			want:       "",
 		},
 		{
-			name: "ca_version_only",
-			raw:  "codex-cli 0.146.0",
-			want: "",
-		},
-		{
-			name: "macos_arch",
-			raw:  "macOS (arm64)",
-			want: "macOS (arm64)",
+			name:       "empty",
+			deviceInfo: "",
+			metadata:   nil,
+			want:       "",
 		},
 	}
 
@@ -56,45 +64,50 @@ func TestDeviceNameFromDeviceInfo(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := deviceNameFromDeviceInfo(tc.raw); got != tc.want {
+			var meta any
+			if tc.metadata != nil {
+				meta = tc.metadata
+			}
+			if got := deviceNameFromRuntime(tc.deviceInfo, meta); got != tc.want {
 				t.Fatalf("device_name: got %q want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-// TestAgentRuntimeResponseDeviceName is mutation-capable: if the structured
-// device_name derivation is removed from runtimeToResponse, the fixture reds.
-func TestAgentRuntimeResponseDeviceName(t *testing.T) {
+// Mutation-capable: if registration stops persisting metadata.device_name and
+// response stops reading it, this fixture reds.
+func TestAgentRuntimeResponsePrefersMetadataDeviceName(t *testing.T) {
 	t.Parallel()
 
-	const glued = "ubuntu · codex-cli 0.146.0"
-	rt := runtimeHealthTestRuntime(t, map[string]any{"version": "1.0.0"})
-	rt.DeviceInfo = glued
+	rt := runtimeHealthTestRuntime(t, map[string]any{
+		"device_name": "ubuntu",
+		"version":     "codex-cli 0.146.0",
+	})
+	rt.DeviceInfo = "ubuntu · codex-cli 0.146.0"
 
 	resp := (&Handler{}).runtimeToResponse(t.Context(), rt)
-	if resp.DeviceInfo != glued {
-		t.Fatalf("device_info must stay composite for old clients: got %q", resp.DeviceInfo)
+	if resp.DeviceInfo != rt.DeviceInfo {
+		t.Fatalf("device_info must stay composite: got %q", resp.DeviceInfo)
 	}
 	if resp.DeviceName != "ubuntu" {
-		t.Fatalf("device_name: got %q want %q (OS row must not show CLI)", resp.DeviceName, "ubuntu")
+		t.Fatalf("device_name: got %q want ubuntu", resp.DeviceName)
 	}
 
-	// Mutation: strip the CA half — device_name must follow.
-	rt.DeviceInfo = "ubuntu"
+	// Mutation: wipe structured field — legacy glue inverse must still work.
+	rt = runtimeWithMetadata(t, rt, map[string]any{"version": "codex-cli 0.146.0"})
 	resp = (&Handler{}).runtimeToResponse(t.Context(), rt)
 	if resp.DeviceName != "ubuntu" {
-		t.Fatalf("after mutation: device_name=%q; want ubuntu", resp.DeviceName)
-	}
-
-	// Mutation: remove the split entirely would leave device_name empty / wrong.
-	rt.DeviceInfo = "ubuntu · codex-cli 0.146.0"
-	resp = (&Handler{}).runtimeToResponse(t.Context(), rt)
-	if stringsContainsCLI(resp.DeviceName) {
-		t.Fatalf("device_name still contains CLI version: %q", resp.DeviceName)
+		t.Fatalf("legacy fallback device_name: got %q want ubuntu", resp.DeviceName)
 	}
 }
 
-func stringsContainsCLI(s string) bool {
-	return isAgentVersionLike.MatchString(s)
+func runtimeWithMetadata(t *testing.T, rt db.AgentRuntime, metadata map[string]any) db.AgentRuntime {
+	t.Helper()
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	rt.Metadata = data
+	return rt
 }

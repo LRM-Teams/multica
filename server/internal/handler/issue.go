@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/go-chi/chi/v5"
@@ -1989,7 +1990,12 @@ func (h *Handler) isRuntimeOnline(ctx context.Context, runtimeID pgtype.UUID) bo
 	if err != nil {
 		return false
 	}
-	return rt.Status == "online"
+	// Task #53: keyed off runtimeConnectivity (heartbeat freshness), not the
+	// raw status column — that column can still read "online" for up to
+	// ~180s after the runtime actually went silent (sweeper lag), which
+	// would wrongly let a Quick-Create submission through against a
+	// runtime that's actually unreachable.
+	return runtimeConnectivity(rt, time.Now()) == runtimeConnectivityOnline
 }
 
 // checkQuickCreateDaemonVersion enforces MinQuickCreateCLIVersion against the

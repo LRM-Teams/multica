@@ -91,6 +91,8 @@ const agent = {
   runtime_config: {},
   custom_args: [],
   status: "idle",
+  runtime_status: "online",
+  runtime_last_seen_at: new Date().toISOString(),
   max_concurrent_tasks: 1,
   model: "auto",
   thinking_level: "",
@@ -186,6 +188,25 @@ describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
 
   it("hides the Restart entry for a non-manager", () => {
     render(<AgentProfileActions agent={agent} canManage={false} />);
+    expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
+  });
+
+  // Frank, 2026-08-01: restart only makes sense while the computer can
+  // actually receive it — hide it offline, it comes back on its own once
+  // the computer reconnects (derived health, not the raw status column).
+  it("hides the Restart entry when the bound computer is offline", () => {
+    const offlineAgent = { ...agent, runtime_status: "offline" } as Agent;
+    render(<AgentProfileActions agent={offlineAgent} canManage />);
+    expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
+  });
+
+  it("hides the Restart entry when status says online but the heartbeat is stale (#10)", () => {
+    const staleAgent = {
+      ...agent,
+      runtime_status: "online",
+      runtime_last_seen_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+    } as Agent;
+    render(<AgentProfileActions agent={staleAgent} canManage />);
     expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
   });
 

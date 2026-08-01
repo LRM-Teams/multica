@@ -193,8 +193,6 @@
     "model_discovering": "正在发现模型...",
     "model_empty": "未找到模型 — 请使用下方「自定义模型 ID」。",
     "model_empty_with_dot": "未找到模型 — 请使用下方「自定义模型 ID」。",
-    "model_custom_tooltip": "使用\"{{value}}\"作为自定义模型 ID",
-    "model_custom_use": "使用\"{{value}}\"",
     "model_custom_row": "自定义模型 ID…",
     "model_custom_input_placeholder": "输入模型 ID",
     "model_custom_confirm": "使用此模型 ID",

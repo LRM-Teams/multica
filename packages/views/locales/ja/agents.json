@@ -185,8 +185,6 @@
     "model_discovering": "モデルを検出中...",
     "model_empty": "モデルが見つかりません — 下の「カスタムモデル ID」を使ってください。",
     "model_empty_with_dot": "モデルが見つかりません — 下の「カスタムモデル ID」を使ってください。",
-    "model_custom_tooltip": "\"{{value}}\" をカスタムモデル ID として使用",
-    "model_custom_use": "\"{{value}}\" を使用",
     "model_custom_row": "カスタムモデル ID…",
     "model_custom_input_placeholder": "モデル ID を入力",
     "model_custom_confirm": "このモデル ID を使用",

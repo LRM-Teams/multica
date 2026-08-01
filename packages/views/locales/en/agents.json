@@ -198,8 +198,6 @@
     "model_discovering": "Discovering models…",
     "model_empty": "No models found — use Custom model ID below.",
     "model_empty_with_dot": "No models found — use Custom model ID below.",
-    "model_custom_tooltip": "Use \"{{value}}\" as a custom model id",
-    "model_custom_use": "Use \"{{value}}\"",
     "model_custom_row": "Custom model ID…",
     "model_custom_input_placeholder": "Enter model ID",
     "model_custom_confirm": "Use this model ID",

@@ -198,8 +198,6 @@
     "model_discovering": "모델 찾는 중...",
     "model_empty": "모델을 찾을 수 없습니다 — 아래 사용자 지정 모델 ID를 사용하세요.",
     "model_empty_with_dot": "모델을 찾을 수 없습니다 — 아래 사용자 지정 모델 ID를 사용하세요.",
-    "model_custom_tooltip": "\"{{value}}\"을(를) 사용자 지정 모델 ID로 사용",
-    "model_custom_use": "\"{{value}}\" 사용",
     "model_custom_row": "사용자 지정 모델 ID…",
     "model_custom_input_placeholder": "모델 ID 입력",
     "model_custom_confirm": "이 모델 ID 사용",

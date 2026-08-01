@@ -58,8 +58,18 @@ const honorActionOrder = [
   "member.invite",
   "presence.minute",
 ] as const;
+// Next.js's webpack/turbopack asset loader types a `.webp` import as
+// `StaticImageData` ({ src: string, ... }); Vite (desktop's build) types the
+// same import as a plain `string` URL. `packages/views/assets.d.ts` declares
+// the union for callers that see it, but desktop's tsconfig doesn't include
+// that ambient file, so it type-checks this import as bare `string` and
+// narrows the object branch below to `never`. Go through `unknown` so the
+// cast compiles regardless of which of the two shapes this specific
+// tsconfig actually sees.
 const honorHeroImageSrc =
-  typeof honorHeroImage === "string" ? honorHeroImage : honorHeroImage.src;
+  typeof honorHeroImage === "string"
+    ? honorHeroImage
+    : (honorHeroImage as unknown as { src: string }).src;
 
 export function HonorTab() {
   const { t, i18n } = useT("settings");

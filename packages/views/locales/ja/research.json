@@ -34,6 +34,7 @@
   "list": {
     "loading": "リサーチを読み込んでいます",
     "load_failed": "リサーチの読み込みに失敗しました",
+    "load_failed_hint": "ネットワークまたはサービスの異常です。既存のリサーチには影響しません。再試行できます。",
     "retry": "再試行",
     "empty_cta": "最初のリサーチを始める",
     "goal_chip": "goal · {{summary}}",

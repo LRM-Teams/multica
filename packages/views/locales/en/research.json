@@ -34,6 +34,7 @@
   "list": {
     "loading": "Loading research sessions",
     "load_failed": "Couldn't load research sessions",
+    "load_failed_hint": "Network or service issue — existing research is unaffected. You can retry.",
     "retry": "Retry",
     "empty_cta": "Start your first research",
     "goal_chip": "goal · {{summary}}",

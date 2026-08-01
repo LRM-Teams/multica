@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -50,8 +49,9 @@ function leadName(session: ResearchSession): string | null {
 }
 
 /**
- * LRM-783 / LRM-784: ~58px borderless dense row — status · title · stage·who·time · avatars.
- * LRM-906: colored goal chip → dialog stays outside the primary link.
+ * LRM-783 dense row + LRM-790 narrow/dark:
+ * status · title · stage·time (avatars/time column yield <sm; stage kept).
+ * Goal chip uses brand tokens (no hard-coded violet).
  */
 export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
   const { t } = useT("research");
@@ -68,22 +68,25 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
   const title = sessionShortTitle(session);
   const goalSummary = sessionGoalSummary(session);
   const who = leadName(session);
-  const output = session.handoff_summary?.trim()
-    ? t(($) => $.list.output_line, { summary: session.handoff_summary.trim() })
-    : t(($) => $.list.no_output);
+  const archived = status === "archived";
+  const awaiting = status === "awaiting_user_confirm";
+  const relative = timeAgo(session.updated_at);
 
   return (
     <>
       <div
         data-testid="research-session-row"
-        className="group flex min-h-[58px] items-center gap-3 rounded-[10px] px-3 py-1.5 transition-colors hover:bg-accent/70"
+        className={cn(
+          "group flex min-h-[58px] items-center gap-3 rounded-[10px] px-3 py-1.5 transition-colors hover:bg-accent/70",
+          archived && "opacity-55",
+        )}
       >
         <span
           aria-hidden
           className={cn(
             "size-2 shrink-0 rounded-full",
             tone.dot,
-            status === "running" && "animate-pulse",
+            status === "running" && "motion-safe:animate-pulse",
           )}
         />
         <span className="sr-only">{statusLabel}</span>
@@ -95,15 +98,17 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
             </div>
           </AppLink>
 
-          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+            {/* Desktop-only goal chip — yields on narrow so stage·time stay scannable. */}
             <button
               type="button"
-              className="inline-flex max-w-[min(100%,14rem)] items-center gap-1 truncate rounded-md border border-violet-500/25 bg-violet-500/10 px-1.5 py-px text-[11px] font-semibold text-violet-700 hover:bg-violet-500/15 dark:text-violet-300"
+              data-testid="research-session-goal-chip"
+              className="hidden max-w-[min(100%,14rem)] items-center gap-1 truncate rounded-md border border-brand/25 bg-brand/10 px-1.5 py-px text-[11px] font-semibold text-brand hover:bg-brand/15 sm:inline-flex"
               onClick={() => setGoalOpen(true)}
             >
               <span
                 aria-hidden
-                className="size-1.5 shrink-0 rounded-full bg-violet-500"
+                className="size-1.5 shrink-0 rounded-full bg-brand"
               />
               <span className="truncate">
                 {t(($) => $.list.goal_chip, { summary: goalSummary })}
@@ -112,29 +117,37 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
 
             <AppLink
               href={href}
-              className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11.5px] text-muted-foreground"
+              className="flex min-w-0 items-center gap-1.5 truncate text-[11.5px] text-muted-foreground"
             >
-              <span className="font-medium tracking-wide text-foreground/80">
+              {awaiting ? (
+                <span className="shrink-0 font-semibold text-warning">{statusLabel}</span>
+              ) : null}
+              {awaiting ? (
+                <span aria-hidden className="text-muted-foreground/50">
+                  ·
+                </span>
+              ) : null}
+              <span className="shrink-0 font-medium tracking-wide text-foreground/80">
                 {stageLabel}
               </span>
+              <span aria-hidden className="text-muted-foreground/50">
+                ·
+              </span>
+              <span className="shrink-0 tabular-nums">{relative}</span>
               {who ? (
-                <span className="truncate">
-                  <span aria-hidden className="text-muted-foreground/70">
+                <span className="hidden min-w-0 truncate sm:inline">
+                  <span aria-hidden className="text-muted-foreground/50">
+                    {" "}
                     ·{" "}
                   </span>
                   {t(($) => $.list.who_working, { name: who })}
                 </span>
               ) : null}
-              <span className="min-w-0 truncate">
-                <span aria-hidden className="text-muted-foreground/70">
-                  ·{" "}
-                </span>
-                {output}
-              </span>
             </AppLink>
           </div>
         </div>
 
+        {/* LRM-790: avatar pile yields below sm. */}
         <AgentAvatarStack
           agentIds={fleetIds}
           size={22}
@@ -142,11 +155,7 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
           className="hidden shrink-0 sm:flex"
         />
 
-        <div className="flex shrink-0 items-center gap-0.5">
-          <span className="hidden text-xs whitespace-nowrap text-muted-foreground tabular-nums sm:inline">
-            {timeAgo(session.updated_at)}
-          </span>
-          <ChevronRight className="size-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        <div className="shrink-0 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100">
           <ResearchSessionRowActions session={session} />
         </div>
       </div>
@@ -165,7 +174,7 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
             </Button>
             <AppLink
               href={href}
-              className="inline-flex h-8 items-center justify-center rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground"
+              className="inline-flex h-8 items-center justify-center rounded-lg bg-brand px-2.5 text-sm font-medium text-brand-foreground"
               onClick={() => setGoalOpen(false)}
             >
               {t(($) => $.list.goal_dialog_open)}

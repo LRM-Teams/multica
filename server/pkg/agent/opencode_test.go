@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -951,6 +952,61 @@ func TestOpencodeBackendAnchorsDirAndPWD(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(gotPWD)); got != workDir {
 		t.Errorf("child PWD = %q, want %q", got, workDir)
+	}
+}
+
+// TestOpencodeExecuteSurfacesStderrWhenChildExitsEarly pins the stdout/stderr
+// capture gap that hid the real cause behind opencode's generic "exited with
+// error: exit status 1" — the literal message a crashed opencode agent
+// surfaced with zero diagnostic content (task #42). Without sampling
+// stderrBuf.Tail() after cmd.Wait(), Result.Error carries only the exit code.
+func TestOpencodeExecuteSurfacesStderrWhenChildExitsEarly(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	fakePath := filepath.Join(t.TempDir(), "opencode")
+	script := "#!/bin/sh\n" +
+		"echo \"Error: ENOENT: no such file or directory, open '/root/.opencode/auth.json'\" >&2\n" +
+		"exit 1\n"
+	writeTestExecutable(t, fakePath, []byte(script))
+
+	backend, err := New("opencode", Config{ExecutablePath: fakePath, Logger: slog.Default()})
+	if err != nil {
+		t.Fatalf("new opencode backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "prompt-ignored", ExecOptions{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+
+	select {
+	case result, ok := <-session.Result:
+		if !ok {
+			t.Fatal("result channel closed without a value")
+		}
+		if result.Status != "failed" {
+			t.Fatalf("expected status=failed, got %q (error=%q)", result.Status, result.Error)
+		}
+		if !strings.Contains(result.Error, "opencode exited with error") {
+			t.Fatalf("expected error to mention exit, got %q", result.Error)
+		}
+		if !strings.Contains(result.Error, "ENOENT: no such file or directory") {
+			t.Fatalf("expected error to include stderr hint, got %q", result.Error)
+		}
+		if !strings.Contains(result.Error, "opencode stderr:") {
+			t.Fatalf("expected stderr label in error, got %q", result.Error)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for result")
 	}
 }
 

@@ -37,6 +37,8 @@
     "section_local": "ローカル",
     "section_remote": "リモート",
     "section_cloud": "クラウド",
+    "section_mine": "自分のマシン",
+    "section_team_public_other": "チーム公開 ({{count}})",
     "this_machine": "このデバイス",
     "local_badge": "ローカル · このマシン",
     "runtime_count_other": "ランタイム {{count}} 個",

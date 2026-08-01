@@ -204,16 +204,16 @@ export function HealthBadge({
 
 const RUNTIME_HEALTH_STATE_VISUAL: Record<
   RuntimeHealthPresentation,
-  { dot: string; tone: string }
+  { dot: string; text: string; tone: string }
 > = {
-  ok: { dot: "bg-success", tone: "bg-success/10 text-success" },
-  update_available: { dot: "bg-warning", tone: "bg-warning/10 text-warning" },
+  ok: { dot: "bg-success", text: "text-success", tone: "bg-success/10 text-success" },
+  update_available: { dot: "bg-warning", text: "text-warning", tone: "bg-warning/10 text-warning" },
   // Staged: downloaded, applies when idle — brand tone like "updating", since the
   // work is effectively done and just waiting, not a pending user action.
-  ready_to_apply: { dot: "bg-brand", tone: "bg-brand/10 text-brand" },
-  updating: { dot: "bg-brand", tone: "bg-brand/10 text-brand" },
-  failed: { dot: "bg-destructive", tone: "bg-destructive/10 text-destructive" },
-  offline: { dot: "bg-muted-foreground/40", tone: "bg-muted text-muted-foreground" },
+  ready_to_apply: { dot: "bg-brand", text: "text-brand", tone: "bg-brand/10 text-brand" },
+  updating: { dot: "bg-brand", text: "text-brand", tone: "bg-brand/10 text-brand" },
+  failed: { dot: "bg-destructive", text: "text-destructive", tone: "bg-destructive/10 text-destructive" },
+  offline: { dot: "bg-muted-foreground/40", text: "text-muted-foreground", tone: "bg-muted text-muted-foreground" },
 };
 
 export function useRuntimeHealthStateLabel(): (
@@ -235,6 +235,29 @@ export function RuntimeHealthStateBadge({
       <span className={`h-1.5 w-1.5 rounded-full ${v.dot}`} />
       {labelOf(health)}
     </Badge>
+  );
+}
+
+/**
+ * Borderless small-text sibling of `RuntimeHealthStateBadge`, for placing
+ * next to the version number instead of competing with the connectivity
+ * dot+text for primary visual weight (Iris 07-31: "不跟连通性文字并排抢视觉
+ * 权重——放在版本号旁边，弱化成小字级"). Only ever rendered for a real
+ * update/issue state — callers already gate on `headerRuntimeHealthBadge`
+ * returning non-null, so this never sits as an empty placeholder.
+ */
+export function RuntimeHealthStateInline({
+  health,
+}: {
+  health: RuntimeHealthPresentation;
+}) {
+  const labelOf = useRuntimeHealthStateLabel();
+  const v = RUNTIME_HEALTH_STATE_VISUAL[health];
+  return (
+    <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${v.text}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${v.dot}`} />
+      {labelOf(health)}
+    </span>
   );
 }
 

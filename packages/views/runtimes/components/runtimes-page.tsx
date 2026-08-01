@@ -39,6 +39,11 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@multica/ui/components/ui/collapsible";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { PageHeader } from "../../layout/page-header";
@@ -55,6 +60,7 @@ import {
 import {
   buildRuntimeMachines,
   headerRuntimeHealthBadge,
+  isMineMachine,
   machineHostname,
   machinePrimaryRuntimeId,
   splitRuntimeName,
@@ -64,7 +70,7 @@ import { MachineNameEditor } from "./machine-name-editor";
 import {
   HealthDot,
   RuntimeConnectivityStatus,
-  RuntimeHealthStateBadge,
+  RuntimeHealthStateInline,
   useHealthLabel,
 } from "./shared";
 import { ProviderLogo } from "./provider-logo";
@@ -326,6 +332,7 @@ export function RuntimesPage({
       agents={agents}
       now={now}
       wsId={wsId}
+      currentUserId={currentUserId ?? null}
       layout={isMobile ? "full" : "sidebar"}
       selectedMachineId={isMobile ? null : selectedMachineId}
       headerActions={headerActions}
@@ -434,11 +441,12 @@ function MachineListActions({
   );
 }
 
-function MachineListView({
+export function MachineListView({
   machines,
   agents,
   now,
   wsId,
+  currentUserId,
   layout,
   selectedMachineId,
   headerActions,
@@ -448,6 +456,7 @@ function MachineListView({
   agents: Agent[];
   now: number;
   wsId: string;
+  currentUserId: string | null;
   /** `sidebar` = v8c left rail; `full` = mobile full-width list. */
   layout: "sidebar" | "full";
   selectedMachineId: string | null;
@@ -456,7 +465,92 @@ function MachineListView({
 }) {
   const { t } = useT("runtimes");
   const labelOf = useHealthLabel();
+  const { getActorName } = useActorName();
   const showChevron = layout === "full";
+
+  const mineMachines = machines.filter((m) => isMineMachine(m, currentUserId));
+  const teamMachines = machines.filter((m) => !isMineMachine(m, currentUserId));
+  // Frank 07-31: "分不清哪个是我的" — only worth splitting into two labeled
+  // groups once there's actually a second owner to distinguish from. A
+  // workspace where the viewer owns everything they can see stays a flat
+  // list, same as before.
+  const showGroups = teamMachines.length > 0;
+
+  const renderRow = (machine: RuntimeMachine, showOwnerBadge: boolean) => {
+    const count = agentCountOnMachine(machine, agents);
+    const lastSeen = formatMachineLastSeen(
+      machine,
+      now,
+      t(($) => $.machine.last_seen_active_now),
+    );
+    const selected = selectedMachineId === machine.id;
+    const ownerId = showOwnerBadge ? (machine.runtimes[0]?.owner_id ?? null) : null;
+    return (
+      <div
+        key={machine.id}
+        className={cn(
+          "relative flex items-center gap-3",
+          layout === "full"
+            ? "border-b px-4 py-3.5"
+            : cn(
+                "rounded-lg px-2.5 py-2.5",
+                selected ? "bg-accent" : "hover:bg-accent/50",
+              ),
+        )}
+      >
+        <button
+          type="button"
+          aria-pressed={selected}
+          aria-label={machine.title}
+          onClick={() => onSelect(machine.id)}
+          className="absolute inset-0 z-0 rounded-[inherit]"
+        />
+        <span className="relative z-10 shrink-0 pointer-events-none" aria-hidden>
+          <HealthDot health={machine.health} />
+        </span>
+        <div className="relative z-10 min-w-0 flex-1 pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-1.5">
+            <MachineNameEditor
+              machine={machine}
+              wsId={wsId}
+              variant="list"
+            />
+            {ownerId && (
+              <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                <ActorAvatar actorType="member" actorId={ownerId} size={18} />
+                <span className="max-w-20 truncate">
+                  {getActorName("member", ownerId)}
+                </span>
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 truncate text-xs text-muted-foreground">
+            {labelOf(machine.health)}
+            {count > 0 && (
+              <>
+                {" · "}
+                {t(($) => $.machine.table_agents_count, {
+                  count,
+                })}
+              </>
+            )}
+            {machine.lastSeenAt && (
+              <>
+                {" · "}
+                {lastSeen}
+              </>
+            )}
+          </div>
+        </div>
+        {showChevron ? (
+          <ChevronRight
+            className="relative z-10 h-4 w-4 shrink-0 pointer-events-none text-muted-foreground/45"
+            aria-hidden
+          />
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -470,72 +564,35 @@ function MachineListView({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className={layout === "sidebar" ? "p-2" : undefined}>
-          {machines.map((machine) => {
-            const count = agentCountOnMachine(machine, agents);
-            const lastSeen = formatMachineLastSeen(
-              machine,
-              now,
-              t(($) => $.machine.last_seen_active_now),
-            );
-            const selected = selectedMachineId === machine.id;
-            return (
-              <div
-                key={machine.id}
-                className={cn(
-                  "relative flex items-center gap-3",
-                  layout === "full"
-                    ? "border-b px-4 py-3.5"
-                    : cn(
-                        "rounded-lg px-2.5 py-2.5",
-                        selected ? "bg-accent" : "hover:bg-accent/50",
-                      ),
-                )}
-              >
-                <button
-                  type="button"
-                  aria-pressed={selected}
-                  aria-label={machine.title}
-                  onClick={() => onSelect(machine.id)}
-                  className="absolute inset-0 z-0 rounded-[inherit]"
-                />
-                <span className="relative z-10 shrink-0 pointer-events-none" aria-hidden>
-                  <HealthDot health={machine.health} />
-                </span>
-                <div className="relative z-10 min-w-0 flex-1 pointer-events-none">
-                  <div className="pointer-events-auto">
-                    <MachineNameEditor
-                      machine={machine}
-                      wsId={wsId}
-                      variant="list"
+          {showGroups ? (
+            <>
+              <SectionTitle>{t(($) => $.machine.section_mine)}</SectionTitle>
+              {mineMachines.map((machine) => renderRow(machine, false))}
+              <Collapsible defaultOpen={false}>
+                <CollapsibleTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={t(($) => $.machine.section_team_public, {
+                        count: teamMachines.length,
+                      })}
+                      className="group/team-toggle mt-2 flex w-full items-center gap-1 rounded-md px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:bg-accent/50"
                     />
-                  </div>
-                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {labelOf(machine.health)}
-                    {count > 0 && (
-                      <>
-                        {" · "}
-                        {t(($) => $.machine.table_agents_count, {
-                          count,
-                        })}
-                      </>
-                    )}
-                    {machine.lastSeenAt && (
-                      <>
-                        {" · "}
-                        {lastSeen}
-                      </>
-                    )}
-                  </div>
-                </div>
-                {showChevron ? (
-                  <ChevronRight
-                    className="relative z-10 h-4 w-4 shrink-0 pointer-events-none text-muted-foreground/45"
-                    aria-hidden
-                  />
-                ) : null}
-              </div>
-            );
-          })}
+                  }
+                >
+                  <ChevronRight className="h-3 w-3 stroke-[2.5] transition-transform duration-200 group-data-[panel-open]/team-toggle:rotate-90" />
+                  {t(($) => $.machine.section_team_public, {
+                    count: teamMachines.length,
+                  })}
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  {teamMachines.map((machine) => renderRow(machine, true))}
+                </CollapsibleContent>
+              </Collapsible>
+            </>
+          ) : (
+            machines.map((machine) => renderRow(machine, false))
+          )}
         </div>
       </div>
     </>
@@ -693,9 +750,6 @@ function MachineDetailView({
                     {t(($) => $.machine.this_machine)}
                   </span>
                 )}
-                {headerBadge ? (
-                  <RuntimeHealthStateBadge health={headerBadge} />
-                ) : null}
               </div>
               <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                 <RuntimeConnectivityStatus health={machine.health} />
@@ -719,6 +773,12 @@ function MachineDetailView({
                         version: machine.cliVersion,
                       })}
                     </span>
+                  </>
+                )}
+                {headerBadge && (
+                  <>
+                    <span className="text-muted-foreground/40">·</span>
+                    <RuntimeHealthStateInline health={headerBadge} />
                   </>
                 )}
               </div>
@@ -830,7 +890,7 @@ function MachineDetailView({
                       return (
                         <tr
                           key={agent.id}
-                          className="border-b last:border-b-0"
+                          className="border-b transition-colors last:border-b-0 hover:bg-accent/40"
                         >
                           <td className="px-4 py-3">
                             <span className="inline-flex min-w-0 items-center gap-2">

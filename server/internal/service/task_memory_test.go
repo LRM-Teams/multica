@@ -56,6 +56,37 @@ func TestAgentMemoryDeliveryFiltersProjectChannelTaskAndExpiry(t *testing.T) {
 	}
 }
 
+func TestAgentMemoryDeliveryExcludesUserOnGroupChatUnlessBringIn(t *testing.T) {
+	memberConfig := []byte(`{"scope":"user","subject":{"type":"member","id":"user-frank"}}`)
+	group := MemoryExecutionScope{
+		InitiatorType: "member",
+		InitiatorID:   "user-frank",
+		ChannelID:     "channel-a",
+		ChannelKind:   "group",
+		ChatSessionID: "chat-1",
+		MessageTexts:  []string{"设定个总目标"},
+		TaskType:      "chat",
+	}
+	if _, _, _, ok := agentMemoryDeliveryForExecution(memberConfig, group); ok {
+		t.Fatal("group chat must exclude user-scoped DB memory by default")
+	}
+	bringIn := group
+	bringIn.MessageTexts = []string{"请带上我的个人偏好"}
+	if _, _, _, ok := agentMemoryDeliveryForExecution(memberConfig, bringIn); !ok {
+		t.Fatal("explicit bring-in must allow user-scoped DB memory")
+	}
+}
+
+func TestAgentMemoryDeliveryRequiresBoundProject(t *testing.T) {
+	projectConfig := []byte(`{"scope":"project","subject":{"type":"project","id":"project-a"}}`)
+	if _, _, _, ok := agentMemoryDeliveryForExecution(projectConfig, MemoryExecutionScope{InitiatorType: "member", InitiatorID: "user-frank"}); ok {
+		t.Fatal("project-scoped memory must not load when ProjectID is empty")
+	}
+	if _, _, _, ok := agentMemoryDeliveryForExecution(projectConfig, MemoryExecutionScope{ProjectID: "project-a"}); !ok {
+		t.Fatal("project-scoped memory should load when ProjectID is bound")
+	}
+}
+
 func TestTeamKnowledgeMemoryDataIsWorkspaceScoped(t *testing.T) {
 	item := db.ActiveTeamKnowledgeForExecution{
 		ID:      pgtype.UUID{Bytes: [16]byte{1}, Valid: true},

@@ -1174,6 +1174,8 @@ func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 
 	for _, want := range []string{
 		"### Memory Operating Guide (v0.11)",
+		"Entry gates (platform-enforced)",
+		"group-chat wakes do not inject personal",
 		"Use high-strength auto-write for human preferences and durable work arrangements",
 		"treat **human speech and peer-agent durable statements** as high-signal by default",
 		"A verbal acknowledgment such as \"got it\" / \"记住了\" does not count as remembering",

@@ -56,6 +56,7 @@ type Task struct {
 	Repos            []RepoData                   `json:"repos,omitempty"`
 	ProjectID        string                       `json:"project_id,omitempty"`        // issue's project, when present
 	ChannelID        string                       `json:"channel_id,omitempty"`        // exact DM/channel surface, when present
+	ChannelKind      string                       `json:"channel_kind,omitempty"`      // "dm" | "group" when ChannelID is set; drives personal-memory entry gate
 	ChannelGoal      *protocol.ChannelGoalContext `json:"channel_goal,omitempty"`      // active channel goal, refreshed on every claim
 	ProjectTitle     string                       `json:"project_title,omitempty"`     // human-readable project title for context injection
 	ProjectResources []ProjectResourceData        `json:"project_resources,omitempty"` // project-scoped resources to expose to the agent

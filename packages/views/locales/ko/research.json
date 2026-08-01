@@ -301,7 +301,13 @@
   "m2": {
     "rail_title": "탐색 트레일",
     "rail_hint": "차원 패밀리 전개 · 고정 체크리스트 아님",
-    "rail_empty": "킥오프 후 문제 트리 루트가 나타납니다…",
+    "rail_empty": "탐색 결과가 아직 없습니다",
+    "rail_empty_title": "탐색 결과가 아직 없습니다",
+    "rail_empty_body": "킥오프 후 차원 클러스터와 문제 트리가 상태·짧은 요약이 있는 결과 카드로 여기에 표시됩니다.",
+    "rail_loading": "문제 트리와 차원 클러스터를 생성하는 중…",
+    "rail_error": "탐색 트레일을 불러오지 못했습니다",
+    "rail_question_count": "노드 {{count}}개",
+    "rail_summary_pending": "요약 생성 중 · 펼쳐 문제 노드 확인",
     "required": "필수",
     "status": {
       "open": "탐색 중",

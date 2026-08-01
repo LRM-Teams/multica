@@ -301,7 +301,13 @@
   "m2": {
     "rail_title": "探索轨迹",
     "rail_hint": "按维度族展开 · 非固定题库",
-    "rail_empty": "开题后生成问题树根…",
+    "rail_empty": "尚未形成探索结果",
+    "rail_empty_title": "尚未形成探索结果",
+    "rail_empty_body": "开题并开始跑调研后，这里会以维度簇 / 问题树结果卡展示状态与短摘要。",
+    "rail_loading": "正在生成问题树与维度簇…",
+    "rail_error": "探索轨迹加载失败",
+    "rail_question_count": "{{count}} 个节点",
+    "rail_summary_pending": "摘要生成中 · 可先展开查看问题节点",
     "required": "必探",
     "status": {
       "open": "探查中",

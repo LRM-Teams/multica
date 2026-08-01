@@ -18,6 +18,7 @@ export function VisibilityTabs({
   dimensions,
   strategy,
   boundary,
+  sessionStatus,
   selectedFamily,
   selectedQuestionId,
   onSelectFamily,
@@ -27,6 +28,7 @@ export function VisibilityTabs({
   dimensions: ExplorationDimension[];
   strategy: SourceStrategyModel;
   boundary: HumanBoundaryModel;
+  sessionStatus?: string | null;
   selectedFamily?: string | null;
   selectedQuestionId?: string | null;
   onSelectFamily?: (family: string) => void;
@@ -69,6 +71,7 @@ export function VisibilityTabs({
           <ExplorationRail
             className="w-full border-r-0"
             dimensions={dimensions}
+            sessionStatus={sessionStatus}
             selectedFamily={selectedFamily}
             selectedQuestionId={selectedQuestionId}
             onSelectFamily={onSelectFamily}

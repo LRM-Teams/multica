@@ -4,6 +4,7 @@ import {
   buildExplorationDimensions,
   buildHumanBoundary,
   buildSourceStrategy,
+  resolveExplorationRailMode,
 } from "./m2-visibility";
 
 function node(
@@ -48,7 +49,30 @@ describe("m2-visibility", () => {
     ]);
     expect(dims.map((d) => d.family)).toContain("feasibility");
     expect(dims.find((d) => d.family === "feasibility")?.status).toBe("covered");
+    expect(dims.find((d) => d.family === "feasibility")?.findingSummary).toBe(
+      "WebGL ok",
+    );
     expect(dims.find((d) => d.family === "cost_schedule")?.status).toBe("open");
+  });
+
+  it("resolves rail empty vs in-flight loading vs ready (LRM-975)", () => {
+    expect(resolveExplorationRailMode([], "drafting")).toBe("empty");
+    expect(resolveExplorationRailMode([], "running")).toBe("loading");
+    expect(resolveExplorationRailMode([], "paused")).toBe("loading");
+    expect(resolveExplorationRailMode([], "running", "boom")).toBe("error");
+    expect(
+      resolveExplorationRailMode(
+        [
+          {
+            family: "feasibility",
+            title: "可行性",
+            status: "open",
+            questions: [],
+          },
+        ],
+        "running",
+      ),
+    ).toBe("ready");
   });
 
   it("splits general vs domain source chips and keeps why", () => {

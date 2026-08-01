@@ -301,7 +301,13 @@
   "m2": {
     "rail_title": "Exploration trail",
     "rail_hint": "Dimension families · not a fixed checklist",
-    "rail_empty": "Dimension tree roots appear after kickoff…",
+    "rail_empty": "No exploration results yet",
+    "rail_empty_title": "No exploration results yet",
+    "rail_empty_body": "After kickoff, dimension clusters and the question tree appear here as result cards with status and short summaries.",
+    "rail_loading": "Building the question tree and dimension clusters…",
+    "rail_error": "Could not load the exploration trail",
+    "rail_question_count": "{{count}} nodes",
+    "rail_summary_pending": "Summary pending · expand to scan question nodes",
     "required": "Required",
     "status": {
       "open": "Exploring",

@@ -162,8 +162,21 @@ func activityVisibilityFor(eventKind, eventType, severity, reasonCode string) st
 // stops retrying and reports a clean terminus instead of retrying forever)
 // — but shown raw in the user's activity feed it reads exactly like an
 // error, which is what prompted the confusion this fix addresses.
+//
+// restarted_by_user (task #62) is the same shape one layer down: a plain
+// restart force-kills the agent's resident process, which the interrupted
+// turn's own goroutine then reports through the normal task-failure path —
+// same as a real crash, because from that goroutine's side it looks
+// identical to one. Without this, a user-initiated restart would show up in
+// their own activity feed as an unexplained crash for the thing they just
+// asked to happen.
 func internalHousekeepingFailureReason(reasonCode string) bool {
-	return reasonCode == "agent_reassigned_elsewhere"
+	switch reasonCode {
+	case "agent_reassigned_elsewhere", "restarted_by_user":
+		return true
+	default:
+		return false
+	}
 }
 
 func customActivityEventIsNarrative(eventType, reasonCode string) bool {

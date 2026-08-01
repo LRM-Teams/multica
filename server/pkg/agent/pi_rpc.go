@@ -140,9 +140,12 @@ func (b *piRPCBackend) sendControlCommand(ctx context.Context, p *piRPCProcess, 
 type piRPCBackend struct {
 	cfg Config
 
-	mu                        sync.Mutex
-	process                   *piRPCProcess
-	running                   atomic.Bool
+	mu      sync.Mutex
+	process *piRPCProcess
+	running atomic.Bool
+	// forceKilled is set by ForceKill() (task #62); see cursorACPBackend's
+	// field of the same name for the full explanation.
+	forceKilled               atomic.Bool
 	afterResultPublishForTest func()
 }
 
@@ -200,6 +203,27 @@ func (b *piRPCBackend) Close() {
 	if b.process != nil {
 		b.disposeLocked(b.process)
 	}
+}
+
+// ForceKill implements agent.ResidentRuntimeForceKillable (task #62). Same
+// shape and same reason as cursorACPBackend.ForceKill: must not call
+// disposeLocked (or cmd.Wait() at all) while a turn may still be reading
+// this process's stdio. Execute()'s own goroutine remains the sole
+// reader/reaper, including the mcp config tempfile cleanup disposeLocked
+// does — ForceKill only needs the process to die.
+func (b *piRPCBackend) ForceKill() error {
+	b.mu.Lock()
+	p := b.process
+	b.mu.Unlock()
+	if p == nil {
+		return nil
+	}
+	b.forceKilled.Store(true)
+	_ = p.stdin.Close()
+	if p.cmd.Process == nil {
+		return nil
+	}
+	return p.cmd.Process.Kill()
 }
 
 func (b *piRPCBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
@@ -451,7 +475,11 @@ func (b *piRPCBackend) readEvents(p *piRPCProcess, stdout io.Reader) {
 	turn := p.turn
 	p.stateMu.Unlock()
 	if turn != nil {
-		trySendPiRPCCompletion(turn.done, piRPCCompletion{err: "Pi RPC process exited before agent_end"})
+		exitErr := "Pi RPC process exited before agent_end"
+		if b.forceKilled.CompareAndSwap(true, false) {
+			exitErr = AgentForceKilledMarker + ": " + exitErr
+		}
+		trySendPiRPCCompletion(turn.done, piRPCCompletion{err: exitErr})
 	}
 }
 

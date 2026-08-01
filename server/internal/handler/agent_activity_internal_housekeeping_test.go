@@ -26,6 +26,18 @@ func TestActivityVisibilityFor_AgentReassignedElsewhereIsDiagnosticOnly(t *testi
 	}
 }
 
+// Task #62: restarted_by_user is the same shape as agent_reassigned_elsewhere
+// one layer down — a plain restart force-kills the resident process, the
+// interrupted turn's own goroutine reports that through the normal
+// task-failure path (identical to a real crash from its side), and without
+// this classification the user would see their own requested restart show
+// up in their activity feed as an unexplained crash.
+func TestActivityVisibilityFor_RestartedByUserIsDiagnosticOnly(t *testing.T) {
+	if got := activityVisibilityFor(activityKindError, "", "error", "restarted_by_user"); got != "diagnostic_only" {
+		t.Fatalf("restarted_by_user visibility = %q, want diagnostic_only", got)
+	}
+}
+
 func TestAgentActivityTimelineRowIsNarrative_RespectsDiagnosticOnlyVisibilityEvenForErrorKind(t *testing.T) {
 	diagnosticErrorRow := agentActivityRawRow{
 		Kind:       activityKindError,

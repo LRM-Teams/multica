@@ -46,6 +46,12 @@ type cursorACPBackend struct {
 	mu      sync.Mutex
 	process *cursorACPProcess
 	running atomic.Bool
+	// forceKilled is set by ForceKill() (task #62) so the in-flight
+	// Execute() goroutine can tell "interrupted on purpose" apart from a
+	// genuine crash when it observes the resulting pipe/request failure.
+	// Read-and-cleared by executeTurn's own error path, not by ForceKill —
+	// ForceKill only signals; it does not touch anything Execute() owns.
+	forceKilled atomic.Bool
 	// afterResultPublishForTest runs after a terminal Result is published.
 	// Tests use it to pin release-before-publish ordering without sleeps.
 	afterResultPublishForTest func()
@@ -81,6 +87,28 @@ func (b *cursorACPBackend) Close() {
 	if b.process != nil {
 		b.disposeProcessLocked(b.process)
 	}
+}
+
+// ForceKill implements agent.ResidentRuntimeForceKillable (task #62). Unlike
+// Close(), this may be called while a turn is in flight (running.Load() ==
+// true) — it must NOT call disposeProcessLocked, because that ends in
+// cmd.Wait(), and the Go documentation for exec.Cmd with StdoutPipe/
+// StdinPipe is explicit that only the goroutine reading the pipes may call
+// Wait. Execute()'s own goroutine is that reader; it already reaps the
+// process once it observes the pipe read failing (the same path a genuine
+// crash takes today). ForceKill only needs to make the process die — it
+// deliberately leaves reaping to that goroutine so there is exactly one
+// caller of Wait(), not two.
+func (b *cursorACPBackend) ForceKill() error {
+	b.mu.Lock()
+	p := b.process
+	b.mu.Unlock()
+	if p == nil {
+		return nil
+	}
+	b.forceKilled.Store(true)
+	_ = p.stdin.Close()
+	return p.cmd.Process.Kill()
 }
 
 func (b *cursorACPBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
@@ -166,6 +194,9 @@ func (b *cursorACPBackend) executeTurn(ctx context.Context, prompt string, opts 
 	}
 	if err != nil {
 		b.disposeProcess(p)
+		if b.forceKilled.CompareAndSwap(true, false) {
+			return Result{Status: "failed", Error: AgentForceKilledMarker + ": " + err.Error(), SessionID: p.sessionID}
+		}
 		status := "failed"
 		if ctx.Err() == context.DeadlineExceeded {
 			status = "timeout"

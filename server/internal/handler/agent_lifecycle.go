@@ -52,6 +52,12 @@ type AgentLifecycleOperation struct {
 type AgentLifecyclePreflight struct {
 	Actions         map[AgentLifecycleActionKind]AgentLifecycleActionPreflight `json:"actions"`
 	ActiveOperation *AgentLifecycleOperation                                   `json:"active_operation"`
+	// ProviderCapabilities is the FE-facing projection of
+	// agent.ProviderCapabilities for this agent's runtime provider.
+	// Gate the restart button on provider_capabilities.force_restart — do
+	// not hardcode a provider allow-list. Older servers omit the object;
+	// treat missing as all-false.
+	ProviderCapabilities ProviderCapabilitiesWire `json:"provider_capabilities"`
 }
 
 type AgentLifecycleActionPreflight struct {
@@ -168,7 +174,14 @@ func (h *Handler) CreateAgentLifecycleOperation(w http.ResponseWriter, r *http.R
 	executionMode := agentLifecycleImmediate
 	status := agentLifecycleRunning
 	var startedAt any = time.Now()
-	if active {
+	// Plain restart (task #62) always goes immediate, even while active: a
+	// busy agent is exactly the stuck-agent case restart exists to recover,
+	// and "scheduled" never fires on its own once created (there is no
+	// trigger that promotes it once the blocking turn ends — see the design
+	// doc). reset_session_restart and full_reset_restart keep the existing
+	// scheduled/rejected behavior below; extending force-interrupt to them
+	// is separate, tracked work, not done here.
+	if active && req.ActionKind != agentLifecycleRestart {
 		executionMode = agentLifecycleAfterCurrentRun
 		status = agentLifecycleScheduled
 		startedAt = nil
@@ -277,13 +290,12 @@ func (h *Handler) loadAgentLifecycleTarget(w http.ResponseWriter, r *http.Reques
 	return agent, true
 }
 
-func (h *Handler) agentLifecyclePreflight(ctx context.Context, agent db.Agent) (AgentLifecyclePreflight, error) {
-	runtime, supported, reason, err := h.agentLifecycleRuntimeSupport(ctx, agent)
+func (h *Handler) agentLifecyclePreflight(ctx context.Context, target db.Agent) (AgentLifecyclePreflight, error) {
+	runtime, supported, reason, err := h.agentLifecycleRuntimeSupport(ctx, target)
 	if err != nil {
 		return AgentLifecyclePreflight{}, err
 	}
-	_ = runtime
-	active, err := agentLifecycleHasActiveRun(ctx, h.DB, agent.ID)
+	active, err := agentLifecycleHasActiveRun(ctx, h.DB, target.ID)
 	if err != nil {
 		return AgentLifecyclePreflight{}, err
 	}
@@ -291,7 +303,7 @@ func (h *Handler) agentLifecyclePreflight(ctx context.Context, agent db.Agent) (
 	if active {
 		mode = agentLifecycleAfterCurrentRun
 	}
-	activeOperation, err := getActiveAgentLifecycleOperation(ctx, h.DB, agent.ID)
+	activeOperation, err := getActiveAgentLifecycleOperation(ctx, h.DB, target.ID)
 	if err != nil {
 		return AgentLifecyclePreflight{}, err
 	}
@@ -315,7 +327,11 @@ func (h *Handler) agentLifecyclePreflight(ctx context.Context, agent db.Agent) (
 			ExecutionMode:  actionMode,
 		}
 	}
-	return AgentLifecyclePreflight{Actions: actions, ActiveOperation: activeOperation}, nil
+	return AgentLifecyclePreflight{
+		Actions:              actions,
+		ActiveOperation:      activeOperation,
+		ProviderCapabilities: providerCapabilitiesWire(runtime.Provider),
+	}, nil
 }
 
 func (h *Handler) agentLifecycleRuntimeSupport(ctx context.Context, agent db.Agent) (db.AgentRuntime, bool, string, error) {

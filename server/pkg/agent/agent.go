@@ -25,6 +25,17 @@ type Backend interface {
 // provider-auth failure rather than retrying or launching an interactive login.
 const ProviderAuthRequiredMarker = "provider_auth_required"
 
+// AgentForceKilledMarker prefixes the Result.Error a resident backend
+// produces when its in-flight turn was interrupted by ForceKill() (task
+// #62), not by a genuine crash. Daemon code matches this the same way it
+// matches ProviderAuthRequiredMarker (see reportTaskFailure) to set
+// failure_reason="restarted_by_user" instead of running it through the
+// generic taskfailure.Classify substring taxonomy — that taxonomy's 21
+// categories are governed by an external SQL source of truth (MUL-1949) for
+// genuine agent-side failures, and a deliberate user-initiated restart isn't
+// one of those, so it must never fall into that classifier.
+const AgentForceKilledMarker = "agent_force_killed_by_user"
+
 // AuthPreflight is an optional contract for backends that can detect missing
 // non-interactive credentials before spawning their provider CLI. Implementers
 // must fail closed: return an error instead of entering the provider's
@@ -43,6 +54,23 @@ type AuthPreflight interface {
 // is not proof the process died.
 type ResidentRuntimeLivenessChecker interface {
 	RuntimeAlive() (alive bool, known bool)
+}
+
+// ResidentRuntimeForceKillable is an optional contract for backends that keep
+// a long-lived provider child process alive across turns (task #62). ForceKill
+// terminates the underlying process immediately, even while a turn is
+// in-flight against it. Implementers must be safe to call concurrently with
+// an in-flight Execute() — the caller does not wait for Execute() to notice;
+// Execute()'s own error handling is expected to observe the killed process
+// (e.g. a pipe read failure) and release the turn itself, exactly as it
+// already does for a genuine crash. ForceKill must NOT perform any step that
+// only one goroutine may safely call (for example, exec.Cmd.Wait() while its
+// stdout/stdin pipes may still be read/written by the in-flight Execute()
+// goroutine) — it may only take the actions needed to make the process die;
+// reaping/cleanup stays the responsibility of the goroutine that was already
+// using the process.
+type ResidentRuntimeForceKillable interface {
+	ForceKill() error
 }
 
 // ExecOptions configures a single execution.

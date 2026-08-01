@@ -15,6 +15,23 @@ import (
 type canonicalRuntimeTestBackend struct {
 	mu               sync.Mutex
 	resumeSessionIDs []string
+	forceKillCalls   int
+	forceKillErr     error
+}
+
+// ForceKill implements ResidentRuntimeForceKillable for tests exercising
+// forceInvalidateSession without a real OS process.
+func (b *canonicalRuntimeTestBackend) ForceKill() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.forceKillCalls++
+	return b.forceKillErr
+}
+
+func (b *canonicalRuntimeTestBackend) forceKillCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.forceKillCalls
 }
 
 func (b *canonicalRuntimeTestBackend) Execute(_ context.Context, _ string, opts agent.ExecOptions) (*agent.Session, error) {
@@ -821,6 +838,100 @@ func TestCanonicalAgentRuntimeSessionResetRejectsBusySlot(t *testing.T) {
 	if created != 1 || closed != 0 {
 		t.Fatalf("busy invalidate touched backend: created %d closed %d", created, closed)
 	}
+}
+
+// TestCanonicalAgentRuntimeForceInvalidateSessionKillsBusySlot pins task
+// #62's core requirement: unlike invalidateSession, forceInvalidateSession
+// must not refuse a busy slot — it must call the backend's ForceKill()
+// instead of closeBackend(), leaving the in-flight turn's own goroutine
+// responsible for releasing the slot once it observes the failure (see
+// the design doc's §3/§4 for why closeBackend() itself stays off-limits
+// while running=true).
+func TestCanonicalAgentRuntimeForceInvalidateSessionKillsBusySlot(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     "agent-a",
+		"MULTICA_TASK_ID":      "turn-a",
+	})
+	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: identity,
+		Mode:     canonicalRuntimeResident,
+		Factory:  probe.factory,
+	})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	backend := probe.backends[0]
+
+	if err := pool.forceInvalidateSession("agent-a", "runtime-a"); err != nil {
+		t.Fatalf("forceInvalidateSession on busy slot: %v", err)
+	}
+	if got := backend.forceKillCount(); got != 1 {
+		t.Fatalf("ForceKill called %d times, want 1", got)
+	}
+	created, closed := probe.counts()
+	if created != 1 || closed != 0 {
+		t.Fatalf("forceInvalidateSession touched closeBackend: created %d closed %d — it must not call closeBackend() on a running slot, only ForceKill()", created, closed)
+	}
+
+	// The in-flight "turn" (simulated by not having released the lease yet)
+	// releasing afterward — exactly as Execute()'s own goroutine would once
+	// it observes the killed process. A force-killed turn is not a healthy
+	// completion, so it releases as unhealthy, same as any other execution
+	// error — that's what actually triggers closeBackend() here.
+	lease.release(false)
+	created, closed = probe.counts()
+	if closed != 1 {
+		t.Fatalf("closed count after release = %d, want 1", closed)
+	}
+	_ = created
+}
+
+// TestCanonicalAgentRuntimeForceInvalidateSessionRejectsNonForceKillableBackend
+// pins the fail-closed requirement from the design doc: a backend that
+// doesn't implement ResidentRuntimeForceKillable must not be silently
+// no-op'd — forceInvalidateSession falls back to the existing busy
+// rejection so a missing capability is loud, not silent.
+func TestCanonicalAgentRuntimeForceInvalidateSessionRejectsNonForceKillableBackend(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	notForceKillable := &canonicalRuntimeNonForceKillableTestBackend{}
+	factory := func(_ agent.Config) (agent.Backend, func(), error) {
+		return notForceKillable, func() {}, nil
+	}
+	identity := canonicalRuntimeIdentityForTest(t, "model-a", map[string]string{
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     "agent-a",
+		"MULTICA_TASK_ID":      "turn-a",
+	})
+	lease, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: identity,
+		Mode:     canonicalRuntimeResident,
+		Factory:  factory,
+	})
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer lease.release(true)
+	if err := pool.forceInvalidateSession("agent-a", "runtime-a"); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		t.Fatalf("forceInvalidateSession error = %v, want busy (fail closed, not silent no-op)", err)
+	}
+}
+
+// canonicalRuntimeNonForceKillableTestBackend deliberately does not
+// implement ResidentRuntimeForceKillable.
+type canonicalRuntimeNonForceKillableTestBackend struct{}
+
+func (b *canonicalRuntimeNonForceKillableTestBackend) Execute(_ context.Context, _ string, opts agent.ExecOptions) (*agent.Session, error) {
+	messages := make(chan agent.Message)
+	result := make(chan agent.Result, 1)
+	close(messages)
+	result <- agent.Result{Status: "completed", SessionID: opts.ResumeSessionID}
+	close(result)
+	return &agent.Session{Messages: messages, Result: result}, nil
 }
 
 func TestCanonicalAgentRuntimeSessionResetRejectsEmptyIdentity(t *testing.T) {

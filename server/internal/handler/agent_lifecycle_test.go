@@ -70,9 +70,48 @@ func TestAgentLifecyclePreflightIsPerActionAndFullResetIsIdleOnly(t *testing.T) 
 	if full.Supported || full.DisabledReason != "agent_active" || full.ExecutionMode != agentLifecycleImmediate {
 		t.Fatalf("full reset preflight = %+v", full)
 	}
+	// Fixture provider is "lifecycle-test" — not ForceKillable → false.
+	if response.ProviderCapabilities.ForceRestart {
+		t.Fatalf("provider_capabilities.force_restart=%v, want false for non-ForceKillable fixture provider", response.ProviderCapabilities.ForceRestart)
+	}
 }
 
-func TestAgentLifecycleCreateIsIdempotentAndSchedulesOnlyNonDestructiveActions(t *testing.T) {
+func TestAgentLifecyclePreflightProviderCapabilitiesFollowProvider(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	// cursor is in forceRestartResidentConstructors and implements ForceKill.
+	agentID, _ := createAgentLifecycleFixtureWithProvider(t, true, "cursor")
+	rec := httptest.NewRecorder()
+	req := withURLParam(
+		newRequestAs(testUserID, http.MethodGet, "/api/agents/"+agentID+"/lifecycle", nil),
+		"id", agentID,
+	)
+	testHandler.GetAgentLifecycle(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preflight status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response AgentLifecyclePreflight
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode preflight: %v", err)
+	}
+	caps := response.ProviderCapabilities
+	if !caps.ForceRestart || !caps.CanonicalResident || !caps.CustomModelID || !caps.ModelSelection {
+		t.Fatalf("provider_capabilities=%+v, want force_restart+canonical_resident+custom_model_id+model_selection for cursor", caps)
+	}
+	if caps.NeedsInlineSystemPrompt {
+		t.Fatalf("cursor must not need inline system prompt, got %+v", caps)
+	}
+}
+
+// TestAgentLifecycleCreateIsIdempotentAndForceRestartsBusyAgent pins task
+// #62: unlike full_reset_restart (still rejected outright while busy) and
+// reset_session_restart (see TestAgentLifecycleResetSessionRestartSchedulesWhenBusy
+// below), plain restart against a busy agent must go immediate/running, not
+// scheduled/after_current_run — a busy agent is exactly the stuck-agent case
+// restart exists to fix, and "scheduled" never fires on its own (see the
+// design doc for why).
+func TestAgentLifecycleCreateIsIdempotentAndForceRestartsBusyAgent(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -94,9 +133,10 @@ func TestAgentLifecycleCreateIsIdempotentAndSchedulesOnlyNonDestructiveActions(t
 	if err := json.Unmarshal(first.Body.Bytes(), &firstOperation); err != nil {
 		t.Fatalf("decode first operation: %v", err)
 	}
-	if firstOperation.Status != agentLifecycleScheduled ||
-		firstOperation.ExecutionMode != agentLifecycleAfterCurrentRun {
-		t.Fatalf("first operation = %+v", firstOperation)
+	if firstOperation.Status != agentLifecycleRunning ||
+		firstOperation.ExecutionMode != agentLifecycleImmediate ||
+		firstOperation.StartedAt == nil {
+		t.Fatalf("restart on busy agent = %+v, want immediate/running (busy must not block plain restart)", firstOperation)
 	}
 
 	replay := invokeCreateAgentLifecycle(t, agentID, key, agentLifecycleRestart)
@@ -124,6 +164,32 @@ func TestAgentLifecycleCreateIsIdempotentAndSchedulesOnlyNonDestructiveActions(t
 	}
 	if count != 1 {
 		t.Fatalf("operation count=%d want=1", count)
+	}
+}
+
+// TestAgentLifecycleResetSessionRestartSchedulesWhenBusy pins the scope
+// boundary from the design doc: reset_session_restart's busy-when-scheduled
+// behavior is deliberately unchanged by task #62 (only plain restart force-
+// interrupts) — its own force-interrupt support needs a separate audit of
+// sessionReset's busy assumptions first.
+func TestAgentLifecycleResetSessionRestartSchedulesWhenBusy(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	insertRunningAgentLifecycleExecution(t, agentID, runtimeID)
+
+	rec := invokeCreateAgentLifecycle(t, agentID, uuid.NewString(), agentLifecycleResetSessionRestart)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var operation AgentLifecycleOperation
+	if err := json.Unmarshal(rec.Body.Bytes(), &operation); err != nil {
+		t.Fatalf("decode operation: %v", err)
+	}
+	if operation.Status != agentLifecycleScheduled ||
+		operation.ExecutionMode != agentLifecycleAfterCurrentRun {
+		t.Fatalf("reset_session_restart on busy agent = %+v, want scheduled/after_current_run (unchanged by task #62)", operation)
 	}
 }
 
@@ -366,6 +432,11 @@ func TestAgentLifecycleNoRuntimeIsUnsupported(t *testing.T) {
 
 func createAgentLifecycleFixture(t *testing.T, capable bool) (agentID, runtimeID string) {
 	t.Helper()
+	return createAgentLifecycleFixtureWithProvider(t, capable, "lifecycle-test")
+}
+
+func createAgentLifecycleFixtureWithProvider(t *testing.T, capable bool, provider string) (agentID, runtimeID string) {
+	t.Helper()
 	capabilities := `[]`
 	if capable {
 		capabilities = `["agent_lifecycle_actions_v1"]`
@@ -377,11 +448,11 @@ func createAgentLifecycleFixture(t *testing.T, capable bool) (agentID, runtimeID
 			device_info, metadata, owner_id, visibility, last_seen_at
 		)
 		VALUES (
-			$1, $2, 'local', 'lifecycle-test', 'online',
-			'', jsonb_build_object('capabilities', $3::jsonb), $4, 'private', now()
+			$1, $2, 'local', $3, 'online',
+			'', jsonb_build_object('capabilities', $4::jsonb), $5, 'private', now()
 		)
 		RETURNING id
-	`, testWorkspaceID, "lifecycle-runtime-"+randomID(), capabilities, testUserID).Scan(&runtimeID); err != nil {
+	`, testWorkspaceID, "lifecycle-runtime-"+randomID(), provider, capabilities, testUserID).Scan(&runtimeID); err != nil {
 		t.Fatalf("create lifecycle runtime: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `

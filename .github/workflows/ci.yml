@@ -119,11 +119,13 @@ jobs:
         #   broken by accident once (2026-08-01, honor-tab.tsx) — that
         #   incident is the reason this line exists instead of silence. If
         #   you touch apps/desktop, run its typecheck yourself; CI won't.
-        # - apps/mobile: ZERO CI coverage since mobile-verify.yml was deleted
-        #   2026-07-29 (#1405) — no other workflow watches it, despite what
-        #   an earlier version of this comment claimed. Whether it gets
-        #   CI coverage or an explicit "nobody maintains this" writeup is
-        #   pending (task #12).
+        # - apps/mobile: no one maintains it (Frank, 2026-08-01) — not in any
+        #   CI gate, and not going to be. If it's red, nobody is watching
+        #   and nobody will fix it. Known and unfixed as of this line: 3
+        #   type errors in data/schemas.ts (Agent/RuntimeDevice zod schemas
+        #   drifted from the current types, including one reference to the
+        #   removed Agent.visibility field) — whoever picks mobile back up
+        #   starts there, not from a clean slate.
         # - apps/docs: no CI coverage, no assigned owner, low blast radius
         #   (infrequent changes). If you touch apps/docs, run its typecheck
         #   yourself; CI won't.

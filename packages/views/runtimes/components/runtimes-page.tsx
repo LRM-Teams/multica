@@ -908,6 +908,12 @@ function MachineDetailView({
                         (task) => task.agent_id === agent.id,
                       );
                       const wl = deriveWorkloadDetail(tasks).workload;
+                      // LRM-922: Host runtime vs Code agent are separate
+                      // columns. Until the API exposes distinct host/CA facts,
+                      // both project from the agent runtime provider (design
+                      // mock: Cursor/Cursor, Pi/Pi) — Host plain text, Code
+                      // with logo.
+                      const hostRuntime = providerLabel(runtime);
                       const codeAgent = providerLabel(runtime);
                       return (
                         <tr
@@ -932,7 +938,7 @@ function MachineDetailView({
                             </span>
                           </td>
                           <td className="px-4 py-3 text-sm text-muted-foreground">
-                            {codeAgent}
+                            {hostRuntime}
                           </td>
                           <td className="px-4 py-3 text-sm text-muted-foreground">
                             <span className="inline-flex items-center gap-1.5">

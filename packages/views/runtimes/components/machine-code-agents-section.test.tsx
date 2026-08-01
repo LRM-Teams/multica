@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type { AgentRuntime } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -83,7 +83,32 @@ function renderSection(machine: RuntimeMachine) {
 }
 
 describe("MachineCodeAgentsSection", () => {
-  it("renders an off-catalog installed provider with its raw id as the label (not blank)", () => {
+  it("renders installed + supported-not-installed inventory with install guide", () => {
+    renderSection(
+      makeMachine([
+        makeRuntime({
+          provider: "cursor",
+          metadata: { version: "1.4.2" },
+        }),
+      ]),
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Code agents on this computer" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/1 installed/i)).toBeInTheDocument();
+    expect(screen.getByText(/Installed · v1\.4\.2/)).toBeInTheDocument();
+    expect(screen.getByTestId("provider-logo-cursor")).toBeInTheDocument();
+    // Recommend catalog still listed as supported · not installed.
+    expect(
+      screen.getAllByText("Supported · not installed").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("View install guide").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("renders an off-catalog installed provider with its raw id as the label", () => {
     renderSection(
       makeMachine([
         makeRuntime({
@@ -93,20 +118,12 @@ describe("MachineCodeAgentsSection", () => {
       ]),
     );
 
-    // Section stays mounted — heading is the lock that it did not early-return null.
     expect(
       screen.getByRole("heading", { name: "Code agents on this computer" }),
     ).toBeInTheDocument();
-
-    const installedHeading = screen.getByText("Installed");
-    const card = installedHeading.closest("div.overflow-hidden") ?? document.body;
-    // Off-catalog: knownProviderLabel misses → fall back to provider id.
-    expect(within(card as HTMLElement).getByText("kimi")).toBeInTheDocument();
-    expect(within(card as HTMLElement).getByText("kimi").textContent?.trim()).toBe(
-      "kimi",
-    );
+    expect(screen.getByText("kimi")).toBeInTheDocument();
     expect(screen.getByTestId("provider-logo-kimi")).toBeInTheDocument();
-    expect(screen.getByText(/v9\.9\.9/)).toBeInTheDocument();
+    expect(screen.getByText(/Installed · v9\.9\.9/)).toBeInTheDocument();
   });
 
   it("keeps the section mounted and shows the empty copy when nothing is installed", () => {
@@ -115,11 +132,12 @@ describe("MachineCodeAgentsSection", () => {
     expect(
       screen.getByRole("heading", { name: "Code agents on this computer" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Installed")).toBeInTheDocument();
+    // Empty install still shows the recommend catalog (supported · not installed).
     expect(
-      screen.getByText("No code agents detected on this computer yet."),
+      screen.getByText(/0 installed/i),
     ).toBeInTheDocument();
-    // Recommend catalog still listed under Not installed — section is not null.
-    expect(screen.getByText("Not installed")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("Supported · not installed").length,
+    ).toBeGreaterThan(0);
   });
 });

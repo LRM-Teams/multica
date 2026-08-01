@@ -320,8 +320,9 @@ func sweepStaleTasks(ctx context.Context, queries *db.Queries, taskSvc *service.
 // big backlog can't monopolise the DB.
 func sweepExpiredQueuedTasks(ctx context.Context, queries *db.Queries, taskSvc *service.TaskService) {
 	failedTasks, err := queries.ExpireStaleQueuedTasks(ctx, db.ExpireStaleQueuedTasksParams{
-		TtlSecs:    queuedTTLSeconds,
-		MaxPerTick: queuedExpireBatchSize,
+		TtlSecs:            queuedTTLSeconds,
+		MaxPerTick:         queuedExpireBatchSize,
+		StaleThresholdSecs: staleThresholdSeconds,
 	})
 	if err != nil {
 		slog.Warn("task sweeper: failed to expire stale queued tasks", "error", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -116,11 +117,14 @@ func TestInMemoryAgentLifecycleDispatchStore_PendingTimesOut(t *testing.T) {
 // never heartbeats, or the runtime dies in the window between the create-time
 // online check and the next heartbeat) must not leave its
 // agent_lifecycle_operation row stuck at "running" forever — that permanently
-// overlays the agent's health as "restarting" with no way out. The dispatch
-// store's own timeout check is the single source of truth (task #52 review:
-// a second, independently-timed sweep would be a second clock that can drift
-// from this one) — it drives the operation-row update directly via the
-// injected onTimeout hook, not a separate poller.
+// overlays the agent's health as "restarting" with no way out.
+//
+// Deliberately never calls HasPending/PopAllPending for this dispatch's
+// runtime — that's exactly the production failure mode Alice's review round
+// caught: those two only evaluate a runtime's own dispatches when that
+// runtime's own daemon heartbeats, so a daemon that dies and never comes
+// back would never have its stuck dispatch evaluated at all. Only
+// SweepTimedOut (the heartbeat-independent trigger) is exercised here.
 func TestAgentLifecycleDispatchTimeoutFailsTheOperation(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -149,8 +153,12 @@ func TestAgentLifecycleDispatchTimeoutFailsTheOperation(t *testing.T) {
 	store.dispatches[operation.ID].CreatedAt = time.Now().Add(-(agentLifecycleDispatchPendingTimeout + time.Second))
 	store.mu.Unlock()
 
-	if _, err := store.HasPending(ctx, runtimeID); err != nil {
-		t.Fatalf("HasPending: %v", err)
+	swept, err := store.SweepTimedOut(ctx)
+	if err != nil {
+		t.Fatalf("SweepTimedOut: %v", err)
+	}
+	if swept != 1 {
+		t.Fatalf("SweepTimedOut swept %d, want 1", swept)
 	}
 
 	got, err := getAgentLifecycleOperation(ctx, testPool, parseUUID(agentID), parseUUID(operation.ID))
@@ -165,5 +173,24 @@ func TestAgentLifecycleDispatchTimeoutFailsTheOperation(t *testing.T) {
 	}
 	if got.FinishedAt == nil {
 		t.Fatal("expected finished_at to be set")
+	}
+
+	// The health overlay must clear once the operation is failed — otherwise
+	// the agent still shows "restarting" even though the operation resolved.
+	healthRec := httptest.NewRecorder()
+	healthReq := withURLParam(
+		newRequestAs(testUserID, http.MethodGet, "/api/agents/"+agentID+"/health", nil),
+		"id", agentID,
+	)
+	testHandler.GetAgentHealth(healthRec, healthReq)
+	if healthRec.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", healthRec.Code, healthRec.Body.String())
+	}
+	var health AgentHealthResponse
+	if err := json.Unmarshal(healthRec.Body.Bytes(), &health); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if health.Summary.State == "restarting" {
+		t.Fatalf("health still shows restarting after the operation failed: %+v", health.Summary)
 	}
 }

@@ -92,7 +92,7 @@ const (
 // hot heartbeat path; the DB is allowed to lag up to runtimeHeartbeatDBFlushInterval).
 // When liveness is unavailable or errors, we fall back to trusting the DB
 // stale window — that is the original behavior.
-func runRuntimeSweeper(ctx context.Context, queries *db.Queries, healthEventExec handler.RuntimeHealthEventExecutor, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus) {
+func runRuntimeSweeper(ctx context.Context, queries *db.Queries, healthEventExec handler.RuntimeHealthEventExecutor, liveness handler.LivenessStore, taskSvc *service.TaskService, bus *events.Bus, agentLifecycleDispatches handler.AgentLifecycleDispatchStore) {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 
@@ -108,7 +108,29 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, healthEventExec
 			sweepQueuedTasksOnOfflineRuntimes(ctx, queries, taskSvc)
 			gcRuntimes(ctx, queries, bus)
 			gcExpiredAgentCredentials(ctx, queries)
+			sweepTimedOutAgentLifecycleDispatches(ctx, agentLifecycleDispatches)
 		}
+	}
+}
+
+// sweepTimedOutAgentLifecycleDispatches is the reachable-regardless-of-heartbeat
+// trigger for AgentLifecycleDispatchStore's timeout (task #52 review, Alice):
+// HasPending/PopAllPending only evaluate a runtime's own dispatches when that
+// runtime's daemon heartbeats, so a daemon that goes offline and never comes
+// back would otherwise leave its stuck operation at status=running forever.
+// Same constant, same function as the heartbeat path — this is a different
+// trigger, not a second clock.
+func sweepTimedOutAgentLifecycleDispatches(ctx context.Context, store handler.AgentLifecycleDispatchStore) {
+	if store == nil {
+		return
+	}
+	swept, err := store.SweepTimedOut(ctx)
+	if err != nil {
+		slog.Warn("sweep timed-out agent lifecycle dispatches failed", "error", err)
+		return
+	}
+	if swept > 0 {
+		slog.Info("swept timed-out agent lifecycle dispatches", "count", swept)
 	}
 }
 

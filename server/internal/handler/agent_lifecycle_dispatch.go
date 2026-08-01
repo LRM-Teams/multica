@@ -92,6 +92,17 @@ type AgentLifecycleDispatchStore interface {
 	Create(ctx context.Context, operationID, agentID, runtimeID, workspaceID, actionKind string) (*AgentLifecycleDispatch, error)
 	HasPending(ctx context.Context, runtimeID string) (bool, error)
 	PopAllPending(ctx context.Context, runtimeID string) ([]*AgentLifecycleDispatch, error)
+	// SweepTimedOut evaluates the timeout (applyAgentLifecycleDispatchTimeout,
+	// the same function and the same agentLifecycleDispatchPendingTimeout
+	// HasPending/PopAllPending already use) across every pending dispatch,
+	// regardless of runtime. HasPending/PopAllPending only evaluate a
+	// runtime's own dispatches when THAT runtime's daemon heartbeats — so a
+	// daemon that goes offline and never comes back would otherwise never
+	// have its stuck dispatch (and the operation row it blocks) evaluated at
+	// all (Alice, #52 review). This is not a second clock: same constant,
+	// same function, just a trigger that doesn't depend on the dead
+	// runtime's own heartbeat to fire.
+	SweepTimedOut(ctx context.Context) (int, error)
 }
 
 // agentLifecycleDispatchTimeoutHook is invoked exactly once, synchronously,
@@ -212,6 +223,21 @@ func (s *InMemoryAgentLifecycleDispatchStore) PopAllPending(ctx context.Context,
 		claimed = append(claimed, &copy)
 	}
 	return claimed, nil
+}
+
+// SweepTimedOut evaluates every pending dispatch regardless of runtime — see
+// the interface doc comment for why this exists alongside HasPending/PopAllPending.
+func (s *InMemoryAgentLifecycleDispatchStore) SweepTimedOut(ctx context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	swept := 0
+	for _, d := range s.dispatches {
+		if applyAgentLifecycleDispatchTimeout(ctx, d, now, s.onTimeout) {
+			swept++
+		}
+	}
+	return swept, nil
 }
 
 // ---------------------------------------------------------------------------

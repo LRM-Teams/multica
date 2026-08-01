@@ -170,3 +170,39 @@ func (s *RedisAgentLifecycleDispatchStore) PopAllPending(ctx context.Context, ru
 	}
 	return claimed, nil
 }
+
+// SweepTimedOut scans every runtime's pending set, not just one runtime's —
+// see the interface doc comment. HasPending/PopAllPending only evaluate a
+// runtime's own dispatches when that runtime's own heartbeat calls them, so
+// a runtime whose daemon goes offline and never comes back would otherwise
+// never have its stuck dispatch evaluated. Reuses loadDispatch (same
+// timeout-check, same persist, same onTimeout hook as the heartbeat path) —
+// this is a different trigger for the same clock, not a new one.
+func (s *RedisAgentLifecycleDispatchStore) SweepTimedOut(ctx context.Context) (int, error) {
+	swept := 0
+	iter := s.rdb.Scan(ctx, 0, agentLifecycleDispatchPendingPrefix+"*", 0).Iterator()
+	for iter.Next(ctx) {
+		pendingKey := iter.Val()
+		ids, err := s.rdb.ZRange(ctx, pendingKey, 0, -1).Result()
+		if err != nil {
+			return swept, fmt.Errorf("zrange pending %q: %w", pendingKey, err)
+		}
+		for _, id := range ids {
+			d, err := s.loadDispatch(ctx, id)
+			if err != nil {
+				return swept, err
+			}
+			if d == nil {
+				s.rdb.ZRem(ctx, pendingKey, id)
+				continue
+			}
+			if d.Status == AgentLifecycleDispatchTimeout {
+				swept++
+			}
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return swept, fmt.Errorf("scan pending keys: %w", err)
+	}
+	return swept, nil
+}

@@ -142,7 +142,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
                 "shrink-0 rounded px-1.5 py-0.5 text-[9.5px] font-bold normal-case",
                 status.tone === "ok" && "bg-success/15 text-success",
                 status.tone === "run" && "bg-brand/15 text-brand",
-                status.tone === "wait" && "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+                status.tone === "wait" && "bg-warning/15 text-warning",
                 status.tone === "fail" && "bg-destructive/15 text-destructive",
                 status.tone === "mute" && "bg-muted text-muted-foreground",
               )}

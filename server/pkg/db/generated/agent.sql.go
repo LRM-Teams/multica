@@ -1550,7 +1550,11 @@ WITH victims AS (
     LEFT JOIN agent_runtime r ON r.id = t.runtime_id
     WHERE t.status IN ('pending', 'failed')
       AND t.created_at < now() - make_interval(secs => $1::double precision)
-      AND (r.id IS NULL OR r.status != 'offline')
+      AND (
+        r.id IS NULL
+        OR r.last_seen_at IS NULL
+        OR r.last_seen_at >= now() - make_interval(secs => $3::double precision)
+      )
     ORDER BY t.created_at ASC
     LIMIT $2::int
     FOR UPDATE OF t SKIP LOCKED
@@ -1567,13 +1571,19 @@ FROM victims v
 WHERE t.id = v.id
   AND t.status IN ('pending', 'failed')
   AND t.created_at < now() - make_interval(secs => $1::double precision)
-  AND NOT EXISTS (SELECT 1 FROM agent_runtime r WHERE r.id = t.runtime_id AND r.status = 'offline')
+  AND NOT EXISTS (
+    SELECT 1 FROM agent_runtime r
+    WHERE r.id = t.runtime_id
+      AND r.last_seen_at IS NOT NULL
+      AND r.last_seen_at < now() - make_interval(secs => $3::double precision)
+  )
 RETURNING t.id, t.workspace_id, t.agent_session_id, t.conversation_id, t.channel_id, t.chat_session_id, t.agent_id, t.source_message_id, t.reason, t.requires_wake, t.status, t.priority, t.seq_from, t.seq_to, t.attempt, t.last_error, t.claimed_at, t.acked_at, t.created_at, t.updated_at, t.terminal_outcome, t.terminal_delivery_id, t.retryable, t.terminal_at, t.runtime_id, t.execution_config, t.delivery_mode, t.response_mode, t.channel_onboarding_id, t.issue_id, t.source_chat_message_id, t.context, t.dispatched_at, t.started_at, t.completed_at, t.result, t.error, t.session_id, t.work_dir, t.trigger_comment_id, t.autopilot_run_id, t.max_attempts, t.parent_task_id, t.failure_reason, t.trigger_summary, t.force_fresh_session, t.is_leader_task, t.wait_reason, t.initiator_user_id
 `
 
 type ExpireStaleQueuedTasksParams struct {
-	TtlSecs    float64 `json:"ttl_secs"`
-	MaxPerTick int32   `json:"max_per_tick"`
+	TtlSecs            float64 `json:"ttl_secs"`
+	MaxPerTick         int32   `json:"max_per_tick"`
+	StaleThresholdSecs float64 `json:"stale_threshold_secs"`
 }
 
 // Fails tasks that have been sitting in 'queued' for longer than the TTL —
@@ -1588,14 +1598,24 @@ type ExpireStaleQueuedTasksParams struct {
 // Task #50: a task queued behind an offline runtime must not be reaped by
 // this blind clock — "offline" is not "never coming back" (a laptop closed
 // overnight looks identical to a dead machine from here), so time alone is
-// the wrong signal. The r.status != 'offline' predicate below leaves those
-// tasks 'pending' indefinitely; sweepStaleRuntimes (earlier in the same
-// sweep tick) is what flips a runtime to 'offline' in the first place, so
-// by the time this query runs the exclusion is already accurate for that
-// tick. A resident provider process crashing (recoverable — task #42②) does
-// not affect the daemon's heartbeat, so r.status stays 'online' for that
-// case and this TTL backstop still applies unchanged; it only ever fires
-// for a genuinely-stuck task behind a healthy runtime, same as before #50.
+// the wrong signal.
+//
+// The exclusion is computed directly from heartbeat freshness (last_seen_at
+// vs staleThresholdSecs — the same signal and threshold
+// SelectStaleOnlineRuntimes uses), NOT from the persisted
+// agent_runtime.status column. Reading status here would make this query's
+// correctness depend on sweepStaleRuntimes having already run earlier in
+// the same sweep tick — true today only because of an unenforced
+// call-order coincidence in runRuntimeSweeper. #1664 already established
+// the rule for the read-time display status (agentRuntimeDisplayStatus):
+// derive from heartbeat freshness at read time, don't trust the
+// (sweep-lagged, up to ~180s stale) persisted column. This query follows
+// the same rule for the same reason.
+//
+// A resident provider process crashing (recoverable — task #42②) does not
+// affect the daemon's heartbeat, so last_seen_at stays fresh for that case
+// and this TTL backstop still applies unchanged; it only ever fires for a
+// genuinely-stuck task behind a healthy runtime, same as before #50.
 // There is deliberately no separate "offline too long, give up" timeout
 // here — that would just be the same blind-clock mistake at a bigger
 // number. A queued task's terminal states are event-driven only (deleted
@@ -1618,7 +1638,7 @@ type ExpireStaleQueuedTasksParams struct {
 // the DB when the backlog is large — the sweeper drains the rest on
 // subsequent ticks.
 func (q *Queries) ExpireStaleQueuedTasks(ctx context.Context, arg ExpireStaleQueuedTasksParams) ([]AgentInboxEvent, error) {
-	rows, err := q.db.Query(ctx, expireStaleQueuedTasks, arg.TtlSecs, arg.MaxPerTick)
+	rows, err := q.db.Query(ctx, expireStaleQueuedTasks, arg.TtlSecs, arg.MaxPerTick, arg.StaleThresholdSecs)
 	if err != nil {
 		return nil, err
 	}

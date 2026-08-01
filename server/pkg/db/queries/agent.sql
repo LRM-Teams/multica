@@ -592,19 +592,29 @@ RETURNING *;
 -- Task #50: a task queued behind an offline runtime must not be reaped by
 -- this blind clock — "offline" is not "never coming back" (a laptop closed
 -- overnight looks identical to a dead machine from here), so time alone is
--- the wrong signal. The r.status != 'offline' predicate below leaves those
--- tasks 'pending' indefinitely; sweepStaleRuntimes (earlier in the same
--- sweep tick) is what flips a runtime to 'offline' in the first place, so
--- by the time this query runs the exclusion is already accurate for that
--- tick. A resident provider process crashing (recoverable — task #42②) does
--- not affect the daemon's heartbeat, so r.status stays 'online' for that
--- case and this TTL backstop still applies unchanged; it only ever fires
--- for a genuinely-stuck task behind a healthy runtime, same as before #50.
--- There is deliberately no separate "offline too long, give up" timeout
--- here — that would just be the same blind-clock mistake at a bigger
--- number. A queued task's terminal states are event-driven only (deleted
--- agent, agent moved to a different runtime, explicit cancel), never
--- elapsed wall-clock time on a merely-offline runtime.
+-- the wrong signal.
+--
+-- The exclusion is computed directly from heartbeat freshness
+-- (last_seen_at vs @stale_threshold_secs — the same signal and threshold
+-- SelectStaleOnlineRuntimes uses, passed in as staleThresholdSeconds from
+-- runtime_sweeper.go), NOT from the persisted agent_runtime.status column.
+-- Reading status here would make this query's correctness depend on
+-- sweepStaleRuntimes having already run earlier in the same sweep tick —
+-- true today only because of an unenforced call-order coincidence in
+-- runRuntimeSweeper. #1664 already established the rule for the read-time
+-- display status (agentRuntimeDisplayStatus): derive from heartbeat
+-- freshness at read time, don't trust the (sweep-lagged, up to ~180s stale)
+-- persisted column. This query follows the same rule for the same reason.
+--
+-- A resident provider process crashing (recoverable — task #42②) does not
+-- affect the daemon's heartbeat, so last_seen_at stays fresh for that case
+-- and this TTL backstop still applies unchanged; it only ever fires for a
+-- genuinely-stuck task behind a healthy runtime, same as before #50. There
+-- is deliberately no separate "offline too long, give up" timeout here —
+-- that would just be the same blind-clock mistake at a bigger number. A
+-- queued task's terminal states are event-driven only (deleted agent, agent
+-- moved to a different runtime, explicit cancel), never elapsed wall-clock
+-- time on a merely-offline runtime.
 --
 -- Concurrency safety: the daemon's claim path may race with this sweeper to
 -- transition the same row out of 'queued'. We protect against that two
@@ -626,7 +636,11 @@ WITH victims AS (
     LEFT JOIN agent_runtime r ON r.id = t.runtime_id
     WHERE t.status IN ('pending', 'failed')
       AND t.created_at < now() - make_interval(secs => @ttl_secs::double precision)
-      AND (r.id IS NULL OR r.status != 'offline')
+      AND (
+        r.id IS NULL
+        OR r.last_seen_at IS NULL
+        OR r.last_seen_at >= now() - make_interval(secs => @stale_threshold_secs::double precision)
+      )
     ORDER BY t.created_at ASC
     LIMIT @max_per_tick::int
     FOR UPDATE OF t SKIP LOCKED
@@ -643,7 +657,12 @@ FROM victims v
 WHERE t.id = v.id
   AND t.status IN ('pending', 'failed')
   AND t.created_at < now() - make_interval(secs => @ttl_secs::double precision)
-  AND NOT EXISTS (SELECT 1 FROM agent_runtime r WHERE r.id = t.runtime_id AND r.status = 'offline')
+  AND NOT EXISTS (
+    SELECT 1 FROM agent_runtime r
+    WHERE r.id = t.runtime_id
+      AND r.last_seen_at IS NOT NULL
+      AND r.last_seen_at < now() - make_interval(secs => @stale_threshold_secs::double precision)
+  )
 RETURNING t.*;
 
 -- name: ExpireQueuedTasksOnOfflineRuntimes :many

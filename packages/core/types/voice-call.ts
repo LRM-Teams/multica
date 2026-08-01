@@ -34,3 +34,23 @@ export interface CreateVoiceCallResponse {
 export interface GetVoiceCallResponse {
   call: VoiceCall;
 }
+
+export interface VoiceCallDuplexAudioHint {
+  input_format: string;
+  input_sample_rate: number;
+  output_format: string;
+  output_sample_rate: number;
+}
+
+export interface VoiceCallDuplexEventHint {
+  client: string[];
+  server: string[];
+}
+
+export interface StartVoiceCallDuplexResponse {
+  call: VoiceCall;
+  mode: string;
+  ws_path: string;
+  audio: VoiceCallDuplexAudioHint;
+  events: VoiceCallDuplexEventHint;
+}

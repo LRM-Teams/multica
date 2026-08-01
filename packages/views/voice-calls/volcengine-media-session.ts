@@ -17,10 +17,12 @@ export type VoiceCallMediaErrorCode =
   | "cancelled"
   | "join_failed"
   | "microphone_unavailable"
+  | "permission_denied"
   | "publish_failed"
   | "mute_failed"
   | "unmute_failed"
   | "playback_failed"
+  | "media_failed"
   | "provider_error"
   | "cleanup_failed";
 

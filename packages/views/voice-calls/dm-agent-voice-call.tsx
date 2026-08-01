@@ -113,6 +113,10 @@ function AgentVoiceCall({
     });
   }, [controller]);
 
+  const toggleSpeakerphone = useCallback(() => {
+    controller.setSpeakerphone(!controller.speakerphone);
+  }, [controller]);
+
   return (
     <>
       <Button
@@ -133,8 +137,12 @@ function AgentVoiceCall({
         error={controller.error}
         durationSeconds={durationSeconds}
         autoplayBlocked={controller.autoplayBlockedUserId !== null}
+        mode={controller.mode}
+        toolStatus={controller.toolStatus}
+        speakerphone={controller.speakerphone}
         onRequestClose={requestClose}
         onToggleMute={toggleMute}
+        onToggleSpeakerphone={toggleSpeakerphone}
         onHangUp={hangUp}
         onRetry={start}
         onResumeAudio={resumeAudio}

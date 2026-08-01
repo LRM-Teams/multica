@@ -666,7 +666,14 @@
     "create_failed": "Couldn't start the call. Try again.",
     "activation_timeout": "The voice agent did not answer in time. Try again.",
     "server_failed": "The call ended because the voice service failed.",
-    "close": "Close"
+    "close": "Close",
+    "speakerphone_on": "Speaker",
+    "speakerphone_off": "Earpiece",
+    "tool_running": "Working on {{name}}…",
+    "tool_done": "{{name}} finished",
+    "tool_error": "{{name}} failed",
+    "duplex_mode": "Duplex voice",
+    "interrupt": "Interrupt"
   },
   "quote": {
     "action": "Quote",

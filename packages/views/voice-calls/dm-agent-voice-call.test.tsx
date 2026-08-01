@@ -72,10 +72,15 @@ function createController(
     phase: "idle",
     error: null,
     autoplayBlockedUserId: null,
+    mode: null,
+    toolStatus: null,
+    speakerphone: false,
     start: vi.fn().mockResolvedValue("call-1"),
     hangUp: vi.fn().mockResolvedValue(undefined),
     setMuted: vi.fn().mockResolvedValue(undefined),
     resumeRemoteAudio: vi.fn().mockResolvedValue(undefined),
+    setSpeakerphone: vi.fn(),
+    interrupt: vi.fn(),
     ...overrides,
   };
 }

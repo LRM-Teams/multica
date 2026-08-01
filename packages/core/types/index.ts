@@ -234,6 +234,9 @@ export type {
   CreateVoiceCallRequest,
   CreateVoiceCallResponse,
   GetVoiceCallResponse,
+  VoiceCallDuplexAudioHint,
+  VoiceCallDuplexEventHint,
+  StartVoiceCallDuplexResponse,
 } from "./voice-call";
 export type {
   Project,

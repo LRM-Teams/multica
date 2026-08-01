@@ -46,6 +46,9 @@ import type {
   VoiceCallMedia,
   CreateVoiceCallResponse,
   GetVoiceCallResponse,
+  StartVoiceCallDuplexResponse,
+  VoiceCallDuplexAudioHint,
+  VoiceCallDuplexEventHint,
   WorkspaceSearchResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
@@ -2286,6 +2289,26 @@ export const GetVoiceCallResponseSchema = z.object({
   call: VoiceCallSchema,
 }).loose();
 
+export const VoiceCallDuplexAudioHintSchema = z.object({
+  input_format: z.string().min(1),
+  input_sample_rate: z.number().int().positive(),
+  output_format: z.string().min(1),
+  output_sample_rate: z.number().int().positive(),
+}).loose();
+
+export const VoiceCallDuplexEventHintSchema = z.object({
+  client: z.array(z.string()),
+  server: z.array(z.string()),
+}).loose();
+
+export const StartVoiceCallDuplexResponseSchema = z.object({
+  call: VoiceCallSchema,
+  mode: z.string().min(1),
+  ws_path: z.string().min(1),
+  audio: VoiceCallDuplexAudioHintSchema,
+  events: VoiceCallDuplexEventHintSchema,
+}).loose();
+
 export const EMPTY_VOICE_CALL: VoiceCall = {
   id: "",
   channel_id: "",
@@ -2316,6 +2339,26 @@ export const EMPTY_CREATE_VOICE_CALL_RESPONSE: CreateVoiceCallResponse = {
 
 export const EMPTY_GET_VOICE_CALL_RESPONSE: GetVoiceCallResponse = {
   call: EMPTY_VOICE_CALL,
+};
+
+export const EMPTY_VOICE_CALL_DUPLEX_AUDIO_HINT: VoiceCallDuplexAudioHint = {
+  input_format: "",
+  input_sample_rate: 0,
+  output_format: "",
+  output_sample_rate: 0,
+};
+
+export const EMPTY_VOICE_CALL_DUPLEX_EVENT_HINT: VoiceCallDuplexEventHint = {
+  client: [],
+  server: [],
+};
+
+export const EMPTY_START_VOICE_CALL_DUPLEX_RESPONSE: StartVoiceCallDuplexResponse = {
+  call: EMPTY_VOICE_CALL,
+  mode: "",
+  ws_path: "",
+  audio: EMPTY_VOICE_CALL_DUPLEX_AUDIO_HINT,
+  events: EMPTY_VOICE_CALL_DUPLEX_EVENT_HINT,
 };
 
 export const EMPTY_SANDBOX_SNAPSHOT: SandboxSnapshot = {

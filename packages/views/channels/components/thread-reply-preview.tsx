@@ -19,7 +19,7 @@ const PREVIEW_LIMIT = 3;
 /**
  * LRM-873 — Thread reply preview under a mainline parent (v1.1c).
  * Thin border + wash, no left accent. Spoken replies only (user|agent).
- * Rows show HH:mm; header adds unread new-count when present.
+ * Top: reply count. Bottom (when >3): brand「查看全部 N 条 →」.
  */
 export function ThreadReplyPreview({
   message,
@@ -35,7 +35,7 @@ export function ThreadReplyPreview({
   const unreadCount = message.thread_unread_count ?? 0;
   const enabled = !!channelId && !!rootId && hintCount > 0 && !message.thread_root_message_id;
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     ...channelMessageThreadOptions(channelId, rootId, { limit: 100 }),
     enabled,
     staleTime: 30_000,
@@ -71,10 +71,30 @@ export function ThreadReplyPreview({
       </div>
     );
   }
-  if (isError && spoken.length === 0) return null;
+  if (isError && spoken.length === 0) {
+    return (
+      <div
+        data-testid="thread-reply-preview-error"
+        className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-border/80 bg-muted/40 px-2.5 py-2"
+      >
+        <span className="text-[11px] text-muted-foreground">
+          {t(($) => $.thread.load_failed)}
+        </span>
+        <button
+          type="button"
+          data-testid="thread-reply-preview-retry"
+          onClick={() => void refetch()}
+          className="shrink-0 text-[11px] font-medium text-primary hover:underline"
+        >
+          {t(($) => $.composer.retry)}
+        </button>
+      </div>
+    );
+  }
   if (spokenCount === 0) return null;
 
   const open = () => onOpenThread(message);
+  const showViewAll = spokenCount > PREVIEW_LIMIT;
   const countLabel =
     unreadCount > 0
       ? t(($) => $.thread.preview_count_with_new, {
@@ -82,12 +102,13 @@ export function ThreadReplyPreview({
           newCount: unreadCount,
         })
       : t(($) => $.thread.preview_count, { count: spokenCount });
+  const viewAllLabel = t(($) => $.thread.preview_view_all, { count: spokenCount });
 
   return (
     <button
       type="button"
       data-testid="thread-reply-preview"
-      aria-label={t(($) => $.thread.preview_open)}
+      aria-label={showViewAll ? viewAllLabel : t(($) => $.thread.preview_open)}
       onClick={open}
       className={cn(
         "mt-2 w-full rounded-lg border border-border/80 bg-muted/40 px-2.5 py-2 text-left",
@@ -98,7 +119,7 @@ export function ThreadReplyPreview({
         className="mb-1 text-[11px] text-muted-foreground"
         data-testid="thread-reply-preview-count"
       >
-        {`${countLabel} >`}
+        {countLabel}
       </div>
       <ul className="flex flex-col gap-1">
         {previewRows.map((reply) => {
@@ -148,6 +169,21 @@ export function ThreadReplyPreview({
           );
         })}
       </ul>
+      {showViewAll ? (
+        <div
+          className="mt-1.5 text-[11px] font-medium text-primary"
+          data-testid="thread-reply-preview-view-all"
+        >
+          {viewAllLabel}
+        </div>
+      ) : (
+        <div
+          className="mt-1.5 text-[11px] font-medium text-primary"
+          data-testid="thread-reply-preview-open"
+        >
+          {t(($) => $.thread.preview_open)}
+        </div>
+      )}
     </button>
   );
 }

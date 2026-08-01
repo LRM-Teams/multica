@@ -403,7 +403,7 @@
     "reply_count": "{{count}} replies",
     "preview_count": "{{count}} replies",
     "preview_count_with_new": "{{count}} replies · {{newCount}} new",
-    "preview_view_all": "View all {{count}} replies →",
+    "preview_view_all": "View all {{count}} →",
     "preview_open": "View thread →",
     "preview_image": "[Image]",
     "preview_sticker": "[Sticker]",

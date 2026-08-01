@@ -349,3 +349,38 @@ chat log.
   fresh read of `internalHousekeepingFailureReason` and the two read paths
   #1708 touched (`agentActivityRowToItem`, the events-feed equivalent) to
   add the new reason code in the same shape Vera used, not a parallel one.
+
+## Known gap: not verified — force-restart during an in-flight daemon upgrade drain
+
+Task #61 (self-hosted machines now default to auto-update, including
+existing machines) landed the same day as this fix, meaning the *next*
+release — the one carrying this force-restart capability — will also be
+the first one to roll out to self-hosted machines with no human pushing
+it. Parker raised the right question: is there a resource conflict
+between the daemon's own upgrade-drain mechanism and a user-triggered
+force-restart happening at the same time on the same machine?
+
+**Traced, not tested**: the upgrade drain (`claimBarrierDrained`,
+`daemon.go`) waits on `d.activeTasks.Load() == 0` — a daemon-wide counter
+of in-flight tasks, entirely separate from the canonical resident pool's
+per-slot `running` flag that `forceInvalidateSession`/`ForceKill()`
+interact with. They are different mechanisms watching different state.
+Reasoning through the interaction (not proven by a test): if a user
+force-restarts a stuck agent while a drain is waiting for `activeTasks`
+to reach zero, the force-kill causes that task's `Execute()` to return a
+failed `Result` through the same completion path any other failure
+takes — which should decrement `activeTasks` normally, *helping* the
+drain finish rather than fighting it. I did not find a point where the
+two mechanisms write to the same field or lock.
+
+**Why this is written down instead of tested**: a test proving this
+would need to simulate a drain in progress (claim barrier set, a real
+in-flight task) concurrent with a real canonical turn being force-killed
+— real scaffolding across two subsystems, for a scenario the code reading
+above suggests is not actually contended. Per Parker's standing guidance
+today: a test that requires that much scaffolding to pin down a
+timing-dependent interaction tends to become slow, flaky, and eventually
+another "everyone knows it's fine" ignored red — worse than an honest gap
+note. **This interaction has not been exercised end-to-end.** If a future
+incident report involves a force-restart landing during an active-update
+window, start here.

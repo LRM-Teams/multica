@@ -10,17 +10,16 @@ import {
 
 function runtime(partial: Partial<AgentRuntime> & { provider: string }): AgentRuntime {
   return {
-    id: partial.id ?? `rt-${partial.provider}`,
+    id: `rt-${partial.provider}`,
     workspace_id: "ws",
     daemon_id: "daemon-1",
-    name: partial.name ?? partial.provider,
+    name: partial.provider,
     runtime_mode: "local",
-    provider: partial.provider,
     launch_header: "",
     status: "online",
     device_info: "box",
     metadata: {},
-    current_version: partial.current_version ?? null,
+    current_version: null,
     update_state: "idle",
     runtime_health: "ok",
     owner_id: "user-1",

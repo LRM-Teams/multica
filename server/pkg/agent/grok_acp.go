@@ -123,6 +123,13 @@ func (b *grokACPBackend) runtimeAlive() (bool, bool) {
 func (b *grokACPBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
 	p, err := b.ensureProcess(ctx, opts)
 	if err != nil {
+		// ForceKill() can now interrupt a process stuck in ensureProcess's own
+		// handshake (task #62 follow-up), not just a turn already past it —
+		// check forceKilled here too so a user-initiated restart during
+		// handshake is reported as such, not misclassified as a generic crash.
+		if b.forceKilled.CompareAndSwap(true, false) {
+			return Result{Status: "failed", Error: AgentForceKilledMarker + ": " + err.Error()}
+		}
 		return Result{Status: "failed", Error: err.Error()}
 	}
 

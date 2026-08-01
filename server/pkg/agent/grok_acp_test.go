@@ -216,6 +216,13 @@ func TestGrokACPBackendForceKillDuringHandshakeActuallyKillsNotDeadlock(t *testi
 	if execResult.Status != "failed" {
 		t.Fatalf("result status = %q, want failed (handshake was force-killed)", execResult.Status)
 	}
+	// Nash's round-2 review catch: forceKilled must be surfaced even when the
+	// kill happens during ensureProcess's own handshake, not just after it —
+	// otherwise the daemon can't classify this as a user-initiated restart
+	// (reason_code=restarted_by_user) and reports it as a generic crash.
+	if !strings.Contains(execResult.Error, AgentForceKilledMarker) {
+		t.Fatalf("result error = %q, want it to contain %q", execResult.Error, AgentForceKilledMarker)
+	}
 }
 
 // TestGrokACPBackendLiveTwoTurns is an opt-in provider proof. It is kept out

@@ -20,6 +20,14 @@ vi.mock("@multica/core/channels", async (importOriginal) => ({
     queryKey: ["channel-goal", channelId],
     queryFn: async () => ({ goal: state.goal }),
   }),
+  channelMembersOptions: (channelId: string) => ({
+    queryKey: ["channel-members", channelId],
+    queryFn: async () => [],
+  }),
+  channelGoalProcessesOptions: (channelId: string) => ({
+    queryKey: ["channel-goal", channelId, "process"],
+    queryFn: async () => ({ goal_id: "", processes: [] }),
+  }),
   useCreateChannelGoal: () => ({
     mutate: state.create,
     isPending: false,
@@ -28,6 +36,14 @@ vi.mock("@multica/core/channels", async (importOriginal) => ({
     mutate: state.update,
     isPending: false,
   }),
+}));
+
+vi.mock("@multica/ui/hooks/use-mobile", () => ({
+  useIsMobile: () => false,
+}));
+
+vi.mock("../../common/actor-avatar", () => ({
+  ActorAvatar: ({ name }: { name?: string }) => <span data-testid="actor-avatar">{name}</span>,
 }));
 
 function goal(overrides: Partial<ChannelGoal> = {}): ChannelGoal {
@@ -78,15 +94,18 @@ describe("ChannelGoalCard", () => {
 
   it("keeps ordinary channels clean for viewers without goal authority", () => {
     renderCard(false);
-    expect(screen.queryByText("Set goal")).not.toBeInTheDocument();
+    expect(screen.queryByText("Set manually")).not.toBeInTheDocument();
     expect(screen.queryByTestId("channel-goal-card")).not.toBeInTheDocument();
   });
 
-  it("creates a goal from the channel surface", async () => {
+  it("creates a goal from the demoted manual text link", async () => {
     const user = userEvent.setup();
     state.create.mockImplementation((_input, options) => options?.onSuccess?.());
     renderCard();
-    await user.click(screen.getByRole("button", { name: "Set goal" }));
+    expect(
+      screen.getByText(/State the overall goal in the group/i),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Set manually" }));
     await user.type(screen.getByLabelText("Goal title"), "Launch v1");
     await user.type(screen.getByLabelText("Outcome"), "Ship a durable goal mode");
     await user.type(screen.getByLabelText("Success criteria"), "Visible in channel\nSurvives resume");
@@ -99,6 +118,30 @@ describe("ChannelGoalCard", () => {
       },
       expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
     );
+  });
+
+  it("toggles the process entry when a handler is provided", async () => {
+    const user = userEvent.setup();
+    const onProcessToggle = vi.fn();
+    state.goal = goal();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    queryClient.setQueryData(["channel-goal", "channel-1"], { goal: state.goal });
+    render(
+      <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
+        <QueryClientProvider client={queryClient}>
+          <ChannelGoalCard
+            channelId="channel-1"
+            canManage
+            processOpen={false}
+            onProcessToggle={onProcessToggle}
+          />
+        </QueryClientProvider>
+      </I18nProvider>,
+    );
+    await user.click(screen.getByTestId("channel-goal-process-entry"));
+    expect(onProcessToggle).toHaveBeenCalledTimes(1);
   });
 
   it("updates progress, evidence, and criteria as one versioned write", async () => {

@@ -53,6 +53,35 @@ export interface UpdateChannelGoalRequest {
   completed_criteria?: string[];
 }
 
+/** LRM-931/932 — per-manager process Markdown under the channel's single goal. */
+export interface ChannelGoalProcessMarkdown {
+  id: string;
+  workspace_id: string;
+  channel_id: string;
+  goal_id: string;
+  manager_agent_id: string;
+  content: string;
+  version: number;
+  updated_by_type: "user" | "agent";
+  updated_by_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChannelGoalProcessEnvelope {
+  process: ChannelGoalProcessMarkdown | null;
+}
+
+export interface ChannelGoalProcessListEnvelope {
+  goal_id: string;
+  processes: ChannelGoalProcessMarkdown[];
+}
+
+export interface UpsertChannelGoalProcessRequest {
+  content: string;
+  expected_version: number;
+}
+
 export interface ChannelLastMessage {
   type: "user" | "agent" | "lark" | "system";
   author_name: string;

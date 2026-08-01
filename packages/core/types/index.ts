@@ -396,6 +396,10 @@ export type {
   ChannelGoalEnvelope,
   CreateChannelGoalRequest,
   UpdateChannelGoalRequest,
+  ChannelGoalProcessMarkdown,
+  ChannelGoalProcessEnvelope,
+  ChannelGoalProcessListEnvelope,
+  UpsertChannelGoalProcessRequest,
 } from "./channel";
 
 export type {

@@ -78,6 +78,29 @@ export const ChannelGoalEnvelopeSchema = z.object({
   goal: ChannelGoalSchema.nullable().default(null),
 }).loose();
 
+export const ChannelGoalProcessMarkdownSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  channel_id: z.string(),
+  goal_id: z.string(),
+  manager_agent_id: z.string(),
+  content: z.string().default(""),
+  version: z.number(),
+  updated_by_type: z.enum(["user", "agent"]),
+  updated_by_id: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const ChannelGoalProcessEnvelopeSchema = z.object({
+  process: ChannelGoalProcessMarkdownSchema.nullable().default(null),
+}).loose();
+
+export const ChannelGoalProcessListEnvelopeSchema = z.object({
+  goal_id: z.string().default(""),
+  processes: z.array(ChannelGoalProcessMarkdownSchema).default([]),
+}).loose();
+
 export interface AppConfigResponse {
   cdn_domain: string;
   allow_signup: boolean;

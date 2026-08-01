@@ -146,6 +146,8 @@ import type {
   ChannelGoalEnvelope,
   CreateChannelGoalRequest,
   UpdateChannelGoalRequest,
+  ChannelGoalProcessEnvelope,
+  ChannelGoalProcessListEnvelope,
   CancelTaskResponse,
   WorkspaceSearchResponse,
   WorkspaceSearchScope,
@@ -292,6 +294,8 @@ import {
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
   ChannelGoalEnvelopeSchema,
+  ChannelGoalProcessEnvelopeSchema,
+  ChannelGoalProcessListEnvelopeSchema,
   ChannelMessageSearchResponseSchema,
   WorkspaceSearchResponseSchema,
   EMPTY_CHANNEL_MESSAGES_PAGE,
@@ -3625,6 +3629,28 @@ export class ApiClient {
     });
     return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
       endpoint: "PATCH /api/channels/:id/goal",
+    });
+  }
+
+  async listChannelGoalProcesses(channelId: string): Promise<ChannelGoalProcessListEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal/process`);
+    return parseWithFallback(
+      raw,
+      ChannelGoalProcessListEnvelopeSchema,
+      { goal_id: "", processes: [] },
+      { endpoint: "GET /api/channels/:id/goal/process" },
+    );
+  }
+
+  async getChannelGoalProcess(
+    channelId: string,
+    managerAgentId: string,
+  ): Promise<ChannelGoalProcessEnvelope> {
+    const raw = await this.fetch<unknown>(
+      `/api/channels/${channelId}/goal/process/${managerAgentId}`,
+    );
+    return parseWithFallback(raw, ChannelGoalProcessEnvelopeSchema, { process: null }, {
+      endpoint: "GET /api/channels/:id/goal/process/:agentId",
     });
   }
 

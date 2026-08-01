@@ -13,6 +13,8 @@ export {
   channelMessageThreadOptions,
   channelMessageSearchOptions,
   channelMembersOptions,
+  channelMemberManagementCapabilitiesOptions,
+  invalidateChannelMemberRoster,
   channelInviteCandidatesOptions,
   channelAttachmentsOptions,
   channelStatsOptions,
@@ -86,6 +88,11 @@ export {
   type GroupMemberActions,
   type GroupMemberActionKind,
 } from "./group-member-actions";
+export {
+  memberCapabilityKey,
+  indexMemberManagementCapabilities,
+  resolveGroupMemberActions,
+} from "./member-management-capabilities";
 export {
   contentMentionsViewer,
   messageMentionsViewer,

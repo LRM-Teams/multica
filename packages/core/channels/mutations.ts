@@ -3,7 +3,13 @@ import { api } from "../api";
 import { classifyRoleChangeFailure } from "./role-change-failure";
 import { useAuthStore } from "../auth";
 import { useWorkspaceId } from "../hooks";
-import { channelKeys, invalidateChannelMessages, upsertChannelMessageInCache, upsertChannelMessageThreadInCache } from "./queries";
+import {
+  channelKeys,
+  invalidateChannelMemberRoster,
+  invalidateChannelMessages,
+  upsertChannelMessageInCache,
+  upsertChannelMessageThreadInCache,
+} from "./queries";
 import {
   buildOptimisticChannelMessage,
   insertOptimisticChannelMessage,
@@ -429,7 +435,7 @@ export function useAddChannelMember() {
     mutationFn: ({ channelId, memberType, memberId }: { channelId: string; memberType: "user" | "agent"; memberId: string }) =>
       api.addChannelMember(channelId, { member_type: memberType, member_id: memberId }),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      invalidateChannelMemberRoster(qc, vars.channelId);
       qc.invalidateQueries({ queryKey: channelKeys.inviteCandidates(vars.channelId) });
       // Refresh the list so channel member briefs stay current after roster changes.
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
@@ -449,7 +455,7 @@ export function useAddChannelMembers() {
       members: { member_type: "user" | "agent"; member_id: string }[];
     }) => api.addChannelMembers(channelId, members),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      invalidateChannelMemberRoster(qc, vars.channelId);
       qc.invalidateQueries({ queryKey: channelKeys.inviteCandidates(vars.channelId) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     },
@@ -488,7 +494,7 @@ export function useUpdateChannelMemberRole() {
       role: "manager" | "member";
     }) => api.updateChannelMemberRole(channelId, memberType, memberId, role),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      invalidateChannelMemberRoster(qc, vars.channelId);
       // Ownership transfer changes what the viewer may do everywhere, not just
       // in this row — the channel list carries role-derived affordances too.
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
@@ -498,7 +504,7 @@ export function useUpdateChannelMemberRole() {
       // Not a retry — the user is told what happened and decides.
       const kind = classifyRoleChangeFailure(error);
       if (kind === "owner_changed" || kind === "gone") {
-        qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+        invalidateChannelMemberRoster(qc, vars.channelId);
       }
     },
   });
@@ -523,13 +529,13 @@ export function useTransferChannelOwnership() {
       memberId: string;
     }) => api.transferChannelOwnership(channelId, memberType, memberId),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      invalidateChannelMemberRoster(qc, vars.channelId);
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     },
     onError: (error, vars) => {
       const kind = classifyRoleChangeFailure(error);
       if (kind === "owner_changed" || kind === "gone") {
-        qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+        invalidateChannelMemberRoster(qc, vars.channelId);
       }
     },
   });
@@ -542,7 +548,7 @@ export function useRemoveChannelMember() {
     mutationFn: ({ channelId, memberType, memberId }: { channelId: string; memberType: "user" | "agent"; memberId: string }) =>
       api.removeChannelMember(channelId, memberType, memberId),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: channelKeys.members(vars.channelId) });
+      invalidateChannelMemberRoster(qc, vars.channelId);
       qc.invalidateQueries({ queryKey: channelKeys.inviteCandidates(vars.channelId) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     },

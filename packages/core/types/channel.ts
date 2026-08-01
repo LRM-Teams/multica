@@ -180,6 +180,34 @@ export interface ChannelInviteCandidatesResponse {
 
 export type ChannelMemberRole = "owner" | "manager" | "member";
 
+/**
+ * LRM-872 / LRM-879 — GET /api/channels/:id/member-management-capabilities.
+ * Server-authored per-row gates (WS admin + inviter can_remove for self-added
+ * agents). FE must prefer these over local channel-role heuristics.
+ */
+export interface ChannelMemberManagementCapabilityTarget {
+  member_type: "user" | "agent";
+  member_id: string;
+  display_name: string;
+  avatar_url?: string | null;
+  role: ChannelMemberRole | string;
+  can_remove: boolean;
+  can_promote_to_manager: boolean;
+  can_demote_to_member: boolean;
+  can_transfer_ownership: boolean;
+}
+
+export interface ChannelMemberManagementCapabilities {
+  channel_id: string;
+  name: string;
+  kind: string;
+  archived: boolean;
+  can_add_members: boolean;
+  can_remove_members: boolean;
+  can_leave: boolean;
+  targets: ChannelMemberManagementCapabilityTarget[];
+}
+
 export interface ChannelReaction {
   id: string;
   channel_id: string;

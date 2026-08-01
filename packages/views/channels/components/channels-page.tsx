@@ -36,6 +36,8 @@ import {
   channelsOptions,
   archivedChannelsOptions,
   channelMembersOptions,
+  channelMemberManagementCapabilitiesOptions,
+  invalidateChannelMemberRoster,
   channelInviteCandidatesOptions,
   channelProjectOptions,
   useSetChannelProject,
@@ -69,6 +71,8 @@ import {
   channelMemberBadge,
   channelMemberRole,
   groupMemberActions,
+  indexMemberManagementCapabilities,
+  resolveGroupMemberActions,
   type GroupMemberActionKind,
   type ComposerDraftKey,
 } from "@multica/core/channels";
@@ -1146,6 +1150,17 @@ export function ChannelsPage({
   // <ThreadPanel highlightMessageId> below) and skip it here.
   const isThreadDeepLink = !!threadDeepLinkId;
   const { data: channelMembers = [], isPending: membersPending } = useQuery(channelMembersOptions(active?.id ?? ""));
+  // LRM-872 / LRM-879 — server per-row can_remove (inviter + WS admin). Only
+  // ordinary group channels expose the endpoint (system/DM → 404).
+  const memberCapsEnabled =
+    !!active?.id && active.kind === "group" && !isActiveSystemChannel && !isActiveArchived;
+  const { data: memberManagementCapabilities } = useQuery(
+    channelMemberManagementCapabilitiesOptions(active?.id ?? "", memberCapsEnabled),
+  );
+  const memberCapabilitiesByKey = useMemo(
+    () => indexMemberManagementCapabilities(memberManagementCapabilities),
+    [memberManagementCapabilities],
+  );
   const { data: channelProjectId = "" } = useQuery(channelProjectOptions(wsId, active?.id ?? ""));
   const { data: activeTasks = [] } = useQuery(activeChannelTasksOptions(active?.id ?? ""));
   const [stoppingChannelTaskId, setStoppingChannelTaskId] = useState<string | null>(null);
@@ -1706,7 +1721,7 @@ export function ChannelsPage({
       // Agent runtime stats are projected through the channel member list.
       // Refresh it with new agent replies so an already-open Agent panel can
       // show freshly persisted token stats without a full page reload.
-      qc.invalidateQueries({ queryKey: channelKeys.members(e.channel_id) });
+      invalidateChannelMemberRoster(qc, e.channel_id);
       if (e.channel_id === active?.id) markChannelRead(active.id);
     }
   });
@@ -1720,7 +1735,7 @@ export function ChannelsPage({
   useWSEvent("task:cancelled", () => {
     if (!active?.id) return;
     qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
-    qc.invalidateQueries({ queryKey: channelKeys.members(active.id) });
+    invalidateChannelMemberRoster(qc, active.id);
     qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
@@ -1729,14 +1744,14 @@ export function ChannelsPage({
   useWSEvent("task:completed", (payload) => {
     const event = payload as { chat_session_id?: string };
     if (!event.chat_session_id || !active?.id) return;
-    qc.invalidateQueries({ queryKey: channelKeys.members(active.id) });
+    invalidateChannelMemberRoster(qc, active.id);
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
   useWSEvent("task:failed", (payload) => {
     const event = payload as { chat_session_id?: string };
     if (!event.chat_session_id || !active?.id) return;
-    qc.invalidateQueries({ queryKey: channelKeys.members(active.id) });
+    invalidateChannelMemberRoster(qc, active.id);
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
   });
 
@@ -2508,9 +2523,20 @@ export function ChannelsPage({
     () =>
       active?.kind === "group" && !isActiveSystemChannel && !isActiveArchived
         ? (m: ChannelMember) =>
-            groupMemberActions({ role: viewerChannelRole }, m, currentUserId ?? "")
+            resolveGroupMemberActions(
+              groupMemberActions({ role: viewerChannelRole }, m, currentUserId ?? ""),
+              m,
+              memberCapabilitiesByKey,
+            )
         : undefined,
-    [active?.kind, isActiveSystemChannel, isActiveArchived, viewerChannelRole, currentUserId],
+    [
+      active?.kind,
+      isActiveSystemChannel,
+      isActiveArchived,
+      viewerChannelRole,
+      currentUserId,
+      memberCapabilitiesByKey,
+    ],
   );
 
   // Leave-group affordance for the channel-details danger zone. Ordinary

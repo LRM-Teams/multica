@@ -107,6 +107,10 @@ function uiReducer(state: UiState, action: UiAction): UiState {
   }
 }
 
+function mutationErrorToast(fallback: string, err: unknown) {
+  showErrorToast(err instanceof Error && err.message ? err.message : fallback);
+}
+
 export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { t } = useT("research");
   const wsId = useWorkspaceId();
@@ -123,10 +127,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
-
-  const mutationErrorToast = (fallback: string, err: unknown) => {
-    showErrorToast(err instanceof Error && err.message ? err.message : fallback);
-  };
 
   const send = useMutation({
     mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),

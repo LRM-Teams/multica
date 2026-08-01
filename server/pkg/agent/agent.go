@@ -211,45 +211,51 @@ type Config struct {
 	Logger         *slog.Logger
 }
 
+// agentConstructors is the single source of truth for "what agent types does
+// New() accept" — task #47's completeness check (TestProviderCapabilitiesCoverAllKnownTypes)
+// reads this map's keys directly instead of a hand-maintained mirror list, so
+// adding a case here without a matching providerCapabilities row fails that
+// test instead of silently shipping a provider that fails closed on every
+// capability. Do not reintroduce a parallel literal of these type strings.
+var agentConstructors = map[string]func(Config) Backend{
+	"claude":      func(cfg Config) Backend { return &claudeBackend{cfg: cfg} },
+	"codebuddy":   func(cfg Config) Backend { return &codebuddyBackend{cfg: cfg} },
+	"codex":       func(cfg Config) Backend { return &codexBackend{cfg: cfg} },
+	"copilot":     func(cfg Config) Backend { return &copilotBackend{cfg: cfg} },
+	"opencode":    func(cfg Config) Backend { return &opencodeBackend{cfg: cfg} },
+	"openclaw":    func(cfg Config) Backend { return &openclawBackend{cfg: cfg} },
+	"hermes":      func(cfg Config) Backend { return &hermesBackend{cfg: cfg} },
+	"gemini":      func(cfg Config) Backend { return &geminiBackend{cfg: cfg} },
+	"pi":          func(cfg Config) Backend { return &piBackend{cfg: cfg} },
+	"cursor":      func(cfg Config) Backend { return &cursorBackend{cfg: cfg} },
+	"kimi":        func(cfg Config) Backend { return &kimiBackend{cfg: cfg} },
+	"kiro":        func(cfg Config) Backend { return &kiroBackend{cfg: cfg} },
+	"antigravity": func(cfg Config) Backend { return &antigravityBackend{cfg: cfg} },
+	"grok":        func(cfg Config) Backend { return &grokBackend{cfg: cfg} },
+}
+
+// KnownAgentTypes returns every agent type New() accepts (agentConstructors'
+// keys). Order is unstable — sort in callers that need determinism.
+func KnownAgentTypes() []string {
+	out := make([]string, 0, len(agentConstructors))
+	for name := range agentConstructors {
+		out = append(out, name)
+	}
+	return out
+}
+
 // New creates a Backend for the given agent type.
-// Supported types: "claude", "codebuddy", "codex", "copilot", "opencode", "openclaw", "hermes", "gemini", "pi", "cursor", "kimi", "kiro", "antigravity", "grok".
+// Supported types: see KnownAgentTypes().
 func New(agentType string, cfg Config) (Backend, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
 
-	switch agentType {
-	case "claude":
-		return &claudeBackend{cfg: cfg}, nil
-	case "codebuddy":
-		return &codebuddyBackend{cfg: cfg}, nil
-	case "codex":
-		return &codexBackend{cfg: cfg}, nil
-	case "copilot":
-		return &copilotBackend{cfg: cfg}, nil
-	case "opencode":
-		return &opencodeBackend{cfg: cfg}, nil
-	case "openclaw":
-		return &openclawBackend{cfg: cfg}, nil
-	case "hermes":
-		return &hermesBackend{cfg: cfg}, nil
-	case "gemini":
-		return &geminiBackend{cfg: cfg}, nil
-	case "pi":
-		return &piBackend{cfg: cfg}, nil
-	case "cursor":
-		return &cursorBackend{cfg: cfg}, nil
-	case "kimi":
-		return &kimiBackend{cfg: cfg}, nil
-	case "kiro":
-		return &kiroBackend{cfg: cfg}, nil
-	case "antigravity":
-		return &antigravityBackend{cfg: cfg}, nil
-	case "grok":
-		return &grokBackend{cfg: cfg}, nil
-	default:
+	ctor, ok := agentConstructors[agentType]
+	if !ok {
 		return nil, fmt.Errorf("unknown agent type: %q (supported: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity, grok)", agentType)
 	}
+	return ctor(cfg), nil
 }
 
 // DetectVersion runs the agent CLI with --version and returns the output.

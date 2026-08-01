@@ -118,6 +118,7 @@ describe("useVoiceCallController", () => {
   let queryClient: QueryClient;
   let createVoiceCall: ReturnType<typeof vi.fn>;
   let connectVoiceCall: ReturnType<typeof vi.fn>;
+  let answerVoiceCall: ReturnType<typeof vi.fn>;
   let stopVoiceCall: ReturnType<typeof vi.fn>;
   let getVoiceCall: ReturnType<typeof vi.fn>;
 
@@ -132,11 +133,19 @@ describe("useVoiceCallController", () => {
     connectVoiceCall = vi.fn().mockResolvedValue({
       call: { ...createdCall.call, status: "connecting" },
     });
+    answerVoiceCall = vi.fn().mockResolvedValue({
+      call: {
+        ...createdCall.call,
+        status: "active",
+        connected_at: "2026-08-01T00:12:00Z",
+      },
+    });
     stopVoiceCall = vi.fn().mockResolvedValue(endedCall);
     getVoiceCall = vi.fn().mockResolvedValue({ call: createdCall.call });
     setApiInstance({
       createVoiceCall,
       connectVoiceCall,
+      answerVoiceCall,
       stopVoiceCall,
       getVoiceCall,
     } as unknown as ApiClient);
@@ -339,6 +348,10 @@ describe("useVoiceCallController", () => {
 
       expect(result.current.phase).toBe("connected");
       expect(ringback.ringback.stop).toHaveBeenCalled();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(answerVoiceCall).toHaveBeenCalledWith("workspace-1", "call-1");
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1_000);

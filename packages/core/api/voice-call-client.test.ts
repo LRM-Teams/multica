@@ -132,6 +132,33 @@ describe("ApiClient voice calls", () => {
     );
   });
 
+  it("records a client-confirmed audible answer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        call: {
+          ...call,
+          status: "active",
+          connected_at: "2026-08-01T00:12:00Z",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.answerVoiceCall("workspace-1", "call/1"))
+      .resolves.toMatchObject({
+        call: {
+          id: "call-1",
+          status: "active",
+          connected_at: "2026-08-01T00:12:00Z",
+        },
+      });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/workspaces/workspace-1/voice-calls/call%2F1/answer",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("fails closed when the provider-start response is malformed", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
       Response.json({ call: null }),

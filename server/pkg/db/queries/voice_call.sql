@@ -146,6 +146,33 @@ WHERE provider = sqlc.arg('provider')
   AND provider_task_id = sqlc.arg('provider_task_id')
 RETURNING *;
 
+-- Client-confirmed audible answer when Volcengine callbacks cannot reach the
+-- public origin. Promotes starting/connecting/reconnecting to active and sets
+-- connected_at; idempotent for an already-active session.
+-- name: ApplyVoiceCallClientAnswered :one
+UPDATE voice_call_session
+SET
+  status = CASE
+    WHEN status IN ('starting', 'connecting', 'reconnecting') THEN 'active'
+    ELSE status
+  END,
+  connected_at = CASE
+    WHEN status IN ('starting', 'connecting', 'reconnecting', 'active')
+      THEN COALESCE(connected_at, now())
+    ELSE connected_at
+  END,
+  updated_at = CASE
+    WHEN status IN ('starting', 'connecting', 'reconnecting')
+      OR (status = 'active' AND connected_at IS NULL)
+      THEN now()
+    ELSE updated_at
+  END
+WHERE id = sqlc.arg('id')
+  AND workspace_id = sqlc.arg('workspace_id')
+  AND user_id = sqlc.arg('user_id')
+  AND status IN ('starting', 'connecting', 'active', 'reconnecting')
+RETURNING *;
+
 -- name: ApplyVoiceCallProviderFailure :one
 UPDATE voice_call_session
 SET

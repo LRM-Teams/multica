@@ -204,6 +204,18 @@ function formatAgentActivity(agentId: string, snapshot: AgentTask[]): string {
   return label;
 }
 
+// Frank 08-02: the machine detail Agent list should not show a duration —
+// `formatAgentActivity` bakes one in (issue-id hint or "· 3h ago"). This is
+// the same working/queued-vs-idle branch as that function, minus the
+// suffix — deliberately not touched, since other callers still want it.
+function activityLabelOnly(agentId: string, snapshot: AgentTask[]): string {
+  const tasks = snapshot.filter((task) => task.agent_id === agentId);
+  const detail = deriveWorkloadDetail(tasks);
+  return detail.workload === "working" || detail.workload === "queued"
+    ? ACTIVITY_LABEL_EN.thinking
+    : ACTIVITY_LABEL_EN.idle;
+}
+
 /**
  * LRM-863 — Runtimes per **v8c** freeze (Frank 2026-07-31):
  * Desktop = left machine list (~300px) + right detail on the same page
@@ -882,94 +894,64 @@ function MachineDetailView({
                 })}
               </div>
             ) : (
+              // Frank 08-02: no table — one line per agent (name · runtime ·
+              // activity), same shape as the mobile list above just laid out
+              // on a single line instead of two. No duration text
+              // (`activityLabelOnly`, not `formatAgentActivity`).
               <div className="overflow-hidden rounded-xl border bg-card">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="border-b text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                      <th className="px-4 py-2.5">
-                        {t(($) => $.machine.table_agent)}
-                      </th>
-                      <th className="px-4 py-2.5">
-                        {t(($) => $.list.col_host_runtime)}
-                      </th>
-                      <th className="px-4 py-2.5">
-                        {t(($) => $.list.col_code_agent)}
-                      </th>
-                      <th className="px-4 py-2.5">
-                        {t(($) => $.list.col_activity)}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {machineAgents.map((agent) => {
-                      const runtime = runtimeForAgent(agent, machine);
-                      const activity = formatAgentActivity(agent.id, snapshot);
-                      const tasks = snapshot.filter(
-                        (task) => task.agent_id === agent.id,
-                      );
-                      const wl = deriveWorkloadDetail(tasks).workload;
-                      // LRM-922: Host runtime vs Code agent are separate
-                      // columns. Until the API exposes distinct host/CA facts,
-                      // both project from the agent runtime provider (design
-                      // mock: Cursor/Cursor, Pi/Pi) — Host plain text, Code
-                      // with logo.
-                      const hostRuntime = providerLabel(runtime);
-                      const codeAgent = providerLabel(runtime);
-                      return (
-                        <tr
-                          key={agent.id}
-                          className="border-b transition-colors last:border-b-0 hover:bg-accent/40"
-                        >
-                          <td className="px-4 py-3">
-                            <span className="inline-flex min-w-0 items-center gap-2">
-                              <ActorAvatar
-                                actorType="agent"
-                                actorId={agent.id}
-                                size={22}
-                                profileLink={false}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => openAgentPanel(agent.id)}
-                                className="truncate text-sm font-medium underline decoration-muted-foreground/40 underline-offset-2 hover:text-foreground"
-                              >
-                                {getActorName("agent", agent.id)}
-                              </button>
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-muted-foreground">
-                            {hostRuntime}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-muted-foreground">
-                            <span className="inline-flex items-center gap-1.5">
-                              {runtime && (
-                                <ProviderLogo
-                                  provider={runtime.provider}
-                                  className="h-3.5 w-3.5"
-                                />
-                              )}
-                              {codeAgent}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-muted-foreground">
-                            <span className="inline-flex items-center gap-1">
-                              {/* Active task: spinner; queued-only: clock.
-                                  Labels use Activity vocabulary (Thinking /
-                                  Idle), never Workload Working. */}
-                              {wl === "working" && (
-                                <Loader2 className="h-3 w-3 animate-spin text-running" />
-                              )}
-                              {wl === "queued" && (
-                                <Clock className="h-3 w-3 text-muted-foreground" />
-                              )}
-                              {activity}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                {machineAgents.map((agent, idx) => {
+                  const runtime = runtimeForAgent(agent, machine);
+                  const activity = activityLabelOnly(agent.id, snapshot);
+                  const tasks = snapshot.filter(
+                    (task) => task.agent_id === agent.id,
+                  );
+                  const wl = deriveWorkloadDetail(tasks).workload;
+                  return (
+                    <button
+                      key={agent.id}
+                      type="button"
+                      onClick={() => openAgentPanel(agent.id)}
+                      className={cn(
+                        "flex w-full items-center gap-1.5 px-4 py-3 text-left text-sm transition-colors hover:bg-accent/50",
+                        idx < machineAgents.length - 1 && "border-b",
+                      )}
+                    >
+                      <ActorAvatar
+                        actorType="agent"
+                        actorId={agent.id}
+                        size={22}
+                        profileLink={false}
+                      />
+                      <span className="shrink-0 truncate font-medium underline decoration-muted-foreground/40 underline-offset-2">
+                        {getActorName("agent", agent.id)}
+                      </span>
+                      <span className="shrink-0 text-muted-foreground" aria-hidden>
+                        ·
+                      </span>
+                      {runtime && (
+                        <ProviderLogo
+                          provider={runtime.provider}
+                          className="h-3.5 w-3.5 shrink-0"
+                        />
+                      )}
+                      <span className="shrink-0 text-muted-foreground">
+                        {providerLabel(runtime)}
+                      </span>
+                      <span className="shrink-0 text-muted-foreground" aria-hidden>
+                        ·
+                      </span>
+                      {wl === "working" && (
+                        <Loader2 className="h-3 w-3 shrink-0 animate-spin text-running" />
+                      )}
+                      {wl === "queued" && (
+                        <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
+                      )}
+                      <span className="min-w-0 truncate text-muted-foreground">
+                        {activity}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </section>

@@ -323,6 +323,16 @@ function runtimeMachineId(runtime: AgentRuntime): string {
   return `${runtime.runtime_mode}:runtime:${runtime.id}`;
 }
 
+// `name` is the daemon-reported raw hostname (e.g. "Cursor (ubuntu)");
+// `display_name` is the user-editable label set on the machine detail page.
+// Runtime pickers were showing the raw name unconditionally — renaming a
+// machine there had no effect in the picker, same "can't tell them apart"
+// shape as the runtimes-page ownership grouping. Trimmed-empty falls back
+// to name, matching `machine-name-editor.tsx`'s currentDisplayName.
+export function runtimeDisplayLabel(runtime: AgentRuntime): string {
+  return runtime.display_name?.trim() || runtime.name;
+}
+
 export function runtimeDeviceName(runtime: AgentRuntime): string | null {
   const host = splitRuntimeName(runtime.name).hostname;
   if (host) return host;

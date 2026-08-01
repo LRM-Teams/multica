@@ -5,6 +5,7 @@ import {
   buildRuntimeMachines,
   filterRuntimeMachines,
   headerRuntimeHealthBadge,
+  runtimeDisplayLabel,
   runtimeMachineCounts,
   splitRuntimeName,
 } from "./runtime-machines";
@@ -424,5 +425,30 @@ describe("headerRuntimeHealthBadge (LRM-624 / Plan A)", () => {
     // Machine reachable but its runtimes individually report offline — a
     // real signal, not a duplicate of the connectivity dot.
     expect(headerRuntimeHealthBadge("offline", "online")).toBe("offline");
+  });
+});
+
+describe("runtimeDisplayLabel", () => {
+  // Barry 08-01: runtime pickers showed the daemon-reported raw hostname
+  // unconditionally — renaming a machine on the detail page had no effect
+  // in the picker dropdowns. This is the shared fix both pickers now use.
+  it("prefers display_name over the raw name", () => {
+    expect(
+      runtimeDisplayLabel(
+        makeRuntime({ display_name: "Andong's MacBook Pro", name: "Claude (dev.local)" }),
+      ),
+    ).toBe("Andong's MacBook Pro");
+  });
+
+  it("falls back to the raw name when display_name is unset", () => {
+    expect(
+      runtimeDisplayLabel(makeRuntime({ display_name: undefined, name: "Claude (dev.local)" })),
+    ).toBe("Claude (dev.local)");
+  });
+
+  it("falls back to the raw name when display_name is blank/whitespace", () => {
+    expect(
+      runtimeDisplayLabel(makeRuntime({ display_name: "   ", name: "Claude (dev.local)" })),
+    ).toBe("Claude (dev.local)");
   });
 });

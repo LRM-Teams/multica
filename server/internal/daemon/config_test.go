@@ -256,11 +256,14 @@ func stageFakeAgent(t *testing.T) string {
 	return binDir
 }
 
-// TestLoadConfig_AutoUpdateDefault_SelfHostOff is the regression guard for
-// MUL-2381: a daemon pointed at any non-cloud server URL must default
-// AutoUpdateEnabled to false, because self-host operators frequently run a
-// fork and the upstream GitHub release would silently overwrite it.
-func TestLoadConfig_AutoUpdateDefault_SelfHostOff(t *testing.T) {
+// TestLoadConfig_AutoUpdateDefault_SelfHostOn is task #61 (Frank,
+// 2026-08-01): self-host used to default AutoUpdateEnabled to false
+// (MUL-2381 — protecting against an external fork or an old pinned server
+// build). That risk doesn't apply here (self-host is internal-only, no
+// external fork users), and version pin (#57) plus post-upgrade cleanup
+// (#55) now make opt-in safe, so self-host now defaults to the same
+// enabled-by-default value as Multica Cloud.
+func TestLoadConfig_AutoUpdateDefault_SelfHostOn(t *testing.T) {
 	stageFakeAgent(t)
 	cfg, err := LoadConfig(Overrides{
 		ServerURL:      "http://localhost:8080",
@@ -269,11 +272,32 @@ func TestLoadConfig_AutoUpdateDefault_SelfHostOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.AutoUpdateEnabled {
-		t.Fatalf("AutoUpdateEnabled = true for self-host (localhost) server, want false")
+	if !cfg.AutoUpdateEnabled {
+		t.Fatalf("AutoUpdateEnabled = false for self-host (localhost) server, want true")
 	}
 	if cfg.AutoUpdateConfigSource != "self_host_default" {
 		t.Fatalf("AutoUpdateConfigSource = %q, want self_host_default", cfg.AutoUpdateConfigSource)
+	}
+}
+
+// TestLoadConfig_AutoUpdateDefault_ExplicitEnvStillWinsForSelfHost confirms
+// MULTICA_DAEMON_AUTO_UPDATE still overrides the self-host default, same as
+// it already overrides the cloud default.
+func TestLoadConfig_AutoUpdateDefault_ExplicitEnvStillWinsForSelfHost(t *testing.T) {
+	stageFakeAgent(t)
+	t.Setenv("MULTICA_DAEMON_AUTO_UPDATE", "false")
+	cfg, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.AutoUpdateEnabled {
+		t.Fatalf("AutoUpdateEnabled = true for self-host with explicit MULTICA_DAEMON_AUTO_UPDATE=false, want false")
+	}
+	if cfg.AutoUpdateConfigSource != "env_disabled" {
+		t.Fatalf("AutoUpdateConfigSource = %q, want env_disabled", cfg.AutoUpdateConfigSource)
 	}
 }
 

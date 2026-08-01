@@ -3443,7 +3443,7 @@ func TestInjectRuntimeConfigMentionLoopHardening(t *testing.T) {
 }
 
 // TestInjectRuntimeConfigSquadSurfaceRetired: squad product removed — brief
-// must not teach multica squad CLI even when IsSquadLeader residual is set.
+// must not teach multica squad CLI.
 func TestInjectRuntimeConfigSquadSurfaceRetired(t *testing.T) {
 	t.Parallel()
 
@@ -3451,7 +3451,6 @@ func TestInjectRuntimeConfigSquadSurfaceRetired(t *testing.T) {
 	ctx := TaskContextForEnv{
 		IssueID:          "issue-1",
 		TriggerCommentID: "comment-1",
-		IsSquadLeader:    true,
 	}
 	if _, err := InjectRuntimeConfig(dir, "claude", ctx); err != nil {
 		t.Fatalf("InjectRuntimeConfig failed: %v", err)

@@ -21,7 +21,7 @@ import (
 // IssueService is the single service-layer entry point for creating issues.
 // Both the HTTP `POST /issues` handler and the future Lark `/issue` command
 // call into Create so that duplicate guard, issue numbering, attachment
-// linking, broadcast, analytics, and agent/squad enqueue stay aligned. The
+// linking, broadcast, analytics, and agent enqueue stay aligned. The
 // service deliberately does NOT depend on http.Request — callers parse
 // their own transport and pass a fully-resolved IssueCreateParams.
 type IssueService struct {
@@ -154,8 +154,7 @@ type IssueCreateResult struct {
 //  7. Commit.
 //  8. Publish EventIssueCreated to the bus (payload via opts.BroadcastPayload).
 //  9. Capture the IssueCreated analytics event.
-//  10. Enqueue an agent task or trigger the squad leader when the issue is
-//     assigned and not in `backlog`.
+//  10. Enqueue an agent task when the issue is assigned and not in `backlog`.
 //
 // Validation that lives in the service (parent existence, project
 // workspace membership, parent → project back-fill) is enforced here so

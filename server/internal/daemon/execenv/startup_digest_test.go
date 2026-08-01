@@ -64,7 +64,7 @@ func TestBarryStartupStaticContextExcludesAllTurnScopedKinds(t *testing.T) {
 		AutopilotSource:         "autopilot-source-alpha-review-sentinel",
 		AutopilotTriggerPayload: "autopilot-payload-alpha-review-sentinel",
 		QuickCreatePrompt:       "quick-create-alpha-review-sentinel",
-		IsSquadLeader:           true,
+		AgentRadarPrompt:        "radar-alpha-review-sentinel",
 	}
 	b := a
 	b.FreshSessionNoticeReason = "fresh-beta-review-sentinel"
@@ -81,7 +81,7 @@ func TestBarryStartupStaticContextExcludesAllTurnScopedKinds(t *testing.T) {
 	b.AutopilotSource = "autopilot-source-beta-review-sentinel"
 	b.AutopilotTriggerPayload = "autopilot-payload-beta-review-sentinel"
 	b.QuickCreatePrompt = "quick-create-beta-review-sentinel"
-	b.IsSquadLeader = false
+	b.AgentRadarPrompt = "radar-beta-review-sentinel"
 
 	if gotA, gotB := StartupStaticDigest("grok", a), StartupStaticDigest("grok", b); gotA != gotB {
 		t.Fatalf("turn-scoped kind changed startup digest: a=%s b=%s", gotA, gotB)

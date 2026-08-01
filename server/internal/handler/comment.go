@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/mention"
-	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -796,16 +795,14 @@ type CommentTriggerAgentResponse struct {
 type commentAgentTriggerSource string
 
 const (
-	commentTriggerSourceIssueAssignee      commentAgentTriggerSource = "issue_assignee"
-	commentTriggerSourceMentionAgent       commentAgentTriggerSource = "mention_agent"
-	commentTriggerSourceMentionSquadLeader commentAgentTriggerSource = "mention_squad_leader"
-	commentTriggerSourceThreadRootAgent    commentAgentTriggerSource = "thread_root_agent"
+	commentTriggerSourceIssueAssignee   commentAgentTriggerSource = "issue_assignee"
+	commentTriggerSourceMentionAgent    commentAgentTriggerSource = "mention_agent"
+	commentTriggerSourceThreadRootAgent commentAgentTriggerSource = "thread_root_agent"
 )
 
 type commentAgentTrigger struct {
 	Agent  db.Agent
 	Source commentAgentTriggerSource
-	Squad  *db.Squad
 }
 
 func commentAgentTriggerReason(trigger commentAgentTrigger) string {
@@ -814,8 +811,6 @@ func commentAgentTriggerReason(trigger commentAgentTrigger) string {
 		return "Current issue assignment will trigger this agent."
 	case commentTriggerSourceMentionAgent:
 		return "This agent was mentioned in the comment."
-	case commentTriggerSourceMentionSquadLeader:
-		return "A mentioned squad will trigger its leader."
 	case commentTriggerSourceThreadRootAgent:
 		return "This reply is in a thread started by this agent."
 	default:
@@ -959,17 +954,6 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 								"parent_id must equal this task's trigger comment id ("+uuidToString(task.TriggerCommentID)+")")
 							return
 						}
-					}
-					noAction, checkErr := service.HasSquadLeaderNoActionEvaluationForTask(r.Context(), h.Queries, task)
-					if checkErr != nil {
-						slog.Warn("checking squad leader no_action evaluation failed", append(logger.RequestAttrs(r),
-							"error", checkErr,
-							"task_id", taskIDHeader,
-							"issue_id", issueID,
-						)...)
-					} else if noAction {
-						writeError(w, http.StatusConflict, "squad leader recorded no_action; comments are not allowed for this task")
-						return
 					}
 				}
 			}
@@ -1129,25 +1113,8 @@ func (h *Handler) enqueueCommentAgentTriggers(ctx context.Context, issue db.Issu
 	for _, trigger := range triggers {
 		switch trigger.Source {
 		case commentTriggerSourceIssueAssignee:
-			if trigger.Squad != nil {
-				if _, err := h.TaskService.EnqueueTaskForSquadLeader(ctx, issue, trigger.Agent.ID, triggerCommentID); err != nil {
-					slog.Warn("enqueue squad leader task failed",
-						"issue_id", uuidToString(issue.ID),
-						"squad_id", uuidToString(trigger.Squad.ID),
-						"leader_id", uuidToString(trigger.Agent.ID),
-						"error", err)
-				}
-				continue
-			}
 			if _, err := h.TaskService.EnqueueTaskForIssue(ctx, issue, triggerCommentID); err != nil {
 				slog.Warn("enqueue agent task on comment failed", "issue_id", uuidToString(issue.ID), "error", err)
-			}
-		case commentTriggerSourceMentionSquadLeader:
-			if _, err := h.TaskService.EnqueueTaskForSquadLeader(ctx, issue, trigger.Agent.ID, triggerCommentID); err != nil {
-				slog.Warn("enqueue squad leader mention task failed",
-					"issue_id", uuidToString(issue.ID),
-					"agent_id", uuidToString(trigger.Agent.ID),
-					"error", err)
 			}
 		case commentTriggerSourceMentionAgent, commentTriggerSourceThreadRootAgent:
 			if _, err := h.TaskService.EnqueueTaskForMention(ctx, issue, trigger.Agent.ID, triggerCommentID); err != nil {
@@ -1195,12 +1162,6 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 			WorkspaceID: issue.WorkspaceID,
 		}); err == nil {
 			add(commentAgentTrigger{Agent: agent, Source: commentTriggerSourceIssueAssignee})
-		}
-	}
-
-	if !replyTargetsThreadRootAgent {
-		if trigger, ok := h.computeAssignedSquadLeaderCommentTrigger(ctx, issue, content, actorType, actorID); ok {
-			add(trigger)
 		}
 	}
 
@@ -1254,16 +1215,6 @@ func (h *Handler) computeThreadRootAgentCommentTrigger(ctx context.Context, issu
 		return commentAgentTrigger{}, false
 	}
 	return commentAgentTrigger{Agent: agent, Source: commentTriggerSourceThreadRootAgent}, true
-}
-
-func (h *Handler) computeAssignedSquadLeaderCommentTrigger(ctx context.Context, issue db.Issue, content, authorType, authorID string) (commentAgentTrigger, bool) {
-	// Squad product retired: never wake leader on comment for assignee=squad.
-	_ = ctx
-	_ = issue
-	_ = content
-	_ = authorType
-	_ = authorID
-	return commentAgentTrigger{}, false
 }
 
 func (h *Handler) commentMentionsOthersButNotAssignee(content string, issue db.Issue) bool {

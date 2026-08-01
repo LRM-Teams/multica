@@ -214,12 +214,9 @@ func (f *fakeEnvDispatchDeps) GetEnvDispatchRootTaskStatus(_ context.Context, pr
 	return "completed", nil
 }
 
-func (f *fakeEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID, _ string) (MessageRoster, error) {
+func (f *fakeEnvDispatchDeps) ResolveMessageRoster(_ context.Context, _, agentID string) (MessageRoster, error) {
 	if f.messageRoster.LeaderID != "" {
 		return f.messageRoster, nil
-	}
-	if agentID == "" {
-		agentID = "squad-leader"
 	}
 	return MessageRoster{LeaderID: agentID, AgentIDs: []string{agentID}}, nil
 }
@@ -473,7 +470,7 @@ type precreateRuntimeCall struct {
 	AgentID     string
 }
 
-func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _, _, _, _, runtimeID string, idx int) (string, error) {
+func (f *fakeEnvDispatchDeps) EnqueueAgentRun(_ context.Context, _, _, _, _, _, _, _, runtimeID string, idx int) (string, error) {
 	if f.enqueueErr != nil {
 		return "", f.enqueueErr
 	}
@@ -553,7 +550,7 @@ func (f *fakeEnvDispatchDeps) SaveTrainingDispatch(_ context.Context, projectID,
 	return nil
 }
 
-func (f *fakeEnvDispatchDeps) ValidateAgentInWorkspaceOrSquad(_ context.Context, _, _, agentID string) error {
+func (f *fakeEnvDispatchDeps) ValidateAgentInWorkspace(_ context.Context, _, agentID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.validateAgentCalls = append(f.validateAgentCalls, agentID)
@@ -626,22 +623,13 @@ func TestValidate_TrainAgentID(t *testing.T) {
 		t.Fatalf("train_agent_id == agent_id must be accepted, got %v", err)
 	}
 
-	// train_agent_id with squad_id (team member) → accepted.
-	team := base
-	team.SquadID = "sq"
-	team.TrainAgentID = "member"
-	team.TrainingMode = true
-	if err := svc.validate(team); err != nil {
-		t.Fatalf("train_agent_id with squad_id must be accepted, got %v", err)
-	}
-
-	// train_agent_id set, single agent, but != agent_id and no squad → rejected.
+	// train_agent_id set, single agent, but != agent_id → rejected.
 	bad := base
 	bad.AgentID = "ag"
 	bad.TrainAgentID = "other"
 	bad.TrainingMode = true
 	if err := svc.validate(bad); err == nil {
-		t.Fatal("train_agent_id != agent_id without squad_id must be rejected")
+		t.Fatal("train_agent_id != agent_id must be rejected")
 	}
 }
 
@@ -834,7 +822,7 @@ func TestBranchWakesOnlyTriggerAgentWithClonedSandbox(t *testing.T) {
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
 		SourceProjectID: "source-proj-1",
 		Domain:          EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
-		SquadID: "squad-1", Message: &MessageInput{Content: "continue"},
+		AgentID: "leader", Message: &MessageInput{Content: "continue"},
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -884,7 +872,7 @@ func TestBranchLeavesNonTriggeredAgentsPendingWithCloneSources(t *testing.T) {
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
 		SourceProjectID: "source-proj-1",
 		Domain:          EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
-		SquadID: "squad-1", Message: &MessageInput{Content: "go"},
+		AgentID: "leader", Message: &MessageInput{Content: "go"},
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -920,7 +908,7 @@ func TestBranchAppendsNewMessageWithoutChangingTriggerAgent(t *testing.T) {
 		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
 		SourceProjectID: "source-proj-1",
 		Domain:          EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
-		SquadID: "squad-1", Message: &MessageInput{Content: "follow-up question"},
+		AgentID: "leader", Message: &MessageInput{Content: "follow-up question"},
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -1308,9 +1296,9 @@ func TestDispatch_ResumeNormalizesToBranch(t *testing.T) {
 	}
 }
 
-// TestValidate_ExactlyOneAgentOrSquad verifies that neither/both agent_id and
-// squad_id are rejected (spec D4).
-func TestValidate_ExactlyOneAgentOrSquad(t *testing.T) {
+// TestValidate_AgentIDRequired verifies dispatch is rejected without an
+// agent_id (spec D4).
+func TestValidate_AgentIDRequired(t *testing.T) {
 	f := newFakeEnvDispatchDeps()
 	svc := NewEnvDispatchService(f, 1)
 	base := EnvDispatchInput{
@@ -1318,15 +1306,8 @@ func TestValidate_ExactlyOneAgentOrSquad(t *testing.T) {
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage,
 		GroupSize: 1, Message: &MessageInput{Content: "hi"},
 	}
-	// neither
 	if _, err := svc.Dispatch(context.Background(), base); err == nil {
-		t.Error("expected error when neither agent_id nor squad_id set")
-	}
-	// both
-	b2 := base
-	b2.AgentID, b2.SquadID = "ag", "sq"
-	if _, err := svc.Dispatch(context.Background(), b2); err == nil {
-		t.Error("expected error when both agent_id and squad_id set")
+		t.Error("expected error when agent_id is not set")
 	}
 }
 
@@ -1561,12 +1542,8 @@ func TestEnvDispatchInput_Validate_CriticAgentID(t *testing.T) {
 		in      EnvDispatchInput
 		wantErr string
 	}{
-		{"empty critic ok (squad)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
-		{"critic with squad+train ok", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
-		{"critic without train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: training_mode=true requires train_agent_id"},
-		{"critic == train rejected", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "same", CriticAgentID: "same", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
+		{"critic without train rejected", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: training_mode=true requires train_agent_id"},
 		{"critic == agent rejected (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "ag", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, "validation_failed: critic_agent_id must differ from train_agent_id"},
-		{"critic ok with squad (no agent id)", EnvDispatchInput{WorkspaceID: "ws", SquadID: "sq", TrainAgentID: "train", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
 		{"empty critic ok (single agent)", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
 		{"critic with single agent ok", EnvDispatchInput{WorkspaceID: "ws", AgentID: "ag", TrainAgentID: "ag", CriticAgentID: "crit", TrainingMode: true, Mode: EnvModeScratch, EnvID: "base", Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1, Message: &MessageInput{Content: "hi"}}, ""},
 	}
@@ -1730,7 +1707,7 @@ func TestEnvDispatchPerAgentEnvSpecs_ShapeValidation(t *testing.T) {
 			f := newFakeEnvDispatchDeps()
 			svc := NewEnvDispatchService(f, 1)
 			in := EnvDispatchInput{
-				WorkspaceID: "ws", SquadID: "sq", Mode: EnvModeScratch, EnvID: "base",
+				WorkspaceID: "ws", AgentID: "lead", Mode: EnvModeScratch, EnvID: "base",
 				Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
 				Message: &MessageInput{Content: "hi"}, PerAgentEnvSpecs: tc.specs,
 			}
@@ -1820,7 +1797,6 @@ func TestEnvDispatchPerAgentEnvSpecs_RuntimeValidation(t *testing.T) {
 		{
 			name: "training target runtime rejected",
 			modify: func(in *EnvDispatchInput) {
-				in.SquadID = ""
 				in.AgentID = "agent-a"
 				in.TrainAgentID = "agent-a"
 				in.PerAgentEnvSpecs = []PerAgentEnvSpec{{AgentID: "agent-a", Runtime: validRuntime}}
@@ -1834,7 +1810,7 @@ func TestEnvDispatchPerAgentEnvSpecs_RuntimeValidation(t *testing.T) {
 			baseEnv := f.seedBaseEnv()
 			svc := NewEnvDispatchService(f, 1)
 			in := EnvDispatchInput{
-				WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+				WorkspaceID: "ws", UserID: "u", AgentID: "lead", Mode: EnvModeScratch, EnvID: baseEnv,
 				Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
 				Message: &MessageInput{Content: "hi"},
 			}
@@ -1890,7 +1866,7 @@ func TestEnvDispatchPerAgentRuntimePolicy_IsolatedPerAgent(t *testing.T) {
 	runtimeB := &ExternalModelRuntime{BaseURL: "https://provider-b.invalid/v1", APIKey: "key-b", Model: "model-b"}
 
 	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
-		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		WorkspaceID: "ws", UserID: "u", AgentID: "lead", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
 		Message: &MessageInput{Content: "hi"},
 		PerAgentEnvSpecs: []PerAgentEnvSpec{
@@ -1933,7 +1909,7 @@ func TestEnvDispatchPerAgentEnvSpecsRejectUnknownAgent(t *testing.T) {
 	svc := NewEnvDispatchService(f, 1)
 
 	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
-		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		WorkspaceID: "ws", UserID: "u", AgentID: "lead", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
 		Message:          &MessageInput{Content: "hi"},
 		PerAgentEnvSpecs: []PerAgentEnvSpec{{AgentID: "ghost", Template: "python"}},
@@ -1962,7 +1938,7 @@ func TestEnvDispatchPerAgentEnvSpecsRejectUnknownEnvSpec(t *testing.T) {
 	svc := NewEnvDispatchService(f, 1)
 
 	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
-		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		WorkspaceID: "ws", UserID: "u", AgentID: "lead", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
 		Message:          &MessageInput{Content: "hi"},
 		PerAgentEnvSpecs: []PerAgentEnvSpec{{AgentID: "ag", Template: "bad-template"}},
@@ -2018,7 +1994,7 @@ func TestEnvDispatchPerAgentEnvSpecsAssignDistinctSandboxRefs(t *testing.T) {
 	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
 
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
-		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		WorkspaceID: "ws", UserID: "u", AgentID: "train", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
 		TrainAgentID: "train", TrainingMode: true,
 		Message: &MessageInput{Content: "hi"},
@@ -2113,7 +2089,7 @@ func TestDispatch_SquadMessagePrecreatesLeaderRuntime(t *testing.T) {
 	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
 
 	if _, err := svc.Dispatch(context.Background(), EnvDispatchInput{
-		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		WorkspaceID: "ws", UserID: "u", AgentID: "lead", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
 		Message: &MessageInput{Content: "hi"},
 	}); err != nil {
@@ -2134,7 +2110,7 @@ func TestScratchMessageProvisionsOnlyLeader(t *testing.T) {
 	svc := NewEnvDispatchService(f, 1)
 
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
-		WorkspaceID: "ws", UserID: "user", SquadID: "squad", Mode: EnvModeScratch, EnvID: baseEnv,
+		WorkspaceID: "ws", UserID: "user", AgentID: "lead", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
 		Message: &MessageInput{Content: "start the rollout"},
 	})
@@ -2286,7 +2262,7 @@ func TestEnvDispatchPerAgentEnvSpecsPartialSquadUsesDefaults(t *testing.T) {
 	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(creator)
 
 	res, err := svc.Dispatch(context.Background(), EnvDispatchInput{
-		WorkspaceID: "ws", UserID: "u", SquadID: "sq", Mode: EnvModeScratch, EnvID: baseEnv,
+		WorkspaceID: "ws", UserID: "u", AgentID: "train", Mode: EnvModeScratch, EnvID: baseEnv,
 		Domain: EnvDomainSelfPlay, DispatchType: EnvDispatchMessage, GroupSize: 1,
 		TrainAgentID: "train", TrainingMode: true,
 		Message: &MessageInput{Content: "hi"},

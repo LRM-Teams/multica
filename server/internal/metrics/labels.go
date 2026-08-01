@@ -71,7 +71,6 @@ var businessMetricLabels = map[string][]string{
 	"multica_issue_created_total":                      {labelSource, labelPlatform},
 	"multica_chat_message_sent_total":                  {labelPlatform},
 	"multica_agent_created_total":                      {labelRuntimeMode, labelSource},
-	"multica_squad_created_total":                      {},
 	"multica_autopilot_created_total":                  {labelCadence},
 	"multica_issue_executed_total":                     {labelSource},
 	"multica_runtime_registered_total":                 {labelRuntimeMode, labelProvider},

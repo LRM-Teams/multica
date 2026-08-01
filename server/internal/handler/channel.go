@@ -33,7 +33,7 @@ import (
 const channelNameMaxLen = 80
 
 // Channel avatar references an uploaded-file link (same persisted shape as
-// agent/squad avatars); cap it well above any signed URL we issue.
+// agent avatars); cap it well above any signed URL we issue.
 const channelAvatarURLMaxLen = 2048
 const channelMessageMaxLen = 20000
 const channelContextMessageLimit = 12

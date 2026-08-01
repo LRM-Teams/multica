@@ -15,9 +15,8 @@ import (
 // interaction_dag closing_event values recorded at the D11 event seams. An empty
 // closing_event is a leaf (root-completion) segment, stored as NULL.
 const (
-	closingEventDelegation    = "delegation"
-	closingEventCompletion    = "completion"
-	closingEventSquadBriefing = "squad_briefing"
+	closingEventDelegation = "delegation"
+	closingEventCompletion = "completion"
 )
 
 // EnvDispatchRunChecker checks whether a project was created via env-dispatch.
@@ -32,18 +31,6 @@ type EnvDispatchRunChecker interface {
 // trained parent that posted the trigger comment is delegating to a child task.
 func (s *TaskService) closeSegmentForDelegation(ctx context.Context, parent db.AgentInboxEvent, projectID string, envSnapshot map[string]any) {
 	s.closeSegmentForDelegationEvent(ctx, parent, projectID, closingEventDelegation, envSnapshot)
-}
-
-// closeSegmentForSquadContextDelegation closes the producer/parent segment for
-// a squad-context handoff. The segment records squad-specific provenance via
-// closing_event="squad_briefing", while the graph edge remains structural
-// delegation when the child later closes.
-func (s *TaskService) closeSegmentForSquadContextDelegation(ctx context.Context, parent db.AgentInboxEvent, projectID string, envSnapshot map[string]any) {
-	s.closeSegmentForDelegationEvent(ctx, parent, projectID, closingEventSquadBriefing, envSnapshot)
-}
-
-func isSquadContextHandoff(parent db.AgentInboxEvent, childIsSquadLeader bool) bool {
-	return childIsSquadLeader || parent.IsLeaderTask
 }
 
 // closeSegmentForDelegationEvent closes the parent's segment for a handoff and,

@@ -279,25 +279,6 @@ func TestBuildQuickCreatePromptAssigneeSquadsRetired(t *testing.T) {
 	}
 }
 
-func TestBuildQuickCreatePromptSquadDefaultsRetired(t *testing.T) {
-	// Residual SquadID on task must not teach squad assignee defaulting.
-	out := buildQuickCreatePrompt(Task{
-		QuickCreatePrompt: "file a bug",
-		Agent:             &AgentData{ID: "leader-1", Name: "Leader"},
-		SquadID:           "aaaa1111-2222-3333-4444-555555555555",
-		SquadName:         "独立团",
-	})
-	for _, forbidden := range []string{
-		"picker SQUAD",
-		"running on the squad's behalf",
-		`--assignee-id "aaaa1111-2222-3333-4444-555555555555"`,
-	} {
-		if strings.Contains(out, forbidden) {
-			t.Errorf("squad product retired: quick-create still defaults to squad: %q", forbidden)
-		}
-	}
-}
-
 func TestBuildQuickCreatePromptProjectPinning(t *testing.T) {
 	const projectID = "11111111-2222-3333-4444-555555555555"
 	out := buildQuickCreatePrompt(Task{

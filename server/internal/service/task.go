@@ -673,22 +673,6 @@ func (s *TaskService) CreateMentionTaskRow(ctx context.Context, q *db.Queries, i
 	return s.createMentionTaskRow(ctx, q, issue, agentID, triggerCommentID, false, false)
 }
 
-// EnqueueTaskForSquadLeader is the leader-role variant of EnqueueTaskForMention.
-// The resulting task carries is_leader_task=true so that downstream
-// self-trigger guards can distinguish a comment posted while the agent was
-// acting as the squad's leader (skip) from one posted while it was acting
-// as a worker (do not skip). This matters for agents that are simultaneously
-// the leader and a worker of the same squad — see migration 090.
-func (s *TaskService) EnqueueTaskForSquadLeader(ctx context.Context, issue db.Issue, leaderID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentInboxEvent, error) {
-	// Squad product retired: never enqueue leader-role tasks.
-	_ = s
-	_ = ctx
-	_ = issue
-	_ = leaderID
-	_ = triggerCommentID
-	return db.AgentInboxEvent{}, fmt.Errorf("squad leader enqueue retired")
-}
-
 func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool) (db.AgentInboxEvent, error) {
 	task, err := s.createMentionTaskRow(ctx, s.Queries, issue, agentID, triggerCommentID, isLeader, forceFreshSession)
 	if err != nil {
@@ -769,11 +753,7 @@ func (s *TaskService) publishMentionTaskQueuedWithInterruptPolicy(ctx context.Co
 	// close. No-op when there is no trained parent (plain user mention).
 	if parent, ok := s.discoverDelegationParent(ctx, issue.ID, triggerCommentID, task.ID); ok {
 		projectID := util.UUIDToString(issue.ProjectID)
-		if isSquadContextHandoff(parent, isLeader) {
-			s.closeSegmentForSquadContextDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
-		} else {
-			s.closeSegmentForDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
-		}
+		s.closeSegmentForDelegation(ctx, parent, projectID, s.leanEnvSnapshot(ctx, issue.ProjectID))
 		if err := s.Queries.SetTaskParentTaskID(ctx, db.SetTaskParentTaskIDParams{ID: task.ID, ParentTaskID: parent.ID}); err != nil {
 			slog.Warn("interaction_dag: set child parent_task_id failed", "child", util.UUIDToString(task.ID), "err", err)
 		} else {
@@ -799,19 +779,12 @@ func (s *TaskService) publishMentionTaskQueuedWithInterruptPolicy(ctx context.Co
 // resources, and the prompt template instructs the agent to pass
 // `--project <uuid>` so the new issue lands in that project.
 //
-// SquadID is non-empty when the user picked a squad (rather than an agent)
-// in the modal. The task is still enqueued against the squad's leader
-// agent (Queries.CreateQuickCreateTask is agent-scoped); SquadID is the
-// hint the daemon claim handler uses to layer the squad-leader briefing
-// onto the agent's Instructions, matching the behavior of issue-bound
-// tasks assigned to the squad.
 type QuickCreateContext struct {
 	Type          string   `json:"type"`
 	Prompt        string   `json:"prompt"`
 	RequesterID   string   `json:"requester_id"`
 	WorkspaceID   string   `json:"workspace_id"`
 	ProjectID     string   `json:"project_id,omitempty"`
-	SquadID       string   `json:"squad_id,omitempty"`
 	AttachmentIDs []string `json:"attachment_ids,omitempty"`
 	// Source carries the visible chat/channel/DM thread context that opened
 	// the quick-create flow. It is written into the task context so the
@@ -842,15 +815,10 @@ const QuickCreateContextType = "quick_create"
 // one). The handler is responsible for validating it belongs to the same
 // workspace before passing it in.
 //
-// squadID is non-empty (Valid) when the user picked a squad as the actor.
-// The handler has already resolved it to the squad's leader agent for
-// agentID; the squadID hint is stamped into the task context so the daemon
-// claim handler can inject the squad-leader briefing on dispatch.
-//
 // parentIssueID is optional (zero-valued pgtype.UUID when the user didn't
 // open the modal from "Add sub issue"). The handler is responsible for
 // validating it belongs to the same workspace before passing it in.
-func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, requesterID pgtype.UUID, agentID, squadID pgtype.UUID, prompt string, projectID, parentIssueID pgtype.UUID, attachmentIDs []pgtype.UUID, source *protocol.QuickCreateSourceContext) (db.AgentInboxEvent, error) {
+func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, requesterID pgtype.UUID, agentID pgtype.UUID, prompt string, projectID, parentIssueID pgtype.UUID, attachmentIDs []pgtype.UUID, source *protocol.QuickCreateSourceContext) (db.AgentInboxEvent, error) {
 	agent, err := s.Queries.GetAgent(ctx, agentID)
 	if err != nil {
 		return db.AgentInboxEvent{}, fmt.Errorf("load agent: %w", err)
@@ -870,9 +838,6 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	}
 	if projectID.Valid {
 		payload.ProjectID = util.UUIDToString(projectID)
-	}
-	if squadID.Valid {
-		payload.SquadID = util.UUIDToString(squadID)
 	}
 	if parentIssueID.Valid {
 		payload.ParentIssueID = util.UUIDToString(parentIssueID)
@@ -912,7 +877,6 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 	slog.Info("quick-create task enqueued",
 		"task_id", util.UUIDToString(task.ID),
 		"agent_id", util.UUIDToString(agentID),
-		"squad_id", payload.SquadID,
 		"requester_id", util.UUIDToString(requesterID),
 		"workspace_id", util.UUIDToString(workspaceID),
 		"project_id", payload.ProjectID,
@@ -1551,21 +1515,12 @@ func (s *TaskService) completeTask(
 	// for assignment-triggered tasks it is NULL and the fallback is top-level.
 	// Chat tasks have no IssueID and are handled separately below.
 	if task.IssueID.Valid {
-		suppressNoActionComment, err := HasSquadLeaderNoActionEvaluationForTask(ctx, s.Queries, task)
-		if err != nil {
-			slog.Warn("checking squad leader no_action evaluation failed",
-				"task_id", util.UUIDToString(task.ID),
-				"issue_id", util.UUIDToString(task.IssueID),
-				"agent_id", util.UUIDToString(task.AgentID),
-				"error", err,
-			)
-		}
 		agentCommented, _ := s.Queries.HasAgentCommentedSince(ctx, db.HasAgentCommentedSinceParams{
 			IssueID:  task.IssueID,
 			AuthorID: task.AgentID,
 			Since:    task.StartedAt,
 		})
-		if !suppressNoActionComment && !agentCommented {
+		if !agentCommented {
 			var payload protocol.TaskCompletedPayload
 			if err := json.Unmarshal(result, &payload); err == nil {
 				outputType, outputTypeErr := protocol.NormalizeChatOutputType(payload.Type, strings.TrimSpace(payload.Output) != "" || len(payload.Parts) > 0, payload.Reaction != nil)
@@ -2264,19 +2219,10 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 			triggerCommentID = sourceTask.TriggerCommentID
 		}
 	} else {
-		switch {
-		case issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid:
-			agentID = issue.AssigneeID
-		case issue.AssigneeType.String == "squad" && issue.AssigneeID.Valid:
-			squad, err := s.Queries.GetSquad(ctx, issue.AssigneeID)
-			if err != nil {
-				return nil, fmt.Errorf("issue is assigned to a squad but squad not found")
-			}
-			agentID = squad.LeaderID
-			isLeader = true
-		default:
-			return nil, fmt.Errorf("issue is not assigned to an agent or squad")
+		if issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
+			return nil, fmt.Errorf("issue is not assigned to an agent")
 		}
+		agentID = issue.AssigneeID
 	}
 
 	// Cancel only the target agent's active/queued tasks on this issue.
@@ -2315,8 +2261,8 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 // enqueueRerunTask enqueues a fresh task for the given agent on the issue.
 // When the target agent is the issue's single-agent assignee we use the
 // assignee-driven path (enqueueIssueTask) so the issue-assignee bookkeeping
-// stays in sync; otherwise (squad member, prior assignee that has since been
-// reassigned, mention agent) we use the mention path with the same
+// stays in sync; otherwise (a prior assignee that has since been reassigned,
+// or a mention agent) we use the mention path with the same
 // force_fresh_session=true contract.
 func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool) (db.AgentInboxEvent, error) {
 	if issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid &&

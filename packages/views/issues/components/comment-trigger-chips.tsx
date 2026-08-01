@@ -40,8 +40,6 @@ function sourceLabel(source: string, t: IssuesT): string {
       return t(($) => $.comment.trigger_source_issue_assignee);
     case "mention_agent":
       return t(($) => $.comment.trigger_source_mention_agent);
-    case "mention_squad_leader":
-      return t(($) => $.comment.trigger_source_mention_squad_leader);
     case "thread_root_agent":
       return t(($) => $.comment.trigger_source_thread_root_agent);
     default:
@@ -56,8 +54,6 @@ function sourceReason(agent: CommentTriggerPreviewAgent, t: IssuesT): string {
       return t(($) => $.comment.trigger_reason_issue_assignee, { name });
     case "mention_agent":
       return t(($) => $.comment.trigger_reason_mention_agent, { name });
-    case "mention_squad_leader":
-      return t(($) => $.comment.trigger_reason_mention_squad_leader, { name });
     case "thread_root_agent":
       return t(($) => $.comment.trigger_reason_thread_root_agent, { name });
     default:

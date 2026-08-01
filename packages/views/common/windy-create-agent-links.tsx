@@ -26,11 +26,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
+import { ComputerPicker } from "../agents/components/computer-picker";
 import {
-  ComputerPicker,
+  firstUsableMachine,
   firstUsableRuntimeIdOnMachine,
   machineForRuntime,
-} from "../agents/components/computer-picker";
+} from "../agents/components/computer-picker-utils";
 import { RuntimePicker, isRuntimeUsableForUser } from "../agents/components/runtime-picker";
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
@@ -179,12 +180,16 @@ function InlineCreateAgentDialog({
     if (!open) onClose();
   };
 
-  const selectedMachine =
-    machines.find((m) => m.id === selectedMachineId) ??
+  const effectiveMachineId =
+    selectedMachineId ||
+    firstUsableMachine(machines, userId)?.id ||
     machineForRuntime(
       runtimes.find((r) => isRuntimeUsableForUser(r, userId)),
       machines,
-    );
+    )?.id ||
+    "";
+  const selectedMachine =
+    machines.find((m) => m.id === effectiveMachineId) ?? null;
   const machineRuntimes = selectedMachine?.runtimes ?? [];
   const handleMachineSelect = (machineId: string) => {
     if (machineId === selectedMachineId) return;
@@ -193,8 +198,9 @@ function InlineCreateAgentDialog({
     setSelectedRuntimeId(firstUsableRuntimeIdOnMachine(next, userId));
   };
 
-  const firstUsableRuntimeId = firstUsableRuntimeIdOnMachine(selectedMachine, userId);
-  const effectiveRuntimeId = selectedRuntimeId || firstUsableRuntimeId;
+  const effectiveRuntimeId =
+    selectedRuntimeId ||
+    firstUsableRuntimeIdOnMachine(selectedMachine, userId);
   const selectedRuntime = runtimes.find((r) => r.id === effectiveRuntimeId) ?? null;
   // Derived, staleness-aware health instead of the raw `status` column
   // (#10 — "runtime online status" had two divergent sources across the
@@ -311,7 +317,7 @@ function InlineCreateAgentDialog({
                   runtimes={runtimes}
                   runtimesLoading={runtimesLoading}
                   currentUserId={userId}
-                  selectedMachineId={selectedMachine?.id ?? selectedMachineId}
+                  selectedMachineId={effectiveMachineId}
                   onSelect={handleMachineSelect}
                 />
               </div>
@@ -323,7 +329,7 @@ function InlineCreateAgentDialog({
                   currentUserId={userId}
                   selectedRuntimeId={effectiveRuntimeId}
                   onSelect={setSelectedRuntimeId}
-                  label={t(($) => $.create_dialog.code_agent_label)}
+                  label={t(($) => $.create_dialog.runtime_label)}
                   getItemLabel={(runtime) => runtime.name}
                 />
               </div>

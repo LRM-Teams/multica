@@ -1,12 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown, Loader2, Monitor } from "lucide-react";
 import type { RuntimeDevice } from "@multica/core/types";
-import {
-  buildRuntimeMachines,
-  type RuntimeMachine,
-} from "../../runtimes/components/runtime-machines";
+import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 import {
   Popover,
   PopoverTrigger,
@@ -17,9 +14,12 @@ import { useT } from "../../i18n";
 
 /**
  * Create-flow computer selector (Frank / Parker 2026-08-01): pick the
- * computer first, then a code agent on that computer. Groups runtimes via
+ * computer first, then a runtime on that computer. Groups runtimes via
  * `buildRuntimeMachines` so the list is one row per machine, not per
  * provider process.
+ *
+ * Selection seeding stays in the parent (derived effective id) — this
+ * component never calls onSelect from an effect.
  */
 export function ComputerPicker({
   runtimes,
@@ -44,14 +44,6 @@ export function ComputerPicker({
 
   const selected =
     machines.find((machine) => machine.id === selectedMachineId) ?? null;
-
-  // Seed an empty selection once machines are known. Parent owns the id so
-  // duplicate/template pre-fill is never overwritten here.
-  useEffect(() => {
-    if (selectedMachineId !== "") return;
-    const first = firstUsableMachine(machines, currentUserId);
-    if (first) onSelect(first.id);
-  }, [machines, selectedMachineId, currentUserId, onSelect]);
 
   return (
     <div className="flex flex-col min-w-0">
@@ -138,44 +130,4 @@ export function ComputerPicker({
       </Popover>
     </div>
   );
-}
-
-export function machineForRuntime(
-  runtime: RuntimeDevice | null | undefined,
-  machines: RuntimeMachine[],
-): RuntimeMachine | null {
-  if (!runtime) return null;
-  return machines.find((m) => m.runtimes.some((r) => r.id === runtime.id)) ?? null;
-}
-
-function firstUsableMachine(
-  machines: RuntimeMachine[],
-  currentUserId: string | null,
-): RuntimeMachine | null {
-  for (const machine of machines) {
-    if (
-      machine.runtimes.some((r) => {
-        if (!currentUserId) return true;
-        if (r.owner_id === currentUserId) return true;
-        return r.visibility === "public";
-      })
-    ) {
-      return machine;
-    }
-  }
-  return machines[0] ?? null;
-}
-
-/** Prefer a usable code agent on the machine; otherwise first runtime id. */
-export function firstUsableRuntimeIdOnMachine(
-  machine: RuntimeMachine | null | undefined,
-  currentUserId: string | null,
-): string {
-  if (!machine) return "";
-  const usable = machine.runtimes.find((r) => {
-    if (!currentUserId) return true;
-    if (r.owner_id === currentUserId) return true;
-    return r.visibility === "public";
-  });
-  return usable?.id ?? machine.runtimes[0]?.id ?? "";
 }

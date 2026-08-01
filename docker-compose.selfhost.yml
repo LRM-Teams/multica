@@ -56,6 +56,11 @@ services:
       METRICS_ADDR: ${METRICS_ADDR:-127.0.0.1:9091}
       METRICS_DISABLED: ${METRICS_DISABLED:-}
       HTTP_SLO_ALERT_WEBHOOK_URL: ${HTTP_SLO_ALERT_WEBHOOK_URL:-}
+      # Optional override for the daemon release-manifest base URL dispatched at
+      # heartbeat (task #815 step 2). Empty means daemons fall back to their own
+      # compiled-in default; set this only to redirect all daemons to a new
+      # mirror without reinstalling every machine.
+      MULTICA_SERVER_RELEASE_MANIFEST_BASE_URL: ${MULTICA_SERVER_RELEASE_MANIFEST_BASE_URL:-}
 
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:${FRONTEND_PORT:-3000}}

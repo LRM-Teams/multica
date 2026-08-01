@@ -43,8 +43,11 @@ function workspaceScoped(slug: string) {
       `${ws}/profile/${encode(memberType)}/${encode(memberId)}`,
     inbox: () => `${ws}/inbox`,
     myIssues: () => `${ws}/my-issues`,
-    runtimes: () => `${ws}/runtimes`,
-    runtimeDetail: (id: string) => `${ws}/runtimes/${encode(id)}`,
+    // Page path is "computers" (task #18) — the page lists computers, not
+    // the "runtime" concept (a computer's bound code-agent process), which
+    // keeps its existing name everywhere else per Frank's explicit ruling.
+    computers: () => `${ws}/computers`,
+    computerDetail: (id: string) => `${ws}/computers/${encode(id)}`,
     sandboxes: () => `${ws}/sandboxes`,
     sandboxDetail: (id: string) => `${ws}/sandboxes/${encode(id)}`,
     sandboxNodeSetup: (nodeId: string) => `${ws}/sandboxes/nodes/${encode(nodeId)}`,

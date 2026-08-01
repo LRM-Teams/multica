@@ -15,7 +15,7 @@ import { useT } from "../i18n";
  * Task #9 (2026-07-31, Frank DM): replaces the modal "your daemon needs an
  * upgrade" popup, which grabbed focus on every visit for a non-urgent,
  * routine maintenance fact. This is a small warning-tone icon next to the
- * "Runtimes" nav item (same slot the old red dot used) that opens a
+ * "Computers" nav item (same slot the old red dot used) that opens a
  * non-modal popover on click/hover — click outside to dismiss, never steals
  * focus.
  *
@@ -51,7 +51,7 @@ export function RuntimeAttentionAlert({ wsId }: { wsId: string | undefined }) {
         // The sidebar row this renders inside is itself one big link
         // (SidebarMenuButton's `render={<AppLink .../>}`) — without both of
         // these, a click on just this icon would open the popover AND
-        // navigate the row to /runtimes.
+        // navigate the row to /computers.
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -64,7 +64,7 @@ export function RuntimeAttentionAlert({ wsId }: { wsId: string | undefined }) {
           {t(($) => $.runtime_attention.count, { count })}
         </p>
         <AppLink
-          href={paths.runtimes()}
+          href={paths.computers()}
           className="text-xs font-medium text-brand hover:underline"
         >
           {t(($) => $.runtime_attention.view)}

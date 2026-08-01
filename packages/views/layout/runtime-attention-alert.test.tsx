@@ -13,7 +13,7 @@ vi.mock("@multica/core/runtimes/hooks", () => ({
 }));
 
 vi.mock("@multica/core/paths", () => ({
-  useWorkspacePaths: () => ({ runtimes: () => "/acme/runtimes" }),
+  useWorkspacePaths: () => ({ computers: () => "/acme/computers" }),
 }));
 
 vi.mock("../navigation/app-link", () => ({
@@ -65,11 +65,11 @@ describe("RuntimeAttentionAlert", () => {
     expect(screen.getByText("3 machines have available updates.")).toBeInTheDocument();
   });
 
-  it("links the view action to the runtimes page, never embeds an upgrade action here (task #9: tell + take you there, act elsewhere)", () => {
+  it("links the view action to the computers page, never embeds an upgrade action here (task #9: tell + take you there, act elsewhere)", () => {
     mockCount.current = 2;
     renderWithI18n(<RuntimeAttentionAlert wsId="ws-1" />);
     const link = screen.getByRole("link", { name: "View" });
-    expect(link).toHaveAttribute("href", "/acme/runtimes");
+    expect(link).toHaveAttribute("href", "/acme/computers");
     // Scoped to the popover content only — the trigger button itself is
     // legitimately labeled "N machines need updates", that's not the thing
     // being ruled out here.
@@ -83,7 +83,7 @@ describe("RuntimeAttentionAlert", () => {
     // Reproduce the real nesting: SidebarMenuButton's `render={<AppLink/>}`
     // makes the whole row an <a>, and this component renders inside it.
     renderWithI18n(
-      <a href="/acme/runtimes" onClick={outerClick}>
+      <a href="/acme/computers" onClick={outerClick}>
         <RuntimeAttentionAlert wsId="ws-1" />
       </a>,
     );

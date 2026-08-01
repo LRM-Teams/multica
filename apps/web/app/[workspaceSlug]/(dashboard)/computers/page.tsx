@@ -10,6 +10,6 @@ const RuntimesPage = lazyNamedRoute(
 const cloudRuntimeEnabled =
   process.env.NEXT_PUBLIC_ENABLE_CLOUD_RUNTIME === "true";
 
-export default function RuntimesRoute() {
+export default function ComputersRoute() {
   return <RuntimesPage cloudRuntimeEnabled={cloudRuntimeEnabled} />;
 }

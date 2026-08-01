@@ -77,7 +77,7 @@ export interface DeleteRuntimeDialogProps {
   runtime: AgentRuntime;
   wsId: string;
   // Called after a successful delete. List page closes the dialog and
-  // toasts; detail page additionally navigates back to /runtimes.
+  // toasts; detail page additionally navigates back to /computers.
   onDeleted: () => void;
 }
 

@@ -46,6 +46,24 @@ const nextConfig: NextConfig = {
     formats: ["image/avif", "image/webp"],
     qualities: [75, 80, 85],
   },
+  async redirects() {
+    return [
+      // The "Runtimes" page was renamed to "Computers" (task #18) — keep old
+      // links/bookmarks working instead of 404ing. Not `permanent` (307, not
+      // 308): a 308 is aggressively cached by browsers, and we may still
+      // adjust this rename.
+      {
+        source: "/:workspaceSlug/runtimes",
+        destination: "/:workspaceSlug/computers",
+        permanent: false,
+      },
+      {
+        source: "/:workspaceSlug/runtimes/:id",
+        destination: "/:workspaceSlug/computers/:id",
+        permanent: false,
+      },
+    ];
+  },
   async rewrites() {
     return {
       // Run before file-system routes so /docs isn't shadowed by the

@@ -114,7 +114,7 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   // and the light-mode "Runtime deleted" share one entry point.
   const handleDeleted = () => {
     setDeleteOpen(false);
-    navigation.replace(paths.runtimes());
+    navigation.replace(paths.computers());
     toast.success(t(($) => $.detail.toast_deleted));
   };
 
@@ -124,7 +124,7 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   return (
     <div className="flex h-full flex-col">
       <BreadcrumbHeader
-        segments={[{ href: paths.runtimes(), label: t(($) => $.page.title) }]}
+        segments={[{ href: paths.computers(), label: t(($) => $.page.title) }]}
         leaf={
           <span className="truncate font-mono text-xs text-foreground">
             {runtime.name}

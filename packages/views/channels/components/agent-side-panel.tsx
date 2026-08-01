@@ -145,6 +145,25 @@ export function AgentSidePanel({
       ? t(($) => $.side_panel.back_to_messages)
       : undefined);
 
+  const backName = stackedBack ? backLabel!.trim() : "";
+  const leading = useMemo(() => {
+    if (!stackedBack) return undefined;
+    return (
+      <button
+        type="button"
+        data-testid="agent-panel-back-to-member"
+        onClick={onBack}
+        className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md px-1.5 py-1 text-xs font-semibold text-brand transition-colors hover:bg-brand/10"
+        aria-label={t(($) => $.side_panel.back_to_member_aria, {
+          name: backName,
+        })}
+      >
+        <ArrowLeft className="size-3.5 shrink-0" />
+        <span className="truncate">{backName}</span>
+      </button>
+    );
+  }, [stackedBack, onBack, backName, t]);
+
   return (
     <ConversationSidePanelShell
       variant={variant}
@@ -152,22 +171,7 @@ export function AgentSidePanel({
       onClose={onClose}
       closeAriaLabel={t(($) => $.side_panel.close_aria)}
       doneLabel={pageDoneLabel}
-      leading={
-        stackedBack ? (
-          <button
-            type="button"
-            data-testid="agent-panel-back-to-member"
-            onClick={onBack}
-            className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md px-1.5 py-1 text-xs font-semibold text-brand transition-colors hover:bg-brand/10"
-            aria-label={t(($) => $.side_panel.back_to_member_aria, {
-              name: backLabel!.trim(),
-            })}
-          >
-            <ArrowLeft className="size-3.5 shrink-0" />
-            <span className="truncate">{backLabel!.trim()}</span>
-          </button>
-        ) : undefined
-      }
+      leading={leading}
     >
       <div
         className={cn(

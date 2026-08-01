@@ -315,6 +315,7 @@
     "managed_by_sandbox": "Managed by sandbox",
     "managed_by_sandbox_title": "This machine is managed by its sandbox environment — it can't self-update from here.",
     "latest": "Latest",
+    "up_to_date": "Up to date — v{{version}}",
     "available": "available",
     "action": "Update",
     "retry": "Retry",

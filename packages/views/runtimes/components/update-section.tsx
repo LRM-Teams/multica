@@ -270,13 +270,6 @@ export function UpdateSection({
           </span>
         ) : (
           <>
-            {runtimeHealth === "ok" && currentVersion && !derivedStatus ? (
-              <span className="inline-flex items-center gap-1 text-xs text-success">
-                <Check className="h-3 w-3" />
-                {t(($) => $.update.latest)}
-              </span>
-            ) : null}
-
             {hasUpdate && !derivedStatus && (
               <>
                 <span className="text-xs text-muted-foreground">→</span>
@@ -287,16 +280,28 @@ export function UpdateSection({
               </>
             )}
 
-            {canStartUpdate && (
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={handleUpdate}
-                disabled={isActive}
-              >
-                <ArrowUpCircle className="h-3 w-3" />
-                {t(($) => $.update.action)}
+            {/* Frank, 2026-08-01: a button that vanishes when there's nothing
+                to do reads as "broken", not "up to date" — same rule as
+                RestartSection's always-rendered, disabled-when-ineligible
+                button. When up to date, the button stays but its own label
+                carries the reason, so a disabled state never looks unexplained. */}
+            {!hasUpdate && !derivedStatus && runtimeHealth === "ok" && currentVersion ? (
+              <Button variant="outline" size="xs" disabled>
+                <Check className="h-3 w-3" />
+                {t(($) => $.update.up_to_date, { version: currentVersion })}
               </Button>
+            ) : (
+              hasUpdate && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={handleUpdate}
+                  disabled={!canStartUpdate}
+                >
+                  <ArrowUpCircle className="h-3 w-3" />
+                  {t(($) => $.update.action)}
+                </Button>
+              )
             )}
           </>
         )}

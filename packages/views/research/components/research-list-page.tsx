@@ -13,7 +13,6 @@ import {
 import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
-import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { AlertCircle, Loader2, X } from "lucide-react";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
@@ -32,6 +31,7 @@ import {
 import { ResearchEmptyState } from "./research-empty-state";
 import { ResearchSessionFilterBar } from "./research-session-filter-bar";
 import { ResearchSessionRow } from "./research-session-row";
+import { ResearchSessionListSkeleton } from "./research-session-row-skeleton";
 import { ResearchTemplateCards } from "./research-template-cards";
 
 /** Composer draft — one state object so create/template/goal update together (react-doctor). */
@@ -297,11 +297,7 @@ export function ResearchListPage() {
       <ResearchTemplateCards onSelect={applyTemplate} />
 
       {isLoading ? (
-        <div className="space-y-2" aria-busy="true" aria-label={t(($) => $.list.loading)}>
-          {Array.from({ length: 4 }, (_, i) => (
-            <Skeleton key={i} className="h-16 w-full" />
-          ))}
-        </div>
+        <ResearchSessionListSkeleton rows={4} label={t(($) => $.list.loading)} />
       ) : isError ? (
         <div
           role="alert"

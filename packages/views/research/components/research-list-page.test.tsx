@@ -139,15 +139,20 @@ beforeEach(() => {
 });
 
 describe("ResearchListPage list states (LRM-789)", () => {
-  it("loading paints equal-height skeleton rows, no group headers or empty state", () => {
+  it("loading paints row-shaped skeleton list, no group headers or empty state (LRM-781)", () => {
     setQuery({ isLoading: true });
     const { container } = render(<ResearchListPage />);
-    const busy = container.querySelector('[aria-busy="true"]');
+    const busy = container.querySelector(
+      '[data-testid="research-session-list-skeleton"][aria-busy="true"]',
+    );
     expect(busy).toBeTruthy();
-    expect(busy?.querySelectorAll('[data-slot="skeleton"]').length).toBe(4);
-    for (const el of busy?.querySelectorAll('[data-slot="skeleton"]') ?? []) {
-      expect(el.className).toContain("h-16");
-    }
+    expect(
+      container.querySelectorAll('[data-testid="research-session-row-skeleton"]').length,
+    ).toBe(4);
+    // Row shells are bordered cards, not a single h-16 bar.
+    const row = container.querySelector('[data-testid="research-session-row-skeleton"]');
+    expect(row?.className).toContain("rounded-xl");
+    expect(row?.className).toContain("border");
     expect(screen.queryByText(enResearch.groups.in_progress)).toBeNull();
     expect(screen.queryByText(enResearch.empty_title)).toBeNull();
   });

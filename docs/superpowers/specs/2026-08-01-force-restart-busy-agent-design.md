@@ -278,11 +278,18 @@ checking, and only the first has evidence so far.
   clears, and the pool ends up in the same clean state as the existing
   idle-eviction path. This is the test that actually exercises the new
   concurrent path — the informal `kill -9` result does not substitute for it.
-  For `cursorACPBackend` specifically, this test must use a real `exec.Cmd`
-  with real `StdoutPipe()`/`StdinPipe()` (not a stubbed/mocked process), so
-  it can actually surface the double-`Wait()` hazard Nash found — a fake
-  backend that never calls the real `cmd.Wait()` contract would pass without
-  proving anything.
+
+  **Hard requirement (Parker/Nash, not optional polish): the test must
+  cover the code path where `cmd.Wait()` is actually called, not just that
+  a kill signal was sent.** For `cursorACPBackend` specifically, that means
+  using a real `exec.Cmd` with real `StdoutPipe()`/`StdinPipe()` — not a
+  stubbed/mocked process. A test that only asserts "the kill signal went
+  out" would stay green even with a double-`Wait()` bug present (the race
+  is timing-dependent, not something a mocked process can surface at all),
+  and then break randomly in production with symptoms that don't point back
+  to this code — exactly the "tested the process, not the outcome" failure
+  shape that bit this team multiple times today (see #57's pin-observability
+  gap for the same class of miss).
 - A real end-to-end pass on at least one real canonical-resident provider
   (cursor is the one already exercised informally today) mirroring what I
   did manually, but through the **new formal path**, not a manual
@@ -293,6 +300,30 @@ checking, and only the first has evidence so far.
 - Reverse case: force-kill an agent that is **not** currently busy — must
   behave identically to today's already-tested idle-restart path (no
   regression for the common case).
+
+## Future work: extending force-interrupt to `reset_session_restart` / `full_reset_restart`
+
+Not part of this fix — tracked here so the constraint is written down
+somewhere a future implementer will actually find it, not just in today's
+chat log.
+
+- **`full_reset_restart` cannot reuse plain `ForceKill()` as designed here
+  without an added ordering step.** `ForceKill()` for `restart` returns as
+  soon as the kill signal is sent — it does not wait for `Execute()`'s
+  goroutine to finish observing the failure and releasing the turn, because
+  nothing about `restart` depends on that goroutine being fully done before
+  `restart` itself is considered complete. `full_reset_restart` is
+  different: it deletes the agent's workspace files afterward
+  (`execenv.RemoveAgentWorkspace`), and if that goroutine hasn't finished
+  cleaning up yet, deletion could race against whatever it still touches on
+  disk. The correct sequence there is **kill → confirm the turn actually
+  released (not just "kill signal sent") → then delete** — a genuinely
+  different, slower synchronization than plain restart needs. Don't
+  copy-paste `ForceKill()`'s "fire and return" shape when this gets built;
+  it needs its own wait-for-release step.
+- `reset_session_restart`'s busy-interrupt support needs an audit of
+  `sessionReset.ResetAgentRuntimeSession`'s own assumptions first (see
+  scope-boundary section above) — not yet started.
 
 ## Open items for implementation, not for further product debate
 

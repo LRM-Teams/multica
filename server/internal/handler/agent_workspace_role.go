@@ -18,7 +18,8 @@ type updateAgentWorkspaceRoleRequest struct {
 }
 
 // UpdateAgentWorkspaceRole changes the workspace-level authority of an agent.
-// This human route is intentionally owner-only and has no /api/agent alias.
+// This human route is restricted to workspace owner/admin actors and has no
+// /api/agent alias (task #32: admins, not just the owner, can edit).
 func (h *Handler) UpdateAgentWorkspaceRole(w http.ResponseWriter, r *http.Request) {
 	if rejectAgentOnHumanRoute(w, r, "UpdateAgentWorkspaceRole") {
 		return
@@ -71,7 +72,7 @@ func (h *Handler) UpdateAgentWorkspaceRole(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to authorize workspace owner")
 		return
 	}
-	if actorRole != "owner" {
+	if actorRole != "owner" && actorRole != "admin" {
 		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}

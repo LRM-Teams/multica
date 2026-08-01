@@ -47,6 +47,49 @@ func stageAndActivate(t *testing.T, store *cli.VersionStore, version string) str
 	return staged.BinaryPath
 }
 
+// TestRunningUnderSupervision_DefaultsFalse pins the signal task #61's
+// self-host auto-update safety net depends on: with the self-host default
+// now enabled-by-default (previously opt-in only), a daemon started plainly
+// (no supervisor) must correctly detect it isn't supervised, so
+// runDaemonForeground's post-update-drain branch takes the "stay stopped,
+// tell the operator to run `daemon restart`" path instead of trying to
+// self-restart unattended (cmd_daemon.go:444-458, Parker's call from task
+// #815) — see the fork/compat-risk comment removed from LoadConfig's
+// auto-update default for why that path being safe matters more now that
+// it's not opt-in anymore.
+func TestRunningUnderSupervision_DefaultsFalse(t *testing.T) {
+	t.Setenv(superviseEnvVar, "")
+	if runningUnderSupervision() {
+		t.Fatalf("runningUnderSupervision() = true with %s unset, want false", superviseEnvVar)
+	}
+}
+
+// TestRunningUnderSupervision_TrueOnlyWhenExactMatch confirms the check is
+// exactly "1", not any other truthy-looking value — matching how
+// buildSuperviseConfig's WorkerEnv actually sets it (see the other test in
+// this file asserting the literal "1" value), so a typo'd or
+// differently-truthy value doesn't silently make an unsupervised worker
+// believe it's supervised.
+func TestRunningUnderSupervision_TrueOnlyWhenExactMatch(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"1", true},
+		{"true", false},
+		{"yes", false},
+		{"0", false},
+		{"", false},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv(superviseEnvVar, tc.value)
+			if got := runningUnderSupervision(); got != tc.want {
+				t.Fatalf("runningUnderSupervision() with %s=%q = %v, want %v", superviseEnvVar, tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolveVersionHandoffBinaryNoActivationState(t *testing.T) {
 	t.Parallel()
 	store := newTestVersionStoreForHandoff(t)

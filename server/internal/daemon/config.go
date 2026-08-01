@@ -96,7 +96,7 @@ type Config struct {
 	GCOrphanTTL                   time.Duration         // clean orphan dirs with no meta, or dirs whose issue gc-check returns 404, once they exceed this age (default: 72h). The 404 path uses the same TTL — a scoped-down token can't instantly wipe live workspaces.
 	GCArtifactTTL                 time.Duration         // when a task has been completed for at least this long but its issue is still open, drop regenerable artifacts (default: 12h, set 0 to disable)
 	GCArtifactPatterns            []string              // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
-	AutoUpdateEnabled             bool                  // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
+	AutoUpdateEnabled             bool                  // periodically check for a newer CLI release and self-update when idle (default: true, both Multica Cloud and self-host)
 	AutoUpdateConfigSource        string                // resolved source: official_host_default, self_host_default, env_enabled, env_disabled, or cli_disabled
 	AutoUpdateCheckInterval       time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
 	PinnedVersion                 string                // when non-empty, the daemon stays on this version and never auto-upgrades (env: MULTICA_PINNED_VERSION)
@@ -475,16 +475,23 @@ func LoadConfig(overrides Overrides) (Config, error) {
 
 	// Auto-update config: default -> env override -> CLI override.
 	//
-	// Default is opt-in on Multica Cloud (api.multica.ai) and opt-out for
-	// self-hosted instances. Self-host operators frequently run a fork with
-	// their own patches, and silently upgrading their daemon to an upstream
-	// GitHub release would clobber that work; they also commonly stay on an
-	// older server build, which a fresh CLI may no longer talk to. Keeping
-	// auto-update off by default for self-host avoids both footguns (MUL-2381).
+	// Default is opt-in for both Multica Cloud (api.multica.ai) and
+	// self-host. Self-host used to default to opt-out (MUL-2381: self-host
+	// operators might run a fork with their own patches, and silently
+	// upgrading to an upstream release would clobber that work; they might
+	// also stay on an older server build a fresh CLI may no longer talk
+	// to). Task #61 (Frank, 2026-08-01): that risk doesn't apply here —
+	// self-host is only used internally, no one runs an unmanaged fork —
+	// and version pin (#57) plus post-upgrade cleanup (#55) now exist to
+	// make opt-in safe for machines that do want to stay put. Applies to
+	// every self-host daemon, not just new installs: no external fork users
+	// means there's no existing-install risk to protect against either, so
+	// a second config knob for "only new installs" would just be a setting
+	// with one possible value — not worth carrying.
 	// Operators on either side can flip the default with MULTICA_DAEMON_AUTO_UPDATE.
-	autoUpdateEnabled := isOfficialCloudServer(serverBaseURL)
+	autoUpdateEnabled := true
 	autoUpdateConfigSource := "self_host_default"
-	if autoUpdateEnabled {
+	if isOfficialCloudServer(serverBaseURL) {
 		autoUpdateConfigSource = "official_host_default"
 	}
 	if v := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_AUTO_UPDATE")); v != "" {
@@ -620,11 +627,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 const officialCloudHost = cli.OfficialCloudAPIHost
 
 // isOfficialCloudServer reports whether the resolved server base URL points
-// at Multica's hosted cloud. Used to pick the auto-update default: cloud
-// users run a server that publishes the matching CLI release, so opt-in
-// self-update is safe; self-host users may run a fork or pin to an older
-// server, so the default flips to off. Matching is host-only and
-// case-insensitive — port and path are ignored.
+// at Multica's hosted cloud. Used only to label AutoUpdateConfigSource for
+// diagnostics (official_host_default vs self_host_default) — both resolve
+// to the same enabled-by-default value (task #61). Matching is host-only
+// and case-insensitive — port and path are ignored.
 func isOfficialCloudServer(baseURL string) bool {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {

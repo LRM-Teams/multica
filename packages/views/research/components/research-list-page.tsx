@@ -29,6 +29,7 @@ import {
   type ResearchTemplate,
 } from "../lib/research-templates";
 import { ResearchEmptyState } from "./research-empty-state";
+import { ResearchHomeHero } from "./research-home-hero";
 import { ResearchSessionFilterBar } from "./research-session-filter-bar";
 import { ResearchSessionRow } from "./research-session-row";
 import { ResearchSessionListSkeleton } from "./research-session-row-skeleton";
@@ -200,27 +201,21 @@ export function ResearchListPage() {
     : "";
 
   return (
-    <div ref={scrollRef} className="flex h-full flex-col gap-4 overflow-y-auto p-4 sm:p-6">
-      {/* LRM-906 H1: short hero — one value line + composer; list stays above the fold. */}
-      <section
-        ref={composerCardRef}
-        aria-label={t(($) => $.home.composer_label)}
-        className="relative w-full max-w-3xl overflow-hidden rounded-xl border bg-card shadow-sm"
-      >
-        <div className="relative flex flex-col gap-2.5 p-3 sm:p-4">
-          <h1 className="text-sm font-semibold tracking-tight sm:text-[15px]">
-            {t(($) => $.home.hero_title)}
-          </h1>
-          <p className="sr-only">{t(($) => $.home.hero_desc)}</p>
-
+    <div
+      ref={scrollRef}
+      className="flex h-full flex-col gap-5 overflow-y-auto p-4 sm:gap-6 sm:p-6"
+      data-testid="research-list-page"
+    >
+      {/* LRM-783 / LRM-784: brand-hero façade + composer (not bare h1 + gray box). */}
+      <div ref={composerCardRef}>
+        <ResearchHomeHero>
           <div
-            className={
-              "rounded-lg border bg-muted/30 transition-shadow focus-within:border-brand/40 focus-within:ring-3 focus-within:ring-brand/22"
-            }
+            className="overflow-hidden rounded-2xl border bg-card shadow-sm transition-shadow focus-within:border-brand focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--brand)_22%,transparent)]"
+            data-testid="research-home-composer"
           >
             {selectedTemplate ? (
-              <div className="flex flex-wrap gap-1.5 px-3 pt-2.5">
-                <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-violet-500/30 bg-gradient-to-r from-violet-500/10 to-brand/10 px-2.5 py-1 text-[11px] font-semibold text-violet-700 dark:text-violet-300">
+              <div className="flex flex-wrap gap-1.5 px-3 pt-2.5 sm:px-3.5">
+                <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-brand/25 bg-brand/8 px-2.5 py-1 text-[11px] font-semibold text-brand">
                   <span className="truncate">
                     {t(($) => $.home.template_chip, { title: templateTitle })}
                   </span>
@@ -247,7 +242,7 @@ export function ResearchListPage() {
                   : t(($) => $.goal_placeholder)
               }
               rows={2}
-              className="min-h-[52px] border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:border-transparent"
+              className="min-h-[64px] border-0 bg-transparent px-3 py-3 text-[13.5px] shadow-none focus-visible:ring-0 focus-visible:border-transparent sm:px-3.5"
               onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                   e.preventDefault();
@@ -255,22 +250,27 @@ export function ResearchListPage() {
                 }
               }}
             />
-            <div className="flex items-center justify-between gap-3 border-t px-3 py-2">
-              <p className="text-xs text-muted-foreground">
+            <div className="flex flex-col gap-2 border-t px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-3.5">
+              <p className="hidden text-xs text-muted-foreground sm:block">
                 {t(($) => $.home.composer_hint)}
               </p>
               <Button
                 onClick={submitCreate}
                 disabled={!canSubmit || create.isPending}
-                className="shrink-0"
+                className="h-9 w-full shrink-0 rounded-full bg-brand px-4 text-[13.5px] font-semibold text-brand-foreground hover:bg-brand/90 sm:w-auto"
               >
                 {create.isPending ? (
                   <>
-                    <Loader2 className="size-4 animate-spin" aria-hidden />
+                    <Loader2 className="size-3.5 animate-spin" aria-hidden />
                     {t(($) => $.home.creating)}
                   </>
                 ) : (
-                  t(($) => $.start)
+                  <>
+                    {t(($) => $.start)}
+                    <span aria-hidden className="ml-0.5">
+                      →
+                    </span>
+                  </>
                 )}
               </Button>
             </div>
@@ -279,7 +279,7 @@ export function ResearchListPage() {
           {createError ? (
             <div
               role="alert"
-              className="flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/9 px-3 py-2"
+              className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/9 px-3 py-2"
             >
               <div className="flex min-w-0 items-center gap-2 text-sm text-destructive">
                 <AlertCircle className="size-4 shrink-0" aria-hidden />
@@ -290,8 +290,8 @@ export function ResearchListPage() {
               </Button>
             </div>
           ) : null}
-        </div>
-      </section>
+        </ResearchHomeHero>
+      </div>
 
       {/* LRM-817: quick template cards — chip injection (LRM-906 T2). */}
       <ResearchTemplateCards onSelect={applyTemplate} />
@@ -342,26 +342,26 @@ export function ResearchListPage() {
             <div className="space-y-6">
               {inProgress.length > 0 && (
                 <section>
-                  <h2 className="px-1 text-xs font-medium text-muted-foreground">
+                  <h2 className="px-3 text-xs font-semibold text-muted-foreground">
                     {t(($) => $.groups.in_progress)}
                   </h2>
-                  <div className="mt-2 space-y-2">{inProgress.map(renderRow)}</div>
+                  <div className="mt-1">{inProgress.map(renderRow)}</div>
                 </section>
               )}
               {completed.length > 0 && (
                 <section>
-                  <h2 className="px-1 text-xs font-medium text-muted-foreground">
+                  <h2 className="px-3 text-xs font-semibold text-muted-foreground">
                     {t(($) => $.groups.completed)}
                   </h2>
-                  <div className="mt-2 space-y-2">{completed.map(renderRow)}</div>
+                  <div className="mt-1">{completed.map(renderRow)}</div>
                 </section>
               )}
               {failed.length > 0 && (
                 <section>
-                  <h2 className="px-1 text-xs font-medium text-muted-foreground">
+                  <h2 className="px-3 text-xs font-semibold text-muted-foreground">
                     {t(($) => $.filter.status_failed)}
                   </h2>
-                  <div className="mt-2 space-y-2">{failed.map(renderRow)}</div>
+                  <div className="mt-1">{failed.map(renderRow)}</div>
                 </section>
               )}
             </div>

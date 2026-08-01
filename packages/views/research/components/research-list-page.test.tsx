@@ -149,10 +149,10 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(
       container.querySelectorAll('[data-testid="research-session-row-skeleton"]').length,
     ).toBe(4);
-    // Row shells are bordered cards, not a single h-16 bar.
+    // LRM-783: dense ~58px borderless shells matching end-state rows.
     const row = container.querySelector('[data-testid="research-session-row-skeleton"]');
-    expect(row?.className).toContain("rounded-xl");
-    expect(row?.className).toContain("border");
+    expect(row?.className).toContain("min-h-[58px]");
+    expect(row?.className).not.toContain("border");
     expect(screen.queryByText(enResearch.groups.in_progress)).toBeNull();
     expect(screen.queryByText(enResearch.empty_title)).toBeNull();
   });
@@ -285,16 +285,20 @@ describe("ResearchListPage first-visit empty state (LRM-816)", () => {
   });
 });
 
-describe("ResearchListPage composer hero (LRM-787 / LRM-906)", () => {
+describe("ResearchListPage composer hero (LRM-783 / LRM-784 / LRM-906)", () => {
   beforeEach(() => {
     setQuery({ data: { sessions: [] } });
   });
 
-  it("renders compact hero title and start CTA inside a card", () => {
+  it("renders brand-hero title, visible value line, and start CTA", () => {
     render(<ResearchListPage />);
-    expect(screen.getByText(enResearch.home.hero_title)).toBeInTheDocument();
-    // Description stays for a11y but is visually collapsed (sr-only).
-    expect(screen.getByText(enResearch.home.hero_desc)).toBeInTheDocument();
+    expect(screen.getByTestId("research-home-hero")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: enResearch.home.hero_title })).toBeInTheDocument();
+    // LRM-783: value line is visible (not sr-only).
+    const desc = screen.getByText(enResearch.home.hero_desc);
+    expect(desc).toBeInTheDocument();
+    expect(desc.className).not.toContain("sr-only");
+    expect(screen.getByTestId("research-home-composer")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: enResearch.start })).toBeInTheDocument();
   });
 

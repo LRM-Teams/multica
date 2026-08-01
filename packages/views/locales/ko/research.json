@@ -2,7 +2,7 @@
   "title": "Research",
   "new": "New research",
   "empty_title": "No research yet",
-  "empty_desc": "Describe what you want to understand. The research fleet runs a multi-source methodology for you.",
+  "empty_desc": "위에서 첫 질문을 적으면 탐색 지도·출처·보고서가 여기에 쌓입니다.",
   "empty_examples_label": "어디서 시작할지 막막하다면 예시를 골라보세요:",
   "empty_examples": {
     "q1": "2026년 AI 코딩 어시스턴트 주요 제품과 차별점 정리",
@@ -207,9 +207,9 @@
   },
   "home": {
     "composer_label": "리서치 세션 만들기",
-    "hero_title": "리서치, 탭 지옥 없이",
-    "hero_desc": "목표만 적으면 — 리서치 플릿이 소스를 탐색하고 발견을 정리해 보고서로 전달합니다.",
-    "composer_hint": "⌘⏎ 로 시작",
+    "hero_title": "리서치",
+    "hero_desc": "알고 싶은 질문을 적으세요. 플릿이 소스를 모으고 우회를 표시하며 탐색 지도로 정리합니다.",
+    "composer_hint": "⌘⏎ 로 시작 · 단계 S1–S4 항상 표시",
     "creating": "플릿 편성 중…",
     "create_failed": "리서치 세션을 만들지 못했습니다",
     "templates_label": "빠른 템플릿",

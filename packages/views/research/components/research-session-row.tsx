@@ -50,8 +50,8 @@ function leadName(session: ResearchSession): string | null {
 }
 
 /**
- * LRM-906: dense session row — short title, colored goal chip → dialog,
- * stage / who / output meta. Goal chip stays outside the row link.
+ * LRM-783 / LRM-784: ~58px borderless dense row — status · title · stage·who·time · avatars.
+ * LRM-906: colored goal chip → dialog stays outside the primary link.
  */
 export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
   const { t } = useT("research");
@@ -74,61 +74,75 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
 
   return (
     <>
-      <div className="group flex items-start gap-2 rounded-xl border px-3 py-2.5 transition-colors hover:border-brand/35 hover:bg-accent/30">
+      <div
+        data-testid="research-session-row"
+        className="group flex min-h-[58px] items-center gap-3 rounded-[10px] px-3 py-1.5 transition-colors hover:bg-accent/70"
+      >
         <span
           aria-hidden
           className={cn(
-            "mt-1.5 size-2 shrink-0 rounded-full",
+            "size-2 shrink-0 rounded-full",
             tone.dot,
             status === "running" && "animate-pulse",
           )}
         />
         <span className="sr-only">{statusLabel}</span>
 
-        <div className="min-w-0 flex-1 space-y-1.5">
+        <div className="min-w-0 flex-1">
           <AppLink href={href} className="block min-w-0">
-            <div className="truncate text-sm font-semibold tracking-tight">
+            <div className="truncate text-[13.5px] font-medium tracking-tight">
               {title}
             </div>
           </AppLink>
 
-          <button
-            type="button"
-            className="inline-flex max-w-full items-center gap-1.5 truncate rounded-md border border-violet-500/25 bg-violet-500/10 px-2 py-0.5 text-[11px] font-semibold text-violet-700 hover:bg-violet-500/15 dark:text-violet-300"
-            onClick={() => setGoalOpen(true)}
-          >
-            <span
-              aria-hidden
-              className="size-1.5 shrink-0 rounded-full bg-violet-500"
-            />
-            <span className="truncate">
-              {t(($) => $.list.goal_chip, { summary: goalSummary })}
-            </span>
-          </button>
-
-          <AppLink
-            href={href}
-            className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground"
-          >
-            <span className="rounded-md border bg-muted/40 px-1.5 py-0.5 font-semibold tracking-wide text-foreground/80">
-              {stageLabel}
-            </span>
-            {who ? (
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <button
+              type="button"
+              className="inline-flex max-w-[min(100%,14rem)] items-center gap-1 truncate rounded-md border border-violet-500/25 bg-violet-500/10 px-1.5 py-px text-[11px] font-semibold text-violet-700 hover:bg-violet-500/15 dark:text-violet-300"
+              onClick={() => setGoalOpen(true)}
+            >
+              <span
+                aria-hidden
+                className="size-1.5 shrink-0 rounded-full bg-violet-500"
+              />
               <span className="truncate">
-                {t(($) => $.list.who_working, { name: who })}
+                {t(($) => $.list.goal_chip, { summary: goalSummary })}
               </span>
-            ) : null}
-            <AgentAvatarStack
-              agentIds={fleetIds}
-              size={20}
-              max={3}
-              className="shrink-0"
-            />
-            <span className="min-w-0 truncate">{output}</span>
-          </AppLink>
+            </button>
+
+            <AppLink
+              href={href}
+              className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11.5px] text-muted-foreground"
+            >
+              <span className="font-medium tracking-wide text-foreground/80">
+                {stageLabel}
+              </span>
+              {who ? (
+                <span className="truncate">
+                  <span aria-hidden className="text-muted-foreground/70">
+                    ·{" "}
+                  </span>
+                  {t(($) => $.list.who_working, { name: who })}
+                </span>
+              ) : null}
+              <span className="min-w-0 truncate">
+                <span aria-hidden className="text-muted-foreground/70">
+                  ·{" "}
+                </span>
+                {output}
+              </span>
+            </AppLink>
+          </div>
         </div>
 
-        <div className="flex shrink-0 items-start gap-1 pt-0.5">
+        <AgentAvatarStack
+          agentIds={fleetIds}
+          size={22}
+          max={3}
+          className="hidden shrink-0 sm:flex"
+        />
+
+        <div className="flex shrink-0 items-center gap-0.5">
           <span className="hidden text-xs whitespace-nowrap text-muted-foreground tabular-nums sm:inline">
             {timeAgo(session.updated_at)}
           </span>

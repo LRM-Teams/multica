@@ -2,7 +2,7 @@
   "title": "调研",
   "new": "新建调研",
   "empty_title": "还没有调研",
-  "empty_desc": "描述你想搞清楚的方向，调研团会用自己的方法论去多源取证。",
+  "empty_desc": "从上方写下第一个问题——探索图、来源和报告会在这里陆续长出来。",
   "empty_examples_label": "不知道从哪开始？点一条试试：",
   "empty_examples": {
     "q1": "盘点 2026 年 AI 编程助手赛道的头部产品与差异",
@@ -207,9 +207,9 @@
   },
   "home": {
     "composer_label": "创建调研会话",
-    "hero_title": "说清目标——调研团多源取证并交付报告",
-    "hero_desc": "说清目标——调研团去多源取证、梳理发现，并把报告交到你手上。",
-    "composer_hint": "按 ⌘⏎ 开始",
+    "hero_title": "调研",
+    "hero_desc": "说清楚想搞懂的问题，剩下的交给舰队：多源取证、标出弯路、把结论画成一张探索图。",
+    "composer_hint": "⌘⏎ 发起 · 阶段 S1–S4 全程可见",
     "creating": "组建舰队中…",
     "create_failed": "调研会话创建失败",
     "templates_label": "快捷模板",

@@ -63,8 +63,6 @@ func TestEvolutionCandidateJSONLQuarantinesMalformedLines(t *testing.T) {
 }
 
 func TestSecureSkillDraftBundleDirRejectsEscapes(t *testing.T) {
-	// macOS default TMPDIR may spell /private/var through its /var symlink;
-	// until this assertion canonicalizes paths, run it with TMPDIR=/private/tmp/multica-go-test.
 	agentRoot := filepath.Join(t.TempDir(), "agent")
 	validDir := filepath.Join(agentRoot, "skills", "drafts", "candidate-1")
 	if err := os.MkdirAll(validDir, 0o755); err != nil {
@@ -73,9 +71,18 @@ func TestSecureSkillDraftBundleDirRejectsEscapes(t *testing.T) {
 	if err := os.MkdirAll(agentSyncQueueDir(agentRoot), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// secureSkillDraftBundleDir returns a symlink-resolved path (it must, to
+	// defend against a symlink escape below); on macOS the default TMPDIR
+	// spells /private/var through its /var symlink, so t.TempDir() and the
+	// function's return value canonicalize differently unless validDir is
+	// resolved the same way before comparing.
+	wantDir, err := filepath.EvalSymlinks(validDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := secureSkillDraftBundleDir(agentRoot, "../skills/drafts/candidate-1")
-	if err != nil || got != validDir {
-		t.Fatalf("valid bundle got=%q err=%v", got, err)
+	if err != nil || got != wantDir {
+		t.Fatalf("valid bundle got=%q want=%q err=%v", got, wantDir, err)
 	}
 	if _, err := secureSkillDraftBundleDir(agentRoot, "../../../outside"); err == nil {
 		t.Fatal("expected traversal escape to be rejected")

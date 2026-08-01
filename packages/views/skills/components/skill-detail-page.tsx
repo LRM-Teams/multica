@@ -37,6 +37,7 @@ import {
   workspaceKeys,
 } from "@multica/core/workspace/queries";
 import { runtimeListOptions } from "@multica/core/runtimes";
+import { runtimeDisplayLabel } from "../../runtimes/components/runtime-machines";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import {
@@ -220,7 +221,7 @@ function OriginSidebarCard({
       </div>
       {runtime && (
         <div className="mt-1 break-all text-xs text-foreground">
-          {runtime.name}
+          {runtimeDisplayLabel(runtime)}
         </div>
       )}
       {origin.source_path && (

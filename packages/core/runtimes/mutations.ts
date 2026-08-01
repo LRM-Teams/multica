@@ -98,7 +98,10 @@ export function useUpdateRuntime(wsId: string) {
       };
     }) => api.updateRuntime(runtimeId, patch),
     onSettled: () => {
+      // Keep Profile/create runtime pickers in sync when display_name changes
+      // on the Runtimes page (LRM-925).
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
     },
   });
 }

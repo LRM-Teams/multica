@@ -28,6 +28,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { deriveRuntimeHealth, runtimeListOptions } from "@multica/core/runtimes";
+import { runtimeDisplayLabel } from "../../runtimes/components/runtime-machines";
 import { useCurrentMember } from "@multica/core/permissions";
 import {
   dashboardAgentRunTimeOptions,
@@ -1118,7 +1119,7 @@ function CuratorProfileCard({
           <Field label={copy("runtime")}>
             <Select value={draft.runtimeId} onValueChange={(value) => setDraft((current) => ({ ...current, runtimeId: value ?? "", curatorAgentId: "" }))}>
               <SelectTrigger className="w-full"><SelectValue placeholder={copy("selectRuntime")} /></SelectTrigger>
-              <SelectContent>{availableRuntimes.map((runtime) => <SelectItem key={runtime.id} value={runtime.id}>{runtime.name} · {deriveRuntimeHealth(runtime, now)}</SelectItem>)}</SelectContent>
+              <SelectContent>{availableRuntimes.map((runtime) => <SelectItem key={runtime.id} value={runtime.id}>{runtimeDisplayLabel(runtime)} · {deriveRuntimeHealth(runtime, now)}</SelectItem>)}</SelectContent>
             </Select>
           </Field>
           <Field label={copy("curatorAgent")}>

@@ -51,6 +51,7 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { useT } from "../../i18n";
 import { useHealthLabel } from "../../runtimes/components/shared";
+import { runtimeDisplayLabel } from "../../runtimes/components/runtime-machines";
 import { isNameConflictError } from "../lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -105,7 +106,7 @@ const INITIAL_BULK_STATE: BulkImportState = {
 const IMPORT_CONCURRENCY = 10;
 
 function runtimeLabel(runtime: AgentRuntime): string {
-  return `${runtime.name} (${runtime.provider})`;
+  return `${runtimeDisplayLabel(runtime)} (${runtime.provider})`;
 }
 
 function defaultRenameName(name: string): string {

@@ -71,12 +71,12 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 		}
 	}
 
-	// Force restart — backends that implement ResidentRuntimeForceKillable (#62).
-	// Today equal to the canonical-resident set; pinned separately so a future
-	// split does not silently widen/narrow the FE restart button.
+	// Force restart — DERIVED from ResidentRuntimeForceKillable (#62), not
+	// hand-filled. Today equal to the canonical-resident set; pinned so a
+	// future split does not silently widen/narrow the FE restart button.
 	for _, name := range []string{"pi", "grok", "cursor", "opencode"} {
 		if !Capabilities(name).ForceRestart {
-			t.Errorf("%q must advertise ForceRestart", name)
+			t.Errorf("%q must advertise ForceRestart (resident backend must implement ForceKill)", name)
 		}
 		if !ForceRestartSupported(name) {
 			t.Errorf("%q ForceRestartSupported wrapper must read true from the table", name)
@@ -84,6 +84,38 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 	}
 	if Capabilities("claude").ForceRestart || ForceRestartSupported("claude") {
 		t.Error("claude must not advertise ForceRestart")
+	}
+}
+
+// TestForceRestartDerivedFromResidentForceKillable locks the Parker #62 rule:
+// the capability bit comes from a type-assert on the resident backend, not a
+// hand-typed bool. Mutation proof (the "hand-fill true / no interface" shape):
+// a constructor returning a non-ForceKillable Backend must derive false.
+func TestForceRestartDerivedFromResidentForceKillable(t *testing.T) {
+	t.Parallel()
+
+	for name, ctor := range forceRestartResidentConstructors {
+		killable := residentBackendForceKillable(ctor)
+		if !killable {
+			t.Errorf("%q is in forceRestartResidentConstructors but %T does not implement ResidentRuntimeForceKillable — remove it from the map or add ForceKill()", name, ctor(Config{}))
+		}
+		if Capabilities(name).ForceRestart != killable {
+			t.Errorf("%q: derived ForceRestart=%v, type-assert killable=%v", name, Capabilities(name).ForceRestart, killable)
+		}
+	}
+
+	// Non-resident providers must stay false — only the resident constructor
+	// map feeds this bit (a ForceKill on the one-shot New() backend is ignored).
+	for _, name := range KnownAgentTypes() {
+		_, registered := forceRestartResidentConstructors[name]
+		if !registered && Capabilities(name).ForceRestart {
+			t.Errorf("%q ForceRestart=true but not in forceRestartResidentConstructors", name)
+		}
+	}
+
+	// Parker mutation: "table true / interface missing" must not derive true.
+	if residentBackendForceKillable(func(Config) Backend { return &claudeBackend{} }) {
+		t.Fatal("non-ForceKillable Backend must derive ForceRestart=false")
 	}
 }
 

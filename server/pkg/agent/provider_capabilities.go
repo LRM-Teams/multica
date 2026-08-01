@@ -35,23 +35,23 @@ type ProviderCapabilities struct {
 	ThinkingDiscovery bool
 
 	// ForceRestart: can a busy/stuck agent of this provider be force-
-	// interrupted via restart (backend implements ResidentRuntimeForceKillable)?
-	// FE uses this to show/hide the restart button; the daemon also fail-closes
-	// when the interface is missing (task #62). Same allow-list as
-	// CanonicalResident today — keep as a separate field (Parker/Felix: same
-	// name ≠ same meaning).
+	// interrupted via restart? DERIVED at init from whether the provider's
+	// resident backend implements ResidentRuntimeForceKillable — never
+	// hand-filled in caps(...) (Parker #62: a second hand-typed bool would
+	// drift from the real interface). FE uses this to show/hide the restart
+	// button; the daemon also fail-closes when the interface is missing.
 	ForceRestart bool
 }
 
-// caps is the only constructor for a table row. All six fields are required
+// caps is the only constructor for a table row. All five fields are required
 // parameters so omitting one is a compile-time error ("half-filled row").
+// ForceRestart is intentionally NOT a caps() argument — see deriveForceRestart.
 func caps(
 	canonicalResident bool,
 	needsInlineSystemPrompt bool,
 	modelSelectionSupported bool,
 	customModelIDSupported bool,
 	thinkingDiscovery bool,
-	forceRestart bool,
 ) ProviderCapabilities {
 	return ProviderCapabilities{
 		CanonicalResident:       canonicalResident,
@@ -59,28 +59,62 @@ func caps(
 		ModelSelectionSupported: modelSelectionSupported,
 		CustomModelIDSupported:  customModelIDSupported,
 		ThinkingDiscovery:       thinkingDiscovery,
-		ForceRestart:            forceRestart,
 	}
 }
 
 // providerCapabilities covers every agent type accepted by New.
 // Adding a provider to New without a row here fails TestProviderCapabilitiesCoverAllKnownTypes.
+// ForceRestart is filled by deriveForceRestart (not by caps).
 var providerCapabilities = map[string]ProviderCapabilities{
-	//                    canonical, inlinePrompt, modelSel, customID, thinking, forceRestart
-	"claude":      caps(false, false, true, true, true, false),
-	"codebuddy":   caps(false, false, true, false, true, false),
-	"codex":       caps(false, false, true, true, true, false),
-	"copilot":     caps(false, false, true, true, false, false),
-	"opencode":    caps(true, false, true, false, false, true),
-	"openclaw":    caps(false, true, true, false, false, false),
-	"hermes":      caps(false, false, true, false, false, false),
-	"gemini":      caps(false, false, true, false, false, false),
-	"pi":          caps(true, false, true, true, false, true),
-	"cursor":      caps(true, false, true, true, false, true),
-	"kimi":        caps(false, true, true, false, false, false),
-	"kiro":        caps(false, true, true, false, false, false),
-	"antigravity": caps(false, false, true, false, false, false),
-	"grok":        caps(true, false, true, false, false, true),
+	//                    canonical, inlinePrompt, modelSel, customID, thinking
+	"claude":      caps(false, false, true, true, true),
+	"codebuddy":   caps(false, false, true, false, true),
+	"codex":       caps(false, false, true, true, true),
+	"copilot":     caps(false, false, true, true, false),
+	"opencode":    caps(true, false, true, false, false),
+	"openclaw":    caps(false, true, true, false, false),
+	"hermes":      caps(false, false, true, false, false),
+	"gemini":      caps(false, false, true, false, false),
+	"pi":          caps(true, false, true, true, false),
+	"cursor":      caps(true, false, true, true, false),
+	"kimi":        caps(false, true, true, false, false),
+	"kiro":        caps(false, true, true, false, false),
+	"antigravity": caps(false, false, true, false, false),
+	"grok":        caps(true, false, true, false, false),
+}
+
+// forceRestartResidentConstructors maps provider → the Backend the daemon
+// actually pools for canonical-resident runs. ForceRestart is true iff that
+// Backend type-asserts to ResidentRuntimeForceKillable. Adding a ForceKill
+// method without registering the constructor here leaves ForceRestart false
+// (FE button stays hidden — fail closed). Removing ForceKill makes the
+// derived bit flip to false automatically.
+var forceRestartResidentConstructors = map[string]func(Config) Backend{
+	"cursor":   func(cfg Config) Backend { return newCursorACPBackend(cfg) },
+	"pi":       func(cfg Config) Backend { return newPiRPCBackend(cfg) },
+	"grok":     func(cfg Config) Backend { return newGrokACPBackend(cfg) },
+	"opencode": func(cfg Config) Backend { return newOpenCodeServeBackend(cfg) },
+}
+
+func init() {
+	deriveForceRestart()
+}
+
+func deriveForceRestart() {
+	for name, row := range providerCapabilities {
+		row.ForceRestart = false
+		if ctor, ok := forceRestartResidentConstructors[name]; ok {
+			if residentBackendForceKillable(ctor) {
+				row.ForceRestart = true
+			}
+		}
+		providerCapabilities[name] = row
+	}
+}
+
+func residentBackendForceKillable(ctor func(Config) Backend) bool {
+	_, killable := ctor(Config{}).(ResidentRuntimeForceKillable)
+	return killable
 }
 
 // KnownProviderTypes returns every provider that has a capability row

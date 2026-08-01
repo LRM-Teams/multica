@@ -58,3 +58,29 @@ func TestCanonicalResidentProviderListsStayInSync(t *testing.T) {
 		t.Error("claude must not be CanonicalResident in the capability table")
 	}
 }
+
+// TestForceRestartCapabilityMatchesPooledResidentBackend locks Parker #62:
+// agent.Capabilities.ForceRestart must match whether the Backend that
+// defaultCanonicalRuntimeFactory actually pools implements
+// ResidentRuntimeForceKillable. Mutation: flip the derived bit / remove
+// ForceKill / drop a factory arm → this goes red (no second hand-typed list).
+func TestForceRestartCapabilityMatchesPooledResidentBackend(t *testing.T) {
+	for _, provider := range agent.KnownAgentTypes() {
+		want := agent.Capabilities(provider).ForceRestart
+		backend, cleanup, err := defaultCanonicalRuntimeFactory(provider, canonicalRuntimeResident)(agent.Config{})
+		if err != nil {
+			if want {
+				t.Errorf("%q ForceRestart=true but resident factory failed: %v", provider, err)
+			}
+			continue
+		}
+		if cleanup != nil {
+			cleanup()
+		}
+		_, got := backend.(agent.ResidentRuntimeForceKillable)
+		if got != want {
+			t.Errorf("%q: Capability ForceRestart=%v, pooled backend (%T) ForceKillable=%v",
+				provider, want, backend, got)
+		}
+	}
+}

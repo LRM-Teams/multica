@@ -39,27 +39,47 @@ Both from Frank, via Parker, 2026-08-01:
 
 This fix targets **`action_kind=restart` only**, for **canonical-resident
 providers only** (`pi`, `grok`, `cursor`, `opencode` — the four gated by
-`isCanonicalResidentProvider`). Two things are deliberately **out of scope**
-(confirmed with Parker/Frank, not an assumption on my part):
+`isCanonicalResidentProvider`).
 
-Rationale for the split: Frank's stated need all day has been "the agent is
-stuck, I want it to come back" — he has never asked to clear a session or
-delete a workspace. `restart` maps to that intent; `reset_session_restart`
-and `full_reset_restart` are different user intents (reset, not restart) and
-whether *they* should also interrupt a busy turn is a separate product
-question, not answered here.
+**This is a delivery-order decision, not a design judgment that the other
+two actions should stay busy-gated.** Earlier drafts of this doc argued
+`full_reset_restart` should keep rejecting busy agents because it's
+destructive — Frank pointed out the flaw in that reasoning directly: since
+deleting the workspace already implies restarting the agent, "busy" was
+never the risk that operation needed protecting against; the risk is the
+deletion itself, which is orthogonal to whether the agent happened to be
+busy at the time. Applying the old logic consistently would mean the one
+case where a user most wants a full reset — a truly stuck agent — is
+exactly the case the busy-check refuses. That's the same bug as `restart`'s,
+not a reason to leave it. **All three actions should eventually be able to
+interrupt a busy turn; the three-mode dialog itself (task #633) is where
+the user already chooses how much loss they're accepting (restart < reset
+session < full reset) — "busy" doesn't need to gate any of them a second
+time.**
 
-- **`reset_session_restart`** keeps its current scheduled-when-busy behavior.
-  It also calls `sessionReset.ResetAgentRuntimeSession` before invalidating
-  the runtime, which has its own busy assumptions on the daemon side that
-  haven't been audited for force-interrupt safety. Extending force-kill to
-  this action is a reasonable follow-up, not required to give Frank the
-  button he's asking for (which is plain restart on a stuck agent).
-- **`full_reset_restart`** keeps its current behavior: rejected outright
-  (409 `agent_active`) when busy, never scheduled. This is a destructive
-  action (removes the agent's workspace) and the existing code comment
-  frames the upfront rejection as intentional ("shouldn't quietly queue a
-  destructive action"). Nothing here changes that boundary.
+`restart` ships first purely because it's the one Frank has been waiting on
+all day and it's the simplest of the three (deletes nothing, so there's no
+"did cleanup finish before we removed files" ordering question — see below).
+`reset_session_restart` and `full_reset_restart` follow the same policy
+later, tracked separately, not blocked on anything design-level here.
+
+- **`reset_session_restart`** keeps its current scheduled-when-busy behavior
+  for now. It also calls `sessionReset.ResetAgentRuntimeSession` before
+  invalidating the runtime, which has its own busy assumptions on the
+  daemon side not yet audited for force-interrupt safety — audit that
+  before extending force-kill to it.
+- **`full_reset_restart`** keeps its current upfront-rejection-when-busy
+  behavior for now, but only because of a **real ordering hazard**, not
+  because busy agents shouldn't be reset: Nash notes that extending
+  force-kill here can't reuse the plain `ForceKill()` design as-is — it
+  needs to wait for the interrupted turn's own goroutine to actually finish
+  releasing the turn (confirm the kill "took" and cleanup completed) before
+  it's safe to delete the agent's workspace files out from under it.
+  `ForceKill()` as designed for `restart` returns once the kill signal is
+  sent, without waiting for that goroutine to finish — fine when nothing on
+  disk is being removed, not fine when a subsequent step deletes files the
+  still-finishing goroutine might still touch. This is a real, distinct
+  piece of design work for later, not a reason to keep the busy-check.
 - Non-canonical-resident providers (`claude`, `codex`, etc.) never enter the
   canonical pool, so `restart` against them remains a safe no-op, as today.
   Confirmed by Nash earlier today, not re-verified in this design.

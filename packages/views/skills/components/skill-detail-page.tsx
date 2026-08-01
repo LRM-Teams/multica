@@ -65,6 +65,7 @@ import { CapabilityBanner } from "@multica/ui/components/common/capability-banne
 import { readOrigin, isRuntimeManagedOrigin, totalFileCount, type OriginInfo } from "../lib/origin";
 import { FileTree } from "./file-tree";
 import { FileViewer } from "./file-viewer";
+import { SkillGrantSection } from "./skill-grant-section";
 import { useT } from "../../i18n";
 
 const SKILL_MD = "SKILL.md";
@@ -879,6 +880,8 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
               <OriginSidebarCard origin={origin} runtime={originRuntime} />
             </div>
           )}
+
+          <SkillGrantSection skill={skill} />
 
           <div>
             <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">

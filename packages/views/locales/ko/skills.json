@@ -165,6 +165,32 @@
         "reserved": "SKILL.md는 메인 파일용으로 예약되어 있습니다.",
         "exists": "이 경로에 이미 파일이 있습니다."
       }
+    },
+    "grant": {
+      "title": "권한 수준",
+      "level_agent": "Agent (L1)",
+      "level_channel": "채널 (L2)",
+      "level_workspace": "워크스페이스 (L3)",
+      "hint": "가져오기는 Agent 수준으로 시작합니다. 더 넓게 쓰려면 채널 또는 워크스페이스로 승격하세요.",
+      "promote_channel": "채널에 권한 부여",
+      "promote_workspace": "워크스페이스 기본으로 승격",
+      "audit_title": "승격 기록",
+      "audit_loading": "승격 기록을 불러오는 중…",
+      "audit_unavailable": "이 서버에서는 아직 승격 기록을 사용할 수 없습니다.",
+      "audit_empty": "승격 기록이 없습니다.",
+      "actor_unknown": "알 수 없는 실행자",
+      "channel_fallback": "채널",
+      "channel_dialog_title": "Skill을 채널에 권한 부여",
+      "channel_dialog_body": "채널 소유자 또는 관리자가 선택한 채널의 관련 Agent에 이 skill을 부여할 수 있습니다.",
+      "channel_label": "채널",
+      "channel_placeholder": "채널 선택",
+      "channel_empty": "사용 가능한 그룹 채널이 없습니다",
+      "cancel": "취소",
+      "confirm_channel": "권한 부여",
+      "promoting": "승격 중…",
+      "toast_promoted_channel": "채널에 권한을 부여했습니다",
+      "toast_promoted_workspace": "워크스페이스 기본으로 승격했습니다",
+      "toast_promote_failed": "승격에 실패했습니다"
     }
   },
   "create": {

@@ -165,6 +165,32 @@
         "reserved": "SKILL.md is reserved for the main file.",
         "exists": "A file at this path already exists."
       }
+    },
+    "grant": {
+      "title": "Grant level",
+      "level_agent": "Agent (L1)",
+      "level_channel": "Channel (L2)",
+      "level_workspace": "Workspace (L3)",
+      "hint": "Imports start at Agent. Promote to a channel or the whole workspace when you need wider access.",
+      "promote_channel": "Authorize to channel",
+      "promote_workspace": "Promote to workspace default",
+      "audit_title": "Promotion history",
+      "audit_loading": "Loading promotion history…",
+      "audit_unavailable": "Promotion history isn’t available yet on this server.",
+      "audit_empty": "No promotions yet.",
+      "actor_unknown": "Unknown actor",
+      "channel_fallback": "Channel",
+      "channel_dialog_title": "Authorize skill to a channel",
+      "channel_dialog_body": "Channel owners and managers can grant this skill to agents in the selected channel.",
+      "channel_label": "Channel",
+      "channel_placeholder": "Select a channel",
+      "channel_empty": "No group channels available",
+      "cancel": "Cancel",
+      "confirm_channel": "Authorize",
+      "promoting": "Promoting…",
+      "toast_promoted_channel": "Skill authorized to channel",
+      "toast_promoted_workspace": "Skill promoted to workspace default",
+      "toast_promote_failed": "Couldn’t promote skill"
     }
   },
   "create": {

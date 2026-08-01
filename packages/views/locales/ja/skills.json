@@ -163,6 +163,32 @@
         "reserved": "SKILL.md はメインファイル用に予約されています。",
         "exists": "このパスにはすでにファイルが存在します。"
       }
+    },
+    "grant": {
+      "title": "付与レベル",
+      "level_agent": "Agent（L1）",
+      "level_channel": "チャンネル（L2）",
+      "level_workspace": "ワークスペース（L3）",
+      "hint": "インポート時は Agent レベルです。より広く使う場合はチャンネルまたはワークスペースへ昇格します。",
+      "promote_channel": "チャンネルに許可",
+      "promote_workspace": "ワークスペース既定へ昇格",
+      "audit_title": "昇格履歴",
+      "audit_loading": "昇格履歴を読み込み中…",
+      "audit_unavailable": "このサーバーでは昇格履歴をまだ利用できません。",
+      "audit_empty": "昇格履歴はまだありません。",
+      "actor_unknown": "不明な操作者",
+      "channel_fallback": "チャンネル",
+      "channel_dialog_title": "Skill をチャンネルに許可",
+      "channel_dialog_body": "チャンネルのオーナーまたはマネージャーが、選択したチャンネル内の関連 Agent にこの skill を許可できます。",
+      "channel_label": "チャンネル",
+      "channel_placeholder": "チャンネルを選択",
+      "channel_empty": "利用可能なグループチャンネルがありません",
+      "cancel": "キャンセル",
+      "confirm_channel": "許可する",
+      "promoting": "昇格中…",
+      "toast_promoted_channel": "チャンネルに許可しました",
+      "toast_promoted_workspace": "ワークスペース既定へ昇格しました",
+      "toast_promote_failed": "昇格に失敗しました"
     }
   },
   "create": {

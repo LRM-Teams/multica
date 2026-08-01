@@ -99,6 +99,17 @@ export function skillDetailOptions(wsId: string, skillId: string) {
   });
 }
 
+/** LRM-954 — promotion audit list for a skill detail page. */
+export function skillPromotionsOptions(wsId: string, skillId: string) {
+  return queryOptions({
+    queryKey: [...workspaceKeys.skills(wsId), skillId, "promotions"] as const,
+    queryFn: () => api.listSkillPromotions(skillId),
+    enabled: !!skillId,
+    // BE route may not be on `dev` yet — soft-fail to empty.
+    retry: false,
+  });
+}
+
 /**
  * Builds a `Map<skillId, Agent[]>` from the cached agent list. The server
  * already returns each agent with its full skill list inline, so no extra

@@ -61,6 +61,22 @@ func (b *grokACPBackend) Close() {
 	}
 }
 
+// ForceKill implements agent.ResidentRuntimeForceKillable (task #62). Same
+// shape and same reason as cursorACPBackend.ForceKill: must not call
+// disposeProcessLocked (or cmd.Wait() at all) while a turn may still be
+// reading this process's stdio — see that function's doc comment for the
+// full explanation. Execute()'s own goroutine remains the sole reader/reaper.
+func (b *grokACPBackend) ForceKill() error {
+	b.mu.Lock()
+	p := b.process
+	b.mu.Unlock()
+	if p == nil {
+		return nil
+	}
+	_ = p.stdin.Close()
+	return p.cmd.Process.Kill()
+}
+
 func (b *grokACPBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
 	if !b.running.CompareAndSwap(false, true) {
 		return nil, fmt.Errorf("%w: concurrent grok ACP turn", ErrGrokACPTurnBusy)

@@ -202,6 +202,26 @@ func (b *piRPCBackend) Close() {
 	}
 }
 
+// ForceKill implements agent.ResidentRuntimeForceKillable (task #62). Same
+// shape and same reason as cursorACPBackend.ForceKill: must not call
+// disposeLocked (or cmd.Wait() at all) while a turn may still be reading
+// this process's stdio. Execute()'s own goroutine remains the sole
+// reader/reaper, including the mcp config tempfile cleanup disposeLocked
+// does — ForceKill only needs the process to die.
+func (b *piRPCBackend) ForceKill() error {
+	b.mu.Lock()
+	p := b.process
+	b.mu.Unlock()
+	if p == nil {
+		return nil
+	}
+	_ = p.stdin.Close()
+	if p.cmd.Process == nil {
+		return nil
+	}
+	return p.cmd.Process.Kill()
+}
+
 func (b *piRPCBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
 	if !b.running.CompareAndSwap(false, true) {
 		return nil, fmt.Errorf("%w: concurrent Pi RPC turn", ErrPiRPCTurnBusy)

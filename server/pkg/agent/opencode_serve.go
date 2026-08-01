@@ -80,6 +80,26 @@ func (b *opencodeServeBackend) Close() {
 	}
 }
 
+// ForceKill implements agent.ResidentRuntimeForceKillable (task #62). Same
+// shape and same reason as cursorACPBackend.ForceKill, applied uniformly
+// across all four canonical-resident backends even though this one
+// communicates over HTTP rather than manually-read stdio pipes (so the
+// specific StdoutPipe/StdinPipe + cmd.Wait() hazard Nash caught for cursor
+// may not strictly apply here): ForceKill never calls cmd.Wait(), full stop,
+// so the "no ForceKill implementation calls Wait()" static contract (see
+// cmd_force_kill_no_wait_test.go) holds without a backend-specific
+// exception to remember.
+func (b *opencodeServeBackend) ForceKill() error {
+	b.mu.Lock()
+	p := b.server
+	b.mu.Unlock()
+	if p == nil {
+		return nil
+	}
+	p.client.close()
+	return p.cmd.Process.Kill()
+}
+
 func (b *opencodeServeBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
 	b.mu.Lock()
 	if b.running {

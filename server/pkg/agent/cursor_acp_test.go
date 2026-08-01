@@ -428,3 +428,97 @@ func TestCursorACPRequireAuthMethod(t *testing.T) {
 		t.Fatal("expected missing auth method error")
 	}
 }
+
+// fakeCursorACPHungTurnScript answers initialize/authenticate/session/new
+// normally, then goes silent on session/prompt — the shell's `case` falls
+// through with no output and the loop blocks on the next stdin read. This
+// simulates a genuinely stuck turn: a real child process, real
+// StdoutPipe/StdinPipe, Execute()'s goroutine genuinely blocked reading a
+// response that will never arrive — not a stubbed/mocked backend, per the
+// design doc's hard requirement that this test exercise the real cmd.Wait()
+// contract.
+func fakeCursorACPHungTurnScript() string {
+	return `#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":1,"authMethods":[{"id":"cursor_login"}]}}\n' "$id" ;;
+    *'"authenticate"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
+    *'"session/new"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"cursor-session-1"}}\n' "$id" ;;
+    *'"session/prompt"'*)
+      # Keep writing so Execute()'s goroutine is genuinely mid-read when
+      # ForceKill() interrupts, not idly blocked on an empty pipe — a
+      # concurrent Wait() has actual in-flight I/O to race against.
+      i=0
+      while [ $i -lt 100000 ]; do
+        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"cursor-session-1","update":{"kind":"agent_message_chunk","content":{"type":"text","text":"chunk"}}}}\n'
+        i=$((i + 1))
+      done
+      ;;
+  esac
+done
+`
+}
+
+// TestCursorACPBackendForceKillInterruptsHungTurn is the concurrency test
+// the design doc requires (Parker/Nash, task #62): it uses a real subprocess
+// with real StdoutPipe/StdinPipe (not a stub), so it actually exercises
+// ForceKill() running on a second goroutine while Execute()'s own goroutine
+// is genuinely mid-read against a hung, actively-writing process. It asserts
+// the correct behavior: no hang, ForceKill() returns, Execute()'s goroutine
+// observes the kill and returns too.
+//
+// Honesty check on what this does NOT prove: I deliberately reintroduced
+// Nash's caught bug (ForceKill calling disposeProcessLocked, which ends in
+// cmd.Wait() — a second caller of Wait() while Execute()'s goroutine may
+// still be reading, which the Go docs call undefined for StdoutPipe/
+// StdinPipe) and ran this test under -race 15+ times. It never failed.
+// That's not evidence the bug is safe — Go's os.File already tolerates
+// concurrent Read+Close gracefully at the runtime level in the common case,
+// so this specific hazard is a documented stdlib *contract* violation, not
+// one that reliably manifests as a race-detector-visible or crashing
+// failure in a simple reproduction. ForceKill() still follows the
+// documented-safe shape (only stdin.Close() + Process.Kill(), no Wait())
+// because that's the correct design regardless of whether a test can catch
+// the alternative — not because this test demonstrated the alternative
+// failing. Don't cite this test as proof the buggy version breaks; cite it
+// as proof the correct version doesn't hang or deadlock.
+func TestCursorACPBackendForceKillInterruptsHungTurn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cursor-agent")
+	writeTestExecutable(t, path, []byte(fakeCursorACPHungTurnScript()))
+	b := newCursorACPBackend(cursorACPTestConfig(path, nil))
+	t.Cleanup(b.Close)
+
+	s, err := b.Execute(context.Background(), "prompt", ExecOptions{Cwd: dir})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// Give the session handshake time to reach session/prompt and start
+	// genuinely blocking on a response before we interrupt it.
+	time.Sleep(200 * time.Millisecond)
+
+	killErr := make(chan error, 1)
+	go func() {
+		killErr <- b.ForceKill()
+	}()
+
+	select {
+	case err := <-killErr:
+		if err != nil {
+			t.Fatalf("ForceKill: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ForceKill did not return")
+	}
+
+	// Execute()'s own goroutine must observe the killed process and return —
+	// not hang forever waiting on a response that will now never arrive.
+	select {
+	case _, ok := <-s.Result:
+		_ = ok // either a terminal Result or the channel closing is acceptable
+	case <-time.After(3 * time.Second):
+		t.Fatal("Execute()'s goroutine did not observe the force-killed process")
+	}
+}

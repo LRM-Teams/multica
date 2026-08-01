@@ -168,7 +168,14 @@ func (h *Handler) CreateAgentLifecycleOperation(w http.ResponseWriter, r *http.R
 	executionMode := agentLifecycleImmediate
 	status := agentLifecycleRunning
 	var startedAt any = time.Now()
-	if active {
+	// Plain restart (task #62) always goes immediate, even while active: a
+	// busy agent is exactly the stuck-agent case restart exists to recover,
+	// and "scheduled" never fires on its own once created (there is no
+	// trigger that promotes it once the blocking turn ends — see the design
+	// doc). reset_session_restart and full_reset_restart keep the existing
+	// scheduled/rejected behavior below; extending force-interrupt to them
+	// is separate, tracked work, not done here.
+	if active && req.ActionKind != agentLifecycleRestart {
 		executionMode = agentLifecycleAfterCurrentRun
 		status = agentLifecycleScheduled
 		startedAt = nil

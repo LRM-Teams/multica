@@ -62,13 +62,19 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 	if err := e.validateDependencies(request); err != nil {
 		return lifecycleStepError("validate", err)
 	}
-	if e.turns.hasActiveTurn(request.AgentID, request.RuntimeID) {
+	// Plain restart (task #62) must interrupt a busy/stuck turn rather than
+	// refuse it — a genuinely stuck agent's turn never ends on its own, so
+	// requiring hasActiveTurn==false here would mean restart can never fire
+	// for exactly the case it exists to fix. reset_session_restart and
+	// full_reset_restart keep the busy guard: see the design doc's Scope
+	// boundary / Future work sections for why those still require it today.
+	if request.ActionKind != agentLifecycleActionRestart && e.turns.hasActiveTurn(request.AgentID, request.RuntimeID) {
 		return lifecycleStepError("drain", ErrCanonicalAgentRuntimeBusy)
 	}
 
 	switch request.ActionKind {
 	case agentLifecycleActionRestart:
-		return e.invalidateRuntime(request)
+		return e.forceInvalidateRuntime(request)
 	case agentLifecycleActionResetSessionRestart:
 		if err := e.resetSession(ctx, request); err != nil {
 			return err
@@ -127,6 +133,20 @@ func (e *agentLifecycleExecutor) invalidateRuntime(request agentLifecycleExecuti
 		return lifecycleStepError("restart_runtime", errors.New("canonical runtime pool is not configured"))
 	}
 	if err := e.runtimes.invalidateSession(request.AgentID, request.RuntimeID); err != nil {
+		return lifecycleStepError("restart_runtime", err)
+	}
+	return nil
+}
+
+// forceInvalidateRuntime is invalidateRuntime's counterpart for plain restart
+// (task #62): it interrupts a busy slot instead of refusing it, via
+// canonicalAgentRuntimePool.forceInvalidateSession. See that function's doc
+// comment for why this is not simply "call closeBackend() anyway".
+func (e *agentLifecycleExecutor) forceInvalidateRuntime(request agentLifecycleExecutionRequest) error {
+	if e.runtimes == nil {
+		return lifecycleStepError("restart_runtime", errors.New("canonical runtime pool is not configured"))
+	}
+	if err := e.runtimes.forceInvalidateSession(request.AgentID, request.RuntimeID); err != nil {
 		return lifecycleStepError("restart_runtime", err)
 	}
 	return nil

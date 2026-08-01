@@ -283,13 +283,26 @@ checking, and only the first has evidence so far.
   cover the code path where `cmd.Wait()` is actually called, not just that
   a kill signal was sent.** For `cursorACPBackend` specifically, that means
   using a real `exec.Cmd` with real `StdoutPipe()`/`StdinPipe()` — not a
-  stubbed/mocked process. A test that only asserts "the kill signal went
-  out" would stay green even with a double-`Wait()` bug present (the race
-  is timing-dependent, not something a mocked process can surface at all),
-  and then break randomly in production with symptoms that don't point back
-  to this code — exactly the "tested the process, not the outcome" failure
-  shape that bit this team multiple times today (see #57's pin-observability
-  gap for the same class of miss).
+  stubbed/mocked process.
+
+  **Update after actually writing this test (Barry): it does not, and could
+  not be made to, empirically catch the double-`Wait()` mutation.** I
+  reintroduced Nash's caught bug (`ForceKill` calling `disposeProcessLocked`)
+  against a real subprocess actively writing output while `Execute()`'s
+  goroutine read it, and ran it under `-race` 15+ times — it never failed.
+  Go's `os.File` tolerates concurrent Read+Close gracefully at the runtime
+  level in the common case, so this specific hazard is a documented stdlib
+  *contract* violation (the exec package's own docs), not one that reliably
+  manifests as a race-detector-visible or crashing failure in a simple
+  reproduction. **This does not mean the fix is unnecessary — it means "a
+  test proves it" was the wrong bar for this specific hazard.** The correct
+  bar is: follow the documented-safe shape (`ForceKill` only closes stdin
+  and kills the process, never calls `Wait()`) because the stdlib docs say
+  so, not because a test demonstrates the unsafe alternative failing. The
+  test that does exist still earns its place for a different reason: it
+  proves the *correct* implementation doesn't hang, deadlock, or panic under
+  `-race` against a real, actively-writing process — a real regression
+  guard, just not the mutation-proof one originally described here.
 - A real end-to-end pass on at least one real canonical-resident provider
   (cursor is the one already exercised informally today) mirroring what I
   did manually, but through the **new formal path**, not a manual

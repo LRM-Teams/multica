@@ -45,6 +45,23 @@ type ResidentRuntimeLivenessChecker interface {
 	RuntimeAlive() (alive bool, known bool)
 }
 
+// ResidentRuntimeForceKillable is an optional contract for backends that keep
+// a long-lived provider child process alive across turns (task #62). ForceKill
+// terminates the underlying process immediately, even while a turn is
+// in-flight against it. Implementers must be safe to call concurrently with
+// an in-flight Execute() — the caller does not wait for Execute() to notice;
+// Execute()'s own error handling is expected to observe the killed process
+// (e.g. a pipe read failure) and release the turn itself, exactly as it
+// already does for a genuine crash. ForceKill must NOT perform any step that
+// only one goroutine may safely call (for example, exec.Cmd.Wait() while its
+// stdout/stdin pipes may still be read/written by the in-flight Execute()
+// goroutine) — it may only take the actions needed to make the process die;
+// reaping/cleanup stays the responsibility of the goroutine that was already
+// using the process.
+type ResidentRuntimeForceKillable interface {
+	ForceKill() error
+}
+
 // ExecOptions configures a single execution.
 type ExecOptions struct {
 	Cwd   string

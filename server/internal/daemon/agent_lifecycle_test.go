@@ -130,6 +130,77 @@ func TestAgentLifecycleExecutorFailsClosedOnActiveTurn(t *testing.T) {
 	}
 }
 
+// TestAgentLifecycleExecutorPlainRestartInterruptsActiveTurn pins task #62's
+// core requirement at the executor layer: unlike full_reset_restart (which
+// must stay fail-closed on a busy turn, see the test above), plain restart
+// must not refuse a busy turn — it must skip the hasActiveTurn guard and
+// proceed to force-interrupt the canonical pool slot instead of returning
+// ErrCanonicalAgentRuntimeBusy.
+func TestAgentLifecycleExecutorPlainRestartInterruptsActiveTurn(t *testing.T) {
+	agentID := uuid.NewString()
+	runtimeID := uuid.NewString()
+	turnID := uuid.NewString()
+	turns := newAgentRuntimeTurnCoordinator(Config{}, nil)
+	key := agentRuntimeTurnSlotKey{AgentID: agentID, RuntimeID: runtimeID}
+	if !turns.reserve(key, turnID) {
+		t.Fatal("reserve active turn")
+	}
+	defer turns.release(key, turnID)
+
+	pool := newCanonicalAgentRuntimePool()
+	probe := &canonicalRuntimeFactoryProbe{}
+	stable, _, err := splitAgentProcessEnvironment(map[string]string{
+		"MULTICA_SERVER_URL":   "https://multica.example",
+		"MULTICA_WORKSPACE_ID": "workspace-a",
+		"MULTICA_AGENT_ID":     agentID,
+		"MULTICA_TASK_ID":      "turn-a",
+	})
+	if err != nil {
+		t.Fatalf("splitAgentProcessEnvironment: %v", err)
+	}
+	identity, err := newCanonicalAgentRuntimeIdentity(canonicalAgentRuntimeIdentityParams{
+		AgentID:     agentID,
+		RuntimeID:   runtimeID,
+		Provider:    "pi",
+		Executable:  "/usr/local/bin/pi",
+		Model:       "model-a",
+		WorkDir:     "/var/lib/multica/agent-a/workspace",
+		Environment: stable,
+		WorkspaceID: "workspace-a",
+	})
+	if err != nil {
+		t.Fatalf("newCanonicalAgentRuntimeIdentity: %v", err)
+	}
+	if _, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: identity,
+		Mode:     canonicalRuntimeResident,
+		Factory:  probe.factory,
+	}); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	backend := probe.backends[0]
+
+	executor := &agentLifecycleExecutor{
+		workspacesRoot: t.TempDir(),
+		turns:          turns,
+		runtimes:       pool,
+		sessionReset:   &lifecycleResetRecorder{},
+	}
+	execErr := executor.Execute(context.Background(), agentLifecycleExecutionRequest{
+		OperationID: uuid.NewString(),
+		WorkspaceID: uuid.NewString(),
+		AgentID:     agentID,
+		RuntimeID:   runtimeID,
+		ActionKind:  agentLifecycleActionRestart,
+	})
+	if execErr != nil {
+		t.Fatalf("plain restart on active turn should interrupt, not fail: %v", execErr)
+	}
+	if got := backend.forceKillCount(); got != 1 {
+		t.Fatalf("ForceKill called %d times, want 1", got)
+	}
+}
+
 func TestAgentLifecycleExecutorReportsPartialFailureStep(t *testing.T) {
 	resetter := &lifecycleResetRecorder{err: errors.New("reset unavailable")}
 	executor := &agentLifecycleExecutor{

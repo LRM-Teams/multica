@@ -83,6 +83,27 @@ func (b *cursorACPBackend) Close() {
 	}
 }
 
+// ForceKill implements agent.ResidentRuntimeForceKillable (task #62). Unlike
+// Close(), this may be called while a turn is in flight (running.Load() ==
+// true) — it must NOT call disposeProcessLocked, because that ends in
+// cmd.Wait(), and the Go documentation for exec.Cmd with StdoutPipe/
+// StdinPipe is explicit that only the goroutine reading the pipes may call
+// Wait. Execute()'s own goroutine is that reader; it already reaps the
+// process once it observes the pipe read failing (the same path a genuine
+// crash takes today). ForceKill only needs to make the process die — it
+// deliberately leaves reaping to that goroutine so there is exactly one
+// caller of Wait(), not two.
+func (b *cursorACPBackend) ForceKill() error {
+	b.mu.Lock()
+	p := b.process
+	b.mu.Unlock()
+	if p == nil {
+		return nil
+	}
+	_ = p.stdin.Close()
+	return p.cmd.Process.Kill()
+}
+
 func (b *cursorACPBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
 	if !b.running.CompareAndSwap(false, true) {
 		return nil, fmt.Errorf("%w: concurrent cursor ACP turn", ErrCursorACPTurnBusy)

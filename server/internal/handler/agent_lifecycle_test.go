@@ -72,7 +72,14 @@ func TestAgentLifecyclePreflightIsPerActionAndFullResetIsIdleOnly(t *testing.T) 
 	}
 }
 
-func TestAgentLifecycleCreateIsIdempotentAndSchedulesOnlyNonDestructiveActions(t *testing.T) {
+// TestAgentLifecycleCreateIsIdempotentAndForceRestartsBusyAgent pins task
+// #62: unlike full_reset_restart (still rejected outright while busy) and
+// reset_session_restart (see TestAgentLifecycleResetSessionRestartSchedulesWhenBusy
+// below), plain restart against a busy agent must go immediate/running, not
+// scheduled/after_current_run — a busy agent is exactly the stuck-agent case
+// restart exists to fix, and "scheduled" never fires on its own (see the
+// design doc for why).
+func TestAgentLifecycleCreateIsIdempotentAndForceRestartsBusyAgent(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -94,9 +101,10 @@ func TestAgentLifecycleCreateIsIdempotentAndSchedulesOnlyNonDestructiveActions(t
 	if err := json.Unmarshal(first.Body.Bytes(), &firstOperation); err != nil {
 		t.Fatalf("decode first operation: %v", err)
 	}
-	if firstOperation.Status != agentLifecycleScheduled ||
-		firstOperation.ExecutionMode != agentLifecycleAfterCurrentRun {
-		t.Fatalf("first operation = %+v", firstOperation)
+	if firstOperation.Status != agentLifecycleRunning ||
+		firstOperation.ExecutionMode != agentLifecycleImmediate ||
+		firstOperation.StartedAt == nil {
+		t.Fatalf("restart on busy agent = %+v, want immediate/running (busy must not block plain restart)", firstOperation)
 	}
 
 	replay := invokeCreateAgentLifecycle(t, agentID, key, agentLifecycleRestart)
@@ -124,6 +132,32 @@ func TestAgentLifecycleCreateIsIdempotentAndSchedulesOnlyNonDestructiveActions(t
 	}
 	if count != 1 {
 		t.Fatalf("operation count=%d want=1", count)
+	}
+}
+
+// TestAgentLifecycleResetSessionRestartSchedulesWhenBusy pins the scope
+// boundary from the design doc: reset_session_restart's busy-when-scheduled
+// behavior is deliberately unchanged by task #62 (only plain restart force-
+// interrupts) — its own force-interrupt support needs a separate audit of
+// sessionReset's busy assumptions first.
+func TestAgentLifecycleResetSessionRestartSchedulesWhenBusy(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentLifecycleFixture(t, true)
+	insertRunningAgentLifecycleExecution(t, agentID, runtimeID)
+
+	rec := invokeCreateAgentLifecycle(t, agentID, uuid.NewString(), agentLifecycleResetSessionRestart)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var operation AgentLifecycleOperation
+	if err := json.Unmarshal(rec.Body.Bytes(), &operation); err != nil {
+		t.Fatalf("decode operation: %v", err)
+	}
+	if operation.Status != agentLifecycleScheduled ||
+		operation.ExecutionMode != agentLifecycleAfterCurrentRun {
+		t.Fatalf("reset_session_restart on busy agent = %+v, want scheduled/after_current_run (unchanged by task #62)", operation)
 	}
 }
 

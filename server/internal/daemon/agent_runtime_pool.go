@@ -478,6 +478,53 @@ func (p *canonicalAgentRuntimePool) invalidateSession(agentID, runtimeID string)
 	return nil
 }
 
+// forceInvalidateSession interrupts a busy slot instead of refusing it
+// (task #62 — invalidateSession is deliberately for the already-idle case
+// only). It never calls closeBackend() on a running slot: that would race
+// with whatever goroutine currently holds Execute() against the same
+// backend. Instead it asks the backend itself to force-kill its process via
+// agent.ResidentRuntimeForceKillable, then returns — the in-flight turn's own
+// goroutine is expected to observe the failure and release the slot, exactly
+// as it already does for an unexpected crash (task #42②'s self-heal path).
+//
+// If the slot is idle, this behaves exactly like invalidateSession (no
+// force-kill needed, nothing to interrupt). If the backend does not
+// implement ResidentRuntimeForceKillable, this fails closed with
+// ErrCanonicalAgentRuntimeBusy rather than silently no-op'ing — a missing
+// capability must be loud, not indistinguishable from "nothing to do."
+func (p *canonicalAgentRuntimePool) forceInvalidateSession(agentID, runtimeID string) error {
+	if p == nil {
+		return nil
+	}
+	agentID = strings.TrimSpace(agentID)
+	runtimeID = strings.TrimSpace(runtimeID)
+	if agentID == "" || runtimeID == "" {
+		return errors.New("canonical runtime agent_id and runtime_id are required")
+	}
+	key := agentID + "\x00" + runtimeID
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot == nil {
+		p.mu.Unlock()
+		return nil
+	}
+	slot.mu.Lock()
+	p.mu.Unlock()
+	defer slot.mu.Unlock()
+	if !slot.running {
+		slot.closeBackend()
+		slot.fingerprint = ""
+		slot.mode = ""
+		slot.idleSince = time.Time{}
+		return nil
+	}
+	killable, ok := slot.backend.(agent.ResidentRuntimeForceKillable)
+	if !ok {
+		return ErrCanonicalAgentRuntimeBusy
+	}
+	return killable.ForceKill()
+}
+
 func (p *canonicalAgentRuntimePool) evictIdle(before time.Time) int {
 	if p == nil {
 		return 0

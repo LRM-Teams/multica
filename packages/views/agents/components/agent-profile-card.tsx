@@ -301,7 +301,11 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
                   );
                   toast.success(t(($) => $.profile_card.role_updated));
                 } catch (e) {
-                  showErrorToast(e, t(($) => $.profile_card.role_update_failed));
+                  showErrorToast(
+                    e instanceof Error
+                      ? e.message
+                      : t(($) => $.profile_card.role_update_failed),
+                  );
                   throw e;
                 } finally {
                   setRoleSaving(false);

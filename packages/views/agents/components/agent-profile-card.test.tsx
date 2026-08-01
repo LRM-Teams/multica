@@ -177,6 +177,18 @@ beforeEach(() => {
 });
 
 describe("AgentProfileCard execution controls", () => {
+  it("groups Runtime/Model/Thinking under a Runtime config section heading", () => {
+    renderCard();
+
+    // Iris: Computer stays info; config rows sit under this heading.
+    expect(
+      screen.getByRole("heading", { name: "Runtime config" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("runtime-picker")).toBeInTheDocument();
+    expect(screen.getByTestId("model-picker")).toBeInTheDocument();
+    expect(screen.getByTestId("thinking-picker")).toBeInTheDocument();
+  });
+
   it("renders all three shared pickers as editable when the viewer can edit", () => {
     renderCard();
 

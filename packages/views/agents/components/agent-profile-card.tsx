@@ -255,6 +255,12 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
           <PropRow label={t(($) => $.inspector.prop_computer)} interactive={false}>
             <ComputerInfoRow runtime={runtime} />
           </PropRow>
+          {/* Frank 08-01: Computer is immutable info; Runtime/Model/Thinking are
+              runtime config. Group header separates the two (Iris). Pickers
+              unchanged — only visual grouping. */}
+          <h3 className="col-span-2 mt-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {t(($) => $.profile_card.runtime_config_section)}
+          </h3>
           <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
             <div className="flex min-w-0 items-center gap-1.5">
               <RuntimePicker

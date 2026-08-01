@@ -107,14 +107,26 @@ jobs:
       - name: Build, type check, lint
         # Web-only (Frank 2026-07-28): drop desktop/docs/mobile from the PR
         # frontend job so CI stays on the product surface that still ships.
-        # Desktop packaging is out of the main release gate (#1320). Mobile
-        # has had ZERO CI coverage since mobile-verify.yml was deleted
-        # 2026-07-29 (#1405) — there is no other workflow watching it, despite
-        # what an earlier version of this comment claimed. Desktop typecheck
-        # and apps/docs are likewise uncovered here. See task #12 for the
-        # per-surface include/exempt decisions (in progress as of 2026-08-01).
         # Dependents of @multica/web (core/ui/views) are included via the
-        # `...` selector.
+        # `...` selector. Per-surface reasons below — deliberately not one
+        # shared paragraph, so each exemption has to be justified on its own
+        # rather than riding along on a blanket "web-only" note (task #12,
+        # 2026-08-01):
+        #
+        # - apps/desktop packaging: out of the main release gate on purpose
+        #   (#1320) — desktop isn't shipped through this pipeline.
+        # - apps/desktop typecheck: no CI coverage, no assigned owner. Found
+        #   broken by accident once (2026-08-01, honor-tab.tsx) — that
+        #   incident is the reason this line exists instead of silence. If
+        #   you touch apps/desktop, run its typecheck yourself; CI won't.
+        # - apps/mobile: ZERO CI coverage since mobile-verify.yml was deleted
+        #   2026-07-29 (#1405) — no other workflow watches it, despite what
+        #   an earlier version of this comment claimed. Whether it gets
+        #   CI coverage or an explicit "nobody maintains this" writeup is
+        #   pending (task #12).
+        # - apps/docs: no CI coverage, no assigned owner, low blast radius
+        #   (infrequent changes). If you touch apps/docs, run its typecheck
+        #   yourself; CI won't.
         run: pnpm exec turbo build typecheck lint --filter='@multica/web...'
 
       - name: Report runner size

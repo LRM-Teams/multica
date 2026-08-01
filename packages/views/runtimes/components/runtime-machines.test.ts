@@ -387,31 +387,30 @@ describe("splitRuntimeName", () => {
 
 describe("headerRuntimeHealthBadge (LRM-624 / Plan A)", () => {
   // The title row shows a single connectivity dot+label. The secondary
-  // runtimeHealth badge must carry *incremental* info only and never a
-  // duplicate "Offline".
+  // runtimeHealth badge is offline-only now — update-lifecycle states are
+  // never shown here, since the page's own upgrade control (task #1680)
+  // already states that fact once.
   it("never badges ok / null", () => {
     expect(headerRuntimeHealthBadge(null, "online")).toBeNull();
     expect(headerRuntimeHealthBadge("ok", "online")).toBeNull();
     expect(headerRuntimeHealthBadge("ok", "offline")).toBeNull();
   });
 
-  it("badges incremental update states regardless of connectivity", () => {
+  it("never badges update-lifecycle states, regardless of connectivity — the upgrade control already says this once", () => {
     for (const connectivity of [
       "online",
       "recently_lost",
       "offline",
       "about_to_gc",
     ] as const) {
-      expect(headerRuntimeHealthBadge("update_available", connectivity)).toBe(
-        "update_available",
-      );
-      expect(headerRuntimeHealthBadge("ready_to_apply", connectivity)).toBe(
-        "ready_to_apply",
-      );
-      expect(headerRuntimeHealthBadge("updating", connectivity)).toBe(
-        "updating",
-      );
-      expect(headerRuntimeHealthBadge("failed", connectivity)).toBe("failed");
+      expect(
+        headerRuntimeHealthBadge("update_available", connectivity),
+      ).toBeNull();
+      expect(
+        headerRuntimeHealthBadge("ready_to_apply", connectivity),
+      ).toBeNull();
+      expect(headerRuntimeHealthBadge("updating", connectivity)).toBeNull();
+      expect(headerRuntimeHealthBadge("failed", connectivity)).toBeNull();
     }
   });
 

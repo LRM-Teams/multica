@@ -1,9 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
 import { ThinkingDropdown } from "./thinking-dropdown";
+import {
+  ComputerPicker,
+  firstUsableRuntimeIdOnMachine,
+  machineForRuntime,
+} from "./computer-picker";
 import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
@@ -39,6 +44,7 @@ import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { CharCounter } from "./char-counter";
 import { randomPickedAvatarSelection } from "./avatar-preset";
+import { buildRuntimeMachines } from "../../runtimes/components/runtime-machines";
 import { useT } from "../../i18n";
 
 export function CreateAgentDialog({
@@ -118,11 +124,25 @@ export function CreateAgentDialog({
   );
   const [creating, setCreating] = useState(false);
 
-  // Duplicate-mode pre-fill: clone lands on the source agent's runtime so
-  // the user doesn't have to re-pick. Skipped when that runtime is now
-  // locked for the caller (Create would 403). Empty fallback hands the
-  // job to RuntimePicker — it owns filter state, so it's the only place
-  // that knows which runtimes are visible right now.
+  // Computer → code-agent selection (Frank 2026-08-01). Duplicate mode
+  // seeds from the template's computer+runtime when still usable; empty
+  // ids let ComputerPicker / RuntimePicker seed the first usable option.
+  const initialMachines = buildRuntimeMachines(runtimes, {
+    now: Date.now(),
+    currentUserId,
+  });
+  const [selectedMachineId, setSelectedMachineId] = useState(() => {
+    const templateRuntime = template?.runtime_id
+      ? runtimes.find((r) => r.id === template.runtime_id)
+      : undefined;
+    if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
+      return machineForRuntime(templateRuntime, initialMachines)?.id ?? "";
+    }
+    const usableRuntime = runtimes.find((r) =>
+      isRuntimeUsableForUser(r, currentUserId),
+    );
+    return machineForRuntime(usableRuntime, initialMachines)?.id ?? "";
+  });
   const [selectedRuntimeId, setSelectedRuntimeId] = useState(() => {
     const templateRuntime = template?.runtime_id
       ? runtimes.find((r) => r.id === template.runtime_id)
@@ -130,9 +150,27 @@ export function CreateAgentDialog({
     if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
       return templateRuntime.id;
     }
-    const usableRuntime = runtimes.find((r) => isRuntimeUsableForUser(r, currentUserId));
-    return usableRuntime?.id ?? "";
+    const machine =
+      initialMachines.find((m) => m.id === selectedMachineId) ?? null;
+    return firstUsableRuntimeIdOnMachine(machine, currentUserId);
   });
+
+  const machines = useMemo(
+    () => buildRuntimeMachines(runtimes, { now: Date.now(), currentUserId }),
+    [runtimes, currentUserId],
+  );
+  const selectedMachine =
+    machines.find((m) => m.id === selectedMachineId) ?? null;
+  // Code-agent dropdown only lists providers on the chosen computer —
+  // never other machines' runtimes.
+  const machineRuntimes = selectedMachine?.runtimes ?? [];
+
+  const handleMachineSelect = (machineId: string) => {
+    if (machineId === selectedMachineId) return;
+    setSelectedMachineId(machineId);
+    const next = machines.find((m) => m.id === machineId) ?? null;
+    setSelectedRuntimeId(firstUsableRuntimeIdOnMachine(next, currentUserId));
+  };
 
   const selectedRuntime = runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
   // Derived, staleness-aware health instead of the raw `status` column
@@ -295,13 +333,23 @@ export function CreateAgentDialog({
             </div>
 
 
-            <RuntimePicker
+            <ComputerPicker
               runtimes={runtimes}
+              runtimesLoading={runtimesLoading}
+              currentUserId={currentUserId}
+              selectedMachineId={selectedMachineId}
+              onSelect={handleMachineSelect}
+            />
+
+            <RuntimePicker
+              runtimes={machineRuntimes}
               runtimesLoading={runtimesLoading}
               members={members}
               currentUserId={currentUserId}
               selectedRuntimeId={selectedRuntimeId}
               onSelect={setSelectedRuntimeId}
+              label={t(($) => $.create_dialog.code_agent_label)}
+              getItemLabel={(runtime) => runtime.name}
             />
 
             <ModelDropdown

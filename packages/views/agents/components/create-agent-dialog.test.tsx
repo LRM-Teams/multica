@@ -315,4 +315,44 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     expect(createBtn).toBeDefined();
     expect((createBtn as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it("scopes the code-agent picker to the selected computer only", () => {
+    const onS144 = makeRuntime({
+      id: "rt-s144-cursor",
+      name: "Cursor (s144)",
+      daemon_id: "daemon-s144",
+      display_name: "s144",
+      owner_id: ME,
+      visibility: "private",
+      device_info: "s144",
+    });
+    const alsoOnS144 = makeRuntime({
+      id: "rt-s144-pi",
+      name: "Pi (s144)",
+      daemon_id: "daemon-s144",
+      display_name: "s144",
+      owner_id: ME,
+      visibility: "private",
+      provider: "pi",
+      device_info: "s144",
+    });
+    const onOther = makeRuntime({
+      id: "rt-other-cursor",
+      name: "Cursor (other)",
+      daemon_id: "daemon-other",
+      display_name: "other-box",
+      owner_id: ME,
+      visibility: "private",
+      device_info: "other-box",
+    });
+    renderDialog([onS144, alsoOnS144, onOther]);
+
+    // Default computer is the first usable machine (s144). Open the
+    // code-agent picker — other-box's Cursor must not appear.
+    fireEvent.click(
+      screen.getByText("Cursor (s144)", { selector: "span.truncate" }),
+    );
+    expect(screen.getByText("Pi (s144)")).toBeInTheDocument();
+    expect(screen.queryByText("Cursor (other)")).toBeNull();
+  });
 });

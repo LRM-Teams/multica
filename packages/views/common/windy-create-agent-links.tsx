@@ -26,11 +26,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
+import {
+  ComputerPicker,
+  firstUsableRuntimeIdOnMachine,
+  machineForRuntime,
+} from "../agents/components/computer-picker";
 import { RuntimePicker, isRuntimeUsableForUser } from "../agents/components/runtime-picker";
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import { AvatarPicker, type AvatarPickerSelection } from "../agents/components/avatar-picker";
 import { randomPickedAvatarSelection } from "../agents/components/avatar-preset";
+import { buildRuntimeMachines } from "../runtimes/components/runtime-machines";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import { listParam, parseWindyCreateAgentURL } from "./windy-create-agent-link-utils";
@@ -158,10 +164,13 @@ function InlineCreateAgentDialog({
       ? randomPickedAvatarSelection()
       : null;
   };
-  const [selectedRuntimeId, setSelectedRuntimeId] = React.useState(() => {
-    const firstUsable = runtimes.find((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null));
-    return firstUsable?.id ?? "";
-  });
+  const userId = currentUser?.id ?? null;
+  const machines = React.useMemo(
+    () => buildRuntimeMachines(runtimes, { now: Date.now(), currentUserId: userId }),
+    [runtimes, userId],
+  );
+  const [selectedMachineId, setSelectedMachineId] = React.useState("");
+  const [selectedRuntimeId, setSelectedRuntimeId] = React.useState("");
   const [model, setModel] = React.useState("");
   const [thinkingLevel, setThinkingLevel] = React.useState("");
   const [creating, setCreating] = React.useState(false);
@@ -170,7 +179,21 @@ function InlineCreateAgentDialog({
     if (!open) onClose();
   };
 
-  const firstUsableRuntimeId = runtimes.find((r) => isRuntimeUsableForUser(r, currentUser?.id ?? null))?.id ?? "";
+  const selectedMachine =
+    machines.find((m) => m.id === selectedMachineId) ??
+    machineForRuntime(
+      runtimes.find((r) => isRuntimeUsableForUser(r, userId)),
+      machines,
+    );
+  const machineRuntimes = selectedMachine?.runtimes ?? [];
+  const handleMachineSelect = (machineId: string) => {
+    if (machineId === selectedMachineId) return;
+    setSelectedMachineId(machineId);
+    const next = machines.find((m) => m.id === machineId) ?? null;
+    setSelectedRuntimeId(firstUsableRuntimeIdOnMachine(next, userId));
+  };
+
+  const firstUsableRuntimeId = firstUsableRuntimeIdOnMachine(selectedMachine, userId);
   const effectiveRuntimeId = selectedRuntimeId || firstUsableRuntimeId;
   const selectedRuntime = runtimes.find((r) => r.id === effectiveRuntimeId) ?? null;
   // Derived, staleness-aware health instead of the raw `status` column
@@ -284,13 +307,24 @@ function InlineCreateAgentDialog({
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2">
-                <RuntimePicker
+                <ComputerPicker
                   runtimes={runtimes}
                   runtimesLoading={runtimesLoading}
+                  currentUserId={userId}
+                  selectedMachineId={selectedMachine?.id ?? selectedMachineId}
+                  onSelect={handleMachineSelect}
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <RuntimePicker
+                  runtimes={machineRuntimes}
+                  runtimesLoading={runtimesLoading}
                   members={members}
-                  currentUserId={currentUser?.id ?? null}
+                  currentUserId={userId}
                   selectedRuntimeId={effectiveRuntimeId}
                   onSelect={setSelectedRuntimeId}
+                  label={t(($) => $.create_dialog.code_agent_label)}
+                  getItemLabel={(runtime) => runtime.name}
                 />
               </div>
               <ModelDropdown

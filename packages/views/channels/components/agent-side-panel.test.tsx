@@ -216,6 +216,8 @@ const RESOURCES = {
   },
   side_panel: {
     close_aria: "Close panel",
+    back_to_member_aria: "Back to {{name}}",
+    back_to_messages: "Back to messages",
     resize_aria: "Resize profile panel",
     no_description: "No description",
     created_label: "Created",
@@ -393,6 +395,26 @@ describe("AgentSidePanel", () => {
     const identity = screen.getByTestId("agent-profile-identity");
     // Avatar + name share one centered row; top padding tightened to ~14px.
     expect(identity).toHaveClass("items-center", "pt-3.5");
+  });
+
+  it("LRM-877: stacked Agent chrome shows ← {member} pop + Close clears via onClose", () => {
+    const onBack = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <AgentSidePanel
+        agent={makeAgent("user-owner")}
+        currentUserId="user-owner"
+        members={members}
+        onClose={onClose}
+        onBack={onBack}
+        backLabel="Frank An"
+      />,
+    );
+    fireEvent.click(screen.getByTestId("agent-panel-back-to-member"));
+    expect(onBack).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("LRM-542: renders the avatar read-only when the edit permission is denied", () => {

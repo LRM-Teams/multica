@@ -13,9 +13,11 @@ import {
 
 let selectedAgentId: string | null = null;
 let identitySnapshot: { display_name?: string } | null = null;
+let returnToMemberId: string | null = null;
 const closeMock = vi.fn(() => {
   selectedAgentId = null;
   identitySnapshot = null;
+  returnToMemberId = null;
 });
 
 vi.mock("@multica/core/hooks", () => ({
@@ -40,16 +42,24 @@ vi.mock("@multica/core/agents/stores", () => ({
     selector: (s: {
       selectedAgentId: string | null;
       identitySnapshot: { display_name?: string } | null;
+      returnToMemberId: string | null;
       close: () => void;
     }) => unknown,
   ) =>
     selector({
       selectedAgentId,
       identitySnapshot,
+      returnToMemberId,
       close: closeMock,
     }),
   useAgentXpBurstStore: (selector: (s: { bursts: Record<string, never> }) => unknown) =>
     selector({ bursts: {} }),
+}));
+
+vi.mock("@multica/core/workspace", () => ({
+  useMemberPanelStore: (
+    selector: (s: { open: (id: string) => void }) => unknown,
+  ) => selector({ open: vi.fn() }),
 }));
 
 vi.mock("../navigation", () => ({
@@ -85,6 +95,7 @@ describe("GlobalAgentPanel", () => {
   beforeEach(() => {
     selectedAgentId = null;
     identitySnapshot = null;
+    returnToMemberId = null;
     closeMock.mockClear();
     window.localStorage.removeItem(PROFILE_PANEL_WIDTH_STORAGE_KEY);
   });

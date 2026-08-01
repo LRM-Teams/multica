@@ -253,6 +253,7 @@ import { useSidebarSectionCollapsed } from "../hooks/use-sidebar-section-collaps
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { MemberPanelProvider } from "../../common/member-panel-context";
+import { MotionContent } from "../../common/motion-content";
 import { MemberSidePanel } from "../../members/member-side-panel";
 import {
   CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
@@ -536,6 +537,7 @@ export function ChannelsPage({
   // react-doctor-disable-next-line react-doctor/prefer-useReducer
 }: ChannelsPageProps = {}) {
   const { t } = useT("channels");
+  const { t: tAgents } = useT("agents");
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
@@ -787,6 +789,8 @@ export function ChannelsPage({
         kind: "agent";
         agentId: string;
         snapshot?: AgentPanelIdentitySnapshot;
+        /** LRM-877 Dock Stack — pop target human Profile under Agent. */
+        returnToMemberId?: string;
       }
     | { kind: "member"; userId: string }
     | { kind: "channel-details"; tab: ChannelDetailsTab }
@@ -796,6 +800,8 @@ export function ChannelsPage({
   const selectedAgentPanelId = sidePanel.kind === "agent" ? sidePanel.agentId : null;
   const selectedAgentPanelSnapshot =
     sidePanel.kind === "agent" ? (sidePanel.snapshot ?? null) : null;
+  const selectedAgentReturnToMemberId =
+    sidePanel.kind === "agent" ? (sidePanel.returnToMemberId ?? null) : null;
   const selectedMemberPanelId = sidePanel.kind === "member" ? sidePanel.userId : null;
   const channelDetailsOpen = sidePanel.kind === "channel-details";
   const channelDetailsTab =
@@ -2409,12 +2415,41 @@ export function ChannelsPage({
     setSidePanel({ kind: "thread", message });
   }, []);
 
-  const handleOpenAgentPanel: OpenAgentPanelFn = useCallback((agentId, snapshot) => {
-    setSidePanel({ kind: "agent", agentId, snapshot });
-  }, []);
+  const handleOpenAgentPanel: OpenAgentPanelFn = useCallback(
+    (agentId, snapshot, options) => {
+      // LRM-877 Dock Stack: open Agent on top of a human Profile without
+      // losing the pop target. Explicit options win; else inherit from the
+      // currently open member (or an existing agent stack frame).
+      setSidePanel((current) => {
+        const returnToMemberId =
+          options?.returnToMemberId ??
+          (current.kind === "member"
+            ? current.userId
+            : current.kind === "agent"
+              ? current.returnToMemberId
+              : undefined);
+        return {
+          kind: "agent",
+          agentId,
+          snapshot,
+          ...(returnToMemberId ? { returnToMemberId } : {}),
+        };
+      });
+    },
+    [],
+  );
 
   const handleOpenMemberPanel = useCallback((userId: string) => {
     setSidePanel({ kind: "member", userId });
+  }, []);
+
+  const handlePopAgentToMember = useCallback(() => {
+    setSidePanel((current) => {
+      if (current.kind === "agent" && current.returnToMemberId) {
+        return { kind: "member", userId: current.returnToMemberId };
+      }
+      return { kind: "none" };
+    });
   }, []);
 
   // #645 — toggles the same exclusive slot; opening it always wins over
@@ -3479,6 +3514,13 @@ export function ChannelsPage({
         }
       />
     ) : null;
+  const agentPanelBackLabel = selectedAgentReturnToMemberId
+    ? resolveActorDisplayName(
+        workspaceMembers.find((m) => m.user_id === selectedAgentReturnToMemberId) ??
+          null,
+        selectedAgentReturnToMemberId,
+      )
+    : undefined;
   const agentPanel =
     active && selectedAgentPanelId ? (
       <ResolvedAgentSidePanel
@@ -3487,6 +3529,11 @@ export function ChannelsPage({
         currentUserId={currentUserId}
         members={workspaceMembers}
         onClose={() => setSelectedAgentPanelId(null)}
+        variant={isMobile ? "page" : "panel"}
+        onBack={
+          selectedAgentReturnToMemberId ? handlePopAgentToMember : undefined
+        }
+        backLabel={agentPanelBackLabel}
       />
     ) : null;
   const memberPanel =
@@ -3494,6 +3541,8 @@ export function ChannelsPage({
       <MemberSidePanel
         userId={selectedMemberPanelId}
         onClose={() => setSelectedMemberPanelId(null)}
+        variant={isMobile ? "page" : "panel"}
+        doneLabel={isMobile ? tAgents(($) => $.side_panel.back_to_messages) : undefined}
         onMessage={(userId) => {
           createOrFindDm.mutate(
             { peer_type: "user", peer_id: userId },
@@ -4151,7 +4200,9 @@ export function ChannelsPage({
               ? "thread-side-slot"
               : agentPanel
                 ? "agent-side-slot"
-                : "channel-details-side-slot"
+                : memberPanel
+                  ? "member-side-slot"
+                  : "channel-details-side-slot"
           }
           className="relative flex shrink-0 flex-col border-l border-border/30 bg-background"
           style={{ width: detailSideWidth }}
@@ -4163,12 +4214,29 @@ export function ChannelsPage({
             className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10"
             onPointerDown={onDetailSideResizePointerDown}
           />
-          {desktopSidePanel}
+          {/* LRM-877 / LRM-836 — 200ms fade on stack push/pop; motion-reduce instant */}
+          <MotionContent
+            motionKey={
+              threadPanel
+                ? `thread:${openThreadRoot?.id ?? "x"}`
+                : agentPanel
+                  ? `agent:${selectedAgentPanelId}`
+                  : memberPanel
+                    ? `member:${selectedMemberPanelId}`
+                    : `details:${channelDetailsTab}`
+            }
+            tier="moderate"
+            className="flex min-h-0 min-w-0 flex-1 flex-col"
+          >
+            {desktopSidePanel}
+          </MotionContent>
         </div>
       ) : null}
     </div>
   ) : (
-    threadPanel ?? channelConversationPane
+    // LRM-877 — mobile Sheet stack: Agent/Member replace the conversation
+    // surface (same as DM), so Created Agents → Agent keeps a pop path.
+    threadPanel ?? agentPanel ?? memberPanel ?? channelConversationPane
   );
 
   // DM detail pane — rendered in place of the group detail when a DM is active.

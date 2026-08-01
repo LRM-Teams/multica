@@ -509,6 +509,8 @@
   },
   "side_panel": {
     "close_aria": "エージェントパネルを閉じる",
+    "back_to_member_aria": "{{name}} に戻る",
+    "back_to_messages": "メッセージに戻る",
     "resize_aria": "プロフィールパネルの幅を変更",
     "no_description": "説明はまだありません",
     "model_label": "モデル",

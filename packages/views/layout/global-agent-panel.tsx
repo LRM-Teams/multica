@@ -5,6 +5,8 @@ import { Dialog } from "@base-ui/react/dialog";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
+import { resolveActorDisplayName } from "@multica/core/identity";
+import { useMemberPanelStore } from "@multica/core/workspace";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import {
   useAgentPanelStore,
@@ -46,12 +48,20 @@ export function GlobalAgentPanel() {
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const selectedAgentId = useAgentPanelStore((s) => s.selectedAgentId);
   const identitySnapshot = useAgentPanelStore((s) => s.identitySnapshot);
+  const returnToMemberId = useAgentPanelStore((s) => s.returnToMemberId);
   const close = useAgentPanelStore((s) => s.close);
+  const openMember = useMemberPanelStore((s) => s.open);
   const { width, onResizePointerDown } = useProfilePanelWidth();
   const { data: members = [] } = useQuery({
     ...memberListOptions(wsId),
-    enabled: !!selectedAgentId,
+    enabled: !!selectedAgentId || !!returnToMemberId,
   });
+  const backLabel = returnToMemberId
+    ? resolveActorDisplayName(
+        members.find((m) => m.user_id === returnToMemberId) ?? null,
+        returnToMemberId,
+      )
+    : undefined;
 
   // Peek semantics: a route change dismisses the panel (navigating away is an
   // implicit "done looking"). Without this the fixed panel would linger across
@@ -94,7 +104,7 @@ export function GlobalAgentPanel() {
             translate on real mount/unmount, so it animates without a manual
             rAF two-frame dance. */}
         <Dialog.Popup
-          className="fixed inset-y-0 right-0 z-50 max-w-[90vw] border-l border-border/30 bg-background shadow-2xl transition-transform duration-200 ease-in-out data-starting-style:translate-x-full data-ending-style:translate-x-full"
+          className="fixed inset-y-0 right-0 z-50 max-w-[90vw] border-l border-border/30 bg-background shadow-2xl transition-transform duration-200 ease-in-out motion-reduce:transition-none data-starting-style:translate-x-full data-ending-style:translate-x-full"
           style={{ width }}
           data-testid="global-agent-panel"
         >
@@ -112,6 +122,16 @@ export function GlobalAgentPanel() {
               currentUserId={currentUserId}
               members={members}
               onClose={close}
+              onBack={
+                returnToMemberId
+                  ? () => {
+                      const memberId = returnToMemberId;
+                      close();
+                      openMember(memberId);
+                    }
+                  : undefined
+              }
+              backLabel={backLabel}
             />
           ) : null}
         </Dialog.Popup>

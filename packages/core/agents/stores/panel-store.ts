@@ -1,13 +1,25 @@
 "use client";
 
 import { create } from "zustand";
-import type { AgentPanelIdentitySnapshot } from "../panel-open";
+import type {
+  AgentPanelIdentitySnapshot,
+  OpenAgentPanelOptions,
+} from "../panel-open";
 
 interface AgentPanelState {
   selectedAgentId: string | null;
   /** Optimistic identity from the click source; cleared on close. */
   identitySnapshot: AgentPanelIdentitySnapshot | null;
-  open: (agentId: string, snapshot?: AgentPanelIdentitySnapshot) => void;
+  /**
+   * LRM-877 — when set, Agent panel shows `← {member}` and pop restores the
+   * human Profile dock (global overlay hosts).
+   */
+  returnToMemberId: string | null;
+  open: (
+    agentId: string,
+    snapshot?: AgentPanelIdentitySnapshot,
+    options?: OpenAgentPanelOptions,
+  ) => void;
   close: () => void;
 }
 
@@ -27,10 +39,17 @@ interface AgentPanelState {
 export const useAgentPanelStore = create<AgentPanelState>((set) => ({
   selectedAgentId: null,
   identitySnapshot: null,
-  open: (agentId, snapshot) =>
+  returnToMemberId: null,
+  open: (agentId, snapshot, options) =>
     set({
       selectedAgentId: agentId,
       identitySnapshot: snapshot ?? null,
+      returnToMemberId: options?.returnToMemberId ?? null,
     }),
-  close: () => set({ selectedAgentId: null, identitySnapshot: null }),
+  close: () =>
+    set({
+      selectedAgentId: null,
+      identitySnapshot: null,
+      returnToMemberId: null,
+    }),
 }));

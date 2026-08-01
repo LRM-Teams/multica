@@ -242,3 +242,77 @@ func TestPiRPCBackendRuntimeStats(t *testing.T) {
 		t.Fatalf("RuntimeStats = %+v", stats)
 	}
 }
+
+// fakePiRPCHungAckScript starts fine (so ensureProcess returns immediately,
+// same as the real pi backend's non-blocking startup) but never responds to
+// anything on stdin, including the initial "prompt" command. This simulates
+// a real pi process wedged before it acknowledges the prompt it was just
+// given — the exact narrow window task #65 is about.
+func fakePiRPCHungAckScript() string {
+	return `#!/bin/sh
+while IFS= read -r line; do
+  :
+done
+`
+}
+
+// TestPiRPCBackendForceKillDuringInitialAckActuallyKillsNotHang pins task
+// #65: waitPiRPCResponse only selected on turn.response and ctx.Done(), not
+// turn.done. ForceKill() killing the process during the initial prompt-ack
+// wait doesn't cancel ctx — it only makes readEvents' reader loop hit EOF and
+// push a completion onto turn.done, which nothing was listening to. The turn
+// would hang until ctx's own deadline (which may not exist at all, per
+// MULTICA_AGENT_TIMEOUT=0), not until the process was actually killed.
+//
+// Mirrors the acceptance shape from task #62's cursor/grok handshake tests:
+// asserts the process is actually killed and the turn actually terminates,
+// not just that some error eventually comes back.
+func TestPiRPCBackendForceKillDuringInitialAckActuallyKillsNotHang(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCHungAckScript()))
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	b := newPiRPCBackend(Config{ExecutablePath: path})
+	t.Cleanup(b.Close)
+
+	execDone := make(chan struct{})
+	var execResult Result
+	go func() {
+		defer close(execDone)
+		s, err := b.Execute(context.Background(), "prompt", ExecOptions{Cwd: dir, ResumeSessionID: sessionPath})
+		if err != nil {
+			return
+		}
+		execResult = <-s.Result
+	}()
+
+	// Give Execute() time to actually write the prompt command and start
+	// blocking on waitPiRPCResponse before we try to interrupt it.
+	time.Sleep(200 * time.Millisecond)
+
+	killErr := make(chan error, 1)
+	go func() {
+		killErr <- b.ForceKill()
+	}()
+
+	select {
+	case err := <-killErr:
+		if err != nil {
+			t.Fatalf("ForceKill during the initial ack wait returned an error: %v — it should actually kill the process, not fail", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ForceKill() did not return promptly during the initial ack wait")
+	}
+
+	select {
+	case <-execDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Execute()'s goroutine never returned after ForceKill() during the initial ack wait — waitPiRPCResponse is still stuck on turn.done never being observed")
+	}
+	if execResult.Status != "failed" {
+		t.Fatalf("result status = %q, want failed (initial ack wait was force-killed)", execResult.Status)
+	}
+	if !strings.Contains(execResult.Error, AgentForceKilledMarker) {
+		t.Fatalf("result error = %q, want it to contain %q", execResult.Error, AgentForceKilledMarker)
+	}
+}

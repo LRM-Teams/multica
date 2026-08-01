@@ -2,7 +2,7 @@
 
 import { useMemo, useReducer, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Square } from "lucide-react";
+import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -113,7 +113,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const qc = useQueryClient();
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
-  const { data, isLoading } = useQuery(researchSessionSnapshotOptions(wsId, sessionId));
+  const { data, isLoading, isError, error, refetch } = useQuery(
+    researchSessionSnapshotOptions(wsId, sessionId),
+  );
   const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
@@ -122,6 +124,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
 
+  const mutationErrorToast = (fallback: string, err: unknown) => {
+    showErrorToast(err instanceof Error && err.message ? err.message : fallback);
+  };
+
   const send = useMutation({
     mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
     onSuccess: () => {
@@ -129,6 +135,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
       void qc.invalidateQueries({ queryKey: researchKeys.productRounds(wsId, sessionId) });
     },
+    onError: (err) => mutationErrorToast(t(($) => $.session_page.send_failed), err),
   });
 
   const stop = useMutation({
@@ -148,6 +155,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
     },
+    onError: (err) => mutationErrorToast(t(($) => $.session_page.confirm_failed), err),
   });
 
   const handoff = useMutation({
@@ -159,6 +167,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
     },
+    onError: (err) => mutationErrorToast(t(($) => $.session_page.handoff_failed), err),
   });
 
   // LRM-890 M2 visibility models — derived from graph nodes / sources / report.
@@ -175,11 +184,39 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     [data?.nodes, data?.report],
   );
 
-  if (isLoading || !data) {
+  // LRM-799: never keep a permanent skeleton on failure — only while loading.
+  if (isLoading) {
     return (
-      <div className="flex h-full flex-col gap-0">
+      <div className="flex h-full flex-col gap-0" aria-busy="true">
         <Skeleton className="h-16 w-full" />
         <Skeleton className="min-h-0 flex-1" />
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <div
+        role="alert"
+        data-testid="research-session-load-error"
+        className="flex h-full flex-col items-center justify-center gap-3 px-6 py-12 text-center"
+      >
+        <AlertCircle className="size-6 text-destructive" aria-hidden />
+        <p className="text-sm text-destructive">
+          {error instanceof Error && error.message
+            ? error.message
+            : t(($) => $.session_page.load_failed)}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            void refetch();
+          }}
+        >
+          {t(($) => $.session_page.retry)}
+        </Button>
       </div>
     );
   }
@@ -321,6 +358,21 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 );
             }}
           />
+          {data.nodes.length === 0 ? (
+            <div
+              data-testid="research-session-canvas-forming"
+              className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center px-6"
+            >
+              <div className="max-w-sm text-center">
+                <p className="text-sm font-medium text-foreground">
+                  {t(($) => $.session_page.canvas_forming_title)}
+                </p>
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  {t(($) => $.session_page.canvas_forming_hint)}
+                </p>
+              </div>
+            </div>
+          ) : null}
         </section>
 
         <aside className="hidden w-[260px] shrink-0 flex-col gap-3 overflow-y-auto border-l bg-background p-3 lg:flex">

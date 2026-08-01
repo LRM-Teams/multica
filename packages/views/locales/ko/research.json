@@ -66,6 +66,15 @@
     "delete_done": "Research deleted",
     "cancel": "Cancel"
   },
+  "session_page": {
+    "load_failed": "세션을 불러오지 못했습니다",
+    "retry": "다시 시도",
+    "canvas_forming_title": "캔버스 구성 중",
+    "canvas_forming_hint": "조사단이 노드를 배치하고 있습니다. 여기에 표시됩니다.",
+    "confirm_failed": "확인에 실패했습니다",
+    "handoff_failed": "인수인계에 실패했습니다",
+    "send_failed": "메시지 전송에 실패했습니다"
+  },
   "overlay": {
     "fleet_expand": "조사단 펼치기",
     "fleet_collapse": "조사단 접기",

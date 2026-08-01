@@ -66,6 +66,15 @@
     "delete_done": "调研已删除",
     "cancel": "取消"
   },
+  "session_page": {
+    "load_failed": "会话加载失败",
+    "retry": "重试",
+    "canvas_forming_title": "画布组建中",
+    "canvas_forming_hint": "调研团正在落子，节点会出现在这里。",
+    "confirm_failed": "确认调研失败",
+    "handoff_failed": "交接失败",
+    "send_failed": "消息发送失败"
+  },
   "overlay": {
     "fleet_expand": "展开调研团",
     "fleet_collapse": "收起调研团",

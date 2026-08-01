@@ -50,6 +50,14 @@ type AgentRuntimeResponse struct {
 	LastSeenAt *string `json:"last_seen_at"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
+	// ComputerConnected and DaemonLastSeenAt (task #58) reflect the physical
+	// machine's own heartbeat, independent of this runtime's LastSeenAt —
+	// see computerConnected's doc comment for why the two must not be
+	// conflated. DaemonLastSeenAt is nil when the daemon has never sent a
+	// heartbeat (e.g. a pre-#58 daemon binary, or a runtime with no
+	// daemon_id).
+	ComputerConnected bool    `json:"computer_connected"`
+	DaemonLastSeenAt  *string `json:"daemon_last_seen_at"`
 }
 
 type DaemonUpdateStatusResponse struct {
@@ -84,7 +92,31 @@ func (h *Handler) runtimeToResponse(ctx context.Context, rt db.AgentRuntime) Age
 
 func (h *Handler) runtimeToResponseWithResolvedUpdate(ctx context.Context, rt db.AgentRuntime, update *UpdateRequest) AgentRuntimeResponse {
 	release := h.runtimeReleaseForResponse(ctx, rt, update)
-	return runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, h.daemonUpdateStatusForRuntime(ctx, rt))
+	daemonHeartbeat := h.daemonHeartbeatForRuntime(ctx, rt)
+	resp := runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, h.daemonUpdateStatusForRuntime(ctx, rt))
+	resp.ComputerConnected = computerConnected(daemonHeartbeat, time.Now())
+	if daemonHeartbeat != nil {
+		resp.DaemonLastSeenAt = timestampToPtr(daemonHeartbeat.LastSeenAt)
+	}
+	return resp
+}
+
+// daemonHeartbeatForRuntime is the single-runtime counterpart to
+// daemonHeartbeatsForList, for call sites that build one response at a time
+// rather than a batch.
+func (h *Handler) daemonHeartbeatForRuntime(ctx context.Context, rt db.AgentRuntime) *db.DaemonHeartbeat {
+	daemonID := runtimeDaemonKey(rt)
+	if h == nil || h.Queries == nil || daemonID == "" {
+		return nil
+	}
+	hb, err := h.Queries.GetDaemonHeartbeat(ctx, db.GetDaemonHeartbeatParams{
+		WorkspaceID: rt.WorkspaceID,
+		DaemonID:    daemonID,
+	})
+	if err != nil {
+		return nil
+	}
+	return &hb
 }
 
 func (h *Handler) latestRuntimeUpdate(ctx context.Context, rt db.AgentRuntime) *UpdateRequest {
@@ -963,10 +995,17 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 	resp := make([]AgentRuntimeResponse, len(runtimes))
 	updates := h.runtimeUpdatesForList(r.Context(), runtimes)
 	autoUpdates := h.daemonUpdateStatusesForList(r.Context(), runtimes)
+	daemonHeartbeats := h.daemonHeartbeatsForList(r.Context(), runtimes)
+	now := time.Now()
 	for i, rt := range runtimes {
 		update := updates[uuidToString(rt.ID)]
 		release := h.runtimeReleaseForResponse(r.Context(), rt, update)
 		resp[i] = runtimeToResponseWithUpdateReleaseAndObservation(rt, update, release, autoUpdates[runtimeDaemonKey(rt)])
+		hb := daemonHeartbeats[runtimeDaemonKey(rt)]
+		resp[i].ComputerConnected = computerConnected(hb, now)
+		if hb != nil {
+			resp[i].DaemonLastSeenAt = timestampToPtr(hb.LastSeenAt)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)

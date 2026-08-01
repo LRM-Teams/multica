@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:cost-baseline": "./scripts/record-import-env-baseline.sh"
   },
   "exports": {
     "./navigation": "./navigation/index.ts",

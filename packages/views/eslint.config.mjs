@@ -8,6 +8,23 @@ import i18next from "eslint-plugin-i18next";
 
 export default [
   ...reactConfig,
+  // Node tooling under scripts/ (Vitest reporters, baseline recorders) — not browser.
+  {
+    files: ["scripts/**/*.{mjs,js,cjs}"],
+    languageOptions: {
+      globals: {
+        console: "readonly",
+        process: "readonly",
+        URL: "readonly",
+        Buffer: "readonly",
+        __dirname: "readonly",
+        __filename: "readonly",
+        module: "readonly",
+        require: "readonly",
+        exports: "readonly",
+      },
+    },
+  },
   {
     files: ["**/*.tsx"],
     ignores: ["**/*.test.tsx", "test/**"],

@@ -111,3 +111,36 @@ func TestDaemonRegister_ClearsStartingSince(t *testing.T) {
 		t.Fatalf("starting_since = %v after a completed register, want NULL", *startingSince)
 	}
 }
+
+// TestAttachAgentRuntimeNames_StartingRuntimeShowsStarting is the wiring
+// check for the primary agent-list/detail endpoint (GET /agents, GetAgent),
+// which goes through attachAgentRuntimeNames's own hand-rolled raw-SQL query
+// rather than a sqlc-generated `SELECT *`. That query originally omitted
+// starting_since, so a machine mid-restart would silently show its stale
+// pre-crash connectivity tier on the one surface most users actually look
+// at, even though the pure agentRuntimeDisplayStatus function and its unit
+// tests already handled it correctly (found independently by Alice and Vera
+// during review — same shape as #1801's offline_reason miss on this exact
+// query).
+func TestAttachAgentRuntimeNames_StartingRuntimeShowsStarting(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	// Stale-by-connectivity-alone (long past LastSeenAt/UpdatedAt) so a pass
+	// here can only be explained by starting_since being read, not by an
+	// otherwise-fresh row coincidentally looking fine.
+	agentID, runtimeID := createAgentHealthFixture(t, "online", time.Now().Add(-10*time.Minute), time.Now().Add(-10*time.Minute))
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_runtime SET starting_since = now() WHERE id = $1
+	`, runtimeID); err != nil {
+		t.Fatalf("seed starting_since: %v", err)
+	}
+
+	resps := []AgentResponse{{ID: agentID, RuntimeID: runtimeID, Status: "idle"}}
+	testHandler.attachAgentRuntimeNames(context.Background(), resps)
+
+	if resps[0].RuntimeDisplayStatus != agentDisplayStatusStarting {
+		t.Fatalf("RuntimeDisplayStatus = %q, want %q — the agent-list endpoint must surface a fresh starting_since, not fall back to stale connectivity",
+			resps[0].RuntimeDisplayStatus, agentDisplayStatusStarting)
+	}
+}

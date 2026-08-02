@@ -146,18 +146,17 @@
     "basics_daemon_id": "Daemon ID",
     "ops": {
       "section": "操作",
-      "local_only": "升级和重启仅适用于本机电脑。",
-      "restart_not_local": "只有本机电脑可以重启。",
-      "restart_managed_desktop": "由桌面应用托管，请在桌面端重启。",
-      "restart_sandbox": "沙箱电脑不能在此重启。",
-      "restart_no_permission": "只有所有者或工作区管理员可以重启。",
-      "restart_offline": "电脑离线。",
-      "delete_owner_only": "只有所有者可以删除这台电脑。"
+      "local_only": "仅本机",
+      "restart_not_local": "仅本机",
+      "restart_managed_desktop": "请在桌面端重启",
+      "restart_sandbox": "沙箱不可用",
+      "restart_no_permission": "仅所有者或管理员",
+      "restart_offline": "离线",
+      "delete_owner_only": "仅所有者"
     },
     "sharing": {
       "section": "共享设置",
-      "hint": "公开后，工作区其他成员给本机上的 agent 换 runtime 时可以看到并选用这条。私有则只有你自己能选。",
-      "owner_only": "仅所有者或工作区管理员可操作",
+      "owner_only": "仅所有者可操作",
       "switch_locked": "不可切换",
       "switch_to": {
         "public": "切换为公开",

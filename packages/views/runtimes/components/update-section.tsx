@@ -91,6 +91,11 @@ interface UpdateSectionProps {
    * specific gap without touching the retry-after-failure path.
    */
   isSandbox?: boolean;
+  /**
+   * Machine detail Actions zone: no always-on explanatory copy — keep the
+   * manual-update control, drop the paragraph under the version row.
+   */
+  compact?: boolean;
 }
 
 export function UpdateSection({
@@ -104,6 +109,7 @@ export function UpdateSection({
   launchedBy,
   canUpdate = true,
   isSandbox = false,
+  compact = false,
 }: UpdateSectionProps) {
   const { t } = useT("runtimes");
   const qc = useQueryClient();
@@ -326,7 +332,7 @@ export function UpdateSection({
 
       {!isManaged && (
         <div className="flex flex-wrap items-center gap-2 text-[11px] leading-[1.55] text-muted-foreground">
-          <p>{t(($) => $.update.manual_hint)}</p>
+          {!compact && <p>{t(($) => $.update.manual_hint)}</p>}
           <Button
             variant="ghost"
             size="xs"

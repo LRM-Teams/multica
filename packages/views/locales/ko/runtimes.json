@@ -148,18 +148,17 @@
     "basics_daemon_id": "Daemon ID",
     "ops": {
       "section": "작업",
-      "local_only": "업그레이드와 재시작은 로컬 컴퓨터에만 적용됩니다.",
-      "restart_not_local": "재시작은 로컬 컴퓨터에서만 가능합니다.",
-      "restart_managed_desktop": "데스크톱 앱에서 관리됩니다. 그곳에서 재시작하세요.",
-      "restart_sandbox": "샌드박스는 여기서 재시작할 수 없습니다.",
-      "restart_no_permission": "소유자 또는 워크스페이스 관리자만 재시작할 수 있습니다.",
-      "restart_offline": "컴퓨터가 오프라인입니다.",
-      "delete_owner_only": "소유자만 이 컴퓨터를 삭제할 수 있습니다."
+      "local_only": "로컬만",
+      "restart_not_local": "로컬만",
+      "restart_managed_desktop": "데스크톱 앱에서 재시작",
+      "restart_sandbox": "샌드박스 불가",
+      "restart_no_permission": "소유자 또는 관리자만",
+      "restart_offline": "오프라인",
+      "delete_owner_only": "소유자만"
     },
     "sharing": {
       "section": "공유 설정",
-      "hint": "공개하면 다른 멤버가 이 컴퓨터의 에이전트 런타임 전환에서 선택할 수 있습니다. 비공개는 본인만 가능합니다.",
-      "owner_only": "소유자 또는 워크스페이스 관리자만 변경할 수 있습니다",
+      "owner_only": "소유자만",
       "switch_locked": "변경 불가",
       "switch_to": {
         "public": "공개로 전환",

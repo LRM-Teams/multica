@@ -106,6 +106,7 @@ export function MachineOpsSection({
               launchedBy={launchedBy}
               canUpdate={canManage}
               isSandbox={isSandbox}
+              compact
             />
             <div className="flex flex-wrap items-center gap-2">
               <RestartSection

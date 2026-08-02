@@ -71,9 +71,6 @@ export function MachineSharingSection({ machine }: { machine: RuntimeMachine }) 
       <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
         {t(($) => $.machine.sharing.section)}
       </h3>
-      <p className="mb-2 px-1 text-xs text-muted-foreground">
-        {t(($) => $.machine.sharing.hint)}
-      </p>
       <div className="overflow-hidden rounded-xl border bg-card">
         {rows.map((runtime, idx) => {
           const visibility =

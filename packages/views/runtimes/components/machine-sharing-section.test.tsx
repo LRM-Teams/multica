@@ -138,7 +138,7 @@ describe("MachineSharingSection", () => {
     );
 
     expect(screen.getByTestId("machine-sharing-locked-reason")).toHaveTextContent(
-      /Only the owner or a workspace admin/i,
+      /Owner only/i,
     );
     expect(screen.getByTestId("machine-sharing-toggle-rt-other")).toBeDisabled();
   });

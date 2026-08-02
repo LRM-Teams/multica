@@ -146,18 +146,17 @@
     "basics_daemon_id": "Daemon ID",
     "ops": {
       "section": "操作",
-      "local_only": "アップグレードと再起動はローカルマシンのみです。",
-      "restart_not_local": "再起動はローカルマシンでのみ利用できます。",
-      "restart_managed_desktop": "デスクトップアプリ管理のため、そちらから再起動してください。",
-      "restart_sandbox": "サンドボックスはここでは再起動できません。",
-      "restart_no_permission": "所有者またはワークスペース管理者のみ再起動できます。",
-      "restart_offline": "マシンがオフラインです。",
-      "delete_owner_only": "所有者のみこのマシンを削除できます。"
+      "local_only": "ローカルのみ",
+      "restart_not_local": "ローカルのみ",
+      "restart_managed_desktop": "デスクトップから再起動",
+      "restart_sandbox": "サンドボックス不可",
+      "restart_no_permission": "所有者または管理者のみ",
+      "restart_offline": "オフライン",
+      "delete_owner_only": "所有者のみ"
     },
     "sharing": {
       "section": "共有設定",
-      "hint": "公開すると、他のメンバーがこのマシン上のエージェントのランタイム切替で選べます。非公開は自分だけです。",
-      "owner_only": "所有者またはワークスペース管理者のみ変更できます",
+      "owner_only": "所有者のみ",
       "switch_locked": "変更不可",
       "switch_to": {
         "public": "公開にする",

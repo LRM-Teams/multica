@@ -314,9 +314,22 @@ export interface ResearchSessionSnapshot {
   messages: ResearchMessage[];
 }
 
+/** Create-time source preference weights (0–1). Persisted via goal trailer until BE columns land. */
+export interface ResearchSourceWeights {
+  primary: number;
+  secondary: number;
+  community: number;
+}
+
 export interface CreateResearchSessionRequest {
   goal: string;
   title?: string;
+  /** LRM-676 / LRM-838 — shallow|standard|deep product-round caps. */
+  depth_tier?: ResearchDepthTier;
+  /** Report / delivery language preference (LRM-838). */
+  language?: string;
+  /** Source credibility preference weights (LRM-838). */
+  source_weights?: ResearchSourceWeights;
 }
 
 export interface ResearchHandoffRequest {

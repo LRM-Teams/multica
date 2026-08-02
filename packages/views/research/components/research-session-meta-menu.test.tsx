@@ -32,6 +32,24 @@ vi.mock("../../i18n/use-t", () => ({
           fleet_badge: { lead: "Lead", pending: "Pending", done: "Settled" },
           weight: "Weight",
         },
+        create_params: {
+          session_menu: "Create parameters",
+          session_hint: "Read-only create params",
+          depth_label: "Depth",
+          language_label: "Language",
+          weights_label: "Weights",
+          depth_tiers: {
+            shallow: { label: "Shallow", hint: "2 rounds" },
+            standard: { label: "Standard", hint: "5 rounds" },
+            deep: { label: "Deep", hint: "10 rounds" },
+          },
+          language_options: { zh: "中文", en: "English" },
+          weight_rows: {
+            primary: { label: "Primary", hint: "Official" },
+            secondary: { label: "Secondary", hint: "Reviews" },
+            community: { label: "Community", hint: "Forums" },
+          },
+        },
       }),
   }),
 }));
@@ -136,5 +154,22 @@ describe("ResearchSessionMetaMenu (LRM-919)", () => {
     expect(screen.getByTestId("menu-separator")).toBeInTheDocument();
     fireEvent.click(screen.getByText("View delivery"));
     expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens create params summary when session is provided (LRM-838)", () => {
+    render(
+      <ResearchSessionMetaMenu
+        members={[member]}
+        sources={[source]}
+        session={{
+          goal: "调研向量库\n\n【调研参数 depth=deep lang=zh primary=0.90 secondary=0.50 community=0.20】",
+          depth_tier: "deep",
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create parameters" }));
+    expect(screen.getByTestId("research-session-params-summary")).toBeInTheDocument();
+    expect(screen.getByText("Deep")).toBeInTheDocument();
+    expect(screen.getByText("0.90")).toBeInTheDocument();
   });
 });

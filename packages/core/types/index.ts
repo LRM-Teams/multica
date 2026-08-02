@@ -301,6 +301,7 @@ export type {
   ResearchClarificationQuestion,
   ResearchSessionSnapshot,
   CreateResearchSessionRequest,
+  ResearchSourceWeights,
   CreateResearchSessionResponse,
   ResearchHandoffRequest,
   ListResearchSessionsResponse,

@@ -453,5 +453,53 @@
     "dismiss": "关闭",
     "done_badge": "完成",
     "failed_badge": "失败"
+  },
+  "create_params": {
+    "title": "调研参数",
+    "hint": "调整深度、来源权重与报告语言。默认值可直接开题；提交后可在会话详情回看。",
+    "open": "参数",
+    "open_aria": "打开调研参数面板",
+    "done": "完成",
+    "depth_label": "调研深度",
+    "depth_hint": "深度决定产品轮次上限：越深轮次越多、覆盖更全，耗时与成本也更高。",
+    "depth_tiers": {
+      "shallow": {
+        "label": "浅层",
+        "hint": "快速摸底，约 2 轮产品轮次。"
+      },
+      "standard": {
+        "label": "标准",
+        "hint": "默认档位，约 5 轮，适合多数问题。"
+      },
+      "deep": {
+        "label": "深度",
+        "hint": "充分交叉验证，约 10 轮。"
+      }
+    },
+    "weights_label": "来源权重",
+    "weights_hint": "0–1 之间；越高越优先采信该类来源。默认偏官方与权威二手。",
+    "weight_rows": {
+      "primary": {
+        "label": "官方 / 一手",
+        "hint": "官网、文档、监管与原始数据。"
+      },
+      "secondary": {
+        "label": "权威二手",
+        "hint": "学术、研报、权威评测与综述。"
+      },
+      "community": {
+        "label": "社区 / 口碑",
+        "hint": "论坛、社交与用户评价；宜作补充。"
+      }
+    },
+    "language_label": "报告语言",
+    "language_hint": "舰队交付与报告正文优先使用的语言。",
+    "language_options": {
+      "zh": "中文",
+      "en": "English"
+    },
+    "session_hint": "创建时选定的参数（只读回看）。",
+    "session_menu": "创建参数",
+    "chip_depth": "深度 · {{label}}"
   }
 }

@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LRM-838 Gate Shots — 创建调研参数面板</title>
+  <style>
+    :root {
+      --bg: #f4f6f8; --card: #fff; --fg: #171717; --muted: #6b7280;
+      --border: rgba(0,0,0,.08); --brand: #0f766e;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); }
+    .page { padding: 16px; display: grid; gap: 28px; }
+    .label { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+    .frame {
+      position: relative; border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+      background: linear-gradient(180deg, #eef4f3 0%, #f7f8fa 40%, #fff 100%);
+      min-height: 520px;
+    }
+    .frame.narrow { width: 390px; min-height: 720px; }
+    .hero { padding: 20px 18px 10px; }
+    .hero h1 { margin: 0; font-size: 28px; letter-spacing: -.02em; }
+    .hero p { margin: 6px 0 0; font-size: 13px; color: var(--muted); line-height: 1.5; max-width: 42rem; }
+    .composer {
+      margin: 0 16px 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--card);
+      box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 0 0 3px color-mix(in oklab, var(--brand) 14%, transparent);
+    }
+    .composer textarea {
+      width: 100%; border: 0; resize: none; padding: 12px 14px; font: inherit; font-size: 13.5px;
+      min-height: 64px; outline: none; background: transparent;
+    }
+    .composer-foot {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      border-top: 1px solid var(--border); padding: 10px 14px;
+    }
+    .hint { font-size: 12px; color: var(--muted); }
+    .btns { display: flex; gap: 8px; margin-left: auto; }
+    .btn {
+      border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600; border: 0; cursor: default;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn.outline { background: #fff; border: 1px solid rgba(0,0,0,.14); color: var(--fg); }
+    .btn.primary { background: var(--brand); color: #fff; }
+    .overlay { position: absolute; inset: 0; background: rgba(0,0,0,.18); backdrop-filter: blur(2px); }
+    .sheet {
+      position: absolute; top: 0; right: 0; bottom: 0; width: min(28rem, 92%);
+      background: #fff; border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; box-shadow: -12px 0 40px rgba(0,0,0,.08);
+    }
+    .frame.narrow .sheet {
+      inset: 0; width: 100%; border: 0; box-shadow: none;
+    }
+    .sheet-h { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .sheet-h h2 { margin: 0; font-size: 16px; }
+    .sheet-h p { margin: 4px 0 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
+    .sheet-b { padding: 16px; overflow: auto; flex: 1; display: grid; gap: 18px; }
+    .sec h3 { margin: 0; font-size: 13px; font-weight: 650; }
+    .sec .hint { margin-top: 4px; font-size: 11px; line-height: 1.45; }
+    .opt {
+      display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border);
+      border-radius: 12px; padding: 10px 12px; margin-top: 8px; background: #fff;
+    }
+    .opt.on { border-color: color-mix(in oklab, var(--brand) 40%, #fff); background: color-mix(in oklab, var(--brand) 8%, #fff); }
+    .opt .t { font-size: 13px; font-weight: 600; }
+    .opt .d { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+    .radio { width: 14px; height: 14px; border-radius: 999px; border: 2px solid #9ca3af; margin-top: 2px; flex-shrink: 0; }
+    .opt.on .radio { border-color: var(--brand); box-shadow: inset 0 0 0 3px var(--brand); }
+    .wrow { margin-top: 12px; }
+    .wrow .top { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; }
+    .wrow .val { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); font-weight: 500; }
+    .track { margin-top: 8px; height: 4px; border-radius: 999px; background: #e5e7eb; position: relative; }
+    .track .fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--brand); }
+    .track .thumb { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 999px; background: #fff; border: 1px solid #94a3b8; transform: translate(-50%,-50%); }
+    .wrow .d { margin-top: 6px; font-size: 11px; color: var(--muted); line-height: 1.4; }
+    .lang { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+    .sheet-f { padding: 12px 16px; border-top: 1px solid var(--border); }
+    .sheet-f .btn { width: 100%; justify-content: center; height: 40px; }
+    .chrome { border-bottom: 1px solid rgba(0,0,0,.08); background: rgba(255,255,255,.86); backdrop-filter: blur(8px); }
+    .identity { display: flex; align-items: center; gap: 10px; padding: 10px 16px 4px; }
+    .mark { width: 28px; height: 28px; border-radius: 8px; background: rgba(15,118,110,.12); color: var(--brand); display: grid; place-items: center; }
+    .title { font-size: 16px; font-weight: 650; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .status { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; border: 1px solid rgba(15,118,110,.3); background: rgba(15,118,110,.1); color: var(--brand); padding: 2px 8px; font-size: 11px; font-weight: 650; }
+    .status .dot { width: 6px; height: 6px; border-radius: 999px; background: var(--brand); }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 16px 10px; }
+    .context { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+    .chip { font-family: ui-monospace, Menlo, monospace; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); border: 1px solid rgba(0,0,0,.1); background: rgba(0,0,0,.03); border-radius: 6px; padding: 2px 6px; }
+    .goal { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .panel {
+      margin: 16px; border: 1px solid var(--border); border-radius: 14px; background: #fff; padding: 14px;
+      box-shadow: 0 1px 2px rgba(0,0,0,.04);
+    }
+    .panel h3 { margin: 0 0 6px; font-size: 14px; }
+    .panel .hint { font-size: 11px; color: var(--muted); margin-bottom: 12px; }
+    .card { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; margin-top: 8px; background: #fafafa; }
+    .card dt { font-size: 11px; color: var(--muted); font-weight: 600; }
+    .card dd { margin: 4px 0 0; font-size: 13px; font-weight: 600; }
+    .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; font-weight: 500; }
+    .row { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; }
+    @media (max-width: 420px) {
+      .hint.desk { display: none; }
+      .mark { display: none; }
+      .goal { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section>
+      <div class="label">Desktop · 打开参数面板（深度 / 来源权重 / 语言）</div>
+      <div class="frame" data-shot="desktop-panel-open" style="width:1080px;height:640px">
+        <div class="hero">
+          <h1>调研</h1>
+          <p>说清楚想搞懂的问题，剩下的交给舰队：多源取证、标出弯路、把结论画成一张探索图。</p>
+        </div>
+        <div class="composer">
+          <textarea readonly>盘点 2026 年 AI 编程助手赛道的头部产品与差异</textarea>
+          <div class="composer-foot">
+            <span class="hint desk">⌘⏎ 发起 · 阶段 S1–S4 全程可见</span>
+            <div class="btns">
+              <button class="btn outline">⚙ 参数</button>
+              <button class="btn primary">开始调研 →</button>
+            </div>
+          </div>
+        </div>
+        <div class="overlay"></div>
+        <aside class="sheet">
+          <div class="sheet-h">
+            <h2>调研参数</h2>
+            <p>调整深度、来源权重与报告语言。默认值可直接开题；提交后可在会话详情回看。</p>
+          </div>
+          <div class="sheet-b">
+            <div class="sec">
+              <h3>调研深度</h3>
+              <div class="hint">深度决定产品轮次上限：越深轮次越多、覆盖更全，耗时与成本也更高。</div>
+              <div class="opt"><span class="radio"></span><div><div class="t">浅层</div><div class="d">快速摸底，约 2 轮产品轮次。</div></div></div>
+              <div class="opt"><span class="radio"></span><div><div class="t">标准</div><div class="d">默认档位，约 5 轮，适合多数问题。</div></div></div>
+              <div class="opt on"><span class="radio"></span><div><div class="t">深度</div><div class="d">充分交叉验证，约 10 轮。</div></div></div>
+            </div>
+            <div class="sec">
+              <h3>来源权重</h3>
+              <div class="hint">0–1 之间；越高越优先采信该类来源。默认偏官方与权威二手。</div>
+              <div class="wrow">
+                <div class="top"><span>官方 / 一手</span><span class="val">0.90</span></div>
+                <div class="track"><div class="fill" style="width:90%"></div><div class="thumb" style="left:90%"></div></div>
+                <div class="d">官网、文档、监管与原始数据。</div>
+              </div>
+              <div class="wrow">
+                <div class="top"><span>权威二手</span><span class="val">0.55</span></div>
+                <div class="track"><div class="fill" style="width:55%"></div><div class="thumb" style="left:55%"></div></div>
+                <div class="d">学术、研报、权威评测与综述。</div>
+              </div>
+              <div class="wrow">
+                <div class="top"><span>社区 / 口碑</span><span class="val">0.25</span></div>
+                <div class="track"><div class="fill" style="width:25%"></div><div class="thumb" style="left:25%"></div></div>
+                <div class="d">论坛、社交与用户评价；宜作补充。</div>
+              </div>
+            </div>
+            <div class="sec">
+              <h3>报告语言</h3>
+              <div class="hint">舰队交付与报告正文优先使用的语言。</div>
+              <div class="lang">
+                <div class="opt on"><span class="radio"></span><div class="t">中文</div></div>
+                <div class="opt"><span class="radio"></span><div class="t">English</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="sheet-f"><button class="btn primary">完成</button></div>
+        </aside>
+      </div>
+    </section>
+
+    <section>
+      <div class="label">Desktop · 打开参数面板（滚到「报告语言」）</div>
+      <div class="frame" data-shot="desktop-panel-language" style="width:1080px;height:520px">
+        <div class="hero">
+          <h1>调研</h1>
+          <p>说清楚想搞懂的问题，剩下的交给舰队：多源取证、标出弯路、把结论画成一张探索图。</p>
+        </div>
+        <div class="composer">
+          <textarea readonly>盘点 2026 年 AI 编程助手赛道的头部产品与差异</textarea>
+          <div class="composer-foot">
+            <span class="hint desk">⌘⏎ 发起 · 阶段 S1–S4 全程可见</span>
+            <div class="btns">
+              <button class="btn outline">⚙ 参数</button>
+              <button class="btn primary">开始调研 →</button>
+            </div>
+          </div>
+        </div>
+        <div class="overlay"></div>
+        <aside class="sheet">
+          <div class="sheet-h">
+            <h2>调研参数</h2>
+            <p>调整深度、来源权重与报告语言。默认值可直接开题；提交后可在会话详情回看。</p>
+          </div>
+          <div class="sheet-b">
+            <div class="sec">
+              <h3>来源权重</h3>
+              <div class="hint">0–1 之间；越高越优先采信该类来源。</div>
+              <div class="wrow">
+                <div class="top"><span>社区 / 口碑</span><span class="val">0.25</span></div>
+                <div class="track"><div class="fill" style="width:25%"></div><div class="thumb" style="left:25%"></div></div>
+                <div class="d">论坛、社交与用户评价；宜作补充。</div>
+              </div>
+            </div>
+            <div class="sec">
+              <h3>报告语言</h3>
+              <div class="hint">舰队交付与报告正文优先使用的语言。</div>
+              <div class="lang">
+                <div class="opt on"><span class="radio"></span><div class="t">中文</div></div>
+                <div class="opt"><span class="radio"></span><div class="t">English</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="sheet-f"><button class="btn primary">完成</button></div>
+        </aside>
+      </div>
+    </section>
+
+    <section>
+      <div class="label">Desktop · 调参后提交 — 会话详情回看创建参数</div>
+      <div class="frame" data-shot="desktop-after-submit" style="width:1080px;height:420px">
+        <div class="chrome">
+          <div class="identity">
+            <div class="mark">◎</div>
+            <div class="title">盘点 2026 年 AI 编程助手赛道的头部产品与差异</div>
+            <span class="status"><span class="dot"></span>进行中</span>
+          </div>
+          <div class="toolbar">
+            <div class="context">
+              <span class="chip">S1 · 定义</span>
+              <span class="chip">深度 · 深度</span>
+              <span class="chip">1/10</span>
+              <span class="goal">盘点 2026 年 AI 编程助手赛道的头部产品与差异</span>
+            </div>
+            <button class="btn outline">⋯</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>创建参数</h3>
+          <div class="hint">创建时选定的参数（只读回看）。</div>
+          <div class="card"><dt>调研深度</dt><dd>深度</dd></div>
+          <div class="card"><dt>报告语言</dt><dd>中文</dd></div>
+          <div class="card">
+            <dt>来源权重</dt>
+            <dd class="mono">
+              <div class="row"><span>官方 / 一手</span><span>0.90</span></div>
+              <div class="row"><span>权威二手</span><span>0.55</span></div>
+              <div class="row"><span>社区 / 口碑</span><span>0.25</span></div>
+            </dd>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="label">Narrow · 参数面板全屏可用</div>
+      <div class="frame narrow" data-shot="narrow-panel-open">
+        <div class="hero">
+          <h1>调研</h1>
+          <p>说清楚想搞懂的问题…</p>
+        </div>
+        <div class="composer">
+          <textarea readonly>对比主流向量数据库在生产环境的成本与性能</textarea>
+          <div class="composer-foot">
+            <div class="btns" style="width:100%;flex-direction:column">
+              <button class="btn outline" style="width:100%;justify-content:center">⚙ 参数</button>
+              <button class="btn primary" style="width:100%;justify-content:center">开始调研 →</button>
+            </div>
+          </div>
+        </div>
+        <div class="overlay"></div>
+        <aside class="sheet">
+          <div class="sheet-h">
+            <h2>调研参数</h2>
+            <p>调整深度、来源权重与报告语言。默认值可直接开题；提交后可在会话详情回看。</p>
+          </div>
+          <div class="sheet-b">
+            <div class="sec">
+              <h3>调研深度</h3>
+              <div class="hint">深度决定产品轮次上限。</div>
+              <div class="opt on"><span class="radio"></span><div><div class="t">标准</div><div class="d">默认档位，约 5 轮，适合多数问题。</div></div></div>
+            </div>
+            <div class="sec">
+              <h3>来源权重</h3>
+              <div class="wrow">
+                <div class="top"><span>官方 / 一手</span><span class="val">0.85</span></div>
+                <div class="track"><div class="fill" style="width:85%"></div><div class="thumb" style="left:85%"></div></div>
+              </div>
+              <div class="wrow">
+                <div class="top"><span>权威二手</span><span class="val">0.65</span></div>
+                <div class="track"><div class="fill" style="width:65%"></div><div class="thumb" style="left:65%"></div></div>
+              </div>
+              <div class="wrow">
+                <div class="top"><span>社区 / 口碑</span><span class="val">0.40</span></div>
+                <div class="track"><div class="fill" style="width:40%"></div><div class="thumb" style="left:40%"></div></div>
+              </div>
+            </div>
+            <div class="sec">
+              <h3>报告语言</h3>
+              <div class="lang">
+                <div class="opt on"><span class="radio"></span><div class="t">中文</div></div>
+                <div class="opt"><span class="radio"></span><div class="t">English</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="sheet-f"><button class="btn primary">完成</button></div>
+        </aside>
+      </div>
+    </section>
+
+    <section>
+      <div class="label">Narrow · 调参后提交 — 会话详情回看</div>
+      <div class="frame narrow" data-shot="narrow-after-submit" style="min-height:560px">
+        <div class="chrome">
+          <div class="identity">
+            <div class="title">对比主流向量数据库…</div>
+            <span class="status"><span class="dot"></span>进行中</span>
+          </div>
+          <div class="toolbar">
+            <div class="context">
+              <span class="chip">S1 · 定义</span>
+              <span class="chip">深度 · 标准</span>
+            </div>
+            <button class="btn outline">⋯</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>创建参数</h3>
+          <div class="hint">创建时选定的参数（只读回看）。</div>
+          <div class="card"><dt>调研深度</dt><dd>标准</dd></div>
+          <div class="card"><dt>报告语言</dt><dd>中文</dd></div>
+          <div class="card">
+            <dt>来源权重</dt>
+            <dd class="mono">
+              <div class="row"><span>官方 / 一手</span><span>0.85</span></div>
+              <div class="row"><span>权威二手</span><span>0.65</span></div>
+              <div class="row"><span>社区 / 口碑</span><span>0.40</span></div>
+            </dd>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

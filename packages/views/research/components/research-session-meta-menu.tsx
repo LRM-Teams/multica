@@ -1,7 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import type { ResearchFleetMember, ResearchSource } from "@multica/core/types";
+import type {
+  ResearchFleetMember,
+  ResearchSession,
+  ResearchSource,
+} from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   DropdownMenu,
@@ -18,25 +22,30 @@ import {
   SheetTitle,
 } from "@multica/ui/components/ui/sheet";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { cn } from "@multica/ui/lib/utils";
 import { MoreHorizontal } from "lucide-react";
 import { useT } from "../../i18n/use-t";
 import { ResearchFleetStrip } from "./research-fleet-strip";
+import { ResearchSessionParamsSummary } from "./research-session-params-summary";
 import { ResearchSourceBadges } from "./research-source-badges";
 
-type MetaPanel = "fleet" | "sources" | null;
+type MetaPanel = "fleet" | "sources" | "params" | null;
 
 /**
  * LRM-919: fleet roster + source/confidence map live in a session settings
  * sheet — not as permanent canvas corner floats.
+ * LRM-838: create params readback also lands here.
  */
 export function ResearchSessionMetaMenu({
   members,
   sources,
+  session,
   sessionStatus,
   leadingActions,
 }: {
   members: ResearchFleetMember[];
   sources: ResearchSource[];
+  session?: Pick<ResearchSession, "goal" | "depth_tier"> | null;
   sessionStatus?: string | null;
   /** LRM-995: narrow secondary actions (e.g. 查看交付) folded into tools. */
   leadingActions?: Array<{ id: string; label: string; onSelect: () => void }>;
@@ -50,7 +59,9 @@ export function ResearchSessionMetaMenu({
       ? t(($) => $.panel.fleet)
       : panel === "sources"
         ? t(($) => $.panel.sources)
-        : "";
+        : panel === "params"
+          ? t(($) => $.create_params.session_menu)
+          : "";
 
   return (
     <>
@@ -81,17 +92,28 @@ export function ResearchSessionMetaMenu({
           <DropdownMenuItem onClick={() => setPanel("sources")}>
             {t(($) => $.panel.sources)}
           </DropdownMenuItem>
+          {session ? (
+            <DropdownMenuItem
+              onClick={() => setPanel("params")}
+              data-testid="research-session-params-menu"
+            >
+              {t(($) => $.create_params.session_menu)}
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
 
       <Sheet open={panel !== null} onOpenChange={(open) => !open && setPanel(null)}>
         <SheetContent
           side={isMobile ? "bottom" : "right"}
-          className={
-            isMobile
-              ? "max-h-[85vh] gap-0 overflow-y-auto p-0"
-              : "w-full gap-0 overflow-y-auto p-0 sm:max-w-md"
-          }
+          className={cn(
+            "gap-0 overflow-y-auto p-0",
+            isMobile && panel === "params"
+              ? "inset-0 h-dvh max-h-dvh w-full border-0 sm:max-w-none"
+              : isMobile
+                ? "max-h-[85vh]"
+                : "w-full sm:max-w-md",
+          )}
         >
           <SheetHeader className="border-b">
             <SheetTitle>{title}</SheetTitle>
@@ -107,6 +129,9 @@ export function ResearchSessionMetaMenu({
             ) : null}
             {panel === "sources" ? (
               <ResearchSourceBadges sources={sources} embedded />
+            ) : null}
+            {panel === "params" && session ? (
+              <ResearchSessionParamsSummary session={session} />
             ) : null}
           </div>
         </SheetContent>

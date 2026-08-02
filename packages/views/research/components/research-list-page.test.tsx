@@ -302,6 +302,14 @@ describe("ResearchListPage composer hero (LRM-783 / LRM-784 / LRM-906)", () => {
     expect(screen.getByRole("button", { name: enResearch.start })).toBeInTheDocument();
   });
 
+  it("exposes create params opener next to start (LRM-838)", () => {
+    render(<ResearchListPage />);
+    expect(screen.getByTestId("research-create-params-open")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: enResearch.create_params.open_aria }),
+    ).toBeInTheDocument();
+  });
+
   it("disables start until the goal is non-empty or a template chip is attached", () => {
     render(<ResearchListPage />);
     const start = screen.getByRole("button", { name: enResearch.start });

@@ -3669,6 +3669,31 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 			taskLog.Warn("multica agent root creation failed", "error", err)
 		} else {
+			// task #94/#204: the agent's own tool calls write directly to
+			// this directory during the turn (bash/edit tools operating on
+			// MULTICA_AGENT_ROOT/MULTICA_AGENT_MEMORY_DIR below), completely
+			// outside any daemon-mediated write path — there is no
+			// byte-level write to intercept. The only point where the
+			// daemon can enforce a cap at all is here, before the turn
+			// starts: refuse the turn outright once the workspace is
+			// already at or over its cap, rather than letting it grow
+			// further unnoticed.
+			quota := d.cfg.AgentWorkspaceQuotaBytes
+			if quota <= 0 {
+				quota = DefaultAgentWorkspaceQuotaBytes
+			}
+			if used := dirSize(agentRoot); used >= quota {
+				taskLog.Warn("agent workspace at or over its size cap, refusing to start turn",
+					"agent_id", agentID, "used_bytes", used, "quota_bytes", quota)
+				return TaskResult{
+					Status: "failed",
+					Comment: fmt.Sprintf(
+						"agent workspace over capacity: cannot start turn (workspace uses %d bytes, cap is %d bytes) — remove files under the agent's workspace to free space, or raise MULTICA_AGENT_WORKSPACE_QUOTA_BYTES",
+						used, quota,
+					),
+					FailureReason: "agent_workspace_over_capacity",
+				}, nil
+			}
 			d.hydrateAgentMemoryCenter(ctx, task.WorkspaceID, agentID, task.RuntimeID, agentRoot)
 		}
 		agentRootPath = agentRoot

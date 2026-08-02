@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -159,15 +160,44 @@ func (d *Daemon) handleReadFileRequest(req protocol.ReadWorkdirFileRequestPayloa
 }
 
 func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayload, writes chan<- []byte) {
-	resp := writeWorkdirTextFile(
-		filepath.Join(d.cfg.WorkspacesRoot, filepath.FromSlash(req.RelPath)),
-		req.FilePath,
-		req.Content,
-		req.ExpectedContentHash,
-		req.MaxBytes,
-	)
+	root := filepath.Join(d.cfg.WorkspacesRoot, filepath.FromSlash(req.RelPath))
+	// task #94/#204: this RPC can only edit an already-existing file (see
+	// writeWorkdirTextFile's Missing check below) under a 256KB per-request
+	// cap — it cannot create new files, so it is not the growth vector the
+	// quota exists to bound (that's the agent's own direct filesystem
+	// writes during a turn, gated at turn-start in runTask). This check
+	// exists only for consistency: once an agent workspace is already over
+	// its cap, further edits through this path are refused too, rather
+	// than silently allowed while the turn-start gate blocks new turns.
+	if isAgentWorkspaceRelPath(req.RelPath) {
+		quota := d.cfg.AgentWorkspaceQuotaBytes
+		if quota <= 0 {
+			quota = DefaultAgentWorkspaceQuotaBytes
+		}
+		if used := dirSize(root); used >= quota {
+			resp := protocol.WriteWorkdirFileResponsePayload{
+				RequestID: req.RequestID,
+				Error: fmt.Sprintf(
+					"agent workspace over capacity: cannot write (workspace uses %d bytes, cap is %d bytes)",
+					used, quota,
+				),
+			}
+			d.sendDaemonFrame(protocol.EventDaemonWriteFileResponse, resp, req.RequestID, writes)
+			return
+		}
+	}
+	resp := writeWorkdirTextFile(root, req.FilePath, req.Content, req.ExpectedContentHash, req.MaxBytes)
 	resp.RequestID = req.RequestID
 	d.sendDaemonFrame(protocol.EventDaemonWriteFileResponse, resp, req.RequestID, writes)
+}
+
+// isAgentWorkspaceRelPath reports whether relPath (server-supplied, relative
+// to WorkspacesRoot) points into a durable agent workspace
+// ({workspaceID}/.multica/agents/{agentID}, see agentRootRelPath in
+// handler/agent_files.go) as opposed to a per-run task workdir or a
+// project's local_directory workdir, which this quota does not apply to.
+func isAgentWorkspaceRelPath(relPath string) bool {
+	return strings.Contains(filepath.ToSlash(relPath), "/.multica/agents/")
 }
 
 // handleDeleteDirRequest removes one confined directory under WorkspacesRoot.

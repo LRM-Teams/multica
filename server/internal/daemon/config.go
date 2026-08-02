@@ -70,6 +70,10 @@ const (
 	// day-granularity job needs no faster a cadence than this.
 	DefaultAgentWorkspaceRetentionInterval = 24 * time.Hour
 	// DefaultInboundWatchdog: see inbound_watchdog.go (Raft-aligned 70s).
+
+	// DefaultAgentWorkspaceQuotaBytes: task #94/#204 PRD §6 default per-agent
+	// cap on .multica/agents/<id>. 2GiB, matching the PRD's stated default.
+	DefaultAgentWorkspaceQuotaBytes int64 = 2 << 30
 )
 
 // DefaultGCArtifactPatterns lists basename matches that the GC loop treats as
@@ -103,6 +107,7 @@ type Config struct {
 	AgentWorkspaceRetentionEnabled  bool                  // enable the periodic agent-workspace retention job (task #96, default: true)
 	AgentWorkspaceRetentionInterval time.Duration         // how often the retention job runs (default: 24h)
 	AgentWorkspaceRetentionDryRun   bool                  // when true (default), only log which .multica/agents/<id> dirs WOULD be destroyed — never touches disk. Must be explicitly disabled (MULTICA_AGENT_WORKSPACE_RETENTION_DRY_RUN=false) to perform real deletions; Parker's hard requirement (task #96, 2026-08-02) is that the first real-delete run only happens after a human reviews a dry-run list.
+	AgentWorkspaceQuotaBytes        int64                 // per-agent cap on .multica/agents/<id> total size, checked at turn-start (task #94/#204, default: 2GiB)
 	AutoUpdateEnabled               bool                  // periodically check for a newer CLI release and self-update when idle (default: true, both Multica Cloud and self-host)
 	AutoUpdateConfigSource          string                // resolved source: official_host_default, self_host_default, env_enabled, env_disabled, or cli_disabled
 	AutoUpdateCheckInterval         time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
@@ -496,6 +501,15 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		agentWorkspaceRetentionDryRun = false
 	}
 
+	agentWorkspaceQuotaBytes := DefaultAgentWorkspaceQuotaBytes
+	if v := os.Getenv("MULTICA_AGENT_WORKSPACE_QUOTA_BYTES"); v != "" {
+		parsed, parseErr := strconv.ParseInt(v, 10, 64)
+		if parseErr != nil || parsed <= 0 {
+			return Config{}, fmt.Errorf("invalid MULTICA_AGENT_WORKSPACE_QUOTA_BYTES %q: must be a positive integer", v)
+		}
+		agentWorkspaceQuotaBytes = parsed
+	}
+
 	// Auto-update config: default -> env override -> CLI override.
 	//
 	// Default is opt-in for both Multica Cloud (api.multica.ai) and
@@ -617,6 +631,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		AgentWorkspaceRetentionEnabled:  agentWorkspaceRetentionEnabled,
 		AgentWorkspaceRetentionInterval: agentWorkspaceRetentionInterval,
 		AgentWorkspaceRetentionDryRun:   agentWorkspaceRetentionDryRun,
+		AgentWorkspaceQuotaBytes:        agentWorkspaceQuotaBytes,
 		AutoUpdateEnabled:               autoUpdateEnabled,
 		AutoUpdateConfigSource:          autoUpdateConfigSource,
 		AutoUpdateCheckInterval:         autoUpdateInterval,

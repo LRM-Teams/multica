@@ -208,6 +208,15 @@ func (h *Handler) resolveSubgoalSourceMessageID(ctx context.Context, channelID p
 	return msgID, nil
 }
 
+// nullableUUIDArg returns nil for invalid UUIDs so pgx writes SQL NULL
+// (zero pgtype.UUID can be ambiguous across driver paths).
+func nullableUUIDArg(u pgtype.UUID) any {
+	if !u.Valid {
+		return nil
+	}
+	return u
+}
+
 func normalizeSubgoalActor(actor subgoalActor) (subgoalActor, bool) {
 	actor.Type = strings.ToLower(strings.TrimSpace(actor.Type))
 	actor.ID = strings.TrimSpace(actor.ID)
@@ -405,7 +414,7 @@ func (h *Handler) insertSubgoal(ctx context.Context, workspaceID, channelID, goa
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$12,$13)
 		RETURNING `+channelGoalSubgoalColumns,
 		workspaceID, channelID, goalID, title, purpose, boundary, brief,
-		responsible.Type, parseUUID(responsible.ID), refsJSON, sourceMessageID, actorType, actorID))
+		responsible.Type, parseUUID(responsible.ID), refsJSON, nullableUUIDArg(sourceMessageID), actorType, actorID))
 	if err != nil {
 		return sg, err
 	}
@@ -679,7 +688,7 @@ func (h *Handler) UpdateChannelGoalSubgoal(w http.ResponseWriter, r *http.Reques
 		UPDATE channel_goal_subgoal
 		SET title=$1, purpose=$2, completion_boundary=$3, brief=$4, current_conclusion=$5,
 		    status=$6, responsible_type=$7, responsible_id=$8::uuid, waiting_on=$9::jsonb,
-		    artifact_refs=$10::jsonb, activity_delta=$11::jsonb, source_message_id=$12,
+		    artifact_refs=$10::jsonb, activity_delta=$11::jsonb, source_message_id=$12::uuid,
 		    updated_by_type='user', updated_by_id=$13, version=version+1, updated_at=now(),
 		    resolved_at = CASE WHEN $6 IN ('resolved','cancelled') THEN COALESCE(resolved_at, now()) ELSE NULL END,
 		    waiting_on_verified_at = CASE WHEN $9::jsonb = 'null'::jsonb THEN waiting_on_verified_at ELSE NULL END
@@ -687,7 +696,7 @@ func (h *Handler) UpdateChannelGoalSubgoal(w http.ResponseWriter, r *http.Reques
 		RETURNING `+channelGoalSubgoalColumns,
 		current.Title, current.Purpose, current.CompletionBoundary, current.Brief, current.CurrentConclusion,
 		current.Status, current.ResponsibleType, current.ResponsibleID, waitingJSON,
-		artifactJSON, activityJSON, sourceMessageID, parseUUID(userID), subgoalID, req.ExpectedVersion))
+		artifactJSON, activityJSON, nullableUUIDArg(sourceMessageID), parseUUID(userID), subgoalID, req.ExpectedVersion))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "subgoal version is stale")
 		return

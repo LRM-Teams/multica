@@ -323,8 +323,11 @@ func TestChannelGoalSubgoalSourceMessageIDSameChannel(t *testing.T) {
 		t.Fatalf("clear source = %d: %s", clear.Code, clear.Body.String())
 	}
 	_ = json.Unmarshal(clear.Body.Bytes(), &env)
+	if env.Subgoal == nil {
+		t.Fatalf("clear decode empty: %s", clear.Body.String())
+	}
 	if env.Subgoal.SourceMessageID != nil {
-		t.Fatalf("cleared source_message_id still set: %#v", env.Subgoal.SourceMessageID)
+		t.Fatalf("cleared source_message_id still set: %q body=%s", *env.Subgoal.SourceMessageID, clear.Body.String())
 	}
 
 	// Create without field still works (backward compatible).

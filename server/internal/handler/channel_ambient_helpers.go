@@ -7,12 +7,14 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
+	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
 // channelAgentWake carries everything recordChannelAgentPromptWake needs to
@@ -195,9 +197,14 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			SELECT event.id, event.agent_id
 			FROM agent_inbox_event event
 			JOIN agent_session session ON session.id = event.agent_session_id
+			JOIN agent agent_row ON agent_row.id = event.agent_id
 			WHERE COALESCE(event.runtime_id, session.runtime_id) = $1
 			  AND session.status = 'active'
 			  AND event.status IN ('pending', 'failed')
+			  AND NOT (
+			    agent_row.provider_block_detail <> ''
+			    AND (agent_row.provider_blocked_until IS NULL OR agent_row.provider_blocked_until > now())
+			  )
 			  AND NOT EXISTS (
 			    SELECT 1
 			    FROM agent_inbox_event blocking_event
@@ -256,15 +263,22 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 
 		var agentRuntimeID pgtype.UUID
 		var agentArchivedAt pgtype.Timestamptz
+		var providerBlockedUntil pgtype.Timestamptz
+		var providerBlockDetail string
 		if err := tx.QueryRow(ctx, `
-			SELECT id, runtime_id, archived_at
+			SELECT id, runtime_id, archived_at, provider_blocked_until, provider_block_detail
 			FROM agent
 			WHERE id = $1
-			FOR UPDATE`, agentID).Scan(&agentID, &agentRuntimeID, &agentArchivedAt); err != nil {
+			FOR UPDATE`, agentID).Scan(&agentID, &agentRuntimeID, &agentArchivedAt, &providerBlockedUntil, &providerBlockDetail); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return db.AgentEventDelivery{}, commitNoDelivery()
 			}
 			return db.AgentEventDelivery{}, err
+		}
+		// Sticky provider-quota lock (task #92): skip without terminalizing —
+		// wakes stay pending until the lock clears (until elapses or detail cleared).
+		if taskfailure.ProviderLockActive(providerBlockDetail, providerBlockedUntil.Time, providerBlockedUntil.Valid, time.Now()) {
+			return db.AgentEventDelivery{}, commitNoDelivery()
 		}
 		err = tx.QueryRow(ctx, `
 			SELECT event.id
@@ -574,8 +588,13 @@ func (h *Handler) countReadyAgentInboxEventsForRuntime(ctx context.Context, runt
 		SELECT count(*)
 		FROM agent_inbox_event event
 		JOIN agent_session session ON session.id = event.agent_session_id
+		JOIN agent agent_row ON agent_row.id = event.agent_id
 		WHERE COALESCE(event.runtime_id, session.runtime_id) = $1
 		  AND session.status = 'active'
-		  AND event.status IN ('pending', 'failed')`, runtime.ID).Scan(&count)
+		  AND event.status IN ('pending', 'failed')
+		  AND NOT (
+		    agent_row.provider_block_detail <> ''
+		    AND (agent_row.provider_blocked_until IS NULL OR agent_row.provider_blocked_until > now())
+		  )`, runtime.ID).Scan(&count)
 	return count, err
 }

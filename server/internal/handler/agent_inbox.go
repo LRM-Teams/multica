@@ -1033,10 +1033,9 @@ func (h *Handler) completeFailedNonChatAgentInboxEvent(
 ) {
 	alreadyReplied := h.inboxEventHasAgentTransportVisibleOutput(r.Context(), event.ID)
 	terminalOutcome := "failed"
-	retryable := true
+	retryable := inboxFailureRetryable(errText, failureReason, alreadyReplied)
 	if alreadyReplied {
 		terminalOutcome = "replied"
-		retryable = false
 	}
 	var collaborationWakes []channelAgentWake
 	outcome, err := h.TaskService.FailAgentInboxTaskWithFinalization(
@@ -1142,10 +1141,9 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	}
 	alreadyReplied := h.inboxEventHasAgentTransportVisibleOutput(r.Context(), event.ID)
 	terminalOutcome := "failed"
-	retryable := true
+	retryable := inboxFailureRetryable(errText, failureReason, alreadyReplied)
 	if alreadyReplied {
 		terminalOutcome = "replied"
-		retryable = false
 	}
 	if _, err := qtx.SetAgentInboxTerminalOutcome(r.Context(), db.SetAgentInboxTerminalOutcomeParams{
 		ID:                 event.ID,

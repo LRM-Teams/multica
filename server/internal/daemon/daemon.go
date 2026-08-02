@@ -307,6 +307,9 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	d.canonicalRuntimes.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
 		d.onResidentRuntimeCrash(ev)
 	})
+	d.canonicalRuntimes.subscribeResidentRuntimeRecovered(func(agentID, runtimeID string) {
+		d.clearAgentProviderCrashedOnServer(runtimeID, agentID)
+	})
 	d.updateObservation = newUpdateObservationCoordinator(cfg, logger)
 	d.agentRuntimeTurns = newAgentRuntimeTurnCoordinator(cfg, logger)
 	d.agentLifecycleExecutor = &agentLifecycleExecutor{

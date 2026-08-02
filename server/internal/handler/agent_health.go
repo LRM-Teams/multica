@@ -40,18 +40,17 @@ const (
 	// agent list/detail surface (task #42③). It deliberately does not reuse
 	// the agentHealthState* names: this is a coarser, workload-aware view
 	// meant for the primary status badge, not the Activity Health tab.
-	// "thinking"/"crashed" are not emitted yet — they need signals (task
-	// phase, provider-crash event) that don't exist as agent-visible facts
-	// today. Leaving them unemitted is intentional: the family rule is
-	// status stays unknown rather than invented. "stopped" (task ①, agent
-	// intentional-stop signal design) IS emitted: agent_runtime.offline_reason
-	// is a real, known fact written at deregister/teardown time, not a
-	// guess. "starting" is emitted (see agentRuntimeDisplayStatus/
-	// runtime_starting_since): the daemon's cold-start agent-CLI
-	// version-probe loop is a real, boundaried fact.
+	// "thinking" is not emitted yet — it needs a task-phase signal that
+	// doesn't exist as an agent-visible fact today. Leaving it unemitted is
+	// intentional: the family rule is status stays unknown rather than
+	// invented. Emitted today from real facts:
+	//   "stopped"  — agent_runtime.offline_reason (task ①)
+	//   "starting" — agent_runtime.starting_since / cold-start probe (#1802)
+	//   "crashed"  — agent.crashed_since from idle resident death (#1803)
 	agentDisplayStatusIdle         = "idle"
 	agentDisplayStatusWorking      = "working"
 	agentDisplayStatusStarting     = "starting"
+	agentDisplayStatusCrashed      = "crashed"
 	agentDisplayStatusDisconnected = "disconnected"
 	agentDisplayStatusOffline      = "offline"
 	agentDisplayStatusStopped      = "stopped"
@@ -319,12 +318,14 @@ func runtimeConnectivity(rt db.AgentRuntime, now time.Time) runtimeConnectivityT
 // agentRuntimeDisplayStatus derives an honest status for the agent
 // list/detail surface (task #42③). It does not pass through the raw
 // agent_runtime.status column: that column can read "online" for up to
-// ~180s after the daemon actually went silent (sweeper lag), and
-// indefinitely if the daemon's transport stays up while the provider
-// subprocess it spawned has died — that second case has no persisted signal
-// anywhere yet (tracked separately, needs a daemon-side crash-detection
-// hook; see #42①②).
-func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, now time.Time) string {
+// ~180s after the daemon actually went silent (sweeper lag).
+//
+// crashedSince is the per-agent idle-resident crash fact (agent.crashed_since).
+// It is checked only while connectivity is still Online: a whole-machine
+// drop is "offline"/"disconnected", not "crashed" — we no longer have a
+// live daemon asserting the provider-death fact. Mid-turn process_failure
+// never sets this column (different fact; do not invent).
+func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, crashedSince pgtype.Timestamptz, now time.Time) string {
 	// Checked before connectivity: a machine coming back from a crash sets
 	// starting_since before it has refreshed last_seen_at, so connectivity
 	// would otherwise still read Dead/Stale from before the crash — exactly
@@ -342,6 +343,9 @@ func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, now time.
 		return agentDisplayStatusOffline
 	case runtimeConnectivityStale:
 		return agentDisplayStatusDisconnected
+	}
+	if crashedSince.Valid {
+		return agentDisplayStatusCrashed
 	}
 	if agentStatus == "working" {
 		return agentDisplayStatusWorking

@@ -636,6 +636,20 @@ func (c *Client) ReportAgentLifecycleOperationResult(ctx context.Context, runtim
 	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agent-lifecycle/%s/result", runtimeID, operationID), result, nil, c.tokenForRuntime(runtimeID))
 }
 
+// ReportAgentProviderCrashed tells the server an idle resident provider
+// process for this agent was found dead (task #42② / Raft status ②).
+// Best-effort: callers should log and continue on error.
+func (c *Client) ReportAgentProviderCrashed(ctx context.Context, runtimeID, agentID string) error {
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/crashed", runtimeID, agentID), map[string]any{}, nil, c.tokenForRuntime(runtimeID))
+}
+
+// ClearAgentProviderCrashed clears a prior ReportAgentProviderCrashed after
+// the resident provider was successfully recreated or a lifecycle restart
+// succeeded. Best-effort: callers should log and continue on error.
+func (c *Client) ClearAgentProviderCrashed(ctx context.Context, runtimeID, agentID string) error {
+	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/agents/%s/crashed/clear", runtimeID, agentID), map[string]any{}, nil, c.tokenForRuntime(runtimeID))
+}
+
 func (c *Client) SyncSharedSkills(ctx context.Context, runtimeID string, payload SharedSkillSyncPayload) (*SharedSkillSyncResult, error) {
 	var result SharedSkillSyncResult
 	if err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/shared-skills/sync", runtimeID), payload, &result, c.tokenForRuntime(runtimeID)); err != nil {

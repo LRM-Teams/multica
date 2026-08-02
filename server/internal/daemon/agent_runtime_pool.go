@@ -196,12 +196,20 @@ type canonicalAgentRuntimeAcquireRequest struct {
 	Now          time.Time
 }
 
+// ResidentRuntimeRecoveredSubscriber is notified when a resident backend is
+// successfully factory-created for an agent×runtime slot (not on reuse).
+// Used to clear the server-side crashed_since after local recovery.
+type ResidentRuntimeRecoveredSubscriber func(agentID, runtimeID string)
+
 type canonicalAgentRuntimePool struct {
 	mu    sync.Mutex
 	slots map[string]*canonicalAgentRuntimeSlot
 
 	crashMu          sync.Mutex
 	crashSubscribers []ResidentRuntimeCrashSubscriber
+
+	recoverMu          sync.Mutex
+	recoverSubscribers []ResidentRuntimeRecoveredSubscriber
 }
 
 type canonicalAgentRuntimeSlot struct {
@@ -328,6 +336,11 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		if request.Mode == canonicalRuntimeResident {
 			slot.backend = created
 			slot.close = closeFn
+			// New resident process is up — clear any server-side "crashed"
+			// fact from a prior idle death. First-ever create is a no-op clear.
+			// Fire async: we still hold slot.mu here and subscribers may do I/O.
+			agentID, runtimeID := request.Identity.AgentID, request.Identity.RuntimeID
+			go p.notifyResidentRecovered(agentID, runtimeID)
 		}
 	}
 
@@ -563,6 +576,30 @@ func (p *canonicalAgentRuntimePool) subscribeResidentRuntimeCrash(fn ResidentRun
 	p.crashMu.Lock()
 	defer p.crashMu.Unlock()
 	p.crashSubscribers = append(p.crashSubscribers, fn)
+}
+
+// subscribeResidentRuntimeRecovered registers fn for successful resident
+// backend creates (not reuse). Idempotent ClearAgentCrashed on the server
+// is safe even when there was no prior crash.
+func (p *canonicalAgentRuntimePool) subscribeResidentRuntimeRecovered(fn ResidentRuntimeRecoveredSubscriber) {
+	if p == nil || fn == nil {
+		return
+	}
+	p.recoverMu.Lock()
+	defer p.recoverMu.Unlock()
+	p.recoverSubscribers = append(p.recoverSubscribers, fn)
+}
+
+func (p *canonicalAgentRuntimePool) notifyResidentRecovered(agentID, runtimeID string) {
+	if p == nil {
+		return
+	}
+	p.recoverMu.Lock()
+	subs := append([]ResidentRuntimeRecoveredSubscriber(nil), p.recoverSubscribers...)
+	p.recoverMu.Unlock()
+	for _, sub := range subs {
+		sub(agentID, runtimeID)
+	}
 }
 
 // checkResidentLiveness polls every idle resident slot's process liveness and

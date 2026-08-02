@@ -564,6 +564,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 		r.Post("/runtimes/{runtimeId}/agent-inbox/drain", h.DrainAgentInboxByRuntime)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credential", h.EnsureDaemonAgentCredential)
+		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed", h.ReportAgentProviderCrashed)
+		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed/clear", h.ClearAgentProviderCrashed)
 		r.Get("/runtimes/{runtimeId}/tasks/pending", h.ListPendingTasksByRuntime)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)

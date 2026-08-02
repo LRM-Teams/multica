@@ -364,6 +364,9 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		}
 		kind, eventType, severity := agentInboxActivityMessageKind(msg.Type)
 		message := agentInboxActivityMessageText(msg)
+		if callID := strings.TrimSpace(msg.CallID); callID != "" {
+			details["call_id"] = callID
+		}
 		if msg.Type == "tool_use" {
 			rawTool := strings.TrimSpace(msg.Tool)
 			canonicalTool, known := taskMessageCanonicalToolName(rawTool, msg.Input)
@@ -406,6 +409,14 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 				details["tool_target"] = target
 				details["summary_kind"] = summaryKind
 			}
+		}
+		// Cursor often emits tool args only on completed (tool_result). The
+		// daemon already carries that Input (runtime_tool_event.go); merge it
+		// into the started tool_call row by call_id instead of inventing a
+		// second user-facing line. Existing facts are preserved.
+		if msg.Type == "tool_result" {
+			h.backfillAgentInboxToolCallFromResult(r.Context(), h.DB,
+				event.WorkspaceID, event.AgentID, uuidToString(deliveryID), msg)
 		}
 		h.recordAgentActivityEvent(r.Context(), h.DB,
 			event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},

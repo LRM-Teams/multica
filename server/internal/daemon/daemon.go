@@ -4882,10 +4882,11 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					phase.leave()
 					s := seq.Add(1)
 					batch = append(batch, TaskMessageData{
-						Seq:   int(s),
-						Type:  "tool_use",
-						Tool:  msg.Tool,
-						Input: msg.Input,
+						Seq:    int(s),
+						Type:   "tool_use",
+						Tool:   msg.Tool,
+						CallID: msg.CallID,
+						Input:  msg.Input,
 					})
 					mu.Unlock()
 				case agent.MessageToolResult:
@@ -4922,6 +4923,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						Seq:    int(s),
 						Type:   "tool_result",
 						Tool:   toolName,
+						CallID: msg.CallID,
 						Input:  msg.Input, // LRM-689: backfill carrier when started had empty args
 						Output: output,
 					})

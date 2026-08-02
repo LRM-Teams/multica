@@ -569,10 +569,20 @@ func (h *Handler) maybeMaterializeUpdateIntent(ctx context.Context, runtimeID st
 		// Otherwise latest is a terminal failed/timeout attempt already
 		// folded into the backoff above on a prior heartbeat, or predates
 		// this intent entirely (a fresh re-request past a prior give-up) —
-		// fall through to the DueForRetry check below.
+		// fall through to the due-for-retry check below.
 	}
 
-	if !intent.DueForRetry(time.Now()) {
+	// IsDueForRetry, not intent.DueForRetry(time.Now()) — task #80: NextRetryAt
+	// is written using the database's clock (RecordFailure/Create both use
+	// now()), so comparing it against this application server's time.Now()
+	// crossed two clocks and could misjudge a just-eligible intent as not due
+	// yet. The SQL-side comparison below never leaves the database's clock.
+	due, err := h.UpdateIntentStore.IsDueForRetry(ctx, runtimeID)
+	if err != nil {
+		slog.Warn("check update intent retry due failed", "error", err, "runtime_id", runtimeID)
+		return
+	}
+	if !due {
 		return // backing off after a recent failure — not due yet
 	}
 

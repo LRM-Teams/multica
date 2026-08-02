@@ -56,11 +56,8 @@ import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n";
 import { GOAL_PROCESS_PANEL_ID, GoalProcessPanel } from "./goal-process-panel";
-import {
-  countOpenSubgoals,
-  GOAL_SUBGOAL_PANEL_ID,
-  GoalSubgoalPanel,
-} from "./goal-subgoal-panel";
+import { GoalSubgoalPanel } from "./goal-subgoal-panel";
+import { countOpenSubgoals, GOAL_SUBGOAL_PANEL_ID } from "./goal-subgoal-utils";
 
 interface ChannelGoalCardProps {
   channelId: string;

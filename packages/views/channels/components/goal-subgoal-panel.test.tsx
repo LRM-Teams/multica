@@ -8,7 +8,8 @@ import type { ChannelGoalSubgoal } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
-import { countOpenSubgoals, GoalSubgoalPanel } from "./goal-subgoal-panel";
+import { GoalSubgoalPanel } from "./goal-subgoal-panel";
+import { countOpenSubgoals } from "./goal-subgoal-utils";
 
 const state = vi.hoisted(() => ({
   subgoals: [] as ChannelGoalSubgoal[],

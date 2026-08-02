@@ -693,7 +693,7 @@ describe("DmList agent_pair row menu (LRM-752)", () => {
 
   it("renders the ⋯ menu with all four list-preference actions on agent_pair rows", async () => {
     renderDmList();
-    fireEvent.click(screen.getByRole("button", { name: /Agent DMs/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Agent collaboration/ }));
     expect(screen.getByText("Alpha Bot · Beta Bot")).toBeInTheDocument();
 
     const trigger = screen.getByRole("button", { name: "Direct message actions" });
@@ -706,7 +706,7 @@ describe("DmList agent_pair row menu (LRM-752)", () => {
   });
 });
 
-describe("DmList supervised Agent DM folder", () => {
+describe("DmList supervised Agent DM folder (LRM-764)", () => {
   beforeEach(() => {
     mockViewport.isMobile = false;
     mockQueryData.dmsPending = false;
@@ -729,22 +729,42 @@ describe("DmList supervised Agent DM folder", () => {
         unread: 3,
         real_unread: 3,
       }),
+      makeDm({
+        id: "dm-agent-pair-mention",
+        mode: "agent_pair",
+        supervised: true,
+        has_mention: true,
+        peer: { type: "agent", id: "agent-c", name: "Carol · Dave" },
+        participants: [
+          { type: "agent", id: "agent-c", name: "Carol" },
+          { type: "agent", id: "agent-d", name: "Dave" },
+        ],
+        unread: 1,
+        real_unread: 1,
+      }),
     ];
   });
 
   it("keeps direct DMs visible and folds supervised Agent pairs by default", () => {
     renderDmList();
     expect(screen.getByText("Human Peer")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Agent DMs/ })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /Agent collaboration/ })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
     expect(screen.queryByText("Alice · Bob")).not.toBeInTheDocument();
   });
 
+  it("keeps @-mention agent pairs flat (not folded) per LRM-764", () => {
+    renderDmList();
+    // Mentioned pair stays visible while the folder is collapsed.
+    expect(screen.getByText("Carol · Dave")).toBeInTheDocument();
+    expect(screen.queryByText("Alice · Bob")).not.toBeInTheDocument();
+  });
+
   it("expands the folder to reveal the authorized Agent pair", () => {
     renderDmList();
-    fireEvent.click(screen.getByRole("button", { name: /Agent DMs/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Agent collaboration/ }));
     expect(screen.getByText("Alice · Bob")).toBeInTheDocument();
   });
 });

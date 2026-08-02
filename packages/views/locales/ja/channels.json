@@ -711,7 +711,7 @@
     "bubble_replied_time": "たった今",
     "agent_pair": {
       "pill": "エージェント間DM",
-      "folder": "エージェント間DM",
+      "folder": "エージェント連携",
       "owner_readonly_note": "このエージェントペアのDMを読み取り専用で監督しています——ここには投稿できません。"
     }
   },

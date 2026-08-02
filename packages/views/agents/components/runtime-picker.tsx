@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Cloud, Loader2, Lock } from "lucide-react";
+import { ChevronDown, Cloud, Loader2 } from "lucide-react";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { runtimeDisplayLabel } from "../../runtimes/components/runtime-machines";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -15,8 +15,6 @@ import {
 } from "@multica/ui/components/ui/popover";
 import { Label } from "@multica/ui/components/ui/label";
 import { useT } from "../../i18n";
-
-export type RuntimeFilter = "mine" | "all";
 
 export function RuntimePicker({
   runtimes,
@@ -49,7 +47,6 @@ export function RuntimePicker({
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
-  const [filter, setFilter] = useState<RuntimeFilter>("mine");
   const pickerLabel = label ?? t(($) => $.create_dialog.runtime_label);
 
   const getOwnerMember = (ownerId: string | null) => {
@@ -57,41 +54,25 @@ export function RuntimePicker({
     return members.find((m) => m.user_id === ownerId) ?? null;
   };
 
-  const hasOtherRuntimes = runtimes.some((r) => r.owner_id !== currentUserId);
-
-  const filteredRuntimes = useMemo(
-    () => computeFilteredRuntimes(runtimes, filter, currentUserId),
-    [runtimes, filter, currentUserId],
+  // Others' private runtimes are excluded outright, not shown-disabled —
+  // a private runtime that isn't mine has nothing for me to do with it.
+  const visibleRuntimes = useMemo(
+    () => sortRuntimesForPicker(runtimes, currentUserId),
+    [runtimes, currentUserId],
   );
 
   const selectedRuntime =
     runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
 
   // Sole source of truth for seeding the parent's selection when it's empty
-  // — first mount with no template runtime, runtimes arriving later over
-  // WS, or filter toggle clearing to a set with no usable item. Only fires
-  // when `selectedRuntimeId === ""` so a duplicate-mode pre-fill (template
-  // runtime) is never silently overwritten.
+  // — first mount with no template runtime, or runtimes arriving later over
+  // WS. Only fires when `selectedRuntimeId === ""` so a duplicate-mode
+  // pre-fill (template runtime) is never silently overwritten.
   useEffect(() => {
     if (selectedRuntimeId !== "") return;
-    const firstUsable = filteredRuntimes.find((r) =>
-      isRuntimeUsableForUser(r, currentUserId),
-    );
+    const firstUsable = visibleRuntimes[0];
     if (firstUsable) onSelect(firstUsable.id);
-  }, [filteredRuntimes, selectedRuntimeId, currentUserId, onSelect]);
-
-  // On filter toggle, recompute the picker's selection to a usable item
-  // in the new filter set. Pushes `""` when nothing matches; the seeding
-  // effect above is a no-op in that case (correct: no usable item to pick).
-  const handleFilterChange = (next: RuntimeFilter) => {
-    if (next === filter) return;
-    setFilter(next);
-    const nextList = computeFilteredRuntimes(runtimes, next, currentUserId);
-    const firstUsable = nextList.find((r) =>
-      isRuntimeUsableForUser(r, currentUserId),
-    );
-    onSelect(firstUsable?.id ?? "");
-  };
+  }, [visibleRuntimes, selectedRuntimeId, onSelect]);
 
   // Computed once per render, outside JSX, so react:doctor's
   // hydration-mismatch rule doesn't flag a fresh Date.now() per row.
@@ -103,32 +84,6 @@ export function RuntimePicker({
         <Label className="text-xs text-muted-foreground">
           {pickerLabel}
         </Label>
-        {hasOtherRuntimes && (
-          <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
-            <button
-              type="button"
-              onClick={() => handleFilterChange("mine")}
-              className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
-                filter === "mine"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t(($) => $.create_dialog.runtime_filter_mine)}
-            </button>
-            <button
-              type="button"
-              onClick={() => handleFilterChange("all")}
-              className={`rounded px-2 py-0.5 text-xs font-medium transition-colors ${
-                filter === "all"
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t(($) => $.create_dialog.runtime_filter_all)}
-            </button>
-          </div>
-        )}
       </div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
@@ -177,29 +132,20 @@ export function RuntimePicker({
           align="start"
           className="w-[var(--anchor-width)] p-1 max-h-60 overflow-y-auto"
         >
-          {filteredRuntimes.map((device) => {
+          {visibleRuntimes.map((device) => {
             const ownerMember = getOwnerMember(device.owner_id);
-            const disabled = !isRuntimeUsableForUser(device, currentUserId);
-            const disabledTitle = disabled
-              ? t(($) => $.create_dialog.runtime_private_locked_tooltip)
-              : undefined;
             return (
               <button
                 key={device.id}
                 type="button"
-                disabled={disabled}
-                title={disabledTitle}
                 onClick={() => {
-                  if (disabled) return;
                   onSelect(device.id);
                   setOpen(false);
                 }}
                 className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
-                  disabled
-                    ? "cursor-not-allowed opacity-50"
-                    : device.id === selectedRuntimeId
-                      ? "bg-accent"
-                      : "hover:bg-accent/50"
+                  device.id === selectedRuntimeId
+                    ? "bg-accent"
+                    : "hover:bg-accent/50"
                 }`}
               >
                 <ProviderLogo
@@ -212,12 +158,6 @@ export function RuntimePicker({
                     {device.runtime_mode === "cloud" && (
                       <span className="shrink-0 rounded bg-brand/10 px-1.5 py-0.5 text-xs font-medium text-brand">
                         {t(($) => $.create_dialog.runtime_cloud_badge)}
-                      </span>
-                    )}
-                    {disabled && (
-                      <span className="shrink-0 inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                        <Lock className="h-3 w-3" />
-                        {t(($) => $.create_dialog.runtime_private_badge)}
                       </span>
                     )}
                   </div>
@@ -265,24 +205,19 @@ export function isRuntimeUsableForUser(
   return r.visibility === "public";
 }
 
-function computeFilteredRuntimes(
+// Others' private runtimes are excluded, not shown-disabled — a private
+// runtime that isn't mine and isn't public has nothing for me to do with it.
+function sortRuntimesForPicker(
   runtimes: RuntimeDevice[],
-  filter: RuntimeFilter,
   currentUserId: string | null,
 ): RuntimeDevice[] {
-  const filtered =
-    filter === "mine" && currentUserId
-      ? runtimes.filter((r) => r.owner_id === currentUserId)
-      : runtimes;
-  return filtered.toSorted((a, b) => {
-    const aMine = a.owner_id === currentUserId;
-    const bMine = b.owner_id === currentUserId;
-    if (aMine && !bMine) return -1;
-    if (!aMine && bMine) return 1;
-    const aUsable = isRuntimeUsableForUser(a, currentUserId);
-    const bUsable = isRuntimeUsableForUser(b, currentUserId);
-    if (aUsable && !bUsable) return -1;
-    if (!aUsable && bUsable) return 1;
-    return 0;
-  });
+  return runtimes
+    .filter((r) => isRuntimeUsableForUser(r, currentUserId))
+    .toSorted((a, b) => {
+      const aMine = a.owner_id === currentUserId;
+      const bMine = b.owner_id === currentUserId;
+      if (aMine && !bMine) return -1;
+      if (!aMine && bMine) return 1;
+      return 0;
+    });
 }

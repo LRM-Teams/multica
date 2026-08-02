@@ -173,6 +173,10 @@ export type {
   MemoryCurationCandidateListResponse,
   TeamKnowledgeListItem,
   TeamKnowledgeListResponse,
+  KnowledgeEdge,
+  KnowledgeNeighborsResponse,
+  PromoteKnowledgeRequest,
+  PromoteKnowledgeResponse,
   PromoteEvolutionReviewSubmissionResponse,
 } from "./evolution";
 export type {

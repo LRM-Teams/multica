@@ -51,6 +51,9 @@ import type {
   MemoryCurationCandidateListResponse,
   TeamKnowledgeListItem,
   TeamKnowledgeListResponse,
+  KnowledgeNeighborsResponse,
+  PromoteKnowledgeRequest,
+  PromoteKnowledgeResponse,
   PromoteEvolutionReviewSubmissionResponse,
   UpdateAgentRequest,
   AgentEnvResponse,
@@ -372,6 +375,9 @@ import {
   TeamKnowledgeListItemSchema,
   TeamKnowledgeListResponseSchema,
   EMPTY_TEAM_KNOWLEDGE_LIST,
+  KnowledgeNeighborsResponseSchema,
+  EMPTY_KNOWLEDGE_NEIGHBORS,
+  PromoteKnowledgeResponseSchema,
   EMPTY_SANDBOX_NODE_DOCKER_IMAGES_RESPONSE,
   SandboxNodeDockerImagesResponseSchema,
   SandboxNodeTemplatesResponseSchema,
@@ -2829,6 +2835,44 @@ export class ApiClient {
       created_at: "",
     }, {
       endpoint: "GET /api/workspaces/{id}/memory-curation/team-knowledge/{itemId}",
+    });
+  }
+
+  async listKnowledgeNeighbors(
+    workspaceId: string,
+    itemId: string,
+    hops: 1 | 2 = 1,
+  ): Promise<KnowledgeNeighborsResponse> {
+    const query = hops === 2 ? "?hops=2" : "?hops=1";
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/memory-curation/team-knowledge/${encodeURIComponent(itemId)}/neighbors${query}`,
+    );
+    return parseWithFallback(raw, KnowledgeNeighborsResponseSchema, EMPTY_KNOWLEDGE_NEIGHBORS, {
+      endpoint: "GET /api/workspaces/{id}/memory-curation/team-knowledge/{itemId}/neighbors",
+    });
+  }
+
+  async promoteKnowledgePage(
+    workspaceId: string,
+    data: PromoteKnowledgeRequest,
+  ): Promise<PromoteKnowledgeResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/knowledge/promote`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    );
+    return parseWithFallback(raw, PromoteKnowledgeResponseSchema, {
+      id: "",
+      kind: "",
+      title: "",
+      content: "",
+      status: "",
+      edges: [],
+      created_at: "",
+    }, {
+      endpoint: "POST /api/workspaces/{id}/knowledge/promote",
     });
   }
 

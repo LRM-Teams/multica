@@ -112,6 +112,7 @@ vi.mock("@multica/core/paths", () => ({
     agents: () => "/acme/agents",
     usage: () => "/acme/usage",
     evolution: () => "/acme/evolution",
+    wiki: () => "/acme/wiki",
     planBilling: () => "/acme/plan-billing",
     computers: () => "/acme/computers",
     sandboxes: () => "/acme/sandboxes",

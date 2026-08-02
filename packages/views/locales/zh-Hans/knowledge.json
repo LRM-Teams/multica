@@ -1,0 +1,75 @@
+{
+  "nav": {
+    "title": "知识"
+  },
+  "page": {
+    "title": "知识",
+    "tagline": "成员可读的记忆页与显式联系——按页打开，不暗示全库灌入。",
+    "tabs": {
+      "all": "全部",
+      "topic": "议题",
+      "decision": "决策",
+      "goal": "目标"
+    },
+    "kind": {
+      "context": "议题 · CONTEXT",
+      "decision": "决策 · DECISION",
+      "goal": "目标 · GOAL",
+      "other": "页面"
+    },
+    "empty_title": "还没有记忆页",
+    "empty_body": "从 Issue 或频道结论「提升为 CONTEXT / DECISION」创建第一页。",
+    "empty_goal_title": "还没有目标页",
+    "empty_goal_body": "目标 Wiki 与频道 Goal 对齐时可挂链。可先打开频道 Goal，或提升相关 CONTEXT。",
+    "open_channels": "打开消息",
+    "loading": "正在加载知识…",
+    "forbidden": "你没有查看此记忆页的权限。",
+    "not_found_title": "找不到此记忆页",
+    "not_found_body": "可能已归档，或链接不正确。",
+    "back_to_list": "返回知识",
+    "updated": "更新于 {{time}}",
+    "contacts": "联系",
+    "contacts_empty_title": "此页还没有联系",
+    "contacts_empty_body": "提升或编辑时可添加 about / shared_to 等边。",
+    "body": "正文",
+    "edge": {
+      "derived_from": "derived_from",
+      "about": "about",
+      "shared_to": "shared_to",
+      "supersedes": "supersedes",
+      "owned_by": "owned_by",
+      "open": "打开",
+      "back_source": "回源"
+    },
+    "node": {
+      "issue": "Issue",
+      "channel": "频道",
+      "project": "项目",
+      "agent": "智能体",
+      "member": "成员",
+      "team_knowledge": "知识页",
+      "unknown": "关联项"
+    }
+  },
+  "promote": {
+    "context": "提升为 CONTEXT…",
+    "decision": "提升为 DECISION…",
+    "dialog_title_context": "提升为 CONTEXT",
+    "dialog_title_decision": "提升为 DECISION",
+    "dialog_description": "创建成员可读 Wiki 页，并自动建立指向来源的 derived_from 联系。",
+    "title_label": "标题",
+    "content_label": "正文",
+    "subject_label_context": "频道（可选 subject）",
+    "subject_label_decision": "项目（可选 subject）",
+    "subject_placeholder": "可选 UUID",
+    "submit": "提升",
+    "submitting": "提升中…",
+    "cancel": "取消",
+    "success": "已提升，并建立 derived_from",
+    "error": "提升失败"
+  },
+  "drill": {
+    "open_wiki": "在知识中打开",
+    "related": "相关知识"
+  }
+}

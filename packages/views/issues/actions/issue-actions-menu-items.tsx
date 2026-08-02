@@ -10,6 +10,7 @@ import {
   Calendar,
   CalendarClock,
   FolderOpen,
+  BookMarked,
   Link2,
   MoreHorizontal,
   PanelRight,
@@ -19,6 +20,7 @@ import {
   Trash2,
   UserMinus,
 } from "lucide-react";
+import type { PromoteWikiTarget } from "../../knowledge";
 import type { AgentTask, Issue } from "@multica/core/types";
 import { todayDateOnly, addDaysDateOnly } from "@multica/core/issues/date";
 import { api } from "@multica/core/api";
@@ -92,6 +94,8 @@ interface IssueActionsMenuItemsProps {
   /** Optional detail-page-only control. It keeps the mobile header action
    * cluster compact while preserving access to the properties sheet. */
   onToggleSidebar?: () => void;
+  /** Open promote-to-wiki dialog (LRM-1001). Parent hosts the dialog. */
+  onPromoteWiki?: (target: PromoteWikiTarget) => void;
 }
 
 export function IssueActionsMenuItems({
@@ -101,8 +105,10 @@ export function IssueActionsMenuItems({
   onOpenAssignee,
   onDeletedNavigateTo,
   onToggleSidebar,
+  onPromoteWiki,
 }: IssueActionsMenuItemsProps) {
   const { t } = useT("issues");
+  const { t: tKnowledge } = useT("knowledge");
   const {
     isPinned,
     updateField,
@@ -267,6 +273,18 @@ export function IssueActionsMenuItems({
         <Link2 className="h-3.5 w-3.5" />
         {t(($) => $.actions.copy_link)}
       </P.Item>
+      {onPromoteWiki && (
+        <>
+          <P.Item onClick={() => onPromoteWiki("context")}>
+            <BookMarked className="h-3.5 w-3.5" />
+            {tKnowledge(($) => $.promote.context)}
+          </P.Item>
+          <P.Item onClick={() => onPromoteWiki("decision")}>
+            <BookMarked className="h-3.5 w-3.5" />
+            {tKnowledge(($) => $.promote.decision)}
+          </P.Item>
+        </>
+      )}
       <P.Item onClick={handleCopyWorkdirPath}>
         <FolderOpen className="h-3.5 w-3.5" />
         {t(($) => $.actions.copy_workdir_path)}

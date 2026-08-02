@@ -6,6 +6,7 @@ import type { ChannelGoal } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
+import enKnowledge from "../../locales/en/knowledge.json";
 import { ChannelGoalCard } from "./channel-goal-card";
 
 const state = vi.hoisted(() => ({
@@ -43,6 +44,15 @@ vi.mock("@multica/core/channels", async (importOriginal) => ({
   }),
 }));
 
+vi.mock("@multica/core/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/paths")>();
+  return {
+    ...actual,
+    useWorkspacePaths: () => actual.paths.workspace("acme"),
+    useRequiredWorkspaceSlug: () => "acme",
+  };
+});
+
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => false,
 }));
@@ -50,6 +60,27 @@ vi.mock("@multica/ui/hooks/use-mobile", () => ({
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: ({ name }: { name?: string }) => <span data-testid="actor-avatar">{name}</span>,
 }));
+
+vi.mock("../../navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../navigation")>();
+  return {
+    ...actual,
+    AppLink: ({
+      href,
+      children,
+      className,
+    }: {
+      href: string;
+      children?: React.ReactNode;
+      className?: string;
+    }) => (
+      <a href={href} className={className}>
+        {children}
+      </a>
+    ),
+    useNavigation: () => ({ push: vi.fn(), replace: vi.fn() }),
+  };
+});
 
 function goal(overrides: Partial<ChannelGoal> = {}): ChannelGoal {
   return {
@@ -82,7 +113,10 @@ function renderCard(canManage = true) {
   });
   queryClient.setQueryData(["channel-goal", "channel-1"], { goal: state.goal });
   return render(
-    <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
+    <I18nProvider
+      locale="en"
+      resources={{ en: { common: enCommon, channels: enChannels, knowledge: enKnowledge } }}
+    >
       <QueryClientProvider client={queryClient}>
         <ChannelGoalCard channelId="channel-1" canManage={canManage} />
       </QueryClientProvider>

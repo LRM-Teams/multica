@@ -7,14 +7,15 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n/use-t";
 import type { FleetStepCardModel, FleetStepStatus } from "../lib/fleet-step-cards";
 
+/** LRM-1010 — semantic success/warning tokens (no palette emerald/amber / dark: forks). */
 function badgeClass(status: FleetStepStatus): string {
   switch (status) {
     case "done":
-      return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+      return "bg-success/10 text-success";
     case "running":
       return "bg-primary/10 text-primary";
     case "waiting":
-      return "bg-amber-500/10 text-amber-800 dark:text-amber-400";
+      return "bg-warning/10 text-warning";
     case "failed":
       return "bg-destructive/10 text-destructive";
   }
@@ -23,7 +24,7 @@ function badgeClass(status: FleetStepStatus): string {
 function cardClass(status: FleetStepStatus): string {
   switch (status) {
     case "done":
-      return "border-emerald-500/25 bg-card";
+      return "border-success/25 bg-card";
     case "running":
       return "border-primary/30 bg-card";
     case "waiting":

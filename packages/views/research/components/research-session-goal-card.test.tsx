@@ -2,6 +2,12 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { ResearchSessionGoalCard } from "./research-session-goal-card";
 
+const mobileState = { isMobile: false };
+
+vi.mock("@multica/ui/hooks/use-mobile", () => ({
+  useIsMobile: () => mobileState.isMobile,
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (fn: (dict: Record<string, unknown>) => unknown) =>
@@ -31,9 +37,10 @@ vi.mock("../../i18n/use-t", () => ({
   }),
 }));
 
-describe("ResearchSessionGoalCard (LRM-1008)", () => {
+describe("ResearchSessionGoalCard (LRM-1008 / LRM-1010)", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    mobileState.isMobile = false;
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -52,6 +59,34 @@ describe("ResearchSessionGoalCard (LRM-1008)", () => {
     expect(card.textContent).toContain("GOAL");
     expect(card.textContent).toMatch(/人员编制/);
     expect(screen.getByTestId("research-session-goal-dot")).toBeTruthy();
+  });
+
+  it("LRM-1010: uses brand semantic tokens (no hardcoded violet)", () => {
+    const { container } = render(
+      <ResearchSessionGoalCard sessionId="s1" goal="品牌色目标" />,
+    );
+    const card = screen.getByTestId("research-session-goal-card");
+    expect(card.className).toContain("bg-brand/10");
+    expect(card.className).toContain("border-brand/30");
+    expect(card.className).not.toContain("6b5cff");
+    expect(card.className).not.toContain("research-goal");
+    expect(card.className).not.toContain("violet");
+    expect(container.querySelector(".text-brand")).toBeTruthy();
+    expect(screen.getByTestId("research-session-goal-dot").className).toContain(
+      "bg-muted-foreground",
+    );
+  });
+
+  it("LRM-1010: narrow viewport forces icon trigger (no toolbar overflow)", () => {
+    mobileState.isMobile = true;
+    render(
+      <ResearchSessionGoalCard sessionId="s1" goal="窄屏也不挤爆顶栏" />,
+    );
+    expect(screen.getByTestId("research-session-goal-icon")).toBeTruthy();
+    expect(screen.queryByTestId("research-session-goal-card")).toBeNull();
+    fireEvent.click(screen.getByTestId("research-session-goal-icon"));
+    expect(screen.getByTestId("research-session-goal-popover")).toBeTruthy();
+    expect(screen.queryByTestId("research-session-goal-toggle-collapse")).toBeNull();
   });
 
   it("opens dialog with full text; Esc/close works via dialog", () => {

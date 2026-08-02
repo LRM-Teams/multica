@@ -146,7 +146,7 @@ export function ResearchChatCard({
         isProcess && "border-dashed bg-muted/40",
         isUser && !isProcess && "ml-3 border-primary/25 bg-primary/10",
         !isUser && !isProcess && "mr-1 bg-card",
-        wasStopped && "border-amber-500/30",
+        wasStopped && "border-warning/30",
       )}
     >
       <header className="mb-1.5 flex items-center gap-2">

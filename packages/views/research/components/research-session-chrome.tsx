@@ -245,11 +245,11 @@ export function ResearchSessionChrome({
       {/* Context + actions: stage/goal secondary; one primary CTA; secondary folded on narrow */}
       <div
         data-testid="research-session-toolbar"
-        className="flex items-center justify-between gap-3 px-4 pb-2.5"
+        className="flex min-w-0 items-center justify-between gap-2 px-3 pb-2.5 sm:gap-3 sm:px-4"
       >
         <div
           data-testid="research-session-context"
-          className="flex min-w-0 flex-1 items-center gap-2"
+          className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden"
         >
           <ContextChip
             label={stageLabel}

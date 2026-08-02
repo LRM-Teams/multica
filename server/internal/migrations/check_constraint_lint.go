@@ -40,11 +40,25 @@ func (n UnsafeNarrowing) String() string {
 // Scope: this is a narrow, deliberately imperfect regex-based heuristic —
 // not a SQL parser. It catches ONLY the "narrowed CHECK IN(...) list, no
 // preceding remap" shape. It does NOT verify that a down migration can
-// actually run, and does not catch other ways a down migration can fail on
-// real data (dropping a column that holds data, dropping an
-// FK-referenced table, a type change existing rows can't convert to, etc).
+// actually run, and does not catch other ways a down migration can fail —
+// including ways that are worse than a loud failure. Two concrete examples
+// found during task #97's own history audit:
+//   - dropping a column that holds data, dropping an FK-referenced table,
+//     or a type change existing rows can't convert to: these fail loudly
+//     (ALTER TABLE errors out) — bad, but at least visible and the data
+//     survives.
+//   - migration 107's down.sql (task #99) narrows comment.author_type by
+//     DELETE-ing the now-forbidden rows instead of remapping them. This
+//     checker does not flag it — it only looks for narrowed CHECK IN(...)
+//     lists, and a DELETE-based rollback has no CHECK-narrowing shape to
+//     detect. The down migration SUCCEEDS, silently, and 218 rows of real
+//     data are gone with no error to notice. A loud failure is strictly
+//     safer than a silent successful data loss; this checker only catches
+//     the loud-failure family.
+//
 // A migration passing this check is not a general guarantee its rollback
-// works — see task #97's own scope note.
+// works, or that it doesn't quietly destroy data — see task #97's own
+// scope note.
 func FindUnsafeNarrowings(migrationName, upSQL, downSQL string) []UnsafeNarrowing {
 	upConstraints := extractCheckInConstraints(upSQL)
 	downConstraints := extractCheckInConstraints(downSQL)

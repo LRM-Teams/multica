@@ -57,6 +57,12 @@ SELECT COALESCE(MAX(end_seq), 0)::integer AS last_end_seq
 FROM interaction_dag_segment
 WHERE agent_run_id = $1;
 
+-- name: GetInteractionDAGSegmentByID :one
+-- GetInteractionDAGSegmentByID resolves a segment by its segment_id.
+-- Returns pgx.ErrNoRows when no segment exists for the given ID.
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at FROM interaction_dag_segment
+WHERE segment_id = $1;
+
 -- name: InsertInteractionDAGEdge :exec
 -- Typed DAG edge. type is CHECK-constrained to delegation/mention/completion;
 -- no FK to interaction_dag_segment so an edge can be recorded before both
@@ -99,6 +105,24 @@ SELECT e.segment_id, e.sandbox_ids, e.issue_snapshot_id, e.env_state
 FROM interaction_dag_env_snapshot e
 JOIN interaction_dag_segment s ON s.segment_id = e.segment_id
 WHERE s.project_id = $1;
+
+-- name: InsertInteractionDAGStepReward :exec
+-- InsertInteractionDAGStepReward upserts a per-step reward keyed by
+-- (segment_id, seq). Re-recording a key updates score/rationale, not duplicates.
+INSERT INTO interaction_dag_step_reward (segment_id, seq, score, rationale)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (segment_id, seq) DO UPDATE SET score = EXCLUDED.score, rationale = EXCLUDED.rationale;
+
+-- name: ListInteractionDAGStepRewardsForProject :many
+-- ListInteractionDAGStepRewardsForProject returns all step rewards for segments
+-- belonging to the project (the step_reward table has no project_id column, so
+-- the filter joins through interaction_dag_segment). Read-only; used by
+-- InteractionDAGService.AssembleAssembledDag.
+SELECT sr.segment_id, sr.seq, sr.score, sr.rationale, sr.created_at
+FROM interaction_dag_step_reward sr
+JOIN interaction_dag_segment s ON sr.segment_id = s.segment_id
+WHERE s.project_id = $1
+ORDER BY sr.segment_id, sr.seq;
 
 -- name: CreateInteractionDAGDiagnosisRun :exec
 -- Snapshots a new diagnosis run (migration 208): project/task scope, topology

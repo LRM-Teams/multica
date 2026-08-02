@@ -93,7 +93,7 @@ func TestInteractionDAG_RecordLocalSegmentForEvent_RecordsLocalSegment(t *testin
 	assert.Equal(t, "file contents", traj[2]["output"])
 
 	// Env snapshot recorded.
-	assert.JSONEq(t, `["sbx-1"]`, string(seg.SandboxIDs))
+	assert.JSONEq(t, `["sbx-1"]`, string(seg.SandboxIds))
 }
 
 // TestInteractionDAG_RecordLocalSegmentForEvent_RepeatCloseIsIdempotent verifies that
@@ -229,7 +229,7 @@ func TestAssembleAssembledDag_EmitsDualSourceFields(t *testing.T) {
 		TrajectorySource: "areal_tensor",
 		Trainable:        true,
 		Trajectory:       []byte("[]"),
-		SandboxIDs:       []byte("[]"),
+		SandboxIds:       []byte("[]"),
 		EnvState:         []byte("{}"),
 	})
 

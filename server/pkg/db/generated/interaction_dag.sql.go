@@ -11,20 +11,229 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// InteractionDAGSessionRun maps an areal RL session_id to the multica
-// agent_run_id (= task.ID, D8) + issue_id known at session-open. U9 omitted
-// this table; CloseSegmentForEvent looks up agent_run_id + issue_id by
-// session_id here, and U8 assembles session_to_agent_run from it.
-type InteractionDAGSessionRun struct {
-	SessionID  string             `json:"session_id"`
-	ProjectID  string             `json:"project_id"`
-	AgentRunID string             `json:"agent_run_id"`
-	IssueID    pgtype.Text        `json:"issue_id"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+const advanceInteractionDAGDiagnosisSegmentFetch = `-- name: AdvanceInteractionDAGDiagnosisSegmentFetch :execrows
+UPDATE interaction_dag_diagnosis_segment
+SET next_cursor = $4, fetched_message_count = $5, updated_at = now()
+WHERE run_id = $1 AND segment_id = $2
+  AND status = 'in_progress'
+  AND next_cursor = $3
+  AND fetched_message_count <= $5
+`
+
+type AdvanceInteractionDAGDiagnosisSegmentFetchParams struct {
+	RunID               string `json:"run_id"`
+	SegmentID           string `json:"segment_id"`
+	NextCursor          string `json:"next_cursor"`
+	NextCursor_2        string `json:"next_cursor_2"`
+	FetchedMessageCount int32  `json:"fetched_message_count"`
 }
 
-// InteractionDAGSegment is one row per closed communication-bounded segment.
-type InteractionDAGSegment struct {
+// CAS: only the holder of the current cursor may advance it, and the fetched
+// count only moves forward. next_cursor is opaque (HMAC-signed by the server).
+func (q *Queries) AdvanceInteractionDAGDiagnosisSegmentFetch(ctx context.Context, arg AdvanceInteractionDAGDiagnosisSegmentFetchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, advanceInteractionDAGDiagnosisSegmentFetch,
+		arg.RunID,
+		arg.SegmentID,
+		arg.NextCursor,
+		arg.NextCursor_2,
+		arg.FetchedMessageCount,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const completeInteractionDAGDiagnosisRun = `-- name: CompleteInteractionDAGDiagnosisRun :execrows
+UPDATE interaction_dag_diagnosis_run run
+SET status = 'completed', completed_at = now(), updated_at = now()
+WHERE run.run_id = $1
+  AND run.status IN ('running', 'compacting')
+  AND NOT EXISTS (
+    SELECT 1 FROM interaction_dag_diagnosis_segment s
+    WHERE s.run_id = $1 AND s.status <> 'completed'
+  )
+`
+
+// CAS: completes only while active AND every segment checkpoint is completed,
+// so the run can never be marked done with outstanding coverage.
+func (q *Queries) CompleteInteractionDAGDiagnosisRun(ctx context.Context, runID string) (int64, error) {
+	result, err := q.db.Exec(ctx, completeInteractionDAGDiagnosisRun, runID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const completeInteractionDAGDiagnosisSegment = `-- name: CompleteInteractionDAGDiagnosisSegment :execrows
+UPDATE interaction_dag_diagnosis_segment
+SET status = 'completed', completed_at = now(), updated_at = now()
+WHERE run_id = $1 AND segment_id = $2
+  AND status = 'in_progress'
+  AND fetched_message_count >= expected_message_count
+  AND reward_count >= expected_reward_count
+`
+
+type CompleteInteractionDAGDiagnosisSegmentParams struct {
+	RunID     string `json:"run_id"`
+	SegmentID string `json:"segment_id"`
+}
+
+// CAS: completes only from in_progress once both message and reward coverage
+// are satisfied; the DB, not the model, decides completion.
+func (q *Queries) CompleteInteractionDAGDiagnosisSegment(ctx context.Context, arg CompleteInteractionDAGDiagnosisSegmentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, completeInteractionDAGDiagnosisSegment, arg.RunID, arg.SegmentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createInteractionDAGDiagnosisRun = `-- name: CreateInteractionDAGDiagnosisRun :exec
+INSERT INTO interaction_dag_diagnosis_run (run_id, project_id, task_id, topology_hash, ordered_segment_ids, status)
+VALUES ($1, $2, $3, $4, $5, 'running')
+`
+
+type CreateInteractionDAGDiagnosisRunParams struct {
+	RunID             string `json:"run_id"`
+	ProjectID         string `json:"project_id"`
+	TaskID            string `json:"task_id"`
+	TopologyHash      string `json:"topology_hash"`
+	OrderedSegmentIds []byte `json:"ordered_segment_ids"`
+}
+
+// Snapshots a new diagnosis run (migration 208): project/task scope, topology
+// hash, and the ordered segment IDs as jsonb. Status starts 'running'.
+func (q *Queries) CreateInteractionDAGDiagnosisRun(ctx context.Context, arg CreateInteractionDAGDiagnosisRunParams) error {
+	_, err := q.db.Exec(ctx, createInteractionDAGDiagnosisRun,
+		arg.RunID,
+		arg.ProjectID,
+		arg.TaskID,
+		arg.TopologyHash,
+		arg.OrderedSegmentIds,
+	)
+	return err
+}
+
+const createInteractionDAGDiagnosisSegment = `-- name: CreateInteractionDAGDiagnosisSegment :exec
+INSERT INTO interaction_dag_diagnosis_segment (run_id, segment_id, ordinal, status)
+VALUES ($1, $2, $3, 'pending')
+`
+
+type CreateInteractionDAGDiagnosisSegmentParams struct {
+	RunID     string `json:"run_id"`
+	SegmentID string `json:"segment_id"`
+	Ordinal   int32  `json:"ordinal"`
+}
+
+func (q *Queries) CreateInteractionDAGDiagnosisSegment(ctx context.Context, arg CreateInteractionDAGDiagnosisSegmentParams) error {
+	_, err := q.db.Exec(ctx, createInteractionDAGDiagnosisSegment, arg.RunID, arg.SegmentID, arg.Ordinal)
+	return err
+}
+
+const failInteractionDAGDiagnosisRun = `-- name: FailInteractionDAGDiagnosisRun :execrows
+UPDATE interaction_dag_diagnosis_run
+SET status = 'failed', last_error = $2, updated_at = now()
+WHERE run_id = $1 AND status IN ('running', 'compacting')
+`
+
+type FailInteractionDAGDiagnosisRunParams struct {
+	RunID     string `json:"run_id"`
+	LastError string `json:"last_error"`
+}
+
+// CAS: only an active run can be failed; last_error is bounded by the caller.
+func (q *Queries) FailInteractionDAGDiagnosisRun(ctx context.Context, arg FailInteractionDAGDiagnosisRunParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failInteractionDAGDiagnosisRun, arg.RunID, arg.LastError)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getInteractionDAGDiagnosisRun = `-- name: GetInteractionDAGDiagnosisRun :one
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+FROM interaction_dag_diagnosis_run
+WHERE run_id = $1
+`
+
+func (q *Queries) GetInteractionDAGDiagnosisRun(ctx context.Context, runID string) (InteractionDagDiagnosisRun, error) {
+	row := q.db.QueryRow(ctx, getInteractionDAGDiagnosisRun, runID)
+	var i InteractionDagDiagnosisRun
+	err := row.Scan(
+		&i.RunID,
+		&i.ProjectID,
+		&i.TaskID,
+		&i.TopologyHash,
+		&i.OrderedSegmentIds,
+		&i.Status,
+		&i.CurrentSegmentOrdinal,
+		&i.PiSessionID,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getInteractionDAGDiagnosisSegment = `-- name: GetInteractionDAGDiagnosisSegment :one
+SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, expected_reward_seqs, reward_count, next_cursor, status, created_at, updated_at, completed_at
+FROM interaction_dag_diagnosis_segment
+WHERE run_id = $1 AND segment_id = $2
+`
+
+type GetInteractionDAGDiagnosisSegmentParams struct {
+	RunID     string `json:"run_id"`
+	SegmentID string `json:"segment_id"`
+}
+
+type GetInteractionDAGDiagnosisSegmentRow struct {
+	RunID                string             `json:"run_id"`
+	SegmentID            string             `json:"segment_id"`
+	Ordinal              int32              `json:"ordinal"`
+	ExpectedMessageCount int32              `json:"expected_message_count"`
+	FetchedMessageCount  int32              `json:"fetched_message_count"`
+	ExpectedRewardCount  int32              `json:"expected_reward_count"`
+	ExpectedRewardSeqs   []byte             `json:"expected_reward_seqs"`
+	RewardCount          int32              `json:"reward_count"`
+	NextCursor           string             `json:"next_cursor"`
+	Status               string             `json:"status"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	CompletedAt          pgtype.Timestamptz `json:"completed_at"`
+}
+
+func (q *Queries) GetInteractionDAGDiagnosisSegment(ctx context.Context, arg GetInteractionDAGDiagnosisSegmentParams) (GetInteractionDAGDiagnosisSegmentRow, error) {
+	row := q.db.QueryRow(ctx, getInteractionDAGDiagnosisSegment, arg.RunID, arg.SegmentID)
+	var i GetInteractionDAGDiagnosisSegmentRow
+	err := row.Scan(
+		&i.RunID,
+		&i.SegmentID,
+		&i.Ordinal,
+		&i.ExpectedMessageCount,
+		&i.FetchedMessageCount,
+		&i.ExpectedRewardCount,
+		&i.ExpectedRewardSeqs,
+		&i.RewardCount,
+		&i.NextCursor,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getInteractionDAGSegmentByAgentRun = `-- name: GetInteractionDAGSegmentByAgentRun :one
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at
+FROM interaction_dag_segment
+WHERE agent_run_id = $1
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetInteractionDAGSegmentByAgentRunRow struct {
 	SegmentID                 string             `json:"segment_id"`
 	ProjectID                 string             `json:"project_id"`
 	AgentRunID                string             `json:"agent_run_id"`
@@ -42,85 +251,14 @@ type InteractionDAGSegment struct {
 	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
 }
 
-// InteractionDAGEnvSnapshot is the 1:1 env snapshot per segment.
-type InteractionDAGEnvSnapshot struct {
-	SegmentID       string      `json:"segment_id"`
-	SandboxIDs      []byte      `json:"sandbox_ids"`
-	IssueSnapshotID pgtype.Text `json:"issue_snapshot_id"`
-	EnvState        []byte      `json:"env_state"`
-}
-
-// InteractionDAGEdge is one typed DAG edge between segments.
-type InteractionDAGEdge struct {
-	ID           int64              `json:"id"`
-	ProjectID    string             `json:"project_id"`
-	SrcSegmentID string             `json:"src_segment_id"`
-	DstSegmentID string             `json:"dst_segment_id"`
-	Type         string             `json:"type"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-}
-
-const upsertInteractionDAGSessionRun = `-- name: UpsertInteractionDAGSessionRun :exec
-INSERT INTO interaction_dag_session_run (session_id, project_id, agent_run_id, issue_id)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (session_id) DO UPDATE SET
-  project_id = EXCLUDED.project_id,
-  agent_run_id = EXCLUDED.agent_run_id,
-  issue_id = EXCLUDED.issue_id
-`
-
-type UpsertInteractionDAGSessionRunParams struct {
-	SessionID  string      `json:"session_id"`
-	ProjectID  string      `json:"project_id"`
-	AgentRunID string      `json:"agent_run_id"`
-	IssueID    pgtype.Text `json:"issue_id"`
-}
-
-func (q *Queries) UpsertInteractionDAGSessionRun(ctx context.Context, arg UpsertInteractionDAGSessionRunParams) error {
-	_, err := q.db.Exec(ctx, upsertInteractionDAGSessionRun,
-		arg.SessionID,
-		arg.ProjectID,
-		arg.AgentRunID,
-		arg.IssueID,
-	)
-	return err
-}
-
-const getInteractionDAGSessionRun = `-- name: GetInteractionDAGSessionRun :one
-SELECT session_id, project_id, agent_run_id, issue_id, created_at FROM interaction_dag_session_run
-WHERE session_id = $1
-`
-
-// GetInteractionDAGSessionRun resolves agent_run_id + issue_id for a session.
-// Returns pgx.ErrNoRows when RecordSessionAgentRun was never called for it.
-func (q *Queries) GetInteractionDAGSessionRun(ctx context.Context, sessionID string) (InteractionDAGSessionRun, error) {
-	row := q.db.QueryRow(ctx, getInteractionDAGSessionRun, sessionID)
-	var i InteractionDAGSessionRun
-	err := row.Scan(
-		&i.SessionID,
-		&i.ProjectID,
-		&i.AgentRunID,
-		&i.IssueID,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const getInteractionDAGSegmentByAgentRun = `-- name: GetInteractionDAGSegmentByAgentRun :one
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at FROM interaction_dag_segment
-WHERE agent_run_id = $1
-ORDER BY created_at DESC
-LIMIT 1
-`
-
-// GetInteractionDAGSegmentByAgentRun resolves a task's segment by agent_run_id
-// (task.ID). For change 1 each trained task has one segment; ORDER BY
-// created_at DESC LIMIT 1 keeps this stable under a future multi-segment model.
-// Used by the DELEGATION-edge recorder (D11) to find the parent's segment at
-// the child's close. Returns pgx.ErrNoRows when no segment exists yet.
-func (q *Queries) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (InteractionDAGSegment, error) {
+// Resolves a task's segment by agent_run_id (= task.ID, D8). For change 1 each
+// trained task has exactly one segment; ORDER BY created_at DESC LIMIT 1 keeps
+// this stable if a future multi-segment model adds more. Used by the
+// DELEGATION-edge recorder (D11) to find the parent's segment at the child's
+// close. Returns no rows when the parent's segment has not been recorded yet.
+func (q *Queries) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (GetInteractionDAGSegmentByAgentRunRow, error) {
 	row := q.db.QueryRow(ctx, getInteractionDAGSegmentByAgentRun, agentRunID)
-	var i InteractionDAGSegment
+	var i GetInteractionDAGSegmentByAgentRunRow
 	err := row.Scan(
 		&i.SegmentID,
 		&i.ProjectID,
@@ -146,11 +284,29 @@ SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, t
 WHERE segment_id = $1
 `
 
+type GetInteractionDAGSegmentByIDRow struct {
+	SegmentID                 string             `json:"segment_id"`
+	ProjectID                 string             `json:"project_id"`
+	AgentRunID                string             `json:"agent_run_id"`
+	IssueID                   pgtype.Text        `json:"issue_id"`
+	TaskID                    pgtype.Text        `json:"task_id"`
+	TrajectoryID              pgtype.Int8        `json:"trajectory_id"`
+	TensorRef                 []byte             `json:"tensor_ref"`
+	ClosingEvent              pgtype.Text        `json:"closing_event"`
+	ClosingEventTargetSegment pgtype.Text        `json:"closing_event_target_segment"`
+	StartSeq                  int32              `json:"start_seq"`
+	EndSeq                    int32              `json:"end_seq"`
+	TrajectorySource          string             `json:"trajectory_source"`
+	Trainable                 bool               `json:"trainable"`
+	Trajectory                []byte             `json:"trajectory"`
+	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
+}
+
 // GetInteractionDAGSegmentByID resolves a segment by its segment_id.
 // Returns pgx.ErrNoRows when no segment exists for the given ID.
-func (q *Queries) GetInteractionDAGSegmentByID(ctx context.Context, segmentID string) (InteractionDAGSegment, error) {
+func (q *Queries) GetInteractionDAGSegmentByID(ctx context.Context, segmentID string) (GetInteractionDAGSegmentByIDRow, error) {
 	row := q.db.QueryRow(ctx, getInteractionDAGSegmentByID, segmentID)
-	var i InteractionDAGSegment
+	var i GetInteractionDAGSegmentByIDRow
 	err := row.Scan(
 		&i.SegmentID,
 		&i.ProjectID,
@@ -169,6 +325,140 @@ func (q *Queries) GetInteractionDAGSegmentByID(ctx context.Context, segmentID st
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const getInteractionDAGSessionRun = `-- name: GetInteractionDAGSessionRun :one
+SELECT session_id, project_id, agent_run_id, issue_id, created_at
+FROM interaction_dag_session_run
+WHERE session_id = $1
+`
+
+// Resolves agent_run_id + issue_id for a session. Used by CloseSegmentForEvent
+// to stamp the segment row without a separate task lookup. Returns no rows when
+// RecordSessionAgentRun was never called for this session.
+func (q *Queries) GetInteractionDAGSessionRun(ctx context.Context, sessionID string) (InteractionDagSessionRun, error) {
+	row := q.db.QueryRow(ctx, getInteractionDAGSessionRun, sessionID)
+	var i InteractionDagSessionRun
+	err := row.Scan(
+		&i.SessionID,
+		&i.ProjectID,
+		&i.AgentRunID,
+		&i.IssueID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getLastEndSeqForAgentRun = `-- name: GetLastEndSeqForAgentRun :one
+SELECT COALESCE(MAX(end_seq), 0)::integer AS last_end_seq
+FROM interaction_dag_segment
+WHERE agent_run_id = $1
+`
+
+// Returns the highest end_seq recorded for an agent_run, or 0 when no segment
+// exists yet. Used by CloseSegmentForEvent to compute the next segment's
+// start_seq (lastEnd + 1). MAX over end_seq (not "last row") so an empty [0,0]
+// segment never regresses the running start point.
+func (q *Queries) GetLastEndSeqForAgentRun(ctx context.Context, agentRunID string) (int32, error) {
+	row := q.db.QueryRow(ctx, getLastEndSeqForAgentRun, agentRunID)
+	var last_end_seq int32
+	err := row.Scan(&last_end_seq)
+	return last_end_seq, err
+}
+
+const getLatestCompletedInteractionDAGDiagnosisRun = `-- name: GetLatestCompletedInteractionDAGDiagnosisRun :one
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+FROM interaction_dag_diagnosis_run
+WHERE project_id = $1 AND task_id = $2 AND status = 'completed'
+ORDER BY completed_at DESC, updated_at DESC
+LIMIT 1
+`
+
+type GetLatestCompletedInteractionDAGDiagnosisRunParams struct {
+	ProjectID string `json:"project_id"`
+	TaskID    string `json:"task_id"`
+}
+
+// Used by idempotent on-demand requests: a completed diagnosis for the exact
+// same terminal DAG is returned rather than launching another Pi session.
+func (q *Queries) GetLatestCompletedInteractionDAGDiagnosisRun(ctx context.Context, arg GetLatestCompletedInteractionDAGDiagnosisRunParams) (InteractionDagDiagnosisRun, error) {
+	row := q.db.QueryRow(ctx, getLatestCompletedInteractionDAGDiagnosisRun, arg.ProjectID, arg.TaskID)
+	var i InteractionDagDiagnosisRun
+	err := row.Scan(
+		&i.RunID,
+		&i.ProjectID,
+		&i.TaskID,
+		&i.TopologyHash,
+		&i.OrderedSegmentIds,
+		&i.Status,
+		&i.CurrentSegmentOrdinal,
+		&i.PiSessionID,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getResumableInteractionDAGDiagnosisRun = `-- name: GetResumableInteractionDAGDiagnosisRun :one
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+FROM interaction_dag_diagnosis_run
+WHERE project_id = $1 AND task_id = $2 AND status IN ('running', 'compacting')
+ORDER BY updated_at DESC
+LIMIT 1
+`
+
+type GetResumableInteractionDAGDiagnosisRunParams struct {
+	ProjectID string `json:"project_id"`
+	TaskID    string `json:"task_id"`
+}
+
+// Latest still-active (running/compacting) run for a (project, task); used to
+// resume an interrupted diagnosis instead of starting over.
+func (q *Queries) GetResumableInteractionDAGDiagnosisRun(ctx context.Context, arg GetResumableInteractionDAGDiagnosisRunParams) (InteractionDagDiagnosisRun, error) {
+	row := q.db.QueryRow(ctx, getResumableInteractionDAGDiagnosisRun, arg.ProjectID, arg.TaskID)
+	var i InteractionDagDiagnosisRun
+	err := row.Scan(
+		&i.RunID,
+		&i.ProjectID,
+		&i.TaskID,
+		&i.TopologyHash,
+		&i.OrderedSegmentIds,
+		&i.Status,
+		&i.CurrentSegmentOrdinal,
+		&i.PiSessionID,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const insertInteractionDAGEdge = `-- name: InsertInteractionDAGEdge :exec
+INSERT INTO interaction_dag_edge (project_id, src_segment_id, dst_segment_id, type)
+VALUES ($1, $2, $3, $4)
+`
+
+type InsertInteractionDAGEdgeParams struct {
+	ProjectID    string `json:"project_id"`
+	SrcSegmentID string `json:"src_segment_id"`
+	DstSegmentID string `json:"dst_segment_id"`
+	Type         string `json:"type"`
+}
+
+// Typed DAG edge. type is CHECK-constrained to delegation/mention/completion;
+// no FK to interaction_dag_segment so an edge can be recorded before both
+// endpoints are known (best-effort, validated at assembly).
+func (q *Queries) InsertInteractionDAGEdge(ctx context.Context, arg InsertInteractionDAGEdgeParams) error {
+	_, err := q.db.Exec(ctx, insertInteractionDAGEdge,
+		arg.ProjectID,
+		arg.SrcSegmentID,
+		arg.DstSegmentID,
+		arg.Type,
+	)
+	return err
 }
 
 const insertInteractionDAGSegmentWithSnapshot = `-- name: InsertInteractionDAGSegmentWithSnapshot :exec
@@ -195,11 +485,22 @@ type InsertInteractionDAGSegmentWithSnapshotParams struct {
 	TrajectorySource          string      `json:"trajectory_source"`
 	Trainable                 bool        `json:"trainable"`
 	Trajectory                []byte      `json:"trajectory"`
-	SandboxIDs                []byte      `json:"sandbox_ids"`
+	SandboxIds                []byte      `json:"sandbox_ids"`
 	IssueSnapshotID           pgtype.Text `json:"issue_snapshot_id"`
 	EnvState                  []byte      `json:"env_state"`
 }
 
+// Atomically inserts a segment row AND its 1:1 env_snapshot in a single
+// data-modifying CTE. segment_id ($1) is a text PK computed by the service
+// (<sessionID>-<trajectoryID>) and reused as the snapshot FK, so both inserts
+// commit or roll back together - a snapshot failure can never orphan the
+// segment (paired operations stay together). PostgreSQL executes the seg CTE
+// even though its result is not read by the outer INSERT, and the FK check sees
+// the seg row within the same statement. tensor_ref is the opaque tensor-ref
+// object decoded from the areal export (stored verbatim as jsonb); start_seq/
+// end_seq are the task_message.seq turn range captured at close (Task 2);
+// sandbox_ids and env_state are opaque jsonb (NOT NULL); issue_snapshot_id is
+// nullable.
 func (q *Queries) InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg InsertInteractionDAGSegmentWithSnapshotParams) error {
 	_, err := q.db.Exec(ctx, insertInteractionDAGSegmentWithSnapshot,
 		arg.SegmentID,
@@ -216,72 +517,207 @@ func (q *Queries) InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, a
 		arg.TrajectorySource,
 		arg.Trainable,
 		arg.Trajectory,
-		arg.SandboxIDs,
+		arg.SandboxIds,
 		arg.IssueSnapshotID,
 		arg.EnvState,
 	)
 	return err
 }
 
-const getLastEndSeqForAgentRun = `-- name: GetLastEndSeqForAgentRun :one
-SELECT COALESCE(MAX(end_seq), 0)::integer AS last_end_seq
-FROM interaction_dag_segment
-WHERE agent_run_id = $1
-`
-
-// GetLastEndSeqForAgentRun returns the highest end_seq recorded for an agent_run,
-// or 0 when no segment exists yet. Used by CloseSegmentForEvent to compute the
-// next segment's start_seq (lastEnd + 1). MAX over end_seq (not "last row") so
-// an empty [0,0] segment never regresses the running start point.
-func (q *Queries) GetLastEndSeqForAgentRun(ctx context.Context, agentRunID string) (int32, error) {
-	row := q.db.QueryRow(ctx, getLastEndSeqForAgentRun, agentRunID)
-	var lastEndSeq int32
-	err := row.Scan(&lastEndSeq)
-	return lastEndSeq, err
-}
-
-const insertInteractionDAGEdge = `-- name: InsertInteractionDAGEdge :exec
-INSERT INTO interaction_dag_edge (project_id, src_segment_id, dst_segment_id, type)
+const insertInteractionDAGStepReward = `-- name: InsertInteractionDAGStepReward :exec
+INSERT INTO interaction_dag_step_reward (segment_id, seq, score, rationale)
 VALUES ($1, $2, $3, $4)
+ON CONFLICT (segment_id, seq) DO UPDATE SET score = EXCLUDED.score, rationale = EXCLUDED.rationale
 `
 
-type InsertInteractionDAGEdgeParams struct {
-	ProjectID    string `json:"project_id"`
-	SrcSegmentID string `json:"src_segment_id"`
-	DstSegmentID string `json:"dst_segment_id"`
-	Type         string `json:"type"`
+type InsertInteractionDAGStepRewardParams struct {
+	SegmentID string `json:"segment_id"`
+	Seq       int32  `json:"seq"`
+	Score     int32  `json:"score"`
+	Rationale string `json:"rationale"`
 }
 
-func (q *Queries) InsertInteractionDAGEdge(ctx context.Context, arg InsertInteractionDAGEdgeParams) error {
-	_, err := q.db.Exec(ctx, insertInteractionDAGEdge,
-		arg.ProjectID,
-		arg.SrcSegmentID,
-		arg.DstSegmentID,
-		arg.Type,
+// InsertInteractionDAGStepReward upserts a per-step reward keyed by
+// (segment_id, seq). Re-recording a key updates score/rationale, not duplicates.
+func (q *Queries) InsertInteractionDAGStepReward(ctx context.Context, arg InsertInteractionDAGStepRewardParams) error {
+	_, err := q.db.Exec(ctx, insertInteractionDAGStepReward,
+		arg.SegmentID,
+		arg.Seq,
+		arg.Score,
+		arg.Rationale,
 	)
 	return err
 }
 
+const listInteractionDAGDiagnosisSegments = `-- name: ListInteractionDAGDiagnosisSegments :many
+SELECT run_id, segment_id, ordinal, expected_message_count, fetched_message_count, expected_reward_count, expected_reward_seqs, reward_count, next_cursor, status, created_at, updated_at, completed_at
+FROM interaction_dag_diagnosis_segment
+WHERE run_id = $1
+ORDER BY ordinal
+`
+
+type ListInteractionDAGDiagnosisSegmentsRow struct {
+	RunID                string             `json:"run_id"`
+	SegmentID            string             `json:"segment_id"`
+	Ordinal              int32              `json:"ordinal"`
+	ExpectedMessageCount int32              `json:"expected_message_count"`
+	FetchedMessageCount  int32              `json:"fetched_message_count"`
+	ExpectedRewardCount  int32              `json:"expected_reward_count"`
+	ExpectedRewardSeqs   []byte             `json:"expected_reward_seqs"`
+	RewardCount          int32              `json:"reward_count"`
+	NextCursor           string             `json:"next_cursor"`
+	Status               string             `json:"status"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	CompletedAt          pgtype.Timestamptz `json:"completed_at"`
+}
+
+// All segment checkpoints for a run in snapshot (ordinal) order.
+func (q *Queries) ListInteractionDAGDiagnosisSegments(ctx context.Context, runID string) ([]ListInteractionDAGDiagnosisSegmentsRow, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGDiagnosisSegments, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListInteractionDAGDiagnosisSegmentsRow{}
+	for rows.Next() {
+		var i ListInteractionDAGDiagnosisSegmentsRow
+		if err := rows.Scan(
+			&i.RunID,
+			&i.SegmentID,
+			&i.Ordinal,
+			&i.ExpectedMessageCount,
+			&i.FetchedMessageCount,
+			&i.ExpectedRewardCount,
+			&i.ExpectedRewardSeqs,
+			&i.RewardCount,
+			&i.NextCursor,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInteractionDAGEdgesForProject = `-- name: ListInteractionDAGEdgesForProject :many
+SELECT id, project_id, src_segment_id, dst_segment_id, type, created_at
+FROM interaction_dag_edge
+WHERE project_id = $1
+ORDER BY id
+`
+
+// Read-only assembly query (U8): all typed edges for a project, ordered by id
+// (insertion order) for deterministic assembly.
+func (q *Queries) ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]InteractionDagEdge, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGEdgesForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagEdge{}
+	for rows.Next() {
+		var i InteractionDagEdge
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.SrcSegmentID,
+			&i.DstSegmentID,
+			&i.Type,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInteractionDAGEnvSnapshotsForProject = `-- name: ListInteractionDAGEnvSnapshotsForProject :many
+SELECT e.segment_id, e.sandbox_ids, e.issue_snapshot_id, e.env_state
+FROM interaction_dag_env_snapshot e
+JOIN interaction_dag_segment s ON s.segment_id = e.segment_id
+WHERE s.project_id = $1
+`
+
+// Read-only assembly query (U8): all env_snapshots for a project's segments.
+// interaction_dag_env_snapshot has no project_id column, so join through
+// interaction_dag_segment on segment_id. Joined by segment_id in Go (1:1).
+func (q *Queries) ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]InteractionDagEnvSnapshot, error) {
+	rows, err := q.db.Query(ctx, listInteractionDAGEnvSnapshotsForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InteractionDagEnvSnapshot{}
+	for rows.Next() {
+		var i InteractionDagEnvSnapshot
+		if err := rows.Scan(
+			&i.SegmentID,
+			&i.SandboxIds,
+			&i.IssueSnapshotID,
+			&i.EnvState,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInteractionDAGSegmentsForProject = `-- name: ListInteractionDAGSegmentsForProject :many
-SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at FROM interaction_dag_segment
+SELECT segment_id, project_id, agent_run_id, issue_id, task_id, trajectory_id, tensor_ref, closing_event, closing_event_target_segment, start_seq, end_seq, trajectory_source, trainable, trajectory, created_at
+FROM interaction_dag_segment
 WHERE project_id = $1
 ORDER BY created_at
 `
 
-// ListInteractionDAGSegmentsForProject returns all recorded segments for a
-// project, ordered by created_at (deterministic assembly). Read-only; used by
-// InteractionDAGService.AssembleAssembledDag (U8). Hand-written (sqlc generate
-// is broken in this repo) mirroring the :one GetInteractionDAGSegmentByAgentRun
-// scan order.
-func (q *Queries) ListInteractionDAGSegmentsForProject(ctx context.Context, projectID string) ([]InteractionDAGSegment, error) {
+type ListInteractionDAGSegmentsForProjectRow struct {
+	SegmentID                 string             `json:"segment_id"`
+	ProjectID                 string             `json:"project_id"`
+	AgentRunID                string             `json:"agent_run_id"`
+	IssueID                   pgtype.Text        `json:"issue_id"`
+	TaskID                    pgtype.Text        `json:"task_id"`
+	TrajectoryID              pgtype.Int8        `json:"trajectory_id"`
+	TensorRef                 []byte             `json:"tensor_ref"`
+	ClosingEvent              pgtype.Text        `json:"closing_event"`
+	ClosingEventTargetSegment pgtype.Text        `json:"closing_event_target_segment"`
+	StartSeq                  int32              `json:"start_seq"`
+	EndSeq                    int32              `json:"end_seq"`
+	TrajectorySource          string             `json:"trajectory_source"`
+	Trainable                 bool               `json:"trainable"`
+	Trajectory                []byte             `json:"trajectory"`
+	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
+}
+
+// Read-only assembly query (U8 AssembleAssembledDag): all segments for a
+// project, ordered by created_at for deterministic assembly. SELECTs the full
+// row to scan into InteractionDAGSegment cleanly (mirrors
+// GetInteractionDAGSegmentByAgentRun), including the start_seq/end_seq turn
+// range (Task 2). No scores or message-text columns live on this table; step
+// rewards live in interaction_dag_step_reward (Task 5).
+func (q *Queries) ListInteractionDAGSegmentsForProject(ctx context.Context, projectID string) ([]ListInteractionDAGSegmentsForProjectRow, error) {
 	rows, err := q.db.Query(ctx, listInteractionDAGSegmentsForProject, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []InteractionDAGSegment{}
+	items := []ListInteractionDAGSegmentsForProjectRow{}
 	for rows.Next() {
-		var i InteractionDAGSegment
+		var i ListInteractionDAGSegmentsForProjectRow
 		if err := rows.Scan(
 			&i.SegmentID,
 			&i.ProjectID,
@@ -309,61 +745,23 @@ func (q *Queries) ListInteractionDAGSegmentsForProject(ctx context.Context, proj
 	return items, nil
 }
 
-const listInteractionDAGEdgesForProject = `-- name: ListInteractionDAGEdgesForProject :many
-SELECT id, project_id, src_segment_id, dst_segment_id, type, created_at FROM interaction_dag_edge
-WHERE project_id = $1
-ORDER BY id
-`
-
-// ListInteractionDAGEdgesForProject returns all typed edges for a project,
-// ordered by id (insertion order). Read-only; used by
-// InteractionDAGService.AssembleAssembledDag (U8). Hand-written (sqlc generate
-// is broken in this repo).
-func (q *Queries) ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]InteractionDAGEdge, error) {
-	rows, err := q.db.Query(ctx, listInteractionDAGEdgesForProject, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []InteractionDAGEdge{}
-	for rows.Next() {
-		var i InteractionDAGEdge
-		if err := rows.Scan(
-			&i.ID,
-			&i.ProjectID,
-			&i.SrcSegmentID,
-			&i.DstSegmentID,
-			&i.Type,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listInteractionDAGSessionRunsForProject = `-- name: ListInteractionDAGSessionRunsForProject :many
-SELECT session_id, project_id, agent_run_id, issue_id, created_at FROM interaction_dag_session_run
+SELECT session_id, project_id, agent_run_id, issue_id, created_at
+FROM interaction_dag_session_run
 WHERE project_id = $1
 `
 
-// ListInteractionDAGSessionRunsForProject returns all session_id ->
-// agent_run_id mappings for a project. Read-only; used by
-// InteractionDAGService.AssembleAssembledDag (U8) to build session_to_agent_run.
-// Hand-written (sqlc generate is broken in this repo).
-func (q *Queries) ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]InteractionDAGSessionRun, error) {
+// Read-only assembly query (U8): all session_id -> agent_run_id mappings for a
+// project; feeds AssembledDag.session_to_agent_run.
+func (q *Queries) ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]InteractionDagSessionRun, error) {
 	rows, err := q.db.Query(ctx, listInteractionDAGSessionRunsForProject, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []InteractionDAGSessionRun{}
+	items := []InteractionDagSessionRun{}
 	for rows.Next() {
-		var i InteractionDAGSessionRun
+		var i InteractionDagSessionRun
 		if err := rows.Scan(
 			&i.SessionID,
 			&i.ProjectID,
@@ -381,73 +779,6 @@ func (q *Queries) ListInteractionDAGSessionRunsForProject(ctx context.Context, p
 	return items, nil
 }
 
-const listInteractionDAGEnvSnapshotsForProject = `-- name: ListInteractionDAGEnvSnapshotsForProject :many
-SELECT e.segment_id, e.sandbox_ids, e.issue_snapshot_id, e.env_state FROM interaction_dag_env_snapshot e
-JOIN interaction_dag_segment s ON s.segment_id = e.segment_id
-WHERE s.project_id = $1
-`
-
-// ListInteractionDAGEnvSnapshotsForProject returns all env_snapshots for a
-// project's segments. interaction_dag_env_snapshot has no project_id column, so
-// the query joins through interaction_dag_segment on segment_id. The caller
-// (AssembleAssembledDag, U8) joins the returned rows by segment_id in Go.
-// Read-only. Hand-written (sqlc generate is broken in this repo).
-func (q *Queries) ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]InteractionDAGEnvSnapshot, error) {
-	rows, err := q.db.Query(ctx, listInteractionDAGEnvSnapshotsForProject, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []InteractionDAGEnvSnapshot{}
-	for rows.Next() {
-		var i InteractionDAGEnvSnapshot
-		if err := rows.Scan(
-			&i.SegmentID,
-			&i.SandboxIDs,
-			&i.IssueSnapshotID,
-			&i.EnvState,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-// InteractionDAGStepReward is a per-LLM-output (segment_id, seq) reward emitted
-// by the diagnosis agent. Hand-written (sqlc generate is broken in this repo)
-// mirroring the interaction_dag_step_reward table (migration 161).
-type InteractionDAGStepReward struct {
-	SegmentID string             `json:"segment_id"`
-	Seq       int32              `json:"seq"`
-	Score     int32              `json:"score"`
-	Rationale string             `json:"rationale"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-}
-
-type InsertInteractionDAGStepRewardParams struct {
-	SegmentID string `json:"segment_id"`
-	Seq       int32  `json:"seq"`
-	Score     int32  `json:"score"`
-	Rationale string `json:"rationale"`
-}
-
-const insertInteractionDAGStepReward = `-- name: InsertInteractionDAGStepReward :exec
-INSERT INTO interaction_dag_step_reward (segment_id, seq, score, rationale)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (segment_id, seq) DO UPDATE SET score = EXCLUDED.score, rationale = EXCLUDED.rationale
-`
-
-// InsertInteractionDAGStepReward upserts a per-step reward keyed by
-// (segment_id, seq). Re-recording a key updates score/rationale, not duplicates.
-func (q *Queries) InsertInteractionDAGStepReward(ctx context.Context, arg InsertInteractionDAGStepRewardParams) error {
-	_, err := q.db.Exec(ctx, insertInteractionDAGStepReward, arg.SegmentID, arg.Seq, arg.Score, arg.Rationale)
-	return err
-}
-
 const listInteractionDAGStepRewardsForProject = `-- name: ListInteractionDAGStepRewardsForProject :many
 SELECT sr.segment_id, sr.seq, sr.score, sr.rationale, sr.created_at
 FROM interaction_dag_step_reward sr
@@ -460,15 +791,15 @@ ORDER BY sr.segment_id, sr.seq
 // belonging to the project (the step_reward table has no project_id column, so
 // the filter joins through interaction_dag_segment). Read-only; used by
 // InteractionDAGService.AssembleAssembledDag.
-func (q *Queries) ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]InteractionDAGStepReward, error) {
+func (q *Queries) ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]InteractionDagStepReward, error) {
 	rows, err := q.db.Query(ctx, listInteractionDAGStepRewardsForProject, projectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []InteractionDAGStepReward{}
+	items := []InteractionDagStepReward{}
 	for rows.Next() {
-		var i InteractionDAGStepReward
+		var i InteractionDagStepReward
 		if err := rows.Scan(
 			&i.SegmentID,
 			&i.Seq,
@@ -484,4 +815,128 @@ func (q *Queries) ListInteractionDAGStepRewardsForProject(ctx context.Context, p
 		return nil, err
 	}
 	return items, nil
+}
+
+const listLatestCompletedInteractionDAGDiagnosisTargetsForProject = `-- name: ListLatestCompletedInteractionDAGDiagnosisTargetsForProject :many
+WITH latest_run AS (
+  SELECT run_id
+  FROM interaction_dag_diagnosis_run
+  WHERE project_id = $1 AND status = 'completed'
+  ORDER BY completed_at DESC, updated_at DESC
+  LIMIT 1
+)
+SELECT segment_id, expected_reward_seqs
+FROM interaction_dag_diagnosis_segment
+WHERE run_id = (SELECT run_id FROM latest_run)
+ORDER BY ordinal
+`
+
+type ListLatestCompletedInteractionDAGDiagnosisTargetsForProjectRow struct {
+	SegmentID          string `json:"segment_id"`
+	ExpectedRewardSeqs []byte `json:"expected_reward_seqs"`
+}
+
+// Returns the frozen assistant-turn targets for the latest completed diagnosis
+// run. The assembled DAG exposes these immutable targets so downstream clients
+// can prove exact score coverage instead of inferring it from reward counts.
+func (q *Queries) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ctx context.Context, projectID string) ([]ListLatestCompletedInteractionDAGDiagnosisTargetsForProjectRow, error) {
+	rows, err := q.db.Query(ctx, listLatestCompletedInteractionDAGDiagnosisTargetsForProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLatestCompletedInteractionDAGDiagnosisTargetsForProjectRow{}
+	for rows.Next() {
+		var i ListLatestCompletedInteractionDAGDiagnosisTargetsForProjectRow
+		if err := rows.Scan(&i.SegmentID, &i.ExpectedRewardSeqs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setInteractionDAGDiagnosisSegmentRewardCount = `-- name: SetInteractionDAGDiagnosisSegmentRewardCount :execrows
+UPDATE interaction_dag_diagnosis_segment
+SET reward_count = $3, updated_at = now()
+WHERE run_id = $1 AND segment_id = $2 AND reward_count <= $3
+`
+
+type SetInteractionDAGDiagnosisSegmentRewardCountParams struct {
+	RunID       string `json:"run_id"`
+	SegmentID   string `json:"segment_id"`
+	RewardCount int32  `json:"reward_count"`
+}
+
+// Monotonic reward-coverage counter; regressive writes match no row.
+func (q *Queries) SetInteractionDAGDiagnosisSegmentRewardCount(ctx context.Context, arg SetInteractionDAGDiagnosisSegmentRewardCountParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setInteractionDAGDiagnosisSegmentRewardCount, arg.RunID, arg.SegmentID, arg.RewardCount)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const startInteractionDAGDiagnosisSegment = `-- name: StartInteractionDAGDiagnosisSegment :execrows
+UPDATE interaction_dag_diagnosis_segment
+SET status = 'in_progress', expected_message_count = $3, expected_reward_count = $4,
+    expected_reward_seqs = $5, updated_at = now()
+WHERE run_id = $1 AND segment_id = $2 AND status = 'pending'
+`
+
+type StartInteractionDAGDiagnosisSegmentParams struct {
+	RunID                string `json:"run_id"`
+	SegmentID            string `json:"segment_id"`
+	ExpectedMessageCount int32  `json:"expected_message_count"`
+	ExpectedRewardCount  int32  `json:"expected_reward_count"`
+	ExpectedRewardSeqs   []byte `json:"expected_reward_seqs"`
+}
+
+// CAS: pending -> in_progress, recording the expected message/reward coverage.
+// A replay while already in_progress/completed matches no row (idempotency is
+// resolved by the service comparing the stored expectations).
+func (q *Queries) StartInteractionDAGDiagnosisSegment(ctx context.Context, arg StartInteractionDAGDiagnosisSegmentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, startInteractionDAGDiagnosisSegment,
+		arg.RunID,
+		arg.SegmentID,
+		arg.ExpectedMessageCount,
+		arg.ExpectedRewardCount,
+		arg.ExpectedRewardSeqs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertInteractionDAGSessionRun = `-- name: UpsertInteractionDAGSessionRun :exec
+INSERT INTO interaction_dag_session_run (session_id, project_id, agent_run_id, issue_id)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (session_id) DO UPDATE SET
+  project_id = EXCLUDED.project_id,
+  agent_run_id = EXCLUDED.agent_run_id,
+  issue_id = EXCLUDED.issue_id
+`
+
+type UpsertInteractionDAGSessionRunParams struct {
+	SessionID  string      `json:"session_id"`
+	ProjectID  string      `json:"project_id"`
+	AgentRunID string      `json:"agent_run_id"`
+	IssueID    pgtype.Text `json:"issue_id"`
+}
+
+// Idempotent on session_id: a retry that re-opens a session re-binds it to the
+// latest agent_run_id (= task.ID, D8) + issue_id. agent_run_id is the multica
+// agent_inbox_event PK (attempt-level), NOT the agent UUID.
+func (q *Queries) UpsertInteractionDAGSessionRun(ctx context.Context, arg UpsertInteractionDAGSessionRunParams) error {
+	_, err := q.db.Exec(ctx, upsertInteractionDAGSessionRun,
+		arg.SessionID,
+		arg.ProjectID,
+		arg.AgentRunID,
+		arg.IssueID,
+	)
+	return err
 }

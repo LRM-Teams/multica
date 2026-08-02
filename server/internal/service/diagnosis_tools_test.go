@@ -23,24 +23,24 @@ type MockDiagnosisStores struct {
 	mock.Mock
 }
 
-func (m *MockDiagnosisStores) ListInteractionDAGSegmentsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGSegment, error) {
+func (m *MockDiagnosisStores) ListInteractionDAGSegmentsForProject(ctx context.Context, projectID string) ([]db.ListInteractionDAGSegmentsForProjectRow, error) {
 	args := m.Called(ctx, projectID)
-	return args.Get(0).([]db.InteractionDAGSegment), args.Error(1)
+	return args.Get(0).([]db.ListInteractionDAGSegmentsForProjectRow), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]db.InteractionDAGEdge, error) {
+func (m *MockDiagnosisStores) ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]db.InteractionDagEdge, error) {
 	args := m.Called(ctx, projectID)
-	return args.Get(0).([]db.InteractionDAGEdge), args.Error(1)
+	return args.Get(0).([]db.InteractionDagEdge), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) GetInteractionDAGSegmentByID(ctx context.Context, segmentID string) (db.InteractionDAGSegment, error) {
+func (m *MockDiagnosisStores) GetInteractionDAGSegmentByID(ctx context.Context, segmentID string) (db.GetInteractionDAGSegmentByIDRow, error) {
 	args := m.Called(ctx, segmentID)
-	return args.Get(0).(db.InteractionDAGSegment), args.Error(1)
+	return args.Get(0).(db.GetInteractionDAGSegmentByIDRow), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (db.InteractionDAGSegment, error) {
+func (m *MockDiagnosisStores) GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (db.GetInteractionDAGSegmentByAgentRunRow, error) {
 	args := m.Called(ctx, agentRunID)
-	return args.Get(0).(db.InteractionDAGSegment), args.Error(1)
+	return args.Get(0).(db.GetInteractionDAGSegmentByAgentRunRow), args.Error(1)
 }
 
 func (m *MockDiagnosisStores) GetLastEndSeqForAgentRun(ctx context.Context, agentRunID string) (int32, error) {
@@ -73,9 +73,9 @@ func (m *MockDiagnosisStores) UpsertInteractionDAGSessionRun(ctx context.Context
 	return args.Error(0)
 }
 
-func (m *MockDiagnosisStores) GetInteractionDAGSessionRun(ctx context.Context, sessionID string) (db.InteractionDAGSessionRun, error) {
+func (m *MockDiagnosisStores) GetInteractionDAGSessionRun(ctx context.Context, sessionID string) (db.InteractionDagSessionRun, error) {
 	args := m.Called(ctx, sessionID)
-	return args.Get(0).(db.InteractionDAGSessionRun), args.Error(1)
+	return args.Get(0).(db.InteractionDagSessionRun), args.Error(1)
 }
 
 func (m *MockDiagnosisStores) InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) error {
@@ -93,24 +93,24 @@ func (m *MockDiagnosisStores) InsertInteractionDAGStepReward(ctx context.Context
 	return args.Error(0)
 }
 
-func (m *MockDiagnosisStores) ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGStepReward, error) {
+func (m *MockDiagnosisStores) ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]db.InteractionDagStepReward, error) {
 	args := m.Called(ctx, projectID)
-	return args.Get(0).([]db.InteractionDAGStepReward), args.Error(1)
+	return args.Get(0).([]db.InteractionDagStepReward), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGDiagnosisTarget, error) {
+func (m *MockDiagnosisStores) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ctx context.Context, projectID string) ([]db.ListLatestCompletedInteractionDAGDiagnosisTargetsForProjectRow, error) {
 	args := m.Called(ctx, projectID)
-	return args.Get(0).([]db.InteractionDAGDiagnosisTarget), args.Error(1)
+	return args.Get(0).([]db.ListLatestCompletedInteractionDAGDiagnosisTargetsForProjectRow), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGSessionRun, error) {
+func (m *MockDiagnosisStores) ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]db.InteractionDagSessionRun, error) {
 	args := m.Called(ctx, projectID)
-	return args.Get(0).([]db.InteractionDAGSessionRun), args.Error(1)
+	return args.Get(0).([]db.InteractionDagSessionRun), args.Error(1)
 }
 
-func (m *MockDiagnosisStores) ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGEnvSnapshot, error) {
+func (m *MockDiagnosisStores) ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]db.InteractionDagEnvSnapshot, error) {
 	args := m.Called(ctx, projectID)
-	return args.Get(0).([]db.InteractionDAGEnvSnapshot), args.Error(1)
+	return args.Get(0).([]db.InteractionDagEnvSnapshot), args.Error(1)
 }
 
 func TestGetSegmentMessages(t *testing.T) {
@@ -123,7 +123,7 @@ func TestGetSegmentMessages(t *testing.T) {
 	segmentID := "segment-1"
 	agentRunID := "agent-run-1"
 
-	segment := db.InteractionDAGSegment{
+	segment := db.GetInteractionDAGSegmentByIDRow{
 		SegmentID:  segmentID,
 		ProjectID:  projectID.String(),
 		AgentRunID: agentRunID,
@@ -246,12 +246,12 @@ func TestGetInteractionDAG(t *testing.T) {
 	_ = projectID.Scan("123e4567-e89b-12d3-a456-426614174000")
 	projectIDStr := projectID.String()
 
-	segments := []db.InteractionDAGSegment{
+	segments := []db.ListInteractionDAGSegmentsForProjectRow{
 		{SegmentID: "seg1", ProjectID: projectIDStr},
 		{SegmentID: "seg2", ProjectID: projectIDStr},
 	}
 
-	edges := []db.InteractionDAGEdge{
+	edges := []db.InteractionDagEdge{
 		{SrcSegmentID: "seg1", DstSegmentID: "seg2", Type: EdgeTypeDelegation},
 	}
 

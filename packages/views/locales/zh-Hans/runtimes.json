@@ -73,6 +73,7 @@
     "basics_hostname": "主机名",
     "basics_os": "操作系统",
     "basics_daemon": "Daemon",
+    "basics_pinned_version": "指定版本",
     "agents_section": "本机 Agents",
     "code_agents_section": "本机 Runtime",
     "code_agents_help": "已安装 {{installed}} / {{supported}} 个支持的 Runtime",
@@ -142,6 +143,7 @@
     },
     "daemon_version_chip": "daemon v{{version}}",
     "version_prefix": "v{{version}}",
+    "pinned_version_value": "已指定版本 {{version}}",
     "basics_owner": "所有者",
     "basics_daemon_id": "Daemon ID",
     "ops": {

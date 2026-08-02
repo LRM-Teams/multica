@@ -152,6 +152,15 @@ export interface RuntimeDevice {
   owner_id: string | null;
   /** Defaults to "private" when the backend predates the visibility flag. */
   visibility: RuntimeVisibility;
+  /**
+   * Task #81 — non-null when the daemon's `MULTICA_PINNED_VERSION` reported
+   * this machine as pinned. This only reflects the daemon's local intent —
+   * the server does not yet enforce it against a server-initiated update
+   * (that product decision is separate, unmade), so UI copy must say
+   * "recorded intent," never "guaranteed not to be upgraded," and the
+   * upgrade control must stay clickable, not disabled by this alone.
+   */
+  pinned_version?: string | null;
   last_seen_at: string | null;
   created_at: string;
   updated_at: string;

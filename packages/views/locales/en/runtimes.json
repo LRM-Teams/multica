@@ -76,6 +76,7 @@
     "basics_hostname": "Hostname",
     "basics_os": "OS",
     "basics_daemon": "Daemon",
+    "basics_pinned_version": "Pinned version",
     "agents_section": "Agents on this computer",
     "code_agents_section": "Runtimes on this computer",
     "code_agents_help": "Installed {{installed}} of {{supported}} supported runtimes",
@@ -145,6 +146,7 @@
     },
     "daemon_version_chip": "daemon v{{version}}",
     "version_prefix": "v{{version}}",
+    "pinned_version_value": "Specified version {{version}}",
     "basics_owner": "Owner",
     "basics_daemon_id": "Daemon ID",
     "ops": {

@@ -110,7 +110,7 @@ vi.mock("sonner", () => ({
 
 import { ComputersMachineDetail } from "./runtimes-page";
 
-function makeMachine(): RuntimeMachine {
+function makeMachine(runtimeOverrides: Partial<AgentRuntime> = {}): RuntimeMachine {
   const runtime: AgentRuntime = {
     id: "runtime-1",
     workspace_id: "ws-1",
@@ -131,6 +131,7 @@ function makeMachine(): RuntimeMachine {
     last_seen_at: "2026-08-01T00:00:00Z",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
+    ...runtimeOverrides,
   };
   return {
     id: "machine-1",
@@ -248,5 +249,35 @@ describe("ComputersMachineDetail — desktop agent list", () => {
     expect(screen.queryByRole("table")).toBeNull();
     // Frank 08-02: no duration text alongside the activity word.
     expect(screen.queryByText(/ago$/)).toBeNull();
+  });
+});
+
+// Task #81 (Iris/Parker/Wren, 08-02): pin is only the daemon's locally-
+// recorded MULTICA_PINNED_VERSION intent — the server doesn't enforce it
+// against a server-initiated update yet, so this row must state a fact
+// ("Specified version"), never a promise ("locked"/"won't be upgraded").
+// Only "has a pin" renders anything; the other three cases (no pin, missing
+// field, empty value) must add nothing to the page.
+describe("ComputersMachineDetail — Basics pinned-version row (task #81)", () => {
+  it("shows the pinned-version row when the primary runtime has one", () => {
+    renderDetail(makeMachine({ pinned_version: "0.3.85" }), []);
+    expect(screen.getByTestId("machine-basics-pinned-version")).toHaveTextContent(
+      "Specified version 0.3.85",
+    );
+  });
+
+  it("renders nothing when pinned_version is null", () => {
+    renderDetail(makeMachine({ pinned_version: null }), []);
+    expect(screen.queryByTestId("machine-basics-pinned-version")).toBeNull();
+  });
+
+  it("renders nothing when pinned_version is absent (older backend)", () => {
+    renderDetail(makeMachine(), []);
+    expect(screen.queryByTestId("machine-basics-pinned-version")).toBeNull();
+  });
+
+  it("renders nothing when pinned_version is an empty string", () => {
+    renderDetail(makeMachine({ pinned_version: "" }), []);
+    expect(screen.queryByTestId("machine-basics-pinned-version")).toBeNull();
   });
 });

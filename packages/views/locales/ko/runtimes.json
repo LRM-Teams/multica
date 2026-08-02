@@ -75,6 +75,7 @@
     "basics_hostname": "호스트명",
     "basics_os": "OS",
     "basics_daemon": "Daemon",
+    "basics_pinned_version": "고정 버전",
     "agents_section": "이 컴퓨터의 Agents",
     "code_agents_section": "이 컴퓨터의 Runtime",
     "code_agents_help": "지원 Runtime {{supported}}개 중 {{installed}}개 설치됨",
@@ -144,6 +145,7 @@
     },
     "daemon_version_chip": "daemon v{{version}}",
     "version_prefix": "v{{version}}",
+    "pinned_version_value": "지정된 버전 {{version}}",
     "basics_owner": "소유자",
     "basics_daemon_id": "Daemon ID",
     "ops": {

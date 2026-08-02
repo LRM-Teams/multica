@@ -1364,6 +1364,30 @@ func TestReminderRuntimeResetDefinitionsAndWatermarkShareOneOrderBoundary(t *tes
 
 func TestUpdateAgentMoveWithActiveReminderFailsClosedForIncapableRuntime(t *testing.T) {
 	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}, {omitCapability: true}})
+
+	// task #(machine-lock, 2026-08-02): newChannelAgentRuntimeFixture's
+	// runtimes default to runtime_mode='cloud', daemon_id=NULL — each its
+	// own unshareable machine. This test's concern (capability gating on a
+	// same-machine runtime move) is orthogonal to machine identity, so
+	// co-locate the two runtimes on one synthetic daemon rather than
+	// changing the shared fixture (other tests using it don't move agents
+	// between its runtimes and shouldn't need to care).
+	// (workspace_id, daemon_id, provider) is unique, and both runtimes here
+	// default to provider 'pi' — give the second a distinct provider so
+	// sharing a daemon_id doesn't collide, matching how a real machine runs
+	// more than one provider.
+	sharedDaemonID := "reminder-move-capability-daemon-" + uuid.NewString()
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_runtime SET runtime_mode = 'local', daemon_id = $2 WHERE id = $1
+	`, fixture.runtimeIDs[0], sharedDaemonID); err != nil {
+		t.Fatalf("colocate reminder move-capability runtime 0: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_runtime SET runtime_mode = 'local', daemon_id = $2, provider = 'pi-incapable' WHERE id = $1
+	`, fixture.runtimeIDs[1], sharedDaemonID); err != nil {
+		t.Fatalf("colocate reminder move-capability runtime 1: %v", err)
+	}
+
 	anchor := fixture.insertMessage(t, "user", testUserID, "move capability anchor", nil)
 	reminderID := seedDueReminder(t, fixture.agentIDs[0], fixture.channel.ID, anchor.ID, "", "")
 	req := withURLParam(newRequest(http.MethodPut, "/api/agents/"+fixture.agentIDs[0], map[string]any{

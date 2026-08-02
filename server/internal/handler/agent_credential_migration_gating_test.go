@@ -66,25 +66,21 @@ func TestUpdateAgent_MovingRuntimeStampsReassignmentMarker(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	var otherRuntimeID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, last_seen_at, visibility
-		)
-		VALUES ($1, $2, $3, 'local', 'migration_gating_test', 'online', 'migration gating update-agent runtime', now(), 'public')
-		RETURNING id`,
-		testWorkspaceID, "migration-gating-updateagent-"+uuid.NewString(), "Migration Gating UpdateAgent Runtime "+uuid.NewString(),
-	).Scan(&otherRuntimeID); err != nil {
-		t.Fatalf("create other runtime: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, otherRuntimeID) })
+	// task #(machine-lock, 2026-08-02): the agent's starting runtime and
+	// otherRuntimeID must share a daemon_id — an agent's bound computer
+	// cannot change, only the runtime within it — so both live on one
+	// synthetic daemon here rather than starting from testRuntimeID (whose
+	// daemon_id is NULL, making it its own unshareable machine).
+	daemonID := "migration-gating-daemon-" + uuid.NewString()
+	firstRuntimeID := seedMachineLockedRuntime(t, daemonID, "Migration Gating First Runtime")
+	otherRuntimeID := seedMachineLockedRuntime(t, daemonID, "Migration Gating UpdateAgent Runtime")
 
-	agentID := createHandlerTestAgent(t, "update-agent-stamp-"+uuid.NewString()[:8], nil)
+	agentID := createHandlerTestAgentOnRuntime(t, "update-agent-stamp-"+uuid.NewString()[:8], firstRuntimeID)
 
 	t.Run("no-op update on the same runtime does not stamp", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := withURLParam(newRequest(http.MethodPut, "/api/agents/"+agentID, map[string]any{
-			"runtime_id": testRuntimeID,
+			"runtime_id": firstRuntimeID,
 		}), "id", agentID)
 		testHandler.UpdateAgent(rec, req)
 		if rec.Code != http.StatusOK {

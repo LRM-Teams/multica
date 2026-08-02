@@ -470,6 +470,23 @@ func seedQueueExecution(t *testing.T, taskID string) {
 
 func createHandlerTestAgent(t *testing.T, displayName string, mcpConfig []byte) string {
 	t.Helper()
+	return createHandlerTestAgentOnRuntimeWithMcpConfig(t, displayName, handlerTestRuntimeID(t), mcpConfig)
+}
+
+// createHandlerTestAgentOnRuntime is createHandlerTestAgent with an explicit
+// starting runtime instead of the shared handlerTestRuntimeID(t) fixture —
+// needed by tests that then move the agent to a *different* runtime on the
+// same daemon: handlerTestRuntimeID's daemon_id is NULL, which
+// runtimesShareMachine treats as its own unshareable machine, so a fixture
+// starting there can never legally move anywhere under the machine-lock rule
+// (Frank's rule, 2026-08-02).
+func createHandlerTestAgentOnRuntime(t *testing.T, displayName, runtimeID string) string {
+	t.Helper()
+	return createHandlerTestAgentOnRuntimeWithMcpConfig(t, displayName, runtimeID, nil)
+}
+
+func createHandlerTestAgentOnRuntimeWithMcpConfig(t *testing.T, displayName, runtimeID string, mcpConfig []byte) string {
+	t.Helper()
 
 	handle := identityHandleCandidate(identityHandleBase(displayName, "agent"), 1)
 	var agentID string
@@ -478,7 +495,7 @@ func createHandlerTestAgent(t *testing.T, displayName string, mcpConfig []byte) 
 			workspace_id, name, display_name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, mcp_config
 		, model) VALUES ($1, $2, $3, '', 'cloud', '{}'::jsonb, $4, 1, $5, '', '{}'::jsonb, '[]'::jsonb, $6, 'composer-1.5')
 		RETURNING id
-	`, testWorkspaceID, handle, displayName, handlerTestRuntimeID(t), testUserID, mcpConfig).Scan(&agentID); err != nil {
+	`, testWorkspaceID, handle, displayName, runtimeID, testUserID, mcpConfig).Scan(&agentID); err != nil {
 		t.Fatalf("failed to create handler test agent: %v", err)
 	}
 
@@ -487,6 +504,31 @@ func createHandlerTestAgent(t *testing.T, displayName string, mcpConfig []byte) 
 	})
 
 	return agentID
+}
+
+// seedMachineLockedRuntime creates a `local` runtime with the given
+// daemon_id — two runtimes sharing a daemonID pass runtimesShareMachine, so
+// tests can construct a "move to a different runtime, same computer" case.
+// visibility 'public' so any workspace member can bind an agent to it.
+func seedMachineLockedRuntime(t *testing.T, daemonID, name string) string {
+	t.Helper()
+	// provider is part of agent_runtime's (workspace_id, daemon_id, provider)
+	// unique constraint — vary it per call so two runtimes on the same
+	// daemonID (the whole point of this helper) don't collide, matching how
+	// a real machine runs multiple distinct provider daemons side by side.
+	var runtimeID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility, last_seen_at
+		) VALUES ($1, $2, $3, 'local', $4, 'online', '', '{}'::jsonb, 'public', now())
+		RETURNING id
+	`, testWorkspaceID, daemonID, name+" "+uuid.NewString(), "machine_lock_test_"+uuid.NewString()).Scan(&runtimeID); err != nil {
+		t.Fatalf("seed machine-locked runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+	return runtimeID
 }
 
 // createHandlerTestTaskForAgent seeds a running agent_inbox_event row for the
@@ -2148,7 +2190,7 @@ func TestCreateAgentRejectsMalformedRuntimeID(t *testing.T) {
 	req := newRequest("POST", "/api/agents", map[string]any{
 		"display_name": "Malformed runtime agent",
 		"runtime_id":   "not-a-uuid",
-		"model":                "composer-1.5",
+		"model":        "composer-1.5",
 	})
 	testHandler.CreateAgent(w, req)
 	if w.Code != http.StatusBadRequest {
@@ -2581,7 +2623,7 @@ func TestCreateAgentMcpConfigNullStoresSQLNull(t *testing.T) {
 	req := newRequest("POST", "/api/agents", map[string]any{
 		"display_name": "Handler Mcp Create Null",
 		"runtime_id":   handlerTestRuntimeID(t),
-		"model":                "composer-1.5",
+		"model":        "composer-1.5",
 		"mcp_config":   nil,
 		"custom_env":   map[string]string{},
 		"custom_args":  []string{},

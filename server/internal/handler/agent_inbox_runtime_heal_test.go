@@ -142,23 +142,15 @@ func TestUpdateAgent_ReassignsClaimableInboxEventsOnRuntimeMove(t *testing.T) {
 
 	ctx := context.Background()
 	agentName := "inbox-update-heal-" + uuid.NewString()[:8]
-	agentID := createHandlerTestAgent(t, agentName, nil)
-	oldRuntimeID := handlerTestRuntimeID(t)
 
-	var newRuntimeID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status,
-			device_info, metadata, owner_id, last_seen_at
-		)
-		VALUES ($1, $2, 'Inbox Update Heal Runtime', 'local', 'test-heal', 'online', 'test runtime', '{}'::jsonb, $3, now())
-		RETURNING id
-	`, testWorkspaceID, "inbox-update-heal-"+uuid.NewString(), testUserID).Scan(&newRuntimeID); err != nil {
-		t.Fatalf("create new runtime: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, newRuntimeID)
-	})
+	// task #(machine-lock, 2026-08-02): old and new runtimes must share a
+	// daemon_id (same computer) — handlerTestRuntimeID's daemon_id is NULL,
+	// its own unshareable machine, so the agent starts on a runtime that has
+	// a real daemon_id instead.
+	daemonID := "inbox-update-heal-daemon-" + uuid.NewString()
+	oldRuntimeID := seedMachineLockedRuntime(t, daemonID, "Inbox Update Heal Old Runtime")
+	agentID := createHandlerTestAgentOnRuntime(t, agentName, oldRuntimeID)
+	newRuntimeID := seedMachineLockedRuntime(t, daemonID, "Inbox Update Heal Runtime")
 
 	channelID := seedChannelForTest(t, "agent-inbox-update-heal-"+uuid.NewString(), testUserID)
 	if _, err := testPool.Exec(ctx, `

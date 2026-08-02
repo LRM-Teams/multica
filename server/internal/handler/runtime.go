@@ -36,8 +36,8 @@ type AgentRuntimeResponse struct {
 	// agent.ProviderCapabilities for this runtime's provider (task #62).
 	// Distinct from Capabilities ([]string), which is the daemon protocol
 	// advertise list. Older servers omit the object; treat missing as all-false.
-	ProviderCapabilities ProviderCapabilitiesWire    `json:"provider_capabilities"`
-	Status               string                      `json:"status"`
+	ProviderCapabilities ProviderCapabilitiesWire `json:"provider_capabilities"`
+	Status               string                   `json:"status"`
 	// DeviceInfo is the legacy composite string daemons still register
 	// (e.g. "ubuntu · codex-cli 0.146.0"). Prefer DeviceName for the OS row.
 	DeviceInfo string `json:"device_info"`
@@ -45,16 +45,16 @@ type AgentRuntimeResponse struct {
 	// Daemon already sends device_name separately; we persist it so clients
 	// never re-parse device_info. Empty until the daemon re-registers after
 	// this persist landed. Older servers omit the field.
-	DeviceName string `json:"device_name"`
-	Metadata   any    `json:"metadata"`
-	Capabilities         []string                    `json:"capabilities"`
-	CurrentVersion       *string                     `json:"current_version"`
-	TargetVersion        *string                     `json:"target_version,omitempty"`
-	UpdateState          string                      `json:"update_state"`
-	RuntimeHealth        string                      `json:"runtime_health"`
-	UpdateError          *string                     `json:"update_error,omitempty"`
-	AutoUpdate           *DaemonUpdateStatusResponse `json:"auto_update"`
-	OwnerID              *string                     `json:"owner_id"`
+	DeviceName     string                      `json:"device_name"`
+	Metadata       any                         `json:"metadata"`
+	Capabilities   []string                    `json:"capabilities"`
+	CurrentVersion *string                     `json:"current_version"`
+	TargetVersion  *string                     `json:"target_version,omitempty"`
+	UpdateState    string                      `json:"update_state"`
+	RuntimeHealth  string                      `json:"runtime_health"`
+	UpdateError    *string                     `json:"update_error,omitempty"`
+	AutoUpdate     *DaemonUpdateStatusResponse `json:"auto_update"`
+	OwnerID        *string                     `json:"owner_id"`
 	// Visibility is "private" (default — only the owner / workspace admins
 	// can bind agents) or "public" (any workspace member can). See migration
 	// 083 and canUseRuntimeForAgent.
@@ -973,6 +973,33 @@ func canUseRuntimeForAgent(member db.Member, rt db.AgentRuntime) bool {
 		return true
 	}
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+}
+
+// runtimesShareMachine reports whether two runtimes represent the same
+// physical machine — the authorization-side check backing "an agent's bound
+// computer cannot change; only the runtime within that computer can"
+// (Frank's rule, 2026-08-02). It is deliberately narrower than the frontend's
+// cosmetic runtimeMachineKey (packages/views/runtimes/components/
+// runtime-machines.ts), which also falls back to parsing a hostname out of
+// `name`/`device_info` for display grouping — free text is not a safe signal
+// for an authorization boundary. Here, only daemon_id (the persistent
+// per-installation UUID written once to <profile-dir>/daemon.id — see
+// server/internal/daemon/config.go's EnsureDaemonID) counts as machine
+// identity. A runtime with no daemon_id (a pure API-key/non-daemon-backed
+// runtime) never shares a machine with anything, including another such
+// runtime — each is its own isolated machine by construction, same as the
+// frontend's ID-keyed fallback.
+func runtimesShareMachine(a, b db.AgentRuntime) bool {
+	if a.RuntimeMode != b.RuntimeMode {
+		return false
+	}
+	if !a.DaemonID.Valid || a.DaemonID.String == "" {
+		return false
+	}
+	if !b.DaemonID.Valid || b.DaemonID.String == "" {
+		return false
+	}
+	return a.DaemonID.String == b.DaemonID.String
 }
 
 func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {

@@ -102,7 +102,7 @@ func (b *opencodeServeBackend) ForceKill() error {
 		return nil
 	}
 	p.client.close()
-	return p.cmd.Process.Kill()
+	return forceKillProcess(p.cmd.Process)
 }
 
 // takeForceKilled reports and clears whether ForceKill() was the cause of

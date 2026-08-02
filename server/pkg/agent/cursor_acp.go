@@ -124,7 +124,7 @@ func (b *cursorACPBackend) ForceKill() error {
 	}
 	b.forceKilled.Store(true)
 	_ = p.stdin.Close()
-	return p.cmd.Process.Kill()
+	return forceKillProcess(p.cmd.Process)
 }
 
 func (b *cursorACPBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {

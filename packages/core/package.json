@@ -103,6 +103,8 @@
     "./feedback/mutations": "./feedback/mutations.ts",
     "./evolution": "./evolution/index.ts",
     "./evolution/queries": "./evolution/queries.ts",
+    "./knowledge": "./knowledge/index.ts",
+    "./knowledge/queries": "./knowledge/queries.ts",
     "./research": "./research/index.ts",
     "./research/queries": "./research/queries.ts",
     "./realtime": "./realtime/index.ts",

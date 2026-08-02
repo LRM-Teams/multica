@@ -9,6 +9,7 @@ import {
   Copy,
   Terminal,
   Clock,
+  Pin,
 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -96,6 +97,15 @@ interface UpdateSectionProps {
    * manual-update control, drop the paragraph under the version row.
    */
   compact?: boolean;
+  /**
+   * Task #81 (b) — the daemon's locally-recorded pin intent
+   * (`MULTICA_PINNED_VERSION`). Parker, 2026-08-02: pin wins over both a
+   * server-initiated push (backend, separate) and a manual click here —
+   * there is no "click to override" path. Disables start/retry and shows
+   * an always-visible reason; unpinning (not this button) is the only way
+   * to re-enable upgrading.
+   */
+  pinnedVersion?: string | null;
 }
 
 export function UpdateSection({
@@ -110,6 +120,7 @@ export function UpdateSection({
   canUpdate = true,
   isSandbox = false,
   compact = false,
+  pinnedVersion,
 }: UpdateSectionProps) {
   const { t } = useT("runtimes");
   const qc = useQueryClient();
@@ -234,6 +245,7 @@ export function UpdateSection({
     !derivedStatus && runtimeHealth === "offline"
       ? t(($) => $.update.offline)
       : null;
+  const isPinned = !!pinnedVersion?.trim();
   const canStartUpdate =
     hasUpdate &&
     !derivedStatus &&
@@ -241,6 +253,7 @@ export function UpdateSection({
     canUpdate &&
     !isManaged &&
     !isSandbox &&
+    !isPinned &&
     !isActive;
   const canRetry =
     !!targetVersion &&
@@ -248,6 +261,7 @@ export function UpdateSection({
     canUpdate &&
     !isManaged &&
     !isSandbox &&
+    !isPinned &&
     !isActive &&
     (derivedStatus === "failed" || derivedStatus === "timeout");
 
@@ -337,6 +351,19 @@ export function UpdateSection({
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
             <XCircle className="h-3 w-3" />
             {healthOnlyLabel}
+          </span>
+        )}
+        {/* Task #81 (b) — Parker, 2026-08-02: pin wins over a manual click,
+            no override. Only shown when there's actually an update being
+            blocked (hasUpdate) — a pinned, already-up-to-date machine has
+            nothing for this to explain. Always visible, not hover-only. */}
+        {isPinned && hasUpdate && !derivedStatus && (
+          <span
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+            data-testid="update-pin-blocked-reason"
+          >
+            <Pin className="h-3 w-3" />
+            {t(($) => $.update.pin_blocked, { version: pinnedVersion })}
           </span>
         )}
       </div>

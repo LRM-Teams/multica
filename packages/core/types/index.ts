@@ -173,6 +173,10 @@ export type {
   MemoryCurationCandidateListResponse,
   TeamKnowledgeListItem,
   TeamKnowledgeListResponse,
+  KnowledgeEdge,
+  KnowledgeNeighborsResponse,
+  PromoteKnowledgeRequest,
+  PromoteKnowledgeResponse,
   PromoteEvolutionReviewSubmissionResponse,
 } from "./evolution";
 export type {
@@ -291,6 +295,10 @@ export type {
   ResearchStageEval,
   ResearchMessage,
   ResearchMessageCardKind,
+  ResearchClarificationLayout,
+  ResearchClarificationOption,
+  ResearchClarificationField,
+  ResearchClarificationQuestion,
   ResearchSessionSnapshot,
   CreateResearchSessionRequest,
   CreateResearchSessionResponse,

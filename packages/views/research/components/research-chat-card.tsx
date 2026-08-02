@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  ResearchClarificationQuestion,
   ResearchFleetMember,
   ResearchMessage,
   ResearchProductRoundCard,
@@ -9,7 +10,13 @@ import { StreamingMarkdown } from "@multica/ui/markdown";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n/use-t";
+import {
+  parseClarificationQuestion,
+  resolveClarificationResolution,
+  type ClarificationResolution,
+} from "../lib/clarification-question";
 import { speakerMemberForMessage } from "../lib/research-chat-speaker";
+import { ResearchClarificationCard } from "./research-clarification-card";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 
 function metaString(meta: unknown, key: string): string | null {
@@ -66,6 +73,7 @@ function formatTime(iso: string): string {
 export function ResearchChatCard({
   message,
   members,
+  messages,
   currentGoal,
   onRoundAgree,
   onRoundRejectContinue,
@@ -73,10 +81,16 @@ export function ResearchChatCard({
   onConfirmGoalPatch,
   onRejectGoalPatch,
   onEditGoalPatch,
+  onClarificationOption,
+  onClarificationForm,
+  onClarificationSkip,
   roundPending,
+  clarificationPending,
 }: {
   message: ResearchMessage;
   members: ResearchFleetMember[];
+  /** Full feed — used to resolve clarification answered/skipped state (LRM-822). */
+  messages?: ResearchMessage[];
   currentGoal?: string;
   onRoundAgree?: (card: ResearchProductRoundCard) => void;
   onRoundRejectContinue?: (card: ResearchProductRoundCard) => void;
@@ -84,7 +98,17 @@ export function ResearchChatCard({
   onConfirmGoalPatch?: (card: ResearchProductRoundCard, text: string) => void;
   onRejectGoalPatch?: (card: ResearchProductRoundCard) => void;
   onEditGoalPatch?: (card: ResearchProductRoundCard, text: string) => void;
+  onClarificationOption?: (
+    question: ResearchClarificationQuestion,
+    optionId: string,
+  ) => void;
+  onClarificationForm?: (
+    question: ResearchClarificationQuestion,
+    values: Record<string, string>,
+  ) => void;
+  onClarificationSkip?: (question: ResearchClarificationQuestion) => void;
   roundPending?: boolean;
+  clarificationPending?: boolean;
 }) {
   const { t } = useT("research");
   const isProcess = message.card_kind === "process";
@@ -108,8 +132,12 @@ export function ResearchChatCard({
       ? target?.display_name || target?.name || t(($) => $.chat.to_lead)
       : null;
   const roundCard = isProcess ? cardFromProcessMeta(message) : null;
+  const clarification = !isUser ? parseClarificationQuestion(message) : null;
+  const clarificationResolution: ClarificationResolution = clarification
+    ? resolveClarificationResolution(clarification, messages ?? [message])
+    : { status: "pending" };
   const wasStopped = metaBool(message.meta, "stopped");
-  const useMarkdown = !isUser && !isProcess && !roundCard;
+  const useMarkdown = !isUser && !isProcess && !roundCard && !clarification;
 
   return (
     <article
@@ -168,6 +196,24 @@ export function ResearchChatCard({
             onConfirmGoalPatch={(text) => onConfirmGoalPatch?.(roundCard, text)}
             onRejectGoalPatch={() => onRejectGoalPatch?.(roundCard)}
             onEditGoalPatch={(text) => onEditGoalPatch?.(roundCard, text)}
+          />
+        </div>
+      ) : clarification ? (
+        <div className="w-full min-w-0 space-y-2">
+          {message.body && message.body.trim() !== clarification.prompt ? (
+            <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">
+              {message.body}
+            </p>
+          ) : null}
+          <ResearchClarificationCard
+            question={clarification}
+            resolution={clarificationResolution}
+            pending={clarificationPending}
+            onSelectOption={(optionId) =>
+              onClarificationOption?.(clarification, optionId)
+            }
+            onSubmitForm={(values) => onClarificationForm?.(clarification, values)}
+            onSkip={() => onClarificationSkip?.(clarification)}
           />
         </div>
       ) : useMarkdown ? (

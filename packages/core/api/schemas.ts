@@ -1117,6 +1117,42 @@ export const EMPTY_TEAM_KNOWLEDGE_LIST = {
   total: 0,
 };
 
+export const KnowledgeEdgeSchema = z.object({
+  id: z.string().default(""),
+  edge_type: z.string().default(""),
+  from_kind: z.string().default(""),
+  from_id: z.string().default(""),
+  to_kind: z.string().default(""),
+  to_id: z.string().default(""),
+  created_by_type: z.string().default(""),
+  created_by_id: z.string().optional(),
+  created_at: z.string().default(""),
+}).loose();
+
+export const KnowledgeNeighborsResponseSchema = z.object({
+  page_id: z.string().default(""),
+  edges: z.array(KnowledgeEdgeSchema).default([]),
+  hops: z.number().default(1),
+}).loose();
+
+export const PromoteKnowledgeResponseSchema = z.object({
+  id: z.string().default(""),
+  kind: z.string().default(""),
+  title: z.string().default(""),
+  content: z.string().default(""),
+  status: z.string().default(""),
+  metadata: z.unknown().optional(),
+  edges: z.array(KnowledgeEdgeSchema).default([]),
+  created_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_KNOWLEDGE_NEIGHBORS = {
+  page_id: "",
+  edges: [],
+  hops: 1,
+};
+
+
 const ChannelMessageSearchResultSchema = z.object({
   message_id: z.string().default(""),
   channel_id: z.string().default(""),

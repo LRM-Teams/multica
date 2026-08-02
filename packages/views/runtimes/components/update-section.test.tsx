@@ -190,3 +190,42 @@ describe("UpdateSection queued state (2026-08-02)", () => {
     }
   });
 });
+
+// Task #81 (b) (Parker, 2026-08-02): pin wins over a manual click, no
+// override path — the button must be disabled, never just discouraged, and
+// the reason must be always-visible (not hover-only), naming the pinned
+// version so the user knows what to undo.
+describe("UpdateSection pin enforcement (task #81 b)", () => {
+  it("disables the Update button when pinned, even though an update is available", () => {
+    renderSection({ pinnedVersion: "0.3.85", runtimeHealth: "update_available" });
+    expect(screen.getByRole("button", { name: "Update" })).toBeDisabled();
+    expect(screen.getByTestId("update-pin-blocked-reason")).toHaveTextContent(
+      "Upgrades are disabled — this computer is pinned to v0.3.85. Remove the pin to allow upgrades.",
+    );
+  });
+
+  it("does not show the pin-blocked reason when the machine is already up to date — nothing for it to explain", () => {
+    renderSection({
+      pinnedVersion: "0.3.85",
+      runtimeHealth: "ok",
+      currentVersion: "0.3.85",
+    });
+    expect(screen.queryByTestId("update-pin-blocked-reason")).toBeNull();
+    expect(screen.getByRole("button", { name: "Up to date — v0.3.85" })).toBeDisabled();
+  });
+
+  it("does not disable or show a reason when pinnedVersion is absent", () => {
+    renderSection({ runtimeHealth: "update_available", pinnedVersion: null });
+    expect(screen.getByRole("button", { name: "Update" })).toBeEnabled();
+    expect(screen.queryByTestId("update-pin-blocked-reason")).toBeNull();
+  });
+
+  it("also blocks Retry when pinned — the pin isn't just for the first attempt", () => {
+    renderSection({
+      pinnedVersion: "0.3.85",
+      updateState: "failed",
+      runtimeHealth: "failed",
+    });
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+});

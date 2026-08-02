@@ -32,6 +32,7 @@ import {
   Plus,
   Check,
   BookOpenText,
+  BookMarked,
   FolderKanban,
   BarChart3,
   Sparkles,
@@ -122,6 +123,7 @@ type NavKey =
   | "agents"
   | "usage"
   | "evolution"
+  | "wiki"
   | "planBilling"
   | "computers"
   | "sandboxes"
@@ -140,6 +142,7 @@ type NavLabelKey =
   | "agents"
   | "usage"
   | "evolution"
+  | "knowledge"
   | "plan_billing"
   | "computers"
   | "sandboxes"
@@ -162,6 +165,7 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity 
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "usage", labelKey: "usage", icon: BarChart3 },
   { key: "evolution", labelKey: "evolution", icon: Sparkles },
+  { key: "wiki", labelKey: "knowledge", icon: BookMarked },
   { key: "planBilling", labelKey: "plan_billing", icon: CreditCard },
 ];
 

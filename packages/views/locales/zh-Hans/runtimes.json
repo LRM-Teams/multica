@@ -346,7 +346,8 @@
       "failed": "更新失败",
       "timeout": "超时"
     },
-    "up_to_date_short": "已是最新"
+    "up_to_date_short": "已是最新",
+    "pin_blocked": "已指定运行版本 v{{version}}，取消指定后才能升级。"
   },
   "restart": {
     "action": "重启",

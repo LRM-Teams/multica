@@ -352,7 +352,8 @@
       "failed": "Update failed",
       "timeout": "Timeout"
     },
-    "up_to_date_short": "Up to date"
+    "up_to_date_short": "Up to date",
+    "pin_blocked": "Upgrades are disabled — this computer is pinned to v{{version}}. Remove the pin to allow upgrades."
   },
   "restart": {
     "action": "Restart",

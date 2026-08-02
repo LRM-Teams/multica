@@ -7,6 +7,8 @@ describe("paths.workspace(slug)", () => {
   it("builds workspace paths with slug prefix", () => {
     expect(ws.usage()).toBe("/acme/usage");
     expect(ws.evolution()).toBe("/acme/evolution");
+    expect(ws.wiki()).toBe("/acme/wiki");
+    expect(ws.wikiDetail("page-1")).toBe("/acme/wiki/page-1");
     expect(ws.planBilling()).toBe("/acme/plan-billing");
     expect(ws.issues()).toBe("/acme/issues");
     expect(ws.issueDetail("abc-123")).toBe("/acme/issues/abc-123");

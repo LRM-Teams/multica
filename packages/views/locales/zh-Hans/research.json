@@ -79,6 +79,9 @@
     "canvas_empty_creating": "正在创建…",
     "canvas_empty_create_goal": "接下来想探索什么？",
     "confirm_failed": "确认调研失败",
+    "confirm_done": "已批准确认",
+    "reject_done": "已驳回并回传舰队",
+    "reject_failed": "驳回失败",
     "handoff_failed": "交接失败",
     "send_failed": "消息发送失败"
   },
@@ -123,6 +126,13 @@
     "session_tools_hint": "调研团编制与来源图谱按需打开，不常驻画布。",
     "confirm": "确认调研完成",
     "confirm_continue": "确认并继续",
+    "gate_approve": "批准",
+    "gate_reject": "驳回",
+    "gate_reject_title": "驳回确认",
+    "gate_reject_hint": "可填意见回传调研主理人，舰队将据此修订。",
+    "gate_reject_placeholder": "希望舰队修订什么？",
+    "gate_reject_submit": "发送驳回",
+    "gate_reject_submitting": "发送中…",
     "handoff_title": "交付移交",
     "view_delivery": "查看交付",
     "handoff_project": "建立开发项目",
@@ -202,6 +212,15 @@
       "wake_internal_error": "唤醒内部错误",
       "unknown": "唤醒失败"
     }
+  },
+  "clarification": {
+    "submit": "提交回答",
+    "submitting": "提交中…",
+    "skip": "跳过",
+    "required_fields": "请至少填写一项后再提交",
+    "answered": "已提交回答 · 会话继续",
+    "answered_option": "已选：{{label}}",
+    "skipped": "已跳过 · 会话继续"
   },
   "node": {
     "goal": "目标",

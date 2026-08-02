@@ -27,6 +27,7 @@ import enUi from "./en/ui.json";
 import enBilling from "./en/billing.json";
 import enChannels from "./en/channels.json";
 import enEvolution from "./en/evolution.json";
+import enKnowledge from "./en/knowledge.json";
 import enResearch from "./en/research.json";
 import enPlanBilling from "./en/plan-billing.json";
 import zhHansCommon from "./zh-Hans/common.json";
@@ -57,6 +58,7 @@ import zhHansUi from "./zh-Hans/ui.json";
 import zhHansBilling from "./zh-Hans/billing.json";
 import zhHansChannels from "./zh-Hans/channels.json";
 import zhHansEvolution from "./zh-Hans/evolution.json";
+import zhHansKnowledge from "./zh-Hans/knowledge.json";
 import zhHansResearch from "./zh-Hans/research.json";
 import zhHansPlanBilling from "./zh-Hans/plan-billing.json";
 import koCommon from "./ko/common.json";
@@ -87,6 +89,7 @@ import koUi from "./ko/ui.json";
 import koBilling from "./ko/billing.json";
 import koChannels from "./ko/channels.json";
 import koEvolution from "./ko/evolution.json";
+import koKnowledge from "./ko/knowledge.json";
 import koResearch from "./ko/research.json";
 import koPlanBilling from "./ko/plan-billing.json";
 import jaCommon from "./ja/common.json";
@@ -117,6 +120,7 @@ import jaUi from "./ja/ui.json";
 import jaBilling from "./ja/billing.json";
 import jaChannels from "./ja/channels.json";
 import jaEvolution from "./ja/evolution.json";
+import jaKnowledge from "./ja/knowledge.json";
 import jaResearch from "./ja/research.json";
 import jaPlanBilling from "./ja/plan-billing.json";
 
@@ -153,6 +157,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     billing: enBilling,
     channels: enChannels,
     evolution: enEvolution,
+    knowledge: enKnowledge,
     research: enResearch,
     "plan-billing": enPlanBilling,
   },
@@ -185,6 +190,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     billing: zhHansBilling,
     channels: zhHansChannels,
     evolution: zhHansEvolution,
+    knowledge: zhHansKnowledge,
     research: zhHansResearch,
     "plan-billing": zhHansPlanBilling,
   },
@@ -217,6 +223,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     billing: koBilling,
     channels: koChannels,
     evolution: koEvolution,
+    knowledge: koKnowledge,
     research: koResearch,
     "plan-billing": koPlanBilling,
   },
@@ -249,6 +256,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     billing: jaBilling,
     channels: jaChannels,
     evolution: jaEvolution,
+    knowledge: jaKnowledge,
     research: jaResearch,
     "plan-billing": jaPlanBilling,
   },

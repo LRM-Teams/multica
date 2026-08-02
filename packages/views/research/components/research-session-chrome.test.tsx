@@ -27,6 +27,13 @@ vi.mock("../../i18n/use-t", () => ({
         },
         panel: {
           confirm_continue: "Confirm & continue",
+          gate_approve: "Approve",
+          gate_reject: "Reject",
+          gate_reject_title: "Reject confirmation",
+          gate_reject_hint: "Optional feedback goes back to the lead.",
+          gate_reject_placeholder: "What should the fleet revise?",
+          gate_reject_submit: "Send rejection",
+          gate_reject_submitting: "Sending…",
           handoff_title: "Handoff delivery",
           view_delivery: "View delivery",
           handoff_project: "Create development project",
@@ -82,9 +89,17 @@ vi.mock("@multica/ui/components/ui/popover", async () => {
         children,
       );
     },
-    PopoverContent: ({ children }: { children?: React.ReactNode }) => {
+    PopoverContent: ({
+      children,
+      ...rest
+    }: {
+      children?: React.ReactNode;
+      "data-testid"?: string;
+    }) => {
       const { open } = React.useContext(Ctx);
-      return open ? <div data-testid="popover-content">{children}</div> : null;
+      return open ? (
+        <div data-testid={rest["data-testid"] ?? "popover-content"}>{children}</div>
+      ) : null;
     },
     PopoverHeader: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
     PopoverTitle: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
@@ -185,7 +200,8 @@ describe("ResearchSessionChrome", () => {
 
   it("running state shows no primary action; desktop keeps delivery outline", () => {
     renderChrome(makeSession({ status: "running" }));
-    expect(screen.queryByText("Confirm & continue")).toBeNull();
+    expect(screen.queryByText("Approve")).toBeNull();
+    expect(screen.queryByText("Reject")).toBeNull();
     expect(screen.queryByText("Handoff delivery")).toBeNull();
     expect(screen.getByTestId("research-session-delivery")).toBeTruthy();
     expect(screen.getByText("View delivery")).toBeTruthy();
@@ -194,7 +210,10 @@ describe("ResearchSessionChrome", () => {
   it("narrow folds delivery into tools so primary is not crowded", () => {
     mobileState.isMobile = true;
     const onOpenDelivery = vi.fn();
-    renderChrome(makeSession({ status: "awaiting_user_confirm" }), { onOpenDelivery });
+    renderChrome(makeSession({ status: "awaiting_user_confirm" }), {
+      onOpenDelivery,
+      onReject: () => {},
+    });
     expect(screen.getByTestId("research-session-primary")).toBeTruthy();
     expect(screen.queryByTestId("research-session-delivery")).toBeNull();
     expect(screen.getByText("View delivery")).toBeTruthy();
@@ -202,19 +221,33 @@ describe("ResearchSessionChrome", () => {
     expect(onOpenDelivery).toHaveBeenCalledTimes(1);
   });
 
-  it("awaiting_user_confirm shows exactly the confirm primary", () => {
+  it("awaiting_user_confirm shows approve + reject controls (LRM-840)", () => {
     const onConfirm = vi.fn();
-    renderChrome(makeSession({ status: "awaiting_user_confirm" }), { onConfirm });
+    const onReject = vi.fn();
+    renderChrome(makeSession({ status: "awaiting_user_confirm" }), {
+      onConfirm,
+      onReject,
+    });
     expect(screen.getByText("Awaiting confirm")).toBeTruthy();
-    const confirm = screen.getByText("Confirm & continue");
+    expect(screen.getByTestId("research-session-status").textContent).toContain(
+      "Awaiting confirm",
+    );
     expect(screen.queryByText("Handoff delivery")).toBeNull();
-    fireEvent.click(confirm);
+    fireEvent.click(screen.getByText("Approve"));
     expect(onConfirm).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId("research-session-gate-reject"));
+    expect(screen.getByTestId("research-session-gate-reject-popover")).toBeTruthy();
+    fireEvent.change(screen.getByTestId("research-session-gate-reject-reason"), {
+      target: { value: "来源权重不够" },
+    });
+    fireEvent.click(screen.getByTestId("research-session-gate-reject-submit"));
+    expect(onReject).toHaveBeenCalledWith("来源权重不够");
   });
 
   it("completed shows handoff primary; checkboxes live inside the popover", () => {
     renderChrome(makeSession({ status: "completed" }));
-    expect(screen.queryByText("Confirm & continue")).toBeNull();
+    expect(screen.queryByText("Approve")).toBeNull();
     expect(screen.queryByText("Create development project")).toBeNull();
 
     fireEvent.click(screen.getByText("Handoff delivery"));

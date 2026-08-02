@@ -395,6 +395,7 @@ type TaskMessageData struct {
 	Seq     int            `json:"seq"`
 	Type    string         `json:"type"`
 	Tool    string         `json:"tool,omitempty"`
+	CallID  string         `json:"call_id,omitempty"`
 	Content string         `json:"content,omitempty"`
 	Lineage string         `json:"lineage,omitempty"`
 	Input   map[string]any `json:"input,omitempty"`

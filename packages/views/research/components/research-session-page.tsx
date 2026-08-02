@@ -20,7 +20,11 @@ import {
   researchSessionSnapshotOptions,
   useResearchUiStore,
 } from "@multica/core/research";
-import type { ResearchGraphNode, ResearchProductRoundCard } from "@multica/core/types";
+import type {
+  ResearchClarificationQuestion,
+  ResearchGraphNode,
+  ResearchProductRoundCard,
+} from "@multica/core/types";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
@@ -35,6 +39,11 @@ import {
   useProfilePanelWidth,
 } from "../../layout/use-profile-panel-width";
 import { useNavigation } from "../../navigation/context";
+import {
+  formatClarificationFormReply,
+  formatClarificationOptionReply,
+  formatClarificationSkipReply,
+} from "../lib/clarification-question";
 import {
   buildFleetChatFeed,
   nextStageWaitingCard,
@@ -67,6 +76,7 @@ import {
   isPostRetryWakeFailure,
   resolveSessionInterrupt,
 } from "../lib/session-interrupt";
+import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchCanvas } from "./research-canvas";
@@ -225,8 +235,21 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     mutationFn: () => api.confirmResearchSession(sessionId),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+      toast.success(t(($) => $.session_page.confirm_done));
     },
     onError: (err) => mutationErrorToast(t(($) => $.session_page.confirm_failed), err),
+  });
+
+  // LRM-840 — reject stage-gate confirm: tip → agent + status resumes via BE.
+  const rejectConfirm = useMutation({
+    mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+      toast.success(t(($) => $.session_page.reject_done));
+    },
+    onError: (err) => mutationErrorToast(t(($) => $.session_page.reject_failed), err),
   });
 
   const handoff = useMutation({
@@ -387,6 +410,27 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
 
   const postUser = (body: string) => send.mutate(body);
 
+  const onClarificationOption = (
+    question: ResearchClarificationQuestion,
+    optionId: string,
+  ) => {
+    const option = question.options.find((o) => o.id === optionId);
+    if (!option) return;
+    postUser(formatClarificationOptionReply(question, option));
+  };
+
+  const onClarificationForm = (
+    question: ResearchClarificationQuestion,
+    values: Record<string, string>,
+  ) => {
+    postUser(formatClarificationFormReply(question, values));
+  };
+
+  const onClarificationSkip = (question: ResearchClarificationQuestion) => {
+    // Skip posts a user tip so the fleet can continue — never blocks the session.
+    postUser(formatClarificationSkipReply(question));
+  };
+
   const chatFeed = buildFleetChatFeed(messages);
   const runningCards = presenceRunningCards(presence, fleet.members);
   const waitingCard = nextStageWaitingCard(session.current_stage, session.status);
@@ -460,8 +504,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         onCreateProjectChange={(value) => dispatch({ type: "setCreateProject", value })}
         onCreateChannelChange={(value) => dispatch({ type: "setCreateChannel", value })}
         onConfirm={() => confirm.mutate()}
+        onReject={(reason) =>
+          rejectConfirm.mutate(formatStageGateRejectReply(reason))
+        }
         onHandoff={() => handoff.mutate()}
         confirmPending={confirm.isPending}
+        rejectPending={rejectConfirm.isPending}
         handoffPending={handoff.isPending}
         onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
         selectedSummary={
@@ -707,39 +755,44 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                         <ResearchChatCard
                           message={item.message}
                           members={fleet.members}
+                          messages={messages}
                           currentGoal={session.goal}
                           roundPending={send.isPending}
-                        onRoundAgree={(card) =>
-                          postUser(
-                            `同意罗纳尔多产品轮 Round ${card.round_number} 裁定：${card.decision}`,
-                          )
-                        }
-                        onRoundRejectContinue={(card) => {
-                          void api.stopResearchSession(sessionId).then(() => {
-                            void qc.invalidateQueries({
-                              queryKey: researchKeys.snapshot(wsId, sessionId),
+                          clarificationPending={send.isPending}
+                          onClarificationOption={onClarificationOption}
+                          onClarificationForm={onClarificationForm}
+                          onClarificationSkip={onClarificationSkip}
+                          onRoundAgree={(card) =>
+                            postUser(
+                              `同意罗纳尔多产品轮 Round ${card.round_number} 裁定：${card.decision}`,
+                            )
+                          }
+                          onRoundRejectContinue={(card) => {
+                            void api.stopResearchSession(sessionId).then(() => {
+                              void qc.invalidateQueries({
+                                queryKey: researchKeys.snapshot(wsId, sessionId),
+                              });
                             });
-                          });
-                          postUser(
-                            `驳回 continue：请停止调研（Round ${card.round_number}）。`,
-                          );
-                        }}
-                        onRoundRejectStop={(card) =>
-                          postUser(
-                            `驳回 stop：请在预算内再开一轮加深（Round ${card.round_number}，剩余 ${card.budget_remaining}）。`,
-                          )
-                        }
-                        onConfirmGoalPatch={(_card, text) =>
-                          postUser(`确认将调研最终目标更新为：${text}`)
-                        }
-                        onEditGoalPatch={(_card, text) =>
-                          postUser(`请按以下文本更新调研最终目标：${text}`)
-                        }
-                        onRejectGoalPatch={(card) =>
-                          postUser(
-                            `拒绝本轮目标回灌提案（Round ${card.round_number}），保持当前目标不变。`,
-                          )
-                        }
+                            postUser(
+                              `驳回 continue：请停止调研（Round ${card.round_number}）。`,
+                            );
+                          }}
+                          onRoundRejectStop={(card) =>
+                            postUser(
+                              `驳回 stop：请在预算内再开一轮加深（Round ${card.round_number}，剩余 ${card.budget_remaining}）。`,
+                            )
+                          }
+                          onConfirmGoalPatch={(_card, text) =>
+                            postUser(`确认将调研最终目标更新为：${text}`)
+                          }
+                          onEditGoalPatch={(_card, text) =>
+                            postUser(`请按以下文本更新调研最终目标：${text}`)
+                          }
+                          onRejectGoalPatch={(card) =>
+                            postUser(
+                              `拒绝本轮目标回灌提案（Round ${card.round_number}），保持当前目标不变。`,
+                            )
+                          }
                         />
                       </div>
                     ) : (

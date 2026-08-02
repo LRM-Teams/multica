@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -132,6 +134,102 @@ func (h *Handler) recordAgentActivityEvent(
 		targetRef.Slug = stringPtr(strings.TrimSpace(targetSlug))
 	}
 	h.publishAgentActivityRealtimeEvent(ctx, workspaceIDString, uuidToString(agentID), uuidToString(id), event, targetRef)
+}
+
+// backfillAgentInboxToolCallFromResult merges completed tool Input into the
+// matching started tool_call Activity row. Cursor often emits args only on
+// completed; runtime_tool_event already carries that Input on tool_result.
+// Existing path/query/pattern/tool_target values are never overwritten.
+func (h *Handler) backfillAgentInboxToolCallFromResult(
+	ctx context.Context,
+	exec activityEventExec,
+	workspaceID, agentID pgtype.UUID,
+	deliveryID string,
+	msg TaskMessageRequest,
+) {
+	if exec == nil || h == nil {
+		return
+	}
+	callID := strings.TrimSpace(msg.CallID)
+	deliveryID = strings.TrimSpace(deliveryID)
+	if callID == "" || deliveryID == "" || len(msg.Input) == 0 {
+		return
+	}
+	rawTool := strings.TrimSpace(msg.Tool)
+	canonicalTool, known := taskMessageCanonicalToolName(rawTool, msg.Input)
+	if !known {
+		return
+	}
+
+	var eventID pgtype.UUID
+	var detailsRaw []byte
+	err := exec.QueryRow(ctx, `
+		SELECT id, details
+		FROM agent_activity_event
+		WHERE workspace_id = $1
+		  AND agent_id = $2
+		  AND event_kind = $3
+		  AND details->>'delivery_id' = $4
+		  AND details->>'call_id' = $5
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, workspaceID, agentID, activityKindToolCall, deliveryID, callID).Scan(&eventID, &detailsRaw)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("agent activity event: tool_call backfill lookup failed",
+				"error", err,
+				"call_id", callID,
+				"delivery_id", deliveryID,
+				"agent_id", uuidToString(agentID),
+			)
+		}
+		return
+	}
+
+	details := map[string]any{}
+	if len(detailsRaw) > 0 {
+		if err := json.Unmarshal(detailsRaw, &details); err != nil {
+			slog.Warn("agent activity event: tool_call backfill decode failed",
+				"error", err,
+				"event_id", uuidToString(eventID),
+			)
+			return
+		}
+	}
+	before, err := json.Marshal(details)
+	if err != nil {
+		return
+	}
+	agentActivityApplyToolSourceFacts(details, rawTool, canonicalTool, msg.Input)
+	agentActivityApplyToolInputSummary(details, canonicalTool, msg.Input, false)
+	if details["tool"] == nil {
+		details["tool"] = canonicalTool
+	}
+	after, err := json.Marshal(details)
+	if err != nil || bytes.Equal(before, after) {
+		return
+	}
+	if _, err := exec.Exec(ctx, `
+		UPDATE agent_activity_event
+		SET details = $2::jsonb
+		WHERE id = $1
+	`, eventID, string(after)); err != nil {
+		slog.Warn("agent activity event: tool_call backfill update failed",
+			"error", err,
+			"event_id", uuidToString(eventID),
+			"call_id", callID,
+		)
+		return
+	}
+	if h.Bus == nil {
+		return
+	}
+	workspaceIDString := uuidToString(workspaceID)
+	event := h.hydrateAgentActivityTimelineEvent(ctx, workspaceIDString, agentID, eventID)
+	if event == nil {
+		return
+	}
+	h.publishAgentActivityRealtimeEvent(ctx, workspaceIDString, uuidToString(agentID), uuidToString(eventID), event, event.TargetRef)
 }
 
 func activityVisibilityFor(eventKind, eventType, severity, reasonCode string) string {

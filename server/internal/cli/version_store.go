@@ -223,6 +223,64 @@ func writeSyncedFile(path string, data []byte, mode fs.FileMode) error {
 	return nil
 }
 
+// renamePublishRetryAttempts/renamePublishRetryBaseDelay bound how long
+// renamePublishWithRetry will keep retrying a failed publish rename.
+//
+// This absorbs a Windows-specific race, not a general reliability concern:
+// StageBinary executes the freshly-staged binary (s.verifier, just above the
+// caller of this function) to confirm its version, then immediately renames
+// its parent directory into place. On Unix this is always safe — a process
+// holding a file open never blocks rename/unlink. On Windows it isn't: the OS
+// can hold the image file locked for a short window after the process exits
+// while it tears down, and antivirus (Defender's on-execute + on-close
+// scanning is the common case) routinely opens its own handle to a
+// just-executed .exe for a similarly short window. Both are sub-second to
+// low-single-digit-second phenomena in practice, not multi-second stalls —
+// this is why the ceiling here is ~3s, not the minutes-scale backoff
+// UpdateIntentStore uses one layer up (handler/runtime_update_intent.go).
+//
+// The two retry layers serve different failures and must not be confused:
+// this one absorbs a transient OS/AV lock during a single already-running
+// attempt; UpdateIntentStore's backoff redelivers the *trigger* to a target
+// that wasn't reachable/available at all. If this retry ceiling is exceeded,
+// StageBinary fails normally and the outer layer takes over on its own
+// schedule — it does not wait for this one to give up before deciding
+// whether to try again.
+const (
+	renamePublishRetryAttempts  = 5
+	renamePublishRetryBaseDelay = 100 * time.Millisecond
+)
+
+// osRename is os.Rename behind an indirection so tests can simulate a
+// transient lock (fail N times, then succeed) without needing a real
+// Windows file lock — mirrors the fetchLatestRelease-style override pattern
+// used elsewhere in this codebase (auto_update.go) for the same reason.
+var osRename = os.Rename
+
+// renamePublishWithRetry retries osRename with exponential backoff
+// (100ms, 200ms, 400ms, 800ms, 1600ms — ~3.1s total across up to
+// renamePublishRetryAttempts retries after the initial attempt) to absorb a
+// transient Windows file lock. See the constants above for why.
+func renamePublishWithRetry(ctx context.Context, oldpath, newpath string) error {
+	err := osRename(oldpath, newpath)
+	if err == nil {
+		return nil
+	}
+	delay := renamePublishRetryBaseDelay
+	for attempt := 0; attempt < renamePublishRetryAttempts; attempt++ {
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+		if err = osRename(oldpath, newpath); err == nil {
+			return nil
+		}
+		delay *= 2
+	}
+	return err
+}
+
 func (s *VersionStore) StageBinary(
 	ctx context.Context,
 	version string,
@@ -292,7 +350,7 @@ func (s *VersionStore) StageBinary(
 	}
 
 	finalDir := filepath.Dir(staged.BinaryPath)
-	if err := os.Rename(tempDir, finalDir); err != nil {
+	if err := renamePublishWithRetry(ctx, tempDir, finalDir); err != nil {
 		if existing, verifyErr := s.verifyExisting(ctx, staged.Version, expectedDigest); verifyErr == nil {
 			return existing, nil
 		}

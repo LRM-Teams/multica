@@ -203,6 +203,15 @@
       "unknown": "Wake failed"
     }
   },
+  "clarification": {
+    "submit": "Submit answer",
+    "submitting": "Submitting…",
+    "skip": "Skip",
+    "required_fields": "Fill at least one field before submitting",
+    "answered": "Answer sent — session continues",
+    "answered_option": "Selected: {{label}}",
+    "skipped": "Skipped — session continues"
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",

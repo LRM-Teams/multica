@@ -92,6 +92,8 @@ function opTitleFallback(op: string): string {
       return "编制 · 归档";
     case "product_round_judgment":
       return "产品轮判定";
+    case "clarification_question":
+      return "澄清提问";
     default:
       return op || "过程";
   }
@@ -183,7 +185,8 @@ export function buildFleetChatFeed(
 
     const op = metaString(message.meta, "op");
     // Interactive product-round judgment stays a chat/process card (LRM-913).
-    if (op === "product_round_judgment") {
+    // Clarification options/form stay interactive in the chat feed (LRM-822).
+    if (op === "product_round_judgment" || op === "clarification_question") {
       out.push({ kind: "chat", message });
       continue;
     }

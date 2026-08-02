@@ -3,6 +3,7 @@ import {
   mockCreateResearchSessionResponse,
   mockResearchSessionsList,
   mockResearchSessionsListEmpty,
+  mockResearchSnapshotClarification,
   mockResearchSnapshotDefault,
   mockResearchSnapshotEmpty,
   mockResearchSnapshotError,
@@ -49,6 +50,21 @@ describe("LRM-841 research mocks", () => {
     const meta = process?.meta as Record<string, unknown> | undefined;
     expect(meta?.op).toBe("wake_failed");
     expect(meta?.reason).toBe("runtime_offline");
+  });
+
+  it("clarification snapshot exposes list + form clarification_question cards (LRM-822)", () => {
+    const parsed = ResearchSessionSnapshotSchema.parse(mockResearchSnapshotClarification);
+    const clarifies = parsed.messages.filter((m) => {
+      const meta = m.meta as Record<string, unknown> | undefined;
+      return meta?.op === "clarification_question";
+    });
+    expect(clarifies.length).toBe(2);
+    const layouts = clarifies.map(
+      (m) => (m.meta as Record<string, unknown>).layout as string,
+    );
+    expect(layouts).toContain("list");
+    expect(layouts).toContain("form");
+    expect(researchMocks.snapshots.clarification.session.id).toBe("sess-clarify");
   });
 
   it("list mocks satisfy list schema", () => {

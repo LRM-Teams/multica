@@ -140,6 +140,23 @@ describe("buildFleetChatFeed", () => {
     expect(feed[0]?.kind).toBe("chat");
   });
 
+  it("keeps clarification_question as interactive chat cards (LRM-822)", () => {
+    const feed = buildFleetChatFeed([
+      msg({
+        id: "c1",
+        body: "澄清提问",
+        meta: {
+          op: "clarification_question",
+          question_id: "q1",
+          layout: "list",
+          options: [{ id: "a", label: "A" }],
+        },
+      }),
+    ]);
+    expect(feed).toHaveLength(1);
+    expect(feed[0]?.kind).toBe("chat");
+  });
+
 describe("presenceRunningCards / nextStageWaitingCard", () => {
   it("builds running cards from presence", () => {
     const cards = presenceRunningCards(

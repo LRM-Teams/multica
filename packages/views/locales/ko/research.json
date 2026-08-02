@@ -203,6 +203,15 @@
       "unknown": "깨우기 실패"
     }
   },
+  "clarification": {
+    "submit": "답변 제출",
+    "submitting": "제출 중…",
+    "skip": "건너뛰기",
+    "required_fields": "제출 전에 하나 이상 입력하세요",
+    "answered": "답변 전송됨 · 세션 계속",
+    "answered_option": "선택: {{label}}",
+    "skipped": "건너뜀 · 세션 계속"
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",

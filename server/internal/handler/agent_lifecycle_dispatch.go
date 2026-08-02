@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // ---------------------------------------------------------------------------
@@ -290,22 +293,47 @@ func (h *Handler) ReportAgentLifecycleOperationResult(w http.ResponseWriter, r *
 		return
 	}
 
-	tag, err := h.DB.Exec(r.Context(), `
+	var (
+		agentID     pgtype.UUID
+		workspaceID pgtype.UUID
+		actionKind  string
+	)
+	err = h.DB.QueryRow(r.Context(), `
 		UPDATE agent_lifecycle_operation
 		SET status = $1, step = $2, reason_code = $3, finished_at = now()
 		WHERE id = $4
 		  AND runtime_id = $5
 		  AND status IN ('running', 'scheduled')
-	`, status, req.Step, req.ReasonCode, operationID, runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to record agent lifecycle result")
-		return
-	}
-	if tag.RowsAffected() == 0 {
+		RETURNING agent_id, workspace_id, action_kind
+	`, status, req.Step, req.ReasonCode, operationID, runtimeUUID).Scan(
+		&agentID, &workspaceID, &actionKind,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
 		// Not an error: the operation may have already timed out or been
 		// reported by a prior (retried) heartbeat delivery. Idempotent no-op.
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
 		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record agent lifecycle result")
+		return
+	}
+	if status == agentLifecycleSucceeded {
+		// Parker 2026-08-02 / Frank: Activity must show that restart happened.
+		// One success row only (~seconds path) — not a running+succeeded pair.
+		// restarted_by_user stays diagnostic_only (#62); this is a positive
+		// business event on the timeline, not that kill-path failure row.
+		h.recordAgentActivityEvent(r.Context(), h.DB,
+			workspaceID, agentID, runtimeUUID, pgtype.UUID{},
+			activityKindCustom, agentLifecycleSucceededActivityEventType, "info",
+			"agent", agentID, "",
+			"", "Restarted",
+			map[string]any{
+				"operation_id": uuidToString(operationID),
+				"action_kind":  actionKind,
+				"status":       status,
+			},
+		)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recorded"})
 }

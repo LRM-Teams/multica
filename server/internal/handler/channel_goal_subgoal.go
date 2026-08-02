@@ -591,6 +591,14 @@ func (h *Handler) UpdateChannelGoalSubgoal(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
+	// Apply depends_on before the in_progress gate so a same-request
+	// {depends_on, status:in_progress} cannot bypass the serial-dep check.
+	if req.DependsOn != nil {
+		if err := h.replaceSubgoalDeps(r.Context(), workspaceID, parseUUID(current.GoalID), current.ID, *req.DependsOn); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if current.Status == subgoalStatusInProgress {
 		okDeps, err := h.subgoalDepsSatisfied(r.Context(), current.ID)
 		if err != nil {
@@ -637,12 +645,6 @@ func (h *Handler) UpdateChannelGoalSubgoal(w http.ResponseWriter, r *http.Reques
 		}
 		if err := h.replaceSubgoalParticipants(r.Context(), workspaceID, updated.ID, participants); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update participants")
-			return
-		}
-	}
-	if req.DependsOn != nil {
-		if err := h.replaceSubgoalDeps(r.Context(), workspaceID, parseUUID(updated.GoalID), updated.ID, *req.DependsOn); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}

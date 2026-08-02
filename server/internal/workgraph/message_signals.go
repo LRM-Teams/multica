@@ -25,22 +25,29 @@ func (s *Store) HandleHumanRework(ctx context.Context, workspaceID, channelID pg
 		if err != nil {
 			return fmt.Errorf("list rework targets: %w", err)
 		}
+		// Drain into memory and close the cursor BEFORE calling Exec: doing
+		// a second pool acquire while this cursor is still open can
+		// deadlock a bounded pool under concurrent requests (same shape as
+		// the #1803 attachAgentRuntimeNames bug / task #90).
+		var nodeIDs []pgtype.UUID
 		for rows.Next() {
 			var nodeID pgtype.UUID
 			if err := rows.Scan(&nodeID); err != nil {
 				rows.Close()
 				return err
 			}
-			if _, err := s.pool.Exec(ctx, `UPDATE work_node SET status = 'needs_rework', updated_at = now() WHERE id = $1`, nodeID); err != nil {
-				rows.Close()
-				return fmt.Errorf("mark node needs rework: %w", err)
-			}
+			nodeIDs = append(nodeIDs, nodeID)
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
 			return err
 		}
 		rows.Close()
+		for _, nodeID := range nodeIDs {
+			if _, err := s.pool.Exec(ctx, `UPDATE work_node SET status = 'needs_rework', updated_at = now() WHERE id = $1`, nodeID); err != nil {
+				return fmt.Errorf("mark node needs rework: %w", err)
+			}
+		}
 	}
 	return nil
 }

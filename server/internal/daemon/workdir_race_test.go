@@ -42,6 +42,13 @@ func TestHandleTask_DoesNotCallStartTaskItself(t *testing.T) {
 			startCalls.Add(1)
 		}
 		w.WriteHeader(http.StatusOK)
+		// Every daemon-facing endpoint here (including /complete, hit via
+		// reportTaskResultForTask) decodes a JSON response body. An empty
+		// body decodes as io.EOF, which isTransientError's fallback treats
+		// as transient — silently sending handleTask into the real
+		// (non-mocked) defaultTerminalRetrySchedule backoff and blowing
+		// past any reasonable test timeout. See task #82.
+		_, _ = w.Write([]byte("{}"))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -244,6 +251,11 @@ func TestHandleTask_KeepsEnvRootActiveAcrossCompletion(t *testing.T) {
 			}
 		}
 		w.WriteHeader(http.StatusOK)
+		// See the sibling handler in TestHandleTask_DoesNotCallStartTaskItself:
+		// an empty body here decodes as io.EOF, which reads as a transient
+		// error and sends handleTask into a real multi-second retry backoff
+		// instead of the mocked-instant round trip this test expects.
+		_, _ = w.Write([]byte("{}"))
 	}))
 	t.Cleanup(srv.Close)
 	d.client = NewClient(srv.URL)

@@ -277,16 +277,13 @@ function finalizeRuntimeMachine(
   const healthByRuntime = runtimes.map((runtime) =>
     deriveRuntimeHealth(runtime, options.now),
   );
+  // Per-runtime online/issue counts stay on runtime heartbeats — filters and
+  // Code Agents rows answer "is this provider alive". Machine title-row
+  // connectivity (`health` / `lastSeenAt`) uses the daemon's own heartbeat
+  // when the server provides it (task #58 / #1696).
   const onlineCount = healthByRuntime.filter((h) => h === "online").length;
   const issueCount = runtimes.length - onlineCount;
-  const health =
-    onlineCount > 0
-      ? "online"
-      : healthByRuntime.reduce<RuntimeHealth>(
-          (worst, current) =>
-            HEALTH_SEVERITY[current] > HEALTH_SEVERITY[worst] ? current : worst,
-          "recently_lost",
-        );
+  const health = deriveMachineConnectivityHealth(runtimes, healthByRuntime);
   const updateIssueRuntime =
     runtimes.find(
       (runtime) => runtime.runtime_health === "failed" && runtime.update_error,
@@ -325,8 +322,39 @@ function finalizeRuntimeMachine(
     runningCount: workload.runningCount,
     queuedCount: workload.queuedCount,
     providerNames,
-    lastSeenAt: latestLastSeenAt(runtimes),
+    lastSeenAt: latestMachineLastSeenAt(runtimes),
   };
+}
+
+/**
+ * Machine title-row connectivity: prefer the daemon's own heartbeat
+ * (`computer_connected`, task #58) so "Online" means the computer is
+ * reachable — not "some runtime on it still has a fresh last_seen_at".
+ * Falls back to aggregating per-runtime deriveRuntimeHealth only when the
+ * response predates #1696 (field absent on every runtime).
+ *
+ * Binary Online/Offline when the daemon field is present — no recently_lost
+ * / about_to_gc on this axis (Parker B-(i), 2026-08-02).
+ */
+function deriveMachineConnectivityHealth(
+  runtimes: AgentRuntime[],
+  healthByRuntime: RuntimeHealth[],
+): RuntimeHealth {
+  const withDaemonField = runtimes.filter(
+    (runtime) => typeof runtime.computer_connected === "boolean",
+  );
+  if (withDaemonField.length > 0) {
+    return withDaemonField.some((runtime) => runtime.computer_connected)
+      ? "online"
+      : "offline";
+  }
+  const onlineCount = healthByRuntime.filter((h) => h === "online").length;
+  if (onlineCount > 0) return "online";
+  return healthByRuntime.reduce<RuntimeHealth>(
+    (worst, current) =>
+      HEALTH_SEVERITY[current] > HEALTH_SEVERITY[worst] ? current : worst,
+    "recently_lost",
+  );
 }
 
 /** Stable machine key used to group code agents that share one computer. */
@@ -478,6 +506,22 @@ function latestLastSeenAt(runtimes: AgentRuntime[]): string | null {
     }
   }
   return latest;
+}
+
+/** Prefer daemon heartbeat timestamp when present; else runtime last_seen. */
+function latestMachineLastSeenAt(runtimes: AgentRuntime[]): string | null {
+  let latest: string | null = null;
+  let sawDaemon = false;
+  for (const runtime of runtimes) {
+    const daemonSeen = runtime.daemon_last_seen_at;
+    if (!daemonSeen) continue;
+    sawDaemon = true;
+    if (!latest || new Date(daemonSeen) > new Date(latest)) {
+      latest = daemonSeen;
+    }
+  }
+  if (sawDaemon) return latest;
+  return latestLastSeenAt(runtimes);
 }
 
 function commonCliVersion(runtimes: AgentRuntime[]): string | null {

@@ -367,6 +367,63 @@ describe("runtime machine grouping", () => {
   });
 });
 
+describe("machine connectivity from daemon heartbeat (task #58 / B-(i))", () => {
+  it("reads Online from computer_connected even when every runtime is offline", () => {
+    const daemonSeen = new Date(NOW - 5_000).toISOString();
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          status: "offline",
+          last_seen_at: new Date(NOW - 10 * 60_000).toISOString(),
+          computer_connected: true,
+          daemon_last_seen_at: daemonSeen,
+        }),
+      ],
+      { now: NOW },
+    );
+
+    expect(machines[0]?.health).toBe("online");
+    expect(machines[0]?.lastSeenAt).toBe(daemonSeen);
+    expect(machines[0]?.onlineCount).toBe(0);
+  });
+
+  it("reads Offline from computer_connected even when a runtime last_seen is fresh", () => {
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          status: "online",
+          last_seen_at: new Date(NOW - 5_000).toISOString(),
+          computer_connected: false,
+          daemon_last_seen_at: new Date(NOW - 10 * 60_000).toISOString(),
+        }),
+      ],
+      { now: NOW },
+    );
+
+    expect(machines[0]?.health).toBe("offline");
+    expect(machines[0]?.lastSeenAt).toBe(
+      new Date(NOW - 10 * 60_000).toISOString(),
+    );
+  });
+
+  it("falls back to runtime aggregation when computer_connected is absent", () => {
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          status: "offline",
+          last_seen_at: new Date(NOW - 10 * 60_000).toISOString(),
+        }),
+      ],
+      { now: NOW },
+    );
+
+    expect(machines[0]?.health).toBe("offline");
+    expect(machines[0]?.lastSeenAt).toBe(
+      new Date(NOW - 10 * 60_000).toISOString(),
+    );
+  });
+});
+
 describe("machine health presentation (#687)", () => {
   it("surfaces a staged runtime's ready_to_apply on the machine header (agrees with the row)", () => {
     // Backend collapses ready_to_apply into runtime_health=update_available; the

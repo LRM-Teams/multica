@@ -462,6 +462,43 @@ func pgtimestamptz(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
 }
 
+// TestAgentRuntimeDisplayStatus_FreshStartingSinceOverridesStaleConnectivity
+// pins the exact scenario "starting" exists for: a machine coming back from
+// a crash calls MarkAgentRuntimesStarting before it has refreshed
+// last_seen_at, so connectivity alone would still read Dead/Stale from
+// before the crash. starting_since must win in that window.
+func TestAgentRuntimeDisplayStatus_FreshStartingSinceOverridesStaleConnectivity(t *testing.T) {
+	now := time.Now()
+	rt := db.AgentRuntime{
+		Status:        "online",
+		LastSeenAt:    pgtimestamptz(now.Add(-10 * time.Minute)), // long-dead by connectivity alone
+		UpdatedAt:     pgtimestamptz(now.Add(-10 * time.Minute)),
+		StartingSince: pgtimestamptz(now.Add(-5 * time.Second)), // just marked starting
+	}
+	if got := agentRuntimeDisplayStatus("idle", rt, now); got != agentDisplayStatusStarting {
+		t.Fatalf("display status = %q, want %q despite stale connectivity", got, agentDisplayStatusStarting)
+	}
+}
+
+// TestAgentRuntimeDisplayStatus_ExpiredStartingSinceFallsThroughSafely proves
+// the TTL is a genuine fallback, not a stuck state: if starting_since is
+// older than agentRuntimeStartingTTL (the daemon never completed register —
+// crashed again, lost the request, etc.), the runtime must NOT show
+// "starting" forever. It falls through to today's ordinary connectivity-based
+// tiering instead.
+func TestAgentRuntimeDisplayStatus_ExpiredStartingSinceFallsThroughSafely(t *testing.T) {
+	now := time.Now()
+	rt := db.AgentRuntime{
+		Status:        "online",
+		LastSeenAt:    pgtimestamptz(now.Add(-5 * time.Second)), // otherwise fresh/online
+		UpdatedAt:     pgtimestamptz(now.Add(-5 * time.Second)),
+		StartingSince: pgtimestamptz(now.Add(-90 * time.Second)), // past the 60s TTL
+	}
+	if got := agentRuntimeDisplayStatus("working", rt, now); got != agentDisplayStatusWorking {
+		t.Fatalf("display status = %q, want %q — expired starting_since must not override a fresh, otherwise-normal runtime", got, agentDisplayStatusWorking)
+	}
+}
+
 // End-to-end wiring check: attachAgentRuntimeNames is the actual code path
 // the agent list/detail response goes through, not just the pure function.
 // This catches the class of bug where the pure function is correct but

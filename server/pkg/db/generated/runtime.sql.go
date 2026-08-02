@@ -1241,6 +1241,31 @@ func (q *Queries) SetAgentRuntimeOffline(ctx context.Context, arg SetAgentRuntim
 	return err
 }
 
+const markAgentRuntimesStarting = `-- name: MarkAgentRuntimesStarting :exec
+UPDATE agent_runtime
+SET starting_since = now()
+WHERE daemon_id = $1 AND workspace_id = $2
+`
+
+type MarkAgentRuntimesStartingParams struct {
+	DaemonID    pgtype.Text `json:"daemon_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Called once, best-effort, right before the daemon's cold-start agent CLI
+// version-probe loop (which can take ~20s on a cold cache) — the window
+// during which the server otherwise has no fact newer than whatever this
+// daemon's runtimes looked like before it stopped. Deliberately a no-op
+// when no rows match (e.g. a daemon that has never registered before has
+// no prior runtime row to attach "starting" to). Read-side treats
+// starting_since as stale after a short TTL, so letting this row sit unset
+// forever if register never follows is safe by construction, not merely
+// tolerated.
+func (q *Queries) MarkAgentRuntimesStarting(ctx context.Context, arg MarkAgentRuntimesStartingParams) error {
+	_, err := q.db.Exec(ctx, markAgentRuntimesStarting, arg.DaemonID, arg.WorkspaceID)
+	return err
+}
+
 const touchAgentRuntimeLastSeen = `-- name: TouchAgentRuntimeLastSeen :execrows
 UPDATE agent_runtime
 SET last_seen_at = now()
@@ -1395,8 +1420,9 @@ DO UPDATE SET
     owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
     offline_reason = NULL,
     last_seen_at = now(),
-    updated_at = now()
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, (xmax = 0) AS inserted
+    updated_at = now(),
+    starting_since = NULL
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, (xmax = 0) AS inserted
 `
 
 type UpsertAgentRuntimeParams struct {
@@ -1429,6 +1455,7 @@ type UpsertAgentRuntimeRow struct {
 	Visibility     string             `json:"visibility"`
 	DisplayName    string             `json:"display_name"`
 	OfflineReason  pgtype.Text        `json:"offline_reason"`
+	StartingSince  pgtype.Timestamptz `json:"starting_since"`
 	Inserted       bool               `json:"inserted"`
 }
 
@@ -1466,6 +1493,7 @@ func (q *Queries) UpsertAgentRuntime(ctx context.Context, arg UpsertAgentRuntime
 		&i.Visibility,
 		&i.DisplayName,
 		&i.OfflineReason,
+		&i.StartingSince,
 		&i.Inserted,
 	)
 	return i, err

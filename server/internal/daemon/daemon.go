@@ -951,6 +951,14 @@ func (d *Daemon) clearDaemonTokensForWorkspace(workspaceID string) {
 
 func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
 	d.logger.Debug("registering runtimes for workspace", "workspace_id", workspaceID, "agent_count", len(d.cfg.Agents))
+	// Best-effort: tell the server we're up and about to probe agent CLI
+	// versions, before that probe loop (which follows immediately below and
+	// can take ~20s on a cold cache) delays the real register call. A failure
+	// here must never block startup — it only costs a missed "starting"
+	// display for this cycle, not a functional regression.
+	if err := d.client.MarkStarting(ctx, workspaceID, d.cfg.DaemonID); err != nil {
+		d.logger.Debug("mark-starting call failed; continuing without it", "workspace_id", workspaceID, "error", err)
+	}
 	var runtimes []map[string]string
 	for name, entry := range d.cfg.Agents {
 		version, err := detectAgentVersion(ctx, entry.Path)

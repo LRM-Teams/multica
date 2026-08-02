@@ -40,18 +40,32 @@ const (
 	// agent list/detail surface (task #42③). It deliberately does not reuse
 	// the agentHealthState* names: this is a coarser, workload-aware view
 	// meant for the primary status badge, not the Activity Health tab.
-	// "starting"/"thinking"/"crashed" are not emitted yet — they need
-	// signals (lifecycle-start marker, task phase, provider-crash event)
-	// that don't exist as agent-visible facts today. Leaving them unemitted
-	// is intentional: the family rule is status stays unknown rather than
-	// invented. "stopped" (task ①, agent intentional-stop signal design)
-	// IS emitted: agent_runtime.offline_reason is a real, known fact
-	// written at deregister/teardown time, not a guess.
+	// "thinking"/"crashed" are not emitted yet — they need signals (task
+	// phase, provider-crash event) that don't exist as agent-visible facts
+	// today. Leaving them unemitted is intentional: the family rule is
+	// status stays unknown rather than invented. "stopped" (task ①, agent
+	// intentional-stop signal design) IS emitted: agent_runtime.offline_reason
+	// is a real, known fact written at deregister/teardown time, not a
+	// guess. "starting" is emitted (see agentRuntimeDisplayStatus/
+	// runtime_starting_since): the daemon's cold-start agent-CLI
+	// version-probe loop is a real, boundaried fact.
 	agentDisplayStatusIdle         = "idle"
 	agentDisplayStatusWorking      = "working"
+	agentDisplayStatusStarting     = "starting"
 	agentDisplayStatusDisconnected = "disconnected"
 	agentDisplayStatusOffline      = "offline"
 	agentDisplayStatusStopped      = "stopped"
+
+	// agentRuntimeStartingTTL bounds how long a fresh MarkAgentRuntimesStarting
+	// call keeps a runtime showing "starting" if the daemon never follows up
+	// with a completing register call (crash between the two, lost request,
+	// etc.) — register unconditionally clears starting_since on success, so
+	// this TTL only matters for the failure case. ~3x the ~20s cold-start
+	// version-probe loop it's meant to cover; expiring early just means a
+	// slow-starting machine stops showing "starting" a little sooner, not
+	// that it shows something wrong (falls through to the existing
+	// connectivity-based tiers, i.e. today's behavior).
+	agentRuntimeStartingTTL = 60 * time.Second
 )
 
 var agentHealthEventTypes = []string{
@@ -311,6 +325,16 @@ func runtimeConnectivity(rt db.AgentRuntime, now time.Time) runtimeConnectivityT
 // anywhere yet (tracked separately, needs a daemon-side crash-detection
 // hook; see #42①②).
 func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, now time.Time) string {
+	// Checked before connectivity: a machine coming back from a crash sets
+	// starting_since before it has refreshed last_seen_at, so connectivity
+	// would otherwise still read Dead/Stale from before the crash — exactly
+	// the window "starting" exists to describe. TTL-gated here (not by a
+	// write-side clear) so a daemon that never completes register after
+	// this call still falls through safely once the window passes, instead
+	// of staying stuck showing "starting" forever.
+	if rt.StartingSince.Valid && now.Sub(rt.StartingSince.Time) < agentRuntimeStartingTTL {
+		return agentDisplayStatusStarting
+	}
 	switch runtimeConnectivity(rt, now) {
 	case runtimeConnectivityStopped:
 		return agentDisplayStatusStopped

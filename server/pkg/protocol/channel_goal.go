@@ -14,4 +14,7 @@ type ChannelGoalContext struct {
 	Blocker           string   `json:"blocker,omitempty"`
 	EvidenceRefs      []string `json:"evidence_refs,omitempty"`
 	CompletedCriteria []string `json:"completed_criteria,omitempty"`
+	// Subgoals is the bounded list of sub-goals relevant to the claiming agent
+	// (LRM-1004). Never a dump of other agents' full threads.
+	Subgoals []ChannelSubgoalContext `json:"subgoals,omitempty"`
 }

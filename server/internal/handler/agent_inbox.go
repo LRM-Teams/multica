@@ -1737,6 +1737,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			ChannelID:     resp.ChannelID,
 			ChannelKind:   resp.ChannelKind,
 			ChatSessionID: resp.ChatSessionID,
+			IssueID:       resp.IssueID,
 			MessageTexts:  []string{resp.ChatMessage, resp.TriggerCommentContent, resp.QuickCreatePrompt},
 			TaskType:      resp.Kind,
 			Now:           time.Now(),
@@ -1748,6 +1749,10 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		channelID := parseUUID(resp.ChannelID)
 		if goal, err := h.currentChannelGoal(ctx, event.WorkspaceID, channelID); err == nil {
 			resp.ChannelGoal = channelGoalContextForClaim(goal)
+			// LRM-1004: attach bounded subgoals for this claiming agent only.
+			if resp.ChannelGoal != nil {
+				resp.ChannelGoal.Subgoals = h.channelSubgoalContextsForClaim(ctx, event.WorkspaceID, channelID, event.AgentID, resp.ChannelGoal.ID)
+			}
 			// LRM-985: auditable Goal reinjection on every wake that carries a goal.
 			if resp.ChannelGoal != nil {
 				h.recordAgentActivityEvent(ctx, h.DB,

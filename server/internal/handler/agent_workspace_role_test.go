@@ -15,14 +15,22 @@ import (
 // testWorkspaceID with the given role, returning the user id. Used to
 // exercise UpdateAgentWorkspaceRole's actor-role authorization from a
 // non-owner perspective.
+//
+// randomID() breaks both the name and email ties: "user" has a unique
+// constraint on BOTH columns (user_name_unique + the email UNIQUE column),
+// and without per-call entropy role+t.Name() alone collides with a leftover
+// row from any prior interrupted run of the same test (task #86, same shape
+// as task #78/#1807's insertSkillPromoteWorkspaceMember — that fix also had
+// to randomize both columns for the same reason).
 func createHandlerTestMember(t *testing.T, role string) string {
 	t.Helper()
+	suffix := randomID()
 	var userID string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO "user" (name, email)
 		VALUES ($1, $2)
 		RETURNING id
-	`, "Role Test "+role, role+"-role-test-"+t.Name()+"@multica.ai").Scan(&userID); err != nil {
+	`, "Role Test "+role+" "+suffix, role+"-role-test-"+t.Name()+"-"+suffix+"@multica.ai").Scan(&userID); err != nil {
 		t.Fatalf("create test member user: %v", err)
 	}
 	if _, err := testPool.Exec(context.Background(), `

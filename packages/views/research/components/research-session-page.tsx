@@ -63,6 +63,10 @@ import {
   stageAnchorTargetId,
   buildStageMessageAnchors,
 } from "../lib/research-stages";
+import {
+  isPostRetryWakeFailure,
+  resolveSessionInterrupt,
+} from "../lib/session-interrupt";
 import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchCanvas } from "./research-canvas";
@@ -80,6 +84,10 @@ import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchSessionChrome } from "./research-session-chrome";
+import {
+  ResearchSessionInterruptBanner,
+  type InterruptBannerPhase,
+} from "./research-session-interrupt-banner";
 import { ResearchSessionPageSkeleton } from "./research-session-page-skeleton";
 import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
 import {
@@ -277,6 +285,53 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     [anchorTarget, setChatOpen, stageFirstMessageId],
   );
 
+  // LRM-823 — session interrupt banner (wake_failed / disconnect). Hooks stay
+  // above early returns; banner auto-hides when the tip process event recovers.
+  const sessionInterrupt = useMemo(
+    () => resolveSessionInterrupt(data?.messages ?? []),
+    [data?.messages],
+  );
+  const interruptId = sessionInterrupt?.messageId ?? null;
+  const [interruptPhase, setInterruptPhase] = useState<InterruptBannerPhase>("idle");
+  const interruptSyncIdRef = useRef<string | null>(interruptId);
+  const interruptRetryPriorIdRef = useRef<string | null>(null);
+  // Adjust phase when the tip interrupt identity changes (no useEffect — react-doctor).
+  if (interruptId !== interruptSyncIdRef.current) {
+    interruptSyncIdRef.current = interruptId;
+    if (!interruptId) {
+      interruptRetryPriorIdRef.current = null;
+      setInterruptPhase("idle");
+    } else if (
+      isPostRetryWakeFailure(data?.messages ?? [], interruptRetryPriorIdRef.current)
+    ) {
+      setInterruptPhase("retry_failed");
+    }
+  }
+
+  const retrySessionInterrupt = useCallback(() => {
+    if (!sessionInterrupt) return;
+    const reason = sessionInterrupt.reason
+      ? `（reason=${sessionInterrupt.reason}）`
+      : "";
+    const body = `请重试刚才失败的唤醒${reason}：${sessionInterrupt.headline}。配置根因仍走运维/LRM-858；本条只请求再试一次。`;
+    interruptRetryPriorIdRef.current = sessionInterrupt.messageId;
+    setInterruptPhase("pending");
+    void api
+      .postResearchMessage(sessionId, { body })
+      .then(() =>
+        qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
+      )
+      .then(() => {
+        // Request accepted — keep banner until tip process recovers; secondary
+        // feedback only when a newer wake_failed lands (sync above).
+        setInterruptPhase((phase) => (phase === "retry_failed" ? phase : "idle"));
+      })
+      .catch((err) => {
+        setInterruptPhase("retry_failed");
+        mutationErrorToast(t(($) => $.session_page.send_failed), err);
+      });
+  }, [sessionInterrupt, sessionId, qc, wsId, t]);
+
   // LRM-799: never keep a permanent skeleton on failure — only while loading.
   // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
   if (isLoading || (isFetching && !data)) {
@@ -416,6 +471,14 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         sources={sources}
         onSelectStage={handleSelectStage}
       />
+
+      {sessionInterrupt ? (
+        <ResearchSessionInterruptBanner
+          interrupt={sessionInterrupt}
+          phase={interruptPhase}
+          onRetry={retrySessionInterrupt}
+        />
+      ) : null}
 
       <ResearchStageTimeline
         currentStage={session.current_stage}

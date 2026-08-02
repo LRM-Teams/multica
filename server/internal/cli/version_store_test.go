@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -112,8 +113,22 @@ func TestVersionStoreStageIsImmutableAndIdempotent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("verifier stat: %v", err)
 		}
-		if info.Mode().Perm() != 0o755 {
-			t.Fatalf("verifier mode = %o, want 755", info.Mode().Perm())
+		// NTFS has no exec bit: os.Chmod on Windows can only toggle the
+		// read-only attribute, so a 0o755 chmod reads back as 0o666 (any
+		// write bit requested -> fully writable) rather than round-tripping
+		// the exact Unix bits (task #79). This is a real, documented Go
+		// platform difference — StageBinary's caller never reads the mode
+		// back in production (Windows resolves whether a file is
+		// executable from its extension/PE header, not chmod bits), so the
+		// meaningful assertion here is "the chmod call took effect and the
+		// file didn't end up read-only", expressed per-platform rather than
+		// skipped outright.
+		wantMode := os.FileMode(0o755)
+		if runtime.GOOS == "windows" {
+			wantMode = 0o666
+		}
+		if info.Mode().Perm() != wantMode {
+			t.Fatalf("verifier mode = %o, want %o", info.Mode().Perm(), wantMode)
 		}
 		return nil
 	})

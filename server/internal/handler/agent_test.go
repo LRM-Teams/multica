@@ -1781,8 +1781,8 @@ func TestUpdateAgent_PreservesSkillsInResponse(t *testing.T) {
 	ctx := context.Background()
 
 	agentID := createHandlerTestAgent(t, "update-preserves-skills-agent", nil)
-	skillA := insertHandlerTestSkill(t, "update-preserve-a", "alpha body")
-	skillB := insertHandlerTestSkill(t, "update-preserve-b", "beta body")
+	skillA, _ := insertHandlerTestSkill(t, "update-preserve-a", "alpha body")
+	skillB, _ := insertHandlerTestSkill(t, "update-preserve-b", "beta body")
 	for _, sid := range []string{skillA, skillB} {
 		if _, err := testPool.Exec(ctx,
 			`INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`,
@@ -1868,7 +1868,7 @@ func TestArchiveRestoreAgent_PreservesSkillsInResponse(t *testing.T) {
 	t.Cleanup(func() { testHandler.ReminderNotifier = previousNotifier })
 
 	agentID := createHandlerTestAgent(t, "archive-preserves-skills-agent", nil)
-	skillID := insertHandlerTestSkill(t, "archive-preserve", "body")
+	skillID, _ := insertHandlerTestSkill(t, "archive-preserve", "body")
 	if _, err := testPool.Exec(ctx,
 		`INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`,
 		agentID, skillID,

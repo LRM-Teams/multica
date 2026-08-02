@@ -182,6 +182,27 @@
     "composer_hint": "Enter 전송 · Shift+Enter 줄바꿈",
     "sending": "전송 중…"
   },
+  "interrupt": {
+    "title": "세션 중단",
+    "hint": "깨우기를 다시 시도하거나 활성 멤버/호나우두에게 재배정하세요.",
+    "retry": "재시도",
+    "retrying": "재시도 중…",
+    "retry_again": "다시 재시도",
+    "retry_failed_title": "재시도로 복구되지 않음",
+    "retry_failed_hint": "daemon/runtime 온라인 여부를 확인하거나 호나우두에게 재배정을 요청하세요.",
+    "reasons": {
+      "fleet_member_not_found": "리서치 함대 멤버가 아님",
+      "fleet_member_pending_review": "멤버 검토 중",
+      "fleet_member_archived": "멤버 보관됨",
+      "fleet_member_not_active": "멤버 비활성",
+      "agent_archived": "Agent 보관됨",
+      "agent_no_runtime": "runtime 미연결",
+      "agent_model_required": "모델 미설정",
+      "runtime_offline": "Runtime / 연결 끊김",
+      "wake_internal_error": "깨우기 내부 오류",
+      "unknown": "깨우기 실패"
+    }
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",
@@ -341,7 +362,19 @@
     "citation_fetch_failed": "가져오기 실패",
     "citation_fetch_failed_hint": "이 출처를 가져오지 못했습니다. 유효한 URL이 생길 때까지 자리 표시 카드로 둡니다.",
     "citation_summary_empty": "아직 요약이 없습니다.",
-    "citation_anchor": "인용 {{label}} 위치로 이동"
+    "citation_anchor": "인용 {{label}} 위치로 이동",
+    "source_failed_badge": "가져오기 실패",
+    "source_failed_purpose": "인용 번호 제외",
+    "source_fail_fetch": "출처 가져오기에 실패했습니다",
+    "source_fail_timeout": "가져오기 시간 초과",
+    "source_fail_http": "HTTP 오류로 가져올 수 없음",
+    "source_fail_invalid_url": "잘못된 URL",
+    "source_fail_missing": "출처 없음",
+    "source_fail_unknown": "출처를 사용할 수 없음",
+    "sources_all_failed_title": "모든 출처 가져오기 실패",
+    "sources_all_failed_body": "사용 가능한 출처가 없습니다. 다시 시도할 수 있으며, 세션과 기존 보고서는 계속 볼 수 있습니다.",
+    "sources_all_failed_retry": "다시 가져오기",
+    "sources_partial_failed_hint": "출처 {{count}}개가 실패했으며 사유가 표시됩니다. 세션은 계속됩니다."
   },
   "m2": {
     "rail_title": "탐색 트레일",

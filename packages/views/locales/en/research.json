@@ -182,6 +182,27 @@
     "composer_hint": "Enter to send · Shift+Enter for newline",
     "sending": "Sending…"
   },
+  "interrupt": {
+    "title": "Session interrupted",
+    "hint": "Retry the wake, or reassign to an active fleet member / Ronaldo.",
+    "retry": "Retry",
+    "retrying": "Retrying…",
+    "retry_again": "Retry again",
+    "retry_failed_title": "Retry did not recover",
+    "retry_failed_hint": "Confirm the daemon/runtime is online, or ask Ronaldo to reassign.",
+    "reasons": {
+      "fleet_member_not_found": "Not a research fleet member",
+      "fleet_member_pending_review": "Member pending review",
+      "fleet_member_archived": "Member archived",
+      "fleet_member_not_active": "Member not active",
+      "agent_archived": "Agent archived",
+      "agent_no_runtime": "No runtime bound",
+      "agent_model_required": "Model not configured",
+      "runtime_offline": "Runtime / connection lost",
+      "wake_internal_error": "Wake internal error",
+      "unknown": "Wake failed"
+    }
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",
@@ -341,7 +362,19 @@
     "citation_fetch_failed": "Fetch failed",
     "citation_fetch_failed_hint": "This source could not be fetched. The citation stays as a placeholder until a good URL is available.",
     "citation_summary_empty": "No summary for this source yet.",
-    "citation_anchor": "Locate citation {{label}}"
+    "citation_anchor": "Locate citation {{label}}",
+    "source_failed_badge": "Fetch failed",
+    "source_failed_purpose": "Excluded from citation numbering",
+    "source_fail_fetch": "Source fetch failed",
+    "source_fail_timeout": "Fetch timed out",
+    "source_fail_http": "HTTP error while fetching",
+    "source_fail_invalid_url": "Invalid source URL",
+    "source_fail_missing": "Source missing",
+    "source_fail_unknown": "Source unavailable",
+    "sources_all_failed_title": "All sources failed",
+    "sources_all_failed_body": "No usable sources right now. Retry the fetch; the session and existing report remain available.",
+    "sources_all_failed_retry": "Retry fetch",
+    "sources_partial_failed_hint": "{{count}} source(s) failed and are labeled; the session continues."
   },
   "m2": {
     "rail_title": "Exploration trail",

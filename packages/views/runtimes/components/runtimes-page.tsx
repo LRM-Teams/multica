@@ -58,7 +58,6 @@ import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
 import { buildWorkloadIndex } from "./runtime-list";
 import {
   buildRuntimeMachines,
-  headerRuntimeHealthBadge,
   isMineMachine,
   machineHostname,
   machinePrimaryRuntimeId,
@@ -69,9 +68,7 @@ import {
 import { MachineNameEditor } from "./machine-name-editor";
 import {
   HealthDot,
-  RuntimeConnectivityStatus,
-  RuntimeHealthStateInline,
-  useHealthLabel,
+  MachineConnectedStatus,
 } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { MachineCodeAgentsSection } from "./machine-code-agents-section";
@@ -144,20 +141,6 @@ function providerLabel(runtime: AgentRuntime | null): string {
   }
 }
 
-function formatMachineLastSeen(
-  machine: RuntimeMachine,
-  now: number,
-  activeNowLabel: string,
-): string {
-  if (!machine.lastSeenAt) return "—";
-  if (machine.health === "online") {
-    const diffMs = now - new Date(machine.lastSeenAt).getTime();
-    if (diffMs < 60_000) {
-      return activeNowLabel;
-    }
-  }
-  return formatLastSeen(machine.lastSeenAt);
-}
 
 // LRM-922 / LRM-863: Agents table uses User Activity vocabulary — never the
 // old Workload Idle/Working primary labels. Without a per-row activity-event
@@ -458,7 +441,7 @@ function MachineListActions({
 export function MachineListView({
   machines,
   agents,
-  now,
+  now: _now,
   wsId,
   currentUserId,
   layout,
@@ -478,7 +461,7 @@ export function MachineListView({
   onSelect: (id: string) => void;
 }) {
   const { t } = useT("runtimes");
-  const labelOf = useHealthLabel();
+  const { t: tAgents } = useT("agents");
   const { getActorName } = useActorName();
   const showChevron = layout === "full";
 
@@ -490,13 +473,13 @@ export function MachineListView({
   // list, same as before.
   const showGroups = teamMachines.length > 0;
 
+  const connectivityLabel = (machine: RuntimeMachine) =>
+    machine.health === "online"
+      ? tAgents(($) => $.inspector.computer_connected)
+      : tAgents(($) => $.inspector.computer_disconnected);
+
   const renderRow = (machine: RuntimeMachine, showOwnerBadge: boolean) => {
     const count = agentCountOnMachine(machine, agents);
-    const lastSeen = formatMachineLastSeen(
-      machine,
-      now,
-      t(($) => $.machine.last_seen_active_now),
-    );
     const selected = selectedMachineId === machine.id;
     const ownerId = showOwnerBadge ? (machine.runtimes[0]?.owner_id ?? null) : null;
     return (
@@ -547,19 +530,13 @@ export function MachineListView({
             )}
           </div>
           <div className="mt-0.5 truncate text-xs text-muted-foreground">
-            {labelOf(machine.health)}
+            {connectivityLabel(machine)}
             {count > 0 && (
               <>
                 {" · "}
                 {t(($) => $.machine.table_agents_count, {
                   count,
                 })}
-              </>
-            )}
-            {machine.lastSeenAt && (
-              <>
-                {" · "}
-                {lastSeen}
               </>
             )}
           </div>
@@ -680,10 +657,6 @@ function MachineDetailView({
     [machine, agents],
   );
 
-  const headerBadge = headerRuntimeHealthBadge(
-    machine.runtimeHealth,
-    machine.health,
-  );
   const hostname = machineHostname(machine);
   // Structured register field only (Alice #1723). Never parse device_info
   // glue ("ubuntu · codex-cli …"). Missing → em dash (Parker; pending Frank).
@@ -772,25 +745,12 @@ function MachineDetailView({
                 )}
               </div>
               <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                <RuntimeConnectivityStatus health={machine.health} />
-                {machine.lastSeenAt && (
-                  <>
-                    <span className="text-muted-foreground/40">·</span>
-                    <span>
-                      {formatMachineLastSeen(
-                        machine,
-                        now,
-                        t(($) => $.machine.last_seen_active_now),
-                      )}
-                    </span>
-                  </>
-                )}
-                {headerBadge && (
-                  <>
-                    <span className="text-muted-foreground/40">·</span>
-                    <RuntimeHealthStateInline health={headerBadge} />
-                  </>
-                )}
+                {/*
+                  Frank/Iris 2026-08-02: this line answers exactly one question —
+                  is the computer connected. No last-seen, no secondary
+                  runtimeHealth badge (those collided as Online · … · Offline).
+                */}
+                <MachineConnectedStatus health={machine.health} />
               </div>
             </div>
             {actions && <div className="shrink-0">{actions}</div>}

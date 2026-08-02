@@ -9,9 +9,7 @@ import (
 )
 
 func TestExistingSkillIdentityByNameReturnsIDAndName(t *testing.T) {
-	namePrefix := "duplicate-import-identity"
-	name := namePrefix + "-" + t.Name()
-	skillID := insertHandlerTestSkill(t, namePrefix, "# Duplicate import identity")
+	skillID, name := insertHandlerTestSkill(t, "duplicate-import-identity", "# Duplicate import identity")
 
 	existing, ok, err := testHandler.existingSkillIdentityByName(context.Background(), parseUUID(testWorkspaceID), name)
 	if err != nil {
@@ -90,9 +88,7 @@ func TestImportSkillOnConflictSkipReturnsStructuredResult(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
 	}
-	namePrefix := "url-import-skip"
-	skillName := namePrefix + "-" + t.Name()
-	existingID := insertHandlerTestSkill(t, namePrefix, "# Existing")
+	existingID, skillName := insertHandlerTestSkill(t, "url-import-skip", "# Existing")
 	importURL := withMockClawHubImport(t, skillName)
 
 	w := httptest.NewRecorder()
@@ -121,9 +117,7 @@ func TestImportSkillOnConflictRenameCreatesSuffixedSkill(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test DB not configured")
 	}
-	namePrefix := "url-import-rename"
-	skillName := namePrefix + "-" + t.Name()
-	insertHandlerTestSkill(t, namePrefix, "# Existing")
+	_, skillName := insertHandlerTestSkill(t, "url-import-rename", "# Existing")
 	importURL := withMockClawHubImport(t, skillName)
 
 	w := httptest.NewRecorder()

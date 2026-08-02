@@ -28,6 +28,11 @@ import {
 import { buildReportMarkdown } from "./report-markdown";
 import { ReportProse } from "./report-prose";
 import { ReportSourceTable } from "./report-source-table";
+import { ReportSourcesFailureBanner } from "./report-sources-failure-banner";
+import {
+  partitionSourcesByFailure,
+  resolveSourcesFailureMode,
+} from "./report-source-degrade";
 import { citationAnchorId } from "./report-citation-resolve";
 
 /** LRM-824 — smooth scroll + ~1s highlight fade; never touches the history
@@ -144,6 +149,15 @@ export function ReportReader({
         body: t(($) => $.panel.report),
       }),
     [normalized, t],
+  );
+
+  const sourcesFailureMode = useMemo(
+    () => resolveSourcesFailureMode(sources),
+    [sources],
+  );
+  const failedSourceCount = useMemo(
+    () => partitionSourcesByFailure(sources).failed.length,
+    [sources],
   );
 
   const title =
@@ -390,6 +404,11 @@ export function ReportReader({
                 <p className="text-sm text-muted-foreground">
                   {t(($) => $.reader.sources_hint)}
                 </p>
+                <ReportSourcesFailureBanner
+                  mode={sourcesFailureMode}
+                  failedCount={failedSourceCount}
+                  onRetry={onRetry}
+                />
                 <ReportSourceTable sources={sources} />
               </section>
             </div>

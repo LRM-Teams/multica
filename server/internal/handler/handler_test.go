@@ -2379,8 +2379,8 @@ func TestSetAgentSkillsRejectsMalformedSkillID(t *testing.T) {
 
 func TestAddAgentSkillsPreservesExistingAssignments(t *testing.T) {
 	agentID := createHandlerTestAgent(t, "Handler Add Skill Preserves Existing", nil)
-	existingSkillID := insertHandlerTestSkill(t, "add-preserve-existing", "existing body")
-	newSkillID := insertHandlerTestSkill(t, "add-preserve-new", "new body")
+	existingSkillID, _ := insertHandlerTestSkill(t, "add-preserve-existing", "existing body")
+	newSkillID, _ := insertHandlerTestSkill(t, "add-preserve-new", "new body")
 
 	if _, err := testPool.Exec(context.Background(),
 		`INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`,
@@ -2409,8 +2409,8 @@ func TestAddAgentSkillsPreservesExistingAssignments(t *testing.T) {
 
 func TestAddAgentSkillsAddsMultipleAndIsIdempotent(t *testing.T) {
 	agentID := createHandlerTestAgent(t, "Handler Add Multiple Skills", nil)
-	skillA := insertHandlerTestSkill(t, "add-multiple-a", "a body")
-	skillB := insertHandlerTestSkill(t, "add-multiple-b", "b body")
+	skillA, _ := insertHandlerTestSkill(t, "add-multiple-a", "a body")
+	skillB, _ := insertHandlerTestSkill(t, "add-multiple-b", "b body")
 
 	for attempt := 0; attempt < 2; attempt++ {
 		w := httptest.NewRecorder()
@@ -2457,10 +2457,15 @@ func TestAddAgentSkillsRejectsCrossWorkspaceSkillID(t *testing.T) {
 	assertAgentSkillRowCount(t, agentID, 0)
 }
 
+// randomID() breaks both the workspace slug and skill name ties: without it,
+// t.Name()-derived values alone collide with leftover rows from any prior
+// interrupted run of the same test (task #86, same shape as task
+// #78/#1807's insertSkillPromoteWorkspaceMember).
 func insertHandlerTestSkillInForeignWorkspace(t *testing.T, namePrefix, content string) string {
 	t.Helper()
 	ctx := context.Background()
-	slug := "foreign-skill-" + strings.ToLower(strings.ReplaceAll(t.Name(), "_", "-"))
+	suffix := randomID()
+	slug := "foreign-skill-" + strings.ToLower(strings.ReplaceAll(t.Name(), "_", "-")) + "-" + suffix
 
 	var workspaceID string
 	if err := testPool.QueryRow(ctx, `
@@ -2474,7 +2479,7 @@ func insertHandlerTestSkillInForeignWorkspace(t *testing.T, namePrefix, content 
 		testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID)
 	})
 
-	name := namePrefix + "-" + t.Name()
+	name := namePrefix + "-" + t.Name() + "-" + suffix
 	var skillID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO skill (workspace_id, name, description, content, config, created_by)

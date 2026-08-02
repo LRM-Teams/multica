@@ -47,7 +47,7 @@ func TestCreateSkillDefaultsGrantLevelAgent(t *testing.T) {
 
 func TestPromoteSkillChannelAndWorkspaceWithAuditAndCapabilityFilter(t *testing.T) {
 	ctx := context.Background()
-	skillID := insertHandlerTestSkill(t, "promote-ladder", "# promote")
+	skillID, _ := insertHandlerTestSkill(t, "promote-ladder", "# promote")
 
 	channelID := insertSkillPromoteGroupChannel(t, "promote-ch-"+t.Name())
 	// testUser is workspace owner; make them channel owner for L2.
@@ -168,7 +168,7 @@ func TestPromoteSkillChannelAndWorkspaceWithAuditAndCapabilityFilter(t *testing.
 
 func TestPromoteSkillChannelRequiresOwnerOrManager(t *testing.T) {
 	ctx := context.Background()
-	skillID := insertHandlerTestSkill(t, "promote-forbidden", "# x")
+	skillID, _ := insertHandlerTestSkill(t, "promote-forbidden", "# x")
 
 	// Channel owned by a different human; insertSkillPromoteGroupChannel seeds
 	// created_by=testUser as owner via triggers, so build the channel under otherOwner.
@@ -250,7 +250,7 @@ func TestPromoteSkillChannelRequiresOwnerOrManager(t *testing.T) {
 }
 
 func TestGetSkillCapabilityFilterHidesPromoteForOrdinaryMember(t *testing.T) {
-	skillID := insertHandlerTestSkill(t, "caps-filter", "# x")
+	skillID, _ := insertHandlerTestSkill(t, "caps-filter", "# x")
 	memberID := insertSkillPromoteWorkspaceMember(t, "member")
 
 	w := httptest.NewRecorder()

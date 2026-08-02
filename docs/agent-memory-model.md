@@ -242,7 +242,52 @@ curator 额外读取的 scoped context 最多 12 个文件、约 16 KiB；不会
 3. 用户本轮明确新指令仍可覆盖历史；裁决后可将旧条标为 superseded（后续自审/人工）。
 4. hydrate 是并集补齐，不是整文件覆盖；已有本地 bullet 不重复追加。
 
-## 9. 最终判断口诀
+## 9. 记忆互联 Wiki + 显式边（LRM-1000）
+
+产品原则（jianghp3 锁）：**Wiki 编译页 + 轻量显式边**；图引擎（Neo4j / 全量 Graphiti）后置。人也要看见产品面（UI 设计门另单）；Agent 上下文**按需注入**，禁止全量 Wiki 入 prompt（护 KV Cache）。
+
+### 9.1 节点映射
+
+| 产品概念 | 存储 | kind / 文件 |
+|---|---|---|
+| 频道 CONTEXT | `team_knowledge_item` + 本地 `channels/<id>/CONTEXT.md` | `context` |
+| 项目 DECISIONS | `team_knowledge_item` + 本地 `projects/<id>/DECISIONS.md` | `decision` |
+| Memory / Skill / policy… | 既有 `agent_memory` / `skill` / team knowledge kinds | 不变 |
+
+### 9.2 最小边集（可查询）
+
+| 边 | 含义 |
+|---|---|
+| `derived_from` | 页 ← issue / 频道结论（提升必写） |
+| `about` | 页 ↔ issue / channel / project |
+| `shared_to` | 页 → agent（可见性） |
+| `supersedes` | 新决策废止旧页（旧页 archive） |
+| `owned_by` | 页 → member / agent |
+
+表：`team_knowledge_edge`。API：`POST /api/workspaces/{id}/knowledge/promote`，`GET .../team-knowledge/{itemId}/neighbors?hops=1\|2`。
+
+### 9.3 写入 / 提升 / lint 纪律
+
+| 动作 | 谁写 | 何时 | 必写边 / 守门 |
+|---|---|---|---|
+| 热写本地 CONTEXT/DECISIONS/MEMORY | 当前 agent | 干活中 | 无边；scope ID 必须匹配任务 |
+| 提升结论 → CONTEXT/DECISION | member/agent API | issue 或频道结论定稿 | **必须** `derived_from`；建议 `about` + `owned_by` |
+| 废止旧决策 | 提升时带 `supersedes_id` | 新页取代旧页 | `supersedes`；旧页 `archived`；注入只取赢家 |
+| 跨 agent 可见 | promote `shared_to_agent_id` | 需要共享时 | `shared_to`；禁止 user-private 扇出 |
+| ingest（页更新） | 策展 / 提升 | 页面内容变更时 | 改页本身；**不要**每轮把全库灌进 prompt |
+| lint | L2/L3 策展 | 冷路径 | 孤儿边、矛盾、被 supersede 仍 active |
+
+### 9.4 Agent 注入与 KV Cache
+
+- claim 路径只注入：**任务相关种子页**（当前 channel `context` / project `decision` / `about` 指向当前 issue·channel·project）+ **≤2 跳** `team_knowledge` 邻域；硬顶约 12 页。
+- **禁止** `ListActiveTeamKnowledgeForExecution` 式全量 dump 进入 wake。
+- 稳定系统前缀（AGENTS / startup digest）**不**含 wiki 正文；页面更新走 ingest/提升，靠下次相关 wake 按需读取，避免无谓打爆 KV Cache。
+
+### 9.5 非目标
+
+不上 Neo4j/全量 Graphiti；不绑 Harness；不替代 LRM-982 自进化证据链 AC。
+
+## 10. 最终判断口诀
 
 ```text
 当前 agent 自己要记住        -> agent 私有文件

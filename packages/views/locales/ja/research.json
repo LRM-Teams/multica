@@ -182,6 +182,27 @@
     "composer_hint": "Enter で送信 · Shift+Enter で改行",
     "sending": "送信中…"
   },
+  "interrupt": {
+    "title": "セッション中断",
+    "hint": "再起動を試すか、アクティブなメンバー／ロナウドへ再割当してください。",
+    "retry": "再試行",
+    "retrying": "再試行中…",
+    "retry_again": "もう一度再試行",
+    "retry_failed_title": "再試行でも復帰しませんでした",
+    "retry_failed_hint": "daemon/runtime がオンラインか確認するか、ロナウドに再割当を依頼してください。",
+    "reasons": {
+      "fleet_member_not_found": "調査艦隊のメンバーではありません",
+      "fleet_member_pending_review": "メンバー審査中",
+      "fleet_member_archived": "メンバーはアーカイブ済み",
+      "fleet_member_not_active": "メンバーが非アクティブ",
+      "agent_archived": "Agent はアーカイブ済み",
+      "agent_no_runtime": "runtime 未割当",
+      "agent_model_required": "モデル未設定",
+      "runtime_offline": "Runtime / 接続切断",
+      "wake_internal_error": "起動内部エラー",
+      "unknown": "起動失敗"
+    }
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",
@@ -341,7 +362,19 @@
     "citation_fetch_failed": "取得失敗",
     "citation_fetch_failed_hint": "このソースは取得できませんでした。有効な URL が戻るまでプレースホルダーを表示します。",
     "citation_summary_empty": "要約はまだありません。",
-    "citation_anchor": "引用 {{label}} へ移動"
+    "citation_anchor": "引用 {{label}} へ移動",
+    "source_failed_badge": "取得失敗",
+    "source_failed_purpose": "引用番号の対象外",
+    "source_fail_fetch": "ソースの取得に失敗しました",
+    "source_fail_timeout": "取得がタイムアウトしました",
+    "source_fail_http": "HTTP エラーで取得できません",
+    "source_fail_invalid_url": "無効な URL",
+    "source_fail_missing": "ソースがありません",
+    "source_fail_unknown": "ソースを利用できません",
+    "sources_all_failed_title": "すべてのソース取得に失敗",
+    "sources_all_failed_body": "利用可能なソースがありません。再試行できます。セッションと既存レポートは引き続き閲覧できます。",
+    "sources_all_failed_retry": "再取得",
+    "sources_partial_failed_hint": "{{count}} 件のソース取得に失敗しました（理由を表示）。セッションは継続します。"
   },
   "m2": {
     "rail_title": "探索トレイル",

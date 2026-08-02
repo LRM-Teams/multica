@@ -153,7 +153,25 @@ func channelGoalStateSlot(task Task) string {
 		fmt.Fprintf(&b, "- Blocker: %s\n", goal.Blocker)
 	}
 	b.WriteString("Advance only the work requested in this turn toward the goal. Preserve the objective and success standard; do not revise or lower the parent goal.\n")
-	fmt.Fprintf(&b, "After concrete progress, checkpoint it with `multica goal checkpoint --channel %s --expected-version %d --progress \"...\" --current-step \"...\"` plus repeatable `--evidence`, `--completed-criterion`, or `--blocker` flags as needed. If the command reports a stale version, run `multica goal get --channel %s` and reconcile before retrying.\n\n", task.ChannelID, goal.Version, task.ChannelID)
+	fmt.Fprintf(&b, "After concrete progress, checkpoint it with `multica goal checkpoint --channel %s --expected-version %d --progress \"...\" --current-step \"...\"` plus repeatable `--evidence`, `--completed-criterion`, or `--blocker` flags as needed. If the command reports a stale version, run `multica goal get --channel %s` and reconcile before retrying.\n", task.ChannelID, goal.Version, task.ChannelID)
+	if len(goal.Subgoals) > 0 {
+		b.WriteString("Your bounded sub-goals this wake (server-claimed; not other agents' full threads):\n")
+		for _, sg := range goal.Subgoals {
+			fmt.Fprintf(&b, "- [%s] %s (id=%s role=%s version=%d)\n", sg.Status, sg.Title, sg.ID, sg.OwnRole, sg.Version)
+			fmt.Fprintf(&b, "  purpose: %s\n", sg.Purpose)
+			if strings.TrimSpace(sg.CompletionBoundary) != "" {
+				fmt.Fprintf(&b, "  completion boundary: %s\n", sg.CompletionBoundary)
+			}
+			if strings.TrimSpace(sg.WaitingOnKind) != "" {
+				fmt.Fprintf(&b, "  waiting_on: %s %s\n", sg.WaitingOnKind, sg.WaitingOnNote)
+			}
+			for _, line := range sg.ActivityDelta {
+				fmt.Fprintf(&b, "  activity: %s\n", line)
+			}
+		}
+		b.WriteString("Do not inject or invent other agents' private dialogue. Resolve/complete a sub-goal without cascading unrelated Issues.\n")
+	}
+	b.WriteString("\n")
 	return b.String()
 }
 

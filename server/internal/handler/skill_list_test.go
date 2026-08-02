@@ -14,7 +14,7 @@ import (
 // many large skills. The detail endpoint still returns content (covered by
 // TestGetSkill_IncludesContent below).
 func TestListSkills_OmitsContent(t *testing.T) {
-	skillID := insertHandlerTestSkill(t, "list-omits-content", strings.Repeat("a", 4096))
+	skillID, _ := insertHandlerTestSkill(t, "list-omits-content", strings.Repeat("a", 4096))
 
 	w := httptest.NewRecorder()
 	req := newRequest("GET", "/api/skills?workspace_id="+testWorkspaceID, nil)
@@ -57,7 +57,7 @@ func TestListSkills_OmitsContent(t *testing.T) {
 // reads.
 func TestGetSkill_IncludesContent(t *testing.T) {
 	body := "# detail body\nstill served on /api/skills/{id}"
-	skillID := insertHandlerTestSkill(t, "detail-includes-content", body)
+	skillID, _ := insertHandlerTestSkill(t, "detail-includes-content", body)
 
 	w := httptest.NewRecorder()
 	req := newRequest("GET", "/api/skills/"+skillID, nil)
@@ -81,7 +81,7 @@ func TestGetSkill_IncludesContent(t *testing.T) {
 // because `multica agent skills list` follows the same shape rules.
 func TestListAgentSkills_OmitsContent(t *testing.T) {
 	agentID := createHandlerTestAgent(t, "Handler Skill Summary Test", nil)
-	skillID := insertHandlerTestSkill(t, "agent-skill-omits-content", strings.Repeat("b", 1024))
+	skillID, _ := insertHandlerTestSkill(t, "agent-skill-omits-content", strings.Repeat("b", 1024))
 	if _, err := testPool.Exec(context.Background(),
 		`INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`,
 		agentID, skillID,
@@ -129,11 +129,17 @@ func TestGetSkill_MalformedUUIDReturns400(t *testing.T) {
 
 // insertHandlerTestSkill writes a skill row directly via SQL and registers a
 // cleanup hook. We bypass the create handler to keep the test focused on the
-// list/detail wire shape and to make it easy to inject a large body.
-func insertHandlerTestSkill(t *testing.T, namePrefix, content string) string {
+// list/detail wire shape and to make it easy to inject a large body. Returns
+// the actual name it inserted (not just the id) so callers that need to
+// exercise name-collision behavior (e.g. skill_import_duplicate_test.go)
+// don't have to guess it by recomputing the formula themselves.
+//
+// randomID() breaks the name tie: without it, namePrefix+t.Name() alone
+// collides with a leftover row from any prior interrupted run of the same
+// test (task #86, same shape as task #78/#1807's insertSkillPromoteWorkspaceMember).
+func insertHandlerTestSkill(t *testing.T, namePrefix, content string) (id, name string) {
 	t.Helper()
-	name := namePrefix + "-" + t.Name()
-	var id string
+	name = namePrefix + "-" + t.Name() + "-" + randomID()
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO skill (workspace_id, name, description, content, config, created_by)
 		VALUES ($1, $2, $3, $4, '{}'::jsonb, $5)
@@ -144,5 +150,5 @@ func insertHandlerTestSkill(t *testing.T, namePrefix, content string) string {
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM skill WHERE id = $1`, id)
 	})
-	return id
+	return id, name
 }

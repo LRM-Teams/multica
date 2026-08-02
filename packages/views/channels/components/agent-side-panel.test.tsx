@@ -387,11 +387,12 @@ describe("AgentSidePanel", () => {
     expect(screen.getByText("s144")).toBeInTheDocument();
   });
 
-  it("shows disconnected + falls back to the raw runtime name when no display_name is set (#28)", () => {
+  it("shows disconnected + hostname when no display_name is set (#28)", () => {
     mockRuntimes.current = [{ id: "runtime-1", status: "offline", name: "Cursor (s144)" }];
     renderPanel();
     expect(screen.getByText("Disconnected")).toBeInTheDocument();
-    expect(screen.getByText("Cursor (s144)")).toBeInTheDocument();
+    expect(screen.getByText("s144")).toBeInTheDocument();
+    expect(screen.queryByText("Cursor (s144)")).not.toBeInTheDocument();
   });
 
   it("shows the no-computer fallback when the agent's runtime_id doesn't resolve (#28)", () => {

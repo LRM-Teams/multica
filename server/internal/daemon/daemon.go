@@ -3077,17 +3077,26 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	if pollInterval == 0 {
 		pollInterval = 5 * time.Second
 	}
-	var cancelledByPoll <-chan struct{}
-	if !task.isInboxTask() {
-		cancelledByPoll = d.watchTaskCancellation(runCtx, task.ID, pollInterval, taskLog)
-		go func() {
-			select {
-			case <-cancelledByPoll:
-				runCancel()
-			case <-runCtx.Done():
-			}
-		}()
-	}
+	// task #60: this used to be `if !task.isInboxTask()` — every task the
+	// daemon dispatches has been inbox-backed since #1164 (2026-07-24) cut
+	// all wakes over to the canonical inbox, so that guard silently turned
+	// this entire cancellation watch into dead code for all production
+	// traffic. A human clicking "cancel" on a stuck task reached CancelTask
+	// (which does exactly one thing: UPDATE ... SET status='suppressed'),
+	// but nothing ever told this goroutine to look — the daemon ran the
+	// stuck one-shot backend to completion (or its own idle-watchdog
+	// timeout) regardless. GetTaskStatus (handler/daemon.go) already maps
+	// status="suppressed" to "cancelled" generically, with no inbox/legacy
+	// distinction, so this is safe for inbox tasks without any server-side
+	// change.
+	cancelledByPoll := d.watchTaskCancellation(runCtx, task.ID, pollInterval, taskLog)
+	go func() {
+		select {
+		case <-cancelledByPoll:
+			runCancel()
+		case <-runCtx.Done():
+		}
+	}()
 
 	// A delivery only grants transport ownership and may renew many times. Mint
 	// and persist the provider-run identity at the actual run boundary so a
@@ -3169,12 +3178,14 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	// terminal state (completed/failed/cancelled) or deleted the row
 	// outright, skip reporting — the complete/fail callbacks would fail
 	// anyway. Reuse shouldInterruptAgent so this guard honors the same
-	// signals as the in-flight watcher.
-	if !task.isInboxTask() {
-		if status, err := d.client.GetTaskStatus(ctx, task.ID); shouldInterruptAgent(status, err) {
-			taskLog.Info("task cancelled during execution, discarding result", "status", status, "error", err)
-			return
-		}
+	// signals as the in-flight watcher. task #60: same stale
+	// `!isInboxTask()` guard as the in-flight watcher above — see that
+	// comment. This one closes a narrower race (cancelled in the gap
+	// between the last poll tick and the backend returning) rather than
+	// the main cancellation path, but was equally dead for every real task.
+	if status, err := d.client.GetTaskStatus(ctx, task.ID); shouldInterruptAgent(status, err) {
+		taskLog.Info("task cancelled during execution, discarding result", "status", status, "error", err)
+		return
 	}
 
 	d.reportTaskResultForTask(ctx, task, result, taskLog)

@@ -1888,8 +1888,15 @@ func TestHandleTask_InboxCompleteUsesInboxEndpoint(t *testing.T) {
 	var completeSeen atomic.Bool
 	var renewSeen atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/api/daemon/tasks/") {
-			t.Fatalf("inbox run called legacy task endpoint: %s", r.URL.Path)
+		// task #60: inbox tasks now poll GetTaskStatus too (the
+		// !isInboxTask() guard that used to skip this for every real task
+		// was dead code left over from #1164 — see daemon.go). Serve
+		// "running" so shouldInterruptAgent stays false and the rest of
+		// this happy-path test proceeds unaffected.
+		if strings.HasSuffix(r.URL.Path, "/status") && strings.Contains(r.URL.Path, "/api/daemon/tasks/") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"running"}`))
+			return
 		}
 		if r.URL.Path == "/api/daemon/agent-inbox/events/event-123/renew" {
 			var body map[string]any
@@ -1992,6 +1999,12 @@ func TestHandleTask_InboxUsageStartsExecutionBeforeProvider(t *testing.T) {
 		case "/api/daemon/agent-memory-writes":
 			// Memory write telemetry is reported after a successful inbox task.
 			w.WriteHeader(http.StatusOK)
+		case "/api/daemon/tasks/event-usage/status":
+			// task #60: the final pre-completion check now runs for inbox
+			// tasks too (see daemon.go) — serve "running" so it doesn't
+			// interrupt this happy path.
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"running"}`))
 		default:
 			t.Fatalf("unexpected inbox path: %s", r.URL.Path)
 		}
@@ -2033,8 +2046,12 @@ func TestHandleTask_InboxFailureUsesInboxEndpointWithClassifier(t *testing.T) {
 	var failSeen atomic.Bool
 	var renewSeen atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/api/daemon/tasks/") {
-			t.Fatalf("inbox run called legacy task endpoint: %s", r.URL.Path)
+		// task #60: inbox tasks now poll GetTaskStatus too — see the
+		// identical comment in TestHandleTask_InboxCompleteUsesInboxEndpoint.
+		if strings.HasSuffix(r.URL.Path, "/status") && strings.Contains(r.URL.Path, "/api/daemon/tasks/") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"running"}`))
+			return
 		}
 		if r.URL.Path == "/api/daemon/agent-inbox/events/event-123/renew" {
 			var body map[string]any
@@ -2237,6 +2254,11 @@ func TestHandleTask_InboxLeaseLossAfterRunnerDoesNotCancelTerminalReport(t *test
 		case strings.HasSuffix(r.URL.Path, "/fail"):
 			failSeen.Store(true)
 			w.WriteHeader(http.StatusOK)
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			// task #60: inbox tasks now poll GetTaskStatus too — serve
+			// "running" so it doesn't race-interrupt this terminal-report test.
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"running"}`))
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -2299,6 +2321,14 @@ func TestHandleTask_InboxLeaseLossCancelsRunningExecutor(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, "/usage") {
 			usageSeen.Store(true)
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/status") {
+			// task #60: inbox tasks now poll GetTaskStatus too — this isn't
+			// the terminal callback this test is watching for, so don't let
+			// it trip the terminalSeen assertion below.
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"running"}`))
 			return
 		}
 		terminalSeen.Store(true)
@@ -2478,6 +2508,93 @@ func TestWatchTaskCancellation_RunningTaskNotInterrupted(t *testing.T) {
 	}
 	if calls.Load() < 5 {
 		t.Fatalf("expected the watcher to poll at least 5 times in 150ms, got %d", calls.Load())
+	}
+}
+
+// TestHandleTask_CancellingAStuckInboxTaskForceKillsIt is the end-to-end
+// regression guard for task #60. Before the fix, `if !task.isInboxTask()`
+// (dead code left over from #1164's cutover to all-inbox dispatch, 2026-07-24)
+// silently skipped watchTaskCancellation for every real task, so a human
+// clicking "cancel" on a stuck issue task only flipped a DB column
+// (CancelAgentTask: status='suppressed') — nothing ever told the daemon to
+// stop the hung one-shot backend. This test goes through handleTask (not
+// watchTaskCancellation directly) with an inbox-backed Task and a runner
+// that blocks until its ctx is cancelled, simulating a genuinely stuck
+// agent process. If this test is red, task #60's fix has regressed.
+func TestHandleTask_CancellingAStuckInboxTaskForceKillsIt(t *testing.T) {
+	t.Parallel()
+
+	var statusCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			statusCalls.Add(1)
+			// Simulate CancelAgentTask's SQL: status='suppressed', which
+			// GetTaskStatus's server handler maps to "cancelled".
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"cancelled"}`))
+		case strings.HasSuffix(r.URL.Path, "/renew"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case strings.HasSuffix(r.URL.Path, "/execution"):
+			w.WriteHeader(http.StatusOK)
+		case strings.HasSuffix(r.URL.Path, "/fail"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	var runnerObservedCancellation atomic.Bool
+	d := &Daemon{
+		client:             NewClient(srv.URL),
+		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:         make(map[string]*workspaceState),
+		runtimeIndex:       map[string]Runtime{"rt-stuck": {ID: "rt-stuck", Provider: "claude"}},
+		cancelPollInterval: 10 * time.Millisecond,
+	}
+	d.runner = taskRunnerFunc(func(ctx context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
+		// A genuinely stuck agent: never returns on its own, only reacts
+		// to the ctx being cancelled — exactly what exec.CommandContext's
+		// default Cancel does to the underlying OS process for every
+		// one-shot backend (cursor/grok/pi/claude), so cancelling this ctx
+		// is equivalent to force-killing the real subprocess.
+		select {
+		case <-ctx.Done():
+			runnerObservedCancellation.Store(true)
+			return TaskResult{}, ctx.Err()
+		case <-time.After(5 * time.Second):
+			return TaskResult{}, errors.New("runner was never interrupted by task cancellation")
+		}
+	})
+
+	task := canonicalInboxTaskForTest(Task{
+		ID:          "event-stuck",
+		AgentID:     "agent-stuck",
+		RuntimeID:   "rt-stuck",
+		WorkspaceID: "ws-stuck",
+		IssueID:     "issue-stuck",
+		Agent:       &AgentData{Name: "stuck-agent"},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		d.handleTask(context.Background(), task, 0)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleTask did not return — cancelling a stuck inbox task should force-kill it within one poll interval, not hang for the runner's own timeout")
+	}
+
+	if !runnerObservedCancellation.Load() {
+		t.Fatal("runner never observed ctx cancellation — cancelling a stuck inbox task did not reach the running backend")
+	}
+	if statusCalls.Load() == 0 {
+		t.Fatal("GetTaskStatus was never polled — the cancellation watch did not run for this inbox task")
 	}
 }
 

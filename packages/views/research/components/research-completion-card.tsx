@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { CheckCircle2, Home, Plus, X, FileText, AlertCircle } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
@@ -10,6 +11,7 @@ import type { CompletionGuideKind } from "../lib/completion-guide";
 /**
  * LRM-832 — terminal completion / failure guide card.
  * Narrow: full-width sheet; desktop: centered card. Below Delivery modal (z-80).
+ * Native `<dialog>` for focus trap / Escape (react-doctor a11y).
  */
 export function ResearchCompletionCard({
   kind,
@@ -26,25 +28,51 @@ export function ResearchCompletionCard({
 }) {
   const { t } = useT("research");
   const done = kind === "done";
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+
+  const bindDialog = useCallback((dialog: HTMLDialogElement | null) => {
+    dialogRef.current = dialog;
+    if (!dialog || dialog.open) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+  }, []);
+
+  const closeThen = (fn: () => void) => {
+    const dialog = dialogRef.current;
+    if (dialog?.open) {
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+    }
+    fn();
+  };
 
   if (typeof document === "undefined") return null;
 
   return createPortal(
-    <div
+    <dialog
+      ref={bindDialog}
       data-testid="research-completion-card"
       data-completion-kind={kind}
-      className="fixed inset-0 z-[70] flex items-end justify-center bg-black/45 p-0 backdrop-blur-[1px] sm:items-center sm:p-6"
-      role="dialog"
-      aria-modal="true"
+      className={cn(
+        "fixed inset-0 z-[70] m-0 flex h-dvh max-h-none w-screen max-w-none items-end justify-center border-0 bg-transparent p-0 open:flex sm:items-center sm:p-6",
+        "backdrop:bg-black/45 backdrop:backdrop-blur-[1px]",
+      )}
       aria-labelledby="research-completion-title"
+      aria-modal="true"
+      onCancel={(event) => {
+        event.preventDefault();
+        closeThen(onDismiss);
+      }}
+      onClose={onDismiss}
     >
       <button
         type="button"
         className="absolute inset-0 z-0 cursor-default bg-transparent"
         aria-label={t(($) => $.completion_guide.dismiss)}
-        onClick={onDismiss}
+        onClick={() => closeThen(onDismiss)}
       />
       <div
+        role="document"
         className={cn(
           "relative z-10 flex w-full max-w-lg flex-col gap-4 border bg-card p-4 shadow-2xl",
           // Narrow: edge-to-edge bottom sheet; no horizontal overflow.
@@ -100,7 +128,7 @@ export function ResearchCompletionCard({
             size="icon-sm"
             variant="ghost"
             aria-label={t(($) => $.completion_guide.dismiss)}
-            onClick={onDismiss}
+            onClick={() => closeThen(onDismiss)}
           >
             <X className="size-4" />
           </Button>
@@ -110,7 +138,7 @@ export function ResearchCompletionCard({
           <Button
             type="button"
             className="w-full bg-brand text-brand-foreground hover:bg-brand/90 sm:w-auto sm:flex-1"
-            onClick={onViewReport}
+            onClick={() => closeThen(onViewReport)}
           >
             <FileText className="size-4" aria-hidden />
             {t(($) => $.completion_guide.view_report)}
@@ -119,7 +147,7 @@ export function ResearchCompletionCard({
             type="button"
             variant="outline"
             className="w-full sm:w-auto sm:flex-1"
-            onClick={onNewResearch}
+            onClick={() => closeThen(onNewResearch)}
           >
             <Plus className="size-4" aria-hidden />
             {t(($) => $.completion_guide.new_research)}
@@ -128,14 +156,14 @@ export function ResearchCompletionCard({
             type="button"
             variant="ghost"
             className="w-full sm:w-auto sm:flex-1"
-            onClick={onHome}
+            onClick={() => closeThen(onHome)}
           >
             <Home className="size-4" aria-hidden />
             {t(($) => $.completion_guide.home)}
           </Button>
         </div>
       </div>
-    </div>,
+    </dialog>,
     document.body,
   );
 }

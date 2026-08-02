@@ -2,7 +2,7 @@
 
 import { useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Link2, Plus, X } from "lucide-react";
+import { ArrowLeft, Link2, MessageSquareText, Plus, X } from "lucide-react";
 import type {
   ChannelGoalSubgoal,
   ChannelGoalSubgoalStatus,
@@ -17,6 +17,8 @@ import {
   useResolveChannelGoalSubgoal,
   useUpdateChannelGoalSubgoal,
 } from "@multica/core/channels";
+import { useWorkspacePaths } from "@multica/core/paths";
+import { AppLink } from "../../navigation";
 import { Button } from "@multica/ui/components/ui/button";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Input } from "@multica/ui/components/ui/input";
@@ -58,6 +60,7 @@ import {
   lines,
   memberLabel,
   mutationMessage,
+  subgoalSourceMessageHref,
 } from "./goal-subgoal-utils";
 
 type SubgoalFilter = "open" | "all" | "waiting" | "done";
@@ -267,12 +270,43 @@ function CreateSubgoalDialogForm({
   );
 }
 
+function SourceMessageChip({
+  channelId,
+  messageId,
+  onNavigate,
+}: {
+  channelId: string;
+  messageId: string;
+  onNavigate?: () => void;
+}) {
+  const { t } = useT("channels");
+  const paths = useWorkspacePaths();
+  const href = subgoalSourceMessageHref(channelId, messageId, paths.channelDetail);
+  if (!href) return null;
+  return (
+    <AppLink
+      href={href}
+      data-testid="subgoal-source-message"
+      onClick={(event) => {
+        event.stopPropagation();
+        onNavigate?.();
+      }}
+      className="inline-flex max-w-full items-center gap-1 truncate rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-900 underline-offset-2 hover:underline"
+    >
+      <MessageSquareText className="size-3 shrink-0" />
+      <span className="truncate">{t(($) => $.goal.subgoals_source_message)}</span>
+    </AppLink>
+  );
+}
+
 function SubgoalRow({
+  channelId,
   subgoal,
   titleById,
   memberByKey,
   onOpen,
 }: {
+  channelId: string;
   subgoal: ChannelGoalSubgoal;
   titleById: Map<string, string>;
   memberByKey: Map<string, ChannelMember>;
@@ -311,6 +345,9 @@ function SubgoalRow({
                 {t(($) => $.goal.subgoals_waiting_on)}
                 {subgoal.waiting_on.note ? ` · ${subgoal.waiting_on.note}` : ""}
               </span>
+            ) : null}
+            {subgoal.source_message_id ? (
+              <SourceMessageChip channelId={channelId} messageId={subgoal.source_message_id} />
             ) : null}
           </div>
         </div>
@@ -466,6 +503,9 @@ function SubgoalDetailForm({
             {t(($) => $.goal.subgoals_parallel)}
           </span>
         )}
+        {subgoal.source_message_id ? (
+          <SourceMessageChip channelId={channelId} messageId={subgoal.source_message_id} onNavigate={onBack} />
+        ) : null}
       </div>
 
       <div className="space-y-1.5 text-sm">
@@ -808,6 +848,7 @@ function SubgoalPanelBody({
         {filtered.map((item) => (
           <SubgoalRow
             key={item.id}
+            channelId={channelId}
             subgoal={item}
             titleById={titleById}
             memberByKey={memberByKey}

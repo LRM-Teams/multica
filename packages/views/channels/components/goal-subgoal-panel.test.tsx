@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import type { AnchorHTMLAttributes } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -9,7 +10,7 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enChannels from "../../locales/en/channels.json";
 import { GoalSubgoalPanel } from "./goal-subgoal-panel";
-import { countOpenSubgoals } from "./goal-subgoal-utils";
+import { countOpenSubgoals, subgoalSourceMessageHref } from "./goal-subgoal-utils";
 
 const state = vi.hoisted(() => ({
   subgoals: [] as ChannelGoalSubgoal[],
@@ -36,6 +37,27 @@ vi.mock("@multica/core/channels", async (importOriginal) => ({
   useUpdateChannelGoalSubgoal: () => ({ mutate: vi.fn(), isPending: false }),
   useResolveChannelGoalSubgoal: () => ({ mutate: vi.fn(), isPending: false }),
   useClearChannelGoalSubgoalWaitingOn: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
+vi.mock("@multica/core/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/paths")>();
+  return {
+    ...actual,
+    useWorkspacePaths: () => actual.paths.workspace("acme"),
+  };
+});
+
+vi.mock("../../navigation", () => ({
+  AppLink: ({
+    href,
+    children,
+    onClick,
+    ...props
+  }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
+    <a href={href} onClick={onClick} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
@@ -99,6 +121,15 @@ describe("countOpenSubgoals", () => {
   });
 });
 
+describe("subgoalSourceMessageHref", () => {
+  it("builds ?message= deep-link and hides when missing", () => {
+    expect(subgoalSourceMessageHref("chan-1", "msg-9", (id) => `/acme/channels/${id}`)).toBe(
+      "/acme/channels/chan-1?message=msg-9",
+    );
+    expect(subgoalSourceMessageHref("chan-1", undefined, (id) => `/acme/channels/${id}`)).toBeNull();
+  });
+});
+
 describe("GoalSubgoalPanel", () => {
   it("shows empty state when nothing is captured", async () => {
     state.subgoals = [];
@@ -120,12 +151,31 @@ describe("GoalSubgoalPanel", () => {
     expect(screen.getByText(/waiting_on · design freeze/i)).toBeInTheDocument();
   });
 
+  it("shows source-message deep-link when source_message_id is set", async () => {
+    state.subgoals = [subgoal({ source_message_id: "msg-42" })];
+    renderPanel();
+    const link = await screen.findByTestId("subgoal-source-message");
+    expect(link).toHaveAttribute("href", "/acme/channels/channel-1?message=msg-42");
+    expect(link).toHaveTextContent(/Source message/i);
+  });
+
+  it("hides source-message chip when source_message_id is absent", async () => {
+    state.subgoals = [subgoal({ title: "No source" })];
+    renderPanel();
+    expect(await screen.findByText("No source")).toBeInTheDocument();
+    expect(screen.queryByTestId("subgoal-source-message")).not.toBeInTheDocument();
+  });
+
   it("opens detail and shows non-cascade resolve copy", async () => {
     const user = userEvent.setup();
-    state.subgoals = [subgoal({ status: "in_progress" })];
+    state.subgoals = [subgoal({ status: "in_progress", source_message_id: "msg-detail" })];
     renderPanel();
     await user.click(await screen.findByTestId("subgoal-row-sg-1"));
     expect(await screen.findByTestId("subgoal-detail")).toBeInTheDocument();
+    expect(screen.getByTestId("subgoal-source-message")).toHaveAttribute(
+      "href",
+      "/acme/channels/channel-1?message=msg-detail",
+    );
     await user.click(screen.getByRole("button", { name: /Complete subgoal/i }));
     expect(
       screen.getByText(/will not close automatically/i),

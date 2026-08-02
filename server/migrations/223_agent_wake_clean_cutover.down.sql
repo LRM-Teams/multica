@@ -386,6 +386,25 @@ ALTER TABLE agent_inbox_event
     'channel_onboarding'
   ));
 
+-- Task #100 (2026-08-02): this narrowing drops 'completed' and 'cancelled'
+-- from terminal_outcome with no remap — none of the remaining values
+-- (replied/no_reply/held/failed/sent/skipped/expired) mean "finished
+-- successfully" or "was cancelled"; remapping to any of them would fabricate
+-- a terminal state that never happened. There is no safe remap target for
+-- either value. Fail loud instead of letting ALTER TABLE...ADD CONSTRAINT
+-- bounce off a raw Postgres constraint-violation error, matching migrations
+-- 107/143/181/182/186/207/247/254/268's fix (tasks #99/#101).
+DO $$
+DECLARE
+    affected_count integer;
+BEGIN
+    SELECT count(*) INTO affected_count
+      FROM agent_inbox_event WHERE terminal_outcome IN ('completed', 'cancelled');
+    IF affected_count > 0 THEN
+        RAISE EXCEPTION 'migration 223 down cannot proceed: % row(s) in agent_inbox_event have terminal_outcome in (''completed'', ''cancelled''). There is no safe value to remap them to under the narrower terminal_outcome list this migration is reverting to — none of the remaining values mean "finished successfully" or "was cancelled". If you accept permanently losing this outcome history, run: DELETE FROM agent_inbox_event WHERE terminal_outcome IN (''completed'', ''cancelled''); -- then re-run this down migration.', affected_count;
+    END IF;
+END $$;
+
 ALTER TABLE agent_inbox_event
   DROP CONSTRAINT IF EXISTS agent_inbox_event_terminal_outcome_check;
 ALTER TABLE agent_inbox_event

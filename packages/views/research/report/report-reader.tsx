@@ -9,6 +9,14 @@ import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { HumanBoundaryCard } from "../components/human-boundary-card";
+import {
+  ResearchDeliveryModeBody,
+  ResearchDeliveryModeChip,
+} from "../components/research-delivery-mode-body";
+import {
+  deliveryContentCount,
+  resolveDeliveryMode,
+} from "../lib/delivery-mode";
 import type { HumanBoundaryModel } from "../lib/m2-visibility";
 import { ReportProse } from "./report-prose";
 import { ReportSourceTable } from "./report-source-table";
@@ -61,6 +69,10 @@ export function ReportReader({
   sources,
   titleFallback,
   boundary,
+  sessionStatus,
+  loading,
+  error,
+  onRetry,
 }: {
   open: boolean;
   onClose: () => void;
@@ -68,12 +80,25 @@ export function ReportReader({
   sources: ResearchSource[];
   titleFallback?: string;
   boundary?: HumanBoundaryModel;
+  /** LRM-993 — drives empty vs in-flight loading. */
+  sessionStatus?: string | null;
+  loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
 }) {
   const { t } = useT("research");
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const contentCount = deliveryContentCount(report, sources.length);
+  const mode = resolveDeliveryMode(contentCount, sessionStatus, {
+    loading,
+    error,
+  });
+  const showReaderChrome =
+    mode === "running" || (mode === "error" && contentCount > 0);
 
   const normalized = useMemo(
     () => normalizeReportStructured(report?.structured),
@@ -182,6 +207,7 @@ export function ReportReader({
       <div
         role="document"
         data-testid="research-delivery-modal-card"
+        data-delivery-mode={mode}
         className={cn(
           "relative z-10 flex h-full w-full flex-col overflow-hidden border bg-card shadow-2xl",
           // Desktop: dominant reading region (not a 420px corner chip).
@@ -189,19 +215,24 @@ export function ReportReader({
         )}
       >
         <header className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="sm:hidden"
-            onClick={() => setOutlineOpen((v) => !v)}
-            aria-expanded={outlineOpen}
-            aria-label={t(($) => $.reader.outline)}
-          >
-            <List className="size-4" />
-          </Button>
+          {showReaderChrome ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="sm:hidden"
+              onClick={() => setOutlineOpen((v) => !v)}
+              aria-expanded={outlineOpen}
+              aria-label={t(($) => $.reader.outline)}
+            >
+              <List className="size-4" />
+            </Button>
+          ) : null}
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-sm font-semibold sm:text-base">{title}</h2>
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <h2 className="truncate text-sm font-semibold sm:text-base">{title}</h2>
+              <ResearchDeliveryModeChip mode={mode} />
+            </div>
             <p className="truncate text-[11px] text-muted-foreground">
               {t(($) => $.reader.meta, {
                 revision: report?.revision ?? 1,
@@ -209,14 +240,23 @@ export function ReportReader({
               })}
             </p>
           </div>
-          <Button type="button" size="sm" variant="outline" onClick={() => void copyMarkdown()}>
-            <Copy className="size-3.5" />
-            {copied ? t(($) => $.reader.copied) : t(($) => $.reader.copy_md)}
-          </Button>
-          <Button type="button" size="sm" onClick={exportMarkdown}>
-            <Download className="size-3.5" />
-            {t(($) => $.reader.export)}
-          </Button>
+          {showReaderChrome ? (
+            <>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void copyMarkdown()}
+              >
+                <Copy className="size-3.5" />
+                {copied ? t(($) => $.reader.copied) : t(($) => $.reader.copy_md)}
+              </Button>
+              <Button type="button" size="sm" onClick={exportMarkdown}>
+                <Download className="size-3.5" />
+                {t(($) => $.reader.export)}
+              </Button>
+            </>
+          ) : null}
           <Button
             type="button"
             size="icon-sm"
@@ -228,36 +268,55 @@ export function ReportReader({
           </Button>
         </header>
 
-        {outlineOpen ? (
+        {showReaderChrome && outlineOpen ? (
           <div className="border-b bg-muted/20 px-2 py-2 sm:hidden">
             <OutlineNav items={outlineItems} activeId={activeId} onPick={scrollTo} />
           </div>
         ) : null}
 
-        <div className="flex min-h-0 flex-1">
-          <aside className="hidden w-[220px] shrink-0 overflow-y-auto border-r p-3 sm:block">
-            <OutlineNav items={outlineItems} activeId={activeId} onPick={scrollTo} />
-          </aside>
+        {mode === "empty" || mode === "loading" || (mode === "error" && contentCount <= 0) ? (
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-6">
-            <div id="report-body" className="scroll-mt-4">
-              <ReportProse report={report} sources={sources} />
-            </div>
-            {boundary ? (
-              <div className="mt-8 scroll-mt-4">
-                <HumanBoundaryCard model={boundary} embedded />
-              </div>
-            ) : null}
-            <section id="report-sources" className="mt-10 scroll-mt-4 space-y-3">
-              <h2 className="border-t pt-5 text-lg font-semibold">
-                {t(($) => $.reader.sources_heading)}
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                {t(($) => $.reader.sources_hint)}
-              </p>
-              <ReportSourceTable sources={sources} />
-            </section>
+            <ResearchDeliveryModeBody
+              mode={mode === "error" ? "error" : mode}
+              errorMessage={typeof error === "string" ? error : null}
+              onRetry={onRetry}
+            />
           </div>
-        </div>
+        ) : (
+          <div className="flex min-h-0 flex-1">
+            <aside className="hidden w-[220px] shrink-0 overflow-y-auto border-r p-3 sm:block">
+              <OutlineNav items={outlineItems} activeId={activeId} onPick={scrollTo} />
+            </aside>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-6">
+              {mode === "error" ? (
+                <div className="mb-4">
+                  <ResearchDeliveryModeBody
+                    mode="error"
+                    errorMessage={typeof error === "string" ? error : null}
+                    onRetry={onRetry}
+                  />
+                </div>
+              ) : null}
+              <div id="report-body" className="scroll-mt-4">
+                <ReportProse report={report} sources={sources} />
+              </div>
+              {boundary ? (
+                <div className="mt-8 scroll-mt-4">
+                  <HumanBoundaryCard model={boundary} embedded />
+                </div>
+              ) : null}
+              <section id="report-sources" className="mt-10 scroll-mt-4 space-y-3">
+                <h2 className="border-t pt-5 text-lg font-semibold">
+                  {t(($) => $.reader.sources_heading)}
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  {t(($) => $.reader.sources_hint)}
+                </p>
+                <ReportSourceTable sources={sources} />
+              </section>
+            </div>
+          </div>
+        )}
       </div>
     </dialog>,
     document.body,

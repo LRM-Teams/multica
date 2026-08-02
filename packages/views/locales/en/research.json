@@ -140,6 +140,12 @@
       "loading": "Loading",
       "running": "In progress",
       "error": "Error"
+    },
+    "delivery_mode": {
+      "empty": "Idle",
+      "loading": "Loading",
+      "running": "In progress",
+      "error": "Error"
     }
   },
   "chat": {
@@ -317,6 +323,11 @@
     "sources_heading": "Weighted source map",
     "sources_hint": "Sorted by credibility. High-weight sources are the baseline; low-weight rows are corroboration only.",
     "report_empty": "No report yet. It will appear here when the fleet finishes.",
+    "empty_title": "No delivery yet",
+    "empty_body": "Sources and the report will appear here when the fleet finishes — empty / loading / in progress / error stay scannable.",
+    "loading_body": "Assembling sources and report…",
+    "error_title": "Could not load delivery",
+    "error_body": "Network or service error. Retry to reload sources and the report.",
     "col_weight": "Weight",
     "col_type": "Type",
     "col_source": "Source",

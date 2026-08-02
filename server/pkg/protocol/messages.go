@@ -299,6 +299,11 @@ const (
 	// atomic.Pointer deadlock fix + real end-to-end verification (busy
 	// resident agent → restart → ForceKill → crash recovery → operation
 	// succeeded, confirmed against a live database, not mocked).
+	//
+	// Minimum daemon release that advertises this capability is currently
+	// v0.3.95. If that floor moves, also update the hardcoded
+	// unsupported_runtime_capability copy in
+	// packages/core/agents/agent-lifecycle.ts (FE points back here).
 	DaemonCapabilityAgentLifecycleActions = "agent_lifecycle_actions_v1"
 )
 

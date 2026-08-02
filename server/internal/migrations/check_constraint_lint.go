@@ -41,25 +41,27 @@ func (n UnsafeNarrowing) String() string {
 // not a SQL parser. It catches ONLY the "narrowed CHECK IN(...) list, no
 // preceding remap" shape. It does NOT verify that a down migration can
 // actually run, and does not catch other ways a down migration can fail —
-// including ways that are worse than a loud failure. Two concrete examples
-// found during task #97's own history audit:
-//   - dropping a column that holds data, dropping an FK-referenced table,
+// including ways that are worse than a loud failure:
+//   - Dropping a column that holds data, dropping an FK-referenced table,
 //     or a type change existing rows can't convert to: these fail loudly
-//     (ALTER TABLE errors out) — bad, but at least visible and the data
+//     (ALTER TABLE errors out) — bad, but at least visible, and the data
 //     survives.
-//   - 143_sandbox_reconfigure's down.sql (found during task #97's history
-//     audit, task #100) narrows sandbox_job.type by DELETE-ing the
-//     now-forbidden rows instead of remapping them — same shape in
-//     143/181_sandbox_create_template/182_sandbox_snapshot. This checker
-//     does not flag it — it only looks for narrowed CHECK IN(...) lists,
-//     and a DELETE-based rollback has no CHECK-narrowing shape to detect.
+//   - A down.sql that resolves a narrowed CHECK by DELETE-ing the
+//     now-forbidden rows instead of remapping them. This checker does not
+//     flag it — it only looks for narrowed CHECK IN(...) lists with no
+//     preceding UPDATE, and a DELETE-based rollback has no such shape to
+//     detect (in fact, a well-placed DELETE makes the narrowing "succeed").
 //     The down migration SUCCEEDS, silently, and real rows are gone with no
 //     error to notice. A loud failure is strictly safer than a silent
 //     successful data loss; this checker only catches the loud-failure
-//     family. (migration 107 was the original example that surfaced this
-//     gap, task #99 — its down.sql was fixed by PR #1842 to RAISE EXCEPTION
-//     instead of DELETE, so it's no longer a live example; the ones above
-//     still are as of this writing.)
+//     family.
+//
+// Deliberately not naming specific migration numbers as examples above:
+// any such example is a snapshot that rots the moment someone fixes it (see
+// task #97's own history — this happened mid-review, twice, to an earlier
+// draft of this exact comment). For current, up-to-date instances of the
+// DELETE-based gap, see task #100, which gets updated as they're
+// fixed — this comment does not.
 //
 // A migration passing this check is not a general guarantee its rollback
 // works, or that it doesn't quietly destroy data — see task #97's own

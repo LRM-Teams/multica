@@ -73,6 +73,7 @@
     "basics_hostname": "ホスト名",
     "basics_os": "OS",
     "basics_daemon": "Daemon",
+    "basics_pinned_version": "指定バージョン",
     "agents_section": "このコンピュータの Agents",
     "code_agents_section": "このコンピュータの Runtime",
     "code_agents_help": "対応 Runtime {{supported}} のうち {{installed}} をインストール済み",

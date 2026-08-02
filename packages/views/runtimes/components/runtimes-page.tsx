@@ -688,6 +688,14 @@ function MachineDetailView({
   // Structured register field only (Alice #1723). Never parse device_info
   // glue ("ubuntu · codex-cli …"). Missing → em dash (Parker; pending Frank).
   const osLabel = machine.deviceName?.trim() || "—";
+  // Task #81 — the daemon's locally-recorded MULTICA_PINNED_VERSION intent,
+  // if any. Purely informational (server doesn't enforce it yet against a
+  // server-initiated update — that's #81's still-unmade (b) half). Only
+  // renders when set; the other three cases (no pin / missing field / empty
+  // value) add nothing, per Iris/Parker 08-02.
+  const primaryPinnedVersion =
+    machine.runtimes.find((r) => r.id === primaryRuntimeId)?.pinned_version ??
+    null;
 
   const scanWorkspaces = () => {
     if (!primaryRuntimeId) {
@@ -811,6 +819,18 @@ function MachineDetailView({
                   <span className="truncate font-mono text-sm">
                     {t(($) => $.machine.version_prefix, {
                       version: machine.cliVersion,
+                    })}
+                  </span>
+                </InfoRow>
+              )}
+              {primaryPinnedVersion?.trim() && (
+                <InfoRow label={t(($) => $.machine.basics_pinned_version)}>
+                  <span
+                    className="truncate font-mono text-sm"
+                    data-testid="machine-basics-pinned-version"
+                  >
+                    {t(($) => $.machine.version_prefix, {
+                      version: primaryPinnedVersion.trim(),
                     })}
                   </span>
                 </InfoRow>

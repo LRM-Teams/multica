@@ -76,6 +76,7 @@
     "basics_hostname": "Hostname",
     "basics_os": "OS",
     "basics_daemon": "Daemon",
+    "basics_pinned_version": "Version pin",
     "agents_section": "Agents on this computer",
     "code_agents_section": "Runtimes on this computer",
     "code_agents_help": "Installed {{installed}} of {{supported}} supported runtimes",

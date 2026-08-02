@@ -186,25 +186,34 @@ export function DmList({
       return 0;
     });
   }, [searchQuery, unpinnedDms, bubbleActivityByAgent]);
-  const directDms = useMemo(
-    () => filteredDms.filter((dm) => dm.mode !== "agent_pair"),
-    [filteredDms],
-  );
-  const agentPairDms = useMemo(
-    () => {
-      const q = searchQuery.trim().toLowerCase();
-      return filteredDms.filter(
-        (dm) =>
-          dm.mode === "agent_pair" &&
-          (!q ||
-            dm.participants?.some((participant) =>
-              participant.name.toLowerCase().includes(q),
-            ) ||
-            dm.peer.name.toLowerCase().includes(q)),
+  // LRM-764: supervised agent↔agent pairs fold into「智能体协作」, except pairs
+  // that @-mention the viewer (`has_mention`) — those stay flat so a direct @
+  // is never buried under a collapsed folder. Pins already left this list via
+  // `unpinnedDms` and live in the unified PINNED section above.
+  const directDms = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return filteredDms.filter((dm) => {
+      if (dm.mode !== "agent_pair") return true;
+      if (!dm.has_mention) return false;
+      if (!q) return true;
+      return (
+        dm.participants?.some((participant) => participant.name.toLowerCase().includes(q)) ||
+        dm.peer.name.toLowerCase().includes(q)
       );
-    },
-    [filteredDms, searchQuery],
-  );
+    });
+  }, [filteredDms, searchQuery]);
+
+  const agentPairDms = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return filteredDms.filter((dm) => {
+      if (dm.mode !== "agent_pair" || dm.has_mention) return false;
+      if (!q) return true;
+      return (
+        dm.participants?.some((participant) => participant.name.toLowerCase().includes(q)) ||
+        dm.peer.name.toLowerCase().includes(q)
+      );
+    });
+  }, [filteredDms, searchQuery]);
   const agentPairUnread = useMemo(
     () =>
       sumUnmutedUnreadCounts(

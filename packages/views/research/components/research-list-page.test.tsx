@@ -7,12 +7,14 @@ const sessionsQueryRef = vi.hoisted(() => ({
   current: {
     data: undefined,
     isLoading: false,
+    isFetching: false,
     isError: false,
     error: null,
     refetch: vi.fn(),
   } as {
     data: { sessions: unknown[] } | undefined;
     isLoading: boolean;
+    isFetching: boolean;
     isError: boolean;
     error: unknown;
     refetch: ReturnType<typeof vi.fn>;
@@ -33,9 +35,13 @@ vi.mock("@tanstack/react-query", () => ({
   useQuery: (opts: { queryKey?: unknown[] }) =>
     opts?.queryKey?.[2] === "sessions"
       ? sessionsQueryRef.current
-      : { data: undefined, isLoading: false },
+      : { data: undefined, isLoading: false, isFetching: false },
   useMutation: () => mutationRef.current,
-  useQueryClient: () => ({ setQueryData: vi.fn(), invalidateQueries: vi.fn() }),
+  useQueryClient: () => ({
+    setQueryData: vi.fn(),
+    invalidateQueries: vi.fn(),
+    fetchQuery: vi.fn().mockResolvedValue({ sessions: [] }),
+  }),
 }));
 
 vi.mock("@multica/core/api", () => ({
@@ -52,6 +58,7 @@ vi.mock("@multica/core/paths", () => ({
 
 vi.mock("@multica/core/research", () => ({
   researchKeys: {
+    all: (wsId: string) => ["research", wsId],
     sessions: (wsId: string) => ["research", wsId, "sessions"],
     snapshot: (wsId: string, id: string) => ["research", wsId, "snapshot", id],
   },
@@ -126,6 +133,7 @@ function setQuery(partial: Partial<typeof sessionsQueryRef.current>) {
   sessionsQueryRef.current = {
     data: undefined,
     isLoading: false,
+    isFetching: false,
     isError: false,
     error: null,
     refetch: vi.fn(),
@@ -166,6 +174,33 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(screen.queryByText(enResearch.empty_title)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: enResearch.list.retry }));
     expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("LRM-833: 5xx with no cache shows server error page + retry", async () => {
+    const refetch = vi.fn();
+    const err = Object.assign(new Error("502 Bad Gateway"), { status: 502 });
+    setQuery({
+      isError: true,
+      error: err,
+      refetch,
+    });
+    render(<ResearchListPage />);
+    expect(screen.getByTestId("research-server-error-page")).toBeTruthy();
+    expect(screen.getByText("502 Bad Gateway")).toBeTruthy();
+    expect(screen.queryByTestId("research-list-error")).toBeNull();
+    await userEvent.click(screen.getByTestId("research-server-error-retry"));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("LRM-833: offline with no cache keeps hero and waiting strip (no white/empty)", () => {
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+    setQuery({ data: undefined });
+    render(<ResearchListPage />);
+    expect(screen.getByTestId("research-offline-banner")).toBeTruthy();
+    expect(screen.getByTestId("research-list-waiting-network")).toBeTruthy();
+    expect(screen.getByTestId("research-home-composer")).toBeTruthy();
+    expect(screen.queryByText(enResearch.empty_title)).toBeNull();
+    Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
   });
 
   it("empty state has icon, copy, and a CTA that focuses the composer", async () => {

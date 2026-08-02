@@ -521,5 +521,21 @@
       "medium": "Medium",
       "high": "High"
     }
+  },
+  "connectivity": {
+    "offline_title": "You are offline",
+    "offline_hint": "Research stays on screen — edits are paused until the network returns. No offline editing.",
+    "reconnecting_title": "Back online — reconnecting",
+    "reconnecting_hint": "Refreshing research data…",
+    "reconnected": "Reconnected — research data refreshed",
+    "reconnect_failed": "Reconnect failed — you can retry",
+    "reconnect_failed_title": "Reconnect failed",
+    "reconnect_failed_hint": "Check the network, then retry. Your last loaded research is still on screen.",
+    "server_error_title": "Server error",
+    "server_error_hint": "The research service returned an error (5xx). You can retry without losing this session shell.",
+    "retry": "Retry",
+    "retrying": "Retrying…",
+    "waiting_network": "Waiting for network",
+    "waiting_network_hint": "Reconnect to load research. The page will not go blank."
   }
 }

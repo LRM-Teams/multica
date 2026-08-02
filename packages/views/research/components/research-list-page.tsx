@@ -31,6 +31,7 @@ import {
   type CreateComposerFieldErrors,
   type ResearchCreateParamsDraft,
 } from "../lib/research-create-params";
+import { isServerError } from "../lib/network-status";
 import {
   DONE_STATUSES,
   FAILED_STATUSES,
@@ -43,10 +44,13 @@ import {
   localizeTemplateField,
   type ResearchTemplate,
 } from "../lib/research-templates";
+import { useBrowserOnline } from "../lib/use-browser-online";
+import { ResearchConnectivityShell } from "./research-connectivity-shell";
 import { ResearchCreateEstimateSummary } from "./research-create-estimate";
 import { ResearchCreateParamsPanel } from "./research-create-params-panel";
 import { ResearchEmptyState } from "./research-empty-state";
 import { ResearchHomeHero } from "./research-home-hero";
+import { ResearchServerErrorPage } from "./research-server-error-page";
 import { ResearchSessionFilterBar } from "./research-session-filter-bar";
 import { ResearchSessionRow } from "./research-session-row";
 import { ResearchSessionListSkeleton } from "./research-session-row-skeleton";
@@ -114,8 +118,9 @@ export function ResearchListPage() {
     }));
   }, [i18n?.language]);
 
+  const online = useBrowserOnline();
   useQuery(researchFleetOptions(wsId));
-  const { data, isLoading, isError, error, refetch } = useQuery(
+  const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionListOptions(wsId),
   );
 
@@ -283,7 +288,23 @@ export function ResearchListPage() {
     ? localizeTemplateField(selectedTemplate.title, i18n?.language)
     : "";
 
+  // LRM-833 — 5xx with no cache: dedicated error page + retry (not a blank shell).
+  if (!isLoading && !data && isError && isServerError(error)) {
+    return (
+      <ResearchConnectivityShell>
+        <ResearchServerErrorPage
+          onRetry={() => {
+            void refetch();
+          }}
+          message={error instanceof Error ? error.message : null}
+          retrying={isFetching}
+        />
+      </ResearchConnectivityShell>
+    );
+  }
+
   return (
+    <ResearchConnectivityShell>
     <div
       ref={scrollRef}
       className="flex h-full flex-col gap-5 overflow-y-auto p-4 sm:gap-6 sm:p-6"
@@ -454,6 +475,19 @@ export function ResearchListPage() {
 
       {isLoading ? (
         <ResearchSessionListSkeleton rows={4} label={t(($) => $.list.loading)} />
+      ) : !data && !online ? (
+        <div
+          role="status"
+          data-testid="research-list-waiting-network"
+          className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-warning/35 bg-warning/5 px-6 py-12 text-center"
+        >
+          <p className="text-sm font-semibold text-foreground">
+            {t(($) => $.connectivity.waiting_network)}
+          </p>
+          <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
+            {t(($) => $.connectivity.waiting_network_hint)}
+          </p>
+        </div>
       ) : isError ? (
         <div
           role="alert"
@@ -538,5 +572,6 @@ export function ResearchListPage() {
         </div>
       )}
     </div>
+    </ResearchConnectivityShell>
   );
 }

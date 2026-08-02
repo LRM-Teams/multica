@@ -936,44 +936,56 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 		slog.Warn("list supervised agent dm channels failed", "workspace", workspaceID, "user", userID, "error", err)
 		return nil
 	}
-	defer rows.Close()
-
-	out := []DMItem{}
+	type supervisedDMRow struct {
+		channelID                                            pgtype.UUID
+		updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
+		lastType, lastName, lastContent                      pgtype.Text
+		lastParts                                            []byte
+	}
+	// Scan every row into memory and close the cursor BEFORE calling
+	// agentDMParticipants: that helper acquires its own pool connection, and
+	// doing so while this cursor is still open can deadlock a bounded pool
+	// under concurrent requests (same shape as the #1803 attachAgentRuntimeNames
+	// bug).
+	var scanned []supervisedDMRow
 	for rows.Next() {
-		var channelID pgtype.UUID
-		var updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
-		var lastType, lastName, lastContent pgtype.Text
-		var lastParts []byte
+		var row supervisedDMRow
 		if err := rows.Scan(
-			&channelID, &updatedAt,
-			&lastType, &lastName, &lastContent, &lastParts, &lastAt,
-			&pinnedAt, &manualUnreadAt, &mutedAt,
+			&row.channelID, &row.updatedAt,
+			&row.lastType, &row.lastName, &row.lastContent, &row.lastParts, &row.lastAt,
+			&row.pinnedAt, &row.manualUnreadAt, &row.mutedAt,
 		); err != nil {
 			continue
 		}
-		participants := h.agentDMParticipants(ctx, parseUUID(workspaceID), channelID)
+		scanned = append(scanned, row)
+	}
+	rows.Close()
+
+	out := []DMItem{}
+	for _, row := range scanned {
+		participants := h.agentDMParticipants(ctx, parseUUID(workspaceID), row.channelID)
 		if len(participants) != 2 {
 			continue
 		}
 		item := DMItem{
-			ID:             uuidToString(channelID),
+			ID:             uuidToString(row.channelID),
 			Source:         dmSourceChannel,
 			Mode:           "agent_pair",
 			Peer:           participants[0],
 			Participants:   participants,
 			Supervised:     true,
-			ManuallyUnread: manualUnreadAt.Valid,
-			PinnedAt:       timestampToPtr(pinnedAt),
-			MutedAt:        timestampToPtr(mutedAt),
-			Muted:          mutedAt.Valid,
-			UpdatedAt:      timestampToString(updatedAt),
+			ManuallyUnread: row.manualUnreadAt.Valid,
+			PinnedAt:       timestampToPtr(row.pinnedAt),
+			MutedAt:        timestampToPtr(row.mutedAt),
+			Muted:          row.mutedAt.Valid,
+			UpdatedAt:      timestampToString(row.updatedAt),
 		}
 		if item.ManuallyUnread && item.Unread == 0 {
 			item.Unread = 1
 		}
-		if lastContent.Valid {
+		if row.lastContent.Valid {
 			item.LastMessage = channelLastMessage(
-				lastType.String, lastName.String, lastContent.String, lastParts, lastAt,
+				row.lastType.String, row.lastName.String, row.lastContent.String, row.lastParts, row.lastAt,
 			)
 		}
 		out = append(out, item)

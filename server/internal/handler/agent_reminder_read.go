@@ -113,6 +113,12 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to load reminders")
 			return
 		}
+		// Scan every row into memory and close the cursor BEFORE calling
+		// safeHumanReminderAnchor: that helper acquires its own pool
+		// connection (channel/workspace lookups), and doing so while this
+		// cursor is still open can deadlock a bounded pool under concurrent
+		// requests (same shape as the #1803 attachAgentRuntimeNames bug).
+		var scheduled []agentReminder
 		for rows.Next() {
 			reminder, err := scanAgentReminder(rows)
 			if err != nil {
@@ -120,6 +126,15 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "failed to load reminders")
 				return
 			}
+			scheduled = append(scheduled, reminder)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			writeError(w, http.StatusInternalServerError, "failed to load reminders")
+			return
+		}
+		rows.Close()
+		for _, reminder := range scheduled {
 			var nextFireAt *string
 			if reminder.Status == "scheduled" || reminder.Status == "firing" {
 				nextFireAt = timestampToPtr(reminder.FireAt)
@@ -133,12 +148,6 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 				Anchor: h.safeHumanReminderAnchor(r, request.userID, reminder),
 			})
 		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			writeError(w, http.StatusInternalServerError, "failed to load reminders")
-			return
-		}
-		rows.Close()
 	}
 
 	if status == "all" || status == "fired" {
@@ -163,32 +172,32 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to load reminder history")
 			return
 		}
+		type firedRow struct {
+			occurrenceID, reminderID     pgtype.UUID
+			title, occurrenceStatus      string
+			scheduledFor, dueAt, firedAt pgtype.Timestamptz
+			cadence, timezone            pgtype.Text
+			reminder                     agentReminder
+		}
+		// Same cursor-before-second-acquire hazard as the scheduled loop
+		// above: drain into memory and close before safeHumanReminderAnchor.
+		var fired []firedRow
 		for rows.Next() {
-			var occurrenceID, reminderID pgtype.UUID
-			var title, occurrenceStatus string
-			var scheduledFor, dueAt, firedAt pgtype.Timestamptz
-			var cadence, timezone pgtype.Text
-			var reminder agentReminder
-			if err := rows.Scan(&occurrenceID, &reminderID, &title, &occurrenceStatus,
-				&scheduledFor, &dueAt, &firedAt, &cadence, &timezone,
-				&reminder.ID, &reminder.WorkspaceID, &reminder.AgentID, &reminder.InitiatorUserID, &reminder.Title,
-				&reminder.AnchorChannelID, &reminder.AnchorMessageID, &reminder.AnchorThreadRootMessageID,
-				&reminder.FireAt, &reminder.Status, &reminder.FiredTaskID, &reminder.SnoozeCount,
-				&reminder.CreatedAt, &reminder.UpdatedAt, &reminder.FiredAt, &reminder.Cadence,
-				&reminder.ScheduleTimezone, &reminder.CadenceNextAt, &reminder.CurrentOccurrenceID,
-				&reminder.TerminalReason, &reminder.Version, &reminder.OriginKind,
-				&reminder.ManagedKind, &reminder.OriginKey, &reminder.ManagedBackoffStep); err != nil {
+			var fr firedRow
+			if err := rows.Scan(&fr.occurrenceID, &fr.reminderID, &fr.title, &fr.occurrenceStatus,
+				&fr.scheduledFor, &fr.dueAt, &fr.firedAt, &fr.cadence, &fr.timezone,
+				&fr.reminder.ID, &fr.reminder.WorkspaceID, &fr.reminder.AgentID, &fr.reminder.InitiatorUserID, &fr.reminder.Title,
+				&fr.reminder.AnchorChannelID, &fr.reminder.AnchorMessageID, &fr.reminder.AnchorThreadRootMessageID,
+				&fr.reminder.FireAt, &fr.reminder.Status, &fr.reminder.FiredTaskID, &fr.reminder.SnoozeCount,
+				&fr.reminder.CreatedAt, &fr.reminder.UpdatedAt, &fr.reminder.FiredAt, &fr.reminder.Cadence,
+				&fr.reminder.ScheduleTimezone, &fr.reminder.CadenceNextAt, &fr.reminder.CurrentOccurrenceID,
+				&fr.reminder.TerminalReason, &fr.reminder.Version, &fr.reminder.OriginKind,
+				&fr.reminder.ManagedKind, &fr.reminder.OriginKey, &fr.reminder.ManagedBackoffStep); err != nil {
 				rows.Close()
 				writeError(w, http.StatusInternalServerError, "failed to load reminder history")
 				return
 			}
-			response.Occurrences = append(response.Occurrences, humanReminderOccurrence{
-				ID: uuidToString(occurrenceID), ReminderID: uuidToString(reminderID), Title: title,
-				Status: occurrenceStatus, DefinitionStatus: reminder.Status, ScheduleKind: reminderScheduleKind(cadence),
-				CadenceScheduledFor: timestampToString(scheduledFor), DueAt: timestampToString(dueAt),
-				FiredAt: timestampToString(firedAt), Cadence: nullableTextPtr(cadence),
-				ScheduleTimezone: reminderTimezonePtr(cadence, timezone), Anchor: h.safeHumanReminderAnchor(r, request.userID, reminder),
-			})
+			fired = append(fired, fr)
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
@@ -196,6 +205,15 @@ func (h *Handler) ListAgentReminders(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rows.Close()
+		for _, fr := range fired {
+			response.Occurrences = append(response.Occurrences, humanReminderOccurrence{
+				ID: uuidToString(fr.occurrenceID), ReminderID: uuidToString(fr.reminderID), Title: fr.title,
+				Status: fr.occurrenceStatus, DefinitionStatus: fr.reminder.Status, ScheduleKind: reminderScheduleKind(fr.cadence),
+				CadenceScheduledFor: timestampToString(fr.scheduledFor), DueAt: timestampToString(fr.dueAt),
+				FiredAt: timestampToString(fr.firedAt), Cadence: nullableTextPtr(fr.cadence),
+				ScheduleTimezone: reminderTimezonePtr(fr.cadence, fr.timezone), Anchor: h.safeHumanReminderAnchor(r, request.userID, fr.reminder),
+			})
+		}
 		if len(response.Occurrences) > limit {
 			response.HasMore = true
 			response.Occurrences = response.Occurrences[:limit]

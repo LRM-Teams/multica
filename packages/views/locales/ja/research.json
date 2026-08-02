@@ -185,6 +185,7 @@
     "doing": "進行中",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
+    "retry_cta": "再試行 / 別経路",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources.",
     "status": {
@@ -248,7 +249,7 @@
     "more": "その他",
     "soon": "近日",
     "esc_hint": "Esc で閉じる",
-    "retry_message": "行き止まりノード「{{title}}」（{{id}}）から再探索してください。"
+    "retry_message": "ノード「{{title}}」（{{id}}）から再試行 / 別経路で探索してください。"
   },
   "dock": {
     "label": "キャンバス操作",

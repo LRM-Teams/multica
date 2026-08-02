@@ -185,6 +185,7 @@
     "doing": "진행 중",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
+    "retry_cta": "재시도 / 경로 변경",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources.",
     "status": {
@@ -248,7 +249,7 @@
     "more": "더보기",
     "soon": "예정",
     "esc_hint": "Esc로 닫기",
-    "retry_message": "막다른 노드 「{{title}}」({{id}})에서 다시 탐색해 주세요."
+    "retry_message": "노드 「{{title}}」({{id}})에서 재시도 / 경로 변경으로 다시 탐색해 주세요."
   },
   "dock": {
     "label": "캔버스 컨트롤",

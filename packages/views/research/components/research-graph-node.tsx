@@ -2,6 +2,8 @@
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
+import { RotateCcw } from "lucide-react";
+import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspaceId } from "@multica/core/hooks";
 import type { ResearchFlowNodeData } from "../lib/layout-graph";
@@ -11,6 +13,7 @@ import {
   resolveLogicStatus,
   type LogicLaneId,
 } from "../lib/logic-lanes";
+import { nodeOffersRetry } from "../lib/node-action-ring";
 import {
   isLowConfidence,
   nodeConfidence,
@@ -47,6 +50,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
     (isLogicEndNode(n) ? "end" : isLogicStartNode(n) ? "start" : "step");
   const status = resolveLogicStatus(n);
   const laneId = (data.laneId ?? "orchestrate") as LogicLaneId;
+  const showRetry = logicRole === "step" && nodeOffersRetry(n) && !!data.onRetry;
 
   const typeLabel = (() => {
     if (logicRole === "start") return t(($) => $.logic.start);
@@ -214,6 +218,23 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
             >
               {activityCaption}
             </p>
+          ) : null}
+          {showRetry ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-testid="research-node-retry"
+              className="nodrag nopan mt-1.5 h-7 gap-1 border-destructive/35 bg-destructive/5 px-2 text-[11px] font-semibold text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={(e) => {
+                e.stopPropagation();
+                data.onRetry?.(n);
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <RotateCcw className="size-3 shrink-0" aria-hidden />
+              {t(($) => $.node.retry_cta)}
+            </Button>
           ) : null}
         </div>
       </div>

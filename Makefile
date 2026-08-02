@@ -310,6 +310,9 @@ test: ## Run Go tests after ensuring the target DB exists and migrations are app
 	# Database-backed packages share the configured test database.
 	cd server && go test -p 1 ./...
 
+check-cursor-deadlock: ## Static check for the #1803 pool-deadlock shape (task #91)
+	cd server && go run ./tools/cursordeadlock ./internal ./cmd ./pkg
+
 # Database
 ##@ Database
 

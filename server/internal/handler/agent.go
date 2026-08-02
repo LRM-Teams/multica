@@ -218,7 +218,8 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		       status,
 		       last_seen_at,
 		       updated_at,
-		       offline_reason
+		       offline_reason,
+		       starting_since
 		FROM agent_runtime
 		WHERE id = ANY($1::uuid[])`, runtimeIDs)
 	if err != nil {
@@ -234,11 +235,12 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		var lastSeen pgtype.Timestamptz
 		var updatedAt pgtype.Timestamptz
 		var offlineReason pgtype.Text
-		if err := rows.Scan(&id, &name, &status, &lastSeen, &updatedAt, &offlineReason); err != nil {
+		var startingSince pgtype.Timestamptz
+		if err := rows.Scan(&id, &name, &status, &lastSeen, &updatedAt, &offlineReason, &startingSince); err != nil {
 			slog.Warn("failed to scan agent runtime name", "error", err)
 			continue
 		}
-		rt := db.AgentRuntime{Status: status, LastSeenAt: lastSeen, UpdatedAt: updatedAt, OfflineReason: offlineReason}
+		rt := db.AgentRuntime{Status: status, LastSeenAt: lastSeen, UpdatedAt: updatedAt, OfflineReason: offlineReason, StartingSince: startingSince}
 		for _, idx := range byRuntimeID[uuidToString(id)] {
 			resps[idx].RuntimeName = name
 			// Always project connectivity onto the agent so private-runtime

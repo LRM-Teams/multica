@@ -762,6 +762,20 @@ func (c *Client) Deregister(ctx context.Context, runtimeIDs []string) error {
 	}, nil)
 }
 
+// MarkStarting tells the server this daemon is up and about to probe its
+// agent CLIs' versions (a step that can take ~20s on a cold cache), so any
+// runtime rows already registered under this daemon_id can show "starting"
+// instead of whatever they looked like before this process started. It is a
+// no-op on the server for a daemon_id with no existing runtime rows (first
+// registration ever), and best-effort by design — callers should log and
+// continue on error rather than fail startup over it.
+func (c *Client) MarkStarting(ctx context.Context, workspaceID, daemonID string) error {
+	return c.postJSON(ctx, "/api/daemon/starting", map[string]any{
+		"workspace_id": workspaceID,
+		"daemon_id":    daemonID,
+	}, nil)
+}
+
 // RegisterResponse holds the server's response to a daemon registration.
 type RegisterResponse struct {
 	Runtimes             []Runtime       `json:"runtimes"`

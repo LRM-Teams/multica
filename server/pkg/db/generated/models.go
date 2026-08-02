@@ -266,6 +266,7 @@ type AgentRuntime struct {
 	Visibility     string             `json:"visibility"`
 	DisplayName    string             `json:"display_name"`
 	OfflineReason  pgtype.Text        `json:"offline_reason"`
+	StartingSince  pgtype.Timestamptz `json:"starting_since"`
 }
 
 type AgentRuntimeState struct {

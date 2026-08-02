@@ -80,6 +80,13 @@ func TestDaemonRegister_InvalidWorkspaceDaemonTokenRetriesBootstrap(t *testing.T
 	expiresAt := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/daemon/starting" {
+			// Best-effort mark-starting call registerRuntimesForWorkspace now
+			// fires before the register retries this test is about; not
+			// this test's concern.
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		if got := r.URL.Path; got != "/api/daemon/register" {
 			t.Fatalf("path = %q, want /api/daemon/register", got)
 		}

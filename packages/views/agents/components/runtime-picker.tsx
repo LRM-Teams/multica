@@ -57,6 +57,7 @@ export function RuntimePicker({
   // Others' private runtimes are excluded outright, not shown-disabled —
   // a private runtime that isn't mine has nothing for me to do with it.
   const visibleRuntimes = useMemo(
+    // react-doctor-disable-next-line react-doctor/no-event-handler -- flags the useEffect below that seeds selection from this list; it reacts to `runtimes` arriving from the parent's query/WS subscription, not a local user event this component can hook a handler into.
     () => sortRuntimesForPicker(runtimes, currentUserId),
     [runtimes, currentUserId],
   );

@@ -605,7 +605,7 @@
     "full_reset_confirm_placeholder": "输入 {{handle}}",
     "disabled_reason": {
       "agent_active": "等当前任务完成后再试。",
-      "unsupported_runtime_capability": "该运行时暂不支持就地重启。",
+      "unsupported_runtime_capability": "需要 daemon v0.3.95 或更新版本。",
       "no_runtime": "该智能体未绑定运行时。",
       "offline": "运行时离线。",
       "no_permission": "你没有重启该智能体的权限。",

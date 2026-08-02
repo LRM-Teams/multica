@@ -4,6 +4,7 @@ import {
   isTerminalAgentLifecycleStatus,
   agentLifecycleActionState,
   isImmediateExecution,
+  resolveLifecycleDisabledReasonKey,
 } from "./agent-lifecycle";
 
 describe("isTerminalAgentLifecycleStatus", () => {
@@ -46,6 +47,23 @@ describe("agentLifecycleActionState", () => {
     expect(
       agentLifecycleActionState({ actions: {} as never }, "restart").supported,
     ).toBe(false);
+  });
+});
+
+describe("resolveLifecycleDisabledReasonKey", () => {
+  it("passes through a known reason", () => {
+    expect(resolveLifecycleDisabledReasonKey("unsupported_runtime_capability")).toBe(
+      "unsupported_runtime_capability",
+    );
+    expect(resolveLifecycleDisabledReasonKey("agent_active")).toBe("agent_active");
+  });
+
+  it("falls back to unavailable for an unknown or missing reason", () => {
+    expect(resolveLifecycleDisabledReasonKey("some_future_reason_the_fe_has_no_copy_for")).toBe(
+      "unavailable",
+    );
+    expect(resolveLifecycleDisabledReasonKey(null)).toBe("unavailable");
+    expect(resolveLifecycleDisabledReasonKey(undefined)).toBe("unavailable");
   });
 });
 

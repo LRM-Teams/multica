@@ -615,7 +615,7 @@
     "full_reset_confirm_placeholder": "Enter {{handle}}",
     "disabled_reason": {
       "agent_active": "Wait until the current task finishes, then try again.",
-      "unsupported_runtime_capability": "This runtime doesn't support in-place restart yet.",
+      "unsupported_runtime_capability": "Requires daemon v0.3.95 or newer.",
       "no_runtime": "No runtime is bound to this agent.",
       "offline": "The runtime is offline.",
       "no_permission": "You don't have permission to restart this agent.",

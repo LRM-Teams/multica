@@ -597,7 +597,7 @@
     "full_reset_confirm_placeholder": "{{handle}} を入力",
     "disabled_reason": {
       "agent_active": "現在のタスクが完了してからもう一度お試しください。",
-      "unsupported_runtime_capability": "このランタイムはまだインプレース再起動に対応していません。",
+      "unsupported_runtime_capability": "デーモン v0.3.95 以降が必要です。",
       "no_runtime": "このエージェントにランタイムがバインドされていません。",
       "offline": "ランタイムがオフラインです。",
       "no_permission": "このエージェントを再起動する権限がありません。",

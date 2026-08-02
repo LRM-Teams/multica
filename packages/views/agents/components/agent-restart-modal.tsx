@@ -2,7 +2,11 @@
 
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
-import { agentLifecycleActionState, useAgentLifecycle } from "@multica/core/agents";
+import {
+  agentLifecycleActionState,
+  resolveLifecycleDisabledReasonKey,
+  useAgentLifecycle,
+} from "@multica/core/agents";
 import type { AgentLifecycleActionKind } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -26,13 +30,6 @@ const TIERS: AgentLifecycleActionKind[] = [
 // elsewhere, so typing the "@" the user sees must still match (no dead-end).
 const normalizeHandle = (value: string) => value.trim().replace(/^@+/, "");
 
-const KNOWN_DISABLED_REASONS = new Set([
-  "agent_active",
-  "unsupported_runtime_capability",
-  "no_runtime",
-  "offline",
-  "no_permission",
-]);
 
 /**
  * Agent lifecycle three-tier restart modal (#633). Reads the server-authoritative
@@ -76,10 +73,8 @@ export function AgentRestartModal({
   const canSubmit =
     selectedState.supported && handleConfirmed && !isActive && !isTerminalSuccess;
 
-  const reasonLabel = (reason: string | null | undefined): string => {
-    const key = reason && KNOWN_DISABLED_REASONS.has(reason) ? reason : "unavailable";
-    return t(($) => $.restart_modal.disabled_reason[key as "unavailable"]);
-  };
+  const reasonLabel = (reason: string | null | undefined): string =>
+    t(($) => $.restart_modal.disabled_reason[resolveLifecycleDisabledReasonKey(reason)]);
 
   const close = () => {
     if (op) lifecycle.refreshAfterTerminal();

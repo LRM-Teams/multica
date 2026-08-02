@@ -615,7 +615,7 @@
     "full_reset_confirm_placeholder": "{{handle}} 입력",
     "disabled_reason": {
       "agent_active": "현재 작업이 끝난 후 다시 시도하세요.",
-      "unsupported_runtime_capability": "이 런타임은 아직 인플레이스 재시작을 지원하지 않습니다.",
+      "unsupported_runtime_capability": "데몬 v0.3.95 이상이 필요합니다.",
       "no_runtime": "이 에이전트에 바인딩된 런타임이 없습니다.",
       "offline": "런타임이 오프라인입니다.",
       "no_permission": "이 에이전트를 재시작할 권한이 없습니다.",

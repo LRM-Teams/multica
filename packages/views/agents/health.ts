@@ -79,9 +79,29 @@ export const healthStateConfig: Record<AgentHealthState, HealthStateVisual> = {
   },
 };
 
+// States we have explicitly decided render as Online green on the presence
+// dot. `suspected_disconnect`/`reconnecting` are here on purpose (LRM-248:
+// "not yet confirmed dead" reads as online, not offline) — this is a
+// deliberate allowance, not a gap. Every other value, including any state
+// the backend starts emitting before this list is updated for it (task #93:
+// e.g. "restarting" from an active lifecycle operation), is NOT on this
+// list and therefore falls to Offline gray below.
+const GREEN_HEALTH_STATES = new Set<string>([
+  "online",
+  "recovered",
+  "suspected_disconnect",
+  "reconnecting",
+]);
+
 // Resolve the presence-dot COLOR class from the connectivity health summary.
-// LRM-248: live badge is Online (green) or Offline (gray) only —
-// suspected_disconnect / reconnecting fold to Online green; offline stays gray.
+// LRM-248: live badge is Online (green) or Offline (gray) only. Task #93:
+// the fallback direction matters — an unrecognized state must default to
+// Offline, not Online. The API response schema is loose (packages/core/api/schemas.ts),
+// so a state string outside the FE's AgentHealthState union can reach here
+// as a live runtime value despite the type claiming it can't; treating
+// "not explicitly known to be online" as "confidently online" would be
+// exactly the kind of invented-good-news the rest of this codebase avoids
+// for missing/unknown facts.
 // When the summary is unavailable, return `fallbackDotClass` (already folded
 // through toLiveAvailability at the call site).
 export function resolveHealthDotClass(
@@ -89,11 +109,10 @@ export function resolveHealthDotClass(
   fallbackDotClass: string,
 ): string {
   if (!summary) return fallbackDotClass;
-  if (summary.state === "offline") {
-    return healthStateConfig.offline.dotClass;
+  if (GREEN_HEALTH_STATES.has(summary.state)) {
+    return healthStateConfig.online.dotClass;
   }
-  // online | recovered | suspected_disconnect | reconnecting → Online green
-  return healthStateConfig.online.dotClass;
+  return healthStateConfig.offline.dotClass;
 }
 
 // Compact elapsed-duration formatter for the "在线 3h" / "疑似掉线 2m" head

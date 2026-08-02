@@ -134,6 +134,12 @@
       "lead": "主理",
       "pending": "待审",
       "done": "收束"
+    },
+    "chat_mode": {
+      "empty": "空闲",
+      "loading": "加载中",
+      "running": "进行中",
+      "error": "错误"
     }
   },
   "chat": {
@@ -148,7 +154,12 @@
     "streaming_from": "舰队回复",
     "streaming_wait": "生成中…",
     "stream_settled": "已落盘",
-    "stopped_tag": "已停止"
+    "stopped_tag": "已停止",
+    "empty_title": "还没有对话",
+    "empty_body": "画布推进时，舰队对话与过程事件会出现在这里——空 / 加载 / 进行中 / 错误四态可辨。",
+    "loading_body": "正在接通舰队对话…",
+    "error_title": "对话发送失败",
+    "error_body": "网络或服务异常。已有消息不受影响，可以重试。"
   },
   "step_card": {
     "status": {

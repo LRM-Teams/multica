@@ -110,13 +110,23 @@ export function resolveSourcesFailureMode(sources: ResearchSource[]): SourcesFai
 /**
  * LRM-834 — drop citations whose resolved source is failed/missing so they
  * never enter the visible citation numbering / footnote sequence.
+ * When every live source failed, hide the whole sequence (do not fall back to
+ * a structured snapshot that still looks healthy).
  */
 export function filterCitationsExcludingFailed(
   citations: ResearchReportCitation[],
   liveSources: ResearchSource[],
   structuredSources: ResearchReportSourceRef[] = [],
 ): ResearchReportCitation[] {
+  const { ok, failed } = partitionSourcesByFailure(liveSources);
+  const failedIds = new Set(failed.map((s) => s.id));
+  const okIds = new Set(ok.map((s) => s.id));
+  const allLiveFailed = liveSources.length > 0 && ok.length === 0;
+
   return citations.filter((citation) => {
+    if (failedIds.has(citation.source_id)) return false;
+    if (allLiveFailed) return false;
+    if (okIds.has(citation.source_id)) return true;
     const source = resolveCitationSource(citation, liveSources, structuredSources);
     return !isResearchSourceFailed(source);
   });

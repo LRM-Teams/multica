@@ -73,4 +73,22 @@ describe("report-source-degrade (LRM-834)", () => {
     const kept = filterCitationsExcludingFailed(citations, live, []);
     expect(kept.map((c) => c.id)).toEqual(["c1"]);
   });
+
+  it("hides the whole citation sequence when every live source failed", () => {
+    const citations: ResearchReportCitation[] = [
+      { id: "c1", index: 1, source_id: "ok", label: "[1]" },
+      { id: "c2", index: 2, source_id: "bad", label: "[2]" },
+    ];
+    const live = [source({ id: "bad", payload: { fetch_failed: true } })];
+    const kept = filterCitationsExcludingFailed(citations, live, [
+      {
+        source_id: "ok",
+        title: "Milvus Docs",
+        url: "https://milvus.io",
+        credibility_weight: 0.9,
+        source_class: "docs",
+      },
+    ]);
+    expect(kept).toEqual([]);
+  });
 });

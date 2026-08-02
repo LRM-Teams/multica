@@ -341,6 +341,7 @@ describe("ReportReader", () => {
       />,
     );
     expect(screen.getByTestId("research-sources-all-failed")).toBeInTheDocument();
+    expect(screen.queryByTestId("research-citation-card")).toBeNull();
     fireEvent.click(screen.getByTestId("research-sources-all-failed-retry"));
     expect(onRetry).toHaveBeenCalled();
   });

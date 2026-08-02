@@ -251,4 +251,53 @@ describe("ReportReader", () => {
     expect(screen.getByText("Source unavailable")).toBeInTheDocument();
     expect(cards[1]).toHaveAttribute("data-degraded", "true");
   });
+
+  it("LRM-829: outline tree is ≥2 levels and click scrolls + flashes the section", () => {
+    const scrollSpy = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollSpy;
+    const structuredReport: ResearchReport = {
+      ...report,
+      structured: {
+        schema_version: 1,
+        title: "Vector DB comparison",
+        outline: [
+          { id: "sec-bg", title: "Background", level: 1, children: ["sec-detail"] },
+          { id: "sec-detail", title: "Detail", level: 2, children: [] },
+        ],
+        sections: [
+          {
+            id: "sec-bg",
+            title: "Background",
+            level: 1,
+            markdown: "Context.",
+            citation_ids: [],
+          },
+          {
+            id: "sec-detail",
+            title: "Detail",
+            level: 2,
+            markdown: "Numbers.",
+            citation_ids: [],
+          },
+        ],
+        citations: [],
+        sources: [],
+        conclusion: "",
+      },
+    };
+    render(
+      <ReportReader open onClose={vi.fn()} report={structuredReport} sources={sources} />,
+    );
+    const outline = screen.getByTestId("research-report-outline");
+    const levels = [...outline.querySelectorAll("[data-outline-level]")].map((el) =>
+      el.getAttribute("data-outline-level"),
+    );
+    expect(levels).toContain("1");
+    expect(levels).toContain("2");
+    fireEvent.click(screen.getByRole("button", { name: "Detail" }));
+    expect(scrollSpy).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    expect(document.getElementById("report-sec-sec-detail")?.classList.contains(
+      "research-anchor-flash",
+    )).toBe(true);
+  });
 });

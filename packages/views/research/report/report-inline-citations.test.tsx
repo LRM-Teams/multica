@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ResearchReportCitation, ResearchSource } from "@multica/core/types";
 import { InlineCitations } from "./report-inline-citations";
 import { rewriteCitationRefs } from "./report-inline-citations-utils";
+
+afterEach(() => cleanup());
 
 vi.mock("../i18n/use-t", () => ({
   useT: () => ({
@@ -104,8 +106,7 @@ describe("InlineCitations", () => {
         )}
       </InlineCitations>,
     );
-    const refs = screen.getAllByTestId("research-inline-citation");
-    expect(refs.length).toBe(2); // StrictMode double-render
-    expect(refs[0]?.textContent).toBe("[1]");
+    const ref = screen.getByTestId("research-inline-citation");
+    expect(ref.textContent).toBe("[1]");
   });
 });

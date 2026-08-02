@@ -823,13 +823,13 @@ function MachineDetailView({
                   </span>
                 </InfoRow>
               )}
-              {primaryPinnedVersion && (
+              {primaryPinnedVersion?.trim() && (
                 <InfoRow label={t(($) => $.machine.basics_pinned_version)}>
                   <span
                     className="truncate font-mono text-sm"
                     data-testid="machine-basics-pinned-version"
                   >
-                    {t(($) => $.machine.pinned_version_value, {
+                    {t(($) => $.machine.version_prefix, {
                       version: primaryPinnedVersion,
                     })}
                   </span>

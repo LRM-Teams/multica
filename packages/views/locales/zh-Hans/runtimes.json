@@ -143,7 +143,6 @@
     },
     "daemon_version_chip": "daemon v{{version}}",
     "version_prefix": "v{{version}}",
-    "pinned_version_value": "已指定版本 {{version}}",
     "basics_owner": "所有者",
     "basics_daemon_id": "Daemon ID",
     "ops": {

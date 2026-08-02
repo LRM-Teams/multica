@@ -120,8 +120,16 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
 
   // Sticky provider-quota lock (tasks #64/#77): Online means "can take work".
   // Heartbeats must not paint Online during lockout — keep the LRM-248 binary
-  // chrome (Online/Offline) but fold lockout into Offline. Lifecycle line
-  // separately says "Quota blocked" via runtime_display_status.
+  // chrome (Online/Offline) but fold lockout into Offline.
+  //
+  // INTENTIONAL (Parker / Iris): a locked agent is unreachable for work even
+  // when the machine/daemon is alive — presence answers "can I find them to
+  // do work?", so Offline is the true answer, not a bug. Do NOT "fix" this
+  // by painting Online during lockout. The real reason + recovery time live
+  // on the denser blocked / lifecycle surface (runtime_display_status), not
+  // on the presence dot — both halves are required; presence alone would
+  // mislead ("machine looks dead").
+  //
   // detail non-empty locks; until null while locked = unknown end (still
   // locked); until known and elapsed = unlocked.
   const providerBlockDetail = (input.agent.provider_block_detail ?? "").trim();

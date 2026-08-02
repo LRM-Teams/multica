@@ -182,6 +182,27 @@
     "composer_hint": "Enter 发送 · Shift+Enter 换行",
     "sending": "发送中…"
   },
+  "interrupt": {
+    "title": "会话中断",
+    "hint": "可重试唤醒；若仍失败，请改派给活跃成员或联系罗纳尔多。",
+    "retry": "重试",
+    "retrying": "重试中…",
+    "retry_again": "再次重试",
+    "retry_failed_title": "重试未恢复",
+    "retry_failed_hint": "请确认 daemon/runtime 在线，或让罗纳尔多改派给其他活跃成员。",
+    "reasons": {
+      "fleet_member_not_found": "目标不是调研团成员",
+      "fleet_member_pending_review": "成员尚在审核中",
+      "fleet_member_archived": "成员已归档",
+      "fleet_member_not_active": "成员未激活",
+      "agent_archived": "Agent 已归档",
+      "agent_no_runtime": "未绑定 runtime",
+      "agent_model_required": "未配置模型",
+      "runtime_offline": "Runtime / 连接中断",
+      "wake_internal_error": "唤醒内部错误",
+      "unknown": "唤醒失败"
+    }
+  },
   "node": {
     "goal": "目标",
     "subquestion": "子问题",

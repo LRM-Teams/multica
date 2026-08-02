@@ -563,8 +563,6 @@
     "info_section": "Info",
     "actions_section": "Actions",
     "actions_restart": "Restart / Reset",
-    "actions_restart_dialog_title": "Restart / reset \"{{name}}\"?",
-    "actions_restart_dialog_description": "This cancels all active tasks for the agent so the next run starts clean. Cancelled tasks cannot be resumed.",
     "actions_copy_diagnostic": "Copy diagnostic info",
     "actions_copy_success": "Diagnostic info copied",
     "actions_copy_failed": "Failed to copy diagnostic info",

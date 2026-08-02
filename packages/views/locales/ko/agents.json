@@ -563,8 +563,6 @@
     "info_section": "정보",
     "actions_section": "작업",
     "actions_restart": "다시 시작 / 재설정",
-    "actions_restart_dialog_title": "\"{{name}}\"을(를) 다시 시작 / 재설정할까요?",
-    "actions_restart_dialog_description": "에이전트의 모든 활성 작업을 취소하여 다음 실행을 깨끗하게 시작합니다. 취소된 작업은 재개할 수 없습니다.",
     "actions_copy_diagnostic": "진단 정보 복사",
     "actions_copy_success": "진단 정보를 복사했습니다",
     "actions_copy_failed": "진단 정보 복사에 실패했습니다",

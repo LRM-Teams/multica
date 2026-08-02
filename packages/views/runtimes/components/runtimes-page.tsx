@@ -55,7 +55,6 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { ACTIVITY_LABEL_EN } from "../../agents/components/tabs/activity-event";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
-import { formatRuntimeUpdateError } from "./update-error";
 import { buildWorkloadIndex } from "./runtime-list";
 import {
   buildRuntimeMachines,

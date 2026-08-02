@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -23,6 +24,31 @@ type agentFileAccessMode string
 const (
 	agentFileAccessRead  agentFileAccessMode = "read"
 	agentFileAccessWrite agentFileAccessMode = "write"
+)
+
+const (
+	// activityKindWorkspaceFile is the event_kind for durable agent
+	// workspace file operations (task #204-②/#95). Kept separate from
+	// activityKindCustom, which is already a catch-all for miscellaneous
+	// events — a dedicated kind keeps this audit trail independently
+	// queryable/filterable instead of buried among unrelated custom events.
+	activityKindWorkspaceFile = "workspace_file"
+
+	// agentWorkspaceFileTargetKind pairs with target_slug (the file's
+	// relative path) so the audit trail is queryable by path, not just
+	// recorded inside details JSONB.
+	agentWorkspaceFileTargetKind = "file"
+
+	// event_type values within activityKindWorkspaceFile. Only read/write
+	// are wired today — ListAgentFiles (directory listing) is deliberately
+	// not audited: it only reveals structure, never file content, so it
+	// doesn't answer the "who read/wrote what" question this audit trail
+	// exists for. Save/Share/Delete have no endpoints yet (not built —
+	// v1 Workspace tab work); add their event_type values here once those
+	// endpoints exist, no further migration needed since event_type is
+	// free text.
+	agentWorkspaceFileEventRead  = "file_read"
+	agentWorkspaceFileEventWrite = "file_write"
 )
 
 type AgentFilesResponse struct {
@@ -53,24 +79,24 @@ type UpdateAgentFileContentResponse struct {
 	Conflict    bool   `json:"conflict"`
 }
 
-func (h *Handler) authorizeAgentFiles(w http.ResponseWriter, r *http.Request, mode agentFileAccessMode) (db.Agent, bool) {
+func (h *Handler) authorizeAgentFiles(w http.ResponseWriter, r *http.Request, mode agentFileAccessMode) (db.Agent, string, string, bool) {
 	agent, ok := h.loadAgentForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {
-		return db.Agent{}, false
+		return db.Agent{}, "", "", false
 	}
 	workspaceID := uuidToString(agent.WorkspaceID)
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	if actorType == "agent" {
 		writeError(w, http.StatusForbidden, "agents may not access agent files")
-		return db.Agent{}, false
+		return db.Agent{}, "", "", false
 	}
 	hasAccess := h.canAccessAgentInternals(r.Context(), agent, actorType, actorID, workspaceID)
 	if !hasAccess && !(mode == agentFileAccessRead && userID != "" && devAgentProfileAccessEnabled()) {
 		writeError(w, http.StatusForbidden, "only the agent creator or a workspace admin can access these files")
-		return db.Agent{}, false
+		return db.Agent{}, "", "", false
 	}
-	return agent, true
+	return agent, actorType, actorID, true
 }
 
 func agentRootRelPath(agent db.Agent) string {
@@ -95,7 +121,7 @@ func includeHiddenAgentFiles(r *http.Request) bool {
 }
 
 func (h *Handler) ListAgentFiles(w http.ResponseWriter, r *http.Request) {
-	agent, ok := h.authorizeAgentFiles(w, r, agentFileAccessRead)
+	agent, _, _, ok := h.authorizeAgentFiles(w, r, agentFileAccessRead)
 	if !ok {
 		return
 	}
@@ -144,7 +170,7 @@ func (h *Handler) ListAgentFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetAgentFileContent(w http.ResponseWriter, r *http.Request) {
-	agent, ok := h.authorizeAgentFiles(w, r, agentFileAccessRead)
+	agent, actorType, actorID, ok := h.authorizeAgentFiles(w, r, agentFileAccessRead)
 	if !ok {
 		return
 	}
@@ -182,6 +208,18 @@ func (h *Handler) GetAgentFileContent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, resp.Error)
 		return
 	}
+	h.recordAgentActivityEvent(r.Context(), h.DB,
+		agent.WorkspaceID, agent.ID, agent.RuntimeID, pgtype.UUID{},
+		activityKindWorkspaceFile, agentWorkspaceFileEventRead, "info",
+		agentWorkspaceFileTargetKind, pgtype.UUID{}, filePath,
+		"", "Agent workspace file read",
+		map[string]any{
+			"actor_type":   actorType,
+			"actor_id":     actorID,
+			"content_hash": resp.ContentHash,
+			"truncated":    resp.Truncated,
+		},
+	)
 	writeJSON(w, http.StatusOK, AgentFileContentResponse{
 		Content:     resp.Content,
 		Encoding:    resp.Encoding,
@@ -194,7 +232,7 @@ func (h *Handler) GetAgentFileContent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateAgentFileContent(w http.ResponseWriter, r *http.Request) {
-	agent, ok := h.authorizeAgentFiles(w, r, agentFileAccessWrite)
+	agent, actorType, actorID, ok := h.authorizeAgentFiles(w, r, agentFileAccessWrite)
 	if !ok {
 		return
 	}
@@ -254,6 +292,17 @@ func (h *Handler) UpdateAgentFileContent(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, resp.Error)
 		return
 	}
+	h.recordAgentActivityEvent(r.Context(), h.DB,
+		agent.WorkspaceID, agent.ID, agent.RuntimeID, pgtype.UUID{},
+		activityKindWorkspaceFile, agentWorkspaceFileEventWrite, "info",
+		agentWorkspaceFileTargetKind, pgtype.UUID{}, req.Path,
+		"", "Agent workspace file written",
+		map[string]any{
+			"actor_type":   actorType,
+			"actor_id":     actorID,
+			"content_hash": resp.ContentHash,
+		},
+	)
 	writeJSON(w, http.StatusOK, UpdateAgentFileContentResponse{
 		ContentHash: resp.ContentHash,
 		Conflict:    false,

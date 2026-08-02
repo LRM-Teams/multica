@@ -386,5 +386,17 @@
     "tab_trail": "トレイル",
     "tab_sources": "ソース",
     "tab_boundary": "境界"
+  },
+  "completion_guide": {
+    "done_title": "リサーチ完了",
+    "done_body": "レポートとソースの準備ができました。成果物を確認するか、新しいリサーチを始めましょう。",
+    "failed_title": "リサーチ未完了",
+    "failed_body": "今回は完了できませんでした。成果物で詳細を確認するか、新しく始め直してください。",
+    "view_report": "レポートを見る",
+    "new_research": "新規リサーチ",
+    "home": "ホームへ",
+    "dismiss": "閉じる",
+    "done_badge": "完了",
+    "failed_badge": "失敗"
   }
 }

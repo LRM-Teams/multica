@@ -386,5 +386,17 @@
     "tab_trail": "轨迹",
     "tab_sources": "信源",
     "tab_boundary": "边界"
+  },
+  "completion_guide": {
+    "done_title": "调研已完成",
+    "done_body": "报告与来源已就绪。下一步可以查看交付，或开始新的调研。",
+    "failed_title": "调研未完成",
+    "failed_body": "本轮未能顺利收口。可查看交付了解详情，或新建一局再试。",
+    "view_report": "查看报告",
+    "new_research": "新建调研",
+    "home": "回主页",
+    "dismiss": "关闭",
+    "done_badge": "完成",
+    "failed_badge": "失败"
   }
 }

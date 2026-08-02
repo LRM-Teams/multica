@@ -386,5 +386,17 @@
     "tab_trail": "트레일",
     "tab_sources": "출처",
     "tab_boundary": "경계"
+  },
+  "completion_guide": {
+    "done_title": "리서치 완료",
+    "done_body": "보고서와 출처가 준비되었습니다. 산출물을 보거나 새 리서치를 시작하세요.",
+    "failed_title": "리서치 미완료",
+    "failed_body": "이번 실행이 정상 완료되지 않았습니다. 산출물에서 확인하거나 새로 시작하세요.",
+    "view_report": "보고서 보기",
+    "new_research": "새 리서치",
+    "home": "홈으로",
+    "dismiss": "닫기",
+    "done_badge": "완료",
+    "failed_badge": "실패"
   }
 }

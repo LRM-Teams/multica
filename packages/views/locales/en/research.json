@@ -386,5 +386,17 @@
     "tab_trail": "Trail",
     "tab_sources": "Sources",
     "tab_boundary": "Boundary"
+  },
+  "completion_guide": {
+    "done_title": "Research complete",
+    "done_body": "Your report and sources are ready. View delivery next, or start a new research.",
+    "failed_title": "Research unfinished",
+    "failed_body": "This run did not finish cleanly. Review delivery for details, or start a new research.",
+    "view_report": "View report",
+    "new_research": "New research",
+    "home": "Home",
+    "dismiss": "Dismiss",
+    "done_badge": "Done",
+    "failed_badge": "Failed"
   }
 }

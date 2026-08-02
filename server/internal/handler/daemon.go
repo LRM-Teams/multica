@@ -1286,12 +1286,21 @@ func (h *Handler) processHeartbeat(
 	// by InitiateUpdate) and no attempt already in flight, materialize it
 	// into a real attempt right here so the HasPending/PopPending block below
 	// picks it up and delivers it in this same heartbeat response.
-	h.maybeMaterializeUpdateIntent(ctx, runtimeID)
+	h.maybeMaterializeUpdateIntent(ctx, rt)
 
+	_, runtimePinned := runtimePinnedVersion(rt)
 	probeUpdateCtx, cancelProbeUpdate := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
 	hasUpdate, probeUpdateErr := h.UpdateStore.HasPending(probeUpdateCtx, runtimeID)
 	cancelProbeUpdate()
 	switch {
+	case probeUpdateErr == nil && hasUpdate && runtimePinned:
+		// Pin wins (task #81). Deliberately do NOT call PopPending here —
+		// popping claims the row (it stops being "pending"), which would
+		// permanently strand it the moment this heartbeat's ack doesn't
+		// deliver it. Leaving HasPending's answer untouched means this same
+		// pending update is offered again on every future heartbeat until
+		// the pin is lifted, instead of being silently consumed once.
+		slog.Info("skipping pending update delivery: runtime pinned", "runtime_id", runtimeID)
 	case probeUpdateErr == nil && hasUpdate:
 		pending, popUpdateErr := h.UpdateStore.PopPending(ctx, runtimeID)
 		if popUpdateErr != nil {

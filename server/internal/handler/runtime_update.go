@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -170,6 +172,19 @@ func (s *InMemoryUpdateStore) Create(_ context.Context, runtimeID, targetVersion
 }
 
 var errUpdateInProgress = &updateError{msg: "an update is already in progress for this runtime"}
+
+// runtimePinnedVersion centralizes the "pin wins" rule (task #81): a runtime
+// pinned via MULTICA_PINNED_VERSION must never receive an automatic or
+// queued update, on any of the three paths that can deliver one (manual
+// InitiateUpdate, intent materialization, heartbeat delivery) — checked here
+// once so a future rule change (e.g. an override) only needs one edit.
+func runtimePinnedVersion(rt db.AgentRuntime) (version string, pinned bool) {
+	if !rt.PinnedVersion.Valid {
+		return "", false
+	}
+	v := strings.TrimSpace(rt.PinnedVersion.String)
+	return v, v != ""
+}
 
 type updateError struct{ msg string }
 
@@ -354,12 +369,22 @@ func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
 
 	rtID := uuidToString(rt.ID)
 
+	// Pin wins (task #81) — reject immediately rather than create an intent
+	// that maybeMaterializeUpdateIntent will refuse to ever materialize. The
+	// caller gets instant feedback instead of a "queued" state that silently
+	// never progresses.
+	if pinnedVersion, pinned := runtimePinnedVersion(rt); pinned {
+		writeCodedError(w, http.StatusConflict, "runtime_pinned",
+			fmt.Sprintf("this computer is pinned to version %s", pinnedVersion))
+		return
+	}
+
 	// An attempt already in flight (delivered on a prior heartbeat) takes
 	// priority — creating a new intent wouldn't change anything until that
 	// attempt resolves, and the caller should see its real progress, not a
 	// "queued" state that's misleading given delivery already happened.
 	if existing, err := h.UpdateStore.LatestForRuntime(r.Context(), rtID); err == nil && existing != nil && updateRequestBlocksNewRequest(existing.Status) {
-		writeError(w, http.StatusConflict, errUpdateInProgress.Error())
+		writeCodedError(w, http.StatusConflict, "update_already_in_progress", errUpdateInProgress.Error())
 		return
 	}
 
@@ -502,8 +527,21 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 // reachable. Called unconditionally on every heartbeat (handler/daemon.go,
 // right before the existing HasPending/PopPending block) — cheap no-op when
 // there's no live intent, which is the common case.
-func (h *Handler) maybeMaterializeUpdateIntent(ctx context.Context, runtimeID string) {
+func (h *Handler) maybeMaterializeUpdateIntent(ctx context.Context, rt db.AgentRuntime) {
 	if h.UpdateIntentStore == nil || h.UpdateStore == nil || h.RuntimeReleaseSource == nil {
+		return
+	}
+	runtimeID := uuidToString(rt.ID)
+	// Pin wins (task #81): an intent always resolves to whatever's newest at
+	// delivery time (see queuedUpdateFromIntent's comment) — fundamentally
+	// incompatible with "stay on this version". Leave the intent live and
+	// un-materialized rather than consume it into an attempt that would
+	// never be delivered (see the heartbeat-delivery gate in daemon.go for
+	// why materializing anyway would strand a permanently-undeliverable
+	// attempt). Lifting the pin requires a daemon restart (task #81), which
+	// reports the new state on its next register — the following heartbeat
+	// picks this back up normally.
+	if _, pinned := runtimePinnedVersion(rt); pinned {
 		return
 	}
 	intent, err := h.UpdateIntentStore.Get(ctx, runtimeID)

@@ -351,7 +351,8 @@
       "failed": "업데이트 실패",
       "timeout": "시간 초과"
     },
-    "up_to_date_short": "최신"
+    "up_to_date_short": "최신",
+    "pin_blocked": "업그레이드가 비활성화되어 있습니다 — 이 컴퓨터는 v{{version}}(으)로 지정되어 있습니다. 지정을 해제하면 업그레이드할 수 있습니다."
   },
   "restart": {
     "action": "재시작",

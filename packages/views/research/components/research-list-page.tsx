@@ -42,18 +42,27 @@ import { ResearchSessionRow } from "./research-session-row";
 import { ResearchSessionListSkeleton } from "./research-session-row-skeleton";
 import { ResearchTemplateCards } from "./research-template-cards";
 
-/** Composer draft — one state object so create/template/goal update together (react-doctor). */
+/**
+ * Composer draft — one state object so create/template/goal/params update
+ * together (react-doctor prefer-useReducer / related useState).
+ */
 type ComposerDraft = {
   goal: string;
   template: ResearchTemplate | null;
   draftTitle: string | undefined;
+  params: ResearchCreateParams;
+  paramsOpen: boolean;
 };
 
-const EMPTY_COMPOSER: ComposerDraft = {
-  goal: "",
-  template: null,
-  draftTitle: undefined,
-};
+function emptyComposer(uiLanguage?: string): ComposerDraft {
+  return {
+    goal: "",
+    template: null,
+    draftTitle: undefined,
+    params: defaultCreateParams(uiLanguage),
+    paramsOpen: false,
+  };
+}
 
 export function ResearchListPage() {
   const { t, i18n } = useT("research");
@@ -61,11 +70,7 @@ export function ResearchListPage() {
   const paths = useWorkspacePaths();
   const nav = useNavigation();
   const qc = useQueryClient();
-  const [composer, setComposer] = useState<ComposerDraft>(EMPTY_COMPOSER);
-  const [createParams, setCreateParams] = useState<ResearchCreateParams>(() =>
-    defaultCreateParams(),
-  );
-  const [paramsOpen, setParamsOpen] = useState(false);
+  const [composer, setComposer] = useState<ComposerDraft>(() => emptyComposer());
   const [titleQuery, setTitleQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter | null>(null);
   const goalInputRef = useRef<HTMLTextAreaElement>(null);
@@ -75,15 +80,25 @@ export function ResearchListPage() {
   const savedScrollTop = useRef<number | null>(null);
   const localeSeeded = useRef(false);
 
-  const { goal, template: selectedTemplate, draftTitle } = composer;
+  const {
+    goal,
+    template: selectedTemplate,
+    draftTitle,
+    params: createParams,
+    paramsOpen,
+  } = composer;
 
   // Seed language from UI locale once i18n is ready (defaults stay standard/weights).
   useEffect(() => {
     if (localeSeeded.current || !i18n?.language) return;
     localeSeeded.current = true;
-    setCreateParams((prev) =>
-      normalizeCreateParams({ ...prev, language: undefined }, i18n.language),
-    );
+    setComposer((prev) => ({
+      ...prev,
+      params: normalizeCreateParams(
+        { ...prev.params, language: undefined },
+        i18n.language,
+      ),
+    }));
   }, [i18n?.language]);
 
   useQuery(researchFleetOptions(wsId));
@@ -169,7 +184,12 @@ export function ResearchListPage() {
   };
 
   const fillComposer = (text: string, title?: string) => {
-    setComposer({ goal: text, template: null, draftTitle: title });
+    setComposer((prev) => ({
+      ...prev,
+      goal: text,
+      template: null,
+      draftTitle: title,
+    }));
     // Defer focus so the controlled value paints before the caret moves.
     queueMicrotask(focusComposer);
   };
@@ -177,11 +197,12 @@ export function ResearchListPage() {
   /** LRM-906 T2: chip only — never dump ≥800-char professional prompt into the box. */
   const applyTemplate = (template: ResearchTemplate) => {
     const language = i18n?.language;
-    setComposer({
+    setComposer((prev) => ({
+      ...prev,
       goal: "",
       template,
       draftTitle: localizeTemplateField(template.sessionTitle, language),
-    });
+    }));
     queueMicrotask(focusComposer);
   };
 
@@ -287,7 +308,9 @@ export function ResearchListPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setParamsOpen(true)}
+                  onClick={() =>
+                    setComposer((prev) => ({ ...prev, paramsOpen: true }))
+                  }
                   disabled={create.isPending}
                   className="h-10 w-full shrink-0 rounded-full px-3.5 text-[13px] font-medium sm:h-9 sm:w-auto"
                   data-testid="research-create-params-open"
@@ -322,8 +345,12 @@ export function ResearchListPage() {
           <ResearchCreateParamsPanel
             open={paramsOpen}
             value={createParams}
-            onOpenChange={setParamsOpen}
-            onChange={setCreateParams}
+            onOpenChange={(open) =>
+              setComposer((prev) => ({ ...prev, paramsOpen: open }))
+            }
+            onChange={(params) =>
+              setComposer((prev) => ({ ...prev, params }))
+            }
           />
 
           {createError ? (

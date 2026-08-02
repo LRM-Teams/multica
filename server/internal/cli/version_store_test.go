@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -850,4 +851,158 @@ func TestPruneInactiveVersions_SkipsStageTempDirs(t *testing.T) {
 	if _, err := os.Stat(tempDir); err != nil {
 		t.Fatalf("temp directory was deleted by prune: %v", err)
 	}
+}
+
+// TestRenamePublishWithRetry_SucceedsImmediatelyWithoutRetrying confirms the
+// common (Unix, or a Windows machine that isn't racing a lock) case pays no
+// retry cost at all.
+func TestRenamePublishWithRetry_SucceedsImmediatelyWithoutRetrying(t *testing.T) {
+	calls := 0
+	restore := stubOSRename(t, func(oldpath, newpath string) error {
+		calls++
+		return nil
+	})
+	defer restore()
+
+	if err := renamePublishWithRetry(context.Background(), "old", "new"); err != nil {
+		t.Fatalf("renamePublishWithRetry: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1 (no retry needed)", calls)
+	}
+}
+
+// TestRenamePublishWithRetry_RetriesTransientFailureThenSucceeds is the
+// concrete shape of the bug this exists to fix: os.Rename fails a few times
+// (Windows image lock / AV on-close scan still releasing) then succeeds once
+// the lock clears — this must be absorbed, not surfaced as a hard failure.
+func TestRenamePublishWithRetry_RetriesTransientFailureThenSucceeds(t *testing.T) {
+	calls := 0
+	const failuresBeforeSuccess = 3 // well within renamePublishRetryAttempts
+	restore := stubOSRename(t, func(oldpath, newpath string) error {
+		calls++
+		if calls <= failuresBeforeSuccess {
+			return fmt.Errorf("rename %s -> %s: Access is denied", oldpath, newpath)
+		}
+		return nil
+	})
+	defer restore()
+
+	start := time.Now()
+	if err := renamePublishWithRetry(context.Background(), "old", "new"); err != nil {
+		t.Fatalf("renamePublishWithRetry: %v", err)
+	}
+	elapsed := time.Since(start)
+	if calls != failuresBeforeSuccess+1 {
+		t.Fatalf("calls = %d, want %d", calls, failuresBeforeSuccess+1)
+	}
+	// 100+200+400 = 700ms of backoff before the 4th (successful) call.
+	if elapsed < 700*time.Millisecond {
+		t.Fatalf("elapsed = %v, expected at least 700ms of backoff before success", elapsed)
+	}
+}
+
+// TestRenamePublishWithRetry_GivesUpAfterMaxAttemptsAndReturnsLastError is
+// the other half of the contract Parker asked for explicitly: this layer
+// must have a ceiling and hand back a real error once exhausted — it does
+// NOT retry forever, that's the outer (UpdateIntentStore) layer's job.
+func TestRenamePublishWithRetry_GivesUpAfterMaxAttemptsAndReturnsLastError(t *testing.T) {
+	calls := 0
+	sentinelErr := errors.New("rename: Access is denied (attempt N)")
+	restore := stubOSRename(t, func(oldpath, newpath string) error {
+		calls++
+		return sentinelErr
+	})
+	defer restore()
+
+	start := time.Now()
+	err := renamePublishWithRetry(context.Background(), "old", "new")
+	elapsed := time.Since(start)
+	if !errors.Is(err, sentinelErr) {
+		t.Fatalf("err = %v, want %v", err, sentinelErr)
+	}
+	if calls != renamePublishRetryAttempts+1 {
+		t.Fatalf("calls = %d, want %d (1 initial + %d retries)", calls, renamePublishRetryAttempts+1, renamePublishRetryAttempts)
+	}
+	// 100+200+400+800+1600 = 3100ms total — this is the ceiling Parker asked
+	// for explicitly ("内层最多耗多久"): long enough to cover a real AV scan,
+	// short enough not to duplicate the outer minutes-scale backoff.
+	if elapsed < 3*time.Second {
+		t.Fatalf("elapsed = %v, expected roughly 3.1s of total backoff before giving up", elapsed)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("elapsed = %v, retry ceiling should not run away past ~3.1s", elapsed)
+	}
+}
+
+// TestRenamePublishWithRetry_StopsOnContextCancellation ensures a cancelled
+// context (e.g. the daemon shutting down mid-update) doesn't strand the
+// retry loop waiting out its full ~3.1s backoff budget for nothing.
+func TestRenamePublishWithRetry_StopsOnContextCancellation(t *testing.T) {
+	calls := 0
+	restore := stubOSRename(t, func(oldpath, newpath string) error {
+		calls++
+		return errors.New("rename: Access is denied")
+	})
+	defer restore()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err := renamePublishWithRetry(ctx, "old", "new")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("expected an error after cancellation, got nil")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("elapsed = %v, should have stopped shortly after cancellation, not run the full backoff", elapsed)
+	}
+	if calls >= renamePublishRetryAttempts+1 {
+		t.Fatalf("calls = %d, should have stopped before exhausting all attempts", calls)
+	}
+}
+
+// TestVersionStoreStageBinary_SurvivesTransientRenameFailure is the actual
+// end-to-end shape of the 2026-08-01/02 incident: the publish rename fails a
+// couple of times (Windows image lock / AV on-close scan) before the lock
+// clears. StageBinary as a whole must still succeed — this proves the retry
+// is actually wired into the real call path, not just correct in isolation.
+func TestVersionStoreStageBinary_SurvivesTransientRenameFailure(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+	data := []byte("multica binary contents")
+
+	renameCalls := 0
+	restore := stubOSRename(t, func(oldpath, newpath string) error {
+		renameCalls++
+		if renameCalls <= 2 {
+			return fmt.Errorf("rename %s -> %s: Access is denied", oldpath, newpath)
+		}
+		return os.Rename(oldpath, newpath)
+	})
+	defer restore()
+
+	staged, err := store.StageBinary(context.Background(), "v0.3.95", data, testBinaryDigest(data), 0o755)
+	if err != nil {
+		t.Fatalf("StageBinary should survive a transient rename failure: %v", err)
+	}
+	if staged.Version != "v0.3.95" {
+		t.Fatalf("staged.Version = %q, want v0.3.95", staged.Version)
+	}
+	if renameCalls < 3 {
+		t.Fatalf("renameCalls = %d, expected at least 3 (2 failures + 1 success)", renameCalls)
+	}
+	if _, err := os.Stat(staged.BinaryPath); err != nil {
+		t.Fatalf("staged binary should exist on disk after a successful retry: %v", err)
+	}
+}
+
+func stubOSRename(t *testing.T, fn func(oldpath, newpath string) error) func() {
+	t.Helper()
+	original := osRename
+	osRename = fn
+	return func() { osRename = original }
 }

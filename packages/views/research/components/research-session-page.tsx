@@ -356,6 +356,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         dimensions={explorationDims}
         strategy={sourceStrategy}
         boundary={humanBoundary}
+        sessionStatus={session.status}
         selectedFamily={ui.selectedFamily}
         selectedQuestionId={ui.selected?.id}
         onSelectFamily={(family) => dispatch({ type: "setFamily", family })}
@@ -373,6 +374,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         <ExplorationRail
           className="hidden sm:flex"
           dimensions={explorationDims}
+          sessionStatus={session.status}
           selectedFamily={ui.selectedFamily}
           selectedQuestionId={ui.selected?.id}
           onSelectFamily={(family) => dispatch({ type: "setFamily", family })}

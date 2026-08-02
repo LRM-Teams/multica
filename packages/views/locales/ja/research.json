@@ -302,7 +302,13 @@
   "m2": {
     "rail_title": "探索トレイル",
     "rail_hint": "次元ファミリー展開 · 固定チェックリストではない",
-    "rail_empty": "キックオフ後に問題ツリーの根が現れます…",
+    "rail_empty": "探索結果はまだありません",
+    "rail_empty_title": "探索結果はまだありません",
+    "rail_empty_body": "キックオフ後、次元クラスタと問題ツリーがステータスと短い要約付きの結果カードとして表示されます。",
+    "rail_loading": "問題ツリーと次元クラスタを生成中…",
+    "rail_error": "探索トレイルの読み込みに失敗しました",
+    "rail_question_count": "{{count}} ノード",
+    "rail_summary_pending": "要約生成中 · 展開して問題ノードを確認",
     "required": "必須",
     "status": {
       "open": "探索中",

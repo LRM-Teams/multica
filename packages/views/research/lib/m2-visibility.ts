@@ -11,6 +11,8 @@ export type ExplorationQuestion = {
   title: string;
   nodeType: string;
   active?: boolean;
+  /** Short blurb for result-card rows (LRM-975). */
+  summary?: string;
 };
 
 export type ExplorationDimension = {
@@ -21,6 +23,26 @@ export type ExplorationDimension = {
   questions: ExplorationQuestion[];
   findingSummary?: string;
 };
+
+/** Rail body mode when the dimension list is empty or errored (LRM-975). */
+export type ExplorationRailMode = "ready" | "loading" | "empty" | "error";
+
+export function resolveExplorationRailMode(
+  dimensions: ExplorationDimension[],
+  sessionStatus?: string | null,
+  error?: string | null,
+): ExplorationRailMode {
+  if (error) return "error";
+  if (dimensions.length > 0) return "ready";
+  // In-flight sessions should show generating skeletons — not the old gray kickoff stub.
+  if (sessionStatus === "running" || sessionStatus === "paused") return "loading";
+  return "empty";
+}
+
+function summaryFromNode(node: ResearchGraphNode | undefined): string {
+  if (!node) return "";
+  return str(node.summary) || str(node.title);
+}
 
 export type SourceStrategyLayer = "general" | "domain";
 
@@ -134,21 +156,35 @@ export function buildExplorationDimensions(
     const questions: ExplorationQuestion[] = [];
     for (const n of group) {
       if (!questionTypes.has(n.node_type)) continue;
+      const qSummary = str(n.summary);
       questions.push({
         id: n.id,
         title: n.title || n.node_type,
         nodeType: n.node_type,
         active: n.status === "active" || n.node_type === "probe",
+        summary: qSummary || undefined,
       });
     }
     const finding = group.find((n) => n.node_type === "finding");
+    const probe = group.find((n) => n.node_type === "probe");
+    const pivot = group.find((n) => n.node_type === "pivot");
+    const conflict = group.find((n) => n.node_type === "conflict");
+    const dead = group.find((n) => n.node_type === "dead_end");
+    const findingSummary =
+      summaryFromNode(finding) ||
+      summaryFromNode(pivot) ||
+      summaryFromNode(conflict) ||
+      summaryFromNode(dead) ||
+      summaryFromNode(probe) ||
+      questions.find((q) => q.summary)?.summary ||
+      undefined;
     dims.push({
       family,
       title,
       status: statusFromNodes(group),
       required: p.required === true || family === "human_ai_boundary",
       questions,
-      findingSummary: finding?.summary || finding?.title,
+      findingSummary,
     });
   }
 

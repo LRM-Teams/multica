@@ -181,6 +181,9 @@ func channelGoalContextForClaim(goal ChannelGoalResponse) *protocol.ChannelGoalC
 	}
 }
 
+// Completing the main Goal must not cascade-close Issues / Needs You / other
+// coordination records (LRM-1004). UpdateChannelGoal only mutates channel_goal.
+
 func (h *Handler) GetChannelGoal(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

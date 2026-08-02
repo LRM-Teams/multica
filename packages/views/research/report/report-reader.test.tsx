@@ -26,6 +26,8 @@ vi.mock("../../i18n/use-t", () => ({
           copy_md: "Copy MD",
           copied: "Copied",
           export: "Export",
+          copy_md_done: "Markdown copied to clipboard",
+          export_done: "Markdown file downloaded",
           meta: `Delivery · v${vars?.revision ?? 1} · ${vars?.count ?? 0} sources`,
           sources_heading: "Weighted source map",
           sources_hint: "hint",
@@ -299,5 +301,43 @@ describe("ReportReader", () => {
     expect(document.getElementById("report-sec-sec-detail")?.classList.contains(
       "research-anchor-flash",
     )).toBe(true);
+  });
+
+  it("LRM-831: copy button writes full markdown to clipboard and fires toast", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const { toast } = await import("sonner");
+    const successSpy = vi.spyOn(toast, "success");
+
+    render(
+      <ReportReader open onClose={vi.fn()} report={report} sources={sources} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /copy md/i }));
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        expect.stringContaining("## Findings"),
+      );
+    });
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("| A | B |"));
+    expect(successSpy).toHaveBeenCalledWith("Markdown copied to clipboard");
+  });
+
+  it("LRM-831: export button downloads markdown and fires toast", async () => {
+    const { toast } = await import("sonner");
+    const successSpy = vi.spyOn(toast, "success");
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+    // jsdom lacks createObjectURL
+    URL.createObjectURL = vi.fn(() => "blob:mock");
+    URL.revokeObjectURL = vi.fn();
+
+    render(
+      <ReportReader open onClose={vi.fn()} report={report} sources={sources} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^export$/i }));
+    expect(clickSpy).toHaveBeenCalled();
+    expect(successSpy).toHaveBeenCalledWith("Markdown file downloaded");
+    clickSpy.mockRestore();
   });
 });

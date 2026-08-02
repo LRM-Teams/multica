@@ -319,6 +319,8 @@
     "copy_md": "Copy MD",
     "copied": "Copied",
     "export": "Export",
+    "copy_md_done": "Markdown copied to clipboard",
+    "export_done": "Markdown file downloaded",
     "meta": "Delivery · v{{revision}} · {{count}} sources",
     "sources_heading": "Weighted source map",
     "sources_hint": "Sorted by credibility. High-weight sources are the baseline; low-weight rows are corroboration only.",

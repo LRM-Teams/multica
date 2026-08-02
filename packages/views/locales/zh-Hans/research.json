@@ -140,6 +140,12 @@
       "loading": "加载中",
       "running": "进行中",
       "error": "错误"
+    },
+    "delivery_mode": {
+      "empty": "空闲",
+      "loading": "加载中",
+      "running": "进行中",
+      "error": "错误"
     }
   },
   "chat": {
@@ -317,6 +323,11 @@
     "sources_heading": "加权源地图",
     "sources_hint": "按可信度排序。权重高的为权威基线，低权重仅作旁证。",
     "report_empty": "报告尚未生成。舰队完成后会显示在这里。",
+    "empty_title": "还没有交付",
+    "empty_body": "舰队完成后，加权来源与报告会出现在这里——空 / 加载 / 进行中 / 错误四态可辨。",
+    "loading_body": "正在汇集来源与报告…",
+    "error_title": "交付加载失败",
+    "error_body": "网络或服务异常。可重试以重新加载来源与报告。",
     "col_weight": "权重",
     "col_type": "类型",
     "col_source": "来源",

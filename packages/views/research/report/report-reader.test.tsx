@@ -10,7 +10,17 @@ vi.mock("../../i18n/use-t", () => ({
       vars?: Record<string, unknown>,
     ) => {
       const value = fn({
-        panel: { delivery: "Sources & report", hide_chat: "Close", report: "Report" },
+        panel: {
+          delivery: "Sources & report",
+          hide_chat: "Close",
+          report: "Report",
+          delivery_mode: {
+            empty: "Idle",
+            loading: "Loading",
+            running: "In progress",
+            error: "Error",
+          },
+        },
         reader: {
           outline: "Outline",
           copy_md: "Copy MD",
@@ -19,6 +29,11 @@ vi.mock("../../i18n/use-t", () => ({
           meta: `Delivery · v${vars?.revision ?? 1} · ${vars?.count ?? 0} sources`,
           sources_heading: "Weighted source map",
           sources_hint: "hint",
+          empty_title: "No delivery yet",
+          empty_body: "Empty body",
+          loading_body: "Assembling…",
+          error_title: "Could not load delivery",
+          error_body: "Error body",
           col_weight: "Weight",
           col_type: "Type",
           col_source: "Source",
@@ -31,6 +46,7 @@ vi.mock("../../i18n/use-t", () => ({
           citation_fetch_failed_hint: "Could not fetch this source.",
           citation_summary_empty: "No summary.",
         },
+        session_page: { retry: "Retry" },
       });
       return value;
     },
@@ -113,6 +129,60 @@ describe("ReportReader", () => {
     const card = dialog.querySelector("[role='document']");
     expect(card?.className).toMatch(/sm:max-w-/);
     expect(card?.className).toMatch(/sm:rounded/);
+  });
+
+  it("exposes four-state delivery modes inside the centered modal (LRM-993)", () => {
+    const { rerender } = render(
+      <ReportReader open onClose={vi.fn()} report={null} sources={[]} sessionStatus="drafting" />,
+    );
+    expect(screen.getByTestId("research-delivery-modal-card")).toHaveAttribute(
+      "data-delivery-mode",
+      "empty",
+    );
+    expect(screen.getByTestId("research-delivery-empty")).toBeInTheDocument();
+
+    rerender(
+      <ReportReader
+        open
+        onClose={vi.fn()}
+        report={null}
+        sources={[]}
+        sessionStatus="running"
+      />,
+    );
+    expect(screen.getByTestId("research-delivery-modal-card")).toHaveAttribute(
+      "data-delivery-mode",
+      "loading",
+    );
+    expect(screen.getByTestId("research-delivery-loading")).toBeInTheDocument();
+
+    rerender(
+      <ReportReader
+        open
+        onClose={vi.fn()}
+        report={null}
+        sources={[]}
+        error="boom"
+        onRetry={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("research-delivery-modal-card")).toHaveAttribute(
+      "data-delivery-mode",
+      "error",
+    );
+    expect(screen.getByTestId("research-delivery-error")).toBeInTheDocument();
+
+    rerender(
+      <ReportReader open onClose={vi.fn()} report={report} sources={sources} />,
+    );
+    expect(screen.getByTestId("research-delivery-modal-card")).toHaveAttribute(
+      "data-delivery-mode",
+      "running",
+    );
+    expect(screen.getByTestId("research-delivery-mode")).toHaveAttribute(
+      "data-delivery-mode",
+      "running",
+    );
   });
 
   it("renders in-body citation cards for structured report sections (LRM-821)", () => {

@@ -41,6 +41,7 @@ import {
 } from "../lib/fleet-step-cards";
 import { resolveCanvasBodyMode } from "../lib/canvas-body-mode";
 import { resolveChatDrawerMode } from "../lib/chat-drawer-mode";
+import { deliveryContentCount } from "../lib/delivery-mode";
 import {
   buildExplorationDimensions,
   buildHumanBoundary,
@@ -232,7 +233,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     return <ResearchSessionPageSkeleton />;
   }
 
-  if (isError || !data) {
+  // Keep successful snapshot on refetch failure so Delivery can show its error
+  // surface (LRM-993) instead of blanking the whole session shell.
+  if (!data) {
     return (
       <div
         role="alert"
@@ -745,6 +748,20 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         sources={sources}
         titleFallback={session.title}
         boundary={humanBoundary}
+        sessionStatus={session.status}
+        loading={
+          isFetching && deliveryContentCount(report, sources.length) <= 0
+        }
+        error={
+          isError
+            ? error instanceof Error && error.message
+              ? error.message
+              : t(($) => $.session_page.load_failed)
+            : null
+        }
+        onRetry={() => {
+          void refetch();
+        }}
       />
     </div>
   );

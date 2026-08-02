@@ -25,14 +25,14 @@ import (
 // the SQL WHERE clause would match no row.
 type fakeDiagnosisStateQueries struct {
 	mu       sync.Mutex
-	runs     map[string]db.InteractionDAGDiagnosisRun
-	segments map[string]db.InteractionDAGDiagnosisSegment // runID+"/"+segmentID
+	runs     map[string]db.InteractionDagDiagnosisRun
+	segments map[string]db.InteractionDagDiagnosisSegment // runID+"/"+segmentID
 }
 
 func newFakeDiagnosisStateQueries() *fakeDiagnosisStateQueries {
 	return &fakeDiagnosisStateQueries{
-		runs:     map[string]db.InteractionDAGDiagnosisRun{},
-		segments: map[string]db.InteractionDAGDiagnosisSegment{},
+		runs:     map[string]db.InteractionDagDiagnosisRun{},
+		segments: map[string]db.InteractionDagDiagnosisSegment{},
 	}
 }
 
@@ -41,7 +41,7 @@ func diagSegmentKey(runID, segmentID string) string { return runID + "/" + segme
 func (f *fakeDiagnosisStateQueries) CreateInteractionDAGDiagnosisRun(_ context.Context, arg db.CreateInteractionDAGDiagnosisRunParams) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.runs[arg.RunID] = db.InteractionDAGDiagnosisRun{
+	f.runs[arg.RunID] = db.InteractionDagDiagnosisRun{
 		RunID:                 arg.RunID,
 		ProjectID:             arg.ProjectID,
 		TaskID:                arg.TaskID,
@@ -53,17 +53,17 @@ func (f *fakeDiagnosisStateQueries) CreateInteractionDAGDiagnosisRun(_ context.C
 	return nil
 }
 
-func (f *fakeDiagnosisStateQueries) GetInteractionDAGDiagnosisRun(_ context.Context, runID string) (db.InteractionDAGDiagnosisRun, error) {
+func (f *fakeDiagnosisStateQueries) GetInteractionDAGDiagnosisRun(_ context.Context, runID string) (db.InteractionDagDiagnosisRun, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	row, ok := f.runs[runID]
 	if !ok {
-		return db.InteractionDAGDiagnosisRun{}, pgx.ErrNoRows
+		return db.InteractionDagDiagnosisRun{}, pgx.ErrNoRows
 	}
 	return row, nil
 }
 
-func (f *fakeDiagnosisStateQueries) GetResumableInteractionDAGDiagnosisRun(_ context.Context, arg db.GetResumableInteractionDAGDiagnosisRunParams) (db.InteractionDAGDiagnosisRun, error) {
+func (f *fakeDiagnosisStateQueries) GetResumableInteractionDAGDiagnosisRun(_ context.Context, arg db.GetResumableInteractionDAGDiagnosisRunParams) (db.InteractionDagDiagnosisRun, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, row := range f.runs {
@@ -72,10 +72,10 @@ func (f *fakeDiagnosisStateQueries) GetResumableInteractionDAGDiagnosisRun(_ con
 			return row, nil
 		}
 	}
-	return db.InteractionDAGDiagnosisRun{}, pgx.ErrNoRows
+	return db.InteractionDagDiagnosisRun{}, pgx.ErrNoRows
 }
 
-func (f *fakeDiagnosisStateQueries) GetLatestCompletedInteractionDAGDiagnosisRun(_ context.Context, arg db.GetLatestCompletedInteractionDAGDiagnosisRunParams) (db.InteractionDAGDiagnosisRun, error) {
+func (f *fakeDiagnosisStateQueries) GetLatestCompletedInteractionDAGDiagnosisRun(_ context.Context, arg db.GetLatestCompletedInteractionDAGDiagnosisRunParams) (db.InteractionDagDiagnosisRun, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, row := range f.runs {
@@ -83,7 +83,7 @@ func (f *fakeDiagnosisStateQueries) GetLatestCompletedInteractionDAGDiagnosisRun
 			return row, nil
 		}
 	}
-	return db.InteractionDAGDiagnosisRun{}, pgx.ErrNoRows
+	return db.InteractionDagDiagnosisRun{}, pgx.ErrNoRows
 }
 
 func (f *fakeDiagnosisStateQueries) FailInteractionDAGDiagnosisRun(_ context.Context, arg db.FailInteractionDAGDiagnosisRunParams) (int64, error) {
@@ -126,7 +126,7 @@ func (f *fakeDiagnosisStateQueries) CompleteInteractionDAGDiagnosisRun(_ context
 func (f *fakeDiagnosisStateQueries) CreateInteractionDAGDiagnosisSegment(_ context.Context, arg db.CreateInteractionDAGDiagnosisSegmentParams) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.segments[diagSegmentKey(arg.RunID, arg.SegmentID)] = db.InteractionDAGDiagnosisSegment{
+	f.segments[diagSegmentKey(arg.RunID, arg.SegmentID)] = db.InteractionDagDiagnosisSegment{
 		RunID:      arg.RunID,
 		SegmentID:  arg.SegmentID,
 		Ordinal:    arg.Ordinal,
@@ -136,23 +136,59 @@ func (f *fakeDiagnosisStateQueries) CreateInteractionDAGDiagnosisSegment(_ conte
 	return nil
 }
 
-func (f *fakeDiagnosisStateQueries) GetInteractionDAGDiagnosisSegment(_ context.Context, arg db.GetInteractionDAGDiagnosisSegmentParams) (db.InteractionDAGDiagnosisSegment, error) {
+func diagSegmentToGetRow(seg db.InteractionDagDiagnosisSegment) db.GetInteractionDAGDiagnosisSegmentRow {
+	return db.GetInteractionDAGDiagnosisSegmentRow{
+		RunID:                seg.RunID,
+		SegmentID:            seg.SegmentID,
+		Ordinal:              seg.Ordinal,
+		ExpectedMessageCount: seg.ExpectedMessageCount,
+		FetchedMessageCount:  seg.FetchedMessageCount,
+		ExpectedRewardCount:  seg.ExpectedRewardCount,
+		ExpectedRewardSeqs:   seg.ExpectedRewardSeqs,
+		RewardCount:          seg.RewardCount,
+		NextCursor:           seg.NextCursor,
+		Status:               seg.Status,
+		CreatedAt:            seg.CreatedAt,
+		UpdatedAt:            seg.UpdatedAt,
+		CompletedAt:          seg.CompletedAt,
+	}
+}
+
+func diagSegmentToListRow(seg db.InteractionDagDiagnosisSegment) db.ListInteractionDAGDiagnosisSegmentsRow {
+	return db.ListInteractionDAGDiagnosisSegmentsRow{
+		RunID:                seg.RunID,
+		SegmentID:            seg.SegmentID,
+		Ordinal:              seg.Ordinal,
+		ExpectedMessageCount: seg.ExpectedMessageCount,
+		FetchedMessageCount:  seg.FetchedMessageCount,
+		ExpectedRewardCount:  seg.ExpectedRewardCount,
+		ExpectedRewardSeqs:   seg.ExpectedRewardSeqs,
+		RewardCount:          seg.RewardCount,
+		NextCursor:           seg.NextCursor,
+		Status:               seg.Status,
+		CreatedAt:            seg.CreatedAt,
+		UpdatedAt:            seg.UpdatedAt,
+		CompletedAt:          seg.CompletedAt,
+	}
+}
+
+func (f *fakeDiagnosisStateQueries) GetInteractionDAGDiagnosisSegment(_ context.Context, arg db.GetInteractionDAGDiagnosisSegmentParams) (db.GetInteractionDAGDiagnosisSegmentRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	row, ok := f.segments[diagSegmentKey(arg.RunID, arg.SegmentID)]
 	if !ok {
-		return db.InteractionDAGDiagnosisSegment{}, pgx.ErrNoRows
+		return db.GetInteractionDAGDiagnosisSegmentRow{}, pgx.ErrNoRows
 	}
-	return row, nil
+	return diagSegmentToGetRow(row), nil
 }
 
-func (f *fakeDiagnosisStateQueries) ListInteractionDAGDiagnosisSegments(_ context.Context, runID string) ([]db.InteractionDAGDiagnosisSegment, error) {
+func (f *fakeDiagnosisStateQueries) ListInteractionDAGDiagnosisSegments(_ context.Context, runID string) ([]db.ListInteractionDAGDiagnosisSegmentsRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out []db.InteractionDAGDiagnosisSegment
+	var out []db.ListInteractionDAGDiagnosisSegmentsRow
 	for _, seg := range f.segments {
 		if seg.RunID == runID {
-			out = append(out, seg)
+			out = append(out, diagSegmentToListRow(seg))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Ordinal < out[j].Ordinal })
@@ -187,12 +223,15 @@ func (f *fakeDiagnosisStateQueries) AdvanceInteractionDAGDiagnosisSegmentFetch(_
 		return 0, pgx.ErrNoRows
 	}
 	// CAS predicate: only the current cursor holder may advance, and fetched
-	// counts only move forward.
-	if row.Status != string(SegmentDiagnosisInProgress) || row.NextCursor != arg.PrevCursor ||
+	// counts only move forward. Field names follow sqlc's $-position naming
+	// (see AdvanceInteractionDAGDiagnosisSegmentFetch's production call site):
+	// arg.NextCursor is the CAS check against the currently-held cursor,
+	// arg.NextCursor_2 is the new value being written.
+	if row.Status != string(SegmentDiagnosisInProgress) || row.NextCursor != arg.NextCursor ||
 		arg.FetchedMessageCount < row.FetchedMessageCount {
 		return 0, nil
 	}
-	row.NextCursor = arg.NextCursor
+	row.NextCursor = arg.NextCursor_2
 	row.FetchedMessageCount = arg.FetchedMessageCount
 	f.segments[key] = row
 	return 1, nil

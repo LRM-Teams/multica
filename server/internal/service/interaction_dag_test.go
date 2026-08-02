@@ -62,11 +62,11 @@ var _ MessageStore = (*fakeMessageStore)(nil)
 // fakeInteractionDAGStore is an in-memory InteractionDAGStore for unit tests.
 type fakeInteractionDAGStore struct {
 	mu                  sync.Mutex
-	sessionRuns         map[string]db.InteractionDAGSessionRun
+	sessionRuns         map[string]db.InteractionDagSessionRun
 	segmentSnapshots    []db.InsertInteractionDAGSegmentWithSnapshotParams
 	edges               []db.InsertInteractionDAGEdgeParams
 	taskMessages        map[string][]int32 // taskID -> list of seq numbers
-	stepRewards         []db.InteractionDAGStepReward
+	stepRewards         []db.InteractionDagStepReward
 	diagnosisTargetSeqs map[string][]int32
 	// order, when non-nil, records cross-helper call ordering by appending
 	// "RecordStepRewards" on each InsertInteractionDAGStepReward. nil-safe
@@ -82,9 +82,9 @@ type fakeInteractionDAGStore struct {
 
 func newFakeInteractionDAGStore() *fakeInteractionDAGStore {
 	return &fakeInteractionDAGStore{
-		sessionRuns:         map[string]db.InteractionDAGSessionRun{},
+		sessionRuns:         map[string]db.InteractionDagSessionRun{},
 		taskMessages:        map[string][]int32{},
-		stepRewards:         []db.InteractionDAGStepReward{},
+		stepRewards:         []db.InteractionDagStepReward{},
 		diagnosisTargetSeqs: map[string][]int32{},
 	}
 }
@@ -95,7 +95,7 @@ func (f *fakeInteractionDAGStore) UpsertInteractionDAGSessionRun(_ context.Conte
 	if f.upsertErr != nil {
 		return f.upsertErr
 	}
-	f.sessionRuns[arg.SessionID] = db.InteractionDAGSessionRun{
+	f.sessionRuns[arg.SessionID] = db.InteractionDagSessionRun{
 		SessionID:  arg.SessionID,
 		ProjectID:  arg.ProjectID,
 		AgentRunID: arg.AgentRunID,
@@ -104,15 +104,15 @@ func (f *fakeInteractionDAGStore) UpsertInteractionDAGSessionRun(_ context.Conte
 	return nil
 }
 
-func (f *fakeInteractionDAGStore) GetInteractionDAGSessionRun(_ context.Context, sessionID string) (db.InteractionDAGSessionRun, error) {
+func (f *fakeInteractionDAGStore) GetInteractionDAGSessionRun(_ context.Context, sessionID string) (db.InteractionDagSessionRun, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.getSessionRunErr != nil {
-		return db.InteractionDAGSessionRun{}, f.getSessionRunErr
+		return db.InteractionDagSessionRun{}, f.getSessionRunErr
 	}
 	row, ok := f.sessionRuns[sessionID]
 	if !ok {
-		return db.InteractionDAGSessionRun{}, pgx.ErrNoRows
+		return db.InteractionDagSessionRun{}, pgx.ErrNoRows
 	}
 	return row, nil
 }
@@ -176,13 +176,13 @@ func (f *fakeInteractionDAGStore) InsertInteractionDAGEdge(_ context.Context, ar
 // latest segment recorded for the run (one-segment-per-task in change 1; the
 // reverse scan keeps this stable under a future multi-segment model, mirroring
 // the real query's ORDER BY created_at DESC LIMIT 1).
-func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByAgentRun(_ context.Context, agentRunID string) (db.InteractionDAGSegment, error) {
+func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByAgentRun(_ context.Context, agentRunID string) (db.GetInteractionDAGSegmentByAgentRunRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := len(f.segmentSnapshots) - 1; i >= 0; i-- {
 		s := f.segmentSnapshots[i]
 		if s.AgentRunID == agentRunID {
-			return db.InteractionDAGSegment{
+			return db.GetInteractionDAGSegmentByAgentRunRow{
 				SegmentID:                 s.SegmentID,
 				ProjectID:                 s.ProjectID,
 				AgentRunID:                s.AgentRunID,
@@ -197,17 +197,17 @@ func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByAgentRun(_ context.C
 			}, nil
 		}
 	}
-	return db.InteractionDAGSegment{}, pgx.ErrNoRows
+	return db.GetInteractionDAGSegmentByAgentRunRow{}, pgx.ErrNoRows
 }
 
 // GetInteractionDAGSegmentByID satisfies InteractionDAGStore. Returns the segment
 // with the given segment_id, or pgx.ErrNoRows if not found.
-func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByID(_ context.Context, segmentID string) (db.InteractionDAGSegment, error) {
+func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByID(_ context.Context, segmentID string) (db.GetInteractionDAGSegmentByIDRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, s := range f.segmentSnapshots {
 		if s.SegmentID == segmentID {
-			return db.InteractionDAGSegment{
+			return db.GetInteractionDAGSegmentByIDRow{
 				SegmentID:                 s.SegmentID,
 				ProjectID:                 s.ProjectID,
 				AgentRunID:                s.AgentRunID,
@@ -222,22 +222,22 @@ func (f *fakeInteractionDAGStore) GetInteractionDAGSegmentByID(_ context.Context
 			}, nil
 		}
 	}
-	return db.InteractionDAGSegment{}, pgx.ErrNoRows
+	return db.GetInteractionDAGSegmentByIDRow{}, pgx.ErrNoRows
 }
 
 // ListInteractionDAGSegmentsForProject satisfies InteractionDAGStore (U8
 // assembly). Returns segments recorded for projectID, ordered by insertion
 // order (the fake appends; the real query orders by created_at). Converts the
-// stored insert params to InteractionDAGSegment row structs.
-func (f *fakeInteractionDAGStore) ListInteractionDAGSegmentsForProject(_ context.Context, projectID string) ([]db.InteractionDAGSegment, error) {
+// stored insert params to InteractionDagSegment row structs.
+func (f *fakeInteractionDAGStore) ListInteractionDAGSegmentsForProject(_ context.Context, projectID string) ([]db.ListInteractionDAGSegmentsForProjectRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := []db.InteractionDAGSegment{}
+	out := []db.ListInteractionDAGSegmentsForProjectRow{}
 	for _, s := range f.segmentSnapshots {
 		if s.ProjectID != projectID {
 			continue
 		}
-		out = append(out, db.InteractionDAGSegment{
+		out = append(out, db.ListInteractionDAGSegmentsForProjectRow{
 			SegmentID:                 s.SegmentID,
 			ProjectID:                 s.ProjectID,
 			AgentRunID:                s.AgentRunID,
@@ -256,16 +256,16 @@ func (f *fakeInteractionDAGStore) ListInteractionDAGSegmentsForProject(_ context
 
 // ListInteractionDAGEdgesForProject satisfies InteractionDAGStore (U8 assembly).
 // Returns edges recorded for projectID in insertion order (real query orders by
-// id). Converts insert params to InteractionDAGEdge row structs.
-func (f *fakeInteractionDAGStore) ListInteractionDAGEdgesForProject(_ context.Context, projectID string) ([]db.InteractionDAGEdge, error) {
+// id). Converts insert params to InteractionDagEdge row structs.
+func (f *fakeInteractionDAGStore) ListInteractionDAGEdgesForProject(_ context.Context, projectID string) ([]db.InteractionDagEdge, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := []db.InteractionDAGEdge{}
+	out := []db.InteractionDagEdge{}
 	for i, e := range f.edges {
 		if e.ProjectID != projectID {
 			continue
 		}
-		out = append(out, db.InteractionDAGEdge{
+		out = append(out, db.InteractionDagEdge{
 			ID:           int64(i + 1), // stable synthetic id mirroring bigserial ordering
 			ProjectID:    e.ProjectID,
 			SrcSegmentID: e.SrcSegmentID,
@@ -278,10 +278,10 @@ func (f *fakeInteractionDAGStore) ListInteractionDAGEdgesForProject(_ context.Co
 
 // ListInteractionDAGSessionRunsForProject satisfies InteractionDAGStore (U8
 // assembly). Returns session_run rows for projectID.
-func (f *fakeInteractionDAGStore) ListInteractionDAGSessionRunsForProject(_ context.Context, projectID string) ([]db.InteractionDAGSessionRun, error) {
+func (f *fakeInteractionDAGStore) ListInteractionDAGSessionRunsForProject(_ context.Context, projectID string) ([]db.InteractionDagSessionRun, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := []db.InteractionDAGSessionRun{}
+	out := []db.InteractionDagSessionRun{}
 	for _, r := range f.sessionRuns {
 		if r.ProjectID != projectID {
 			continue
@@ -296,17 +296,17 @@ func (f *fakeInteractionDAGStore) ListInteractionDAGSessionRunsForProject(_ cont
 // insert params (the fake stores them together via
 // InsertInteractionDAGSegmentWithSnapshot), filtered by projectID. Mirrors the
 // real query's join through interaction_dag_segment on segment_id.
-func (f *fakeInteractionDAGStore) ListInteractionDAGEnvSnapshotsForProject(_ context.Context, projectID string) ([]db.InteractionDAGEnvSnapshot, error) {
+func (f *fakeInteractionDAGStore) ListInteractionDAGEnvSnapshotsForProject(_ context.Context, projectID string) ([]db.InteractionDagEnvSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := []db.InteractionDAGEnvSnapshot{}
+	out := []db.InteractionDagEnvSnapshot{}
 	for _, s := range f.segmentSnapshots {
 		if s.ProjectID != projectID {
 			continue
 		}
-		out = append(out, db.InteractionDAGEnvSnapshot{
+		out = append(out, db.InteractionDagEnvSnapshot{
 			SegmentID:       s.SegmentID,
-			SandboxIDs:      s.SandboxIDs,
+			SandboxIds:      s.SandboxIds,
 			IssueSnapshotID: s.IssueSnapshotID,
 			EnvState:        s.EnvState,
 		})
@@ -322,15 +322,15 @@ func (f *fakeInteractionDAGStore) InsertInteractionDAGStepReward(_ context.Conte
 	}
 	for i, sr := range f.stepRewards {
 		if sr.SegmentID == arg.SegmentID && sr.Seq == arg.Seq {
-			f.stepRewards[i] = db.InteractionDAGStepReward{SegmentID: arg.SegmentID, Seq: arg.Seq, Score: arg.Score, Rationale: arg.Rationale}
+			f.stepRewards[i] = db.InteractionDagStepReward{SegmentID: arg.SegmentID, Seq: arg.Seq, Score: arg.Score, Rationale: arg.Rationale}
 			return nil
 		}
 	}
-	f.stepRewards = append(f.stepRewards, db.InteractionDAGStepReward{SegmentID: arg.SegmentID, Seq: arg.Seq, Score: arg.Score, Rationale: arg.Rationale})
+	f.stepRewards = append(f.stepRewards, db.InteractionDagStepReward{SegmentID: arg.SegmentID, Seq: arg.Seq, Score: arg.Score, Rationale: arg.Rationale})
 	return nil
 }
 
-func (f *fakeInteractionDAGStore) ListInteractionDAGStepRewardsForProject(_ context.Context, projectID string) ([]db.InteractionDAGStepReward, error) {
+func (f *fakeInteractionDAGStore) ListInteractionDAGStepRewardsForProject(_ context.Context, projectID string) ([]db.InteractionDagStepReward, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	projSegs := map[string]bool{}
@@ -339,7 +339,7 @@ func (f *fakeInteractionDAGStore) ListInteractionDAGStepRewardsForProject(_ cont
 			projSegs[s.SegmentID] = true
 		}
 	}
-	out := []db.InteractionDAGStepReward{}
+	out := []db.InteractionDagStepReward{}
 	for _, sr := range f.stepRewards {
 		if projSegs[sr.SegmentID] {
 			out = append(out, sr)
@@ -348,7 +348,7 @@ func (f *fakeInteractionDAGStore) ListInteractionDAGStepRewardsForProject(_ cont
 	return out, nil
 }
 
-func (f *fakeInteractionDAGStore) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(_ context.Context, projectID string) ([]db.InteractionDAGDiagnosisTarget, error) {
+func (f *fakeInteractionDAGStore) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(_ context.Context, projectID string) ([]db.ListLatestCompletedInteractionDAGDiagnosisTargetsForProjectRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	projectSegments := make(map[string]struct{})
@@ -357,7 +357,7 @@ func (f *fakeInteractionDAGStore) ListLatestCompletedInteractionDAGDiagnosisTarg
 			projectSegments[segment.SegmentID] = struct{}{}
 		}
 	}
-	targets := make([]db.InteractionDAGDiagnosisTarget, 0, len(projectSegments))
+	targets := make([]db.ListLatestCompletedInteractionDAGDiagnosisTargetsForProjectRow, 0, len(projectSegments))
 	for _, segment := range f.segmentSnapshots {
 		if _, exists := projectSegments[segment.SegmentID]; !exists {
 			continue
@@ -370,7 +370,7 @@ func (f *fakeInteractionDAGStore) ListLatestCompletedInteractionDAGDiagnosisTarg
 		if err != nil {
 			return nil, err
 		}
-		targets = append(targets, db.InteractionDAGDiagnosisTarget{SegmentID: segment.SegmentID, ExpectedRewardSeqs: encoded})
+		targets = append(targets, db.ListLatestCompletedInteractionDAGDiagnosisTargetsForProjectRow{SegmentID: segment.SegmentID, ExpectedRewardSeqs: encoded})
 	}
 	return targets, nil
 }
@@ -607,7 +607,7 @@ func TestInteractionDAG_CloseSegmentForEvent_RecordsSegment(t *testing.T) {
 	assert.JSONEq(t, `{"input_ids":{"shard_id":"shard-1","node_addr":"10.0.0.1:8000"},"attention_mask":{"shard_id":"shard-2","node_addr":"10.0.0.1:8000"}}`, string(row.TensorRef))
 	assert.Equal(t, ptrText("delegation"), row.ClosingEvent)
 	// Env-snapshot fields are 1:1 with the segment (atomic insert).
-	assert.JSONEq(t, `["sbx-1"]`, string(row.SandboxIDs))
+	assert.JSONEq(t, `["sbx-1"]`, string(row.SandboxIds))
 	assert.Equal(t, ptrText("snap-1"), row.IssueSnapshotID)
 	assert.JSONEq(t, `{"k":"v"}`, string(row.EnvState))
 }
@@ -1017,7 +1017,7 @@ func TestInteractionDAGQueries_Integration(t *testing.T) {
 		TrajectorySource: "areal_tensor",
 		Trainable:        true,
 		Trajectory:       []byte(`[]`),
-		SandboxIDs:       []byte(`["sbx"]`),
+		SandboxIds:       []byte(`["sbx"]`),
 		EnvState:         []byte(`{}`),
 	}))
 
@@ -1081,7 +1081,7 @@ func TestAssembleAssembledDag_ProjectsRecordedRows(t *testing.T) {
 		TrajectorySource: "areal_tensor",
 		Trainable:        true,
 		Trajectory:       []byte(`[]`),
-		SandboxIDs:       []byte(`["sbx-1"]`), IssueSnapshotID: ptrText("snap-1"),
+		SandboxIds:       []byte(`["sbx-1"]`), IssueSnapshotID: ptrText("snap-1"),
 		EnvState: []byte(`{"k":"v"}`),
 	}))
 
@@ -1179,7 +1179,7 @@ func TestAssembleAssembledDag_EdgesTypedAndAcyclic(t *testing.T) {
 				}
 				return ptrText(s.closing)
 			}(),
-			SandboxIDs: []byte(`[]`), EnvState: []byte(`{}`),
+			SandboxIds: []byte(`[]`), EnvState: []byte(`{}`),
 		}))
 	}
 	// Typed edges forming an acyclic graph: a->b (delegation), b->c (mention),

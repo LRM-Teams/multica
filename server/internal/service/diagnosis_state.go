@@ -80,14 +80,14 @@ type SegmentDiagnosisCheckpoint struct {
 // that honors the same compare-and-set predicates.
 type diagnosisStateQueries interface {
 	CreateInteractionDAGDiagnosisRun(ctx context.Context, arg db.CreateInteractionDAGDiagnosisRunParams) error
-	GetInteractionDAGDiagnosisRun(ctx context.Context, runID string) (db.InteractionDAGDiagnosisRun, error)
-	GetResumableInteractionDAGDiagnosisRun(ctx context.Context, arg db.GetResumableInteractionDAGDiagnosisRunParams) (db.InteractionDAGDiagnosisRun, error)
-	GetLatestCompletedInteractionDAGDiagnosisRun(ctx context.Context, arg db.GetLatestCompletedInteractionDAGDiagnosisRunParams) (db.InteractionDAGDiagnosisRun, error)
+	GetInteractionDAGDiagnosisRun(ctx context.Context, runID string) (db.InteractionDagDiagnosisRun, error)
+	GetResumableInteractionDAGDiagnosisRun(ctx context.Context, arg db.GetResumableInteractionDAGDiagnosisRunParams) (db.InteractionDagDiagnosisRun, error)
+	GetLatestCompletedInteractionDAGDiagnosisRun(ctx context.Context, arg db.GetLatestCompletedInteractionDAGDiagnosisRunParams) (db.InteractionDagDiagnosisRun, error)
 	FailInteractionDAGDiagnosisRun(ctx context.Context, arg db.FailInteractionDAGDiagnosisRunParams) (int64, error)
 	CompleteInteractionDAGDiagnosisRun(ctx context.Context, runID string) (int64, error)
 	CreateInteractionDAGDiagnosisSegment(ctx context.Context, arg db.CreateInteractionDAGDiagnosisSegmentParams) error
-	GetInteractionDAGDiagnosisSegment(ctx context.Context, arg db.GetInteractionDAGDiagnosisSegmentParams) (db.InteractionDAGDiagnosisSegment, error)
-	ListInteractionDAGDiagnosisSegments(ctx context.Context, runID string) ([]db.InteractionDAGDiagnosisSegment, error)
+	GetInteractionDAGDiagnosisSegment(ctx context.Context, arg db.GetInteractionDAGDiagnosisSegmentParams) (db.GetInteractionDAGDiagnosisSegmentRow, error)
+	ListInteractionDAGDiagnosisSegments(ctx context.Context, runID string) ([]db.ListInteractionDAGDiagnosisSegmentsRow, error)
 	StartInteractionDAGDiagnosisSegment(ctx context.Context, arg db.StartInteractionDAGDiagnosisSegmentParams) (int64, error)
 	AdvanceInteractionDAGDiagnosisSegmentFetch(ctx context.Context, arg db.AdvanceInteractionDAGDiagnosisSegmentFetchParams) (int64, error)
 	SetInteractionDAGDiagnosisSegmentRewardCount(ctx context.Context, arg db.SetInteractionDAGDiagnosisSegmentRewardCountParams) (int64, error)
@@ -110,7 +110,7 @@ func NewDiagnosisStateStore(q diagnosisStateQueries) *DiagnosisStateStore {
 	return &DiagnosisStateStore{q: q}
 }
 
-func diagnosisRunFromRow(row db.InteractionDAGDiagnosisRun) (DiagnosisRunCheckpoint, error) {
+func diagnosisRunFromRow(row db.InteractionDagDiagnosisRun) (DiagnosisRunCheckpoint, error) {
 	var segmentIDs []string
 	if len(row.OrderedSegmentIds) > 0 {
 		if err := json.Unmarshal(row.OrderedSegmentIds, &segmentIDs); err != nil {
@@ -130,7 +130,7 @@ func diagnosisRunFromRow(row db.InteractionDAGDiagnosisRun) (DiagnosisRunCheckpo
 	}, nil
 }
 
-func diagnosisSegmentFromRow(row db.InteractionDAGDiagnosisSegment) SegmentDiagnosisCheckpoint {
+func diagnosisSegmentFromRow(row db.InteractionDagDiagnosisSegment) SegmentDiagnosisCheckpoint {
 	var expectedRewardSeqs []int32
 	if len(row.ExpectedRewardSeqs) > 0 {
 		_ = json.Unmarshal(row.ExpectedRewardSeqs, &expectedRewardSeqs)
@@ -225,7 +225,21 @@ func (s *DiagnosisStateStore) GetSegment(ctx context.Context, runID, segmentID s
 		}
 		return SegmentDiagnosisCheckpoint{}, err
 	}
-	return diagnosisSegmentFromRow(row), nil
+	return diagnosisSegmentFromRow(db.InteractionDagDiagnosisSegment{
+		RunID:                row.RunID,
+		SegmentID:            row.SegmentID,
+		Ordinal:              row.Ordinal,
+		ExpectedMessageCount: row.ExpectedMessageCount,
+		FetchedMessageCount:  row.FetchedMessageCount,
+		ExpectedRewardCount:  row.ExpectedRewardCount,
+		ExpectedRewardSeqs:   row.ExpectedRewardSeqs,
+		RewardCount:          row.RewardCount,
+		NextCursor:           row.NextCursor,
+		Status:               row.Status,
+		CreatedAt:            row.CreatedAt,
+		UpdatedAt:            row.UpdatedAt,
+		CompletedAt:          row.CompletedAt,
+	}), nil
 }
 
 // ListSegments returns all segment checkpoints for a run in ordinal order.
@@ -236,7 +250,21 @@ func (s *DiagnosisStateStore) ListSegments(ctx context.Context, runID string) ([
 	}
 	out := make([]SegmentDiagnosisCheckpoint, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, diagnosisSegmentFromRow(row))
+		out = append(out, diagnosisSegmentFromRow(db.InteractionDagDiagnosisSegment{
+			RunID:                row.RunID,
+			SegmentID:            row.SegmentID,
+			Ordinal:              row.Ordinal,
+			ExpectedMessageCount: row.ExpectedMessageCount,
+			FetchedMessageCount:  row.FetchedMessageCount,
+			ExpectedRewardCount:  row.ExpectedRewardCount,
+			ExpectedRewardSeqs:   row.ExpectedRewardSeqs,
+			RewardCount:          row.RewardCount,
+			NextCursor:           row.NextCursor,
+			Status:               row.Status,
+			CreatedAt:            row.CreatedAt,
+			UpdatedAt:            row.UpdatedAt,
+			CompletedAt:          row.CompletedAt,
+		}))
 	}
 	return out, nil
 }
@@ -329,10 +357,16 @@ func (s *DiagnosisStateStore) RecordSegmentPage(ctx context.Context, runID, segm
 		return fmt.Errorf("%w: fetched count regressed for segment %s", ErrDiagnosisInvalidTransition, segmentID)
 	}
 	applied, err := s.q.AdvanceInteractionDAGDiagnosisSegmentFetch(ctx, db.AdvanceInteractionDAGDiagnosisSegmentFetchParams{
-		RunID:               runID,
-		SegmentID:           segmentID,
-		PrevCursor:          prevCursor,
-		NextCursor:          nextCursor,
+		RunID: runID,
+		SegmentID: segmentID,
+		// sqlc numbers params by $-position, not by intent: $3 (WHERE
+		// next_cursor = $3, the CAS check against the currently-held
+		// cursor) becomes the first-seen "NextCursor" field; $4 (SET
+		// next_cursor = $4, the new value) becomes "NextCursor_2". Despite
+		// the field names, NextCursor here is the CAS predicate (prev) and
+		// NextCursor_2 is the new value being written.
+		NextCursor:          prevCursor,
+		NextCursor_2:        nextCursor,
 		FetchedMessageCount: int32(fetchedTotal),
 	})
 	if err != nil {

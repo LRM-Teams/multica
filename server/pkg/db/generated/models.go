@@ -709,6 +709,87 @@ type InboxItem struct {
 	Details       []byte             `json:"details"`
 }
 
+type InteractionDagDiagnosisRun struct {
+	RunID                 string             `json:"run_id"`
+	ProjectID             string             `json:"project_id"`
+	TaskID                string             `json:"task_id"`
+	TopologyHash          string             `json:"topology_hash"`
+	OrderedSegmentIds     []byte             `json:"ordered_segment_ids"`
+	Status                string             `json:"status"`
+	CurrentSegmentOrdinal int32              `json:"current_segment_ordinal"`
+	PiSessionID           string             `json:"pi_session_id"`
+	LastError             string             `json:"last_error"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	CompletedAt           pgtype.Timestamptz `json:"completed_at"`
+}
+
+type InteractionDagDiagnosisSegment struct {
+	RunID                string             `json:"run_id"`
+	SegmentID            string             `json:"segment_id"`
+	Ordinal              int32              `json:"ordinal"`
+	ExpectedMessageCount int32              `json:"expected_message_count"`
+	FetchedMessageCount  int32              `json:"fetched_message_count"`
+	ExpectedRewardCount  int32              `json:"expected_reward_count"`
+	RewardCount          int32              `json:"reward_count"`
+	NextCursor           string             `json:"next_cursor"`
+	Status               string             `json:"status"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	CompletedAt          pgtype.Timestamptz `json:"completed_at"`
+	ExpectedRewardSeqs   []byte             `json:"expected_reward_seqs"`
+}
+
+type InteractionDagEdge struct {
+	ID           int64              `json:"id"`
+	ProjectID    string             `json:"project_id"`
+	SrcSegmentID string             `json:"src_segment_id"`
+	DstSegmentID string             `json:"dst_segment_id"`
+	Type         string             `json:"type"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type InteractionDagEnvSnapshot struct {
+	SegmentID       string      `json:"segment_id"`
+	SandboxIds      []byte      `json:"sandbox_ids"`
+	IssueSnapshotID pgtype.Text `json:"issue_snapshot_id"`
+	EnvState        []byte      `json:"env_state"`
+}
+
+type InteractionDagSegment struct {
+	SegmentID                 string             `json:"segment_id"`
+	ProjectID                 string             `json:"project_id"`
+	AgentRunID                string             `json:"agent_run_id"`
+	IssueID                   pgtype.Text        `json:"issue_id"`
+	TaskID                    pgtype.Text        `json:"task_id"`
+	TrajectoryID              pgtype.Int8        `json:"trajectory_id"`
+	TensorRef                 []byte             `json:"tensor_ref"`
+	ClosingEvent              pgtype.Text        `json:"closing_event"`
+	ClosingEventTargetSegment pgtype.Text        `json:"closing_event_target_segment"`
+	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
+	StartSeq                  int32              `json:"start_seq"`
+	EndSeq                    int32              `json:"end_seq"`
+	TrajectorySource          string             `json:"trajectory_source"`
+	Trainable                 bool               `json:"trainable"`
+	Trajectory                []byte             `json:"trajectory"`
+}
+
+type InteractionDagSessionRun struct {
+	SessionID  string             `json:"session_id"`
+	ProjectID  string             `json:"project_id"`
+	AgentRunID string             `json:"agent_run_id"`
+	IssueID    pgtype.Text        `json:"issue_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type InteractionDagStepReward struct {
+	SegmentID string             `json:"segment_id"`
+	Seq       int32              `json:"seq"`
+	Score     int32              `json:"score"`
+	Rationale string             `json:"rationale"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Issue struct {
 	ID                 pgtype.UUID        `json:"id"`
 	WorkspaceID        pgtype.UUID        `json:"workspace_id"`

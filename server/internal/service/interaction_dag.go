@@ -35,23 +35,23 @@ var validEdgeTypes = map[string]bool{
 // through. *db.Queries satisfies it; tests inject a fake.
 type InteractionDAGStore interface {
 	UpsertInteractionDAGSessionRun(ctx context.Context, arg db.UpsertInteractionDAGSessionRunParams) error
-	GetInteractionDAGSessionRun(ctx context.Context, sessionID string) (db.InteractionDAGSessionRun, error)
+	GetInteractionDAGSessionRun(ctx context.Context, sessionID string) (db.InteractionDagSessionRun, error)
 	InsertInteractionDAGSegmentWithSnapshot(ctx context.Context, arg db.InsertInteractionDAGSegmentWithSnapshotParams) error
 	InsertInteractionDAGEdge(ctx context.Context, arg db.InsertInteractionDAGEdgeParams) error
-	GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (db.InteractionDAGSegment, error)
-	GetInteractionDAGSegmentByID(ctx context.Context, segmentID string) (db.InteractionDAGSegment, error)
+	GetInteractionDAGSegmentByAgentRun(ctx context.Context, agentRunID string) (db.GetInteractionDAGSegmentByAgentRunRow, error)
+	GetInteractionDAGSegmentByID(ctx context.Context, segmentID string) (db.GetInteractionDAGSegmentByIDRow, error)
 	GetLastEndSeqForAgentRun(ctx context.Context, agentRunID string) (int32, error)
 	GetMaxTaskMessageSeq(ctx context.Context, taskIDText string) (int32, error)
 
 	// Read-only assembly queries (U8 AssembleAssembledDag). Each filters by
 	// project_id; env_snapshot joins through segment (no project_id column).
-	ListInteractionDAGSegmentsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGSegment, error)
-	ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]db.InteractionDAGEdge, error)
-	ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGSessionRun, error)
-	ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGEnvSnapshot, error)
+	ListInteractionDAGSegmentsForProject(ctx context.Context, projectID string) ([]db.ListInteractionDAGSegmentsForProjectRow, error)
+	ListInteractionDAGEdgesForProject(ctx context.Context, projectID string) ([]db.InteractionDagEdge, error)
+	ListInteractionDAGSessionRunsForProject(ctx context.Context, projectID string) ([]db.InteractionDagSessionRun, error)
+	ListInteractionDAGEnvSnapshotsForProject(ctx context.Context, projectID string) ([]db.InteractionDagEnvSnapshot, error)
 	InsertInteractionDAGStepReward(ctx context.Context, arg db.InsertInteractionDAGStepRewardParams) error
-	ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGStepReward, error)
-	ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ctx context.Context, projectID string) ([]db.InteractionDAGDiagnosisTarget, error)
+	ListInteractionDAGStepRewardsForProject(ctx context.Context, projectID string) ([]db.InteractionDagStepReward, error)
+	ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ctx context.Context, projectID string) ([]db.ListLatestCompletedInteractionDAGDiagnosisTargetsForProjectRow, error)
 }
 
 // MessageStore is the DB seam for accessing task messages.
@@ -253,7 +253,7 @@ func (s *InteractionDAGService) CloseSegmentForEvent(
 		ClosingEvent:     pgText(closingEvent),
 		StartSeq:         startSeq,
 		EndSeq:           endSeq,
-		SandboxIDs:       sandboxIDs,
+		SandboxIds:       sandboxIDs,
 		IssueSnapshotID:  issueSnapshotID,
 		EnvState:         envState,
 	}); err != nil {
@@ -358,7 +358,7 @@ func (s *InteractionDAGService) RecordLocalSegmentForEvent(
 		TrajectorySource: "task_messages",
 		Trainable:        false,
 		Trajectory:       trajectory,
-		SandboxIDs:       sandboxIDs,
+		SandboxIds:       sandboxIDs,
 		IssueSnapshotID:  issueSnapshotID,
 		EnvState:         envState,
 	}); err != nil {
@@ -544,7 +544,7 @@ func (s *InteractionDAGService) AssembleAssembledDag(ctx context.Context, projec
 	// Index env_snapshots by segment_id for an O(1) 1:1 join (the atomic CTE
 	// in CloseSegmentForEvent guarantees every segment has exactly one snapshot;
 	// the map makes assembly defensive if that invariant ever drifts).
-	snapBySeg := make(map[string]db.InteractionDAGEnvSnapshot, len(snaps))
+	snapBySeg := make(map[string]db.InteractionDagEnvSnapshot, len(snaps))
 	for _, sn := range snaps {
 		snapBySeg[sn.SegmentID] = sn
 	}
@@ -650,9 +650,9 @@ func (s *InteractionDAGService) RecordStepRewards(ctx context.Context, projectID
 // env_state). It is the inverse of encodeEnvSnapshot: the jsonb columns are
 // passed through verbatim as json.RawMessage (no re-decode/re-encode), and the
 // nullable issue_snapshot_id becomes *string (nil -> JSON null).
-func assembleEnvSnapshot(sn db.InteractionDAGEnvSnapshot) AssembledEnvSnapshot {
+func assembleEnvSnapshot(sn db.InteractionDagEnvSnapshot) AssembledEnvSnapshot {
 	out := AssembledEnvSnapshot{
-		SandboxIDs: json.RawMessage(sn.SandboxIDs),
+		SandboxIDs: json.RawMessage(sn.SandboxIds),
 		EnvState:   json.RawMessage(sn.EnvState),
 	}
 	if sn.IssueSnapshotID.Valid {

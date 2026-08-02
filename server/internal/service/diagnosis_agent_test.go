@@ -149,6 +149,52 @@ func TestNewDiagnosisAgentRunner_InjectsBackend(t *testing.T) {
 	}
 }
 
+// diagSegmentToGetByIDRow and diagSegmentToListForProjectRow convert the
+// shared db.InteractionDagSegment test fixture into the two distinct
+// query-specific row types GetInteractionDAGSegmentByID/
+// ListInteractionDAGSegmentsForProject return (identical fields, different
+// generated types since neither query is a plain SELECT * reusing the table
+// model 1:1 for a mock's return type).
+func diagSegmentToGetByIDRow(seg db.InteractionDagSegment) db.GetInteractionDAGSegmentByIDRow {
+	return db.GetInteractionDAGSegmentByIDRow{
+		SegmentID:                 seg.SegmentID,
+		ProjectID:                 seg.ProjectID,
+		AgentRunID:                seg.AgentRunID,
+		IssueID:                   seg.IssueID,
+		TaskID:                    seg.TaskID,
+		TrajectoryID:              seg.TrajectoryID,
+		TensorRef:                 seg.TensorRef,
+		ClosingEvent:              seg.ClosingEvent,
+		ClosingEventTargetSegment: seg.ClosingEventTargetSegment,
+		StartSeq:                  seg.StartSeq,
+		EndSeq:                    seg.EndSeq,
+		TrajectorySource:          seg.TrajectorySource,
+		Trainable:                 seg.Trainable,
+		Trajectory:                seg.Trajectory,
+		CreatedAt:                 seg.CreatedAt,
+	}
+}
+
+func diagSegmentToListForProjectRow(seg db.InteractionDagSegment) db.ListInteractionDAGSegmentsForProjectRow {
+	return db.ListInteractionDAGSegmentsForProjectRow{
+		SegmentID:                 seg.SegmentID,
+		ProjectID:                 seg.ProjectID,
+		AgentRunID:                seg.AgentRunID,
+		IssueID:                   seg.IssueID,
+		TaskID:                    seg.TaskID,
+		TrajectoryID:              seg.TrajectoryID,
+		TensorRef:                 seg.TensorRef,
+		ClosingEvent:              seg.ClosingEvent,
+		ClosingEventTargetSegment: seg.ClosingEventTargetSegment,
+		StartSeq:                  seg.StartSeq,
+		EndSeq:                    seg.EndSeq,
+		TrajectorySource:          seg.TrajectorySource,
+		Trainable:                 seg.Trainable,
+		Trajectory:                seg.Trajectory,
+		CreatedAt:                 seg.CreatedAt,
+	}
+}
+
 // newDiagnosisStores builds a MockDiagnosisStores (satisfying both DAGStore and
 // MessageStore) for one root segment "seg-diag-1" with two assistant messages
 // and a task issue. It is the happy-path fixture for the rich-prompt Diagnose
@@ -156,7 +202,7 @@ func TestNewDiagnosisAgentRunner_InjectsBackend(t *testing.T) {
 func newDiagnosisStores(t *testing.T, projectID, workspaceID pgtype.UUID) *MockDiagnosisStores {
 	t.Helper()
 	m := new(MockDiagnosisStores)
-	seg := db.InteractionDAGSegment{
+	seg := db.InteractionDagSegment{
 		SegmentID:  diagSegmentID,
 		ProjectID:  projectID.String(),
 		AgentRunID: diagAgentRunID,
@@ -172,9 +218,9 @@ func newDiagnosisStores(t *testing.T, projectID, workspaceID pgtype.UUID) *MockD
 	m.On("GetProjectInWorkspace", mock.Anything, mock.MatchedBy(func(a db.GetProjectInWorkspaceParams) bool {
 		return a.ID == projectID && a.WorkspaceID == workspaceID
 	})).Return(db.Project{ID: projectID, WorkspaceID: workspaceID}, nil)
-	m.On("ListInteractionDAGSegmentsForProject", mock.Anything, projectID.String()).Return([]db.InteractionDAGSegment{seg}, nil)
-	m.On("ListInteractionDAGEdgesForProject", mock.Anything, projectID.String()).Return([]db.InteractionDAGEdge{}, nil)
-	m.On("GetInteractionDAGSegmentByID", mock.Anything, diagSegmentID).Return(seg, nil)
+	m.On("ListInteractionDAGSegmentsForProject", mock.Anything, projectID.String()).Return([]db.ListInteractionDAGSegmentsForProjectRow{diagSegmentToListForProjectRow(seg)}, nil)
+	m.On("ListInteractionDAGEdgesForProject", mock.Anything, projectID.String()).Return([]db.InteractionDagEdge{}, nil)
+	m.On("GetInteractionDAGSegmentByID", mock.Anything, diagSegmentID).Return(diagSegmentToGetByIDRow(seg), nil)
 	m.On("MessagesForTaskInRange", mock.Anything, diagAgentRunID, int32(1), int32(2)).Return(msgs, nil)
 	// Root segment (no incoming edge) -> AgentRunID is the root task ID (D8).
 	m.On("GetIssueForTask", mock.Anything, diagAgentRunID).Return(db.Issue{
@@ -297,8 +343,8 @@ func TestDiagnose_NoSegmentsErrors(t *testing.T) {
 	m.On("GetProjectInWorkspace", mock.Anything, mock.MatchedBy(func(a db.GetProjectInWorkspaceParams) bool {
 		return a.ID == projectID && a.WorkspaceID == workspaceID
 	})).Return(db.Project{ID: projectID, WorkspaceID: workspaceID}, nil)
-	m.On("ListInteractionDAGSegmentsForProject", mock.Anything, projectID.String()).Return([]db.InteractionDAGSegment{}, nil)
-	m.On("ListInteractionDAGEdgesForProject", mock.Anything, projectID.String()).Return([]db.InteractionDAGEdge{}, nil)
+	m.On("ListInteractionDAGSegmentsForProject", mock.Anything, projectID.String()).Return([]db.ListInteractionDAGSegmentsForProjectRow{}, nil)
+	m.On("ListInteractionDAGEdgesForProject", mock.Anything, projectID.String()).Return([]db.InteractionDagEdge{}, nil)
 
 	fb := &fakeBackend{}
 	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{ScoreMax: 10, Backend: fb, DAGStore: m, MessageStore: m})
@@ -401,23 +447,23 @@ func TestDiagnose_CapsSegmentCount(t *testing.T) {
 	workspaceID := util.MustParseUUID(diagWorkspaceID)
 	m := new(MockDiagnosisStores)
 	n := maxDiagnosisSegments + 5
-	segs := make([]db.InteractionDAGSegment, 0, n)
+	segs := make([]db.ListInteractionDAGSegmentsForProjectRow, 0, n)
 	for i := 0; i < n; i++ {
 		sid := fmt.Sprintf("segcap-%02d", i)
-		seg := db.InteractionDAGSegment{
+		seg := db.InteractionDagSegment{
 			SegmentID: sid, ProjectID: projectID.String(),
 			AgentRunID: diagAgentRunID, StartSeq: 1, EndSeq: 1,
 		}
-		segs = append(segs, seg)
+		segs = append(segs, diagSegmentToListForProjectRow(seg))
 		if i < maxDiagnosisSegments {
-			m.On("GetInteractionDAGSegmentByID", mock.Anything, sid).Return(seg, nil)
+			m.On("GetInteractionDAGSegmentByID", mock.Anything, sid).Return(diagSegmentToGetByIDRow(seg), nil)
 			m.On("MessagesForTaskInRange", mock.Anything, diagAgentRunID, int32(1), int32(1)).
 				Return([]db.TaskMessage{{Seq: 1, Type: "assistant", Content: pgtype.Text{String: "m", Valid: true}}}, nil)
 		}
 	}
 	m.On("GetProjectInWorkspace", mock.Anything, mock.Anything).Return(db.Project{ID: projectID, WorkspaceID: workspaceID}, nil)
 	m.On("ListInteractionDAGSegmentsForProject", mock.Anything, projectID.String()).Return(segs, nil)
-	m.On("ListInteractionDAGEdgesForProject", mock.Anything, projectID.String()).Return([]db.InteractionDAGEdge{}, nil)
+	m.On("ListInteractionDAGEdgesForProject", mock.Anything, projectID.String()).Return([]db.InteractionDagEdge{}, nil)
 	m.On("GetIssueForTask", mock.Anything, diagAgentRunID).Return(db.Issue{WorkspaceID: workspaceID, Title: "t"}, nil)
 
 	fb := &fakeBackend{status: "completed", output: `[]`}

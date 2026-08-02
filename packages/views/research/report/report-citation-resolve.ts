@@ -62,3 +62,8 @@ export function resolveCitationSource(
   }
   return null;
 }
+
+/** DOM id on a citation card, used as a scroll/highlight target (LRM-824). */
+export function citationAnchorId(citationId: string): string {
+  return `report-citation-${citationId}`;
+}

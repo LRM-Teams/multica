@@ -60,6 +60,8 @@ import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
   stageAnchorId,
+  stageAnchorTargetId,
+  buildStageMessageAnchors,
 } from "../lib/research-stages";
 import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
@@ -245,6 +247,36 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     [data?.nodes, data?.report],
   );
 
+  // LRM-824 — anchor targets (hooks must stay above the early returns below).
+  const stageFirstMessageId = useMemo(
+    () => buildStageMessageAnchors(data?.messages ?? []),
+    [data?.messages],
+  );
+  const anchorTarget = useCallback((el: HTMLElement | null) => {
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    el.classList.add("research-anchor-flash");
+    window.setTimeout(() => el.classList.remove("research-anchor-flash"), 1000);
+  }, []);
+  const handleSelectStage = useCallback(
+    (stage: string) => {
+      setChatOpen(true);
+      // Wait a frame so the chat pane mounts before scrolling.
+      requestAnimationFrame(() => {
+        const firstMessageId = stageFirstMessageId.get(stage);
+        const el =
+          (firstMessageId
+            ? document.getElementById(stageAnchorTargetId(firstMessageId))
+            : null) ??
+          document.getElementById(stageAnchorId(stage)) ??
+          chatScrollRef.current?.querySelector(`[data-research-stage="${stage}"]`) ??
+          null;
+        anchorTarget(el as HTMLElement | null);
+      });
+    },
+    [anchorTarget, setChatOpen, stageFirstMessageId],
+  );
+
   // LRM-799: never keep a permanent skeleton on failure — only while loading.
   // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
   if (isLoading || (isFetching && !data)) {
@@ -343,17 +375,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     );
   };
 
-  const scrollToStage = (stage: string) => {
-    setChatOpen(true);
-    // Wait a frame so the chat pane mounts before scrolling.
-    requestAnimationFrame(() => {
-      const el =
-        document.getElementById(stageAnchorId(stage)) ??
-        chatScrollRef.current?.querySelector(`[data-research-stage="${stage}"]`);
-      el?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  };
-
   const agentPanelNode = agentDock ? (
     <ResolvedAgentSidePanel
       agentId={agentDock.agentId}
@@ -393,12 +414,13 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         }
         members={fleet.members}
         sources={sources}
+        onSelectStage={handleSelectStage}
       />
 
       <ResearchStageTimeline
         currentStage={session.current_stage}
         sessionStatus={session.status}
-        onSelectStage={scrollToStage}
+        onSelectStage={handleSelectStage}
       />
 
       <VisibilityTabs
@@ -586,13 +608,17 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
               data-testid="research-chat-feed"
               data-chat-mode={chatMode}
             >
-              {startedStages.map((stage) => (
-                <ResearchStageChatMarker
-                  key={stage}
-                  stage={stage}
-                  label={t(($) => $.stage[stage])}
-                />
-              ))}
+              {/* LRM-824 — anchor once per stage: marker if that stage has no
+                  tagged message, else the first tagged message bubble. */}
+              {startedStages.map((stage) =>
+                stageFirstMessageId.get(stage) ? null : (
+                  <ResearchStageChatMarker
+                    key={stage}
+                    stage={stage}
+                    label={t(($) => $.stage[stage])}
+                  />
+                ),
+              )}
               {chatMode === "empty" || chatMode === "loading" ? (
                 <ResearchChatModeBody mode={chatMode} />
               ) : null}
@@ -610,12 +636,16 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 <>
                   {chatFeed.map((item) =>
                     item.kind === "chat" ? (
-                      <ResearchChatCard
+                      <div
                         key={item.message.id}
-                        message={item.message}
-                        members={fleet.members}
-                        currentGoal={session.goal}
-                        roundPending={send.isPending}
+                        id={stageAnchorTargetId(item.message.id)}
+                        className="scroll-mt-3"
+                      >
+                        <ResearchChatCard
+                          message={item.message}
+                          members={fleet.members}
+                          currentGoal={session.goal}
+                          roundPending={send.isPending}
                         onRoundAgree={(card) =>
                           postUser(
                             `同意罗纳尔多产品轮 Round ${card.round_number} 裁定：${card.decision}`,
@@ -647,7 +677,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                             `拒绝本轮目标回灌提案（Round ${card.round_number}），保持当前目标不变。`,
                           )
                         }
-                      />
+                        />
+                      </div>
                     ) : (
                       <ResearchFleetStepCard
                         key={item.id}

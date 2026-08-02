@@ -6,6 +6,7 @@ import {
   messageStageKey,
   resolveStageStepState,
   stageAnchorId,
+  stageAnchorTargetId,
   stageIndex,
 } from "./research-stages";
 
@@ -49,5 +50,9 @@ describe("research-stages", () => {
     expect(messageStageKey(messages[3]!)).toBeNull();
     expect(stageIndex("s2_sources")).toBe(1);
     expect(stageAnchorId("s2_sources")).toBe("research-stage-s2_sources");
+  });
+
+  it("maps a chat message to a stable scroll-target id (LRM-824)", () => {
+    expect(stageAnchorTargetId("m-9")).toBe("research-msg-m-9");
   });
 });

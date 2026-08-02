@@ -6,7 +6,10 @@ import { isCitationSourceDegraded } from "./report-citation-resolve";
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: Record<string, unknown>) => unknown) =>
+    t: (
+      fn: (dict: Record<string, unknown>) => unknown,
+      vars?: Record<string, unknown>,
+    ) =>
       fn({
         reader: {
           citation_expand: "Show summary",
@@ -16,6 +19,7 @@ vi.mock("../../i18n/use-t", () => ({
           citation_fetch_failed: "Fetch failed",
           citation_fetch_failed_hint: "Could not fetch this source.",
           citation_summary_empty: "No summary.",
+          citation_anchor: `Locate citation ${vars?.label ?? ""}`.trim(),
         },
       }),
   }),
@@ -119,5 +123,27 @@ describe("ReportCitationList", () => {
     expect(screen.getAllByTestId("research-citation-card")).toHaveLength(2);
     expect(screen.getByRole("link", { name: /Milvus benchmarks/i })).toBeInTheDocument();
     expect(screen.getByText("Source unavailable")).toBeInTheDocument();
+  });
+});
+
+describe("LRM-824 citation anchor", () => {
+  it("citation number is a locate button that scrolls + flashes its card", () => {
+    vi.useFakeTimers();
+    const scrollSpy = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollSpy;
+    try {
+      render(<ReportCitationCard citation={citation} source={live} />);
+      const card = screen.getByTestId("research-citation-card");
+      expect(card.id).toBe("report-citation-c1");
+      const anchor = screen.getByTestId("research-citation-anchor");
+      expect(anchor).toHaveAccessibleName("Locate citation [1]");
+      fireEvent.click(anchor);
+      expect(scrollSpy).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+      expect(card.classList.contains("research-anchor-flash")).toBe(true);
+      vi.advanceTimersByTime(1100);
+      expect(card.classList.contains("research-anchor-flash")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

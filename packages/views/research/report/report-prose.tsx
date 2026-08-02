@@ -28,10 +28,13 @@ const proseClass = cn(
 export function ReportProse({
   report,
   sources = EMPTY_RESEARCH_SOURCES,
+  onLocateCitation,
 }: {
   report: ResearchReport | null | undefined;
   /** Live session sources — preferred when resolving citation.source_id. */
   sources?: ResearchSource[];
+  /** LRM-824 — click a citation number to locate the matching card. */
+  onLocateCitation?: (citationId: string) => void;
 }) {
   const { t } = useT("research");
 
@@ -73,6 +76,7 @@ export function ReportProse({
                 citations={sectionCitations}
                 liveSources={sources}
                 structuredSources={structured.sources}
+                onLocate={onLocateCitation}
               />
             </section>
           );

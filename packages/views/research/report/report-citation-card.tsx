@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ExternalLink } from "lucide-react";
+import { ChevronDown, ExternalLink, Locate } from "lucide-react";
 import type {
   ResearchReportCitation,
   ResearchReportSourceRef,
@@ -12,6 +12,7 @@ import { useT } from "../../i18n/use-t";
 import {
   type CitationCardSource,
   EMPTY_REPORT_SOURCE_REFS,
+  citationAnchorId,
   isCitationSourceDegraded,
   resolveCitationSource,
 } from "./report-citation-resolve";
@@ -23,6 +24,15 @@ function hostOf(url: string): string {
   } catch {
     return "";
   }
+}
+
+/** Smooth scroll + ~1s highlight fade on the citation's own card (LRM-824). */
+function defaultLocate(citationId: string) {
+  const el = document.getElementById(citationAnchorId(citationId));
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+  el.classList.add("research-anchor-flash");
+  window.setTimeout(() => el.classList.remove("research-anchor-flash"), 1000);
 }
 
 function WeightChip({ weight }: { weight: number }) {
@@ -44,9 +54,12 @@ function WeightChip({ weight }: { weight: number }) {
 export function ReportCitationCard({
   citation,
   source,
+  onLocate,
 }: {
   citation: ResearchReportCitation;
   source: CitationCardSource | ResearchReportSourceRef | null;
+  /** LRM-824 — click the citation number to locate the matching card. */
+  onLocate?: (citationId: string) => void;
 }) {
   const { t } = useT("research");
   const [open, setOpen] = useState(false);
@@ -68,18 +81,34 @@ export function ReportCitationCard({
 
   return (
     <article
+      id={citationAnchorId(citation.id)}
       data-testid="research-citation-card"
       data-citation-id={citation.id}
       data-degraded={degraded ? "true" : "false"}
       className={cn(
-        "rounded-lg border bg-muted/15 px-3 py-2.5",
+        "scroll-mt-4 rounded-lg border bg-muted/15 px-3 py-2.5",
         degraded && "border-dashed border-muted-foreground/35 bg-muted/10",
       )}
     >
       <div className="flex items-start gap-2">
-        <span className="mt-0.5 shrink-0 font-mono text-[11px] font-semibold text-muted-foreground">
+        <button
+          type="button"
+          data-testid="research-citation-anchor"
+          className={cn(
+            "mt-0.5 inline-flex shrink-0 items-center gap-0.5 rounded px-1 -mx-1 font-mono text-[11px] font-semibold text-muted-foreground transition-colors",
+            "hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
+          )}
+          aria-label={t(($) => $.reader.citation_anchor, { label })}
+          onClick={() => {
+            // Default locate = self-locate when no handler is supplied; scroll
+            // + flash works in any context the card is rendered into.
+            const handler = onLocate ?? defaultLocate;
+            handler(citation.id);
+          }}
+        >
+          <Locate className="size-3 opacity-70" aria-hidden />
           {label}
-        </span>
+        </button>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             {href ? (
@@ -150,10 +179,12 @@ export function ReportCitationList({
   citations,
   liveSources,
   structuredSources = EMPTY_REPORT_SOURCE_REFS,
+  onLocate,
 }: {
   citations: ResearchReportCitation[];
   liveSources: ResearchSource[];
   structuredSources?: ResearchReportSourceRef[];
+  onLocate?: (citationId: string) => void;
 }) {
   if (citations.length === 0) return null;
   return (
@@ -167,6 +198,7 @@ export function ReportCitationList({
           key={citation.id}
           citation={citation}
           source={resolveCitationSource(citation, liveSources, structuredSources)}
+          onLocate={onLocate}
         />
       ))}
     </div>

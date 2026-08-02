@@ -256,4 +256,18 @@ describe("ResearchSessionChrome", () => {
     expect(screen.getByText("weird_state")).toBeTruthy();
     expect(document.querySelector(".bg-muted-foreground")).toBeTruthy();
   });
+
+  it("LRM-824: stage chip becomes a button that anchors to the current stage", () => {
+    const onSelectStage = vi.fn();
+    renderChrome(makeSession({ current_stage: "s2_sources" }), { onSelectStage });
+    const chip = screen.getByRole("button", { name: "S2 · Explore" });
+    fireEvent.click(chip);
+    expect(onSelectStage).toHaveBeenCalledWith("s2_sources");
+  });
+
+  it("LRM-824: stage chip stays inert when no anchor handler is wired", () => {
+    renderChrome(makeSession({ current_stage: "s2_sources" }));
+    expect(screen.queryByRole("button", { name: "S2 · Explore" })).toBeNull();
+    expect(screen.getByText("S2 · Explore")).toBeTruthy();
+  });
 });

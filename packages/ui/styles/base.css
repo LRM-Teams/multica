@@ -25,6 +25,25 @@
   animation: entrance-spin 0.6s ease-out forwards;
 }
 
+/* LRM-824 — research session anchor flash: smooth-scroll target highlight,
+   fades out ~1s (class removed by caller). Honors prefers-reduced-motion. */
+@keyframes research-anchor-flash {
+  0% { box-shadow: 0 0 0 3px var(--brand); opacity: 1; }
+  100% { box-shadow: 0 0 0 0 var(--brand-soft); opacity: 1; }
+}
+
+.research-anchor-flash {
+  border-radius: 10px;
+  animation: research-anchor-flash 0.9s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .research-anchor-flash {
+    animation: none;
+    outline: 2px solid var(--brand);
+  }
+}
+
 /* Onboarding: step / phase entry — 400ms fade.
  * Applied on mount so every new step (and intra-step phase switch, via
  * key=phase remount) plays once. `both` fill-mode commits the `from`

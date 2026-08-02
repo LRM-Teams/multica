@@ -20,6 +20,16 @@ import {
 import type { HumanBoundaryModel } from "../lib/m2-visibility";
 import { ReportProse } from "./report-prose";
 import { ReportSourceTable } from "./report-source-table";
+import { citationAnchorId } from "./report-citation-resolve";
+
+/** LRM-824 — smooth scroll + ~1s highlight fade; never touches the history
+ * stack (no location.hash / pushState). Module scope: no local state. */
+function anchorTarget(el: HTMLElement | null) {
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+  el.classList.add("research-anchor-flash");
+  window.setTimeout(() => el.classList.remove("research-anchor-flash"), 1000);
+}
 
 function OutlineNav({
   items,
@@ -149,7 +159,12 @@ export function ReportReader({
     const el =
       document.getElementById(`report-sec-${id}`) ||
       document.getElementById(`report-${id}`);
-    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    anchorTarget(el);
+  };
+
+  const locateCitation = (citationId: string) => {
+    setOutlineOpen(false);
+    anchorTarget(document.getElementById(citationAnchorId(citationId)));
   };
 
   const copyMarkdown = async () => {
@@ -298,7 +313,11 @@ export function ReportReader({
                 </div>
               ) : null}
               <div id="report-body" className="scroll-mt-4">
-                <ReportProse report={report} sources={sources} />
+                <ReportProse
+                  report={report}
+                  sources={sources}
+                  onLocateCitation={locateCitation}
+                />
               </div>
               {boundary ? (
                 <div className="mt-8 scroll-mt-4">

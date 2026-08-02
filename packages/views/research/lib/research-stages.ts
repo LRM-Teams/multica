@@ -38,6 +38,11 @@ export function stageAnchorId(stage: string): string {
   return `research-stage-${stage}`;
 }
 
+/** DOM id on a chat message wrapper used as a scroll/highlight target (LRM-824). */
+export function stageAnchorTargetId(messageId: string): string {
+  return `research-msg-${messageId}`;
+}
+
 /**
  * Pick the first message that should own a stage anchor.
  * Prefer explicit `meta.stage`; fall back to process ops that name a stage.

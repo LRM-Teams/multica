@@ -21,6 +21,18 @@ export function AgentLifecycleStatusLine({
   className?: string;
 }) {
   const { t } = useT("agents");
+  // Denser surfaces paint Stopped / Starting / Crashed / Disconnected only.
+  // idle/working → null from the mapper; offline / missing fall back to the
+  // mapper's "offline" visual, but that word belongs to the LRM-248 avatar
+  // badge — never restate Online/Offline as name-row text here.
+  if (
+    status !== "starting" &&
+    status !== "stopped" &&
+    status !== "crashed" &&
+    status !== "disconnected"
+  ) {
+    return null;
+  }
   const visual = resolveAgentLifecycleStatus(status, t);
   if (!visual) return null;
   return <AgentLifecycleStatusMark visual={visual} className={className} />;

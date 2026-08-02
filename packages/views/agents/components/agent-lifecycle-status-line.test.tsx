@@ -21,6 +21,22 @@ vi.mock("../resolve-agent-lifecycle-status", () => ({
         dotClass: "bg-brand",
       };
     }
+    if (status === "crashed") {
+      return {
+        label: "Crashed",
+        shape: "dot",
+        toneClass: "text-muted-foreground",
+        dotClass: "bg-muted-foreground/40",
+      };
+    }
+    if (status === "disconnected") {
+      return {
+        label: "Disconnected",
+        shape: "dot",
+        toneClass: "text-muted-foreground",
+        dotClass: "bg-muted-foreground/40",
+      };
+    }
     return {
       label: "Offline",
       shape: "dot",
@@ -35,13 +51,13 @@ vi.mock("../../i18n/use-t", () => ({
 }));
 
 describe("AgentLifecycleStatusLine", () => {
-  it("renders nothing for idle/working", () => {
-    const { container } = render(<AgentLifecycleStatusLine status="idle" />);
-    expect(container).toBeEmptyDOMElement();
-    const { container: c2 } = render(
-      <AgentLifecycleStatusLine status="working" />,
-    );
-    expect(c2).toBeEmptyDOMElement();
+  it("renders nothing for idle/working/offline/missing (LRM-248 + denser filter)", () => {
+    for (const status of ["idle", "working", "offline", null, undefined] as const) {
+      const { container } = render(
+        <AgentLifecycleStatusLine status={status} />,
+      );
+      expect(container).toBeEmptyDOMElement();
+    }
   });
 
   it("renders stopped with square marker", () => {
@@ -59,5 +75,21 @@ describe("AgentLifecycleStatusLine", () => {
     expect(mark).toHaveTextContent("Starting");
     expect(mark).toHaveAttribute("data-shape", "dot");
     expect(mark.className).toContain("text-brand");
+  });
+
+  it("renders crashed and disconnected as gray dots", () => {
+    const { unmount } = render(<AgentLifecycleStatusLine status="crashed" />);
+    expect(screen.getByTestId("agent-lifecycle-status")).toHaveTextContent(
+      "Crashed",
+    );
+    expect(screen.getByTestId("agent-lifecycle-status")).toHaveAttribute(
+      "data-shape",
+      "dot",
+    );
+    unmount();
+    render(<AgentLifecycleStatusLine status="disconnected" />);
+    expect(screen.getByTestId("agent-lifecycle-status")).toHaveTextContent(
+      "Disconnected",
+    );
   });
 });

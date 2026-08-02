@@ -254,6 +254,15 @@ const RESOURCES = {
   row: {
     archived: "Archived",
   },
+  // AgentLifecycleStatusLine → resolveAgentLifecycleStatus (Felix #1811).
+  // Missing keys crash every panel render when status is null/offline.
+  lifecycle_status: {
+    starting: "Starting",
+    disconnected: "Disconnected",
+    offline: "Offline",
+    stopped: "Stopped",
+    crashed: "Crashed",
+  },
 };
 
 // Extracted to a named const so the spreads below start from a concrete

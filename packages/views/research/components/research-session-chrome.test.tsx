@@ -11,8 +11,8 @@ vi.mock("@multica/ui/hooks/use-mobile", () => ({
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: Record<string, unknown>) => unknown) =>
-      fn({
+    t: (fn: (dict: Record<string, unknown>) => unknown, vars?: Record<string, unknown>) => {
+      const raw = fn({
         status: {
           running: "Running",
           awaiting_user_confirm: "Awaiting confirm",
@@ -49,7 +49,29 @@ vi.mock("../../i18n/use-t", () => ({
           budget_chip: "{{used}}/{{budget}}",
           budget_capped: "capped",
         },
-      }),
+        create_params: {
+          session_menu: "Create parameters",
+          session_hint: "Read-only",
+          depth_label: "Depth",
+          language_label: "Language",
+          weights_label: "Weights",
+          chip_depth: "Depth · {{label}}",
+          depth_tiers: {
+            shallow: { label: "Shallow", hint: "2" },
+            standard: { label: "Standard", hint: "5" },
+            deep: { label: "Deep", hint: "10" },
+          },
+          language_options: { zh: "中文", en: "English" },
+          weight_rows: {
+            primary: { label: "Primary", hint: "Official" },
+            secondary: { label: "Secondary", hint: "Reviews" },
+            community: { label: "Community", hint: "Forums" },
+          },
+        },
+      });
+      if (typeof raw !== "string" || !vars) return raw;
+      return raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(vars[key] ?? ""));
+    },
   }),
 }));
 

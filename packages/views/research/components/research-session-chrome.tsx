@@ -17,6 +17,12 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { Compass } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
+import {
+  DEPTH_TIERS,
+  type ResearchCreateDepthTier,
+  resolveSessionCreateParams,
+  stripCreateParamsTrailer,
+} from "../lib/research-create-params";
 import { ResearchSessionMetaMenu } from "./research-session-meta-menu";
 
 type StatusTone = { text: string; dot: string; pill: string };
@@ -131,6 +137,22 @@ export function ResearchSessionChrome({
   const stageLabel = t(
     ($) => $.stage[session.current_stage as keyof typeof $.stage] ?? session.current_stage,
   );
+  const createParams = resolveSessionCreateParams({
+    goal: session.goal,
+    depth_tier: session.depth_tier,
+  });
+  const depthTierLabel =
+    createParams.depth_tier === "shallow"
+      ? t(($) => $.create_params.depth_tiers.shallow.label)
+      : createParams.depth_tier === "deep"
+        ? t(($) => $.create_params.depth_tiers.deep.label)
+        : t(($) => $.create_params.depth_tiers.standard.label);
+  const showDepthChip = DEPTH_TIERS.includes(
+    createParams.depth_tier as ResearchCreateDepthTier,
+  );
+  const goalPreview = stripCreateParamsTrailer(
+    selectedSummary ?? session.goal ?? "",
+  );
 
   // LRM-840: awaiting_user_confirm → approve + reject controls (not text-only).
   // completed → 交付移交; running → none.
@@ -228,9 +250,14 @@ export function ResearchSessionChrome({
             interactive={Boolean(onSelectStage)}
             onClick={onSelectStage ? () => onSelectStage(session.current_stage) : undefined}
           />
+          {showDepthChip ? (
+            <ContextChip
+              label={t(($) => $.create_params.chip_depth, { label: depthTierLabel })}
+            />
+          ) : null}
           {roundChip}
           <p className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:block">
-            {selectedSummary ?? session.goal}
+            {goalPreview}
           </p>
         </div>
         <div
@@ -369,6 +396,7 @@ export function ResearchSessionChrome({
           <ResearchSessionMetaMenu
             members={members}
             sources={sources}
+            session={session}
             sessionStatus={session.status}
             leadingActions={
               foldDeliveryIntoTools && onOpenDelivery

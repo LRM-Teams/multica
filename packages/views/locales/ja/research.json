@@ -453,5 +453,53 @@
     "dismiss": "閉じる",
     "done_badge": "完了",
     "failed_badge": "失敗"
+  },
+  "create_params": {
+    "title": "Research parameters",
+    "hint": "Tune depth, source weights, and report language. Defaults are fine to start; values are submitted with create and visible in the session.",
+    "open": "Params",
+    "open_aria": "Open research parameters",
+    "done": "Done",
+    "depth_label": "Research depth",
+    "depth_hint": "Depth sets the product-round budget: deeper means more rounds and coverage, at higher cost.",
+    "depth_tiers": {
+      "shallow": {
+        "label": "Shallow",
+        "hint": "Quick scan — about 2 product rounds."
+      },
+      "standard": {
+        "label": "Standard",
+        "hint": "Default — about 5 rounds for most questions."
+      },
+      "deep": {
+        "label": "Deep",
+        "hint": "Full cross-check — about 10 rounds."
+      }
+    },
+    "weights_label": "Source weights",
+    "weights_hint": "0–1 scale; higher means prefer that source class. Defaults favor official and authoritative secondary sources.",
+    "weight_rows": {
+      "primary": {
+        "label": "Official / primary",
+        "hint": "Docs, regulators, and primary data."
+      },
+      "secondary": {
+        "label": "Authoritative secondary",
+        "hint": "Papers, research notes, reputable reviews."
+      },
+      "community": {
+        "label": "Community / sentiment",
+        "hint": "Forums, social, and reviews — use as supplement."
+      }
+    },
+    "language_label": "Report language",
+    "language_hint": "Preferred language for delivery and the written report.",
+    "language_options": {
+      "zh": "中文",
+      "en": "English"
+    },
+    "session_hint": "Parameters chosen at create time (read-only).",
+    "session_menu": "Create parameters",
+    "chip_depth": "Depth · {{label}}"
   }
 }

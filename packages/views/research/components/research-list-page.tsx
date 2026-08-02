@@ -13,9 +13,15 @@ import {
 import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
-import { AlertCircle, Loader2, X } from "lucide-react";
+import { AlertCircle, Loader2, SlidersHorizontal, X } from "lucide-react";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
+import {
+  appendCreateParamsToGoal,
+  defaultCreateParams,
+  normalizeCreateParams,
+  type ResearchCreateParams,
+} from "../lib/research-create-params";
 import {
   DONE_STATUSES,
   FAILED_STATUSES,
@@ -28,6 +34,7 @@ import {
   localizeTemplateField,
   type ResearchTemplate,
 } from "../lib/research-templates";
+import { ResearchCreateParamsPanel } from "./research-create-params-panel";
 import { ResearchEmptyState } from "./research-empty-state";
 import { ResearchHomeHero } from "./research-home-hero";
 import { ResearchSessionFilterBar } from "./research-session-filter-bar";
@@ -55,6 +62,10 @@ export function ResearchListPage() {
   const nav = useNavigation();
   const qc = useQueryClient();
   const [composer, setComposer] = useState<ComposerDraft>(EMPTY_COMPOSER);
+  const [createParams, setCreateParams] = useState<ResearchCreateParams>(() =>
+    defaultCreateParams(),
+  );
+  const [paramsOpen, setParamsOpen] = useState(false);
   const [titleQuery, setTitleQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter | null>(null);
   const goalInputRef = useRef<HTMLTextAreaElement>(null);
@@ -62,8 +73,18 @@ export function ResearchListPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   /** Scroll offset captured when filters first become active; restored on clear. */
   const savedScrollTop = useRef<number | null>(null);
+  const localeSeeded = useRef(false);
 
   const { goal, template: selectedTemplate, draftTitle } = composer;
+
+  // Seed language from UI locale once i18n is ready (defaults stay standard/weights).
+  useEffect(() => {
+    if (localeSeeded.current || !i18n?.language) return;
+    localeSeeded.current = true;
+    setCreateParams((prev) =>
+      normalizeCreateParams({ ...prev, language: undefined }, i18n.language),
+    );
+  }, [i18n?.language]);
 
   useQuery(researchFleetOptions(wsId));
   const { data, isLoading, isError, error, refetch } = useQuery(
@@ -73,9 +94,16 @@ export function ResearchListPage() {
   const create = useMutation({
     mutationFn: () => {
       const language = i18n?.language;
-      const mergedGoal = buildCreateGoal(selectedTemplate, goal, language);
+      const params = normalizeCreateParams(createParams, language);
+      const mergedGoal = appendCreateParamsToGoal(
+        buildCreateGoal(selectedTemplate, goal, language),
+        params,
+      );
       return api.createResearchSession({
         goal: mergedGoal,
+        depth_tier: params.depth_tier,
+        language: params.language,
+        source_weights: params.source_weights,
         ...(draftTitle?.trim() ? { title: draftTitle.trim() } : {}),
       });
     },
@@ -255,27 +283,48 @@ export function ResearchListPage() {
               <p className="hidden text-xs text-muted-foreground sm:block">
                 {t(($) => $.home.composer_hint)}
               </p>
-              <Button
-                onClick={submitCreate}
-                disabled={!canSubmit || create.isPending}
-                className="h-10 w-full shrink-0 rounded-full bg-brand px-4 text-[13.5px] font-semibold text-brand-foreground hover:bg-brand/90 sm:h-9 sm:w-auto"
-              >
-                {create.isPending ? (
-                  <>
-                    <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                    {t(($) => $.home.creating)}
-                  </>
-                ) : (
-                  <>
-                    {t(($) => $.start)}
-                    <span aria-hidden className="ml-0.5">
-                      →
-                    </span>
-                  </>
-                )}
-              </Button>
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setParamsOpen(true)}
+                  disabled={create.isPending}
+                  className="h-10 w-full shrink-0 rounded-full px-3.5 text-[13px] font-medium sm:h-9 sm:w-auto"
+                  data-testid="research-create-params-open"
+                  aria-label={t(($) => $.create_params.open_aria)}
+                >
+                  <SlidersHorizontal className="size-3.5" aria-hidden />
+                  {t(($) => $.create_params.open)}
+                </Button>
+                <Button
+                  onClick={submitCreate}
+                  disabled={!canSubmit || create.isPending}
+                  className="h-10 w-full shrink-0 rounded-full bg-brand px-4 text-[13.5px] font-semibold text-brand-foreground hover:bg-brand/90 sm:h-9 sm:w-auto"
+                >
+                  {create.isPending ? (
+                    <>
+                      <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                      {t(($) => $.home.creating)}
+                    </>
+                  ) : (
+                    <>
+                      {t(($) => $.start)}
+                      <span aria-hidden className="ml-0.5">
+                        →
+                      </span>
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
           </div>
+
+          <ResearchCreateParamsPanel
+            open={paramsOpen}
+            value={createParams}
+            onOpenChange={setParamsOpen}
+            onChange={setCreateParams}
+          />
 
           {createError ? (
             <div

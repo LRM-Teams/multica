@@ -89,14 +89,14 @@ export function AgentProfileActions({
   // real preflight whenever we'd otherwise offer the button, so a stale
   // daemon shows a standing reason instead of a click that silently no-ops.
   const wantsRestartOffer = canManage && !isArchived && isRuntimeOnline && forceRestartSupported;
-  const restartPreflight = useQuery(
+  const { data: restartPreflightData, isSuccess: restartPreflightSucceeded } = useQuery(
     agentLifecyclePreflightOptions(agent.id, wantsRestartOffer),
   );
-  const restartState = agentLifecycleActionState(restartPreflight.data, "restart");
+  const restartState = agentLifecycleActionState(restartPreflightData, "restart");
   // Only trust a disabled+reason render once the preflight has actually
   // resolved — otherwise the pre-fetch fallback (agentLifecycleActionState's
   // "unavailable") would flash for every agent during the initial fetch.
-  const restartBlocked = restartPreflight.isSuccess && !restartState.supported;
+  const restartBlocked = restartPreflightSucceeded && !restartState.supported;
   const restartDisabledReason = restartBlocked
     ? t(($) => $.restart_modal.disabled_reason[resolveLifecycleDisabledReasonKey(restartState.disabled_reason)])
     : null;

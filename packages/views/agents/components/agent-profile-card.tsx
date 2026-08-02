@@ -43,6 +43,7 @@ import { useT } from "../../i18n/use-t";
 import { ActorProfileContentLoaded } from "../../common/actor-profile-popover";
 import { MemoryGrowthField } from "./memory-growth-field";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
+import { AgentLifecycleStatusLine } from "./agent-lifecycle-status-line";
 
 interface AgentProfileCardProps {
   agentId: string;
@@ -183,12 +184,18 @@ export function AgentProfileCard({ agentId }: AgentProfileCardProps) {
               className="min-w-0 shrink"
             />
           </div>
-          {/* LRM-248: archived is muted secondary copy; live presence is avatar badge only. */}
+          {/* LRM-248: archived is muted secondary copy; live presence is avatar badge only.
+              Lifecycle denser line uses runtime_display_status (not presence). */}
           {isArchived ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
               {t(($) => $.row.archived)}
             </p>
-          ) : null}
+          ) : (
+            <AgentLifecycleStatusLine
+              status={agent.runtime_display_status}
+              className="mt-0.5"
+            />
+          )}
         </div>
         {!isArchived && (
           <div className="mr-1 mt-0.5 flex shrink-0 items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">

@@ -37,6 +37,7 @@ import { RuntimePicker } from "./inspector/runtime-picker";
 import { SkillAttach } from "./inspector/skill-attach";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
 import { LarkAgentBindButton } from "../../settings/components/lark-tab";
+import { AgentLifecycleStatusLine } from "./agent-lifecycle-status-line";
 
 interface InspectorProps {
   agent: Agent;
@@ -109,12 +110,16 @@ export function AgentDetailInspector({
           onUpdate={update}
         />
         {/* LRM-248: live Online/Offline is avatar-badge only — no name-row text.
-            Archived stays muted secondary copy under the identity. */}
+            Archived stays muted secondary copy under the identity.
+            Lifecycle (Stopped / Starting / Crashed / …) is denser-surface only
+            via runtime_display_status — not presence.ts. */}
         {agent.archived_at || presence?.availability === "archived" ? (
           <span className="text-xs text-muted-foreground">
             {t(($) => $.row.archived)}
           </span>
-        ) : null}
+        ) : (
+          <AgentLifecycleStatusLine status={agent.runtime_display_status} />
+        )}
       </div>
 
       {/* Properties — editable when canEdit. When the current user lacks

@@ -402,7 +402,7 @@ func (q *Queries) FailTasksForOfflineRuntimes(ctx context.Context) ([]AgentInbox
 }
 
 const findLegacyRuntimesByDaemonID = `-- name: FindLegacyRuntimesByDaemonID :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version FROM agent_runtime
 WHERE workspace_id = $1
   AND provider = $2
   AND LOWER(daemon_id) = LOWER($3)
@@ -457,6 +457,7 @@ func (q *Queries) FindLegacyRuntimesByDaemonID(ctx context.Context, arg FindLega
 			&i.DisplayName,
 			&i.OfflineReason,
 			&i.StartingSince,
+			&i.PinnedVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -596,7 +597,7 @@ func (q *Queries) GetAgentBoundRuntimeForWorkspace(ctx context.Context, arg GetA
 }
 
 const getAgentRuntime = `-- name: GetAgentRuntime :one
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version FROM agent_runtime
 WHERE id = $1
 `
 
@@ -622,6 +623,7 @@ func (q *Queries) GetAgentRuntime(ctx context.Context, id pgtype.UUID) (AgentRun
 		&i.DisplayName,
 		&i.OfflineReason,
 		&i.StartingSince,
+		&i.PinnedVersion,
 	)
 	return i, err
 }
@@ -694,7 +696,7 @@ func (q *Queries) ListAgentRuntimeConnectivityByIDs(ctx context.Context, ids []p
 }
 
 const getAgentRuntimeForWorkspace = `-- name: GetAgentRuntimeForWorkspace :one
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version FROM agent_runtime
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -725,12 +727,13 @@ func (q *Queries) GetAgentRuntimeForWorkspace(ctx context.Context, arg GetAgentR
 		&i.DisplayName,
 		&i.OfflineReason,
 		&i.StartingSince,
+		&i.PinnedVersion,
 	)
 	return i, err
 }
 
 const listAgentRuntimes = `-- name: ListAgentRuntimes :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version FROM agent_runtime
 WHERE workspace_id = $1
 ORDER BY created_at ASC
 `
@@ -834,7 +837,7 @@ func (q *Queries) ListAgentRuntimesByDaemonID(ctx context.Context, arg ListAgent
 }
 
 const listAgentRuntimesByOwner = `-- name: ListAgentRuntimesByOwner :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version FROM agent_runtime
 WHERE workspace_id = $1 AND owner_id = $2
 ORDER BY created_at ASC
 `
@@ -872,6 +875,7 @@ func (q *Queries) ListAgentRuntimesByOwner(ctx context.Context, arg ListAgentRun
 			&i.DisplayName,
 			&i.OfflineReason,
 			&i.StartingSince,
+			&i.PinnedVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -913,7 +917,7 @@ func (q *Queries) ListArchivedAgentIDsByRuntime(ctx context.Context, runtimeID p
 }
 
 const listVisibleAgentRuntimes = `-- name: ListVisibleAgentRuntimes :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version FROM agent_runtime
 WHERE workspace_id = $1 AND (owner_id = $2 OR visibility = 'public')
 ORDER BY created_at ASC
 `
@@ -955,6 +959,7 @@ func (q *Queries) ListVisibleAgentRuntimes(ctx context.Context, arg ListVisibleA
 			&i.DisplayName,
 			&i.OfflineReason,
 			&i.StartingSince,
+			&i.PinnedVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -967,7 +972,7 @@ func (q *Queries) ListVisibleAgentRuntimes(ctx context.Context, arg ListVisibleA
 }
 
 const lockAgentRuntime = `-- name: LockAgentRuntime :one
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version FROM agent_runtime
 WHERE id = $1
 FOR UPDATE
 `
@@ -1008,6 +1013,7 @@ func (q *Queries) LockAgentRuntime(ctx context.Context, id pgtype.UUID) (AgentRu
 		&i.DisplayName,
 		&i.OfflineReason,
 		&i.StartingSince,
+		&i.PinnedVersion,
 	)
 	return i, err
 }
@@ -1016,7 +1022,7 @@ const markAgentRuntimeOnline = `-- name: MarkAgentRuntimeOnline :one
 UPDATE agent_runtime
 SET status = 'online', last_seen_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version
 `
 
 // Used on the offline→online transition (and on first heartbeat after
@@ -1044,6 +1050,7 @@ func (q *Queries) MarkAgentRuntimeOnline(ctx context.Context, id pgtype.UUID) (A
 		&i.DisplayName,
 		&i.OfflineReason,
 		&i.StartingSince,
+		&i.PinnedVersion,
 	)
 	return i, err
 }
@@ -1393,7 +1400,7 @@ const updateAgentRuntimeVisibility = `-- name: UpdateAgentRuntimeVisibility :one
 UPDATE agent_runtime
 SET visibility = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version
 `
 
 type UpdateAgentRuntimeVisibilityParams struct {
@@ -1427,6 +1434,7 @@ func (q *Queries) UpdateAgentRuntimeVisibility(ctx context.Context, arg UpdateAg
 		&i.DisplayName,
 		&i.OfflineReason,
 		&i.StartingSince,
+		&i.PinnedVersion,
 	)
 	return i, err
 }
@@ -1435,7 +1443,7 @@ const updateAgentRuntimeDisplayName = `-- name: UpdateAgentRuntimeDisplayName :o
 UPDATE agent_runtime
 SET display_name = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version
 `
 
 type UpdateAgentRuntimeDisplayNameParams struct {
@@ -1468,6 +1476,7 @@ func (q *Queries) UpdateAgentRuntimeDisplayName(ctx context.Context, arg UpdateA
 		&i.DisplayName,
 		&i.OfflineReason,
 		&i.StartingSince,
+		&i.PinnedVersion,
 	)
 	return i, err
 }

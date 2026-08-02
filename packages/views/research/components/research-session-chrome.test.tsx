@@ -1,7 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchSession } from "@multica/core/types";
 import { ResearchSessionChrome } from "./research-session-chrome";
+
+const mobileState = { isMobile: false };
+
+vi.mock("@multica/ui/hooks/use-mobile", () => ({
+  useIsMobile: () => mobileState.isMobile,
+}));
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
@@ -26,6 +32,15 @@ vi.mock("../../i18n/use-t", () => ({
           handoff_project: "Create development project",
           handoff_channel: "Create development channel",
           handoff: "Handoff",
+          session_tools: "Session tools",
+          fleet: "Fleet",
+          sources: "Sources",
+          session_tools_hint: "On demand",
+        },
+        round: {
+          subtitle: "Product rounds",
+          budget_chip: "{{used}}/{{budget}}",
+          budget_capped: "capped",
         },
       }),
   }),
@@ -59,9 +74,13 @@ vi.mock("@multica/ui/components/ui/popover", async () => {
       children?: React.ReactNode;
     }) => {
       const { open, onOpenChange } = React.useContext(Ctx);
-      return React.cloneElement(renderProp ?? <button type="button" />, {
-        onClick: () => onOpenChange?.(!open),
-      } as Record<string, unknown>, children);
+      return React.cloneElement(
+        renderProp ?? <button type="button" />,
+        {
+          onClick: () => onOpenChange?.(!open),
+        } as Record<string, unknown>,
+        children,
+      );
     },
     PopoverContent: ({ children }: { children?: React.ReactNode }) => {
       const { open } = React.useContext(Ctx);
@@ -72,6 +91,43 @@ vi.mock("@multica/ui/components/ui/popover", async () => {
     PopoverDescription: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   };
 });
+
+vi.mock("@multica/ui/components/ui/dropdown-menu", async () => {
+  const React = await import("react");
+  return {
+    DropdownMenu: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+    DropdownMenuTrigger: ({
+      render: renderProp,
+      children,
+    }: {
+      render?: React.ReactElement;
+      children?: React.ReactNode;
+    }) => React.cloneElement(renderProp ?? <button type="button" />, {}, children),
+    DropdownMenuContent: ({ children }: { children?: React.ReactNode }) => (
+      <div data-testid="menu">{children}</div>
+    ),
+    DropdownMenuItem: ({
+      children,
+      onClick,
+    }: {
+      children?: React.ReactNode;
+      onClick?: () => void;
+    }) => (
+      <button type="button" onClick={onClick}>
+        {children}
+      </button>
+    ),
+    DropdownMenuSeparator: () => <hr data-testid="menu-separator" />,
+  };
+});
+
+vi.mock("@multica/ui/components/ui/sheet", () => ({
+  Sheet: () => null,
+  SheetContent: () => null,
+  SheetHeader: () => null,
+  SheetTitle: () => null,
+  SheetDescription: () => null,
+}));
 
 function makeSession(overrides: Partial<ResearchSession> = {}): ResearchSession {
   return {
@@ -111,21 +167,39 @@ function renderChrome(session: ResearchSession, overrides: Record<string, unknow
 }
 
 describe("ResearchSessionChrome", () => {
-  it("renders two rows: title + status dot + stage chip, goal line below", () => {
+  beforeEach(() => {
+    mobileState.isMobile = false;
+  });
+
+  it("renders identity + toolbar: title, status pill, stage context, goal", () => {
     renderChrome(makeSession());
+    expect(screen.getByTestId("research-session-identity")).toBeTruthy();
+    expect(screen.getByTestId("research-session-toolbar")).toBeTruthy();
     expect(screen.getByText("知春路沿线房产市场深度调研")).toBeTruthy();
-    expect(screen.getByText("Running")).toBeTruthy();
-    expect(screen.getAllByText("S2 · Explore").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("research-session-status").textContent).toContain("Running");
+    expect(screen.getByText("S2 · Explore")).toBeTruthy();
     expect(screen.getByText("分析知春路沿线 3 公里二手房挂牌与成交")).toBeTruthy();
     const dot = document.querySelector(".bg-brand.animate-pulse");
     expect(dot).toBeTruthy();
   });
 
-  it("running state shows no primary action, only the delivery outline", () => {
+  it("running state shows no primary action; desktop keeps delivery outline", () => {
     renderChrome(makeSession({ status: "running" }));
     expect(screen.queryByText("Confirm & continue")).toBeNull();
     expect(screen.queryByText("Handoff delivery")).toBeNull();
+    expect(screen.getByTestId("research-session-delivery")).toBeTruthy();
     expect(screen.getByText("View delivery")).toBeTruthy();
+  });
+
+  it("narrow folds delivery into tools so primary is not crowded", () => {
+    mobileState.isMobile = true;
+    const onOpenDelivery = vi.fn();
+    renderChrome(makeSession({ status: "awaiting_user_confirm" }), { onOpenDelivery });
+    expect(screen.getByTestId("research-session-primary")).toBeTruthy();
+    expect(screen.queryByTestId("research-session-delivery")).toBeNull();
+    expect(screen.getByText("View delivery")).toBeTruthy();
+    fireEvent.click(screen.getByText("View delivery"));
+    expect(onOpenDelivery).toHaveBeenCalledTimes(1);
   });
 
   it("awaiting_user_confirm shows exactly the confirm primary", () => {
@@ -167,14 +241,14 @@ describe("ResearchSessionChrome", () => {
     expect(confirm).toHaveProperty("disabled", true);
   });
 
-  it("selected node summary replaces the goal line without adding a third row", () => {
+  it("selected node summary replaces the goal line without adding a third content row", () => {
     const { container } = renderChrome(makeSession(), {
       selectedSummary: "偏离度 8.2% — 高置信",
     });
     expect(screen.getByText("偏离度 8.2% — 高置信")).toBeTruthy();
     expect(screen.queryByText("分析知春路沿线 3 公里二手房挂牌与成交")).toBeNull();
-    // Row 0 may be the LRM-971 brand hairline; content stays two flex rows.
-    expect(container.querySelectorAll("header > div.flex")).toHaveLength(2);
+    // Hairline + identity + toolbar.
+    expect(container.querySelectorAll("header > div").length).toBe(3);
   });
 
   it("unknown status falls back to muted tone and raw status text", () => {

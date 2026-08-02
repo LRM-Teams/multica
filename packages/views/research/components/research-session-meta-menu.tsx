@@ -7,6 +7,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import {
@@ -32,10 +33,13 @@ export function ResearchSessionMetaMenu({
   members,
   sources,
   sessionStatus,
+  leadingActions,
 }: {
   members: ResearchFleetMember[];
   sources: ResearchSource[];
   sessionStatus?: string | null;
+  /** LRM-995: narrow secondary actions (e.g. 查看交付) folded into tools. */
+  leadingActions?: Array<{ id: string; label: string; onSelect: () => void }>;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -58,12 +62,19 @@ export function ResearchSessionMetaMenu({
               size="icon-sm"
               variant="ghost"
               aria-label={t(($) => $.panel.session_tools)}
+              data-testid="research-session-tools"
             />
           }
         >
           <MoreHorizontal className="size-4" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-44">
+          {leadingActions?.map((action) => (
+            <DropdownMenuItem key={action.id} onClick={action.onSelect}>
+              {action.label}
+            </DropdownMenuItem>
+          ))}
+          {leadingActions && leadingActions.length > 0 ? <DropdownMenuSeparator /> : null}
           <DropdownMenuItem onClick={() => setPanel("fleet")}>
             {t(($) => $.panel.fleet)}
           </DropdownMenuItem>

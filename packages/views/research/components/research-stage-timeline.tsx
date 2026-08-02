@@ -23,7 +23,7 @@ function StepGlyph({ state }: { state: StageStepState }) {
   if (state === "current") {
     return (
       <span
-        className="flex size-5 items-center justify-center rounded-full bg-brand text-brand-foreground ring-2 ring-brand/30"
+        className="flex size-6 items-center justify-center rounded-full bg-brand text-brand-foreground shadow-sm ring-2 ring-brand/35"
         aria-hidden
       >
         <span className="size-1.5 rounded-full bg-current" />
@@ -32,10 +32,10 @@ function StepGlyph({ state }: { state: StageStepState }) {
   }
   return (
     <span
-      className="flex size-5 items-center justify-center rounded-full border border-border bg-muted/40"
+      className="flex size-5 items-center justify-center rounded-full border border-border/80 bg-muted/30 opacity-70"
       aria-hidden
     >
-      <span className="size-1.5 rounded-full bg-muted-foreground/50" />
+      <span className="size-1.5 rounded-full bg-muted-foreground/40" />
     </span>
   );
 }
@@ -55,6 +55,7 @@ export function ResearchStageTimeline({
   return (
     <nav
       aria-label={t(($) => $.timeline.label)}
+      data-testid="research-stage-timeline"
       className="relative z-[1] shrink-0 border-b border-border/55 bg-background/55 backdrop-blur-sm"
     >
       <ol
@@ -79,17 +80,20 @@ export function ResearchStageTimeline({
           return (
             <li
               key={stage}
+              data-stage-state={state}
               className={cn(
-                "relative flex min-w-[7.5rem] flex-1 snap-start items-center sm:min-w-0",
+                "relative flex min-w-[6.5rem] flex-1 snap-start items-center sm:min-w-0",
                 index < RESEARCH_STAGE_ORDER.length - 1 && "pr-2",
+                state === "upcoming" && "opacity-75",
               )}
             >
               {index < RESEARCH_STAGE_ORDER.length - 1 ? (
                 <span
                   aria-hidden
                   className={cn(
-                    "pointer-events-none absolute top-[0.625rem] right-0 left-8 h-px sm:left-10",
-                    state === "done" ? "bg-success/50" : "bg-border",
+                    "pointer-events-none absolute top-[0.7rem] right-0 left-9 h-px sm:left-11",
+                    state === "done" ? "bg-success/50" : "bg-border/80",
+                    state === "current" && "bg-gradient-to-r from-brand/50 to-border/80",
                   )}
                 />
               ) : null}
@@ -99,23 +103,32 @@ export function ResearchStageTimeline({
                 onClick={() => onSelectStage?.(stage)}
                 className={cn(
                   "relative z-[1] flex max-w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors",
-                  clickable && "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
+                  clickable &&
+                    "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
                   !clickable && "cursor-default",
-                  state === "current" && "bg-brand/8",
+                  state === "current" && "bg-brand/10 ring-1 ring-brand/20",
                 )}
                 aria-current={state === "current" ? "step" : undefined}
                 aria-label={`${label} — ${stateLabel}`}
               >
                 <StepGlyph state={state} />
-                <span
-                  className={cn(
-                    "truncate font-mono text-[11px] tracking-wide",
-                    state === "current" && "font-semibold text-foreground",
-                    state === "done" && "text-foreground/80",
-                    state === "upcoming" && "text-muted-foreground",
-                  )}
-                >
-                  {label}
+                <span className="min-w-0">
+                  <span
+                    className={cn(
+                      "block truncate tracking-wide",
+                      state === "current" && "text-xs font-semibold text-foreground",
+                      state === "done" && "font-mono text-[11px] text-foreground/75",
+                      state === "upcoming" &&
+                        "font-mono text-[11px] text-muted-foreground/80",
+                    )}
+                  >
+                    {label}
+                  </span>
+                  {state === "current" ? (
+                    <span className="mt-0.5 hidden text-[10px] font-medium text-brand sm:block">
+                      {t(($) => $.timeline.current)}
+                    </span>
+                  ) : null}
                 </span>
                 {state === "done" ? (
                   <span className="sr-only">{t(($) => $.timeline.done_feedback)}</span>

@@ -77,6 +77,10 @@ import {
   type VoiceRecordingAttachment,
 } from "../lib/voice-audio";
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
+import {
+  handleConvSearchInputKeyDown,
+  orderConvSearchResultsNewestFirst,
+} from "../lib/conv-search-navigation";
 import { ChannelMessageList } from "./channel-message-list";
 import { ChannelFilesPanel } from "./channel-files-panel";
 import { Composer, ConversationHeader } from "./conversation-surface";
@@ -854,7 +858,8 @@ function DmChannelConversation({
         dispatch({
           type: "setSearchResults",
           query: searchQuery,
-          results: res.results,
+          // LRM-753 — newest-first so index 0 is「最近命中」.
+          results: orderConvSearchResultsNewestFirst(res.results),
           total: res.total,
         });
       } catch {
@@ -1518,9 +1523,12 @@ function DmChannelConversation({
               dispatch({ type: "setSearchQuery", query: e.target.value })
             }
             onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                dispatch({ type: "closeSearch" });
-              }
+              handleConvSearchInputKeyDown(e, {
+                total: convSearch.total,
+                onClose: () => dispatch({ type: "closeSearch" }),
+                onNext: () => dispatch({ type: "nextSearchResult" }),
+                onPrev: () => dispatch({ type: "previousSearchResult" }),
+              });
             }}
             placeholder={t(($) => $.conv_search.dm_placeholder, { name: dm.peer.name })}
             className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"

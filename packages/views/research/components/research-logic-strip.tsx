@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useRef } from "react";
 import { RotateCcw } from "lucide-react";
 import type { ResearchPresenceMap } from "@multica/core/research";
 import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
@@ -16,11 +17,21 @@ import {
 } from "../lib/logic-lanes";
 import { nodeOffersRetry } from "../lib/node-action-ring";
 import {
+  NODE_ENTER_CLASS,
+  nodeEnterDelayStyle,
+  nodeEnterStaggerDelayMs,
+} from "../lib/node-enter-motion";
+import {
   isLowConfidence,
   nodeConfidence,
   nodeIsVisuallyBusy,
   visualForNodeType,
 } from "../lib/node-visuals";
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined" || !window.matchMedia) return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
 
 /**
  * LRM-908 C8: narrow-screen vertical logic strip — start → path → end,
@@ -28,6 +39,7 @@ import {
  * LRM-775: presence activity → pulse + caption on related cards.
  * LRM-972: dead_end / conflict / low-confidence dual-coded on strip cards.
  * LRM-981: scannable retry CTA on dead-end / failure cards.
+ * LRM-827: card enter fade+slide with batch stagger (reduced-motion off).
  */
 export function ResearchLogicStrip({
   nodes,
@@ -68,6 +80,31 @@ export function ResearchLogicStrip({
     endSynthetic,
   ];
 
+  const seenEnterIds = useRef<Set<string> | null>(null);
+  if (seenEnterIds.current === null) {
+    seenEnterIds.current = new Set();
+  }
+  const pathKey = pathIds.join("|");
+  const enterDelayById = useMemo(() => {
+    const delays = new Map<string, number>();
+    const stripIds = [
+      ...(pathKey ? pathKey.split("|").filter(Boolean) : []),
+      LOGIC_END_NODE_ID,
+    ];
+    if (prefersReducedMotion()) {
+      for (const id of stripIds) seenEnterIds.current!.add(id);
+      return delays;
+    }
+    let batchIndex = 0;
+    for (const id of stripIds) {
+      if (seenEnterIds.current!.has(id)) continue;
+      seenEnterIds.current!.add(id);
+      delays.set(id, nodeEnterStaggerDelayMs(batchIndex));
+      batchIndex += 1;
+    }
+    return delays;
+  }, [pathKey]);
+
   return (
     <div
       className="flex h-full min-h-0 flex-col overflow-y-auto bg-canvas-bg px-3 py-3"
@@ -79,6 +116,8 @@ export function ResearchLogicStrip({
       </div>
       <ol className="relative space-y-0">
         {items.map((node, index) => {
+          const enterDelayMs = enterDelayById.get(node.id);
+          const entering = enterDelayMs !== undefined;
           const status = resolveLogicStatus(node);
           const start = isLogicStartNode(node);
           const end = isLogicEndNode(node);
@@ -143,6 +182,7 @@ export function ResearchLogicStrip({
               <div
                 className={cn(
                   "mb-2 min-w-0 flex-1 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
+                  entering && `${NODE_ENTER_CLASS} research-logic-strip-card-enter`,
                   selected && "border-brand ring-2 ring-brand/30",
                   !selected &&
                     !lowConf &&
@@ -156,6 +196,7 @@ export function ResearchLogicStrip({
                   (isDeadEnd || isRefuted || isConflict) && visual.shellClass,
                   lowConf && !isDeadEnd && !isRefuted && "border-dashed border-warning/70",
                 )}
+                style={entering ? nodeEnterDelayStyle(enterDelayMs ?? 0) : undefined}
                 data-node-type={end ? "logic_end" : node.node_type}
                 data-low-confidence={lowConf ? "true" : undefined}
                 data-presence-busy={presenceBusy ? "true" : undefined}

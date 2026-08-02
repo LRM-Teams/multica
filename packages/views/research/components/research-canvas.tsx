@@ -35,6 +35,12 @@ import {
 import type { ChatDrawerMode } from "../lib/chat-drawer-mode";
 import { layoutResearchGraph, type ResearchFlowNodeData } from "../lib/layout-graph";
 import { LOGIC_END_NODE_ID, isLogicEndNode } from "../lib/logic-lanes";
+import {
+  NODE_ENTER_CLASS,
+  nodeEnterDelayStyle,
+  nodeEnterMotionCss,
+  nodeEnterStaggerDelayMs,
+} from "../lib/node-enter-motion";
 import { edgeVisualForConnection } from "../lib/node-visuals";
 import { ResearchCanvasDock } from "./research-canvas-dock";
 import { ResearchChatFab } from "./research-chat-fab";
@@ -46,6 +52,8 @@ import { SYSTEM_NODE_TYPES, type NodeRingAction } from "../lib/node-action-ring"
 import { ResearchNodeActionRing } from "./research-node-action-ring";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { useT } from "../../i18n/use-t";
+
+const NODE_ENTER_MOTION_CSS = nodeEnterMotionCss();
 
 const nodeTypes: NodeTypes = {
   research: ResearchGraphNodeView,
@@ -101,7 +109,8 @@ function ResearchCanvasInner({
   const [detailPinned, setDetailPinned] = useState(false);
   const [pinnedNodeId, setPinnedNodeId] = useState<string | null>(null);
   const [zoomPct, setZoomPct] = useState(100);
-  // Opacity-only enter motion (never touch transform — RF uses it for position).
+  // LRM-827: enter class on RF node; fade+slide runs on inner shell so RF
+  // position transform is never overridden.
   const enterClassById = useRef<Map<string, string> | null>(null);
   if (enterClassById.current === null) {
     enterClassById.current = new Map();
@@ -117,22 +126,29 @@ function ResearchCanvasInner({
     const reduceMotion = prefersReducedMotion();
     const classMap = enterClassById.current!;
     const posMap = userPositions.current!;
+    const delayById = new Map<string, number>();
+    let newEnterIndex = 0;
+    for (const n of laid.nodes) {
+      const research = n.data.research;
+      const isBand = n.type === "laneBand" || !research;
+      if (!isBand && !classMap.has(n.id) && !reduceMotion) {
+        classMap.set(n.id, NODE_ENTER_CLASS);
+        delayById.set(n.id, nodeEnterStaggerDelayMs(newEnterIndex));
+        newEnterIndex += 1;
+      }
+    }
 
     setRfNodes((prev) => {
       const prevById = new Map(prev.map((n) => [n.id, n]));
-      return laid.nodes.map((n, index) => {
+      return laid.nodes.map((n) => {
         const research = n.data.research;
         const isBand = n.type === "laneBand" || !research;
         const actorId = research?.actor_agent_id;
         const presenceLabel = actorId ? presence?.[actorId]?.activity : undefined;
-        if (!isBand && !classMap.has(n.id) && !reduceMotion) {
-          classMap.set(n.id, `research-node-enter`);
-        }
+        const delayMs = delayById.get(n.id) ?? 0;
         const dragged = isBand ? undefined : posMap.get(n.id);
         const previous = prevById.get(n.id);
         const position = dragged ?? previous?.position ?? n.position;
-        const delayMs =
-          !isBand && !posMap.has(n.id) && !previous ? Math.min(index, 12) * 45 : 0;
         return {
           ...n,
           position,
@@ -141,7 +157,7 @@ function ResearchCanvasInner({
           className: isBand ? undefined : classMap.get(n.id),
           style: {
             ...n.style,
-            animationDelay: delayMs ? `${delayMs}ms` : undefined,
+            ...(delayMs ? nodeEnterDelayStyle(delayMs) : undefined),
           },
           data: {
             ...n.data,
@@ -283,6 +299,7 @@ function ResearchCanvasInner({
         data-testid="research-canvas-overlay-grid"
         data-overlay="narrow"
       >
+        <style>{NODE_ENTER_MOTION_CSS}</style>
         <ResearchLogicStrip
           nodes={nodes}
           edges={edges}
@@ -336,26 +353,7 @@ function ResearchCanvasInner({
       data-overlay="desktop"
     >
       <style>{`
-        .research-node-enter {
-          animation: research-node-enter 520ms ease both;
-        }
-        @keyframes research-node-enter {
-          0% {
-            opacity: 0;
-            box-shadow: 0 0 0 2px color-mix(in oklch, var(--brand) 55%, transparent), 0 8px 24px color-mix(in oklch, var(--brand) 18%, transparent);
-          }
-          55% {
-            opacity: 1;
-            box-shadow: 0 0 0 2px color-mix(in oklch, var(--brand) 35%, transparent), 0 8px 20px color-mix(in oklch, var(--brand) 12%, transparent);
-          }
-          100% {
-            opacity: 1;
-            box-shadow: none;
-          }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .research-node-enter { animation: none; }
-        }
+        ${NODE_ENTER_MOTION_CSS}
         .react-flow__node.selected .research-graph-node-shell {
           outline: 2px solid var(--brand);
           outline-offset: 2px;

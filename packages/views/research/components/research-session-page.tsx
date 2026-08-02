@@ -849,7 +849,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             {isPaused ? (
               <output
                 data-testid="research-paused-banner"
-                className="block border-t border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[12px] leading-snug text-foreground"
+                className="block border-t border-warning/25 bg-warning/10 px-3 py-2 text-[12px] leading-snug text-foreground"
               >
                 <span className="font-medium">{t(($) => $.panel.paused_title)}</span>
                 {" · "}

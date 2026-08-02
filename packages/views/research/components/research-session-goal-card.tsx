@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import {
@@ -22,10 +23,11 @@ import {
 
 const PULSE_MS = 2800;
 
+/** LRM-1010 / LRM-790 — brand semantic tokens only (no hardcoded violet). */
 function statusDotClass(state: SessionGoalVisualState): string {
   switch (state) {
     case "updated":
-      return "bg-[var(--research-goal,#6b5cff)]";
+      return "bg-brand";
     case "pending_substantive":
       return "bg-warning";
     case "error":
@@ -59,6 +61,7 @@ export function ResearchSessionGoalCard({
   className?: string;
 }) {
   const { t } = useT("research");
+  const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() =>
     readGoalCardCollapsed(sessionId),
@@ -133,15 +136,13 @@ export function ResearchSessionGoalCard({
       title={t(($) => $.goal_card.card_title)}
       className={cn(
         "inline-flex max-w-[min(17.5rem,46vw)] items-center gap-1.5 rounded-lg border px-2 py-1 text-left transition-shadow",
-        "border-[color-mix(in_oklab,var(--research-goal,#6b5cff)_30%,var(--border))] bg-[var(--research-goal-soft,rgba(107,92,255,0.08))]",
-        "hover:bg-[color-mix(in_oklab,var(--research-goal,#6b5cff)_14%,transparent)]",
+        "border-brand/30 bg-brand/10 hover:bg-brand/15",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
-        model.state === "updated" &&
-          "shadow-[0_0_0_3px_color-mix(in_oklab,var(--research-goal,#6b5cff)_22%,transparent)]",
+        model.state === "updated" && "shadow-[0_0_0_3px_color-mix(in_oklab,var(--brand)_22%,transparent)]",
         className,
       )}
     >
-      <span className="shrink-0 text-[10px] font-extrabold tracking-wide text-[var(--research-goal,#6b5cff)]">
+      <span className="shrink-0 text-[10px] font-extrabold tracking-wide text-brand">
         {t(($) => $.goal_card.label)}
       </span>
       {model.state === "loading" ? (
@@ -175,7 +176,7 @@ export function ResearchSessionGoalCard({
       }}
       title={t(($) => $.goal_card.icon_title)}
       className={cn(
-        "relative inline-flex size-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-[var(--research-goal,#6b5cff)]",
+        "relative inline-flex size-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-brand",
         "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
         className,
       )}
@@ -193,27 +194,30 @@ export function ResearchSessionGoalCard({
     </button>
   );
 
+  // LRM-1010: narrow toolbar keeps Goal as icon so Approve/Reject never overflow.
+  const showIcon = isMobile || collapsed;
+
   return (
     <>
-      {collapsed ? icon : card}
+      {showIcon ? icon : card}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
           data-testid="research-session-goal-popover"
-          className="gap-0 p-0 sm:max-w-[26rem]"
+          className="max-w-[calc(100vw-1.5rem)] gap-0 p-0 sm:max-w-[26rem]"
         >
           <DialogHeader className="space-y-2 px-4 pt-4 pb-2 text-left">
             <DialogTitle className="flex items-center gap-2 text-sm">
-              <span className="inline-flex items-center gap-1.5 rounded-lg border border-[color-mix(in_oklab,var(--research-goal,#6b5cff)_30%,var(--border))] bg-[var(--research-goal-soft,rgba(107,92,255,0.08))] px-2 py-0.5">
-                <span className="text-[10px] font-extrabold tracking-wide text-[var(--research-goal,#6b5cff)]">
+              <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-brand/30 bg-brand/10 px-2 py-0.5">
+                <span className="shrink-0 text-[10px] font-extrabold tracking-wide text-brand">
                   {t(($) => $.goal_card.label)}
                 </span>
-                <span className="text-[11.5px] font-semibold">
+                <span className="min-w-0 truncate text-[11.5px] font-semibold">
                   {t(($) => $.goal_card.final_title)}
                 </span>
               </span>
             </DialogTitle>
             {model.note === "optimized" ? (
-              <DialogDescription className="text-[11px] text-[var(--research-goal,#6b5cff)]">
+              <DialogDescription className="text-[11px] text-brand">
                 {t(($) => $.goal_card.optimized_note)}
               </DialogDescription>
             ) : (
@@ -272,19 +276,22 @@ export function ResearchSessionGoalCard({
 
           <DialogFooter className="flex-row flex-wrap justify-between gap-2 border-t px-4 py-3 sm:justify-between">
             <div className="flex gap-1.5">
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                data-testid="research-session-goal-toggle-collapse"
-                onClick={() => setCollapsedPersist(!collapsed)}
-              >
-                {collapsed
-                  ? t(($) => $.goal_card.expand_card)
-                  : t(($) => $.goal_card.collapse_icon)}
-              </Button>
+              {/* Collapse toggle is desktop-only — narrow always uses the icon trigger. */}
+              {!isMobile ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  data-testid="research-session-goal-toggle-collapse"
+                  onClick={() => setCollapsedPersist(!collapsed)}
+                >
+                  {collapsed
+                    ? t(($) => $.goal_card.expand_card)
+                    : t(($) => $.goal_card.collapse_icon)}
+                </Button>
+              ) : null}
             </div>
-            <div className="flex gap-1.5">
+            <div className="flex min-w-0 flex-wrap justify-end gap-1.5">
               {model.state === "error" && onRetry ? (
                 <Button
                   type="button"

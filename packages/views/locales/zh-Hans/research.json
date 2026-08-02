@@ -341,7 +341,19 @@
     "citation_fetch_failed": "抓取失败",
     "citation_fetch_failed_hint": "该来源未能抓取。在可用链接恢复前，此处显示降级占位卡。",
     "citation_summary_empty": "暂无摘要。",
-    "citation_anchor": "定位引用 {{label}}"
+    "citation_anchor": "定位引用 {{label}}",
+    "source_failed_badge": "抓取失败",
+    "source_failed_purpose": "未纳入引用编号序列",
+    "source_fail_fetch": "来源抓取失败",
+    "source_fail_timeout": "抓取超时",
+    "source_fail_http": "HTTP 错误，无法抓取",
+    "source_fail_invalid_url": "链接无效",
+    "source_fail_missing": "来源缺失",
+    "source_fail_unknown": "来源不可用",
+    "sources_all_failed_title": "全部来源抓取失败",
+    "sources_all_failed_body": "当前没有可用来源。可重试抓取；会话与已有报告内容仍可继续查看。",
+    "sources_all_failed_retry": "重试抓取",
+    "sources_partial_failed_hint": "{{count}} 个来源抓取失败，已标注原因；会话继续。"
   },
   "m2": {
     "rail_title": "探索轨迹",

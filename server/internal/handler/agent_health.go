@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
 const (
@@ -47,10 +48,12 @@ const (
 	//   "stopped"  — agent_runtime.offline_reason (task ①)
 	//   "starting" — agent_runtime.starting_since / cold-start probe (#1802)
 	//   "crashed"  — agent.crashed_since from idle resident death (#1803)
+	//   "blocked"  — agent.provider_blocked_until (quota lock, #64/#77)
 	agentDisplayStatusIdle         = "idle"
 	agentDisplayStatusWorking      = "working"
 	agentDisplayStatusStarting     = "starting"
 	agentDisplayStatusCrashed      = "crashed"
+	agentDisplayStatusBlocked      = "blocked"
 	agentDisplayStatusDisconnected = "disconnected"
 	agentDisplayStatusOffline      = "offline"
 	agentDisplayStatusStopped      = "stopped"
@@ -325,7 +328,12 @@ func runtimeConnectivity(rt db.AgentRuntime, now time.Time) runtimeConnectivityT
 // drop is "offline"/"disconnected", not "crashed" — we no longer have a
 // live daemon asserting the provider-death fact. Mid-turn process_failure
 // never sets this column (different fact; do not invent).
-func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, crashedSince pgtype.Timestamptz, now time.Time) string {
+//
+// providerBlockDetail / providerBlockedUntil are the sticky provider-quota
+// lock (tasks #64/#77). detail non-empty locks; until NULL means unknown end
+// (still locked). Checked while connectivity is Online so a still-reachable
+// daemon cannot paint "idle"/"working" during lockout.
+func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, crashedSince pgtype.Timestamptz, providerBlockDetail string, providerBlockedUntil pgtype.Timestamptz, now time.Time) string {
 	// Checked before connectivity: a machine coming back from a crash sets
 	// starting_since before it has refreshed last_seen_at, so connectivity
 	// would otherwise still read Dead/Stale from before the crash — exactly
@@ -346,6 +354,9 @@ func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, crashedSi
 	}
 	if crashedSince.Valid {
 		return agentDisplayStatusCrashed
+	}
+	if taskfailure.ProviderLockActive(providerBlockDetail, providerBlockedUntil.Time, providerBlockedUntil.Valid, now) {
+		return agentDisplayStatusBlocked
 	}
 	if agentStatus == "working" {
 		return agentDisplayStatusWorking

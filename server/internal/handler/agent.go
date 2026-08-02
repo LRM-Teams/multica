@@ -58,6 +58,12 @@ type AgentResponse struct {
 	// this field for any UI that shows a live status badge; RuntimeStatus
 	// stays for callers that need the raw dispatch-relevant value.
 	RuntimeDisplayStatus string `json:"runtime_display_status,omitempty"`
+	// ProviderBlockedUntil / Detail (tasks #64/#77): sticky provider-quota
+	// display lock. Detail non-empty ⇒ locked; Until nil while locked means
+	// unknown end (still locked). Heartbeats do not clear it. Claim/drain
+	// gating is a separate card.
+	ProviderBlockedUntil *string `json:"provider_blocked_until,omitempty"`
+	ProviderBlockDetail  string  `json:"provider_block_detail,omitempty"`
 	// RuntimePinnedVersion (task #81) is non-nil when the daemon's
 	// MULTICA_PINNED_VERSION reported this machine as pinned. This only
 	// reflects the daemon's local intent — the server does not yet enforce
@@ -231,12 +237,20 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		}
 	}
 	crashedByAgent := map[string]pgtype.Timestamptz{}
+	providerBlockByAgent := map[string]db.ListAgentProviderBlockByIDsRow{}
 	if len(agentIDs) > 0 && h.Queries != nil {
 		if crashRows, err := h.Queries.ListAgentCrashedSinceByIDs(ctx, agentIDs); err != nil {
 			slog.Warn("failed to load agent crashed_since", "error", err)
 		} else {
 			for _, row := range crashRows {
 				crashedByAgent[uuidToString(row.ID)] = row.CrashedSince
+			}
+		}
+		if blockRows, err := h.Queries.ListAgentProviderBlockByIDs(ctx, agentIDs); err != nil {
+			slog.Warn("failed to load agent provider block", "error", err)
+		} else {
+			for _, row := range blockRows {
+				providerBlockByAgent[uuidToString(row.ID)] = row
 			}
 		}
 	}
@@ -262,8 +276,16 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 			// filtering on the runtimes list cannot blank live presence.
 			resps[idx].RuntimeStatus = rt.Status
 			resps[idx].RuntimeLastSeenAt = timestampToPtr(rt.LastSeenAt)
+			block := providerBlockByAgent[resps[idx].ID]
+			if block.ProviderBlockDetail != "" {
+				resps[idx].ProviderBlockDetail = block.ProviderBlockDetail
+				if block.ProviderBlockedUntil.Valid {
+					resps[idx].ProviderBlockedUntil = timestampToPtr(block.ProviderBlockedUntil)
+				}
+			}
 			resps[idx].RuntimeDisplayStatus = agentRuntimeDisplayStatus(
-				resps[idx].Status, rt, crashedByAgent[resps[idx].ID], now,
+				resps[idx].Status, rt, crashedByAgent[resps[idx].ID],
+				block.ProviderBlockDetail, block.ProviderBlockedUntil, now,
 			)
 			resps[idx].RuntimePinnedVersion = nullableTextPtr(rt.PinnedVersion)
 		}

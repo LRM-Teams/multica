@@ -32,7 +32,8 @@ export type AgentRuntimeDisplayStatus =
   | "disconnected"
   | "offline"
   | "stopped"
-  | "crashed";
+  | "crashed"
+  | "blocked";
 
 // Runtime visibility is a separate axis from agent visibility — different
 // vocabulary because it gates a different action. "private" (default) means
@@ -415,6 +416,12 @@ export interface Agent {
    * server/internal/handler/agent_health.go, not generated.
    */
   runtime_display_status?: AgentRuntimeDisplayStatus | null;
+  /**
+   * Sticky provider-quota lock (tasks #64/#77). Non-empty detail ⇒ locked.
+   * Until null while locked means unknown end (still locked — never invent).
+   */
+  provider_blocked_until?: string | null;
+  provider_block_detail?: string | null;
   runtime_config: Record<string, unknown>;
   custom_args: string[];
   /**

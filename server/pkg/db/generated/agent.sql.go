@@ -3436,10 +3436,16 @@ func (q *Queries) RecoverOrphanedTasksForRuntime(ctx context.Context, runtimeID 
 
 const refreshAgentStatusFromTasks = `-- name: RefreshAgentStatusFromTasks :one
 UPDATE agent AS a
-SET status = CASE WHEN EXISTS (
-    SELECT 1 FROM agent_inbox_event q
-    WHERE q.agent_id = a.id AND q.status = 'draining'
-) THEN 'working' ELSE 'idle' END,
+SET status = CASE
+    WHEN a.provider_block_detail <> ''
+         AND (a.provider_blocked_until IS NULL OR a.provider_blocked_until > now())
+      THEN 'blocked'
+    WHEN EXISTS (
+        SELECT 1 FROM agent_inbox_event q
+        WHERE q.agent_id = a.id AND q.status = 'draining'
+    ) THEN 'working'
+    ELSE 'idle'
+END,
     updated_at = now()
 WHERE a.id = $1
 RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, display_name, managed_role, source_agent_id, avatar_source, avatar_attachment_id, workspace_role

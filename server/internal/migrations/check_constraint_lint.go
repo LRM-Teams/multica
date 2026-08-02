@@ -47,14 +47,19 @@ func (n UnsafeNarrowing) String() string {
 //     or a type change existing rows can't convert to: these fail loudly
 //     (ALTER TABLE errors out) — bad, but at least visible and the data
 //     survives.
-//   - migration 107's down.sql (task #99) narrows comment.author_type by
-//     DELETE-ing the now-forbidden rows instead of remapping them. This
-//     checker does not flag it — it only looks for narrowed CHECK IN(...)
-//     lists, and a DELETE-based rollback has no CHECK-narrowing shape to
-//     detect. The down migration SUCCEEDS, silently, and 218 rows of real
-//     data are gone with no error to notice. A loud failure is strictly
-//     safer than a silent successful data loss; this checker only catches
-//     the loud-failure family.
+//   - 143_sandbox_reconfigure's down.sql (found during task #97's history
+//     audit, task #100) narrows sandbox_job.type by DELETE-ing the
+//     now-forbidden rows instead of remapping them — same shape in
+//     143/181_sandbox_create_template/182_sandbox_snapshot. This checker
+//     does not flag it — it only looks for narrowed CHECK IN(...) lists,
+//     and a DELETE-based rollback has no CHECK-narrowing shape to detect.
+//     The down migration SUCCEEDS, silently, and real rows are gone with no
+//     error to notice. A loud failure is strictly safer than a silent
+//     successful data loss; this checker only catches the loud-failure
+//     family. (migration 107 was the original example that surfaced this
+//     gap, task #99 — its down.sql was fixed by PR #1842 to RAISE EXCEPTION
+//     instead of DELETE, so it's no longer a live example; the ones above
+//     still are as of this writing.)
 //
 // A migration passing this check is not a general guarantee its rollback
 // works, or that it doesn't quietly destroy data — see task #97's own

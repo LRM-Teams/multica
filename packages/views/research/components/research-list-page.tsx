@@ -19,8 +19,11 @@ import { useT } from "../../i18n/use-t";
 import {
   appendCreateParamsToGoal,
   defaultCreateParams,
+  draftCreateParams,
   normalizeCreateParams,
-  type ResearchCreateParams,
+  validateCreateComposer,
+  type CreateComposerFieldErrors,
+  type ResearchCreateParamsDraft,
 } from "../lib/research-create-params";
 import {
   DONE_STATUSES,
@@ -50,8 +53,9 @@ type ComposerDraft = {
   goal: string;
   template: ResearchTemplate | null;
   draftTitle: string | undefined;
-  params: ResearchCreateParams;
+  params: ResearchCreateParamsDraft;
   paramsOpen: boolean;
+  fieldErrors: CreateComposerFieldErrors | null;
 };
 
 function emptyComposer(uiLanguage?: string): ComposerDraft {
@@ -61,6 +65,7 @@ function emptyComposer(uiLanguage?: string): ComposerDraft {
     draftTitle: undefined,
     params: defaultCreateParams(uiLanguage),
     paramsOpen: false,
+    fieldErrors: null,
   };
 }
 
@@ -86,6 +91,7 @@ export function ResearchListPage() {
     draftTitle,
     params: createParams,
     paramsOpen,
+    fieldErrors,
   } = composer;
 
   // Seed language from UI locale once i18n is ready (defaults stay standard/weights).
@@ -94,7 +100,7 @@ export function ResearchListPage() {
     localeSeeded.current = true;
     setComposer((prev) => ({
       ...prev,
-      params: normalizeCreateParams(
+      params: draftCreateParams(
         { ...prev.params, language: undefined },
         i18n.language,
       ),
@@ -107,9 +113,8 @@ export function ResearchListPage() {
   );
 
   const create = useMutation({
-    mutationFn: () => {
+    mutationFn: (params: ReturnType<typeof normalizeCreateParams>) => {
       const language = i18n?.language;
-      const params = normalizeCreateParams(createParams, language);
       const mergedGoal = appendCreateParamsToGoal(
         buildCreateGoal(selectedTemplate, goal, language),
         params,
@@ -214,12 +219,34 @@ export function ResearchListPage() {
     }));
   };
 
-  const canSubmit =
-    Boolean(selectedTemplate) || Boolean(goal.trim());
-
   const submitCreate = () => {
-    if (!canSubmit || create.isPending) return;
-    create.mutate();
+    if (create.isPending) return;
+    const language = i18n?.language;
+    const result = validateCreateComposer({
+      goal,
+      hasTemplate: Boolean(selectedTemplate),
+      params: createParams,
+      uiLanguage: language,
+    });
+    if (!result.ok) {
+      // Keep draft (goal / depth / weights / language); surface near-field errors.
+      const openParams = Boolean(result.errors.depth || result.errors.weights);
+      setComposer((prev) => ({
+        ...prev,
+        fieldErrors: result.errors,
+        paramsOpen: openParams ? true : prev.paramsOpen,
+      }));
+      if (result.errors.goal) {
+        queueMicrotask(focusComposer);
+      }
+      return;
+    }
+    setComposer((prev) => ({
+      ...prev,
+      fieldErrors: null,
+      params: result.params,
+    }));
+    create.mutate(result.params);
   };
 
   // LRM-787: keep the draft on failure and surface the error inside the card.
@@ -283,7 +310,13 @@ export function ResearchListPage() {
               ref={goalInputRef}
               value={goal}
               onChange={(e) =>
-                setComposer((prev) => ({ ...prev, goal: e.target.value }))
+                setComposer((prev) => ({
+                  ...prev,
+                  goal: e.target.value,
+                  fieldErrors: prev.fieldErrors?.goal
+                    ? { ...prev.fieldErrors, goal: undefined }
+                    : prev.fieldErrors,
+                }))
               }
               placeholder={
                 selectedTemplate
@@ -291,6 +324,11 @@ export function ResearchListPage() {
                   : t(($) => $.goal_placeholder)
               }
               rows={2}
+              aria-invalid={fieldErrors?.goal ? true : undefined}
+              aria-describedby={
+                fieldErrors?.goal ? "research-create-goal-error" : undefined
+              }
+              data-testid="research-create-goal"
               className="min-h-[64px] border-0 bg-transparent px-3 py-3 text-[13.5px] shadow-none focus-visible:ring-0 focus-visible:border-transparent sm:px-3.5"
               onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -299,6 +337,16 @@ export function ResearchListPage() {
                 }
               }}
             />
+            {fieldErrors?.goal ? (
+              <p
+                id="research-create-goal-error"
+                role="alert"
+                data-testid="research-create-goal-error"
+                className="px-3 pb-2 text-[12px] leading-relaxed text-destructive sm:px-3.5"
+              >
+                {t(($) => $.create_params.errors.empty_goal)}
+              </p>
+            ) : null}
             <div className="flex flex-col gap-2 border-t px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-3.5">
               {/* LRM-790: ⌘ hint yields on narrow; CTA goes full-width. */}
               <p className="hidden text-xs text-muted-foreground sm:block">
@@ -321,7 +369,8 @@ export function ResearchListPage() {
                 </Button>
                 <Button
                   onClick={submitCreate}
-                  disabled={!canSubmit || create.isPending}
+                  disabled={create.isPending}
+                  data-testid="research-create-submit"
                   className="h-10 w-full shrink-0 rounded-full bg-brand px-4 text-[13.5px] font-semibold text-brand-foreground hover:bg-brand/90 sm:h-9 sm:w-auto"
                 >
                   {create.isPending ? (
@@ -345,11 +394,22 @@ export function ResearchListPage() {
           <ResearchCreateParamsPanel
             open={paramsOpen}
             value={createParams}
+            errors={fieldErrors}
             onOpenChange={(open) =>
               setComposer((prev) => ({ ...prev, paramsOpen: open }))
             }
             onChange={(params) =>
               setComposer((prev) => ({ ...prev, params }))
+            }
+            onErrorsChange={(next) =>
+              setComposer((prev) => ({
+                ...prev,
+                fieldErrors: next
+                  ? { ...prev.fieldErrors, ...next, goal: prev.fieldErrors?.goal }
+                  : prev.fieldErrors?.goal
+                    ? { goal: prev.fieldErrors.goal }
+                    : null,
+              }))
             }
           />
 

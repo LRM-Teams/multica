@@ -2,7 +2,10 @@
  * LRM-838 — create-time research levers (depth / source weights / language).
  * depth_tier is a first-class create API field; weights + language also ride a
  * parseable goal trailer so session detail can round-trip them without a BE
- * schema change (LRM-835 will harden validation later).
+ * schema change.
+ *
+ * LRM-835 — FE validation: empty goal blocked; depth/weight out-of-range
+ * blocked with near-field errors (draft values are preserved, not wiped).
  */
 
 export type ResearchCreateDepthTier = "shallow" | "standard" | "deep";
@@ -16,6 +19,22 @@ export type ResearchCreateParams = {
   depth_tier: ResearchCreateDepthTier;
   language: ResearchCreateLanguage;
   source_weights: ResearchSourceWeights;
+};
+
+/** Draft may carry out-of-range weights / unknown enums until validation runs. */
+export type ResearchCreateParamsDraft = {
+  depth_tier: string;
+  language: string;
+  source_weights: ResearchSourceWeights;
+};
+
+export type CreateParamsFieldErrors = {
+  depth?: "depth_invalid";
+  weights?: Partial<Record<ResearchSourceWeightKey, "weight_out_of_range" | "weight_invalid">>;
+};
+
+export type CreateComposerFieldErrors = CreateParamsFieldErrors & {
+  goal?: "empty_goal";
 };
 
 export const SOURCE_WEIGHT_KEYS: ResearchSourceWeightKey[] = [
@@ -38,7 +57,7 @@ export const DEFAULT_SOURCE_WEIGHTS: ResearchSourceWeights = {
   community: 0.4,
 };
 
-/** Inclusive bounds for weight sliders (LRM-835 will surface out-of-range errors). */
+/** Inclusive bounds for source weights (LRM-835 surfaces out-of-range errors). */
 export const SOURCE_WEIGHT_MIN = 0;
 export const SOURCE_WEIGHT_MAX = 1;
 
@@ -63,6 +82,125 @@ export function clampSourceWeight(value: number): number {
   return Math.round(clamped * 100) / 100;
 }
 
+export function roundSourceWeight(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+export function isValidDepthTier(
+  value: string | null | undefined,
+): value is ResearchCreateDepthTier {
+  return Boolean(value && DEPTH_TIERS.includes(value as ResearchCreateDepthTier));
+}
+
+export function isValidCreateLanguage(
+  value: string | null | undefined,
+): value is ResearchCreateLanguage {
+  return Boolean(
+    value && CREATE_LANGUAGES.includes(value as ResearchCreateLanguage),
+  );
+}
+
+/** True when weight is a finite number inside [SOURCE_WEIGHT_MIN, SOURCE_WEIGHT_MAX]. */
+export function isSourceWeightInRange(value: number): boolean {
+  return (
+    Number.isFinite(value) &&
+    value >= SOURCE_WEIGHT_MIN &&
+    value <= SOURCE_WEIGHT_MAX
+  );
+}
+
+/**
+ * Fill missing draft fields without clamping — preserves out-of-range weights
+ * so LRM-835 can show near-field errors instead of silently rewriting input.
+ */
+export function draftCreateParams(
+  partial: Partial<ResearchCreateParamsDraft> | null | undefined,
+  uiLanguage?: string,
+): ResearchCreateParamsDraft {
+  const base = defaultCreateParams(uiLanguage);
+  const weights = partial?.source_weights ?? base.source_weights;
+  return {
+    depth_tier: partial?.depth_tier ?? base.depth_tier,
+    language: partial?.language ?? base.language,
+    source_weights: {
+      primary: Number.isFinite(weights.primary)
+        ? weights.primary
+        : base.source_weights.primary,
+      secondary: Number.isFinite(weights.secondary)
+        ? weights.secondary
+        : base.source_weights.secondary,
+      community: Number.isFinite(weights.community)
+        ? weights.community
+        : base.source_weights.community,
+    },
+  };
+}
+
+export function validateCreateParams(
+  partial: Partial<ResearchCreateParamsDraft> | null | undefined,
+  uiLanguage?: string,
+): { ok: true; params: ResearchCreateParams } | { ok: false; errors: CreateParamsFieldErrors } {
+  const draft = draftCreateParams(partial, uiLanguage);
+  const errors: CreateParamsFieldErrors = {};
+  if (!isValidDepthTier(draft.depth_tier)) {
+    errors.depth = "depth_invalid";
+  }
+  const weightErrors: NonNullable<CreateParamsFieldErrors["weights"]> = {};
+  for (const key of SOURCE_WEIGHT_KEYS) {
+    const value = draft.source_weights[key];
+    if (!Number.isFinite(value)) {
+      weightErrors[key] = "weight_invalid";
+    } else if (!isSourceWeightInRange(value)) {
+      weightErrors[key] = "weight_out_of_range";
+    }
+  }
+  if (Object.keys(weightErrors).length > 0) {
+    errors.weights = weightErrors;
+  }
+  if (errors.depth || errors.weights) {
+    return { ok: false, errors };
+  }
+  const language = isValidCreateLanguage(draft.language)
+    ? draft.language
+    : defaultCreateLanguage(uiLanguage);
+  return {
+    ok: true,
+    params: {
+      depth_tier: draft.depth_tier as ResearchCreateDepthTier,
+      language,
+      source_weights: {
+        primary: roundSourceWeight(draft.source_weights.primary),
+        secondary: roundSourceWeight(draft.source_weights.secondary),
+        community: roundSourceWeight(draft.source_weights.community),
+      },
+    },
+  };
+}
+
+export function validateCreateComposer(input: {
+  goal: string;
+  hasTemplate: boolean;
+  params: Partial<ResearchCreateParamsDraft> | null | undefined;
+  uiLanguage?: string;
+}):
+  | { ok: true; params: ResearchCreateParams }
+  | { ok: false; errors: CreateComposerFieldErrors } {
+  const errors: CreateComposerFieldErrors = {};
+  if (!input.hasTemplate && !input.goal.trim()) {
+    errors.goal = "empty_goal";
+  }
+  const paramsResult = validateCreateParams(input.params, input.uiLanguage);
+  if (!paramsResult.ok) {
+    Object.assign(errors, paramsResult.errors);
+  }
+  if (errors.goal || errors.depth || errors.weights) {
+    return { ok: false, errors };
+  }
+  // paramsResult.ok is guaranteed when no params field errors were merged.
+  return { ok: true, params: (paramsResult as { ok: true; params: ResearchCreateParams }).params };
+}
+
+/** Clamp + coerce for trailer/session display and safe API payloads. */
 export function normalizeCreateParams(
   partial: Partial<ResearchCreateParams> | null | undefined,
   uiLanguage?: string,

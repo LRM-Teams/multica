@@ -41,7 +41,7 @@ vi.mock("@multica/ui/components/ui/sheet", () => ({
   SheetDescription: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
 }));
 
-describe("ResearchCreateParamsPanel (LRM-838)", () => {
+describe("ResearchCreateParamsPanel (LRM-838 / LRM-835)", () => {
   it("renders adjustable depth, weights, and language controls", () => {
     const onChange = vi.fn();
     render(
@@ -80,7 +80,7 @@ describe("ResearchCreateParamsPanel (LRM-838)", () => {
     expect(next?.depth_tier).toBe("deep");
   });
 
-  it("done closes the panel", () => {
+  it("done closes the panel when params are valid", () => {
     const onOpenChange = vi.fn();
     render(
       <ResearchCreateParamsPanel
@@ -92,5 +92,36 @@ describe("ResearchCreateParamsPanel (LRM-838)", () => {
     );
     fireEvent.click(screen.getByTestId("research-create-params-done"));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("shows near-field weight error and keeps out-of-range value (LRM-835)", () => {
+    const onChange = vi.fn();
+    const onErrorsChange = vi.fn();
+    const onOpenChange = vi.fn();
+    const base = defaultCreateParams("en");
+    render(
+      <ResearchCreateParamsPanel
+        open
+        value={{
+          ...base,
+          source_weights: { ...base.source_weights, primary: 1.4 },
+        }}
+        onOpenChange={onOpenChange}
+        onChange={onChange}
+        onErrorsChange={onErrorsChange}
+      />,
+    );
+    expect(screen.getByTestId("research-create-weight-primary-error")).toHaveTextContent(
+      enResearch.create_params.errors.weight_out_of_range,
+    );
+    const input = screen.getByTestId(
+      "research-create-weight-primary-input",
+    ) as HTMLInputElement;
+    expect(input.value).toBe("1.4");
+    fireEvent.click(screen.getByTestId("research-create-params-done"));
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(onErrorsChange).toHaveBeenCalled();
+    const errs = onErrorsChange.mock.calls.at(-1)?.[0];
+    expect(errs?.weights?.primary).toBe("weight_out_of_range");
   });
 });

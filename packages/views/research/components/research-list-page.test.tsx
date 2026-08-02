@@ -310,14 +310,24 @@ describe("ResearchListPage composer hero (LRM-783 / LRM-784 / LRM-906)", () => {
     ).toBeInTheDocument();
   });
 
-  it("disables start until the goal is non-empty or a template chip is attached", () => {
+  it("keeps start enabled and shows near-field empty-goal error (LRM-835)", () => {
+    const mutate = vi.fn();
+    mutationRef.current = { ...mutationRef.current, mutate };
     render(<ResearchListPage />);
     const start = screen.getByRole("button", { name: enResearch.start });
-    expect(start).toBeDisabled();
+    expect(start).toBeEnabled();
+    fireEvent.click(start);
+    expect(mutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId("research-create-goal-error")).toHaveTextContent(
+      enResearch.create_params.errors.empty_goal,
+    );
+    // Draft stays empty (not wiped); params defaults remain usable after typing.
     fireEvent.change(screen.getByPlaceholderText(enResearch.goal_placeholder), {
       target: { value: "Vector DB comparison" },
     });
-    expect(start).toBeEnabled();
+    expect(screen.queryByTestId("research-create-goal-error")).not.toBeInTheDocument();
+    fireEvent.click(start);
+    expect(mutate).toHaveBeenCalledTimes(1);
   });
 
   it("⌘⏎ submits the composer", () => {
@@ -431,13 +441,21 @@ describe("ResearchListPage quick templates (LRM-817 / LRM-906 T2)", () => {
     expect(textarea.value).toBe("Vector DB for RAG");
   });
 
-  it("clearing the template chip disables start when the box is empty", () => {
+  it("clearing the template chip blocks empty submit with near-field error (LRM-835)", () => {
+    const mutate = vi.fn();
+    mutationRef.current = { ...mutationRef.current, mutate };
     render(<ResearchListPage />);
     fireEvent.click(screen.getByRole("button", { name: /Competitor analysis/i }));
     expect(screen.getByRole("button", { name: enResearch.start })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: enResearch.home.template_chip_clear }));
     expect(screen.queryByText(/prompt added/i)).toBeNull();
-    expect(screen.getByRole("button", { name: enResearch.start })).toBeDisabled();
+    const start = screen.getByRole("button", { name: enResearch.start });
+    expect(start).toBeEnabled();
+    fireEvent.click(start);
+    expect(mutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId("research-create-goal-error")).toHaveTextContent(
+      enResearch.create_params.errors.empty_goal,
+    );
   });
 });
 

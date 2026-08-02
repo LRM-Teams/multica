@@ -1,4 +1,13 @@
 /**
+ * Convert citation tokens [[cit:citation-id]] to standard markdown links with
+ * cit:// URLs (LRM-830). Applied before mention/sticker preprocessing so the
+ * downstream link renderer can project them as clickable inline refs.
+ */
+export function preprocessCitationTokens(text: string): string {
+  return text.replace(/\[\[cit:([^\]]+)\]\]/g, '[$1](cit://$1)')
+}
+
+/**
  * Convert legacy mention shortcodes [@ id="UUID" label="LABEL"] to the
  * standard markdown link format [@LABEL](mention://member/UUID).
  *

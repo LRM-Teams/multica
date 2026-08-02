@@ -6,6 +6,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { Markdown } from "../../common/markdown";
 import { ReportCitationList } from "./report-citation-card";
+import { InlineCitations } from "./report-inline-citations";
 import { EMPTY_RESEARCH_SOURCES } from "./report-citation-resolve";
 
 const proseClass = cn(
@@ -70,7 +71,22 @@ export function ReportProse({
             <section key={section.id} id={`report-sec-${section.id}`} className="scroll-mt-4">
               <Heading>{section.title}</Heading>
               {section.markdown ? (
-                <Markdown mode="full">{section.markdown}</Markdown>
+                <InlineCitations
+                  markdown={section.markdown}
+                  citations={sectionCitations}
+                  liveSources={sources}
+                  structuredSources={structured.sources}
+                  onLocateCitation={onLocateCitation}
+                >
+                  {(rewrittenMarkdown, renderCitation) => (
+                    <Markdown
+                      mode="full"
+                      renderCitation={renderCitation}
+                    >
+                      {rewrittenMarkdown}
+                    </Markdown>
+                  )}
+                </InlineCitations>
               ) : null}
               <ReportCitationList
                 citations={sectionCitations}

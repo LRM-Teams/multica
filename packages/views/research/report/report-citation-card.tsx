@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ExternalLink, Locate } from "lucide-react";
+import { ChevronDown, ExternalLink, Locate, Quote } from "lucide-react";
 import type {
   ResearchReportCitation,
   ResearchReportSourceRef,
@@ -172,6 +172,73 @@ export function ReportCitationCard({
         </div>
       ) : null}
     </article>
+  );
+}
+
+/**
+ * LRM-830 — compact citation popover for inline [^n] refs. Shows title, URL
+ * (new-window), quote when present, and a "locate footnote" button.
+ */
+export function InlineFootnoteCard({
+  citation,
+  source,
+  onLocate,
+}: {
+  citation: ResearchReportCitation;
+  source: CitationCardSource | ResearchReportSourceRef | null;
+  onLocate?: (citationId: string) => void;
+}) {
+  const { t } = useT("research");
+  const label = citation.label || `[${citation.index}]`;
+  const degraded = isCitationSourceDegraded(source);
+  const href = !degraded && source?.url ? source.url : null;
+
+  return (
+    <div
+      data-testid="research-inline-footnote"
+      className="rounded-lg border border-brand/25 bg-background/95 p-3 shadow-md backdrop-blur"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-[11px] font-semibold text-brand">{label}</span>
+            {href ? (
+              <a
+                href={href}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="truncate text-[13px] font-medium text-brand underline-offset-2 hover:underline"
+              >
+                {source?.title || hostOf(href)}
+                <ExternalLink className="ml-1 inline size-3 align-[-1px] opacity-70" aria-hidden />
+              </a>
+            ) : (
+              <span className="truncate text-[13px] font-medium text-muted-foreground">
+                {t(($) => $.reader.citation_unavailable)}
+              </span>
+            )}
+          </div>
+          {href ? (
+            <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{hostOf(href)}</p>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          data-testid="research-inline-footnote-locate"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          aria-label={t(($) => $.reader.citation_anchor, { label })}
+          onClick={() => onLocate?.(citation.id)}
+        >
+          <Locate className="size-3.5" aria-hidden />
+        </button>
+      </div>
+      {citation.quote ? (
+        <blockquote className="mt-2 border-l-2 border-brand/50 pl-2 text-[12px] italic text-muted-foreground">
+          <Quote className="mr-1 inline size-3 align-[-1px] opacity-60" aria-hidden />
+          {citation.quote}
+        </blockquote>
+      ) : null}
+    </div>
   );
 }
 

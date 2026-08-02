@@ -829,6 +829,73 @@ func (q *Queries) RecordEvolutionSkillOutcome(ctx context.Context, arg RecordEvo
 	return err
 }
 
+const recordEvolutionMemoryInjection = `-- name: RecordEvolutionMemoryInjection :exec
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, local_unit_id, event, outcome, source, metadata
+)
+SELECT $1, $2, $3, 'memory', $4, $5, 'injected', '', 'runtime',
+       jsonb_build_object(
+         'execution_id', $6::uuid,
+         'sync_key', $7::text,
+         'scope', $8::text,
+         'inbox_event_id', $6::uuid
+       )
+WHERE NOT EXISTS (
+  SELECT 1 FROM evolution_unit_feedback_event
+  WHERE unit_type = 'memory' AND unit_id = $4 AND event = 'injected'
+    AND metadata->>'execution_id' = $6::text
+)
+`
+
+type RecordEvolutionMemoryInjectionParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+	TaskID      pgtype.UUID `json:"task_id"`
+	UnitID      pgtype.UUID `json:"unit_id"`
+	LocalUnitID string      `json:"local_unit_id"`
+	ExecutionID pgtype.UUID `json:"execution_id"`
+	SyncKey     string      `json:"sync_key"`
+	Scope       string      `json:"scope"`
+}
+
+func (q *Queries) RecordEvolutionMemoryInjection(ctx context.Context, arg RecordEvolutionMemoryInjectionParams) error {
+	_, err := q.db.Exec(ctx, recordEvolutionMemoryInjection,
+		arg.WorkspaceID, arg.AgentID, arg.TaskID, arg.UnitID, arg.LocalUnitID, arg.ExecutionID, arg.SyncKey, arg.Scope)
+	return err
+}
+
+const recordEvolutionUnitUsed = `-- name: RecordEvolutionUnitUsed :exec
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, local_unit_id, event, outcome, source, metadata
+)
+SELECT DISTINCT workspace_id, agent_id, task_id, unit_type, unit_id, local_unit_id,
+       'used', '', 'runtime',
+       jsonb_build_object(
+         'execution_id', $1::uuid,
+         'version_id', metadata->>'version_id',
+         'sync_key', metadata->>'sync_key',
+         'scope', metadata->>'scope',
+         'inbox_event_id', $1::uuid
+       )
+FROM evolution_unit_feedback_event
+WHERE event = 'injected'
+  AND unit_type IN ('memory', 'skill')
+  AND metadata->>'execution_id' = $1::text
+  AND NOT EXISTS (
+    SELECT 1 FROM evolution_unit_feedback_event recorded
+    WHERE recorded.unit_type = evolution_unit_feedback_event.unit_type
+      AND recorded.unit_id IS NOT DISTINCT FROM evolution_unit_feedback_event.unit_id
+      AND recorded.local_unit_id = evolution_unit_feedback_event.local_unit_id
+      AND recorded.event = 'used'
+      AND recorded.metadata->>'execution_id' = $1::text
+  )
+`
+
+func (q *Queries) RecordEvolutionUnitUsed(ctx context.Context, executionID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, recordEvolutionUnitUsed, executionID)
+	return err
+}
+
 func scanEvolutionUnitSubmission(row pgx.Row) (EvolutionUnitSubmission, error) {
 	var i EvolutionUnitSubmission
 	err := row.Scan(

@@ -2035,13 +2035,42 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		if workspaceID != "" {
 			if eventKind, eventType, message, ok := taskMessageCompactionActivity(msg.Type); ok {
 				targetKind, targetID, targetSlug := h.taskActivityTarget(r.Context(), task)
+				details := map[string]any{"task_message_id": uuidToString(created.ID), "seq": msg.Seq}
+				// LRM-985: attach active channel goal so compaction can be
+				// audited against the Goal anchor (resume evidence).
+				if task.ChannelID.Valid {
+					if goal, err := h.currentChannelGoal(r.Context(), parseUUID(workspaceID), task.ChannelID); err == nil {
+						if goalCtx := channelGoalContextForClaim(goal); goalCtx != nil {
+							details["goal_id"] = goalCtx.ID
+							details["goal_version"] = goalCtx.Version
+							details["channel_id"] = uuidToString(task.ChannelID)
+						}
+					}
+				}
 				h.recordAgentActivityEvent(r.Context(), h.DB,
 					parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
 					eventKind, eventType, "info",
 					targetKind, targetID, targetSlug,
 					"", message,
-					map[string]any{"task_message_id": uuidToString(created.ID), "seq": msg.Seq},
+					details,
 				)
+				if msg.Type == "compaction_finished" {
+					if goalID, _ := details["goal_id"].(string); goalID != "" {
+						h.recordAgentActivityEvent(r.Context(), h.DB,
+							parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
+							activityKindCustom, "channel_goal_anchor_after_compaction", "info",
+							targetKind, targetID, targetSlug,
+							"", "Channel goal still anchored after context compaction",
+							map[string]any{
+								"goal_id":         goalID,
+								"goal_version":    details["goal_version"],
+								"channel_id":      details["channel_id"],
+								"compaction_seq":  msg.Seq,
+								"task_message_id": uuidToString(created.ID),
+							},
+						)
+					}
+				}
 				continue
 			}
 			if visibility == "user_facing" {

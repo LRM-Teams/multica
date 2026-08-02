@@ -1123,8 +1123,9 @@ describe("ChannelMessageBubble", () => {
       /justify-start/,
     );
     expect(screen.getByTestId("message-collapse-fade").className).toMatch(
-      /via-background\/95/,
+      /from-background/,
     );
+    expect(screen.getByTestId("message-collapse-fade").className).toMatch(/from-35%/);
 
     await userEvent.click(expand);
 

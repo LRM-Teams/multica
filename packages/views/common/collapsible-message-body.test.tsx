@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CollapsibleMessageBody } from "./collapsible-message-body";
+import { resetCollapsibleMessageExpandedMemoryForTests } from "./collapsible-message-expanded-memory";
+
+afterEach(() => {
+  resetCollapsibleMessageExpandedMemoryForTests();
+});
 
 describe("CollapsibleMessageBody", () => {
   it("clips tall content behind See more and expands on click", async () => {
@@ -145,6 +150,56 @@ describe("CollapsibleMessageBody", () => {
     });
     expect(screen.queryByTestId("message-collapse-fade")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "See more" })).not.toBeInTheDocument();
+  });
+
+  it("keeps expand across remount with the same contentKey (LRM-987)", async () => {
+    const { unmount } = render(
+      <CollapsibleMessageBody
+        contentKey="remount-key"
+        expandLabel="See more"
+        collapseLabel="See less"
+      >
+        <div>
+          {Array.from({ length: 20 }, (_, index) => (
+            <p key={index}>Line {index}</p>
+          ))}
+        </div>
+      </CollapsibleMessageBody>,
+    );
+
+    const body = screen.getByTestId("collapsible-message-body");
+    Object.defineProperties(body, {
+      scrollHeight: { configurable: true, value: 420 },
+      clientHeight: { configurable: true, value: 320 },
+    });
+    fireEvent(window, new Event("resize"));
+    await userEvent.click(await screen.findByRole("button", { name: "See more" }));
+    expect(body).not.toHaveAttribute("data-collapsed");
+    unmount();
+
+    render(
+      <CollapsibleMessageBody
+        contentKey="remount-key"
+        expandLabel="See more"
+        collapseLabel="See less"
+      >
+        <div>
+          {Array.from({ length: 20 }, (_, index) => (
+            <p key={index}>Line {index}</p>
+          ))}
+        </div>
+      </CollapsibleMessageBody>,
+    );
+    const remounted = screen.getByTestId("collapsible-message-body");
+    Object.defineProperties(remounted, {
+      scrollHeight: { configurable: true, value: 420 },
+      clientHeight: { configurable: true, value: 320 },
+    });
+    fireEvent(window, new Event("resize"));
+    await waitFor(() => {
+      expect(remounted).not.toHaveAttribute("data-collapsed");
+    });
+    expect(screen.getByRole("button", { name: "See less" })).toBeInTheDocument();
   });
 
   it("does not collapse when enabled is false", async () => {

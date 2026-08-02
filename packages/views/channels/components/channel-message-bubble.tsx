@@ -48,6 +48,7 @@ import {
 import { MessageBody } from "./message-body";
 import { MessageInlineEditor } from "./message-inline-editor";
 import { areChannelMessageBubblePropsEqual } from "./channel-message-render-equality";
+import { useMessageContentExpanded } from "../hooks/use-message-content-expanded";
 import { ThreadReplyPreview } from "./thread-reply-preview";
 import { MessageQuoteCard } from "./message-quote";
 import { isLegacyRuntimeSystemNotice } from "./runtime-system-notice";
@@ -316,9 +317,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const mobileReactionShowFull = mobileOverlay === "reaction-full";
   // Key expansion to the message identity so a recycled row cannot keep another
   // bubble's See-more choice (no prop→state effect; LRM-268 / react-doctor).
+  // LRM-987: Map-backed so Virtuoso remount-after-expand does not flash-collapse.
   const collapseIdentity = `${message.id}\0${message.content ?? ""}\0${message.parts?.length ?? 0}\0${message.attachments?.length ?? 0}`;
-  const [expandedForIdentity, setExpandedForIdentity] = useState<string | null>(null);
-  const contentExpanded = expandedForIdentity === collapseIdentity;
+  const { contentExpanded, expand, collapse } = useMessageContentExpanded(
+    message.id,
+    collapseIdentity,
+  );
   const [contentOverflows, setContentOverflows] = useState(false);
   const [mobileThreadTapActive, setMobileThreadTapActive] = useState(false);
   // #1276 INV-3: a slow in-flight send must not stay silent (looking exactly like
@@ -1008,7 +1012,11 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    setExpandedForIdentity(collapseIdentity);
+                    expand();
+                    // Virtuoso remeasures after height change (LRM-987).
+                    window.requestAnimationFrame(() => {
+                      window.dispatchEvent(new Event("resize"));
+                    });
                   }}
                 >
                   {t(($) => $.message.expand_action)}
@@ -1023,7 +1031,10 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
-                    setExpandedForIdentity(null);
+                    collapse();
+                    window.requestAnimationFrame(() => {
+                      window.dispatchEvent(new Event("resize"));
+                    });
                   }}
                 >
                   {t(($) => $.message.collapse_action)}

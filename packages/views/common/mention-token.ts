@@ -100,33 +100,35 @@ export function resolveMessageCollapseFadeVariant(options: {
 export function messageCollapseFadeClassName(
   variant: MessageCollapseFadeVariant,
 ): string {
+  // LRM-987: taller opaque wash so collapsed bottom edge does not leak half-lines
+  // of table/prose under the 「查看更多」control (screenshot: faint truncated row).
   const layout =
-    "pointer-events-none absolute inset-x-0 bottom-0 flex justify-start pb-0.5 pt-10";
+    "pointer-events-none absolute inset-x-0 bottom-0 flex justify-start pb-0.5 pt-14";
   switch (variant) {
     case "search":
       return cn(
         layout,
-        "bg-gradient-to-t from-primary/5 via-primary/5/95 to-transparent",
+        "bg-gradient-to-t from-primary/5 from-35% via-primary/5 via-60% to-transparent",
       );
     case "highlighted":
       return cn(
         layout,
-        "bg-gradient-to-t from-primary/10 via-primary/10/95 to-transparent",
+        "bg-gradient-to-t from-primary/10 from-35% via-primary/10 via-60% to-transparent",
       );
     case "self-mention":
       return cn(
         layout,
-        "bg-gradient-to-t from-[#fef9e8] via-[#fef9e8]/95 to-transparent dark:from-brand/[0.06] dark:via-brand/[0.06]/95",
+        "bg-gradient-to-t from-[#fef9e8] from-35% via-[#fef9e8] via-60% to-transparent dark:from-brand/[0.06] dark:via-brand/[0.06]",
       );
     case "muted":
       return cn(
         layout,
-        "bg-gradient-to-t from-muted via-muted/95 to-transparent",
+        "bg-gradient-to-t from-muted from-35% via-muted via-60% to-transparent",
       );
     default:
       return cn(
         layout,
-        "bg-gradient-to-t from-background via-background/95 to-transparent",
+        "bg-gradient-to-t from-background from-35% via-background via-60% to-transparent",
       );
   }
 }

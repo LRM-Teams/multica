@@ -135,6 +135,7 @@ export const ChannelGoalSubgoalSchema = z.object({
   waiting_on: ChannelGoalSubgoalWaitingOnSchema.nullable().default(null),
   artifact_refs: z.array(z.string()).default([]),
   activity_delta: z.array(z.string()).default([]),
+  source_message_id: z.string().optional(),
   created_by_type: z.string().default(""),
   created_by_id: z.string().default(""),
   updated_by_type: z.string().default(""),

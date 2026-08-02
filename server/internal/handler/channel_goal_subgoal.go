@@ -46,6 +46,7 @@ type ChannelGoalSubgoalResponse struct {
 	WaitingOn          json.RawMessage `json:"waiting_on"`
 	ArtifactRefs       []string        `json:"artifact_refs"`
 	ActivityDelta      []string        `json:"activity_delta"`
+	SourceMessageID    *string         `json:"source_message_id,omitempty"`
 	CreatedByType      string          `json:"created_by_type"`
 	CreatedByID        string          `json:"created_by_id"`
 	UpdatedByType      string          `json:"updated_by_type"`
@@ -75,6 +76,7 @@ type createSubgoalRequest struct {
 	Participants       []subgoalActor `json:"participants"`
 	DependsOn          []string       `json:"depends_on"`
 	ArtifactRefs       []string       `json:"artifact_refs"`
+	SourceMessageID    *string        `json:"source_message_id,omitempty"`
 }
 
 type batchCreateSubgoalsRequest struct {
@@ -95,6 +97,8 @@ type updateSubgoalRequest struct {
 	ArtifactRefs       *[]string       `json:"artifact_refs,omitempty"`
 	ActivityDelta      *[]string       `json:"activity_delta,omitempty"`
 	WaitingOn          json.RawMessage `json:"waiting_on,omitempty"`
+	// SourceMessageID: omit = unchanged; ""/null = clear; UUID = set (same-channel).
+	SourceMessageID *string `json:"source_message_id,omitempty"`
 }
 
 type clearWaitingOnRequest struct {
@@ -130,18 +134,18 @@ type subgoalBatchEnvelope struct {
 const channelGoalSubgoalColumns = `
 	id::text, workspace_id, channel_id, goal_id, title, purpose, completion_boundary,
 	brief, current_conclusion, status, version, responsible_type, responsible_id,
-	waiting_on, artifact_refs, activity_delta, created_by_type, created_by_id,
+	waiting_on, artifact_refs, activity_delta, source_message_id, created_by_type, created_by_id,
 	updated_by_type, updated_by_id, created_at, updated_at, resolved_at`
 
 func scanChannelGoalSubgoal(row pgx.Row) (ChannelGoalSubgoalResponse, error) {
 	var sg ChannelGoalSubgoalResponse
-	var workspaceID, channelID, goalID, responsibleID, createdByID, updatedByID pgtype.UUID
+	var workspaceID, channelID, goalID, responsibleID, createdByID, updatedByID, sourceMessageID pgtype.UUID
 	var waitingOn, artifactRefs, activityDelta []byte
 	var resolvedAt pgtype.Timestamptz
 	err := row.Scan(
 		&sg.ID, &workspaceID, &channelID, &goalID, &sg.Title, &sg.Purpose, &sg.CompletionBoundary,
 		&sg.Brief, &sg.CurrentConclusion, &sg.Status, &sg.Version, &sg.ResponsibleType, &responsibleID,
-		&waitingOn, &artifactRefs, &activityDelta, &sg.CreatedByType, &createdByID,
+		&waitingOn, &artifactRefs, &activityDelta, &sourceMessageID, &sg.CreatedByType, &createdByID,
 		&sg.UpdatedByType, &updatedByID, &sg.CreatedAt, &sg.UpdatedAt, &resolvedAt,
 	)
 	if err != nil {
@@ -153,6 +157,10 @@ func scanChannelGoalSubgoal(row pgx.Row) (ChannelGoalSubgoalResponse, error) {
 	sg.ResponsibleID = uuidToString(responsibleID)
 	sg.CreatedByID = uuidToString(createdByID)
 	sg.UpdatedByID = uuidToString(updatedByID)
+	if sourceMessageID.Valid {
+		id := uuidToString(sourceMessageID)
+		sg.SourceMessageID = &id
+	}
 	if len(waitingOn) == 0 || string(waitingOn) == "null" {
 		sg.WaitingOn = json.RawMessage("null")
 	} else {
@@ -173,6 +181,31 @@ func scanChannelGoalSubgoal(row pgx.Row) (ChannelGoalSubgoalResponse, error) {
 		sg.ResolvedAt = &t
 	}
 	return sg, nil
+}
+
+// resolveSubgoalSourceMessageID validates optional source_message_id against the
+// same channel. Empty string → null UUID (clear / unset).
+func (h *Handler) resolveSubgoalSourceMessageID(ctx context.Context, channelID pgtype.UUID, raw string) (pgtype.UUID, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return pgtype.UUID{}, nil
+	}
+	msgID, err := util.ParseUUID(raw)
+	if err != nil || !msgID.Valid {
+		return pgtype.UUID{}, errors.New("invalid source_message_id")
+	}
+	var ok bool
+	if err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM channel_message
+			WHERE id = $1 AND channel_id = $2 AND deleted_at IS NULL
+		)`, msgID, channelID).Scan(&ok); err != nil {
+		return pgtype.UUID{}, err
+	}
+	if !ok {
+		return pgtype.UUID{}, errors.New("source_message_id must reference a message in this channel")
+	}
+	return msgID, nil
 }
 
 func normalizeSubgoalActor(actor subgoalActor) (subgoalActor, bool) {
@@ -356,15 +389,23 @@ func (h *Handler) insertSubgoal(ctx context.Context, workspaceID, channelID, goa
 		return ChannelGoalSubgoalResponse{}, errors.New("invalid artifact_refs")
 	}
 	refsJSON, _ := json.Marshal(refs)
+	var sourceMessageID pgtype.UUID
+	if req.SourceMessageID != nil {
+		resolved, err := h.resolveSubgoalSourceMessageID(ctx, channelID, *req.SourceMessageID)
+		if err != nil {
+			return ChannelGoalSubgoalResponse{}, err
+		}
+		sourceMessageID = resolved
+	}
 	sg, err := scanChannelGoalSubgoal(h.DB.QueryRow(ctx, `
 		INSERT INTO channel_goal_subgoal (
 			workspace_id, channel_id, goal_id, title, purpose, completion_boundary, brief,
-			responsible_type, responsible_id, artifact_refs,
+			responsible_type, responsible_id, artifact_refs, source_message_id,
 			created_by_type, created_by_id, updated_by_type, updated_by_id
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$11,$12)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$12,$13)
 		RETURNING `+channelGoalSubgoalColumns,
 		workspaceID, channelID, goalID, title, purpose, boundary, brief,
-		responsible.Type, parseUUID(responsible.ID), refsJSON, actorType, actorID))
+		responsible.Type, parseUUID(responsible.ID), refsJSON, sourceMessageID, actorType, actorID))
 	if err != nil {
 		return sg, err
 	}
@@ -555,6 +596,24 @@ func (h *Handler) UpdateChannelGoalSubgoal(w http.ResponseWriter, r *http.Reques
 		}
 		current.ArtifactRefs = refs
 	}
+	sourceMessageID := pgtype.UUID{}
+	if current.SourceMessageID != nil {
+		sourceMessageID = parseUUID(*current.SourceMessageID)
+	}
+	if req.SourceMessageID != nil {
+		resolved, err := h.resolveSubgoalSourceMessageID(r.Context(), channelID, *req.SourceMessageID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		sourceMessageID = resolved
+		if resolved.Valid {
+			id := uuidToString(resolved)
+			current.SourceMessageID = &id
+		} else {
+			current.SourceMessageID = nil
+		}
+	}
 	if req.ActivityDelta != nil {
 		delta, valid := normalizeOptionalGoalStrings(*req.ActivityDelta, 20, 500)
 		if !valid {
@@ -620,15 +679,15 @@ func (h *Handler) UpdateChannelGoalSubgoal(w http.ResponseWriter, r *http.Reques
 		UPDATE channel_goal_subgoal
 		SET title=$1, purpose=$2, completion_boundary=$3, brief=$4, current_conclusion=$5,
 		    status=$6, responsible_type=$7, responsible_id=$8::uuid, waiting_on=$9::jsonb,
-		    artifact_refs=$10::jsonb, activity_delta=$11::jsonb,
-		    updated_by_type='user', updated_by_id=$12, version=version+1, updated_at=now(),
+		    artifact_refs=$10::jsonb, activity_delta=$11::jsonb, source_message_id=$12,
+		    updated_by_type='user', updated_by_id=$13, version=version+1, updated_at=now(),
 		    resolved_at = CASE WHEN $6 IN ('resolved','cancelled') THEN COALESCE(resolved_at, now()) ELSE NULL END,
 		    waiting_on_verified_at = CASE WHEN $9::jsonb = 'null'::jsonb THEN waiting_on_verified_at ELSE NULL END
-		WHERE id=$13 AND version=$14
+		WHERE id=$14 AND version=$15
 		RETURNING `+channelGoalSubgoalColumns,
 		current.Title, current.Purpose, current.CompletionBoundary, current.Brief, current.CurrentConclusion,
 		current.Status, current.ResponsibleType, current.ResponsibleID, waitingJSON,
-		artifactJSON, activityJSON, parseUUID(userID), subgoalID, req.ExpectedVersion))
+		artifactJSON, activityJSON, sourceMessageID, parseUUID(userID), subgoalID, req.ExpectedVersion))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "subgoal version is stale")
 		return

@@ -25,11 +25,21 @@ const base = {
   updated_at: "2026-07-31T00:00:00Z",
 } as unknown as ResearchGraphNode;
 
-describe("ringActionsForNode (LRM-848)", () => {
+describe("ringActionsForNode (LRM-848 / LRM-981)", () => {
   it("makes retry primary on dead_end", () => {
     const actions = ringActionsForNode({ ...base, node_type: "dead_end" });
     expect(actions[0]).toMatchObject({ id: "retry", primary: true });
     expect(actions.find((a) => a.id === "detail")).toBeTruthy();
+  });
+
+  it("makes retry primary on refuted and failed status", () => {
+    expect(ringActionsForNode({ ...base, node_type: "refuted" })[0]).toMatchObject({
+      id: "retry",
+      primary: true,
+    });
+    expect(
+      ringActionsForNode({ ...base, node_type: "probe", status: "failed" })[0],
+    ).toMatchObject({ id: "retry", primary: true });
   });
 
   it("makes detail primary on probe and disables retry", () => {

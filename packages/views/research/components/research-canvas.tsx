@@ -151,6 +151,7 @@ function ResearchCanvasInner({
               "source_id" in (research.payload as object)
                 ? 1
                 : 0,
+            onRetry: onRetry ?? undefined,
           },
         } satisfies FlowNode;
       });
@@ -186,7 +187,7 @@ function ResearchCanvasInner({
         };
       }),
     );
-  }, [laid, laidIdsKey, selectedId, ringNodeId, setRfNodes, setRfEdges, presence]);
+  }, [laid, laidIdsKey, selectedId, ringNodeId, setRfNodes, setRfEdges, presence, onRetry]);
 
   useEffect(() => {
     if (!laidIdsKey) return;
@@ -312,6 +313,7 @@ function ResearchCanvasInner({
             }
           }}
           onOpenDelivery={onOpenDelivery}
+          onRetry={onRetry}
         />
         <ResearchFleetAvatarStack
           members={members}

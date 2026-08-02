@@ -15,13 +15,20 @@ export type NodeRingAction =
   | "dig_deeper"
   | "more";
 
+/** LRM-981 — dead-end / refuted / failed nodes offer a scannable retry entry. */
+export function nodeOffersRetry(node: ResearchGraphNode): boolean {
+  if (node.node_type === "dead_end" || node.node_type === "refuted") return true;
+  const s = (node.status || "").toLowerCase();
+  return s === "failed" || s === "error";
+}
+
 export function ringActionsForNode(node: ResearchGraphNode): {
   id: NodeRingAction;
   primary?: boolean;
   disabled?: boolean;
   candidate?: boolean;
 }[] {
-  const isDeadEnd = node.node_type === "dead_end";
+  const retryable = nodeOffersRetry(node);
   const hasSource =
     node.node_type === "finding" &&
     !!node.payload &&
@@ -29,10 +36,10 @@ export function ringActionsForNode(node: ResearchGraphNode): {
     "source_id" in (node.payload as object);
 
   return [
-    { id: isDeadEnd ? "retry" : "detail", primary: true },
+    { id: retryable ? "retry" : "detail", primary: true },
     { id: "locate_source", disabled: !hasSource },
     { id: "copy_prompt" },
-    { id: isDeadEnd ? "detail" : "retry", disabled: !isDeadEnd },
+    { id: retryable ? "detail" : "retry", disabled: !retryable },
     { id: "dig_deeper", candidate: true, disabled: true },
     { id: "more" },
   ];

@@ -10,9 +10,10 @@ import {
 
 export const RESEARCH_NODE_WIDTH = 200;
 /** Approximate rendered card height (title + status + 2-line summary). */
-export const RESEARCH_NODE_HEIGHT = 96;
+/** Includes LRM-981 on-card retry CTA clearance. */
+export const RESEARCH_NODE_HEIGHT = 118;
 
-export const LOGIC_LANE_HEIGHT = 128;
+export const LOGIC_LANE_HEIGHT = 148;
 export const LOGIC_LAYER_GAP = 236;
 export const LOGIC_MARGIN_X = 28;
 export const LOGIC_MARGIN_Y = 20;
@@ -30,6 +31,8 @@ export type ResearchFlowNodeData = {
   laneId?: LogicLaneId;
   /** Lane band chrome (non-interactive). */
   laneLabelKey?: LogicLaneId;
+  /** LRM-981 — scannable retry/reroute from the card surface. */
+  onRetry?: (node: ResearchGraphNode) => void;
 };
 
 export type ResearchFlowEdgeData = {

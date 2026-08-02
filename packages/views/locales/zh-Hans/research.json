@@ -173,6 +173,7 @@
     "doing": "正在做",
     "summary_empty": "暂无摘要。",
     "dead_end_reason": "死胡同原因",
+    "retry_cta": "重试 / 换路",
     "evidence": "证据 / 来源",
     "evidence_empty": "暂无关联来源。",
     "status": {
@@ -236,7 +237,7 @@
     "more": "更多",
     "soon": "待定",
     "esc_hint": "Esc 关闭",
-    "retry_message": "请从死胡同节点「{{title}}」（{{id}}）重新探索。"
+    "retry_message": "请从节点「{{title}}」（{{id}}）重试 / 换路继续探索。"
   },
   "dock": {
     "label": "画布控件",

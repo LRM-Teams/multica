@@ -173,6 +173,7 @@
     "doing": "In progress",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
+    "retry_cta": "Retry / Reroute",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources.",
     "status": {
@@ -236,7 +237,7 @@
     "more": "More",
     "soon": "Soon",
     "esc_hint": "Esc to close",
-    "retry_message": "Retry exploration from dead-end «{{title}}» (node {{id}})."
+    "retry_message": "Retry / reroute exploration from «{{title}}» (node {{id}})."
   },
   "dock": {
     "label": "Canvas controls",

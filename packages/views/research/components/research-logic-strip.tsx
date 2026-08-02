@@ -1,7 +1,9 @@
 "use client";
 
+import { RotateCcw } from "lucide-react";
 import type { ResearchPresenceMap } from "@multica/core/research";
 import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
+import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import {
@@ -12,6 +14,7 @@ import {
   mainPathNodeIds,
   resolveLogicStatus,
 } from "../lib/logic-lanes";
+import { nodeOffersRetry } from "../lib/node-action-ring";
 import {
   isLowConfidence,
   nodeConfidence,
@@ -24,6 +27,7 @@ import {
  * card rows (not git dots). Desktop keeps the full swimlane canvas.
  * LRM-775: presence activity → pulse + caption on related cards.
  * LRM-972: dead_end / conflict / low-confidence dual-coded on strip cards.
+ * LRM-981: scannable retry CTA on dead-end / failure cards.
  */
 export function ResearchLogicStrip({
   nodes,
@@ -31,6 +35,7 @@ export function ResearchLogicStrip({
   selectedId,
   onSelect,
   onOpenDelivery,
+  onRetry,
   presence,
 }: {
   nodes: ResearchGraphNode[];
@@ -38,6 +43,7 @@ export function ResearchLogicStrip({
   selectedId?: string | null;
   onSelect?: (node: ResearchGraphNode | null) => void;
   onOpenDelivery?: () => void;
+  onRetry?: (node: ResearchGraphNode) => void;
   presence?: ResearchPresenceMap;
 }) {
   const { t } = useT("research");
@@ -88,6 +94,7 @@ export function ResearchLogicStrip({
           const isDeadEnd = node.node_type === "dead_end";
           const isRefuted = node.node_type === "refuted";
           const isConflict = node.node_type === "conflict";
+          const showRetry = !end && nodeOffersRetry(node) && !!onRetry;
           const title = end
             ? t(($) => $.logic.end_title)
             : isDeadEnd
@@ -133,16 +140,7 @@ export function ResearchLogicStrip({
                   />
                 ) : null}
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  if (end) {
-                    onOpenDelivery?.();
-                    onSelect?.(endSynthetic);
-                    return;
-                  }
-                  onSelect?.(node);
-                }}
+              <div
                 className={cn(
                   "mb-2 min-w-0 flex-1 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
                   selected && "border-brand ring-2 ring-brand/30",
@@ -155,9 +153,7 @@ export function ResearchLogicStrip({
                   pulse && "motion-safe:animate-pulse motion-safe:[animation-duration:2.2s]",
                   presenceBusy &&
                     "shadow-[0_0_18px_color-mix(in_oklch,var(--brand)_28%,transparent)]",
-                  // LRM-793 / LRM-972: sunk muted dead-end / refuted / conflict shells
                   (isDeadEnd || isRefuted || isConflict) && visual.shellClass,
-                  // Low confidence = dashed + text (dual-coded)
                   lowConf && !isDeadEnd && !isRefuted && "border-dashed border-warning/70",
                 )}
                 data-node-type={end ? "logic_end" : node.node_type}
@@ -179,37 +175,66 @@ export function ResearchLogicStrip({
                               : "research-logic-strip-card"
                 }
               >
-                <div
-                  className={cn(
-                    "text-sm font-semibold text-foreground",
-                    isRefuted && "line-through decoration-muted-foreground/70",
-                  )}
+                <button
+                  type="button"
+                  className="w-full text-left"
+                  onClick={() => {
+                    if (end) {
+                      onOpenDelivery?.();
+                      onSelect?.(endSynthetic);
+                      return;
+                    }
+                    onSelect?.(node);
+                  }}
                 >
-                  {title}
-                </div>
-                <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{summary}</p>
-                {lowConf ? (
-                  <p
-                    data-testid="research-node-low-confidence-label"
-                    className="mt-1 text-[10.5px] font-medium text-warning"
+                  <div
+                    className={cn(
+                      "text-sm font-semibold text-foreground",
+                      isRefuted && "line-through decoration-muted-foreground/70",
+                    )}
                   >
-                    {t(($) => $.node.low_confidence)}
-                  </p>
-                ) : null}
-                {isDeadEnd ? (
-                  <p className="mt-1 text-[10.5px] font-medium text-muted-foreground">
-                    {t(($) => $.node.dead_end)}
-                  </p>
-                ) : null}
-                {presenceLabel ? (
-                  <p
-                    data-testid="research-node-presence-caption"
-                    className="mt-1 truncate text-[10px] font-medium text-primary"
+                    {title}
+                  </div>
+                  <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{summary}</p>
+                  {lowConf ? (
+                    <p
+                      data-testid="research-node-low-confidence-label"
+                      className="mt-1 text-[10.5px] font-medium text-warning"
+                    >
+                      {t(($) => $.node.low_confidence)}
+                    </p>
+                  ) : null}
+                  {isDeadEnd ? (
+                    <p className="mt-1 text-[10.5px] font-medium text-muted-foreground">
+                      {t(($) => $.node.dead_end)}
+                    </p>
+                  ) : null}
+                  {presenceLabel ? (
+                    <p
+                      data-testid="research-node-presence-caption"
+                      className="mt-1 truncate text-[10px] font-medium text-primary"
+                    >
+                      {presenceLabel}
+                    </p>
+                  ) : null}
+                </button>
+                {showRetry ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    data-testid="research-node-retry"
+                    className="mt-1.5 h-7 gap-1 border-destructive/35 bg-destructive/5 px-2 text-[11px] font-semibold text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRetry?.(node);
+                    }}
                   >
-                    {presenceLabel}
-                  </p>
+                    <RotateCcw className="size-3 shrink-0" aria-hidden />
+                    {t(($) => $.node.retry_cta)}
+                  </Button>
                 ) : null}
-              </button>
+              </div>
             </li>
           );
         })}

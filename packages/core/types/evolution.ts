@@ -565,3 +565,45 @@ export interface PromoteEvolutionReviewSubmissionResponse {
   status: string;
   unit_id?: string;
 }
+
+
+/** Explicit knowledge edge (LRM-1000 / LRM-1001). */
+export interface KnowledgeEdge {
+  id: string;
+  edge_type: string;
+  from_kind: string;
+  from_id: string;
+  to_kind: string;
+  to_id: string;
+  created_by_type: string;
+  created_by_id?: string;
+  created_at: string;
+}
+
+export interface KnowledgeNeighborsResponse {
+  page_id: string;
+  edges: KnowledgeEdge[];
+  hops: number;
+}
+
+export interface PromoteKnowledgeRequest {
+  source_type: "issue" | "channel";
+  source_id: string;
+  target_kind: "context" | "decision";
+  title: string;
+  content: string;
+  subject_id?: string;
+  supersedes_id?: string;
+  shared_to_agent_id?: string;
+}
+
+export interface PromoteKnowledgeResponse {
+  id: string;
+  kind: string;
+  title: string;
+  content: string;
+  status: string;
+  metadata?: unknown;
+  edges: KnowledgeEdge[];
+  created_at: string;
+}

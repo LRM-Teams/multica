@@ -22,11 +22,13 @@ import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { ResearchListPage } from "@multica/views/research";
 import { MyIssuesPage } from "@multica/views/my-issues";
 import { SkillsPage } from "@multica/views/skills";
+import { KnowledgeListPage } from "@multica/views/knowledge";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
 import { DesktopAgentsPage } from "./components/desktop-agents-page";
 import { SandboxesPage } from "@multica/views/sandboxes";
 import { SandboxDetailPage } from "./pages/sandbox-detail-page";
 import { SandboxNodeSetupPage } from "./pages/sandbox-node-setup-page";
+import { WikiDetailPage } from "./pages/wiki-detail-page";
 import { InboxPage } from "@multica/views/inbox";
 import { WorkspaceRouteLayout } from "./components/workspace-route-layout";
 import { DesktopRouteErrorPage } from "./components/route-error-page";
@@ -136,6 +138,12 @@ export const appRoutes: RouteObject[] = [
             path: "skills/:id",
             element: <SkillDetailPage />,
             handle: { title: "Skill" },
+          },
+          { path: "wiki", element: <KnowledgeListPage />, handle: { title: "Knowledge" } },
+          {
+            path: "wiki/:id",
+            element: <WikiDetailPage />,
+            handle: { title: "Knowledge" },
           },
           { path: "agents", element: <DesktopAgentsPage />, handle: { title: "Agents" } },
           {

@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw, X } from "lucide-react";
+import { BookMarked, RefreshCw, X } from "lucide-react";
 import type { ChannelGoal, ChannelGoalProcessMarkdown, ChannelMember } from "@multica/core/types";
 import {
   channelGoalProcessOptions,
@@ -10,12 +10,14 @@ import {
   channelMemberRole,
   channelMembersOptions,
 } from "@multica/core/channels";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { Markdown } from "../../common/markdown";
+import { AppLink } from "../../navigation";
 import { useT } from "../../i18n";
 import { useTimeAgo } from "../../i18n/use-time-ago";
 
@@ -84,6 +86,8 @@ export function GoalProcessPanel({
   currentUserId?: string;
 }) {
   const { t } = useT("channels");
+  const { t: tKnowledge } = useT("knowledge");
+  const paths = useWorkspacePaths();
   const timeAgo = useTimeAgo();
   const { data: membersData } = useQuery(channelMembersOptions(channelId));
   const members = membersData ?? EMPTY_MEMBERS;
@@ -247,6 +251,16 @@ export function GoalProcessPanel({
           <p className="truncate text-[11px] text-muted-foreground">{goal.title}</p>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            aria-label={tKnowledge(($) => $.drill.open_wiki)}
+            render={<AppLink href={`${paths.wiki()}?tab=goal`} />}
+          >
+            <BookMarked className="size-3.5" />
+          </Button>
           <Button
             type="button"
             variant="ghost"

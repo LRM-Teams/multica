@@ -13,6 +13,10 @@ import {
   dropdownPrimitives,
 } from "./issue-actions-menu-items";
 import { AssigneePicker } from "../components/pickers";
+import {
+  PromoteToWikiDialog,
+  type PromoteWikiTarget,
+} from "../../knowledge";
 
 interface IssueActionsDropdownProps {
   issue: Issue;
@@ -34,6 +38,7 @@ export function IssueActionsDropdown({
 }: IssueActionsDropdownProps) {
   const actions = useIssueActions(issue);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
+  const [promoteTarget, setPromoteTarget] = useState<PromoteWikiTarget | null>(null);
 
   // The outer `relative inline-flex` is the picker's anchor box: the
   // absolute, pointer-events-none span inside `triggerRender` fills it, so
@@ -51,6 +56,7 @@ export function IssueActionsDropdown({
             onOpenAssignee={() => setAssigneeOpen(true)}
             onDeletedNavigateTo={onDeletedNavigateTo}
             onToggleSidebar={onToggleSidebar}
+            onPromoteWiki={setPromoteTarget}
           />
         </DropdownMenuContent>
       </DropdownMenu>
@@ -72,6 +78,24 @@ export function IssueActionsDropdown({
           }
           trigger={<span />}
           align={align}
+        />
+      )}
+      {promoteTarget && (
+        <PromoteToWikiDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setPromoteTarget(null);
+          }}
+          targetKind={promoteTarget}
+          sourceType="issue"
+          sourceId={issue.id}
+          initialTitle={issue.title}
+          initialContent={issue.description?.trim() || issue.title}
+          subjectId={
+            promoteTarget === "decision"
+              ? (issue.project_id ?? undefined)
+              : (issue.channel?.channel_id ?? undefined)
+          }
         />
       )}
     </span>

@@ -138,6 +138,7 @@ const ROUTE_ICONS: Record<string, string> = {
   agents: "Bot",
   runtimes: "Monitor",
   skills: "BookOpenText",
+  wiki: "BookMarked",
   settings: "Settings",
 };
 

@@ -30,6 +30,7 @@ import type usage from "../locales/en/usage.json";
 import type billing from "../locales/en/billing.json";
 import type channels from "../locales/en/channels.json";
 import type evolution from "../locales/en/evolution.json";
+import type knowledge from "../locales/en/knowledge.json";
 import type research from "../locales/en/research.json";
 import type planBilling from "../locales/en/plan-billing.json";
 
@@ -76,6 +77,7 @@ declare global {
     billing: typeof billing;
     channels: typeof channels;
     evolution: typeof evolution;
+    knowledge: typeof knowledge;
     research: typeof research;
     "plan-billing": typeof planBilling;
   }

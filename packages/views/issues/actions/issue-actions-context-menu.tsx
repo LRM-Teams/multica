@@ -13,6 +13,10 @@ import {
   contextPrimitives,
 } from "./issue-actions-menu-items";
 import { AssigneePicker } from "../components/pickers";
+import {
+  PromoteToWikiDialog,
+  type PromoteWikiTarget,
+} from "../../knowledge";
 
 interface IssueActionsContextMenuProps {
   issue: Issue;
@@ -26,6 +30,7 @@ export function IssueActionsContextMenu({
 }: IssueActionsContextMenuProps) {
   const actions = useIssueActions(issue);
   const [assigneeOpen, setAssigneeOpen] = useState(false);
+  const [promoteTarget, setPromoteTarget] = useState<PromoteWikiTarget | null>(null);
   // Right-click coordinates captured during contextmenu so the AssigneePicker
   // opens where the context menu just was, instead of jumping to the row's
   // top-left corner. Reset between opens; only consulted while the picker is
@@ -49,6 +54,7 @@ export function IssueActionsContextMenu({
             actions={actions}
             primitives={contextPrimitives}
             onOpenAssignee={() => setAssigneeOpen(true)}
+            onPromoteWiki={setPromoteTarget}
           />
         </ContextMenuContent>
       </ContextMenu>
@@ -76,6 +82,24 @@ export function IssueActionsContextMenu({
           }
           trigger={<span />}
           align="start"
+        />
+      )}
+      {promoteTarget && (
+        <PromoteToWikiDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setPromoteTarget(null);
+          }}
+          targetKind={promoteTarget}
+          sourceType="issue"
+          sourceId={issue.id}
+          initialTitle={issue.title}
+          initialContent={issue.description?.trim() || issue.title}
+          subjectId={
+            promoteTarget === "decision"
+              ? (issue.project_id ?? undefined)
+              : (issue.channel?.channel_id ?? undefined)
+          }
         />
       )}
     </>

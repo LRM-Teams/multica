@@ -11,7 +11,12 @@ import {
   resolveLogicStatus,
   type LogicLaneId,
 } from "../lib/logic-lanes";
-import { nodeIsVisuallyBusy, visualForNodeType } from "../lib/node-visuals";
+import {
+  isLowConfidence,
+  nodeConfidence,
+  nodeIsVisuallyBusy,
+  visualForNodeType,
+} from "../lib/node-visuals";
 import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { isCompactActivityLabel } from "../../channels/components/is-compact-activity-label";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -29,6 +34,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
   if (!n) return null;
 
   const visual = visualForNodeType(n.node_type);
+  const lowConf = isLowConfidence(nodeConfidence(n));
   const presenceBusy = !!(data.presenceLabel && data.presenceLabel.trim());
   const actorBusy =
     presenceBusy || !!(projection && isCompactActivityLabel(projection.label));
@@ -83,30 +89,43 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
       className={cn(
         "research-graph-node-shell relative overflow-hidden rounded-xl border bg-card/95 text-left shadow-sm backdrop-blur-sm transition-[box-shadow,transform] duration-300",
         logicRole === "start" || logicRole === "end" ? "w-[216px]" : "w-[200px]",
-        n.status === "abandoned" && "opacity-85",
+        n.status === "abandoned" && !visual.shellClass && "opacity-85",
         logicRole === "start" &&
           "border-[color-mix(in_oklch,var(--success)_45%,var(--border))] ring-2 ring-[color-mix(in_oklch,var(--success)_28%,transparent)]",
         logicRole === "end" &&
           "border-[color-mix(in_oklch,var(--brand)_50%,var(--border))] ring-2 ring-brand/25",
         logicRole === "step" && visual.ringClass,
+        logicRole === "step" && visual.shellClass,
+        // LRM-793 / LRM-972: low confidence = dashed border + text (not color alone).
+        logicRole === "step" && lowConf && "border-dashed",
         selected && "scale-[1.02]",
-        pulse && "motion-safe:animate-pulse motion-safe:[animation-duration:2.2s]",
+        pulse && "motion-safe:animate-pulse motion-safe:[animation-duration:1.8s]",
         actorBusy && "shadow-[0_0_22px_color-mix(in_oklch,var(--brand)_30%,transparent)]",
         status.tone === "run" &&
           !selected &&
+          n.node_type !== "dead_end" &&
+          n.node_type !== "refuted" &&
           "shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand)_18%,transparent)]",
       )}
       data-logic-role={logicRole}
       data-lane={laneId}
+      data-node-type={n.node_type}
+      data-low-confidence={lowConf ? "true" : undefined}
       data-presence-busy={presenceBusy ? "true" : undefined}
       data-testid={
         logicRole === "start"
           ? "research-logic-start"
           : logicRole === "end"
             ? "research-logic-end"
-            : presenceBusy
-              ? "research-node-presence-busy"
-              : "research-logic-card"
+            : n.node_type === "dead_end"
+              ? "research-node-dead-end"
+              : n.node_type === "conflict"
+                ? "research-node-conflict"
+                : lowConf
+                  ? "research-node-low-confidence"
+                  : presenceBusy
+                    ? "research-node-presence-busy"
+                    : "research-logic-card"
       }
     >
       <div
@@ -141,8 +160,18 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
         ) : null}
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
-            <span className="truncate">
-              {logicRole === "step" ? t(($) => $.logic.lane[laneId]) : typeLabel}
+            <span
+              className={cn(
+                "truncate",
+                visual.labelTone === "warning" && "text-warning",
+                visual.labelTone === "danger" && "text-destructive",
+                visual.labelTone === "success" && "text-success",
+                visual.labelTone === "info" && "text-brand",
+              )}
+            >
+              {logicRole === "step" && !visual.emphasizeType
+                ? t(($) => $.logic.lane[laneId])
+                : typeLabel}
             </span>
             <span
               className={cn(
@@ -157,10 +186,25 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
               {t(($) => $.logic.status[status.key])}
             </span>
           </div>
-          <div className="mt-1 truncate text-sm font-semibold text-foreground">{title}</div>
+          <div
+            className={cn(
+              "mt-1 truncate text-sm font-semibold text-foreground",
+              visual.titleClass,
+            )}
+          >
+            {title}
+          </div>
           {summary ? (
             <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
               {summary}
+            </p>
+          ) : null}
+          {lowConf ? (
+            <p
+              data-testid="research-node-low-confidence-label"
+              className="mt-1.5 text-[10.5px] font-medium text-warning"
+            >
+              {t(($) => $.node.low_confidence)}
             </p>
           ) : null}
           {activityCaption ? (

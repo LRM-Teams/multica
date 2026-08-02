@@ -161,6 +161,7 @@
     "agent_activity": "Activity",
     "product_round_gate": "Product round",
     "confidence": "Confidence",
+    "low_confidence": "◌ Low confidence",
     "detail_hint": "Node detail",
     "summary": "Summary / conclusion",
     "doing": "In progress",

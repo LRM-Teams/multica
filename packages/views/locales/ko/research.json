@@ -161,6 +161,7 @@
     "agent_activity": "Activity",
     "product_round_gate": "Product round",
     "confidence": "Confidence",
+    "low_confidence": "◌ 낮은 신뢰도",
     "detail_hint": "Node detail",
     "summary": "Summary / conclusion",
     "doing": "진행 중",

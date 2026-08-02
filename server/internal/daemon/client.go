@@ -539,8 +539,10 @@ func (c *Client) AckAgentInboxEvent(ctx context.Context, lease AgentInboxLease) 
 	return c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/agent-inbox/events/%s/ack", lease.ID), body, nil, c.tokenForRuntime(lease.RuntimeID))
 }
 
-// PinTaskSession persists the agent's session_id and work_dir on the task
-// row mid-flight so a daemon crash doesn't lose the resume pointer.
+// PinTaskSession persists the provider CLI resume token (TEXT
+// agent_inbox_event.session_id) and work_dir on the task row mid-flight so a
+// daemon crash doesn't lose --resume. Not the Multica agent_session /
+// agent_session_id inbox wake/drain UUID (task #109).
 func (c *Client) PinTaskSession(ctx context.Context, taskID, sessionID, workDir string) error {
 	if sessionID == "" && workDir == "" {
 		return nil

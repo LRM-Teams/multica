@@ -70,10 +70,16 @@ func (h *Handler) RecoverOrphanedTasks(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PinTaskSession lets the daemon persist the agent's session_id and
-// work_dir as soon as they're known — typically right after the agent
-// emits its first system message — so a crash mid-run doesn't lose the
-// resume pointer needed to continue the conversation on the next attempt.
+// PinTaskSession lets the daemon persist the provider CLI resume token
+// (agent_inbox_event.session_id TEXT) and work_dir as soon as they're known —
+// typically right after the agent emits its first system message — so a crash
+// mid-run doesn't lose the --resume pointer for the next attempt.
+//
+// Homonym warning (task #109): this is NOT the agent_session table / the
+// agent_inbox_event.agent_session_id UUID that gates inbox wake/drain
+// (status active/paused/closed). Those share the word "session" with zero FK
+// or shared identity — CountPendingAgentInboxEventsForRuntime joins the
+// UUID table; PinTaskSession writes the TEXT resume column.
 type PinTaskSessionRequest struct {
 	SessionID string `json:"session_id,omitempty"`
 	WorkDir   string `json:"work_dir,omitempty"`

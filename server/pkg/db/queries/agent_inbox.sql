@@ -1,4 +1,8 @@
 -- name: UpsertAgentSession :one
+-- agent_session (this table) is Multica's inbox wake/drain row: UUID PK,
+-- status IN ('active','paused','closed'), joined as agent_inbox_event.agent_session_id.
+-- It is NOT agent_inbox_event.session_id (TEXT) — that column is the provider CLI
+-- resume token written by PinTaskSession / --resume. No FK links the two; task #109.
 INSERT INTO agent_session (
   workspace_id,
   agent_id,
@@ -140,6 +144,8 @@ SELECT * FROM agent_event_delivery
 WHERE id = $1;
 
 -- name: CountPendingAgentInboxEventsForRuntime :one
+-- Joins agent_session (inbox wake/drain status='active'), NOT the TEXT
+-- agent_inbox_event.session_id resume token from PinTaskSession (task #109).
 SELECT count(*)
 FROM agent_inbox_event e
 JOIN agent_session s ON s.id = e.agent_session_id

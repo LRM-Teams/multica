@@ -43,6 +43,7 @@ import {
   localizeTemplateField,
   type ResearchTemplate,
 } from "../lib/research-templates";
+import { ResearchCreateEstimateSummary } from "./research-create-estimate";
 import { ResearchCreateParamsPanel } from "./research-create-params-panel";
 import { ResearchEmptyState } from "./research-empty-state";
 import { ResearchHomeHero } from "./research-home-hero";
@@ -357,10 +358,13 @@ export function ResearchListPage() {
               </p>
             ) : null}
             <div className="flex flex-col gap-2 border-t px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-3.5">
-              {/* LRM-790: ⌘ hint yields on narrow; CTA goes full-width. */}
-              <p className="hidden text-xs text-muted-foreground sm:block">
-                {t(($) => $.home.composer_hint)}
-              </p>
+              {/* LRM-839: estimate line; LRM-790 ⌘ hint yields on narrow. */}
+              <div className="min-w-0 space-y-0.5">
+                <ResearchCreateEstimateSummary params={createParams} />
+                <p className="hidden text-xs text-muted-foreground sm:block">
+                  {t(($) => $.home.composer_hint)}
+                </p>
+              </div>
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
                 <Button
                   type="button"

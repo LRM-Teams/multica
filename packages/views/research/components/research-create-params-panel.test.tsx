@@ -41,7 +41,7 @@ vi.mock("@multica/ui/components/ui/sheet", () => ({
   SheetDescription: ({ children }: { children?: ReactNode }) => <p>{children}</p>,
 }));
 
-describe("ResearchCreateParamsPanel (LRM-838 / LRM-835)", () => {
+describe("ResearchCreateParamsPanel (LRM-838 / LRM-835 / LRM-839)", () => {
   it("renders adjustable depth, weights, and language controls", () => {
     const onChange = vi.fn();
     render(
@@ -62,6 +62,79 @@ describe("ResearchCreateParamsPanel (LRM-838 / LRM-835)", () => {
     expect(
       screen.getByText(enResearch.create_params.weight_rows.primary.hint),
     ).toBeInTheDocument();
+  });
+
+  it("shows linked estimate and refreshes when depth changes (LRM-839)", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <ResearchCreateParamsPanel
+        open
+        value={defaultCreateParams("en")}
+        onOpenChange={() => {}}
+        onChange={onChange}
+      />,
+    );
+    const estimate = screen.getByTestId("research-create-estimate");
+    expect(estimate).toHaveAttribute("data-estimate-status", "ready");
+    expect(estimate).toHaveTextContent(enResearch.create_estimate.badge);
+    expect(screen.getByTestId("research-create-estimate-cost")).toHaveTextContent(
+      enResearch.create_estimate.cost_tiers.medium,
+    );
+
+    const deep = { ...defaultCreateParams("en"), depth_tier: "deep" as const };
+    rerender(
+      <ResearchCreateParamsPanel
+        open
+        value={deep}
+        onOpenChange={() => {}}
+        onChange={onChange}
+      />,
+    );
+    expect(screen.getByTestId("research-create-estimate")).toHaveAttribute(
+      "data-estimate-status",
+      "ready",
+    );
+    expect(screen.getByTestId("research-create-estimate-cost")).toHaveTextContent(
+      enResearch.create_estimate.cost_tiers.high,
+    );
+
+    const shallow = {
+      ...defaultCreateParams("en"),
+      depth_tier: "shallow" as const,
+    };
+    rerender(
+      <ResearchCreateParamsPanel
+        open
+        value={shallow}
+        onOpenChange={() => {}}
+        onChange={onChange}
+      />,
+    );
+    expect(screen.getByTestId("research-create-estimate-cost")).toHaveTextContent(
+      enResearch.create_estimate.cost_tiers.low,
+    );
+  });
+
+  it("shows unknown estimate without blocking Done (LRM-839)", () => {
+    const onOpenChange = vi.fn();
+    render(
+      <ResearchCreateParamsPanel
+        open
+        value={defaultCreateParams("en")}
+        onOpenChange={onOpenChange}
+        onChange={() => {}}
+        estimateResolveOptions={{ lookup: () => null }}
+      />,
+    );
+    expect(screen.getByTestId("research-create-estimate")).toHaveAttribute(
+      "data-estimate-status",
+      "unknown",
+    );
+    expect(screen.getByTestId("research-create-estimate-duration")).toHaveTextContent(
+      enResearch.create_estimate.unknown,
+    );
+    fireEvent.click(screen.getByTestId("research-create-params-done"));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("selecting deep depth calls onChange", () => {

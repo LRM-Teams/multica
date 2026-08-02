@@ -143,7 +143,28 @@
       }
     },
     "daemon_version_chip": "daemon v{{version}}",
-    "version_prefix": "v{{version}}"
+    "version_prefix": "v{{version}}",
+    "basics_owner": "소유자",
+    "basics_daemon_id": "Daemon ID",
+    "ops": {
+      "section": "작업",
+      "local_only": "로컬만",
+      "restart_not_local": "로컬만",
+      "restart_managed_desktop": "데스크톱 앱에서 재시작",
+      "restart_sandbox": "샌드박스 불가",
+      "restart_no_permission": "소유자 또는 관리자만",
+      "restart_offline": "오프라인",
+      "delete_owner_only": "소유자만"
+    },
+    "sharing": {
+      "section": "공유 설정",
+      "owner_only": "소유자만",
+      "switch_locked": "변경 불가",
+      "switch_to": {
+        "public": "공개로 전환",
+        "private": "비공개로 전환"
+      }
+    }
   },
   "health": {
     "online": {
@@ -172,23 +193,7 @@
     "offline": "오프라인"
   },
   "detail": {
-    "all_runtimes": "모든 런타임",
-    "read_only": "읽기 전용",
-    "delete_button": "런타임 삭제",
-    "last_seen": "마지막 확인 {{when}}",
-    "fact_owner": "소유자",
-    "fact_device": "기기",
-    "fact_runtime": "런타임",
-    "technical_details": "기술 세부 정보",
-    "fact_daemon_cli": "데몬 CLI",
-    "fact_daemon_id": "데몬 ID",
-    "serving_title": "제공 중",
-    "serving_count_one": "에이전트 {{count}}개",
-    "serving_count_other": "에이전트 {{count}}개",
     "no_agents": "아직 이 런타임에 연결된 에이전트가 없습니다.",
-    "diagnostics_title": "진단",
-    "diagnostics_cli": "CLI",
-    "diagnostics_visibility": "공개 범위",
     "visibility_label": {
       "private": "비공개",
       "public": "공개"
@@ -231,15 +236,7 @@
       "delete_failed_toast": "런타임을 삭제하지 못했습니다"
     },
     "toast_deleted": "런타임을 삭제했습니다",
-    "toast_delete_failed": "런타임을 삭제하지 못했습니다",
-    "running_chip_one": "· 실행 중 {{count}}개",
-    "running_chip_other": "· 실행 중 {{count}}개",
-    "queued_chip_one": "· 대기 중 {{count}}개",
-    "queued_chip_other": "· 대기 중 {{count}}개"
-  },
-  "detail_page": {
-    "not_found_title": "런타임을 찾을 수 없습니다",
-    "not_found_hint": "삭제되었거나 접근 권한이 없을 수 있습니다."
+    "toast_delete_failed": "런타임을 삭제하지 못했습니다"
   },
   "running_one": "실행 중 {{count}}개",
   "running_other": "실행 중 {{count}}개",
@@ -352,7 +349,8 @@
       "ready_to_apply": "업데이트가 준비되었습니다. 런타임이 유휴 상태가 되면 적용됩니다.",
       "failed": "업데이트 실패",
       "timeout": "시간 초과"
-    }
+    },
+    "up_to_date_short": "최신"
   },
   "restart": {
     "action": "재시작",

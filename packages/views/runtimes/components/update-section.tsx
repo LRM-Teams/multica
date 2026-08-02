@@ -91,6 +91,11 @@ interface UpdateSectionProps {
    * specific gap without touching the retry-after-failure path.
    */
   isSandbox?: boolean;
+  /**
+   * Machine detail Actions zone: no always-on explanatory copy — keep the
+   * manual-update control, drop the paragraph under the version row.
+   */
+  compact?: boolean;
 }
 
 export function UpdateSection({
@@ -104,6 +109,7 @@ export function UpdateSection({
   launchedBy,
   canUpdate = true,
   isSandbox = false,
+  compact = false,
 }: UpdateSectionProps) {
   const { t } = useT("runtimes");
   const qc = useQueryClient();
@@ -248,10 +254,19 @@ export function UpdateSection({
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-xs text-muted-foreground">{t(($) => $.update.cli_version_label)}</span>
-        <span className="text-xs font-mono">
-          {currentVersion ?? t(($) => $.update.version_unknown)}
-        </span>
+        {/* Machine detail: version lives in Basics only (Wren/Iris/Frank
+            2026-08-02) — compact ops show upgrade/up-to-date controls without
+            repeating the CLI version number. */}
+        {!compact && (
+          <>
+            <span className="text-xs text-muted-foreground">
+              {t(($) => $.update.cli_version_label)}
+            </span>
+            <span className="text-xs font-mono">
+              {currentVersion ?? t(($) => $.update.version_unknown)}
+            </span>
+          </>
+        )}
 
         {isManaged ? (
           <span
@@ -272,7 +287,7 @@ export function UpdateSection({
           </span>
         ) : (
           <>
-            {hasUpdate && !derivedStatus && (
+            {!compact && hasUpdate && !derivedStatus && (
               <>
                 <span className="text-xs text-muted-foreground">→</span>
                 <span className="text-xs font-mono text-brand">
@@ -290,7 +305,9 @@ export function UpdateSection({
             {!hasUpdate && !derivedStatus && runtimeHealth === "ok" && currentVersion ? (
               <Button variant="outline" size="xs" disabled>
                 <Check className="h-3 w-3" />
-                {t(($) => $.update.up_to_date, { version: currentVersion })}
+                {compact
+                  ? t(($) => $.update.up_to_date_short)
+                  : t(($) => $.update.up_to_date, { version: currentVersion })}
               </Button>
             ) : (
               hasUpdate && (
@@ -326,7 +343,7 @@ export function UpdateSection({
 
       {!isManaged && (
         <div className="flex flex-wrap items-center gap-2 text-[11px] leading-[1.55] text-muted-foreground">
-          <p>{t(($) => $.update.manual_hint)}</p>
+          {!compact && <p>{t(($) => $.update.manual_hint)}</p>}
           <Button
             variant="ghost"
             size="xs"

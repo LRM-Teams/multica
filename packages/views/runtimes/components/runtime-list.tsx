@@ -146,9 +146,7 @@ export function RuntimeRows({
           last={idx === runtimes.length - 1}
           onOpen={() => {
             if (!slug) return;
-            navigation.push(
-              paths.workspace(slug).computerDetail(runtime.id),
-            );
+            navigation.push(paths.workspace(slug).computers());
           }}
         />
       ))}

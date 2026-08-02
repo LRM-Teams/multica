@@ -14,6 +14,36 @@ const TEST_RESOURCES = {
   en: { common: enCommon, runtimes: enRuntimes, agents: enAgents },
 };
 
+
+const { FakeMachineOpsSection } = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const React = require("react") as typeof import("react");
+  function FakeMachineOpsSection() {
+    const [open, setOpen] = React.useState(false);
+    return React.createElement(
+      React.Fragment,
+      null,
+      React.createElement(
+        "button",
+        {
+          type: "button",
+          "data-testid": "delete-computer-button",
+          onClick: () => setOpen(true),
+        },
+        "Delete",
+      ),
+      open
+        ? React.createElement(
+            "div",
+            { "data-testid": "delete-computer-dialog" },
+            "Permanently delete this computer?",
+          )
+        : null,
+    );
+  }
+  return { FakeMachineOpsSection };
+});
+
 vi.mock("@multica/core/auth", () => ({
   useAuthStore: (sel: (s: { user: { id: string } }) => unknown) =>
     sel({ user: { id: "user-me" } }),
@@ -48,6 +78,10 @@ vi.mock("@multica/core/runtimes/mutations", () => ({
 
 vi.mock("@multica/core/workspace/queries", () => ({
   agentListOptions: () => ({ queryKey: ["agents"] }),
+  memberListOptions: () => ({
+    queryKey: ["members"],
+    queryFn: async () => [],
+  }),
 }));
 
 vi.mock("@tanstack/react-query", async () => {
@@ -80,6 +114,15 @@ vi.mock("./machine-name-editor", () => ({
 
 vi.mock("./machine-code-agents-section", () => ({
   MachineCodeAgentsSection: () => null,
+}));
+
+
+vi.mock("./machine-ops-section", () => ({
+  MachineOpsSection: FakeMachineOpsSection,
+}));
+
+vi.mock("./machine-sharing-section", () => ({
+  MachineSharingSection: () => null,
 }));
 
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));

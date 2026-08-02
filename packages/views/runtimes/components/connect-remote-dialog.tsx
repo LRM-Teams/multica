@@ -65,10 +65,10 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
 
   const handleGoToRuntime = () => {
     onClose();
-    if (slug && newRuntimeIdRef.current) {
-      navigation.push(
-        paths.workspace(slug).computerDetail(newRuntimeIdRef.current),
-      );
+    // Former deep-link to orphan `/computers/{runtimeId}` — machine detail
+    // now lives on the computers list page (Frank 2026-08-02).
+    if (slug) {
+      navigation.push(paths.workspace(slug).computers());
     }
   };
 

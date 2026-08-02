@@ -1,18 +1,9 @@
-import { useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { RuntimeDetailPage as SharedRuntimeDetailPage } from "@multica/views/runtimes";
-import { useWorkspaceId } from "@multica/core/hooks";
-import { runtimeListOptions } from "@multica/core/runtimes/queries";
-import { useDocumentTitle } from "@/hooks/use-document-title";
+import { Navigate } from "react-router-dom";
 
+/**
+ * Former runtime-detail orphan. Frank 2026-08-02: ops + sharing live on the
+ * computers/runtimes list detail panel — redirect old deep links.
+ */
 export function RuntimeDetailPage() {
-  const { id } = useParams<{ id: string }>();
-  const wsId = useWorkspaceId();
-  const { data: runtimes } = useQuery(runtimeListOptions(wsId));
-  const runtime = runtimes?.find((r) => r.id === id);
-
-  useDocumentTitle(runtime?.name ?? "Runtime");
-
-  if (!id) return null;
-  return <SharedRuntimeDetailPage runtimeId={id} />;
+  return <Navigate to=".." replace relative="path" />;
 }

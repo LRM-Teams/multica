@@ -141,7 +141,28 @@
       }
     },
     "daemon_version_chip": "daemon v{{version}}",
-    "version_prefix": "v{{version}}"
+    "version_prefix": "v{{version}}",
+    "basics_owner": "所有者",
+    "basics_daemon_id": "Daemon ID",
+    "ops": {
+      "section": "操作",
+      "local_only": "仅本机",
+      "restart_not_local": "仅本机",
+      "restart_managed_desktop": "请在桌面端重启",
+      "restart_sandbox": "沙箱不可用",
+      "restart_no_permission": "仅所有者或管理员",
+      "restart_offline": "离线",
+      "delete_owner_only": "仅所有者"
+    },
+    "sharing": {
+      "section": "共享设置",
+      "owner_only": "仅所有者可操作",
+      "switch_locked": "不可切换",
+      "switch_to": {
+        "public": "切换为公开",
+        "private": "切换为私有"
+      }
+    }
   },
   "health": {
     "online": {
@@ -170,22 +191,7 @@
     "offline": "离线"
   },
   "detail": {
-    "all_runtimes": "全部运行时",
-    "read_only": "只读",
-    "delete_button": "删除运行时",
-    "last_seen": "最后活跃 {{when}}",
-    "fact_owner": "所有者",
-    "fact_device": "设备",
-    "fact_runtime": "运行时",
-    "technical_details": "技术详情",
-    "fact_daemon_cli": "守护进程 CLI",
-    "fact_daemon_id": "守护进程 ID",
-    "serving_title": "服务中",
-    "serving_count_other": "{{count}} 个智能体",
     "no_agents": "还没有智能体绑定到这个运行时。",
-    "diagnostics_title": "诊断",
-    "diagnostics_cli": "CLI",
-    "diagnostics_visibility": "可见性",
     "visibility_label": {
       "private": "私有",
       "public": "公开"
@@ -227,13 +233,7 @@
       "delete_failed_toast": "删除运行时失败"
     },
     "toast_deleted": "已删除运行时",
-    "toast_delete_failed": "删除运行时失败",
-    "running_chip_other": "· {{count}} 个进行中",
-    "queued_chip_other": "· {{count}} 个排队中"
-  },
-  "detail_page": {
-    "not_found_title": "未找到运行时",
-    "not_found_hint": "它可能已被删除，或你没有访问权限。"
+    "toast_delete_failed": "删除运行时失败"
   },
   "running_other": "{{count}} 个运行中",
   "queued_other": "{{count}} 个排队中",
@@ -344,7 +344,8 @@
       "ready_to_apply": "更新已准备好，空闲后自动生效。",
       "failed": "更新失败",
       "timeout": "超时"
-    }
+    },
+    "up_to_date_short": "已是最新"
   },
   "restart": {
     "action": "重启",

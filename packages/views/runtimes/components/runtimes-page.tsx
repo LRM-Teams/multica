@@ -28,8 +28,12 @@ import {
   useRuntimeAgentWorkspaces,
 } from "@multica/core/runtimes/mutations";
 import { useWSEvent } from "@multica/core/realtime";
-import { agentListOptions } from "@multica/core/workspace/queries";
+import {
+  agentListOptions,
+  memberListOptions,
+} from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import type { Agent, AgentRuntime, AgentTask } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -51,18 +55,14 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { ACTIVITY_LABEL_EN } from "../../agents/components/tabs/activity-event";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
-import { formatRuntimeUpdateError } from "./update-error";
 import { buildWorkloadIndex } from "./runtime-list";
-import {
-  DeleteComputerDialog,
-  MachineDeleteControl,
-} from "./delete-computer-dialog";
 import {
   buildRuntimeMachines,
   headerRuntimeHealthBadge,
   isMineMachine,
   machineHostname,
   machinePrimaryRuntimeId,
+  shortDaemonId,
   splitRuntimeName,
   type RuntimeMachine,
 } from "./runtime-machines";
@@ -75,6 +75,8 @@ import {
 } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { MachineCodeAgentsSection } from "./machine-code-agents-section";
+import { MachineOpsSection } from "./machine-ops-section";
+import { MachineSharingSection } from "./machine-sharing-section";
 import { formatLastSeen } from "../utils";
 import { useT } from "../../i18n/use-t";
 
@@ -637,9 +639,7 @@ type MachineDetailViewProps = {
 
 /**
  * List-page machine detail. Remounts when `machine.id` changes so
- * destructive dialog state (`deleteOpen`, workspace scan, etc.) cannot
- * leak across machines — e.g. delete confirm opened on A must not stay
- * open after the user selects B.
+ * workspace-scan / ops dialog state cannot leak across machines.
  */
 export function ComputersMachineDetail(props: MachineDetailViewProps) {
   return <MachineDetailView key={props.machine.id} {...props} />;
@@ -663,11 +663,14 @@ function MachineDetailView({
   const { t } = useT("runtimes");
   const { getActorName } = useActorName();
   const openAgentPanel = useAgentPanelStore((s) => s.open);
-  const user = useAuthStore((s) => s.user);
+  const { data: members = [] } = useQuery(memberListOptions(wsId));
   const [workspacesEnabled, setWorkspacesEnabled] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const primaryRuntimeId = machinePrimaryRuntimeId(machine, now);
+  const ownerId = machine.runtimes[0]?.owner_id ?? null;
+  const ownerMember = ownerId
+    ? members.find((m) => m.user_id === ownerId) ?? null
+    : null;
   const { data: workspacesData, isFetching: workspacesLoading } =
     useRuntimeAgentWorkspaces(primaryRuntimeId, workspacesEnabled);
   const deleteWorkspace = useDeleteRuntimeAgentWorkspace(primaryRuntimeId ?? "");
@@ -677,23 +680,10 @@ function MachineDetailView({
     [machine, agents],
   );
 
-  const canDelete =
-    machine.runtimes.length > 0 &&
-    !!user &&
-    machine.runtimes.every((r) => r.owner_id === user.id);
-
   const headerBadge = headerRuntimeHealthBadge(
     machine.runtimeHealth,
     machine.health,
   );
-  const updateIssue = machine.updateError
-    ? formatRuntimeUpdateError({
-        rawError: machine.updateError,
-        currentVersion: machine.cliVersion,
-        targetVersion: machine.updateTargetVersion,
-        t,
-      })
-    : "";
   const hostname = machineHostname(machine);
   // Structured register field only (Alice #1723). Never parse device_info
   // glue ("ubuntu · codex-cli …"). Missing → em dash (Parker; pending Frank).
@@ -751,14 +741,6 @@ function MachineDetailView({
               <DropdownMenuItem onClick={scanWorkspaces}>
                 {t(($) => $.machine.scan_workspaces)}
               </DropdownMenuItem>
-              {canDelete && (
-                <DropdownMenuItem
-                  variant="destructive"
-                  onClick={() => setDeleteOpen(true)}
-                >
-                  {t(($) => $.machine.delete_danger_row)}
-                </DropdownMenuItem>
-              )}
             </DropdownMenuContent>
           </DropdownMenu>
           {showListActions ? headerActions : null}
@@ -795,16 +777,6 @@ function MachineDetailView({
                     </span>
                   </>
                 )}
-                {machine.cliVersion && (
-                  <>
-                    <span className="text-muted-foreground/40">·</span>
-                    <span className="font-mono text-[11px]">
-                      {t(($) => $.machine.daemon_version_chip, {
-                        version: machine.cliVersion,
-                      })}
-                    </span>
-                  </>
-                )}
                 {headerBadge && (
                   <>
                     <span className="text-muted-foreground/40">·</span>
@@ -812,11 +784,6 @@ function MachineDetailView({
                   </>
                 )}
               </div>
-              {updateIssue && (
-                <p className="mt-2 max-w-2xl break-words text-xs text-destructive">
-                  {updateIssue}
-                </p>
-              )}
             </div>
             {actions && <div className="shrink-0">{actions}</div>}
           </div>
@@ -824,13 +791,13 @@ function MachineDetailView({
           <section>
             <SectionTitle>{t(($) => $.machine.basics_section)}</SectionTitle>
             <div className="overflow-hidden rounded-xl border bg-card">
-              <InfoRow label={t(($) => $.machine.basics_display_name)}>
-                <MachineNameEditor
-                  machine={machine}
-                  wsId={wsId}
-                  variant="basics"
-                />
-              </InfoRow>
+              {ownerMember && (
+                <InfoRow label={t(($) => $.machine.basics_owner)}>
+                  <span className="truncate text-sm">
+                    {resolveActorDisplayName(ownerMember, ownerMember.user_id)}
+                  </span>
+                </InfoRow>
+              )}
               {hostname && (
                 <InfoRow label={t(($) => $.machine.basics_hostname)}>
                   <span className="truncate font-mono text-sm">{hostname}</span>
@@ -848,10 +815,25 @@ function MachineDetailView({
                   </span>
                 </InfoRow>
               )}
+              {machine.daemonId && (
+                <InfoRow label={t(($) => $.machine.basics_daemon_id)}>
+                  <span className="truncate font-mono text-xs text-muted-foreground">
+                    {shortDaemonId(machine.daemonId)}
+                  </span>
+                </InfoRow>
+              )}
             </div>
           </section>
 
+          <MachineOpsSection
+            machine={machine}
+            now={now}
+            onDeleted={onComputerDeleted}
+          />
+
           <MachineCodeAgentsSection machine={machine} />
+
+          <MachineSharingSection machine={machine} />
 
           <section>
             <SectionTitle>{t(($) => $.machine.agents_section)}</SectionTitle>
@@ -1016,28 +998,8 @@ function MachineDetailView({
             </section>
           )}
 
-          <MachineDeleteControl
-            machine={machine}
-            wsId={wsId}
-            onDeleted={onComputerDeleted}
-            layout="row"
-          />
         </div>
       </div>
-
-      {canDelete && (
-        <DeleteComputerDialog
-          open={deleteOpen}
-          onOpenChange={setDeleteOpen}
-          machine={machine}
-          wsId={wsId}
-          canDelete={canDelete}
-          onDeleted={() => {
-            setDeleteOpen(false);
-            onComputerDeleted?.();
-          }}
-        />
-      )}
 
       {!machine.runtimes.length && bootstrapping && (
         <div className="px-6 py-8 text-center text-sm text-muted-foreground">

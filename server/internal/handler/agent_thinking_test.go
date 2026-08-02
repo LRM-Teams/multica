@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // TestCreateAgent_ThinkingLevel_ValidationConsistency exercises the
@@ -207,6 +209,23 @@ func TestUpdateAgent_RuntimeSwitch_ReconcilesInvalidThinkingLevel(t *testing.T) 
 	ctx := context.Background()
 	claudeRuntimeID := createClaudeProviderRuntime(t)
 	codexRuntimeID := createCodexProviderRuntime(t)
+
+	// task #(machine-lock, 2026-08-02): both helpers default to
+	// runtime_mode='cloud', daemon_id=NULL — each its own unshareable
+	// machine, so a real machine running Claude and Codex side by side (the
+	// scenario this test exercises) has to be simulated by pointing both at
+	// the same daemon_id explicitly.
+	sharedDaemonID := "thinking-runtime-switch-daemon-" + uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_runtime SET runtime_mode = 'local', daemon_id = $2 WHERE id = $1
+	`, claudeRuntimeID, sharedDaemonID); err != nil {
+		t.Fatalf("colocate claude runtime: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_runtime SET runtime_mode = 'local', daemon_id = $2 WHERE id = $1
+	`, codexRuntimeID, sharedDaemonID); err != nil {
+		t.Fatalf("colocate codex runtime: %v", err)
+	}
 
 	t.Cleanup(func() {
 		testPool.Exec(ctx, `

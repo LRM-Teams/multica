@@ -323,7 +323,7 @@ type AgentTaskResponse struct {
 	ChannelKind string          `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; personal-memory entry gate
 	// ScopedSecrets carries channel/project secrets for daemon injection after
 	// scope filtering (LRM-953). Empty until a secret store populates them.
-	ScopedSecrets []ScopedSecretData `json:"scoped_secrets,omitempty"`
+	ScopedSecrets    []ScopedSecretData    `json:"scoped_secrets,omitempty"`
 	ProjectTitle     string                `json:"project_title,omitempty"`     // for surfacing in agent context
 	ProjectResources []ProjectResourceData `json:"project_resources,omitempty"` // resources attached to the project
 	// ProvisionManagedWorkdir signals the daemon to lazily create a managed
@@ -1453,6 +1453,26 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		if !canUseRuntimeForAgent(member, runtime) {
 			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can move agents onto it")
 			return
+		}
+		if runtime.ID != existing.RuntimeID {
+			// An agent's bound computer cannot change (Frank's rule,
+			// 2026-08-02) — only which runtime on that same computer it uses.
+			// The frontend already restricts the runtime picker to the bound
+			// machine (runtime-picker.tsx's sameComputerRuntimes), but that's
+			// a UI affordance, not an authorization boundary: this endpoint
+			// must reject the move itself, or a direct API call bypasses it.
+			currentRuntime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
+				ID:          existing.RuntimeID,
+				WorkspaceID: existing.WorkspaceID,
+			})
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to load current runtime")
+				return
+			}
+			if !runtimesShareMachine(currentRuntime, runtime) {
+				writeError(w, http.StatusForbidden, "an agent's computer cannot be changed; choose a runtime on the same computer")
+				return
+			}
 		}
 		if runtime.ID != existing.RuntimeID && !agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityReminderVersionedCache) {
 			var hasActiveReminders bool

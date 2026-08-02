@@ -43,6 +43,11 @@ export interface MarkdownProps extends MarkdownBaseProps {
   attachments?: AttachmentRecord[];
   /** Source row id for issue references rendered inside a Messages timeline. */
   sourceMessageId?: string;
+  /**
+   * LRM-830 — citation renderer for [[cit:id]] tokens in report prose.
+   * When provided, replaces the default link renderer for citation anchors.
+   */
+  renderCitation?: (props: { citationId: string; label: string }) => React.ReactNode;
 }
 
 /**
@@ -272,7 +277,7 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
   // the current workspace's prefix so it can't false-positive on tokens like
   // "UTF-8". Empty/absent prefix disables it.
   const issueRefPrefix = useCurrentWorkspace()?.issue_prefix || undefined;
-  const { attachments, highlightQuery, enableStickerShortcodes = true, sourceMessageId, ...rest } = props;
+  const { attachments, highlightQuery, enableStickerShortcodes = true, sourceMessageId, renderCitation, ...rest } = props;
   const renderAppImage = React.useCallback(
     (image: { src: string; alt: string }) => renderImage(image, enableStickerShortcodes),
     [enableStickerShortcodes],
@@ -296,6 +301,7 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
       <MarkdownBase
         renderMention={renderMention}
         renderAppLink={RenderAppLink}
+        renderCitation={renderCitation}
         renderImage={renderAppImage}
         renderFileCard={renderFileCard}
         cdnDomain={cdnDomain}

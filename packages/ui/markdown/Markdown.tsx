@@ -12,7 +12,7 @@ import { CODE_LIGATURE_CLASS } from '@multica/ui/lib/code-style'
 import { CodeBlock, InlineCode } from './CodeBlock'
 import { isAllowedFileCardHref, preprocessFileCards } from './file-cards'
 import { preprocessLinks, preprocessIssueRefs } from './linkify'
-import { preprocessMentionShortcodes } from './mentions'
+import { preprocessCitationTokens, preprocessMentionShortcodes } from './mentions'
 import { preprocessStickers } from './stickers'
 import 'katex/dist/katex.min.css'
 import './markdown.css'
@@ -66,6 +66,11 @@ export interface MarkdownProps {
    * When not provided, mentions render as a simple styled span.
    */
   renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode
+  /**
+   * Custom renderer for citation tokens (e.g. cit://citation-id in report prose).
+   * When provided, replaces the default link renderer for `[[cit:id]]` tokens.
+   */
+  renderCitation?: (props: { citationId: string; label: string }) => React.ReactNode
   /** Custom renderer for non-http app links such as Wendy's create-agent cards. */
   renderAppLink?: AppLinkRenderer
   /**
@@ -264,6 +269,7 @@ function createComponents(
   onFileClick?: (path: string) => void,
   renderMention?: (props: { type: string; id: string; label?: string }) => React.ReactNode,
   renderAppLink?: AppLinkRenderer,
+  renderCitation?: (props: { citationId: string; label: string }) => React.ReactNode,
   renderImage?: (props: { src: string; alt: string }) => React.ReactNode,
   renderFileCard?: (props: { href: string; filename: string }) => React.ReactNode,
   highlightQuery?: string,
@@ -318,6 +324,13 @@ function createComponents(
     },
     // Links: Make clickable with callbacks, or render as mention
     a: ({ href, children }) => {
+      // Citation tokens: [[cit:id]] → cit://id (LRM-830)
+      if (href?.startsWith('cit://')) {
+        const m = href.match(/^cit:\/\/(.+)$/)
+        if (m?.[1] && renderCitation) {
+          return renderCitation({ citationId: m[1], label: String(children) })
+        }
+      }
       // Mention links: mention://member/id, mention://agent/id, mention://issue/id, mention://project/id, mention://all/all
       if (href?.startsWith('mention://')) {
         const mentionMatch = href.match(/^mention:\/\/(member|agent|issue|project|all)\/(.+)$/)
@@ -679,6 +692,7 @@ export function Markdown({
   onFileClick,
   renderMention,
   renderAppLink,
+  renderCitation,
   renderImage,
   renderFileCard,
   cdnDomain,
@@ -695,18 +709,20 @@ export function Markdown({
         onFileClick,
         renderMention,
         renderAppLink,
+        renderCitation,
         renderImage,
         renderFileCard,
         normalizedHighlightQuery,
       ),
-    [mode, onUrlClick, onFileClick, renderMention, renderAppLink, renderImage, renderFileCard, normalizedHighlightQuery]
+    [mode, onUrlClick, onFileClick, renderMention, renderAppLink, renderCitation, renderImage, renderFileCard, normalizedHighlightQuery]
   )
 
-  // Preprocess: convert mention shortcodes, bare issue identifiers, raw URLs,
-  // and file cards to renderable content
+  // Preprocess: convert mention shortcodes, citation tokens, bare issue
+  // identifiers, raw URLs, and file cards to renderable content
   const processedContent = React.useMemo(
     () => {
       let result = preprocessMentionShortcodes(children)
+      result = preprocessCitationTokens(result)
       if (enableStickerShortcodes) result = preprocessStickers(result)
       if (issueRefPrefix) result = preprocessIssueRefs(result, issueRefPrefix)
       result = preprocessLinks(result)

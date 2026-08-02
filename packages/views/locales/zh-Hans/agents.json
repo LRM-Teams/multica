@@ -552,7 +552,6 @@
     "description_label": "描述",
     "info_section": "信息",
     "actions_section": "操作",
-    "actions_restart": "重启 / 重置",
     "actions_copy_diagnostic": "复制诊断信息",
     "actions_copy_success": "已复制诊断信息",
     "actions_copy_failed": "复制诊断信息失败",

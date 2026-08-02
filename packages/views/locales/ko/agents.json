@@ -562,7 +562,6 @@
     "description_label": "설명",
     "info_section": "정보",
     "actions_section": "작업",
-    "actions_restart": "다시 시작 / 재설정",
     "actions_copy_diagnostic": "진단 정보 복사",
     "actions_copy_success": "진단 정보를 복사했습니다",
     "actions_copy_failed": "진단 정보 복사에 실패했습니다",

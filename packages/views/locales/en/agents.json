@@ -562,7 +562,6 @@
     "description_label": "Description",
     "info_section": "Info",
     "actions_section": "Actions",
-    "actions_restart": "Restart / Reset",
     "actions_copy_diagnostic": "Copy diagnostic info",
     "actions_copy_success": "Diagnostic info copied",
     "actions_copy_failed": "Failed to copy diagnostic info",

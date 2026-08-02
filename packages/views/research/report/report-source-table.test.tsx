@@ -81,7 +81,7 @@ describe("ReportSourceTable", () => {
     expect(screen.queryByText(/\|/)).not.toBeInTheDocument();
   });
 
-  it("LRM-834: annotates failed rows with a readable reason", () => {
+  it("LRM-834: annotates failed rows with a readable reason (no raw ETIMEDOUT)", () => {
     render(
       <ReportSourceTable
         sources={[
@@ -89,16 +89,21 @@ describe("ReportSourceTable", () => {
           source({
             id: "bad",
             title: "Broken",
-            payload: { fetch_failed: true, status: "timeout" },
+            payload: {
+              fetch_failed: true,
+              status: "timeout",
+              failure_message: "ETIMEDOUT",
+            },
           }),
         ]}
       />,
     );
     const rows = screen.getAllByTestId("research-source-row");
     expect(rows[1]).toHaveAttribute("data-source-failed", "true");
-    expect(screen.getByTestId("research-source-fail-reason").textContent).toContain(
-      "Fetch timed out",
-    );
+    const reason = screen.getByTestId("research-source-fail-reason").textContent ?? "";
+    expect(reason).toContain("Fetch timed out");
+    expect(reason).not.toMatch(/ETIMEDOUT/i);
     expect(screen.getByText("Excluded from citation numbering")).toBeInTheDocument();
   });
+
 });

@@ -50,9 +50,23 @@ export function resolveSourceFailureReasonCode(
         : typeof payload.error_code === "string"
           ? payload.error_code.toLowerCase()
           : "";
-    const blob = `${status} ${reason}`;
-    if (blob.includes("timeout") || blob.includes("timed_out")) return "timeout";
-    if (blob.includes("http") || blob.includes("status")) return "http";
+    const detailBits = ["failure_message", "error_message", "message", "error", "reason"]
+      .map((k) => payload[k])
+      .filter((v): v is string => typeof v === "string")
+      .map((v) => v.toLowerCase())
+      .join(" ");
+    const blob = `${status} ${reason} ${detailBits}`;
+    if (
+      blob.includes("timeout") ||
+      blob.includes("timed_out") ||
+      blob.includes("timed out") ||
+      blob.includes("etimedout")
+    ) {
+      return "timeout";
+    }
+    if (blob.includes("http") || /\bstatus\b/.test(blob) || /\b4\d\d\b/.test(blob) || /\b5\d\d\b/.test(blob)) {
+      return "http";
+    }
     if (payload.fetch_failed === true || status === "fetch_failed") return "fetch_failed";
   }
 
@@ -70,7 +84,11 @@ export function resolveSourceFailureReasonCode(
   return "unknown";
 }
 
-/** Optional free-text detail from payload (shown after the Chinese label). */
+/**
+ * Optional free-text detail from payload.
+ * LRM-834: not shown in primary UI — raw codes like ETIMEDOUT are not 中文可读.
+ * Kept for diagnostics / future tooltips only.
+ */
 export function sourceFailureDetail(
   source: ResearchSource | CitationCardSource | null | undefined,
 ): string | null {
@@ -82,6 +100,33 @@ export function sourceFailureDetail(
     if (typeof v === "string" && v.trim()) return v.trim();
   }
   return null;
+}
+
+/**
+ * Remove `[^n]` / `[n]` tokens for excluded citations so failed/all-failed
+ * sources leave no orphan reference marks in Findings prose.
+ */
+export function stripCitationRefs(
+  markdown: string,
+  citations: ResearchReportCitation[],
+): string {
+  if (!markdown || citations.length === 0) return markdown;
+  const indexes = new Set(citations.map((c) => c.index));
+  const labels = new Set(
+    citations
+      .map((c) => (c.label || "").replace(/^\[|\]$/g, "").trim())
+      .filter(Boolean),
+  );
+  return markdown
+    .replace(/\[\^?([^\]]+)\]/g, (whole, inner: string) => {
+      const num = Number.parseInt(inner, 10);
+      if (Number.isFinite(num) && String(num) === inner && indexes.has(num)) return "";
+      if (labels.has(inner)) return "";
+      return whole;
+    })
+    .replace(/[ \t]+([.,;:!?])/g, "$1")
+    .replace(/ {2,}/g, " ")
+    .replace(/[ \t]+\n/g, "\n");
 }
 
 export function partitionSourcesByFailure(sources: ResearchSource[]): {

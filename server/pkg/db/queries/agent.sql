@@ -163,6 +163,19 @@ UPDATE agent SET archived_at = NULL, archived_by = NULL, updated_at = now()
 WHERE id = $1
 RETURNING *;
 
+-- name: ListAgentIDsArchivedBefore :many
+-- Batch reconciliation for the daemon-side agent-workspace retention job
+-- (task #96): the daemon reports which agent IDs it has a local
+-- .multica/agents/<id> directory for, scoped to one workspace; this returns
+-- the subset that are archived (soft-deleted, see ArchiveAgent/RestoreAgent)
+-- with archived_at older than the retention cutoff the caller passes in.
+-- RestoreAgent clears archived_at, so a restored agent falls out of this set
+-- on its own — no separate "undo" handling needed. Scoped by workspace_id so
+-- a daemon can only learn the archived state of agents in its own workspace.
+SELECT id, archived_at
+FROM agent
+WHERE workspace_id = $1 AND id = ANY(@agent_ids::uuid[]) AND archived_at IS NOT NULL AND archived_at < @before;
+
 -- name: ListAgentTasks :many
 SELECT * FROM agent_inbox_event
 WHERE agent_id = $1

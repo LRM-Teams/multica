@@ -828,6 +828,29 @@ func (c *Client) GetWorkspaceRepos(ctx context.Context, workspaceID string) (*Wo
 	return &resp, nil
 }
 
+// agentWorkspaceRetentionCheckResponse mirrors the server's
+// CheckAgentWorkspaceRetention response body.
+type agentWorkspaceRetentionCheckResponse struct {
+	EligibleAgentIDs []string `json:"eligible_agent_ids"`
+}
+
+// CheckAgentWorkspaceRetention asks the server which of the given agent IDs
+// (agent IDs the daemon found a local .multica/agents/<id> directory for, in
+// this workspace) are archived long enough ago to be destroyed. The
+// retention threshold is server-owned; the daemon never sends one. Callers
+// must still re-validate every returned ID against the exact batch they
+// reported and the exact canonical on-disk path before deleting anything —
+// this call only answers the question, it never deletes.
+func (c *Client) CheckAgentWorkspaceRetention(ctx context.Context, workspaceID string, agentIDs []string) ([]string, error) {
+	var resp agentWorkspaceRetentionCheckResponse
+	err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/workspaces/%s/agent-workspace-retention/check", workspaceID),
+		map[string]any{"agent_ids": agentIDs}, &resp, c.tokenForWorkspace(workspaceID))
+	if err != nil {
+		return nil, err
+	}
+	return resp.EligibleAgentIDs, nil
+}
+
 // defaultTerminalRetrySchedule is the backoff used by postJSONWithRetry for
 // terminal task callbacks (CompleteTask / FailTask). N entries → N+1 attempts
 // in the worst case (one immediate + N retries). Five backoffs totalling

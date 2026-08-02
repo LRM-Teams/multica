@@ -338,7 +338,8 @@
     "citation_untitled": "未命名来源",
     "citation_fetch_failed": "抓取失败",
     "citation_fetch_failed_hint": "该来源未能抓取。在可用链接恢复前，此处显示降级占位卡。",
-    "citation_summary_empty": "暂无摘要。"
+    "citation_summary_empty": "暂无摘要。",
+    "citation_anchor": "定位引用 {{label}}"
   },
   "m2": {
     "rail_title": "探索轨迹",

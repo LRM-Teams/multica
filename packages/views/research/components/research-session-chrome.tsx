@@ -49,17 +49,31 @@ const DEFAULT_TONE: StatusTone = {
 const EMPTY_MEMBERS: ResearchFleetMember[] = [];
 const EMPTY_SOURCES: ResearchSource[] = [];
 
-function ContextChip({ label, className }: { label: string; className?: string }) {
-  return (
-    <span
-      className={cn(
-        "shrink-0 rounded-md border border-border/70 bg-muted/35 px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-muted-foreground uppercase",
-        className,
-      )}
-    >
-      {label}
-    </span>
+function ContextChip({
+  label,
+  className,
+  interactive,
+  onClick,
+}: {
+  label: string;
+  className?: string;
+  interactive?: boolean;
+  onClick?: () => void;
+}) {
+  const base = cn(
+    "shrink-0 rounded-md border border-border/70 bg-muted/35 px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-muted-foreground uppercase",
+    interactive &&
+      "cursor-pointer transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
+    className,
   );
+  if (interactive && onClick) {
+    return (
+      <button type="button" onClick={onClick} className={base}>
+        {label}
+      </button>
+    );
+  }
+  return <span className={base}>{label}</span>;
 }
 
 export function ResearchSessionChrome({
@@ -78,6 +92,7 @@ export function ResearchSessionChrome({
   selectedSummary,
   members = EMPTY_MEMBERS,
   sources = EMPTY_SOURCES,
+  onSelectStage,
 }: {
   session: ResearchSession;
   canConfirm: boolean;
@@ -94,6 +109,8 @@ export function ResearchSessionChrome({
   selectedSummary?: string | null;
   members?: ResearchFleetMember[];
   sources?: ResearchSource[];
+  /** LRM-824 — top-bar stage chip anchors into the chat message area. */
+  onSelectStage?: (stage: string) => void;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -195,7 +212,11 @@ export function ResearchSessionChrome({
           data-testid="research-session-context"
           className="flex min-w-0 flex-1 items-center gap-2"
         >
-          <ContextChip label={stageLabel} />
+          <ContextChip
+            label={stageLabel}
+            interactive={Boolean(onSelectStage)}
+            onClick={onSelectStage ? () => onSelectStage(session.current_stage) : undefined}
+          />
           {roundChip}
           <p className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:block">
             {selectedSummary ?? session.goal}

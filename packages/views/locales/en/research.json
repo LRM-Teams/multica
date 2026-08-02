@@ -338,7 +338,8 @@
     "citation_untitled": "Untitled source",
     "citation_fetch_failed": "Fetch failed",
     "citation_fetch_failed_hint": "This source could not be fetched. The citation stays as a placeholder until a good URL is available.",
-    "citation_summary_empty": "No summary for this source yet."
+    "citation_summary_empty": "No summary for this source yet.",
+    "citation_anchor": "Locate citation {{label}}"
   },
   "m2": {
     "rail_title": "Exploration trail",

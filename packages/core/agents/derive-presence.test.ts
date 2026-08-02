@@ -368,14 +368,39 @@ describe("deriveAgentPresenceDetail", () => {
     expect(detail.workload).toBe("idle");
   });
 
-  it("promotes missing runtime + running task to online (LRM-248 running→在线)", () => {
+  it("task #106: does NOT promote a missing runtime + running task to online — no last_seen_at means no freshness evidence to trust", () => {
+    // Was "promotes ... to online" pre-#106: a running task alone used to be
+    // enough. That's the bug — task status is a RESULT, the heartbeat is the
+    // CAUSE; with zero freshness signal (no runtime, no last_seen_at at all)
+    // there is nothing to justify overriding an already-honest offline.
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent(),
       runtime: null,
       tasks: [makeTask({ status: "running" })],
       now: NOW,
     });
-    expect(detail.availability).toBe("online");
+    expect(detail.availability).toBe("offline");
+    // Workload is a separate axis (task-derived, not runtime-derived) —
+    // unaffected by the availability fix.
+    expect(detail.workload).toBe("working");
+  });
+
+  it("task #106: a runtime stale beyond the recently-lost window is NOT promoted to online by a running task", () => {
+    // The actual bug scenario: daemon died mid-task. The runtime sweeper
+    // correctly marks the runtime offline within ~180s, but the task's
+    // 'running' status can linger for hours (server-side wall-clock
+    // backstop). Before the fix this stale running task would resurrect
+    // "online" forever; now it can't once last_seen_at is genuinely old.
+    const detail = deriveAgentPresenceDetail({
+      agent: makeAgent(),
+      runtime: makeRuntime({
+        status: "offline",
+        last_seen_at: "2026-04-27T11:00:00Z", // 1 hour stale
+      }),
+      tasks: [makeTask({ status: "running" })],
+      now: NOW,
+    });
+    expect(detail.availability).toBe("offline");
     expect(detail.workload).toBe("working");
   });
 
@@ -445,7 +470,7 @@ describe("buildPresenceMap", () => {
     expect(b?.workload).toBe("queued");
   });
 
-  it("returns online availability for agents whose runtime_id has no matching runtime but a task is running", () => {
+  it("task #106: agents whose runtime_id has no matching runtime and no freshness evidence stay offline, even with a running task", () => {
     const orphan = makeAgent({ id: "orphan", runtime_id: "missing" });
     const map = buildPresenceMap({
       agents: [orphan],
@@ -454,7 +479,7 @@ describe("buildPresenceMap", () => {
       now: NOW,
     });
     const o = map.get("orphan");
-    expect(o?.availability).toBe("online");
+    expect(o?.availability).toBe("offline");
     // Workload still resolves independently — running task counts.
     expect(o?.workload).toBe("working");
   });
@@ -538,7 +563,7 @@ describe("runtimeReachabilityFromAgent (LRM-248 AC5)", () => {
     expect(map.get(agent.id)?.availability).toBe("online");
   });
 
-  it("promotes to online when a running task exists without runtime projection", () => {
+  it("task #106: a running task WITHOUT any runtime projection stays offline — no freshness evidence available", () => {
     expect(runtimeReachabilityFromAgent(makeAgent())).toBeNull();
     const map = buildPresenceMap({
       agents: [makeAgent({ runtime_id: "missing" })],
@@ -546,7 +571,7 @@ describe("runtimeReachabilityFromAgent (LRM-248 AC5)", () => {
       snapshot: [makeTask({ status: "running" })],
       now: NOW,
     });
-    expect(map.get("agent-1")?.availability).toBe("online");
+    expect(map.get("agent-1")?.availability).toBe("offline");
     expect(map.get("agent-1")?.workload).toBe("working");
   });
 });

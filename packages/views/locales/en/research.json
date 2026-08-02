@@ -97,7 +97,18 @@
     "paused_title": "Research paused",
     "paused_hint": "Output so far is kept. Send a message to resume.",
     "fleet": "Research fleet",
-    "fleet_empty": "No active fleet members.",
+    "fleet_empty": "No active fleet members",
+    "fleet_empty_title": "No active fleet members",
+    "fleet_empty_body": "After kickoff, fleet members appear here as result cards — empty / loading / running / done stay distinguishable.",
+    "fleet_loading_body": "Assembling the research fleet…",
+    "fleet_count": "{{count}} members",
+    "fleet_done_hint": "Roster settled for this round",
+    "fleet_mode": {
+      "empty": "Idle",
+      "loading": "Assembling",
+      "running": "Running",
+      "done": "Done"
+    },
     "sources_empty": "No weighted sources yet.",
     "sources_hint": "Sorted by credibility. High-weight sources are the baseline; low-weight rows are corroboration only.",
     "sources_view_all": "View all · {{count}}",
@@ -115,7 +126,8 @@
     "weight": "Weight",
     "fleet_badge": {
       "lead": "Lead",
-      "pending": "Pending review"
+      "pending": "Pending review",
+      "done": "Settled"
     }
   },
   "chat": {

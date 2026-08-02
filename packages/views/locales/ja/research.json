@@ -97,7 +97,18 @@
     "paused_title": "Research paused",
     "paused_hint": "Output so far is kept. Send a message to resume.",
     "fleet": "Research fleet",
-    "fleet_empty": "No active fleet members.",
+    "fleet_empty": "アクティブな艦隊メンバーはいません",
+    "fleet_empty_title": "アクティブな艦隊メンバーはいません",
+    "fleet_empty_body": "キックオフ後、艦隊メンバーが結果カードとして表示されます。空 / 読み込み / 進行中 / 完了を区別できます。",
+    "fleet_loading_body": "調査艦隊を召集中…",
+    "fleet_count": "{{count}} 名",
+    "fleet_done_hint": "今ラウンドの編成は確定",
+    "fleet_mode": {
+      "empty": "待機",
+      "loading": "召集中",
+      "running": "進行中",
+      "done": "完了"
+    },
     "sources_empty": "No weighted sources yet.",
     "sources_hint": "Sorted by credibility. High-weight sources are the baseline; low-weight rows are corroboration only.",
     "sources_view_all": "すべて表示 · {{count}}",
@@ -115,7 +126,8 @@
     "weight": "Weight",
     "fleet_badge": {
       "lead": "リード",
-      "pending": "確認待ち"
+      "pending": "確認待ち",
+      "done": "確定"
     }
   },
   "chat": {

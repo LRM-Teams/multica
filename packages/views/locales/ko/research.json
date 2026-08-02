@@ -97,7 +97,18 @@
     "paused_title": "Research paused",
     "paused_hint": "Output so far is kept. Send a message to resume.",
     "fleet": "Research fleet",
-    "fleet_empty": "No active fleet members.",
+    "fleet_empty": "활성 플릿 멤버가 없습니다",
+    "fleet_empty_title": "활성 플릿 멤버가 없습니다",
+    "fleet_empty_body": "킥오프 후 플릿 멤버가 결과 카드로 표시됩니다. 빈/로딩/진행/완료 상태를 구분할 수 있습니다.",
+    "fleet_loading_body": "조사 플릿을 소집하는 중…",
+    "fleet_count": "{{count}}명",
+    "fleet_done_hint": "이번 라운드 편성이 확정됨",
+    "fleet_mode": {
+      "empty": "대기",
+      "loading": "소집 중",
+      "running": "진행 중",
+      "done": "완료"
+    },
     "sources_empty": "No weighted sources yet.",
     "sources_hint": "Sorted by credibility. High-weight sources are the baseline; low-weight rows are corroboration only.",
     "sources_view_all": "전체 보기 · {{count}}",
@@ -115,7 +126,8 @@
     "weight": "Weight",
     "fleet_badge": {
       "lead": "리드",
-      "pending": "검토 대기"
+      "pending": "검토 대기",
+      "done": "확정"
     }
   },
   "chat": {

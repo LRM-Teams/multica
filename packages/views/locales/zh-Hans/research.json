@@ -97,7 +97,18 @@
     "paused_title": "调研已暂停",
     "paused_hint": "已产出内容保留。在对话里继续发言即可恢复。",
     "fleet": "调研团",
-    "fleet_empty": "当前没有在编成员。",
+    "fleet_empty": "当前没有在编成员",
+    "fleet_empty_title": "当前没有在编成员",
+    "fleet_empty_body": "开题后舰队成员会以结果卡出现在这里；空 / 加载 / 进行中 / 完成四态可辨。",
+    "fleet_loading_body": "正在召集调研团成员…",
+    "fleet_count": "{{count}} 人",
+    "fleet_done_hint": "本轮编制已收束",
+    "fleet_mode": {
+      "empty": "空闲",
+      "loading": "召集中",
+      "running": "进行中",
+      "done": "完成"
+    },
     "sources_empty": "尚无加权来源。",
     "sources_hint": "按可信度排序。权重高的为权威基线，低权重仅作旁证。",
     "sources_view_all": "查看全部 · {{count}}",
@@ -115,7 +126,8 @@
     "weight": "权重",
     "fleet_badge": {
       "lead": "主理",
-      "pending": "待审"
+      "pending": "待审",
+      "done": "收束"
     }
   },
   "chat": {

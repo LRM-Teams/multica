@@ -31,9 +31,11 @@ type MetaPanel = "fleet" | "sources" | null;
 export function ResearchSessionMetaMenu({
   members,
   sources,
+  sessionStatus,
 }: {
   members: ResearchFleetMember[];
   sources: ResearchSource[];
+  sessionStatus?: string | null;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -86,7 +88,11 @@ export function ResearchSessionMetaMenu({
           </SheetHeader>
           <div className="p-3" data-testid="research-session-meta-panel">
             {panel === "fleet" ? (
-              <ResearchFleetStrip members={members} embedded />
+              <ResearchFleetStrip
+                members={members}
+                sessionStatus={sessionStatus}
+                embedded
+              />
             ) : null}
             {panel === "sources" ? (
               <ResearchSourceBadges sources={sources} embedded />

@@ -783,6 +783,7 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		h.recordChannelAgentPromptWake(r.Context(), wake.channel, wake.agent, wake.trigger, wake.reason, wake.result)
 	}
 	h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
+	h.TaskService.RecordEvolutionUnitUsed(r.Context(), event.ID)
 	if chatDonePayload != nil {
 		h.publishAgentInboxChatDone(event, *chatDonePayload)
 		h.recordAgentInboxVisibleOutputActivity(r.Context(), event, task.RuntimeID, *chatDonePayload)
@@ -1230,6 +1231,7 @@ func (h *Handler) finishFailedAgentInboxEvent(
 	runtimeID := h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID)
 	if alreadyReplied {
 		h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
+		h.TaskService.RecordEvolutionUnitUsed(r.Context(), event.ID)
 		h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, runtimeID, "completed")
 	} else {
 		h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, runtimeID, "failed")
@@ -1736,11 +1738,31 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			TaskType:      resp.Kind,
 			Now:           time.Now(),
 		})
+		// LRM-984: claim-time retrieval proof (injected) for each delivered memory.
+		h.TaskService.RecordMemoryInjections(ctx, event.WorkspaceID, event.AgentID, event.ID, resp.Agent.Memories)
 	}
 	if strings.TrimSpace(resp.ChannelID) != "" {
 		channelID := parseUUID(resp.ChannelID)
 		if goal, err := h.currentChannelGoal(ctx, event.WorkspaceID, channelID); err == nil {
 			resp.ChannelGoal = channelGoalContextForClaim(goal)
+			// LRM-985: auditable Goal reinjection on every wake that carries a goal.
+			if resp.ChannelGoal != nil {
+				h.recordAgentActivityEvent(ctx, h.DB,
+					event.WorkspaceID, event.AgentID, event.RuntimeID, event.ID,
+					activityKindCustom, "channel_goal_injected", "info",
+					"channel", channelID, "",
+					"", "Channel goal reinjected for this wake",
+					map[string]any{
+						"goal_id":                     resp.ChannelGoal.ID,
+						"goal_version":                resp.ChannelGoal.Version,
+						"inbox_event_id":              uuidToString(event.ID),
+						"channel_id":                  resp.ChannelID,
+						"prior_session_id":            resp.PriorSessionID,
+						"fresh_session_notice_reason": resp.FreshSessionNoticeReason,
+						"trigger":                     "claim",
+					},
+				)
+			}
 		}
 	}
 	if resp.WorkspaceID == "" || resp.WorkspaceID != runtimeWorkspaceID {

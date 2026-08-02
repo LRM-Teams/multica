@@ -2899,6 +2899,50 @@ func (s *TaskService) RecordEvolutionSkillOutcome(ctx context.Context, execution
 	}
 }
 
+// RecordMemoryInjections writes claim-time feedback that each delivered memory
+// was retrieved into this execution (LRM-984). Fail-soft.
+func (s *TaskService) RecordMemoryInjections(ctx context.Context, workspaceID, agentID, executionID pgtype.UUID, memories []AgentMemoryData) {
+	if s == nil || s.Queries == nil || !executionID.Valid || len(memories) == 0 {
+		return
+	}
+	for _, memory := range memories {
+		unitID, err := util.ParseUUID(memory.ID)
+		if err != nil || !unitID.Valid {
+			continue
+		}
+		if err := s.Queries.RecordEvolutionMemoryInjection(ctx, db.RecordEvolutionMemoryInjectionParams{
+			WorkspaceID: workspaceID,
+			AgentID:     agentID,
+			TaskID:      pgtype.UUID{},
+			UnitID:      unitID,
+			LocalUnitID: strings.TrimSpace(memory.SyncKey),
+			ExecutionID: executionID,
+			SyncKey:     strings.TrimSpace(memory.SyncKey),
+			Scope:       strings.TrimSpace(memory.Scope),
+		}); err != nil {
+			slog.Warn("record evolution memory injection failed",
+				"execution_id", util.UUIDToString(executionID),
+				"memory_id", memory.ID,
+				"error", err,
+			)
+		}
+	}
+}
+
+// RecordEvolutionUnitUsed marks every memory/skill injected for this execution
+// as used when the run completes successfully (LRM-984). Fail-soft.
+func (s *TaskService) RecordEvolutionUnitUsed(ctx context.Context, executionID pgtype.UUID) {
+	if s == nil || s.Queries == nil || !executionID.Valid {
+		return
+	}
+	if err := s.Queries.RecordEvolutionUnitUsed(ctx, executionID); err != nil {
+		slog.Warn("record evolution unit used failed",
+			"execution_id", util.UUIDToString(executionID),
+			"error", err,
+		)
+	}
+}
+
 // AgentSkillData represents a skill for task execution responses.
 type AgentSkillData struct {
 	ID          string               `json:"id"`

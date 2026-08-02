@@ -278,3 +278,50 @@ WHERE unit_type = 'skill'
       AND recorded.metadata->>'execution_id' = @execution_id::text
       AND recorded.metadata->>'version_id' = evolution_unit_feedback_event.metadata->>'version_id'
   );
+
+-- name: RecordEvolutionMemoryInjection :exec
+-- LRM-984: claim-time proof that a memory was retrieved into the run.
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, local_unit_id, event, outcome, source, metadata
+)
+SELECT @workspace_id, @agent_id, @task_id, 'memory', @unit_id, @local_unit_id,
+       'injected', '', 'runtime',
+       jsonb_build_object(
+         'execution_id', @execution_id::uuid,
+         'sync_key', @sync_key::text,
+         'scope', @scope::text,
+         'inbox_event_id', @execution_id::uuid
+       )
+WHERE NOT EXISTS (
+  SELECT 1 FROM evolution_unit_feedback_event
+  WHERE unit_type = 'memory' AND unit_id = @unit_id AND event = 'injected'
+    AND metadata->>'execution_id' = @execution_id::text
+);
+
+-- name: RecordEvolutionUnitUsed :exec
+-- LRM-984: mark every memory/skill injected for this execution as used when
+-- the run completes successfully (auditable unit_id + execution_id).
+INSERT INTO evolution_unit_feedback_event (
+  workspace_id, agent_id, task_id, unit_type, unit_id, local_unit_id, event, outcome, source, metadata
+)
+SELECT DISTINCT workspace_id, agent_id, task_id, unit_type, unit_id, local_unit_id,
+       'used', '', 'runtime',
+       jsonb_build_object(
+         'execution_id', @execution_id::uuid,
+         'version_id', metadata->>'version_id',
+         'sync_key', metadata->>'sync_key',
+         'scope', metadata->>'scope',
+         'inbox_event_id', @execution_id::uuid
+       )
+FROM evolution_unit_feedback_event
+WHERE event = 'injected'
+  AND unit_type IN ('memory', 'skill')
+  AND metadata->>'execution_id' = @execution_id::text
+  AND NOT EXISTS (
+    SELECT 1 FROM evolution_unit_feedback_event recorded
+    WHERE recorded.unit_type = evolution_unit_feedback_event.unit_type
+      AND recorded.unit_id IS NOT DISTINCT FROM evolution_unit_feedback_event.unit_id
+      AND recorded.local_unit_id = evolution_unit_feedback_event.local_unit_id
+      AND recorded.event = 'used'
+      AND recorded.metadata->>'execution_id' = @execution_id::text
+  );

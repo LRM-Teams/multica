@@ -4867,7 +4867,24 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				activitySeq.Add(1)
 				switch msg.Type {
 				case agent.MessageStatus:
-					sessionPinned.Store(msg.SessionID != "")
+					// Pin the resume pointer the moment the backend reports a
+					// session_id — this is the earliest point it's known, well
+					// before the task completes. Without this, a daemon crash
+					// mid-task loses session_id/work_dir entirely (previously
+					// only ever reported at completion), so the server-side
+					// retry starts the agent completely fresh with no memory
+					// of any work already done. Only fire once per task
+					// (CompareAndSwap false->true) since backends may repeat
+					// MessageStatus on every turn. Best-effort and bounded: a
+					// failure here must never block task execution, it only
+					// costs the resume pointer for this cycle.
+					if msg.SessionID != "" && sessionPinned.CompareAndSwap(false, true) {
+						pinCtx, pinCancel := context.WithTimeout(context.Background(), 5*time.Second)
+						if err := d.client.PinTaskSession(pinCtx, taskID, msg.SessionID, opts.Cwd); err != nil {
+							taskLog.Warn("pin task session failed (task still runs; resume pointer lost for this cycle)", "error", err)
+						}
+						pinCancel()
+					}
 				case agent.MessageToolUse:
 					n := toolCount.Add(1)
 					inFlightTools.Add(1)

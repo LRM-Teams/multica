@@ -43,6 +43,7 @@ function providerLabel(runtime: AgentRuntime): string {
 /**
  * Per-runtime visibility on the machine detail page (Iris 「共享设置」).
  * Owner is shown once on the machine header — rows are tool name + state only.
+ * Lock reason is section-level once (Iris/Parker 2026-08-02), not per row.
  */
 export function MachineSharingSection({ machine }: { machine: RuntimeMachine }) {
   const { t } = useT("runtimes");
@@ -66,17 +67,30 @@ export function MachineSharingSection({ machine }: { machine: RuntimeMachine }) 
     return an !== 0 ? an : a.id.localeCompare(b.id);
   });
 
+  const canEditRuntime = (runtime: AgentRuntime) =>
+    !!user && (runtime.owner_id === user.id || isAdmin);
+
+  // Same fact for every locked row on a machine — say it once under the title.
+  const showOwnerOnlyNote = rows.some((r) => !canEditRuntime(r));
+
   return (
     <section data-testid="machine-sharing-section">
       <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
         {t(($) => $.machine.sharing.section)}
       </h3>
+      {showOwnerOnlyNote && (
+        <p
+          className="mb-2 px-1 text-xs text-muted-foreground"
+          data-testid="machine-sharing-locked-reason"
+        >
+          {t(($) => $.machine.sharing.owner_only)}
+        </p>
+      )}
       <div className="overflow-hidden rounded-xl border bg-card">
         {rows.map((runtime, idx) => {
           const visibility =
             runtime.visibility === "public" ? "public" : "private";
-          const canEdit =
-            !!user && (runtime.owner_id === user.id || isAdmin);
+          const canEdit = canEditRuntime(runtime);
           const next = visibility === "public" ? "private" : "public";
 
           const flip = () => {
@@ -121,17 +135,6 @@ export function MachineSharingSection({ machine }: { machine: RuntimeMachine }) 
                 <span className="text-muted-foreground">
                   {t(($) => $.detail.visibility_label[visibility])}
                 </span>
-                {!canEdit && (
-                  <>
-                    <span className="text-muted-foreground"> · </span>
-                    <span
-                      className="text-muted-foreground"
-                      data-testid="machine-sharing-locked-reason"
-                    >
-                      {t(($) => $.machine.sharing.owner_only)}
-                    </span>
-                  </>
-                )}
               </span>
               <button
                 type="button"

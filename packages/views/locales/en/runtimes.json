@@ -194,23 +194,7 @@
     "offline": "Offline"
   },
   "detail": {
-    "all_runtimes": "All runtimes",
-    "read_only": "Read-only",
-    "delete_button": "Delete runtime",
-    "last_seen": "last seen {{when}}",
-    "fact_owner": "Owner",
-    "fact_device": "Device",
-    "fact_runtime": "Runtime",
-    "technical_details": "Technical details",
-    "fact_daemon_cli": "Daemon CLI",
-    "fact_daemon_id": "Daemon ID",
-    "serving_title": "Serving",
-    "serving_count_one": "{{count}} agent",
-    "serving_count_other": "{{count}} agents",
     "no_agents": "No agents are bound to this runtime yet.",
-    "diagnostics_title": "Diagnostics",
-    "diagnostics_cli": "CLI",
-    "diagnostics_visibility": "Visibility",
     "visibility_label": {
       "private": "Private",
       "public": "Public"
@@ -253,15 +237,7 @@
       "delete_failed_toast": "Failed to delete runtime"
     },
     "toast_deleted": "Runtime deleted",
-    "toast_delete_failed": "Failed to delete runtime",
-    "running_chip_one": "· {{count}} running",
-    "running_chip_other": "· {{count}} running",
-    "queued_chip_one": "· {{count}} queued",
-    "queued_chip_other": "· {{count}} queued"
-  },
-  "detail_page": {
-    "not_found_title": "Runtime not found",
-    "not_found_hint": "It may have been deleted or you may not have access."
+    "toast_delete_failed": "Failed to delete runtime"
   },
   "running_one": "{{count}} running",
   "running_other": "{{count}} running",

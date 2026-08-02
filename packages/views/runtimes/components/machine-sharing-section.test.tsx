@@ -125,22 +125,43 @@ describe("MachineSharingSection", () => {
     );
   });
 
-  it("shows always-visible lock reason for non-editable rows", () => {
+  it("shows the lock reason once at section level, not per row", () => {
     renderSection(
       makeMachine([
         makeRuntime({
-          id: "rt-other",
+          id: "rt-a",
           provider: "grok",
           owner_id: "user-other",
           visibility: "private",
         }),
+        makeRuntime({
+          id: "rt-b",
+          provider: "pi",
+          owner_id: "user-other",
+          visibility: "public",
+        }),
       ]),
     );
 
+    expect(screen.getAllByTestId("machine-sharing-locked-reason")).toHaveLength(
+      1,
+    );
     expect(screen.getByTestId("machine-sharing-locked-reason")).toHaveTextContent(
       /Owner only/i,
     );
-    expect(screen.getByTestId("machine-sharing-toggle-rt-other")).toBeDisabled();
+    expect(screen.getByTestId("machine-sharing-toggle-rt-a")).toBeDisabled();
+    expect(screen.getByTestId("machine-sharing-toggle-rt-b")).toBeDisabled();
+  });
+
+  it("hides the lock reason when the viewer can edit", () => {
+    renderSection(
+      makeMachine([
+        makeRuntime({ id: "rt-c", provider: "cursor", visibility: "private" }),
+      ]),
+    );
+    expect(
+      screen.queryByTestId("machine-sharing-locked-reason"),
+    ).not.toBeInTheDocument();
   });
 
   it("flips visibility when editable", () => {

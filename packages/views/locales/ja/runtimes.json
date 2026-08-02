@@ -191,22 +191,7 @@
     "offline": "オフライン"
   },
   "detail": {
-    "all_runtimes": "すべてのランタイム",
-    "read_only": "読み取り専用",
-    "delete_button": "ランタイムを削除",
-    "last_seen": "最終確認 {{when}}",
-    "fact_owner": "所有者",
-    "fact_device": "デバイス",
-    "fact_runtime": "ランタイム",
-    "technical_details": "技術的な詳細",
-    "fact_daemon_cli": "デーモン CLI",
-    "fact_daemon_id": "デーモン ID",
-    "serving_title": "提供中",
-    "serving_count_other": "エージェント {{count}} 個",
     "no_agents": "まだこのランタイムに紐づいたエージェントがありません。",
-    "diagnostics_title": "診断",
-    "diagnostics_cli": "CLI",
-    "diagnostics_visibility": "公開範囲",
     "visibility_label": {
       "private": "非公開",
       "public": "公開"
@@ -248,13 +233,7 @@
       "delete_failed_toast": "ランタイムを削除できませんでした"
     },
     "toast_deleted": "ランタイムを削除しました",
-    "toast_delete_failed": "ランタイムを削除できませんでした",
-    "running_chip_other": "· 実行中 {{count}} 件",
-    "queued_chip_other": "· キュー待ち {{count}} 件"
-  },
-  "detail_page": {
-    "not_found_title": "ランタイムが見つかりません",
-    "not_found_hint": "削除されたか、アクセス権がない可能性があります。"
+    "toast_delete_failed": "ランタイムを削除できませんでした"
   },
   "running_other": "実行中 {{count}} 件",
   "queued_other": "キュー待ち {{count}} 件",

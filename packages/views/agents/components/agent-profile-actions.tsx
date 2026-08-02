@@ -2,11 +2,16 @@
 
 import { useState } from "react";
 import { Loader2, MessageSquare, RotateCcw, Trash2 } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent } from "@multica/core/types";
 import { api } from "@multica/core/api";
+import {
+  agentLifecycleActionState,
+  agentLifecyclePreflightOptions,
+  resolveLifecycleDisabledReasonKey,
+} from "@multica/core/agents";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { resolveActorDisplayName } from "@multica/core/identity";
@@ -77,6 +82,25 @@ export function AgentProfileActions({
       Date.now(),
     ) === "online";
 
+  // The provider-level gate above (forceRestartSupported) only tells us the
+  // agent's provider CAN be force-restarted in principle — not that the
+  // daemon it's actually running on is new enough to execute it right now
+  // (e.g. pre-v0.3.95 daemons predate agent_lifecycle_actions_v1). Fetch the
+  // real preflight whenever we'd otherwise offer the button, so a stale
+  // daemon shows a standing reason instead of a click that silently no-ops.
+  const wantsRestartOffer = canManage && !isArchived && isRuntimeOnline && forceRestartSupported;
+  const { data: restartPreflightData, isSuccess: restartPreflightSucceeded } = useQuery(
+    agentLifecyclePreflightOptions(agent.id, wantsRestartOffer),
+  );
+  const restartState = agentLifecycleActionState(restartPreflightData, "restart");
+  // Only trust a disabled+reason render once the preflight has actually
+  // resolved — otherwise the pre-fetch fallback (agentLifecycleActionState's
+  // "unavailable") would flash for every agent during the initial fetch.
+  const restartBlocked = restartPreflightSucceeded && !restartState.supported;
+  const restartDisabledReason = restartBlocked
+    ? t(($) => $.restart_modal.disabled_reason[resolveLifecycleDisabledReasonKey(restartState.disabled_reason)])
+    : null;
+
   const invalidateAgents = () => {
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) });
   };
@@ -128,18 +152,29 @@ export function AgentProfileActions({
           </Button>
         ) : null}
 
-        {canManage && !isArchived && isRuntimeOnline && forceRestartSupported ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className="w-full gap-2"
-            data-testid="agent-profile-action-restart"
-            onClick={() => setRestartOpen(true)}
-          >
-            <RotateCcw className="size-4 shrink-0" aria-hidden />
-            {t(($) => $.restart_modal.trigger)}
-          </Button>
+        {wantsRestartOffer ? (
+          <div className="flex flex-col gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className="w-full gap-2"
+              data-testid="agent-profile-action-restart"
+              disabled={restartBlocked}
+              onClick={() => setRestartOpen(true)}
+            >
+              <RotateCcw className="size-4 shrink-0" aria-hidden />
+              {t(($) => $.restart_modal.trigger)}
+            </Button>
+            {restartDisabledReason && (
+              <span
+                className="text-xs text-muted-foreground"
+                data-testid="agent-profile-action-restart-reason"
+              >
+                {restartDisabledReason}
+              </span>
+            )}
+          </div>
         ) : null}
 
         {canManage && !isArchived ? (

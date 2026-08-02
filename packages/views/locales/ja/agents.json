@@ -584,15 +584,15 @@
       },
       "full_reset_restart": {
         "title": "完全リセットして再起動",
-        "scope": "セッションをクリアし、ワークスペースのファイル（MEMORY.md、notes/）を完全に削除して再起動します。アイデンティティ、設定、チャット履歴、Issue は保持されます。これはエージェントの削除ではありません。"
+        "scope": "セッションをクリアし、ワークスペースのファイル（MEMORY.md、notes/）を完全に削除して再起動します。これはエージェントの削除ではありません。"
       }
     },
     "after_current_run": "現在のタスク完了後に実行されます。",
-    "full_reset_confirm": "確認のため、このエージェントのハンドル {{handle}} を入力してください。ワークスペースのファイル（MEMORY.md、notes/）は完全に削除されます。アイデンティティ、設定、チャット履歴、Issue は保持されます。",
+    "full_reset_confirm": "この操作は取り消せません。確認のため、このエージェントのハンドル {{handle}} を入力してください。",
     "full_reset_confirm_placeholder": "{{handle}} を入力",
     "disabled_reason": {
       "agent_active": "現在のタスクが完了してからもう一度お試しください。",
-      "unsupported_runtime_capability": "このランタイムはまだインプレース再起動に対応していません。",
+      "unsupported_runtime_capability": "デーモン v0.3.95 以降が必要です。",
       "no_runtime": "このエージェントにランタイムがバインドされていません。",
       "offline": "ランタイムがオフラインです。",
       "no_permission": "このエージェントを再起動する権限がありません。",

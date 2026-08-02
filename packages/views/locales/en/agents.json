@@ -602,15 +602,15 @@
       },
       "full_reset_restart": {
         "title": "Full reset & restart",
-        "scope": "Clears the session and permanently deletes the workspace files (MEMORY.md, notes/), then restarts. Identity, configuration, chat history, and Issues are kept. This is not Delete agent."
+        "scope": "Clears the session and permanently deletes the workspace files (MEMORY.md, notes/), then restarts. This is not Delete agent."
       }
     },
     "after_current_run": "Runs after the current task finishes.",
-    "full_reset_confirm": "Type this agent's handle {{handle}} to confirm. Workspace files (MEMORY.md, notes/) will be permanently deleted; identity, configuration, chat history, and Issues are kept.",
+    "full_reset_confirm": "This can't be undone. Type this agent's handle {{handle}} to confirm.",
     "full_reset_confirm_placeholder": "Enter {{handle}}",
     "disabled_reason": {
       "agent_active": "Wait until the current task finishes, then try again.",
-      "unsupported_runtime_capability": "This runtime doesn't support in-place restart yet.",
+      "unsupported_runtime_capability": "Requires daemon v0.3.95 or newer.",
       "no_runtime": "No runtime is bound to this agent.",
       "offline": "The runtime is offline.",
       "no_permission": "You don't have permission to restart this agent.",

@@ -154,6 +154,25 @@ describe("AgentRestartModal (#633)", () => {
     expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
   });
 
+  // Iris, 08-02: "identity/configuration/chat history/Issues are kept" was
+  // said 3x in this modal (top description, full_reset's own scope, and the
+  // full_reset confirm box) — say it once where it applies to all three
+  // tiers, reference it nowhere else.
+  it("states what's preserved exactly once — not repeated in the full_reset tier or its confirm box", () => {
+    renderModal();
+    fireEvent.click(screen.getByText("Full reset & restart"));
+    const preservedFactMatches = screen.getAllByText(
+      /identity, configuration, chat history, and Issues/i,
+    );
+    expect(preservedFactMatches).toHaveLength(1);
+  });
+
+  it("the full_reset confirm box states irreversibility instead of re-listing what's preserved", () => {
+    renderModal();
+    fireEvent.click(screen.getByText("Full reset & restart"));
+    expect(screen.getByText(/can't be undone/i)).toBeInTheDocument();
+  });
+
   it("shows the failure reason + Retry when the operation fails", () => {
     lifecycleState.current.operation = {
       id: "op-1",

@@ -14,6 +14,13 @@ const mocks = vi.hoisted(() => ({
   invalidateQueries: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  // Defaults to "not resolved yet" so every existing test (which doesn't
+  // care about the restart preflight) sees the trigger enabled, exactly
+  // like before this query existed — see `restartBlocked` in the component.
+  restartPreflight: { data: undefined, isSuccess: false } as {
+    data: unknown;
+    isSuccess: boolean;
+  },
 }));
 
 vi.mock("../../common/use-open-dm", () => ({
@@ -28,6 +35,20 @@ vi.mock("@multica/core/api", () => ({
 
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ invalidateQueries: mocks.invalidateQueries }),
+  useQuery: () => mocks.restartPreflight,
+}));
+
+vi.mock("@multica/core/agents", () => ({
+  agentLifecyclePreflightOptions: (agentId: string, enabled: boolean) => ({
+    agentId,
+    enabled,
+  }),
+  agentLifecycleActionState: (
+    preflight: { actions?: Record<string, { supported: boolean; disabled_reason?: string | null }> } | null | undefined,
+    kind: string,
+  ) => preflight?.actions?.[kind] ?? { supported: false, disabled_reason: "unavailable" },
+  resolveLifecycleDisabledReasonKey: (reason: string | null | undefined) =>
+    reason ?? "unavailable",
 }));
 
 vi.mock("sonner", () => ({
@@ -74,6 +95,10 @@ const RESOURCES = {
   },
   restart_modal: {
     trigger: "Restart…",
+    disabled_reason: {
+      unsupported_runtime_capability: "Requires daemon v0.3.95 or newer.",
+      unavailable: "This action isn't available right now.",
+    },
   },
 };
 
@@ -159,6 +184,7 @@ describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
     mocks.toastError.mockReset();
     mocks.invalidateQueries.mockReset();
     mocks.isPending = false;
+    mocks.restartPreflight = { data: undefined, isSuccess: false };
   });
 
   it("renders Message as primary action and opens DM", () => {
@@ -221,6 +247,47 @@ describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
   it("shows the Restart entry when the runtime supports forced restart", () => {
     render(<AgentProfileActions agent={agent} canManage forceRestartSupported={true} />);
     expect(screen.getByTestId("agent-profile-action-restart")).toBeInTheDocument();
+  });
+
+  // The provider-level gate (forceRestartSupported) only says the provider
+  // CAN be force-restarted in principle — the daemon it's actually running
+  // on might still be too old (pre-agent_lifecycle_actions_v1). This is
+  // that second, daemon-side gate: button visible, but disabled with a
+  // standing reason instead of a click that silently no-ops.
+  it("disables the trigger with a standing reason when the daemon preflight says unsupported", () => {
+    mocks.restartPreflight = {
+      isSuccess: true,
+      data: {
+        actions: {
+          restart: { supported: false, disabled_reason: "unsupported_runtime_capability" },
+        },
+      },
+    };
+    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
+    const trigger = screen.getByTestId("agent-profile-action-restart");
+    expect(trigger).toBeDisabled();
+    expect(screen.getByTestId("agent-profile-action-restart-reason")).toHaveTextContent(
+      "Requires daemon v0.3.95 or newer.",
+    );
+  });
+
+  it("keeps the trigger enabled with no reason once the preflight confirms restart is supported", () => {
+    mocks.restartPreflight = {
+      isSuccess: true,
+      data: { actions: { restart: { supported: true } } },
+    };
+    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
+    const trigger = screen.getByTestId("agent-profile-action-restart");
+    expect(trigger).not.toBeDisabled();
+    expect(screen.queryByTestId("agent-profile-action-restart-reason")).not.toBeInTheDocument();
+  });
+
+  it("doesn't flash a disabled reason before the preflight resolves", () => {
+    mocks.restartPreflight = { isSuccess: false, data: undefined };
+    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
+    const trigger = screen.getByTestId("agent-profile-action-restart");
+    expect(trigger).not.toBeDisabled();
+    expect(screen.queryByTestId("agent-profile-action-restart-reason")).not.toBeInTheDocument();
   });
 
   it("hides Delete when canManage is false; keeps Message", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link2, ChevronLeft } from "lucide-react";
 import type { Agent, EvolutionReviewSubmission, EvolutionUnitMetric } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -89,33 +89,47 @@ export function AgentEvidencePanel({
     () => buildAgentEvidenceSummaries(agents, submissions, unitMetrics),
     [agents, submissions, unitMetrics],
   );
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  // User picks only — fall back to first agent / default node while rendering
+  // (no prop→state sync effects; react-doctor no-derived-state / no-effect-chain).
+  const [agentIdOverride, setAgentIdOverride] = useState<string | null>(null);
   const [filter, setFilter] = useState<EvidenceFilter>("all");
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [nodeIdOverride, setNodeIdOverride] = useState<string | null>(null);
   const [narrowStep, setNarrowStep] = useState<NarrowStep>("list");
 
-  useEffect(() => {
-    if (selectedAgentId && summaries.some((s) => s.agent.id === selectedAgentId)) return;
-    setSelectedAgentId(summaries[0]?.agent.id ?? null);
-  }, [selectedAgentId, summaries]);
-
+  const selectedAgentId =
+    agentIdOverride && summaries.some((s) => s.agent.id === agentIdOverride)
+      ? agentIdOverride
+      : (summaries[0]?.agent.id ?? null);
   const selected = summaries.find((s) => s.agent.id === selectedAgentId) ?? null;
   const visibleChains = useMemo(
     () => (selected ? filterChains(selected.chains, filter) : []),
     [filter, selected],
   );
-
-  useEffect(() => {
+  const defaultNodeId = useMemo(() => {
     const firstUsed = visibleChains
       .flatMap((c) => c.nodes)
       .find((n) => n.kind === "used" && !n.pending);
-    const first = firstUsed ?? visibleChains[0]?.nodes.at(-1) ?? null;
-    setSelectedNodeId(first?.id ?? null);
-  }, [selectedAgentId, filter, visibleChains]);
+    return firstUsed?.id ?? visibleChains[0]?.nodes.at(-1)?.id ?? null;
+  }, [visibleChains]);
+  const selectedNodeId =
+    nodeIdOverride &&
+    visibleChains.some((c) => c.nodes.some((n) => n.id === nodeIdOverride))
+      ? nodeIdOverride
+      : defaultNodeId;
 
   const selectedNode = visibleChains
     .flatMap((c) => c.nodes.map((n) => ({ chain: c, node: n })))
     .find((x) => x.node.id === selectedNodeId);
+
+  const selectAgent = (id: string) => {
+    setAgentIdOverride(id);
+    setFilter("all");
+    setNodeIdOverride(null);
+  };
+  const selectFilter = (next: EvidenceFilter) => {
+    setFilter(next);
+    setNodeIdOverride(null);
+  };
 
   if (loading) {
     return (
@@ -147,18 +161,15 @@ export function AgentEvidencePanel({
         <AgentListColumn
           summaries={summaries}
           selectedAgentId={selectedAgentId}
-          onSelect={(id) => {
-            setSelectedAgentId(id);
-            setFilter("all");
-          }}
+          onSelect={selectAgent}
         />
         <AgentChainColumn
           selected={selected}
           filter={filter}
-          onFilter={setFilter}
+          onFilter={selectFilter}
           chains={visibleChains}
           selectedNodeId={selectedNodeId}
-          onSelectNode={setSelectedNodeId}
+          onSelectNode={setNodeIdOverride}
           onOpenLearning={onOpenLearning}
         />
         <div className="hidden xl:block">
@@ -177,8 +188,7 @@ export function AgentEvidencePanel({
             summaries={summaries}
             selectedAgentId={selectedAgentId}
             onSelect={(id) => {
-              setSelectedAgentId(id);
-              setFilter("all");
+              selectAgent(id);
               setNarrowStep("agent");
             }}
           />
@@ -198,11 +208,11 @@ export function AgentEvidencePanel({
             <AgentChainColumn
               selected={selected}
               filter={filter}
-              onFilter={setFilter}
+              onFilter={selectFilter}
               chains={visibleChains}
               selectedNodeId={selectedNodeId}
               onSelectNode={(id) => {
-                setSelectedNodeId(id);
+                setNodeIdOverride(id);
                 setNarrowStep("node");
               }}
               onOpenLearning={onOpenLearning}

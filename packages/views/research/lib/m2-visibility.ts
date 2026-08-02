@@ -81,6 +81,20 @@ export type HumanBoundaryModel = {
   empty: boolean;
 };
 
+/** Boundary panel mode when content is empty or errored (LRM-978). */
+export type HumanBoundaryMode = "ready" | "loading" | "empty" | "error";
+
+export function resolveHumanBoundaryMode(
+  model: HumanBoundaryModel,
+  sessionStatus?: string | null,
+  error?: string | null,
+): HumanBoundaryMode {
+  if (error) return "error";
+  if (!model.empty) return "ready";
+  if (sessionStatus === "running" || sessionStatus === "paused") return "loading";
+  return "empty";
+}
+
 const GENERAL_SOURCE_CLASSES = new Set([
   "web",
   "x",

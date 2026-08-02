@@ -87,7 +87,10 @@ export function VisibilityTabs({
         ) : null}
         {tab === "boundary" ? (
           <div className="p-3">
-            <HumanBoundaryCard model={boundary} />
+            <HumanBoundaryCard
+              model={boundary}
+              sessionStatus={sessionStatus}
+            />
           </div>
         ) : null}
       </div>

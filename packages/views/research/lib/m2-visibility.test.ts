@@ -5,6 +5,7 @@ import {
   buildHumanBoundary,
   buildSourceStrategy,
   resolveExplorationRailMode,
+  resolveHumanBoundaryMode,
   resolveSourceStrategyMode,
 } from "./m2-visibility";
 
@@ -94,6 +95,24 @@ describe("m2-visibility", () => {
               samples: [],
             },
           ],
+        },
+        "running",
+      ),
+    ).toBe("ready");
+  });
+
+  it("resolves boundary empty vs loading vs ready (LRM-978)", () => {
+    const empty = { aiCeiling: "", mustHuman: "", matrix: [], empty: true };
+    expect(resolveHumanBoundaryMode(empty, "drafting")).toBe("empty");
+    expect(resolveHumanBoundaryMode(empty, "running")).toBe("loading");
+    expect(resolveHumanBoundaryMode(empty, "running", "boom")).toBe("error");
+    expect(
+      resolveHumanBoundaryMode(
+        {
+          empty: false,
+          aiCeiling: "no licensed advice",
+          mustHuman: "compliance review",
+          matrix: [],
         },
         "running",
       ),

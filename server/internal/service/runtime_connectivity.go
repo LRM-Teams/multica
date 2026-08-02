@@ -31,6 +31,12 @@ const (
 	RuntimeConnectivityOnline RuntimeConnectivityTier = iota
 	RuntimeConnectivityStale
 	RuntimeConnectivityDead
+	// RuntimeConnectivityStopped is a confirmed-offline tier: the
+	// daemon/server itself knows this runtime is done (graceful deregister,
+	// sandbox teardown, ...) rather than merely having gone silent. Task ①
+	// of the agent intentional-stop signal design
+	// (docs/superpowers/specs/2026-08-02-agent-intentional-stop-signal-design.md).
+	RuntimeConnectivityStopped
 )
 
 // RuntimeConnectivity applies the freshness gate this package and the
@@ -39,7 +45,16 @@ const (
 // means the runtime is not actually reachable right now. A row already
 // persisted "offline" by the sweeper gets the same tiering, just keyed off
 // UpdatedAt (the sweeper's flip time) instead of LastSeenAt.
+//
+// A confirmed offline_reason short-circuits the whole time-based ramp: a
+// runtime we know was deliberately stopped reads as Stopped immediately,
+// not after riding through Stale/Dead the way a silent/unexplained offline
+// flip does. This check must run first — a fresh LastSeenAt/UpdatedAt would
+// otherwise mask the confirmed reason behind Online/Stale.
 func RuntimeConnectivity(rt db.AgentRuntime, now time.Time) RuntimeConnectivityTier {
+	if rt.Status == "offline" && rt.OfflineReason.Valid && rt.OfflineReason.String != "" {
+		return RuntimeConnectivityStopped
+	}
 	if rt.LastSeenAt.Valid && now.Sub(rt.LastSeenAt.Time) >= AgentHealthStaleThreshold {
 		if now.Sub(rt.LastSeenAt.Time) >= AgentHealthReconnectAfter {
 			return RuntimeConnectivityDead

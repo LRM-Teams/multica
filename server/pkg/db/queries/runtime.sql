@@ -54,6 +54,13 @@ WHERE a.id = @agent_id AND a.workspace_id = @workspace_id
 -- reconnect must keep refreshing `name` (hostname / reported label) but
 -- must never clobber a user-set display_name. New inserts default to ''
 -- via the column default.
+--
+-- offline_reason = NULL is required, not optional cleanup (found while
+-- writing the agent intentional-stop signal design doc, Open Question 1):
+-- without it, a runtime that was gracefully stopped (offline_reason set by
+-- SetAgentRuntimeOffline) and later reconnects would carry the stale reason
+-- forever, so a FUTURE real (silence-based) disconnect would incorrectly
+-- still read as "stopped" instead of "disconnected".
 INSERT INTO agent_runtime (
     workspace_id,
     daemon_id,
@@ -74,6 +81,7 @@ DO UPDATE SET
     device_info = EXCLUDED.device_info,
     metadata = EXCLUDED.metadata,
     owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
+    offline_reason = NULL,
     last_seen_at = now(),
     updated_at = now()
 RETURNING *, (xmax = 0) AS inserted;
@@ -162,9 +170,15 @@ WHERE id = $1
 RETURNING *;
 
 -- name: SetAgentRuntimeOffline :exec
+-- offline_reason is optional: callers that know why the runtime is offline
+-- (daemon graceful deregister, sandbox teardown) pass a reason_code string
+-- (mirrors agent_activity_event's vocabulary, no new enum). Callers that
+-- don't know pass a zero-value/NULL pgtype.Text, which preserves today's
+-- "we don't know why" behavior — see docs/superpowers/specs/2026-08-02-
+-- agent-intentional-stop-signal-design.md.
 UPDATE agent_runtime
-SET status = 'offline', updated_at = now()
-WHERE id = $1;
+SET status = 'offline', offline_reason = @offline_reason, updated_at = now()
+WHERE id = @id;
 
 -- name: SelectStaleOnlineRuntimes :many
 -- Lists online runtimes whose last_seen_at exceeds the stale window. The

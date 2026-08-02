@@ -33,6 +33,8 @@ import {
   roundSourceWeight,
   validateCreateParams,
 } from "../lib/research-create-params";
+import type { ResolveCreateEstimateOptions } from "../lib/research-create-estimate";
+import { ResearchCreateEstimatePanel } from "./research-create-estimate";
 
 function WeightRow({
   weightKey,
@@ -128,9 +130,10 @@ function WeightRow({
 }
 
 /**
- * LRM-838 / LRM-835 — create-flow params sheet: depth / source weights / language.
- * Narrow: fullscreen; desktop: right sheet. Out-of-range weights keep draft values
- * and show near-field Chinese errors (no silent wipe).
+ * LRM-838 / LRM-835 / LRM-839 — create-flow params sheet: depth / source weights /
+ * language + linked duration/cost estimate. Narrow: fullscreen; desktop: right
+ * sheet. Out-of-range weights keep draft values and show near-field errors.
+ * Estimate unknown does not block Done.
  */
 export function ResearchCreateParamsPanel({
   open,
@@ -139,6 +142,7 @@ export function ResearchCreateParamsPanel({
   onOpenChange,
   onChange,
   onErrorsChange,
+  estimateResolveOptions,
 }: {
   open: boolean;
   value: ResearchCreateParamsDraft;
@@ -146,6 +150,8 @@ export function ResearchCreateParamsPanel({
   onOpenChange: (open: boolean) => void;
   onChange: (next: ResearchCreateParamsDraft) => void;
   onErrorsChange?: (next: CreateParamsFieldErrors | null) => void;
+  /** Test / future API override for estimate lookup (LRM-839). */
+  estimateResolveOptions?: ResolveCreateEstimateOptions;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -211,6 +217,11 @@ export function ResearchCreateParamsPanel({
         </SheetHeader>
 
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-4">
+          <ResearchCreateEstimatePanel
+            params={params}
+            resolveOptions={estimateResolveOptions}
+          />
+
           <section className="space-y-3" data-testid="research-create-depth">
             <div>
               <h3 className="text-sm font-semibold text-foreground">

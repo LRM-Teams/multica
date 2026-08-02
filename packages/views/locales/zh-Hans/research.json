@@ -507,5 +507,19 @@
       "weight_out_of_range": "权重须在 0–1 之间，请调整后再提交。",
       "weight_invalid": "请输入有效数字（0–1）。"
     }
+  },
+  "create_estimate": {
+    "title": "费用与时长",
+    "badge": "预估值",
+    "duration_label": "预估时长",
+    "cost_label": "消耗档位",
+    "duration_range": "约 {{min}}–{{max}} 分钟",
+    "unknown": "未知",
+    "disclaimer": "预估值，非承诺；实际可能因题量与澄清轮次变化。无数据时仍可创建。",
+    "cost_tiers": {
+      "low": "低",
+      "medium": "中",
+      "high": "高"
+    }
   }
 }

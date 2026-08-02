@@ -507,5 +507,19 @@
       "weight_out_of_range": "重みは 0〜1 の範囲で指定してください。",
       "weight_invalid": "0〜1 の有効な数値を入力してください。"
     }
+  },
+  "create_estimate": {
+    "title": "Cost & duration",
+    "badge": "Estimate",
+    "duration_label": "Estimated duration",
+    "cost_label": "Cost tier",
+    "duration_range": "About {{min}}–{{max}} min",
+    "unknown": "Unknown",
+    "disclaimer": "Estimate only — not a commitment. Actual time may vary with topic size and clarifications. You can still create when unknown.",
+    "cost_tiers": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High"
+    }
   }
 }

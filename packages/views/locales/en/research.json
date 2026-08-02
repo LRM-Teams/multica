@@ -507,5 +507,19 @@
       "weight_out_of_range": "Weight must be between 0 and 1.",
       "weight_invalid": "Enter a valid number between 0 and 1."
     }
+  },
+  "create_estimate": {
+    "title": "Cost & duration",
+    "badge": "Estimate",
+    "duration_label": "Estimated duration",
+    "cost_label": "Cost tier",
+    "duration_range": "About {{min}}–{{max}} min",
+    "unknown": "Unknown",
+    "disclaimer": "Estimate only — not a commitment. Actual time may vary with topic size and clarifications. You can still create when unknown.",
+    "cost_tiers": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High"
+    }
   }
 }

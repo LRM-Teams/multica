@@ -325,6 +325,16 @@ describe("ResearchListPage composer hero (LRM-783 / LRM-784 / LRM-906)", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows create estimate summary on the composer (LRM-839)", () => {
+    render(<ResearchListPage />);
+    const summary = screen.getByTestId("research-create-estimate-summary");
+    expect(summary).toHaveAttribute("data-estimate-status", "ready");
+    expect(summary).toHaveTextContent(enResearch.create_estimate.badge);
+    expect(screen.getByTestId("research-create-estimate-summary-cost")).toHaveTextContent(
+      enResearch.create_estimate.cost_tiers.medium,
+    );
+  });
+
   it("keeps start enabled and shows near-field empty-goal error (LRM-835)", () => {
     const mutate = vi.fn();
     mutationRef.current = { ...mutationRef.current, mutate };

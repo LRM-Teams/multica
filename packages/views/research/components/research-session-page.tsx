@@ -429,8 +429,14 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           ) : null}
         </section>
 
-        <aside className="hidden w-[260px] shrink-0 flex-col gap-3 overflow-y-auto border-l bg-background p-3 lg:flex">
-          <HumanBoundaryCard model={humanBoundary} />
+        <aside
+          data-testid="research-boundary-aside"
+          className="relative z-[1] hidden w-[280px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-border/55 bg-background/55 p-3 backdrop-blur-sm lg:flex"
+        >
+          <HumanBoundaryCard
+            model={humanBoundary}
+            sessionStatus={session.status}
+          />
         </aside>
 
         <ResearchChatDrawer open={chatOpen} onClose={() => setChatOpen(false)}>
@@ -441,7 +447,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
               </Button>
             </div>
             <div className="border-b p-3 lg:hidden">
-              <HumanBoundaryCard model={humanBoundary} />
+              <HumanBoundaryCard
+                model={humanBoundary}
+                sessionStatus={session.status}
+              />
             </div>
             <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
               {t(($) => $.panel.fleet)}:{" "}

@@ -2754,7 +2754,7 @@ func (s *TaskService) LoadAgentMemoriesForExecution(ctx context.Context, agentID
 	return result
 }
 
-func teamKnowledgeMemoryData(item db.ActiveTeamKnowledgeForExecution) AgentMemoryData {
+func teamKnowledgeMemoryData(item db.ListActiveTeamKnowledgeForExecutionRow) AgentMemoryData {
 	id := util.UUIDToString(item.ID)
 	return AgentMemoryData{
 		ID:      id,

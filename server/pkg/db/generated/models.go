@@ -333,6 +333,21 @@ type AgentSkill struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type AgentSkillSuggestion struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	SkillID        pgtype.UUID        `json:"skill_id"`
+	Action         string             `json:"action"`
+	Reason         string             `json:"reason"`
+	MatcherScore   float64            `json:"matcher_score"`
+	MatcherDetails []byte             `json:"matcher_details"`
+	Status         string             `json:"status"`
+	DecidedAt      pgtype.Timestamptz `json:"decided_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Attachment struct {
 	ID            pgtype.UUID        `json:"id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`

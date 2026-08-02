@@ -18,6 +18,7 @@ import { resolveChannelAuthorDisplayName } from "./message-preview";
 import { MessageBody } from "./message-body";
 import { VoiceMessageAudio } from "./voice-message-audio";
 import { resolveVoiceMessagePresentation } from "../lib/voice-message-presentation";
+import { useMessageContentExpanded } from "../hooks/use-message-content-expanded";
 
 /** Match main-column long-message clamp (channel-message-bubble LRM-268). */
 const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 320;
@@ -127,10 +128,12 @@ export function ThreadRootPreview({
     />
   );
 
-  // Same long-message See more / See less as the main column (LRM-268 / LRM-572).
+  // Same long-message See more / See less as the main column (LRM-268 / LRM-572 / LRM-987).
   const collapseIdentity = `${message.id}\0${message.content ?? ""}\0${message.parts?.length ?? 0}\0${message.attachments?.length ?? 0}`;
-  const [expandedForIdentity, setExpandedForIdentity] = useState<string | null>(null);
-  const contentExpanded = expandedForIdentity === collapseIdentity;
+  const { contentExpanded, expand, collapse } = useMessageContentExpanded(
+    message.id,
+    collapseIdentity,
+  );
   const [contentOverflows, setContentOverflows] = useState(false);
   const messageBodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -213,7 +216,7 @@ export function ThreadRootPreview({
                 <button
                   type="button"
                   className="pointer-events-auto inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  onClick={() => setExpandedForIdentity(collapseIdentity)}
+                  onClick={() => expand()}
                 >
                   {t(($) => $.message.expand_action)}
                 </button>
@@ -225,7 +228,7 @@ export function ThreadRootPreview({
               <button
                 type="button"
                 className="inline-flex min-h-8 items-center px-0 text-sm font-normal text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                onClick={() => setExpandedForIdentity(null)}
+                onClick={() => collapse()}
               >
                 {t(($) => $.message.collapse_action)}
               </button>

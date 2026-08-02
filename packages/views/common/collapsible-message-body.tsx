@@ -13,6 +13,10 @@ import {
   messageCollapseFadeClassName,
   type MessageCollapseFadeVariant,
 } from "./mention-token";
+import {
+  isCollapsibleMessageExpanded,
+  setCollapsibleMessageExpanded,
+} from "./collapsible-message-expanded-memory";
 
 /** Slack-style collapsed body height (LRM-268, widened ~2x by LRM-750). */
 export const MESSAGE_COLLAPSE_MAX_HEIGHT_PX = 320;
@@ -36,10 +40,10 @@ type CollapsibleMessageBodyProps = {
  * 「查看更多」/「收起」control. Full DOM stays mounted so expand is instant
  * and copy still sees the complete text.
  *
- * `contentKey` is applied as a React key so a new message remounts collapsed
- * without syncing expand state through an effect.
+ * Expand choice is Map-backed (keyed by `contentKey`) so list remounts after
+ * height change do not flash-collapse (LRM-987).
  */
-// react-doctor-disable-next-line react-doctor/no-multi-comp -- key wrapper remounts inner expand state
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- key wrapper remounts measure refs
 export function CollapsibleMessageBody({
   contentKey,
   ...props
@@ -60,7 +64,7 @@ function CollapsibleMessageBodyInner({
   const bodyRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<() => void>(() => {});
   const [contentOverflows, setContentOverflows] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() => isCollapsibleMessageExpanded(contentKey));
 
   const measureContentOverflow = useCallback(() => {
     const body = bodyRef.current;
@@ -77,7 +81,6 @@ function CollapsibleMessageBodyInner({
   useLayoutEffect(() => {
     if (!enabled) {
       setContentOverflows(false);
-      return;
     }
     measureRef.current();
   }, [enabled, contentKey, expanded]);
@@ -114,6 +117,7 @@ function CollapsibleMessageBodyInner({
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();
+                setCollapsibleMessageExpanded(contentKey, true);
                 setExpanded(true);
                 onExpandedChange?.(true);
               }}
@@ -131,6 +135,7 @@ function CollapsibleMessageBodyInner({
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
+              setCollapsibleMessageExpanded(contentKey, false);
               setExpanded(false);
               onExpandedChange?.(false);
             }}

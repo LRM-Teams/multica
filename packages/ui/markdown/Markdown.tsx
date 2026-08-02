@@ -529,17 +529,23 @@ function createComponents(
       ),
       ol: ({ children }) => <ol className="my-2 space-y-1 pl-6 list-decimal">{highlight(children)}</ol>,
       li: ({ children }) => <li>{highlight(children)}</li>,
-      // Clean tables
+      // Clean tables — wrap cells (LRM-987: no ellipsis-only crop in narrow bubbles)
       table: ({ children }) => (
-        <div className="my-3 overflow-x-auto">
-          <table className="min-w-full text-sm">{highlight(children)}</table>
+        <div className="my-3 max-w-full overflow-x-auto">
+          <table className="w-max min-w-full text-sm">{highlight(children)}</table>
         </div>
       ),
       thead: ({ children }) => <thead className="border-b">{highlight(children)}</thead>,
       th: ({ children }) => (
-        <th className="text-left py-2 px-3 font-semibold text-muted-foreground">{highlight(children)}</th>
+        <th className="whitespace-normal break-words text-left py-2 px-3 font-semibold text-muted-foreground">
+          {highlight(children)}
+        </th>
       ),
-      td: ({ children }) => <td className="py-2 px-3 border-b border-border/50">{highlight(children)}</td>,
+      td: ({ children }) => (
+        <td className="whitespace-normal break-words py-2 px-3 border-b border-border/50">
+          {highlight(children)}
+        </td>
+      ),
       // Headings - H1/H2 same size, differentiated by weight
       h1: ({ children }) => <h1 className="font-sans text-base font-bold mt-5 mb-3">{highlight(children)}</h1>,
       h2: ({ children }) => (
@@ -591,18 +597,22 @@ function createComponents(
       <ol className="my-3 space-y-1.5 pl-6 list-decimal">{highlight(children)}</ol>
     ),
     li: ({ children }) => <li className="leading-relaxed">{highlight(children)}</li>,
-    // Beautiful tables
+    // Beautiful tables — wrap cells (LRM-987)
     table: ({ children }) => (
-      <div className="my-4 overflow-x-auto rounded-md border">
-        <table className="min-w-full divide-y divide-border">{highlight(children)}</table>
+      <div className="my-4 max-w-full overflow-x-auto rounded-md border">
+        <table className="w-max min-w-full divide-y divide-border">{highlight(children)}</table>
       </div>
     ),
     thead: ({ children }) => <thead className="bg-muted/50">{highlight(children)}</thead>,
     tbody: ({ children }) => <tbody className="divide-y divide-border">{highlight(children)}</tbody>,
     th: ({ children }) => (
-      <th className="text-left py-3 px-4 font-semibold text-sm">{highlight(children)}</th>
+      <th className="whitespace-normal break-words text-left py-3 px-4 font-semibold text-sm">
+        {highlight(children)}
+      </th>
     ),
-    td: ({ children }) => <td className="py-3 px-4 text-sm">{highlight(children)}</td>,
+    td: ({ children }) => (
+      <td className="whitespace-normal break-words py-3 px-4 text-sm">{highlight(children)}</td>
+    ),
     tr: ({ children }) => (
       <tr className="hover:bg-muted/30 transition-colors">{highlight(children)}</tr>
     ),

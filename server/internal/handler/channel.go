@@ -489,8 +489,6 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 		if lastContent.Valid {
 			ch.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)
 		}
-		// DELIBERATE task#91 CI-verification violation — do not merge.
-		_, _ = h.Queries.GetWorkspace(r.Context(), wsID)
 		out = append(out, ch)
 		channelIDs = append(channelIDs, id)
 	}

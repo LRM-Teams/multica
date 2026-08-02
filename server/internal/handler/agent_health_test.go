@@ -405,7 +405,7 @@ func TestAgentRuntimeDisplayStatus_StaleOnlineRuntimeShowsDisconnectedNotOnline(
 		LastSeenAt: pgtimestamptz(now.Add(-3 * time.Minute)), // stale (> 150s)
 		UpdatedAt:  pgtimestamptz(now.Add(-2 * time.Minute)),
 	}
-	got := agentRuntimeDisplayStatus("idle", rt, now)
+	got := agentRuntimeDisplayStatus("idle", rt, pgtype.Timestamptz{}, now)
 	if got != agentDisplayStatusDisconnected {
 		t.Fatalf("display status = %q, want %q (stale heartbeat must not show as still working/idle-online)", got, agentDisplayStatusDisconnected)
 	}
@@ -418,7 +418,7 @@ func TestAgentRuntimeDisplayStatus_PersistedOfflineShowsOffline(t *testing.T) {
 		LastSeenAt: pgtimestamptz(now.Add(-10 * time.Minute)),
 		UpdatedAt:  pgtimestamptz(now.Add(-6 * time.Minute)), // past reconnect window
 	}
-	got := agentRuntimeDisplayStatus("idle", rt, now)
+	got := agentRuntimeDisplayStatus("idle", rt, pgtype.Timestamptz{}, now)
 	if got != agentDisplayStatusOffline {
 		t.Fatalf("display status = %q, want %q", got, agentDisplayStatusOffline)
 	}
@@ -431,10 +431,10 @@ func TestAgentRuntimeDisplayStatus_FreshOnlineFollowsAgentWorkload(t *testing.T)
 		LastSeenAt: pgtimestamptz(now.Add(-10 * time.Second)), // fresh
 		UpdatedAt:  pgtimestamptz(now.Add(-5 * time.Second)),
 	}
-	if got := agentRuntimeDisplayStatus("working", rt, now); got != agentDisplayStatusWorking {
+	if got := agentRuntimeDisplayStatus("working", rt, pgtype.Timestamptz{}, now); got != agentDisplayStatusWorking {
 		t.Fatalf("display status = %q, want %q for a fresh runtime with a working agent", got, agentDisplayStatusWorking)
 	}
-	if got := agentRuntimeDisplayStatus("idle", rt, now); got != agentDisplayStatusIdle {
+	if got := agentRuntimeDisplayStatus("idle", rt, pgtype.Timestamptz{}, now); got != agentDisplayStatusIdle {
 		t.Fatalf("display status = %q, want %q for a fresh runtime with an idle agent", got, agentDisplayStatusIdle)
 	}
 }
@@ -452,7 +452,7 @@ func TestAgentRuntimeDisplayStatus_Stopped(t *testing.T) {
 		UpdatedAt:     pgtimestamptz(now.Add(-1 * time.Second)),
 		OfflineReason: pgtype.Text{String: "daemon_deregistered", Valid: true},
 	}
-	got := agentRuntimeDisplayStatus("idle", rt, now)
+	got := agentRuntimeDisplayStatus("idle", rt, pgtype.Timestamptz{}, now)
 	if got != agentDisplayStatusStopped {
 		t.Fatalf("display status = %q, want %q for a confirmed offline_reason", got, agentDisplayStatusStopped)
 	}
@@ -475,7 +475,7 @@ func TestAgentRuntimeDisplayStatus_FreshStartingSinceOverridesStaleConnectivity(
 		UpdatedAt:     pgtimestamptz(now.Add(-10 * time.Minute)),
 		StartingSince: pgtimestamptz(now.Add(-5 * time.Second)), // just marked starting
 	}
-	if got := agentRuntimeDisplayStatus("idle", rt, now); got != agentDisplayStatusStarting {
+	if got := agentRuntimeDisplayStatus("idle", rt, pgtype.Timestamptz{}, now); got != agentDisplayStatusStarting {
 		t.Fatalf("display status = %q, want %q despite stale connectivity", got, agentDisplayStatusStarting)
 	}
 }
@@ -494,8 +494,34 @@ func TestAgentRuntimeDisplayStatus_ExpiredStartingSinceFallsThroughSafely(t *tes
 		UpdatedAt:     pgtimestamptz(now.Add(-5 * time.Second)),
 		StartingSince: pgtimestamptz(now.Add(-90 * time.Second)), // past the 60s TTL
 	}
-	if got := agentRuntimeDisplayStatus("working", rt, now); got != agentDisplayStatusWorking {
+	if got := agentRuntimeDisplayStatus("working", rt, pgtype.Timestamptz{}, now); got != agentDisplayStatusWorking {
 		t.Fatalf("display status = %q, want %q — expired starting_since must not override a fresh, otherwise-normal runtime", got, agentDisplayStatusWorking)
+	}
+}
+
+func TestAgentRuntimeDisplayStatus_CrashedSinceShowsCrashedWhenConnectivityOnline(t *testing.T) {
+	now := time.Now()
+	rt := db.AgentRuntime{
+		Status:     "online",
+		LastSeenAt: pgtimestamptz(now.Add(-10 * time.Second)),
+		UpdatedAt:  pgtimestamptz(now.Add(-10 * time.Second)),
+	}
+	got := agentRuntimeDisplayStatus("idle", rt, pgtimestamptz(now.Add(-30*time.Second)), now)
+	if got != agentDisplayStatusCrashed {
+		t.Fatalf("display status = %q, want %q", got, agentDisplayStatusCrashed)
+	}
+}
+
+func TestAgentRuntimeDisplayStatus_WholeMachineOfflineBeatsStaleCrashFact(t *testing.T) {
+	now := time.Now()
+	rt := db.AgentRuntime{
+		Status:     "online",
+		LastSeenAt: pgtimestamptz(now.Add(-10 * time.Minute)),
+		UpdatedAt:  pgtimestamptz(now.Add(-10 * time.Minute)),
+	}
+	got := agentRuntimeDisplayStatus("idle", rt, pgtimestamptz(now.Add(-1*time.Minute)), now)
+	if got != agentDisplayStatusOffline {
+		t.Fatalf("display status = %q, want %q — machine silence is offline, not crashed", got, agentDisplayStatusOffline)
 	}
 }
 
@@ -521,5 +547,37 @@ func TestAttachAgentRuntimeNames_StaleOnlineRuntimeGetsHonestDisplayStatusNotRaw
 	}
 	if resps[0].RuntimeDisplayStatus != agentDisplayStatusDisconnected {
 		t.Fatalf("RuntimeDisplayStatus = %q, want %q — a stale-but-DB-online runtime must not display as online", resps[0].RuntimeDisplayStatus, agentDisplayStatusDisconnected)
+	}
+}
+
+// TestAttachAgentRuntimeNames_CrashedAgentShowsCrashed is the GET /agents
+// wiring check Parker required for Raft status ②: seed agent.crashed_since,
+// call attachAgentRuntimeNames (the only production call site of
+// agentRuntimeDisplayStatus), assert RuntimeDisplayStatus == "crashed".
+// Confirm-broken: temporarily skip ListAgentCrashedSinceByIDs / zero the
+// map and this fails with idle; restored, it passes.
+func TestAttachAgentRuntimeNames_CrashedAgentShowsCrashed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentHealthFixture(t, "online",
+		time.Now().Add(-10*time.Second),
+		time.Now().Add(-10*time.Second),
+	)
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE agent SET crashed_since = now() WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("seed crashed_since: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(),
+			`UPDATE agent SET crashed_since = NULL WHERE id = $1`, agentID)
+	})
+
+	resps := []AgentResponse{{ID: agentID, RuntimeID: runtimeID, Status: "idle"}}
+	testHandler.attachAgentRuntimeNames(context.Background(), resps)
+
+	if resps[0].RuntimeDisplayStatus != agentDisplayStatusCrashed {
+		t.Fatalf("RuntimeDisplayStatus = %q, want %q — attachAgentRuntimeNames must load agent.crashed_since",
+			resps[0].RuntimeDisplayStatus, agentDisplayStatusCrashed)
 	}
 }

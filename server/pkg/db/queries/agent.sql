@@ -921,3 +921,32 @@ LEFT JOIN chat_session cs ON atq.chat_session_id = cs.id
 WHERE (i.project_id = @project_id OR cs.project_id = @project_id)
   AND atq.status = 'draining'
 ORDER BY atq.created_at ASC;
+
+-- name: MarkAgentCrashed :exec
+-- Records that this agent's idle resident provider process was found dead
+-- (daemon ResidentRuntimeCrashEvent / task #42②). Per-agent on purpose: many
+-- agents can share one runtime/daemon, and only the crashed provider slot
+-- should show "crashed". Cleared explicitly on successful recreate / manual
+-- lifecycle restart — not by TTL (a crash with no next dispatch is exactly
+-- the long-lived case this signal exists for).
+UPDATE agent
+SET crashed_since = now(), updated_at = now()
+WHERE id = $1;
+
+-- name: ClearAgentCrashed :exec
+-- Clears a prior MarkAgentCrashed once the daemon has a live resident
+-- provider again (successful recreate after eviction) or a human-driven
+-- lifecycle restart succeeded. Leaving this out would stick "crashed" forever
+-- after recovery — the same class of stale-fact bug as uncleared offline_reason.
+UPDATE agent
+SET crashed_since = NULL, updated_at = now()
+WHERE id = $1;
+
+-- name: ListAgentCrashedSinceByIDs :many
+-- Narrow read used by attachAgentRuntimeNames so GET /agents can project
+-- "crashed" without regenerating every SELECT * FROM agent query (make sqlc
+-- is currently broken repo-wide — see task #83). Keep this in sync with the
+-- column MarkAgentCrashed/ClearAgentCrashed touch.
+SELECT id, crashed_since
+FROM agent
+WHERE id = ANY($1::uuid[]) AND crashed_since IS NOT NULL;

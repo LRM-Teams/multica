@@ -107,8 +107,10 @@ func (d *Daemon) handleAgentLifecycleOperation(ctx context.Context, pending prot
 		result["status"] = "succeeded"
 		// A human explicitly asked for this operation, so give the runtime a
 		// fresh crash-retry budget instead of leaving it flagged crash-looping
-		// from history predating the restart.
+		// from history predating the restart — and clear the server-side
+		// crashed display fact so GET /agents stops saying "crashed".
 		d.residentCrashBackoff.clear(pending.AgentID, pending.RuntimeID)
+		d.clearAgentProviderCrashedOnServer(pending.RuntimeID, pending.AgentID)
 	}
 
 	if err := d.client.ReportAgentLifecycleOperationResult(ctx, pending.RuntimeID, pending.OperationID, result); err != nil {
@@ -118,14 +120,21 @@ func (d *Daemon) handleAgentLifecycleOperation(ctx context.Context, pending prot
 }
 
 // onResidentRuntimeCrash is the daemon's own subscriber to crash events —
-// it tracks the retry-cap/backoff bookkeeping. Other subscribers (e.g.
-// Vera's #42③ status reporting) register independently via
-// subscribeResidentRuntimeCrash and do not depend on this one.
+// it tracks the retry-cap/backoff bookkeeping and best-effort reports the
+// crash fact to the server so GET /agents can show "crashed" (Parker Raft
+// status ②). Mid-turn process_failure deliberately does NOT call this path.
 func (d *Daemon) onResidentRuntimeCrash(ev ResidentRuntimeCrashEvent) {
 	if d.residentCrashBackoff == nil {
 		return
 	}
 	attempt, backoff, terminal := d.residentCrashBackoff.recordCrash(ev.AgentID, ev.RuntimeID, ev.DetectedAt)
+	if d.client != nil && ev.AgentID != "" && ev.RuntimeID != "" {
+		// Best-effort: local recovery continues even if the server call fails.
+		if err := d.client.ReportAgentProviderCrashed(context.Background(), ev.RuntimeID, ev.AgentID); err != nil {
+			d.logger.Debug("report agent provider crashed failed; continuing",
+				"agent_id", ev.AgentID, "runtime_id", ev.RuntimeID, "error", err)
+		}
+	}
 	if terminal {
 		d.logger.Warn("resident runtime crash-looping, auto-recovery stopped",
 			"agent_id", ev.AgentID, "runtime_id", ev.RuntimeID, "provider", ev.Provider,
@@ -135,6 +144,18 @@ func (d *Daemon) onResidentRuntimeCrash(ev ResidentRuntimeCrashEvent) {
 	d.logger.Warn("resident runtime crashed, will recover on next dispatch",
 		"agent_id", ev.AgentID, "runtime_id", ev.RuntimeID, "provider", ev.Provider,
 		"attempt", attempt, "backoff", backoff)
+}
+
+// clearAgentProviderCrashedOnServer clears the server-side crashed_since after
+// local recovery (successful resident recreate or lifecycle restart).
+func (d *Daemon) clearAgentProviderCrashedOnServer(runtimeID, agentID string) {
+	if d == nil || d.client == nil || runtimeID == "" || agentID == "" {
+		return
+	}
+	if err := d.client.ClearAgentProviderCrashed(context.Background(), runtimeID, agentID); err != nil {
+		d.logger.Debug("clear agent provider crashed failed; continuing",
+			"agent_id", agentID, "runtime_id", runtimeID, "error", err)
+	}
 }
 
 // residentCrashBackoffTracker counts crashes per agent×runtime within a

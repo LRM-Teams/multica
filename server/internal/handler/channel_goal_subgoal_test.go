@@ -262,7 +262,7 @@ func TestChannelGoalSubgoalSourceMessageIDSameChannel(t *testing.T) {
 	var messageID string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, source)
-		VALUES ($1, $2, 'member', $3, 'tester', 'assign this as a subgoal', 'multica')
+		VALUES ($1, $2, 'user', $3, 'tester', 'assign this as a subgoal', 'multica')
 		RETURNING id::text
 	`, channel.ID, testWorkspaceID, testUserID).Scan(&messageID); err != nil {
 		t.Fatalf("seed channel message: %v", err)
@@ -273,7 +273,7 @@ func TestChannelGoalSubgoalSourceMessageIDSameChannel(t *testing.T) {
 	var otherMessageID string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, source)
-		VALUES ($1, $2, 'member', $3, 'tester', 'wrong channel', 'multica')
+		VALUES ($1, $2, 'user', $3, 'tester', 'wrong channel', 'multica')
 		RETURNING id::text
 	`, otherChannel.ID, testWorkspaceID, testUserID).Scan(&otherMessageID); err != nil {
 		t.Fatalf("seed other-channel message: %v", err)

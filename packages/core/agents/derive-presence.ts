@@ -11,7 +11,7 @@
 // terminal state. Past failures / completions live on the detail page
 // (Recent Work, failure_reason) and Inbox.
 
-import { deriveRuntimeHealth } from "../runtimes/derive-health";
+import { deriveRuntimeHealth, FIVE_MINUTES_MS } from "../runtimes/derive-health";
 import type { Agent, AgentRuntime, AgentTask } from "../types";
 import type {
   AgentAvailability,
@@ -153,9 +153,22 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
 
   // LRM-248: unstable/reconnecting/running → online for live chrome. An
   // in-flight running task proves the agent is reachable even when heartbeat
-  // lags or the runtime row is missing from the visible list.
+  // lags or the runtime row is missing from the visible list — but ONLY
+  // while the runtime's own last_seen_at is still plausibly fresh. Task
+  // status is a RESULT of the heartbeat, not a substitute for it: once the
+  // heartbeat has been gone for as long as deriveRuntimeHealth already
+  // treats as genuinely offline (not just "recently lost"), a lingering
+  // 'running' task is stale server-side bookkeeping, not evidence of life
+  // (task #106 — daemon can die mid-task and its task can stay 'running'
+  // for hours via the server's coarse wall-clock backstop, long after the
+  // runtime itself was correctly marked offline).
+  const lastSeenMs = input.runtime?.last_seen_at
+    ? new Date(input.runtime.last_seen_at).getTime()
+    : null;
+  const runtimeRecentlyFresh = lastSeenMs !== null && input.now - lastSeenMs < FIVE_MINUTES_MS;
   if (
     workloadDetail.runningCount > 0 &&
+    runtimeRecentlyFresh &&
     (availability === "offline" || availability === "unstable")
   ) {
     availability = "online";

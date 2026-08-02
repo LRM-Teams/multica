@@ -11,7 +11,10 @@ import type { RuntimeHealth } from "./types";
 // the connection "recently lost" (likely a transient wobble); past
 // FIVE_MINUTES_MS it is treated as fully offline.
 const HEARTBEAT_STALE_MS = 150_000; // 150s
-const FIVE_MINUTES_MS = 5 * 60 * 1000;
+// Exported: task #106 reuses this as the "still plausibly reachable" window
+// for the LRM-248 running-task optimism in derive-presence.ts — same boundary,
+// not a second freshness policy invented independently.
+export const FIVE_MINUTES_MS = 5 * 60 * 1000;
 // The runtime sweeper GCs runtimes that have been offline for 7 days. We
 // flag the last 24 hours of that window so users can rescue a runtime
 // before it disappears silently.

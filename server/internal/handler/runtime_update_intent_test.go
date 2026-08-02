@@ -307,6 +307,121 @@ func TestPostgresUpdateIntentStore_CreateAfterGivenUpResetsFailureBookkeeping(t 
 	}
 }
 
+// TestPostgresUpdateIntentStore_IsDueForRetry_ComparesEntirelyInSQL pins task
+// #80: the due-for-retry check must never fetch NextRetryAt and compare it
+// against Go's time.Now() (that crosses the database's clock and the
+// application server's, which under DB connection-pool pressure could
+// misjudge a just-eligible intent as "not due yet" until the next
+// heartbeat — reproduced by @Vera running several update-intent tests
+// together, confirmed present on the #1771 commit before #1782/#80). This
+// test manipulates next_retry_at directly via SQL (`now() ± interval`) and
+// asserts IsDueForRetry's answer, so the comparison it exercises is
+// DB-clock-to-DB-clock throughout — no Go time.Time ever enters the
+// assertion, which is what makes this deterministic rather than a timing
+// race.
+func TestPostgresUpdateIntentStore_IsDueForRetry_ComparesEntirelyInSQL(t *testing.T) {
+	runtimeID := newPostgresUpdateTestRuntime(t)
+	memberID := testMemberIDForIntent(t)
+	ctx := context.Background()
+	store := NewPostgresUpdateIntentStore(testPool)
+
+	if _, err := store.Create(ctx, runtimeID, memberID, time.Hour); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	setNextRetryAt := func(t *testing.T, sqlIntervalExpr string) {
+		t.Helper()
+		if _, err := testPool.Exec(ctx, `
+			UPDATE daemon_runtime_update_intent
+			SET next_retry_at = now() `+sqlIntervalExpr+`
+			WHERE runtime_id = $1
+		`, runtimeID); err != nil {
+			t.Fatalf("set next_retry_at: %v", err)
+		}
+	}
+
+	setNextRetryAt(t, "+ interval '1 hour'")
+	due, err := store.IsDueForRetry(ctx, runtimeID)
+	if err != nil {
+		t.Fatalf("IsDueForRetry: %v", err)
+	}
+	if due {
+		t.Fatalf("IsDueForRetry = true, want false when next_retry_at is 1h in the future")
+	}
+
+	setNextRetryAt(t, "- interval '1 second'")
+	due, err = store.IsDueForRetry(ctx, runtimeID)
+	if err != nil {
+		t.Fatalf("IsDueForRetry: %v", err)
+	}
+	if !due {
+		t.Fatalf("IsDueForRetry = false, want true when next_retry_at is 1s in the past")
+	}
+}
+
+// TestPostgresUpdateIntentStore_IsDueForRetry_NoIntentIsNotDue confirms the
+// no-such-runtime case returns (false, nil), not an error — callers treat
+// "no intent" and "not due yet" identically (both mean "nothing to
+// materialize right now").
+func TestPostgresUpdateIntentStore_IsDueForRetry_NoIntentIsNotDue(t *testing.T) {
+	runtimeID := newPostgresUpdateTestRuntime(t)
+	ctx := context.Background()
+	store := NewPostgresUpdateIntentStore(testPool)
+
+	due, err := store.IsDueForRetry(ctx, runtimeID)
+	if err != nil {
+		t.Fatalf("IsDueForRetry: %v", err)
+	}
+	if due {
+		t.Fatalf("IsDueForRetry = true for a runtime with no intent, want false")
+	}
+}
+
+// TestPostgresUpdateIntentStore_RecordFailure_NextRetryAtUsesDatabaseClock
+// pins the write side of task #80: RecordFailure must compute next_retry_at
+// via SQL's now() (matching Create's `next_retry_at = now()`), never Go's
+// time.Now().Add(backoff) — otherwise the two writers of this column would
+// disagree on which clock it's measured against. Bounds NextRetryAt against
+// timestamps read back from the database itself (not time.Now()) so this
+// assertion can't itself reintroduce a cross-clock comparison.
+func TestPostgresUpdateIntentStore_RecordFailure_NextRetryAtUsesDatabaseClock(t *testing.T) {
+	runtimeID := newPostgresUpdateTestRuntime(t)
+	memberID := testMemberIDForIntent(t)
+	ctx := context.Background()
+	store := NewPostgresUpdateIntentStore(testPool)
+
+	if _, err := store.Create(ctx, runtimeID, memberID, time.Hour); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	dbNowBefore := dbNow(t, ctx)
+	if err := store.RecordFailure(ctx, runtimeID, "attempt-1"); err != nil {
+		t.Fatalf("RecordFailure: %v", err)
+	}
+	dbNowAfter := dbNow(t, ctx)
+
+	after, err := store.Get(ctx, runtimeID)
+	if err != nil || after == nil {
+		t.Fatalf("Get after RecordFailure: %+v, err=%v", after, err)
+	}
+	// First failure's backoff is updateIntentBaseRetryBackoff (1 minute).
+	lowerBound := dbNowBefore.Add(updateIntentBaseRetryBackoff)
+	upperBound := dbNowAfter.Add(updateIntentBaseRetryBackoff).Add(time.Second) // slack for query round-trip
+	if after.NextRetryAt.Before(lowerBound) || after.NextRetryAt.After(upperBound) {
+		t.Fatalf("NextRetryAt = %v, want between %v and %v (database-clock-bounded, not Go's time.Now())",
+			after.NextRetryAt, lowerBound, upperBound)
+	}
+}
+
+func dbNow(t *testing.T, ctx context.Context) time.Time {
+	t.Helper()
+	var now time.Time
+	if err := testPool.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+		t.Fatalf("query db now(): %v", err)
+	}
+	return now
+}
+
 func testMemberIDForIntent(t *testing.T) string {
 	t.Helper()
 	if testPool == nil {

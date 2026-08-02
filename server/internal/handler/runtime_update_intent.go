@@ -116,6 +116,16 @@ type UpdateIntentStore interface {
 	// the same attemptID (e.g. from a heartbeat that arrives before
 	// NextRetryAt) is a no-op, since last_failed_attempt_id already matches.
 	RecordFailure(ctx context.Context, runtimeID, attemptID string) error
+	// IsDueForRetry reports whether a live intent's backoff window has
+	// elapsed. The comparison (next_retry_at <= now()) runs entirely in SQL
+	// rather than fetching NextRetryAt and comparing against Go's
+	// time.Now() — task #80: NextRetryAt is written by the database's own
+	// clock (Create/RecordFailure both use now()), so comparing it against
+	// the application server's clock introduced a window (observed under
+	// DB connection-pool pressure in tests) where a just-created or
+	// just-retried intent could be misjudged as "not due yet" until the
+	// next heartbeat. Returns false (not an error) if no intent exists.
+	IsDueForRetry(ctx context.Context, runtimeID string) (bool, error)
 	// Delete removes the intent row entirely. Only called once its
 	// materialized attempt reaches UpdateCompleted — a fulfilled intent has
 	// nothing left to track.
@@ -212,12 +222,18 @@ func (s *PostgresUpdateIntentStore) MarkExpired(ctx context.Context, runtimeID s
 	return nil
 }
 
-// RecordFailure computes the new consecutive-failure count and its backoff
-// window in Go (updateIntentRetryBackoff — the single source of truth also
-// used anywhere else backoff needs explaining/testing) and writes both
-// atomically, guarded by last_failed_attempt_id so a heartbeat that observes
-// the same terminal attempt more than once (e.g. arriving again before
-// NextRetryAt) doesn't double-count it.
+// RecordFailure computes the new consecutive-failure count in Go but leaves
+// NextRetryAt's actual value to SQL (now() + interval) — task #80: this
+// column must always be written using the database's own clock, matching
+// Create()'s `next_retry_at = now()`, so IsDueForRetry's later `<= now()`
+// comparison never crosses between the application server's clock and the
+// database's. Only the backoff *duration* (updateIntentRetryBackoff — the
+// single source of truth also used anywhere else backoff needs
+// explaining/testing) is Go-computed; the absolute timestamp is not.
+// given_up_at is likewise computed with SQL's now() via a CASE, guarded by
+// last_failed_attempt_id so a heartbeat that observes the same terminal
+// attempt more than once (e.g. arriving again before NextRetryAt) doesn't
+// double-count it.
 func (s *PostgresUpdateIntentStore) RecordFailure(ctx context.Context, runtimeID, attemptID string) error {
 	if err := s.requireDB(); err != nil {
 		return err
@@ -230,25 +246,45 @@ func (s *PostgresUpdateIntentStore) RecordFailure(ctx context.Context, runtimeID
 		return nil // already recorded, or no longer live — nothing to do
 	}
 	newCount := intent.ConsecutiveFailures + 1
-	nextRetryAt := time.Now().Add(updateIntentRetryBackoff(newCount))
-	var givenUp any
-	if newCount >= updateIntentMaxConsecutiveFailures {
-		givenUp = time.Now()
-	}
+	backoffSeconds := updateIntentRetryBackoff(newCount).Seconds()
+	givenUp := newCount >= updateIntentMaxConsecutiveFailures
 	if _, err := s.db.Exec(ctx, `
 		UPDATE daemon_runtime_update_intent
 		SET
 			consecutive_failures = $2,
 			last_failed_attempt_id = $3,
-			next_retry_at = $4,
-			given_up_at = $5
+			next_retry_at = now() + ($4 * interval '1 second'),
+			given_up_at = CASE WHEN $5 THEN now() ELSE NULL END
 		WHERE runtime_id = $1
 		  AND cancelled_at IS NULL AND expired_at IS NULL AND given_up_at IS NULL
 		  AND last_failed_attempt_id IS DISTINCT FROM $3
-	`, runtimeID, newCount, attemptID, nextRetryAt, givenUp); err != nil {
+	`, runtimeID, newCount, attemptID, backoffSeconds, givenUp); err != nil {
 		return fmt.Errorf("record daemon runtime update intent failure: %w", err)
 	}
 	return nil
+}
+
+// IsDueForRetry reports whether a live intent's backoff window has elapsed,
+// comparing next_retry_at against now() entirely within SQL. See the
+// UpdateIntentStore interface doc for why this exists instead of fetching
+// NextRetryAt and comparing it in Go.
+func (s *PostgresUpdateIntentStore) IsDueForRetry(ctx context.Context, runtimeID string) (bool, error) {
+	if err := s.requireDB(); err != nil {
+		return false, err
+	}
+	var due bool
+	err := s.db.QueryRow(ctx, `
+		SELECT next_retry_at <= now()
+		FROM daemon_runtime_update_intent
+		WHERE runtime_id = $1
+	`, runtimeID).Scan(&due)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check daemon runtime update intent retry due: %w", err)
+	}
+	return due, nil
 }
 
 func (s *PostgresUpdateIntentStore) Delete(ctx context.Context, runtimeID string) error {

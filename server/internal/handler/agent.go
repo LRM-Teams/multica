@@ -241,56 +241,32 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		}
 	}
 
-	rows, err := h.DB.Query(ctx, `
-		SELECT id,
-		       COALESCE(
-		         NULLIF(display_name, ''),
-		         NULLIF(name, ''),
-		         CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END
-		       ),
-		       status,
-		       last_seen_at,
-		       updated_at,
-		       offline_reason,
-		       starting_since,
-		       pinned_version
-		FROM agent_runtime
-		WHERE id = ANY($1::uuid[])`, runtimeIDs)
+	// task #84: ListAgentRuntimeConnectivityByIDs uses sqlc.embed(agent_runtime)
+	// instead of a hand-listed column SELECT, so a future agent_runtime column
+	// reaches this response the moment its migration lands and the query is
+	// regenerated — no Go changes here. See the query's doc comment
+	// (pkg/db/queries/runtime.sql) for the three "done but unreachable"
+	// incidents (#1801/#1802/#81) this replaces.
+	rows, err := h.Queries.ListAgentRuntimeConnectivityByIDs(ctx, runtimeIDs)
 	if err != nil {
 		slog.Warn("failed to load agent runtime names", "error", err)
 		return
 	}
-	defer rows.Close()
 
 	now := time.Now()
-	for rows.Next() {
-		var id pgtype.UUID
-		var name string
-		var status string
-		var lastSeen pgtype.Timestamptz
-		var updatedAt pgtype.Timestamptz
-		var offlineReason pgtype.Text
-		var startingSince pgtype.Timestamptz
-		var pinnedVersion pgtype.Text
-		if err := rows.Scan(&id, &name, &status, &lastSeen, &updatedAt, &offlineReason, &startingSince, &pinnedVersion); err != nil {
-			slog.Warn("failed to scan agent runtime name", "error", err)
-			continue
-		}
-		rt := db.AgentRuntime{Status: status, LastSeenAt: lastSeen, UpdatedAt: updatedAt, OfflineReason: offlineReason, StartingSince: startingSince}
-		for _, idx := range byRuntimeID[uuidToString(id)] {
-			resps[idx].RuntimeName = name
+	for _, row := range rows {
+		rt := row.AgentRuntime
+		for _, idx := range byRuntimeID[uuidToString(rt.ID)] {
+			resps[idx].RuntimeName = row.EffectiveName
 			// Always project connectivity onto the agent so private-runtime
 			// filtering on the runtimes list cannot blank live presence.
-			resps[idx].RuntimeStatus = status
-			resps[idx].RuntimeLastSeenAt = timestampToPtr(lastSeen)
+			resps[idx].RuntimeStatus = rt.Status
+			resps[idx].RuntimeLastSeenAt = timestampToPtr(rt.LastSeenAt)
 			resps[idx].RuntimeDisplayStatus = agentRuntimeDisplayStatus(
 				resps[idx].Status, rt, crashedByAgent[resps[idx].ID], now,
 			)
-			resps[idx].RuntimePinnedVersion = nullableTextPtr(pinnedVersion)
+			resps[idx].RuntimePinnedVersion = nullableTextPtr(rt.PinnedVersion)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		slog.Warn("failed to iterate agent runtime names", "error", err)
 	}
 }
 

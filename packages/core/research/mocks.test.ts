@@ -67,6 +67,15 @@ describe("LRM-841 research mocks", () => {
     expect(researchMocks.snapshots.clarification.session.id).toBe("sess-clarify");
   });
 
+  it("awaitingConfirm snapshot exposes awaiting_user_confirm for LRM-840 gate controls", () => {
+    const parsed = ResearchSessionSnapshotSchema.parse(
+      researchMocks.snapshots.awaitingConfirm,
+    );
+    expect(parsed.session.status).toBe("awaiting_user_confirm");
+    expect(parsed.session.current_stage).toBe("s4_delivery");
+    expect(parsed.session.id).toBe("sess-awaiting-confirm");
+  });
+
   it("list mocks satisfy list schema", () => {
     expect(ListResearchSessionsResponseSchema.parse(mockResearchSessionsList).sessions).toHaveLength(1);
     expect(ListResearchSessionsResponseSchema.parse(mockResearchSessionsListEmpty).sessions).toHaveLength(0);

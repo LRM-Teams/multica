@@ -379,8 +379,10 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// User chat while paused resumes the session before wake.
-	if senderType == "user" && session.Status == "paused" {
+	// User chat while paused / awaiting confirm resumes before wake.
+	// LRM-840: reject-confirm tips post as chat and must leave awaiting_user_confirm
+	// so status updates immediately (approve still uses POST /confirm → completed).
+	if senderType == "user" && (session.Status == "paused" || session.Status == "awaiting_user_confirm") {
 		resumed, resumeErr := h.Queries.UpdateResearchSession(r.Context(), db.UpdateResearchSessionParams{
 			ID:          sessionID,
 			WorkspaceID: wsUUID,

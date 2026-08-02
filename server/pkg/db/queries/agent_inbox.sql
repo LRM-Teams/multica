@@ -185,6 +185,32 @@ WHERE e.id IN (SELECT inbox_event_id FROM expired_delivery)
       AND d.lease_expires_at > now()
   );
 
+-- name: ExpireDeliveriesForRuntimeRecovery :exec
+-- Called by RecoverOrphanedTasks (task #107) immediately alongside
+-- RecoverOrphanedTasksForRuntime, scoped to the same dead runtime_id.
+--
+-- RecoverOrphanedTasksForRuntime fails the task layer (agent_inbox_event)
+-- for the prior incarnation's in-flight work, but a delivery for that same
+-- agent can still be sitting in 'leased'/'processing' with its lease not
+-- yet naturally expired (default 2 minutes, see migration 160). Until then,
+-- leaseAgentInboxEventForRuntime's same-agent serialization check (any
+-- unexpired active_delivery for the agent blocks a new lease) also blocks
+-- the fresh retry task this recovery just created — even though the daemon
+-- is alive and polling normally. The result: retry looks stuck for up to
+-- ~2 minutes with no error, no log, nothing to indicate why.
+--
+-- Scoping to runtime_id = $1 (not agent_id) keeps this legitimate: recovery
+-- only runs for a runtime the server has just judged dead/restarted, so
+-- every delivery still attributed to it is stale by definition. Do not
+-- reuse this for any path other than orphan recovery — a live runtime's
+-- in-progress delivery must never be touched by this.
+UPDATE agent_event_delivery
+SET status = 'expired',
+    last_error = 'daemon restarted while event was in flight',
+    updated_at = now()
+WHERE runtime_id = $1
+  AND status IN ('leased', 'processing');
+
 -- name: RenewAgentInboxDelivery :one
 UPDATE agent_event_delivery d
 SET lease_expires_at = now() + interval '2 minutes',

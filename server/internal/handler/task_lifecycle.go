@@ -34,6 +34,21 @@ func (h *Handler) RecoverOrphanedTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Task #107: RecoverOrphanedTasksForRuntime above only fails the task
+	// layer (agent_inbox_event) for the prior incarnation's in-flight work.
+	// A delivery for the same agent can still be 'leased'/'processing' with
+	// up to ~2 minutes left on its lease (migration 160 default) — until it
+	// naturally expires, leaseAgentInboxEventForRuntime's same-agent
+	// serialization check blocks the fresh retry task the auto-retry path
+	// below is about to create, even though this daemon is alive and
+	// polling normally. Expire it now so the retry isn't stuck behind a
+	// lease that belongs to a runtime the server has just judged dead.
+	if err := h.Queries.ExpireDeliveriesForRuntimeRecovery(r.Context(), parseUUID(runtimeID)); err != nil {
+		slog.Warn("recover-orphans: failed to expire stale deliveries", "runtime_id", runtimeID, "error", err)
+		writeError(w, http.StatusInternalServerError, "recover orphans failed")
+		return
+	}
+
 	// Funnel through the shared post-failure pipeline so we get the same
 	// task:failed events, agent reconcile, issue rollback, and auto-retry
 	// behaviour as the runtime sweeper. This was previously a fast-path

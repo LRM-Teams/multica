@@ -121,16 +121,22 @@ type knownIssueKey struct {
 }
 
 var knownIssues = map[knownIssueKey]string{
-	{file: "internal/scheduler/jobs_memory_curation.go", funcName: "makeMemoryCurationIntentHandler"}: "task #90",
-	{file: "internal/workgraph/message_signals.go", funcName: "Store.HandleHumanRework"}:              "task #90",
-	{file: "cmd/materialize-promoted/main.go", funcName: "main"}:                                      "task #90 (one-shot CLI script, low priority — single-threaded, won't deadlock unless the pool is misconfigured to size 1)",
+	{file: "cmd/materialize-promoted/main.go", funcName: "main"}: "task #90 (one-shot CLI script, low priority — single-threaded, won't deadlock unless the pool is misconfigured to size 1)",
 }
 
 // filterKnown splits findings into blocking (fail CI) and known (logged,
 // not blocking) using the knownIssues allowlist above.
 func filterKnown(findings []finding) (blocking, known []finding) {
+	return filterKnownWith(findings, knownIssues)
+}
+
+// filterKnownWith is the testable core of filterKnown: tests pass a fixture
+// allowlist so they don't hardcode (and break on) real knownIssues entries
+// that get deleted when those bugs are fixed (Parker's 2026-08-02 note on
+// task #90 / #1824).
+func filterKnownWith(findings []finding, allow map[knownIssueKey]string) (blocking, known []finding) {
 	for _, f := range findings {
-		if _, ok := knownIssues[knownIssueKey{file: f.file, funcName: f.funcName}]; ok {
+		if _, ok := allow[knownIssueKey{file: f.file, funcName: f.funcName}]; ok {
 			known = append(known, f)
 			continue
 		}

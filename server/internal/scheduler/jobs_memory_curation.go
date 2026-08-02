@@ -88,18 +88,44 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 		if err != nil {
 			return HandlerResult{}, err
 		}
-		defer rows.Close()
-		created := int64(0)
+		// Drain every candidate profile into memory and close the cursor
+		// BEFORE any per-row processing below: activeMemoryCurationAgentIDs,
+		// the INSERT QueryRow, and the INSERT Exec all acquire their own
+		// pool connection, and doing so while this cursor is still open can
+		// deadlock a bounded pool under concurrent scheduler ticks (same
+		// shape as the #1803 attachAgentRuntimeNames bug / task #90).
+		type curatorProfileCandidate struct {
+			profileID, workspaceID, userID, runtimeID, curatorAgentID, model, mode, targetScope, timezone string
+			runtimeLastSeenAt                                                                             time.Time
+			confidenceThreshold                                                                           float64
+			scheduleHour                                                                                  int
+			catchUp                                                                                       bool
+			configVersion                                                                                 int64
+		}
+		var candidates []curatorProfileCandidate
 		for rows.Next() {
-			var profileID, workspaceID, userID, runtimeID, curatorAgentID, model, mode, targetScope, timezone string
-			var runtimeLastSeenAt time.Time
-			var confidenceThreshold float64
-			var scheduleHour int
-			var catchUp bool
-			var configVersion int64
-			if err := rows.Scan(&profileID, &workspaceID, &userID, &runtimeID, &curatorAgentID, &model, &mode, &confidenceThreshold, &targetScope, &timezone, &scheduleHour, &catchUp, &configVersion, &runtimeLastSeenAt); err != nil {
+			var c curatorProfileCandidate
+			if err := rows.Scan(&c.profileID, &c.workspaceID, &c.userID, &c.runtimeID, &c.curatorAgentID, &c.model, &c.mode, &c.confidenceThreshold, &c.targetScope, &c.timezone, &c.scheduleHour, &c.catchUp, &c.configVersion, &c.runtimeLastSeenAt); err != nil {
+				rows.Close()
 				return HandlerResult{}, err
 			}
+			candidates = append(candidates, c)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return HandlerResult{}, err
+		}
+		rows.Close()
+
+		created := int64(0)
+		for _, c := range candidates {
+			profileID, workspaceID, userID, runtimeID, curatorAgentID, model, mode, targetScope, timezone :=
+				c.profileID, c.workspaceID, c.userID, c.runtimeID, c.curatorAgentID, c.model, c.mode, c.targetScope, c.timezone
+			runtimeLastSeenAt := c.runtimeLastSeenAt
+			confidenceThreshold := c.confidenceThreshold
+			scheduleHour := c.scheduleHour
+			catchUp := c.catchUp
+			configVersion := c.configVersion
 			loc, err := time.LoadLocation(timezone)
 			if err != nil {
 				continue
@@ -174,9 +200,6 @@ func makeMemoryCurationIntentHandler(pool *pgxpool.Pool, stage any, hourOffset i
 				return HandlerResult{}, err
 			}
 			created += tag.RowsAffected()
-		}
-		if err := rows.Err(); err != nil {
-			return HandlerResult{}, err
 		}
 		if in.Heartbeat != nil {
 			_ = in.Heartbeat(ctx)

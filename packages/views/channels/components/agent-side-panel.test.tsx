@@ -187,6 +187,8 @@ vi.mock("@multica/core/runtimes", () => ({
         : (rt?.runtime_health ?? "ok"),
   deriveRuntimeHealth: (rt: { status?: string }) =>
     rt?.status === "online" ? "online" : "offline",
+  runtimeCurrentVersion: (rt: { current_version?: string | null }) =>
+    rt?.current_version?.trim() || null,
 }));
 vi.mock("@multica/core/dashboard/queries", () => ({
   dashboardUsageByAgentOptions: () => ({ kind: "usage-by-agent" }),
@@ -248,6 +250,12 @@ const RESOURCES = {
     display_name_required: "Display name is required",
     save: "Save",
     cancel: "Cancel",
+    // Import real keys — do not hand-copy (Parker: mock drift).
+    prop_computer: enAgents.inspector.prop_computer,
+    computer_connected: enAgents.inspector.computer_connected,
+    computer_disconnected: enAgents.inspector.computer_disconnected,
+    computer_version: enAgents.inspector.computer_version,
+    computer_none: enAgents.inspector.computer_none,
   },
   execution_config: {
     applies_next_run: "Changes take effect on the next run",
@@ -363,6 +371,33 @@ describe("AgentSidePanel", () => {
       "data-force-restart-supported",
       "false",
     );
+  });
+
+  // task #28: the Info section only ever showed Created/Owner — nobody had
+  // wired the machine-binding row into this surface (only agent-profile-card
+  // had it), so anyone opening an agent from the channel sidebar never saw
+  // which computer it runs on.
+  it("shows the bound computer's connection + label in the Info section (#28)", () => {
+    mockRuntimes.current = [
+      { id: "runtime-1", status: "online", name: "Cursor (s144)", display_name: "s144" },
+    ];
+    renderPanel();
+    expect(screen.getByText("Computer")).toBeInTheDocument();
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(screen.getByText("s144")).toBeInTheDocument();
+  });
+
+  it("shows disconnected + falls back to the raw runtime name when no display_name is set (#28)", () => {
+    mockRuntimes.current = [{ id: "runtime-1", status: "offline", name: "Cursor (s144)" }];
+    renderPanel();
+    expect(screen.getByText("Disconnected")).toBeInTheDocument();
+    expect(screen.getByText("Cursor (s144)")).toBeInTheDocument();
+  });
+
+  it("shows the no-computer fallback when the agent's runtime_id doesn't resolve (#28)", () => {
+    mockRuntimes.current = [];
+    renderPanel();
+    expect(screen.getByText("No computer")).toBeInTheDocument();
   });
 
   it("defaults forceRestartSupported to false when the capability object is missing (older backend)", () => {

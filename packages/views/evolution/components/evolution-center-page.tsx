@@ -90,6 +90,7 @@ import {
   formatDuration,
 } from "../../dashboard/utils";
 import { MemoryCurationDailyLedger } from "./memory-curation-daily-ledger";
+import { AgentEvidencePanel } from "./agent-evidence-panel";
 
 const COPY = {
   title: "Evolution Center",
@@ -275,6 +276,45 @@ const COPY = {
   skills: "Skills",
   dailyLedger: "Daily memory ledger",
   dailyLedgerHint: "Self-review memories/skills produced each day, and team knowledge promoted by the curator. Click a day to inspect each item.",
+  // LRM-986 / 983 frozen copy — individual evidence chain
+  evidenceWorkspaceAgents: "Workspace agents",
+  evidenceSortHint: "Sorted by recent evidence-chain activity",
+  evidenceChainComplete: "Chain complete",
+  evidenceIndividualBadge: "Individual evidence",
+  evidenceIndividualHint: "Shows what was written → promotion result → whether it was used. Not a metric wall.",
+  evidenceStatWrite: "Writes",
+  evidenceStatWriteHint: "Memory/Skill proposals (14d)",
+  evidenceStatPromoted: "Promoted",
+  evidenceStatPromotedHint: "Curation approved / enabled",
+  evidenceStatUsed: "Used",
+  evidenceStatUsedHint: "Cited in later tasks",
+  evidenceChainTitle: "Evidence chain",
+  evidenceEmptyTitle: "No evidence chain yet",
+  evidenceEmptyBody:
+    "When an agent writes experience to Memory/Skill and curation promotes it, a Write → Promote → Use chain appears here. Come back after a valuable task.",
+  evidenceEmptyCta: "View learning queue",
+  evidenceNodeWrite: "Write",
+  evidenceNodePromote: "Promote",
+  evidenceNodeUsed: "Used",
+  evidenceNodePendingUse: "Awaiting use",
+  evidenceNodeDetail: "Node detail",
+  evidenceSelectNode: "Select a chain node to inspect fields and back-links.",
+  evidenceFieldEvent: "Event type",
+  evidenceFieldTitle: "Experience title",
+  evidenceFieldKind: "Experience kind",
+  evidenceFieldSource: "Write source",
+  evidenceFieldDecision: "Promotion result",
+  evidenceFieldTask: "Usage task",
+  evidenceFieldTime: "Time",
+  evidenceOpenAgent: "Open agent profile",
+  evidenceOpenAgentHint: "Agent detail / memory entry",
+  evidenceSubmissionRef: "Submission",
+  evidenceRecentUsed: "Recently used",
+  evidencePendingPromote: "Pending promotion · {count} candidate(s)",
+  evidenceNoUseYet: "No usage events yet",
+  evidenceNoWrites: "No writes yet",
+  evidenceJustNow: "just now",
+  evidenceFilterEmpty: "No chains match this filter.",
 };
 
 type EvolutionCopy = (key: keyof typeof COPY) => string;
@@ -491,6 +531,7 @@ export function EvolutionCenterPage() {
   const [learningFilter, setLearningFilter] = useState<"all" | "memory" | "skill">("all");
   const [selectedCurationRunId, setSelectedCurationRunId] = useState("");
   const [metricDays, setMetricDays] = useState<(typeof METRIC_DAY_OPTIONS)[number]>(30);
+  const [activeTab, setActiveTab] = useState("overview");
 
   const { data: agentsData, isLoading: agentsLoading } = useQuery(agentListOptions(wsId));
   const { data: runtimesData } = useQuery(runtimeListOptions(wsId));
@@ -661,7 +702,7 @@ export function EvolutionCenterPage() {
             <MetricCard icon={ShieldCheck} label={copy("auditTrail")} value={String(collaborationMetrics?.immutable_decision_audit_events ?? 0)} detail={`${collaborationMetrics?.unauthorized_public_sends_blocked ?? 0} blocked · ${pct(collaborationMetrics?.turn_order_violation_rate ?? 0)} turn risk`} tone="amber" />
           </div>
 
-          <Tabs defaultValue="overview" className="gap-4">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-4">
             <TabsList className="w-full justify-start overflow-x-auto bg-background/70 p-1 shadow-sm backdrop-blur md:w-fit">
               <TabsTrigger value="overview" className="px-3">{copy("tabOverview")}</TabsTrigger>
               <TabsTrigger value="agents" className="px-3">{copy("tabAgents")}</TabsTrigger>
@@ -676,7 +717,13 @@ export function EvolutionCenterPage() {
             </TabsContent>
 
             <TabsContent value="agents" className="grid gap-4">
-              <AgentTable rows={rows} loading={loading} />
+              <AgentEvidencePanel
+                agents={agents}
+                submissions={submissions}
+                unitMetrics={unitMetrics}
+                loading={loading}
+                onOpenLearning={() => setActiveTab("learning")}
+              />
             </TabsContent>
 
             <TabsContent value="learning" className="grid gap-4 xl:grid-cols-[.75fr_1.25fr]">
@@ -846,55 +893,6 @@ function CoachingCard({ rows }: { rows: AgentEvolutionRow[] }) {
             <Badge variant={row.failedCount > 0 ? "destructive" : "outline"}>{pct(row.successRate)}</Badge>
           </div>
         ))}
-      </CardContent>
-    </Card>
-  );
-}
-
-function AgentTable({ rows, loading }: { rows: AgentEvolutionRow[]; loading: boolean }) {
-  const copy = useEvolutionCopy();
-  return (
-    <Card className="bg-background/85 backdrop-blur">
-      <CardHeader>
-        <CardTitle>{copy("agentTable")}</CardTitle>
-      </CardHeader>
-      <CardContent className="overflow-x-auto">
-        {loading ? <LeaderboardSkeleton /> : (
-          <table className="w-full min-w-[920px] text-sm">
-            <thead className="text-left text-xs uppercase tracking-wider text-muted-foreground">
-              <tr className="border-b">
-                <th className="pb-3 font-medium">{copy("agentColumn")}</th>
-                <th className="pb-3 font-medium">{copy("tasks")}</th>
-                <th className="pb-3 font-medium">{copy("successRate")}</th>
-                <th className="pb-3 font-medium">{copy("cost")}</th>
-                <th className="pb-3 font-medium">{copy("costPerSuccess")}</th>
-                <th className="pb-3 font-medium">{copy("learned")}</th>
-                <th className="pb-3 font-medium">{copy("runtime")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.agent.id} className="border-b last:border-0">
-                  <td className="py-3">
-                    <div className="flex items-center gap-3">
-                      <ActorAvatar actorType="agent" actorId={row.agent.id} size={32} showStatusDot enableHoverCard />
-                      <div>
-                        <div className="font-medium">{row.agent.display_name || row.agent.name}</div>
-                        <div className="text-xs text-muted-foreground">{shortId(row.agent.id)}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="py-3 tabular-nums">{row.taskCount}</td>
-                  <td className="py-3"><Badge variant={row.successRate >= 0.8 ? "secondary" : "outline"}>{pct(row.successRate)}</Badge></td>
-                  <td className="py-3 tabular-nums">{money(row.cost)}</td>
-                  <td className="py-3 tabular-nums">{money(row.costPerSuccess)}</td>
-                  <td className="py-3"><span className="tabular-nums">{row.learnedCount}</span> <span className="text-xs text-muted-foreground">{row.memoryCount}/{row.skillCount}</span></td>
-                  <td className="py-3 tabular-nums">{formatDuration(row.seconds, "<1m")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
       </CardContent>
     </Card>
   );
@@ -1563,14 +1561,4 @@ function InsightLine({ icon: Icon, text }: { icon: typeof CheckCircle2; text: st
 
 function EmptyState({ text }: { text: string }) {
   return <div className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">{text}</div>;
-}
-
-function LeaderboardSkeleton() {
-  return (
-    <div className="space-y-3">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <Skeleton key={index} className="h-24 rounded-2xl" />
-      ))}
-    </div>
-  );
 }

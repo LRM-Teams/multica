@@ -173,6 +173,7 @@
     "subgoals_responsible": "Responsible",
     "subgoals_participants": "Participants",
     "subgoals_waiting_on": "waiting_on",
+    "subgoals_source_message": "来源消息",
     "subgoals_artifacts": "产物",
     "subgoals_brief": "Brief",
     "subgoals_brief_version": "brief v{{version}}",

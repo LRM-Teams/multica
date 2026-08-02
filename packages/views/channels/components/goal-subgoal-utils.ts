@@ -58,3 +58,13 @@ export function mutationMessage(error: unknown, fallback: string, stale: string)
   }
   return fallback;
 }
+
+/** Deep-link to the channel message a subgoal was captured from (`?message=`). */
+export function subgoalSourceMessageHref(
+  channelId: string,
+  sourceMessageId: string | undefined | null,
+  channelDetail: (id: string) => string,
+): string | null {
+  if (!sourceMessageId) return null;
+  return `${channelDetail(channelId)}?message=${encodeURIComponent(sourceMessageId)}`;
+}

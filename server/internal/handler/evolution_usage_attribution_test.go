@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 )
 
@@ -128,27 +129,27 @@ func TestChannelGoalAnchorActivityEventsAreQueryable(t *testing.T) {
 	}
 
 	agentID := createHandlerTestAgent(t, "goal-anchor-"+randomID(), nil)
-	runtimeID := parseUUID(handlerTestRuntimeID(t))
-	inboxEventID := parseUUID(uuid.NewString())
+	// task_id FK → agent_task_queue; leave null in unit test (claim path uses a real inbox id).
+	inboxEventID := uuid.NewString()
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_activity_event WHERE agent_id=$1`, agentID)
 	})
 
 	testHandler.recordAgentActivityEvent(ctx, testHandler.DB,
-		parseUUID(testWorkspaceID), parseUUID(agentID), runtimeID, inboxEventID,
+		parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
 		activityKindCustom, "channel_goal_injected", "info",
 		"channel", parseUUID(channel.ID), "",
 		"", "Channel goal reinjected for this wake",
 		map[string]any{
 			"goal_id":        goal.ID,
 			"goal_version":   goal.Version,
-			"inbox_event_id": uuidToString(inboxEventID),
+			"inbox_event_id": inboxEventID,
 			"channel_id":     channel.ID,
 			"trigger":        "claim",
 		},
 	)
 	testHandler.recordAgentActivityEvent(ctx, testHandler.DB,
-		parseUUID(testWorkspaceID), parseUUID(agentID), runtimeID, inboxEventID,
+		parseUUID(testWorkspaceID), parseUUID(agentID), pgtype.UUID{}, pgtype.UUID{},
 		activityKindCustom, "channel_goal_anchor_after_compaction", "info",
 		"channel", parseUUID(channel.ID), "",
 		"", "Channel goal still anchored after context compaction",

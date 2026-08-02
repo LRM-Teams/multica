@@ -57,7 +57,13 @@ type AgentResponse struct {
 	// way agentHealthSummary already gates the Activity Health tab. Prefer
 	// this field for any UI that shows a live status badge; RuntimeStatus
 	// stays for callers that need the raw dispatch-relevant value.
-	RuntimeDisplayStatus string          `json:"runtime_display_status,omitempty"`
+	RuntimeDisplayStatus string `json:"runtime_display_status,omitempty"`
+	// RuntimePinnedVersion (task #81) is non-nil when the daemon's
+	// MULTICA_PINNED_VERSION reported this machine as pinned. This only
+	// reflects the daemon's local intent — the server does not yet enforce
+	// it against a server-initiated update, so UI copy must say "recorded
+	// intent," not "guaranteed not to be upgraded."
+	RuntimePinnedVersion *string         `json:"runtime_pinned_version,omitempty"`
 	RuntimeConfig        any             `json:"runtime_config"`
 	CustomArgs           []string        `json:"custom_args"`
 	McpConfig            json.RawMessage `json:"mcp_config"`
@@ -246,7 +252,8 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		       last_seen_at,
 		       updated_at,
 		       offline_reason,
-		       starting_since
+		       starting_since,
+		       pinned_version
 		FROM agent_runtime
 		WHERE id = ANY($1::uuid[])`, runtimeIDs)
 	if err != nil {
@@ -264,7 +271,8 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		var updatedAt pgtype.Timestamptz
 		var offlineReason pgtype.Text
 		var startingSince pgtype.Timestamptz
-		if err := rows.Scan(&id, &name, &status, &lastSeen, &updatedAt, &offlineReason, &startingSince); err != nil {
+		var pinnedVersion pgtype.Text
+		if err := rows.Scan(&id, &name, &status, &lastSeen, &updatedAt, &offlineReason, &startingSince, &pinnedVersion); err != nil {
 			slog.Warn("failed to scan agent runtime name", "error", err)
 			continue
 		}
@@ -278,6 +286,7 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 			resps[idx].RuntimeDisplayStatus = agentRuntimeDisplayStatus(
 				resps[idx].Status, rt, crashedByAgent[resps[idx].ID], now,
 			)
+			resps[idx].RuntimePinnedVersion = nullableTextPtr(pinnedVersion)
 		}
 	}
 	if err := rows.Err(); err != nil {

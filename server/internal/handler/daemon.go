@@ -185,7 +185,11 @@ type DaemonRegisterRequest struct {
 	Capabilities      []string                          `json:"capabilities"`
 	SandboxInstanceID string                            `json:"sandbox_instance_id,omitempty"` // daemon-enabled env-dispatch sandboxes forward MULTICA_SANDBOX_INSTANCE_ID so the runtime row carries it for discovery
 	UpdateObservation *protocol.DaemonUpdateObservation `json:"auto_update,omitempty"`
-	Runtimes          []struct {
+	// PinnedVersion mirrors the daemon's MULTICA_PINNED_VERSION (task #81);
+	// empty means not pinned. Sent unconditionally on every register so
+	// unpinning a machine clears the stale value server-side too.
+	PinnedVersion string `json:"pinned_version,omitempty"`
+	Runtimes      []struct {
 		Name    string `json:"name"`
 		Type    string `json:"type"`
 		Version string `json:"version"` // agent CLI version (claude/codex)
@@ -448,15 +452,16 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		metadata, _ := json.Marshal(metadataMap)
 
 		row, err := registrationHandler.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
-			WorkspaceID: wsUUID,
-			DaemonID:    strToText(req.DaemonID),
-			Name:        name,
-			RuntimeMode: "local",
-			Provider:    provider,
-			Status:      status,
-			DeviceInfo:  deviceInfo,
-			Metadata:    metadata,
-			OwnerID:     ownerID,
+			WorkspaceID:   wsUUID,
+			DaemonID:      strToText(req.DaemonID),
+			Name:          name,
+			RuntimeMode:   "local",
+			Provider:      provider,
+			Status:        status,
+			DeviceInfo:    deviceInfo,
+			Metadata:      metadata,
+			OwnerID:       ownerID,
+			PinnedVersion: req.PinnedVersion,
 		})
 		if err != nil {
 			if isReminderDaemonOutdatedError(err) {

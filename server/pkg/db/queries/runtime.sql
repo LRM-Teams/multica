@@ -69,6 +69,13 @@ WHERE a.id = @agent_id AND a.workspace_id = @workspace_id
 -- brand-new row with nothing to have marked) — leaving this out would risk
 -- a stuck starting_since surviving a crash between mark-starting and
 -- register.
+--
+-- pinned_version (task #81) mirrors the same "refresh on every register"
+-- rule: the daemon sends its current MULTICA_PINNED_VERSION (empty string
+-- when unset) on every call, so unpinning a machine (removing the env var
+-- and restarting) clears the stale value here too, the same way
+-- offline_reason/starting_since already do. NULLIF converts "" to NULL so
+-- "not pinned" reads as absent, not as an empty-string pin.
 INSERT INTO agent_runtime (
     workspace_id,
     daemon_id,
@@ -79,8 +86,9 @@ INSERT INTO agent_runtime (
     device_info,
     metadata,
     owner_id,
-    last_seen_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+    last_seen_at,
+    pinned_version
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), NULLIF($10, ''))
 ON CONFLICT (workspace_id, daemon_id, provider)
 DO UPDATE SET
     name = EXCLUDED.name,
@@ -92,7 +100,8 @@ DO UPDATE SET
     offline_reason = NULL,
     last_seen_at = now(),
     updated_at = now(),
-    starting_since = NULL
+    starting_since = NULL,
+    pinned_version = NULLIF($10, '')
 RETURNING *, (xmax = 0) AS inserted;
 
 -- name: MarkAgentRuntimesStarting :exec

@@ -1000,6 +1000,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"launched_by":       d.cfg.LaunchedBy,
 		"capabilities":      daemonRegistrationCapabilities(includeCredentialTransport),
 		"runtimes":          runtimes,
+		"pinned_version":    d.cfg.PinnedVersion,
 	}
 	if d.updateObservation != nil {
 		if snapshot := d.updateObservation.PublishedSnapshot(); snapshot != nil {

@@ -469,7 +469,7 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     markReadSpy.mockClear();
   });
 
-  it("read-only surface: no editable composer, NO reply-in-thread affordance, NO auto member-only mark-read", async () => {
+  it("read-only surface: no editable composer, NO reply-in-thread; mark-read still runs (LRM-762)", async () => {
     renderSupervisedDm();
     await screen.findByTestId("message-bubble");
 
@@ -485,9 +485,9 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     expect(
       screen.getByText(/supervising this agent pair.*read-only/i),
     ).toBeInTheDocument();
-    // The supervisor isn't a channel_member — opening must NOT auto mark-read
-    // (that member-only mutation 403s). This is the core of finding 1.
-    expect(markReadSpy).not.toHaveBeenCalled();
+    // LRM-762: BE admits supervisors via channel_read (no channel_member upsert).
+    // Opening must mark-read so the sidebar unread clears; write stays blocked.
+    await waitFor(() => expect(markReadSpy).toHaveBeenCalledWith("dm-chan-1"));
     // #692 walkthrough finding: reply-in-thread is a write ENTRY and must be
     // gone too — previously it leaked (the bubble showed "Reply in thread" on a
     // supervised surface even though the thread composer was read-only).
@@ -502,7 +502,8 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     expect(screen.queryByTestId("content-editor")).not.toBeInTheDocument();
     expect(screen.queryByTestId("dm-agent-bubble")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
-    expect(markReadSpy).not.toHaveBeenCalled();
+    // LRM-762: agent_pair still mark-reads on open; write affordances stay off.
+    await waitFor(() => expect(markReadSpy).toHaveBeenCalledWith("dm-chan-1"));
   });
 
   it("mounts the single-agent chat bubble on a NORMAL agent DM (gate must not regress legit chat)", async () => {
@@ -513,7 +514,7 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     expect(screen.getByTestId("dm-agent-bubble")).toBeInTheDocument();
   });
 
-  it("baseline: a NON-supervised DM DOES auto mark-read on open (proves the guard suppresses it)", async () => {
+  it("baseline: a NON-supervised DM DOES auto mark-read on open", async () => {
     renderDm();
     await screen.findByTestId("message-bubble");
     await waitFor(() => expect(markReadSpy).toHaveBeenCalled());

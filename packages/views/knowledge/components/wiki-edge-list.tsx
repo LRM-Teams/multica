@@ -55,7 +55,7 @@ export function WikiEdgeList({
     );
   }
 
-  const ordered = [...edges].sort((a, b) => {
+  const ordered = edges.toSorted((a, b) => {
     const ai = isWikiEdgeType(a.edge_type) ? a.edge_type : "zzz";
     const bi = isWikiEdgeType(b.edge_type) ? b.edge_type : "zzz";
     return ai.localeCompare(bi) || a.created_at.localeCompare(b.created_at);

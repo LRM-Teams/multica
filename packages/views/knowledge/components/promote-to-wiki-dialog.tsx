@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, ApiError } from "@multica/core/api";
@@ -37,7 +37,15 @@ export interface PromoteToWikiDialogProps {
   subjectId?: string;
 }
 
-export function PromoteToWikiDialog({
+/** Remount form when the promote target opens / source changes. */
+export function PromoteToWikiDialog(props: PromoteToWikiDialogProps) {
+  const resetKey = props.open
+    ? `${props.sourceType}:${props.sourceId}:${props.targetKind}:${props.subjectId ?? ""}:${props.initialTitle ?? ""}`
+    : "closed";
+  return <PromoteToWikiDialogForm key={resetKey} {...props} />;
+}
+
+function PromoteToWikiDialogForm({
   open,
   onOpenChange,
   targetKind,
@@ -52,27 +60,24 @@ export function PromoteToWikiDialog({
   const paths = useWorkspacePaths();
   const { push } = useNavigation();
   const queryClient = useQueryClient();
-  const [title, setTitle] = useState(initialTitle);
-  const [content, setContent] = useState(initialContent);
-  const [subject, setSubject] = useState(subjectId);
-
-  useEffect(() => {
-    if (!open) return;
-    setTitle(initialTitle);
-    setContent(initialContent);
-    setSubject(subjectId);
-  }, [open, initialTitle, initialContent, subjectId]);
+  const titleRef = useRef<HTMLInputElement>(null);
+  const contentRef = useRef<HTMLTextAreaElement>(null);
+  const subjectRef = useRef<HTMLInputElement>(null);
 
   const mutation = useMutation({
     mutationFn: async () => {
       if (!wsId) throw new Error("workspace missing");
+      const title = titleRef.current?.value.trim() ?? "";
+      const content = contentRef.current?.value.trim() ?? "";
+      const subject = subjectRef.current?.value.trim() ?? "";
+      if (!title || !content) throw new Error(t(($) => $.promote.error));
       return api.promoteKnowledgePage(wsId, {
         source_type: sourceType,
         source_id: sourceId,
         target_kind: targetKind,
-        title: title.trim(),
-        content: content.trim(),
-        subject_id: subject.trim() || undefined,
+        title,
+        content,
+        subject_id: subject || undefined,
       });
     },
     onSuccess: async (page) => {
@@ -92,8 +97,6 @@ export function PromoteToWikiDialog({
     },
   });
 
-  const canSubmit = title.trim().length > 0 && content.trim().length > 0 && !mutation.isPending;
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg" data-testid="promote-to-wiki-dialog">
@@ -110,8 +113,8 @@ export function PromoteToWikiDialog({
             <Label htmlFor="wiki-promote-title">{t(($) => $.promote.title_label)}</Label>
             <Input
               id="wiki-promote-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              ref={titleRef}
+              defaultValue={initialTitle}
               autoFocus
             />
           </div>
@@ -119,8 +122,8 @@ export function PromoteToWikiDialog({
             <Label htmlFor="wiki-promote-content">{t(($) => $.promote.content_label)}</Label>
             <Textarea
               id="wiki-promote-content"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
+              ref={contentRef}
+              defaultValue={initialContent}
               rows={8}
               className="min-h-40 resize-y"
             />
@@ -133,8 +136,8 @@ export function PromoteToWikiDialog({
             </Label>
             <Input
               id="wiki-promote-subject"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
+              ref={subjectRef}
+              defaultValue={subjectId}
               placeholder={t(($) => $.promote.subject_placeholder)}
             />
           </div>
@@ -145,7 +148,7 @@ export function PromoteToWikiDialog({
           </Button>
           <Button
             type="button"
-            disabled={!canSubmit}
+            disabled={mutation.isPending}
             onClick={() => mutation.mutate()}
           >
             {mutation.isPending ? t(($) => $.promote.submitting) : t(($) => $.promote.submit)}

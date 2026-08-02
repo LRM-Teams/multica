@@ -1,7 +1,9 @@
 "use client";
 
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, X } from "lucide-react";
+import type { KnowledgeEdge, TeamKnowledgeListItem } from "@multica/core/types";
 import { ApiError } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { knowledgeItemOptions, knowledgeNeighborsOptions } from "@multica/core/knowledge";
@@ -15,28 +17,33 @@ import { AppLink, useNavigation } from "../../navigation";
 import { BreadcrumbHeader } from "../../layout/breadcrumb-header";
 import { WikiEdgeList } from "./wiki-edge-list";
 
+const LOADING_LEAF = <span className="text-muted-foreground">…</span>;
+
 export function KnowledgePageView({ pageId }: { pageId: string }) {
   const { t } = useT("knowledge");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const { push } = useNavigation();
-  const timeAgo = useTimeAgo();
 
-  const pageQuery = useQuery(knowledgeItemOptions(wsId ?? "", pageId));
-  const neighborsQuery = useQuery({
+  const {
+    data: page,
+    error: pageError,
+    isLoading: pageLoading,
+    isSuccess: pageReady,
+  } = useQuery(knowledgeItemOptions(wsId ?? "", pageId));
+  const { data: neighbors, isLoading: neighborsLoading } = useQuery({
     ...knowledgeNeighborsOptions(wsId ?? "", pageId, 1),
-    enabled: !!wsId && !!pageId && pageQuery.isSuccess,
+    enabled: !!wsId && !!pageId && pageReady,
   });
 
-  const err = pageQuery.error;
-  const status = err instanceof ApiError ? err.status : 0;
+  const status = pageError instanceof ApiError ? pageError.status : 0;
 
-  if (pageQuery.isLoading) {
+  if (pageLoading) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-testid="knowledge-page-loading">
         <BreadcrumbHeader
           segments={[{ href: paths.wiki(), label: t(($) => $.page.title) }]}
-          leaf={<span className="text-muted-foreground">…</span>}
+          leaf={LOADING_LEAF}
         />
         <div className="space-y-3 px-4 py-4 sm:px-6">
           <Skeleton className="h-5 w-28" />
@@ -62,7 +69,7 @@ export function KnowledgePageView({ pageId }: { pageId: string }) {
     );
   }
 
-  if (status === 404 || !pageQuery.data?.id) {
+  if (status === 404 || !page?.id) {
     return (
       <StateShell
         title={t(($) => $.page.not_found_title)}
@@ -74,7 +81,31 @@ export function KnowledgePageView({ pageId }: { pageId: string }) {
     );
   }
 
-  const page = pageQuery.data;
+  return (
+    <KnowledgePageBody
+      page={page}
+      neighborEdges={neighbors?.edges ?? []}
+      neighborsLoading={neighborsLoading}
+    />
+  );
+}
+
+function KnowledgePageBody({
+  page,
+  neighborEdges,
+  neighborsLoading,
+}: {
+  page: TeamKnowledgeListItem;
+  neighborEdges: KnowledgeEdge[];
+  neighborsLoading: boolean;
+}) {
+  const { t } = useT("knowledge");
+  const paths = useWorkspacePaths();
+  const { push } = useNavigation();
+  const timeAgo = useTimeAgo();
+  const backLabel = t(($) => $.page.back_to_list);
+  const wikiHref = paths.wiki();
+
   const kindLabel =
     page.kind === "context"
       ? t(($) => $.page.kind.context)
@@ -93,39 +124,48 @@ export function KnowledgePageView({ pageId }: { pageId: string }) {
           ? t(($) => $.page.tabs.goal)
           : t(($) => $.page.kind.other);
 
+  const titleLeaf = useMemo(
+    () => <span className="truncate font-medium">{page.title}</span>,
+    [page.title],
+  );
+  const closeAction = useMemo(
+    () => (
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        className="size-8 md:hidden"
+        aria-label={backLabel}
+        onClick={() => push(wikiHref)}
+      >
+        <X className="size-4" />
+      </Button>
+    ),
+    [backLabel, push, wikiHref],
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="knowledge-page-view">
       <BreadcrumbHeader
         segments={[
-          { href: paths.wiki(), label: t(($) => $.page.title) },
+          { href: wikiHref, label: t(($) => $.page.title) },
           {
-            href: `${paths.wiki()}?tab=${page.kind === "context" ? "topic" : page.kind === "decision" ? "decision" : "all"}`,
+            href: `${wikiHref}?tab=${page.kind === "context" ? "topic" : page.kind === "decision" ? "decision" : "all"}`,
             label: sectionLabel,
           },
         ]}
-        leaf={<span className="truncate font-medium">{page.title}</span>}
-        actions={
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            className="size-8 md:hidden"
-            aria-label={t(($) => $.page.back_to_list)}
-            onClick={() => push(paths.wiki())}
-          >
-            <X className="size-4" />
-          </Button>
-        }
+        leaf={titleLeaf}
+        actions={closeAction}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <div className="mb-1 md:hidden">
           <AppLink
-            href={paths.wiki()}
+            href={wikiHref}
             className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "-ml-2 gap-1")}
           >
             <ArrowLeft className="size-3.5" />
-            {t(($) => $.page.back_to_list)}
+            {backLabel}
           </AppLink>
         </div>
 
@@ -161,8 +201,8 @@ export function KnowledgePageView({ pageId }: { pageId: string }) {
             </h2>
             <WikiEdgeList
               pageId={page.id}
-              edges={neighborsQuery.data?.edges ?? []}
-              loading={neighborsQuery.isLoading}
+              edges={neighborEdges}
+              loading={neighborsLoading}
             />
           </aside>
         </div>

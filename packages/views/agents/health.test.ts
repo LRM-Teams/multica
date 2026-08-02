@@ -54,7 +54,7 @@ describe("healthStateConfig — dot color source (Iris §1)", () => {
 });
 
 describe("resolveHealthDotClass — LRM-248 Online/Offline live badge", () => {
-  it("folds non-offline health states to Online green", () => {
+  it("folds the explicitly-decided-green states to Online green (LRM-248 allowance, must not regress)", () => {
     expect(resolveHealthDotClass(summary("online"), "bg-fallback")).toBe(
       "bg-success",
     );
@@ -74,6 +74,20 @@ describe("resolveHealthDotClass — LRM-248 Online/Offline live badge", () => {
 
   it("falls back gracefully when the summary is unavailable (API not live)", () => {
     expect(resolveHealthDotClass(undefined, "bg-success")).toBe("bg-success");
+  });
+
+  // Task #93: the backend can emit a state this FE type doesn't declare yet
+  // (e.g. "restarting" from an active lifecycle operation overlay in
+  // GetAgentHealth) — the response schema is loose, so this reaches the FE
+  // as a live runtime value despite the AgentHealthState union claiming it
+  // can't happen. An unrecognized state must never read as confidently
+  // online; it falls to the existing Offline gray, the same conservative
+  // default used elsewhere for unknown/missing facts.
+  it("folds an unrecognized state to Offline gray, not Online green", () => {
+    const unknownState = "restarting" as AgentHealthState;
+    expect(resolveHealthDotClass(summary(unknownState), "bg-fallback")).toBe(
+      "bg-muted-foreground/40",
+    );
   });
 });
 

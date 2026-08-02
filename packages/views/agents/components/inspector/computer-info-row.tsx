@@ -2,7 +2,7 @@
 
 import { deriveRuntimeHealth, runtimeCurrentVersion } from "@multica/core/runtimes";
 import type { AgentRuntime } from "@multica/core/types";
-import { runtimeDisplayLabel } from "../../../runtimes/components/runtime-machines";
+import { runtimeComputerLabel } from "../../../runtimes/components/runtime-machines";
 import { useT } from "../../../i18n";
 
 /**
@@ -12,9 +12,10 @@ import { useT } from "../../../i18n";
  * on its own PropRow, so relabeling/scoping the picker later can't drag
  * this display along with it.
  *
- * Connection status reads the derived, staleness-aware health (#10) rather
- * than the raw `status` column, same rule as every other online/offline
- * read in the app — a different axis from whatever the code-agent row shows.
+ * Label is machine identity (`runtimeComputerLabel`), never the code-agent
+ * `Provider (host)` string. Connection status prefers task #58's
+ * `computer_connected` when the server sends it; otherwise falls back to
+ * derived runtime health (#10).
  */
 export function ComputerInfoRow({ runtime }: { runtime: AgentRuntime | null }) {
   const { t } = useT("agents");
@@ -27,7 +28,10 @@ export function ComputerInfoRow({ runtime }: { runtime: AgentRuntime | null }) {
     );
   }
 
-  const isOnline = deriveRuntimeHealth(runtime, Date.now()) === "online";
+  const isOnline =
+    typeof runtime.computer_connected === "boolean"
+      ? runtime.computer_connected
+      : deriveRuntimeHealth(runtime, Date.now()) === "online";
   const version = runtimeCurrentVersion(runtime);
 
   return (
@@ -43,7 +47,7 @@ export function ComputerInfoRow({ runtime }: { runtime: AgentRuntime | null }) {
           : t(($) => $.inspector.computer_disconnected)}
       </span>
       <span className="text-muted-foreground/40">·</span>
-      <span className="min-w-0 truncate font-mono">{runtimeDisplayLabel(runtime)}</span>
+      <span className="min-w-0 truncate font-mono">{runtimeComputerLabel(runtime)}</span>
       {version && (
         <span className="shrink-0 font-mono text-muted-foreground/70">
           {t(($) => $.inspector.computer_version, { version })}

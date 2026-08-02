@@ -136,11 +136,70 @@ export function useHealthLabel(): (health: RuntimeHealth | "loading") => string 
 }
 
 /**
+ * Machine-level connectivity only: Connected / Disconnected, using the same
+ * agents.inspector copy as ComputerInfoRow (Frank/Iris 2026-08-02). Binary —
+ * anything other than online reads as disconnected. Do not pair with a
+ * secondary runtimeHealth badge on the same line.
+ */
+export function MachineConnectedStatus({
+  health,
+  className,
+}: {
+  health: RuntimeHealth | "loading";
+  className?: string;
+}) {
+  const { t } = useT("agents");
+  if (health === "loading") {
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground",
+          className,
+        )}
+        title="—"
+      >
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/40" />
+        —
+      </span>
+    );
+  }
+  const connected = health === "online";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 text-xs font-medium",
+        connected ? "text-success" : "text-muted-foreground",
+        className,
+      )}
+      title={
+        connected
+          ? t(($) => $.inspector.computer_connected)
+          : t(($) => $.inspector.computer_disconnected)
+      }
+    >
+      <span
+        className={cn(
+          "h-2 w-2 rounded-full",
+          connected ? "bg-success" : "bg-muted-foreground/40",
+        )}
+      />
+      {connected
+        ? t(($) => $.inspector.computer_connected)
+        : t(($) => $.inspector.computer_disconnected)}
+    </span>
+  );
+}
+
+/**
  * Borderless single-point connectivity status: a coloured dot + label, no
  * bordered chip / wifi-icon wall. Plan A (LRM-624) for the machine-detail
  * title row — connectivity is expressed exactly once. The secondary
  * runtimeHealth badge alongside it is reserved for incremental update
  * states only (see `headerRuntimeHealthBadge`), never a second "Offline".
+ *
+ * Prefer {@link MachineConnectedStatus} for machine-level surfaces (computers
+ * page) — that one uses Connected/Disconnected vocabulary. This component
+ * keeps Online/Offline for per-runtime health rows.
  */
 export function RuntimeConnectivityStatus({
   health,

@@ -133,6 +133,7 @@ export function splitRuntimeName(name: string): {
   base: string;
   hostname: string | null;
 } {
+  if (!name) return { base: name ?? "", hostname: null };
   const m = name.match(/^(.+?)\s+\(([^)]+)\)$/);
   if (!m || !m[1] || !m[2]) return { base: name, hostname: null };
   return { base: m[1], hostname: m[2] };
@@ -373,6 +374,32 @@ export function runtimeMachineKey(runtime: AgentRuntime): string {
 // to name, matching `machine-name-editor.tsx`'s currentDisplayName.
 export function runtimeDisplayLabel(runtime: AgentRuntime): string {
   return runtime.display_name?.trim() || runtime.name;
+}
+
+/**
+ * Machine identity for "which computer" surfaces (ComputerInfoRow), matching
+ * machine-detail title priority: user rename → hostname parenthetical →
+ * structured device_name. Never falls back to the full `Provider (host)`
+ * runtime.name — that reads as a code-agent label, which Frank called out
+ * on 2026-08-02 when Info showed the runtime name instead of the computer.
+ */
+export function runtimeComputerLabel(runtime: AgentRuntime): string {
+  const displayName = runtime.display_name?.trim();
+  if (displayName) return displayName;
+
+  const hostname = splitRuntimeName(runtime.name ?? "").hostname?.trim();
+  if (hostname) return hostname;
+
+  const structured = runtime.device_name?.trim();
+  if (structured) return structured;
+
+  // Last resort: device_info first segment / short daemon id — still not
+  // the "Cursor (…)" provider string.
+  const fromDeviceInfo = runtime.device_info?.trim().split(" · ")[0]?.trim();
+  if (fromDeviceInfo) return fromDeviceInfo;
+
+  if (runtime.daemon_id) return shortDaemonId(runtime.daemon_id);
+  return runtime.name?.trim() || "—";
 }
 
 export function runtimeDeviceName(runtime: AgentRuntime): string | null {

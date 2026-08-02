@@ -43,14 +43,38 @@ function renderRow(runtime: AgentRuntime | null) {
 // Runtime/code-agent picker row — it must not disappear or get relabeled
 // when that picker's own vocabulary changes.
 describe("ComputerInfoRow (2026-08-01)", () => {
-  it("shows Connected + name + version for an online runtime", () => {
+  it("shows Connected + machine label + version for an online runtime", () => {
     renderRow(makeRuntime());
     expect(screen.getByText("Connected")).toBeInTheDocument();
     expect(screen.getByText("s144")).toBeInTheDocument();
     expect(screen.getByText("v0.3.92")).toBeInTheDocument();
   });
 
-  it("shows Disconnected for a stale-heartbeat runtime, reading derived health not raw status", () => {
+  it("shows hostname — not Provider (host) — when display_name is unset (Frank 2026-08-02)", () => {
+    renderRow(
+      makeRuntime({
+        display_name: "",
+        name: "Cursor (s144)",
+        computer_connected: true,
+      }),
+    );
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(screen.getByText("s144")).toBeInTheDocument();
+    expect(screen.queryByText("Cursor (s144)")).not.toBeInTheDocument();
+  });
+
+  it("prefers computer_connected over runtime last_seen for the Connected label", () => {
+    renderRow(
+      makeRuntime({
+        computer_connected: true,
+        status: "offline",
+        last_seen_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+      }),
+    );
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+  });
+
+  it("shows Disconnected for a stale-heartbeat runtime when computer_connected is absent", () => {
     // status still says "online" but last_seen_at is far in the past — the
     // whole point of deriveRuntimeHealth over reading raw `status` (#10).
     renderRow(

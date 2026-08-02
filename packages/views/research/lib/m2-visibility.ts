@@ -60,6 +60,20 @@ export type SourceStrategyModel = {
   empty: boolean;
 };
 
+/** Source strip body mode when chips are empty or errored (LRM-977). */
+export type SourceStrategyMode = "ready" | "loading" | "empty" | "error";
+
+export function resolveSourceStrategyMode(
+  model: SourceStrategyModel,
+  sessionStatus?: string | null,
+  error?: string | null,
+): SourceStrategyMode {
+  if (error) return "error";
+  if (!model.empty && model.chips.length > 0) return "ready";
+  if (sessionStatus === "running" || sessionStatus === "paused") return "loading";
+  return "empty";
+}
+
 export type HumanBoundaryModel = {
   aiCeiling: string;
   mustHuman: string;

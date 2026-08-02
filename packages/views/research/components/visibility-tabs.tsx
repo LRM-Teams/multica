@@ -78,7 +78,13 @@ export function VisibilityTabs({
             onSelectQuestion={onSelectQuestion}
           />
         ) : null}
-        {tab === "sources" ? <SourceStrategyStrip model={strategy} className="border-b-0" /> : null}
+        {tab === "sources" ? (
+          <SourceStrategyStrip
+            model={strategy}
+            sessionStatus={sessionStatus}
+            className="border-b-0"
+          />
+        ) : null}
         {tab === "boundary" ? (
           <div className="p-3">
             <HumanBoundaryCard model={boundary} />

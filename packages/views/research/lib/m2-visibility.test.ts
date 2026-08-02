@@ -5,6 +5,7 @@ import {
   buildHumanBoundary,
   buildSourceStrategy,
   resolveExplorationRailMode,
+  resolveSourceStrategyMode,
 } from "./m2-visibility";
 
 function node(
@@ -70,6 +71,30 @@ describe("m2-visibility", () => {
             questions: [],
           },
         ],
+        "running",
+      ),
+    ).toBe("ready");
+  });
+
+  it("resolves source strip empty vs loading vs ready (LRM-977)", () => {
+    const empty = { chips: [], whyLine: "", empty: true };
+    expect(resolveSourceStrategyMode(empty, "drafting")).toBe("empty");
+    expect(resolveSourceStrategyMode(empty, "running")).toBe("loading");
+    expect(resolveSourceStrategyMode(empty, "running", "boom")).toBe("error");
+    expect(
+      resolveSourceStrategyMode(
+        {
+          empty: false,
+          whyLine: "why",
+          chips: [
+            {
+              id: "docs",
+              label: "docs",
+              layer: "general",
+              samples: [],
+            },
+          ],
+        },
         "running",
       ),
     ).toBe("ready");

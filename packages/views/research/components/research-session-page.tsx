@@ -367,7 +367,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       />
 
       <div className="hidden border-b sm:block">
-        <SourceStrategyStrip model={sourceStrategy} />
+        <SourceStrategyStrip
+          model={sourceStrategy}
+          sessionStatus={session.status}
+        />
       </div>
 
       <div className="flex min-h-0 flex-1">

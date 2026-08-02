@@ -65,6 +65,7 @@ vi.mock("@multica/ui/components/ui/dropdown-menu", async () => {
         {children}
       </button>
     ),
+    DropdownMenuSeparator: () => <hr data-testid="menu-separator" />,
   };
 });
 
@@ -121,5 +122,19 @@ describe("ResearchSessionMetaMenu (LRM-919)", () => {
     fireEvent.click(screen.getByText("Sources"));
     expect(screen.getByText("Example Doc")).toBeInTheDocument();
     expect(document.querySelector(".absolute.right-3")).toBeNull();
+  });
+
+  it("renders leading secondary actions before fleet/sources (LRM-995)", () => {
+    const onSelect = vi.fn();
+    render(
+      <ResearchSessionMetaMenu
+        members={[member]}
+        sources={[source]}
+        leadingActions={[{ id: "delivery", label: "View delivery", onSelect }]}
+      />,
+    );
+    expect(screen.getByTestId("menu-separator")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("View delivery"));
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 });

@@ -25,7 +25,7 @@ vi.mock("../../i18n/use-t", () => ({
 
 describe("ResearchStageTimeline", () => {
   it("renders the full stage sequence and highlights the current stage", () => {
-    render(
+    const { container } = render(
       <ResearchStageTimeline currentStage="s2_sources" sessionStatus="running" />,
     );
     expect(screen.getByLabelText("Research stages")).toBeInTheDocument();
@@ -35,6 +35,9 @@ describe("ResearchStageTimeline", () => {
       "step",
     );
     expect(screen.getByRole("button", { name: /S4 · Deliver/i })).toBeDisabled();
+    expect(container.querySelector('[data-stage-state="current"]')).toBeTruthy();
+    expect(container.querySelectorAll('[data-stage-state="done"]').length).toBe(1);
+    expect(container.querySelectorAll('[data-stage-state="upcoming"]').length).toBe(2);
   });
 
   it("invokes onSelectStage for done/current steps only", () => {

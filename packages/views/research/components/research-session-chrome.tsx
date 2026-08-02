@@ -11,22 +11,37 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { Compass } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { ResearchSessionMetaMenu } from "./research-session-meta-menu";
 
-type StatusTone = { text: string; dot: string };
+type StatusTone = { text: string; dot: string; pill: string };
 
-// Semantic status dot (design lock LRM-792: 状态中文+语义点).
+// Semantic status (design lock LRM-792 + LRM-995 hierarchy): pill is primary
+// state signal; stage/round chips stay secondary context.
 const STATUS_TONES: Record<string, StatusTone> = {
-  running: { text: "text-brand", dot: "bg-brand" },
-  awaiting_user_confirm: { text: "text-warning", dot: "bg-warning" },
-  completed: { text: "text-success", dot: "bg-success" },
+  running: {
+    text: "text-brand",
+    dot: "bg-brand",
+    pill: "border-brand/30 bg-brand/10 text-brand",
+  },
+  awaiting_user_confirm: {
+    text: "text-warning",
+    dot: "bg-warning",
+    pill: "border-warning/35 bg-warning/10 text-warning",
+  },
+  completed: {
+    text: "text-success",
+    dot: "bg-success",
+    pill: "border-success/35 bg-success/10 text-success",
+  },
 };
 const DEFAULT_TONE: StatusTone = {
   text: "text-muted-foreground",
   dot: "bg-muted-foreground",
+  pill: "border-border bg-muted/50 text-muted-foreground",
 };
 
 // Module-level so the default doesn't allocate a new array identity on every
@@ -34,11 +49,11 @@ const DEFAULT_TONE: StatusTone = {
 const EMPTY_MEMBERS: ResearchFleetMember[] = [];
 const EMPTY_SOURCES: ResearchSource[] = [];
 
-function StageChip({ label, className }: { label: string; className?: string }) {
+function ContextChip({ label, className }: { label: string; className?: string }) {
   return (
     <span
       className={cn(
-        "shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-muted-foreground uppercase",
+        "shrink-0 rounded-md border border-border/70 bg-muted/35 px-1.5 py-0.5 font-mono text-[10px] tracking-wider text-muted-foreground uppercase",
         className,
       )}
     >
@@ -81,6 +96,7 @@ export function ResearchSessionChrome({
   sources?: ResearchSource[];
 }) {
   const { t } = useT("research");
+  const isMobile = useIsMobile();
   const [handoffOpen, setHandoffOpen] = useState(false);
 
   const status = session.status;
@@ -94,8 +110,38 @@ export function ResearchSessionChrome({
   // 确认并继续, completed → 交付移交, running → none.
   const showConfirm = status === "awaiting_user_confirm" && canConfirm;
   const showHandoff = status === "completed" && canHandoff;
+  const hasPrimary = showConfirm || showHandoff;
+
+  // LRM-995: on narrow, fold secondary "查看交付" into the tools menu so the
+  // primary CTA is never crowded by an equal-weight outline button.
+  const foldDeliveryIntoTools = Boolean(onOpenDelivery) && isMobile;
+  const showDeliveryButton = Boolean(onOpenDelivery) && !isMobile;
 
   const primaryClass = "bg-brand text-brand-foreground hover:bg-brand/90";
+
+  const roundChip =
+    typeof session.product_round === "number" &&
+    typeof session.product_round_budget === "number" &&
+    session.product_round_budget > 0 ? (
+      <span
+        className={cn(
+          "shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] tracking-wide",
+          session.product_round >= session.product_round_budget
+            ? "border-warning/40 bg-warning/10 text-warning"
+            : "border-border/70 bg-muted/35 text-muted-foreground",
+        )}
+        title={t(($) => $.round.subtitle)}
+      >
+        {t(($) => $.round.budget_chip, {
+          used: session.product_round,
+          budget: session.product_round_budget,
+        })}
+        {session.status === "completed" &&
+        session.product_round >= session.product_round_budget
+          ? ` · ${t(($) => $.round.budget_capped)}`
+          : ""}
+      </span>
+    ) : null;
 
   return (
     <header
@@ -107,64 +153,68 @@ export function ResearchSessionChrome({
         aria-hidden
         className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-brand/45 to-transparent"
       />
-      <div className="flex items-center gap-2.5 px-4 pt-2.5 pb-1">
+
+      {/* Identity: title + status (primary visual) */}
+      <div
+        data-testid="research-session-identity"
+        className="flex items-center gap-2.5 px-4 pt-2.5 pb-1"
+      >
         <span
           className="hidden size-7 shrink-0 items-center justify-center rounded-[8px] bg-brand/12 text-brand sm:flex"
           aria-hidden
         >
           <Compass className="size-3.5" strokeWidth={2} />
         </span>
-        <h1 className="min-w-0 truncate text-base font-semibold tracking-tight">
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold tracking-tight">
           {session.title}
         </h1>
         <span
-          className={cn("flex shrink-0 items-center gap-1.5 text-xs font-semibold", tone.text)}
+          data-testid="research-session-status"
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+            tone.pill,
+          )}
         >
           <span
             className={cn(
-              "size-2 rounded-full",
+              "size-1.5 rounded-full",
               tone.dot,
               status === "running" && "animate-pulse",
             )}
           />
           {statusLabel}
         </span>
-        <StageChip label={stageLabel} className="hidden sm:inline-flex" />
-        {typeof session.product_round === "number" &&
-        typeof session.product_round_budget === "number" &&
-        session.product_round_budget > 0 ? (
-          <span
-            className={cn(
-              "hidden shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] tracking-wide sm:inline-flex",
-              session.product_round >= session.product_round_budget
-                ? "border-warning/40 text-warning"
-                : "text-muted-foreground",
-            )}
-            title={t(($) => $.round.subtitle)}
-          >
-            {t(($) => $.round.budget_chip, {
-              used: session.product_round,
-              budget: session.product_round_budget,
-            })}
-            {session.status === "completed" &&
-            session.product_round >= session.product_round_budget
-              ? ` · ${t(($) => $.round.budget_capped)}`
-              : ""}
-          </span>
-        ) : null}
       </div>
-      <div className="flex items-center justify-between gap-3 px-4 pb-2.5">
-        <p className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:block">
-          {selectedSummary ?? session.goal}
-        </p>
-        <StageChip label={stageLabel} className="sm:hidden" />
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+
+      {/* Context + actions: stage/goal secondary; one primary CTA; secondary folded on narrow */}
+      <div
+        data-testid="research-session-toolbar"
+        className="flex items-center justify-between gap-3 px-4 pb-2.5"
+      >
+        <div
+          data-testid="research-session-context"
+          className="flex min-w-0 flex-1 items-center gap-2"
+        >
+          <ContextChip label={stageLabel} />
+          {roundChip}
+          <p className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:block">
+            {selectedSummary ?? session.goal}
+          </p>
+        </div>
+        <div
+          data-testid="research-session-actions"
+          className={cn(
+            "flex shrink-0 items-center gap-2",
+            hasPrimary && "pl-1",
+          )}
+        >
           {showConfirm ? (
             <Button
               size="sm"
               className={primaryClass}
               onClick={onConfirm}
               disabled={confirmPending}
+              data-testid="research-session-primary"
             >
               {t(($) => $.panel.confirm_continue)}
             </Button>
@@ -172,7 +222,13 @@ export function ResearchSessionChrome({
           {showHandoff ? (
             <Popover open={handoffOpen} onOpenChange={setHandoffOpen}>
               <PopoverTrigger
-                render={<Button size="sm" className={primaryClass} />}
+                render={
+                  <Button
+                    size="sm"
+                    className={primaryClass}
+                    data-testid="research-session-primary"
+                  />
+                }
               >
                 {t(($) => $.panel.handoff_title)}
               </PopoverTrigger>
@@ -207,8 +263,13 @@ export function ResearchSessionChrome({
               </PopoverContent>
             </Popover>
           ) : null}
-          {onOpenDelivery ? (
-            <Button size="sm" variant="outline" onClick={onOpenDelivery}>
+          {showDeliveryButton ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onOpenDelivery}
+              data-testid="research-session-delivery"
+            >
               {t(($) => $.panel.view_delivery)}
             </Button>
           ) : null}
@@ -216,6 +277,17 @@ export function ResearchSessionChrome({
             members={members}
             sources={sources}
             sessionStatus={session.status}
+            leadingActions={
+              foldDeliveryIntoTools && onOpenDelivery
+                ? [
+                    {
+                      id: "view-delivery",
+                      label: t(($) => $.panel.view_delivery),
+                      onSelect: onOpenDelivery,
+                    },
+                  ]
+                : undefined
+            }
           />
         </div>
       </div>

@@ -727,7 +727,7 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 		      AND (
 		        aae.event_type = 'agent_status_changed'
 		        OR aae.event_type LIKE '%subagent%'
-		        OR 		        aae.event_type IN (
+		        OR aae.event_type IN (
 		          'reminder_scheduled',
 		          'reminder_snoozed',
 		          'reminder_updated',

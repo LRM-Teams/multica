@@ -63,6 +63,18 @@ func (n UnsafeNarrowing) String() string {
 // DELETE-based gap, see task #100, which gets updated as they're
 // fixed — this comment does not.
 //
+// As of this writing, three distinct down-migration failure mechanisms are
+// tracked, each requiring its own detector — this checker covers only the
+// first row:
+//
+//	mechanism                                    | what happens on rollback      | tracked by
+//	----------------------------------------------|--------------------------------|------------
+//	narrowed CHECK, no remap (this checker)        | fails loudly, data survives   | this file / task #97, #100
+//	down.sql DELETEs the now-forbidden rows        | succeeds, silently loses data | task #101
+//	down.sql references a table/function that was  | fails mid-way, already        | task #102
+//	  later dropped by an unrelated migration       |   partially applied           |
+//
+// A migration passing this check says nothing about the other two rows.
 // A migration passing this check is not a general guarantee its rollback
 // works, or that it doesn't quietly destroy data — see task #97's own
 // scope note.

@@ -502,9 +502,11 @@ WHERE id = $1 AND status = 'draining'
 RETURNING *;
 
 -- name: UpdateAgentTaskSession :exec
--- Pins the resume pointer mid-flight so a daemon crash leaves a usable
--- session_id/work_dir on the task row. No-op if the task is no longer
--- in dispatched/running. waiting_local_directory tasks have no session yet
+-- Pins the provider-CLI resume pointer mid-flight so a daemon crash leaves a
+-- usable session_id/work_dir on the task row (PinTaskSession / --resume).
+-- This TEXT column is NOT agent_session / agent_session_id (Multica inbox
+-- wake/drain UUID). No FK between them; task #109. No-op if the task is no
+-- longer draining. waiting_local_directory tasks have no resume token yet
 -- so this query intentionally skips them.
 UPDATE agent_inbox_event
 SET session_id = COALESCE(sqlc.narg('session_id'), session_id),
@@ -525,8 +527,9 @@ WHERE id = $1;
 -- single read-modify-write. COALESCE handles a NULL/empty context; the `||`
 -- operator preserves every existing top-level key and
 -- overwrites only the areal_proxy sub-object. Used by the session-open hook.
--- This intentionally does NOT touch agent_inbox_event.session_id, which is the
--- runtime/chat session pointer, not the RL session.
+-- This intentionally does NOT touch agent_inbox_event.session_id (provider CLI
+-- --resume TEXT from PinTaskSession; also not the agent_session inbox UUID —
+-- task #109), nor the RL session inside areal_proxy.
 UPDATE agent_inbox_event
 SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object('areal_proxy', sqlc.arg('areal_proxy')::jsonb)
 WHERE id = sqlc.arg('id');

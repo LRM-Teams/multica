@@ -3015,6 +3015,143 @@ func TestExecuteAndDrain_NoRetryWhenSessionEstablished(t *testing.T) {
 	}
 }
 
+// statusStreamBackend is a test double for agent.Backend that streams a
+// configurable number of MessageStatus events (each carrying sessionID) down
+// the message channel before completing successfully. fakeBackend can't
+// exercise this: its Execute closes the message channel immediately with no
+// streamed messages, so the `case agent.MessageStatus:` branch in
+// executeAndDrainForTask (task #105's PinTaskSession wiring) never runs
+// against it.
+type statusStreamBackend struct {
+	sessionID   string
+	statusCount int // number of MessageStatus events to stream
+}
+
+func (b statusStreamBackend) Execute(_ context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+	// msgCh is deliberately unbuffered and fed from a background goroutine
+	// (mirroring how real backends stream messages after Execute returns)
+	// rather than pre-filled and closed synchronously. executeAndDrainForTask
+	// races its own return (on session.Result) against a drain goroutine
+	// reading session.Messages; with a pre-filled buffered channel both
+	// session.Messages and session.Result are ready the instant Execute
+	// returns, so Go's select can — nondeterministically — pick the drain
+	// goroutine's ctx-done case over its message-receive case before a
+	// single message is ever read, silently starving PinTaskSession. An
+	// unbuffered send only completes once the drain goroutine actually
+	// receives it, and Result is only sent after every message send has
+	// completed, so the drain goroutine is guaranteed to receive (and start
+	// processing) every streamed message before executeAndDrainForTask can
+	// possibly return.
+	msgCh := make(chan agent.Message)
+	resCh := make(chan agent.Result, 1)
+	go func() {
+		for i := 0; i < b.statusCount; i++ {
+			msgCh <- agent.Message{Type: agent.MessageStatus, Status: "running", SessionID: b.sessionID}
+		}
+		close(msgCh)
+		resCh <- agent.Result{Status: "completed", SessionID: b.sessionID}
+	}()
+	return &agent.Session{Messages: msgCh, Result: resCh}, nil
+}
+
+// TestExecuteAndDrain_PinsTaskSessionOnStatusMessage is the task #105
+// regression test Parker required before the drain-loop wiring lands: a
+// single MessageStatus carrying a session id must actually call
+// PinTaskSession. This is the important half of the coverage — an
+// idempotency-only test (see the sibling test below) would still pass even
+// if the whole `if msg.SessionID != "" && sessionPinned.CompareAndSwap(...)`
+// block were deleted outright.
+//
+// PinTaskSession fires from the drain loop's background goroutine, which is
+// deliberately fire-and-forget with respect to executeAndDrainForTask's
+// return (see the "Best-effort and bounded" comment in daemon.go) — the
+// backend's Result can arrive and unblock the caller before the goroutine
+// has processed the buffered MessageStatus at all. So this test cannot just
+// check the call count immediately after executeAndDrain returns; it must
+// wait (bounded) for the HTTP call to actually land.
+func TestExecuteAndDrain_PinsTaskSessionOnStatusMessage(t *testing.T) {
+	t.Parallel()
+
+	type pinCall struct {
+		path string
+		body map[string]any
+	}
+	pinned := make(chan pinCall, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		pinned <- pinCall{path: r.URL.Path, body: body}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
+
+	backend := statusStreamBackend{sessionID: "sess-pin-1", statusCount: 1}
+	opts := agent.ExecOptions{Cwd: "/work/task-pin"}
+	result, _, err := d.executeAndDrain(context.Background(), backend, "prompt", opts, slog.Default(), "task-pin")
+	if err != nil {
+		t.Fatalf("executeAndDrain error: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Fatalf("result status = %q, want completed", result.Status)
+	}
+
+	select {
+	case call := <-pinned:
+		wantPath := "/api/daemon/tasks/task-pin/session"
+		if call.path != wantPath {
+			t.Fatalf("pin request path = %q, want %q", call.path, wantPath)
+		}
+		if call.body["session_id"] != "sess-pin-1" {
+			t.Fatalf("pin request session_id = %v, want sess-pin-1 (body=%#v)", call.body["session_id"], call.body)
+		}
+		if call.body["work_dir"] != "/work/task-pin" {
+			t.Fatalf("pin request work_dir = %v, want /work/task-pin (body=%#v)", call.body["work_dir"], call.body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("PinTaskSession was never called for a MessageStatus carrying a non-empty SessionID")
+	}
+}
+
+// TestExecuteAndDrain_PinsTaskSessionOnlyOnce covers the
+// sessionPinned.CompareAndSwap(false, true) idempotency guard: backends may
+// repeat MessageStatus on every turn (e.g. Claude Code CLI streams a status
+// update per turn), and PinTaskSession must fire only once per task.
+func TestExecuteAndDrain_PinsTaskSessionOnlyOnce(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
+
+	backend := statusStreamBackend{sessionID: "sess-pin-2", statusCount: 2}
+	result, _, err := d.executeAndDrain(context.Background(), backend, "prompt", agent.ExecOptions{Cwd: "/work/task-pin-2"}, slog.Default(), "task-pin-2")
+	if err != nil {
+		t.Fatalf("executeAndDrain error: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Fatalf("result status = %q, want completed", result.Status)
+	}
+
+	// Wait for the first call, then hold for a grace period to give a
+	// wrongly-unguarded second call a real chance to land before asserting.
+	deadline := time.Now().Add(2 * time.Second)
+	for calls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("PinTaskSession calls = %d, want exactly 1 across two MessageStatus events on the same task", got)
+	}
+}
+
 func TestExecuteAndDrain_CodexInactivityReportsToolResultTranscript(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fixture is POSIX-only")

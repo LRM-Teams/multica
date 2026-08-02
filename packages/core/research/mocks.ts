@@ -534,6 +534,23 @@ export const mockResearchSnapshotClarification: ResearchSessionSnapshot = {
   ],
 };
 
+/** LRM-840 — stage gate awaiting human approve/reject (status visible, not frozen). */
+export const mockResearchSnapshotAwaitingConfirm: ResearchSessionSnapshot = {
+  session: {
+    ...sessionBase,
+    id: "sess-awaiting-confirm",
+    status: "awaiting_user_confirm",
+    current_stage: "s4_delivery",
+  },
+  fleet: mockFleet,
+  nodes: mockNodes,
+  edges: mockEdges,
+  sources: mockSources,
+  report: mockReport,
+  evals: mockEvals,
+  messages: [mockMessageUser],
+};
+
 export const mockResearchSessionsList: ListResearchSessionsResponse = {
   sessions: [sessionBase],
 };
@@ -576,6 +593,7 @@ export const researchMocks = {
     loading: mockResearchSnapshotLoading,
     error: mockResearchSnapshotError,
     clarification: mockResearchSnapshotClarification,
+    awaitingConfirm: mockResearchSnapshotAwaitingConfirm,
   },
   lists: {
     default: mockResearchSessionsList,

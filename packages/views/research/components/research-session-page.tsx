@@ -76,6 +76,7 @@ import {
   isPostRetryWakeFailure,
   resolveSessionInterrupt,
 } from "../lib/session-interrupt";
+import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchCanvas } from "./research-canvas";
@@ -234,8 +235,21 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     mutationFn: () => api.confirmResearchSession(sessionId),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+      toast.success(t(($) => $.session_page.confirm_done));
     },
     onError: (err) => mutationErrorToast(t(($) => $.session_page.confirm_failed), err),
+  });
+
+  // LRM-840 — reject stage-gate confirm: tip → agent + status resumes via BE.
+  const rejectConfirm = useMutation({
+    mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+      toast.success(t(($) => $.session_page.reject_done));
+    },
+    onError: (err) => mutationErrorToast(t(($) => $.session_page.reject_failed), err),
   });
 
   const handoff = useMutation({
@@ -490,8 +504,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         onCreateProjectChange={(value) => dispatch({ type: "setCreateProject", value })}
         onCreateChannelChange={(value) => dispatch({ type: "setCreateChannel", value })}
         onConfirm={() => confirm.mutate()}
+        onReject={(reason) =>
+          rejectConfirm.mutate(formatStageGateRejectReply(reason))
+        }
         onHandoff={() => handoff.mutate()}
         confirmPending={confirm.isPending}
+        rejectPending={rejectConfirm.isPending}
         handoffPending={handoff.isPending}
         onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
         selectedSummary={

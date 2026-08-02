@@ -7,10 +7,12 @@ import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import {
   Popover,
   PopoverContent,
+  PopoverDescription,
   PopoverHeader,
   PopoverTitle,
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
+import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { Compass } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
@@ -85,8 +87,10 @@ export function ResearchSessionChrome({
   onCreateProjectChange,
   onCreateChannelChange,
   onConfirm,
+  onReject,
   onHandoff,
   confirmPending,
+  rejectPending,
   handoffPending,
   onOpenDelivery,
   selectedSummary,
@@ -102,8 +106,11 @@ export function ResearchSessionChrome({
   onCreateProjectChange: (v: boolean) => void;
   onCreateChannelChange: (v: boolean) => void;
   onConfirm: () => void;
+  /** LRM-840 — reject with optional feedback; parent posts tip + resumes. */
+  onReject?: (reason: string) => void;
   onHandoff: () => void;
   confirmPending?: boolean;
+  rejectPending?: boolean;
   handoffPending?: boolean;
   onOpenDelivery?: () => void;
   selectedSummary?: string | null;
@@ -115,6 +122,8 @@ export function ResearchSessionChrome({
   const { t } = useT("research");
   const isMobile = useIsMobile();
   const [handoffOpen, setHandoffOpen] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
 
   const status = session.status;
   const tone = STATUS_TONES[status] ?? DEFAULT_TONE;
@@ -123,11 +132,13 @@ export function ResearchSessionChrome({
     ($) => $.stage[session.current_stage as keyof typeof $.stage] ?? session.current_stage,
   );
 
-  // One primary action per state (design lock): awaiting_user_confirm →
-  // 确认并继续, completed → 交付移交, running → none.
+  // LRM-840: awaiting_user_confirm → approve + reject controls (not text-only).
+  // completed → 交付移交; running → none.
   const showConfirm = status === "awaiting_user_confirm" && canConfirm;
+  const showReject = showConfirm && Boolean(onReject);
   const showHandoff = status === "completed" && canHandoff;
   const hasPrimary = showConfirm || showHandoff;
+  const gateBusy = Boolean(confirmPending || rejectPending);
 
   // LRM-995: on narrow, fold secondary "查看交付" into the tools menu so the
   // primary CTA is never crowded by an equal-weight outline button.
@@ -234,11 +245,72 @@ export function ResearchSessionChrome({
               size="sm"
               className={primaryClass}
               onClick={onConfirm}
-              disabled={confirmPending}
+              disabled={gateBusy}
               data-testid="research-session-primary"
+              data-gate-action="approve"
             >
-              {t(($) => $.panel.confirm_continue)}
+              {t(($) => $.panel.gate_approve)}
             </Button>
+          ) : null}
+          {showReject ? (
+            <Popover
+              open={rejectOpen}
+              onOpenChange={(open) => {
+                setRejectOpen(open);
+                if (!open) setRejectReason("");
+              }}
+            >
+              <PopoverTrigger
+                render={
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={gateBusy}
+                    data-testid="research-session-gate-reject"
+                    data-gate-action="reject"
+                  />
+                }
+              >
+                {t(($) => $.panel.gate_reject)}
+              </PopoverTrigger>
+              <PopoverContent
+                align="end"
+                className="w-[min(20rem,calc(100vw-2rem))] gap-3 p-3"
+                data-testid="research-session-gate-reject-popover"
+              >
+                <PopoverHeader>
+                  <PopoverTitle>{t(($) => $.panel.gate_reject_title)}</PopoverTitle>
+                  <PopoverDescription>
+                    {t(($) => $.panel.gate_reject_hint)}
+                  </PopoverDescription>
+                </PopoverHeader>
+                <Textarea
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  placeholder={t(($) => $.panel.gate_reject_placeholder)}
+                  rows={3}
+                  disabled={rejectPending}
+                  className="min-h-[4.5rem] w-full resize-y text-sm"
+                  data-testid="research-session-gate-reject-reason"
+                />
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="w-full"
+                  disabled={rejectPending}
+                  data-testid="research-session-gate-reject-submit"
+                  onClick={() => {
+                    onReject?.(rejectReason);
+                    setRejectOpen(false);
+                    setRejectReason("");
+                  }}
+                >
+                  {rejectPending
+                    ? t(($) => $.panel.gate_reject_submitting)
+                    : t(($) => $.panel.gate_reject_submit)}
+                </Button>
+              </PopoverContent>
+            </Popover>
           ) : null}
           {showHandoff ? (
             <Popover open={handoffOpen} onOpenChange={setHandoffOpen}>

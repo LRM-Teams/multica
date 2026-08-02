@@ -70,6 +70,12 @@ type AgentRuntimeResponse struct {
 	// daemon_id).
 	ComputerConnected bool    `json:"computer_connected"`
 	DaemonLastSeenAt  *string `json:"daemon_last_seen_at"`
+	// PinnedVersion (task #81) is non-nil when the daemon's
+	// MULTICA_PINNED_VERSION reported this machine as pinned. This only
+	// reflects the daemon's local intent — the server does not yet enforce
+	// it against a server-initiated update, so UI copy must say "recorded
+	// intent," not "guaranteed not to be upgraded."
+	PinnedVersion *string `json:"pinned_version,omitempty"`
 }
 
 type DaemonUpdateStatusResponse struct {
@@ -265,6 +271,7 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		LastSeenAt:           timestampToPtr(rt.LastSeenAt),
 		CreatedAt:            timestampToString(rt.CreatedAt),
 		UpdatedAt:            timestampToString(rt.UpdatedAt),
+		PinnedVersion:        nullableTextPtr(rt.PinnedVersion),
 	}
 }
 

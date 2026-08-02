@@ -134,6 +134,12 @@
       "lead": "Lead",
       "pending": "Pending review",
       "done": "Settled"
+    },
+    "chat_mode": {
+      "empty": "Idle",
+      "loading": "Loading",
+      "running": "In progress",
+      "error": "Error"
     }
   },
   "chat": {
@@ -148,7 +154,12 @@
     "streaming_from": "Fleet reply",
     "streaming_wait": "Generating…",
     "stream_settled": "Settled",
-    "stopped_tag": "Stopped"
+    "stopped_tag": "Stopped",
+    "empty_title": "No dialogue yet",
+    "empty_body": "Fleet dialogue and process events will appear here as the canvas fills in — empty / loading / in progress / error are scannable.",
+    "loading_body": "Connecting fleet chat…",
+    "error_title": "Could not send",
+    "error_body": "Network or service error. Existing messages are kept — you can retry."
   },
   "step_card": {
     "status": {

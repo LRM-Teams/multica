@@ -24,23 +24,20 @@ import type {
   ResearchSource,
 } from "@multica/core/types";
 import type { ResearchPresenceMap } from "@multica/core/research";
-import { Button } from "@multica/ui/components/ui/button";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
-import { MessageSquare } from "lucide-react";
 import {
   CONTROLS_BOTTOM_PX,
   DETAIL_CARD_BOTTOM_PX,
-  FAB_ABOVE_MINIMAP_BOTTOM_PX,
-  FAB_NARROW_BOTTOM_PX,
-  FAB_SIZE_PX,
   MINIMAP_HEIGHT_PX,
   MINIMAP_WIDTH_PX,
   OVERLAY_INSET_PX,
 } from "../lib/canvas-overlay-grid";
+import type { ChatDrawerMode } from "../lib/chat-drawer-mode";
 import { layoutResearchGraph, type ResearchFlowNodeData } from "../lib/layout-graph";
 import { LOGIC_END_NODE_ID, isLogicEndNode } from "../lib/logic-lanes";
 import { edgeVisualForConnection } from "../lib/node-visuals";
 import { ResearchCanvasDock } from "./research-canvas-dock";
+import { ResearchChatFab } from "./research-chat-fab";
 import { ResearchFleetAvatarStack } from "./research-fleet-avatar-stack";
 import { ResearchGraphNode as ResearchGraphNodeView } from "./research-graph-node";
 import { ResearchLaneBandNodeView } from "./research-lane-band-node";
@@ -77,6 +74,7 @@ function ResearchCanvasInner({
   onOpenDelivery,
   onOpenChat,
   chatOpen = false,
+  chatMode = "empty",
 }: {
   nodes: ResearchGraphNode[];
   edges: ResearchGraphEdge[];
@@ -90,6 +88,8 @@ function ResearchCanvasInner({
   onOpenDelivery?: () => void;
   onOpenChat?: () => void;
   chatOpen?: boolean;
+  /** LRM-992 — FAB four-state mode (empty / loading / running / error). */
+  chatMode?: ChatDrawerMode;
 }) {
   const { t } = useT("research");
   const laid = useMemo(() => layoutResearchGraph(nodes, edges), [nodes, edges]);
@@ -270,25 +270,10 @@ function ResearchCanvasInner({
     [ringNode, pinDetail, onRetry, closeRing],
   );
 
-  // Narrow + detail sheet: hide FAB so it does not sit under the sheet.
+  // Narrow + detail sheet: hide FAB so it does not sit under the sheet / drawer.
   const chatFab =
     !chatOpen && onOpenChat && !(isMobile && showDetail) ? (
-      <Button
-        type="button"
-        size="icon"
-        className="pointer-events-auto absolute z-20 rounded-full shadow-lg"
-        style={{
-          width: FAB_SIZE_PX,
-          height: FAB_SIZE_PX,
-          right: OVERLAY_INSET_PX,
-          bottom: isMobile ? FAB_NARROW_BOTTOM_PX : FAB_ABOVE_MINIMAP_BOTTOM_PX,
-        }}
-        onClick={onOpenChat}
-        aria-label={t(($) => $.panel.chat)}
-        data-testid="research-canvas-chat-fab"
-      >
-        <MessageSquare className="h-5 w-5" />
-      </Button>
+      <ResearchChatFab mode={chatMode} onOpen={onOpenChat} isMobile={isMobile} />
     ) : null;
 
   if (isMobile) {
@@ -537,6 +522,7 @@ export function ResearchCanvas(props: {
   onOpenDelivery?: () => void;
   onOpenChat?: () => void;
   chatOpen?: boolean;
+  chatMode?: ChatDrawerMode;
 }) {
   return (
     <ReactFlowProvider>

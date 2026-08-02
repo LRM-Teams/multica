@@ -134,6 +134,12 @@
       "lead": "리드",
       "pending": "검토 대기",
       "done": "확정"
+    },
+    "chat_mode": {
+      "empty": "대기",
+      "loading": "로딩",
+      "running": "진행 중",
+      "error": "오류"
     }
   },
   "chat": {
@@ -148,7 +154,12 @@
     "streaming_from": "Fleet reply",
     "streaming_wait": "Generating…",
     "stream_settled": "Settled",
-    "stopped_tag": "Stopped"
+    "stopped_tag": "Stopped",
+    "empty_title": "아직 대화가 없습니다",
+    "empty_body": "캔버스가 진행되면 함대 대화와 프로세스 이벤트가 여기에 표시됩니다. 빈 / 로딩 / 진행 중 / 오류 상태를 구분할 수 있습니다.",
+    "loading_body": "함대 채팅 연결 중…",
+    "error_title": "전송 실패",
+    "error_body": "네트워크 또는 서비스 오류입니다. 기존 메시지는 유지되며 다시 시도할 수 있습니다."
   },
   "step_card": {
     "status": {

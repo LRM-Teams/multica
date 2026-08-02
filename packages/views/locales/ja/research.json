@@ -134,6 +134,12 @@
       "lead": "リード",
       "pending": "確認待ち",
       "done": "確定"
+    },
+    "chat_mode": {
+      "empty": "待機",
+      "loading": "読込中",
+      "running": "進行中",
+      "error": "エラー"
     }
   },
   "chat": {
@@ -148,7 +154,12 @@
     "streaming_from": "Fleet reply",
     "streaming_wait": "Generating…",
     "stream_settled": "Settled",
-    "stopped_tag": "Stopped"
+    "stopped_tag": "Stopped",
+    "empty_title": "まだ対話がありません",
+    "empty_body": "キャンバスが進むと、艦隊の対話とプロセスイベントがここに表示されます。空 / 読込 / 進行中 / エラーが区別できます。",
+    "loading_body": "艦隊チャットに接続しています…",
+    "error_title": "送信に失敗しました",
+    "error_body": "ネットワークまたはサービスエラーです。既存メッセージは保持されます。再試行できます。"
   },
   "step_card": {
     "status": {

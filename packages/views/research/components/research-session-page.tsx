@@ -40,6 +40,7 @@ import {
   type FleetStepCardModel,
 } from "../lib/fleet-step-cards";
 import { resolveCanvasBodyMode } from "../lib/canvas-body-mode";
+import { resolveChatDrawerMode } from "../lib/chat-drawer-mode";
 import {
   buildExplorationDimensions,
   buildHumanBoundary,
@@ -59,6 +60,10 @@ import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
 import { ResearchChatCard } from "./research-chat-card";
 import { ResearchChatDrawer } from "./research-chat-drawer";
+import {
+  ResearchChatModeBody,
+  ResearchChatModeChip,
+} from "./research-chat-mode-body";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
@@ -276,6 +281,23 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const runningCards = presenceRunningCards(presence, fleet.members);
   const waitingCard = nextStageWaitingCard(session.current_stage, session.status);
   const showStop = canStop || runningCards.length > 0;
+  // LRM-992 — drawer/FAB four-state mode (align with fleet strip language).
+  // Live stream / stop chrome counts as in-progress activity (not empty stub).
+  const chatHasFeed =
+    chatFeed.length > 0 ||
+    runningCards.length > 0 ||
+    !!waitingCard ||
+    showStop;
+  const chatMode = resolveChatDrawerMode(chatHasFeed ? 1 : 0, session.status, {
+    loading: send.isPending && !chatHasFeed,
+    error: send.isError
+      ? send.error instanceof Error
+        ? send.error.message
+        : t(($) => $.session_page.send_failed)
+      : null,
+  });
+  const chatErrorMessage =
+    send.error instanceof Error ? send.error.message : null;
 
   const postFleetAction = (body: string) => {
     void api
@@ -403,6 +425,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
             onOpenChat={() => setChatOpen(true)}
             chatOpen={chatOpen}
+            chatMode={chatMode}
             onRetry={(node) => {
               // LRM-848 entry → LRM-828 retry path. Until a dedicated BE API lands,
               // ask the fleet lead to re-explore from this dead_end via chat.
@@ -432,8 +455,17 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         </aside>
 
         <ResearchChatDrawer open={chatOpen} onClose={() => setChatOpen(false)}>
-            <div className="flex items-center justify-between border-b px-3 py-2.5">
-              <div className="text-sm font-semibold text-foreground">{t(($) => $.panel.chat)}</div>
+            <div
+              className="flex items-center justify-between gap-2 border-b px-3 py-2.5"
+              data-testid="research-chat-header"
+              data-chat-mode={chatMode}
+            >
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <div className="text-sm font-semibold text-foreground">
+                  {t(($) => $.panel.chat)}
+                </div>
+                <ResearchChatModeChip mode={chatMode} />
+              </div>
               <Button type="button" size="sm" variant="ghost" onClick={() => setChatOpen(false)}>
                 {t(($) => $.panel.hide_chat)}
               </Button>
@@ -525,7 +557,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   ))}
               </div>
             ) : null}
-            <div ref={chatScrollRef} className="flex-1 space-y-2.5 overflow-y-auto p-3">
+            <div
+              ref={chatScrollRef}
+              className="flex-1 space-y-2.5 overflow-y-auto p-3"
+              data-testid="research-chat-feed"
+              data-chat-mode={chatMode}
+            >
               {startedStages.map((stage) => (
                 <ResearchStageChatMarker
                   key={stage}
@@ -533,9 +570,20 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   label={t(($) => $.stage[stage])}
                 />
               ))}
-              {messages.length === 0 && runningCards.length === 0 && !showStop ? (
-                <p className="px-1 text-xs text-muted-foreground">{t(($) => $.chat.empty)}</p>
-              ) : (
+              {chatMode === "empty" || chatMode === "loading" ? (
+                <ResearchChatModeBody mode={chatMode} />
+              ) : null}
+              {chatMode === "error" ? (
+                <ResearchChatModeBody
+                  mode="error"
+                  errorMessage={chatErrorMessage}
+                  onRetry={() => {
+                    if (ui.body.trim()) send.mutate(ui.body.trim());
+                    else void send.reset();
+                  }}
+                />
+              ) : null}
+              {chatMode === "running" || (chatMode === "error" && chatHasFeed) ? (
                 <>
                   {chatFeed.map((item) =>
                     item.kind === "chat" ? (
@@ -594,7 +642,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   ) : null}
                   {showStop ? <ResearchLiveStream sessionId={sessionId} /> : null}
                 </>
-              )}
+              ) : null}
             </div>
             {isPaused ? (
               <output

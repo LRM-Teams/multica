@@ -65,6 +65,10 @@ const (
 	DefaultGrokPersistentIdleTTL         = 15 * time.Minute
 	DefaultPiPersistentIdleTTL           = 15 * time.Minute
 	raftLoopbackNoProxy                  = "127.0.0.1,localhost"
+	// DefaultAgentWorkspaceRetentionInterval: task #96 destroys an archived
+	// agent's .multica/agents/<id> workspace 30 days after deletion — a
+	// day-granularity job needs no faster a cadence than this.
+	DefaultAgentWorkspaceRetentionInterval = 24 * time.Hour
 	// DefaultInboundWatchdog: see inbound_watchdog.go (Raft-aligned 70s).
 )
 
@@ -78,38 +82,41 @@ var DefaultGCArtifactPatterns = []string{"node_modules", ".next", ".turbo"}
 
 // Config holds all daemon configuration.
 type Config struct {
-	ServerBaseURL                 string
-	DaemonID                      string
-	LegacyDaemonIDs               []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
-	DeviceName                    string
-	RuntimeName                   string
-	CLIVersion                    string                // multica CLI version (e.g. "0.1.13")
-	LaunchedBy                    string                // "desktop" when spawned by the Electron app, empty for standalone
-	Profile                       string                // profile name (empty = default)
-	Agents                        map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity, grok
-	WorkspacesRoot                string                // base path for execution envs (default: ~/multica_workspaces)
-	KeepEnvAfterTask              bool                  // preserve env after task for debugging
-	HealthPort                    int                   // local HTTP port for health checks (default: 19514)
-	GCEnabled                     bool                  // enable periodic workspace garbage collection (default: true)
-	GCInterval                    time.Duration         // how often the GC loop runs (default: 1h)
-	GCTTL                         time.Duration         // clean dirs whose issue is done/cancelled and updated_at < now()-TTL (default: 24h)
-	GCOrphanTTL                   time.Duration         // clean orphan dirs with no meta, or dirs whose issue gc-check returns 404, once they exceed this age (default: 72h). The 404 path uses the same TTL — a scoped-down token can't instantly wipe live workspaces.
-	GCArtifactTTL                 time.Duration         // when a task has been completed for at least this long but its issue is still open, drop regenerable artifacts (default: 12h, set 0 to disable)
-	GCArtifactPatterns            []string              // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
-	AutoUpdateEnabled             bool                  // periodically check for a newer CLI release and self-update when idle (default: true, both Multica Cloud and self-host)
-	AutoUpdateConfigSource        string                // resolved source: official_host_default, self_host_default, env_enabled, env_disabled, or cli_disabled
-	AutoUpdateCheckInterval       time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
-	PinnedVersion                 string                // when non-empty, the daemon stays on this version and never auto-upgrades (env: MULTICA_PINNED_VERSION)
-	UpdateObservationPath         string                // daemon-local durable update truth; empty is in-memory only for explicitly constructed test configs
-	SharedSkillsDir               string                // optional global override; when empty each provider uses its own shared root
-	SharedSkillsSyncInterval      time.Duration         // how often to scan and sync SharedSkillsDir
-	MemoryCurationL3ReviewEnabled bool                  // run the local Pi L3 reviewer during daemon-side curation
-	MemoryCurationL3ReviewTimeout time.Duration         // per-agent L3 reviewer timeout
-	MemoryCurationRunTimeout      time.Duration         // wall-clock timeout for one daemon-claimed curation run
-	GrokPersistentIdleTTL         time.Duration         // 0 disables idle chat-session eviction
-	PiPersistentIdleTTL           time.Duration         // 0 disables idle Pi chat-session eviction
-	PollInterval                  time.Duration
-	HeartbeatInterval             time.Duration
+	ServerBaseURL                   string
+	DaemonID                        string
+	LegacyDaemonIDs                 []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
+	DeviceName                      string
+	RuntimeName                     string
+	CLIVersion                      string                // multica CLI version (e.g. "0.1.13")
+	LaunchedBy                      string                // "desktop" when spawned by the Electron app, empty for standalone
+	Profile                         string                // profile name (empty = default)
+	Agents                          map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity, grok
+	WorkspacesRoot                  string                // base path for execution envs (default: ~/multica_workspaces)
+	KeepEnvAfterTask                bool                  // preserve env after task for debugging
+	HealthPort                      int                   // local HTTP port for health checks (default: 19514)
+	GCEnabled                       bool                  // enable periodic workspace garbage collection (default: true)
+	GCInterval                      time.Duration         // how often the GC loop runs (default: 1h)
+	GCTTL                           time.Duration         // clean dirs whose issue is done/cancelled and updated_at < now()-TTL (default: 24h)
+	GCOrphanTTL                     time.Duration         // clean orphan dirs with no meta, or dirs whose issue gc-check returns 404, once they exceed this age (default: 72h). The 404 path uses the same TTL — a scoped-down token can't instantly wipe live workspaces.
+	GCArtifactTTL                   time.Duration         // when a task has been completed for at least this long but its issue is still open, drop regenerable artifacts (default: 12h, set 0 to disable)
+	GCArtifactPatterns              []string              // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
+	AgentWorkspaceRetentionEnabled  bool                  // enable the periodic agent-workspace retention job (task #96, default: true)
+	AgentWorkspaceRetentionInterval time.Duration         // how often the retention job runs (default: 24h)
+	AgentWorkspaceRetentionDryRun   bool                  // when true (default), only log which .multica/agents/<id> dirs WOULD be destroyed — never touches disk. Must be explicitly disabled (MULTICA_AGENT_WORKSPACE_RETENTION_DRY_RUN=false) to perform real deletions; Parker's hard requirement (task #96, 2026-08-02) is that the first real-delete run only happens after a human reviews a dry-run list.
+	AutoUpdateEnabled               bool                  // periodically check for a newer CLI release and self-update when idle (default: true, both Multica Cloud and self-host)
+	AutoUpdateConfigSource          string                // resolved source: official_host_default, self_host_default, env_enabled, env_disabled, or cli_disabled
+	AutoUpdateCheckInterval         time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
+	PinnedVersion                   string                // when non-empty, the daemon stays on this version and never auto-upgrades (env: MULTICA_PINNED_VERSION)
+	UpdateObservationPath           string                // daemon-local durable update truth; empty is in-memory only for explicitly constructed test configs
+	SharedSkillsDir                 string                // optional global override; when empty each provider uses its own shared root
+	SharedSkillsSyncInterval        time.Duration         // how often to scan and sync SharedSkillsDir
+	MemoryCurationL3ReviewEnabled   bool                  // run the local Pi L3 reviewer during daemon-side curation
+	MemoryCurationL3ReviewTimeout   time.Duration         // per-agent L3 reviewer timeout
+	MemoryCurationRunTimeout        time.Duration         // wall-clock timeout for one daemon-claimed curation run
+	GrokPersistentIdleTTL           time.Duration         // 0 disables idle chat-session eviction
+	PiPersistentIdleTTL             time.Duration         // 0 disables idle Pi chat-session eviction
+	PollInterval                    time.Duration
+	HeartbeatInterval               time.Duration
 	// InboundWatchdog is the daemon-ws silence threshold for probe→terminate
 	// reconnect (default 70s). 0 disables. Override: MULTICA_DAEMON_INBOUND_WATCHDOG.
 	InboundWatchdog                time.Duration
@@ -473,6 +480,22 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	}
 	gcArtifactPatterns := patternsFromEnv("MULTICA_GC_ARTIFACT_PATTERNS", DefaultGCArtifactPatterns)
 
+	// Agent workspace retention config (task #96): env > defaults. Dry-run
+	// defaults to true — real deletion is destructive and must be an
+	// explicit opt-in, never a silent default.
+	agentWorkspaceRetentionEnabled := true
+	if v := os.Getenv("MULTICA_AGENT_WORKSPACE_RETENTION_ENABLED"); v == "false" || v == "0" {
+		agentWorkspaceRetentionEnabled = false
+	}
+	agentWorkspaceRetentionInterval, err := durationFromEnv("MULTICA_AGENT_WORKSPACE_RETENTION_INTERVAL", DefaultAgentWorkspaceRetentionInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	agentWorkspaceRetentionDryRun := true
+	if v := os.Getenv("MULTICA_AGENT_WORKSPACE_RETENTION_DRY_RUN"); v == "false" || v == "0" {
+		agentWorkspaceRetentionDryRun = false
+	}
+
 	// Auto-update config: default -> env override -> CLI override.
 	//
 	// Default is opt-in for both Multica Cloud (api.multica.ai) and
@@ -576,44 +599,47 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	}
 
 	return Config{
-		ServerBaseURL:                  serverBaseURL,
-		DaemonID:                       daemonID,
-		LegacyDaemonIDs:                legacyDaemonIDs,
-		DeviceName:                     deviceName,
-		RuntimeName:                    runtimeName,
-		Profile:                        profile,
-		Agents:                         agents,
-		WorkspacesRoot:                 workspacesRoot,
-		KeepEnvAfterTask:               keepEnv,
-		GCEnabled:                      gcEnabled,
-		GCInterval:                     gcInterval,
-		GCTTL:                          gcTTL,
-		GCOrphanTTL:                    gcOrphanTTL,
-		GCArtifactTTL:                  gcArtifactTTL,
-		GCArtifactPatterns:             gcArtifactPatterns,
-		AutoUpdateEnabled:              autoUpdateEnabled,
-		AutoUpdateConfigSource:         autoUpdateConfigSource,
-		AutoUpdateCheckInterval:        autoUpdateInterval,
-		PinnedVersion:                  pinnedVersion,
-		UpdateObservationPath:          updateObservationPath,
-		SharedSkillsDir:                sharedSkillsDir,
-		SharedSkillsSyncInterval:       sharedSkillsInterval,
-		MemoryCurationL3ReviewEnabled:  memoryCurationL3ReviewEnabled,
-		MemoryCurationL3ReviewTimeout:  memoryCurationL3ReviewTimeout,
-		MemoryCurationRunTimeout:       memoryCurationRunTimeout,
-		GrokPersistentIdleTTL:          grokPersistentIdleTTL,
-		PiPersistentIdleTTL:            piPersistentIdleTTL,
-		HealthPort:                     healthPort,
-		PollInterval:                   pollInterval,
-		HeartbeatInterval:              heartbeatInterval,
-		InboundWatchdog:                inboundWatchdog,
-		AgentTimeout:                   agentTimeout,
-		CodexSemanticInactivityTimeout: codexSemanticInactivityTimeout,
-		AgentIdleWatchdog:              agentIdleWatchdog,
-		AgentToolWatchdog:              agentToolWatchdog,
-		ClaudeArgs:                     claudeArgs,
-		CodexArgs:                      codexArgs,
-		CodebuddyArgs:                  codebuddyArgs,
+		ServerBaseURL:                   serverBaseURL,
+		DaemonID:                        daemonID,
+		LegacyDaemonIDs:                 legacyDaemonIDs,
+		DeviceName:                      deviceName,
+		RuntimeName:                     runtimeName,
+		Profile:                         profile,
+		Agents:                          agents,
+		WorkspacesRoot:                  workspacesRoot,
+		KeepEnvAfterTask:                keepEnv,
+		GCEnabled:                       gcEnabled,
+		GCInterval:                      gcInterval,
+		GCTTL:                           gcTTL,
+		GCOrphanTTL:                     gcOrphanTTL,
+		GCArtifactTTL:                   gcArtifactTTL,
+		GCArtifactPatterns:              gcArtifactPatterns,
+		AgentWorkspaceRetentionEnabled:  agentWorkspaceRetentionEnabled,
+		AgentWorkspaceRetentionInterval: agentWorkspaceRetentionInterval,
+		AgentWorkspaceRetentionDryRun:   agentWorkspaceRetentionDryRun,
+		AutoUpdateEnabled:               autoUpdateEnabled,
+		AutoUpdateConfigSource:          autoUpdateConfigSource,
+		AutoUpdateCheckInterval:         autoUpdateInterval,
+		PinnedVersion:                   pinnedVersion,
+		UpdateObservationPath:           updateObservationPath,
+		SharedSkillsDir:                 sharedSkillsDir,
+		SharedSkillsSyncInterval:        sharedSkillsInterval,
+		MemoryCurationL3ReviewEnabled:   memoryCurationL3ReviewEnabled,
+		MemoryCurationL3ReviewTimeout:   memoryCurationL3ReviewTimeout,
+		MemoryCurationRunTimeout:        memoryCurationRunTimeout,
+		GrokPersistentIdleTTL:           grokPersistentIdleTTL,
+		PiPersistentIdleTTL:             piPersistentIdleTTL,
+		HealthPort:                      healthPort,
+		PollInterval:                    pollInterval,
+		HeartbeatInterval:               heartbeatInterval,
+		InboundWatchdog:                 inboundWatchdog,
+		AgentTimeout:                    agentTimeout,
+		CodexSemanticInactivityTimeout:  codexSemanticInactivityTimeout,
+		AgentIdleWatchdog:               agentIdleWatchdog,
+		AgentToolWatchdog:               agentToolWatchdog,
+		ClaudeArgs:                      claudeArgs,
+		CodexArgs:                       codexArgs,
+		CodebuddyArgs:                   codebuddyArgs,
 	}, nil
 }
 

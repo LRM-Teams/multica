@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -738,6 +739,78 @@ func (h *Handler) GetDaemonWorkspaceRepos(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, workspaceReposResponse(workspaceID, ws.Repos, ws.Settings))
+}
+
+// defaultAgentWorkspaceRetentionDays is the PRD-specified default (task
+// #204/#96): an archived agent's on-disk .multica/agents/<id> workspace is
+// eligible for destruction 30 days after archival. Overridable so ops can
+// tune it without a code change, mirroring the daemon-side *_TTL env vars.
+const defaultAgentWorkspaceRetentionDays = 30
+
+func agentWorkspaceRetentionDays() int {
+	raw := strings.TrimSpace(os.Getenv("MULTICA_AGENT_WORKSPACE_RETENTION_DAYS"))
+	if raw == "" {
+		return defaultAgentWorkspaceRetentionDays
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil || days <= 0 {
+		slog.Warn("invalid MULTICA_AGENT_WORKSPACE_RETENTION_DAYS, using default", "value", raw, "default", defaultAgentWorkspaceRetentionDays)
+		return defaultAgentWorkspaceRetentionDays
+	}
+	return days
+}
+
+// CheckAgentWorkspaceRetention answers the daemon-side agent-workspace
+// retention job's (task #96) reconciliation question: "of these agent IDs I
+// found a local .multica/agents/<id> directory for, which are archived long
+// enough ago to destroy?"
+//
+// The retention threshold is server-owned (agentWorkspaceRetentionDays), not
+// caller-supplied — a stale or misconfigured daemon must not be able to talk
+// the server into answering against a threshold it picked itself. The daemon
+// is still required to re-validate locally (path safety, and that the ID
+// being deleted was actually in the batch it just reported) before removing
+// anything; this endpoint only answers the "should this be deleted" question,
+// it never touches the filesystem itself.
+func (h *Handler) CheckAgentWorkspaceRetention(w http.ResponseWriter, r *http.Request) {
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceId"))
+	if !h.requireDaemonWorkspaceAccess(w, r, workspaceID) {
+		return
+	}
+
+	var req struct {
+		AgentIDs []string `json:"agent_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.AgentIDs) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"eligible_agent_ids": []string{}})
+		return
+	}
+	agentUUIDs, ok := parseUUIDSliceOrBadRequest(w, req.AgentIDs, "agent_ids")
+	if !ok {
+		return
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -agentWorkspaceRetentionDays())
+	rows, err := h.Queries.ListAgentIDsArchivedBefore(r.Context(), db.ListAgentIDsArchivedBeforeParams{
+		WorkspaceID: parseUUID(workspaceID),
+		AgentIds:    agentUUIDs,
+		Before:      pgtype.Timestamptz{Time: cutoff, Valid: true},
+	})
+	if err != nil {
+		slog.Warn("agent workspace retention check failed", "workspace_id", workspaceID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to check agent workspace retention")
+		return
+	}
+
+	eligible := make([]string, 0, len(rows))
+	for _, row := range rows {
+		eligible = append(eligible, uuidToString(row.ID))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"eligible_agent_ids": eligible})
 }
 
 // DaemonDeregister marks runtimes as offline when the daemon shuts down.

@@ -72,6 +72,12 @@
     "retry": "重试",
     "canvas_forming_title": "画布组建中",
     "canvas_forming_hint": "调研团正在落子，节点会出现在这里。",
+    "canvas_empty_title": "探索将在此画布展开",
+    "canvas_empty_body": "调研团启动后，目标、探查与弯路会以图的形式生长在这里——不是一块空白灰坑。",
+    "canvas_empty_home": "返回调研主页",
+    "canvas_empty_create": "开始新调研",
+    "canvas_empty_creating": "正在创建…",
+    "canvas_empty_create_goal": "接下来想探索什么？",
     "confirm_failed": "确认调研失败",
     "handoff_failed": "交接失败",
     "send_failed": "消息发送失败"

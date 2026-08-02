@@ -31,6 +31,19 @@ func withFakeRuntimeReleaseSource(t *testing.T, tag string) {
 	t.Cleanup(func() { testHandler.RuntimeReleaseSource = nil })
 }
 
+// materializeUpdateIntentForRuntimeID fetches the runtime row and calls
+// maybeMaterializeUpdateIntent — most of this file's tests only have the ID
+// handy (createUpdateIntentTestRuntime returns a string), but the pin-check
+// added in task #81 needs the full row.
+func materializeUpdateIntentForRuntimeID(t *testing.T, runtimeID string) {
+	t.Helper()
+	rt, err := testHandler.Queries.GetAgentRuntime(context.Background(), parseUUID(runtimeID))
+	if err != nil {
+		t.Fatalf("get runtime for materialize: %v", err)
+	}
+	testHandler.maybeMaterializeUpdateIntent(context.Background(), rt)
+}
+
 func createUpdateIntentTestRuntime(t *testing.T, ownerID string) string {
 	t.Helper()
 	if testPool == nil {
@@ -155,7 +168,7 @@ func TestGetUpdate_QueuedIntentSurfacesMaterializedAttempt(t *testing.T) {
 
 	// Simulate a heartbeat arriving — this is the actual fix: reachability
 	// materializes the intent into a real attempt, no admin re-click needed.
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 
 	// Polling the SAME id InitiateUpdate handed back must now show the real,
 	// delivered attempt — the frontend never needs to learn a new ID.
@@ -216,7 +229,7 @@ func TestMaybeMaterializeUpdateIntent_NoIntentIsNoop(t *testing.T) {
 	withFakeRuntimeReleaseSource(t, "v9.9.9")
 	runtimeID := createUpdateIntentTestRuntime(t, testUserID)
 
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 
 	if attempt, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID); err != nil || attempt != nil {
 		t.Fatalf("expected no attempt without an intent, got %+v err=%v", attempt, err)
@@ -232,7 +245,7 @@ func TestMaybeMaterializeUpdateIntent_DoesNotDoubleCreateWhileAttemptInFlight(t 
 	doInitiateUpdate(t, testUserID, runtimeID)
 
 	// First heartbeat materializes.
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 	first, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
 	if err != nil || first == nil {
 		t.Fatalf("expected a materialized attempt: %+v err=%v", first, err)
@@ -241,7 +254,7 @@ func TestMaybeMaterializeUpdateIntent_DoesNotDoubleCreateWhileAttemptInFlight(t 
 	// A second heartbeat before the attempt resolves must not create another
 	// one — that would violate daemon_runtime_update's one-active-per-runtime
 	// invariant and would be a duplicate delivery to the daemon.
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 	second, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
 	if err != nil || second == nil || second.ID != first.ID {
 		t.Fatalf("expected the same attempt, got first=%+v second=%+v err=%v", first, second, err)
@@ -256,7 +269,7 @@ func TestMaybeMaterializeUpdateIntent_RetriesAfterAttemptFailsOnceBackoffElapses
 	runtimeID := createUpdateIntentTestRuntime(t, testUserID)
 	doInitiateUpdate(t, testUserID, runtimeID)
 
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 	first, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
 	if err != nil || first == nil {
 		t.Fatalf("expected a materialized attempt: %+v err=%v", first, err)
@@ -272,7 +285,7 @@ func TestMaybeMaterializeUpdateIntent_RetriesAfterAttemptFailsOnceBackoffElapses
 	// must NOT immediately materialize a fresh attempt on the same call
 	// (that would defeat the whole point of backoff: a machine heartbeating
 	// every 15s would get hammered exactly as before).
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 	stillFirst, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
 	if err != nil || stillFirst == nil || stillFirst.ID != first.ID {
 		t.Fatalf("must not create a new attempt before backoff elapses, got %+v err=%v", stillFirst, err)
@@ -284,7 +297,7 @@ func TestMaybeMaterializeUpdateIntent_RetriesAfterAttemptFailsOnceBackoffElapses
 
 	// A heartbeat arriving again before the backoff elapses (very plausible
 	// at a 15s interval) must not double-count the same failed attempt.
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 	unchanged, err := testHandler.UpdateIntentStore.Get(context.Background(), runtimeID)
 	if err != nil || unchanged == nil || unchanged.ConsecutiveFailures != 1 {
 		t.Fatalf("re-observing the same failed attempt must not increment again: %+v err=%v", unchanged, err)
@@ -298,7 +311,7 @@ func TestMaybeMaterializeUpdateIntent_RetriesAfterAttemptFailsOnceBackoffElapses
 	`, runtimeID); err != nil {
 		t.Fatalf("simulate elapsed backoff: %v", err)
 	}
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 	second, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
 	if err != nil || second == nil || second.ID == first.ID || second.Status != UpdatePending {
 		t.Fatalf("expected a fresh retried attempt once backoff elapsed, got first=%+v second=%+v err=%v", first, second, err)
@@ -351,7 +364,7 @@ func TestMaybeMaterializeUpdateIntent_GivenUpStopsRetryingAndGetUpdateReflectsIt
 	initiated := decodeUpdateResponse(t, doInitiateUpdate(t, testUserID, runtimeID))
 
 	for i := 0; i < updateIntentMaxConsecutiveFailures; i++ {
-		testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+		materializeUpdateIntentForRuntimeID(t, runtimeID)
 		attempt, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
 		if err != nil || attempt == nil {
 			t.Fatalf("round %d: expected a materialized attempt: %+v err=%v", i, attempt, err)
@@ -362,7 +375,7 @@ func TestMaybeMaterializeUpdateIntent_GivenUpStopsRetryingAndGetUpdateReflectsIt
 		if err := testHandler.UpdateStore.Fail(context.Background(), attempt.ID, "rename failed: Access is denied"); err != nil {
 			t.Fatalf("round %d: fail attempt: %v", i, err)
 		}
-		testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID) // folds the failure in
+		materializeUpdateIntentForRuntimeID(t, runtimeID) // folds the failure in
 		if _, err := testPool.Exec(context.Background(), `
 			UPDATE daemon_runtime_update_intent SET next_retry_at = now() - interval '1 second' WHERE runtime_id = $1
 		`, runtimeID); err != nil {
@@ -377,7 +390,7 @@ func TestMaybeMaterializeUpdateIntent_GivenUpStopsRetryingAndGetUpdateReflectsIt
 
 	// One more heartbeat must not create yet another attempt — the whole
 	// point of giving up is to stop.
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 	final, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
 	if err != nil || final == nil || updateRequestBlocksNewRequest(final.Status) {
 		t.Fatalf("no new attempt should be in flight after giving up: %+v err=%v", final, err)
@@ -419,7 +432,7 @@ func TestInitiateUpdate_AfterGivenUpResetsAndRetriesImmediately(t *testing.T) {
 	doInitiateUpdate(t, testUserID, runtimeID)
 
 	for i := 0; i < updateIntentMaxConsecutiveFailures; i++ {
-		testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+		materializeUpdateIntentForRuntimeID(t, runtimeID)
 		attempt, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
 		if err != nil || attempt == nil {
 			t.Fatalf("round %d: expected a materialized attempt: %+v err=%v", i, attempt, err)
@@ -430,7 +443,7 @@ func TestInitiateUpdate_AfterGivenUpResetsAndRetriesImmediately(t *testing.T) {
 		if err := testHandler.UpdateStore.Fail(context.Background(), attempt.ID, "rename failed"); err != nil {
 			t.Fatalf("round %d: fail attempt: %v", i, err)
 		}
-		testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+		materializeUpdateIntentForRuntimeID(t, runtimeID)
 		if _, err := testPool.Exec(context.Background(), `
 			UPDATE daemon_runtime_update_intent SET next_retry_at = now() - interval '1 second' WHERE runtime_id = $1
 		`, runtimeID); err != nil {
@@ -462,7 +475,7 @@ func TestInitiateUpdate_AfterGivenUpResetsAndRetriesImmediately(t *testing.T) {
 	}
 
 	// And materialization actually resumes — not just the bookkeeping.
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 	fresh, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
 	if err != nil || fresh == nil || fresh.Status != UpdatePending {
 		t.Fatalf("expected a fresh attempt after re-requesting past a given-up intent: %+v err=%v", fresh, err)
@@ -484,7 +497,7 @@ func TestMaybeMaterializeUpdateIntent_ExpiredIntentIsMarkedNotDeleted(t *testing
 		t.Fatalf("back-date expiry: %v", err)
 	}
 
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 
 	if attempt, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID); err != nil || attempt != nil {
 		t.Fatalf("expired intent must not materialize an attempt, got %+v err=%v", attempt, err)
@@ -508,7 +521,7 @@ func TestMaybeMaterializeUpdateIntent_FulfilledIntentIsDeleted(t *testing.T) {
 	runtimeID := createUpdateIntentTestRuntime(t, testUserID)
 	doInitiateUpdate(t, testUserID, runtimeID)
 
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 	attempt, err := testHandler.UpdateStore.LatestForRuntime(context.Background(), runtimeID)
 	if err != nil || attempt == nil {
 		t.Fatalf("expected a materialized attempt: %+v err=%v", attempt, err)
@@ -520,7 +533,7 @@ func TestMaybeMaterializeUpdateIntent_FulfilledIntentIsDeleted(t *testing.T) {
 		t.Fatalf("complete attempt: %v", err)
 	}
 
-	testHandler.maybeMaterializeUpdateIntent(context.Background(), runtimeID)
+	materializeUpdateIntentForRuntimeID(t, runtimeID)
 
 	if intent, err := testHandler.UpdateIntentStore.Get(context.Background(), runtimeID); err != nil || intent != nil {
 		t.Fatalf("fulfilled intent should be deleted, got %+v err=%v", intent, err)

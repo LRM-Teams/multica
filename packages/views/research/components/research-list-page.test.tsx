@@ -302,6 +302,21 @@ describe("ResearchListPage composer hero (LRM-783 / LRM-784 / LRM-906)", () => {
     expect(screen.getByRole("button", { name: enResearch.start })).toBeInTheDocument();
   });
 
+  it("wires hero CTA micro-interaction tokens (LRM-837)", () => {
+    render(<ResearchListPage />);
+    const start = screen.getByTestId("research-create-submit");
+    const params = screen.getByTestId("research-create-params-open");
+    const composer = screen.getByTestId("research-home-composer");
+    expect(start.className).toContain("--motion-duration-moderate");
+    expect(start.className).toContain("focus-visible:ring");
+    expect(start.className).toContain("active:scale");
+    expect(params.className).toContain("--motion-duration-moderate");
+    expect(params.className).toContain("active:scale");
+    expect(composer.className).toContain("--motion-duration-moderate");
+    // Narrow: start is full-width (not hover-dependent layout).
+    expect(start.className).toContain("w-full");
+  });
+
   it("exposes create params opener next to start (LRM-838)", () => {
     render(<ResearchListPage />);
     expect(screen.getByTestId("research-create-params-open")).toBeInTheDocument();

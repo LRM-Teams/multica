@@ -13,9 +13,15 @@ import {
 import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
+import { cn } from "@multica/ui/lib/utils";
 import { AlertCircle, Loader2, SlidersHorizontal, X } from "lucide-react";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
+import {
+  HERO_COMPOSER_CARD_CLASS,
+  HERO_CTA_PRIMARY_CLASS,
+  HERO_CTA_SECONDARY_CLASS,
+} from "../lib/hero-cta-motion";
 import {
   appendCreateParamsToGoal,
   defaultCreateParams,
@@ -286,7 +292,10 @@ export function ResearchListPage() {
       <div ref={composerCardRef}>
         <ResearchHomeHero>
           <div
-            className="overflow-hidden rounded-2xl border bg-card shadow-sm transition-shadow focus-within:border-brand focus-within:shadow-[0_0_0_3px_color-mix(in_oklab,var(--brand)_22%,transparent)]"
+            className={cn(
+              "overflow-hidden rounded-2xl border bg-card shadow-sm",
+              HERO_COMPOSER_CARD_CLASS,
+            )}
             data-testid="research-home-composer"
           >
             {selectedTemplate ? (
@@ -360,7 +369,10 @@ export function ResearchListPage() {
                     setComposer((prev) => ({ ...prev, paramsOpen: true }))
                   }
                   disabled={create.isPending}
-                  className="h-10 w-full shrink-0 rounded-full px-3.5 text-[13px] font-medium sm:h-9 sm:w-auto"
+                  className={cn(
+                    "h-10 w-full shrink-0 rounded-full px-3.5 text-[13px] font-medium sm:h-9 sm:w-auto",
+                    HERO_CTA_SECONDARY_CLASS,
+                  )}
                   data-testid="research-create-params-open"
                   aria-label={t(($) => $.create_params.open_aria)}
                 >
@@ -371,7 +383,10 @@ export function ResearchListPage() {
                   onClick={submitCreate}
                   disabled={create.isPending}
                   data-testid="research-create-submit"
-                  className="h-10 w-full shrink-0 rounded-full bg-brand px-4 text-[13.5px] font-semibold text-brand-foreground hover:bg-brand/90 sm:h-9 sm:w-auto"
+                  className={cn(
+                    "h-10 w-full shrink-0 rounded-full bg-brand px-4 text-[13.5px] font-semibold text-brand-foreground sm:h-9 sm:w-auto",
+                    HERO_CTA_PRIMARY_CLASS,
+                  )}
                 >
                   {create.isPending ? (
                     <>

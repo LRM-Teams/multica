@@ -3437,7 +3437,9 @@ func (q *Queries) RecoverOrphanedTasksForRuntime(ctx context.Context, runtimeID 
 const refreshAgentStatusFromTasks = `-- name: RefreshAgentStatusFromTasks :one
 UPDATE agent AS a
 SET status = CASE
-    WHEN a.provider_blocked_until IS NOT NULL AND a.provider_blocked_until > now() THEN 'blocked'
+    WHEN a.provider_block_detail <> ''
+         AND (a.provider_blocked_until IS NULL OR a.provider_blocked_until > now())
+      THEN 'blocked'
     WHEN EXISTS (
         SELECT 1 FROM agent_inbox_event q
         WHERE q.agent_id = a.id AND q.status = 'draining'

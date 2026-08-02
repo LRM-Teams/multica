@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
 const (
@@ -328,10 +329,11 @@ func runtimeConnectivity(rt db.AgentRuntime, now time.Time) runtimeConnectivityT
 // live daemon asserting the provider-death fact. Mid-turn process_failure
 // never sets this column (different fact; do not invent).
 //
-// providerBlockedUntil is the sticky provider-quota lock (tasks #64/#77).
-// Checked while connectivity is Online so a still-reachable daemon cannot
-// paint "idle"/"working" (or let presence fold to Online) during lockout.
-func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, crashedSince, providerBlockedUntil pgtype.Timestamptz, now time.Time) string {
+// providerBlockDetail / providerBlockedUntil are the sticky provider-quota
+// lock (tasks #64/#77). detail non-empty locks; until NULL means unknown end
+// (still locked). Checked while connectivity is Online so a still-reachable
+// daemon cannot paint "idle"/"working" during lockout.
+func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, crashedSince pgtype.Timestamptz, providerBlockDetail string, providerBlockedUntil pgtype.Timestamptz, now time.Time) string {
 	// Checked before connectivity: a machine coming back from a crash sets
 	// starting_since before it has refreshed last_seen_at, so connectivity
 	// would otherwise still read Dead/Stale from before the crash — exactly
@@ -353,7 +355,7 @@ func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, crashedSi
 	if crashedSince.Valid {
 		return agentDisplayStatusCrashed
 	}
-	if providerBlockedUntil.Valid && providerBlockedUntil.Time.After(now) {
+	if taskfailure.ProviderLockActive(providerBlockDetail, providerBlockedUntil.Time, providerBlockedUntil.Valid, now) {
 		return agentDisplayStatusBlocked
 	}
 	if agentStatus == "working" {

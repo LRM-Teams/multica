@@ -99,31 +99,27 @@ func Classify(rawError string) Reason {
 	):
 		return ReasonAgentProviderAuthOrAccess
 
-	// 4. Quota / billing. 402 / insufficient balance / monthly usage
-	//    limit / credits exhausted.
-	case containsAny(lower,
-		"402",
-		"insufficient_balance",
-		"balance is too low",
-		"monthly usage limit",
-		"usage limit",
-		"you've hit your limit",
-		// Curly apostrophe variant: providers and copy-pasted error
-		// strings sometimes use U+2019 instead of ASCII '. SQL ILIKE
-		// would not match the curly form either, so this is a small
-		// in-flight improvement on top of the SQL classifier.
-		"you\u2019ve hit your limit",
-		"credits",
-		"quota",
-		// Chinese provider copy (Cursor/国内网关 code 1310). Must land in
-		// quota BEFORE the bare "429" capacity rule — otherwise a hard
-		// multi-day lock is mislabeled transient and stays retryable
-		// (tasks #64/#77 specimen: jhp-前端工程师).
-		"使用上限",
-		`"code":"1310"`,
-		`"code": "1310"`,
-		"code\":1310",
-	):
+	// 4. Quota / billing. Prefer structured code 1310 (Cursor/国内网关)
+	//    over free-text — copy changes silently; code is the stable signal
+	//    (Parker #64). Chinese「使用上限」is supplement when code is absent.
+	//    Must land BEFORE the bare "429" capacity rule.
+	case HasProviderQuotaCode1310(trimmed),
+		containsAny(lower,
+			"402",
+			"insufficient_balance",
+			"balance is too low",
+			"monthly usage limit",
+			"usage limit",
+			"you've hit your limit",
+			// Curly apostrophe variant: providers and copy-pasted error
+			// strings sometimes use U+2019 instead of ASCII '. SQL ILIKE
+			// would not match the curly form either, so this is a small
+			// in-flight improvement on top of the SQL classifier.
+			"you\u2019ve hit your limit",
+			"credits",
+			"quota",
+			"使用上限",
+		):
 		return ReasonAgentProviderQuotaLimit
 
 	// 5. Capacity / rate limit. 429 / 529 / overloaded / rate limit.

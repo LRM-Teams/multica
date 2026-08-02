@@ -597,11 +597,11 @@
       },
       "full_reset_restart": {
         "title": "完全重置并重启",
-        "scope": "清除会话并永久删除工作区文件（MEMORY.md、notes/），然后重启。身份、配置、聊天历史和 Issue 保留。这不是删除智能体。"
+        "scope": "清除会话并永久删除工作区文件（MEMORY.md、notes/），然后重启。这不是删除智能体。"
       }
     },
     "after_current_run": "将在当前任务完成后执行。",
-    "full_reset_confirm": "输入该智能体的标识 {{handle}} 以确认。工作区文件（MEMORY.md、notes/）将被永久删除；身份、配置、聊天历史和 Issue 保留。",
+    "full_reset_confirm": "此操作不可撤销。输入该智能体的标识 {{handle}} 以确认。",
     "full_reset_confirm_placeholder": "输入 {{handle}}",
     "disabled_reason": {
       "agent_active": "等当前任务完成后再试。",

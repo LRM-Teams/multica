@@ -24,6 +24,7 @@ import { RuntimePicker } from "../../agents/components/inspector/runtime-picker"
 import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
 import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
 import { AgentProfileActions } from "../../agents/components/agent-profile-actions";
+import { AgentLifecycleStatusLine } from "../../agents/components/agent-lifecycle-status-line";
 import { InlineFieldEditor } from "../../agents/components/inline-field-editor";
 import { useUpdateAgent } from "../../agents/hooks/use-update-agent";
 import { useRuntimeHealthStateLabel } from "../../runtimes/components/shared";
@@ -199,6 +200,12 @@ export function AgentSidePanel({
               <span className="ml-2">{t(($) => $.row.archived)}</span>
             ) : null}
           </p>
+          {!agent.archived_at ? (
+            <AgentLifecycleStatusLine
+              status={agent.runtime_display_status}
+              className="mt-0.5"
+            />
+          ) : null}
         </div>
       </div>
 

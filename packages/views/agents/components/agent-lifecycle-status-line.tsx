@@ -22,9 +22,10 @@ export function AgentLifecycleStatusLine({
 }) {
   const { t } = useT("agents");
   // Denser surfaces paint Stopped / Starting / Crashed / Disconnected only.
-  // idle/working → null from the mapper; offline / missing fall back to the
-  // mapper's "offline" visual, but that word belongs to the LRM-248 avatar
-  // badge — never restate Online/Offline as name-row text here.
+  // idle/working → null from the mapper. offline / missing also map to an
+  // offline visual in ①, but we intentionally do NOT render it here — the
+  // LRM-248 avatar badge already says Online/Offline; a second "Offline"
+  // word is duplicate copy (Frank / Iris / Parker). Do not "fix" this.
   if (
     status !== "starting" &&
     status !== "stopped" &&

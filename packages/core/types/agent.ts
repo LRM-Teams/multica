@@ -162,6 +162,15 @@ export interface RuntimeDevice {
    */
   pinned_version?: string | null;
   last_seen_at: string | null;
+  /**
+   * Task #58 — physical machine (daemon) connectivity, independent of this
+   * runtime's own `status` / `last_seen_at`. Present on servers that shipped
+   * #1696; omitted on older responses. Machine-level surfaces must prefer
+   * these over aggregating runtime heartbeats.
+   */
+  computer_connected?: boolean;
+  /** ISO timestamp of the daemon's own heartbeat; null/absent when never seen. */
+  daemon_last_seen_at?: string | null;
   created_at: string;
   updated_at: string;
 }

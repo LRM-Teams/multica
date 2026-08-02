@@ -103,6 +103,11 @@ export {
   channelGoalOptions,
   channelGoalProcessesOptions,
   channelGoalProcessOptions,
+  channelGoalSubgoalsOptions,
   useCreateChannelGoal,
   useUpdateChannelGoal,
+  useCreateChannelGoalSubgoal,
+  useUpdateChannelGoalSubgoal,
+  useResolveChannelGoalSubgoal,
+  useClearChannelGoalSubgoalWaitingOn,
 } from "./goal";

@@ -426,6 +426,16 @@ export type {
   ChannelGoalProcessEnvelope,
   ChannelGoalProcessListEnvelope,
   UpsertChannelGoalProcessRequest,
+  ChannelGoalSubgoalStatus,
+  ChannelGoalSubgoalActor,
+  ChannelGoalSubgoalWaitingOn,
+  ChannelGoalSubgoal,
+  ChannelGoalSubgoalListEnvelope,
+  ChannelGoalSubgoalEnvelope,
+  CreateChannelGoalSubgoalRequest,
+  UpdateChannelGoalSubgoalRequest,
+  ResolveChannelGoalSubgoalRequest,
+  ClearChannelGoalSubgoalWaitingOnRequest,
 } from "./channel";
 
 export type {

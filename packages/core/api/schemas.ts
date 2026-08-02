@@ -105,6 +105,56 @@ export const ChannelGoalProcessListEnvelopeSchema = z.object({
   processes: z.array(ChannelGoalProcessMarkdownSchema).default([]),
 }).loose();
 
+export const ChannelGoalSubgoalActorSchema = z.object({
+  type: z.enum(["agent", "member"]),
+  id: z.string(),
+}).loose();
+
+export const ChannelGoalSubgoalWaitingOnSchema = z.object({
+  kind: z.enum(["member", "issue", "pr", "lock", "external"]),
+  target_id: z.string().optional(),
+  note: z.string().optional(),
+}).loose();
+
+export const ChannelGoalSubgoalSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  channel_id: z.string().default(""),
+  goal_id: z.string().default(""),
+  title: z.string().default(""),
+  purpose: z.string().default(""),
+  completion_boundary: z.string().default(""),
+  brief: z.string().default(""),
+  current_conclusion: z.string().default(""),
+  status: z.enum(["captured", "in_progress", "waiting", "resolved", "cancelled"]).default("captured"),
+  version: z.number().default(0),
+  responsible_type: z.string().default(""),
+  responsible_id: z.string().default(""),
+  participants: z.array(ChannelGoalSubgoalActorSchema).default([]),
+  depends_on: z.array(z.string()).default([]),
+  waiting_on: ChannelGoalSubgoalWaitingOnSchema.nullable().default(null),
+  artifact_refs: z.array(z.string()).default([]),
+  activity_delta: z.array(z.string()).default([]),
+  created_by_type: z.string().default(""),
+  created_by_id: z.string().default(""),
+  updated_by_type: z.string().default(""),
+  updated_by_id: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+  resolved_at: z.string().optional(),
+}).loose();
+
+export const ChannelGoalSubgoalListEnvelopeSchema = z.object({
+  subgoals: z.array(ChannelGoalSubgoalSchema).default([]),
+}).loose();
+
+export const ChannelGoalSubgoalEnvelopeSchema = z.object({
+  subgoal: ChannelGoalSubgoalSchema.nullable().default(null),
+}).loose();
+
+export const EMPTY_CHANNEL_GOAL_SUBGOAL_LIST = { subgoals: [] };
+
+
 export interface AppConfigResponse {
   cdn_domain: string;
   allow_signup: boolean;

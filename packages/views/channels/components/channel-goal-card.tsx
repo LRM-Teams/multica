@@ -10,6 +10,7 @@ import {
   FileText,
   Flag,
   ListChecks,
+  ListTodo,
   Pause,
   Pencil,
   Play,
@@ -19,6 +20,7 @@ import type { ChannelGoal, UpdateChannelGoalRequest } from "@multica/core/types"
 import {
   channelGoalOptions,
   channelGoalProcessesOptions,
+  channelGoalSubgoalsOptions,
   channelMemberRole,
   channelMembersOptions,
   useCreateChannelGoal,
@@ -54,6 +56,8 @@ import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n";
 import { GOAL_PROCESS_PANEL_ID, GoalProcessPanel } from "./goal-process-panel";
+import { GoalSubgoalPanel } from "./goal-subgoal-panel";
+import { countOpenSubgoals, GOAL_SUBGOAL_PANEL_ID } from "./goal-subgoal-utils";
 
 interface ChannelGoalCardProps {
   channelId: string;
@@ -242,6 +246,10 @@ export function ChannelGoalCard({
     ...channelGoalProcessesOptions(channelId),
     enabled: !!goal,
   });
+  const { data: subgoalsData } = useQuery({
+    ...channelGoalSubgoalsOptions(channelId),
+    enabled: !!goal,
+  });
   const managers = useMemo(
     () =>
       members.filter(
@@ -250,8 +258,10 @@ export function ChannelGoalCard({
     [members],
   );
   const [processOpen, setProcessOpen] = useState(false);
+  const [subgoalsOpen, setSubgoalsOpen] = useState(false);
   const hasProcessUpdates =
     !processOpen && (processesData?.processes.some((doc) => doc.content.trim()) ?? false);
+  const openSubgoalCount = countOpenSubgoals(subgoalsData?.subgoals ?? []);
   const createGoal = useCreateChannelGoal(channelId);
   const updateGoal = useUpdateChannelGoal(channelId);
   const [ui, setUI] = useReducer(mergeState<GoalCardUIState>, {
@@ -338,7 +348,12 @@ export function ChannelGoalCard({
 
   const completed = new Set(goal.completed_criteria);
   const allCompleted = goal.success_criteria.every((criterion) => completed.has(criterion));
-  const canComplete = allCompleted && goal.evidence_refs.length > 0;
+  const canComplete =
+    allCompleted && goal.evidence_refs.length > 0 && openSubgoalCount === 0;
+  const completeDisabledReason =
+    openSubgoalCount > 0
+      ? t(($) => $.goal.subgoals_complete_blocked, { count: openSubgoalCount })
+      : t(($) => $.goal.complete_disabled);
   return (
     <>
       <section className={cn("shrink-0 border-b border-border/50 bg-primary/[0.035]", goal.status === "paused" && "opacity-75")} data-testid="channel-goal-card">
@@ -355,10 +370,35 @@ export function ChannelGoalCard({
           </button>
           <button
             type="button"
+            data-testid="channel-goal-subgoals-entry"
+            aria-expanded={subgoalsOpen}
+            aria-controls={GOAL_SUBGOAL_PANEL_ID}
+            onClick={() => {
+              setSubgoalsOpen((open) => !open);
+              if (!subgoalsOpen) setProcessOpen(false);
+            }}
+            className={cn(
+              "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold transition-colors",
+              subgoalsOpen
+                ? "border-brand/45 bg-brand-soft text-brand"
+                : "border-blue-300 bg-background text-blue-700 hover:bg-blue-50",
+            )}
+          >
+            <ListTodo className="size-3.5" />
+            {isMobile ? null : <span>{openSubgoalCount > 0 ? t(($) => $.goal.subgoals_open) : t(($) => $.goal.subgoals_none_chip)}</span>}
+            {openSubgoalCount > 0 ? (
+              <span className="rounded-full bg-brand px-1.5 text-[10px] font-bold text-white">{openSubgoalCount}</span>
+            ) : null}
+          </button>
+          <button
+            type="button"
             data-testid="channel-goal-process-entry"
             aria-expanded={processOpen}
             aria-controls={GOAL_PROCESS_PANEL_ID}
-            onClick={() => setProcessOpen((open) => !open)}
+            onClick={() => {
+              setProcessOpen((open) => !open);
+              if (!processOpen) setSubgoalsOpen(false);
+            }}
             className={cn(
               "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-input px-2.5 text-xs font-semibold transition-colors",
               processOpen
@@ -417,6 +457,15 @@ export function ChannelGoalCard({
             onClose={() => setProcessOpen(false)}
           />
         ) : null}
+        {subgoalsOpen ? (
+          <GoalSubgoalPanel
+            key={`subgoals-${goal.id}`}
+            channelId={channelId}
+            canManage={canManage && !archived}
+            asSheet={isMobile}
+            onClose={() => setSubgoalsOpen(false)}
+          />
+        ) : null}
         {expanded ? (
           <div className="space-y-3 border-t border-border/40 px-4 py-3 text-sm">
             <p className="text-muted-foreground">{goal.objective}</p>
@@ -446,9 +495,14 @@ export function ChannelGoalCard({
                   {goal.status === "paused" ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
                   {goal.status === "paused" ? t(($) => $.goal.resume) : t(($) => $.goal.pause)}
                 </Button>
-                <Button size="sm" className="gap-1.5" disabled={!canComplete || updateGoal.isPending} title={!canComplete ? t(($) => $.goal.complete_disabled) : undefined} onClick={() => setUI({ confirmAction: "complete" })}>
+                <Button size="sm" className="gap-1.5" disabled={!canComplete || updateGoal.isPending} title={!canComplete ? completeDisabledReason : undefined} onClick={() => setUI({ confirmAction: "complete" })}>
                   <CheckCircle2 className="size-3.5" />{t(($) => $.goal.complete)}
                 </Button>
+                {openSubgoalCount > 0 ? (
+                  <p className="basis-full text-xs text-muted-foreground">
+                    {t(($) => $.goal.subgoals_complete_blocked, { count: openSubgoalCount })}
+                  </p>
+                ) : null}
                 <Button size="sm" variant="ghost" className="gap-1.5 text-destructive hover:text-destructive" onClick={() => setUI({ confirmAction: "cancel" })}>
                   <Ban className="size-3.5" />{t(($) => $.goal.cancel_goal)}
                 </Button>

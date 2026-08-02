@@ -154,6 +154,12 @@ import type {
   UpdateChannelGoalRequest,
   ChannelGoalProcessEnvelope,
   ChannelGoalProcessListEnvelope,
+  ChannelGoalSubgoalListEnvelope,
+  ChannelGoalSubgoalEnvelope,
+  CreateChannelGoalSubgoalRequest,
+  UpdateChannelGoalSubgoalRequest,
+  ResolveChannelGoalSubgoalRequest,
+  ClearChannelGoalSubgoalWaitingOnRequest,
   CancelTaskResponse,
   WorkspaceSearchResponse,
   WorkspaceSearchScope,
@@ -304,6 +310,9 @@ import {
   ChannelGoalEnvelopeSchema,
   ChannelGoalProcessEnvelopeSchema,
   ChannelGoalProcessListEnvelopeSchema,
+  ChannelGoalSubgoalListEnvelopeSchema,
+  ChannelGoalSubgoalEnvelopeSchema,
+  EMPTY_CHANNEL_GOAL_SUBGOAL_LIST,
   ChannelMessageSearchResponseSchema,
   WorkspaceSearchResponseSchema,
   EMPTY_CHANNEL_MESSAGES_PAGE,
@@ -3821,6 +3830,68 @@ export class ApiClient {
     );
     return parseWithFallback(raw, ChannelGoalProcessEnvelopeSchema, { process: null }, {
       endpoint: "GET /api/channels/:id/goal/process/:agentId",
+    });
+  }
+
+  async listChannelGoalSubgoals(channelId: string): Promise<ChannelGoalSubgoalListEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal/subgoals`);
+    return parseWithFallback(raw, ChannelGoalSubgoalListEnvelopeSchema, EMPTY_CHANNEL_GOAL_SUBGOAL_LIST, {
+      endpoint: "GET /api/channels/:id/goal/subgoals",
+    });
+  }
+
+  async createChannelGoalSubgoal(
+    channelId: string,
+    input: CreateChannelGoalSubgoalRequest,
+  ): Promise<ChannelGoalSubgoalEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal/subgoals`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return parseWithFallback(raw, ChannelGoalSubgoalEnvelopeSchema, { subgoal: null }, {
+      endpoint: "POST /api/channels/:id/goal/subgoals",
+    });
+  }
+
+  async updateChannelGoalSubgoal(
+    channelId: string,
+    subgoalId: string,
+    input: UpdateChannelGoalSubgoalRequest,
+  ): Promise<ChannelGoalSubgoalEnvelope> {
+    const raw = await this.fetch<unknown>(
+      `/api/channels/${channelId}/goal/subgoals/${encodeURIComponent(subgoalId)}`,
+      { method: "PATCH", body: JSON.stringify(input) },
+    );
+    return parseWithFallback(raw, ChannelGoalSubgoalEnvelopeSchema, { subgoal: null }, {
+      endpoint: "PATCH /api/channels/:id/goal/subgoals/:subgoalId",
+    });
+  }
+
+  async resolveChannelGoalSubgoal(
+    channelId: string,
+    subgoalId: string,
+    input: ResolveChannelGoalSubgoalRequest,
+  ): Promise<ChannelGoalSubgoalEnvelope> {
+    const raw = await this.fetch<unknown>(
+      `/api/channels/${channelId}/goal/subgoals/${encodeURIComponent(subgoalId)}/resolve`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    return parseWithFallback(raw, ChannelGoalSubgoalEnvelopeSchema, { subgoal: null }, {
+      endpoint: "POST /api/channels/:id/goal/subgoals/:subgoalId/resolve",
+    });
+  }
+
+  async clearChannelGoalSubgoalWaitingOn(
+    channelId: string,
+    subgoalId: string,
+    input: ClearChannelGoalSubgoalWaitingOnRequest,
+  ): Promise<ChannelGoalSubgoalEnvelope> {
+    const raw = await this.fetch<unknown>(
+      `/api/channels/${channelId}/goal/subgoals/${encodeURIComponent(subgoalId)}/waiting-on/clear`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+    return parseWithFallback(raw, ChannelGoalSubgoalEnvelopeSchema, { subgoal: null }, {
+      endpoint: "POST /api/channels/:id/goal/subgoals/:subgoalId/waiting-on/clear",
     });
   }
 

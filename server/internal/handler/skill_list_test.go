@@ -130,9 +130,13 @@ func TestGetSkill_MalformedUUIDReturns400(t *testing.T) {
 // insertHandlerTestSkill writes a skill row directly via SQL and registers a
 // cleanup hook. We bypass the create handler to keep the test focused on the
 // list/detail wire shape and to make it easy to inject a large body.
+//
+// randomID() breaks the name tie: without it, namePrefix+t.Name() alone
+// collides with a leftover row from any prior interrupted run of the same
+// test (task #86, same shape as task #78/#1807's insertSkillPromoteWorkspaceMember).
 func insertHandlerTestSkill(t *testing.T, namePrefix, content string) string {
 	t.Helper()
-	name := namePrefix + "-" + t.Name()
+	name := namePrefix + "-" + t.Name() + "-" + randomID()
 	var id string
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO skill (workspace_id, name, description, content, config, created_by)

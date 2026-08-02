@@ -170,25 +170,7 @@ func TestAgentAttachmentUploaderFallbackOnlyWhenUnbound(t *testing.T) {
 	}
 
 	// Bind channel_id without membership → must NOT fall back to uploader privilege.
-	var chID string
-	err = testPool.QueryRow(context.Background(), `
-		INSERT INTO channel (workspace_id, name, kind, created_by)
-		VALUES ($1, $2, 'group', (SELECT owner_id FROM agent WHERE id = $3 LIMIT 1))
-		RETURNING id::text`, ws, "bind-deny-"+t.Name(), agentUUID).Scan(&chID)
-	if err != nil {
-		// created_by may need a user — try workspace member
-		err = testPool.QueryRow(context.Background(), `
-			INSERT INTO channel (workspace_id, name, kind, created_by)
-			SELECT $1, $2, 'group', m.user_id FROM member m WHERE m.workspace_id = $1 LIMIT 1
-			RETURNING id::text`, ws, "bind-deny-"+t.Name()).Scan(&chID)
-	}
-	if err != nil {
-		t.Fatalf("create channel: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_member WHERE channel_id = $1`, parseUUID(chID))
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, parseUUID(chID))
-	})
+	chID := insertAgentSurfaceBindDenyChannel(t, testWorkspaceID, agentID)
 	_, err = testPool.Exec(context.Background(), `
 		UPDATE attachment SET channel_id = $1 WHERE id = $2`, parseUUID(chID), attUUID)
 	if err != nil {
@@ -202,6 +184,39 @@ func TestAgentAttachmentUploaderFallbackOnlyWhenUnbound(t *testing.T) {
 	if testHandler.agentAttachmentVisible(context.Background(), ws, agentUUID, attUUID) {
 		t.Fatal("after bind without membership, uploader fallback must not grant visibility")
 	}
+}
+
+// insertAgentSurfaceBindDenyChannel creates a group channel not owned by the
+// given agent (used to test that binding an attachment to a channel the
+// uploader isn't a member of does not fall back to uploader privilege).
+// randomID() breaks the name tie: without it, "bind-deny-"+t.Name() alone
+// collides with a leftover row from any prior interrupted run of the same
+// test (task #86, same shape as task #78/#1807's insertSkillPromoteWorkspaceMember).
+func insertAgentSurfaceBindDenyChannel(t *testing.T, workspaceID, agentID string) string {
+	t.Helper()
+	ws := parseUUID(workspaceID)
+	agentUUID := parseUUID(agentID)
+	name := "bind-deny-" + t.Name() + "-" + randomID()
+	var chID string
+	err := testPool.QueryRow(context.Background(), `
+		INSERT INTO channel (workspace_id, name, kind, created_by)
+		VALUES ($1, $2, 'group', (SELECT owner_id FROM agent WHERE id = $3 LIMIT 1))
+		RETURNING id::text`, ws, name, agentUUID).Scan(&chID)
+	if err != nil {
+		// created_by may need a user — try workspace member
+		err = testPool.QueryRow(context.Background(), `
+			INSERT INTO channel (workspace_id, name, kind, created_by)
+			SELECT $1, $2, 'group', m.user_id FROM member m WHERE m.workspace_id = $1 LIMIT 1
+			RETURNING id::text`, ws, name).Scan(&chID)
+	}
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_member WHERE channel_id = $1`, parseUUID(chID))
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel WHERE id = $1`, parseUUID(chID))
+	})
+	return chID
 }
 
 func TestRejectAgentOnHumanAPIMiddleware(t *testing.T) {

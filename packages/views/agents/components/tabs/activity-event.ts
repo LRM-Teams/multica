@@ -55,6 +55,7 @@ export type ActivityLabelKey =
   | "completed"
   | "working"
   | "idle"
+  | "restarted"
   | "disconnected"
   | "failed"
   | "waiting"
@@ -120,6 +121,7 @@ export const ACTIVITY_LABEL_EN: Record<ActivityLabelKey, string> = {
   completed: "Completed",
   working: "Working",
   idle: "Idle",
+  restarted: "Restarted",
   disconnected: "Disconnected",
   failed: "Failed",
   waiting: "Waiting",
@@ -297,6 +299,11 @@ export function isNarrativeActivityEvent(event: ActivityEvent): boolean {
         // exists in the stream for the header/hover latest-state projection; we
         // just don't give it its own timeline row.
         (event.detail_kind === "agent_status_changed" && event.status !== "working") ||
+        // User-initiated lifecycle success (Parker 2026-08-02 / Frank: restart
+        // must leave a visible Activity row). BE event_type
+        // agent_lifecycle_succeeded — not the diagnostic_only restarted_by_user
+        // kill path (#62).
+        event.detail_kind === "agent_lifecycle_succeeded" ||
         event.detail_kind.includes("subagent")
       );
     default:
@@ -693,6 +700,11 @@ export function activityPresentation(event: ActivityEvent): ActivityPresentation
         return event.status === "idle"
           ? { labelKey: "idle", tone: "neutral" }
           : { labelKey: "working", tone: "active" };
+      }
+      if (event.detail_kind === "agent_lifecycle_succeeded") {
+        // Positive business event after restart/reset completes — label only,
+        // no "Working · Restarted" subtext noise.
+        return { labelKey: "restarted", tone: "neutral" };
       }
       if (event.detail_kind.includes("subagent")) {
         // Prefer the daemon's own subagent detail text; fall back to a fixed label.

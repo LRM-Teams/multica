@@ -197,7 +197,8 @@ func customActivityEventIsNarrative(eventType, reasonCode string) bool {
 		"reminder_snoozed",
 		"reminder_updated",
 		"reminder_cancelled",
-		"reminder_fired":
+		"reminder_fired",
+		agentLifecycleSucceededActivityEventType:
 		return true
 	default:
 		return false

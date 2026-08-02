@@ -33,6 +33,13 @@ const (
 
 	agentLifecycleImmediate       = "immediate"
 	agentLifecycleAfterCurrentRun = "after_current_run"
+
+	// agentLifecycleSucceededActivityEventType is the single user-facing
+	// Activity timeline row written when a lifecycle op finishes successfully
+	// (Parker 2026-08-02: Frank wants "I clicked restart" visible; only the
+	// success fact — not a running+succeeded pair). Must stay on the
+	// /activity/events allowlist and FE isNarrativeActivityEvent allowlist.
+	agentLifecycleSucceededActivityEventType = "agent_lifecycle_succeeded"
 )
 
 type AgentLifecycleOperation struct {
@@ -214,18 +221,10 @@ func (h *Handler) CreateAgentLifecycleOperation(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	insertAgentActivityEvent(
-		r.Context(), tx, lockedAgent.WorkspaceID, lockedAgent.ID, runtime.ID, pgtype.UUID{},
-		activityKindSystem, "agent_lifecycle_"+status, "info",
-		"agent", lockedAgent.ID, "",
-		"", "Agent lifecycle operation "+status,
-		map[string]any{
-			"operation_id":  op.ID,
-			"actor_user_id": requestUserID(r),
-			"action_kind":   string(req.ActionKind),
-			"status":        status,
-		},
-	)
+	// Do not write a create-time Activity row. /activity/events excludes
+	// event_kind=system, and a "running" flash for a ~seconds restart is
+	// noise (Parker: one success row only). Success is recorded in
+	// ReportAgentLifecycleOperationResult.
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create agent lifecycle operation")
 		return

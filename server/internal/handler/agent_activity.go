@@ -732,7 +732,8 @@ func (h *Handler) queryAgentActivityEventRows(ctx context.Context, reqCtx agentA
 		          'reminder_snoozed',
 		          'reminder_updated',
 		          'reminder_cancelled',
-		          'reminder_fired'
+		          'reminder_fired',
+		          'agent_lifecycle_succeeded'
 		        )
 		        OR (
 		          aae.event_type IN ('radar_action_executed', 'radar_action_failed')
@@ -1846,6 +1847,8 @@ func agentActivityDisplayLabelKey(row agentActivityRawRow, detailKind string, to
 				return "idle"
 			}
 			return "working"
+		case agentLifecycleSucceededActivityEventType:
+			return "restarted"
 		case "radar_action_failed":
 			return "failed"
 		case "radar_action_executed":
@@ -1975,6 +1978,7 @@ var agentActivityDisplayLabels = map[string]string{
 	"radar_executed":         "Radar",
 	"working":                "Working",
 	"idle":                   "Idle",
+	"restarted":              "Restarted",
 	"failed":                 "Failed",
 	"waiting":                "Waiting",
 	"cancelled":              "Cancelled",

@@ -448,6 +448,21 @@ describe("agent status transitions — Working ↔ Idle rows (#411/#525)", () =>
     expect(isNarrativeActivityEvent(statusEvent("working"))).toBe(false);
   });
 
+  it("keeps lifecycle success (Restarted) as a narrative timeline row", () => {
+    const restarted: ActivityEvent = {
+      ...evtBase("custom"),
+      id: "lifecycle-succeeded",
+      detail_kind: "agent_lifecycle_succeeded",
+      text: "Restarted",
+    } as ActivityEvent;
+    expect(isNarrativeActivityEvent(restarted)).toBe(true);
+    expect(activityPresentation(restarted)).toMatchObject({
+      labelKey: "restarted",
+      tone: "neutral",
+    });
+    expect(activityPresentation(restarted).subtext).toBeUndefined();
+  });
+
   it("labels working as active and idle as a settled neutral row", () => {
     expect(activityPresentation(statusEvent("working"))).toMatchObject({
       labelKey: "working",

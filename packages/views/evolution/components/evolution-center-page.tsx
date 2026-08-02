@@ -1562,13 +1562,3 @@ function InsightLine({ icon: Icon, text }: { icon: typeof CheckCircle2; text: st
 function EmptyState({ text }: { text: string }) {
   return <div className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">{text}</div>;
 }
-
-function LeaderboardSkeleton() {
-  return (
-    <div className="space-y-3">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <Skeleton key={index} className="h-24 rounded-2xl" />
-      ))}
-    </div>
-  );
-}

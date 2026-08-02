@@ -5,7 +5,7 @@ import { Link2, ChevronLeft } from "lucide-react";
 import type { Agent, EvolutionReviewSubmission, EvolutionUnitMetric } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Badge } from "@multica/ui/components/ui/badge";
-import { Button } from "@multica/ui/components/ui/button";
+import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components/ui/card";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -511,16 +511,20 @@ function NodeDetailCard({
         </dl>
         <div className="space-y-2">
           {agentPath ? (
-            <Button asChild variant="secondary" className="h-auto w-full justify-start px-3 py-2">
-              <AppLink href={agentPath}>
-                <span className="flex flex-col items-start gap-0.5 text-left">
-                  <span className="text-sm font-medium">{copy("evidenceOpenAgent")}</span>
-                  <span className="text-[11px] font-normal text-muted-foreground">
-                    {copy("evidenceOpenAgentHint")}
-                  </span>
+            <AppLink
+              href={agentPath}
+              className={buttonVariants({
+                variant: "secondary",
+                className: "h-auto w-full justify-start px-3 py-2",
+              })}
+            >
+              <span className="flex flex-col items-start gap-0.5 text-left">
+                <span className="text-sm font-medium">{copy("evidenceOpenAgent")}</span>
+                <span className="text-[11px] font-normal text-muted-foreground">
+                  {copy("evidenceOpenAgentHint")}
                 </span>
-              </AppLink>
-            </Button>
+              </span>
+            </AppLink>
           ) : null}
           {node.submissionId ? (
             <div className="rounded-xl border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">

@@ -1,3 +1,17 @@
+-- Remap any rows using this migration's new values BEFORE narrowing the
+-- CHECK constraints back down, mirroring migration 163's down.sql pattern.
+-- Without this, ADD CONSTRAINT fails outright the moment any real
+-- workspace_file/file row exists (which happens on the first agent file
+-- read/write after this migration ships) — the down migration would be
+-- unable to run at all instead of degrading gracefully.
+UPDATE agent_activity_event
+SET target_kind = 'none', target_slug = ''
+WHERE target_kind = 'file';
+
+UPDATE agent_activity_event
+SET event_kind = 'custom'
+WHERE event_kind = 'workspace_file';
+
 ALTER TABLE agent_activity_event
     DROP CONSTRAINT agent_activity_event_target_kind_check;
 

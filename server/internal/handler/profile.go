@@ -186,8 +186,12 @@ func (h *Handler) listAgentRecentActivity(ctx context.Context, agent db.Agent, l
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
+	// Scan every row into memory and close the cursor BEFORE calling
+	// attachRecentExecutionActivity: that helper acquires its own pool
+	// connection (task_message lookup), and doing so while this cursor is
+	// still open can deadlock a bounded pool under concurrent requests (same
+	// shape as the #1803 attachAgentRuntimeNames bug).
+	taskIDs := make([]pgtype.UUID, 0, limit)
 	items := make([]AgentRecentActivityItem, 0, limit)
 	for rows.Next() {
 		var (
@@ -198,6 +202,7 @@ func (h *Handler) listAgentRecentActivity(ctx context.Context, agent db.Agent, l
 		if err := rows.Scan(&taskID, &status, &occurredAt); err != nil {
 			continue
 		}
+		taskIDs = append(taskIDs, taskID)
 		items = append(items, AgentRecentActivityItem{
 			ID:           uuidToString(taskID),
 			Kind:         recentActivityFallbackKind(status),
@@ -209,10 +214,14 @@ func (h *Handler) listAgentRecentActivity(ctx context.Context, agent db.Agent, l
 			OccurredAt:   timestampToString(occurredAt),
 			Status:       status,
 		})
-		h.attachRecentExecutionActivity(ctx, taskID, status, &items[len(items)-1])
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, err
+	}
+	rows.Close()
+	for i := range items {
+		h.attachRecentExecutionActivity(ctx, taskIDs[i], items[i].Status, &items[i])
 	}
 	return items, nil
 }

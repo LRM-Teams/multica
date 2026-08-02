@@ -50,6 +50,10 @@ vi.mock("@multica/core/runtimes/mutations", () => ({
 
 vi.mock("@multica/core/workspace/queries", () => ({
   agentListOptions: () => ({ queryKey: ["agents"] }),
+  memberListOptions: () => ({
+    queryKey: ["members"],
+    queryFn: async () => [],
+  }),
 }));
 
 vi.mock("@tanstack/react-query", async () => {
@@ -82,6 +86,15 @@ vi.mock("./machine-name-editor", () => ({
 
 vi.mock("./machine-code-agents-section", () => ({
   MachineCodeAgentsSection: () => null,
+}));
+
+
+vi.mock("./machine-ops-section", () => ({
+  MachineOpsSection: () => null,
+}));
+
+vi.mock("./machine-sharing-section", () => ({
+  MachineSharingSection: () => null,
 }));
 
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));

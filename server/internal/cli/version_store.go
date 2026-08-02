@@ -350,7 +350,7 @@ func (s *VersionStore) StageBinary(
 	}
 
 	finalDir := filepath.Dir(staged.BinaryPath)
-	if err := renamePublishWithRetry(ctx, tempDir, finalDir); err != nil {
+	if err := os.Rename(tempDir, finalDir); err != nil {
 		if existing, verifyErr := s.verifyExisting(ctx, staged.Version, expectedDigest); verifyErr == nil {
 			return existing, nil
 		}

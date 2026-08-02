@@ -83,21 +83,60 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(findings) == 0 {
-		fmt.Println("cursordeadlock: no findings")
-		return
-	}
 	sort.Slice(findings, func(i, j int) bool {
 		if findings[i].file != findings[j].file {
 			return findings[i].file < findings[j].file
 		}
 		return findings[i].line < findings[j].line
 	})
-	for _, f := range findings {
+
+	blocking, known := filterKnown(findings)
+	for _, f := range known {
+		fmt.Printf("%s:%d: in %s — KNOWN, not blocking (%s)\n", f.file, f.line, f.funcName, knownIssues[knownIssueKey{file: f.file, funcName: f.funcName}])
+	}
+
+	if len(blocking) == 0 {
+		fmt.Println("cursordeadlock: no new findings")
+		return
+	}
+	for _, f := range blocking {
 		fmt.Printf("%s:%d: in %s, an outer rows cursor (Query) is still open when %s:%d acquires a second pool connection — %s\n",
 			f.file, f.line, f.funcName, f.file, f.innerLine, f.innerDesc)
 	}
 	os.Exit(1)
+}
+
+// knownIssueKey/knownIssues is a small, explicit, task-tracked allowlist —
+// NOT a general suppression mechanism. Every entry here is a real,
+// already-reported instance of this bug shape that this checker is
+// deliberately not blocking CI on yet, so landing this checker doesn't turn
+// every future PR red for pre-existing debt it didn't create. Each entry
+// must reference a tracked task and gets removed the moment that task fixes
+// it — if you're tempted to add an entry for something new instead of
+// fixing it, don't; this list is for "already known and tracked," not "too
+// hard to fix right now."
+type knownIssueKey struct {
+	file     string
+	funcName string
+}
+
+var knownIssues = map[knownIssueKey]string{
+	{file: "internal/scheduler/jobs_memory_curation.go", funcName: "makeMemoryCurationIntentHandler"}: "task #90",
+	{file: "internal/workgraph/message_signals.go", funcName: "Store.HandleHumanRework"}:              "task #90",
+	{file: "cmd/materialize-promoted/main.go", funcName: "main"}:                                      "task #90 (one-shot CLI script, low priority — single-threaded, won't deadlock unless the pool is misconfigured to size 1)",
+}
+
+// filterKnown splits findings into blocking (fail CI) and known (logged,
+// not blocking) using the knownIssues allowlist above.
+func filterKnown(findings []finding) (blocking, known []finding) {
+	for _, f := range findings {
+		if _, ok := knownIssues[knownIssueKey{file: f.file, funcName: f.funcName}]; ok {
+			known = append(known, f)
+			continue
+		}
+		blocking = append(blocking, f)
+	}
+	return blocking, known
 }
 
 // run walks each root, parses every non-test .go file, and returns every

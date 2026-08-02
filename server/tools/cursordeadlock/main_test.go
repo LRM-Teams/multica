@@ -214,3 +214,35 @@ func formatName(name string) string {
 		t.Fatalf("findings = %d, want 0 (pure in-memory loop body): %+v", len(findings), findings)
 	}
 }
+
+// TestFilterKnown_AllowlistedFindingIsNonBlocking pins the task #90
+// allowlist mechanism: a finding matching a knownIssues entry must not end
+// up in the blocking slice (which drives CI exit status), but must still be
+// reported (in known) so it stays visible in logs — this is a task-tracked
+// "not blocking yet," not a silent suppression.
+func TestFilterKnown_AllowlistedFindingIsNonBlocking(t *testing.T) {
+	f := finding{file: "internal/scheduler/jobs_memory_curation.go", funcName: "makeMemoryCurationIntentHandler"}
+	blocking, known := filterKnown([]finding{f})
+	if len(blocking) != 0 {
+		t.Fatalf("blocking = %+v, want empty (this exact finding is in knownIssues)", blocking)
+	}
+	if len(known) != 1 {
+		t.Fatalf("known = %+v, want 1 entry (must stay visible, not silently dropped)", known)
+	}
+}
+
+// TestFilterKnown_UnknownFindingIsBlocking is the inverse: anything not in
+// knownIssues must block, including a finding in the SAME file as an
+// allowlisted one but a different function — allowlist entries are scoped
+// per-function, not per-file, so a new bug introduced next to a known one
+// still fails CI.
+func TestFilterKnown_UnknownFindingIsBlocking(t *testing.T) {
+	f := finding{file: "internal/scheduler/jobs_memory_curation.go", funcName: "someOtherFunc"}
+	blocking, known := filterKnown([]finding{f})
+	if len(blocking) != 1 {
+		t.Fatalf("blocking = %+v, want 1 (not in knownIssues, must block)", blocking)
+	}
+	if len(known) != 0 {
+		t.Fatalf("known = %+v, want empty", known)
+	}
+}

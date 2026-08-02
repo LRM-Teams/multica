@@ -208,15 +208,6 @@ func (h *Handler) resolveSubgoalSourceMessageID(ctx context.Context, channelID p
 	return msgID, nil
 }
 
-// nullableUUIDArg returns nil for invalid UUIDs so pgx writes SQL NULL
-// (zero pgtype.UUID can be ambiguous across driver paths).
-func nullableUUIDArg(u pgtype.UUID) any {
-	if !u.Valid {
-		return nil
-	}
-	return u
-}
-
 func normalizeSubgoalActor(actor subgoalActor) (subgoalActor, bool) {
 	actor.Type = strings.ToLower(strings.TrimSpace(actor.Type))
 	actor.ID = strings.TrimSpace(actor.ID)

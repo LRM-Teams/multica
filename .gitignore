@@ -40,6 +40,7 @@ server/bin/
 server/tmp/
 server/migrate
 server/daemon
+server/cursordeadlock
 server/multica
 
 # Test artifacts

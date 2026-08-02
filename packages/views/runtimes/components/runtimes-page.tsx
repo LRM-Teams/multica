@@ -830,7 +830,7 @@ function MachineDetailView({
                     data-testid="machine-basics-pinned-version"
                   >
                     {t(($) => $.machine.version_prefix, {
-                      version: primaryPinnedVersion,
+                      version: primaryPinnedVersion.trim(),
                     })}
                   </span>
                 </InfoRow>

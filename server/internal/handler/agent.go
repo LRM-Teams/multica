@@ -208,6 +208,33 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		return
 	}
 
+	// Per-agent crash fact (agent.crashed_since). Must be loaded here — the
+	// same place that computes RuntimeDisplayStatus — or GET /agents will
+	// never show "crashed" even when the column is set (Parker's 2026-08-02
+	// attachAgentRuntimeNames lesson from #1801/#1802: pure-function green
+	// ≠ user-facing green). Narrow query avoids regenerating every SELECT *
+	// FROM agent while make sqlc is broken (task #83).
+	//
+	// Load BEFORE the runtime Query below: holding an open rows cursor while
+	// acquiring another pool connection deadlocks under concurrent CreateAgent
+	// (CI: TestAgentAvatar_ConcurrentCreatesAndDirectInsertsAreComplete).
+	agentIDs := make([]pgtype.UUID, 0, len(resps))
+	for i := range resps {
+		if id := parseUUID(resps[i].ID); id.Valid {
+			agentIDs = append(agentIDs, id)
+		}
+	}
+	crashedByAgent := map[string]pgtype.Timestamptz{}
+	if len(agentIDs) > 0 && h.Queries != nil {
+		if crashRows, err := h.Queries.ListAgentCrashedSinceByIDs(ctx, agentIDs); err != nil {
+			slog.Warn("failed to load agent crashed_since", "error", err)
+		} else {
+			for _, row := range crashRows {
+				crashedByAgent[uuidToString(row.ID)] = row.CrashedSince
+			}
+		}
+	}
+
 	rows, err := h.DB.Query(ctx, `
 		SELECT id,
 		       COALESCE(
@@ -227,29 +254,6 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 		return
 	}
 	defer rows.Close()
-
-	// Per-agent crash fact (agent.crashed_since). Must be loaded here — the
-	// same place that computes RuntimeDisplayStatus — or GET /agents will
-	// never show "crashed" even when the column is set (Parker's 2026-08-02
-	// attachAgentRuntimeNames lesson from #1801/#1802: pure-function green
-	// ≠ user-facing green). Narrow query avoids regenerating every SELECT *
-	// FROM agent while make sqlc is broken (task #83).
-	agentIDs := make([]pgtype.UUID, 0, len(resps))
-	for i := range resps {
-		if id := parseUUID(resps[i].ID); id.Valid {
-			agentIDs = append(agentIDs, id)
-		}
-	}
-	crashedByAgent := map[string]pgtype.Timestamptz{}
-	if len(agentIDs) > 0 && h.Queries != nil {
-		if crashRows, err := h.Queries.ListAgentCrashedSinceByIDs(ctx, agentIDs); err != nil {
-			slog.Warn("failed to load agent crashed_since", "error", err)
-		} else {
-			for _, row := range crashRows {
-				crashedByAgent[uuidToString(row.ID)] = row.CrashedSince
-			}
-		}
-	}
 
 	now := time.Now()
 	for rows.Next() {

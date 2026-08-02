@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -249,4 +250,100 @@ func TestChannelSubgoalContextsForClaimAreBoundedToOwnRole(t *testing.T) {
 	}
 	// Ensure protocol shape stays free of chat/thread blobs.
 	_ = protocol.ChannelSubgoalContext{}
+}
+
+func TestChannelGoalSubgoalSourceMessageIDSameChannel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	channel := createGoalTestChannel(t)
+	_ = createActiveGoalForSubgoalTests(t, channel.ID)
+	agentID := createHandlerTestAgent(t, "src-"+uuid.NewString()[:8], nil)
+
+	var messageID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, source)
+		VALUES ($1, $2, 'user', $3, 'tester', 'assign this as a subgoal', 'multica')
+		RETURNING id::text
+	`, channel.ID, testWorkspaceID, testUserID).Scan(&messageID); err != nil {
+		t.Fatalf("seed channel message: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel_message WHERE id=$1`, messageID) })
+
+	otherChannel := createGoalTestChannel(t)
+	var otherMessageID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO channel_message (channel_id, workspace_id, author_type, author_id, author_name, content, source)
+		VALUES ($1, $2, 'user', $3, 'tester', 'wrong channel', 'multica')
+		RETURNING id::text
+	`, otherChannel.ID, testWorkspaceID, testUserID).Scan(&otherMessageID); err != nil {
+		t.Fatalf("seed other-channel message: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM channel_message WHERE id=$1`, otherMessageID) })
+
+	// Cross-channel source rejected.
+	bad := httptest.NewRecorder()
+	testHandler.CreateChannelGoalSubgoal(bad, subgoalRequest(t, http.MethodPost, channel.ID, "", map[string]any{
+		"title":              "Bad source",
+		"purpose":            "Must reject foreign message",
+		"responsible":        map[string]any{"type": "agent", "id": agentID},
+		"source_message_id":  otherMessageID,
+	}))
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("cross-channel source = %d: %s", bad.Code, bad.Body.String())
+	}
+
+	// Same-channel source accepted and listed.
+	ok := httptest.NewRecorder()
+	testHandler.CreateChannelGoalSubgoal(ok, subgoalRequest(t, http.MethodPost, channel.ID, "", map[string]any{
+		"title":             "From chat",
+		"purpose":           "Trace back to the ask",
+		"responsible":       map[string]any{"type": "agent", "id": agentID},
+		"source_message_id": messageID,
+	}))
+	if ok.Code != http.StatusCreated {
+		t.Fatalf("create with source = %d: %s", ok.Code, ok.Body.String())
+	}
+	var env subgoalEnvelope
+	if err := json.Unmarshal(ok.Body.Bytes(), &env); err != nil || env.Subgoal == nil {
+		t.Fatalf("decode: %v body=%s", err, ok.Body.String())
+	}
+	if env.Subgoal.SourceMessageID == nil || *env.Subgoal.SourceMessageID != messageID {
+		t.Fatalf("source_message_id = %#v want %s", env.Subgoal.SourceMessageID, messageID)
+	}
+
+	// Omit keeps prior; empty string clears.
+	clear := httptest.NewRecorder()
+	creq := subgoalRequest(t, http.MethodPatch, channel.ID, "/"+env.Subgoal.ID, map[string]any{
+		"expected_version":  env.Subgoal.Version,
+		"source_message_id": "",
+	})
+	creq = withRouteParams(creq, "channelId", channel.ID, "subgoalId", env.Subgoal.ID)
+	testHandler.UpdateChannelGoalSubgoal(clear, creq)
+	if clear.Code != http.StatusOK {
+		t.Fatalf("clear source = %d: %s", clear.Code, clear.Body.String())
+	}
+	// Fresh envelope: json.Unmarshal into a prior struct keeps old pointer
+	// fields when the response omits source_message_id (omitempty).
+	var clearedEnv subgoalEnvelope
+	if err := json.Unmarshal(clear.Body.Bytes(), &clearedEnv); err != nil || clearedEnv.Subgoal == nil {
+		t.Fatalf("clear decode: %v body=%s", err, clear.Body.String())
+	}
+	if clearedEnv.Subgoal.SourceMessageID != nil {
+		t.Fatalf("cleared source_message_id still set: %q body=%s", *clearedEnv.Subgoal.SourceMessageID, clear.Body.String())
+	}
+	if !strings.Contains(clear.Body.String(), `"version":2`) {
+		t.Fatalf("expected version bump on clear, body=%s", clear.Body.String())
+	}
+
+	// Create without field still works (backward compatible).
+	plain := httptest.NewRecorder()
+	testHandler.CreateChannelGoalSubgoal(plain, subgoalRequest(t, http.MethodPost, channel.ID, "", map[string]any{
+		"title":       "No source",
+		"purpose":     "Legacy clients omit the field",
+		"responsible": map[string]any{"type": "agent", "id": agentID},
+	}))
+	if plain.Code != http.StatusCreated {
+		t.Fatalf("create without source = %d: %s", plain.Code, plain.Body.String())
+	}
 }

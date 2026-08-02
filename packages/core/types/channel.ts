@@ -547,6 +547,8 @@ export interface ChannelGoalSubgoal {
   waiting_on: ChannelGoalSubgoalWaitingOn | null;
   artifact_refs: string[];
   activity_delta: string[];
+  /** LRM-1007: optional same-channel message for "jump back"; omit when unset. */
+  source_message_id?: string;
   created_by_type: string;
   created_by_id: string;
   updated_by_type: string;
@@ -573,6 +575,8 @@ export interface CreateChannelGoalSubgoalRequest {
   participants?: ChannelGoalSubgoalActor[];
   depends_on?: string[];
   artifact_refs?: string[];
+  /** Same-channel message id; omit when no source. */
+  source_message_id?: string;
 }
 
 export interface UpdateChannelGoalSubgoalRequest {
@@ -589,6 +593,8 @@ export interface UpdateChannelGoalSubgoalRequest {
   artifact_refs?: string[];
   activity_delta?: string[];
   waiting_on?: ChannelGoalSubgoalWaitingOn | null;
+  /** Omit = unchanged; empty string = clear; UUID = set (must be same channel). */
+  source_message_id?: string;
 }
 
 export interface ResolveChannelGoalSubgoalRequest {

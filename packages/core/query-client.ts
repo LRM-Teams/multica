@@ -1,6 +1,11 @@
 import { QueryClient } from "@tanstack/react-query";
+import { installQueryOnlineRecovery } from "./query-online";
 
 export function createQueryClient(): QueryClient {
+  // LRM-844: install once per browser session so a missed `online` after a
+  // cold-start `offline` cannot leave first-paint queries paused forever.
+  installQueryOnlineRecovery();
+
   return new QueryClient({
     defaultOptions: {
       queries: {

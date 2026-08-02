@@ -19,5 +19,9 @@ export function dmListOptions(wsId: string) {
     queryFn: () => api.listDMs(),
     enabled: !!wsId,
     staleTime: Infinity,
+    // LRM-844: first-paint DM list must not sit paused when onlineManager is
+    // falsely offline. Fail the fetch instead of hanging the skeleton forever;
+    // WS invalidation still keeps the cache fresh after the first success.
+    networkMode: "always",
   });
 }

@@ -60,7 +60,10 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT } from "../../i18n/use-t";
 import { Time } from "../../i18n/time";
 import { useOpenDM } from "../../common/use-open-dm";
-import { useAgentBubbleActivityByAgent } from "../../chat/lib/agent-bubble-unread";
+import {
+  dmAgentBubbleActivity,
+  useAgentBubbleActivityByAgent,
+} from "../../chat/lib/agent-bubble-unread";
 import {
   formatChannelMessagePreview,
   resolveChannelAuthorDisplayName,
@@ -139,8 +142,8 @@ export function DmList({
         unpinnedDms,
         (dm) => {
           const channelUnread = dm.real_unread ?? dm.unread ?? 0;
-          if (dm.peer.type !== "agent") return channelUnread;
-          return channelUnread + (bubbleActivityByAgent.get(dm.peer.id)?.unreadCount ?? 0);
+          const bubble = dmAgentBubbleActivity(dm, bubbleActivityByAgent);
+          return channelUnread + (bubble?.unreadCount ?? 0);
         },
         (dm) => isConversationMuted(dm),
       ),
@@ -172,10 +175,8 @@ export function DmList({
     return base.toSorted((a, b) => {
       const activityTime = (dm: DMItem) => {
         const channelMs = Date.parse(dm.updated_at);
-        const bubbleUpdatedAt =
-          dm.peer.type === "agent"
-            ? bubbleActivityByAgent.get(dm.peer.id)?.latestUpdatedAt
-            : undefined;
+        const bubbleUpdatedAt = dmAgentBubbleActivity(dm, bubbleActivityByAgent)
+          ?.latestUpdatedAt;
         if (!bubbleUpdatedAt) return Number.isNaN(channelMs) ? 0 : channelMs;
         const bubbleMs = Date.parse(bubbleUpdatedAt);
         if (Number.isNaN(bubbleMs)) return Number.isNaN(channelMs) ? 0 : channelMs;
@@ -269,7 +270,9 @@ export function DmList({
       </div>
     ) : (
       <>
-        {directDms.map((dm) => (
+        {directDms.map((dm) => {
+          const bubble = dmAgentBubbleActivity(dm, bubbleActivityByAgent);
+          return (
         <DmConversationRow
           key={`${dm.source}:${dm.id}`}
           dm={dm}
@@ -278,18 +281,16 @@ export function DmList({
           resolveMentionPreview={resolveMentionPreview}
           members={members}
           agents={agents}
-          bubbleUnreadCount={
-            dm.peer.type === "agent"
-              ? (bubbleActivityByAgent.get(dm.peer.id)?.unreadCount ?? 0)
-              : 0
-          }
+          bubbleUnreadCount={bubble?.unreadCount ?? 0}
+          bubbleLatestUpdatedAt={bubble?.latestUpdatedAt ?? null}
           onSelect={() => onSelect(dm)}
           onTogglePin={() => dmActions.togglePin(dm)}
           onMarkUnread={() => dmActions.markUnread(dm)}
           onToggleMute={() => dmActions.toggleMute(dm)}
           onClose={() => dmActions.close(dm)}
         />
-        ))}
+          );
+        })}
         {agentPairDms.length > 0 && (
           <div className="mt-1">
             <button
@@ -545,6 +546,7 @@ export function DmConversationRow({
   members,
   agents,
   bubbleUnreadCount = 0,
+  bubbleLatestUpdatedAt = null,
   onSelect,
   onTogglePin,
   onMarkUnread,
@@ -559,6 +561,8 @@ export function DmConversationRow({
   agents: Agent[];
   /** Unread independent bubble (chat_session) replies for this agent peer. */
   bubbleUnreadCount?: number;
+  /** Newest bubble session `updated_at` — drives list time when bubble is unread. */
+  bubbleLatestUpdatedAt?: string | null;
   onSelect: () => void;
   /** Pin / unpin (toggles based on current pinned state). */
   onTogglePin: () => void;
@@ -717,11 +721,14 @@ export function DmConversationRow({
               </span>
               {(last || hasBubbleReply) && (
                 <span className="shrink-0 text-[11px] text-muted-foreground">
-                  {hasBubbleReply ? (
-                    t(($) => $.dm.bubble_replied_time)
-                  ) : (
-                    <Time kind="list" value={last!.created_at} />
-                  )}
+                  {/* LRM-762/763: even bubble-bumped rows use `<Time kind="list">`
+                      — never the hard-coded 「刚刚」/just now copy. Prefer the
+                      bubble session clock when that is what bumped the row. */}
+                  {hasBubbleReply && bubbleLatestUpdatedAt ? (
+                    <Time kind="list" value={bubbleLatestUpdatedAt} />
+                  ) : last ? (
+                    <Time kind="list" value={last.created_at} />
+                  ) : null}
                 </span>
               )}
             </div>

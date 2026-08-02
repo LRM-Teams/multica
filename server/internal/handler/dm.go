@@ -888,6 +888,9 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 	rows, err := h.DB.Query(ctx, `
 		SELECT ch.id, ch.updated_at,
 		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
+		       COALESCE(uc.cnt, 0) AS real_unread,
+		       NULLIF(COALESCE(cr.last_read_seq, 0), 0)::bigint,
+		       COALESCE(hm.has_mention, false),
 		       state.pinned_at, state.manual_unread_at, state.muted_at
 		FROM channel ch
 		LEFT JOIN LATERAL (
@@ -897,6 +900,26 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 			ORDER BY message.seq DESC
 			LIMIT 1
 		) lm ON true
+		LEFT JOIN channel_read cr ON cr.channel_id = ch.id AND cr.user_id = $2
+		LEFT JOIN LATERAL (
+			SELECT count(*) AS cnt FROM channel_message m
+			WHERE m.channel_id = ch.id
+			  AND m.seq > COALESCE(cr.last_read_seq, 0)
+			  AND m.author_type <> 'system'
+			  AND m.thread_root_message_id IS NULL
+			  AND m.deleted_at IS NULL
+		) uc ON true
+		LEFT JOIN LATERAL (
+			SELECT EXISTS (
+				SELECT 1 FROM channel_message m
+				WHERE m.channel_id = ch.id
+				  AND m.seq > COALESCE(cr.last_read_seq, 0)
+				  AND m.deleted_at IS NULL
+				  AND (m.content ILIKE '%@' || (
+				    SELECT name FROM "user" WHERE id = $2
+				  ) || '%' OR m.parts::text ILIKE '%mention://' || $2::text || '%')
+			) AS has_mention
+		) hm ON true
 		LEFT JOIN dm_peer_state state
 		  ON state.workspace_id = ch.workspace_id
 		 AND state.user_id = $2
@@ -941,6 +964,9 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 		updatedAt, lastAt, pinnedAt, manualUnreadAt, mutedAt pgtype.Timestamptz
 		lastType, lastName, lastContent                      pgtype.Text
 		lastParts                                            []byte
+		unread                                               int
+		lastReadSeq                                          *int64
+		hasMention                                           bool
 	}
 	// Scan every row into memory and close the cursor BEFORE calling
 	// agentDMParticipants: that helper acquires its own pool connection, and
@@ -953,6 +979,7 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 		if err := rows.Scan(
 			&row.channelID, &row.updatedAt,
 			&row.lastType, &row.lastName, &row.lastContent, &row.lastParts, &row.lastAt,
+			&row.unread, &row.lastReadSeq, &row.hasMention,
 			&row.pinnedAt, &row.manualUnreadAt, &row.mutedAt,
 		); err != nil {
 			continue
@@ -974,7 +1001,11 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 			Peer:           participants[0],
 			Participants:   participants,
 			Supervised:     true,
+			Unread:         row.unread,
+			RealUnread:     row.unread,
 			ManuallyUnread: row.manualUnreadAt.Valid,
+			HasMention:     row.hasMention,
+			LastReadSeq:    row.lastReadSeq,
 			PinnedAt:       timestampToPtr(row.pinnedAt),
 			MutedAt:        timestampToPtr(row.mutedAt),
 			Muted:          row.mutedAt.Valid,

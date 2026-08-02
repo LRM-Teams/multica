@@ -71,6 +71,25 @@ vi.mock("../../common/use-open-dm", () => ({
 
 vi.mock("../../chat/lib/agent-bubble-unread", () => ({
   useAgentBubbleActivityByAgent: () => mockBubbleActivity.byAgent,
+  // Keep LRM-762 gate in the mock so agent_pair rows never inherit bubble
+  // unread/time from the projected peer agent.
+  dmAgentBubbleActivity: (
+    dm: { mode?: string; peer: { type: string; id: string } },
+    byAgent: Map<string, { unreadCount: number; latestUpdatedAt: string | null }>,
+  ) => {
+    if (dm.mode === "agent_pair" || dm.peer.type !== "agent") return null;
+    return byAgent.get(dm.peer.id) ?? null;
+  },
+}));
+
+vi.mock("../../common/use-viewing-timezone", () => ({
+  useViewingTimezone: () => "UTC",
+}));
+
+vi.mock("../../i18n/time", () => ({
+  Time: ({ kind, value }: { kind: string; value: string }) => (
+    <time data-kind={kind}>{value}</time>
+  ),
 }));
 
 vi.mock("../../common/actor-avatar", () => ({
@@ -490,6 +509,12 @@ describe("DmList bubble activity ordering", () => {
       makeDm({
         id: "dm-agent",
         peer: { type: "agent", id: "agent-1", name: "Agent Peer" },
+        last_message: {
+          type: "agent",
+          author_name: "Agent Peer",
+          content: "channel last",
+          created_at: "2026-07-29T10:00:00Z",
+        },
       }),
     ];
     mockBubbleActivity.byAgent = new Map([
@@ -499,7 +524,46 @@ describe("DmList bubble activity ordering", () => {
     renderDmList();
 
     expect(screen.getByText("Bubble replied")).toBeInTheDocument();
-    expect(screen.getByText("just now")).toBeInTheDocument();
+    // LRM-762/763: list time follows bubble session clock via <Time kind="list">,
+    // not the hard-coded「刚刚」/just now string.
+    expect(screen.queryByText("just now")).not.toBeInTheDocument();
+    expect(screen.getByText("2026-07-30T11:00:00Z")).toBeInTheDocument();
+  });
+
+  it("does not paint bubble「刚刚」/unread onto supervised agent_pair rows (LRM-762)", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-pair",
+        mode: "agent_pair",
+        supervised: true,
+        has_mention: true,
+        peer: { type: "agent", id: "agent-1", name: "Front End" },
+        participants: [
+          { type: "agent", id: "agent-1", name: "Front End" },
+          { type: "agent", id: "agent-2", name: "Beckham" },
+        ],
+        unread: 0,
+        real_unread: 0,
+        last_message: {
+          type: "agent",
+          author_name: "Beckham",
+          content: "yesterday note",
+          created_at: "2026-07-29T10:11:00Z",
+        },
+      }),
+    ];
+    mockBubbleActivity.byAgent = new Map([
+      ["agent-1", { unreadCount: 3, latestUpdatedAt: "2026-07-30T12:00:00Z" }],
+    ]);
+
+    renderDmList();
+
+    expect(screen.queryByText("Bubble replied")).not.toBeInTheDocument();
+    expect(screen.queryByText("just now")).not.toBeInTheDocument();
+    expect(screen.getByText(/yesterday note/)).toBeInTheDocument();
+    expect(screen.getByText("2026-07-29T10:11:00Z")).toBeInTheDocument();
+    expect(screen.queryByText("2026-07-30T12:00:00Z")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/3 unread/i)).not.toBeInTheDocument();
   });
 });
 

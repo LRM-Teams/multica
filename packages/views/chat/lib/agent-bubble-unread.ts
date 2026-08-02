@@ -1,11 +1,26 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { chatSessionsOptions } from "@multica/core/chat/queries";
+import type { DMItem } from "@multica/core/dm";
 import { excludeChannelShellSessions } from "./exclude-channel-shell-sessions";
 
 export interface AgentBubbleActivity {
   unreadCount: number;
   latestUpdatedAt: string | null;
+}
+
+/**
+ * LRM-762: bubble (independent chat_session) activity only belongs on a 1:1
+ * human↔agent DM. Supervised agent↔agent rows (`agent_pair`) project an agent
+ * peer for identity, but their sidebar time/unread must follow the DM channel
+ * last_message — never the unrelated bubble "刚刚" / sticky unread path.
+ */
+export function dmAgentBubbleActivity(
+  dm: Pick<DMItem, "mode" | "peer">,
+  byAgent: Map<string, AgentBubbleActivity>,
+): AgentBubbleActivity | null {
+  if (dm.mode === "agent_pair" || dm.peer.type !== "agent") return null;
+  return byAgent.get(dm.peer.id) ?? null;
 }
 
 /**

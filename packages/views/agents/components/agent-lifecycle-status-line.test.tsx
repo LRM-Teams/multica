@@ -2,21 +2,36 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AgentLifecycleStatusLine } from "./agent-lifecycle-status-line";
 
+vi.mock("../resolve-agent-lifecycle-status", () => ({
+  resolveAgentLifecycleStatus: (status: string | null | undefined) => {
+    if (status === "idle" || status === "working") return null;
+    if (status === "stopped") {
+      return {
+        label: "Stopped",
+        shape: "square",
+        toneClass: "text-muted-foreground",
+        dotClass: "bg-muted-foreground/40",
+      };
+    }
+    if (status === "starting") {
+      return {
+        label: "Starting",
+        shape: "dot",
+        toneClass: "text-brand",
+        dotClass: "bg-brand",
+      };
+    }
+    return {
+      label: "Offline",
+      shape: "dot",
+      toneClass: "text-muted-foreground",
+      dotClass: "bg-muted-foreground/40",
+    };
+  },
+}));
+
 vi.mock("../../i18n/use-t", () => ({
-  useT: () => ({
-    t: (selector: (r: {
-      lifecycle: Record<string, string>;
-    }) => string) =>
-      selector({
-        lifecycle: {
-          starting: "Starting",
-          stopped: "Stopped",
-          crashed: "Crashed",
-          disconnected: "Disconnected",
-          offline: "Offline",
-        },
-      }),
-  }),
+  useT: () => ({ t: () => "" }),
 }));
 
 describe("AgentLifecycleStatusLine", () => {

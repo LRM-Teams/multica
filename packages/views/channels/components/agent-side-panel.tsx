@@ -21,6 +21,7 @@ import { RemindersTab } from "../../agents/components/tabs/reminders-tab";
 import { AgentProfileAvatarEditor } from "../../agents/components/agent-profile-avatar-editor";
 import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
+import { ComputerInfoRow } from "../../agents/components/inspector/computer-info-row";
 import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
 import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
 import { AgentProfileActions } from "../../agents/components/agent-profile-actions";
@@ -410,6 +411,10 @@ function AgentProfileTabContent({
             <span className="truncate" title={formatDate(agent.created_at)}>
               {formatDate(agent.created_at)}
             </span>
+            <span className="pt-0.5 text-muted-foreground">
+              {t(($) => $.inspector.prop_computer)}
+            </span>
+            <ComputerInfoRow runtime={selectedRuntime} />
             <span className="text-muted-foreground">{t(($) => $.side_panel.owner_label)}</span>
             <span className="truncate" title={ownerName(agent, members)}>
               {ownerName(agent, members)}

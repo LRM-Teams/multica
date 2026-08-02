@@ -10,7 +10,7 @@ import {
   PropertyPicker,
 } from "../../../issues/components/pickers";
 import { ProviderLogo } from "../../../runtimes/components/provider-logo";
-import { runtimeMachineKey } from "../../../runtimes/components/runtime-machines";
+import { runtimeMachineKey, splitRuntimeName } from "../../../runtimes/components/runtime-machines";
 import { CHIP_CLASS } from "./chip";
 import { useT } from "../../../i18n";
 
@@ -79,7 +79,7 @@ export function RuntimePicker({
       <span className="inline-flex min-w-0 items-center gap-1.5 px-1.5 py-0.5 text-xs text-muted-foreground">
         <Icon className="h-3 w-3 shrink-0" />
         <span className="min-w-0 truncate font-mono">
-          {selected ? selected.name : t(($) => $.pickers.runtime_none)}
+          {selected ? splitRuntimeName(selected.name).base : t(($) => $.pickers.runtime_none)}
         </span>
         {selected && (
           <span
@@ -91,10 +91,12 @@ export function RuntimePicker({
       </span>
     );
   }
-  // Code-agent chip uses daemon-reported `name` (e.g. "Cursor (s144)"), not
-  // machine `display_name` — that label belongs on the Computer row. Using
-  // display_name here made every code agent on a renamed machine look identical.
-  const triggerLabel = selected ? selected.name : t(($) => $.pickers.runtime_none);
+  // Code-agent chip drops the daemon-reported hostname parenthetical (e.g.
+  // "Cursor (s144)" → "Cursor") — that machine identity now lives on its own
+  // Computer row, so keeping it here duplicated the same hostname twice.
+  const triggerLabel = selected
+    ? splitRuntimeName(selected.name).base
+    : t(($) => $.pickers.runtime_none);
   const isOnline = !!selected && deriveRuntimeHealth(selected, now) === "online";
   const triggerTitle = selected
     ? t(($) => $.pickers.runtime_tooltip, {

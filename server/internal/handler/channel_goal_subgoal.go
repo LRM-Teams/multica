@@ -212,6 +212,37 @@ func normalizeParticipants(items []subgoalActor, responsible subgoalActor) ([]su
 	return out, true
 }
 
+// listChannelGoalSubgoalsHydrated drains the list cursor before hydrateSubgoalRelations
+// so nested Query() calls cannot hold two pool connections (cursordeadlock / #1803).
+func (h *Handler) listChannelGoalSubgoalsHydrated(ctx context.Context, goalID string) ([]ChannelGoalSubgoalResponse, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT `+channelGoalSubgoalColumns+`
+		FROM channel_goal_subgoal
+		WHERE goal_id = $1::uuid
+		ORDER BY created_at ASC, id ASC`, goalID)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]ChannelGoalSubgoalResponse, 0)
+	for rows.Next() {
+		sg, err := scanChannelGoalSubgoal(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		items = append(items, sg)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	for i := range items {
+		_ = h.hydrateSubgoalRelations(ctx, &items[i])
+	}
+	return items, nil
+}
+
 func (h *Handler) hydrateSubgoalRelations(ctx context.Context, sg *ChannelGoalSubgoalResponse) error {
 	rows, err := h.DB.Query(ctx, `
 		SELECT participant_type, participant_id::text
@@ -366,25 +397,10 @@ func (h *Handler) ListChannelGoalSubgoals(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to load channel goal")
 		return
 	}
-	rows, err := h.DB.Query(r.Context(), `
-		SELECT `+channelGoalSubgoalColumns+`
-		FROM channel_goal_subgoal
-		WHERE goal_id = $1::uuid
-		ORDER BY created_at ASC, id ASC`, goal.ID)
+	items, err := h.listChannelGoalSubgoalsHydrated(r.Context(), goal.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list subgoals")
 		return
-	}
-	defer rows.Close()
-	items := make([]ChannelGoalSubgoalResponse, 0)
-	for rows.Next() {
-		sg, err := scanChannelGoalSubgoal(rows)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to scan subgoal")
-			return
-		}
-		_ = h.hydrateSubgoalRelations(r.Context(), &sg)
-		items = append(items, sg)
 	}
 	writeJSON(w, http.StatusOK, subgoalListEnvelope{Subgoals: items})
 }
@@ -851,23 +867,10 @@ func (h *Handler) ListAgentChannelGoalSubgoals(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "failed to load channel goal")
 		return
 	}
-	rows, err := h.DB.Query(r.Context(), `
-		SELECT `+channelGoalSubgoalColumns+`
-		FROM channel_goal_subgoal WHERE goal_id=$1::uuid ORDER BY created_at ASC, id`, goal.ID)
+	items, err := h.listChannelGoalSubgoalsHydrated(r.Context(), goal.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list subgoals")
 		return
-	}
-	defer rows.Close()
-	items := make([]ChannelGoalSubgoalResponse, 0)
-	for rows.Next() {
-		sg, err := scanChannelGoalSubgoal(rows)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to scan subgoal")
-			return
-		}
-		_ = h.hydrateSubgoalRelations(r.Context(), &sg)
-		items = append(items, sg)
 	}
 	writeJSON(w, http.StatusOK, subgoalListEnvelope{Subgoals: items})
 }

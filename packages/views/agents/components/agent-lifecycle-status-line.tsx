@@ -1,5 +1,6 @@
 "use client";
 
+import type { AgentRuntimeDisplayStatus } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import {
@@ -16,7 +17,7 @@ export function AgentLifecycleStatusLine({
   status,
   className,
 }: {
-  status: string | null | undefined;
+  status: AgentRuntimeDisplayStatus | null | undefined;
   className?: string;
 }) {
   const { t } = useT("agents");

@@ -6,7 +6,6 @@ import { useT } from "../../i18n/use-t";
 import {
   isResearchSourceFailed,
   resolveSourceFailureReasonCode,
-  sourceFailureDetail,
   type SourceFailureReasonCode,
 } from "./report-source-degrade";
 import { weightTier } from "./report-weight";
@@ -85,8 +84,8 @@ export function ReportSourceTable({ sources }: { sources: ResearchSource[] }) {
           {sorted.map((s, i) => {
             const failed = isResearchSourceFailed(s);
             const reasonCode = resolveSourceFailureReasonCode(s);
-            const detail = sourceFailureDetail(s);
             const label = s.title || s.url || s.source_class;
+            // Localized reason only — never append raw payload codes (ETIMEDOUT, etc.).
             const reasonText = failed && reasonCode ? reasonLabel(reasonCode) : null;
             return (
               <tr
@@ -132,7 +131,6 @@ export function ReportSourceTable({ sources }: { sources: ResearchSource[] }) {
                       className="mt-0.5 text-[11px] text-destructive"
                     >
                       {reasonText}
-                      {detail ? ` · ${detail}` : ""}
                     </p>
                   ) : null}
                 </td>

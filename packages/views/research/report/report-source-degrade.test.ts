@@ -5,6 +5,7 @@ import {
   partitionSourcesByFailure,
   resolveSourceFailureReasonCode,
   resolveSourcesFailureMode,
+  stripCitationRefs,
 } from "./report-source-degrade";
 
 function source(partial: Partial<ResearchSource> & { id: string }): ResearchSource {
@@ -55,9 +56,29 @@ describe("report-source-degrade (LRM-834)", () => {
     ).toBe("timeout");
     expect(
       resolveSourceFailureReasonCode(
+        source({
+          id: "et",
+          payload: { fetch_failed: true, failure_message: "ETIMEDOUT" },
+        }),
+      ),
+    ).toBe("timeout");
+    expect(
+      resolveSourceFailureReasonCode(
         source({ id: "h", payload: { fetch_failed: true, failure_reason: "http_403" } }),
       ),
     ).toBe("http");
+  });
+
+  it("strips excluded citation tokens from Findings prose", () => {
+    const md = "Milvus recall higher.[^1] Also [^2].";
+    const excluded: ResearchReportCitation[] = [
+      { id: "c1", index: 1, source_id: "a", label: "[1]" },
+      { id: "c2", index: 2, source_id: "b", label: "[2]" },
+    ];
+    expect(stripCitationRefs(md, excluded)).toBe("Milvus recall higher. Also.");
+    expect(
+      stripCitationRefs(md, [{ id: "c2", index: 2, source_id: "b", label: "[2]" }]),
+    ).toBe("Milvus recall higher.[^1] Also.");
   });
 
   it("excludes failed sources from the citation sequence", () => {

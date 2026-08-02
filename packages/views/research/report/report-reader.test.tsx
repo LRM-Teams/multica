@@ -342,6 +342,9 @@ describe("ReportReader", () => {
     );
     expect(screen.getByTestId("research-sources-all-failed")).toBeInTheDocument();
     expect(screen.queryByTestId("research-citation-card")).toBeNull();
+    const findings = screen.getByTestId("md").textContent ?? "";
+    expect(findings).not.toMatch(/\[\^?1\]/);
+    expect(findings).not.toMatch(/\[\^?2\]/);
     fireEvent.click(screen.getByTestId("research-sources-all-failed-retry"));
     expect(onRetry).toHaveBeenCalled();
   });

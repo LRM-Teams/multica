@@ -85,12 +85,12 @@ type ChannelResponse struct {
 	ArchivedAt  *string `json:"archived_at,omitempty"`
 	ArchivedBy  *string `json:"archived_by,omitempty"`
 	// List-only enrichments (zero/omitted on create/update/get responses).
-	UnreadCount        int                  `json:"unread_count"`
-	RealUnreadCount    int                  `json:"real_unread_count"`
-	ManuallyUnread     bool                 `json:"manually_unread,omitempty"`
-	PinnedAt           *string              `json:"pinned_at,omitempty"`
-	MutedAt            *string              `json:"muted_at,omitempty"`
-	Muted              bool                 `json:"muted,omitempty"`
+	UnreadCount     int     `json:"unread_count"`
+	RealUnreadCount int     `json:"real_unread_count"`
+	ManuallyUnread  bool    `json:"manually_unread,omitempty"`
+	PinnedAt        *string `json:"pinned_at,omitempty"`
+	MutedAt         *string `json:"muted_at,omitempty"`
+	Muted           bool    `json:"muted,omitempty"`
 	// NotifyLevel is the viewer's channel notification preference (LRM-769).
 	// Always one of default|all|mentions|muted; DB NULL maps to "default".
 	NotifyLevel        string               `json:"notify_level"`
@@ -567,7 +567,15 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
+	userUUID := parseUUID(userID)
+	isMember := h.channelUserIsMember(r.Context(), workspaceID, channelID, userUUID)
+	isSupervisor := !isMember && h.channelUserIsAgentDMSupervisor(r.Context(), workspaceID, channelID, userUUID)
+	if !isMember && !isSupervisor {
+		if !h.channelExists(r.Context(), workspaceID, channelID) {
+			writeError(w, http.StatusNotFound, "channel not found")
+			return
+		}
+		writeError(w, http.StatusForbidden, "not a channel member")
 		return
 	}
 
@@ -594,6 +602,14 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.rewindChannelRead(w, r, workspaceID, channelID, parseUUID(userID), *req.LastReadSeq)
+		return
+	}
+
+	// LRM-762: supervised agent_pair owners are not channel_members. Persist
+	// their read cursor on channel_read only — never upsert conversation_member
+	// (that would imply a speakable seat). Clear channel-keyed manual unread.
+	if isSupervisor {
+		h.markSupervisedDMChannelRead(w, r, workspaceID, userID, channelID, req.LastReadSeq)
 		return
 	}
 
@@ -689,6 +705,45 @@ func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {
 		SET manual_unread_at = NULL
 		WHERE channel_id = $1 AND workspace_id = $2 AND member_type = 'user' AND member_id = $3`,
 		channelID, parseUUID(workspaceID), parseUUID(userID))
+	h.clearDMPeerManualUnreadForChannel(r.Context(), workspaceID, userID, channelID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "previous_last_read_seq": previousLastReadSeq})
+}
+
+// markSupervisedDMChannelRead advances a supervised agent_pair owner's read
+// cursor without making them a conversation_member (LRM-762). Write paths stay
+// gated on channel membership / agent_pair mode elsewhere.
+func (h *Handler) markSupervisedDMChannelRead(w http.ResponseWriter, r *http.Request, workspaceID, userID string, channelID pgtype.UUID, lastReadSeq *int64) {
+	var previousLastReadSeq *int64
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT NULLIF(cr.last_read_seq, 0)::bigint
+		FROM channel_read cr
+		WHERE cr.channel_id = $1 AND cr.user_id = $2`,
+		channelID, parseUUID(userID)).Scan(&previousLastReadSeq)
+	if err != nil {
+		previousLastReadSeq = nil
+	}
+
+	_, err = h.DB.Exec(r.Context(), `
+		WITH conv AS (
+		  SELECT last_seq FROM conversation WHERE channel_id = $1
+		),
+		new_state AS (
+		  SELECT CASE WHEN $3::bigint IS NOT NULL
+		              THEN LEAST($3::bigint, conv.last_seq)
+		              ELSE conv.last_seq END AS last_read_seq
+		  FROM conv
+		)
+		INSERT INTO channel_read (channel_id, user_id, last_read_at, last_read_seq)
+		SELECT $1, $2, now(), last_read_seq
+		FROM new_state
+		ON CONFLICT (channel_id, user_id)
+		DO UPDATE SET last_read_at = now(),
+		              last_read_seq = GREATEST(channel_read.last_read_seq, EXCLUDED.last_read_seq)`,
+		channelID, parseUUID(userID), lastReadSeq)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to mark channel read")
+		return
+	}
 	h.clearDMPeerManualUnreadForChannel(r.Context(), workspaceID, userID, channelID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "previous_last_read_seq": previousLastReadSeq})
 }

@@ -398,6 +398,117 @@ func TestAgentDMSupervisionListReadOnly(t *testing.T) {
 	}
 }
 
+// TestSupervisedAgentPairUnreadAndMarkRead (LRM-762): supervised agent_pair list
+// projects real unread from channel_read; owner mark-read clears it without
+// becoming a channel_member (write stays forbidden).
+func TestSupervisedAgentPairUnreadAndMarkRead(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	firstAgentID := createHandlerTestAgent(t, "Unread A "+uuid.NewString(), []byte("[]"))
+	secondAgentID := createHandlerTestAgent(t, "Unread B "+uuid.NewString(), []byte("[]"))
+	canonical := dmCanonicalName("agent", firstAgentID, "agent", secondAgentID)
+	channel, created := testHandler.createDMChannel(
+		ctx,
+		nil,
+		testWorkspaceID,
+		testUserID,
+		canonical,
+		[]dmMember{
+			{memberType: "agent", memberID: parseUUID(firstAgentID)},
+			{memberType: "agent", memberID: parseUUID(secondAgentID)},
+		},
+	)
+	if !created {
+		t.Fatal("create supervised A2A DM channel failed")
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM channel WHERE id = $1`, channel.ID)
+	})
+
+	msg, err := testHandler.insertChannelMessage(
+		ctx,
+		parseUUID(channel.ID),
+		parseUUID(testWorkspaceID),
+		"agent",
+		parseUUID(firstAgentID),
+		"Unread A",
+		"supervised unread seed",
+		"multica",
+		nil,
+		pgtype.UUID{},
+		pgtype.UUID{},
+		nil,
+		0,
+	)
+	if err != nil {
+		t.Fatalf("seed supervised message: %v", err)
+	}
+
+	before := listedDMItemForTest(t, channel.ID)
+	if before == nil {
+		t.Fatal("supervised channel missing from DM list")
+	}
+	if before.RealUnread != 1 || before.Unread != 1 {
+		t.Fatalf("supervised unread before read = real:%d total:%d, want 1/1", before.RealUnread, before.Unread)
+	}
+
+	markReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channel.ID+"/read", nil),
+		),
+		"channelId",
+		channel.ID,
+	)
+	markRec := httptest.NewRecorder()
+	testHandler.MarkChannelRead(markRec, markReq)
+	if markRec.Code != http.StatusOK {
+		t.Fatalf("supervisor mark-read: status=%d body=%s", markRec.Code, markRec.Body.String())
+	}
+
+	after := listedDMItemForTest(t, channel.ID)
+	if after == nil {
+		t.Fatal("supervised channel missing after mark-read")
+	}
+	if after.RealUnread != 0 || after.Unread != 0 {
+		t.Fatalf("supervised unread after read = real:%d total:%d, want 0/0", after.RealUnread, after.Unread)
+	}
+	if after.LastReadSeq == nil || *after.LastReadSeq != msg.Seq {
+		t.Fatalf("supervised last_read_seq = %v, want %d", after.LastReadSeq, msg.Seq)
+	}
+
+	var memberCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_member
+		WHERE channel_id = $1 AND member_type = 'user' AND member_id = $2`,
+		channel.ID, testUserID).Scan(&memberCount); err != nil {
+		t.Fatalf("count channel_member: %v", err)
+	}
+	if memberCount != 0 {
+		t.Fatalf("mark-read must not add supervisor as channel_member; count=%d", memberCount)
+	}
+
+	sendReq := withURLParam(
+		withChatTestWorkspaceCtx(
+			t,
+			newRequestAs(testUserID, http.MethodPost, "/api/channels/"+channel.ID+"/messages", map[string]any{
+				"content":           "still read-only",
+				"client_message_id": uuid.NewString(),
+			}),
+		),
+		"channelId",
+		channel.ID,
+	)
+	sendRec := httptest.NewRecorder()
+	testHandler.SendChannelMessage(sendRec, sendReq)
+	if sendRec.Code != http.StatusForbidden {
+		t.Fatalf("supervisor send after mark-read: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+}
+
 // TestSupervisedAgentPairListPreferences (LRM-845): owner may pin/mute/mark_unread/close
 // a supervised agent_pair DM; prefs key by channel in dm_peer_state; list projects them;
 // non-owners stay 403; message send stays read-only.

@@ -230,7 +230,10 @@ import {
 } from "./conversation-activity-tasks";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
 import { DmConversation } from "./dm-conversation";
-import { useAgentBubbleUnreadByAgent } from "../../chat/lib/agent-bubble-unread";
+import {
+  dmAgentBubbleActivity,
+  useAgentBubbleActivityByAgent,
+} from "../../chat/lib/agent-bubble-unread";
 import {
   ChannelListSkeleton,
   InitialChannelsShellSkeleton,
@@ -886,7 +889,7 @@ export function ChannelsPage({
   // (click or ?channel= deep link), so the list shows until the user opens a
   // channel and the Back button (which clears activeId) returns to it.
   const { data: dms = [], refetch: refetchDms } = useQuery(dmListOptions(wsId));
-  const bubbleUnreadByAgent = useAgentBubbleUnreadByAgent(wsId);
+  const bubbleActivityByAgent = useAgentBubbleActivityByAgent(wsId);
   const lastSelectedChannelId = useLastSelectedChannelStore(
     (state) => state.lastSelectedChannelId,
   );
@@ -3108,6 +3111,7 @@ export function ChannelsPage({
               {filteredPinnedEntries.map((entry) => {
                 if (entry.kind === "dm") {
                   const dm = entry.dm;
+                  const bubble = dmAgentBubbleActivity(dm, bubbleActivityByAgent);
                   return (
                     <DmConversationRow
                       key={`pinned-dm:${dm.source}:${dm.id}`}
@@ -3117,11 +3121,8 @@ export function ChannelsPage({
                       resolveMentionPreview={resolveMentionPreview}
                       members={workspaceMembers}
                       agents={agents}
-                      bubbleUnreadCount={
-                        dm.peer.type === "agent"
-                          ? (bubbleUnreadByAgent.get(dm.peer.id) ?? 0)
-                          : 0
-                      }
+                      bubbleUnreadCount={bubble?.unreadCount ?? 0}
+                      bubbleLatestUpdatedAt={bubble?.latestUpdatedAt ?? null}
                       onSelect={() => selectDm(dm)}
                       onTogglePin={() => dmActions.togglePin(dm)}
                       onMarkUnread={() => dmActions.markUnread(dm)}

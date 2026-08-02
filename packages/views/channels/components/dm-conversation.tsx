@@ -90,12 +90,6 @@ import { DmAgentBubble } from "../../chat/components/dm-agent-bubble";
 import { DmAgentWorkingCue } from "./dm-agent-working-cue";
 import { useSelectionQuoteMenu } from "../lib/selection-quote-menu";
 
-// #692 finding 1: a supervised agent_pair owner is NOT a channel_member, so the
-// automatic member-only mark-read mutation 403s. Pass this no-op instead of the
-// real mark-read for the read-only supervision surface; the "N new" divider
-// still falls back to the entry cursor, no member-only request is fired.
-const noopMarkRead = () => {};
-
 /**
  * DM detail pane. Visible direct messages must use the R2 `dm_channel` stack:
  *  - `dm_channel` — the DM IS a kind='dm' channel, so we reuse the exact
@@ -848,14 +842,13 @@ function DmChannelConversation({
   // Mark read on open — clears the badge — and expose the pre-advance read
   // cursor from the mark-read response for the race-free "N new messages"
   // divider (#303).
+  // LRM-762: supervisors may mark-read (BE admits agent_pair owners via
+  // channel_read without requiring channel_member). Clears sidebar unread /
+  // manual-unread the same way as a speakable DM.
   const dividerLastReadSeq = useEntryReadCursor(
     channelId,
     dm.last_read_seq,
-    // #692 finding 1: gated on `supervisedReadOnly` specifically, not the
-    // broader `readOnly` — this avoids a 403 for the agent_pair supervisor
-    // (not a channel_member), but an archived-peer DM's viewer is a normal
-    // member and mark-read works fine (and should still clear the badge).
-    supervisedReadOnly ? noopMarkRead : markChannelRead,
+    markChannelRead,
   );
 
   useEffect(() => {
@@ -925,11 +918,9 @@ function DmChannelConversation({
     const e = payload as { channel_id?: string };
     if (e.channel_id !== channelId) return;
     qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
-    // #692 finding 1: don't auto-mark-read on new messages for the read-only
-    // supervision surface — the supervisor isn't a member, so it would 403.
-    // An archived-peer DM's viewer is a normal member (no 403 risk), so this
-    // stays keyed on `supervisedReadOnly`, not the broader `readOnly`.
-    if (!supervisedReadOnly) markChannelRead(channelId);
+    // LRM-762: while the supervised pane is open, advance the supervisor's
+    // channel_read cursor the same as a speakable DM (write path stays blocked).
+    markChannelRead(channelId);
   });
 
   useWSEvent("task:cancelled", () => {

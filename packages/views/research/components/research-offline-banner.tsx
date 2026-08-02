@@ -22,13 +22,12 @@ export function ResearchOfflineBanner({
   const showRetry = (failed || reconnecting) && !!onRetry;
 
   return (
-    <div
-      role="status"
-      aria-live="polite"
+    // `<output>` maps to role="status" — keep native tag (react-doctor prefer-tag-over-role).
+    <output
       data-testid="research-offline-banner"
       data-mode={mode}
       className={cn(
-        "relative z-[3] shrink-0 border-b px-3 py-2.5 sm:px-4",
+        "relative z-[3] block shrink-0 border-b px-3 py-2.5 sm:px-4",
         failed
           ? "border-destructive/35 bg-destructive/8"
           : "border-warning/35 bg-warning/10",
@@ -81,6 +80,6 @@ export function ResearchOfflineBanner({
           </Button>
         ) : null}
       </div>
-    </div>
+    </output>
   );
 }

@@ -476,8 +476,7 @@ export function ResearchListPage() {
       {isLoading ? (
         <ResearchSessionListSkeleton rows={4} label={t(($) => $.list.loading)} />
       ) : !data && !online ? (
-        <div
-          role="status"
+        <output
           data-testid="research-list-waiting-network"
           className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-warning/35 bg-warning/5 px-6 py-12 text-center"
         >
@@ -487,7 +486,7 @@ export function ResearchListPage() {
           <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
             {t(($) => $.connectivity.waiting_network_hint)}
           </p>
-        </div>
+        </output>
       ) : isError ? (
         <div
           role="alert"

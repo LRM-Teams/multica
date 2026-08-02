@@ -208,6 +208,16 @@ func TestHandleWriteFileRequest_AllowsShrinkingEditWhenAgentWorkspaceOverCapacit
 	if err := os.WriteFile(filepath.Join(agentRoot, existingFile), []byte("this file alone is already over the ten-byte cap"), 0o644); err != nil {
 		t.Fatalf("seed oversized existing file: %v", err)
 	}
+	// A second, untouched file — large enough that even after shrinking
+	// existingFile below, the workspace TOTAL remains well over cap. Per
+	// Parker's own worked example (used=1000, quota=10, shrinking one file
+	// from 900 to 800 still leaves the total at 900): the shrink must
+	// still succeed even though the resulting total is still over
+	// capacity — recovery is a multi-step process, not a single edit that
+	// must land back under quota in one shot.
+	if err := os.WriteFile(filepath.Join(agentRoot, "other.md"), []byte("this other file also keeps the total over cap even after the edit below"), 0o644); err != nil {
+		t.Fatalf("seed second oversized file: %v", err)
+	}
 
 	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	resp := writeFileRequestResult(t, d, protocol.WriteWorkdirFileRequestPayload{
@@ -217,6 +227,9 @@ func TestHandleWriteFileRequest_AllowsShrinkingEditWhenAgentWorkspaceOverCapacit
 		Content:   "short",
 	})
 	if resp.Error != "" {
-		t.Fatalf("resp = %+v, want no error — a write that shrinks the file must be allowed even while over capacity", resp)
+		t.Fatalf("resp = %+v, want no error — a write that shrinks the file must be allowed even while the workspace TOTAL remains over capacity afterward", resp)
+	}
+	if postEditTotal := dirSize(agentRoot); postEditTotal < cfg.AgentWorkspaceQuotaBytes {
+		t.Fatalf("test setup bug: post-edit total %d dropped under the %d cap — this no longer exercises the still-over-cap case", postEditTotal, cfg.AgentWorkspaceQuotaBytes)
 	}
 }

@@ -182,6 +182,27 @@
     "composer_hint": "Enter to send · Shift+Enter for newline",
     "sending": "Sending…"
   },
+  "interrupt": {
+    "title": "Session interrupted",
+    "hint": "Retry the wake, or reassign to an active fleet member / Ronaldo.",
+    "retry": "Retry",
+    "retrying": "Retrying…",
+    "retry_again": "Retry again",
+    "retry_failed_title": "Retry did not recover",
+    "retry_failed_hint": "Confirm the daemon/runtime is online, or ask Ronaldo to reassign.",
+    "reasons": {
+      "fleet_member_not_found": "Not a research fleet member",
+      "fleet_member_pending_review": "Member pending review",
+      "fleet_member_archived": "Member archived",
+      "fleet_member_not_active": "Member not active",
+      "agent_archived": "Agent archived",
+      "agent_no_runtime": "No runtime bound",
+      "agent_model_required": "Model not configured",
+      "runtime_offline": "Runtime / connection lost",
+      "wake_internal_error": "Wake internal error",
+      "unknown": "Wake failed"
+    }
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",

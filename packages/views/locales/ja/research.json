@@ -182,6 +182,27 @@
     "composer_hint": "Enter で送信 · Shift+Enter で改行",
     "sending": "送信中…"
   },
+  "interrupt": {
+    "title": "セッション中断",
+    "hint": "再起動を試すか、アクティブなメンバー／ロナウドへ再割当してください。",
+    "retry": "再試行",
+    "retrying": "再試行中…",
+    "retry_again": "もう一度再試行",
+    "retry_failed_title": "再試行でも復帰しませんでした",
+    "retry_failed_hint": "daemon/runtime がオンラインか確認するか、ロナウドに再割当を依頼してください。",
+    "reasons": {
+      "fleet_member_not_found": "調査艦隊のメンバーではありません",
+      "fleet_member_pending_review": "メンバー審査中",
+      "fleet_member_archived": "メンバーはアーカイブ済み",
+      "fleet_member_not_active": "メンバーが非アクティブ",
+      "agent_archived": "Agent はアーカイブ済み",
+      "agent_no_runtime": "runtime 未割当",
+      "agent_model_required": "モデル未設定",
+      "runtime_offline": "Runtime / 接続切断",
+      "wake_internal_error": "起動内部エラー",
+      "unknown": "起動失敗"
+    }
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",

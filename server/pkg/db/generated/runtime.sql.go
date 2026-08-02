@@ -765,6 +765,8 @@ func (q *Queries) ListAgentRuntimes(ctx context.Context, workspaceID pgtype.UUID
 			&i.Visibility,
 			&i.DisplayName,
 			&i.OfflineReason,
+			&i.StartingSince,
+			&i.PinnedVersion,
 		); err != nil {
 			return nil, err
 		}

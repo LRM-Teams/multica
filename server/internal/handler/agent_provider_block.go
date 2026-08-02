@@ -12,7 +12,7 @@ import (
 
 // applyAgentProviderQuotaBlock pins agent *display* as provider-quota blocked
 // (tasks #64/#77). No-op for transient capacity 429s. Owner-facing activity is
-// emitted once per lock window. Claim/drain gating is a separate card.
+// emitted once per lock window. Claim/drain skip while locked is task #92.
 func (h *Handler) applyAgentProviderQuotaBlock(
 	ctx context.Context,
 	workspaceID, agentID, runtimeID, taskID pgtype.UUID,
@@ -73,4 +73,17 @@ func (h *Handler) applyAgentProviderQuotaBlock(
 		"agent", agentID, "",
 		reason, msg, details,
 	)
+}
+
+// inboxFailureRetryable: sticky provider-quota failures are not auto-retryable
+// (task #92 / Parker: quota is an external hard constraint). Already-replied
+// turns stay non-retryable as before.
+func inboxFailureRetryable(errText, failureReason string, alreadyReplied bool) bool {
+	if alreadyReplied {
+		return false
+	}
+	if taskfailure.IsStickyProviderQuotaLock(errText, failureReason) {
+		return false
+	}
+	return true
 }

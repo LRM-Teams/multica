@@ -2379,8 +2379,8 @@ func TestSetAgentSkillsRejectsMalformedSkillID(t *testing.T) {
 
 func TestAddAgentSkillsPreservesExistingAssignments(t *testing.T) {
 	agentID := createHandlerTestAgent(t, "Handler Add Skill Preserves Existing", nil)
-	existingSkillID := insertHandlerTestSkill(t, "add-preserve-existing", "existing body")
-	newSkillID := insertHandlerTestSkill(t, "add-preserve-new", "new body")
+	existingSkillID, _ := insertHandlerTestSkill(t, "add-preserve-existing", "existing body")
+	newSkillID, _ := insertHandlerTestSkill(t, "add-preserve-new", "new body")
 
 	if _, err := testPool.Exec(context.Background(),
 		`INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`,
@@ -2409,8 +2409,8 @@ func TestAddAgentSkillsPreservesExistingAssignments(t *testing.T) {
 
 func TestAddAgentSkillsAddsMultipleAndIsIdempotent(t *testing.T) {
 	agentID := createHandlerTestAgent(t, "Handler Add Multiple Skills", nil)
-	skillA := insertHandlerTestSkill(t, "add-multiple-a", "a body")
-	skillB := insertHandlerTestSkill(t, "add-multiple-b", "b body")
+	skillA, _ := insertHandlerTestSkill(t, "add-multiple-a", "a body")
+	skillB, _ := insertHandlerTestSkill(t, "add-multiple-b", "b body")
 
 	for attempt := 0; attempt < 2; attempt++ {
 		w := httptest.NewRecorder()

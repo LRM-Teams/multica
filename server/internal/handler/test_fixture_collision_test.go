@@ -24,8 +24,8 @@ func TestInsertHandlerTestSkill_RepeatedCallsDoNotCollide(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	first := insertHandlerTestSkill(t, "collision-check", "first body")
-	second := insertHandlerTestSkill(t, "collision-check", "second body")
+	first, _ := insertHandlerTestSkill(t, "collision-check", "first body")
+	second, _ := insertHandlerTestSkill(t, "collision-check", "second body")
 	if first == second {
 		t.Fatalf("two calls with the same namePrefix produced the same skill id %q", first)
 	}

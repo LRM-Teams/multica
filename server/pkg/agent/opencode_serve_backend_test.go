@@ -6,12 +6,21 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
 
 const openCodeServeHelperEnv = "MULTICA_OPENCODE_SERVE_HELPER"
 const openCodeServeHelperPortFileEnv = "MULTICA_OPENCODE_SERVE_HELPER_PORT_FILE"
+
+// openCodeServeHelperEventDelayEnv / openCodeServeHelperHandshakeMarkerFileEnv
+// let TestEnsureServerBlocksUntilSSEHandshakeCompletes control and observe
+// the fake process's /event handshake timing from the outer test process —
+// see fakeOpenCodeServeServer.eventDelay/handshakeMarkerFile.
+const openCodeServeHelperEventDelayEnv = "MULTICA_OPENCODE_SERVE_HELPER_EVENT_DELAY_MS"
+const openCodeServeHelperHandshakeMarkerFileEnv = "MULTICA_OPENCODE_SERVE_HELPER_HANDSHAKE_MARKER_FILE"
+const openCodeServeHelperEventStatusEnv = "MULTICA_OPENCODE_SERVE_HELPER_EVENT_STATUS"
 
 // fakeOpenCodeServeBinaryScript is a POSIX-sh shim impersonating `opencode
 // serve --port N --hostname H`. It cannot itself speak HTTP, so it extracts
@@ -52,6 +61,17 @@ func TestOpenCodeServeHelperProcess(t *testing.T) {
 	fake.scriptEvents = func(sessionID string) []string { return []string{sessionIdleEvent(sessionID)} }
 	fake.scriptMessages = func(sessionID string) []opencodeServeMessage {
 		return []opencodeServeMessage{{ID: "msg_1", Parts: []opencodeServeMessagePart{{Type: "text"}}}}
+	}
+	if ms := os.Getenv(openCodeServeHelperEventDelayEnv); ms != "" {
+		if n, err := strconv.Atoi(ms); err == nil {
+			fake.eventDelay = time.Duration(n) * time.Millisecond
+		}
+	}
+	fake.handshakeMarkerFile = os.Getenv(openCodeServeHelperHandshakeMarkerFileEnv)
+	if status := os.Getenv(openCodeServeHelperEventStatusEnv); status != "" {
+		if n, err := strconv.Atoi(status); err == nil {
+			fake.eventStatus = n
+		}
 	}
 	srv := &http.Server{Addr: "127.0.0.1:" + string(portBytes), Handler: fake.handler()}
 	_ = srv.ListenAndServe()
@@ -165,5 +185,66 @@ func TestExecuteEndToEndAgainstFakeServeProcess(t *testing.T) {
 	result := <-session.Result
 	if result.Status != "completed" {
 		t.Fatalf("result.Status = %q, want completed (result=%+v)", result.Status, result)
+	}
+}
+
+// TestEnsureServerBlocksUntilSSEHandshakeCompletes proves ensureServer
+// itself waits for the SSE subscription to be live before returning a
+// usable process — not just that runEventLoop eventually closes
+// connectedCh, which TestRunEventLoopConnectedCh* already covers in
+// opencode_serve_client_test.go.
+//
+// That distinction matters because those two tests exercise runEventLoop in
+// isolation and never touch ensureServer's return timing at all. Alice
+// proved this by mutation: deleting the `select { case
+// <-client.connectedCh: ... }` block from ensureServer (goroutine and
+// signature unchanged) left both of those tests fully green — the exact gap
+// Parker/Alice/Vera/Nash independently converged on for this PR.
+//
+// Deliberately an ordering assertion, not a duration one: CI load already
+// makes fixed-duration thresholds flake elsewhere in this package (see task
+// #44's history above). The fake process's /event handler withholds its
+// handshake for a fixed delay, then writes a marker file at the exact
+// instant it completes. If ensureServer returns before that marker exists,
+// it returned before a listener was actually registered — the #49 race,
+// reintroduced through ensureServer instead of through runEventLoop.
+func TestEnsureServerBlocksUntilSSEHandshakeCompletes(t *testing.T) {
+	cfg := newTestOpenCodeServeBackendConfig(t)
+	markerFile := filepath.Join(t.TempDir(), "handshake-marker")
+	cfg.Env[openCodeServeHelperEventDelayEnv] = "300"
+	cfg.Env[openCodeServeHelperHandshakeMarkerFileEnv] = markerFile
+
+	backend := newOpenCodeServeBackend(cfg)
+	t.Cleanup(backend.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := backend.ensureServer(ctx, ExecOptions{}); err != nil {
+		t.Fatalf("ensureServer: %v", err)
+	}
+
+	if _, err := os.Stat(markerFile); err != nil {
+		t.Fatalf("ensureServer returned before the SSE handshake marker was written — it did not actually wait for the subscription to be live: %v", err)
+	}
+}
+
+// TestEnsureServerRejectsNon2xxEventResponse proves the second door onto
+// the same race (Parker's finding): opencode can answer /event with a
+// non-2xx status — plausible during its own startup window — before a
+// subscription is genuinely live. http.Do returns no transport error for
+// that response, so ensureServer must not treat "got a response" alone as
+// "connected"; it must surface a connection failure instead of proceeding
+// as if a listener were registered.
+func TestEnsureServerRejectsNon2xxEventResponse(t *testing.T) {
+	cfg := newTestOpenCodeServeBackendConfig(t)
+	cfg.Env[openCodeServeHelperEventStatusEnv] = "503"
+
+	backend := newOpenCodeServeBackend(cfg)
+	t.Cleanup(backend.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := backend.ensureServer(ctx, ExecOptions{}); err == nil {
+		t.Fatal("ensureServer succeeded against a /event endpoint returning 503, want a connection error")
 	}
 }

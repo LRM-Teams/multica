@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +34,18 @@ type fakeOpenCodeServeServer struct {
 	scriptEvents func(sessionID string) []string
 	// scriptMessages controls what GET /session/:id/message returns.
 	scriptMessages func(sessionID string) []opencodeServeMessage
+	// eventDelay, when set, holds the /event handler's response for this
+	// long before writing headers — lets a test simulate a slow-to-accept
+	// SSE subscription against a *real* subprocess, distinct from the fast
+	// in-process httptest servers the runEventLoop-level tests use.
+	eventDelay time.Duration
+	// handshakeMarkerFile, when set, is written the instant the (possibly
+	// delayed) /event handshake completes — see eventDelay's doc comment.
+	handshakeMarkerFile string
+	// eventStatus, when non-zero, overrides /event's response status —
+	// lets a test simulate opencode answering with e.g. 503 before a
+	// subscription is actually live (see ensureServer's non-2xx handling).
+	eventStatus int
 }
 
 type fakeOpenCodeServeSession struct{ id string }
@@ -93,8 +106,29 @@ func (f *fakeOpenCodeServeServer) handler() http.Handler {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		if f.eventDelay > 0 {
+			select {
+			case <-time.After(f.eventDelay):
+			case <-r.Context().Done():
+				return
+			}
+		}
+		// Written at the instant the handshake actually completes — lets a
+		// separate OS process (the real ensureServer subprocess harness in
+		// opencode_serve_backend_test.go) observe *whether this happened yet*
+		// without racing wall-clock durations against ensureServer's return.
+		if f.handshakeMarkerFile != "" {
+			_ = os.WriteFile(f.handshakeMarkerFile, []byte("1"), 0o644)
+		}
+		status := http.StatusOK
+		if f.eventStatus != 0 {
+			status = f.eventStatus
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(status)
+		if status >= 300 {
+			return
+		}
 		ch := make(chan string, 64)
 		f.mu.Lock()
 		f.sseConns = append(f.sseConns, ch)
@@ -583,5 +617,35 @@ func TestRunEventLoopConnectedChReportsConnectionFailure(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("connectedCh did not close after a failed connection attempt")
+	}
+}
+
+// TestRunEventLoopConnectedChRejectsNon2xxStatus proves the second door onto
+// the same race Parker flagged: opencode can be up and answering /event with
+// a non-2xx status (e.g. still starting up, or a routing/auth hiccup) before
+// it has actually registered a subscriber. http.Do returns no transport
+// error in that case, so treating "Do succeeded" alone as "connected" would
+// let a turn proceed against a connection that was never a live SSE stream
+// — the exact silent-drop failure mode #49 is about, reached via a
+// different door than "never waited at all".
+func TestRunEventLoopConnectedChRejectsNon2xxStatus(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/event", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client := newOpenCodeServeClient(srv.URL, "opencode", "test-password", slog.Default())
+	t.Cleanup(client.close)
+	go client.runEventLoop(func(error) {})
+
+	select {
+	case <-client.connectedCh:
+		if client.connectErr == nil {
+			t.Fatal("connectErr = nil, want an error for a 503 /event response")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("connectedCh did not close after a non-2xx /event response")
 	}
 }

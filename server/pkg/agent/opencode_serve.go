@@ -816,6 +816,17 @@ func (c *opencodeServeClient) runEventLoop(onDone func(error)) {
 		onDone(err)
 		return
 	}
+	// A non-2xx response (e.g. an auth or routing failure) is not a live SSE
+	// subscription even though http.Do returned no transport error — treat
+	// it as a failed connection rather than closing connectedCh as if a
+	// listener were now registered.
+	if resp.StatusCode >= 300 {
+		resp.Body.Close()
+		c.connectErr = fmt.Errorf("event stream: unexpected status %d", resp.StatusCode)
+		close(c.connectedCh)
+		onDone(c.connectErr)
+		return
+	}
 	defer resp.Body.Close()
 
 	// The SSE handshake completed — opencode now has this connection

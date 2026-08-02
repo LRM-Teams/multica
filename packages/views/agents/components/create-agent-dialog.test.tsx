@@ -183,7 +183,7 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     document.body.innerHTML = "";
   });
 
-  it("disables another member's private runtime in the picker", () => {
+  it("excludes another member's private runtime from the picker entirely", () => {
     const mine = makeRuntime({ id: "rt-mine", name: "My Runtime", owner_id: ME, visibility: "private" });
     const othersPrivate = makeRuntime({
       id: "rt-others-private",
@@ -193,19 +193,36 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     });
     renderDialog([mine, othersPrivate]);
 
-    // Flip to "All" so other-owned runtimes show.
-    fireEvent.click(screen.getByText("All"));
     // Open the picker.
     fireEvent.click(
       screen.getByText("My Runtime", { selector: "span.truncate" }),
     );
 
-    const disabledRow = screen
-      .getByText("Others Private")
-      .closest("button") as HTMLButtonElement;
-    expect(disabledRow).not.toBeNull();
-    expect(disabledRow.disabled).toBe(true);
-    expect(disabledRow.title).toMatch(/Private runtime/i);
+    // Not shown-disabled — not shown at all. A private runtime that isn't
+    // mine has nothing for me to do with it.
+    expect(screen.queryByText("Others Private")).toBeNull();
+    // No mine/all toggle to reveal it, either.
+    expect(screen.queryByText("All")).toBeNull();
+    expect(screen.queryByText("Mine")).toBeNull();
+  });
+
+  it("shows empty copy when the computer has no usable runtime", () => {
+    const othersPrivate = makeRuntime({
+      id: "rt-others-private",
+      name: "Others Private",
+      owner_id: OTHER,
+      visibility: "private",
+    });
+    renderDialog([othersPrivate]);
+
+    // firstUsableMachine falls back to machines[0], so the trigger can still
+    // show the locked runtime name while the open list is empty.
+    fireEvent.click(
+      screen.getByText("Others Private", { selector: "span.truncate" }),
+    );
+    expect(screen.getByTestId("runtime-picker-empty")).toHaveTextContent(
+      /No usable runtime on this computer/i,
+    );
   });
 
   it("lets a plain member pick another member's public runtime", () => {
@@ -218,7 +235,6 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     });
     renderDialog([mine, othersPublic]);
 
-    fireEvent.click(screen.getByText("All"));
     fireEvent.click(
       screen.getByText("My Runtime", { selector: "span.truncate" }),
     );
@@ -302,9 +318,9 @@ describe("CreateAgentDialog runtime visibility gate", () => {
       owner_id: OTHER,
       visibility: "private",
     });
-    // Flip the picker to "All" so the locked runtime is at least
-    // visible — that's the scope where the selected-but-locked state
-    // can persist after the initial seed search returns nothing.
+    // The only runtime in scope is locked (someone else's private one),
+    // so the seed search finds nothing usable and Create must stay
+    // disabled rather than let the user submit a runtime it can't select.
     const template = makeTemplate("rt-only-others-private");
     renderDialog([onlyOthersPrivate], template);
 

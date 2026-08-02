@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Cloud, Lock, Monitor } from "lucide-react";
+import { Cloud, Monitor } from "lucide-react";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import type { AgentRuntime, MemberWithUser } from "@multica/core/types";
 import { ActorAvatar } from "../../../common/actor-avatar";
@@ -13,8 +13,6 @@ import { ProviderLogo } from "../../../runtimes/components/provider-logo";
 import { runtimeMachineKey } from "../../../runtimes/components/runtime-machines";
 import { CHIP_CLASS } from "./chip";
 import { useT } from "../../../i18n";
-
-type Filter = "mine" | "all";
 
 /**
  * Inline runtime/code-agent picker for the agent inspector.
@@ -40,7 +38,6 @@ export function RuntimePicker({
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
-  const [filter, setFilter] = useState<Filter>("mine");
 
   const selected = runtimes.find((r) => r.id === value) ?? null;
   const Icon = selected?.runtime_mode === "cloud" ? Cloud : Monitor;
@@ -58,35 +55,23 @@ export function RuntimePicker({
     return runtimes.filter((r) => runtimeMachineKey(r) === boundMachineKey);
   }, [runtimes, boundMachineKey]);
 
-  // Compute filtered list unconditionally — the early `!canEdit` return
-  // below would otherwise re-order this hook across renders.
-  const isDisabled = (r: AgentRuntime): boolean => {
-    if (!currentUserId) return false;
-    if (r.owner_id === currentUserId) return false;
-    return r.visibility !== "public";
-  };
+  // Others' private runtimes are excluded outright, not shown-disabled — a
+  // private runtime that isn't mine and isn't public has nothing for me to
+  // do with it.
   const filtered = useMemo(() => {
-    const locked = (r: AgentRuntime): boolean => {
-      if (!currentUserId) return false;
-      if (r.owner_id === currentUserId) return false;
-      return r.visibility !== "public";
+    const isUsable = (r: AgentRuntime): boolean => {
+      if (!currentUserId) return true;
+      if (r.owner_id === currentUserId) return true;
+      return r.visibility === "public";
     };
-    const list =
-      filter === "mine" && currentUserId
-        ? sameComputerRuntimes.filter((r) => r.owner_id === currentUserId)
-        : sameComputerRuntimes;
-    return list.toSorted((a, b) => {
+    return sameComputerRuntimes.filter(isUsable).toSorted((a, b) => {
       const aMine = a.owner_id === currentUserId;
       const bMine = b.owner_id === currentUserId;
       if (aMine && !bMine) return -1;
       if (!aMine && bMine) return 1;
-      const aDisabled = locked(a);
-      const bDisabled = locked(b);
-      if (!aDisabled && bDisabled) return -1;
-      if (aDisabled && !bDisabled) return 1;
       return 0;
     });
-  }, [sameComputerRuntimes, filter, currentUserId]);
+  }, [sameComputerRuntimes, currentUserId]);
 
   if (!canEdit) {
     const isOnline = !!selected && deriveRuntimeHealth(selected, now) === "online";
@@ -117,10 +102,6 @@ export function RuntimePicker({
         status: isOnline ? t(($) => $.pickers.runtime_online) : t(($) => $.pickers.runtime_offline),
       })
     : t(($) => $.pickers.runtime_tooltip_none);
-
-  const hasOtherRuntimes = sameComputerRuntimes.some(
-    (r) => r.owner_id !== currentUserId,
-  );
 
   const getOwner = (id: string | null) =>
     id ? members.find((m) => m.user_id === id) ?? null : null;
@@ -157,26 +138,6 @@ export function RuntimePicker({
           )}
         </>
       }
-      header={
-        hasOtherRuntimes ? (
-          <div className="p-2">
-            <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
-              <FilterButton
-                active={filter === "mine"}
-                onClick={() => setFilter("mine")}
-              >
-                {t(($) => $.scope.mine)}
-              </FilterButton>
-              <FilterButton
-                active={filter === "all"}
-                onClick={() => setFilter("all")}
-              >
-                {t(($) => $.scope.all)}
-              </FilterButton>
-            </div>
-          </div>
-        ) : undefined
-      }
     >
       {filtered.length === 0 ? (
         <p className="px-2 py-3 text-center text-xs text-muted-foreground">
@@ -186,12 +147,10 @@ export function RuntimePicker({
         filtered.map((rt) => {
           const owner = getOwner(rt.owner_id);
           const rtOnline = deriveRuntimeHealth(rt, now) === "online";
-          const locked = isDisabled(rt);
           const tooltip = [
             rt.name,
             owner ? t(($) => $.pickers.runtime_owned_by, { name: owner.name }) : null,
             rtOnline ? t(($) => $.pickers.runtime_online) : t(($) => $.pickers.runtime_offline),
-            locked ? t(($) => $.create_dialog.runtime_private_locked_tooltip) : null,
           ]
             .filter(Boolean)
             .join(" · ");
@@ -199,11 +158,7 @@ export function RuntimePicker({
             <PickerItem
               key={rt.id}
               selected={rt.id === value}
-              disabled={locked}
-              onClick={() => {
-                if (locked) return;
-                void select(rt.id);
-              }}
+              onClick={() => void select(rt.id)}
               tooltip={tooltip}
             >
               <ProviderLogo
@@ -218,12 +173,6 @@ export function RuntimePicker({
                   {rt.runtime_mode === "cloud" && (
                     <span className="shrink-0 rounded bg-brand/10 px-1 text-[10px] font-medium text-brand">
                       {t(($) => $.create_dialog.runtime_cloud_badge)}
-                    </span>
-                  )}
-                  {locked && (
-                    <span className="shrink-0 inline-flex items-center gap-0.5 rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground">
-                      <Lock className="h-2.5 w-2.5" />
-                      {t(($) => $.create_dialog.runtime_private_badge)}
                     </span>
                   )}
                 </div>
@@ -259,29 +208,5 @@ export function RuntimePicker({
         })
       )}
     </PropertyPicker>
-  );
-}
-
-function FilterButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex-1 rounded px-2 py-0.5 text-xs font-medium transition-colors ${
-        active
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:text-foreground"
-      }`}
-    >
-      {children}
-    </button>
   );
 }

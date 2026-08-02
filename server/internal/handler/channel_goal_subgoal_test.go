@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -322,12 +323,17 @@ func TestChannelGoalSubgoalSourceMessageIDSameChannel(t *testing.T) {
 	if clear.Code != http.StatusOK {
 		t.Fatalf("clear source = %d: %s", clear.Code, clear.Body.String())
 	}
-	_ = json.Unmarshal(clear.Body.Bytes(), &env)
-	if env.Subgoal == nil {
-		t.Fatalf("clear decode empty: %s", clear.Body.String())
+	// Fresh envelope: json.Unmarshal into a prior struct keeps old pointer
+	// fields when the response omits source_message_id (omitempty).
+	var clearedEnv subgoalEnvelope
+	if err := json.Unmarshal(clear.Body.Bytes(), &clearedEnv); err != nil || clearedEnv.Subgoal == nil {
+		t.Fatalf("clear decode: %v body=%s", err, clear.Body.String())
 	}
-	if env.Subgoal.SourceMessageID != nil {
-		t.Fatalf("cleared source_message_id still set: %q body=%s", *env.Subgoal.SourceMessageID, clear.Body.String())
+	if clearedEnv.Subgoal.SourceMessageID != nil {
+		t.Fatalf("cleared source_message_id still set: %q body=%s", *clearedEnv.Subgoal.SourceMessageID, clear.Body.String())
+	}
+	if !strings.Contains(clear.Body.String(), `"version":2`) {
+		t.Fatalf("expected version bump on clear, body=%s", clear.Body.String())
 	}
 
 	// Create without field still works (backward compatible).

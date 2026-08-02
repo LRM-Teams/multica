@@ -109,6 +109,9 @@ export function ActorProfileTrigger({
       <HoverCardTrigger
         render={triggerRender}
         className={triggerClassName}
+        data-testid="actor-profile-trigger"
+        data-member-type={memberType}
+        data-member-id={memberId}
         onClickCapture={onClickCapture}
       >
         {children}
@@ -120,6 +123,10 @@ export function ActorProfileTrigger({
         // IM-density profile peek: one shared size for author + @mention.
         // ~300px is closer to Slack/Discord hover cards than a 360 panel.
         className="w-[300px] p-0"
+        // LRM-740 — Thread's narrow right rail often parks the peek over the
+        // avatar. Clicking the peek must still open the Profile dock (same
+        // handler as the trigger), not silently no-op on the popup.
+        onClick={onClickCapture}
       >
         {content}
       </HoverCardContent>
@@ -165,6 +172,9 @@ function MobileActorProfileTrigger({
       <span
         role="button"
         tabIndex={0}
+        data-testid="actor-profile-trigger"
+        data-member-type={memberType}
+        data-member-id={memberId}
         className={triggerClassName}
         onClickCapture={onClickCapture}
         onClick={openProfile}
@@ -183,6 +193,9 @@ function MobileActorProfileTrigger({
   return (
     <button
       type="button"
+      data-testid="actor-profile-trigger"
+      data-member-type={memberType}
+      data-member-id={memberId}
       className={triggerClassName}
       onClickCapture={onClickCapture}
       onClick={openProfile}

@@ -795,8 +795,15 @@ export function ChannelsPage({
         snapshot?: AgentPanelIdentitySnapshot;
         /** LRM-877 Dock Stack — pop target human Profile under Agent. */
         returnToMemberId?: string;
+        /** LRM-740 — Profile/Agent opened from Thread; close pops Thread back. */
+        returnToThread?: ChannelMessage;
       }
-    | { kind: "member"; userId: string }
+    | {
+        kind: "member";
+        userId: string;
+        /** LRM-740 — Profile opened from Thread; close pops Thread back. */
+        returnToThread?: ChannelMessage;
+      }
     | { kind: "channel-details"; tab: ChannelDetailsTab }
   >({ kind: "none" });
   const [threadDraftEmpty, setThreadDraftEmpty] = useState(true);
@@ -813,11 +820,33 @@ export function ChannelsPage({
   const setOpenThreadRoot = useCallback((next: ChannelMessage | null) => {
     setSidePanel(next ? { kind: "thread", message: next } : { kind: "none" });
   }, []);
+  // LRM-740 — X on Agent/Member restores Thread when the dock was pushed from
+  // a Thread avatar click (embedded Activity thread-only surface would
+  // otherwise fall through to a skeleton — silent no-op). Member pop stays on
+  // `handlePopAgentToMember` / onBack — X dismisses the Agent frame entirely.
   const setSelectedAgentPanelId = useCallback((next: string | null) => {
-    setSidePanel(next ? { kind: "agent", agentId: next } : { kind: "none" });
+    if (next) {
+      setSidePanel({ kind: "agent", agentId: next });
+      return;
+    }
+    setSidePanel((current) => {
+      if (current.kind === "agent" && current.returnToThread) {
+        return { kind: "thread", message: current.returnToThread };
+      }
+      return { kind: "none" };
+    });
   }, []);
   const setSelectedMemberPanelId = useCallback((next: string | null) => {
-    setSidePanel(next ? { kind: "member", userId: next } : { kind: "none" });
+    if (next) {
+      setSidePanel({ kind: "member", userId: next });
+      return;
+    }
+    setSidePanel((current) => {
+      if (current.kind === "member" && current.returnToThread) {
+        return { kind: "thread", message: current.returnToThread };
+      }
+      return { kind: "none" };
+    });
   }, []);
   const openChannelDetails = useCallback(
     (tab: ChannelDetailsTab = "about") => {
@@ -2443,6 +2472,8 @@ export function ChannelsPage({
       // LRM-877 Dock Stack: open Agent on top of a human Profile without
       // losing the pop target. Explicit options win; else inherit from the
       // currently open member (or an existing agent stack frame).
+      // LRM-740: also keep Thread under Profile/Agent so avatar clicks from
+      // Thread (esp. Activity embed) don't fall through to a skeleton.
       setSidePanel((current) => {
         const returnToMemberId =
           options?.returnToMemberId ??
@@ -2451,11 +2482,18 @@ export function ChannelsPage({
             : current.kind === "agent"
               ? current.returnToMemberId
               : undefined);
+        const returnToThread =
+          current.kind === "thread"
+            ? current.message
+            : current.kind === "member" || current.kind === "agent"
+              ? current.returnToThread
+              : undefined;
         return {
           kind: "agent",
           agentId,
           snapshot,
           ...(returnToMemberId ? { returnToMemberId } : {}),
+          ...(returnToThread ? { returnToThread } : {}),
         };
       });
     },
@@ -2463,13 +2501,34 @@ export function ChannelsPage({
   );
 
   const handleOpenMemberPanel = useCallback((userId: string) => {
-    setSidePanel({ kind: "member", userId });
+    setSidePanel((current) => {
+      const returnToThread =
+        current.kind === "thread"
+          ? current.message
+          : current.kind === "agent"
+            ? current.returnToThread
+            : undefined;
+      return {
+        kind: "member",
+        userId,
+        ...(returnToThread ? { returnToThread } : {}),
+      };
+    });
   }, []);
 
   const handlePopAgentToMember = useCallback(() => {
     setSidePanel((current) => {
       if (current.kind === "agent" && current.returnToMemberId) {
-        return { kind: "member", userId: current.returnToMemberId };
+        return {
+          kind: "member",
+          userId: current.returnToMemberId,
+          ...(current.returnToThread
+            ? { returnToThread: current.returnToThread }
+            : {}),
+        };
+      }
+      if (current.kind === "agent" && current.returnToThread) {
+        return { kind: "thread", message: current.returnToThread };
       }
       return { kind: "none" };
     });
@@ -3569,7 +3628,8 @@ export function ChannelsPage({
             { peer_type: "user", peer_id: userId },
             {
               onSuccess: (dm) => {
-                setSelectedMemberPanelId(null);
+                // Leaving for a DM — drop any Thread return stack.
+                setSidePanel({ kind: "none" });
                 selectDm(dm);
               },
               onError: () => showErrorToast(t(($) => $.dm.open_failed)),
@@ -4305,13 +4365,19 @@ export function ChannelsPage({
   // Activity embed (LRM-388 / LRM-400): pin to thread-only or channel-stream-only
   // so the Activity right pane never mounts the desktop dual-pane (blank half +
   // stranded Stop all). DMs keep the full DmConversation shell.
+  // LRM-740 — Activity embed `embeddedSurface=thread` must still host the
+  // Agent/Member dock when a Thread avatar is clicked. Previously only
+  // `threadPanel` was mounted, so opening Profile cleared Thread and fell
+  // through to the skeleton (silent no-op).
   const detailSurface = activeDmId
     ? dmDetailPane
     : embedded
       ? embeddedSurface === "thread"
-        ? (threadPanel ?? (
-            <ConversationSwitchSkeleton isMobile={isMobile} />
-          ))
+        ? (threadPanel ??
+            agentPanel ??
+            memberPanel ?? (
+              <ConversationSwitchSkeleton isMobile={isMobile} />
+            ))
         : channelConversationPane
       : detailPane;
 

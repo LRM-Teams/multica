@@ -57,6 +57,23 @@ describe("ActorProfileTrigger — stretch-proof anchor (desktop)", () => {
     expect(trigger.className).toContain("shrink-0");
     expect(trigger.className).toContain("h-fit");
     expect(trigger.className).toContain("w-fit");
+    expect(trigger).toHaveAttribute("data-testid", "actor-profile-trigger");
+  });
+
+  it("LRM-740: onClickCapture fires when the trigger is clicked (dock open path)", () => {
+    const onClickCapture = vi.fn();
+    render(
+      <ActorProfileTrigger
+        memberType="user"
+        memberId="user-9"
+        onClickCapture={onClickCapture}
+      >
+        <span>Bob</span>
+      </ActorProfileTrigger>,
+    );
+
+    fireEvent.click(screen.getByTestId("actor-profile-trigger"));
+    expect(onClickCapture).toHaveBeenCalledTimes(1);
   });
 });
 

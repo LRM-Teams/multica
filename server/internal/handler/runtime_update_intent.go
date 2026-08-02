@@ -86,13 +86,6 @@ func (i *UpdateIntent) Live() bool {
 	return i != nil && i.CancelledAt == nil && i.ExpiredAt == nil && i.GivenUpAt == nil
 }
 
-// DueForRetry reports whether enough backoff time has passed since the last
-// recorded failure (or immediately, if there's never been one) to attempt
-// materialization again.
-func (i *UpdateIntent) DueForRetry(now time.Time) bool {
-	return i != nil && !now.Before(i.NextRetryAt)
-}
-
 type UpdateIntentStore interface {
 	// Create replaces any existing intent for runtimeID (last-write-wins —
 	// mirrors InitiateUpdate's existing single-active-request semantics).

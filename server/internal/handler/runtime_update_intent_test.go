@@ -179,7 +179,11 @@ func TestPostgresUpdateIntentStore_RecordFailure_IncrementsAndBacksOff(t *testin
 	if !after.NextRetryAt.After(before) {
 		t.Fatalf("NextRetryAt = %v should be pushed into the future (after %v)", after.NextRetryAt, before)
 	}
-	if after.DueForRetry(time.Now()) {
+	due, err := store.IsDueForRetry(ctx, runtimeID)
+	if err != nil {
+		t.Fatalf("IsDueForRetry: %v", err)
+	}
+	if due {
 		t.Fatalf("should not be due for retry immediately after a failure, backoff = %v", after.NextRetryAt.Sub(before))
 	}
 	if !after.Live() {
@@ -302,7 +306,11 @@ func TestPostgresUpdateIntentStore_CreateAfterGivenUpResetsFailureBookkeeping(t 
 	if recreated.GivenUpAt != nil {
 		t.Fatalf("re-created intent should clear GivenUpAt, got %v", recreated.GivenUpAt)
 	}
-	if !recreated.DueForRetry(time.Now()) {
+	due, err := store.IsDueForRetry(ctx, runtimeID)
+	if err != nil {
+		t.Fatalf("IsDueForRetry: %v", err)
+	}
+	if !due {
 		t.Fatalf("re-created intent should be immediately eligible, NextRetryAt = %v", recreated.NextRetryAt)
 	}
 }

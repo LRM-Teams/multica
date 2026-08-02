@@ -152,3 +152,31 @@ func TestEphemeralSandboxManagerCleanup_SetsOfflineReason(t *testing.T) {
 		t.Fatalf("offline_reason = %+v, want valid %q", offlineReason, "sandbox_teardown")
 	}
 }
+
+// TestAttachAgentRuntimeNames_StoppedRuntimeShowsStopped is the wiring check
+// for the primary agent-list/detail endpoint (GET /agents, GetAgent), which
+// goes through attachAgentRuntimeNames's own hand-rolled raw-SQL query
+// rather than a sqlc-generated `SELECT *`. That query originally omitted
+// offline_reason, so a confirmed-stopped runtime would silently fall back to
+// "offline" on the one surface most users actually look at, even though the
+// pure agentRuntimeDisplayStatus function and the Activity Health tab both
+// already handled it correctly (found during adversarial review, task ①).
+func TestAttachAgentRuntimeNames_StoppedRuntimeShowsStopped(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID, runtimeID := createAgentHealthFixture(t, "offline", time.Now(), time.Now())
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent_runtime SET offline_reason = 'daemon_deregistered' WHERE id = $1
+	`, runtimeID); err != nil {
+		t.Fatalf("seed offline_reason: %v", err)
+	}
+
+	resps := []AgentResponse{{ID: agentID, RuntimeID: runtimeID, Status: "idle"}}
+	testHandler.attachAgentRuntimeNames(context.Background(), resps)
+
+	if resps[0].RuntimeDisplayStatus != agentDisplayStatusStopped {
+		t.Fatalf("RuntimeDisplayStatus = %q, want %q — the agent-list endpoint must surface a confirmed intentional stop, not fall back to generic offline",
+			resps[0].RuntimeDisplayStatus, agentDisplayStatusStopped)
+	}
+}

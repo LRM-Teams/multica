@@ -107,10 +107,13 @@ function makeMachine(
 
 function renderOps(machine: RuntimeMachine) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // Sample once outside JSX — react-doctor flags Date.now() in JSX for SSR
+  // hydration mismatch; this file is RTL-only and never SSR'd.
+  const now = Date.now();
   return render(
     <QueryClientProvider client={qc}>
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <MachineOpsSection machine={machine} now={Date.now()} />
+        <MachineOpsSection machine={machine} now={now} />
       </I18nProvider>
     </QueryClientProvider>,
   );

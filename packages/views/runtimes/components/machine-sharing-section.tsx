@@ -62,7 +62,7 @@ export function MachineSharingSection({ machine }: { machine: RuntimeMachine }) 
   if (machine.runtimes.length === 0) return null;
 
   // Stable order: provider name then id
-  const rows = [...machine.runtimes].sort((a, b) => {
+  const rows = machine.runtimes.toSorted((a, b) => {
     const an = providerLabel(a).localeCompare(providerLabel(b));
     return an !== 0 ? an : a.id.localeCompare(b.id);
   });

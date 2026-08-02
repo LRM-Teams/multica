@@ -278,8 +278,8 @@ describe("deriveAgentPresenceDetail", () => {
   it("provider quota lock folds Online→Offline even with a fresh heartbeat (#64/#77)", () => {
     const detail = deriveAgentPresenceDetail({
       agent: makeAgent({
+        provider_block_detail: "429 code 1310 usage cap",
         provider_blocked_until: "2026-04-28T12:00:00Z",
-        provider_block_reason: "agent_error.provider_quota_limit",
       }),
       runtime: makeRuntime(),
       tasks: [makeTask({ status: "running" })],
@@ -288,6 +288,19 @@ describe("deriveAgentPresenceDetail", () => {
     expect(detail.availability).toBe("offline");
     expect(detail.workload).toBe("idle");
     expect(detail.runningCount).toBe(0);
+  });
+
+  it("provider lock with unknown until (null) stays Offline — never invents a reset (#815)", () => {
+    const detail = deriveAgentPresenceDetail({
+      agent: makeAgent({
+        provider_block_detail: "quota exceeded",
+        provider_blocked_until: null,
+      }),
+      runtime: makeRuntime(),
+      tasks: [],
+      now: NOW,
+    });
+    expect(detail.availability).toBe("offline");
   });
 
   it("composes offline + queued — the canonical 'stuck' case (was previously misleading 'running 0/N')", () => {

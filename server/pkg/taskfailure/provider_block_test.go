@@ -9,7 +9,7 @@ func TestIsStickyProviderQuotaLock(t *testing.T) {
 	t.Parallel()
 	err := `429: {"code":"1310","message":"已达到 7 天使用上限，2026-08-03 13:52:38 后可继续使用。"}`
 	if !IsStickyProviderQuotaLock(err, string(ReasonAgentProviderCapacityOrRateLimit)) {
-		t.Fatal("chinese usage-limit 429 must sticky-lock even when failure_reason still says capacity")
+		t.Fatal("code-1310 usage-limit 429 must sticky-lock even when failure_reason still says capacity")
 	}
 	if !IsStickyProviderQuotaLock("x", string(ReasonAgentProviderQuotaLimit)) {
 		t.Fatal("explicit quota reason must sticky-lock")
@@ -24,14 +24,34 @@ func TestParseProviderBlockedUntil(t *testing.T) {
 	loc := time.FixedZone("CST", 8*3600)
 	now := time.Date(2026, 8, 2, 12, 0, 0, 0, loc)
 	err := `429: {"code":"1310","message":"已达到 7 天使用上限，2026-08-03 13:52:38 后可继续使用。"}`
-	got := ParseProviderBlockedUntil(err, now, loc)
+	got, ok := ParseProviderBlockedUntil(err, now, loc)
+	if !ok {
+		t.Fatal("expected parse ok")
+	}
 	want := time.Date(2026, 8, 3, 13, 52, 38, 0, loc)
 	if !got.Equal(want) {
 		t.Fatalf("ParseProviderBlockedUntil = %v, want %v", got, want)
 	}
 
-	fallback := ParseProviderBlockedUntil("quota exceeded", now, loc)
-	if !fallback.Equal(now.Add(DefaultProviderQuotaBlockTTL)) {
-		t.Fatalf("fallback = %v, want now+1h", fallback)
+	_, ok = ParseProviderBlockedUntil("quota exceeded with no stamp", now, loc)
+	if ok {
+		t.Fatal("must not invent a reset time when none is present")
+	}
+}
+
+func TestProviderLockActive(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	if ProviderLockActive("", time.Time{}, false, now) {
+		t.Fatal("empty detail must be unlocked")
+	}
+	if !ProviderLockActive("quota", time.Time{}, false, now) {
+		t.Fatal("detail set + until unknown must stay locked")
+	}
+	if !ProviderLockActive("quota", now.Add(time.Hour), true, now) {
+		t.Fatal("future until must be locked")
+	}
+	if ProviderLockActive("quota", now.Add(-time.Minute), true, now) {
+		t.Fatal("elapsed until must unlock")
 	}
 }

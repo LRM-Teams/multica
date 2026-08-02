@@ -889,10 +889,12 @@ RETURNING *;
 -- name: RefreshAgentStatusFromTasks :one
 -- Provider-quota lock (tasks #64/#77) wins over workload: a blocked agent
 -- must not flip back to idle/working just because the draining task ended.
--- Read-time TTL — expired provider_blocked_until does not keep status=blocked.
+-- Lock = detail non-empty AND (until unknown OR until > now()).
 UPDATE agent AS a
 SET status = CASE
-    WHEN a.provider_blocked_until IS NOT NULL AND a.provider_blocked_until > now() THEN 'blocked'
+    WHEN a.provider_block_detail <> ''
+         AND (a.provider_blocked_until IS NULL OR a.provider_blocked_until > now())
+      THEN 'blocked'
     WHEN EXISTS (
         SELECT 1 FROM agent_inbox_event q
         WHERE q.agent_id = a.id AND q.status = 'draining'
@@ -959,32 +961,30 @@ FROM agent
 WHERE id = ANY($1::uuid[]) AND crashed_since IS NOT NULL;
 
 -- name: MarkAgentProviderBlocked :exec
--- Pins an agent unavailable for provider quota (tasks #64/#77). Extends or
--- replaces an existing lock. Does not clear on heartbeat.
+-- Pins agent display as provider-quota blocked (tasks #64/#77). Extends or
+-- replaces an existing lock. Does not clear on heartbeat. until may be NULL
+-- (= locked, unknown end). Claim/drain gating is a separate card.
 UPDATE agent
 SET provider_blocked_until = $2,
-    provider_block_reason = $3,
-    provider_block_detail = $4,
+    provider_block_detail = $3,
     status = 'blocked',
     updated_at = now()
 WHERE id = $1;
 
 -- name: ClearAgentProviderBlocked :exec
--- Explicit clear (e.g. admin override). Normal unlock is read-time when
--- provider_blocked_until elapses — RefreshAgentStatusFromTasks then leaves
--- blocked for idle/working.
+-- Explicit clear (e.g. admin override). Normal unlock is read-time when a
+-- known until elapses — RefreshAgentStatusFromTasks then leaves blocked.
 UPDATE agent
 SET provider_blocked_until = NULL,
-    provider_block_reason = '',
     provider_block_detail = '',
     updated_at = now()
 WHERE id = $1;
 
 -- name: ListAgentProviderBlockByIDs :many
 -- Narrow read for attachAgentRuntimeNames (same make-sqlc constraint as
--- ListAgentCrashedSinceByIDs). Only returns still-active locks.
-SELECT id, provider_blocked_until, provider_block_reason, provider_block_detail
+-- ListAgentCrashedSinceByIDs). Active locks only (unknown-until stays active).
+SELECT id, provider_blocked_until, provider_block_detail
 FROM agent
 WHERE id = ANY($1::uuid[])
-  AND provider_blocked_until IS NOT NULL
-  AND provider_blocked_until > now();
+  AND provider_block_detail <> ''
+  AND (provider_blocked_until IS NULL OR provider_blocked_until > now());

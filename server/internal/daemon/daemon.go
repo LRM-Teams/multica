@@ -4274,10 +4274,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Fallback: if session resume failed before establishing a session, retry
 	// with a fresh session. We check SessionID == "" to distinguish a resume
 	// failure (no session established) from a failure during actual execution.
-	// Skip sticky provider-quota locks (#64/#77) — a second attempt cannot
-	// clear an external usage cap and only flaps status.
-	if result.Status == "failed" && task.PriorSessionID != "" && result.SessionID == "" &&
-		!taskfailure.IsStickyProviderQuotaLock(result.Error, "") {
+	if result.Status == "failed" && task.PriorSessionID != "" && result.SessionID == "" {
 		firstUsage := result.Usage
 		taskLog.Warn("session resume failed, retrying with fresh session", "error", result.Error)
 		execOpts.ResumeSessionID = ""

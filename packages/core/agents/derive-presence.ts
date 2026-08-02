@@ -116,31 +116,38 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
   // a reachability stub (status + last_seen) so "can't see runtime details"
   // does not collapse to offline.
   let availability = deriveAgentAvailability(input.runtime, input.now);
-  const detail = deriveWorkloadDetail(input.tasks);
+  const workloadDetail = deriveWorkloadDetail(input.tasks);
 
   // Sticky provider-quota lock (tasks #64/#77): Online means "can take work".
   // Heartbeats must not paint Online during lockout — keep the LRM-248 binary
   // chrome (Online/Offline) but fold lockout into Offline. Lifecycle line
   // separately says "Quota blocked" via runtime_display_status.
-  const providerBlocked =
-    typeof input.agent.provider_blocked_until === "string" &&
-    Number.isFinite(Date.parse(input.agent.provider_blocked_until)) &&
-    Date.parse(input.agent.provider_blocked_until) > input.now;
-  if (providerBlocked) {
-    return {
-      availability: "offline",
-      workload: "idle",
-      runningCount: 0,
-      queuedCount: 0,
-      capacity: input.agent.max_concurrent_tasks,
-    };
+  // detail non-empty locks; until null while locked = unknown end (still
+  // locked); until known and elapsed = unlocked.
+  const providerBlockDetail = (input.agent.provider_block_detail ?? "").trim();
+  if (providerBlockDetail !== "") {
+    const untilMs =
+      typeof input.agent.provider_blocked_until === "string"
+        ? Date.parse(input.agent.provider_blocked_until)
+        : Number.NaN;
+    const untilKnown = Number.isFinite(untilMs);
+    const stillLocked = !untilKnown || untilMs > input.now;
+    if (stillLocked) {
+      return {
+        availability: "offline",
+        workload: "idle",
+        runningCount: 0,
+        queuedCount: 0,
+        capacity: input.agent.max_concurrent_tasks,
+      };
+    }
   }
 
   // LRM-248: unstable/reconnecting/running → online for live chrome. An
   // in-flight running task proves the agent is reachable even when heartbeat
   // lags or the runtime row is missing from the visible list.
   if (
-    detail.runningCount > 0 &&
+    workloadDetail.runningCount > 0 &&
     (availability === "offline" || availability === "unstable")
   ) {
     availability = "online";
@@ -148,9 +155,9 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
 
   return {
     availability,
-    workload: detail.workload,
-    runningCount: detail.runningCount,
-    queuedCount: detail.queuedCount,
+    workload: workloadDetail.workload,
+    runningCount: workloadDetail.runningCount,
+    queuedCount: workloadDetail.queuedCount,
     capacity: input.agent.max_concurrent_tasks,
   };
 }

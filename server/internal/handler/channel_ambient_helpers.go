@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -196,11 +195,9 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 			SELECT event.id, event.agent_id
 			FROM agent_inbox_event event
 			JOIN agent_session session ON session.id = event.agent_session_id
-			JOIN agent agent_row ON agent_row.id = event.agent_id
 			WHERE COALESCE(event.runtime_id, session.runtime_id) = $1
 			  AND session.status = 'active'
 			  AND event.status IN ('pending', 'failed')
-			  AND (agent_row.provider_blocked_until IS NULL OR agent_row.provider_blocked_until <= now())
 			  AND NOT EXISTS (
 			    SELECT 1
 			    FROM agent_inbox_event blocking_event
@@ -259,21 +256,15 @@ func (h *Handler) leaseAgentInboxEventForRuntime(ctx context.Context, runtime db
 
 		var agentRuntimeID pgtype.UUID
 		var agentArchivedAt pgtype.Timestamptz
-		var providerBlockedUntil pgtype.Timestamptz
 		if err := tx.QueryRow(ctx, `
-			SELECT id, runtime_id, archived_at, provider_blocked_until
+			SELECT id, runtime_id, archived_at
 			FROM agent
 			WHERE id = $1
-			FOR UPDATE`, agentID).Scan(&agentID, &agentRuntimeID, &agentArchivedAt, &providerBlockedUntil); err != nil {
+			FOR UPDATE`, agentID).Scan(&agentID, &agentRuntimeID, &agentArchivedAt); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return db.AgentEventDelivery{}, commitNoDelivery()
 			}
 			return db.AgentEventDelivery{}, err
-		}
-		// Sticky provider-quota lock (tasks #64/#77): skip without
-		// terminalizing — wakes stay pending until the lock expires.
-		if providerBlockedUntil.Valid && providerBlockedUntil.Time.After(time.Now()) {
-			return db.AgentEventDelivery{}, commitNoDelivery()
 		}
 		err = tx.QueryRow(ctx, `
 			SELECT event.id
@@ -583,10 +574,8 @@ func (h *Handler) countReadyAgentInboxEventsForRuntime(ctx context.Context, runt
 		SELECT count(*)
 		FROM agent_inbox_event event
 		JOIN agent_session session ON session.id = event.agent_session_id
-		JOIN agent agent_row ON agent_row.id = event.agent_id
 		WHERE COALESCE(event.runtime_id, session.runtime_id) = $1
 		  AND session.status = 'active'
-		  AND event.status IN ('pending', 'failed')
-		  AND (agent_row.provider_blocked_until IS NULL OR agent_row.provider_blocked_until <= now())`, runtime.ID).Scan(&count)
+		  AND event.status IN ('pending', 'failed')`, runtime.ID).Scan(&count)
 	return count, err
 }

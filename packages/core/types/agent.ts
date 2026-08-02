@@ -416,9 +416,11 @@ export interface Agent {
    * server/internal/handler/agent_health.go, not generated.
    */
   runtime_display_status?: AgentRuntimeDisplayStatus | null;
-  /** Sticky provider-quota lock end (RFC3339). Tasks #64/#77. */
+  /**
+   * Sticky provider-quota lock (tasks #64/#77). Non-empty detail ⇒ locked.
+   * Until null while locked means unknown end (still locked — never invent).
+   */
   provider_blocked_until?: string | null;
-  provider_block_reason?: string | null;
   provider_block_detail?: string | null;
   runtime_config: Record<string, unknown>;
   custom_args: string[];

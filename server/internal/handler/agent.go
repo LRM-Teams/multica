@@ -58,11 +58,11 @@ type AgentResponse struct {
 	// this field for any UI that shows a live status badge; RuntimeStatus
 	// stays for callers that need the raw dispatch-relevant value.
 	RuntimeDisplayStatus string `json:"runtime_display_status,omitempty"`
-	// ProviderBlockedUntil / Reason / Detail (tasks #64/#77): sticky provider
-	// quota lock. When Until is in the future, RuntimeDisplayStatus is
-	// "blocked" and claim/drain skips this agent. Heartbeats do not clear it.
+	// ProviderBlockedUntil / Detail (tasks #64/#77): sticky provider-quota
+	// display lock. Detail non-empty ⇒ locked; Until nil while locked means
+	// unknown end (still locked). Heartbeats do not clear it. Claim/drain
+	// gating is a separate card.
 	ProviderBlockedUntil *string `json:"provider_blocked_until,omitempty"`
-	ProviderBlockReason  string  `json:"provider_block_reason,omitempty"`
 	ProviderBlockDetail  string  `json:"provider_block_detail,omitempty"`
 	// RuntimePinnedVersion (task #81) is non-nil when the daemon's
 	// MULTICA_PINNED_VERSION reported this machine as pinned. This only
@@ -277,15 +277,15 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 			resps[idx].RuntimeStatus = rt.Status
 			resps[idx].RuntimeLastSeenAt = timestampToPtr(rt.LastSeenAt)
 			block := providerBlockByAgent[resps[idx].ID]
-			var blockedUntil pgtype.Timestamptz
-			if block.ProviderBlockedUntil.Valid {
-				blockedUntil = block.ProviderBlockedUntil
-				resps[idx].ProviderBlockedUntil = timestampToPtr(block.ProviderBlockedUntil)
-				resps[idx].ProviderBlockReason = block.ProviderBlockReason
+			if block.ProviderBlockDetail != "" {
 				resps[idx].ProviderBlockDetail = block.ProviderBlockDetail
+				if block.ProviderBlockedUntil.Valid {
+					resps[idx].ProviderBlockedUntil = timestampToPtr(block.ProviderBlockedUntil)
+				}
 			}
 			resps[idx].RuntimeDisplayStatus = agentRuntimeDisplayStatus(
-				resps[idx].Status, rt, crashedByAgent[resps[idx].ID], blockedUntil, now,
+				resps[idx].Status, rt, crashedByAgent[resps[idx].ID],
+				block.ProviderBlockDetail, block.ProviderBlockedUntil, now,
 			)
 			resps[idx].RuntimePinnedVersion = nullableTextPtr(rt.PinnedVersion)
 		}

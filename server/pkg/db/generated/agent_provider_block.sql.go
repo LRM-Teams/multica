@@ -17,30 +17,27 @@ import (
 const markAgentProviderBlocked = `-- name: MarkAgentProviderBlocked :exec
 UPDATE agent
 SET provider_blocked_until = $2,
-    provider_block_reason = $3,
-    provider_block_detail = $4,
+    provider_block_detail = $3,
     status = 'blocked',
     updated_at = now()
 WHERE id = $1
 `
 
 type MarkAgentProviderBlockedParams struct {
-	ID                    pgtype.UUID        `json:"id"`
-	ProviderBlockedUntil  pgtype.Timestamptz `json:"provider_blocked_until"`
-	ProviderBlockReason   string             `json:"provider_block_reason"`
-	ProviderBlockDetail   string             `json:"provider_block_detail"`
+	ID                   pgtype.UUID        `json:"id"`
+	ProviderBlockedUntil pgtype.Timestamptz `json:"provider_blocked_until"`
+	ProviderBlockDetail  string             `json:"provider_block_detail"`
 }
 
 func (q *Queries) MarkAgentProviderBlocked(ctx context.Context, arg MarkAgentProviderBlockedParams) error {
 	_, err := q.db.Exec(ctx, markAgentProviderBlocked,
-		arg.ID, arg.ProviderBlockedUntil, arg.ProviderBlockReason, arg.ProviderBlockDetail)
+		arg.ID, arg.ProviderBlockedUntil, arg.ProviderBlockDetail)
 	return err
 }
 
 const clearAgentProviderBlocked = `-- name: ClearAgentProviderBlocked :exec
 UPDATE agent
 SET provider_blocked_until = NULL,
-    provider_block_reason = '',
     provider_block_detail = '',
     updated_at = now()
 WHERE id = $1
@@ -52,17 +49,16 @@ func (q *Queries) ClearAgentProviderBlocked(ctx context.Context, id pgtype.UUID)
 }
 
 const listAgentProviderBlockByIDs = `-- name: ListAgentProviderBlockByIDs :many
-SELECT id, provider_blocked_until, provider_block_reason, provider_block_detail
+SELECT id, provider_blocked_until, provider_block_detail
 FROM agent
 WHERE id = ANY($1::uuid[])
-  AND provider_blocked_until IS NOT NULL
-  AND provider_blocked_until > now()
+  AND provider_block_detail <> ''
+  AND (provider_blocked_until IS NULL OR provider_blocked_until > now())
 `
 
 type ListAgentProviderBlockByIDsRow struct {
 	ID                   pgtype.UUID        `json:"id"`
 	ProviderBlockedUntil pgtype.Timestamptz `json:"provider_blocked_until"`
-	ProviderBlockReason  string             `json:"provider_block_reason"`
 	ProviderBlockDetail  string             `json:"provider_block_detail"`
 }
 
@@ -75,7 +71,7 @@ func (q *Queries) ListAgentProviderBlockByIDs(ctx context.Context, dollar_1 []pg
 	items := []ListAgentProviderBlockByIDsRow{}
 	for rows.Next() {
 		var i ListAgentProviderBlockByIDsRow
-		if err := rows.Scan(&i.ID, &i.ProviderBlockedUntil, &i.ProviderBlockReason, &i.ProviderBlockDetail); err != nil {
+		if err := rows.Scan(&i.ID, &i.ProviderBlockedUntil, &i.ProviderBlockDetail); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

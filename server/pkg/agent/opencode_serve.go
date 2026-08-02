@@ -326,10 +326,34 @@ func (b *opencodeServeBackend) ensureServer(ctx context.Context, opts ExecOption
 		return nil, errors.New(withAgentStderr(fmt.Sprintf("opencode serve did not become ready: %v", err), "opencode-serve", stderrBuf.Tail()))
 	}
 
-	p := &opencodeServeProcess{cmd: cmd, baseURL: baseURL, password: password, username: username, client: client, stderrBuf: stderrBuf}
 	go client.runEventLoop(func(err error) {
 		b.cfg.Logger.Warn("opencode serve event stream ended", "error", err)
 	})
+
+	// task #49: waitReady above only proves the HTTP server is up — it says
+	// nothing about whether anything is subscribed to /event yet. Block
+	// here until runEventLoop's SSE handshake actually completes, so a turn
+	// can never be sent (and opencode's response events silently dropped)
+	// before a listener exists to receive them. The server has already
+	// answered /global/health by this point, so the SSE handshake itself
+	// should be near-instant; a short, separate timeout is enough and keeps
+	// a genuine hang here distinguishable from the readiness timeout above.
+	connectCtx, connectCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer connectCancel()
+	select {
+	case <-client.connectedCh:
+		if client.connectErr != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return nil, errors.New(withAgentStderr(fmt.Sprintf("opencode serve event stream failed to connect: %v", client.connectErr), "opencode-serve", stderrBuf.Tail()))
+		}
+	case <-connectCtx.Done():
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, errors.New(withAgentStderr("opencode serve event stream did not connect in time", "opencode-serve", stderrBuf.Tail()))
+	}
+
+	p := &opencodeServeProcess{cmd: cmd, baseURL: baseURL, password: password, username: username, client: client, stderrBuf: stderrBuf}
 	b.server = p
 	return p, nil
 }
@@ -402,6 +426,20 @@ type opencodeServeClient struct {
 	closed   bool
 	closeCh  chan struct{}
 	closeErr error
+
+	// connectedCh closes once runEventLoop's GET /event has received a
+	// response (headers back — the SSE handshake completed and opencode has
+	// registered this connection as a subscriber), or once runEventLoop
+	// fails to even establish the request. task #49: waitReady only checks
+	// /global/health, which says nothing about whether anyone is listening
+	// on the event stream yet — opencode can process a turn and emit its
+	// SSE events before this goroutine's http.Do(req) below returns,
+	// silently dropping them for a reader that was never there. The
+	// constructor blocks on this channel before treating the server as
+	// usable, so a turn is never sent before something is actually
+	// subscribed to receive its events.
+	connectedCh chan struct{}
+	connectErr  error
 }
 
 // opencodeServeWaiter is the per-session registration runTurn holds for the
@@ -441,13 +479,14 @@ func newOpenCodeServeClient(baseURL, username, password string, logger *slog.Log
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	return &opencodeServeClient{
-		baseURL:  baseURL,
-		username: username,
-		password: password,
-		logger:   logger,
-		http:     &http.Client{Transport: transport},
-		waiters:  make(map[string]*opencodeServeWaiter),
-		closeCh:  make(chan struct{}),
+		baseURL:     baseURL,
+		username:    username,
+		password:    password,
+		logger:      logger,
+		http:        &http.Client{Transport: transport},
+		waiters:     make(map[string]*opencodeServeWaiter),
+		closeCh:     make(chan struct{}),
+		connectedCh: make(chan struct{}),
 	}
 }
 
@@ -765,15 +804,26 @@ func trySendOpenCodeServeSignal(ch chan opencodeServeSessionSignal, sig opencode
 func (c *opencodeServeClient) runEventLoop(onDone func(error)) {
 	req, err := c.newRequest(context.Background(), http.MethodGet, "/event", nil)
 	if err != nil {
+		c.connectErr = err
+		close(c.connectedCh)
 		onDone(err)
 		return
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		c.connectErr = err
+		close(c.connectedCh)
 		onDone(err)
 		return
 	}
 	defer resp.Body.Close()
+
+	// The SSE handshake completed — opencode now has this connection
+	// registered as a subscriber, so any event it emits from this point
+	// forward will reach the scanner loop below. This is the earliest
+	// point at which sending a turn is safe (see connectedCh's doc comment
+	// on why waitReady alone does not guarantee this).
+	close(c.connectedCh)
 
 	go func() {
 		<-c.closeCh

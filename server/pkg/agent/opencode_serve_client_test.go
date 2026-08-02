@@ -173,10 +173,18 @@ func newTestOpenCodeServeClient(t *testing.T, srv *httptest.Server) *opencodeSer
 	c := newOpenCodeServeClient(srv.URL, "opencode", "test-password", slog.Default())
 	go c.runEventLoop(func(error) {})
 	t.Cleanup(c.close)
-	// Give the event loop a moment to establish its SSE connection before
-	// the test starts sending messages, so publish() during runTurn always
-	// has a live subscriber.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the SSE handshake to actually complete (task #49) instead of
+	// a fixed sleep — connectedCh closes once the event loop has a live
+	// subscription, which is the real fact this helper needs, not a guess
+	// at how long that takes.
+	select {
+	case <-c.connectedCh:
+		if c.connectErr != nil {
+			t.Fatalf("event loop failed to connect: %v", c.connectErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("event loop did not connect within 5s")
+	}
 	return c
 }
 
@@ -490,5 +498,90 @@ func TestWaitReadySurvivesOneHungProbe(t *testing.T) {
 	}
 	if got := hits.Load(); got < 2 {
 		t.Fatalf("expected at least 2 probe attempts (one hung, one that succeeds), got %d", got)
+	}
+}
+
+// TestRunEventLoopConnectedChClosesOnlyAfterSSEHandshake is the direct
+// regression test for task #49's root cause: waitReady only proves the
+// health endpoint answers, which says nothing about whether anything is
+// subscribed to /event yet. Before connectedCh existed, ensureServer fired
+// runEventLoop in a goroutine and returned immediately — a fast-responding
+// opencode could emit its turn's SSE events before that goroutine's
+// http.Do(req) even returned, silently dropping them for a reader that was
+// never there.
+//
+// This test proves connectedCh is a genuine synchronization point, not
+// just "the goroutine started": it delays the /event handler's response
+// headers by a controlled amount and asserts connectedCh stays open for the
+// entire delay, only closing once the SSE handshake actually completes.
+func TestRunEventLoopConnectedChClosesOnlyAfterSSEHandshake(t *testing.T) {
+	release := make(chan struct{})
+	var headersSent atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/event", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		<-release // simulate a slow-to-accept server
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		headersSent.Store(true)
+		flusher.Flush()
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client := newOpenCodeServeClient(srv.URL, "opencode", "test-password", slog.Default())
+	t.Cleanup(client.close)
+	go client.runEventLoop(func(error) {})
+
+	// While the server is deliberately withholding its response, connectedCh
+	// must not have closed yet — otherwise a caller gated on it would
+	// proceed to send a turn before anyone is actually listening.
+	select {
+	case <-client.connectedCh:
+		t.Fatal("connectedCh closed before the SSE handshake completed")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if headersSent.Load() {
+		t.Fatal("test setup bug: headers already sent despite release channel not yet closed")
+	}
+
+	close(release)
+
+	select {
+	case <-client.connectedCh:
+		if client.connectErr != nil {
+			t.Fatalf("connectErr = %v, want nil", client.connectErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("connectedCh did not close after the SSE handshake completed")
+	}
+}
+
+// TestRunEventLoopConnectedChReportsConnectionFailure proves the failure
+// path: if the SSE request can never be established at all (server refuses
+// the connection), connectedCh must still close — with connectErr set —
+// rather than leaving a caller blocked forever waiting on a signal that
+// will never come.
+func TestRunEventLoopConnectedChReportsConnectionFailure(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	unreachableURL := srv.URL
+	srv.Close() // close immediately so the port refuses new connections
+
+	client := newOpenCodeServeClient(unreachableURL, "opencode", "test-password", slog.Default())
+	t.Cleanup(client.close)
+	go client.runEventLoop(func(error) {})
+
+	select {
+	case <-client.connectedCh:
+		if client.connectErr == nil {
+			t.Fatal("connectErr = nil, want a connection error against a closed port")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("connectedCh did not close after a failed connection attempt")
 	}
 }

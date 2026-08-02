@@ -36,6 +36,13 @@
     "offline": "Offline",
     "archived": "Archived"
   },
+  "lifecycle_status": {
+    "starting": "Starting",
+    "disconnected": "Disconnected",
+    "offline": "Offline",
+    "stopped": "Stopped",
+    "crashed": "Crashed"
+  },
   "workload": {
     "working": "Working",
     "queued": "Queued",

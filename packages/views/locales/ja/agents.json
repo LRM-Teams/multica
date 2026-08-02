@@ -36,6 +36,13 @@
     "offline": "オフライン",
     "archived": "アーカイブ済み"
   },
+  "lifecycle_status": {
+    "starting": "起動中",
+    "disconnected": "切断",
+    "offline": "オフライン",
+    "stopped": "停止済み",
+    "crashed": "クラッシュ"
+  },
   "workload": {
     "working": "作業中",
     "queued": "待機中",

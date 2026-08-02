@@ -18,6 +18,22 @@ export type RuntimeHealthState =
   | "failed"
   | "offline";
 
+/**
+ * `agentDisplayStatus*` in server/internal/handler/agent_health.go — the
+ * honest, read-time lifecycle vocabulary for the agent list/detail health
+ * badge (task #42③, 08-02 extended for Raft alignment). "crashed" isn't
+ * emitted yet (task #1803) but is kept in the type so enabling it
+ * server-side needs zero FE type changes.
+ */
+export type AgentRuntimeDisplayStatus =
+  | "idle"
+  | "working"
+  | "starting"
+  | "disconnected"
+  | "offline"
+  | "stopped"
+  | "crashed";
+
 // Runtime visibility is a separate axis from agent visibility — different
 // vocabulary because it gates a different action. "private" (default) means
 // only the runtime owner and workspace admins can bind agents to it;
@@ -391,12 +407,14 @@ export interface Agent {
    * Honest, read-time status (task #42③) — freshness-gated the same way the
    * Activity Health tab already is, so this never lags `runtime_status`'s
    * up-to-180s sweeper delay. Prefer this over `runtime_status` for any
-   * live status badge. Only 4 of the eventual 8 states are emitted so far
-   * (no signal yet for starting/thinking/crashed/stopped) — values are kept
-   * hand-written in sync with `agentDisplayStatus*` in
+   * live status badge. "crashed"/"thinking" are not emitted yet (no signal
+   * exists for them server-side — 08-02: "crashed" lands with task #1803,
+   * kept in the type now so turning it on server-side is a zero-FE-change
+   * flip, not guessed in the meantime) — values are kept hand-written in
+   * sync with `agentDisplayStatus*` in
    * server/internal/handler/agent_health.go, not generated.
    */
-  runtime_display_status?: "idle" | "working" | "disconnected" | "offline" | null;
+  runtime_display_status?: AgentRuntimeDisplayStatus | null;
   runtime_config: Record<string, unknown>;
   custom_args: string[];
   /**

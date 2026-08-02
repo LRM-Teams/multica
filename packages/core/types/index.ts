@@ -31,6 +31,7 @@ export type {
   AgentRuntimeMode,
   RuntimeUpdateState,
   RuntimeHealthState,
+  AgentRuntimeDisplayStatus,
   AgentTask,
   AgentActivityBucket,
   AgentRunCount,

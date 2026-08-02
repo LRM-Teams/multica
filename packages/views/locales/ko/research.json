@@ -319,6 +319,8 @@
     "copy_md": "MD 복사",
     "copied": "복사됨",
     "export": "내보내기",
+    "copy_md_done": "Markdown이 클립보드에 복사되었습니다",
+    "export_done": "Markdown 파일이 다운로드되었습니다",
     "meta": "전달 · v{{revision}} · 출처 {{count}}",
     "sources_heading": "가중 출처 지도",
     "sources_hint": "신뢰도 순. 높은 가중치는 기준선, 낮은 가중치는 보조 근거입니다.",

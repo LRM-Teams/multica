@@ -319,6 +319,8 @@
     "copy_md": "复制 MD",
     "copied": "已复制",
     "export": "导出",
+    "copy_md_done": "Markdown 已复制到剪贴板",
+    "export_done": "Markdown 文件已下载",
     "meta": "交付完成 · schema v{{revision}} · {{count}} 来源",
     "sources_heading": "加权源地图",
     "sources_hint": "按可信度排序。权重高的为权威基线，低权重仅作旁证。",

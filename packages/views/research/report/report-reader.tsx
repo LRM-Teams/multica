@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { toast } from "sonner";
 import { Copy, Download, List, X } from "lucide-react";
 import { normalizeReportStructured } from "@multica/core/research";
 import type { ResearchReport, ResearchSource } from "@multica/core/types";
@@ -24,6 +25,7 @@ import {
   resolveActiveOutlineId,
   type OutlineItem,
 } from "../lib/report-outline";
+import { buildReportMarkdown } from "./report-markdown";
 import { ReportProse } from "./report-prose";
 import { ReportSourceTable } from "./report-source-table";
 import { citationAnchorId } from "./report-citation-resolve";
@@ -208,19 +210,21 @@ export function ReportReader({
   }, []);
 
   const copyMarkdown = async () => {
-    const md = report?.content_md?.trim();
+    const md = buildReportMarkdown(report);
     if (!md) return;
     try {
       await navigator.clipboard.writeText(md);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
+      toast.success(t(($) => $.reader.copy_md_done));
     } catch {
       // clipboard may be denied in headless — ignore
     }
   };
 
   const exportMarkdown = () => {
-    const md = report?.content_md ?? "";
+    const md = buildReportMarkdown(report);
+    if (!md) return;
     const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -228,6 +232,7 @@ export function ReportReader({
     a.download = "research-report.md";
     a.click();
     URL.revokeObjectURL(url);
+    toast.success(t(($) => $.reader.export_done));
   };
 
   if (!open || typeof document === "undefined") return null;

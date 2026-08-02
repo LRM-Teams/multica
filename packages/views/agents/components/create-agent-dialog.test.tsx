@@ -206,6 +206,25 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     expect(screen.queryByText("Mine")).toBeNull();
   });
 
+  it("shows empty copy when the computer has no usable runtime", () => {
+    const othersPrivate = makeRuntime({
+      id: "rt-others-private",
+      name: "Others Private",
+      owner_id: OTHER,
+      visibility: "private",
+    });
+    renderDialog([othersPrivate]);
+
+    // firstUsableMachine falls back to machines[0], so the trigger can still
+    // show the locked runtime name while the open list is empty.
+    fireEvent.click(
+      screen.getByText("Others Private", { selector: "span.truncate" }),
+    );
+    expect(screen.getByTestId("runtime-picker-empty")).toHaveTextContent(
+      /No usable runtime on this computer/i,
+    );
+  });
+
   it("lets a plain member pick another member's public runtime", () => {
     const mine = makeRuntime({ id: "rt-mine", name: "My Runtime", owner_id: ME, visibility: "private" });
     const othersPublic = makeRuntime({

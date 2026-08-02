@@ -132,62 +132,71 @@ export function RuntimePicker({
           align="start"
           className="w-[var(--anchor-width)] p-1 max-h-60 overflow-y-auto"
         >
-          {visibleRuntimes.map((device) => {
-            const ownerMember = getOwnerMember(device.owner_id);
-            return (
-              <button
-                key={device.id}
-                type="button"
-                onClick={() => {
-                  onSelect(device.id);
-                  setOpen(false);
-                }}
-                className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
-                  device.id === selectedRuntimeId
-                    ? "bg-accent"
-                    : "hover:bg-accent/50"
-                }`}
-              >
-                <ProviderLogo
-                  provider={device.provider}
-                  className="h-4 w-4 shrink-0"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate font-medium">{getItemLabel(device)}</span>
-                    {device.runtime_mode === "cloud" && (
-                      <span className="shrink-0 rounded bg-brand/10 px-1.5 py-0.5 text-xs font-medium text-brand">
-                        {t(($) => $.create_dialog.runtime_cloud_badge)}
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-                    {ownerMember ? (
-                      <>
-                        <ActorAvatar
-                          actorType="member"
-                          actorId={ownerMember.user_id}
-                          size={14}
-                        />
-                        <span className="truncate">
-                          {resolveActorDisplayName(ownerMember, ownerMember.user_id)}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="truncate">{device.device_info}</span>
-                    )}
-                  </div>
-                </div>
-                <span
-                  className={`h-2 w-2 shrink-0 rounded-full ${
-                    deriveRuntimeHealth(device, now) === "online"
-                      ? "bg-success"
-                      : "bg-muted-foreground/40"
+          {visibleRuntimes.length === 0 ? (
+            <p
+              className="px-3 py-2.5 text-center text-xs text-muted-foreground"
+              data-testid="runtime-picker-empty"
+            >
+              {t(($) => $.create_dialog.runtime_empty)}
+            </p>
+          ) : (
+            visibleRuntimes.map((device) => {
+              const ownerMember = getOwnerMember(device.owner_id);
+              return (
+                <button
+                  key={device.id}
+                  type="button"
+                  onClick={() => {
+                    onSelect(device.id);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
+                    device.id === selectedRuntimeId
+                      ? "bg-accent"
+                      : "hover:bg-accent/50"
                   }`}
-                />
-              </button>
-            );
-          })}
+                >
+                  <ProviderLogo
+                    provider={device.provider}
+                    className="h-4 w-4 shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate font-medium">{getItemLabel(device)}</span>
+                      {device.runtime_mode === "cloud" && (
+                        <span className="shrink-0 rounded bg-brand/10 px-1.5 py-0.5 text-xs font-medium text-brand">
+                          {t(($) => $.create_dialog.runtime_cloud_badge)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                      {ownerMember ? (
+                        <>
+                          <ActorAvatar
+                            actorType="member"
+                            actorId={ownerMember.user_id}
+                            size={14}
+                          />
+                          <span className="truncate">
+                            {resolveActorDisplayName(ownerMember, ownerMember.user_id)}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="truncate">{device.device_info}</span>
+                      )}
+                    </div>
+                  </div>
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      deriveRuntimeHealth(device, now) === "online"
+                        ? "bg-success"
+                        : "bg-muted-foreground/40"
+                    }`}
+                  />
+                </button>
+              );
+            })
+          )}
         </PopoverContent>
       </Popover>
     </div>

@@ -126,39 +126,12 @@ func TestRunTask_AllowsTurnWhenAgentWorkspaceUnderCapacity(t *testing.T) {
 	}
 }
 
-// TestHandleWriteFileRequest_RefusesEditWhenAgentWorkspaceOverCapacity covers
-// the secondary, lower-value enforcement point: the RPC that lets a human
-// edit an existing file in the Workspace tab. It cannot grow the workspace
-// (writeWorkdirTextFile only edits files that already exist, under a 256KB
-// cap — see its own Missing/TooLarge checks) but should still refuse once
-// the workspace is already over capacity, for consistency with the
-// turn-start gate.
-func TestHandleWriteFileRequest_RefusesEditWhenAgentWorkspaceOverCapacity(t *testing.T) {
-	t.Parallel()
-
-	workspacesRoot := t.TempDir()
-	cfg := Config{WorkspacesRoot: workspacesRoot, AgentWorkspaceQuotaBytes: 10}
-
-	const workspaceID = "ws-rpc-quota"
-	const agentID = "agent-rpc-quota"
-	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
-	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
-		t.Fatalf("seed agent root: %v", err)
-	}
-	existingFile := "existing.md"
-	if err := os.WriteFile(filepath.Join(agentRoot, existingFile), []byte("more than ten bytes already"), 0o644); err != nil {
-		t.Fatalf("seed oversized existing file: %v", err)
-	}
-
-	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+// writeFileRequestResult sends req through handleWriteFileRequest and
+// decodes the response frame it sends back.
+func writeFileRequestResult(t *testing.T, d *Daemon, req protocol.WriteWorkdirFileRequestPayload) protocol.WriteWorkdirFileResponsePayload {
+	t.Helper()
 	writes := make(chan []byte, 1)
-	d.handleWriteFileRequest(protocol.WriteWorkdirFileRequestPayload{
-		RequestID: "req-1",
-		RelPath:   filepath.ToSlash(filepath.Join(workspaceID, ".multica", "agents", agentID)),
-		FilePath:  existingFile,
-		Content:   "short",
-	}, writes)
-
+	d.handleWriteFileRequest(req, writes)
 	var msg protocol.Message
 	select {
 	case frame := <-writes:
@@ -172,7 +145,78 @@ func TestHandleWriteFileRequest_RefusesEditWhenAgentWorkspaceOverCapacity(t *tes
 	if err := json.Unmarshal(msg.Payload, &resp); err != nil {
 		t.Fatalf("unmarshal response payload: %v", err)
 	}
+	return resp
+}
+
+// TestHandleWriteFileRequest_RefusesGrowingEditWhenAgentWorkspaceOverCapacity
+// covers the secondary, lower-value enforcement point: the RPC that lets a
+// human edit an existing file in the Workspace tab. It cannot create new
+// files (writeWorkdirTextFile only edits files that already exist, under a
+// 256KB cap — see its own Missing/TooLarge checks), but once the workspace
+// is already over capacity, a write that would make the file (and so the
+// workspace) BIGGER must still be refused.
+func TestHandleWriteFileRequest_RefusesGrowingEditWhenAgentWorkspaceOverCapacity(t *testing.T) {
+	t.Parallel()
+
+	workspacesRoot := t.TempDir()
+	cfg := Config{WorkspacesRoot: workspacesRoot, AgentWorkspaceQuotaBytes: 10}
+
+	const workspaceID = "ws-rpc-quota-grow"
+	const agentID = "agent-rpc-quota-grow"
+	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
+		t.Fatalf("seed agent root: %v", err)
+	}
+	existingFile := "existing.md"
+	if err := os.WriteFile(filepath.Join(agentRoot, existingFile), []byte("already-over-cap"), 0o644); err != nil {
+		t.Fatalf("seed oversized existing file: %v", err)
+	}
+
+	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	resp := writeFileRequestResult(t, d, protocol.WriteWorkdirFileRequestPayload{
+		RequestID: "req-grow",
+		RelPath:   filepath.ToSlash(filepath.Join(workspaceID, ".multica", "agents", agentID)),
+		FilePath:  existingFile,
+		Content:   "this new content is longer than the sixteen-byte original file",
+	})
 	if resp.Error == "" {
-		t.Fatalf("resp = %+v, want a non-empty Error refusing the write over capacity", resp)
+		t.Fatalf("resp = %+v, want a non-empty Error refusing a write that grows the file while over capacity", resp)
+	}
+}
+
+// TestHandleWriteFileRequest_AllowsShrinkingEditWhenAgentWorkspaceOverCapacity
+// is the recovery-path regression test Alice's review caught missing: the
+// turn-start gate blocks every turn for an over-capacity agent, including
+// one that might otherwise clean up its own workspace, so an owner/admin
+// editing a file SMALLER via this RPC is the one remaining way to shrink a
+// single file back down (short of handleDeleteDirRequest nuking the whole
+// directory). An earlier version of this check refused every write once
+// over cap, which would have blocked this exact recovery action.
+func TestHandleWriteFileRequest_AllowsShrinkingEditWhenAgentWorkspaceOverCapacity(t *testing.T) {
+	t.Parallel()
+
+	workspacesRoot := t.TempDir()
+	cfg := Config{WorkspacesRoot: workspacesRoot, AgentWorkspaceQuotaBytes: 10}
+
+	const workspaceID = "ws-rpc-quota-shrink"
+	const agentID = "agent-rpc-quota-shrink"
+	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
+		t.Fatalf("seed agent root: %v", err)
+	}
+	existingFile := "existing.md"
+	if err := os.WriteFile(filepath.Join(agentRoot, existingFile), []byte("this file alone is already over the ten-byte cap"), 0o644); err != nil {
+		t.Fatalf("seed oversized existing file: %v", err)
+	}
+
+	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	resp := writeFileRequestResult(t, d, protocol.WriteWorkdirFileRequestPayload{
+		RequestID: "req-shrink",
+		RelPath:   filepath.ToSlash(filepath.Join(workspaceID, ".multica", "agents", agentID)),
+		FilePath:  existingFile,
+		Content:   "short",
+	})
+	if resp.Error != "" {
+		t.Fatalf("resp = %+v, want no error — a write that shrinks the file must be allowed even while over capacity", resp)
 	}
 }

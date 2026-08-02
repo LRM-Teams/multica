@@ -165,25 +165,39 @@ func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayl
 	// writeWorkdirTextFile's Missing check below) under a 256KB per-request
 	// cap — it cannot create new files, so it is not the growth vector the
 	// quota exists to bound (that's the agent's own direct filesystem
-	// writes during a turn, gated at turn-start in runTask). This check
-	// exists only for consistency: once an agent workspace is already over
-	// its cap, further edits through this path are refused too, rather
-	// than silently allowed while the turn-start gate blocks new turns.
+	// writes during a turn, gated at turn-start in runTask).
+	//
+	// Once a workspace is over cap, this is also the ONLY remaining path
+	// that can shrink it back down (handleDeleteDirRequest can nuke the
+	// whole directory, but nothing else can edit a single file down to
+	// size) — the turn-start gate blocks every turn for this agent,
+	// including one that might otherwise clean up its own workspace, so an
+	// owner/admin editing a file smaller via this RPC is the recovery
+	// path. Blocking all writes once over cap (an earlier version of this
+	// check did exactly that) would have blocked that recovery path too.
+	// Only refuse a write that would make the workspace bigger.
 	if isAgentWorkspaceRelPath(req.RelPath) {
 		quota := d.cfg.AgentWorkspaceQuotaBytes
 		if quota <= 0 {
 			quota = DefaultAgentWorkspaceQuotaBytes
 		}
 		if used := dirSize(root); used >= quota {
-			resp := protocol.WriteWorkdirFileResponsePayload{
-				RequestID: req.RequestID,
-				Error: fmt.Sprintf(
-					"agent workspace over capacity: cannot write (workspace uses %d bytes, cap is %d bytes)",
-					used, quota,
-				),
+			var oldSize int64
+			if info, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(req.FilePath))); statErr == nil {
+				oldSize = info.Size()
 			}
-			d.sendDaemonFrame(protocol.EventDaemonWriteFileResponse, resp, req.RequestID, writes)
-			return
+			newSize := int64(len(req.Content))
+			if newSize > oldSize {
+				resp := protocol.WriteWorkdirFileResponsePayload{
+					RequestID: req.RequestID,
+					Error: fmt.Sprintf(
+						"agent workspace over capacity: cannot write (workspace uses %d bytes, cap is %d bytes) — a write that shrinks or keeps the same size is still allowed",
+						used, quota,
+					),
+				}
+				d.sendDaemonFrame(protocol.EventDaemonWriteFileResponse, resp, req.RequestID, writes)
+				return
+			}
 		}
 	}
 	resp := writeWorkdirTextFile(root, req.FilePath, req.Content, req.ExpectedContentHash, req.MaxBytes)

@@ -144,7 +144,29 @@
       }
     },
     "daemon_version_chip": "daemon v{{version}}",
-    "version_prefix": "v{{version}}"
+    "version_prefix": "v{{version}}",
+    "basics_owner": "Owner",
+    "basics_daemon_id": "Daemon ID",
+    "ops": {
+      "section": "Actions",
+      "local_only": "Upgrade and restart apply to local computers only.",
+      "restart_not_local": "Restart is only available on local computers.",
+      "restart_managed_desktop": "Managed by the desktop app — restart from there.",
+      "restart_sandbox": "Sandbox computers cannot be restarted here.",
+      "restart_no_permission": "Only the owner or a workspace admin can restart.",
+      "restart_offline": "Computer is offline.",
+      "delete_owner_only": "Only the owner can delete this computer."
+    },
+    "sharing": {
+      "section": "Sharing",
+      "hint": "Public runtimes appear in other members’ runtime pickers on this computer. Private ones stay yours.",
+      "owner_only": "Only the owner or a workspace admin can change this",
+      "switch_locked": "Locked",
+      "switch_to": {
+        "public": "Make public",
+        "private": "Make private"
+      }
+    }
   },
   "health": {
     "online": {

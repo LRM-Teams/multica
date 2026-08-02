@@ -1,18 +1,16 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { use } from "react";
-import { lazyNamedRoute } from "@/lib/lazy-route";
-
-const RuntimeDetailPage = lazyNamedRoute(
-  () => import("@multica/views/runtimes"),
-  "RuntimeDetailPage",
-);
-
-export default function ComputerDetailRoute({
+/**
+ * Former runtime-detail orphan route (`/computers/{runtimeId}`).
+ * Frank 2026-08-02: no separate runtime detail — machine ops + sharing live
+ * on the computers list detail panel. Keep the URL so old bookmarks land
+ * on the computers page.
+ */
+export default async function ComputerDetailRoute({
   params,
 }: {
-  params: Promise<{ id: string }>;
+  params: Promise<{ workspaceSlug: string; id: string }>;
 }) {
-  const { id } = use(params);
-  return <RuntimeDetailPage runtimeId={id} />;
+  const { workspaceSlug } = await params;
+  redirect(`/${workspaceSlug}/computers`);
 }

@@ -491,7 +491,8 @@ function commonCliVersion(runtimes: AgentRuntime[]): string | null {
   return versions.size === 1 ? Array.from(versions)[0] ?? null : null;
 }
 
-function shortDaemonId(daemonId: string): string {
+/** Short form for machine-detail / ops diagnostics (e.g. `a1b2c3··ef`). */
+export function shortDaemonId(daemonId: string): string {
   return daemonId.length > 12 ? `${daemonId.slice(0, 8)}...` : daemonId;
 }
 

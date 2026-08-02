@@ -141,7 +141,29 @@
       }
     },
     "daemon_version_chip": "daemon v{{version}}",
-    "version_prefix": "v{{version}}"
+    "version_prefix": "v{{version}}",
+    "basics_owner": "所有者",
+    "basics_daemon_id": "Daemon ID",
+    "ops": {
+      "section": "操作",
+      "local_only": "アップグレードと再起動はローカルマシンのみです。",
+      "restart_not_local": "再起動はローカルマシンでのみ利用できます。",
+      "restart_managed_desktop": "デスクトップアプリ管理のため、そちらから再起動してください。",
+      "restart_sandbox": "サンドボックスはここでは再起動できません。",
+      "restart_no_permission": "所有者またはワークスペース管理者のみ再起動できます。",
+      "restart_offline": "マシンがオフラインです。",
+      "delete_owner_only": "所有者のみこのマシンを削除できます。"
+    },
+    "sharing": {
+      "section": "共有設定",
+      "hint": "公開すると、他のメンバーがこのマシン上のエージェントのランタイム切替で選べます。非公開は自分だけです。",
+      "owner_only": "所有者またはワークスペース管理者のみ変更できます",
+      "switch_locked": "変更不可",
+      "switch_to": {
+        "public": "公開にする",
+        "private": "非公開にする"
+      }
+    }
   },
   "health": {
     "online": {

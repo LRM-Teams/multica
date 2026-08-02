@@ -344,7 +344,8 @@
       "ready_to_apply": "更新の準備ができました。ランタイムがアイドルになると適用されます。",
       "failed": "更新に失敗しました",
       "timeout": "タイムアウト"
-    }
+    },
+    "up_to_date_short": "最新です"
   },
   "restart": {
     "action": "再起動",

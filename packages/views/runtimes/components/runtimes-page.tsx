@@ -786,16 +786,6 @@ function MachineDetailView({
                     </span>
                   </>
                 )}
-                {machine.cliVersion && (
-                  <>
-                    <span className="text-muted-foreground/40">·</span>
-                    <span className="font-mono text-[11px]">
-                      {t(($) => $.machine.daemon_version_chip, {
-                        version: machine.cliVersion,
-                      })}
-                    </span>
-                  </>
-                )}
                 {headerBadge && (
                   <>
                     <span className="text-muted-foreground/40">·</span>

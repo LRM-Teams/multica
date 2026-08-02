@@ -344,7 +344,8 @@
       "ready_to_apply": "更新已准备好，空闲后自动生效。",
       "failed": "更新失败",
       "timeout": "超时"
-    }
+    },
+    "up_to_date_short": "已是最新"
   },
   "restart": {
     "action": "重启",

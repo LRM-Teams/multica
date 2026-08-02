@@ -82,6 +82,18 @@ describe("UpdateSection up-to-date state (2026-08-01)", () => {
     expect(screen.queryByText(/Up to date/)).toBeNull();
     expect(screen.getByRole("button", { name: "Update" })).toBeEnabled();
   });
+
+  it("compact mode: no CLI version echo; up-to-date button has no version number", () => {
+    renderSection({
+      compact: true,
+      runtimeHealth: "ok",
+      currentVersion: "0.3.93",
+      targetVersion: null,
+    });
+    expect(screen.queryByText(/CLI Version/i)).toBeNull();
+    expect(screen.queryByText("0.3.93")).toBeNull();
+    expect(screen.getByRole("button", { name: "Up to date" })).toBeDisabled();
+  });
 });
 
 // 2026-08-02: InitiateUpdate now records a durable intent instead of

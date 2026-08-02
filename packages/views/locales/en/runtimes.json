@@ -350,7 +350,8 @@
       "ready_to_apply": "Update is ready. It will apply when this runtime is idle.",
       "failed": "Update failed",
       "timeout": "Timeout"
-    }
+    },
+    "up_to_date_short": "Up to date"
   },
   "restart": {
     "action": "Restart",

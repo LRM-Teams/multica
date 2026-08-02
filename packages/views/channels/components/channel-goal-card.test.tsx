@@ -34,6 +34,10 @@ vi.mock("@multica/core/channels", async (importOriginal) => ({
     queryFn: async () => ({ process: null }),
     enabled: !!managerId,
   }),
+  channelGoalSubgoalsOptions: (channelId: string) => ({
+    queryKey: ["channel-goal", channelId, "subgoals"],
+    queryFn: async () => ({ subgoals: [] }),
+  }),
   useCreateChannelGoal: () => ({
     mutate: state.create,
     isPending: false,

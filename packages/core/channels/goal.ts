@@ -1,6 +1,13 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../api";
-import type { CreateChannelGoalRequest, UpdateChannelGoalRequest } from "../types";
+import type {
+  ClearChannelGoalSubgoalWaitingOnRequest,
+  CreateChannelGoalRequest,
+  CreateChannelGoalSubgoalRequest,
+  ResolveChannelGoalSubgoalRequest,
+  UpdateChannelGoalRequest,
+  UpdateChannelGoalSubgoalRequest,
+} from "../types";
 import type { ChannelGoalEnvelope } from "../types";
 
 export const channelGoalKeys = {
@@ -10,6 +17,8 @@ export const channelGoalKeys = {
     [...channelGoalKeys.detail(channelId), "process"] as const,
   process: (channelId: string, managerAgentId: string) =>
     [...channelGoalKeys.processes(channelId), managerAgentId] as const,
+  subgoals: (channelId: string) =>
+    [...channelGoalKeys.detail(channelId), "subgoals"] as const,
 };
 
 export function channelGoalOptions(channelId: string) {
@@ -92,5 +101,81 @@ export function useUpdateChannelGoal(channelId: string) {
     },
     onSuccess: (data) => queryClient.setQueryData(channelGoalKeys.detail(channelId), data),
     onSettled: () => queryClient.invalidateQueries({ queryKey: channelGoalKeys.detail(channelId) }),
+  });
+}
+
+export function channelGoalSubgoalsOptions(channelId: string) {
+  return queryOptions({
+    queryKey: channelGoalKeys.subgoals(channelId),
+    queryFn: async () => {
+      if (typeof api.listChannelGoalSubgoals !== "function") {
+        return { subgoals: [] };
+      }
+      try {
+        return await api.listChannelGoalSubgoals(channelId);
+      } catch (error) {
+        // BE not deployed yet (404) or route missing — soft empty for FE ship ahead of merge.
+        if (error instanceof ApiError && (error.status === 404 || error.status === 501)) {
+          return { subgoals: [] };
+        }
+        throw error;
+      }
+    },
+    enabled: !!channelId,
+  });
+}
+
+function invalidateSubgoals(queryClient: ReturnType<typeof useQueryClient>, channelId: string) {
+  return queryClient.invalidateQueries({ queryKey: channelGoalKeys.subgoals(channelId) });
+}
+
+export function useCreateChannelGoalSubgoal(channelId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateChannelGoalSubgoalRequest) =>
+      api.createChannelGoalSubgoal(channelId, input),
+    onSettled: () => invalidateSubgoals(queryClient, channelId),
+  });
+}
+
+export function useUpdateChannelGoalSubgoal(channelId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      subgoalId,
+      input,
+    }: {
+      subgoalId: string;
+      input: UpdateChannelGoalSubgoalRequest;
+    }) => api.updateChannelGoalSubgoal(channelId, subgoalId, input),
+    onSettled: () => invalidateSubgoals(queryClient, channelId),
+  });
+}
+
+export function useResolveChannelGoalSubgoal(channelId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      subgoalId,
+      input,
+    }: {
+      subgoalId: string;
+      input: ResolveChannelGoalSubgoalRequest;
+    }) => api.resolveChannelGoalSubgoal(channelId, subgoalId, input),
+    onSettled: () => invalidateSubgoals(queryClient, channelId),
+  });
+}
+
+export function useClearChannelGoalSubgoalWaitingOn(channelId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      subgoalId,
+      input,
+    }: {
+      subgoalId: string;
+      input: ClearChannelGoalSubgoalWaitingOnRequest;
+    }) => api.clearChannelGoalSubgoalWaitingOn(channelId, subgoalId, input),
+    onSettled: () => invalidateSubgoals(queryClient, channelId),
   });
 }

@@ -507,3 +507,103 @@ export interface ChannelTypingPayload {
   is_typing: boolean;
   expires_in_ms?: number;
 }
+
+
+/** LRM-1004 / LRM-1005 — subgoal statuses. */
+export type ChannelGoalSubgoalStatus =
+  | "captured"
+  | "in_progress"
+  | "waiting"
+  | "resolved"
+  | "cancelled";
+
+export interface ChannelGoalSubgoalActor {
+  type: "agent" | "member";
+  id: string;
+}
+
+export interface ChannelGoalSubgoalWaitingOn {
+  kind: "member" | "issue" | "pr" | "lock" | "external";
+  target_id?: string;
+  note?: string;
+}
+
+export interface ChannelGoalSubgoal {
+  id: string;
+  workspace_id: string;
+  channel_id: string;
+  goal_id: string;
+  title: string;
+  purpose: string;
+  completion_boundary: string;
+  brief: string;
+  current_conclusion: string;
+  status: ChannelGoalSubgoalStatus;
+  version: number;
+  responsible_type: "agent" | "member" | string;
+  responsible_id: string;
+  participants: ChannelGoalSubgoalActor[];
+  depends_on: string[];
+  waiting_on: ChannelGoalSubgoalWaitingOn | null;
+  artifact_refs: string[];
+  activity_delta: string[];
+  created_by_type: string;
+  created_by_id: string;
+  updated_by_type: string;
+  updated_by_id: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string;
+}
+
+export interface ChannelGoalSubgoalListEnvelope {
+  subgoals: ChannelGoalSubgoal[];
+}
+
+export interface ChannelGoalSubgoalEnvelope {
+  subgoal: ChannelGoalSubgoal | null;
+}
+
+export interface CreateChannelGoalSubgoalRequest {
+  title: string;
+  purpose: string;
+  completion_boundary?: string;
+  brief?: string;
+  responsible: ChannelGoalSubgoalActor;
+  participants?: ChannelGoalSubgoalActor[];
+  depends_on?: string[];
+  artifact_refs?: string[];
+}
+
+export interface UpdateChannelGoalSubgoalRequest {
+  expected_version: number;
+  title?: string;
+  purpose?: string;
+  completion_boundary?: string;
+  brief?: string;
+  current_conclusion?: string;
+  status?: ChannelGoalSubgoalStatus;
+  responsible?: ChannelGoalSubgoalActor;
+  participants?: ChannelGoalSubgoalActor[];
+  depends_on?: string[];
+  artifact_refs?: string[];
+  activity_delta?: string[];
+  waiting_on?: ChannelGoalSubgoalWaitingOn | null;
+}
+
+export interface ResolveChannelGoalSubgoalRequest {
+  expected_version: number;
+  current_conclusion: string;
+}
+
+export interface ClearChannelGoalSubgoalWaitingOnRequest {
+  expected_version: number;
+  verification: {
+    kind: string;
+    target_id?: string;
+    issue_status_ok?: boolean;
+    acknowledged?: boolean;
+    released?: boolean;
+    external_ok?: boolean;
+  };
+}

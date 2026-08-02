@@ -6,6 +6,7 @@ import {
   filterRuntimeMachines,
   headerRuntimeHealthBadge,
   machineDeviceName,
+  runtimeComputerLabel,
   runtimeDisplayLabel,
   runtimeMachineCounts,
   splitRuntimeName,
@@ -421,6 +422,30 @@ describe("machine connectivity from daemon heartbeat (task #58 / B-(i))", () => 
     expect(machines[0]?.lastSeenAt).toBe(
       new Date(NOW - 10 * 60_000).toISOString(),
     );
+  });
+});
+
+describe("runtimeComputerLabel (Frank 2026-08-02)", () => {
+  it("never returns the Provider (host) runtime name when a hostname exists", () => {
+    expect(
+      runtimeComputerLabel(
+        makeRuntime({
+          display_name: "",
+          name: "Cursor (s144)",
+        }),
+      ),
+    ).toBe("s144");
+  });
+
+  it("prefers display_name over hostname", () => {
+    expect(
+      runtimeComputerLabel(
+        makeRuntime({
+          display_name: "Andong's Mac",
+          name: "Cursor (s144)",
+        }),
+      ),
+    ).toBe("Andong's Mac");
   });
 });
 

@@ -41,7 +41,8 @@
     "disconnected": "Disconnected",
     "offline": "Offline",
     "stopped": "Stopped",
-    "crashed": "Crashed"
+    "crashed": "Crashed",
+    "blocked": "Quota blocked"
   },
   "workload": {
     "working": "Working",

@@ -118,6 +118,24 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
   let availability = deriveAgentAvailability(input.runtime, input.now);
   const detail = deriveWorkloadDetail(input.tasks);
 
+  // Sticky provider-quota lock (tasks #64/#77): Online means "can take work".
+  // Heartbeats must not paint Online during lockout — keep the LRM-248 binary
+  // chrome (Online/Offline) but fold lockout into Offline. Lifecycle line
+  // separately says "Quota blocked" via runtime_display_status.
+  const providerBlocked =
+    typeof input.agent.provider_blocked_until === "string" &&
+    Number.isFinite(Date.parse(input.agent.provider_blocked_until)) &&
+    Date.parse(input.agent.provider_blocked_until) > input.now;
+  if (providerBlocked) {
+    return {
+      availability: "offline",
+      workload: "idle",
+      runningCount: 0,
+      queuedCount: 0,
+      capacity: input.agent.max_concurrent_tasks,
+    };
+  }
+
   // LRM-248: unstable/reconnecting/running → online for live chrome. An
   // in-flight running task proves the agent is reachable even when heartbeat
   // lags or the runtime row is missing from the visible list.

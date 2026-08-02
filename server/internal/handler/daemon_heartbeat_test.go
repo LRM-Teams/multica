@@ -88,7 +88,7 @@ func TestComputerConnected_IndependentOfRuntimeHealth(t *testing.T) {
 	if !computerConnected(daemonHeartbeat, now) {
 		t.Fatal("computer must show connected: the daemon itself just heartbeat, independent of any runtime")
 	}
-	if got := agentRuntimeDisplayStatus("idle", staleRuntime, pgtype.Timestamptz{}, now); got != agentDisplayStatusDisconnected {
+	if got := agentRuntimeDisplayStatus("idle", staleRuntime, pgtype.Timestamptz{}, pgtype.Timestamptz{}, now); got != agentDisplayStatusDisconnected {
 		t.Fatalf("agent display status = %q, want %q — the runtime's own heartbeat is genuinely stale", got, agentDisplayStatusDisconnected)
 	}
 }

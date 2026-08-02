@@ -10,6 +10,7 @@ const AGENTS = {
     offline: "Offline",
     stopped: "Stopped",
     crashed: "Crashed",
+    blocked: "Quota blocked",
   },
 } as const;
 
@@ -45,6 +46,15 @@ describe("resolveAgentLifecycleStatus", () => {
   it("crashed is a dot, grey — same shape as disconnected (both recoverable), text is the only differentiator", () => {
     expect(resolveAgentLifecycleStatus("crashed", t)).toEqual({
       label: "Crashed",
+      shape: "dot",
+      toneClass: "text-muted-foreground",
+      dotClass: "bg-muted-foreground/40",
+    });
+  });
+
+  it("blocked (provider quota) is a grey recoverable dot — not Online", () => {
+    expect(resolveAgentLifecycleStatus("blocked", t)).toEqual({
+      label: "Quota blocked",
       shape: "dot",
       toneClass: "text-muted-foreground",
       dotClass: "bg-muted-foreground/40",

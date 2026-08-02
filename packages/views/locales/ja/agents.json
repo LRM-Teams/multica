@@ -41,7 +41,8 @@
     "disconnected": "切断",
     "offline": "オフライン",
     "stopped": "停止済み",
-    "crashed": "クラッシュ"
+    "crashed": "クラッシュ",
+    "blocked": "クォータ制限"
   },
   "workload": {
     "working": "作業中",

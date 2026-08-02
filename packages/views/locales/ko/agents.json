@@ -41,7 +41,8 @@
     "disconnected": "연결 끊김",
     "offline": "오프라인",
     "stopped": "중지됨",
-    "crashed": "충돌함"
+    "crashed": "충돌함",
+    "blocked": "할당량 차단"
   },
   "workload": {
     "working": "작업 중",

@@ -515,7 +515,7 @@ function NodeDetailCard({
               href={agentPath}
               className={buttonVariants({
                 variant: "secondary",
-                className: "h-auto w-full justify-start px-3 py-2",
+                className: "h-auto w-full justify-start px-3 py-2 whitespace-normal",
               })}
             >
               <span className="flex flex-col items-start gap-0.5 text-left">

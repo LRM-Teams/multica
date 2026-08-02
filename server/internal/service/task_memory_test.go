@@ -88,7 +88,7 @@ func TestAgentMemoryDeliveryRequiresBoundProject(t *testing.T) {
 }
 
 func TestTeamKnowledgeMemoryDataIsWorkspaceScoped(t *testing.T) {
-	item := db.ActiveTeamKnowledgeForExecution{
+	item := db.ListActiveTeamKnowledgeForExecutionRow{
 		ID:      pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
 		Kind:    "policy",
 		Title:   "Acknowledge before work",

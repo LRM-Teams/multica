@@ -76,7 +76,9 @@ import {
   isPostRetryWakeFailure,
   resolveSessionInterrupt,
 } from "../lib/session-interrupt";
+import { isServerError } from "../lib/network-status";
 import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
+import { useBrowserOnline } from "../lib/use-browser-online";
 import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchCanvas } from "./research-canvas";
@@ -89,10 +91,12 @@ import {
   ResearchChatModeChip,
 } from "./research-chat-mode-body";
 import { ResearchCompletionCard } from "./research-completion-card";
+import { ResearchConnectivityShell } from "./research-connectivity-shell";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
+import { ResearchServerErrorPage } from "./research-server-error-page";
 import { ResearchSessionChrome } from "./research-session-chrome";
 import {
   ResearchSessionInterruptBanner,
@@ -182,6 +186,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     dismissCompletionGuide(sessionId);
     setDismissedSessionId(sessionId);
   }, [sessionId]);
+  const online = useBrowserOnline();
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionSnapshotOptions(wsId, sessionId),
   );
@@ -357,36 +362,58 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
 
   // LRM-799: never keep a permanent skeleton on failure — only while loading.
   // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
-  if (isLoading || (isFetching && !data)) {
-    return <ResearchSessionPageSkeleton />;
+  // LRM-833: offline with no cache keeps skeleton under the connectivity banner (no white screen).
+  if (isLoading || (isFetching && !data) || (!data && !online)) {
+    return (
+      <ResearchConnectivityShell>
+        <ResearchSessionPageSkeleton />
+      </ResearchConnectivityShell>
+    );
+  }
+
+  // LRM-833 — 5xx with no cache: dedicated error page + retry.
+  if (!data && isError && isServerError(error)) {
+    return (
+      <ResearchConnectivityShell>
+        <ResearchServerErrorPage
+          onRetry={() => {
+            void refetch();
+          }}
+          message={error instanceof Error ? error.message : null}
+          retrying={isFetching}
+        />
+      </ResearchConnectivityShell>
+    );
   }
 
   // Keep successful snapshot on refetch failure so Delivery can show its error
   // surface (LRM-993) instead of blanking the whole session shell.
   if (!data) {
     return (
-      <div
-        role="alert"
-        data-testid="research-session-load-error"
-        className="flex h-full flex-col items-center justify-center gap-3 px-6 py-12 text-center"
-      >
-        <AlertCircle className="size-6 text-destructive" aria-hidden />
-        <p className="text-sm text-destructive">
-          {error instanceof Error && error.message
-            ? error.message
-            : t(($) => $.session_page.load_failed)}
-        </p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            void refetch();
-          }}
+      <ResearchConnectivityShell>
+        <div
+          role="alert"
+          data-testid="research-session-load-error"
+          className="flex h-full flex-col items-center justify-center gap-3 px-6 py-12 text-center"
         >
-          {t(($) => $.session_page.retry)}
-        </Button>
-      </div>
+          <AlertCircle className="size-6 text-destructive" aria-hidden />
+          <p className="text-sm text-destructive">
+            {error instanceof Error && error.message
+              ? error.message
+              : t(($) => $.session_page.load_failed)}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void refetch();
+            }}
+          >
+            {t(($) => $.session_page.retry)}
+          </Button>
+        </div>
+      </ResearchConnectivityShell>
     );
   }
 
@@ -954,8 +981,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   );
 
   return (
-    <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
-      {isMobile && agentPanelNode ? agentPanelNode : sessionBody}
-    </AgentPanelProvider>
+    <ResearchConnectivityShell>
+      <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
+        {isMobile && agentPanelNode ? agentPanelNode : sessionBody}
+      </AgentPanelProvider>
+    </ResearchConnectivityShell>
   );
 }

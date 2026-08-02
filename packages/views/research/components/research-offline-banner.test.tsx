@@ -1,0 +1,48 @@
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { ResearchOfflineBanner } from "./research-offline-banner";
+
+vi.mock("../../i18n/use-t", () => ({
+  useT: () => ({
+    t: (fn: (dict: Record<string, unknown>) => unknown) =>
+      fn({
+        connectivity: {
+          offline_title: "You are offline",
+          offline_hint: "Research stays on screen — reconnect when the network returns.",
+          reconnecting_title: "Reconnecting…",
+          reconnecting_hint: "Refreshing research data.",
+          reconnect_failed_title: "Reconnect failed",
+          reconnect_failed_hint: "Check the network, then retry.",
+          retry: "Retry",
+          retrying: "Retrying…",
+        },
+      }),
+  }),
+}));
+
+describe("ResearchOfflineBanner (LRM-833)", () => {
+  it("shows offline copy without a retry CTA", () => {
+    render(<ResearchOfflineBanner mode="offline" />);
+    const banner = screen.getByTestId("research-offline-banner");
+    expect(banner.getAttribute("data-mode")).toBe("offline");
+    expect(banner.textContent).toContain("You are offline");
+    expect(screen.queryByTestId("research-offline-banner-retry")).toBeNull();
+  });
+
+  it("shows failed mode with manual retry", () => {
+    const onRetry = vi.fn();
+    render(<ResearchOfflineBanner mode="failed" onRetry={onRetry} />);
+    expect(screen.getByTestId("research-offline-banner").getAttribute("data-mode")).toBe(
+      "failed",
+    );
+    fireEvent.click(screen.getByTestId("research-offline-banner-retry"));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables retry while reconnecting", () => {
+    render(<ResearchOfflineBanner mode="reconnecting" onRetry={() => {}} />);
+    const btn = screen.getByTestId("research-offline-banner-retry");
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
+    expect(btn.textContent).toContain("Retrying");
+  });
+});

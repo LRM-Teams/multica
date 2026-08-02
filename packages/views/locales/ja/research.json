@@ -521,5 +521,21 @@
       "medium": "Medium",
       "high": "High"
     }
+  },
+  "connectivity": {
+    "offline_title": "オフラインです",
+    "offline_hint": "画面の内容は保持されます。復帰後に自動再接続します。オフライン編集はしません。",
+    "reconnecting_title": "オンライン復帰 — 再接続中",
+    "reconnecting_hint": "調査データを更新しています…",
+    "reconnected": "再接続しました — データを更新しました",
+    "reconnect_failed": "再接続に失敗しました — 再試行できます",
+    "reconnect_failed_title": "再接続に失敗",
+    "reconnect_failed_hint": "ネットワークを確認して再試行してください。最後に読み込んだ内容は画面に残ります。",
+    "server_error_title": "サーバーエラー",
+    "server_error_hint": "調査サービスがエラー（5xx）を返しました。再試行できます。",
+    "retry": "再試行",
+    "retrying": "再試行中…",
+    "waiting_network": "ネットワーク待機中",
+    "waiting_network_hint": "復帰後に自動で読み込みます。白紙にはしません。"
   }
 }

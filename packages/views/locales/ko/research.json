@@ -521,5 +521,21 @@
       "medium": "Medium",
       "high": "High"
     }
+  },
+  "connectivity": {
+    "offline_title": "오프라인입니다",
+    "offline_hint": "화면 내용은 유지됩니다. 네트워크가 돌아오면 자동 재연결합니다. 오프라인 편집은 하지 않습니다.",
+    "reconnecting_title": "온라인 복구 — 재연결 중",
+    "reconnecting_hint": "리서치 데이터를 새로고침하는 중…",
+    "reconnected": "재연결됨 — 리서치 데이터를 갱신했습니다",
+    "reconnect_failed": "재연결 실패 — 다시 시도할 수 있습니다",
+    "reconnect_failed_title": "재연결 실패",
+    "reconnect_failed_hint": "네트워크를 확인한 뒤 다시 시도하세요. 마지막으로 불러온 리서치는 화면에 남습니다.",
+    "server_error_title": "서버 오류",
+    "server_error_hint": "리서치 서비스가 오류(5xx)를 반환했습니다. 다시 시도할 수 있습니다.",
+    "retry": "재시도",
+    "retrying": "재시도 중…",
+    "waiting_network": "네트워크 대기 중",
+    "waiting_network_hint": "연결되면 자동으로 불러옵니다. 빈 화면으로 두지 않습니다."
   }
 }

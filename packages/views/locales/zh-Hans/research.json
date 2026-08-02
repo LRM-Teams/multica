@@ -521,5 +521,21 @@
       "medium": "中",
       "high": "高"
     }
+  },
+  "connectivity": {
+    "offline_title": "网络已断开",
+    "offline_hint": "页面保留当前内容，恢复联网后自动重连。不做离线编辑。",
+    "reconnecting_title": "已恢复网络，正在重连",
+    "reconnecting_hint": "正在刷新调研数据…",
+    "reconnected": "已重连，调研数据已刷新",
+    "reconnect_failed": "重连失败，可手动重试",
+    "reconnect_failed_title": "重连失败",
+    "reconnect_failed_hint": "请检查网络后重试；上次已加载的调研仍保留在屏幕上。",
+    "server_error_title": "服务异常",
+    "server_error_hint": "调研服务返回错误（5xx）。可重试，不会白屏丢掉会话壳。",
+    "retry": "重试",
+    "retrying": "重试中…",
+    "waiting_network": "等待网络恢复",
+    "waiting_network_hint": "联网后将自动加载调研；页面不会白屏。"
   }
 }

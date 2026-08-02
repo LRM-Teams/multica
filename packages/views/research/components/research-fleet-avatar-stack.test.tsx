@@ -8,7 +8,18 @@ vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (picker: (keys: Record<string, unknown>) => unknown) => {
       const keys = {
-        panel: { fleet: "Fleet" },
+        panel: {
+          fleet: "Fleet",
+          fleet_empty_title: "No fleet",
+          fleet_empty_body: "Empty body",
+          fleet_loading_body: "Loading fleet",
+          fleet_mode: {
+            empty: "Idle",
+            loading: "Assembling",
+            running: "Running",
+            done: "Done",
+          },
+        },
         overlay: { fleet_collapse: "Collapse", fleet_expand: "Expand" },
       };
       return picker(keys as never);

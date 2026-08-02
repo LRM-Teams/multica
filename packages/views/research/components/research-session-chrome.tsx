@@ -212,7 +212,11 @@ export function ResearchSessionChrome({
               {t(($) => $.panel.view_delivery)}
             </Button>
           ) : null}
-          <ResearchSessionMetaMenu members={members} sources={sources} />
+          <ResearchSessionMetaMenu
+            members={members}
+            sources={sources}
+            sessionStatus={session.status}
+          />
         </div>
       </div>
     </header>

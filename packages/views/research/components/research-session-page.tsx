@@ -396,6 +396,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             edges={data.edges}
             sources={sources}
             members={fleet.members}
+            sessionStatus={session.status}
             presence={presence}
             selectedId={ui.selected?.id}
             onSelect={(node) => dispatch({ type: "select", node })}

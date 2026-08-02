@@ -1,26 +1,60 @@
 "use client";
 
 import { useState } from "react";
+import { Loader2 } from "lucide-react";
 import { dedupeResearchFleetMembers } from "@multica/core/research";
 import type { ResearchFleetMember } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useT } from "../../i18n/use-t";
+import { resolveFleetStripMode } from "../lib/fleet-strip-mode";
 
 /**
- * LRM-797 narrow: collapsible fleet avatar stack (not a permanent canvas float roster).
+ * LRM-797 / LRM-980 narrow: collapsible fleet avatar stack with four-state chrome.
  */
 export function ResearchFleetAvatarStack({
   members,
+  sessionStatus,
   className,
 }: {
   members: ResearchFleetMember[];
+  sessionStatus?: string | null;
   className?: string;
 }) {
   const { t } = useT("research");
   const [open, setOpen] = useState(false);
   const active = dedupeResearchFleetMembers(members).filter((m) => m.status !== "archived");
-  if (active.length === 0) return null;
+  const mode = resolveFleetStripMode(active.length, sessionStatus);
+
+  if (mode === "empty") {
+    return (
+      <div
+        className={cn("pointer-events-auto", className)}
+        data-testid="research-fleet-avatar-stack"
+        data-fleet-mode="empty"
+      >
+        <div className="rounded-xl border border-border/55 bg-card/95 px-2.5 py-1.5 text-[11px] text-muted-foreground shadow-md backdrop-blur-sm">
+          {t(($) => $.panel.fleet_mode.empty)}
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === "loading") {
+    return (
+      <div
+        className={cn("pointer-events-auto", className)}
+        data-testid="research-fleet-avatar-stack"
+        data-fleet-mode="loading"
+        aria-busy
+      >
+        <div className="flex items-center gap-1.5 rounded-xl border border-brand/30 bg-card/95 px-2.5 py-1.5 text-[11px] text-brand shadow-md backdrop-blur-sm">
+          <Loader2 className="size-3.5 animate-spin" aria-hidden />
+          {t(($) => $.panel.fleet_mode.loading)}
+        </div>
+      </div>
+    );
+  }
 
   const visible = open ? active : active.slice(0, 3);
   const extra = Math.max(0, active.length - 3);
@@ -32,11 +66,26 @@ export function ResearchFleetAvatarStack({
         className,
       )}
       data-testid="research-fleet-avatar-stack"
+      data-fleet-mode={mode}
     >
       {open ? (
-        <div className="max-h-48 w-[200px] overflow-y-auto rounded-xl border bg-card/95 p-2 shadow-lg backdrop-blur">
-          <div className="mb-1.5 px-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
-            {t(($) => $.panel.fleet)}
+        <div className="max-h-48 w-[220px] overflow-y-auto rounded-xl border border-border/55 bg-card/95 p-2 shadow-lg backdrop-blur-sm">
+          <div className="mb-1.5 flex items-center gap-1.5 px-1">
+            <span className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {t(($) => $.panel.fleet)}
+            </span>
+            <span
+              className={cn(
+                "rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
+                mode === "done"
+                  ? "border-success/35 bg-success/10 text-success"
+                  : "border-brand/35 bg-brand/10 text-brand",
+              )}
+            >
+              {mode === "done"
+                ? t(($) => $.panel.fleet_mode.done)
+                : t(($) => $.panel.fleet_mode.running)}
+            </span>
           </div>
           <ul className="space-y-1.5">
             {active.map((m) => (
@@ -60,7 +109,10 @@ export function ResearchFleetAvatarStack({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center rounded-full border bg-card/95 py-1 pr-2 pl-1 shadow-md backdrop-blur"
+        className={cn(
+          "flex items-center rounded-full border bg-card/95 py-1 pr-2 pl-1 shadow-md backdrop-blur-sm",
+          mode === "done" ? "border-success/35" : "border-border/55",
+        )}
         aria-expanded={open}
         aria-label={open ? t(($) => $.overlay.fleet_collapse) : t(($) => $.overlay.fleet_expand)}
         data-testid="research-fleet-avatar-stack-toggle"

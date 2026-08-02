@@ -69,6 +69,7 @@ function ResearchCanvasInner({
   edges,
   sources,
   members = EMPTY_FLEET_MEMBERS,
+  sessionStatus,
   presence,
   selectedId,
   onSelect,
@@ -81,6 +82,7 @@ function ResearchCanvasInner({
   edges: ResearchGraphEdge[];
   sources?: ResearchSource[];
   members?: ResearchFleetMember[];
+  sessionStatus?: string | null;
   presence?: ResearchPresenceMap;
   selectedId?: string | null;
   onSelect?: (node: ResearchGraphNode | null) => void;
@@ -315,6 +317,7 @@ function ResearchCanvasInner({
         />
         <ResearchFleetAvatarStack
           members={members}
+          sessionStatus={sessionStatus}
           className="absolute top-3 right-3 z-20"
         />
         {chatFab}
@@ -524,6 +527,7 @@ export function ResearchCanvas(props: {
   edges: ResearchGraphEdge[];
   sources?: ResearchSource[];
   members?: ResearchFleetMember[];
+  sessionStatus?: string | null;
   presence?: ResearchPresenceMap;
   selectedId?: string | null;
   onSelect?: (node: ResearchGraphNode | null) => void;

@@ -16,6 +16,26 @@ ORDER BY created_at ASC;
 SELECT * FROM agent_runtime
 WHERE id = $1;
 
+-- name: ListAgentRuntimeConnectivityByIDs :many
+-- task #84: replaces attachAgentRuntimeNames's hand-rolled SELECT. That
+-- query listed columns explicitly, so every new agent_runtime column (task
+-- #1801 offline_reason, #1802 starting_since, #81 pinned_version) needed a
+-- manual SELECT+scan+struct-field edit to actually reach GET /agents — three
+-- separate "done but unreachable" incidents in one day. sqlc.embed(agent_runtime)
+-- returns the whole row, so a future column is available on the generated
+-- struct the moment its migration lands and this query is regenerated — no
+-- Go changes here. effective_name mirrors the display-name fallback the old
+-- inline SQL computed (display_name, then name, then "Cloud" for cloud-mode
+-- runtimes with neither).
+SELECT sqlc.embed(agent_runtime),
+       COALESCE(
+         NULLIF(display_name, ''),
+         NULLIF(name, ''),
+         CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END
+       )::text AS effective_name
+FROM agent_runtime
+WHERE id = ANY(@ids::uuid[]);
+
 -- name: LockAgentRuntime :one
 -- Acquires a row-level exclusive lock on the runtime row. Used at the
 -- top of the cascade-delete transaction so that:

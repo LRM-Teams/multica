@@ -626,6 +626,73 @@ func (q *Queries) GetAgentRuntime(ctx context.Context, id pgtype.UUID) (AgentRun
 	return i, err
 }
 
+const listAgentRuntimeConnectivityByIDs = `-- name: ListAgentRuntimeConnectivityByIDs :many
+SELECT agent_runtime.id, agent_runtime.workspace_id, agent_runtime.daemon_id, agent_runtime.name, agent_runtime.runtime_mode, agent_runtime.provider, agent_runtime.status, agent_runtime.device_info, agent_runtime.metadata, agent_runtime.last_seen_at, agent_runtime.created_at, agent_runtime.updated_at, agent_runtime.owner_id, agent_runtime.legacy_daemon_id, agent_runtime.visibility, agent_runtime.display_name, agent_runtime.offline_reason, agent_runtime.starting_since, agent_runtime.pinned_version,
+       COALESCE(
+         NULLIF(display_name, ''),
+         NULLIF(name, ''),
+         CASE WHEN runtime_mode = 'cloud' THEN 'Cloud' ELSE '' END
+       )::text AS effective_name
+FROM agent_runtime
+WHERE id = ANY($1::uuid[])
+`
+
+type ListAgentRuntimeConnectivityByIDsRow struct {
+	AgentRuntime  AgentRuntime `json:"agent_runtime"`
+	EffectiveName string       `json:"effective_name"`
+}
+
+// task #84: replaces attachAgentRuntimeNames's hand-rolled SELECT. That
+// query listed columns explicitly, so every new agent_runtime column (task
+// #1801 offline_reason, #1802 starting_since, #81 pinned_version) needed a
+// manual SELECT+scan+struct-field edit to actually reach GET /agents — three
+// separate "done but unreachable" incidents in one day. sqlc.embed(agent_runtime)
+// returns the whole row, so a future column is available on the generated
+// struct the moment its migration lands and this query is regenerated — no
+// Go changes here. effective_name mirrors the display-name fallback the old
+// inline SQL computed (display_name, then name, then "Cloud" for cloud-mode
+// runtimes with neither).
+func (q *Queries) ListAgentRuntimeConnectivityByIDs(ctx context.Context, ids []pgtype.UUID) ([]ListAgentRuntimeConnectivityByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listAgentRuntimeConnectivityByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAgentRuntimeConnectivityByIDsRow{}
+	for rows.Next() {
+		var i ListAgentRuntimeConnectivityByIDsRow
+		if err := rows.Scan(
+			&i.AgentRuntime.ID,
+			&i.AgentRuntime.WorkspaceID,
+			&i.AgentRuntime.DaemonID,
+			&i.AgentRuntime.Name,
+			&i.AgentRuntime.RuntimeMode,
+			&i.AgentRuntime.Provider,
+			&i.AgentRuntime.Status,
+			&i.AgentRuntime.DeviceInfo,
+			&i.AgentRuntime.Metadata,
+			&i.AgentRuntime.LastSeenAt,
+			&i.AgentRuntime.CreatedAt,
+			&i.AgentRuntime.UpdatedAt,
+			&i.AgentRuntime.OwnerID,
+			&i.AgentRuntime.LegacyDaemonID,
+			&i.AgentRuntime.Visibility,
+			&i.AgentRuntime.DisplayName,
+			&i.AgentRuntime.OfflineReason,
+			&i.AgentRuntime.StartingSince,
+			&i.AgentRuntime.PinnedVersion,
+			&i.EffectiveName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getAgentRuntimeForWorkspace = `-- name: GetAgentRuntimeForWorkspace :one
 SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since FROM agent_runtime
 WHERE id = $1 AND workspace_id = $2

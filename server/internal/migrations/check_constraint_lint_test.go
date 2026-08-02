@@ -235,6 +235,100 @@ ALTER TABLE widget ADD CONSTRAINT widget_status_check
 	}
 }
 
+// TestCheckDownMigrationNarrowsSafely_RaiseExceptionGuardSatisfiesCheck is
+// task #104: the checker must recognize task #99/#101's conditional
+// RAISE EXCEPTION pattern as a valid resolution, on equal footing with a
+// remap UPDATE. Both leave no window where the ADD CONSTRAINT can silently
+// destroy or corrupt data — one preserves it via remap, the other refuses
+// to proceed at all while it exists. This fixture is migration 143's real
+// fix, byte-for-byte (task #101 / PR #1850).
+func TestCheckDownMigrationNarrowsSafely_RaiseExceptionGuardSatisfiesCheck(t *testing.T) {
+	up := `
+ALTER TABLE sandbox_job
+    DROP CONSTRAINT IF EXISTS sandbox_job_type_check,
+    ADD CONSTRAINT sandbox_job_type_check CHECK (type IN ('create', 'stop', 'resume', 'delete', 'reconfigure', 'exec', 'message'));
+`
+	down := `
+DO $$
+DECLARE
+    affected_count integer;
+BEGIN
+    SELECT count(*) INTO affected_count FROM sandbox_job WHERE type = 'reconfigure';
+    IF affected_count > 0 THEN
+        RAISE EXCEPTION 'migration 143 down cannot proceed: % row(s) in sandbox_job have type=''reconfigure''. There is no safe value to remap them to. If you accept permanently losing these job records, run: DELETE FROM sandbox_job WHERE type = ''reconfigure''; -- then re-run this down migration.', affected_count;
+    END IF;
+END $$;
+
+ALTER TABLE sandbox_job
+    DROP CONSTRAINT IF EXISTS sandbox_job_type_check,
+    ADD CONSTRAINT sandbox_job_type_check CHECK (type IN ('create', 'stop', 'resume', 'delete', 'exec', 'message'));
+`
+	found := FindUnsafeNarrowings("fixture_143", up, down)
+	if len(found) != 0 {
+		t.Fatalf("a preceding conditional RAISE EXCEPTION guard on the narrowed column must satisfy the check, got: %v", found)
+	}
+}
+
+// TestCheckDownMigrationNarrowsSafely_RaiseExceptionGuardAfterNarrowingStillFlagged
+// mirrors the UPDATE-after-narrowing test: a guard positioned AFTER the
+// narrowing ADD CONSTRAINT never gets a chance to run — the ALTER TABLE
+// fails (or, worse, silently succeeds if nothing else stops it) before
+// the guard is reached.
+func TestCheckDownMigrationNarrowsSafely_RaiseExceptionGuardAfterNarrowingStillFlagged(t *testing.T) {
+	up := `
+ALTER TABLE widget ADD CONSTRAINT widget_status_check
+    CHECK (status IN ('active', 'archived'));
+`
+	down := `
+ALTER TABLE widget ADD CONSTRAINT widget_status_check
+    CHECK (status IN ('active'));
+
+DO $$
+DECLARE
+    affected_count integer;
+BEGIN
+    SELECT count(*) INTO affected_count FROM widget WHERE status = 'archived';
+    IF affected_count > 0 THEN
+        RAISE EXCEPTION 'too late, % rows', affected_count;
+    END IF;
+END $$;
+`
+	found := FindUnsafeNarrowings("fixture_guard_too_late", up, down)
+	if len(found) == 0 {
+		t.Fatal("a RAISE EXCEPTION guard positioned after the narrowing ADD CONSTRAINT must still be flagged — it never gets a chance to run")
+	}
+}
+
+// TestCheckDownMigrationNarrowsSafely_RaiseExceptionGuardWrongColumnNotEnough
+// proves the guard must actually reference the narrowed column — a guard on
+// the same table but checking an unrelated column must not satisfy the
+// check (mirrors TestCheckDownMigrationNarrowsSafely_UnrelatedColumnUpdateNotEnough
+// for the UPDATE case).
+func TestCheckDownMigrationNarrowsSafely_RaiseExceptionGuardWrongColumnNotEnough(t *testing.T) {
+	up := `
+ALTER TABLE widget ADD CONSTRAINT widget_status_check
+    CHECK (status IN ('active', 'archived'));
+`
+	down := `
+DO $$
+DECLARE
+    affected_count integer;
+BEGIN
+    SELECT count(*) INTO affected_count FROM widget WHERE name = 'archived-widget';
+    IF affected_count > 0 THEN
+        RAISE EXCEPTION 'wrong column, % rows', affected_count;
+    END IF;
+END $$;
+
+ALTER TABLE widget ADD CONSTRAINT widget_status_check
+    CHECK (status IN ('active'));
+`
+	found := FindUnsafeNarrowings("fixture_guard_wrong_column", up, down)
+	if len(found) == 0 {
+		t.Fatal("a guard that checks an unrelated column must not satisfy the check")
+	}
+}
+
 // TestFilterKnownUnsafeNarrowings_FixtureAllowlist uses a fixture known-map,
 // not the real 33-entry knownPreExistingUnsafeNarrowings — hardcoding a real
 // entry here would make this test break the day someone fixes that entry

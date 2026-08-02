@@ -9,7 +9,7 @@ import (
 
 // UnsafeNarrowing is one ADD CONSTRAINT ... CHECK (<col> IN (...)) in a
 // down.sql that narrows relative to its paired up.sql without a preceding
-// remap UPDATE.
+// remap UPDATE or conditional RAISE EXCEPTION guard.
 type UnsafeNarrowing struct {
 	Migration  string
 	Constraint string
@@ -28,11 +28,18 @@ func (n UnsafeNarrowing) String() string {
 // FindUnsafeNarrowings is a text-level lint for exactly one concrete
 // down-migration failure shape (task #97): a down.sql that narrows an
 // `ALTER TABLE ... ADD CONSTRAINT ... CHECK (<col> IN (...))` value list
-// relative to what the paired up.sql just established, without an UPDATE
-// statement on the same table (mentioning the same column) appearing before
-// the narrowing ADD CONSTRAINT to remap now-forbidden existing rows first.
+// relative to what the paired up.sql just established, without either of
+// the two mechanisms this codebase uses to handle that safely appearing
+// before the narrowing ADD CONSTRAINT:
+//  1. an UPDATE statement on the same table (mentioning the same column)
+//     that remaps now-forbidden existing rows to a value the narrower list
+//     still allows; or
+//  2. a conditional `DO $$ ... IF count(*) > 0 THEN RAISE EXCEPTION ... END
+//     $$;` guard (task #99/#101) that refuses to narrow at all while rows
+//     with the now-forbidden value exist — used when there is no
+//     semantically safe remap target.
 //
-// Without that UPDATE, the down migration works on an empty database but
+// Without one of these, the down migration works on an empty database but
 // fails the moment a real row uses one of the removed values — which is
 // exactly the shape that shipped in 268_agent_workspace_file_audit.down.sql
 // before review caught it (task #95 / PR #1834).
@@ -69,7 +76,8 @@ func (n UnsafeNarrowing) String() string {
 //
 //	mechanism                                    | what happens on rollback      | tracked by
 //	----------------------------------------------|--------------------------------|------------
-//	narrowed CHECK, no remap (this checker)        | fails loudly, data survives   | this file / task #97, #100
+//	narrowed CHECK, no remap UPDATE and no RAISE   | fails loudly, data survives   | this file / task #97, #100
+//	  EXCEPTION guard (this checker's coverage)    |                                |
 //	down.sql DELETEs the now-forbidden rows        | succeeds, silently loses data | task #101
 //	down.sql references a table/function that was  | fails mid-way, already        | task #102
 //	  later dropped by an unrelated migration       |   partially applied           |
@@ -95,7 +103,7 @@ func FindUnsafeNarrowings(migrationName, upSQL, downSQL string) []UnsafeNarrowin
 		if len(removed) == 0 {
 			continue // down.sql's list is equal to or a superset of up's — safe
 		}
-		if hasPrecedingRemapUpdate(downSQL, down) {
+		if hasPrecedingRemapUpdate(downSQL, down) || hasPrecedingRaiseExceptionGuard(downSQL, down) {
 			continue
 		}
 		found = append(found, UnsafeNarrowing{
@@ -125,6 +133,12 @@ var (
 	addConstraintCheckInRe = regexp.MustCompile(`(?is)ALTER\s+TABLE\s+(\w+)\b.*?ADD\s+CONSTRAINT\s+(\w+)\b.*?CHECK\s*\(\s*(\w+)\s+IN\s*\(([^)]*)\)\s*\)`)
 	quotedValueRe          = regexp.MustCompile(`'([^']*)'`)
 	updateRe               = regexp.MustCompile(`(?is)UPDATE\s+(\w+)\b\s+SET\b(.*?);`)
+	// raiseExceptionGuardRe matches task #99/#101's fail-loud-only-if-real-data
+	// pattern: a DO block that counts rows matching some condition and RAISE
+	// EXCEPTIONs if any exist. Captures the FROM table and the WHERE clause
+	// text (checked for the narrowed column's name, same as
+	// hasPrecedingRemapUpdate does for UPDATE ... SET).
+	raiseExceptionGuardRe = regexp.MustCompile(`(?is)DO\s*\$\$.*?SELECT\s+count\(\*\)\s+INTO\s+\w+\s+FROM\s+(\w+)\b\s+WHERE\b(.*?)IF\s+\w+\s*>\s*0\s+THEN\s+RAISE\s+EXCEPTION\b.*?\$\$\s*;`)
 )
 
 // extractCheckInConstraints finds every ADD CONSTRAINT ... CHECK (col IN
@@ -178,6 +192,33 @@ func hasPrecedingRemapUpdate(downSQL string, c checkInConstraint) bool {
 			setClause = setClause[:idx]
 		}
 		if strings.Contains(setClause, c.column) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasPrecedingRaiseExceptionGuard reports whether downSQL contains a task
+// #99/#101-style conditional guard — `SELECT count(*) ... FROM <same
+// table> WHERE <mentions the column> ... IF ... > 0 THEN RAISE EXCEPTION`
+// — whose start offset is before the narrowing constraint's own offset.
+// This is the second of two mechanisms this checker recognizes as "the
+// narrowing was handled safely" (the other being hasPrecedingRemapUpdate):
+// remap-then-narrow preserves data, guard-then-narrow refuses to narrow at
+// all when data exists. Both leave no window where the ADD CONSTRAINT can
+// silently destroy or corrupt real rows.
+func hasPrecedingRaiseExceptionGuard(downSQL string, c checkInConstraint) bool {
+	for _, m := range raiseExceptionGuardRe.FindAllStringSubmatchIndex(downSQL, -1) {
+		start := m[0]
+		if start >= c.pos {
+			continue // must come before the narrowing ADD CONSTRAINT, not after
+		}
+		table := downSQL[m[2]:m[3]]
+		whereClause := downSQL[m[4]:m[5]]
+		if table != c.table {
+			continue
+		}
+		if strings.Contains(whereClause, c.column) {
 			return true
 		}
 	}

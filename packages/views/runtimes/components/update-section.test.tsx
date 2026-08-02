@@ -1,15 +1,28 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, act } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enRuntimes from "../../locales/en/runtimes.json";
-import { api } from "@multica/core/api";
+import { api, ApiError } from "@multica/core/api";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { UpdateSection } from "./update-section";
 
-vi.mock("@multica/core/api", () => ({
-  api: { initiateUpdate: vi.fn(), getUpdateResult: vi.fn() },
+vi.mock("@multica/core/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/api")>();
+  return {
+    ...actual,
+    api: { initiateUpdate: vi.fn(), getUpdateResult: vi.fn() },
+  };
+});
+
+vi.mock("@multica/ui/lib/error-toast", () => ({
+  showErrorToast: vi.fn(),
 }));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 function renderSection(props: Partial<React.ComponentProps<typeof UpdateSection>> = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -227,5 +240,51 @@ describe("UpdateSection pin enforcement (task #81 b)", () => {
       runtimeHealth: "failed",
     });
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+});
+
+// Task #81 (b), follow-up (Wren/Barry/Iris, 2026-08-02): the button is
+// disabled whenever we already know a runtime is pinned — so this 409 can
+// only fire on a genuine bypass (the pin took effect between render and
+// click, or a direct API call reaches the server without going through this
+// disabled button at all). A toast, not the persistent failed-state box:
+// this update never started, it isn't a failure of one that did.
+describe("UpdateSection pin-blocked bypass toast (task #81 b follow-up)", () => {
+  it("shows a toast (not the persistent failed box) when the server rejects with runtime_pinned", async () => {
+    vi.mocked(api.initiateUpdate).mockRejectedValue(
+      new ApiError("this computer is pinned to version 0.3.85", 409, "Conflict", {
+        code: "runtime_pinned",
+        error: "this computer is pinned to version 0.3.85",
+      }),
+    );
+    // pinnedVersion is null here on purpose: this reproduces the actual race
+    // — the button rendered enabled because the client hadn't seen the pin
+    // yet, so it has no version to show without a page refresh.
+    renderSection({ pinnedVersion: null });
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+
+    await act(async () => {});
+
+    expect(showErrorToast).toHaveBeenCalledWith(
+      "Can't upgrade — this computer is pinned to vunknown.",
+    );
+    // Not the inline destructive box a real update failure would render.
+    expect(screen.queryByText("Update failed")).toBeNull();
+  });
+
+  it("falls through to the generic failed state for a non-pin error (e.g. update_already_in_progress)", async () => {
+    vi.mocked(api.initiateUpdate).mockRejectedValue(
+      new ApiError("an update is already in progress", 409, "Conflict", {
+        code: "update_already_in_progress",
+        error: "an update is already in progress",
+      }),
+    );
+    renderSection({ pinnedVersion: null });
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
+
+    await act(async () => {});
+
+    expect(showErrorToast).not.toHaveBeenCalled();
+    expect(screen.getByText("Failed to initiate update")).toBeInTheDocument();
   });
 });

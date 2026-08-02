@@ -347,7 +347,8 @@
       "timeout": "超时"
     },
     "up_to_date_short": "已是最新",
-    "pin_blocked": "已指定运行版本 v{{version}}，取消指定后才能升级。"
+    "pin_blocked": "已指定运行版本 v{{version}}，取消指定后才能升级。",
+    "pin_blocked_toast": "无法升级——该电脑已指定运行版本 v{{version}}。"
   },
   "restart": {
     "action": "重启",

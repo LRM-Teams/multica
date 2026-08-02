@@ -353,7 +353,8 @@
       "timeout": "Timeout"
     },
     "up_to_date_short": "Up to date",
-    "pin_blocked": "Upgrades are disabled — this computer is pinned to v{{version}}. Remove the pin to allow upgrades."
+    "pin_blocked": "Upgrades are disabled — this computer is pinned to v{{version}}. Remove the pin to allow upgrades.",
+    "pin_blocked_toast": "Can't upgrade — this computer is pinned to v{{version}}."
   },
   "restart": {
     "action": "Restart",

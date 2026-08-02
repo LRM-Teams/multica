@@ -20,7 +20,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
-import { api } from "@multica/core/api";
+import { api, ApiError } from "@multica/core/api";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { deriveUpdateStatus } from "@multica/core/runtimes";
 import {
   MULTICA_INSTALL_COMMAND,
@@ -208,7 +209,30 @@ export function UpdateSection({
           // ignore poll errors
         }
       }, 2000);
-    } catch {
+    } catch (err) {
+      // Task #81 (b) — the button is disabled whenever we already know the
+      // machine is pinned, so this 409 only fires on a genuine bypass (the
+      // pin took effect between render and click, or a direct API call).
+      // A transient toast, not the persistent failed-state box below: this
+      // isn't an update that failed, it never started. Use our own
+      // `pinnedVersion` prop rather than parsing the server's message
+      // string — the `code` is the only part of the contract we match on
+      // (Parker, 2026-08-02).
+      if (
+        err instanceof ApiError &&
+        err.status === 409 &&
+        err.body &&
+        typeof err.body === "object" &&
+        (err.body as Record<string, unknown>).code === "runtime_pinned"
+      ) {
+        showErrorToast(
+          t(($) => $.update.pin_blocked_toast, {
+            version: pinnedVersion?.trim() || t(($) => $.update.version_unknown),
+          }),
+        );
+        setUpdating(false);
+        return;
+      }
       setStatus("failed");
       setError(t(($) => $.update.initiate_failed));
       setUpdating(false);

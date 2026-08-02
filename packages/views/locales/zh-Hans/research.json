@@ -500,6 +500,12 @@
     },
     "session_hint": "创建时选定的参数（只读回看）。",
     "session_menu": "创建参数",
-    "chip_depth": "深度 · {{label}}"
+    "chip_depth": "深度 · {{label}}",
+    "errors": {
+      "empty_goal": "请先填写调研目标，或选择一个模板。",
+      "depth_invalid": "请选择有效的调研深度（浅层 / 标准 / 深度）。",
+      "weight_out_of_range": "权重须在 0–1 之间，请调整后再提交。",
+      "weight_invalid": "请输入有效数字（0–1）。"
+    }
   }
 }

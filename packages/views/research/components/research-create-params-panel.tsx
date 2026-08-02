@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@multica/ui/components/ui/button";
+import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@multica/ui/components/ui/radio-group";
 import {
@@ -20,21 +21,28 @@ import {
   SOURCE_WEIGHT_KEYS,
   SOURCE_WEIGHT_MAX,
   SOURCE_WEIGHT_MIN,
+  type CreateParamsFieldErrors,
   type ResearchCreateDepthTier,
   type ResearchCreateLanguage,
-  type ResearchCreateParams,
+  type ResearchCreateParamsDraft,
   type ResearchSourceWeightKey,
   clampSourceWeight,
-  normalizeCreateParams,
+  draftCreateParams,
+  isSourceWeightInRange,
+  isValidDepthTier,
+  roundSourceWeight,
+  validateCreateParams,
 } from "../lib/research-create-params";
 
 function WeightRow({
   weightKey,
   value,
+  error,
   onChange,
 }: {
   weightKey: ResearchSourceWeightKey;
   value: number;
+  error?: NonNullable<CreateParamsFieldErrors["weights"]>[ResearchSourceWeightKey];
   onChange: (next: number) => void;
 }) {
   const { t } = useT("research");
@@ -50,59 +58,139 @@ function WeightRow({
       : weightKey === "community"
         ? t(($) => $.create_params.weight_rows.community.hint)
         : t(($) => $.create_params.weight_rows.primary.hint);
+  const invalid =
+    Boolean(error) ||
+    !Number.isFinite(value) ||
+    !isSourceWeightInRange(value);
+  const displayError = !invalid
+    ? null
+    : error === "weight_invalid" || !Number.isFinite(value)
+      ? t(($) => $.create_params.errors.weight_invalid)
+      : t(($) => $.create_params.errors.weight_out_of_range);
+  const sliderValue = Number.isFinite(value)
+    ? Math.min(SOURCE_WEIGHT_MAX, Math.max(SOURCE_WEIGHT_MIN, value))
+    : SOURCE_WEIGHT_MIN;
 
   return (
     <div className="space-y-2" data-testid={`research-create-weight-${weightKey}`}>
       <div className="flex items-baseline justify-between gap-2">
-        <Label className="text-sm font-medium text-foreground">{label}</Label>
-        <span className="font-mono text-xs tabular-nums text-muted-foreground">
-          {value.toFixed(2)}
-        </span>
+        <Label className="text-sm font-medium text-foreground" htmlFor={`research-weight-${weightKey}`}>
+          {label}
+        </Label>
+        <Input
+          id={`research-weight-${weightKey}`}
+          type="number"
+          inputMode="decimal"
+          step={0.05}
+          value={Number.isFinite(value) ? String(roundSourceWeight(value)) : ""}
+          aria-invalid={invalid || undefined}
+          aria-describedby={
+            displayError ? `research-weight-${weightKey}-error` : undefined
+          }
+          data-testid={`research-create-weight-${weightKey}-input`}
+          className="h-7 w-[4.5rem] px-2 text-right font-mono text-xs tabular-nums"
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw.trim() === "") {
+              onChange(Number.NaN);
+              return;
+            }
+            const next = Number(raw);
+            onChange(Number.isFinite(next) ? next : Number.NaN);
+          }}
+        />
       </div>
       <Slider
-        value={[value]}
+        value={[sliderValue]}
         min={SOURCE_WEIGHT_MIN}
         max={SOURCE_WEIGHT_MAX}
         step={0.05}
         onValueChange={(v) => {
           const raw = Array.isArray(v) ? v[0] : v;
-          onChange(clampSourceWeight(typeof raw === "number" ? raw : value));
+          onChange(clampSourceWeight(typeof raw === "number" ? raw : sliderValue));
         }}
         aria-label={label}
       />
-      <p className="text-[11px] leading-relaxed text-muted-foreground">{hint}</p>
+      {displayError ? (
+        <p
+          id={`research-weight-${weightKey}-error`}
+          role="alert"
+          data-testid={`research-create-weight-${weightKey}-error`}
+          className="text-[11px] leading-relaxed text-destructive"
+        >
+          {displayError}
+        </p>
+      ) : (
+        <p className="text-[11px] leading-relaxed text-muted-foreground">{hint}</p>
+      )}
     </div>
   );
 }
 
 /**
- * LRM-838 — create-flow params sheet: depth / source weights / language.
- * Narrow: fullscreen; desktop: right sheet.
+ * LRM-838 / LRM-835 — create-flow params sheet: depth / source weights / language.
+ * Narrow: fullscreen; desktop: right sheet. Out-of-range weights keep draft values
+ * and show near-field Chinese errors (no silent wipe).
  */
 export function ResearchCreateParamsPanel({
   open,
   value,
+  errors,
   onOpenChange,
   onChange,
+  onErrorsChange,
 }: {
   open: boolean;
-  value: ResearchCreateParams;
+  value: ResearchCreateParamsDraft;
+  errors?: CreateParamsFieldErrors | null;
   onOpenChange: (open: boolean) => void;
-  onChange: (next: ResearchCreateParams) => void;
+  onChange: (next: ResearchCreateParamsDraft) => void;
+  onErrorsChange?: (next: CreateParamsFieldErrors | null) => void;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
-  const params = normalizeCreateParams(value);
+  const params = draftCreateParams(value);
+  const depthInvalid =
+    Boolean(errors?.depth) || !isValidDepthTier(params.depth_tier);
 
-  const setDepth = (depth_tier: ResearchCreateDepthTier) =>
+  const setDepth = (depth_tier: ResearchCreateDepthTier) => {
     onChange({ ...params, depth_tier });
+    if (errors?.depth) {
+      onErrorsChange?.({ ...errors, depth: undefined });
+    }
+  };
   const setLanguage = (language: ResearchCreateLanguage) =>
     onChange({ ...params, language });
-  const setWeight = (key: ResearchSourceWeightKey, next: number) =>
+  const setWeight = (key: ResearchSourceWeightKey, next: number) => {
     onChange({
       ...params,
       source_weights: { ...params.source_weights, [key]: next },
     });
+    if (errors?.weights?.[key]) {
+      const nextWeights = { ...errors.weights };
+      delete nextWeights[key];
+      onErrorsChange?.(
+        errors.depth || Object.keys(nextWeights).length > 0
+          ? {
+              ...errors,
+              weights: Object.keys(nextWeights).length > 0 ? nextWeights : undefined,
+            }
+          : null,
+      );
+    }
+  };
+
+  const handleDone = () => {
+    const result = validateCreateParams(params);
+    if (!result.ok) {
+      onErrorsChange?.(result.errors);
+      return;
+    }
+    onErrorsChange?.(null);
+    // Persist rounded in-range values when confirming.
+    onChange(result.params);
+    onOpenChange(false);
+  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -133,13 +221,14 @@ export function ResearchCreateParamsPanel({
               </p>
             </div>
             <RadioGroup
-              value={params.depth_tier}
+              value={isValidDepthTier(params.depth_tier) ? params.depth_tier : ""}
               onValueChange={(v) => {
                 if (typeof v === "string" && DEPTH_TIERS.includes(v as ResearchCreateDepthTier)) {
                   setDepth(v as ResearchCreateDepthTier);
                 }
               }}
               className="grid gap-2"
+              aria-invalid={depthInvalid || undefined}
             >
               {DEPTH_TIERS.map((tier) => {
                 const label =
@@ -161,7 +250,9 @@ export function ResearchCreateParamsPanel({
                       "flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2.5 transition-colors",
                       params.depth_tier === tier
                         ? "border-brand/40 bg-brand/8"
-                        : "border-border/70 bg-card/60 hover:bg-muted/40",
+                        : depthInvalid
+                          ? "border-destructive/35 bg-card/60"
+                          : "border-border/70 bg-card/60 hover:bg-muted/40",
                     )}
                   >
                     <RadioGroupItem value={tier} className="mt-0.5" />
@@ -175,6 +266,15 @@ export function ResearchCreateParamsPanel({
                 );
               })}
             </RadioGroup>
+            {depthInvalid ? (
+              <p
+                role="alert"
+                data-testid="research-create-depth-error"
+                className="text-[11px] leading-relaxed text-destructive"
+              >
+                {t(($) => $.create_params.errors.depth_invalid)}
+              </p>
+            ) : null}
           </section>
 
           <section className="space-y-4" data-testid="research-create-weights">
@@ -191,6 +291,7 @@ export function ResearchCreateParamsPanel({
                 key={key}
                 weightKey={key}
                 value={params.source_weights[key]}
+                error={errors?.weights?.[key]}
                 onChange={(next) => setWeight(key, next)}
               />
             ))}
@@ -206,7 +307,11 @@ export function ResearchCreateParamsPanel({
               </p>
             </div>
             <RadioGroup
-              value={params.language}
+              value={
+                CREATE_LANGUAGES.includes(params.language as ResearchCreateLanguage)
+                  ? params.language
+                  : "zh"
+              }
               onValueChange={(v) => {
                 if (
                   typeof v === "string" &&
@@ -244,7 +349,7 @@ export function ResearchCreateParamsPanel({
             type="button"
             className="h-10 w-full rounded-full bg-brand text-brand-foreground hover:bg-brand/90"
             data-testid="research-create-params-done"
-            onClick={() => onOpenChange(false)}
+            onClick={handleDone}
           >
             {t(($) => $.create_params.done)}
           </Button>

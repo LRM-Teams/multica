@@ -500,6 +500,12 @@
     },
     "session_hint": "Parameters chosen at create time (read-only).",
     "session_menu": "Create parameters",
-    "chip_depth": "Depth · {{label}}"
+    "chip_depth": "Depth · {{label}}",
+    "errors": {
+      "empty_goal": "Enter a research goal, or pick a template first.",
+      "depth_invalid": "Choose a valid depth (shallow / standard / deep).",
+      "weight_out_of_range": "Weight must be between 0 and 1.",
+      "weight_invalid": "Enter a valid number between 0 and 1."
+    }
   }
 }

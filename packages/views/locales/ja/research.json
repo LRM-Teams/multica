@@ -500,6 +500,12 @@
     },
     "session_hint": "Parameters chosen at create time (read-only).",
     "session_menu": "Create parameters",
-    "chip_depth": "Depth · {{label}}"
+    "chip_depth": "Depth · {{label}}",
+    "errors": {
+      "empty_goal": "調査目標を入力するか、テンプレートを選んでください。",
+      "depth_invalid": "有効な深さ（浅い / 標準 / 深い）を選択してください。",
+      "weight_out_of_range": "重みは 0〜1 の範囲で指定してください。",
+      "weight_invalid": "0〜1 の有効な数値を入力してください。"
+    }
   }
 }

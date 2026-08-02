@@ -11,6 +11,7 @@ import type {
   OpenAgentPanelFn,
 } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useWorkspacePaths } from "@multica/core/paths";
 import {
   dedupeResearchFleetMembers,
   researchKeys,
@@ -33,6 +34,7 @@ import {
   CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
   useProfilePanelWidth,
 } from "../../layout/use-profile-panel-width";
+import { useNavigation } from "../../navigation/context";
 import {
   buildFleetChatFeed,
   nextStageWaitingCard,
@@ -41,6 +43,11 @@ import {
 } from "../lib/fleet-step-cards";
 import { resolveCanvasBodyMode } from "../lib/canvas-body-mode";
 import { resolveChatDrawerMode } from "../lib/chat-drawer-mode";
+import {
+  dismissCompletionGuide,
+  isCompletionGuideDismissed,
+  resolveCompletionGuideKind,
+} from "../lib/completion-guide";
 import { deliveryContentCount } from "../lib/delivery-mode";
 import {
   buildExplorationDimensions,
@@ -65,6 +72,7 @@ import {
   ResearchChatModeBody,
   ResearchChatModeChip,
 } from "./research-chat-mode-body";
+import { ResearchCompletionCard } from "./research-completion-card";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
@@ -139,11 +147,21 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { t } = useT("research");
   const { t: tAgents } = useT("agents");
   const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const nav = useNavigation();
   const qc = useQueryClient();
   const isMobile = useIsMobile();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
+  // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
+  const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
+  const completionDismissed =
+    dismissedSessionId === sessionId || isCompletionGuideDismissed(sessionId);
+  const dismissCompletion = useCallback(() => {
+    dismissCompletionGuide(sessionId);
+    setDismissedSessionId(sessionId);
+  }, [sessionId]);
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionSnapshotOptions(wsId, sessionId),
   );
@@ -270,6 +288,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
   const canStop = isResearchSessionStoppable(session.status);
   const isPaused = session.status === "paused";
+  const completionKind = resolveCompletionGuideKind(session.status);
+  const showCompletionGuide = Boolean(completionKind) && !completionDismissed;
   const startedStages = RESEARCH_STAGE_ORDER.filter(
     (stage) =>
       resolveStageStepState(stage, session.current_stage, session.status) !== "upcoming",
@@ -738,6 +758,26 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           </div>
         ) : null}
       </div>
+
+      {/* LRM-832 — terminal next-step guide (dismiss persists; below Delivery z-80). */}
+      {showCompletionGuide && completionKind ? (
+        <ResearchCompletionCard
+          kind={completionKind}
+          onViewReport={() => {
+            dismissCompletion();
+            dispatch({ type: "setDeliveryOpen", value: true });
+          }}
+          onNewResearch={() => {
+            dismissCompletion();
+            nav.push(paths.research());
+          }}
+          onHome={() => {
+            dismissCompletion();
+            nav.push(paths.root());
+          }}
+          onDismiss={dismissCompletion}
+        />
+      ) : null}
 
       {/* Portal-friendly mount: keep delivery modal outside the canvas
           `relative`/`overflow` section so it cannot collapse into a corner float. */}

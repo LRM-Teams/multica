@@ -21,8 +21,8 @@ import {
   DEPTH_TIERS,
   type ResearchCreateDepthTier,
   resolveSessionCreateParams,
-  stripCreateParamsTrailer,
 } from "../lib/research-create-params";
+import { ResearchSessionGoalCard } from "./research-session-goal-card";
 import { ResearchSessionMetaMenu } from "./research-session-meta-menu";
 
 type StatusTone = { text: string; dot: string; pill: string };
@@ -99,10 +99,14 @@ export function ResearchSessionChrome({
   rejectPending,
   handoffPending,
   onOpenDelivery,
-  selectedSummary,
   members = EMPTY_MEMBERS,
   sources = EMPTY_SOURCES,
   onSelectStage,
+  pendingSubstantiveGoal = null,
+  onConfirmSubstantiveGoal,
+  goalLoading = false,
+  goalError = false,
+  onGoalRetry,
 }: {
   session: ResearchSession;
   canConfirm: boolean;
@@ -119,11 +123,16 @@ export function ResearchSessionChrome({
   rejectPending?: boolean;
   handoffPending?: boolean;
   onOpenDelivery?: () => void;
-  selectedSummary?: string | null;
   members?: ResearchFleetMember[];
   sources?: ResearchSource[];
   /** LRM-824 — top-bar stage chip anchors into the chat message area. */
   onSelectStage?: (stage: string) => void;
+  /** LRM-1008 — pending substantive goal proposal (if any). */
+  pendingSubstantiveGoal?: string | null;
+  onConfirmSubstantiveGoal?: (proposal: string) => void;
+  goalLoading?: boolean;
+  goalError?: boolean;
+  onGoalRetry?: () => void;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -149,9 +158,6 @@ export function ResearchSessionChrome({
         : t(($) => $.create_params.depth_tiers.standard.label);
   const showDepthChip = DEPTH_TIERS.includes(
     createParams.depth_tier as ResearchCreateDepthTier,
-  );
-  const goalPreview = stripCreateParamsTrailer(
-    selectedSummary ?? session.goal ?? "",
   );
 
   // LRM-840: awaiting_user_confirm → approve + reject controls (not text-only).
@@ -256,9 +262,6 @@ export function ResearchSessionChrome({
             />
           ) : null}
           {roundChip}
-          <p className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:block">
-            {goalPreview}
-          </p>
         </div>
         <div
           data-testid="research-session-actions"
@@ -267,6 +270,16 @@ export function ResearchSessionChrome({
             hasPrimary && "pl-1",
           )}
         >
+          {/* LRM-1008 / LRM-898 D — compact Goal Card (toolbar right, before CTAs). */}
+          <ResearchSessionGoalCard
+            sessionId={session.id}
+            goal={session.goal}
+            pendingSubstantive={pendingSubstantiveGoal}
+            onConfirmSubstantive={onConfirmSubstantiveGoal}
+            loading={goalLoading}
+            error={goalError}
+            onRetry={onGoalRetry}
+          />
           {showConfirm ? (
             <Button
               size="sm"

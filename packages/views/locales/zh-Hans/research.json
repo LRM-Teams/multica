@@ -67,6 +67,27 @@
     "delete_done": "调研已删除",
     "cancel": "取消"
   },
+  "goal_card": {
+    "label": "GOAL",
+    "final_title": "最终目标",
+    "card_title": "查看最终目标",
+    "icon_title": "最终目标",
+    "empty_summary": "尚未收敛",
+    "loading_summary": "更新中…",
+    "error_summary": "目标加载失败",
+    "pending_summary": "待确认换题…",
+    "empty_body": "最终目标尚未收敛。在对话里纠正方向后会收束到这里。",
+    "loading_body": "正在根据你的发言更新目标…",
+    "error_body": "无法加载最终目标，可重试。",
+    "optimized_note": "目标已根据你的话优化",
+    "previous_label": "上一版",
+    "substantive_label": "待确认换题",
+    "close": "关闭",
+    "retry": "重试",
+    "confirm_substantive": "确认换题（substantive）",
+    "collapse_icon": "收起为图标",
+    "expand_card": "展开卡片"
+  },
   "session_page": {
     "load_failed": "会话加载失败",
     "retry": "重试",

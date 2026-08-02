@@ -539,12 +539,17 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         rejectPending={rejectConfirm.isPending}
         handoffPending={handoff.isPending}
         onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
-        selectedSummary={
-          ui.selected ? `${ui.selected.title} — ${ui.selected.summary}` : null
-        }
         members={fleet.members}
         sources={sources}
         onSelectStage={handleSelectStage}
+        pendingSubstantiveGoal={
+          latestRound?.goal_patch_proposal?.trim()
+            ? latestRound.goal_patch_proposal
+            : null
+        }
+        onConfirmSubstantiveGoal={(proposal) =>
+          postUser(`确认将调研最终目标更新为：${proposal}`)
+        }
       />
 
       {sessionInterrupt ? (

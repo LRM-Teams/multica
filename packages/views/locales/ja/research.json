@@ -67,6 +67,27 @@
     "delete_done": "Research deleted",
     "cancel": "Cancel"
   },
+  "goal_card": {
+    "label": "GOAL",
+    "final_title": "最終目標",
+    "card_title": "最終目標を表示",
+    "icon_title": "最終目標",
+    "empty_summary": "未設定",
+    "loading_summary": "更新中…",
+    "error_summary": "読み込み失敗",
+    "pending_summary": "確認待ち…",
+    "empty_body": "最終目標はまだ収束していません。チャットで方向を直すとここにまとまります。",
+    "loading_body": "発言に基づき目標を更新しています…",
+    "error_body": "最終目標を読み込めません。再試行できます。",
+    "optimized_note": "目標はあなたの発言に合わせて最適化されました",
+    "previous_label": "前の版",
+    "substantive_label": "トピック変更の確認待ち",
+    "close": "閉じる",
+    "retry": "再試行",
+    "confirm_substantive": "トピック変更を確認",
+    "collapse_icon": "アイコンに畳む",
+    "expand_card": "カードを展開"
+  },
   "session_page": {
     "load_failed": "セッションの読み込みに失敗しました",
     "retry": "再試行",

@@ -9,6 +9,12 @@ vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => mobileState.isMobile,
 }));
 
+vi.mock("./research-session-goal-card", () => ({
+  ResearchSessionGoalCard: ({ goal }: { goal: string }) => (
+    <div data-testid="research-session-goal-card">{goal}</div>
+  ),
+}));
+
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
     t: (fn: (dict: Record<string, unknown>) => unknown, vars?: Record<string, unknown>) => {
@@ -296,12 +302,11 @@ describe("ResearchSessionChrome", () => {
     expect(confirm).toHaveProperty("disabled", true);
   });
 
-  it("selected node summary replaces the goal line without adding a third content row", () => {
-    const { container } = renderChrome(makeSession(), {
-      selectedSummary: "偏离度 8.2% — 高置信",
-    });
-    expect(screen.getByText("偏离度 8.2% — 高置信")).toBeTruthy();
-    expect(screen.queryByText("分析知春路沿线 3 公里二手房挂牌与成交")).toBeNull();
+  it("LRM-1008: Goal Card shows session.goal (not selected node summary)", () => {
+    const { container } = renderChrome(makeSession());
+    expect(screen.getByTestId("research-session-goal-card").textContent).toContain(
+      "分析知春路沿线 3 公里二手房挂牌与成交",
+    );
     // Hairline + identity + toolbar.
     expect(container.querySelectorAll("header > div").length).toBe(3);
   });

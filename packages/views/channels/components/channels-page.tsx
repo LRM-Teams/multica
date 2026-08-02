@@ -199,6 +199,10 @@ import {
   type VoiceRecordingAttachment,
 } from "../lib/voice-audio";
 import { prepareVoicePlayback, voicePlaybackScope } from "../lib/voice-playback";
+import {
+  handleConvSearchInputKeyDown,
+  orderConvSearchResultsNewestFirst,
+} from "../lib/conv-search-navigation";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
 import {
@@ -1713,7 +1717,9 @@ export function ChannelsPage({
     const timer = setTimeout(async () => {
       try {
         const res = await api.searchChannelMessages(active.id, q);
-        setConvSearchResults(res.results);
+        // LRM-753 — newest-first so index 0 is「最近命中」; list scroll follows
+        // effectiveHighlightId via ChannelMessageList.
+        setConvSearchResults(orderConvSearchResultsNewestFirst(res.results));
         setConvSearchTotal(res.total);
         setConvSearchIndex(0);
       } catch {
@@ -3997,13 +4003,24 @@ export function ChannelsPage({
                       }
                     }}
                     onKeyDown={(e) => {
-                      if (e.key === "Escape") {
-                        setConvSearchOpen(false);
-                        setConvSearchQuery("");
-                        setConvSearchResults([]);
-                        setConvSearchTotal(0);
-                        setConvSearchIndex(0);
-                      }
+                      handleConvSearchInputKeyDown(e, {
+                        total: convSearchTotal,
+                        onClose: () => {
+                          setConvSearchOpen(false);
+                          setConvSearchQuery("");
+                          setConvSearchResults([]);
+                          setConvSearchTotal(0);
+                          setConvSearchIndex(0);
+                        },
+                        // Newest-first: next = older hits, prev = newer hits.
+                        onNext: () =>
+                          setConvSearchIndex((i) =>
+                            convSearchTotal === 0
+                              ? 0
+                              : Math.min(convSearchTotal - 1, i + 1),
+                          ),
+                        onPrev: () => setConvSearchIndex((i) => Math.max(0, i - 1)),
+                      });
                     }}
                     placeholder={t(($) => $.conv_search.group_placeholder)}
                     className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
@@ -4023,7 +4040,7 @@ export function ChannelsPage({
                       variant="ghost"
                       size="icon"
                       className="size-8"
-                      disabled={convSearchTotal === 0}
+                      disabled={convSearchTotal === 0 || convSearchIndex === 0}
                       aria-label={t(($) => $.conv_search.prev_aria)}
                       onClick={() => setConvSearchIndex((i) => Math.max(0, i - 1))}
                     >
@@ -4033,9 +4050,16 @@ export function ChannelsPage({
                       variant="ghost"
                       size="icon"
                       className="size-8"
-                      disabled={convSearchTotal === 0}
+                      disabled={
+                        convSearchTotal === 0 ||
+                        convSearchIndex >= convSearchTotal - 1
+                      }
                       aria-label={t(($) => $.conv_search.next_aria)}
-                      onClick={() => setConvSearchIndex((i) => Math.min(convSearchTotal - 1, i + 1))}
+                      onClick={() =>
+                        setConvSearchIndex((i) =>
+                          Math.min(convSearchTotal - 1, i + 1),
+                        )
+                      }
                     >
                       <ChevronDown className="size-4" />
                     </Button>

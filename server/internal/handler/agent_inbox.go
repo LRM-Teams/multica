@@ -1737,6 +1737,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			ChannelID:     resp.ChannelID,
 			ChannelKind:   resp.ChannelKind,
 			ChatSessionID: resp.ChatSessionID,
+			IssueID:       resp.IssueID,
 			MessageTexts:  []string{resp.ChatMessage, resp.TriggerCommentContent, resp.QuickCreatePrompt},
 			TaskType:      resp.Kind,
 			Now:           time.Now(),

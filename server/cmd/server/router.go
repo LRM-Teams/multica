@@ -681,6 +681,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/memory-curation/candidates/{candidateId}", h.GetMemoryCurationCandidate)
 					r.Get("/memory-curation/team-knowledge", h.ListTeamKnowledgeItems)
 					r.Get("/memory-curation/team-knowledge/{itemId}", h.GetTeamKnowledgeItem)
+					r.Get("/memory-curation/team-knowledge/{itemId}/neighbors", h.ListKnowledgeNeighbors)
+					r.Post("/knowledge/promote", h.PromoteKnowledgePage)
 					r.Route("/voice-calls", func(r chi.Router) {
 						r.Use(handler.RequireHumanActor)
 						r.Post("/", h.CreateVoiceCall)

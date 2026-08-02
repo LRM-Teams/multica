@@ -636,7 +636,7 @@ func normalizeCandidateScope(v string) string {
 
 func normalizeTeamKnowledgeKind(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "memory", "pattern", "skill", "policy", "troubleshooting":
+	case "memory", "pattern", "skill", "policy", "troubleshooting", "context", "decision":
 		return strings.ToLower(strings.TrimSpace(v))
 	default:
 		return "memory"

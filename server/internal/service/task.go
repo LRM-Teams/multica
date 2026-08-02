@@ -2713,6 +2713,7 @@ type MemoryExecutionScope struct {
 	ChannelID         string
 	ChannelKind       string
 	ChatSessionID     string
+	IssueID           string
 	IncludeUserMemory *bool // nil = compute from ChannelKind/ChatSessionID + message texts
 	MessageTexts      []string
 	TaskType          string
@@ -2721,6 +2722,9 @@ type MemoryExecutionScope struct {
 
 // LoadAgentMemoriesForExecution returns only memories that apply to the
 // current execution. Legacy rows without delivery metadata remain agent-local.
+//
+// LRM-1000: workspace wiki / team_knowledge pages are injected as task-related
+// seeds + ≤2 hop neighborhood only — never a full active dump (KV-cache friendly).
 func (s *TaskService) LoadAgentMemoriesForExecution(ctx context.Context, agentID, workspaceID pgtype.UUID, execution MemoryExecutionScope) []AgentMemoryData {
 	memories, err := s.Queries.ListAgentMemoriesByAgent(ctx, agentID)
 	if err != nil {
@@ -2743,13 +2747,11 @@ func (s *TaskService) LoadAgentMemoriesForExecution(ctx context.Context, agentID
 			ContentHash: memory.ContentHash,
 		})
 	}
-	teamKnowledge, err := s.Queries.ListActiveTeamKnowledgeForExecution(ctx, workspaceID)
-	if err == nil {
-		for _, item := range teamKnowledge {
-			if teamKnowledgeAppliesForExecution(item.Metadata, execution) {
-				result = append(result, teamKnowledgeMemoryData(item))
-			}
-		}
+	// Prefer gated wiki neighborhood. Legacy ListActiveTeamKnowledgeForExecution
+	// dump is intentionally not used on the wake path.
+	wikiPages := s.LoadTaskRelatedKnowledgeNeighborhood(ctx, workspaceID, execution, knowledgeWikiMaxHops)
+	if len(wikiPages) > 0 {
+		result = append(result, wikiPages...)
 	}
 	return result
 }

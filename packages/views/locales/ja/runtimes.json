@@ -346,7 +346,8 @@
       "failed": "更新に失敗しました",
       "timeout": "タイムアウト"
     },
-    "up_to_date_short": "最新です"
+    "up_to_date_short": "最新です",
+    "pin_blocked": "アップグレードは無効です — このコンピューターは v{{version}} に指定されています。指定を解除するとアップグレードできます。"
   },
   "restart": {
     "action": "再起動",

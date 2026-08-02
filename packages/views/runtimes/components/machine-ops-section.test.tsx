@@ -28,7 +28,15 @@ vi.mock("@multica/core/workspace/queries", () => ({
 }));
 
 vi.mock("./update-section", () => ({
-  UpdateSection: () => <div data-testid="update-section">UpdateSection</div>,
+  // Task #81 (b) (Wren, 08-02): render the received `pinnedVersion` so we
+  // can assert the wiring from `primary.pinned_version` actually reaches
+  // this prop — a stub with no props back would let a broken wire pass
+  // silently.
+  UpdateSection: ({ pinnedVersion }: { pinnedVersion?: string | null }) => (
+    <div data-testid="update-section" data-pinned-version={pinnedVersion ?? ""}>
+      UpdateSection
+    </div>
+  ),
 }));
 
 vi.mock("./restart-section", () => ({
@@ -142,6 +150,27 @@ describe("MachineOpsSection", () => {
     expect(screen.getByTestId("restart-section")).toBeDisabled();
     expect(screen.getByTestId("machine-ops-restart-reason")).toHaveTextContent(
       /desktop app/i,
+    );
+  });
+
+  // Task #81 (b): the primary runtime's pinned_version must reach
+  // UpdateSection's pinnedVersion prop — the seam between machine.runtimes
+  // and the enforcement logic is where a wire could quietly break.
+  it("threads the primary runtime's pinned_version into UpdateSection", () => {
+    renderOps(
+      makeMachine({ runtimes: [makeRuntime({ pinned_version: "0.3.85" })] }),
+    );
+    expect(screen.getByTestId("update-section")).toHaveAttribute(
+      "data-pinned-version",
+      "0.3.85",
+    );
+  });
+
+  it("passes an empty pinned_version through unchanged when the runtime isn't pinned", () => {
+    renderOps(makeMachine({ runtimes: [makeRuntime({ pinned_version: null })] }));
+    expect(screen.getByTestId("update-section")).toHaveAttribute(
+      "data-pinned-version",
+      "",
     );
   });
 });

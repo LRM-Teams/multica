@@ -48,4 +48,9 @@ jobs:
           cache-dependency-path: server/go.sum
 
       - name: Test server/internal/cli (real Windows semantics)
-        run: cd server; go test ./internal/cli/... -v -run TestVersionStore -count=1
+        # No -run filter: the `paths:` trigger above already scopes when this
+        # job runs at all, so a test-name filter here only risks silently
+        # excluding tests whose names don't happen to match (caught in
+        # review, 2026-08-02: TestRenamePublishWithRetry_* never ran because
+        # an earlier -run TestVersionStore didn't match their names).
+        run: cd server; go test ./internal/cli/... -v -count=1

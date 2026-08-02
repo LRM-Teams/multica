@@ -500,18 +500,22 @@ function DmChannelConversation({
     agentSnapshot: AgentPanelIdentitySnapshot | null;
     returnToMemberId: string | null;
     memberId: string | null;
+    /** LRM-740 — Profile/Agent opened from Thread; close re-opens Thread. */
+    returnToThread: ChannelMessage | null;
   };
   const [dock, setDock] = useState<DmDockStack>({
     agentId: null,
     agentSnapshot: null,
     returnToMemberId: null,
     memberId: null,
+    returnToThread: null,
   });
   const {
     agentId: selectedAgentPanelId,
     agentSnapshot: selectedAgentPanelSnapshot,
     returnToMemberId: selectedAgentReturnToMemberId,
     memberId: selectedMemberPanelId,
+    returnToThread: dockReturnToThread,
   } = dock;
   // LRM-682 — DM main-area view switch: 聊天 | 文件 (no Issues — DMs have no
   // issue context). DmConversation remounts per DM (key={source:id} at the
@@ -519,6 +523,8 @@ function DmChannelConversation({
   const [dmView, setDmView] = useState<"chat" | "files">("chat");
   const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>(
     (agentId, snapshot, options) => {
+      // LRM-740 — stash Thread before close so Profile/Agent close can restore it.
+      const returnToThread = openThreadRoot;
       dispatch({ type: "closeThread" });
       setDock((prev) => ({
         agentId,
@@ -526,26 +532,48 @@ function DmChannelConversation({
         returnToMemberId:
           options?.returnToMemberId ?? prev.memberId ?? prev.returnToMemberId,
         memberId: null,
+        returnToThread: returnToThread ?? prev.returnToThread,
       }));
     },
-    [],
+    [openThreadRoot],
   );
-  const handleOpenMemberPanel = useCallback((userId: string) => {
-    dispatch({ type: "closeThread" });
-    setDock({
-      agentId: null,
-      agentSnapshot: null,
-      returnToMemberId: null,
-      memberId: userId,
-    });
-  }, []);
+  const handleOpenMemberPanel = useCallback(
+    (userId: string) => {
+      const returnToThread = openThreadRoot;
+      dispatch({ type: "closeThread" });
+      setDock((prev) => ({
+        agentId: null,
+        agentSnapshot: null,
+        returnToMemberId: null,
+        memberId: userId,
+        returnToThread: returnToThread ?? prev.returnToThread,
+      }));
+    },
+    [openThreadRoot],
+  );
   const handlePopAgentToMember = useCallback(() => {
     setDock((prev) => ({
       agentId: null,
       agentSnapshot: null,
       returnToMemberId: null,
       memberId: prev.returnToMemberId,
+      returnToThread: prev.returnToThread,
     }));
+  }, []);
+  const closeDockRestoringThread = useCallback(() => {
+    setDock((prev) => {
+      const restore = prev.returnToThread;
+      if (restore) {
+        dispatch({ type: "openThread", message: restore });
+      }
+      return {
+        agentId: null,
+        agentSnapshot: null,
+        returnToMemberId: null,
+        memberId: null,
+        returnToThread: null,
+      };
+    });
   }, []);
   const { data: dmMembers = [] } = useQuery({
     ...memberListOptions(wsId),
@@ -1209,6 +1237,7 @@ function DmChannelConversation({
       agentSnapshot: null,
       returnToMemberId: null,
       memberId: null,
+      returnToThread: null,
     });
     dispatch({ type: "openThread", message });
   };
@@ -1711,14 +1740,7 @@ function DmChannelConversation({
         identitySnapshot={selectedAgentPanelSnapshot}
         currentUserId={currentUserId}
         members={dmMembers}
-        onClose={() => {
-          setDock({
-            agentId: null,
-            agentSnapshot: null,
-            returnToMemberId: null,
-            memberId: null,
-          });
-        }}
+        onClose={closeDockRestoringThread}
         variant={isMobile ? "page" : "panel"}
         onBack={
           selectedAgentReturnToMemberId ? handlePopAgentToMember : undefined
@@ -1730,12 +1752,17 @@ function DmChannelConversation({
     selectedMemberPanelId ? (
       <MemberSidePanel
         userId={selectedMemberPanelId}
-        onClose={() =>
+        onClose={() => {
+          if (dockReturnToThread) {
+            closeDockRestoringThread();
+            return;
+          }
           setDock((prev) => ({
             ...prev,
             memberId: null,
-          }))
-        }
+            returnToThread: null,
+          }));
+        }}
         variant={isMobile ? "page" : "panel"}
         doneLabel={
           isMobile ? tAgents(($) => $.side_panel.back_to_messages) : undefined

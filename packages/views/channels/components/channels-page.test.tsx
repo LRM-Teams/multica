@@ -446,14 +446,20 @@ vi.mock("./channel-message-list", () => ({
   // needs message ids + the highlight target surfaced so it can tell the main
   // timeline apart from ThreadPanel's reply list. Suites that never open a
   // thread and seed no messages get the same plain stub div as before.
+  // LRM-740 — also surface onOpenMember/onOpenAgent so embedded Thread avatar
+  // clicks can drive the page dock stack without mounting real bubbles.
   ChannelMessageList: ({
     header,
     messages,
     highlightMessageId,
+    onOpenMember,
+    onOpenAgent,
   }: {
     header?: React.ReactNode;
     messages?: { id: string }[];
     highlightMessageId?: string | null;
+    onOpenMember?: (userId: string) => void;
+    onOpenAgent?: (agentId: string, snapshot?: unknown) => void;
   }) => (
     <div
       data-testid="message-list"
@@ -461,9 +467,59 @@ vi.mock("./channel-message-list", () => ({
       data-count={(messages ?? []).length}
     >
       {header}
+      {onOpenMember ? (
+        <button
+          type="button"
+          data-testid="list-open-member"
+          onClick={() => onOpenMember("user-9")}
+        >
+          open-member
+        </button>
+      ) : null}
+      {onOpenAgent ? (
+        <button
+          type="button"
+          data-testid="list-open-agent"
+          onClick={() => onOpenAgent("agent-9")}
+        >
+          open-agent
+        </button>
+      ) : null}
       {(messages ?? []).filter(Boolean).map((m) => (
         <div key={m.id} data-testid={`msg-${m.id}`} />
       ))}
+    </div>
+  ),
+}));
+
+vi.mock("../../members/member-side-panel", () => ({
+  MemberSidePanel: ({
+    userId,
+    onClose,
+  }: {
+    userId: string;
+    onClose?: () => void;
+  }) => (
+    <div data-testid="member-side-panel" data-user-id={userId}>
+      <button type="button" data-testid="member-side-close" onClick={onClose}>
+        close
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock("../../common/resolved-agent-side-panel", () => ({
+  ResolvedAgentSidePanel: ({
+    agentId,
+    onClose,
+  }: {
+    agentId: string;
+    onClose?: () => void;
+  }) => (
+    <div data-testid="agent-side-panel" data-agent-id={agentId}>
+      <button type="button" data-testid="agent-side-close" onClick={onClose}>
+        close
+      </button>
     </div>
   ),
 }));
@@ -487,7 +543,10 @@ vi.mock("./conversation-surface", async (importOriginal) => ({
   ),
 }));
 
-function renderPage(channelId?: string) {
+function renderPage(
+  channelId?: string,
+  options?: { embedded?: boolean; embeddedSurface?: "thread" | "channel" },
+) {
   const qc = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
@@ -501,7 +560,11 @@ function renderPage(channelId?: string) {
   const ui = () => (
     <I18nProvider locale="en" resources={{ en: { common: enCommon, channels: enChannels } }}>
       <QueryClientProvider client={qc}>
-        <ChannelsPage channelId={channelId} />
+        <ChannelsPage
+          channelId={channelId}
+          embedded={options?.embedded}
+          embeddedSurface={options?.embeddedSurface}
+        />
       </QueryClientProvider>
     </I18nProvider>
   );
@@ -1974,6 +2037,55 @@ describe("ChannelsPage — Reminder anchor ?thread=&message= deep-link (#656)", 
     // a message that was never in the main list's page.
     const mainList = lists.find((el) => el !== threadList);
     expect(mainList).toHaveAttribute("data-highlight", "");
+  });
+
+  it("LRM-740: embedded Thread avatar opens Member dock (not skeleton) and close restores Thread", async () => {
+    renderPage("chan-1", { embedded: true, embeddedSurface: "thread" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`msg-${THREAD_REPLY_ID}`)).toBeInTheDocument();
+    });
+    // Thread reply list is the one that received onOpenMember from ThreadPanel.
+    const openMember = screen.getAllByTestId("list-open-member").at(-1)!;
+    fireEvent.click(openMember);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("member-side-panel")).toHaveAttribute(
+        "data-user-id",
+        "user-9",
+      );
+    });
+    // Profile replaced Thread in the exclusive slot — must not be a skeleton gap.
+    expect(screen.queryByTestId(`msg-${THREAD_REPLY_ID}`)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("member-side-close"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`msg-${THREAD_REPLY_ID}`)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("member-side-panel")).not.toBeInTheDocument();
+  });
+
+  it("LRM-740: embedded Thread avatar opens Agent dock and close restores Thread", async () => {
+    renderPage("chan-1", { embedded: true, embeddedSurface: "thread" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`msg-${THREAD_REPLY_ID}`)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getAllByTestId("list-open-agent").at(-1)!);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-side-panel")).toHaveAttribute(
+        "data-agent-id",
+        "agent-9",
+      );
+    });
+
+    fireEvent.click(screen.getByTestId("agent-side-close"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`msg-${THREAD_REPLY_ID}`)).toBeInTheDocument();
+    });
   });
 
   it("opens a SECOND, different thread when a same-pathname AppLink navigation changes ?thread=&message= without remounting (no full reload)", async () => {

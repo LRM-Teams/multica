@@ -19,6 +19,17 @@ describe("createQueryClient — networkMode defaults (#1276)", () => {
     const defaults = createQueryClient().getDefaultOptions();
     expect(defaults.queries?.networkMode).toBe("online");
   });
+
+  it("installs LRM-844 online recovery as a side effect of createQueryClient", async () => {
+    // jsdom: createQueryClient must leave onlineManager online even if something
+    // latched false before the client was built.
+    const { onlineManager } = await import("@tanstack/react-query");
+    const { resetQueryOnlineRecoveryForTests } = await import("./query-online");
+    resetQueryOnlineRecoveryForTests();
+    onlineManager.setOnline(false);
+    createQueryClient();
+    expect(onlineManager.isOnline()).toBe(true);
+  });
 });
 
 // #835 audit guard. `refetchOnMount` was never set, so it fell through to the

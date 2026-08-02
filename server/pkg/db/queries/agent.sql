@@ -887,11 +887,18 @@ WHERE id = $1
 RETURNING *;
 
 -- name: RefreshAgentStatusFromTasks :one
+-- Provider-quota lock (tasks #64/#77) wins over workload: a blocked agent
+-- must not flip back to idle/working just because the draining task ended.
+-- Read-time TTL — expired provider_blocked_until does not keep status=blocked.
 UPDATE agent AS a
-SET status = CASE WHEN EXISTS (
-    SELECT 1 FROM agent_inbox_event q
-    WHERE q.agent_id = a.id AND q.status = 'draining'
-) THEN 'working' ELSE 'idle' END,
+SET status = CASE
+    WHEN a.provider_blocked_until IS NOT NULL AND a.provider_blocked_until > now() THEN 'blocked'
+    WHEN EXISTS (
+        SELECT 1 FROM agent_inbox_event q
+        WHERE q.agent_id = a.id AND q.status = 'draining'
+    ) THEN 'working'
+    ELSE 'idle'
+END,
     updated_at = now()
 WHERE a.id = $1
 RETURNING *;
@@ -950,3 +957,34 @@ WHERE id = $1;
 SELECT id, crashed_since
 FROM agent
 WHERE id = ANY($1::uuid[]) AND crashed_since IS NOT NULL;
+
+-- name: MarkAgentProviderBlocked :exec
+-- Pins an agent unavailable for provider quota (tasks #64/#77). Extends or
+-- replaces an existing lock. Does not clear on heartbeat.
+UPDATE agent
+SET provider_blocked_until = $2,
+    provider_block_reason = $3,
+    provider_block_detail = $4,
+    status = 'blocked',
+    updated_at = now()
+WHERE id = $1;
+
+-- name: ClearAgentProviderBlocked :exec
+-- Explicit clear (e.g. admin override). Normal unlock is read-time when
+-- provider_blocked_until elapses — RefreshAgentStatusFromTasks then leaves
+-- blocked for idle/working.
+UPDATE agent
+SET provider_blocked_until = NULL,
+    provider_block_reason = '',
+    provider_block_detail = '',
+    updated_at = now()
+WHERE id = $1;
+
+-- name: ListAgentProviderBlockByIDs :many
+-- Narrow read for attachAgentRuntimeNames (same make-sqlc constraint as
+-- ListAgentCrashedSinceByIDs). Only returns still-active locks.
+SELECT id, provider_blocked_until, provider_block_reason, provider_block_detail
+FROM agent
+WHERE id = ANY($1::uuid[])
+  AND provider_blocked_until IS NOT NULL
+  AND provider_blocked_until > now();

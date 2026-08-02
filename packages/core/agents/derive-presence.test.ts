@@ -91,6 +91,7 @@ describe("deriveAgentAvailability", () => {
     expect(deriveAgentAvailability(makeRuntime(), NOW)).toBe("online");
   });
 
+
   it("returns unstable ONLY for an ONLINE runtime whose heartbeat lagged (150s–5min)", () => {
     // Post-#571 unstable is reserved for a STALE ONLINE heartbeat — never an
     // explicitly-offline runtime. Online + last_seen 3.5 min ago → recently_lost
@@ -272,6 +273,21 @@ describe("deriveAgentPresenceDetail", () => {
     expect(detail.runningCount).toBe(1);
     expect(detail.queuedCount).toBe(1);
     expect(detail.capacity).toBe(6);
+  });
+
+  it("provider quota lock folds Online→Offline even with a fresh heartbeat (#64/#77)", () => {
+    const detail = deriveAgentPresenceDetail({
+      agent: makeAgent({
+        provider_blocked_until: "2026-04-28T12:00:00Z",
+        provider_block_reason: "agent_error.provider_quota_limit",
+      }),
+      runtime: makeRuntime(),
+      tasks: [makeTask({ status: "running" })],
+      now: NOW,
+    });
+    expect(detail.availability).toBe("offline");
+    expect(detail.workload).toBe("idle");
+    expect(detail.runningCount).toBe(0);
   });
 
   it("composes offline + queued — the canonical 'stuck' case (was previously misleading 'running 0/N')", () => {

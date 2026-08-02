@@ -41,7 +41,8 @@
     "disconnected": "断线",
     "offline": "离线",
     "stopped": "已停止",
-    "crashed": "已崩溃"
+    "crashed": "已崩溃",
+    "blocked": "额度封锁"
   },
   "workload": {
     "working": "处理中",

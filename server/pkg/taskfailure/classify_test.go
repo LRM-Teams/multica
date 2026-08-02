@@ -72,6 +72,8 @@ func TestClassifyRules(t *testing.T) {
 		{"hit your limit curly", "you\u2019ve hit your limit", ReasonAgentProviderQuotaLimit},
 		{"credits", "Your account has 0 credits remaining", ReasonAgentProviderQuotaLimit},
 		{"quota", "quota exceeded for project foo", ReasonAgentProviderQuotaLimit},
+		{"chinese usage cap", `429: {"code":"1310","message":"已达到 7 天使用上限，2026-08-03 13:52:38 后可继续使用。"}`, ReasonAgentProviderQuotaLimit},
+		{"chinese usage substring", "已达到7天使用上限", ReasonAgentProviderQuotaLimit},
 
 		// 5. Capacity / rate limit.
 		{"429", "API Error: 429 Too Many Requests", ReasonAgentProviderCapacityOrRateLimit},

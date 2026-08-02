@@ -115,6 +115,14 @@ func Classify(rawError string) Reason {
 		"you\u2019ve hit your limit",
 		"credits",
 		"quota",
+		// Chinese provider copy (Cursor/国内网关 code 1310). Must land in
+		// quota BEFORE the bare "429" capacity rule — otherwise a hard
+		// multi-day lock is mislabeled transient and stays retryable
+		// (tasks #64/#77 specimen: jhp-前端工程师).
+		"使用上限",
+		`"code":"1310"`,
+		`"code": "1310"`,
+		"code\":1310",
 	):
 		return ReasonAgentProviderQuotaLimit
 

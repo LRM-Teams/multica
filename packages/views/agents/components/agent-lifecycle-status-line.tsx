@@ -30,7 +30,8 @@ export function AgentLifecycleStatusLine({
     status !== "starting" &&
     status !== "stopped" &&
     status !== "crashed" &&
-    status !== "disconnected"
+    status !== "disconnected" &&
+    status !== "blocked"
   ) {
     return null;
   }

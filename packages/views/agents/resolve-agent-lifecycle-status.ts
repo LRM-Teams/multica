@@ -69,6 +69,13 @@ export function resolveAgentLifecycleStatus(
         toneClass: NEUTRAL_TONE,
         dotClass: NEUTRAL_DOT,
       };
+    case "blocked":
+      return {
+        label: t(($) => $.lifecycle_status.blocked),
+        shape: "dot",
+        toneClass: NEUTRAL_TONE,
+        dotClass: NEUTRAL_DOT,
+      };
     case "disconnected":
       return {
         label: t(($) => $.lifecycle_status.disconnected),

@@ -23,6 +23,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/redact"
+	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
 const (
@@ -1004,6 +1005,9 @@ func (h *Handler) recordAgentInboxFailureActivity(ctx context.Context, event db.
 	}
 	h.TaskService.RecordEvolutionSkillOutcome(ctx, event.ID, "failure", "failure")
 	h.refreshAgentHonor(ctx, event.WorkspaceID, event.AgentID, "task_failed")
+	if failureReason == "" {
+		failureReason = string(taskfailure.Classify(errText))
+	}
 	h.recordAgentActivityEvent(ctx, h.DB,
 		event.WorkspaceID, event.AgentID, delivery.RuntimeID, pgtype.UUID{},
 		activityKindError, "agent_inbox_failed", "error",
@@ -1017,6 +1021,7 @@ func (h *Handler) recordAgentInboxFailureActivity(ctx context.Context, event db.
 			"source_message_id": uuidToString(event.SourceMessageID),
 		},
 	)
+	h.applyAgentProviderQuotaBlock(ctx, event.WorkspaceID, event.AgentID, delivery.RuntimeID, event.ID, errText, failureReason)
 }
 
 func (h *Handler) completeFailedNonChatAgentInboxEvent(
@@ -1028,10 +1033,9 @@ func (h *Handler) completeFailedNonChatAgentInboxEvent(
 ) {
 	alreadyReplied := h.inboxEventHasAgentTransportVisibleOutput(r.Context(), event.ID)
 	terminalOutcome := "failed"
-	retryable := true
+	retryable := inboxFailureRetryable(errText, failureReason, alreadyReplied)
 	if alreadyReplied {
 		terminalOutcome = "replied"
-		retryable = false
 	}
 	var collaborationWakes []channelAgentWake
 	outcome, err := h.TaskService.FailAgentInboxTaskWithFinalization(
@@ -1137,10 +1141,9 @@ func (h *Handler) completeFailedAgentInboxEvent(w http.ResponseWriter, r *http.R
 	}
 	alreadyReplied := h.inboxEventHasAgentTransportVisibleOutput(r.Context(), event.ID)
 	terminalOutcome := "failed"
-	retryable := true
+	retryable := inboxFailureRetryable(errText, failureReason, alreadyReplied)
 	if alreadyReplied {
 		terminalOutcome = "replied"
-		retryable = false
 	}
 	if _, err := qtx.SetAgentInboxTerminalOutcome(r.Context(), db.SetAgentInboxTerminalOutcomeParams{
 		ID:                 event.ID,

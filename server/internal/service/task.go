@@ -2442,8 +2442,11 @@ func (s *TaskService) maybeCleanupEphemeralSandbox(ctx context.Context, task db.
 
 	// 1. Set R' offline immediately so the sweeper doesn't keep the runtime alive
 	//    (the sandbox deletion is async, so the daemon may briefly re-register).
+	// offline_reason intentionally left unset/NULL here: this path hasn't
+	// been researched as a "confirmed" reason family for task ① (agent
+	// intentional-stop signal) — not guessing a reason_code for it.
 	if task.RuntimeID.Valid {
-		if err := s.Queries.SetAgentRuntimeOffline(ctx, task.RuntimeID); err != nil {
+		if err := s.Queries.SetAgentRuntimeOffline(ctx, db.SetAgentRuntimeOfflineParams{ID: task.RuntimeID}); err != nil {
 			slog.Warn("ephemeral sandbox cleanup: set R' offline failed",
 				"task_id", util.UUIDToString(task.ID),
 				"runtime_id", util.UUIDToString(task.RuntimeID),

@@ -40,15 +40,18 @@ const (
 	// agent list/detail surface (task #42③). It deliberately does not reuse
 	// the agentHealthState* names: this is a coarser, workload-aware view
 	// meant for the primary status badge, not the Activity Health tab.
-	// "starting"/"thinking"/"crashed"/"stopped" are not emitted yet — they
-	// need signals (lifecycle-start marker, task phase, provider-crash
-	// event) that don't exist as agent-visible facts today. Leaving them
-	// unemitted is intentional: the family rule is status stays unknown
-	// rather than invented.
+	// "starting"/"thinking"/"crashed" are not emitted yet — they need
+	// signals (lifecycle-start marker, task phase, provider-crash event)
+	// that don't exist as agent-visible facts today. Leaving them unemitted
+	// is intentional: the family rule is status stays unknown rather than
+	// invented. "stopped" (task ①, agent intentional-stop signal design)
+	// IS emitted: agent_runtime.offline_reason is a real, known fact
+	// written at deregister/teardown time, not a guess.
 	agentDisplayStatusIdle         = "idle"
 	agentDisplayStatusWorking      = "working"
 	agentDisplayStatusDisconnected = "disconnected"
 	agentDisplayStatusOffline      = "offline"
+	agentDisplayStatusStopped      = "stopped"
 )
 
 var agentHealthEventTypes = []string{
@@ -289,9 +292,10 @@ func agentHealthMissingRuntimeSummary(agent db.Agent) AgentHealthSummary {
 type runtimeConnectivityTier = service.RuntimeConnectivityTier
 
 const (
-	runtimeConnectivityOnline = service.RuntimeConnectivityOnline
-	runtimeConnectivityStale  = service.RuntimeConnectivityStale
-	runtimeConnectivityDead   = service.RuntimeConnectivityDead
+	runtimeConnectivityOnline  = service.RuntimeConnectivityOnline
+	runtimeConnectivityStale   = service.RuntimeConnectivityStale
+	runtimeConnectivityDead    = service.RuntimeConnectivityDead
+	runtimeConnectivityStopped = service.RuntimeConnectivityStopped
 )
 
 func runtimeConnectivity(rt db.AgentRuntime, now time.Time) runtimeConnectivityTier {
@@ -308,6 +312,8 @@ func runtimeConnectivity(rt db.AgentRuntime, now time.Time) runtimeConnectivityT
 // hook; see #42①②).
 func agentRuntimeDisplayStatus(agentStatus string, rt db.AgentRuntime, now time.Time) string {
 	switch runtimeConnectivity(rt, now) {
+	case runtimeConnectivityStopped:
+		return agentDisplayStatusStopped
 	case runtimeConnectivityDead:
 		return agentDisplayStatusOffline
 	case runtimeConnectivityStale:
@@ -336,6 +342,17 @@ func agentHealthSummary(agent db.Agent, rt db.AgentRuntime, events []AgentHealth
 	// the gap between a daemon going silent and the sweeper marking the
 	// row offline (~150s + sweep interval). (#284)
 	switch runtimeConnectivity(rt, now) {
+	case runtimeConnectivityStopped:
+		// Task ① (agent intentional-stop signal): a confirmed offline_reason
+		// bypasses the Stale/Dead time ramp at the connectivity-tier level,
+		// so it must be handled here too or it would silently fall through
+		// to the agentHealthStateOnline default above — mislabeling a
+		// deliberately-stopped runtime as online. This deliberately reuses
+		// the existing 5-word Activity Health vocabulary (agentHealthStateOffline)
+		// rather than adding a new state; only the reason_code reflects the
+		// specific, real fact instead of a guessed one.
+		state = agentHealthStateOffline
+		reason = rt.OfflineReason.String
 	case runtimeConnectivityStale:
 		state = agentHealthStateSuspectedDisconnect
 		reason = "heartbeat_stale"

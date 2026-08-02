@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -134,14 +135,20 @@ func (m *ephemeralSandboxManager) Cleanup(ctx context.Context, task db.AgentInbo
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, service.ErrSandboxInstanceNotFound) {
 			if task.RuntimeID.Valid {
-				return m.h.Queries.SetAgentRuntimeOffline(ctx, task.RuntimeID)
+				return m.h.Queries.SetAgentRuntimeOffline(ctx, db.SetAgentRuntimeOfflineParams{
+					ID:            task.RuntimeID,
+					OfflineReason: pgtype.Text{String: "sandbox_teardown", Valid: true},
+				})
 			}
 			return nil
 		}
 		return fmt.Errorf("cleanup ephemeral sandbox: lookup sandbox: %w", err)
 	}
 	if task.RuntimeID.Valid {
-		if err := m.h.Queries.SetAgentRuntimeOffline(ctx, task.RuntimeID); err != nil {
+		if err := m.h.Queries.SetAgentRuntimeOffline(ctx, db.SetAgentRuntimeOfflineParams{
+			ID:            task.RuntimeID,
+			OfflineReason: pgtype.Text{String: "sandbox_teardown", Valid: true},
+		}); err != nil {
 			return fmt.Errorf("cleanup ephemeral sandbox: set runtime offline: %w", err)
 		}
 	}

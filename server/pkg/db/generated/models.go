@@ -265,6 +265,7 @@ type AgentRuntime struct {
 	LegacyDaemonID pgtype.Text        `json:"legacy_daemon_id"`
 	Visibility     string             `json:"visibility"`
 	DisplayName    string             `json:"display_name"`
+	OfflineReason  pgtype.Text        `json:"offline_reason"`
 }
 
 type AgentRuntimeState struct {

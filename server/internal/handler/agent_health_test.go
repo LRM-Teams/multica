@@ -439,6 +439,25 @@ func TestAgentRuntimeDisplayStatus_FreshOnlineFollowsAgentWorkload(t *testing.T)
 	}
 }
 
+// TestAgentRuntimeDisplayStatus_Stopped is task ①'s (agent intentional-stop
+// signal) read-side check: a runtime with a confirmed offline_reason must
+// display as "stopped", not fall through to the generic "offline" case —
+// even though UpdatedAt here is only seconds old (still inside what would
+// otherwise be the Stale window).
+func TestAgentRuntimeDisplayStatus_Stopped(t *testing.T) {
+	now := time.Now()
+	rt := db.AgentRuntime{
+		Status:        "offline",
+		LastSeenAt:    pgtimestamptz(now.Add(-1 * time.Second)),
+		UpdatedAt:     pgtimestamptz(now.Add(-1 * time.Second)),
+		OfflineReason: pgtype.Text{String: "daemon_deregistered", Valid: true},
+	}
+	got := agentRuntimeDisplayStatus("idle", rt, now)
+	if got != agentDisplayStatusStopped {
+		t.Fatalf("display status = %q, want %q for a confirmed offline_reason", got, agentDisplayStatusStopped)
+	}
+}
+
 func pgtimestamptz(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
 }

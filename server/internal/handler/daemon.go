@@ -770,7 +770,10 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if err := h.Queries.SetAgentRuntimeOffline(r.Context(), rt.ID); err != nil {
+		if err := h.Queries.SetAgentRuntimeOffline(r.Context(), db.SetAgentRuntimeOfflineParams{
+			ID:            rt.ID,
+			OfflineReason: pgtype.Text{String: "daemon_deregistered", Valid: true},
+		}); err != nil {
 			slog.Warn("deregister: failed to set offline", "runtime_id", rid, "error", err)
 			continue
 		}

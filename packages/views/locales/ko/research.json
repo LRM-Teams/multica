@@ -67,6 +67,27 @@
     "delete_done": "Research deleted",
     "cancel": "Cancel"
   },
+  "goal_card": {
+    "label": "GOAL",
+    "final_title": "최종 목표",
+    "card_title": "최종 목표 보기",
+    "icon_title": "최종 목표",
+    "empty_summary": "아직 없음",
+    "loading_summary": "업데이트 중…",
+    "error_summary": "불러오기 실패",
+    "pending_summary": "주제 확인…",
+    "empty_body": "최종 목표가 아직 수렴되지 않았습니다. 대화에서 방향을 잡으면 여기에 모입니다.",
+    "loading_body": "말씀에 따라 목표를 업데이트하는 중…",
+    "error_body": "최종 목표를 불러올 수 없습니다. 다시 시도할 수 있습니다.",
+    "optimized_note": "목표가 당신의 말에 맞춰 최적화되었습니다",
+    "previous_label": "이전 버전",
+    "substantive_label": "주제 변경 대기",
+    "close": "닫기",
+    "retry": "다시 시도",
+    "confirm_substantive": "주제 변경 확인",
+    "collapse_icon": "아이콘으로 접기",
+    "expand_card": "카드 펼치기"
+  },
   "session_page": {
     "load_failed": "세션을 불러오지 못했습니다",
     "retry": "다시 시도",

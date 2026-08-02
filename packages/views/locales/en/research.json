@@ -67,6 +67,27 @@
     "delete_done": "Research deleted",
     "cancel": "Cancel"
   },
+  "goal_card": {
+    "label": "GOAL",
+    "final_title": "Final goal",
+    "card_title": "View final goal",
+    "icon_title": "Final goal",
+    "empty_summary": "Not set yet",
+    "loading_summary": "Updating…",
+    "error_summary": "Failed to load",
+    "pending_summary": "Confirm topic…",
+    "empty_body": "The final goal has not converged yet. Course-correct in chat and it will settle here.",
+    "loading_body": "Updating the goal from your message…",
+    "error_body": "Could not load the final goal. You can retry.",
+    "optimized_note": "Goal optimized from your words",
+    "previous_label": "Previous",
+    "substantive_label": "Pending topic change",
+    "close": "Close",
+    "retry": "Retry",
+    "confirm_substantive": "Confirm topic change",
+    "collapse_icon": "Collapse to icon",
+    "expand_card": "Expand card"
+  },
   "session_page": {
     "load_failed": "Failed to load session",
     "retry": "Retry",

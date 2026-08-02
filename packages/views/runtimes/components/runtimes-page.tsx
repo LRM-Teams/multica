@@ -685,14 +685,6 @@ function MachineDetailView({
     machine.runtimeHealth,
     machine.health,
   );
-  const updateIssue = machine.updateError
-    ? formatRuntimeUpdateError({
-        rawError: machine.updateError,
-        currentVersion: machine.cliVersion,
-        targetVersion: machine.updateTargetVersion,
-        t,
-      })
-    : "";
   const hostname = machineHostname(machine);
   // Structured register field only (Alice #1723). Never parse device_info
   // glue ("ubuntu · codex-cli …"). Missing → em dash (Parker; pending Frank).
@@ -793,11 +785,6 @@ function MachineDetailView({
                   </>
                 )}
               </div>
-              {updateIssue && (
-                <p className="mt-2 max-w-2xl break-words text-xs text-destructive">
-                  {updateIssue}
-                </p>
-              )}
             </div>
             {actions && <div className="shrink-0">{actions}</div>}
           </div>
@@ -805,13 +792,6 @@ function MachineDetailView({
           <section>
             <SectionTitle>{t(($) => $.machine.basics_section)}</SectionTitle>
             <div className="overflow-hidden rounded-xl border bg-card">
-              <InfoRow label={t(($) => $.machine.basics_display_name)}>
-                <MachineNameEditor
-                  machine={machine}
-                  wsId={wsId}
-                  variant="basics"
-                />
-              </InfoRow>
               {ownerMember && (
                 <InfoRow label={t(($) => $.machine.basics_owner)}>
                   <span className="truncate text-sm">

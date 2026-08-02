@@ -221,7 +221,7 @@ func formatName(name string) string {
 // reported (in known) so it stays visible in logs — this is a task-tracked
 // "not blocking yet," not a silent suppression.
 func TestFilterKnown_AllowlistedFindingIsNonBlocking(t *testing.T) {
-	f := finding{file: "internal/scheduler/jobs_memory_curation.go", funcName: "makeMemoryCurationIntentHandler"}
+	f := finding{file: "cmd/materialize-promoted/main.go", funcName: "main"}
 	blocking, known := filterKnown([]finding{f})
 	if len(blocking) != 0 {
 		t.Fatalf("blocking = %+v, want empty (this exact finding is in knownIssues)", blocking)
@@ -237,7 +237,7 @@ func TestFilterKnown_AllowlistedFindingIsNonBlocking(t *testing.T) {
 // per-function, not per-file, so a new bug introduced next to a known one
 // still fails CI.
 func TestFilterKnown_UnknownFindingIsBlocking(t *testing.T) {
-	f := finding{file: "internal/scheduler/jobs_memory_curation.go", funcName: "someOtherFunc"}
+	f := finding{file: "cmd/materialize-promoted/main.go", funcName: "someOtherFunc"}
 	blocking, known := filterKnown([]finding{f})
 	if len(blocking) != 1 {
 		t.Fatalf("blocking = %+v, want 1 (not in knownIssues, must block)", blocking)

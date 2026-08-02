@@ -121,9 +121,7 @@ type knownIssueKey struct {
 }
 
 var knownIssues = map[knownIssueKey]string{
-	{file: "internal/scheduler/jobs_memory_curation.go", funcName: "makeMemoryCurationIntentHandler"}: "task #90",
-	{file: "internal/workgraph/message_signals.go", funcName: "Store.HandleHumanRework"}:              "task #90",
-	{file: "cmd/materialize-promoted/main.go", funcName: "main"}:                                      "task #90 (one-shot CLI script, low priority — single-threaded, won't deadlock unless the pool is misconfigured to size 1)",
+	{file: "cmd/materialize-promoted/main.go", funcName: "main"}: "task #90 (one-shot CLI script, low priority — single-threaded, won't deadlock unless the pool is misconfigured to size 1)",
 }
 
 // filterKnown splits findings into blocking (fail CI) and known (logged,

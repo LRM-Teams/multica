@@ -220,10 +220,7 @@ func (b *piRPCBackend) ForceKill() error {
 	}
 	b.forceKilled.Store(true)
 	_ = p.stdin.Close()
-	if p.cmd.Process == nil {
-		return nil
-	}
-	return p.cmd.Process.Kill()
+	return forceKillProcess(p.cmd.Process)
 }
 
 func (b *piRPCBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {

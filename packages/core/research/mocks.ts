@@ -358,6 +358,82 @@ const mockMessageWakeFailed: ResearchMessage = {
   created_at: now(),
 };
 
+/** LRM-822 — agent clarification with list options (interactive chat card). */
+const mockMessageClarificationList: ResearchMessage = {
+  id: "msg-00000000-0000-0000-0000-000000000004",
+  session_id: sessionBase.id,
+  sender_type: "agent",
+  sender_id: "agent-mock-lead",
+  target_agent_id: null,
+  body: "Which vector store dimension should we prioritize first?",
+  card_kind: "process",
+  meta: {
+    op: "clarification_question",
+    question_id: "clarify-list-001",
+    prompt: "Which vector store dimension should we prioritize first?",
+    layout: "list",
+    allow_skip: true,
+    options: [
+      {
+        id: "cost",
+        label: "Cost / quota",
+        description: "Hosting + egress economics",
+      },
+      {
+        id: "recall",
+        label: "Recall quality",
+        description: "Recall@10 under production load",
+      },
+      {
+        id: "ops",
+        label: "Ops complexity",
+        description: "Day-2 ops and migration risk",
+      },
+    ],
+  },
+  created_at: now(),
+};
+
+/** LRM-822 — short form fields (no freehand draw). */
+const mockMessageClarificationForm: ResearchMessage = {
+  id: "msg-00000000-0000-0000-0000-000000000005",
+  session_id: sessionBase.id,
+  sender_type: "agent",
+  sender_id: "agent-mock-lead",
+  target_agent_id: null,
+  body: "Share hard constraints for the comparison.",
+  card_kind: "process",
+  meta: {
+    op: "clarification_question",
+    question_id: "clarify-form-001",
+    prompt: "Share hard constraints for the comparison.",
+    layout: "form",
+    allow_skip: true,
+    fields: [
+      {
+        id: "budget",
+        label: "Monthly budget (USD)",
+        type: "text",
+        required: true,
+        placeholder: "e.g. 2000",
+      },
+      {
+        id: "latency",
+        label: "p95 latency target",
+        type: "text",
+        placeholder: "e.g. < 40ms",
+      },
+      {
+        id: "notes",
+        label: "Other constraints",
+        type: "textarea",
+        placeholder: "Compliance, team skills, launch window…",
+      },
+    ],
+  },
+  created_at: now(),
+};
+
 const mockMessages: ResearchMessage[] = [
   mockMessageUser,
   mockMessageAgent,
@@ -442,6 +518,22 @@ export const mockResearchSnapshotError: ResearchSessionSnapshot = {
   messages: [mockMessageWakeFailed],
 };
 
+/** Clarification snapshot — list + form controls for LRM-822 Gate Shots / harness. */
+export const mockResearchSnapshotClarification: ResearchSessionSnapshot = {
+  session: { ...sessionBase, id: "sess-clarify", status: "running" },
+  fleet: mockFleet,
+  nodes: mockNodes,
+  edges: mockEdges,
+  sources: mockSources,
+  report: mockReport,
+  evals: mockEvals,
+  messages: [
+    mockMessageUser,
+    mockMessageClarificationList,
+    mockMessageClarificationForm,
+  ],
+};
+
 export const mockResearchSessionsList: ListResearchSessionsResponse = {
   sessions: [sessionBase],
 };
@@ -483,6 +575,7 @@ export const researchMocks = {
     empty: mockResearchSnapshotEmpty,
     loading: mockResearchSnapshotLoading,
     error: mockResearchSnapshotError,
+    clarification: mockResearchSnapshotClarification,
   },
   lists: {
     default: mockResearchSessionsList,

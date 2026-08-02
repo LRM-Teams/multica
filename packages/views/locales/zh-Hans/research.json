@@ -203,6 +203,15 @@
       "unknown": "唤醒失败"
     }
   },
+  "clarification": {
+    "submit": "提交回答",
+    "submitting": "提交中…",
+    "skip": "跳过",
+    "required_fields": "请至少填写一项后再提交",
+    "answered": "已提交回答 · 会话继续",
+    "answered_option": "已选：{{label}}",
+    "skipped": "已跳过 · 会话继续"
+  },
   "node": {
     "goal": "目标",
     "subquestion": "子问题",

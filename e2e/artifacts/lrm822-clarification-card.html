@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="utf-8" />
+    <title>LRM-822 Gate Shots — 澄清结构化回答控件</title>
+    <style>
+      :root {
+        --fg: #18181b;
+        --muted: #71717a;
+        --border: rgba(24, 24, 27, 0.12);
+        --bg: #fafafa;
+        --card: #fff;
+        --brand: #2563eb;
+        --primary: #18181b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      .shell { min-height: 100vh; display: flex; flex-direction: column; }
+      .chrome {
+        border-bottom: 1px solid var(--border);
+        background: rgba(255,255,255,0.85);
+        padding: 10px 16px 8px;
+        display: flex; align-items: center; gap: 10px;
+      }
+      .chrome h1 { margin: 0; font-size: 16px; font-weight: 600; flex: 1; }
+      .pill {
+        border: 1px solid rgba(37,99,235,0.3);
+        background: rgba(37,99,235,0.1);
+        color: var(--brand);
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .feed {
+        flex: 1;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        max-width: 720px;
+        width: 100%;
+        margin: 0 auto;
+      }
+      .bubble {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--card);
+        padding: 10px 12px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        width: 100%;
+      }
+      .bubble.process { border-style: dashed; background: rgba(24,24,27,0.03); }
+      .meta { font-size: 10px; color: var(--muted); margin-bottom: 6px; }
+      .name { font-size: 12px; font-weight: 600; }
+      .card {
+        margin-top: 6px;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        border: 1px solid rgba(24,24,27,0.18);
+        background: rgba(24,24,27,0.04);
+        border-radius: 10px;
+        padding: 10px;
+      }
+      .prompt { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+      .options { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+      .options.binary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .opt {
+        width: 100%;
+        min-height: 32px;
+        text-align: left;
+        border: 1px solid var(--border);
+        background: #fff;
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+      .opt strong { display: block; font-weight: 600; }
+      .opt span { display: block; margin-top: 2px; font-size: 11px; color: var(--muted); }
+      .opt.selected { border-color: var(--brand); background: rgba(37,99,235,0.1); }
+      .fields { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+      label { display: flex; flex-direction: column; gap: 4px; width: 100%; font-size: 12px; font-weight: 600; }
+      input, textarea {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 400;
+      }
+      .actions { display: flex; flex-direction: column; gap: 8px; width: 100%; margin-top: 4px; }
+      .actions.row { flex-direction: row; }
+      button.primary, button.ghost, button.outline {
+        min-height: 32px;
+        border-radius: 8px;
+        padding: 6px 12px;
+        font-size: 13px;
+        font-weight: 600;
+        width: 100%;
+      }
+      button.primary { background: var(--brand); color: #fff; border: none; }
+      button.outline { background: #fff; border: 1px solid var(--border); color: var(--fg); }
+      button.ghost { background: transparent; border: none; color: var(--muted); }
+      .status { margin-top: 8px; font-size: 11px; color: var(--muted); }
+      .composer {
+        margin: 0 16px 16px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--card);
+        padding: 10px;
+        font-size: 13px;
+        color: var(--muted);
+        max-width: 720px;
+        width: calc(100% - 32px);
+        align-self: center;
+      }
+      .label {
+        position: fixed; top: 8px; right: 8px;
+        background: #111; color: #fff; font-size: 11px;
+        padding: 4px 8px; border-radius: 6px; opacity: 0.75; z-index: 2;
+      }
+      @media (max-width: 480px) {
+        .options.binary { grid-template-columns: 1fr; }
+        .actions.row { flex-direction: column; }
+        .feed { padding: 12px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="label" id="shot-label">desktop · list</div>
+    <div class="shell" data-testid="research-session-page">
+      <header class="chrome">
+        <h1>向量库成本调研</h1>
+        <span class="pill">进行中</span>
+      </header>
+      <div class="feed" id="feed">
+        <article class="bubble process" data-testid="research-chat-card">
+          <div class="meta"><span class="name">罗纳尔多</span> · 过程 · clarification_question</div>
+          <div
+            class="card"
+            data-testid="research-clarification-card"
+            data-layout="list"
+            data-status="pending"
+            id="list-card"
+          >
+            <p class="prompt">优先比哪一维？</p>
+            <div class="options" data-testid="research-clarification-options">
+              <button type="button" class="opt" data-testid="research-clarification-option">
+                <strong>成本 / 配额</strong><span>托管与出站流量</span>
+              </button>
+              <button type="button" class="opt" data-testid="research-clarification-option">
+                <strong>召回质量</strong><span>生产负载下 Recall@10</span>
+              </button>
+              <button type="button" class="opt" data-testid="research-clarification-option">
+                <strong>运维复杂度</strong><span>Day-2 与迁移风险</span>
+              </button>
+            </div>
+            <button type="button" class="ghost" data-testid="research-clarification-skip">跳过</button>
+          </div>
+        </article>
+
+        <article class="bubble process" id="form-article">
+          <div class="meta"><span class="name">罗纳尔多</span> · 过程 · clarification_question</div>
+          <div
+            class="card"
+            data-testid="research-clarification-card"
+            data-layout="form"
+            data-status="pending"
+            id="form-card"
+          >
+            <p class="prompt">硬约束是什么？</p>
+            <div class="fields" data-testid="research-clarification-form">
+              <label>月预算（USD） * <input placeholder="例如 2000" /></label>
+              <label>p95 延迟目标 <input placeholder="例如 &lt; 40ms" /></label>
+              <label>其他约束 <textarea rows="3" placeholder="合规、团队技能、上线窗口…"></textarea></label>
+              <div class="actions row">
+                <button type="button" class="primary" data-testid="research-clarification-submit">提交回答</button>
+                <button type="button" class="outline" data-testid="research-clarification-skip">跳过</button>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+      <div class="composer" data-testid="research-chat-composer">提交后以用户消息入流，跳过不阻塞会话…</div>
+    </div>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const shot = params.get("shot") || "list";
+      const label = document.getElementById("shot-label");
+      const listCard = document.getElementById("list-card");
+      const formArticle = document.getElementById("form-article");
+      const formCard = document.getElementById("form-card");
+
+      if (shot === "list" || shot === "narrow-list") {
+        label.textContent = (shot.startsWith("narrow") ? "narrow" : "desktop") + " · list";
+        formArticle.style.display = "none";
+      } else if (shot === "form" || shot === "narrow-form") {
+        label.textContent = (shot.startsWith("narrow") ? "narrow" : "desktop") + " · form";
+        listCard.parentElement.style.display = "none";
+      } else if (shot === "skipped" || shot === "narrow-skipped") {
+        label.textContent = (shot.startsWith("narrow") ? "narrow" : "desktop") + " · skipped";
+        formArticle.style.display = "none";
+        listCard.dataset.status = "skipped";
+        listCard.querySelectorAll(".opt").forEach((b) => { b.disabled = true; b.style.opacity = "0.55"; });
+        const skip = listCard.querySelector('[data-testid="research-clarification-skip"]');
+        if (skip) skip.remove();
+        const status = document.createElement("p");
+        status.className = "status";
+        status.dataset.testid = "research-clarification-skipped";
+        status.textContent = "已跳过 · 会话继续";
+        listCard.appendChild(status);
+      } else if (shot === "answered" || shot === "narrow-answered") {
+        label.textContent = (shot.startsWith("narrow") ? "narrow" : "desktop") + " · answered";
+        formArticle.style.display = "none";
+        listCard.dataset.status = "answered";
+        const first = listCard.querySelector(".opt");
+        if (first) first.classList.add("selected");
+        listCard.querySelectorAll(".opt").forEach((b) => { b.disabled = true; });
+        const skip = listCard.querySelector('[data-testid="research-clarification-skip"]');
+        if (skip) skip.remove();
+        const status = document.createElement("p");
+        status.className = "status";
+        status.dataset.testid = "research-clarification-answered";
+        status.textContent = "已选：成本 / 配额";
+        listCard.appendChild(status);
+      }
+    </script>
+  </body>
+</html>

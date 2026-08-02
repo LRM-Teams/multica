@@ -247,6 +247,41 @@ export interface ResearchStageEval {
 
 export type ResearchMessageCardKind = "chat" | "process" | string;
 
+/**
+ * Agent clarification question (LRM-822).
+ * Carried on ResearchMessage.meta with op: "clarification_question".
+ * Submit/skip reply as a plain user chat body via postResearchMessage.
+ */
+export type ResearchClarificationLayout = "binary" | "list" | "form";
+
+export interface ResearchClarificationOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+export interface ResearchClarificationField {
+  id: string;
+  label: string;
+  type: "text" | "textarea";
+  required?: boolean;
+  placeholder?: string;
+}
+
+export interface ResearchClarificationQuestion {
+  /** Stable id referenced in the user reply body. */
+  question_id: string;
+  prompt: string;
+  layout: ResearchClarificationLayout;
+  options: ResearchClarificationOption[];
+  fields: ResearchClarificationField[];
+  /** Default true — skip must not block the session (AC). */
+  allow_skip: boolean;
+  /** Source message id (process/chat card that asked). */
+  message_id: string;
+  created_at: string;
+}
+
 export interface ResearchMessage {
   id: string;
   session_id: string;

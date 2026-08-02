@@ -203,6 +203,15 @@
       "unknown": "起動失敗"
     }
   },
+  "clarification": {
+    "submit": "回答を送信",
+    "submitting": "送信中…",
+    "skip": "スキップ",
+    "required_fields": "送信前に少なくとも1項目を入力してください",
+    "answered": "回答済み · セッション続行",
+    "answered_option": "選択：{{label}}",
+    "skipped": "スキップ済み · セッション続行"
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",

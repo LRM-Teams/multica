@@ -13,6 +13,7 @@ From `@multica/core/research`:
 | `researchMocks.snapshots.empty` | First-visit state (no graph / sources / report) |
 | `researchMocks.snapshots.loading` | Session row only — used for skeleton rendering |
 | `researchMocks.snapshots.error` | Running session + `wake_failed` process card (`meta.op` / `meta.reason`) |
+| `researchMocks.snapshots.clarification` | Running session + `clarification_question` list/form process cards (LRM-822) |
 | `researchMocks.lists.default` / `.empty` | Session list payloads |
 | `researchMocks.createResponse` | Kickoff payload shape for create-session flows |
 | `researchMocks.api` | Explicit mock surface mirroring `api.*Research*` signatures — wire in via query-client override or test harness, **never** silently in prod |
@@ -36,6 +37,7 @@ From `@multica/core/research`:
 | 820 streaming / stop | `snapshots.default` + WS updaters |
 | 821 source citation card | `snapshots.default.sources` + report citations |
 | 823 interruption banner | `snapshots.error` (`wake_failed`) |
+| 822 clarification options/form | `snapshots.clarification` (`clarification_question`) |
 | 825 canvas empty / first load | `snapshots.empty` / `snapshots.loading` |
 | 826 node detail drawer | `snapshots.default.nodes` + sources |
 | 828 dead-end retry | `snapshots.error` + `dead_end` node |

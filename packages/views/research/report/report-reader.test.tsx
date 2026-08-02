@@ -47,6 +47,18 @@ vi.mock("../../i18n/use-t", () => ({
           citation_fetch_failed: "Fetch failed",
           citation_fetch_failed_hint: "Could not fetch this source.",
           citation_summary_empty: "No summary.",
+          source_failed_badge: "Fetch failed",
+          source_failed_purpose: "Excluded from citation numbering",
+          source_fail_fetch: "Source fetch failed",
+          source_fail_timeout: "Fetch timed out",
+          source_fail_http: "HTTP error while fetching",
+          source_fail_invalid_url: "Invalid source URL",
+          source_fail_missing: "Source missing",
+          source_fail_unknown: "Source unavailable",
+          sources_all_failed_title: "All sources failed",
+          sources_all_failed_body: "No usable sources right now.",
+          sources_all_failed_retry: "Retry fetch",
+          sources_partial_failed_hint: "{{count}} source(s) failed and are labeled; the session continues.",
         },
         session_page: { retry: "Retry" },
       });
@@ -214,9 +226,72 @@ describe("ReportReader", () => {
           {
             id: "c2",
             index: 2,
-            source_id: "src-fail",
+            source_id: "src2",
             label: "[2]",
           },
+        ],
+        sources: [
+          {
+            source_id: "src1",
+            title: "Milvus Docs",
+            url: "https://milvus.io",
+            credibility_weight: 0.92,
+            source_class: "docs",
+          },
+          {
+            source_id: "src2",
+            title: "Qdrant Blog",
+            url: "https://qdrant.tech",
+            credibility_weight: 0.8,
+            source_class: "blog",
+          },
+        ],
+        conclusion: "Milvus leads.",
+      },
+    };
+    const src2: ResearchSource = {
+      ...sources[0]!,
+      id: "src2",
+      title: "Qdrant Blog",
+      url: "https://qdrant.tech",
+      credibility_weight: 0.8,
+      source_class: "blog",
+    };
+    render(
+      <ReportReader
+        open
+        onClose={vi.fn()}
+        report={structuredReport}
+        sources={[sources[0]!, src2]}
+      />,
+    );
+    const cards = screen.getAllByTestId("research-citation-card");
+    expect(cards).toHaveLength(2);
+    const citationLink = cards[0]!.querySelector("a");
+    expect(citationLink).toHaveAttribute("href", "https://milvus.io");
+    expect(citationLink).toHaveAttribute("target", "_blank");
+  });
+
+  it("LRM-834: failed sources stay labeled but drop out of citation sequence; all-failed shows retry", () => {
+    const onRetry = vi.fn();
+    const structuredReport: ResearchReport = {
+      ...report,
+      structured: {
+        schema_version: 1,
+        title: "Vector DB comparison",
+        outline: [{ id: "sec-find", title: "Findings", level: 1, children: [] }],
+        sections: [
+          {
+            id: "sec-find",
+            title: "Findings",
+            level: 1,
+            markdown: "Milvus recall higher.[^1] Also [^2].",
+            citation_ids: ["c1", "c2"],
+          },
+        ],
+        citations: [
+          { id: "c1", index: 1, source_id: "src1", label: "[1]", quote: "0.94" },
+          { id: "c2", index: 2, source_id: "src-fail", label: "[2]" },
         ],
         sources: [
           {
@@ -233,25 +308,41 @@ describe("ReportReader", () => {
     const failSource: ResearchSource = {
       ...sources[0]!,
       id: "src-fail",
-      title: "",
+      title: "Broken",
       url: "https://example.invalid/x",
-      payload: { fetch_failed: true },
+      payload: { fetch_failed: true, status: "timeout" },
     };
-    render(
+    const { rerender } = render(
       <ReportReader
         open
         onClose={vi.fn()}
         report={structuredReport}
         sources={[sources[0]!, failSource]}
+        onRetry={onRetry}
       />,
     );
+    // Partial: session continues; failed row labeled; failed citation excluded.
+    expect(screen.getByTestId("research-sources-partial-failed")).toBeInTheDocument();
+    expect(screen.getByTestId("research-source-fail-reason").textContent).toContain(
+      "Fetch timed out",
+    );
     const cards = screen.getAllByTestId("research-citation-card");
-    expect(cards).toHaveLength(2);
-    const citationLink = cards[0]!.querySelector("a");
-    expect(citationLink).toHaveAttribute("href", "https://milvus.io");
-    expect(citationLink).toHaveAttribute("target", "_blank");
-    expect(screen.getByText("Source unavailable")).toBeInTheDocument();
-    expect(cards[1]).toHaveAttribute("data-degraded", "true");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveAttribute("data-citation-id", "c1");
+
+    // All failed: clear prompt + retry.
+    rerender(
+      <ReportReader
+        open
+        onClose={vi.fn()}
+        report={structuredReport}
+        sources={[failSource]}
+        onRetry={onRetry}
+      />,
+    );
+    expect(screen.getByTestId("research-sources-all-failed")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("research-sources-all-failed-retry"));
+    expect(onRetry).toHaveBeenCalled();
   });
 
   it("LRM-829: outline tree is ≥2 levels and click scrolls + flashes the section", () => {

@@ -8,6 +8,7 @@ import { Markdown } from "../../common/markdown";
 import { ReportCitationList } from "./report-citation-card";
 import { InlineCitations } from "./report-inline-citations";
 import { EMPTY_RESEARCH_SOURCES } from "./report-citation-resolve";
+import { filterCitationsExcludingFailed } from "./report-source-degrade";
 
 const proseClass = cn(
   "report-prose max-w-none text-[15px] leading-[1.7] text-foreground",
@@ -64,9 +65,13 @@ export function ReportProse({
           const Heading = (
             section.level <= 1 ? "h2" : section.level === 2 ? "h3" : "h4"
           ) as "h2" | "h3" | "h4";
-          const sectionCitations = section.citation_ids
-            .map((id) => byId.get(id))
-            .filter((c): c is NonNullable<typeof c> => Boolean(c));
+          const sectionCitations = filterCitationsExcludingFailed(
+            section.citation_ids
+              .map((id) => byId.get(id))
+              .filter((c): c is NonNullable<typeof c> => Boolean(c)),
+            sources,
+            structured.sources,
+          );
           return (
             <section key={section.id} id={`report-sec-${section.id}`} className="scroll-mt-4">
               <Heading>{section.title}</Heading>

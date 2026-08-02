@@ -341,7 +341,19 @@
     "citation_fetch_failed": "取得失敗",
     "citation_fetch_failed_hint": "このソースは取得できませんでした。有効な URL が戻るまでプレースホルダーを表示します。",
     "citation_summary_empty": "要約はまだありません。",
-    "citation_anchor": "引用 {{label}} へ移動"
+    "citation_anchor": "引用 {{label}} へ移動",
+    "source_failed_badge": "取得失敗",
+    "source_failed_purpose": "引用番号の対象外",
+    "source_fail_fetch": "ソースの取得に失敗しました",
+    "source_fail_timeout": "取得がタイムアウトしました",
+    "source_fail_http": "HTTP エラーで取得できません",
+    "source_fail_invalid_url": "無効な URL",
+    "source_fail_missing": "ソースがありません",
+    "source_fail_unknown": "ソースを利用できません",
+    "sources_all_failed_title": "すべてのソース取得に失敗",
+    "sources_all_failed_body": "利用可能なソースがありません。再試行できます。セッションと既存レポートは引き続き閲覧できます。",
+    "sources_all_failed_retry": "再取得",
+    "sources_partial_failed_hint": "{{count}} 件のソース取得に失敗しました（理由を表示）。セッションは継続します。"
   },
   "m2": {
     "rail_title": "探索トレイル",

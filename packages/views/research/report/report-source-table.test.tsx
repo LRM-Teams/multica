@@ -13,6 +13,15 @@ vi.mock("../../i18n/use-t", () => ({
           col_type: "Type",
           col_source: "Source",
           col_purpose: "Purpose",
+          source_failed_badge: "Fetch failed",
+          source_failed_purpose: "Excluded from citation numbering",
+          source_fail_fetch: "Source fetch failed",
+          source_fail_timeout: "Fetch timed out",
+          source_fail_http: "HTTP error while fetching",
+          source_fail_invalid_url: "Invalid source URL",
+          source_fail_missing: "Source missing",
+          source_fail_unknown: "Source unavailable",
+          citation_untitled: "Untitled source",
         },
       }),
   }),
@@ -70,5 +79,26 @@ describe("ReportSourceTable", () => {
     expect(screen.getByText("Community notes")).toBeInTheDocument();
     // No raw markdown pipe table
     expect(screen.queryByText(/\|/)).not.toBeInTheDocument();
+  });
+
+  it("LRM-834: annotates failed rows with a readable reason", () => {
+    render(
+      <ReportSourceTable
+        sources={[
+          source({ id: "ok", title: "Good Docs" }),
+          source({
+            id: "bad",
+            title: "Broken",
+            payload: { fetch_failed: true, status: "timeout" },
+          }),
+        ]}
+      />,
+    );
+    const rows = screen.getAllByTestId("research-source-row");
+    expect(rows[1]).toHaveAttribute("data-source-failed", "true");
+    expect(screen.getByTestId("research-source-fail-reason").textContent).toContain(
+      "Fetch timed out",
+    );
+    expect(screen.getByText("Excluded from citation numbering")).toBeInTheDocument();
   });
 });

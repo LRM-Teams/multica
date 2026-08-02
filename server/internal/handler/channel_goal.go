@@ -269,6 +269,17 @@ func allGoalCriteriaCompleted(criteria, completed []string) bool {
 	return true
 }
 
+// openSubgoalsBlockMainGoalComplete reports whether any non-terminal subgoals
+// still block completing the parent Goal (LRM-1004 / design gate). This is a
+// gate only — it never cascade-closes Issues or other coordination records.
+func (h *Handler) openSubgoalsBlockMainGoalComplete(ctx context.Context, goalID string) bool {
+	var openSubgoals int
+	err := h.DB.QueryRow(ctx, `
+		SELECT count(*) FROM channel_goal_subgoal
+		WHERE goal_id = $1::uuid AND status IN ('captured','in_progress','waiting')`, goalID).Scan(&openSubgoals)
+	return err == nil && openSubgoals > 0
+}
+
 func (h *Handler) UpdateChannelGoal(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -383,6 +394,10 @@ func (h *Handler) UpdateChannelGoal(w http.ResponseWriter, r *http.Request) {
 	if current.Status == "completed" &&
 		(!allGoalCriteriaCompleted(current.SuccessCriteria, current.CompletedCriteria) || len(current.EvidenceRefs) == 0) {
 		writeError(w, http.StatusConflict, "all success criteria need evidence-backed completion")
+		return
+	}
+	if current.Status == "completed" && h.openSubgoalsBlockMainGoalComplete(r.Context(), current.ID) {
+		writeError(w, http.StatusConflict, "resolve or cancel open subgoals before completing the main goal")
 		return
 	}
 	criteriaJSON, _ := json.Marshal(current.SuccessCriteria)
@@ -597,6 +612,10 @@ func (h *Handler) UpdateAgentChannelGoal(w http.ResponseWriter, r *http.Request)
 	if current.Status == "completed" &&
 		(!allGoalCriteriaCompleted(current.SuccessCriteria, current.CompletedCriteria) || len(current.EvidenceRefs) == 0) {
 		writeError(w, http.StatusConflict, "all success criteria need evidence-backed completion")
+		return
+	}
+	if current.Status == "completed" && h.openSubgoalsBlockMainGoalComplete(r.Context(), current.ID) {
+		writeError(w, http.StatusConflict, "resolve or cancel open subgoals before completing the main goal")
 		return
 	}
 	criteriaJSON, _ := json.Marshal(current.SuccessCriteria)

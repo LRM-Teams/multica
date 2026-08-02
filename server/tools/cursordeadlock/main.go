@@ -127,8 +127,16 @@ var knownIssues = map[knownIssueKey]string{
 // filterKnown splits findings into blocking (fail CI) and known (logged,
 // not blocking) using the knownIssues allowlist above.
 func filterKnown(findings []finding) (blocking, known []finding) {
+	return filterKnownWith(findings, knownIssues)
+}
+
+// filterKnownWith is the testable core of filterKnown: tests pass a fixture
+// allowlist so they don't hardcode (and break on) real knownIssues entries
+// that get deleted when those bugs are fixed (Parker's 2026-08-02 note on
+// task #90 / #1824).
+func filterKnownWith(findings []finding, allow map[knownIssueKey]string) (blocking, known []finding) {
 	for _, f := range findings {
-		if _, ok := knownIssues[knownIssueKey{file: f.file, funcName: f.funcName}]; ok {
+		if _, ok := allow[knownIssueKey{file: f.file, funcName: f.funcName}]; ok {
 			known = append(known, f)
 			continue
 		}

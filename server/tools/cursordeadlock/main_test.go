@@ -221,10 +221,16 @@ func formatName(name string) string {
 // reported (in known) so it stays visible in logs — this is a task-tracked
 // "not blocking yet," not a silent suppression.
 func TestFilterKnown_AllowlistedFindingIsNonBlocking(t *testing.T) {
-	f := finding{file: "cmd/materialize-promoted/main.go", funcName: "main"}
-	blocking, known := filterKnown([]finding{f})
+	// Fixture allowlist — not the real knownIssues map. Real entries get
+	// deleted when those bugs are fixed; hardcoding them here would make
+	// "fixing a known issue" break the checker's own tests.
+	allow := map[knownIssueKey]string{
+		{file: "internal/fixture/example.go", funcName: "KnownBad"}: "test fixture",
+	}
+	f := finding{file: "internal/fixture/example.go", funcName: "KnownBad"}
+	blocking, known := filterKnownWith([]finding{f}, allow)
 	if len(blocking) != 0 {
-		t.Fatalf("blocking = %+v, want empty (this exact finding is in knownIssues)", blocking)
+		t.Fatalf("blocking = %+v, want empty (this exact finding is in the fixture allowlist)", blocking)
 	}
 	if len(known) != 1 {
 		t.Fatalf("known = %+v, want 1 entry (must stay visible, not silently dropped)", known)
@@ -232,15 +238,18 @@ func TestFilterKnown_AllowlistedFindingIsNonBlocking(t *testing.T) {
 }
 
 // TestFilterKnown_UnknownFindingIsBlocking is the inverse: anything not in
-// knownIssues must block, including a finding in the SAME file as an
+// the allowlist must block, including a finding in the SAME file as an
 // allowlisted one but a different function — allowlist entries are scoped
 // per-function, not per-file, so a new bug introduced next to a known one
 // still fails CI.
 func TestFilterKnown_UnknownFindingIsBlocking(t *testing.T) {
-	f := finding{file: "cmd/materialize-promoted/main.go", funcName: "someOtherFunc"}
-	blocking, known := filterKnown([]finding{f})
+	allow := map[knownIssueKey]string{
+		{file: "internal/fixture/example.go", funcName: "KnownBad"}: "test fixture",
+	}
+	f := finding{file: "internal/fixture/example.go", funcName: "someOtherFunc"}
+	blocking, known := filterKnownWith([]finding{f}, allow)
 	if len(blocking) != 1 {
-		t.Fatalf("blocking = %+v, want 1 (not in knownIssues, must block)", blocking)
+		t.Fatalf("blocking = %+v, want 1 (not in allowlist, must block)", blocking)
 	}
 	if len(known) != 0 {
 		t.Fatalf("known = %+v, want empty", known)

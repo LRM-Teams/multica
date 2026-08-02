@@ -291,12 +291,13 @@ func insertSkillPromoteGroupChannel(t *testing.T, name string) string {
 func insertSkillPromoteWorkspaceMember(t *testing.T, role string) string {
 	t.Helper()
 	var userID string
-	email := t.Name() + "-" + role + "@example.com"
+	suffix := randomID()
+	email := t.Name() + "-" + role + "-" + suffix + "@example.com"
 	if err := testPool.QueryRow(context.Background(), `
 		INSERT INTO "user" (name, email)
 		VALUES ($1, $2)
 		RETURNING id::text
-	`, "Skill Promote "+role, email).Scan(&userID); err != nil {
+	`, "Skill Promote "+role+" "+suffix, email).Scan(&userID); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 	if _, err := testPool.Exec(context.Background(), `

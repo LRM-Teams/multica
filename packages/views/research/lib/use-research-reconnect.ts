@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../i18n/use-t";
 import type { ReconnectPhase } from "./network-status";
 
@@ -35,7 +36,7 @@ export function useResearchReconnect({
       toast.success(tRef.current(($) => $.connectivity.reconnected));
     } catch {
       setPhase("failed");
-      toast.error(tRef.current(($) => $.connectivity.reconnect_failed));
+      showErrorToast(tRef.current(($) => $.connectivity.reconnect_failed));
     }
   }, []);
 

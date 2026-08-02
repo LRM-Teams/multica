@@ -195,3 +195,69 @@ func TestListAgentReminders_SingleConnPoolDoesNotDeadlock(t *testing.T) {
 		t.Fatalf("reminder anchor not resolved: %+v", response.Definitions[0].Anchor)
 	}
 }
+
+// TestListAgentReminders_FiredLoop_SingleConnPoolDoesNotDeadlock covers the
+// SECOND independent loop in ListAgentReminders (status=fired, occurrence
+// history) — a separate code path from the scheduled-loop test above, fixed
+// by the same PR but not previously covered by a single-conn-pool test
+// (Alice's review note on #1812, non-blocking at the time; Parker asked for
+// it to land in this PR rather than a follow-up card).
+func TestListAgentReminders_FiredLoop_SingleConnPoolDoesNotDeadlock(t *testing.T) {
+	fixture := newChannelAgentRuntimeFixture(t, []channelAgentRuntimeSpec{{}})
+	anchor := fixture.insertMessage(t, "user", testUserID, "fired reminder anchor", nil)
+	ctx := context.Background()
+
+	var reminderID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_reminder (
+			workspace_id, agent_id, initiator_user_id, title, anchor_channel_id,
+			anchor_message_id, fire_at, status
+		) VALUES ($1, $2, $3, $4, $5, $6, now() - interval '1 hour', 'fired')
+		RETURNING id
+	`, testWorkspaceID, fixture.agentIDs[0], testUserID, "fired deadlock test reminder",
+		fixture.channel.ID, anchor.ID).Scan(&reminderID); err != nil {
+		t.Fatalf("seed fired reminder: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_reminder WHERE id = $1`, reminderID) })
+
+	var occurrenceID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_reminder_occurrence (
+			reminder_id, workspace_id, agent_id, cadence_scheduled_for, due_at,
+			status, title_snapshot, fired_at
+		) VALUES ($1, $2, $3, now() - interval '1 hour', now() - interval '1 hour',
+		          'fired', 'fired deadlock test reminder', now() - interval '1 hour')
+		RETURNING id
+	`, reminderID, testWorkspaceID, fixture.agentIDs[0]).Scan(&occurrenceID); err != nil {
+		t.Fatalf("seed fired occurrence: %v", err)
+	}
+
+	h := singleConnHandler(t, 1)
+	req := newRequest(http.MethodGet, "/api/agents/"+fixture.agentIDs[0]+"/reminders?status=fired", nil)
+	req = withURLParam(req, "id", fixture.agentIDs[0])
+	reqCtx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
+	defer cancel()
+	req = req.WithContext(reqCtx)
+
+	recorder := httptest.NewRecorder()
+	start := time.Now()
+	h.ListAgentReminders(recorder, req)
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Fatalf("ListAgentReminders(status=fired) took %s with a single-connection pool — cursor held open across a second QueryRow() acquire (pool deadlock)", elapsed)
+	}
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("ListAgentReminders status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var response humanReminderPage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Occurrences) != 1 || response.Occurrences[0].ID != occurrenceID {
+		t.Fatalf("response.Occurrences = %+v, want exactly occurrence %s", response.Occurrences, occurrenceID)
+	}
+	if !response.Occurrences[0].Anchor.Available {
+		t.Fatalf("fired occurrence anchor not resolved: %+v", response.Occurrences[0].Anchor)
+	}
+}

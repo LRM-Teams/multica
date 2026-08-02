@@ -373,7 +373,9 @@ func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
 		"runtime": h.runtimeToResponse(r.Context(), rt),
 	})
 
-	writeJSON(w, http.StatusOK, queuedUpdateFromIntent(intent))
+	// A freshly created intent is never given up (Create always resets that
+	// bookkeeping) — no last-attempt error to thread through here.
+	writeJSON(w, http.StatusOK, queuedUpdateFromIntent(intent, ""))
 }
 
 // CancelUpdateIntent withdraws a not-yet-delivered update intent (protected
@@ -436,14 +438,6 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 	updateID := chi.URLParam(r, "updateId")
 
 	if updateID == intentUpdateID(rtID) {
-		// A real attempt may have been delivered since the intent was
-		// created — surface that instead so a caller polling the ID
-		// InitiateUpdate handed back sees live progress the moment
-		// materialization happens, not a stale "queued" forever.
-		if attempt, err := h.UpdateStore.LatestForRuntime(r.Context(), rtID); err == nil && attempt != nil {
-			writeJSON(w, http.StatusOK, attempt)
-			return
-		}
 		intent, err := h.UpdateIntentStore.Get(r.Context(), rtID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load update intent: "+err.Error())
@@ -453,7 +447,40 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "update not found")
 			return
 		}
-		writeJSON(w, http.StatusOK, queuedUpdateFromIntent(intent))
+
+		// A terminal intent state (given up / expired) takes priority over
+		// whatever the last raw attempt says, even if that attempt is still
+		// within UpdateStore's retention window — a bare "failed" from the
+		// last attempt doesn't tell the caller "and we've stopped
+		// auto-retrying," which is the more important fact once it's true
+		// (Alice's catch, 2026-08-02: the original ordering here let a
+		// still-fresh failed attempt silently mask the given-up state).
+		if intent.GivenUpAt != nil || intent.ExpiredAt != nil {
+			var lastAttemptError string
+			if intent.GivenUpAt != nil && intent.LastFailedAttemptID != "" {
+				// The give-up message must say why, not just that it
+				// happened — "gave up after N attempts" with no reason is a
+				// wall, not an answer (Parker's rule, 2026-08-02).
+				// Best-effort: if the attempt has already aged out of
+				// UpdateStore's retention, fall back to the generic message
+				// rather than fail the request.
+				if lastAttempt, err := h.UpdateStore.Get(r.Context(), intent.LastFailedAttemptID); err == nil && lastAttempt != nil {
+					lastAttemptError = lastAttempt.Error
+				}
+			}
+			writeJSON(w, http.StatusOK, queuedUpdateFromIntent(intent, lastAttemptError))
+			return
+		}
+
+		// Intent still live: a real attempt may have been delivered since
+		// it was created — surface that instead so a caller polling the ID
+		// InitiateUpdate handed back sees live progress the moment
+		// materialization happens, not a stale "queued" forever.
+		if attempt, err := h.UpdateStore.LatestForRuntime(r.Context(), rtID); err == nil && attempt != nil {
+			writeJSON(w, http.StatusOK, attempt)
+			return
+		}
+		writeJSON(w, http.StatusOK, queuedUpdateFromIntent(intent, ""))
 		return
 	}
 
@@ -565,7 +592,12 @@ func (h *Handler) maybeMaterializeUpdateIntent(ctx context.Context, runtimeID st
 // resolves to whatever's newest at delivery time, not whatever was newest
 // when it was created (Parker's call, 2026-08-02 — showing a version number
 // that might not be what actually gets installed would be the UI lying).
-func queuedUpdateFromIntent(intent *UpdateIntent) *UpdateRequest {
+//
+// lastAttemptError is the Error field off the UpdateRequest referenced by
+// intent.LastFailedAttemptID, if the caller already fetched it — only
+// relevant when GivenUpAt is set. Passed in rather than fetched here so this
+// stays a pure function; GetUpdate does the (best-effort) lookup.
+func queuedUpdateFromIntent(intent *UpdateIntent, lastAttemptError string) *UpdateRequest {
 	if intent == nil {
 		return nil
 	}
@@ -579,12 +611,20 @@ func queuedUpdateFromIntent(intent *UpdateIntent) *UpdateRequest {
 	case intent.GivenUpAt != nil:
 		// Got plenty of chances — every one of them failed. Distinct status
 		// from "expired" (Parker's rule, 2026-08-02): a stale "queued" label
-		// here would be a UI lie the moment auto-retry actually stops.
+		// here would be a UI lie the moment auto-retry actually stops. The
+		// reason must say *why*, not just that it happened (Parker's rule,
+		// same session, restated specifically for this message,
+		// 2026-08-02): "gave up after N attempts" alone is a wall, not an
+		// answer — append the actual last failure (e.g. the real 404/rename
+		// error) when it's available.
 		status = UpdateFailed
 		errMsg = fmt.Sprintf(
 			"gave up after %d consecutive failed attempts — cancel and retry manually once the underlying issue is resolved",
 			intent.ConsecutiveFailures,
 		)
+		if lastAttemptError != "" {
+			errMsg = fmt.Sprintf("%s (last failure: %s)", errMsg, lastAttemptError)
+		}
 	}
 	return &UpdateRequest{
 		ID:            intentUpdateID(intent.RuntimeID),

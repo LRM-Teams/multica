@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -384,12 +385,28 @@ func TestMaybeMaterializeUpdateIntent_GivenUpStopsRetryingAndGetUpdateReflectsIt
 
 	// Parker's rule, 2026-08-02: the polling surface must not keep saying
 	// "queued" once the system has stopped trying — that would be a UI lie.
+	//
+	// The raw last attempt (status=failed, error="rename failed: Access is
+	// denied") is still well within UpdateStore's retention window here —
+	// Alice's catch, 2026-08-02: GetUpdate's ordering originally let that
+	// still-fresh attempt mask the given-up state entirely, so the message
+	// must be provably the *synthesized* given-up response, not just
+	// "any failed status" (which the raw attempt alone would also satisfy).
 	got := decodeUpdateResponse(t, doGetUpdate(t, testUserID, runtimeID, initiated.ID))
 	if got.Status == UpdateQueued {
 		t.Fatalf("GetUpdate must not report queued once given up, got %+v", got)
 	}
 	if got.Status != UpdateFailed {
 		t.Fatalf("expected a terminal failed status once given up, got %q", got.Status)
+	}
+	// Parker's bar, restated explicitly, 2026-08-02: the message must answer
+	// both "will this fix itself" (no — say so) and "what do I do" /"why did
+	// it fail" (the real underlying error) — either half missing fails.
+	if !strings.Contains(got.Error, "gave up") {
+		t.Fatalf("error should say it gave up (won't retry itself), got %q", got.Error)
+	}
+	if !strings.Contains(got.Error, "rename failed: Access is denied") {
+		t.Fatalf("error should include the real last-attempt failure reason, got %q", got.Error)
 	}
 }
 

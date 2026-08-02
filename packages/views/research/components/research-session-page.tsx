@@ -39,6 +39,7 @@ import {
   presenceRunningCards,
   type FleetStepCardModel,
 } from "../lib/fleet-step-cards";
+import { resolveCanvasBodyMode } from "../lib/canvas-body-mode";
 import {
   buildExplorationDimensions,
   buildHumanBoundary,
@@ -54,6 +55,8 @@ import {
 import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchCanvas } from "./research-canvas";
+import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
+import { ResearchCanvasForming } from "./research-canvas-forming";
 import { ResearchChatCard } from "./research-chat-card";
 import { ResearchChatDrawer } from "./research-chat-drawer";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
@@ -135,7 +138,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
-  const { data, isLoading, isError, error, refetch } = useQuery(
+  const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionSnapshotOptions(wsId, sessionId),
   );
   const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
@@ -219,8 +222,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   );
 
   // LRM-799: never keep a permanent skeleton on failure — only while loading.
-  // LRM-781: skeleton mirrors chrome + timeline + canvas/chat shell.
-  if (isLoading) {
+  // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
+  if (isLoading || (isFetching && !data)) {
     return <ResearchSessionPageSkeleton />;
   }
 
@@ -254,6 +257,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { session, messages, report, sources } = data;
   const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
   const fleet = { ...data.fleet, members: fleetMembers };
+  const canvasMode = resolveCanvasBodyMode(data.nodes.length, session.status);
   const canConfirm = session.status === "awaiting_user_confirm" || session.status === "running";
   const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
   const canStop = isResearchSessionStoppable(session.status);
@@ -412,21 +416,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 );
             }}
           />
-          {data.nodes.length === 0 ? (
-            <div
-              data-testid="research-session-canvas-forming"
-              className="pointer-events-none absolute inset-0 z-[5] flex items-center justify-center px-6"
-            >
-              <div className="max-w-sm text-center">
-                <p className="text-sm font-medium text-foreground">
-                  {t(($) => $.session_page.canvas_forming_title)}
-                </p>
-                <p className="mt-1.5 text-xs text-muted-foreground">
-                  {t(($) => $.session_page.canvas_forming_hint)}
-                </p>
-              </div>
-            </div>
-          ) : null}
+          {canvasMode === "forming" ? <ResearchCanvasForming /> : null}
+          {canvasMode === "empty" ? <ResearchCanvasEmptyState /> : null}
         </section>
 
         <aside className="hidden w-[260px] shrink-0 flex-col gap-3 overflow-y-auto border-l bg-background p-3 lg:flex">

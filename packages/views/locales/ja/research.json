@@ -72,6 +72,12 @@
     "retry": "再試行",
     "canvas_forming_title": "キャンバス準備中",
     "canvas_forming_hint": "調査団がノードを配置しています。ここに表示されます。",
+    "canvas_empty_title": "探索はこのキャンバスで始まります",
+    "canvas_empty_body": "調査団が動き出すと、目標・探索・回り道がグラフとしてここに育ちます。空白のグレー領域にはしません。",
+    "canvas_empty_home": "リサーチホームへ戻る",
+    "canvas_empty_create": "新しい調査を始める",
+    "canvas_empty_creating": "開始中…",
+    "canvas_empty_create_goal": "次に何を探索しますか？",
     "confirm_failed": "確認に失敗しました",
     "handoff_failed": "引き継ぎに失敗しました",
     "send_failed": "メッセージの送信に失敗しました"

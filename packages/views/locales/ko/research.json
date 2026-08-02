@@ -72,6 +72,12 @@
     "retry": "다시 시도",
     "canvas_forming_title": "캔버스 구성 중",
     "canvas_forming_hint": "조사단이 노드를 배치하고 있습니다. 여기에 표시됩니다.",
+    "canvas_empty_title": "탐색은 이 캔버스에서 시작됩니다",
+    "canvas_empty_body": "조사단이 시작되면 목표·탐색·우회 경로가 그래프로 여기에 쌓입니다. 빈 회색 공간이 아닙니다.",
+    "canvas_empty_home": "리서치 홈으로",
+    "canvas_empty_create": "새 리서치 시작",
+    "canvas_empty_creating": "시작 중…",
+    "canvas_empty_create_goal": "다음에 무엇을 탐색할까요?",
     "confirm_failed": "확인에 실패했습니다",
     "handoff_failed": "인수인계에 실패했습니다",
     "send_failed": "메시지 전송에 실패했습니다"

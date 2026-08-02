@@ -36,6 +36,13 @@
     "offline": "오프라인",
     "archived": "보관됨"
   },
+  "lifecycle_status": {
+    "starting": "시작 중",
+    "disconnected": "연결 끊김",
+    "offline": "오프라인",
+    "stopped": "중지됨",
+    "crashed": "충돌함"
+  },
   "workload": {
     "working": "작업 중",
     "queued": "대기 중",

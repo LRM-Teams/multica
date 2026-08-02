@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent, MemberWithUser } from "@multica/core/types";
 import { configStore } from "@multica/core/config";
+import enAgents from "../../locales/en/agents.json";
 import { AgentSidePanel } from "./agent-side-panel";
 
 const filesPanelProps = vi.fn();
@@ -254,15 +255,8 @@ const RESOURCES = {
   row: {
     archived: "Archived",
   },
-  // AgentLifecycleStatusLine → resolveAgentLifecycleStatus (Felix #1811).
-  // Missing keys crash every panel render when status is null/offline.
-  lifecycle_status: {
-    starting: "Starting",
-    disconnected: "Disconnected",
-    offline: "Offline",
-    stopped: "Stopped",
-    crashed: "Crashed",
-  },
+  // Import real keys — do not hand-copy (Parker: mock drift).
+  lifecycle_status: enAgents.lifecycle_status,
 };
 
 // Extracted to a named const so the spreads below start from a concrete

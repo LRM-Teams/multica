@@ -581,6 +581,42 @@ describe("ChannelMessageBubble", () => {
     expect(contentCol!.className).not.toMatch(/760px/);
   });
 
+  it("LRM-1126: reserves a fine-pointer action-bar gutter and solid chrome so hover never covers body", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage()}
+        currentUserId="user-1"
+        onReact={vi.fn()}
+        onOpenThread={vi.fn()}
+      />,
+    );
+
+    const contentCol = screen.getByTestId("message-body").parentElement;
+    expect(contentCol).toHaveClass("[@media(pointer:fine)]:md:pr-[184px]");
+
+    const actionBar = screen.getByTestId("message-action-bar");
+    expect(actionBar).toHaveClass("bg-popover");
+    expect(actionBar).toHaveClass("border-border/70");
+    expect(actionBar).toHaveClass("shadow-sm");
+    expect(actionBar).toHaveClass("rounded-lg");
+    expect(actionBar).toHaveClass("top-1.5");
+
+    // Author name: never wrap (role/time shrink first on narrow).
+    expect(screen.getByText("Research Agent").className).toMatch(/whitespace-nowrap/);
+  });
+
+  it("LRM-1126: compact rows align the action bar to the first body line", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: "follow-up" })}
+        currentUserId="user-1"
+        compact
+        onReact={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("message-action-bar")).toHaveClass("top-0.5");
+  });
+
   it("renders compact continuations without author chrome but keeps body and gutter time (LRM-255)", () => {
     render(
       <ChannelMessageBubble

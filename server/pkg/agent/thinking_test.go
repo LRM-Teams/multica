@@ -303,56 +303,58 @@ func TestIsKnownThinkingValue(t *testing.T) {
 // layer call this; if it gets default-model wrong, any agent without an
 // explicit model set would have its thinking_level dropped silently.
 
+func writeFakeCodexDebugModelsBinary(t *testing.T, jsonPayload string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codex")
+	// Emit fixed JSON for any `debug models` invocation.
+	script := "#!/bin/sh\n" +
+		"cat <<'EOF'\n" +
+		jsonPayload + "\n" +
+		"EOF\n"
+	writeTestExecutable(t, path, []byte(script))
+	return path
+}
+
 func TestValidateThinkingLevel_EmptyModelResolvesToDefault(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fake binary requires a POSIX shell")
 	}
-	// Intentionally NOT t.Parallel(): this test mutates the shared global
-	// thinkingCache via resetThinkingCacheForTests(). Running it parallel to the
-	// other cache-resetting tests lets one test's reset wipe another's entries
-	// mid-assertion — a logical race (not a data race, so -race won't catch it)
-	// that flakes TestThinkingCacheKeyDistinct under CI parallelism. See task #319.
-
-	// We need a `claude` whose --help advertises the full superset
-	// (low/medium/high/xhigh/max) so per-model projection actually has
-	// something to filter. A non-existent path falls back to a conservative
-	// [low,medium,high] which would hide the per-model behaviour we're
-	// trying to verify.
-	fakeClaude := writeFakeClaudeHelpBinary(t)
+	// Intentionally NOT t.Parallel(): mutates modelCache + thinkingCache.
+	payload := `{"models":[{"slug":"gpt-5.6-sol","display_name":"GPT-5.6-Sol","visibility":"list","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low","description":"fast"},{"effort":"high","description":"deep"}]},{"slug":"gpt-5.5","display_name":"GPT-5.5","visibility":"list","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"medium","description":"bal"},{"effort":"high","description":"deep"}]}]}`
+	fake := writeFakeCodexDebugModelsBinary(t, payload)
+	modelCacheMu.Lock()
+	delete(modelCache, "codex")
+	delete(modelCache, "codex:"+fake)
+	modelCacheMu.Unlock()
 	resetThinkingCacheForTests()
 	defer resetThinkingCacheForTests()
 
 	ctx := context.Background()
 
 	t.Run("valid level on default model passes", func(t *testing.T) {
-		// Claude's catalog flags the Sonnet alias as Default. Sonnet supports
-		// low/medium/high/max (no xhigh) per claudeModelEffortAllow, so
-		// "high" must round-trip when model is left empty.
-		ok, err := ValidateThinkingLevel(ctx, "claude", fakeClaude, "", "high")
+		// Default = first listable (gpt-5.6-sol) supports high.
+		ok, err := ValidateThinkingLevel(ctx, "codex", fake, "", "high")
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)
 		}
 		if !ok {
-			t.Errorf("default-model high should be valid for claude; got false")
+			t.Errorf("default-model high should be valid; got false")
 		}
 	})
 
 	t.Run("invalid level on default model fails", func(t *testing.T) {
-		// "xhigh" is opus-only; resolving "" to the default Sonnet alias
-		// should reject it, not silently accept.
-		ok, err := ValidateThinkingLevel(ctx, "claude", fakeClaude, "", "xhigh")
+		ok, err := ValidateThinkingLevel(ctx, "codex", fake, "", "xhigh")
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)
 		}
 		if ok {
-			t.Errorf("xhigh should be invalid on sonnet (the default model); got true")
+			t.Errorf("xhigh should be invalid on default list model; got true")
 		}
 	})
 
 	t.Run("empty value always valid", func(t *testing.T) {
-		// Empty value means "use runtime default" — should pass
-		// regardless of model resolution.
-		ok, err := ValidateThinkingLevel(ctx, "claude", fakeClaude, "", "")
+		ok, err := ValidateThinkingLevel(ctx, "codex", fake, "", "")
 		if err != nil {
 			t.Fatalf("unexpected err: %v", err)
 		}
@@ -366,35 +368,34 @@ func TestValidateThinkingLevel_ExplicitModel(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell-script fake binary requires a POSIX shell")
 	}
-	// Intentionally NOT t.Parallel(): mutates the shared global thinkingCache
-	// (resetThinkingCacheForTests). Keeping the cache-resetting tests serial
-	// avoids one test's reset clobbering another's entries mid-assertion (#319).
-	fakeClaude := writeFakeClaudeHelpBinary(t)
+	payload := `{"models":[{"slug":"gpt-5.6-sol","display_name":"Sol","visibility":"list","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low","description":"fast"},{"effort":"xhigh","description":"max"}]},{"slug":"gpt-5.5","display_name":"GPT-5.5","visibility":"list","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"medium","description":"bal"},{"effort":"high","description":"deep"}]}]}`
+	fake := writeFakeCodexDebugModelsBinary(t, payload)
+	modelCacheMu.Lock()
+	delete(modelCache, "codex")
+	delete(modelCache, "codex:"+fake)
+	modelCacheMu.Unlock()
 	resetThinkingCacheForTests()
 	defer resetThinkingCacheForTests()
 
 	ctx := context.Background()
 
-	// xhigh IS valid on Opus 4.7.
-	ok, err := ValidateThinkingLevel(ctx, "claude", fakeClaude, "claude-opus-4-7", "xhigh")
+	ok, err := ValidateThinkingLevel(ctx, "codex", fake, "gpt-5.6-sol", "xhigh")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if !ok {
-		t.Errorf("xhigh should be valid on opus-4-7; got false")
+		t.Errorf("xhigh should be valid on gpt-5.6-sol; got false")
 	}
 
-	// xhigh is NOT valid on Sonnet — should fail.
-	ok, err = ValidateThinkingLevel(ctx, "claude", fakeClaude, "claude-sonnet-4-6", "xhigh")
+	ok, err = ValidateThinkingLevel(ctx, "codex", fake, "gpt-5.5", "xhigh")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if ok {
-		t.Errorf("xhigh must not be valid on sonnet-4-6; got true")
+		t.Errorf("xhigh must not be valid on gpt-5.5; got true")
 	}
 
-	// An unknown model with a valid token still fails closed (no guess).
-	ok, err = ValidateThinkingLevel(ctx, "claude", fakeClaude, "claude-nonexistent", "high")
+	ok, err = ValidateThinkingLevel(ctx, "codex", fake, "gpt-nonexistent", "high")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}

@@ -11,7 +11,7 @@ import (
 
 func TestListModelsStaticProviders(t *testing.T) {
 	ctx := context.Background()
-	for _, provider := range []string{"claude", "codex", "gemini", "cursor"} {
+	for _, provider := range []string{"gemini", "cursor"} {
 		got, err := ListModels(ctx, provider, "")
 		if err != nil {
 			t.Fatalf("ListModels(%q) error: %v", provider, err)
@@ -969,5 +969,67 @@ func TestCachedDiscovery(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("expected 1 underlying call due to cache, got %d", calls)
+	}
+}
+
+func TestParseCodexDebugModelsCatalog_ListOnly(t *testing.T) {
+	t.Parallel()
+	raw := []byte(`{
+  "models": [
+    {"slug":"gpt-5.6-sol","display_name":"GPT-5.6-Sol","visibility":"list","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low","description":"fast"}]},
+    {"slug":"gpt-5.4","display_name":"GPT-5.4","visibility":"hide","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"medium","description":"bal"}]},
+    {"slug":"gpt-5.5","display_name":"GPT-5.5","visibility":"list","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"medium","description":"bal"}]}
+  ]
+}`)
+	got := parseCodexDebugModelsCatalog(raw)
+	if len(got) != 2 {
+		t.Fatalf("len=%d want 2 (hide filtered)", len(got))
+	}
+	if got[0].ID != "gpt-5.6-sol" || !got[0].Default {
+		t.Fatalf("first=%+v", got[0])
+	}
+	if got[0].Thinking == nil || len(got[0].Thinking.SupportedLevels) != 1 {
+		t.Fatalf("thinking=%+v", got[0].Thinking)
+	}
+	if got[1].ID != "gpt-5.5" || got[1].Default {
+		t.Fatalf("second=%+v", got[1])
+	}
+}
+
+func TestDiscoverClaudeModels_NoStaticFallback(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	modelCacheMu.Lock()
+	delete(modelCache, "claude")
+	delete(modelCache, "claude:/nonexistent/claude")
+	modelCacheMu.Unlock()
+	got, err := ListModels(ctx, "claude", "/nonexistent/claude")
+	if err == nil {
+		t.Fatal("expected error when Claude cannot list models")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty list on failure, got %+v", got)
+	}
+	if !strings.Contains(err.Error(), "cannot list models") && !strings.Contains(err.Error(), "unable") {
+		// accept either phrasing
+		if !strings.Contains(strings.ToLower(err.Error()), "claude") {
+			t.Fatalf("error should mention Claude: %v", err)
+		}
+	}
+}
+
+func TestDiscoverCodexModels_MissingBinary(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	modelCacheMu.Lock()
+	delete(modelCache, "codex")
+	delete(modelCache, "codex:/nonexistent/codex")
+	modelCacheMu.Unlock()
+	got, err := ListModels(ctx, "codex", "/nonexistent/codex")
+	if err == nil {
+		t.Fatal("expected error when Codex CLI missing")
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty list, got %+v", got)
 	}
 }

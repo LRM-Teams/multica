@@ -137,7 +137,12 @@ describe("ResearchProductRoundCardView", () => {
       expect(el.getAttribute("aria-disabled")).toBe("true");
     }
 
+    agree.focus();
+    expect(document.activeElement).toBe(agree);
     fireEvent.click(agree);
+    fireEvent.keyDown(agree, { key: "Enter" });
+    expect(document.activeElement).toBe(agree);
+
     fireEvent.click(reject);
     fireEvent.click(goalReject);
     expect(onAgree).not.toHaveBeenCalled();

@@ -155,4 +155,73 @@ describe("ResearchChatDrawer", () => {
     expect(screen.queryByTestId("research-chat-drawer")).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
+
+  it("restores focus to a trigger that unmounts while the float is open (LRM-1177)", async () => {
+    // Mirrors research-canvas.tsx: `chatFab` is `!chatOpen && ... ? <Fab/> : null`,
+    // so the only desktop opener is UNMOUNTED for the whole time the float is
+    // open and comes back as a different DOM node. Restoring by node identity
+    // alone silently no-ops on exactly this path.
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          {open ? null : (
+            <button
+              type="button"
+              data-testid="research-canvas-chat-fab"
+              onClick={() => setOpen(true)}
+            >
+              open chat
+            </button>
+          )}
+          <ResearchChatDrawer open={open} onClose={() => setOpen(false)}>
+            <button type="button">send</button>
+          </ResearchChatDrawer>
+        </div>
+      );
+    }
+    render(<Harness />);
+    const fab = screen.getByTestId("research-canvas-chat-fab");
+    fab.focus();
+    await userEvent.click(fab);
+
+    const drawer = screen.getByTestId("research-chat-drawer");
+    expect(drawer.contains(document.activeElement)).toBe(true);
+    expect(fab.isConnected).toBe(false);
+
+    await userEvent.keyboard("{Escape}");
+    const remounted = screen.getByTestId("research-canvas-chat-fab");
+    expect(remounted).not.toBe(fab);
+    expect(document.activeElement).toBe(remounted);
+  });
+
+  it("keeps focus put when an unmounted trigger has no relocatable key (LRM-1177)", async () => {
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          {open ? null : (
+            <button type="button" onClick={() => setOpen(true)}>
+              open chat
+            </button>
+          )}
+          <ResearchChatDrawer open={open} onClose={() => setOpen(false)}>
+            <button type="button">send</button>
+          </ResearchChatDrawer>
+        </div>
+      );
+    }
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "open chat" });
+    trigger.focus();
+    await userEvent.click(trigger);
+    expect(
+      screen.getByTestId("research-chat-drawer").contains(document.activeElement),
+    ).toBe(true);
+
+    await userEvent.keyboard("{Escape}");
+    // No id / data-testid to re-find: fall back to doing nothing rather than
+    // grabbing an unrelated control.
+    expect(document.activeElement).toBe(document.body);
+  });
 });

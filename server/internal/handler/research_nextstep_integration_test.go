@@ -172,6 +172,7 @@ func TestProcessResearchNextSteps_SilentWindowAutoStepsGe3(t *testing.T) {
 		t.Fatalf("expected ≥3 scheduler events documenting silent steps, got %d", eventCount)
 	}
 
-	t.Logf("LRM-1076 silent-window evidence: emitted=%d unattended_auto_steps=%d unattended_probes=%d scheduler_events=%d (user quiet since %s, no chat)",
+	// fmt so CI (no -v) still prints the evidence numbers Beckham/AC5 need.
+	fmt.Printf("LRM-1076 silent-window evidence: emitted=%d unattended_auto_steps=%d unattended_probes=%d scheduler_events=%d (user quiet since %s, no chat)\n",
 		emitted, got.UnattendedAutoSteps, probeCount, eventCount, quietAt.Format(time.RFC3339))
 }

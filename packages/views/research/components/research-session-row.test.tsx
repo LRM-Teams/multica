@@ -175,6 +175,35 @@ describe("ResearchSessionRow (LRM-790 narrow + dark tokens)", () => {
     expect(titleEl?.textContent?.length ?? 0).toBeLessThan(longGoal.length);
   });
 
+  it("LRM-1104: omits goal chip when title falls back to goal (duplicate)", () => {
+    const longGoal =
+      "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员，开发环境要求。目前我们的设备是几台 linux 服务器";
+    render(
+      <ResearchSessionRow session={session({ title: "", goal: longGoal })} href="/research/s1" />,
+    );
+    expect(screen.queryByTestId("research-session-goal-chip")).toBeNull();
+  });
+
+  it("LRM-1104: omits goal chip when title and goal are mutual prefixes", () => {
+    render(
+      <ResearchSessionRow
+        session={session({
+          title: "LRM-904 live联调：动态编制",
+          goal: "LRM-904 live联调：动态编制 hire/archive 证据（可删）",
+        })}
+        href="/research/s1"
+      />,
+    );
+    expect(screen.queryByTestId("research-session-goal-chip")).toBeNull();
+  });
+
+  it("LRM-1104: keeps goal chip + dialog when goal adds distinct info", () => {
+    render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    expect(screen.getByTestId("research-session-goal-chip")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("research-session-goal-chip"));
+    expect(screen.getByTestId("goal-dialog")).toBeTruthy();
+  });
+
   it("renders the localized stage and falls back to the raw stage key", () => {
     const { rerender } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
     expect(screen.getByText(enResearch.stage.s2_sources)).toBeTruthy();

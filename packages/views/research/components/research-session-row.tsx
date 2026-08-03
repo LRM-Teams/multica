@@ -18,6 +18,7 @@ import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
 import {
   sessionGoalSummary,
   sessionShortTitle,
+  shouldShowSessionGoalChip,
 } from "../lib/session-list-filter";
 import { ResearchSessionRowActions } from "./research-session-row-actions";
 
@@ -67,6 +68,7 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
   const fleetIds = (session.fleet_preview ?? []).map((m) => m.agent_id);
   const title = sessionShortTitle(session);
   const goalSummary = sessionGoalSummary(session);
+  const showGoalChip = shouldShowSessionGoalChip(session);
   const who = leadName(session);
   const archived = status === "archived";
   const awaiting = status === "awaiting_user_confirm";
@@ -99,21 +101,24 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
           </AppLink>
 
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-            {/* Desktop-only goal chip — yields on narrow so stage·time stay scannable. */}
-            <button
-              type="button"
-              data-testid="research-session-goal-chip"
-              className="hidden max-w-[min(100%,14rem)] items-center gap-1 truncate rounded-md border border-brand/25 bg-brand/10 px-1.5 py-px text-[11px] font-semibold text-brand hover:bg-brand/15 sm:inline-flex"
-              onClick={() => setGoalOpen(true)}
-            >
-              <span
-                aria-hidden
-                className="size-1.5 shrink-0 rounded-full bg-brand"
-              />
-              <span className="truncate">
-                {t(($) => $.list.goal_chip, { summary: goalSummary })}
-              </span>
-            </button>
+            {/* Desktop-only goal chip — yields on narrow so stage·time stay scannable.
+                LRM-1104: omit when chip text duplicates the title (equal / mutual prefix). */}
+            {showGoalChip ? (
+              <button
+                type="button"
+                data-testid="research-session-goal-chip"
+                className="hidden max-w-[min(100%,14rem)] items-center gap-1 truncate rounded-md border border-brand/25 bg-brand/10 px-1.5 py-px text-[11px] font-semibold text-brand hover:bg-brand/15 sm:inline-flex"
+                onClick={() => setGoalOpen(true)}
+              >
+                <span
+                  aria-hidden
+                  className="size-1.5 shrink-0 rounded-full bg-brand"
+                />
+                <span className="truncate">
+                  {t(($) => $.list.goal_chip, { summary: goalSummary })}
+                </span>
+              </button>
+            ) : null}
 
             <AppLink
               href={href}
@@ -160,28 +165,30 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
         </div>
       </div>
 
-      <Dialog open={goalOpen} onOpenChange={setGoalOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t(($) => $.list.goal_dialog_title)}</DialogTitle>
-          </DialogHeader>
-          <p className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-            {session.goal}
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setGoalOpen(false)}>
-              {t(($) => $.list.goal_dialog_close)}
-            </Button>
-            <AppLink
-              href={href}
-              className="inline-flex h-8 items-center justify-center rounded-lg bg-brand px-2.5 text-sm font-medium text-brand-foreground"
-              onClick={() => setGoalOpen(false)}
-            >
-              {t(($) => $.list.goal_dialog_open)}
-            </AppLink>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {showGoalChip ? (
+        <Dialog open={goalOpen} onOpenChange={setGoalOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t(($) => $.list.goal_dialog_title)}</DialogTitle>
+            </DialogHeader>
+            <p className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+              {session.goal}
+            </p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setGoalOpen(false)}>
+                {t(($) => $.list.goal_dialog_close)}
+              </Button>
+              <AppLink
+                href={href}
+                className="inline-flex h-8 items-center justify-center rounded-lg bg-brand px-2.5 text-sm font-medium text-brand-foreground"
+                onClick={() => setGoalOpen(false)}
+              >
+                {t(($) => $.list.goal_dialog_open)}
+              </AppLink>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </>
   );
 }

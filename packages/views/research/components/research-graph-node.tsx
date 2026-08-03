@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo } from "react";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { MoreHorizontal } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
@@ -35,7 +35,6 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
   const n = data.research;
   const actorId = n?.actor_agent_id ?? undefined;
   const projection = useAgentActivityProjection(wsId, actorId);
-  const [menuOpen, setMenuOpen] = useState(false);
   if (!n) return null;
 
   const presenceBusy = !!(data.presenceLabel && data.presenceLabel.trim());
@@ -77,15 +76,17 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
     ownerLabel,
   ].join(", ");
 
+  const menuOpen = !!data.menuOpen;
+
   return (
     <div
       className={cn(
-        "research-graph-node-shell relative grid w-[240px] grid-cols-[1fr_auto] gap-x-2 gap-y-1 overflow-hidden rounded-[10px] border bg-card px-3 py-2.5 text-left shadow-[0_1px_0_rgba(28,25,23,0.04)] transition-[border-color,box-shadow] duration-150",
+        "research-graph-node-shell relative grid w-[240px] grid-cols-[1fr_auto] gap-x-2 gap-y-1 overflow-hidden rounded-lg border bg-card px-3 py-2.5 text-left transition-colors duration-150",
         "min-h-[68px] max-h-[88px]",
         "hover:border-muted-foreground/40",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand)]",
         selected &&
-          "border-[var(--brand)] shadow-[0_0_0_2px_color-mix(in_oklch,var(--brand)_18%,transparent)]",
+          "border-[var(--brand)] ring-2 ring-[color-mix(in_oklch,var(--brand)_18%,transparent)]",
         status.tone === "run" &&
           "border-[color-mix(in_oklch,var(--brand)_45%,var(--border))]",
         status.tone === "fail" &&
@@ -117,11 +118,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
         position={Position.Left}
         className="!h-2 !w-2 !opacity-0"
       />
-      <div
-        className={cn(
-          "col-start-1 line-clamp-2 text-[13px] font-semibold leading-snug text-foreground",
-        )}
-      >
+      <div className="col-start-1 line-clamp-2 text-sm font-medium leading-snug text-foreground">
         {title}
       </div>
       <button
@@ -131,17 +128,17 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
         data-testid="research-card-menu-trigger"
         onClick={(e) => {
           e.stopPropagation();
-          setMenuOpen((v) => !v);
+          data.onMenuOpenChange?.(!menuOpen);
         }}
         onPointerDown={(e) => e.stopPropagation()}
       >
         <MoreHorizontal className="size-4" aria-hidden />
       </button>
-      <div className="col-start-1 flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
+      <div className="col-start-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
         <span
           data-status-dot
           className={cn(
-            "inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+            "inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-xs font-medium",
             status.tone === "ok" && "bg-success/15 text-success",
             status.tone === "run" && "bg-brand/15 text-brand",
             status.tone === "wait" && "bg-warning/15 text-warning",
@@ -160,8 +157,9 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
       {menuOpen ? (
         <ResearchCardMenu
           node={n}
-          onClose={() => setMenuOpen(false)}
+          onClose={() => data.onMenuOpenChange?.(false)}
           onRetry={data.onRetry}
+          onViewDetail={data.onViewDetail}
         />
       ) : null}
       <Handle

@@ -48,6 +48,9 @@ export type ResearchFlowNodeData = {
   row?: number;
   laneLabelKey?: LogicLaneId;
   onRetry?: (node: ResearchGraphNode) => void;
+  onViewDetail?: (node: ResearchGraphNode) => void;
+  menuOpen?: boolean;
+  onMenuOpenChange?: (open: boolean) => void;
   /** Gutter chrome only. */
   gutterSegments?: GitLaneSegment[];
   gutterHeight?: number;

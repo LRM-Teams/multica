@@ -69,6 +69,7 @@ type FlowNode = Node<ResearchFlowNodeData>;
 type CanvasUiState = {
   detailPinned: boolean;
   pinnedNodeId: string | null;
+  menuNodeId: string | null;
   zoomPct: number;
   liveText: string;
 };
@@ -76,12 +77,14 @@ type CanvasUiState = {
 type CanvasUiAction =
   | { type: "pin"; nodeId: string }
   | { type: "clearDetail" }
+  | { type: "setMenu"; nodeId: string | null }
   | { type: "setZoom"; pct: number }
   | { type: "setLive"; text: string };
 
 const initialCanvasUi: CanvasUiState = {
   detailPinned: false,
   pinnedNodeId: null,
+  menuNodeId: null,
   zoomPct: 100,
   liveText: "",
 };
@@ -89,9 +92,11 @@ const initialCanvasUi: CanvasUiState = {
 function canvasUiReducer(state: CanvasUiState, action: CanvasUiAction): CanvasUiState {
   switch (action.type) {
     case "pin":
-      return { ...state, pinnedNodeId: action.nodeId, detailPinned: true };
+      return { ...state, pinnedNodeId: action.nodeId, detailPinned: true, menuNodeId: null };
     case "clearDetail":
       return { ...state, detailPinned: false, pinnedNodeId: null };
+    case "setMenu":
+      return state.menuNodeId === action.nodeId ? state : { ...state, menuNodeId: action.nodeId };
     case "setZoom":
       return state.zoomPct === action.pct ? state : { ...state, zoomPct: action.pct };
     case "setLive":
@@ -141,7 +146,7 @@ function ResearchCanvasInner({
   const { fitView, zoomIn, zoomOut, getZoom, setCenter, getNode } = useReactFlow();
   const isMobile = useIsMobile();
   const [ui, dispatch] = useReducer(canvasUiReducer, initialCanvasUi);
-  const { detailPinned, pinnedNodeId, zoomPct, liveText } = ui;
+  const { detailPinned, pinnedNodeId, menuNodeId, zoomPct, liveText } = ui;
   // Keyboard focus is handler-only (announce + setCenter); keep off the render path.
   const focusIdRef = useRef<string | null>(null);
   const enterClassById = useRef<Map<string, string> | null>(null);
@@ -199,12 +204,39 @@ function ResearchCanvasInner({
                 ? 1
                 : 0,
             onRetry: onRetry ?? undefined,
+            onViewDetail: (node) => {
+              if (isLogicEndNode(node)) {
+                onOpenDelivery?.();
+                return;
+              }
+              onSelect?.(node);
+              if (detailPlacement === "drawer") onOpenDetail?.(node);
+              else dispatch({ type: "pin", nodeId: node.id });
+            },
+            menuOpen: research?.id === menuNodeId,
+            onMenuOpenChange: (open) => {
+              if (!research) return;
+              dispatch({ type: "setMenu", nodeId: open ? research.id : null });
+            },
           },
         } satisfies FlowNode;
       }),
     );
     setRfEdges(laid.edges);
-  }, [laid, laidIdsKey, selectedId, setRfNodes, setRfEdges, presence, onRetry]);
+  }, [
+    laid,
+    laidIdsKey,
+    selectedId,
+    setRfNodes,
+    setRfEdges,
+    presence,
+    onRetry,
+    menuNodeId,
+    detailPlacement,
+    onOpenDetail,
+    onOpenDelivery,
+    onSelect,
+  ]);
 
   useEffect(() => {
     if (!laidIdsKey) return;
@@ -369,7 +401,17 @@ function ResearchCanvasInner({
             else pinDetail(n);
           }
         } else if (e.key === "Escape") {
-          if (showOverlayDetail || detailPinned) clearDetail();
+          if (menuNodeId) {
+            dispatch({ type: "setMenu", nodeId: null });
+          } else if (showOverlayDetail || detailPinned) {
+            clearDetail();
+          }
+        } else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+          e.preventDefault();
+          dispatch({
+            type: "setMenu",
+            nodeId: menuNodeId === current ? null : current,
+          });
         }
       }}
     >
@@ -380,7 +422,9 @@ function ResearchCanvasInner({
         ${NODE_ENTER_MOTION_CSS}
         .react-flow__node.selected .research-graph-node-shell {
           border-color: var(--brand);
-          box-shadow: 0 0 0 2px color-mix(in oklch, var(--brand) 18%, transparent);
+          box-shadow: none;
+          outline: 2px solid color-mix(in oklch, var(--brand) 35%, transparent);
+          outline-offset: 2px;
         }
         .react-flow__node:focus-visible .research-graph-node-shell,
         .react-flow__node:focus .research-graph-node-shell {
@@ -416,6 +460,7 @@ function ResearchCanvasInner({
           pinDetail(research);
         }}
         onPaneClick={() => {
+          dispatch({ type: "setMenu", nodeId: null });
           clearDetail();
         }}
         className="!bg-transparent"
@@ -428,9 +473,9 @@ function ResearchCanvasInner({
         />
         <Panel
           position="top-left"
-          className="!m-3 flex items-center gap-2 rounded-lg border bg-card/90 px-2.5 py-1.5 text-[11px] text-muted-foreground shadow-sm backdrop-blur-md"
+          className="!m-3 flex items-center gap-2 rounded-lg border bg-card/90 px-2.5 py-1.5 text-xs text-muted-foreground backdrop-blur-md"
         >
-          <span className="font-semibold text-foreground">{t(($) => $.logic.label)}</span>
+          <span className="font-medium text-foreground">{t(($) => $.logic.label)}</span>
           <span aria-hidden>·</span>
           <span>{t(($) => $.logic.git_hint)}</span>
         </Panel>

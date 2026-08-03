@@ -86,7 +86,7 @@ export function ResearchCardMenu({
       role="menu"
       tabIndex={-1}
       data-testid="research-card-menu"
-      className="nodrag nopan absolute top-8 right-1 z-30 min-w-[180px] rounded-lg border bg-card p-1 shadow-lg outline-none"
+      className="nodrag nopan absolute top-8 right-1 z-30 min-w-[180px] rounded-lg border bg-card p-1 outline-none"
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
@@ -98,7 +98,7 @@ export function ResearchCardMenu({
           disabled={!item.enabled}
           title={!item.enabled ? item.disabledReason : undefined}
           className={cn(
-            "flex w-full flex-col items-start rounded-md px-2.5 py-1.5 text-left text-[13px]",
+            "flex w-full flex-col items-start rounded-md px-2.5 py-1.5 text-left text-sm",
             item.enabled ? "hover:bg-muted" : "cursor-not-allowed text-muted-foreground",
             item.danger && item.enabled && "text-destructive",
           )}
@@ -109,7 +109,7 @@ export function ResearchCardMenu({
             {item.needConfirm ? "…" : ""}
           </span>
           {!item.enabled && item.disabledReason ? (
-            <span className="mt-0.5 text-[10px] leading-snug text-muted-foreground">
+            <span className="mt-0.5 text-xs leading-snug text-muted-foreground">
               {item.disabledReason}
             </span>
           ) : null}

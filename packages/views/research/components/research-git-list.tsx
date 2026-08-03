@@ -176,7 +176,7 @@ export function ResearchGitList({
                 }}
                 aria-hidden
               />
-              <div className="relative grid w-full max-w-[320px] grid-cols-[1fr_auto] gap-x-2">
+              <div className="relative grid w-full grid-cols-[1fr_auto] gap-x-2">
                 <button
                   type="button"
                   tabIndex={focusId === n.id || (!focusId && index === 0) ? 0 : -1}
@@ -184,11 +184,11 @@ export function ResearchGitList({
                   data-testid="research-git-list-card"
                   aria-label={`${n.title}, ${t(($) => $.logic.status[status.key])}, ${rf.data.branchId ?? "main"}`}
                   className={cn(
-                    "col-start-1 row-span-2 grid w-full grid-cols-1 gap-y-1 rounded-[10px] border bg-card px-3 py-2.5 pr-12 text-left",
+                    "col-start-1 row-span-2 grid w-full grid-cols-1 gap-y-1 rounded-lg border bg-card px-3 py-2.5 pr-12 text-left",
                     "min-h-[68px] max-h-[88px] outline-none",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand)]",
                     selected &&
-                      "border-[var(--brand)] shadow-[0_0_0_2px_color-mix(in_oklch,var(--brand)_18%,transparent)]",
+                      "border-[var(--brand)] ring-2 ring-[color-mix(in_oklch,var(--brand)_18%,transparent)]",
                     status.tone === "run" &&
                       "border-[color-mix(in_oklch,var(--brand)_45%,var(--border))]",
                     status.tone === "fail" &&
@@ -197,15 +197,15 @@ export function ResearchGitList({
                   onClick={() => openNode(n)}
                   onFocus={() => setNavFocusId(n.id)}
                 >
-                  <div className="line-clamp-2 text-[13px] font-semibold leading-snug">
+                  <div className="line-clamp-2 text-sm font-medium leading-snug">
                     {n.id === LOGIC_END_NODE_ID
                       ? t(($) => $.logic.end_title)
                       : n.title}
                   </div>
-                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span
                       className={cn(
-                        "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                        "rounded-full px-1.5 py-0.5 text-xs font-medium",
                         status.tone === "ok" && "bg-success/15 text-success",
                         status.tone === "run" && "bg-brand/15 text-brand",
                         status.tone === "fail" && "bg-destructive/15 text-destructive",

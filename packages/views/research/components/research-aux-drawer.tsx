@@ -65,9 +65,9 @@ export function ResearchAuxDrawer({
           showCloseButton={false}
           data-testid="research-aux-drawer"
           data-panel={panel ?? undefined}
-          // LRM-1109: full-bleed through the 640–767 dead zone. Prior `sm:max-w-md`
-          // constrained the mobile sheet while useIsMobile was still true.
-          className="flex w-full max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+          // LRM-1109 / LRM-1118 SoT: beat Sheet's `sm:max-w-sm` with !max-w-none —
+          // no `sm:*` inside the isMobile branch (forbids 640–767 layout flip).
+          className="flex w-full !max-w-none flex-col gap-0 overflow-hidden p-0"
         >
           <SheetHeader className="sr-only">
             <SheetTitle>{title}</SheetTitle>

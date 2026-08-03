@@ -134,7 +134,7 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
       );
     });
 
-    it("aux drawer stays full-bleed in the 640–767 dead zone (no sm:max-w-md)", () => {
+    it("aux drawer stays full-bleed in the 640–767 dead zone (no sm:max-w-*)", () => {
       setViewport(700);
       render(
         <ResearchAuxDrawer panel="sources" onClose={() => {}}>
@@ -142,9 +142,9 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
         </ResearchAuxDrawer>,
       );
       const el = screen.getByTestId("research-aux-drawer");
-      expect(el.className).toContain("sm:max-w-none");
-      expect(el.className).not.toContain("sm:max-w-md");
-      expect(el.className).toContain("max-w-none");
+      // LRM-1118 SoT: isMobile branch must not carry sm:* layout flips.
+      expect(el.className).not.toMatch(/\bsm:max-w-/);
+      expect(el.className).toMatch(/!max-w-none/);
     });
   });
 

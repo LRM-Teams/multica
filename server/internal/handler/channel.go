@@ -7109,6 +7109,9 @@ func (h *Handler) channelThreadFromQuery(ctx context.Context, query string, args
 }
 
 func (h *Handler) channelInitiatorForChatSession(ctx context.Context, chatSessionID pgtype.UUID) pgtype.UUID {
+	if !chatSessionID.Valid {
+		return pgtype.UUID{}
+	}
 	var initiator pgtype.UUID
 	err := h.DB.QueryRow(ctx, `
 		SELECT initiator_user_id
@@ -7124,6 +7127,16 @@ func (h *Handler) channelInitiatorForChatSession(ctx context.Context, chatSessio
 		return creator
 	}
 	return pgtype.UUID{}
+}
+
+// channelInitiatorForTask prefers the wake's own initiator_user_id so
+// channel-bound tasks without chat_session_id still resolve a human initiator
+// for DM create / provenance (LRM-1079 / LRM-1080).
+func (h *Handler) channelInitiatorForTask(ctx context.Context, task db.AgentInboxEvent) pgtype.UUID {
+	if task.InitiatorUserID.Valid {
+		return task.InitiatorUserID
+	}
+	return h.channelInitiatorForChatSession(ctx, task.ChatSessionID)
 }
 
 type channelMessageInsertInput struct {

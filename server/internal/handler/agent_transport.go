@@ -425,7 +425,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	initiatorID := h.channelInitiatorForChatSession(r.Context(), source.task.ChatSessionID)
+	initiatorID := h.channelInitiatorForTask(r.Context(), source.task)
 	if err := h.requireAgentTransportVisibilityGrantActive(r.Context(), source); err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
@@ -728,7 +728,7 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	initiatorID := h.channelInitiatorForChatSession(r.Context(), source.task.ChatSessionID)
+	initiatorID := h.channelInitiatorForTask(r.Context(), source.task)
 	// send_draft is the explicit decision to send the already-saved content.
 	// The held range is therefore the reviewed boundary; only context that
 	// arrived after it can create a new hold. Do not require a hidden client

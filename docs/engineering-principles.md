@@ -82,6 +82,13 @@
 - **物**：`buildChatPrompt` + `renderChatRuntimeBrief` 按 `channel_id` 分流；`multica-stickers` 同步两种路径；`TestBuildChatPromptStandaloneDeliveryContract`、`TestStandaloneChatRuntimeBriefUsesAutomaticCompletionDelivery`、`TestBuiltinStickerSkillSeparatesStandaloneAndChannelDelivery` 与 sticker unwrap 回归。
 - **已见红**：修复前 standalone prompt/runtime brief 均缺自动回传合同且继续注入 CLI-only 规则，sticker skill 只教无 target 的 `message send`；四个回归分别按这些缺口失败，channel-bound 对照仍保留 transport 合同。
 
+### 1.5.1 产品表面只认 `channel_id`；禁止新增 `chat_session` 硬门 — `可执行`（⑤；owner: @阿泰；LRM-1079 / LRM-1080）
+- **产品口径**（Frank #LRM2.0）：业务只记 `channel_id`（钉句再加 `message_id`）。`chat_session_id` 是底层消息流内部号，**不是** Agent/提醒/发言 API 的必填业务概念。Agent 自己的 runtime/agent session（恢复上下文）是第三条线，与本条无关。
+- **冻结**：新代码路径不得再以「缺 `chat_session_id` → 403/拒」作为频道级发言、reminder、inbox drain、ambient gate、completion 归一化的硬条件；已有 `channel_id`（+ 成员表面权限）时必须可纯 channel 运行。#1909 / LRM-1055 已开先例。
+- **迁移中**：`channel_agent_session` / `chat_session` 可暂作内部可选桥；完成回写 / mention·DM 桥 / enqueue 仍可能写 session，属 P2 迁路径，不得反向把新硬依赖加回来。
+- **物**：`chatOutputOriginForTask` channel 回退；`isChannelAgentTask` / ambient gate stats / `channelInitiatorForTask`（LRM-1080）；`TestAgentCredentialTransportAllowsChannelBoundWakeWithoutChatSession`；`lrm_1080_channel_session_fallback_test.go`。
+- **已见红**：缺 session 的 ambient/GM 运输 403（#1909）；channel-only wake 被 `isChannelAgentTask` 误判为非频道任务、ambient gate 漏计仅带 `channel_id` 的 priority-1 行。
+
 ### 1.6 Agent-to-agent DM 是受 owner 监督的有界协议 — `可执行`（①持久状态 + ⑤并发/权限回归；owner: @Barry ✅ 已签）
 - `dm:@<handle>` 在 workspace 内同时解析 active human 与 active agent handle；缺失、跨类型重名、自发给自己都 fail closed。Agent pair DM 固定为两个 agent member，owner 只通过 read-only supervision projection 查看，不成为第三个 channel member，也不能发送、改写、删除或 reaction。
 - 每个 matter 默认最多 3 轮（6 条可见消息），严格交替；第 6 条必须先原子持久化再暂停，且不再唤醒对方。pair 另有跨 matter 的 5 分钟 12 条频率门；频率与轮次都在 visible message 同一事务内预留，防并发越界。对方唤醒复用 canonical `agent_inbox_event` directed must-reply 路径，不能另造不受终态约束的执行通道。

@@ -181,6 +181,39 @@ verification results.
 - The Research Run production code, Dispatcher integration test, Engine
   lifecycle test, and prompt corrections had no merge conflicts.
 
+### 13. Fixed and recorded a merge-only compile defect
+
+- The upstream provider-quota fixture uses string concatenation instead of
+  `fmt.Sprintf`; resolving the conflict left the old `fmt` import behind.
+- The first post-merge handler build rejected the unused import. It was removed
+  without changing runtime or test behavior, and the handler suite was queued
+  for a clean rerun.
+
+### 14. Repaired a user-reachable defect found in the merged `dev`
+
+- With PostgreSQL restored, the full handler suite reached three new
+  shared-sandbox provisioning tests and all failed with SQLSTATE `42703`.
+- The hand-written production clone query in
+  `env_dispatch_clone_adapter.go` still inserted and selected
+  `agent.visibility`, although migration 253 intentionally removed that field.
+  A real user's first mention of another Agent in a shared-sandbox rollout
+  would hit the same query and fail provisioning.
+- Removed the retired column from both sides of the `INSERT ... SELECT` and
+  added a unit assertion that the derived-Agent query cannot reintroduce a
+  `visibility` reference. No compatibility branch or schema rollback was
+  added.
+
+### 15. Completed post-merge database and repository verification
+
+- The three shared-sandbox provisioning paths, the derived-Agent SQL contract
+  assertion, and all Research Dispatcher focused tests pass together against
+  the migrated PostgreSQL database.
+- The complete handler package passes after the retired-field fix in 51.7
+  seconds; the complete `researchrun` package also passes.
+- The complete Views suite passes: 402 test files, 3,569 passing tests, seven
+  documented expected failures, and five skipped tests.
+- Monorepo TypeScript typecheck passes on the merged `dev` baseline.
+
 ## Pending steps
 
 - [x] Add regression tests and observe them fail on the unmodified code.

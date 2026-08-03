@@ -1,10 +1,9 @@
 "use client";
 
 import { cn } from "@multica/ui/lib/utils";
-import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { useT } from "../../i18n/use-t";
 
-/** LRM-1061 / LRM-1056 v2 — left-of-canvas module triggers (one drawer at a time). */
+/** LRM-1061 / LRM-1151 — aux panel ids (one drawer at a time). */
 export type ResearchAuxPanelId = "trajectory" | "sources" | "detail";
 
 const MODULES: {
@@ -29,23 +28,36 @@ const MODULES: {
   },
 ];
 
+/**
+ * LRM-1151 — Dock module group (轨 / 源 / 详).
+ * Desktop: compact horizontal pills inside the canvas Dock.
+ * Narrow: full-width three-equal strip under Logic Strip.
+ * Content still opens the single ResearchAuxDrawer / Sheet.
+ */
 export function ResearchModuleRail({
   active,
   onSelect,
   className,
+  layout = "dock",
+  disabled = false,
 }: {
   active: ResearchAuxPanelId | null;
   onSelect: (id: ResearchAuxPanelId) => void;
   className?: string;
+  /** `dock` = inline pill group; `bar` = full-width ⅓ strip (narrow). */
+  layout?: "dock" | "bar";
+  disabled?: boolean;
 }) {
   const { t } = useT("research");
-  const isMobile = useIsMobile();
+  const isBar = layout === "bar";
 
   return (
     <div
       data-testid="research-module-rail"
+      data-layout={layout}
       className={cn(
-        "pointer-events-auto absolute top-3 left-3 z-30 flex flex-col gap-1.5",
+        "pointer-events-auto flex",
+        isBar ? "w-full items-stretch gap-0.5" : "items-center gap-0.5",
         className,
       )}
     >
@@ -58,23 +70,30 @@ export function ResearchModuleRail({
             data-testid={`research-module-${mod.id}`}
             data-active={on ? "true" : "false"}
             aria-pressed={on}
+            disabled={disabled}
             onClick={() => onSelect(mod.id)}
             className={cn(
-              "inline-flex h-8 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium shadow-sm backdrop-blur-md transition-colors",
+              "inline-flex items-center justify-center gap-1 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40",
+              isBar
+                ? "min-h-11 min-w-0 flex-1 flex-col rounded-lg px-1.5 py-1.5 text-[11px]"
+                : "h-9 rounded-full px-2.5 text-[11px]",
               on
-                ? "border-brand/40 bg-brand/12 text-brand"
-                : "border-border/70 bg-card/90 text-muted-foreground hover:bg-muted/70 hover:text-foreground",
-              isMobile && "h-8 w-8 justify-center px-0",
+                ? "bg-brand/12 text-brand"
+                : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+              disabled && "pointer-events-none opacity-50",
             )}
           >
-            <span className="font-semibold tracking-wide">
+            <span className="font-semibold tracking-wide" aria-hidden={isBar}>
               {t(($) => $.panel[mod.icoKey])}
             </span>
-            {!isMobile ? (
-              <span className="max-w-[5.5rem] truncate">
-                {t(($) => $.panel[mod.labelKey])}
-              </span>
-            ) : null}
+            <span
+              className={cn(
+                "truncate",
+                isBar ? "max-w-full text-[9px] font-medium" : "max-w-[4.5rem]",
+              )}
+            >
+              {t(($) => $.panel[mod.labelKey])}
+            </span>
           </button>
         );
       })}

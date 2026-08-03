@@ -339,7 +339,7 @@
     "retry_message": "Retry / reroute exploration from «{{title}}» (node {{id}})."
   },
   "dock": {
-    "label": "Canvas controls",
+    "label": "Research canvas tools",
     "north_star": "North star",
     "zoom_in": "Zoom in",
     "zoom_out": "Zoom out",

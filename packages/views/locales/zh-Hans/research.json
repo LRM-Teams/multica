@@ -339,7 +339,7 @@
     "retry_message": "请从节点「{{title}}」（{{id}}）重试 / 换路继续探索。"
   },
   "dock": {
-    "label": "画布控件",
+    "label": "调研画布工具",
     "north_star": "北极星",
     "zoom_in": "放大",
     "zoom_out": "缩小",

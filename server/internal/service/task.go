@@ -2005,7 +2005,7 @@ func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentI
 		// Autopilot has its own retry semantics; do not double-trigger.
 		return nil, nil
 	}
-	if !parent.IssueID.Valid && !parent.ChatSessionID.Valid {
+	if !parent.IssueID.Valid && !parent.ChatSessionID.Valid && !parent.ChannelID.Valid {
 		return nil, nil
 	}
 

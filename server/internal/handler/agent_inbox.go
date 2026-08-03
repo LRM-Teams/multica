@@ -637,13 +637,16 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 						if err != nil {
 							return err
 						}
-					} else {
+					} else if !event.IssueID.Valid && (event.ChannelID.Valid || channelOnlyWakeReason(event.Reason)) {
 						// LRM-1079: channel-only wakes have no chat_message prompt /
-						// ChatDone bridge; terminal outcome still follows transport
-						// + completion action (no_reply / replied / held).
+						// ChatDone bridge; terminal outcome follows transport + action.
+						// Issue/work tasks (even if they carry a channel_id) keep
+						// the historical terminal ("completed").
 						terminalOutcome = agentInboxCompletionTerminalOutcome(
 							r.Context(), h, event, req.TaskCompleteRequest, nil,
 						)
+					} else {
+						terminalOutcome = "completed"
 					}
 					if len(freshnessResolutionPublications) > 0 {
 						terminalOutcome = "no_reply"
@@ -1664,16 +1667,8 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 		SeqTo:          event.SeqTo,
 		RequiresWake:   event.RequiresWake,
 	}
-	if event.ChatSessionID.Valid {
-		if !h.populateAgentInboxChatContext(ctx, event, &resp) {
-			slog.Warn("agent inbox claim: exact prompt missing",
-				"inbox_event_id", uuidToString(event.ID),
-				"chat_session_id", uuidToString(event.ChatSessionID),
-			)
-			return nil
-		}
-	} else if event.ChannelID.Valid {
-		// LRM-1079: channel-only wakes carry the exact prompt in context.
+	if _, ok := channelWakePromptFromContext(event.Context); ok {
+		// LRM-1079: ordinary channel-only wakes carry the exact prompt in context.
 		if !h.populateAgentInboxChannelWakeContext(ctx, event, &resp) {
 			slog.Error("agent inbox claim: channel wake context missing",
 				"inbox_event_id", uuidToString(event.ID),
@@ -1682,6 +1677,23 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			)
 			return nil
 		}
+	} else if event.ChatSessionID.Valid {
+		if !h.populateAgentInboxChatContext(ctx, event, &resp) {
+			slog.Warn("agent inbox claim: exact prompt missing",
+				"inbox_event_id", uuidToString(event.ID),
+				"chat_session_id", uuidToString(event.ChatSessionID),
+			)
+			return nil
+		}
+	} else if channelOnlyWakeReason(event.Reason) {
+		// Channel-only wake kinds must carry channel_wake context — do not fall
+		// through to work-context claim (that would silently run without prompt).
+		slog.Error("agent inbox claim: channel-only wake missing channel_wake context",
+			"inbox_event_id", uuidToString(event.ID),
+			"reason", event.Reason,
+			"channel_id", uuidToString(event.ChannelID),
+		)
+		return nil
 	} else if !h.populateAgentInboxWorkContext(ctx, runtime, event, &resp) {
 		slog.Error("agent inbox claim: work context missing",
 			"inbox_event_id", uuidToString(event.ID),
@@ -2544,6 +2556,26 @@ func (h *Handler) populateAgentInboxChannelWakeContext(ctx context.Context, even
 	} else if event.SourceMessageID.Valid {
 		h.populateAgentInboxInitiator(ctx, event.SourceMessageID, resp)
 	}
+	if event.SourceMessageID.Valid {
+		if atts, attErr := h.Queries.ListAttachmentsByChannelMessageIDs(ctx, db.ListAttachmentsByChannelMessageIDsParams{
+			Column1:     []pgtype.UUID{event.SourceMessageID},
+			WorkspaceID: event.WorkspaceID,
+		}); attErr == nil {
+			seen := make(map[string]struct{}, len(atts))
+			for _, row := range atts {
+				id := uuidToString(row.Attachment.ID)
+				if _, exists := seen[id]; exists {
+					continue
+				}
+				seen[id] = struct{}{}
+				resp.ChatMessageAttachments = append(resp.ChatMessageAttachments, ChatAttachmentMeta{
+					ID:          id,
+					Filename:    row.Attachment.Filename,
+					ContentType: row.Attachment.ContentType,
+				})
+			}
+		}
+	}
 	var channelProjectID pgtype.UUID
 	_ = h.DB.QueryRow(ctx, `SELECT project_id FROM channel WHERE id = $1`, event.ChannelID).Scan(&channelProjectID)
 	if channelProjectID.Valid {
@@ -2573,6 +2605,17 @@ func (h *Handler) populateAgentInboxChannelWakeContext(ctx context.Context, even
 	resp.ReferencedEntities = references.Snapshots
 	resp.ReferencedEntityOmittedCount = references.OmittedCount
 	return true
+}
+
+// channelOnlyWakeReason is true for ordinary channel wakes that must carry
+// agent_inbox_event.context.channel_wake (no chat_session bridge).
+func channelOnlyWakeReason(reason string) bool {
+	switch strings.TrimSpace(reason) {
+	case "mention", "dm", "thread_reply", "handoff", "continuation", channelMessageWakeReason:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.AgentInboxEvent, resp *AgentTaskResponse) bool {

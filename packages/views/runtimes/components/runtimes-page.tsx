@@ -749,8 +749,9 @@ function MachineDetailView({
                   Frank/Iris 2026-08-02: this line answers exactly one question —
                   is the computer connected. No last-seen, no secondary
                   runtimeHealth badge (those collided as Online · … · Offline).
-                  LRM-1036: daemon version also appears once here (Basics row
-                  from LRM-1029 stays — not a hero chip).
+                  LRM-1036 / Parker 2026-08-03: daemon version lives once on
+                  this subtitle — Basics no longer repeats it (Frank's
+                  "版本号重复" complaint).
                 */}
                 <MachineConnectedStatus health={machine.health} />
                 {machine.cliVersion ? (
@@ -793,15 +794,6 @@ function MachineDetailView({
               <InfoRow label={t(($) => $.machine.basics_os)}>
                 <span className="truncate text-sm">{osLabel}</span>
               </InfoRow>
-              {machine.cliVersion && (
-                <InfoRow label={t(($) => $.machine.basics_daemon)}>
-                  <span className="truncate font-mono text-sm">
-                    {t(($) => $.machine.version_prefix, {
-                      version: machine.cliVersion,
-                    })}
-                  </span>
-                </InfoRow>
-              )}
               {primaryPinnedVersion?.trim() && (
                 <InfoRow label={t(($) => $.machine.basics_pinned_version)}>
                   <span

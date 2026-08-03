@@ -2457,7 +2457,7 @@ export function ChannelsPage({
         setChannelThreadSendError({ conflicted });
       },
     });
-       if (dispatched) {
+    if (dispatched) {
       setChannelThreadSendError(null);
       setChannelThreadRestoreText("");
       prepareVoicePlayback(voicePlaybackScope(active.id, threadRoot.id));

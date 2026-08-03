@@ -146,10 +146,6 @@ export function AgentRestartModal({
                     <div className="mt-1 text-xs text-muted-foreground">
                       {reasonLabel(state.disabled_reason)}
                     </div>
-                  ) : state.execution_mode === "after_current_run" ? (
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {t(($) => $.restart_modal.after_current_run)}
-                    </div>
                   ) : null}
                 </div>
               </label>

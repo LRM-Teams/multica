@@ -90,7 +90,7 @@ describe("AgentRestartModal (#633)", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the after-current-run hint when a tier is deferred (no fake wait promise)", () => {
+  it("does not show after-current-run / busy-wait copy (Raft: all tiers force; #1900)", () => {
     lifecycleState.current.preflight = {
       actions: {
         restart: { supported: true, execution_mode: "after_current_run" },
@@ -99,11 +99,9 @@ describe("AgentRestartModal (#633)", () => {
       },
     };
     renderModal();
-    expect(
-      screen.getByText(
-        "Not available while a task is running — wait until idle, or use Restart (force).",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/after the current task/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/wait until idle/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/强制重启|force/i)).not.toBeInTheDocument();
   });
 
   it("task #26: scheduled op is non-blocking — Done (not infinite spinner / locked cancel)", () => {

@@ -312,10 +312,13 @@ export function ReportReader({
       }}
       onClose={onClose}
     >
+      {/* LRM-1234 — mouse-only dismiss scrim: keep click-to-close, leave Tab/AT. */}
       <button
         type="button"
+        data-testid="research-delivery-modal-dismiss-scrim"
         className="absolute inset-0 z-0 cursor-default bg-transparent"
-        aria-label={t(($) => $.panel.hide_chat)}
+        aria-hidden="true"
+        tabIndex={-1}
         onClick={onClose}
       />
       <div

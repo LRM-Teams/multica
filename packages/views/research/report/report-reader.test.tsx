@@ -135,6 +135,32 @@ describe("ReportReader", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("LRM-1234: dismiss scrim is mouse-only (aria-hidden + tabIndex=-1) and still closes", () => {
+    const onClose = vi.fn();
+    render(<ReportReader open onClose={onClose} report={report} sources={sources} />);
+    const scrim = screen.getByTestId("research-delivery-modal-dismiss-scrim");
+    expect(scrim).toHaveAttribute("aria-hidden", "true");
+    expect(scrim).toHaveAttribute("tabindex", "-1");
+    expect(scrim.tabIndex).toBe(-1);
+    // AC2 — only the header X exposes the "Close" accessible name.
+    expect(screen.getAllByRole("button", { name: "Close" })).toHaveLength(1);
+    fireEvent.click(scrim);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("LRM-1234: Tab order never lands on the dismiss scrim", () => {
+    render(<ReportReader open onClose={vi.fn()} report={report} sources={sources} />);
+    const dialog = screen.getByRole("dialog");
+    const scrim = screen.getByTestId("research-delivery-modal-dismiss-scrim");
+    const focusables = [
+      ...dialog.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ),
+    ].filter((el) => el.tabIndex >= 0 && !el.hasAttribute("disabled"));
+    expect(focusables).not.toContain(scrim);
+    expect(focusables[0]).not.toBe(scrim);
+  });
+
   it("renders a centered modal shell (not a corner float)", () => {
     render(<ReportReader open onClose={vi.fn()} report={report} sources={sources} />);
     const dialog = screen.getByTestId("research-delivery-modal");

@@ -599,3 +599,48 @@ func voiceCallConstraintViolation(err error, constraint string) bool {
 		postgresError.Code == "23505" &&
 		postgresError.ConstraintName == constraint
 }
+
+type voiceCallRestartRecoveryQueries interface {
+	FailVoiceCallSessionsStartedBefore(
+		context.Context,
+		pgtype.Timestamptz,
+	) ([]db.VoiceCallSession, error)
+}
+
+// RecoverInterruptedSessionsAtStartup makes sessions created before this server
+// process terminal. Their provider lifecycle cannot be safely resumed after a
+// process restart, and leaving them non-terminal blocks a caller from retrying.
+func (store *PostgresStore) RecoverInterruptedSessionsAtStartup(
+	timeout time.Duration,
+	startedBefore time.Time,
+) ([]Session, error) {
+	if timeout <= 0 {
+		return nil, errors.New("voice call recovery timeout must be positive")
+	}
+	if startedBefore.IsZero() {
+		return nil, errors.New("voice call recovery cutoff is required")
+	}
+	recoveryQueries, ok := store.queries.(voiceCallRestartRecoveryQueries)
+	if !ok {
+		return nil, errors.New("voice call queries do not support restart recovery")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	rows, err := recoveryQueries.FailVoiceCallSessionsStartedBefore(ctx, pgtype.Timestamptz{
+		Time:  startedBefore.UTC(),
+		Valid: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fail interrupted voice call sessions: %w", err)
+	}
+	sessions := make([]Session, 0, len(rows))
+	for _, row := range rows {
+		session, err := voiceCallSessionFromDB(row)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, nil
+}

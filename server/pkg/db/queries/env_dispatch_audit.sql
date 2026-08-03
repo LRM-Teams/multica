@@ -165,9 +165,19 @@ UPDATE env_dispatch_reclamation_obligation
 SET state = 'succeeded',
     next_attempt_at = NULL,
     last_error_code = NULL,
-    updated_at = now()
+    updated_at = CASE
+        WHEN state IN ('pending', 'in_progress') THEN now()
+        ELSE updated_at
+    END
 WHERE id = @obligation_id
-  AND state IN ('pending', 'in_progress', 'succeeded')
+  AND (
+      (state = 'pending' AND sqlc.narg(lease_acquired_at)::timestamptz IS NULL)
+      OR (
+          state = 'in_progress'
+          AND updated_at = sqlc.narg(lease_acquired_at)::timestamptz
+      )
+      OR state = 'succeeded'
+  )
 RETURNING *;
 
 -- name: MarkEnvDispatchReclamationObligationNotRequired :one
@@ -175,14 +185,25 @@ UPDATE env_dispatch_reclamation_obligation
 SET state = 'not_required',
     next_attempt_at = NULL,
     last_error_code = NULL,
-    updated_at = now()
+    updated_at = CASE
+        WHEN state IN ('pending', 'in_progress') THEN now()
+        ELSE updated_at
+    END
 WHERE id = @obligation_id
-  AND state IN ('pending', 'in_progress', 'not_required')
+  AND (
+      (state = 'pending' AND sqlc.narg(lease_acquired_at)::timestamptz IS NULL)
+      OR (
+          state = 'in_progress'
+          AND updated_at = sqlc.narg(lease_acquired_at)::timestamptz
+      )
+      OR state = 'not_required'
+  )
 RETURNING *;
 
 -- name: RescheduleEnvDispatchReclamationObligation :one
--- A claim increments attempt_count. Retry failures only move that same claim
--- back to pending; they never reset the bounded retry counter.
+-- A reconciled claim increments attempt_count and returns updated_at as its
+-- lease token. Retry failures only move that exact lease back to pending; they
+-- never reset the bounded retry counter or overwrite a newer claimant.
 UPDATE env_dispatch_reclamation_obligation
 SET state = 'pending',
     last_error_code = sqlc.narg(last_error_code),
@@ -190,6 +211,7 @@ SET state = 'pending',
     updated_at = now()
 WHERE id = @obligation_id
   AND state = 'in_progress'
+  AND updated_at = @lease_acquired_at
 RETURNING *;
 
 -- name: ExhaustEnvDispatchReclamationObligation :one
@@ -197,9 +219,19 @@ UPDATE env_dispatch_reclamation_obligation
 SET state = 'exhausted',
     last_error_code = sqlc.narg(last_error_code),
     next_attempt_at = NULL,
-    updated_at = now()
+    updated_at = CASE
+        WHEN state IN ('pending', 'in_progress') THEN now()
+        ELSE updated_at
+    END
 WHERE id = @obligation_id
-  AND state IN ('pending', 'in_progress', 'exhausted')
+  AND (
+      (state = 'pending' AND sqlc.narg(lease_acquired_at)::timestamptz IS NULL)
+      OR (
+          state = 'in_progress'
+          AND updated_at = sqlc.narg(lease_acquired_at)::timestamptz
+      )
+      OR state = 'exhausted'
+  )
 RETURNING *;
 
 -- name: ListEnvDispatchReclamationObligationsForInitiator :many
@@ -213,44 +245,79 @@ WHERE audit.id = @audit_id
   AND audit.initiator_id = @initiator_id
 ORDER BY resource.first_observed_at ASC, resource.id ASC;
 
--- name: ClaimEligibleEnvDispatchReclamationObligations :many
--- Claim in bounded, deterministic batches. SKIP LOCKED prevents concurrent
--- sweeps from issuing duplicate cleanup attempts; the deadline is never
--- extended, so expired obligations remain available for classification instead
--- of further retries.
+-- name: ReconcileEligibleEnvDispatchReclamationObligations :many
+-- Reconcile bounded, deterministic batches. A returned in_progress row is
+-- leased to its worker by updated_at: completion and retry writes must echo
+-- that timestamp. Once updated_at is at or before stale_before (computed as
+-- eligible_at minus the configured positive lease duration), this query
+-- atomically re-leases it to one worker. At the immutable audit deadline it
+-- instead returns an exhausted row, preventing an abandoned claim from being
+-- retried indefinitely. SKIP LOCKED prevents concurrent sweeps from claiming
+-- or expiring the same obligation twice.
 WITH eligible AS (
-    SELECT obligation.id
+    SELECT
+        obligation.id,
+        audit.reclamation_deadline <= @eligible_at AS deadline_expired,
+        obligation.state = 'in_progress' AS stale_claim
     FROM env_dispatch_reclamation_obligation AS obligation
     JOIN env_dispatch_audit_resource AS resource
       ON resource.id = obligation.audit_resource_id
     JOIN env_dispatch_audit_run AS audit ON audit.id = resource.audit_id
-    WHERE obligation.state = 'pending'
-      AND obligation.next_attempt_at <= @eligible_at
-      AND audit.reclamation_deadline > @eligible_at
-    ORDER BY obligation.next_attempt_at ASC, obligation.id ASC
+    WHERE obligation.state IN ('pending', 'in_progress')
+      AND (
+          audit.reclamation_deadline <= @eligible_at
+          OR (
+              audit.reclamation_deadline > @eligible_at
+              AND (
+                  (
+                      obligation.state = 'pending'
+                      AND obligation.next_attempt_at <= @eligible_at
+                  )
+                  OR (
+                      obligation.state = 'in_progress'
+                      AND obligation.updated_at <= @stale_before
+                  )
+              )
+          )
+      )
+    ORDER BY
+        audit.reclamation_deadline ASC,
+        COALESCE(obligation.next_attempt_at, obligation.updated_at) ASC,
+        obligation.id ASC
     LIMIT @limit_count
     FOR UPDATE OF obligation SKIP LOCKED
-), claimed AS (
+), reconciled AS (
     UPDATE env_dispatch_reclamation_obligation AS obligation
-    SET state = 'in_progress',
-        attempt_count = obligation.attempt_count + 1,
+    SET state = CASE
+            WHEN eligible.deadline_expired THEN 'exhausted'
+            ELSE 'in_progress'
+        END,
+        attempt_count = CASE
+            WHEN eligible.deadline_expired THEN obligation.attempt_count
+            ELSE obligation.attempt_count + 1
+        END,
+        last_error_code = CASE
+            WHEN eligible.deadline_expired THEN 'reclamation_deadline_exceeded'
+            WHEN eligible.stale_claim THEN 'reclamation_lease_expired'
+            ELSE obligation.last_error_code
+        END,
         next_attempt_at = NULL,
-        updated_at = now()
+        updated_at = @eligible_at
     FROM eligible
     WHERE obligation.id = eligible.id
-      AND obligation.state = 'pending'
+      AND obligation.state IN ('pending', 'in_progress')
     RETURNING obligation.*
 )
 SELECT
-    claimed.id AS obligation_id,
-    claimed.audit_resource_id,
-    claimed.trigger,
-    claimed.state,
-    claimed.attempt_count,
-    claimed.last_error_code,
-    claimed.next_attempt_at,
-    claimed.created_at AS obligation_created_at,
-    claimed.updated_at AS obligation_updated_at,
+    reconciled.id AS obligation_id,
+    reconciled.audit_resource_id,
+    reconciled.trigger,
+    reconciled.state,
+    reconciled.attempt_count,
+    reconciled.last_error_code,
+    reconciled.next_attempt_at,
+    reconciled.created_at AS obligation_created_at,
+    reconciled.updated_at AS obligation_updated_at,
     resource.audit_id,
     resource.resource_kind,
     resource.resource_id,
@@ -264,11 +331,11 @@ SELECT
     audit.workspace_id,
     audit.initiator_id,
     audit.reclamation_deadline
-FROM claimed
+FROM reconciled
 JOIN env_dispatch_audit_resource AS resource
-  ON resource.id = claimed.audit_resource_id
+  ON resource.id = reconciled.audit_resource_id
 JOIN env_dispatch_audit_run AS audit ON audit.id = resource.audit_id
-ORDER BY claimed.created_at ASC, claimed.id ASC;
+ORDER BY reconciled.created_at ASC, reconciled.id ASC;
 
 -- name: LockEnvDispatchAuditRunForEventAppend :one
 -- Event writers must call this in the same transaction before determining the

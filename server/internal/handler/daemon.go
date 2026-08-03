@@ -2782,39 +2782,6 @@ func (h *Handler) GetChatSessionGCCheck(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// GetAutopilotRunGCCheck returns the status and completed_at of an autopilot
-// run for the daemon GC loop. autopilot_run has no updated_at column; the
-// daemon uses completed_at as the TTL anchor for terminal runs, and treats
-// non-terminal status as a skip signal regardless of timestamp.
-//
-// Workspace ownership is resolved via the parent autopilot row.
-func (h *Handler) GetAutopilotRunGCCheck(w http.ResponseWriter, r *http.Request) {
-	runID := chi.URLParam(r, "runId")
-	runUUID, ok := parseUUIDOrBadRequest(w, runID, "run_id")
-	if !ok {
-		return
-	}
-	run, err := h.Queries.GetAutopilotRun(r.Context(), runUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "autopilot run not found")
-		return
-	}
-	autopilot, err := h.Queries.GetAutopilot(r.Context(), run.AutopilotID)
-	if err != nil {
-		// Parent autopilot is gone — treat as not found rather than 500
-		// so the daemon can fall through to its orphan-by-mtime path.
-		writeError(w, http.StatusNotFound, "autopilot run not found")
-		return
-	}
-	if !h.requireDaemonWorkspaceAccess(w, r, uuidToString(autopilot.WorkspaceID)) {
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":       run.Status,
-		"completed_at": run.CompletedAt.Time,
-	})
-}
-
 // GetTaskGCCheck returns the agent_inbox_event status for quick-create cleanup.
 // Quick-create tasks have no parent record (no issue_id at WriteGCMeta time,
 // no chat session, no autopilot run) so the daemon keys GC directly on the

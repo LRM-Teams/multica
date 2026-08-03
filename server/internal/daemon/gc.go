@@ -366,58 +366,11 @@ func (d *Daemon) gcDecisionChat(ctx context.Context, taskDir string, meta *exece
 }
 
 func (d *Daemon) gcDecisionAutopilotRun(ctx context.Context, taskDir string, meta *execenv.GCMeta) gcAction {
+	// LRM-1049: Autopilot GC endpoint removed; clean leftover run workdirs by mtime.
 	if strings.TrimSpace(meta.AutopilotRunID) == "" {
 		return d.orphanByMTime(taskDir, "empty autopilot run id")
 	}
-
-	status, err := d.client.GetAutopilotRunGCCheck(ctx, meta.AutopilotRunID)
-	if err != nil {
-		if isAccessNotFound(err) {
-			return d.orphanByMTime(taskDir, "autopilot run not accessible")
-		}
-		return gcActionSkip
-	}
-
-	// Terminal states per the autopilot_run CHECK constraint:
-	//   completed, failed, skipped — the run finished its own work.
-	//   issue_created            — the run produced an issue task that owns
-	//                              its own workdir; this run's workdir is
-	//                              dead weight from here on.
-	// Non-terminal: pending, running. Skip until they reach a terminal state
-	// rather than trying to bound them by mtime — long autopilots are real.
-	if isAutopilotRunTerminal(status.Status) {
-		anchor := status.CompletedAt
-		if anchor.IsZero() {
-			// Defensive: terminal status without completed_at means the
-			// run finished but the column wasn't stamped (older code path).
-			// Fall back to the meta's CompletedAt so we still GC eventually.
-			anchor = meta.CompletedAt
-		}
-		if !anchor.IsZero() && time.Since(anchor) > d.cfg.GCTTL {
-			d.logger.Info("gc: eligible for cleanup",
-				"dir", filepath.Base(taskDir),
-				"kind", "autopilot_run",
-				"autopilot_run", meta.AutopilotRunID,
-				"status", status.Status,
-				"completed_at", anchor.Format(time.RFC3339),
-			)
-			return gcActionClean
-		}
-	}
-	return gcActionSkip
-}
-
-// isAutopilotRunTerminal mirrors the run.status CHECK in
-// migrations/042_autopilot.up.sql. Non-terminal states are pending/running;
-// every other value the schema allows is a final resting state from the
-// daemon's POV (the run is no longer producing work in this workdir).
-func isAutopilotRunTerminal(status string) bool {
-	switch status {
-	case "completed", "failed", "skipped", "issue_created":
-		return true
-	default:
-		return false
-	}
+	return d.orphanByMTime(taskDir, "autopilot retired")
 }
 
 func (d *Daemon) gcDecisionQuickCreate(ctx context.Context, taskDir string, meta *execenv.GCMeta) gcAction {

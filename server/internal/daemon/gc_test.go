@@ -968,41 +968,10 @@ func TestShouldCleanTaskDir_KindDispatch(t *testing.T) {
 			want: gcActionClean,
 		},
 
-		// ---- autopilot run -----------------------------------------------
+		// ---- autopilot run (LRM-1049: gc-check endpoint removed; mtime only)
 		{
-			name: "autopilot completed over TTL — clean",
+			name: "autopilot retired — fresh dir skips via orphan mtime",
 			meta: &execenv.GCMeta{Kind: execenv.GCKindAutopilotRun, AutopilotRunID: runID, WorkspaceID: "ws"},
-			servers: []serverResp{{
-				path: "/api/daemon/autopilot-runs/" + runID + "/gc-check",
-				body: map[string]any{"status": "completed", "completed_at": overTTL},
-			}},
-			want: gcActionClean,
-		},
-		{
-			name: "autopilot issue_created counts as terminal",
-			meta: &execenv.GCMeta{Kind: execenv.GCKindAutopilotRun, AutopilotRunID: runID, WorkspaceID: "ws"},
-			servers: []serverResp{{
-				path: "/api/daemon/autopilot-runs/" + runID + "/gc-check",
-				body: map[string]any{"status": "issue_created", "completed_at": overTTL},
-			}},
-			want: gcActionClean,
-		},
-		{
-			name: "autopilot running — skip",
-			meta: &execenv.GCMeta{Kind: execenv.GCKindAutopilotRun, AutopilotRunID: runID, WorkspaceID: "ws"},
-			servers: []serverResp{{
-				path: "/api/daemon/autopilot-runs/" + runID + "/gc-check",
-				body: map[string]any{"status": "running"},
-			}},
-			want: gcActionSkip,
-		},
-		{
-			name: "autopilot completed within TTL — skip",
-			meta: &execenv.GCMeta{Kind: execenv.GCKindAutopilotRun, AutopilotRunID: runID, WorkspaceID: "ws"},
-			servers: []serverResp{{
-				path: "/api/daemon/autopilot-runs/" + runID + "/gc-check",
-				body: map[string]any{"status": "completed", "completed_at": withinTTL},
-			}},
 			want: gcActionSkip,
 		},
 
@@ -1073,6 +1042,41 @@ func TestShouldCleanTaskDir_KindDispatch(t *testing.T) {
 				t.Fatalf("kind dispatch %q: want %d, got %d", tc.name, tc.want, got)
 			}
 		})
+	}
+}
+
+func TestShouldCleanTaskDir_AutopilotRetiredUsesOrphanMTime(t *testing.T) {
+	t.Parallel()
+
+	const runID = "cccccccc-cccc-cccc-cccc-cccccccccc01"
+	requests := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "unexpected request", http.StatusBadRequest)
+	})
+
+	d := newGCTestDaemon(t, mux)
+	d.cfg.GCOrphanTTL = 365 * 24 * time.Hour
+	taskDir := createTaskDir(t, d.cfg.WorkspacesRoot, "ws", "retired-autopilot", &execenv.GCMeta{
+		Kind:           execenv.GCKindAutopilotRun,
+		AutopilotRunID: runID,
+		WorkspaceID:    "ws",
+	})
+
+	if got := d.shouldCleanTaskDir(context.Background(), taskDir); got != gcActionSkip {
+		t.Fatalf("fresh retired autopilot dir: want skip, got %d", got)
+	}
+
+	old := time.Now().Add(-400 * 24 * time.Hour)
+	if err := os.Chtimes(taskDir, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	if got := d.shouldCleanTaskDir(context.Background(), taskDir); got != gcActionOrphan {
+		t.Fatalf("stale retired autopilot dir: want orphan, got %d", got)
+	}
+	if requests != 0 {
+		t.Fatalf("retired autopilot must not call gc-check, got %d requests", requests)
 	}
 }
 

@@ -411,7 +411,17 @@ func TestSquadsSkillRetired(t *testing.T) {
 }
 
 
-func TestAutopilotsSkillCoversDispatchAndSideEffects(t *testing.T) {
+func TestAutopilotsSkillRetired(t *testing.T) {
+	// Autopilot product retired (LRM-1049 / Frank): skill must not ship.
+	for _, s := range loadBuiltinSkills() {
+		if s.Name == "multica-autopilots" {
+			t.Fatal("multica-autopilots skill must be removed from builtin_skills")
+		}
+	}
+}
+
+func TestAutopilotsSkillCoversDispatchAndSideEffectsRemoved(t *testing.T) {
+	t.Skip("LRM-1049: multica-autopilots skill retired")
 	skill, ok := findSkill(t, "multica-autopilots")
 	if !ok {
 		return

@@ -105,8 +105,6 @@ func TestRejectAgentOnHumanAPI_AdminSurfaces403(t *testing.T) {
 		{"agents archive", http.MethodPost, "/api/agents/a1/archive"},
 		{"agent skills set", http.MethodPut, "/api/agents/a1/skills"},
 		// autopilot
-		{"autopilot list", http.MethodGet, "/api/autopilots"},
-		{"autopilot create", http.MethodPost, "/api/autopilots"},
 		// PAT / me
 		{"tokens list", http.MethodGet, "/api/tokens"},
 		{"me", http.MethodGet, "/api/me"},

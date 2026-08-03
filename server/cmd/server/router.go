@@ -528,10 +528,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.Get("/api/stickers", h.ListStickers)
 	r.Get("/api/stickers/{id}", h.GetStickerAsset)
 
-	// Webhook ingress for autopilots. Outside the authenticated group on
-	// purpose: the bearer token in the URL path IS the credential. Workspace
-	// context is derived from the trigger row, never from request headers.
-	r.Post("/api/webhooks/autopilots/{token}", h.HandleAutopilotWebhook)
+	// LRM-1049: Autopilot webhook ingress removed (product retired).
 	// GitHub App webhook (no Multica auth — requests are authenticated via
 	// HMAC-SHA256 signature in the handler) and post-install setup callback.
 	r.Post("/api/webhooks/github", h.HandleGitHubWebhook)
@@ -597,7 +594,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 		r.Get("/issues/{issueId}/gc-check", h.GetIssueGCCheck)
 		r.Get("/chat-sessions/{sessionId}/gc-check", h.GetChatSessionGCCheck)
-		r.Get("/autopilot-runs/{runId}/gc-check", h.GetAutopilotRunGCCheck)
 		r.Get("/tasks/{taskId}/gc-check", h.GetTaskGCCheck)
 
 		r.Post("/runtimes/{runtimeId}/recover-orphans", h.RecoverOrphanedTasks)
@@ -1016,30 +1012,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/product-rounds/judgment", h.SubmitResearchProductRoundJudgment)
 					r.Post("/confirm", h.ConfirmResearchSession)
 					r.Post("/handoff", h.ResearchSessionHandoff)
-				})
-			})
-
-			// Autopilots
-			r.Route("/api/autopilots", func(r chi.Router) {
-				r.Get("/", h.ListAutopilots)
-				r.Post("/", h.CreateAutopilot)
-				r.Route("/{id}", func(r chi.Router) {
-					r.Get("/", h.GetAutopilot)
-					r.Patch("/", h.UpdateAutopilot)
-					r.Delete("/", h.DeleteAutopilot)
-					r.Post("/trigger", h.TriggerAutopilot)
-					r.Get("/runs", h.ListAutopilotRuns)
-					r.Get("/runs/{runId}", h.GetAutopilotRun)
-					r.Get("/deliveries", h.ListAutopilotDeliveries)
-					r.Get("/deliveries/{deliveryId}", h.GetAutopilotDelivery)
-					r.Post("/deliveries/{deliveryId}/replay", h.ReplayAutopilotDelivery)
-					r.Post("/triggers", h.CreateAutopilotTrigger)
-					r.Route("/triggers/{triggerId}", func(r chi.Router) {
-						r.Patch("/", h.UpdateAutopilotTrigger)
-						r.Delete("/", h.DeleteAutopilotTrigger)
-						r.Post("/rotate-webhook-token", h.RotateAutopilotTriggerWebhookToken)
-						r.Put("/signing-secret", h.SetAutopilotTriggerSigningSecret)
-					})
 				})
 			})
 

@@ -738,24 +738,6 @@ func (c *Client) GetChatSessionGCCheck(ctx context.Context, sessionID string) (*
 	return &resp, nil
 }
 
-// AutopilotRunGCStatus carries the status of an autopilot run. CompletedAt
-// is the run's terminal timestamp (zero for non-terminal runs); the GC loop
-// uses it as the TTL anchor instead of UpdatedAt because autopilot_run rows
-// have no updated_at column.
-type AutopilotRunGCStatus struct {
-	Status      string    `json:"status"`
-	CompletedAt time.Time `json:"completed_at"`
-}
-
-// GetAutopilotRunGCCheck returns the status of an autopilot run for GC decisions.
-func (c *Client) GetAutopilotRunGCCheck(ctx context.Context, runID string) (*AutopilotRunGCStatus, error) {
-	var resp AutopilotRunGCStatus
-	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/autopilot-runs/%s/gc-check", runID), &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
 // TaskGCStatus carries the agent_inbox_event status for quick-create cleanup.
 // Quick-create tasks have no separate parent record, so GC keys directly on
 // the task itself.

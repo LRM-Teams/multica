@@ -41,9 +41,11 @@
     "goal_dialog_title": "调研目标",
     "goal_dialog_close": "关闭",
     "goal_dialog_open": "打开会话",
-    "who_working": "{{name}} 进行中",
+    "who_working": "{{name}}",
     "output_line": "产出 · {{summary}}",
-    "no_output": "产出 · 暂无产出"
+    "no_output": "产出 · 暂无产出",
+    "recent_heading": "最近调研",
+    "recent_count": "{{count}}"
   },
   "filter": {
     "search_label": "搜索会话标题",
@@ -54,7 +56,12 @@
     "status_failed": "失败",
     "clear": "清除筛选",
     "no_results": "没有匹配的会话",
-    "no_results_hint": "试试别的关键词，或清除筛选查看全部"
+    "no_results_hint": "试试别的关键词，或清除筛选查看全部",
+    "status_all": "全部",
+    "count_aria": "{{label}} {{count}} 个",
+    "scope_line": "{{scope}} · {{count}} 个会话",
+    "scope_query": "「{{query}}」",
+    "no_results_scope": "当前口径：{{scope}}"
   },
   "actions": {
     "menu": "调研操作",
@@ -65,7 +72,8 @@
     "delete_desc": "画布、对话和来源都会被永久删除，无法恢复。",
     "delete_confirm": "删除",
     "delete_done": "调研已删除",
-    "cancel": "取消"
+    "cancel": "取消",
+    "view_goal": "查看目标"
   },
   "goal_card": {
     "label": "GOAL",
@@ -290,6 +298,8 @@
   "logic": {
     "label": "调研逻辑",
     "lr_hint": "左→右 · 非 Git",
+    "git_hint": "上→下 · Git 分支线",
+    "git_list_label": "调研 Git 列表",
     "strip_label": "逻辑结构",
     "strip_position": "当前 {{current}} / 共 {{total}}",
     "start": "起点",
@@ -312,6 +322,21 @@
       "failed": "失败",
       "abandoned": "已放弃"
     }
+  },
+  "card_menu": {
+    "open": "打开操作菜单",
+    "view_evidence": "查看证据",
+    "view_io": "查看输入/输出",
+    "fork_from": "从此分叉",
+    "retry_failed": "重试失败",
+    "reassign": "重新分配",
+    "cancel_run": "取消运行",
+    "confirm": "确认：{{action}}？"
+  },
+  "a11y": {
+    "focus_node": "焦点 {{title}}，分支 {{branch}}",
+    "opened_detail": "已打开 {{title}} 详情",
+    "closed_detail": "已关闭详情"
   },
   "home": {
     "composer_label": "创建调研会话",

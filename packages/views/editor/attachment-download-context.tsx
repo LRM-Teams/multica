@@ -2,7 +2,7 @@
 
 import { createContext, use, useMemo, type ReactNode } from "react";
 import type { Attachment } from "@multica/core/types";
-import { attachmentIdFromDownloadURL } from "@multica/core/types/attachment-url";
+import { attachmentIdFromRef } from "@multica/core/types/attachment-url";
 import { openExternal } from "../platform";
 import { useDownloadAttachment } from "./use-download-attachment";
 
@@ -50,7 +50,8 @@ export function AttachmentDownloadProvider({ attachments, children }: ProviderPr
         // Preferred path: stable `/api/attachments/<id>/download` URL.
         // Match by id so the lookup survives a host swap (Electron vs
         // web vs SSR) and any incidental query/fragment.
-        const idFromUrl = attachmentIdFromDownloadURL(url);
+        // Stable download path **or** `attachment:<uuid>` shorthand (LRM-1130).
+        const idFromUrl = attachmentIdFromRef(url);
         if (idFromUrl) {
           const byId = attachments.find((a) => a.id === idFromUrl);
           if (byId) return byId;

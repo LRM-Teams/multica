@@ -44,4 +44,5 @@ RTC VoiceChat。
 ## Notes
 
 - Multica 派活复用 `VoiceCallAgentBridge`（与 RTC `delegate_work_to_multica_agent` 同语义）
+- Duplex 收到上游 `session.created` 后，复用 RTC 通话上下文生成的成员名、智能体名和语言欢迎语主动发声；前端以首段可听音频确认接通。
 - 免提 UI：LRM-947；FE 接 Duplex：LRM-950

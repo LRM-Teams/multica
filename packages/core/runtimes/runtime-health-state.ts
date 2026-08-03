@@ -1,3 +1,4 @@
+import { isNewerCliVersion } from "./cli-version";
 import type { AgentRuntime, RuntimeHealthState } from "../types";
 import { deriveRuntimeHealth } from "./derive-health";
 import { isUpdateLifecycleActive } from "./update-status";
@@ -109,9 +110,11 @@ export function runtimeCanStartSelfUpdate(
   // terminal modal). `completed` stays eligible so a newer release during the
   // terminal window is not blocked.
   if (isUpdateLifecycleActive(runtime.update_state)) return false;
+  const target = runtimeTargetVersion(runtime);
   return (
     runtimeHealthState(runtime) === "update_available" &&
-    runtimeTargetVersion(runtime) !== null
+    target !== null &&
+    isNewerCliVersion(target, runtimeCurrentVersion(runtime))
   );
 }
 

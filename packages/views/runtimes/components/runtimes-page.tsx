@@ -9,9 +9,13 @@ import {
   Loader2,
   Monitor,
   Plus,
+  RotateCcw,
   Server,
+  Square,
+  X,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -620,23 +624,46 @@ function MachineDetailView({
     [machine, agents],
   );
   const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
-  const [selectMode, setSelectMode] = useState(false);
-  const [selectedAgentIds, setSelectedAgentIds] = useState<Set<string>>(
-    () => new Set(),
-  );
+  // One object for Select mode (react-doctor: avoid many related useState).
+  const [select, setSelect] = useState<{
+    mode: boolean;
+    ids: Set<string>;
+    busy: "stop" | "restart" | null;
+  }>(() => ({ mode: false, ids: new Set(), busy: null }));
+  const selectMode = select.mode;
+  const selectedAgentIds = select.ids;
+  const bulkBusy = select.busy;
   const [showCreateAgent, setShowCreateAgent] = useState(false);
   const { data: allRuntimes = [], isLoading: runtimesLoading } = useQuery(
     runtimeListOptions(wsId),
   );
   const qc = useQueryClient();
+  const selectedCount = selectedAgentIds.size;
+  const allSelected =
+    machineAgents.length > 0 && selectedCount === machineAgents.length;
+
+  const exitSelectMode = useCallback(() => {
+    setSelect({ mode: false, ids: new Set(), busy: null });
+  }, []);
 
   const toggleAgentSelected = (agentId: string) => {
-    setSelectedAgentIds((prev) => {
-      const next = new Set(prev);
+    setSelect((prev) => {
+      const next = new Set(prev.ids);
       if (next.has(agentId)) next.delete(agentId);
       else next.add(agentId);
-      return next;
+      return { ...prev, ids: next };
     });
+  };
+
+  const selectAllAgents = () => {
+    setSelect((prev) => ({
+      ...prev,
+      ids: new Set(machineAgents.map((a) => a.id)),
+    }));
+  };
+
+  const clearSelection = () => {
+    setSelect((prev) => ({ ...prev, ids: new Set() }));
   };
 
   const handleCreateAgent = async (data: CreateAgentRequest) => {
@@ -644,6 +671,86 @@ function MachineDetailView({
     await qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
     setShowCreateAgent(false);
     return agent;
+  };
+
+  /** Raft-aligned bulk bar: Stop = cancel active tasks; Restart = lifecycle restart. */
+  const handleBulkStop = async () => {
+    if (selectedCount === 0 || bulkBusy) return;
+    const ids = Array.from(selectedAgentIds);
+    setSelect((prev) => ({ ...prev, busy: "stop" }));
+    try {
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const res = await api.cancelAgentTasks(id);
+            return { ok: true as const, cancelled: res.cancelled ?? 0 };
+          } catch {
+            return { ok: false as const, cancelled: 0 };
+          }
+        }),
+      );
+      let cancelled = 0;
+      let failed = 0;
+      for (const r of results) {
+        if (r.ok) cancelled += r.cancelled;
+        else failed += 1;
+      }
+      await qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      if (failed > 0) {
+        showErrorToast(
+          t(($) => $.machine.agents_bulk_stop_partial, {
+            cancelled,
+            failed,
+          }),
+        );
+      } else {
+        toast.success(
+          t(($) => $.machine.agents_bulk_stop_done, { count: cancelled }),
+        );
+      }
+    } finally {
+      setSelect((prev) => ({ ...prev, busy: null }));
+    }
+  };
+
+  const handleBulkRestart = async () => {
+    if (selectedCount === 0 || bulkBusy) return;
+    const ids = Array.from(selectedAgentIds);
+    setSelect((prev) => ({ ...prev, busy: "restart" }));
+    try {
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            await api.startAgentLifecycleAction(
+              id,
+              "restart",
+              crypto.randomUUID(),
+            );
+            return true;
+          } catch {
+            return false;
+          }
+        }),
+      );
+      let ok = 0;
+      let failed = 0;
+      for (const r of results) {
+        if (r) ok += 1;
+        else failed += 1;
+      }
+      await qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+      if (failed > 0) {
+        showErrorToast(
+          t(($) => $.machine.agents_bulk_restart_partial, { ok, failed }),
+        );
+      } else {
+        toast.success(
+          t(($) => $.machine.agents_bulk_restart_done, { count: ok }),
+        );
+      }
+    } finally {
+      setSelect((prev) => ({ ...prev, busy: null }));
+    }
   };
 
 
@@ -799,32 +906,65 @@ function MachineDetailView({
                 ) : null}
               </h3>
               <div className="flex shrink-0 items-center gap-1.5">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  className="h-7 gap-1 px-2.5 text-[11px]"
-                  onClick={() => {
-                    setSelectMode((v) => !v);
-                    setSelectedAgentIds(new Set());
-                  }}
-                  data-testid="machine-agents-select"
-                  disabled={machineAgents.length === 0}
-                >
-                  {selectMode
-                    ? t(($) => $.machine.agents_done)
-                    : t(($) => $.machine.agents_select)}
-                </Button>
-                <Button
-                  type="button"
-                  size="xs"
-                  className="h-7 gap-1 px-2.5 text-[11px]"
-                  onClick={() => setShowCreateAgent(true)}
-                  data-testid="machine-agents-create"
-                >
-                  <Plus className="h-3 w-3" />
-                  {t(($) => $.machine.agents_create)}
-                </Button>
+                {selectMode ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      className="h-7 gap-1 px-2.5 text-[11px]"
+                      onClick={allSelected ? clearSelection : selectAllAgents}
+                      data-testid="machine-agents-select-all"
+                      disabled={machineAgents.length === 0 || !!bulkBusy}
+                    >
+                      {allSelected
+                        ? t(($) => $.machine.agents_clear_all)
+                        : t(($) => $.machine.agents_select_all)}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      className="h-7 gap-1 px-2.5 text-[11px]"
+                      onClick={exitSelectMode}
+                      data-testid="machine-agents-select-cancel"
+                      disabled={!!bulkBusy}
+                    >
+                      <X className="h-3 w-3" />
+                      {t(($) => $.machine.agents_cancel)}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      className="h-7 gap-1 px-2.5 text-[11px]"
+                      onClick={() => {
+                        setSelect({
+                          mode: true,
+                          ids: new Set(machineAgents.map((a) => a.id)),
+                          busy: null,
+                        });
+                      }}
+                      data-testid="machine-agents-select"
+                      disabled={machineAgents.length === 0}
+                    >
+                      {t(($) => $.machine.agents_select)}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="xs"
+                      className="h-7 gap-1 px-2.5 text-[11px]"
+                      onClick={() => setShowCreateAgent(true)}
+                      data-testid="machine-agents-create"
+                    >
+                      <Plus className="h-3 w-3" />
+                      {t(($) => $.machine.agents_create)}
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
             {machineAgents.length === 0 ? (
@@ -832,31 +972,79 @@ function MachineDetailView({
                 {t(($) => $.detail.no_agents)}
               </p>
             ) : (
-              <div className="overflow-hidden rounded-xl border bg-card">
-                {machineAgents.map((agent, idx) => {
-                  const runtime = runtimeForAgent(agent, machine);
-                  return (
-                    <AgentActivityListItem
-                      key={agent.id}
-                      agentId={agent.id}
-                      displayName={getActorName("agent", agent.id)}
-                      provider={runtime?.provider}
-                      runtimeLabel={providerLabel(runtime)}
-                      presence={presenceMap.get(agent.id) ?? null}
-                      onClick={() =>
-                        selectMode
-                          ? toggleAgentSelected(agent.id)
-                          : openAgentPanel(agent.id)
-                      }
-                      layout={isMobile ? "stacked" : "inline"}
-                      showChevron={isMobile && !selectMode}
-                      showBorder={idx < machineAgents.length - 1}
-                      selectionMode={selectMode}
-                      selected={selectedAgentIds.has(agent.id)}
-                    />
-                  );
-                })}
-              </div>
+              <>
+                {selectMode && selectedCount > 0 ? (
+                  <div
+                    className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-muted/40 px-3 py-2"
+                    data-testid="machine-agents-bulk-bar"
+                  >
+                    <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                      {t(($) => $.machine.agents_selected_count, {
+                        count: selectedCount,
+                      })}
+                    </span>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        className="h-7 gap-1 px-2.5 text-[11px]"
+                        onClick={() => void handleBulkStop()}
+                        disabled={!!bulkBusy}
+                        data-testid="machine-agents-bulk-stop"
+                      >
+                        {bulkBusy === "stop" ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Square className="h-3 w-3" />
+                        )}
+                        {t(($) => $.machine.agents_bulk_stop)}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        className="h-7 gap-1 px-2.5 text-[11px]"
+                        onClick={() => void handleBulkRestart()}
+                        disabled={!!bulkBusy}
+                        data-testid="machine-agents-bulk-restart"
+                      >
+                        {bulkBusy === "restart" ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <RotateCcw className="h-3 w-3" />
+                        )}
+                        {t(($) => $.machine.agents_bulk_restart)}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+                <div className="overflow-hidden rounded-xl border bg-card">
+                  {machineAgents.map((agent, idx) => {
+                    const runtime = runtimeForAgent(agent, machine);
+                    return (
+                      <AgentActivityListItem
+                        key={agent.id}
+                        agentId={agent.id}
+                        displayName={getActorName("agent", agent.id)}
+                        provider={runtime?.provider}
+                        runtimeLabel={providerLabel(runtime)}
+                        presence={presenceMap.get(agent.id) ?? null}
+                        onClick={() =>
+                          selectMode
+                            ? toggleAgentSelected(agent.id)
+                            : openAgentPanel(agent.id)
+                        }
+                        layout={isMobile ? "stacked" : "inline"}
+                        showChevron={isMobile && !selectMode}
+                        showBorder={idx < machineAgents.length - 1}
+                        selectionMode={selectMode}
+                        selected={selectedAgentIds.has(agent.id)}
+                      />
+                    );
+                  })}
+                </div>
+              </>
             )}
             {showCreateAgent ? (
               <CreateAgentDialog

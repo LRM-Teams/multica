@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"sort"
 	"time"
 
@@ -513,27 +512,99 @@ func (s *HonorService) GetPublicWall(ctx context.Context, user db.User) (HonorPu
 }
 
 func (s *HonorService) BuildSnapshots(ctx context.Context, userIDs []pgtype.UUID) (map[string]HonorSnapshot, error) {
+	validUserIDs := make([]pgtype.UUID, 0, len(userIDs))
+	for _, id := range userIDs {
+		if id.Valid {
+			validUserIDs = append(validUserIDs, id)
+		}
+	}
+	if len(validUserIDs) == 0 {
+		return map[string]HonorSnapshot{}, nil
+	}
+
+	honors, err := s.Queries.ListUserHonorByUserIDs(ctx, validUserIDs)
+	if err != nil {
+		return nil, err
+	}
+	unlocks, err := s.Queries.ListUserHonorUnlocksByUserIDs(ctx, validUserIDs)
+	if err != nil {
+		return nil, err
+	}
+	styleDefs, err := s.Queries.ListHonorNameStyleDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	badgeDefs, err := s.Queries.ListHonorBadgeDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return buildHonorSnapshots(validUserIDs, honors, unlocks, styleDefs, badgeDefs), nil
+}
+
+func buildHonorSnapshots(
+	userIDs []pgtype.UUID,
+	honors []db.UserHonor,
+	unlocks []db.UserHonorUnlock,
+	styleDefs []db.HonorNameStyleDef,
+	badgeDefs []db.HonorBadgeDef,
+) map[string]HonorSnapshot {
+	honorByUser := make(map[string]db.UserHonor, len(honors))
+	for _, honor := range honors {
+		honorByUser[util.UUIDToString(honor.UserID)] = honor
+	}
+	unlocksByUser := make(map[string][]db.UserHonorUnlock)
+	for _, unlock := range unlocks {
+		userID := util.UUIDToString(unlock.UserID)
+		unlocksByUser[userID] = append(unlocksByUser[userID], unlock)
+	}
+	styleRank := make(map[string]int32, len(styleDefs))
+	for _, def := range styleDefs {
+		styleRank[def.ID] = def.SortRank
+	}
+	badgeByID := make(map[string]db.HonorBadgeDef, len(badgeDefs))
+	for _, def := range badgeDefs {
+		badgeByID[def.ID] = def
+	}
+
 	out := make(map[string]HonorSnapshot, len(userIDs))
 	for _, id := range userIDs {
-		if !id.Valid {
-			continue
+		userID := util.UUIDToString(id)
+		honor, hasHonor := honorByUser[userID]
+		level := 1
+		if hasHonor {
+			level = int(honor.Level)
 		}
-		user, err := s.Queries.GetUser(ctx, id)
-		if err != nil {
-			slog.Warn("honor snapshot: user missing", "user_id", util.UUIDToString(id), "error", err)
-			continue
+		nameStyle := "default"
+		bestStyleRank := int32(-1)
+		var bestBadge *HonorBadgeView
+		bestBadgeRank := int32(-1)
+		for _, unlock := range unlocksByUser[userID] {
+			switch unlock.UnlockKind {
+			case "style":
+				if rank, ok := styleRank[unlock.DefID]; ok && rank > bestStyleRank {
+					bestStyleRank = rank
+					nameStyle = unlock.DefID
+				}
+			case "badge":
+				if def, ok := badgeByID[unlock.DefID]; ok && def.SortRank > bestBadgeRank {
+					bestBadgeRank = def.SortRank
+					bestBadge = honorBadgeViewFromDef(def)
+				}
+			}
 		}
-		if err := s.EnsureUserHonor(ctx, user); err != nil {
-			slog.Warn("honor snapshot: ensure failed", "user_id", util.UUIDToString(id), "error", err)
-			continue
+		if hasHonor && honor.EquippedBadgeID.Valid {
+			if def, ok := badgeByID[honor.EquippedBadgeID.String]; ok {
+				bestBadge = honorBadgeViewFromDef(def)
+			}
 		}
-		snap, err := s.buildSnapshot(ctx, id)
-		if err != nil {
-			continue
+		out[userID] = HonorSnapshot{
+			Level:     level,
+			NameStyle: nameStyle,
+			Badge:     bestBadge,
 		}
-		out[util.UUIDToString(id)] = snap
 	}
-	return out, nil
+	return out
 }
 
 func honorBadgeViewFromDef(def db.HonorBadgeDef) *HonorBadgeView {

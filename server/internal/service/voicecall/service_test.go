@@ -689,7 +689,7 @@ func TestServiceActivateDuplexSkipsProviderConnectAndStop(t *testing.T) {
 		t.Fatalf("prepare call: %v", err)
 	}
 
-	session, err := service.ActivateDuplex(context.Background(), AnswerInput{
+	activation, err := service.ActivateDuplex(context.Background(), AnswerInput{
 		WorkspaceID: "workspace-1",
 		UserID:      "member-1",
 		CallID:      "call-1",
@@ -697,8 +697,11 @@ func TestServiceActivateDuplexSkipsProviderConnectAndStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activate duplex: %v", err)
 	}
-	if session.Status != StatusActive || session.ConnectedAt == nil {
-		t.Fatalf("session = %+v, want active with connected_at", session)
+	if activation.Session.Status != StatusActive || activation.Session.ConnectedAt == nil {
+		t.Fatalf("session = %+v, want active with connected_at", activation.Session)
+	}
+	if activation.WelcomeMessage != "你好，我是贝克汉姆。" {
+		t.Fatalf("welcome message = %q", activation.WelcomeMessage)
 	}
 	if !reflect.DeepEqual(deps.order, []string{
 		"authorize",
@@ -706,6 +709,7 @@ func TestServiceActivateDuplexSkipsProviderConnectAndStop(t *testing.T) {
 		"provider_prepare",
 		"get",
 		"authorize",
+		"context",
 		"provider_start_claim",
 		"client_answer",
 	}) {

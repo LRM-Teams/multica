@@ -363,7 +363,6 @@ export function CreateAgentDialog({
               selectedRuntimeId={effectiveRuntimeId}
               onSelect={setSelectedRuntimeId}
               label={t(($) => $.create_dialog.runtime_label)}
-              getItemLabel={(runtime) => runtime.name}
             />
 
             <ModelDropdown

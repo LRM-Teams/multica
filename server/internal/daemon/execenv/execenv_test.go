@@ -4132,7 +4132,7 @@ func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
 		{
 			name: "chat_no_metadata_section",
 			ctx: TaskContextForEnv{
-				ChatSessionID: "chat-md-1",
+				ChannelID: "channel-md-1",
 			},
 			provider: "claude",
 			filename: "CLAUDE.md",

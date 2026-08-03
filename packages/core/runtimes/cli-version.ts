@@ -72,3 +72,15 @@ export function readRuntimeCliVersion(metadata: Record<string, unknown> | undefi
   const v = metadata?.cli_version;
   return typeof v === "string" ? v : "";
 }
+
+/**
+ * Frontend mirror of server cli.IsNewerVersion: true when candidate is a
+ * strictly newer stable three-part semver than current. Used to gate upgrade
+ * buttons so equal/older/stale targets never light "upgrade".
+ */
+export function isNewerCliVersion(candidate: string | null | undefined, current: string | null | undefined): boolean {
+  const c = parseSemver(candidate ?? "");
+  const cur = parseSemver(current ?? "");
+  if (!c || !cur) return false;
+  return lessThan(cur, c);
+}

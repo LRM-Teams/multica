@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ResearchClarificationQuestion } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -32,6 +32,8 @@ export function ResearchClarificationCard({
     return init;
   });
   const [localError, setLocalError] = useState<string | null>(null);
+  const [invalidFieldId, setInvalidFieldId] = useState<string | null>(null);
+  const fieldRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
 
   const resolved = resolution.status !== "pending";
   const interactive = !resolved && !pending;
@@ -40,6 +42,7 @@ export function ResearchClarificationCard({
 
   const selectedOptionId =
     resolution.status === "answered" ? resolution.optionId : undefined;
+  const localErrorId = `research-clarification-error-${question.question_id}`;
 
   const onFormSubmit = () => {
     if (!interactive) return;
@@ -47,18 +50,30 @@ export function ResearchClarificationCard({
     for (const field of question.fields) {
       const value = (draft[field.id] ?? "").trim();
       if (field.required && !value) {
+        setInvalidFieldId(field.id);
         setLocalError(t(($) => $.clarification.required_fields));
+        fieldRefs.current[field.id]?.focus();
         return;
       }
       values[field.id] = value;
     }
     const hasAny = Object.values(values).some((v) => v.trim());
     if (!hasAny) {
+      setInvalidFieldId(null);
       setLocalError(t(($) => $.clarification.required_fields));
       return;
     }
+    setInvalidFieldId(null);
     setLocalError(null);
     onSubmitForm?.(values);
+  };
+
+  const updateDraft = (fieldId: string, value: string) => {
+    setDraft((prev) => ({ ...prev, [fieldId]: value }));
+    if (invalidFieldId === fieldId) {
+      setInvalidFieldId(null);
+      setLocalError(null);
+    }
   };
 
   return (
@@ -75,41 +90,54 @@ export function ResearchClarificationCard({
 
       {isForm ? (
         <div className="flex w-full flex-col gap-2" data-testid="research-clarification-form">
-          {question.fields.map((field) => (
-            <label key={field.id} className="flex w-full flex-col gap-1">
-              <span className="text-xs font-medium text-foreground/90">
-                {field.label}
-                {field.required ? (
-                  <span className="text-destructive" aria-hidden>
-                    {" "}
-                    *
-                  </span>
-                ) : null}
-              </span>
-              {field.type === "textarea" ? (
-                <Textarea
-                  value={draft[field.id] ?? ""}
-                  disabled={!interactive}
-                  placeholder={field.placeholder}
-                  rows={3}
-                  className="w-full min-h-[4.5rem] resize-y text-sm"
-                  onChange={(e) =>
-                    setDraft((prev) => ({ ...prev, [field.id]: e.target.value }))
-                  }
-                />
-              ) : (
-                <Input
-                  value={draft[field.id] ?? ""}
-                  disabled={!interactive}
-                  placeholder={field.placeholder}
-                  className="w-full text-sm"
-                  onChange={(e) =>
-                    setDraft((prev) => ({ ...prev, [field.id]: e.target.value }))
-                  }
-                />
-              )}
-            </label>
-          ))}
+          {question.fields.map((field) => {
+            const invalid = invalidFieldId === field.id;
+            return (
+              <label key={field.id} className="flex w-full flex-col gap-1">
+                <span className="text-xs font-medium text-foreground/90">
+                  {field.label}
+                  {field.required ? (
+                    <span className="text-destructive" aria-hidden>
+                      {" "}
+                      *
+                    </span>
+                  ) : null}
+                </span>
+                {field.type === "textarea" ? (
+                  <Textarea
+                    ref={(node) => {
+                      fieldRefs.current[field.id] = node;
+                    }}
+                    value={draft[field.id] ?? ""}
+                    disabled={!interactive}
+                    required={field.required}
+                    aria-required={field.required || undefined}
+                    aria-invalid={invalid || undefined}
+                    aria-describedby={invalid ? localErrorId : undefined}
+                    placeholder={field.placeholder}
+                    rows={3}
+                    className="w-full min-h-[4.5rem] resize-y text-sm"
+                    onChange={(e) => updateDraft(field.id, e.target.value)}
+                  />
+                ) : (
+                  <Input
+                    ref={(node) => {
+                      fieldRefs.current[field.id] = node;
+                    }}
+                    value={draft[field.id] ?? ""}
+                    disabled={!interactive}
+                    required={field.required}
+                    aria-required={field.required || undefined}
+                    aria-invalid={invalid || undefined}
+                    aria-describedby={invalid ? localErrorId : undefined}
+                    placeholder={field.placeholder}
+                    className="w-full text-sm"
+                    onChange={(e) => updateDraft(field.id, e.target.value)}
+                  />
+                )}
+              </label>
+            );
+          })}
           <div className="flex w-full flex-col gap-2 sm:flex-row">
             <Button
               type="button"
@@ -226,7 +254,12 @@ export function ResearchClarificationCard({
         </p>
       ) : null}
       {localError ? (
-        <p className="mt-1.5 text-xs text-destructive" data-testid="research-clarification-error">
+        <p
+          id={localErrorId}
+          role="alert"
+          className="mt-1.5 text-xs text-destructive"
+          data-testid="research-clarification-error"
+        >
           {localError}
         </p>
       ) : null}

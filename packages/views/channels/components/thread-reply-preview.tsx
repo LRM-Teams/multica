@@ -19,7 +19,7 @@ const PREVIEW_LIMIT = 3;
 /**
  * LRM-873 — Thread reply preview under a mainline parent (v1.1c).
  * Thin border + wash, no left accent. Spoken replies only (user|agent).
- * Top: reply count. Bottom (when >3): brand「查看全部 N 条 →」.
+ * Top: reply count. Card click opens Thread (LRM-1154: no bottom CTA row).
  */
 export function ThreadReplyPreview({
   message,
@@ -94,7 +94,6 @@ export function ThreadReplyPreview({
   if (spokenCount === 0) return null;
 
   const open = () => onOpenThread(message);
-  const showViewAll = spokenCount > PREVIEW_LIMIT;
   const countLabel =
     unreadCount > 0
       ? t(($) => $.thread.preview_count_with_new, {
@@ -102,13 +101,12 @@ export function ThreadReplyPreview({
           newCount: unreadCount,
         })
       : t(($) => $.thread.preview_count, { count: spokenCount });
-  const viewAllLabel = t(($) => $.thread.preview_view_all, { count: spokenCount });
 
   return (
     <button
       type="button"
       data-testid="thread-reply-preview"
-      aria-label={showViewAll ? viewAllLabel : t(($) => $.thread.preview_open)}
+      aria-label={countLabel}
       onClick={open}
       className={cn(
         "mt-2 w-full rounded-lg border border-border/80 bg-muted/40 px-2.5 py-2 text-left",
@@ -169,21 +167,6 @@ export function ThreadReplyPreview({
           );
         })}
       </ul>
-      {showViewAll ? (
-        <div
-          className="mt-1.5 text-[11px] font-medium text-primary"
-          data-testid="thread-reply-preview-view-all"
-        >
-          {viewAllLabel}
-        </div>
-      ) : (
-        <div
-          className="mt-1.5 text-[11px] font-medium text-primary"
-          data-testid="thread-reply-preview-open"
-        >
-          {t(($) => $.thread.preview_open)}
-        </div>
-      )}
     </button>
   );
 }

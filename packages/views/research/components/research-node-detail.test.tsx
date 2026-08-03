@@ -137,4 +137,71 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     expect(screen.getByText("Why blocked")).toBeInTheDocument();
     expect(screen.getByText("权威源不可达")).toBeInTheDocument();
   });
+
+  it("does not fall back to session sources when node has no source association", () => {
+    const unlinked: ResearchGraphNode = {
+      ...node,
+      payload: { confidence: 0.5 },
+    };
+    const sessionSources: ResearchSource[] = [
+      {
+        id: "other-a",
+        url: "https://docs.example/other-a",
+        title: "他人节点来源 A",
+        credibility_weight: 0.99,
+        excerpt: "不应出现",
+      } as ResearchSource,
+      {
+        id: "other-b",
+        url: "https://docs.example/other-b",
+        title: "他人节点来源 B",
+        credibility_weight: 0.95,
+        excerpt: "不应出现",
+      } as ResearchSource,
+      {
+        id: "other-c",
+        url: "https://docs.example/other-c",
+        title: "他人节点来源 C",
+        credibility_weight: 0.9,
+        excerpt: "不应出现",
+      } as ResearchSource,
+    ];
+    render(<ResearchNodeDetail node={unlinked} sources={sessionSources} open />);
+    expect(screen.getByText("No evidence")).toBeInTheDocument();
+    expect(screen.queryByText("他人节点来源 A")).toBeNull();
+    expect(screen.queryByText("他人节点来源 B")).toBeNull();
+    expect(screen.queryByText("他人节点来源 C")).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("still shows explicitly linked sources via source_id / source_ids", () => {
+    const multi: ResearchGraphNode = {
+      ...node,
+      payload: { source_ids: ["src2", "src3"] },
+    };
+    const sessionSources: ResearchSource[] = [
+      {
+        id: "src2",
+        url: "https://docs.example/b",
+        title: "关联来源 B",
+        credibility_weight: 0.7,
+      } as ResearchSource,
+      {
+        id: "src3",
+        url: "https://docs.example/c",
+        title: "关联来源 C",
+        credibility_weight: 0.6,
+      } as ResearchSource,
+      {
+        id: "unrelated",
+        url: "https://docs.example/x",
+        title: "无关来源",
+        credibility_weight: 0.99,
+      } as ResearchSource,
+    ];
+    render(<ResearchNodeDetail node={multi} sources={sessionSources} open />);
+    expect(screen.getByText("关联来源 B")).toBeInTheDocument();
+    expect(screen.getByText("关联来源 C")).toBeInTheDocument();
+    expect(screen.queryByText("无关来源")).toBeNull();
+  });
 });

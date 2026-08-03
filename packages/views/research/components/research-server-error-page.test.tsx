@@ -22,6 +22,9 @@ describe("ResearchServerErrorPage (LRM-833)", () => {
     render(<ResearchServerErrorPage onRetry={onRetry} />);
     expect(screen.getByTestId("research-server-error-page")).toBeTruthy();
     expect(screen.getByText("Server error")).toBeTruthy();
+    // LRM-1106 Gate: error title uses font-medium (not font-semibold).
+    expect(screen.getByText("Server error").className).toContain("font-medium");
+    expect(screen.getByText("Server error").className).not.toContain("font-semibold");
     fireEvent.click(screen.getByTestId("research-server-error-retry"));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });

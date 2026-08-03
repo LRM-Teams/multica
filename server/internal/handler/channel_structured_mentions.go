@@ -84,6 +84,10 @@ func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelRe
 	}
 	parts = appendReferenceOccurrences(parts, h.resolveBareChannelIssueReferences(ctx, ch.WorkspaceID, content, parts))
 	parts = appendReferenceOccurrences(parts, h.resolveChannelReferenceLinks(ctx, ch.WorkspaceID, content))
+	// Bare `#name` runs after the link form so an explicit composer link always
+	// wins the span it already owns (appendReferenceOccurrences keeps the first
+	// verified anchor per span).
+	parts = appendReferenceOccurrences(parts, h.resolveBareChannelReferences(ctx, ch.WorkspaceID, content))
 	return content, parts, nil
 }
 
@@ -191,56 +195,292 @@ func unescapeChannelReferenceLabel(label string) string {
 	return label
 }
 
-func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, channelID string) map[string]channelMentionCandidate {
+type channelReferenceCandidate struct {
+	ID   string
+	Name string
+}
+
+type channelReferenceOccurrence struct {
+	Candidate channelReferenceCandidate
+	Start     int
+	End       int
+}
+
+// resolveBareChannelReferences attaches durable channel IDs to bare `#name`
+// tokens in group messages (LRM-1153). The composer's picker path
+// (resolveChannelReferenceLinks) only covers text a human authored through the
+// suggestion menu; agents and hand-typed prose write the plain `#name` that
+// every reader already reads as a channel, and before this resolver those
+// occurrences carried no parts at all — so the FE's ChannelRefLink had nothing
+// to anchor and the raw `#name` shipped as prose next to correctly chipped
+// @mentions and issue refs from the very same message.
+//
+// Discovery is candidate-driven rather than regex-driven, exactly like
+// resolveBareChannelMentions: channel names are unique per workspace but may
+// contain Unicode, so matching known names (longest first) is what keeps
+// `#1973` (a PR number), `#todo` (no such channel), and a DM's synthetic name
+// from being guessed into links. The visible text stays exactly as authored.
+func (h *Handler) resolveBareChannelReferences(ctx context.Context, workspaceID, content string) []protocol.MessagePart {
+	if !strings.Contains(content, "#") {
+		return nil
+	}
+	candidates := h.channelReferenceCandidates(ctx, workspaceID)
+	if len(candidates) == 0 {
+		return nil
+	}
+	out := make([]protocol.MessagePart, 0)
+	for _, occurrence := range findBareChannelReferences(content, candidates) {
+		start, end := contentUTF16Span(content, occurrence.Start, occurrence.End)
+		out = append(out, protocol.MessagePart{
+			Type:              protocol.MessagePartTypeReference,
+			RefType:           "channel-ref",
+			RefID:             occurrence.Candidate.ID,
+			Label:             occurrence.Candidate.Name,
+			ContentStartUTF16: &start,
+			ContentEndUTF16:   &end,
+		})
+	}
+	return out
+}
+
+// channelReferenceCandidates lists the linkable group channels of a workspace
+// keyed by lowercased name. DMs are excluded for the same reason
+// resolveChannelReferenceLinks drops them (private 1:1s are not a shareable
+// target, and their names are synthetic `dm:...` keys), and archived channels
+// are excluded because a chip that navigates nowhere useful is worse than the
+// author's own plain text.
+func (h *Handler) channelReferenceCandidates(ctx context.Context, workspaceID string) map[string]channelReferenceCandidate {
 	rows, err := h.DB.Query(ctx, `
-		SELECT cm.member_type, cm.member_id,
-		       COALESCE(u.name, a.name, ''),
-		       COALESCE(NULLIF(u.display_name, ''), NULLIF(a.display_name, ''), '')
-		FROM channel_member cm
-		LEFT JOIN "user" u ON cm.member_type = 'user' AND u.id = cm.member_id
-		LEFT JOIN agent a ON cm.member_type = 'agent' AND a.id = cm.member_id
-		WHERE cm.channel_id = $1 AND cm.workspace_id = $2
-		  AND (cm.member_type = 'user' OR (cm.member_type = 'agent' AND a.archived_at IS NULL))`,
-		parseUUID(channelID), parseUUID(workspaceID))
+		SELECT id::text, name
+		FROM channel
+		WHERE workspace_id = $1 AND kind = 'group' AND archived_at IS NULL`,
+		parseUUID(workspaceID))
 	if err != nil {
 		return nil
 	}
 	defer rows.Close()
 
+	candidates := map[string]channelReferenceCandidate{}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		key := normalizeMentionCandidateLabel(name)
+		if key == "" {
+			continue
+		}
+		candidates[key] = channelReferenceCandidate{ID: id, Name: name}
+	}
+	return candidates
+}
+
+// findBareChannelReferences walks each `#` in content and takes the longest
+// candidate name that matches at that position with handle boundaries on both
+// sides, so `#pr` never steals the front of `#pr-frontend`. Code spans and text
+// already owned by a markdown link are skipped: the explicit
+// `[Label](mention://channel/<id>)` form is resolved by
+// resolveChannelReferenceLinks and must not be anchored twice.
+func findBareChannelReferences(content string, candidates map[string]channelReferenceCandidate) []channelReferenceOccurrence {
+	keys := make([]string, 0, len(candidates))
+	for key := range candidates {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return utf8.RuneCountInString(candidates[keys[i]].Name) > utf8.RuneCountInString(candidates[keys[j]].Name)
+	})
+	skipRegions := mention.FindLiteralSkipRegions(content)
+
+	out := make([]channelReferenceOccurrence, 0)
+	for start := 0; start < len(content); {
+		hash := strings.IndexByte(content[start:], '#')
+		if hash < 0 {
+			break
+		}
+		hash += start
+		if !mentionHandleBoundaryBefore(content, hash) || mention.InLiteralSkipRegion(hash, skipRegions) {
+			start = hash + 1
+			continue
+		}
+		matchEnd := hash + 1
+		for _, key := range keys {
+			candidate := candidates[key]
+			end, ok := mentionHandlePrefix(content, hash+1, candidate.Name)
+			if !ok || !mentionHandleBoundaryAfter(content, end) {
+				continue
+			}
+			if mention.IsInsideMarkdownLink(content, hash, end) {
+				continue
+			}
+			out = append(out, channelReferenceOccurrence{Candidate: candidate, Start: hash, End: end})
+			matchEnd = end
+			break
+		}
+		start = matchEnd
+	}
+	return out
+}
+
+func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, channelID string) map[string]channelMentionCandidate {
+	// Workspace-scoped candidates for group @ resolution (Raft-style):
+	// resolve workspace members/agents even when not yet in the channel.
+	// Delivery still requires membership — see undeliveredMentionsForMessage.
+	// channelID is unused for group candidate expansion (workspace scope).
+	_ = channelID
+	// Workspace members (users)
+	userRows, err := h.DB.Query(ctx, `
+		SELECT m.user_id, COALESCE(u.name, ''), COALESCE(NULLIF(u.display_name, ''), '')
+		FROM member m
+		JOIN "user" u ON u.id = m.user_id
+		WHERE m.workspace_id = $1`, parseUUID(workspaceID))
+	if err != nil {
+		return nil
+	}
+	defer userRows.Close()
+
 	candidates := map[string]channelMentionCandidate{}
 	ambiguous := map[string]bool{}
-	for rows.Next() {
-		var memberType, name, displayName string
-		var memberID pgtype.UUID
-		if err := rows.Scan(&memberType, &memberID, &name, &displayName); err != nil {
-			continue
-		}
-		mentionType := "member"
-		if memberType == "agent" {
-			mentionType = "agent"
-		}
+	add := func(mentionType, id, name, displayName string) {
 		handle := strings.TrimSpace(name)
 		if mentionType == "agent" && validateIdentityHandle(handle) != nil {
-			// Agent handles are canonical ASCII usernames. Invalid historical
-			// values deliberately remain plain text in old messages after the
-			// one-time backfill; do not retain a second mention-routing path.
-			continue
+			return
 		}
 		key := normalizeMentionCandidateLabel(handle)
 		if key == "" || key == "all" {
-			continue
+			return
 		}
-		candidate := channelMentionCandidate{Type: mentionType, ID: uuidToString(memberID), Handle: handle, Label: firstNonEmpty(displayName, name)}
+		candidate := channelMentionCandidate{Type: mentionType, ID: id, Handle: handle, Label: firstNonEmpty(displayName, name)}
 		if existing, ok := candidates[key]; ok && (existing.Type != candidate.Type || existing.ID != candidate.ID) {
 			delete(candidates, key)
 			ambiguous[key] = true
-			continue
+			return
 		}
 		if !ambiguous[key] {
 			candidates[key] = candidate
 		}
 	}
+	for userRows.Next() {
+		var userID pgtype.UUID
+		var name, displayName string
+		if err := userRows.Scan(&userID, &name, &displayName); err != nil {
+			continue
+		}
+		add("member", uuidToString(userID), name, displayName)
+	}
+
+	// Workspace agents (non-archived)
+	agentRows, err := h.DB.Query(ctx, `
+		SELECT id, COALESCE(name, ''), COALESCE(NULLIF(display_name, ''), '')
+		FROM agent
+		WHERE workspace_id = $1 AND archived_at IS NULL`, parseUUID(workspaceID))
+	if err != nil {
+		return candidates
+	}
+	defer agentRows.Close()
+	for agentRows.Next() {
+		var agentID pgtype.UUID
+		var name, displayName string
+		if err := agentRows.Scan(&agentID, &name, &displayName); err != nil {
+			continue
+		}
+		add("agent", uuidToString(agentID), name, displayName)
+	}
 	return candidates
+}
+
+// channelMemberMentionIDs returns user and agent IDs that are already members
+// of the channel (delivery-eligible).
+func (h *Handler) channelMemberMentionIDs(ctx context.Context, workspaceID, channelID string) (users, agents map[string]bool) {
+	users = map[string]bool{}
+	agents = map[string]bool{}
+	rows, err := h.DB.Query(ctx, `
+		SELECT member_type, member_id
+		FROM channel_member
+		WHERE channel_id = $1 AND workspace_id = $2`,
+		parseUUID(channelID), parseUUID(workspaceID))
+	if err != nil {
+		return users, agents
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var memberType string
+		var memberID pgtype.UUID
+		if err := rows.Scan(&memberType, &memberID); err != nil {
+			continue
+		}
+		id := uuidToString(memberID)
+		switch memberType {
+		case "user":
+			users[id] = true
+		case "agent":
+			agents[id] = true
+		}
+	}
+	return users, agents
+}
+
+// UndeliveredMention is returned on message create when a structured @ targets
+// a workspace member/agent who is not currently in the channel. Delivery is
+// withheld until the sender invites (or a future notify path). Aligns with
+// Raft mention undelivered / invite — no silent auto-add.
+type UndeliveredMention struct {
+	Type    string   `json:"type"` // member | agent
+	ID      string   `json:"id"`
+	Handle  string   `json:"handle,omitempty"`
+	Label   string   `json:"label,omitempty"`
+	Reason  string   `json:"reason"`  // not_channel_member
+	Actions []string `json:"actions"` // invite (notify reserved)
+}
+
+func (h *Handler) undeliveredMentionsForMessage(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) []UndeliveredMention {
+	if ch.Kind != "group" {
+		return nil
+	}
+	mentions := util.ParseMentionsFromContentAndParts(content, parts)
+	if len(mentions) == 0 {
+		return nil
+	}
+	memberUsers, memberAgents := h.channelMemberMentionIDs(ctx, ch.WorkspaceID, ch.ID)
+	// Prefer handles from workspace candidates when available
+	candidates := h.channelMentionCandidates(ctx, ch.WorkspaceID, ch.ID)
+	byID := map[string]channelMentionCandidate{}
+	for _, c := range candidates {
+		byID[c.Type+":"+c.ID] = c
+	}
+	seen := map[string]bool{}
+	var out []UndeliveredMention
+	for _, m := range mentions {
+		if m.Type != "member" && m.Type != "agent" {
+			continue
+		}
+		key := m.Type + ":" + m.ID
+		if seen[key] {
+			continue
+		}
+		inChannel := false
+		if m.Type == "member" {
+			inChannel = memberUsers[m.ID]
+		} else {
+			inChannel = memberAgents[m.ID]
+		}
+		if inChannel {
+			continue
+		}
+		seen[key] = true
+		u := UndeliveredMention{
+			Type:    m.Type,
+			ID:      m.ID,
+			Reason:  "not_channel_member",
+			Actions: []string{"invite"},
+		}
+		if c, ok := byID[key]; ok {
+			u.Handle = c.Handle
+			u.Label = c.Label
+		}
+		out = append(out, u)
+	}
+	return out
 }
 
 func (h *Handler) resolveBareChannelMentions(content string, parts []protocol.MessagePart, candidates map[string]channelMentionCandidate) []protocol.MessagePart {
@@ -380,4 +620,31 @@ func appendReferenceOccurrences(parts []protocol.MessagePart, references []proto
 		}
 	}
 	return out
+}
+
+// validateDMMentionMembership rejects @ of non-participants on DM surfaces
+// (private). Group channels allow workspace-scoped resolution with undelivered
+// mentions instead.
+func (h *Handler) validateDMMentionMembership(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) error {
+	if ch.Kind != "dm" {
+		return nil
+	}
+	mentions := util.ParseMentionsFromContentAndParts(content, parts)
+	if len(mentions) == 0 {
+		return nil
+	}
+	memberUsers, memberAgents := h.channelMemberMentionIDs(ctx, ch.WorkspaceID, ch.ID)
+	for _, m := range mentions {
+		switch m.Type {
+		case "member":
+			if !memberUsers[m.ID] {
+				return fmt.Errorf("cannot mention non-participants in a DM")
+			}
+		case "agent":
+			if !memberAgents[m.ID] {
+				return fmt.Errorf("cannot mention non-participants in a DM")
+			}
+		}
+	}
+	return nil
 }

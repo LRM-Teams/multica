@@ -40,7 +40,10 @@ import { api } from "@multica/core/api";
 import { useConfigStore } from "@multica/core/config";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
-import { attachmentIdFromDownloadURL } from "@multica/core/types/attachment-url";
+import {
+  attachmentDownloadPath,
+  attachmentIdFromRef,
+} from "@multica/core/types/attachment-url";
 import { useT } from "../i18n";
 import { useNavigation } from "../navigation";
 import { useAttachmentDownloadResolver } from "./attachment-download-context";
@@ -140,6 +143,12 @@ function normalize(
     };
   }
   const record = input.url ? resolve(input.url) : undefined;
+  // LRM-1130: `attachment:<uuid>` is the same id as the stable download
+  // path — rewrite before falling through so <img> never gets a bare
+  // scheme that the browser can't load.
+  const idFromRef = input.url ? attachmentIdFromRef(input.url) : undefined;
+  const fallbackUrl =
+    !record && idFromRef ? attachmentDownloadPath(idFromRef) : input.url;
   return {
     filename: input.filename || record?.filename || "",
     contentType: input.contentType || record?.content_type || "",
@@ -165,16 +174,17 @@ function normalize(
     // uploaded image URL stayed site-relative and Electron's renderer
     // origin (file://) couldn't load it.
     url: absolutizeMediaURL(
-      record ? pickInlineMediaURL(record, input.url, cdnDomain) : input.url,
+      record ? pickInlineMediaURL(record, fallbackUrl, cdnDomain) : fallbackUrl,
     ),
     // #831: fall back to the id embedded in a stable
-    // `/api/attachments/<id>/download` URL. `resolve()` only finds records
-    // present in the surrounding `attachments` prop, so a URL pasted across
-    // comments (or a surface that passes no attachments at all) used to yield
-    // `undefined` here — even though the id was sitting in the URL. That lost
-    // id is what silently downgraded markdown/txt previews to a download and
+    // `/api/attachments/<id>/download` URL (or `attachment:<uuid>`).
+    // `resolve()` only finds records present in the surrounding
+    // `attachments` prop, so a URL pasted across comments (or a surface
+    // that passes no attachments at all) used to yield `undefined` here
+    // — even though the id was sitting in the URL. That lost id is what
+    // silently downgraded markdown/txt previews to a download and
     // disabled the card's preview affordance.
-    attachmentId: record?.id ?? attachmentIdFromDownloadURL(input.url),
+    attachmentId: record?.id ?? idFromRef,
     sizeBytes: record?.size_bytes,
     record,
     uploading: !!input.uploading,

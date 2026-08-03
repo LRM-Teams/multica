@@ -8,12 +8,13 @@
  * Known open gaps use `it.fails` so CI stays green until the owning PR flips them to `it`.
  * Do not edit production components from this suite — avoids file conflicts with parallel knives.
  *
- * Gate status (dev):
+ * Gate status (dev @22d89477b+):
  * - 1100 overlay Esc/a11y — hard
  * - 1104 goal-chip dedupe (#1949) + no max-w-3xl shell (#1962) — hard
- * - 1105 helpers (#1952) — hard; canvas wiring `it.fails` until after 1091
+ * - 1105 helpers (#1952) + role=application (1091) — hard; Home/End key handlers still `it.fails` (slice3)
  * - 1109 meta-menu md: (#1947) — hard; template chip-row sm: still `it.fails`
- * - 1091 planar / action — still `it.fails`
+ * - 1091 planar layout + arrow/Enter/Esc/F10 + retry status gate — hard;
+ *   dedicated --branch-* tokens + destructive confirm/undo still `it.fails`
  */
 // @vitest-environment jsdom
 import fs from "node:fs";
@@ -104,6 +105,10 @@ vi.mock("../../i18n/use-t", () => ({
 
 vi.mock("../../i18n/use-time-ago", () => ({
   useTimeAgo: () => (dateStr: string) => `ago:${dateStr}`,
+}));
+
+vi.mock("../../i18n/time", () => ({
+  Time: ({ value }: { value: string }) => <time data-testid="list-time">{value}</time>,
 }));
 
 vi.mock("../../navigation/app-link", () => ({
@@ -221,38 +226,45 @@ describe(`Smoke · list duplicate info (${SMOKE_ISSUES.listDuplicate})`, () => {
     expect(titleEl?.textContent?.length).toBeGreaterThan(0);
   });
 
-  it(`${SMOKE_ISSUES.listDuplicate}: title that is a prefix of goal still hides chip; distinct goal keeps chip`, () => {
-    const { unmount } = render(
-      <ResearchSessionRow
-        session={session({
-          title: "如何开发一个网页游戏",
-          goal: "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员",
-        })}
-        href="/research/s1"
-      />,
-    );
-    expect(
-      screen.queryByTestId("research-session-goal-chip"),
-      failHint(SMOKE_ISSUES.listDuplicate, "prefix-redundant chip should be hidden"),
-    ).toBeNull();
-    unmount();
+  it(
+    `${SMOKE_ISSUES.listDuplicate}: LRM-1106 D2 — inline goal chip never renders (goal lives in ⋯ menu)`,
+    () => {
+      const { unmount } = render(
+        <ResearchSessionRow
+          session={session({
+            title: "如何开发一个网页游戏",
+            goal: "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员",
+          })}
+          href="/research/s1"
+        />,
+      );
+      expect(
+        screen.queryByTestId("research-session-goal-chip"),
+        failHint(SMOKE_ISSUES.listDuplicate, "prefix-redundant chip should be hidden"),
+      ).toBeNull();
+      unmount();
 
-    render(
-      <ResearchSessionRow
-        session={session({
-          title: "Alpha market map",
-          goal: "Map the alpha market across regions with pricing and share",
-        })}
-        href="/research/s1"
-      />,
-    );
-    expect(screen.getByTestId("research-session-goal-chip")).toBeTruthy();
-  });
+      render(
+        <ResearchSessionRow
+          session={session({
+            title: "Alpha market map",
+            goal: "Map the alpha market across regions with pricing and share",
+          })}
+          href="/research/s1"
+        />,
+      );
+      expect(
+        screen.queryByTestId("research-session-goal-chip"),
+        failHint(SMOKE_ISSUES.listDuplicate, "distinct goal must not revive inline chip under D2"),
+      ).toBeNull();
+    },
+  );
 
-  // LRM-1104 #1962: list shell no longer uses max-w-3xl (width owned by LRM-1106).
-  it(`${SMOKE_ISSUES.listDuplicate}: research list content has no max-w-3xl shell`, () => {
+  // LRM-1104 #1962 + LRM-1106: no max-w-3xl shell; workbench owns max-w-[1240px].
+  it(`${SMOKE_ISSUES.listDuplicate}: research list workbench has max-w-[1240px] and no max-w-3xl shell`, () => {
     const listSrc = stripComments(readResearchSource("components/research-list-page.tsx"));
     const filterSrc = stripComments(readResearchSource("components/research-session-filter-bar.tsx"));
+    const heroSrc = stripComments(readResearchSource("components/research-home-hero.tsx"));
     expect(
       !/\bmax-w-3xl\b/.test(listSrc),
       failHint(SMOKE_ISSUES.listDuplicate, "research-list-page.tsx still has max-w-3xl shell"),
@@ -260,6 +272,14 @@ describe(`Smoke · list duplicate info (${SMOKE_ISSUES.listDuplicate})`, () => {
     expect(
       !/\bmax-w-3xl\b/.test(filterSrc),
       failHint(SMOKE_ISSUES.listDuplicate, "research-session-filter-bar.tsx still has max-w-3xl"),
+    ).toBe(true);
+    expect(
+      !/\bmax-w-3xl\b/.test(heroSrc),
+      failHint(SMOKE_ISSUES.listDuplicate, "hero still pins max-w-3xl"),
+    ).toBe(true);
+    expect(
+      /\bmax-w-\[1240px\]\b/.test(listSrc) || listSrc.includes("RESEARCH_LIST_WORKBENCH"),
+      failHint(SMOKE_ISSUES.listDuplicate, "list page missing workbench width"),
     ).toBe(true);
   });
 });
@@ -293,7 +313,7 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
     expect(isMobileViewport(360)).toBe(true);
   });
 
-  it(`${SMOKE_ISSUES.breakpoints}: baseline inventory — template chip-row still mixes sm: (dead-zone risk)`, () => {
+  it(`${SMOKE_ISSUES.breakpoints}: baseline inventory — template chip-row uses md: (768)`, () => {
     // LRM-1109 #1947: meta-menu no longer pairs useIsMobile with sm: classes.
     const meta = readResearchSource("components/research-session-meta-menu.tsx");
     expect(meta.includes("useIsMobile")).toBe(true);
@@ -305,13 +325,13 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
       ),
     ).toBe(false);
 
-    // LRM-1092: composer chip row still switches layout at sm: (640) — tracked below.
+    // LRM-1106: composer chip row aligns with md / 768.
     const templates = readResearchSource("components/research-template-chip-row.tsx");
     expect(
-      hasTailwindSmClass(templates),
+      /\bmd:/.test(templates) && !hasTailwindSmClass(templates),
       failHint(
         SMOKE_ISSUES.breakpoints,
-        "template-chip-row still switches layout at sm: (640)",
+        "template-chip-row should switch layout at md: (768)",
       ),
     ).toBe(true);
   });
@@ -327,7 +347,7 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
     ).toBe(true);
   });
 
-  it.fails(
+  it(
     `${SMOKE_ISSUES.breakpoints}: template chip-row layout switch should be md: (align with 768)`,
     () => {
       const templates = readResearchSource("components/research-template-chip-row.tsx");
@@ -466,7 +486,8 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
     expect(crossLaneNeighbor(nodes, edges, "fork", 1)).toBe("a");
   });
 
-  it.fails(
+  // LRM-1091 planar canvas shipped role=application + name — hard gate now.
+  it(
     `${SMOKE_ISSUES.canvasKeyboard}: canvas root declares role=application with accessible name (after 1091 wire)`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
@@ -481,23 +502,16 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
     },
   );
 
+  // Arrow/Enter/Escape already hard-gated via planar map below. Home/End wait on 1105 slice3.
+  // Match `e.key === "Home"|"End"` only — bare "End" false-positives from isLogicEndNode / onMoveEnd.
   it.fails(
-    `${SMOKE_ISSUES.canvasKeyboard}: canvas wires Arrow/Enter/Escape/Home/End keydown handlers (after 1091 wire)`,
+    `${SMOKE_ISSUES.canvasKeyboard}: canvas wires Home/End keydown handlers (1105 slice3)`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
-      for (const key of [
-        "ArrowLeft",
-        "ArrowRight",
-        "ArrowUp",
-        "ArrowDown",
-        "Enter",
-        "Escape",
-        "Home",
-        "End",
-      ]) {
+      for (const key of ["Home", "End"]) {
         expect(
-          canvasSrc.includes(key),
-          failHint(SMOKE_ISSUES.canvasKeyboard, `research-canvas.tsx missing ${key} handling`),
+          new RegExp(String.raw`e\.key\s*===\s*["']${key}["']`).test(canvasSrc),
+          failHint(SMOKE_ISSUES.canvasKeyboard, `research-canvas.tsx missing e.key === "${key}"`),
         ).toBe(true);
       }
     },
@@ -639,7 +653,8 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     expect(BRANCH_VS_STATUS_COLOR_CONTRACT.branchTokens.length).toBeGreaterThan(0);
   });
 
-  it.fails(
+  // LRM-1091 planar layout ships — hard gate now.
+  it(
     `${SMOKE_ISSUES.canvasPlanar}: 30-node layout has no card AABB overlap / pierce`,
     () => {
       const { nodes, edges } = thirtyNodeFixture();
@@ -664,29 +679,32 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     },
   );
 
+  // #1956: leads_to uses --brand (not status success/warning/destructive) — hard gate.
+  it(`${SMOKE_ISSUES.canvasPlanar}: leads_to edge stroke must not reuse status accent tokens`, () => {
+    const branchStroke = visualForEdgeType("leads_to").stroke;
+    const statusAccents = [
+      visualForNodeType("finding").accentBarClass,
+      visualForNodeType("conflict").accentBarClass,
+      visualForNodeType("dead_end").accentBarClass,
+    ];
+    for (const accent of statusAccents) {
+      expect(
+        branchStroke.includes("success") ||
+          branchStroke.includes("warning") ||
+          branchStroke.includes("destructive") ||
+          accent.includes(branchStroke.replace(/var\(|\)/g, "")),
+        failHint(
+          SMOKE_ISSUES.canvasPlanar,
+          `branch stroke ${branchStroke} collides with status accent ${accent}`,
+        ),
+      ).toBe(false);
+    }
+  });
+
+  // Dedicated --branch-* chrome still missing on graph-node after #1956.
   it.fails(
-    `${SMOKE_ISSUES.canvasPlanar}: branch/edge accent tokens ≠ status shell tokens`,
+    `${SMOKE_ISSUES.canvasPlanar}: research-graph-node exposes dedicated --branch-* tokens`,
     () => {
-      const branchStroke = visualForEdgeType("leads_to").stroke;
-      const statusAccents = [
-        visualForNodeType("finding").accentBarClass,
-        visualForNodeType("conflict").accentBarClass,
-        visualForNodeType("dead_end").accentBarClass,
-      ];
-      // Branch stroke must not literally reuse a status accent token class/var.
-      for (const accent of statusAccents) {
-        expect(
-          branchStroke.includes("success") ||
-            branchStroke.includes("warning") ||
-            branchStroke.includes("destructive") ||
-            accent.includes(branchStroke.replace(/var\(|\)/g, "")),
-          failHint(
-            SMOKE_ISSUES.canvasPlanar,
-            `branch stroke ${branchStroke} collides with status accent ${accent}`,
-          ),
-        ).toBe(false);
-      }
-      // Explicit SoT tokens must exist once 1091 wires branch chrome.
       const graphNodeSrc = readResearchSource("components/research-graph-node.tsx");
       expect(
         BRANCH_VS_STATUS_COLOR_CONTRACT.branchTokens.some((t) => graphNodeSrc.includes(t)),
@@ -698,19 +716,32 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     },
   );
 
-  it.fails(
+  // LRM-1091 planar keyboard wiring shipped — hard gate now.
+  // LRM-1105 slice3: key literals live in canvas-keyboard-nav; canvas only wires resolveCanvasKeyEvent.
+  it(
     `${SMOKE_ISSUES.canvasPlanar}: canvas wires planar keyboard map (topo ↑↓, branch ←→, Enter/Esc, Shift+F10)`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
+      const navSrc = readResearchSource("lib/canvas-keyboard-nav.ts");
+      expect(
+        canvasSrc.includes("resolveCanvasKeyEvent"),
+        failHint(
+          SMOKE_ISSUES.canvasPlanar,
+          "research-canvas.tsx missing resolveCanvasKeyEvent wiring",
+        ),
+      ).toBe(true);
       for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "Escape"]) {
         expect(
-          canvasSrc.includes(key),
-          failHint(SMOKE_ISSUES.canvasPlanar, `research-canvas.tsx missing ${key}`),
+          navSrc.includes(key),
+          failHint(SMOKE_ISSUES.canvasPlanar, `canvas-keyboard-nav.ts missing ${key}`),
         ).toBe(true);
       }
       expect(
-        /Shift\+F10|shiftKey.*F10|F10/.test(canvasSrc),
-        failHint(SMOKE_ISSUES.canvasPlanar, "research-canvas.tsx missing Shift+F10 context menu"),
+        /Shift\+F10|shiftKey.*F10|F10/.test(navSrc),
+        failHint(
+          SMOKE_ISSUES.canvasPlanar,
+          "canvas-keyboard-nav.ts missing Shift+F10 context menu",
+        ),
       ).toBe(true);
       expect(
         canvasSrc.includes("topology") || canvasSrc.includes("branch"),
@@ -719,42 +750,47 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     },
   );
 
-  it.fails(
-    `${SMOKE_ISSUES.canvasPlanar}: ring actions gated by status; destructive path has confirm/undo hook`,
-    () => {
-      const active = ringActionsForNode({
-        id: "a",
-        session_id: "s1",
-        title: "Active probe",
-        summary: "",
-        status: "active",
-        node_type: "probe",
-        actor_agent_id: null,
-        payload: {},
-        created_at: "2026-07-31T00:00:00Z",
-        updated_at: "2026-07-31T00:00:00Z",
-      });
-      const failed = ringActionsForNode({
-        id: "b",
-        session_id: "s1",
-        title: "Failed",
-        summary: "",
-        status: "failed",
-        node_type: "probe",
-        actor_agent_id: null,
-        payload: {},
-        created_at: "2026-07-31T00:00:00Z",
-        updated_at: "2026-07-31T00:00:00Z",
-      });
-      expect(
-        active.find((a) => a.id === "retry")?.disabled,
-        failHint(SMOKE_ISSUES.canvasPlanar, "active probe should not expose live retry"),
-      ).toBe(true);
-      expect(
-        failed.find((a) => a.id === "retry")?.disabled,
-        failHint(SMOKE_ISSUES.canvasPlanar, "failed probe should enable retry"),
-      ).toBeFalsy();
+  // #1956 / LRM-981: retry gated by failed|error|dead_end|refuted — hard gate.
+  it(`${SMOKE_ISSUES.canvasPlanar}: ring retry gated by node status`, () => {
+    const active = ringActionsForNode({
+      id: "a",
+      session_id: "s1",
+      title: "Active probe",
+      summary: "",
+      status: "active",
+      node_type: "probe",
+      actor_agent_id: null,
+      payload: {},
+      created_at: "2026-07-31T00:00:00Z",
+      updated_at: "2026-07-31T00:00:00Z",
+    });
+    const failed = ringActionsForNode({
+      id: "b",
+      session_id: "s1",
+      title: "Failed",
+      summary: "",
+      status: "failed",
+      node_type: "probe",
+      actor_agent_id: null,
+      payload: {},
+      created_at: "2026-07-31T00:00:00Z",
+      updated_at: "2026-07-31T00:00:00Z",
+    });
+    expect(
+      active.find((a) => a.id === "retry")?.disabled,
+      failHint(SMOKE_ISSUES.canvasPlanar, "active probe should not expose live retry"),
+    ).toBe(true);
+    expect(
+      failed.find((a) => a.id === "retry")?.disabled,
+      failHint(SMOKE_ISSUES.canvasPlanar, "failed probe should enable retry"),
+    ).toBeFalsy();
+    expect(ACTION_VISIBILITY_CONTRACT.destructiveActionIds.length).toBeGreaterThan(0);
+  });
 
+  // Destructive confirm/undo hook still missing on ring/canvas after #1956.
+  it.fails(
+    `${SMOKE_ISSUES.canvasPlanar}: destructive ring/canvas path has confirm/undo hook`,
+    () => {
       const ringSrc = readResearchSource("lib/node-action-ring.ts");
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
       const hasConfirmOrUndo =
@@ -767,7 +803,6 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
           "destructive canvas actions missing confirm or undo hook",
         ),
       ).toBe(true);
-      expect(ACTION_VISIBILITY_CONTRACT.destructiveActionIds.length).toBeGreaterThan(0);
     },
   );
 });

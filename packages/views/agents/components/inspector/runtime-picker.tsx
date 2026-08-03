@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { Cloud, Monitor } from "lucide-react";
-import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import type { AgentRuntime, MemberWithUser } from "@multica/core/types";
 import { ActorAvatar } from "../../../common/actor-avatar";
 import {
@@ -10,9 +9,13 @@ import {
   PropertyPicker,
 } from "../../../issues/components/pickers";
 import { ProviderLogo } from "../../../runtimes/components/provider-logo";
-import { runtimeMachineKey, splitRuntimeName } from "../../../runtimes/components/runtime-machines";
+import { runtimeMachineKey } from "../../../runtimes/components/runtime-machines";
 import { CHIP_CLASS } from "./chip";
 import { useT } from "../../../i18n";
+import {
+  runtimePickerBrandLabel,
+  runtimePickerHostSubtitle,
+} from "../runtime-picker-labels";
 
 /**
  * Inline runtime/code-agent picker for the agent inspector.
@@ -41,9 +44,6 @@ export function RuntimePicker({
 
   const selected = runtimes.find((r) => r.id === value) ?? null;
   const Icon = selected?.runtime_mode === "cloud" ? Cloud : Monitor;
-  // Computed once per render, outside JSX, so react:doctor's
-  // hydration-mismatch rule doesn't flag a fresh Date.now() per row.
-  const now = Date.now();
   // Lock computer: only peers that share the bound machine key are options.
   // When the bound runtime is missing from `runtimes` (deleted / not loaded),
   // boundMachineKey is null — fall back to the full list so the user can
@@ -73,40 +73,25 @@ export function RuntimePicker({
     });
   }, [sameComputerRuntimes, currentUserId]);
 
+  const brandLabel = selected
+    ? runtimePickerBrandLabel(selected)
+    : t(($) => $.pickers.runtime_none);
+
   if (!canEdit) {
-    const isOnline = !!selected && deriveRuntimeHealth(selected, now) === "online";
     return (
       <span className="inline-flex min-w-0 items-center gap-1.5 px-1.5 py-0.5 text-xs text-muted-foreground">
         <Icon className="h-3 w-3 shrink-0" />
-        <span className="min-w-0 truncate font-mono">
-          {selected ? splitRuntimeName(selected.name).base : t(($) => $.pickers.runtime_none)}
-        </span>
-        {selected && (
-          <span
-            className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${
-              isOnline ? "bg-success" : "bg-muted-foreground/40"
-            }`}
-          />
-        )}
+        <span className="min-w-0 truncate">{brandLabel}</span>
       </span>
     );
   }
-  // Code-agent chip drops the daemon-reported hostname parenthetical (e.g.
-  // "Cursor (s144)" → "Cursor") — that machine identity now lives on its own
-  // Computer row, so keeping it here duplicated the same hostname twice.
-  const triggerLabel = selected
-    ? splitRuntimeName(selected.name).base
-    : t(($) => $.pickers.runtime_none);
-  const isOnline = !!selected && deriveRuntimeHealth(selected, now) === "online";
+
   const triggerTitle = selected
-    ? t(($) => $.pickers.runtime_tooltip, {
-        name: selected.name,
-        status: isOnline ? t(($) => $.pickers.runtime_online) : t(($) => $.pickers.runtime_offline),
-      })
+    ? brandLabel
     : t(($) => $.pickers.runtime_tooltip_none);
 
   const getOwner = (id: string | null) =>
-    id ? members.find((m) => m.user_id === id) ?? null : null;
+    id ? (members.find((m) => m.user_id === id) ?? null) : null;
 
   const select = async (id: string) => {
     setOpen(false);
@@ -129,15 +114,15 @@ export function RuntimePicker({
       }
       trigger={
         <>
-          <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 truncate font-mono">{triggerLabel}</span>
-          {selected && (
-            <span
-              className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${
-                isOnline ? "bg-success" : "bg-muted-foreground/40"
-              }`}
+          {selected ? (
+            <ProviderLogo
+              provider={selected.provider}
+              className="h-3 w-3 shrink-0"
             />
+          ) : (
+            <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
           )}
+          <span className="min-w-0 truncate">{brandLabel}</span>
         </>
       }
     >
@@ -148,20 +133,15 @@ export function RuntimePicker({
       ) : (
         filtered.map((rt) => {
           const owner = getOwner(rt.owner_id);
-          const rtOnline = deriveRuntimeHealth(rt, now) === "online";
-          const tooltip = [
-            rt.name,
-            owner ? t(($) => $.pickers.runtime_owned_by, { name: owner.name }) : null,
-            rtOnline ? t(($) => $.pickers.runtime_online) : t(($) => $.pickers.runtime_offline),
-          ]
-            .filter(Boolean)
-            .join(" · ");
+          const isMine = !!currentUserId && rt.owner_id === currentUserId;
+          const showOwner = !isMine && !!owner;
+          const host = runtimePickerHostSubtitle(rt, filtered);
           return (
             <PickerItem
               key={rt.id}
               selected={rt.id === value}
               onClick={() => void select(rt.id)}
-              tooltip={tooltip}
+              tooltip={runtimePickerBrandLabel(rt)}
             >
               <ProviderLogo
                 provider={rt.provider}
@@ -170,7 +150,7 @@ export function RuntimePicker({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="truncate text-sm font-medium">
-                    {rt.name}
+                    {runtimePickerBrandLabel(rt)}
                   </span>
                   {rt.runtime_mode === "cloud" && (
                     <span className="shrink-0 rounded bg-brand/10 px-1 text-[10px] font-medium text-brand">
@@ -178,33 +158,24 @@ export function RuntimePicker({
                     </span>
                   )}
                 </div>
-                <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                  {owner && (
-                    <span className="flex min-w-0 items-center gap-1">
-                      <ActorAvatar
-                        actorType="member"
-                        actorId={owner.user_id}
-                        size={12}
-                      />
-                      <span className="truncate">{owner.name}</span>
-                    </span>
-                  )}
-                  {owner && rt.device_info && (
-                    <span className="text-muted-foreground/40">·</span>
-                  )}
-                  {rt.device_info && (
-                    <span className="truncate font-mono text-[10px]">
-                      {rt.device_info}
-                    </span>
-                  )}
-                </div>
+                {showOwner || host ? (
+                  <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    {showOwner && owner ? (
+                      <span className="flex min-w-0 items-center gap-1">
+                        <ActorAvatar
+                          actorType="member"
+                          actorId={owner.user_id}
+                          size={12}
+                        />
+                        <span className="truncate">{owner.name}</span>
+                      </span>
+                    ) : null}
+                    {!showOwner && host ? (
+                      <span className="truncate">{host}</span>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
-              <span
-                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                  rtOnline ? "bg-success" : "bg-muted-foreground/40"
-                }`}
-                aria-label={rtOnline ? t(($) => $.pickers.runtime_online) : t(($) => $.pickers.runtime_offline)}
-              />
             </PickerItem>
           );
         })

@@ -12,6 +12,8 @@ import {
   useRemoveAgentsByDaemon,
 } from "@multica/core/runtimes/mutations";
 import { agentListOptions } from "@multica/core/workspace/queries";
+import { useWorkspacePresenceMap } from "@multica/core/agents";
+import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { resolveActorIdentityPresentation } from "@multica/core/identity";
 import {
@@ -22,11 +24,11 @@ import {
 } from "@multica/ui/components/ui/alert-dialog";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
-import { ActorAvatar } from "../../common/actor-avatar";
-import { ActorIdentityRow } from "../../common/actor-identity-row";
-import { AppLink } from "../../navigation/app-link";
+import { AgentActivityListItem } from "../../agents/components/agent-activity-list-item";
+import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import type { RuntimeMachine } from "./runtime-machines";
+import { knownProviderLabel } from "./provider-logo";
 import {
   missingDaemonIdConflict,
   parseComputerDeleteConflict,
@@ -338,7 +340,7 @@ export function DeleteComputerDialog({
       >
         {conflict ? (
           <BlockedBody
-            machineTitle={machine.title}
+            machine={machine}
             conflict={conflict}
             agentHref={(id) => paths.agentDetail(id)}
             onRemoveAll={
@@ -366,6 +368,7 @@ export function DeleteComputerDialog({
               </p>
               <AgentList
                 agents={confirmedAgents}
+                machine={machine}
                 agentHref={(id) => paths.agentDetail(id)}
               />
             </div>
@@ -458,19 +461,20 @@ export function DeleteComputerDialog({
 }
 
 function BlockedBody({
-  machineTitle,
+  machine,
   conflict,
   agentHref,
   onRemoveAll,
   onClose,
 }: {
-  machineTitle: string;
+  machine: RuntimeMachine;
   conflict: ComputerDeleteConflict;
   agentHref: (agentId: string) => string;
   onRemoveAll?: () => void;
   onClose: () => void;
 }) {
   const { t } = useT("runtimes");
+  const machineTitle = machine.title;
 
   let title: string;
   let description: string;
@@ -510,7 +514,11 @@ function BlockedBody({
         </AlertDialogDescription>
 
         {conflict.activeAgents.length > 0 && (
-          <AgentList agents={conflict.activeAgents} agentHref={agentHref} />
+          <AgentList
+            agents={conflict.activeAgents}
+            machine={machine}
+            agentHref={agentHref}
+          />
         )}
       </div>
       <div className="border-t bg-muted/25 px-5 py-3">
@@ -533,41 +541,44 @@ function BlockedBody({
 
 function AgentList({
   agents,
+  machine,
   agentHref,
 }: {
   agents: Agent[];
+  machine: RuntimeMachine;
   agentHref: (agentId: string) => string;
 }) {
   const { t } = useT("runtimes");
+  const wsId = useWorkspaceId();
+  const navigation = useNavigation();
+  const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
+
   return (
     <div className="mt-3 overflow-hidden rounded-md border divide-y">
       {agents.map((agent) => {
         const presentation = resolveActorIdentityPresentation(agent, agent.id);
+        const runtime =
+          machine.runtimes.find((r) => r.id === agent.runtime_id) ??
+          machine.runtimes[0] ??
+          null;
+        const runtimeLabel = runtime
+          ? (knownProviderLabel(runtime.provider) ?? runtime.provider)
+          : undefined;
         return (
-          <AppLink
+          <AgentActivityListItem
             key={agent.id}
-            href={agentHref(agent.id)}
-            className="flex items-center justify-between gap-3 px-3 py-2.5 text-xs hover:bg-muted/40"
-          >
-            <span className="inline-flex min-w-0 items-center gap-2">
-              <ActorAvatar
-                actorType="agent"
-                actorId={agent.id}
-                size={20}
-                enableHoverCard
-              />
-              <ActorIdentityRow
-                displayName={presentation.displayName}
-                handle={presentation.handle}
-                showHandle={presentation.showHandleLabel}
-                primaryClassName="truncate font-medium text-foreground"
-                secondaryClassName="truncate text-[11px] text-muted-foreground"
-              />
-            </span>
-            <span className="shrink-0 text-primary">
-              {t(($) => $.machine.delete_computer.blocked_by_agents.view_agent)}
-            </span>
-          </AppLink>
+            agentId={agent.id}
+            displayName={presentation.displayName}
+            provider={runtime?.provider}
+            runtimeLabel={runtimeLabel}
+            presence={presenceMap.get(agent.id)}
+            avatarSize={20}
+            className="px-3 py-2.5 text-xs hover:bg-muted/40"
+            onClick={() => navigation.push(agentHref(agent.id))}
+            trailingLabel={t(
+              ($) => $.machine.delete_computer.blocked_by_agents.view_agent,
+            )}
+          />
         );
       })}
     </div>

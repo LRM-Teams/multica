@@ -225,17 +225,16 @@ func buildAssignmentPrompt(task Task) string {
 
 // isChatLikeTask reports conversational wakes that must not fall through to the
 // empty-issue assignment prompt. After LRM-1079/1081, ordinary channel/DM wakes
-// intentionally omit chat_session_id and carry the exact prompt in ChatMessage
-// with ChannelID only — treating ChatSessionID as the sole chat signal routed
-// those wakes into "New Assignment" with a blank Issue ID.
+// carry ChatMessage (and usually ChannelID). Single-track: ChatMessage/attachments
+// only — never ChatSessionID (retired; ignore on wire).
 func isChatLikeTask(task Task) bool {
 	if strings.TrimSpace(task.IssueID) != "" {
 		return false
 	}
-	if strings.TrimSpace(task.ChatSessionID) != "" {
+	if strings.TrimSpace(task.ChatMessage) != "" {
 		return true
 	}
-	return strings.TrimSpace(task.ChannelID) != "" && strings.TrimSpace(task.ChatMessage) != ""
+	return len(task.ChatMessageAttachments) > 0
 }
 
 func buildProtocolTurnPrompt(task Task) string {

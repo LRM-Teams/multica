@@ -76,6 +76,27 @@ describe("MachineDaemonUpgrade (#29)", () => {
     expect(screen.queryByTestId("machine-daemon-upgrade-progress")).toBeNull();
   });
 
+  it("equal target does not show upgrade CTA (P0 IsNewer gate)", () => {
+    const rt = makeRuntime({
+      runtime_health: "update_available",
+      target_version: "0.4.0",
+    });
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={rt}
+        cliVersion="0.4.0"
+        updateTargetVersion="0.4.0"
+        updateError={null}
+        isOnline
+        canUpdate
+      />,
+    );
+    expect(screen.getByTestId("machine-basics-daemon-version")).toHaveTextContent(
+      "0.4.0",
+    );
+    expect(screen.queryByTestId("machine-daemon-upgrade-btn")).toBeNull();
+  });
+
   it("click upgrade: shows current → target + progress, no grey CTA", async () => {
     const rt = makeRuntime();
     wrap(

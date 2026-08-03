@@ -70,6 +70,8 @@ import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { AgentActivityStatus } from "./agent-activity-list-item";
+import type { AgentPresenceDetail } from "@multica/core/agents";
 
 // Filter axes:
 //
@@ -754,6 +756,7 @@ export function AgentsPage({
                     key={agent.id}
                     agent={agent}
                     fleet={fleetByAgentId.get(agent.id)}
+                    presence={presenceMap.get(agent.id)}
                     selected={selectedAgent?.id === agent.id}
                     onClick={() => setSelectedId(agent.id)}
                   />
@@ -1045,11 +1048,13 @@ function AvailabilityChip({
 function AgentRailRow({
   agent,
   fleet,
+  presence,
   selected,
   onClick,
 }: {
   agent: Agent;
   fleet?: import("@multica/core/types/agent-fleet").AgentFleetRank;
+  presence?: AgentPresenceDetail;
   selected: boolean;
   onClick: () => void;
 }) {
@@ -1118,6 +1123,13 @@ function AgentRailRow({
             {agent.description?.trim() || "—"}
           </p>
         </div>
+        {!isArchived ? (
+          <AgentActivityStatus
+            presence={presence}
+            alignEnd
+            className="max-w-[36%]"
+          />
+        ) : null}
       </button>
     </div>
   );

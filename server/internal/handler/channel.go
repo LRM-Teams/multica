@@ -223,6 +223,10 @@ type ChannelMessageResponse struct {
 	// Attachments referenced by this message. The chat bubble renders
 	// file/image cards from these canonical associations.
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
+	// UndeliveredMentions lists structured @ targets who are not channel
+	// members yet. Message is still stored; delivery is withheld until the
+	// sender invites (Raft undelivered / invite). Omit when empty.
+	UndeliveredMentions []UndeliveredMention `json:"undelivered_mentions,omitempty"`
 }
 
 type ChannelThreadParticipant struct {
@@ -4212,6 +4216,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	}
 	msg := result.Message
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
+	msg.UndeliveredMentions = h.undeliveredMentionsForMessage(r.Context(), ch, msg.Content, msg.Parts)
 	if !result.Created {
 		writeJSON(w, http.StatusOK, msg)
 		if channelMessageNeedsVoiceTranscription(msg.Parts) {
@@ -4909,6 +4914,10 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := h.validateDMMentionMembership(r.Context(), ch, content, parts); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	replyToMessageID, ok := h.validateChannelReplyTarget(w, r.Context(), workspaceID, channelID, req.ReplyToMessageID)
 	if !ok {
 		return
@@ -4946,6 +4955,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	msg := result.Message
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
+	msg.UndeliveredMentions = h.undeliveredMentionsForMessage(r.Context(), ch, msg.Content, msg.Parts)
 	if !result.Created {
 		writeJSON(w, http.StatusOK, msg)
 		if channelMessageNeedsVoiceTranscription(msg.Parts) {

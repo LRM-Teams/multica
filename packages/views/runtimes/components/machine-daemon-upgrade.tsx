@@ -8,6 +8,7 @@ import {
   runtimeCurrentVersion,
   runtimeLaunchedBy,
   runtimeTargetVersion,
+  isNewerCliVersion,
 } from "@multica/core/runtimes";
 import { api, ApiError } from "@multica/core/api";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -129,7 +130,10 @@ export function MachineDaemonUpgrade({
     updateState,
     runtimeHealth,
   });
-  const hasUpdate = runtimeHealth === "update_available" && !!targetVersion;
+  const hasUpdate =
+    runtimeHealth === "update_available" &&
+    !!targetVersion &&
+    isNewerCliVersion(targetVersion, currentVersion);
   // ready_to_apply / completed mid-restart still need progress chrome
   const isApplying =
     derivedStatus === "ready_to_apply" || derivedStatus === "completed";

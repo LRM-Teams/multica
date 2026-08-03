@@ -205,15 +205,7 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	}
 	dispatched, err := e.dispatchReady(ctx, run, tasks, attempts, members)
 	if err != nil {
-		if errors.Is(err, ErrCapabilityUnavailable) {
-			failed, _, _, failErr := e.store.MarkFailed(ctx, sessionID, err.Error())
-			_, cancelErr := e.cancelPendingAttempts(ctx, failed, "research_capability_unavailable")
-			if cancelErr != nil {
-				return errors.Join(err, failErr, cancelErr)
-			}
-			return errors.Join(err, failErr, e.projectPending(ctx, sessionID))
-		}
-		return err
+		return e.handleDispatchFailure(ctx, sessionID, err)
 	}
 	if dispatched > 0 || hasActiveCurrentWork(run, tasks) {
 		next = e.clock.Now().Add(10 * time.Second)
@@ -267,18 +259,31 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 		return err
 	}
 	if _, err = e.dispatchReady(ctx, run, tasks, attempts, members); err != nil {
-		if errors.Is(err, ErrCapabilityUnavailable) {
-			failed, _, _, failErr := e.store.MarkFailed(ctx, sessionID, err.Error())
-			_, cancelErr := e.cancelPendingAttempts(ctx, failed, "research_capability_unavailable")
-			if cancelErr != nil {
-				return errors.Join(err, failErr, cancelErr)
-			}
-			return errors.Join(err, failErr, e.projectPending(ctx, sessionID))
-		}
-		return err
+		return e.handleDispatchFailure(ctx, sessionID, err)
 	}
 	next = e.clock.Now().Add(10 * time.Second)
 	return e.projectPending(ctx, sessionID)
+}
+
+func (e *Engine) handleDispatchFailure(ctx context.Context, sessionID string, err error) error {
+	reason := ""
+	cancelReason := ""
+	switch {
+	case errors.Is(err, ErrCapabilityUnavailable):
+		reason = err.Error()
+		cancelReason = "research_capability_unavailable"
+	case !dispatchErrorRetryable(err):
+		reason = "non-retryable research task dispatch failed: " + err.Error()
+		cancelReason = "research_dispatch_failed"
+	default:
+		return err
+	}
+	failed, _, _, failErr := e.store.MarkFailed(ctx, sessionID, reason)
+	_, cancelErr := e.cancelPendingAttempts(ctx, failed, cancelReason)
+	if cancelErr != nil {
+		return errors.Join(err, failErr, cancelErr)
+	}
+	return errors.Join(err, failErr, e.projectPending(ctx, sessionID))
 }
 
 func (e *Engine) handleBudgetExhaustion(ctx context.Context, run Run, budgetKind, details string) error {
@@ -439,7 +444,13 @@ func (e *Engine) dispatchReady(ctx context.Context, run Run, tasks []Task, attem
 		}
 		dispatch, err := e.dispatcher.Dispatch(ctx, request)
 		if err != nil {
-			_, _ = e.store.FailAttempt(ctx, AttemptFailure{AttemptID: attempt.ID, FailureClass: "dispatch_failed", Diagnostics: err.Error(), Retryable: true})
+			retryable := dispatchErrorRetryable(err)
+			if _, failErr := e.store.FailAttempt(ctx, AttemptFailure{AttemptID: attempt.ID, FailureClass: "dispatch_failed", Diagnostics: err.Error(), Retryable: retryable}); failErr != nil {
+				return dispatched, errors.Join(err, failErr)
+			}
+			if !retryable {
+				return dispatched, fmt.Errorf("dispatch research task %s: %w", task.ID, err)
+			}
 			continue
 		}
 		if _, _, err = e.store.AttachInboxTask(ctx, attempt.ID, dispatch.InboxTaskID); err != nil {

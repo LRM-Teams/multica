@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { MoreHorizontal, Square, Trash2 } from "lucide-react";
+import { MoreHorizontal, Square, Target, Trash2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -21,6 +21,13 @@ import {
 } from "@multica/ui/components/ui/alert-dialog";
 import { Button } from "@multica/ui/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@multica/ui/components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -28,24 +35,31 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useT } from "../../i18n/use-t";
+import { AppLink } from "../../navigation/app-link";
 
 interface ResearchSessionRowActionsProps {
   session: ResearchSession;
+  /** Optional session detail href for the goal dialog CTA. */
+  href?: string;
 }
 
 const STOPPABLE = new Set(["drafting", "running", "awaiting_user_confirm"]);
 
 /**
- * Per-row ⋯ menu for research sessions. Stop pauses the fleet; delete hard-removes
- * the session. Clicks stop propagation so the row link does not navigate.
+ * Per-row ⋯ menu. LRM-1106 D2: 「查看目标」 lives here (no inline goal chip).
  */
-export function ResearchSessionRowActions({ session }: ResearchSessionRowActionsProps) {
+export function ResearchSessionRowActions({
+  session,
+  href,
+}: ResearchSessionRowActionsProps) {
   const { t } = useT("research");
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [goalOpen, setGoalOpen] = useState(false);
 
   const canStop = STOPPABLE.has(session.status);
+  const hasGoal = Boolean(session.goal?.trim());
 
   const stop = useMutation({
     mutationFn: () => api.stopResearchSession(session.id),
@@ -79,6 +93,7 @@ export function ResearchSessionRowActions({ session }: ResearchSessionRowActions
               type="button"
               variant="ghost"
               size="icon-sm"
+              className="size-8 md:size-7"
               aria-label={t(($) => $.actions.menu)}
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
@@ -92,6 +107,16 @@ export function ResearchSessionRowActions({ session }: ResearchSessionRowActions
           className="w-auto"
           onClick={(e) => e.stopPropagation()}
         >
+          {hasGoal ? (
+            <DropdownMenuItem
+              onClick={() => setGoalOpen(true)}
+              data-testid="research-session-view-goal"
+            >
+              <Target className="h-3.5 w-3.5" />
+              {t(($) => $.actions.view_goal)}
+            </DropdownMenuItem>
+          ) : null}
+          {hasGoal && canStop ? <DropdownMenuSeparator /> : null}
           {canStop ? (
             <DropdownMenuItem
               disabled={stop.isPending}
@@ -112,6 +137,36 @@ export function ResearchSessionRowActions({ session }: ResearchSessionRowActions
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {hasGoal ? (
+        <Dialog open={goalOpen} onOpenChange={setGoalOpen}>
+          <DialogContent
+            className="sm:max-w-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <DialogHeader>
+              <DialogTitle>{t(($) => $.list.goal_dialog_title)}</DialogTitle>
+            </DialogHeader>
+            <p className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+              {session.goal}
+            </p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setGoalOpen(false)}>
+                {t(($) => $.list.goal_dialog_close)}
+              </Button>
+              {href ? (
+                <AppLink
+                  href={href}
+                  className="inline-flex h-8 items-center justify-center rounded-lg bg-brand px-2.5 text-sm font-medium text-brand-foreground"
+                  onClick={() => setGoalOpen(false)}
+                >
+                  {t(($) => $.list.goal_dialog_open)}
+                </AppLink>
+              ) : null}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
 
       {confirmDelete ? (
         <AlertDialog

@@ -394,8 +394,7 @@ func TestRuntimeBriefHasOneContractWithoutModeIdentity(t *testing.T) {
 	}{
 		{name: "issue", ctx: TaskContextForEnv{IssueID: "issue-1"}},
 		{name: "channel", ctx: TaskContextForEnv{ChatSessionID: "chat-1", ChannelID: "channel-1"}},
-		{name: "channel_only", ctx: TaskContextForEnv{ChannelID: "channel-1"}},
-		{name: "standalone", ctx: TaskContextForEnv{ChatSessionID: "chat-1"}},
+		{name: "channel-only", ctx: TaskContextForEnv{ChannelID: "channel-1"}},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -598,6 +597,7 @@ func TestChatRuntimeBriefPinsRaftThreadUnfollowDecisionBoundary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			out := buildMetaSkillContent("codex", TaskContextForEnv{
+				ChannelID:     "channel-1",
 				ChatSessionID: "chat-1",
 				Directed:      tc.directed,
 			})
@@ -630,6 +630,7 @@ func TestChatRuntimeBriefPinsReminderDecisionBoundary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			out := buildMetaSkillContent("codex", TaskContextForEnv{
+				ChannelID:     "channel-1",
 				ChatSessionID: "chat-1",
 				Directed:      tc.directed,
 			})
@@ -669,7 +670,7 @@ func TestRuntimeBriefMakesFreshCanonicalSessionExplicit(t *testing.T) {
 		{
 			name:   "reset chat wake",
 			reason: "reset",
-			ctx:    TaskContextForEnv{ChatSessionID: "chat-1"},
+			ctx:    TaskContextForEnv{ChannelID: "channel-1"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -827,32 +828,16 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 
 func TestTargetlessRuntimeBriefUsesAutomaticCompletionDelivery(t *testing.T) {
 	t.Parallel()
-	ctx := TaskContextForEnv{
+	// Single-track: ChatSessionID alone must not unlock targetless chat delivery brief.
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
 		ChatSessionID: "standalone-chat-1",
 		Directed:      true,
+	})
+	if strings.Contains(out, "no `ChannelID`") {
+		t.Fatalf("ChatSessionID alone must not select targetless chat delivery brief:\n%s", out)
 	}
-	out := buildMetaSkillContent("codex", ctx)
-
-	const stickerEnvelope = `{"action":"message_send","parts":[{"type":"sticker","sticker_id":"hi"}]}`
-	for _, want := range []string{
-		"no `ChannelID`",
-		"final assistant output, which the current session delivers automatically",
-		"Do not run `multica message send` or `multica message react` for this reply",
-		"search for a target, or invent one",
-		stickerEnvelope,
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("targetless brief missing %q\n---\n%s", want, out)
-		}
-	}
-
-	for _, banned := range []string{
-		"Visible chat output is delivered only by the task-scoped Multica CLI transport",
-		"For visible chat replies, run `multica message send` or `multica message react`",
-	} {
-		if strings.Contains(out, banned) {
-			t.Errorf("targetless brief contains channel transport rule %q\n---\n%s", banned, out)
-		}
+	if strings.Contains(out, "final assistant output, which the current session delivers automatically") {
+		t.Fatalf("ChatSessionID alone must not select session-auto-delivery chat brief:\n%s", out)
 	}
 }
 
@@ -885,6 +870,7 @@ func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
 func TestChatBackedIssueUsesSemanticIssueWorkflow(t *testing.T) {
 	t.Parallel()
 	out := buildMetaSkillContent("pi", TaskContextForEnv{
+		ChannelID:     "channel-1",
 		ChatSessionID: "resident-session-1",
 		IssueID:       "11111111-2222-3333-4444-555555555555",
 		ProjectID:     "project-1",
@@ -911,7 +897,7 @@ func TestCloseoutStatusInstructionStaysCompact(t *testing.T) {
 		ctx  TaskContextForEnv
 	}{
 		{name: "issue", ctx: TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"}},
-		{name: "chat", ctx: TaskContextForEnv{ChatSessionID: "chat-1"}},
+		{name: "chat", ctx: TaskContextForEnv{ChannelID: "channel-1"}},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -944,7 +930,7 @@ func TestInstructionPrecedenceOnlyAppliesToAssignmentWorkflow(t *testing.T) {
 		},
 		{
 			name: "chat",
-			ctx:  TaskContextForEnv{ChatSessionID: "chat-1"},
+			ctx:  TaskContextForEnv{ChannelID: "channel-1"},
 		},
 		{
 			name: "quick-create",
@@ -1033,6 +1019,7 @@ func TestWorkspaceContextRenderedAcrossTaskKinds(t *testing.T) {
 		{
 			name: "chat",
 			ctx: TaskContextForEnv{
+				ChannelID:        "channel-1",
 				ChatSessionID:    "chat-1",
 				WorkspaceContext: wsContext,
 			},
@@ -1117,7 +1104,7 @@ func TestRenderProjectContextUsesTruthfulTaskKindWording(t *testing.T) {
 		want string
 	}{
 		{name: "issue", ctx: TaskContextForEnv{IssueID: "issue-1"}, want: "This issue belongs to **Project A**."},
-		{name: "chat", ctx: TaskContextForEnv{ChatSessionID: "chat-1"}, want: "This conversation is associated with **Project A**."},
+		{name: "chat", ctx: TaskContextForEnv{ChannelID: "channel-1"}, want: "This conversation is associated with **Project A**."},
 		{name: "quick create", ctx: TaskContextForEnv{QuickCreatePrompt: "create"}, want: "The requested issue will be created in **Project A**."},
 		{name: "autopilot", ctx: TaskContextForEnv{AutopilotRunID: "run-1"}, want: "This automation run is associated with **Project A**."},
 	}
@@ -1140,6 +1127,7 @@ func TestRenderProjectContextUsesTruthfulTaskKindWording(t *testing.T) {
 func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
+		ChannelID:           "channel-1",
 		ChatSessionID:       "chat-1",
 		AgentRoot:           "/tmp/multica/workspace-1/.multica/agents/agent-1",
 		AgentMemoryDir:      "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
@@ -1178,6 +1166,7 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
+		ChannelID:        "channel-1",
 		ChatSessionID:    "chat-1",
 		Directed:         true,
 		AgentRoot:        "/tmp/multica/workspace-1/.multica/agents/agent-1",
@@ -1290,12 +1279,13 @@ func TestPromotedMemorySnapshotIncludesOnlyServerSelectedMemories(t *testing.T) 
 
 func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 	t.Parallel()
-	withoutScope := buildMetaSkillContent("codex", TaskContextForEnv{ChatSessionID: "chat-1"})
+	withoutScope := buildMetaSkillContent("codex", TaskContextForEnv{ChannelID: "channel-1"})
 	if strings.Contains(withoutScope, "Memory Operating Guide") {
 		t.Fatalf("memory operating guide must not render without an agent-local root:\n%s", withoutScope)
 	}
 
 	withRoot := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChannelID:     "channel-1",
 		ChatSessionID: "chat-1",
 		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
 	})
@@ -1304,6 +1294,7 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 	}
 
 	skillsOnly := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChannelID:     "channel-1",
 		ChatSessionID: "chat-1",
 		AgentSkillDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/skills",
 	})
@@ -1368,7 +1359,7 @@ func TestWorkspaceContextHeadingSkippedWhenEmpty(t *testing.T) {
 
 func TestMetaSkillDocumentsCanonicalHumanDMTransport(t *testing.T) {
 	t.Parallel()
-	out := buildMetaSkillContent("claude", TaskContextForEnv{ChatSessionID: "chat-1"})
+	out := buildMetaSkillContent("claude", TaskContextForEnv{ChannelID: "channel-1"})
 
 	for _, want := range []string{
 		"multica message send --target dm:@<human-handle> --message-stdin",
@@ -1392,7 +1383,7 @@ func TestSubIssueCreationSectionSkippedForNonIssueModes(t *testing.T) {
 	}{
 		{
 			name: "chat",
-			ctx:  TaskContextForEnv{ChatSessionID: "chat-1"},
+			ctx:  TaskContextForEnv{ChannelID: "channel-1"},
 		},
 		{
 			name: "quick-create",
@@ -2209,6 +2200,7 @@ func TestWriteRuntimeConfigFileAlwaysInsertsFixedManagedSeparator(t *testing.T) 
 
 func TestBuildMetaSkillContentDoesNotUseLegacyManagedRole(t *testing.T) {
 	content := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChannelID:     "channel-1",
 		ChatSessionID: "chat-1",
 		AgentName:     "ordinary-looking-name",
 		ManagedRole:   "group_manager",
@@ -2227,7 +2219,7 @@ func TestExecutionDisciplineBriefAppearsOnceOnEveryRunKind(t *testing.T) {
 	}{
 		{name: "assignment", ctx: TaskContextForEnv{IssueID: "issue-1"}},
 		{name: "comment", ctx: TaskContextForEnv{IssueID: "issue-1", TriggerCommentID: "comment-1"}},
-		{name: "chat", ctx: TaskContextForEnv{ChatSessionID: "chat-1"}},
+		{name: "chat", ctx: TaskContextForEnv{ChannelID: "channel-1"}},
 		{name: "quick create", ctx: TaskContextForEnv{QuickCreatePrompt: "create an issue"}},
 		{name: "autopilot", ctx: TaskContextForEnv{AutopilotRunID: "run-1"}},
 	}
@@ -2265,28 +2257,15 @@ func TestExecutionDisciplineBriefAppearsOnceOnEveryRunKind(t *testing.T) {
 // re-merged branch would leak the wrong contract into the wrong path).
 func TestStandaloneChatRuntimeBriefNeverLeaksChannelCLITransportContract(t *testing.T) {
 	t.Parallel()
-	out := buildMetaSkillContent("codex", TaskContextForEnv{
+	// Single-track: ChatSessionID alone must not select the chat runtime brief.
+	out := buildMetaSkillContent("claude", TaskContextForEnv{
 		ChatSessionID: "standalone-chat-1",
-		Directed:      true,
 	})
-
-	for _, want := range []string{
-		"No `ChannelID` target: final assistant output is delivered to the current session.",
-		"This run has no `ChannelID`. A visible final response is required through final assistant output",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("standalone brief missing its own delivery marker %q\n---\n%s", want, out)
-		}
+	if strings.Contains(out, "No `ChannelID` target") {
+		t.Fatalf("ChatSessionID alone must not select standalone chat delivery brief:\n%s", out)
 	}
-
-	for _, banned := range []string{
-		"`ChannelID` target present: visible output is delivered only by the task-scoped Multica CLI transport",
-		"Visible reply required for human DM/@mention/direct question/task/continuation.",
-		"For visible chat replies, run `multica message send` or `multica message react`. After the command succeeds",
-	} {
-		if strings.Contains(out, banned) {
-			t.Errorf("standalone brief leaked channel-transport contract %q\n---\n%s", banned, out)
-		}
+	if strings.Contains(out, "final assistant output is delivered to the current session") {
+		t.Fatalf("ChatSessionID alone must not select chat delivery brief:\n%s", out)
 	}
 }
 

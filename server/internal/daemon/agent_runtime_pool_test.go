@@ -619,7 +619,7 @@ func TestCanonicalRuntimeResultHealthIsFailClosed(t *testing.T) {
 	}
 }
 
-func TestCanonicalRuntimeModeUsesResidentOnlyForFullPiGrokAndCursor(t *testing.T) {
+func TestCanonicalRuntimeModeUsesResidentForCanonicalProviders(t *testing.T) {
 	for _, tc := range []struct {
 		provider string
 		profile  string
@@ -630,7 +630,9 @@ func TestCanonicalRuntimeModeUsesResidentOnlyForFullPiGrokAndCursor(t *testing.T
 		{provider: "grok", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "cursor", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "claude", profile: executionProfileFull, want: canonicalRuntimeOneShot},
-		{provider: "codex", profile: executionProfileFull, want: canonicalRuntimeOneShot},
+		{provider: "codex", profile: executionProfileFull, want: canonicalRuntimeResident},
+		{provider: "kiro", profile: executionProfileFull, want: canonicalRuntimeResident},
+		{provider: "opencode", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "pi", profile: executionProfileProtocolTurn, wantErr: true},
 	} {
 		t.Run(tc.provider+"/"+tc.profile, func(t *testing.T) {
@@ -652,7 +654,7 @@ func TestCanonicalRuntimeModeUsesResidentOnlyForFullPiGrokAndCursor(t *testing.T
 }
 
 func TestCanonicalRuntimeDefaultFactoriesMatchProviderMode(t *testing.T) {
-	for _, provider := range []string{"pi", "grok", "cursor"} {
+	for _, provider := range []string{"pi", "grok", "cursor", "opencode", "kiro", "codex"} {
 		factory := defaultCanonicalRuntimeFactory(provider, canonicalRuntimeResident)
 		backend, closeBackend, err := factory(agent.Config{ExecutablePath: "/nonexistent/" + provider})
 		if err != nil {

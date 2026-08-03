@@ -266,6 +266,8 @@ var codexEffortLabel = map[string]string{
 type codexDebugModelsResponse struct {
 	Models []struct {
 		Slug                    string `json:"slug"`
+		DisplayName             string `json:"display_name"`
+		Visibility              string `json:"visibility"`
 		DefaultReasoningLevel   string `json:"default_reasoning_level"`
 		SupportedReasoningLevel []struct {
 			Effort      string `json:"effort"`
@@ -399,6 +401,62 @@ type codebuddyHelpEntry struct {
 // codebuddyHelpOutput runs `codebuddy --help` (cached for codebuddyHelpTTL).
 // Both discoverCodebuddyModels and codebuddyEffortSuperset call this so a
 // single cold invocation feeds both.
+// parseCodexDebugModelsCatalog projects `codex debug models` JSON into
+// picker rows. Only visibility=list (or empty visibility for older CLIs)
+// is included; hide is omitted. Thinking levels are attached when present.
+func parseCodexDebugModelsCatalog(raw []byte) []Model {
+	var resp codexDebugModelsResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil
+	}
+	out := make([]Model, 0, len(resp.Models))
+	for _, m := range resp.Models {
+		if m.Slug == "" {
+			continue
+		}
+		vis := strings.ToLower(strings.TrimSpace(m.Visibility))
+		// Older CLIs omit visibility — treat as listable. Explicit hide stays out.
+		if vis == "hide" {
+			continue
+		}
+		label := strings.TrimSpace(m.DisplayName)
+		if label == "" {
+			label = m.Slug
+		}
+		entry := Model{
+			ID:       m.Slug,
+			Label:    label,
+			Provider: "openai",
+			Default:  len(out) == 0, // first listable = preferred
+		}
+		if len(m.SupportedReasoningLevel) > 0 {
+			levels := make([]ThinkingLevel, 0, len(m.SupportedReasoningLevel))
+			for _, lvl := range m.SupportedReasoningLevel {
+				if lvl.Effort == "" {
+					continue
+				}
+				lbl, ok := codexEffortLabel[lvl.Effort]
+				if !ok {
+					lbl = strings.Title(lvl.Effort) //nolint:staticcheck
+				}
+				levels = append(levels, ThinkingLevel{
+					Value:       lvl.Effort,
+					Label:       lbl,
+					Description: lvl.Description,
+				})
+			}
+			if len(levels) > 0 {
+				entry.Thinking = &ModelThinking{
+					SupportedLevels: levels,
+					DefaultLevel:    m.DefaultReasoningLevel,
+				}
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
 func codebuddyHelpOutput(ctx context.Context, executablePath string) string {
 	if executablePath == "" {
 		executablePath = "codebuddy"
@@ -525,11 +583,8 @@ func ValidateThinkingLevel(ctx context.Context, providerType, executablePath, mo
 	if err != nil {
 		return false, err
 	}
-	if providerType == "claude" {
-		compatibility := claudeCompatibilityModels()
-		annotateClaudeThinking(ctx, compatibility, executablePath)
-		models = append(models, compatibility...)
-	}
+	// Compatibility model IDs are no longer merged into the picker or
+	// validation catalog (Frank 2026-08-03: dynamic only).
 	target := model
 	if target == "" {
 		// Default model = the entry the catalog marks as Default. If no

@@ -330,6 +330,31 @@ func (c *BusinessSamplerCollector) queryWorkspaceTotal(
 	return nil
 }
 
+// queryReminderScheduledOverdue counts scheduled reminders past fire_at by
+// reminderOverdueThreshold (1h, aligned with #67). Single global gauge —
+// no workspace/agent labels (task #73 Phase A: detect aggregate fire-path
+// stall without high-cardinality series). Uses the partial index
+// idx_agent_reminder_due (status='scheduled' on fire_at).
+func (c *BusinessSamplerCollector) queryReminderScheduledOverdue(
+	ctx context.Context, tx pgx.Tx, snap *samplerSnapshot,
+) error {
+	// Bind threshold seconds rather than embedding interval text so the
+	// constant stays the single source of truth with #67's Go threshold.
+	const stmt = `
+SELECT count(*)
+FROM agent_reminder
+WHERE status = 'scheduled'
+  AND fire_at IS NOT NULL
+  AND fire_at < now() - make_interval(secs => $1::double precision)
+`
+	var n int64
+	if err := tx.QueryRow(ctx, stmt, reminderOverdueThreshold.Seconds()).Scan(&n); err != nil {
+		return fmt.Errorf("reminder_scheduled_overdue: %w", err)
+	}
+	snap.reminderScheduledOverdue = float64(n)
+	return nil
+}
+
 // queryResearchExecution samples the durable execution ledger. Each SELECT
 // has a statically bounded label space and its own LIMIT, so one category
 // cannot truncate another category or create user-controlled Prometheus

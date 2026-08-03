@@ -69,6 +69,9 @@ func filledSnapshot(now time.Time) *samplerSnapshot {
 	snap.workspaceTotal = 250
 	snap.workspaceTotalKnown = true
 
+	// Platform-ops aggregate for #73 Phase A (overdue scheduled reminders).
+	snap.reminderScheduledOverdue = 4
+
 	snap.researchRuns[researchMetricKey{first: "running", second: "research-run-v1"}] = 2
 	snap.researchRuns[researchMetricKey{first: "completed", second: "research-run-v1"}] = 9
 	snap.researchTasks[researchMetricKey{first: "verify", second: "running"}] = 3
@@ -135,6 +138,7 @@ func TestBusinessSamplerCollectorEmitsExpectedMetrics(t *testing.T) {
 		`multica_runtime_heartbeat_age_seconds_count{runtime_mode="local"} 3`,
 		`multica_runtime_heartbeat_age_seconds_sum{runtime_mode="local"} 45`,
 		`multica_workspace_total 250`,
+		`multica_reminder_scheduled_overdue 4`,
 		`multica_research_runs{orchestrator_version="research-run-v1",status="running"} 2`,
 		`multica_research_tasks{kind="verify",status="running"} 3`,
 		`multica_research_attempts{failure_class="task_timeout",status="failed"} 2`,
@@ -160,6 +164,23 @@ func TestBusinessSamplerCollectorEmitsExpectedMetrics(t *testing.T) {
 		if strings.Contains(body, removed) {
 			t.Errorf("metrics body still exposes removed long DB window %q\nbody:\n%s", removed, body)
 		}
+	}
+}
+
+// TestBusinessSamplerEmitsZeroReminderOverdueOnEmptySnapshot ensures the
+// platform-ops gauge always appears (including 0) so scrapes/alerters never
+// treat a healthy fleet as "missing series".
+func TestBusinessSamplerEmitsZeroReminderOverdueOnEmptySnapshot(t *testing.T) {
+	c := newTestSampler(t, func(ctx context.Context, refreshAt time.Time) *samplerSnapshot {
+		return newSamplerSnapshot(refreshAt)
+	})
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(c.Collectors()...)
+	rec := httptest.NewRecorder()
+	NewHandler(registry).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	if !strings.Contains(body, `multica_reminder_scheduled_overdue 0`) {
+		t.Fatalf("empty snapshot must emit zero overdue gauge\n%s", body)
 	}
 }
 

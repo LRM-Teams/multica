@@ -44,6 +44,12 @@ const (
 	// A running task is considered "stuck" once started_at is older
 	// than this. Matches the Grafana board threshold from MUL-2328.
 	stuckRunningInterval = "30 minutes"
+
+	// reminderOverdueThreshold matches task #67 / ProcessOverdueReminders:
+	// scheduled past fire_at by this long before counting as ops-visible
+	// aggregate debt (task #73 Phase A). Keep in lockstep so user Activity
+	// and platform gauges do not disagree about "overdue".
+	reminderOverdueThreshold = time.Hour
 )
 
 // samplerWindows is the canonical list emitted on every scrape. The slice
@@ -118,6 +124,7 @@ type BusinessSamplerCollector struct {
 	descRuntimeOnline               *prometheus.Desc
 	descHeartbeatAgeHist            *prometheus.Desc
 	descWorkspaceTotal              *prometheus.Desc
+	descReminderScheduledOverdue    *prometheus.Desc
 	descResearchRuns                *prometheus.Desc
 	descResearchTasks               *prometheus.Desc
 	descResearchAttempts            *prometheus.Desc
@@ -198,6 +205,14 @@ func NewBusinessSamplerCollector(opts *BusinessSamplerOptions) *BusinessSamplerC
 			"multica_workspace_total",
 			"Lifetime workspace row count. Useful for sizing alerts and dashboards.",
 			nil, nil),
+		// Platform-ops aggregate for task #73 Phase A. No labels: a single
+		// global count is enough to detect "reminder fire path stopped
+		// globally" without high-cardinality series. Alerter (PR2) reads
+		// this gauge; user-facing per-reminder Activity is #67.
+		descReminderScheduledOverdue: prometheus.NewDesc(
+			"multica_reminder_scheduled_overdue",
+			"Count of agent_reminder rows still status=scheduled with fire_at older than the overdue threshold (1h, aligned with #67). Platform-ops aggregate; sampled from the database.",
+			nil, nil),
 		descResearchRuns: prometheus.NewDesc(
 			"multica_research_runs",
 			"Current research sessions by durable run status and bounded orchestrator version.",
@@ -255,6 +270,7 @@ func (c *BusinessSamplerCollector) Describe(ch chan<- *prometheus.Desc) {
 		c.descRuntimeOnline,
 		c.descHeartbeatAgeHist,
 		c.descWorkspaceTotal,
+		c.descReminderScheduledOverdue,
 		c.descResearchRuns,
 		c.descResearchTasks,
 		c.descResearchAttempts,
@@ -352,6 +368,12 @@ func (c *BusinessSamplerCollector) emit(ch chan<- prometheus.Metric, snap *sampl
 		ch <- prometheus.MustNewConstMetric(
 			c.descWorkspaceTotal, prometheus.GaugeValue, snap.workspaceTotal)
 	}
+
+	// Always emit (including 0) so scrapes/alerters never see "no data"
+	// after a clean start or empty fleet — same rationale as known-source
+	// zero series for task queues.
+	ch <- prometheus.MustNewConstMetric(
+		c.descReminderScheduledOverdue, prometheus.GaugeValue, snap.reminderScheduledOverdue)
 
 	for key, value := range snap.researchRuns {
 		ch <- prometheus.MustNewConstMetric(
@@ -528,6 +550,10 @@ type samplerSnapshot struct {
 
 	workspaceTotal      float64
 	workspaceTotalKnown bool
+
+	// reminderScheduledOverdue is a global count (no labels). Defaults to 0
+	// so emit always has a value even if the query failed this scrape.
+	reminderScheduledOverdue float64
 }
 
 func newSamplerSnapshot(t time.Time) *samplerSnapshot {
@@ -587,6 +613,9 @@ func (c *BusinessSamplerCollector) refreshFromDB(ctx context.Context, now time.T
 	})
 	c.runQuery(ctx, conn, "workspace_total", func(ctx context.Context, tx pgx.Tx) error {
 		return c.queryWorkspaceTotal(ctx, tx, snap)
+	})
+	c.runQuery(ctx, conn, "reminder_scheduled_overdue", func(ctx context.Context, tx pgx.Tx) error {
+		return c.queryReminderScheduledOverdue(ctx, tx, snap)
 	})
 	c.runQuery(ctx, conn, "research_execution", func(ctx context.Context, tx pgx.Tx) error {
 		return c.queryResearchExecution(ctx, tx, snap)

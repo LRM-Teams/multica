@@ -580,7 +580,11 @@
     "voice_unsent": "음성 메시지가 전송되지 않았습니다({{duration}})",
     "voice_unsent_retry": "다시 보내기",
     "voice_unsent_delete": "삭제",
-    "tray_reselect": "다시 선택 필요"
+    "tray_reselect": "다시 선택 필요",
+    "undelivered_mentions_title": "Not delivered to everyone",
+    "undelivered_mentions_body": "{{who}} is not in this channel. Invite so they get the @ mention.",
+    "undelivered_invite": "Invite",
+    "undelivered_invite_done": "Invited — they can see the message now."
   },
   "message": {
     "add_reaction": "반응 추가",

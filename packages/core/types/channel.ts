@@ -247,6 +247,23 @@ export interface ChannelThreadWakeAnnotation {
   terminal_at?: string | null;
 }
 
+/**
+ * Alice #1984 / Raft-aligned undelivered @ on public groups.
+ * Message is stored; delivery withheld until the sender invites.
+ * Omitted from list/history responses when empty.
+ */
+export interface UndeliveredMention {
+  /** `member` (user) or `agent`. */
+  type: "member" | "agent" | string;
+  id: string;
+  handle?: string;
+  label?: string;
+  /** e.g. `not_channel_member` */
+  reason: string;
+  /** e.g. `["invite"]` — `notify` reserved. */
+  actions: string[];
+}
+
 export interface ChannelMessage {
   id: string;
   channel_id: string;
@@ -283,6 +300,11 @@ export interface ChannelMessage {
    * may carry an expiring signature, while this metadata is stable.
    */
   attachments?: import("./attachment").Attachment[];
+  /**
+   * Structured @ targets who are not channel members yet (group send only).
+   * Present on the send ACK when BE #1984 is deployed; omit when empty.
+   */
+  undelivered_mentions?: UndeliveredMention[];
   created_at: string;
   /** Set once the author has edited the message; drives the "(edited)" label. */
   edited_at?: string | null;

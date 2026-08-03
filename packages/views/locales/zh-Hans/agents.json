@@ -590,15 +590,18 @@
     "tier": {
       "restart": {
         "title": "重启",
-        "scope": "重启进程。保留会话、工作区（MEMORY.md、notes/）及其余一切。"
+        "scope": "重启进程。保留会话、工作区（MEMORY.md、notes/）及其余一切。",
+        "title_short": "重启"
       },
       "reset_session_restart": {
         "title": "重置会话并重启",
-        "scope": "清除模型会话与上下文，然后重启。工作区（MEMORY.md、notes/）及其余一切保留。"
+        "scope": "清除模型会话与上下文，然后重启。工作区（MEMORY.md、notes/）及其余一切保留。",
+        "title_short": "重置会话"
       },
       "full_reset_restart": {
         "title": "完全重置并重启",
-        "scope": "清除会话并永久删除工作区文件（MEMORY.md、notes/），然后重启。这不是删除智能体。"
+        "scope": "清除会话并永久删除工作区文件（MEMORY.md、notes/），然后重启。这不是删除智能体。",
+        "title_short": "完全重置"
       }
     },
     "after_current_run": "任务进行中不可用——请等空闲，或用「重启」（强制）。",
@@ -627,7 +630,9 @@
     },
     "cancel": "取消",
     "retry": "重试",
-    "done": "完成"
+    "done": "完成",
+    "description_short": "重启 {{name}}。",
+    "recommended": "推荐"
   },
   "live_peek": {
     "current_issue_label": "正在处理",

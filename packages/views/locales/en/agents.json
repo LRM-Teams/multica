@@ -600,15 +600,18 @@
     "tier": {
       "restart": {
         "title": "Restart",
-        "scope": "Restarts the process. Keeps the session, workspace (MEMORY.md, notes/), and everything else."
+        "scope": "Restarts the process. Keeps the session, workspace (MEMORY.md, notes/), and everything else.",
+        "title_short": "Restart"
       },
       "reset_session_restart": {
         "title": "Reset session & restart",
-        "scope": "Clears the model session and context, then restarts. Workspace (MEMORY.md, notes/) and everything else are kept."
+        "scope": "Clears the model session and context, then restarts. Workspace (MEMORY.md, notes/) and everything else are kept.",
+        "title_short": "Reset session"
       },
       "full_reset_restart": {
         "title": "Full reset & restart",
-        "scope": "Clears the session and permanently deletes the workspace files (MEMORY.md, notes/), then restarts. This is not Delete agent."
+        "scope": "Clears the session and permanently deletes the workspace files (MEMORY.md, notes/), then restarts. This is not Delete agent.",
+        "title_short": "Full reset"
       }
     },
     "after_current_run": "Not available while a task is running — wait until idle, or use Restart (force).",
@@ -637,7 +640,9 @@
     },
     "cancel": "Cancel",
     "retry": "Retry",
-    "done": "Done"
+    "done": "Done",
+    "description_short": "Restart {{name}}.",
+    "recommended": "Default"
   },
   "live_peek": {
     "current_issue_label": "Now on",

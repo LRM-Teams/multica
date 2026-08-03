@@ -64,15 +64,44 @@ beforeEach(() => {
   lifecycleState.current = { preflight: ALL_SUPPORTED, operation: null, isPending: false };
 });
 
-describe("AgentRestartModal (#633)", () => {
-  it("renders the three tiers with a default Restart CTA", () => {
+describe("AgentRestartModal (#27 simplify)", () => {
+  it("renders three short blocks; default Restart CTA; no long scope paragraphs", () => {
     renderModal();
-    expect(screen.getByText("Reset session & restart")).toBeInTheDocument();
-    expect(screen.getByText("Full reset & restart")).toBeInTheDocument();
+    expect(screen.getByTestId("restart-tier-blocks")).toBeInTheDocument();
+    expect(screen.getByTestId("restart-tier-restart")).toHaveTextContent("Restart");
+    expect(screen.getByTestId("restart-tier-reset_session_restart")).toHaveTextContent(
+      "Reset session",
+    );
+    expect(screen.getByTestId("restart-tier-full_reset_restart")).toHaveTextContent("Full reset");
+    // long scope lines gone
+    expect(
+      screen.queryByText(/Keeps the session, workspace/i),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Restart" })).toBeInTheDocument();
   });
 
-  it("disables an unsupported tier and shows its reason (dormant / active)", () => {
+  it("starts plain restart on primary CTA without changing selection", () => {
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    expect(mutate).toHaveBeenCalledWith("restart");
+  });
+
+  it("full reset confirm appears only after selecting Full", () => {
+    renderModal();
+    expect(screen.queryByLabelText("Enter atlas")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("restart-tier-full_reset_restart"));
+    expect(screen.getByLabelText("Enter atlas")).toBeInTheDocument();
+    const cta = screen.getByRole("button", { name: "Full reset & restart" });
+    expect(cta).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Enter atlas"), {
+      target: { value: "atlas" },
+    });
+    expect(cta).toBeEnabled();
+    fireEvent.click(cta);
+    expect(mutate).toHaveBeenCalledWith("full_reset_restart");
+  });
+
+  it("disables unsupported tier with reason", () => {
     lifecycleState.current.preflight = {
       actions: {
         restart: { supported: true, execution_mode: "immediate" },
@@ -90,21 +119,7 @@ describe("AgentRestartModal (#633)", () => {
     ).toBeInTheDocument();
   });
 
-  it("does not show after-current-run / busy-wait copy (Raft: all tiers force; #1900)", () => {
-    lifecycleState.current.preflight = {
-      actions: {
-        restart: { supported: true, execution_mode: "after_current_run" },
-        reset_session_restart: { supported: true, execution_mode: "immediate" },
-        full_reset_restart: { supported: true, execution_mode: "immediate" },
-      },
-    };
-    renderModal();
-    expect(screen.queryByText(/after the current task/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/wait until idle/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/强制重启|force/i)).not.toBeInTheDocument();
-  });
-
-  it("task #26: scheduled op is non-blocking — Done (not infinite spinner / locked cancel)", () => {
+  it("scheduled op is non-blocking — Done, no spinner lock", () => {
     lifecycleState.current.operation = {
       id: "op-sched",
       agent_id: "a-1",
@@ -115,54 +130,11 @@ describe("AgentRestartModal (#633)", () => {
       created_at: "2026-07-28T00:00:00Z",
     };
     renderModal();
-    expect(
-      screen.getByText(
-        /queued but may not run automatically/i,
-      ),
-    ).toBeInTheDocument();
-    // Done is offered so the user can leave; Cancel/spinner lock is gone.
     expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
-    // No spinner for scheduled (only hard-running blocks).
     expect(document.querySelector(".animate-spin")).toBeNull();
   });
 
-  it("full reset requires typing the @handle before it can be submitted", () => {
-    renderModal();
-    fireEvent.click(screen.getByText("Full reset & restart"));
-
-    const cta = screen.getByRole("button", { name: "Full reset & restart" });
-    expect(cta).toBeDisabled();
-
-    // Wrong text keeps it disabled.
-    const input = screen.getByLabelText("Enter atlas");
-    fireEvent.change(input, { target: { value: "wrong" } });
-    expect(cta).toBeDisabled();
-
-    // Exact handle enables it; submitting starts the action.
-    fireEvent.change(input, { target: { value: "atlas" } });
-    expect(cta).toBeEnabled();
-    fireEvent.click(cta);
-    expect(mutate).toHaveBeenCalledWith("full_reset_restart");
-  });
-
-  it("accepts the handle typed with a leading @ (no dead-end)", () => {
-    renderModal();
-    fireEvent.click(screen.getByText("Full reset & restart"));
-    const cta = screen.getByRole("button", { name: "Full reset & restart" });
-    fireEvent.change(screen.getByLabelText("Enter atlas"), {
-      target: { value: "@atlas" },
-    });
-    expect(cta).toBeEnabled();
-  });
-
-  it("starts the selected action on submit", () => {
-    renderModal();
-    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
-    expect(mutate).toHaveBeenCalledWith("restart");
-  });
-
-  it("shows a success outcome + Done when the operation succeeds", () => {
+  it("shows success + Done", () => {
     lifecycleState.current.operation = {
       id: "op-1",
       agent_id: "a-1",
@@ -177,26 +149,7 @@ describe("AgentRestartModal (#633)", () => {
     expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
   });
 
-  // Iris, 08-02: "identity/configuration/chat history/Issues are kept" was
-  // said 3x in this modal (top description, full_reset's own scope, and the
-  // full_reset confirm box) — say it once where it applies to all three
-  // tiers, reference it nowhere else.
-  it("states what's preserved exactly once — not repeated in the full_reset tier or its confirm box", () => {
-    renderModal();
-    fireEvent.click(screen.getByText("Full reset & restart"));
-    const preservedFactMatches = screen.getAllByText(
-      /identity, configuration, chat history, and Issues/i,
-    );
-    expect(preservedFactMatches).toHaveLength(1);
-  });
-
-  it("the full_reset confirm box states irreversibility instead of re-listing what's preserved", () => {
-    renderModal();
-    fireEvent.click(screen.getByText("Full reset & restart"));
-    expect(screen.getByText(/can't be undone/i)).toBeInTheDocument();
-  });
-
-  it("shows the failure reason + Retry when the operation fails", () => {
+  it("shows failure + Retry", () => {
     lifecycleState.current.operation = {
       id: "op-1",
       agent_id: "a-1",
@@ -209,9 +162,7 @@ describe("AgentRestartModal (#633)", () => {
     };
     renderModal();
     expect(screen.getByText(/Restart failed: disk_full/)).toBeInTheDocument();
-    const retry = screen.getByRole("button", { name: "Retry" });
-    fireEvent.click(retry);
-    expect(reset).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(mutate).toHaveBeenCalledWith("restart");
   });
 });

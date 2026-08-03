@@ -582,15 +582,18 @@
     "tier": {
       "restart": {
         "title": "再起動",
-        "scope": "プロセスを再起動します。セッション、ワークスペース（MEMORY.md、notes/）、その他すべてを保持します。"
+        "scope": "プロセスを再起動します。セッション、ワークスペース（MEMORY.md、notes/）、その他すべてを保持します。",
+        "title_short": "再起動"
       },
       "reset_session_restart": {
         "title": "セッションをリセットして再起動",
-        "scope": "モデルのセッションとコンテキストをクリアして再起動します。ワークスペース（MEMORY.md、notes/）とその他すべては保持されます。"
+        "scope": "モデルのセッションとコンテキストをクリアして再起動します。ワークスペース（MEMORY.md、notes/）とその他すべては保持されます。",
+        "title_short": "セッションをリセット"
       },
       "full_reset_restart": {
         "title": "完全リセットして再起動",
-        "scope": "セッションをクリアし、ワークスペースのファイル（MEMORY.md、notes/）を完全に削除して再起動します。これはエージェントの削除ではありません。"
+        "scope": "セッションをクリアし、ワークスペースのファイル（MEMORY.md、notes/）を完全に削除して再起動します。これはエージェントの削除ではありません。",
+        "title_short": "完全リセット"
       }
     },
     "after_current_run": "タスク実行中は利用できません。アイドルを待つか、再起動（強制）を使ってください。",
@@ -619,7 +622,9 @@
     },
     "cancel": "キャンセル",
     "retry": "再試行",
-    "done": "完了"
+    "done": "完了",
+    "description_short": "{{name}} を再起動します。",
+    "recommended": "推奨"
   },
   "live_peek": {
     "current_issue_label": "現在の作業",

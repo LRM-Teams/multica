@@ -16,6 +16,7 @@ import {
 import { dashboardUsageByAgentOptions } from "@multica/core/dashboard/queries";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import { cn } from "@multica/ui/lib/utils";
+import { AgentHonorPanelSection } from "../../agents/components/agent-honor-panel-section";
 import { ActivityTab } from "../../agents/components/tabs/activity-tab";
 import { RemindersTab } from "../../agents/components/tabs/reminders-tab";
 import { AgentProfileAvatarEditor } from "../../agents/components/agent-profile-avatar-editor";
@@ -395,6 +396,8 @@ function AgentProfileTabContent({
             </p>
           )}
         </ProfileField>
+
+        <AgentHonorPanelSection agentId={agent.id} workspaceId={agent.workspace_id} />
 
         <div className="border-t border-border pt-3">
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">

@@ -295,10 +295,14 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
       ),
     ).toBe(true);
 
-    const templates = readResearchSource("components/research-template-cards.tsx");
+    // LRM-1092: external template cards → composer chip row (still uses sm: wrap).
+    const templates = readResearchSource("components/research-template-chip-row.tsx");
     expect(
-      templates.includes("sm:grid"),
-      failHint(SMOKE_ISSUES.breakpoints, "template-cards still switches layout at sm: (640)"),
+      /\bsm:/.test(templates),
+      failHint(
+        SMOKE_ISSUES.breakpoints,
+        "template-chip-row still switches layout at sm: (640)",
+      ),
     ).toBe(true);
   });
 
@@ -317,14 +321,14 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
   );
 
   it.fails(
-    `${SMOKE_ISSUES.breakpoints}: template cards layout switch should be md:grid (align with 768)`,
+    `${SMOKE_ISSUES.breakpoints}: template chip-row layout switch should be md: (align with 768)`,
     () => {
-      const templates = readResearchSource("components/research-template-cards.tsx");
+      const templates = readResearchSource("components/research-template-chip-row.tsx");
       expect(
-        templates.includes("md:grid") && !templates.includes("sm:grid"),
+        /\bmd:/.test(templates) && !/\bsm:/.test(templates),
         failHint(
           SMOKE_ISSUES.breakpoints,
-          "research-template-cards.tsx still uses sm:grid instead of md:grid",
+          "research-template-chip-row.tsx still uses sm: instead of md:",
         ),
       ).toBe(true);
     },
@@ -380,63 +384,55 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
     expect(onClose).toHaveBeenCalled();
   });
 
-  it.fails(
-    `${SMOKE_ISSUES.overlayA11y}: desktop aux drawer closes on Escape`,
-    () => {
-      const onClose = vi.fn();
-      render(
-        <ResearchAuxDrawer panel="detail" onClose={onClose}>
-          <span>body</span>
-        </ResearchAuxDrawer>,
-      );
-      expect(screen.getByTestId("research-aux-drawer").tagName.toLowerCase()).toBe("aside");
-      fireEvent.keyDown(window, { key: "Escape" });
-      expect(
-        onClose,
-        failHint(SMOKE_ISSUES.overlayA11y, "desktop aux drawer ignore Escape"),
-      ).toHaveBeenCalled();
-    },
-  );
+  // LRM-1100 merged — these are hard gates now (was it.fails).
+  it(`${SMOKE_ISSUES.overlayA11y}: desktop aux drawer closes on Escape`, () => {
+    const onClose = vi.fn();
+    render(
+      <ResearchAuxDrawer panel="detail" onClose={onClose}>
+        <span>body</span>
+      </ResearchAuxDrawer>,
+    );
+    expect(screen.getByTestId("research-aux-drawer").tagName.toLowerCase()).toBe("aside");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(
+      onClose,
+      failHint(SMOKE_ISSUES.overlayA11y, "desktop aux drawer ignore Escape"),
+    ).toHaveBeenCalled();
+  });
 
-  it.fails(
-    `${SMOKE_ISSUES.overlayA11y}: desktop aux drawer exposes aria-labelledby to visible title`,
-    () => {
-      render(
-        <ResearchAuxDrawer panel="trajectory" onClose={() => {}}>
-          <span>body</span>
-        </ResearchAuxDrawer>,
-      );
-      const aside = screen.getByTestId("research-aux-drawer");
-      const labelledBy = aside.getAttribute("aria-labelledby");
-      expect(
-        labelledBy,
-        failHint(SMOKE_ISSUES.overlayA11y, "aux drawer missing aria-labelledby"),
-      ).toBeTruthy();
-      expect(document.getElementById(labelledBy!)).toBeTruthy();
-    },
-  );
+  it(`${SMOKE_ISSUES.overlayA11y}: desktop aux drawer exposes aria-labelledby to visible title`, () => {
+    render(
+      <ResearchAuxDrawer panel="trajectory" onClose={() => {}}>
+        <span>body</span>
+      </ResearchAuxDrawer>,
+    );
+    const aside = screen.getByTestId("research-aux-drawer");
+    const labelledBy = aside.getAttribute("aria-labelledby");
+    expect(
+      labelledBy,
+      failHint(SMOKE_ISSUES.overlayA11y, "aux drawer missing aria-labelledby"),
+    ).toBeTruthy();
+    expect(document.getElementById(labelledBy!)).toBeTruthy();
+  });
 
-  it.fails(
-    `${SMOKE_ISSUES.overlayA11y}: desktop chat drawer has aria-label and closes on Escape`,
-    () => {
-      const onClose = vi.fn();
-      render(
-        <ResearchChatDrawer open onClose={onClose}>
-          <span>body</span>
-        </ResearchChatDrawer>,
-      );
-      const aside = screen.getByTestId("research-chat-drawer");
-      expect(
-        aside.getAttribute("aria-label"),
-        failHint(SMOKE_ISSUES.overlayA11y, "chat drawer missing aria-label"),
-      ).toBeTruthy();
-      fireEvent.keyDown(window, { key: "Escape" });
-      expect(
-        onClose,
-        failHint(SMOKE_ISSUES.overlayA11y, "desktop chat drawer ignore Escape"),
-      ).toHaveBeenCalled();
-    },
-  );
+  it(`${SMOKE_ISSUES.overlayA11y}: desktop chat drawer has aria-label and closes on Escape`, () => {
+    const onClose = vi.fn();
+    render(
+      <ResearchChatDrawer open onClose={onClose}>
+        <span>body</span>
+      </ResearchChatDrawer>,
+    );
+    const aside = screen.getByTestId("research-chat-drawer");
+    expect(
+      aside.getAttribute("aria-label"),
+      failHint(SMOKE_ISSUES.overlayA11y, "chat drawer missing aria-label"),
+    ).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(
+      onClose,
+      failHint(SMOKE_ISSUES.overlayA11y, "desktop chat drawer ignore Escape"),
+    ).toHaveBeenCalled();
+  });
 
   it.fails(
     `${SMOKE_ISSUES.canvasKeyboard}: canvas root declares role=application with accessible name`,

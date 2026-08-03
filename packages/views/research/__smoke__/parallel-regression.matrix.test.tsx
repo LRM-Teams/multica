@@ -48,7 +48,10 @@ import {
   RESEARCH_NODE_HEIGHT,
   RESEARCH_NODE_WIDTH,
 } from "../lib/layout-graph";
-import { resolveCanvasKeyEvent } from "../lib/canvas-keyboard-nav";
+import {
+  resolveCanvasKeyEvent,
+  type CanvasKeyboardContext,
+} from "../lib/canvas-keyboard-nav";
 import { ringActionsForNode } from "../lib/node-action-ring";
 import { visualForEdgeType, visualForNodeType } from "../lib/node-visuals";
 import {
@@ -525,7 +528,7 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
         ).toBe(true);
       }
       const { nodes, edges } = keyboardForkFixture();
-      const ctx = { nodes, edges, focusId: "merge" as string | null, overlay: null as const };
+      const ctx: CanvasKeyboardContext = { nodes, edges, focusId: "merge", overlay: null };
       expect(
         resolveCanvasKeyEvent({ key: "Home", shiftKey: false }, ctx),
         failHint(SMOKE_ISSUES.canvasKeyboard, "Home should jump to first main-chain node"),

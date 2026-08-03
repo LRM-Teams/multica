@@ -345,7 +345,14 @@ function MessageViewport({
     channelId,
     messages,
     enabled: highlightIndex < 0 && unreadAnchorIndex < 0,
-    handleAttached,
+    // LRM-1220: the direct fallback renders plain, non-virtualized divs — no
+    // Virtuoso, so `handleAttached` is permanently false and the settle used to
+    // refuse to write a single scrollTop, timing out with the viewport resting on
+    // the OLDEST loaded row (jianghp3 on mobile web: every open landed on 「今天」
+    // + 当日第一条 with 「加载更早消息」 at the top). That path has no landing logic
+    // of its own, so this settle is the only owner of its initial position; it is
+    // "ready" precisely because there is no imperative handle to wait for.
+    listReady: handleAttached || useDirectFallback,
     scrollContainerEl,
     messageRefMap,
   });

@@ -86,16 +86,13 @@ describe("AgentRestartModal (#27 simplify)", () => {
     expect(mutate).toHaveBeenCalledWith("restart");
   });
 
-  it("full reset confirm appears only after selecting Full", () => {
+  it("full reset: select Full and click CTA — no type-to-confirm (Frank)", () => {
     renderModal();
     expect(screen.queryByLabelText("Enter atlas")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("restart-tier-full_reset_restart"));
-    expect(screen.getByLabelText("Enter atlas")).toBeInTheDocument();
+    // Still no type-handle field
+    expect(screen.queryByLabelText("Enter atlas")).not.toBeInTheDocument();
     const cta = screen.getByRole("button", { name: "Full reset & restart" });
-    expect(cta).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Enter atlas"), {
-      target: { value: "atlas" },
-    });
     expect(cta).toBeEnabled();
     fireEvent.click(cta);
     expect(mutate).toHaveBeenCalledWith("full_reset_restart");

@@ -82,6 +82,49 @@ function FactCard({
   );
 }
 
+/**
+ * Persistent shell (LRM-1201).
+ *
+ * The root node and the polite live region must survive every mode swap: a live
+ * region that mounts together with its text is not announced, and one that is
+ * unmounted when content arrives can never announce completion.
+ */
+function BoundaryShell({
+  mode,
+  shell,
+  title,
+  hint,
+  chip,
+  embedded,
+  liveText,
+  children,
+}: {
+  mode: "ready" | "loading" | "empty" | "error";
+  shell: string;
+  title: string;
+  hint: string;
+  chip: string;
+  embedded?: boolean;
+  liveText: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      data-testid="human-boundary-card"
+      role={mode === "error" ? "alert" : undefined}
+      aria-busy={mode === "loading"}
+      className={shell}
+    >
+      <BoundaryHeader title={title} hint={hint} chip={chip} embedded={embedded} />
+      {/* Error text already lives in role=alert — keep this silent to avoid a double read. */}
+      <p data-testid="human-boundary-live" className="sr-only" aria-live="polite">
+        {liveText}
+      </p>
+      {children}
+    </section>
+  );
+}
+
 export function HumanBoundaryCard({
   model,
   sessionStatus,
@@ -115,145 +158,130 @@ export function HumanBoundaryCard({
     className,
   );
 
+  const title = t(($) => $.m2.boundary_title);
+  const hint = t(($) => $.m2.boundary_hint);
+  const chip = t(($) => $.m2.boundary_chip);
+  const liveText =
+    mode === "loading"
+      ? t(($) => $.m2.boundary_loading)
+      : mode === "ready"
+        ? t(($) => $.m2.boundary_ready_live)
+        : mode === "empty"
+          ? t(($) => $.m2.boundary_empty_title)
+          : "";
+
+  const frame = (children: ReactNode) => (
+    <BoundaryShell
+      mode={mode}
+      shell={shell}
+      title={title}
+      hint={hint}
+      chip={chip}
+      embedded={embedded}
+      liveText={liveText}
+    >
+      {children}
+    </BoundaryShell>
+  );
+
   if (mode === "error") {
-    return (
-      <section
-        data-testid="human-boundary-card"
-        role="alert"
-        className={shell}
+    return frame(
+      <div
+        data-testid="human-boundary-error"
+        className="flex flex-col items-start gap-2 py-1"
       >
-        <BoundaryHeader
-          title={t(($) => $.m2.boundary_title)}
-          hint={t(($) => $.m2.boundary_hint)}
-          chip={t(($) => $.m2.boundary_chip)}
-          embedded={embedded}
-        />
-        <div
-          data-testid="human-boundary-error"
-          className="flex flex-col items-start gap-2 py-1"
-        >
-          <AlertCircle className="size-4 text-destructive" aria-hidden />
-          <p className="text-sm text-destructive">
-            {error || t(($) => $.m2.boundary_error)}
-          </p>
-          {onRetry ? (
-            <Button type="button" variant="outline" size="sm" onClick={onRetry}>
-              {t(($) => $.session_page.retry)}
-            </Button>
-          ) : null}
-        </div>
-      </section>
+        <AlertCircle className="size-4 text-destructive" aria-hidden />
+        <p className="text-sm text-destructive">
+          {error || t(($) => $.m2.boundary_error)}
+        </p>
+        {onRetry ? (
+          <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+            {t(($) => $.session_page.retry)}
+          </Button>
+        ) : null}
+      </div>,
     );
   }
 
   if (mode === "loading") {
-    return (
-      <section
-        data-testid="human-boundary-card"
-        className={shell}
-        aria-busy
-        aria-live="polite"
-      >
-        <BoundaryHeader
-          title={t(($) => $.m2.boundary_title)}
-          hint={t(($) => $.m2.boundary_hint)}
-          chip={t(($) => $.m2.boundary_chip)}
-          embedded={embedded}
-        />
-        <div data-testid="human-boundary-loading" className="space-y-2">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />
-            <span>{t(($) => $.m2.boundary_loading)}</span>
-          </div>
-          {[0, 1, 2].map((i) => (
-            <div
-              key={i}
-              className="animate-pulse rounded-xl border border-border/50 bg-card/70 p-3"
-              style={{ animationDelay: `${i * 80}ms` }}
-            >
-              <div className="mb-2 h-2.5 w-[36%] rounded bg-muted/70" />
-              <div className="h-2.5 w-full rounded bg-muted/45" />
-            </div>
-          ))}
+    return frame(
+      <div data-testid="human-boundary-loading" className="space-y-2">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />
+          <span>{t(($) => $.m2.boundary_loading)}</span>
         </div>
-      </section>
+        {[0, 1, 2].map((i) => (
+          <div
+            key={i}
+            className="animate-pulse rounded-xl border border-border/50 bg-card/70 p-3"
+            style={{ animationDelay: `${i * 80}ms` }}
+          >
+            <div className="mb-2 h-2.5 w-[36%] rounded bg-muted/70" />
+            <div className="h-2.5 w-full rounded bg-muted/45" />
+          </div>
+        ))}
+      </div>,
     );
   }
 
   if (mode === "empty") {
-    return (
-      <section data-testid="human-boundary-card" className={shell}>
-        <BoundaryHeader
-          title={t(($) => $.m2.boundary_title)}
-          hint={t(($) => $.m2.boundary_hint)}
-          chip={t(($) => $.m2.boundary_chip)}
-          embedded={embedded}
-        />
-        <div data-testid="human-boundary-empty" className="space-y-1">
-          <p className="text-sm font-medium text-foreground">
-            {t(($) => $.m2.boundary_empty_title)}
-          </p>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {t(($) => $.m2.boundary_empty_body)}
-          </p>
-        </div>
-      </section>
+    return frame(
+      <div data-testid="human-boundary-empty" className="space-y-1">
+        <p className="text-sm font-medium text-foreground">
+          {t(($) => $.m2.boundary_empty_title)}
+        </p>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {t(($) => $.m2.boundary_empty_body)}
+        </p>
+      </div>,
     );
   }
 
-  return (
-    <section data-testid="human-boundary-card" className={shell}>
-      <BoundaryHeader
-        title={t(($) => $.m2.boundary_title)}
-        hint={t(($) => $.m2.boundary_hint)}
-        chip={t(($) => $.m2.boundary_chip)}
-        embedded={embedded}
+  return frame(
+    <div data-testid="human-boundary-cards" className="space-y-2">
+      <FactCard
+        label={t(($) => $.m2.ai_ceiling)}
+        value={model.aiCeiling || t(($) => $.m2.boundary_summary_pending)}
+        tone="ai"
+        icon={<Bot className="size-3.5" />}
       />
-      <div data-testid="human-boundary-cards" className="space-y-2">
-        <FactCard
-          label={t(($) => $.m2.ai_ceiling)}
-          value={model.aiCeiling || t(($) => $.m2.boundary_summary_pending)}
-          tone="ai"
-          icon={<Bot className="size-3.5" />}
-        />
-        <FactCard
-          label={t(($) => $.m2.must_human)}
-          value={model.mustHuman || t(($) => $.m2.boundary_summary_pending)}
-          tone="human"
-          icon={<UserRound className="size-3.5" />}
-        />
-        {model.matrix.length > 0 ? (
-          <article
-            data-testid="human-boundary-matrix"
-            className="overflow-hidden rounded-xl border border-border/60 bg-card/90 shadow-sm backdrop-blur-sm"
-          >
-            <div className="border-b border-border/50 px-3 py-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
-              {t(($) => $.m2.boundary_matrix_label)}
-            </div>
-            <ul className="divide-y divide-border/50">
-              {model.matrix.map((row) => (
-                <li
-                  key={`${row.human}\0${row.ai}`}
-                  className="grid grid-cols-2 gap-2 px-3 py-2 text-[11px] leading-snug"
-                >
-                  <div>
-                    <div className="mb-0.5 text-[10px] text-[color:var(--role-human)]">
-                      {t(($) => $.m2.col_human)}
-                    </div>
-                    <p className="text-foreground">{row.human}</p>
+      <FactCard
+        label={t(($) => $.m2.must_human)}
+        value={model.mustHuman || t(($) => $.m2.boundary_summary_pending)}
+        tone="human"
+        icon={<UserRound className="size-3.5" />}
+      />
+      {model.matrix.length > 0 ? (
+        <article
+          data-testid="human-boundary-matrix"
+          className="overflow-hidden rounded-xl border border-border/60 bg-card/90 shadow-sm backdrop-blur-sm"
+        >
+          <div className="border-b border-border/50 px-3 py-2 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
+            {t(($) => $.m2.boundary_matrix_label)}
+          </div>
+          <ul className="divide-y divide-border/50">
+            {model.matrix.map((row) => (
+              <li
+                key={`${row.human}\0${row.ai}`}
+                className="grid grid-cols-2 gap-2 px-3 py-2 text-[11px] leading-snug"
+              >
+                <div>
+                  <div className="mb-0.5 text-[10px] text-[color:var(--role-human)]">
+                    {t(($) => $.m2.col_human)}
                   </div>
-                  <div>
-                    <div className="mb-0.5 text-[10px] text-brand">
-                      {t(($) => $.m2.col_ai)}
-                    </div>
-                    <p className="text-muted-foreground">{row.ai}</p>
+                  <p className="text-foreground">{row.human}</p>
+                </div>
+                <div>
+                  <div className="mb-0.5 text-[10px] text-brand">
+                    {t(($) => $.m2.col_ai)}
                   </div>
-                </li>
-              ))}
-            </ul>
-          </article>
-        ) : null}
-      </div>
-    </section>
+                  <p className="text-muted-foreground">{row.ai}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </article>
+      ) : null}
+    </div>,
   );
 }

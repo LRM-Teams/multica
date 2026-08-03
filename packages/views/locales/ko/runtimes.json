@@ -150,11 +150,19 @@
     "ops": {
       "section": "작업",
       "local_only": "로컬만",
+      "more_aria": "더 보기",
+      "restart_menu": "다시 시작…",
+      "delete_menu": "컴퓨터 삭제…",
+      "upgrade": "업그레이드",
+      "upgrade_to": "daemon을 v{{version}}(으)로 업그레이드",
+      "updating": "Updating…",
+      "upgrade_failed_retry": "실패 · 다시 시도",
       "restart_not_local": "로컬만",
-      "restart_managed_desktop": "데스크톱 앱에서 재시작",
-      "restart_sandbox": "샌드박스 불가",
-      "restart_no_permission": "소유자 또는 관리자만",
+      "restart_managed_desktop": "데스크톱 관리",
+      "restart_sandbox": "샌드박스",
+      "restart_no_permission": "소유자만",
       "restart_offline": "오프라인",
+      "restart_updating": "업데이트 중",
       "delete_owner_only": "소유자만"
     },
     "sharing": {

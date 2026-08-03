@@ -15,10 +15,10 @@ const TEST_RESOURCES = {
 };
 
 
-const { FakeMachineOpsSection } = vi.hoisted(() => {
+const { FakeMachineHeaderOps } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const React = require("react") as typeof import("react");
-  function FakeMachineOpsSection() {
+  function FakeMachineHeaderOps() {
     const [open, setOpen] = React.useState(false);
     return React.createElement(
       React.Fragment,
@@ -41,7 +41,7 @@ const { FakeMachineOpsSection } = vi.hoisted(() => {
         : null,
     );
   }
-  return { FakeMachineOpsSection };
+  return { FakeMachineHeaderOps };
 });
 
 vi.mock("@multica/core/auth", () => ({
@@ -117,8 +117,11 @@ vi.mock("./machine-code-agents-section", () => ({
 }));
 
 
+vi.mock("./machine-header-ops", () => ({
+  MachineHeaderOps: FakeMachineHeaderOps,
+}));
 vi.mock("./machine-ops-section", () => ({
-  MachineOpsSection: FakeMachineOpsSection,
+  MachineOpsSection: FakeMachineHeaderOps,
 }));
 
 vi.mock("./machine-sharing-section", () => ({

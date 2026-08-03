@@ -148,11 +148,19 @@
     "ops": {
       "section": "操作",
       "local_only": "ローカルのみ",
+      "more_aria": "その他の操作",
+      "restart_menu": "再起動…",
+      "delete_menu": "パソコンを削除…",
+      "upgrade": "アップグレード",
+      "upgrade_to": "daemon を v{{version}} にアップグレード",
+      "updating": "Updating…",
+      "upgrade_failed_retry": "失敗 · 再試行",
       "restart_not_local": "ローカルのみ",
-      "restart_managed_desktop": "デスクトップから再起動",
-      "restart_sandbox": "サンドボックス不可",
-      "restart_no_permission": "所有者または管理者のみ",
+      "restart_managed_desktop": "デスクトップ管理",
+      "restart_sandbox": "サンドボックス",
+      "restart_no_permission": "所有者のみ",
       "restart_offline": "オフライン",
+      "restart_updating": "更新中",
       "delete_owner_only": "所有者のみ"
     },
     "sharing": {

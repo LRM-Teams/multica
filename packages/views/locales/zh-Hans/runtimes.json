@@ -148,11 +148,19 @@
     "ops": {
       "section": "操作",
       "local_only": "仅本机",
+      "more_aria": "更多电脑操作",
+      "restart_menu": "重启…",
+      "delete_menu": "删除电脑…",
+      "upgrade": "升级",
+      "upgrade_to": "升级 daemon 至 v{{version}}",
+      "updating": "Updating…",
+      "upgrade_failed_retry": "升级失败 · 重试",
       "restart_not_local": "仅本机",
-      "restart_managed_desktop": "请在桌面端重启",
-      "restart_sandbox": "沙箱不可用",
-      "restart_no_permission": "仅所有者或管理员",
+      "restart_managed_desktop": "桌面端管理",
+      "restart_sandbox": "沙箱",
+      "restart_no_permission": "仅所有者",
       "restart_offline": "离线",
+      "restart_updating": "升级中",
       "delete_owner_only": "仅所有者"
     },
     "sharing": {

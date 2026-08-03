@@ -96,7 +96,7 @@ describe("runtime machine grouping", () => {
     expect(filterRuntimeMachines(machines, "", "issues")).toHaveLength(1);
   });
 
-  it("Basics Daemon version ignores stale offline runtimes (Frank 2026-08-03)", () => {
+  it("cliVersion ignores stale offline runtimes (Frank 2026-08-03)", () => {
     // One-off code-agent crash: Grok exited on 0.3.94 while Pi/Cursor
     // moved to 0.3.95 with the daemon. The strict every-runtime-agrees
     // read nulled the row and the machine's daemon version vanished.
@@ -550,7 +550,7 @@ describe("machine health presentation (#687)", () => {
   });
 });
 
-describe("machine cliVersion (Basics daemon row)", () => {
+describe("machine cliVersion (header daemon chip)", () => {
   it("keeps a shared version when every runtime reports the same current_version", () => {
     const machines = buildRuntimeMachines(
       [

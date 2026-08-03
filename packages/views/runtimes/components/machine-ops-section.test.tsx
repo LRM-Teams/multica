@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { AgentRuntime } from "@multica/core/types";
@@ -27,35 +28,25 @@ vi.mock("@multica/core/workspace/queries", () => ({
   }),
 }));
 
-vi.mock("./update-section", () => ({
-  // Task #81 (b) (Wren, 08-02): render the received `pinnedVersion` so we
-  // can assert the wiring from `primary.pinned_version` actually reaches
-  // this prop — a stub with no props back would let a broken wire pass
-  // silently.
-  UpdateSection: ({ pinnedVersion }: { pinnedVersion?: string | null }) => (
-    <div data-testid="update-section" data-pinned-version={pinnedVersion ?? ""}>
-      UpdateSection
-    </div>
-  ),
+vi.mock("@multica/core/api", () => ({
+  api: {
+    initiateUpdate: vi.fn(),
+    getUpdateResult: vi.fn(),
+    initiateRestart: vi.fn(),
+    getRestart: vi.fn(),
+  },
+  ApiError: class ApiError extends Error {
+    status: number;
+    body: unknown;
+    constructor(status: number, body: unknown) {
+      super("api");
+      this.status = status;
+      this.body = body;
+    }
+  },
 }));
 
-vi.mock("./restart-section", () => ({
-  RestartSection: ({ canRestart }: { canRestart: boolean }) => (
-    <button type="button" disabled={!canRestart} data-testid="restart-section">
-      Restart
-    </button>
-  ),
-}));
-
-vi.mock("./delete-computer-dialog", () => ({
-  MachineDeleteControl: () => (
-    <button type="button" data-testid="delete-computer-button">
-      Delete computer
-    </button>
-  ),
-}));
-
-import { MachineOpsSection } from "./machine-ops-section";
+import { MachineHeaderOps } from "./machine-header-ops";
 
 const TEST_RESOURCES = { en: { common: enCommon, runtimes: enRuntimes } };
 
@@ -115,29 +106,45 @@ function makeMachine(
 
 function renderOps(machine: RuntimeMachine) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  // Sample once outside JSX — react-doctor flags Date.now() in JSX for SSR
-  // hydration mismatch; this file is RTL-only and never SSR'd.
   const now = Date.now();
   return render(
     <QueryClientProvider client={qc}>
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <MachineOpsSection machine={machine} now={now} />
+        <MachineHeaderOps machine={machine} now={now} />
       </I18nProvider>
     </QueryClientProvider>,
   );
 }
 
-describe("MachineOpsSection", () => {
-  it("renders a dedicated Actions zone with upgrade, restart, delete", () => {
+describe("MachineHeaderOps (LRM-1036)", () => {
+  it("puts ops in the header slot with ⋯ menu; no Actions card title", () => {
     renderOps(makeMachine());
-    expect(screen.getByTestId("machine-ops-section")).toBeInTheDocument();
-    expect(screen.getByText("Actions")).toBeInTheDocument();
-    expect(screen.getByTestId("update-section")).toBeInTheDocument();
-    expect(screen.getByTestId("restart-section")).toBeEnabled();
-    expect(screen.getByTestId("delete-computer-button")).toBeInTheDocument();
+    expect(screen.getByTestId("machine-header-ops")).toBeInTheDocument();
+    expect(screen.queryByText("Actions")).not.toBeInTheDocument();
+    expect(screen.getByTestId("machine-actions-menu-trigger")).toBeInTheDocument();
+    // Up-to-date: no primary Upgrade button
+    expect(screen.queryByTestId("machine-header-upgrade")).not.toBeInTheDocument();
   });
 
-  it("shows always-visible reason when restart is blocked (desktop-managed)", () => {
+  it("shows Upgrade only when an update is available", () => {
+    renderOps(
+      makeMachine({
+        updateTargetVersion: "1.5.0",
+        runtimes: [
+          makeRuntime({
+            runtime_health: "update_available",
+            target_version: "1.5.0",
+          }),
+        ],
+      }),
+    );
+    expect(screen.getByTestId("machine-header-upgrade")).toHaveTextContent(
+      /Upgrade daemon to v1\.5\.0/i,
+    );
+  });
+
+  it("shows short disable reason inside ⋯ for desktop-managed restart", async () => {
+    const user = userEvent.setup();
     renderOps(
       makeMachine({
         runtimes: [
@@ -147,30 +154,14 @@ describe("MachineOpsSection", () => {
         ],
       }),
     );
-    expect(screen.getByTestId("restart-section")).toBeDisabled();
-    expect(screen.getByTestId("machine-ops-restart-reason")).toHaveTextContent(
-      /desktop app/i,
-    );
-  });
-
-  // Task #81 (b): the primary runtime's pinned_version must reach
-  // UpdateSection's pinnedVersion prop — the seam between machine.runtimes
-  // and the enforcement logic is where a wire could quietly break.
-  it("threads the primary runtime's pinned_version into UpdateSection", () => {
-    renderOps(
-      makeMachine({ runtimes: [makeRuntime({ pinned_version: "0.3.85" })] }),
-    );
-    expect(screen.getByTestId("update-section")).toHaveAttribute(
-      "data-pinned-version",
-      "0.3.85",
-    );
-  });
-
-  it("passes an empty pinned_version through unchanged when the runtime isn't pinned", () => {
-    renderOps(makeMachine({ runtimes: [makeRuntime({ pinned_version: null })] }));
-    expect(screen.getByTestId("update-section")).toHaveAttribute(
-      "data-pinned-version",
-      "",
-    );
+    await user.click(screen.getByTestId("machine-actions-menu-trigger"));
+    const reason = await screen.findByTestId("machine-ops-restart-reason");
+    expect(reason).toHaveTextContent(/Desktop managed/i);
+    const item = screen.getByTestId("machine-actions-restart");
+    expect(
+      item.getAttribute("data-disabled") !== null ||
+        item.getAttribute("aria-disabled") === "true" ||
+        (item as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });

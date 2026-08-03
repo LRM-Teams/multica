@@ -50,7 +50,19 @@ import { formatDateOnly } from "@multica/core/issues/date";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { StatusIcon, PriorityIcon, StatusPicker, PriorityPicker, StartDatePicker, DueDatePicker, AssigneePicker, LabelPicker } from ".";
+// Import icons/pickers by path — not via `./index` barrel. The barrel also
+// re-exports IssuesPage / CommentCard / …; pulling it here made every
+// IssueDetail import (prod + tests) pay for that whole graph (task #5 B).
+import { StatusIcon } from "./status-icon";
+import { PriorityIcon } from "./priority-icon";
+import {
+  StatusPicker,
+  PriorityPicker,
+  StartDatePicker,
+  DueDatePicker,
+  AssigneePicker,
+  LabelPicker,
+} from "./pickers";
 import { IssueActionsDropdown, useIssueActions } from "../actions";
 import { ProjectPicker } from "../../projects/components/project-picker";
 import { AssociatedGroupPicker } from "./associated-group-picker";

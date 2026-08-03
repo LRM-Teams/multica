@@ -107,4 +107,58 @@ describe("ResearchProductRoundCardView", () => {
     });
     expect(onAgree).toHaveBeenCalledTimes(1);
   });
+
+  it("LRM-1239: pending uses aria-disabled (not native disabled) and guards handlers", () => {
+    const onAgree = vi.fn();
+    const onRejectContinue = vi.fn();
+    const onRejectGoalPatch = vi.fn();
+    render(
+      <ResearchProductRoundCardView
+        card={card}
+        onAgree={onAgree}
+        onRejectContinue={onRejectContinue}
+        onRejectGoalPatch={onRejectGoalPatch}
+        pending
+        autoAdoptSeconds={0}
+      />,
+    );
+
+    const agree = screen.getByTestId("research-round-agree") as HTMLButtonElement;
+    const reject = screen.getByTestId(
+      "research-round-reject-continue",
+    ) as HTMLButtonElement;
+    const goalReject = screen.getByTestId(
+      "research-round-goal-reject",
+    ) as HTMLButtonElement;
+
+    for (const el of [agree, reject, goalReject]) {
+      expect(el.hasAttribute("disabled")).toBe(false);
+      expect(el.disabled).toBe(false);
+      expect(el.getAttribute("aria-disabled")).toBe("true");
+    }
+
+    agree.focus();
+    expect(document.activeElement).toBe(agree);
+    fireEvent.click(agree);
+    fireEvent.keyDown(agree, { key: "Enter" });
+    expect(document.activeElement).toBe(agree);
+
+    fireEvent.click(reject);
+    fireEvent.click(goalReject);
+    expect(onAgree).not.toHaveBeenCalled();
+    expect(onRejectContinue).not.toHaveBeenCalled();
+    expect(onRejectGoalPatch).not.toHaveBeenCalled();
+  });
+
+  it("LRM-1239: auto-adopt / countdown announcements use native <output>", () => {
+    render(<ResearchProductRoundCardView card={card} autoAdoptSeconds={5} />);
+    const countdown = screen.getByText(/Auto-adopt in/);
+    expect(countdown.tagName).toBe("OUTPUT");
+
+    act(() => {
+      vi.advanceTimersByTime(5500);
+    });
+    const adopted = screen.getByText("Timed out — adopted");
+    expect(adopted.tagName).toBe("OUTPUT");
+  });
 });

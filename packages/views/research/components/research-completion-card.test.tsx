@@ -66,4 +66,31 @@ describe("ResearchCompletionCard (LRM-832)", () => {
     expect(screen.getByText("This run did not finish.")).toBeTruthy();
     expect(screen.queryByText("Research complete")).toBeNull();
   });
+
+  // LRM-1235 — fullscreen dismiss mask must stay mouse-only (out of tab / SR name tree).
+  it("keeps backdrop dismiss clickable but out of tab order and SR name tree", () => {
+    const onDismiss = vi.fn();
+    render(
+      <ResearchCompletionCard
+        kind="done"
+        onViewReport={() => {}}
+        onNewResearch={() => {}}
+        onHome={() => {}}
+        onDismiss={onDismiss}
+      />,
+    );
+    const dialog = screen.getByTestId("research-completion-card");
+    const backdrop = dialog.querySelector(
+      'button.absolute.inset-0[aria-hidden="true"]',
+    );
+    expect(backdrop).toBeTruthy();
+    expect(backdrop).toHaveAttribute("tabindex", "-1");
+    expect(backdrop).not.toHaveAttribute("aria-label");
+
+    const namedDismiss = screen.getAllByRole("button", { name: "Dismiss" });
+    expect(namedDismiss).toHaveLength(1);
+
+    fireEvent.click(backdrop!);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
 });

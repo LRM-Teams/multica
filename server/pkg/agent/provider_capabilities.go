@@ -81,7 +81,7 @@ var providerCapabilities = map[string]ProviderCapabilities{
 	"pi":          caps(true, false, true, true, true),
 	"cursor":      caps(true, false, true, true, false),
 	"kimi":        caps(false, true, true, false, false),
-	"kiro":        caps(false, true, true, false, false),
+	"kiro":        caps(true, true, true, false, false), // resident ACP (session/load); probe s144 2026-08-03
 	"antigravity": caps(false, false, true, false, false),
 	"grok":        caps(true, false, true, false, true),
 }
@@ -97,6 +97,7 @@ var forceRestartResidentConstructors = map[string]func(Config) Backend{
 	"pi":       func(cfg Config) Backend { return newPiRPCBackend(cfg) },
 	"grok":     func(cfg Config) Backend { return newGrokACPBackend(cfg) },
 	"opencode": func(cfg Config) Backend { return newOpenCodeServeBackend(cfg) },
+	"kiro":     func(cfg Config) Backend { return newKiroACPBackend(cfg) },
 }
 
 func init() {

@@ -101,6 +101,10 @@ type AgentResponse struct {
 	UpdatedAt     string              `json:"updated_at"`
 	ArchivedAt    *string             `json:"archived_at"`
 	ArchivedBy    *string             `json:"archived_by"`
+	// HonorLevel is batch-projected on ListAgents for compact identity surfaces.
+	// Other agent endpoints may omit it; the dedicated honor endpoint remains
+	// the source for the complete dashboard.
+	HonorLevel int `json:"honor_level,omitempty"`
 	// Memory growth tier/progress for profile & agent card (LRM-303). Null when
 	// the agent has zero valid Phase① memory writes.
 	MemoryGrowth *AgentMemoryGrowthResponse `json:"memory_growth,omitempty"`
@@ -824,6 +828,19 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	honorLevels, err := h.Queries.ListAgentHonorLevelsByWorkspace(
+		r.Context(),
+		parseUUID(workspaceID),
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load agent honor levels")
+		return
+	}
+	honorLevelByAgentID := make(map[string]int, len(honorLevels))
+	for _, row := range honorLevels {
+		honorLevelByAgentID[uuidToString(row.AgentID)] = int(row.Level)
+	}
+
 	// Batch-load research-fleet membership to avoid N+1 (task #903: the
 	// research_fleet_member table is the single source of truth for "is
 	// this agent a research-fleet member" — agent.managed_role is retired).
@@ -862,6 +879,7 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		resp := agentToResponse(a)
+		resp.HonorLevel = honorLevelByAgentID[resp.ID]
 		if skills, ok := skillMap[resp.ID]; ok {
 			resp.Skills = skills
 		}

@@ -7,7 +7,8 @@ import (
 
 const (
 	OrchestratorVersionV1 = "research-run-v1"
-	OrchestratorVersion   = OrchestratorVersionV1
+	OrchestratorVersionV2 = "research-run-v2"
+	OrchestratorVersion   = OrchestratorVersionV2
 )
 
 type RunStatus string

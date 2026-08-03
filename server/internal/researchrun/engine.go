@@ -563,18 +563,18 @@ func remediationTask(gate GateResult) (TaskKind, string, string) {
 	evidenceGap := codes["tasks_blocked"] || codes["required_questions_missing"] ||
 		codes["required_questions_unanswered"] || codes["independent_sources_insufficient"] ||
 		codes["report_claims_unsupported"] || codes["major_claim_sources_insufficient"] || codes["report_claims_stale"] || codes["report_conflicts_unresolved"] ||
-		codes["major_claims_unlinked"] || codes["quality_evaluation_failed"] ||
 		codes["citation_audit_failed"]
 	if evidenceGap {
 		return TaskKindReplan, gateObjective("Revise the plan to remediate every delivery-gate finding. Preserve valid evidence, add targeted verification and counter-search work, then require a new report revision.", gate), "lead"
 	}
-	if codes["report_missing"] || codes["report_claims_missing"] {
+	if codes["report_missing"] || codes["report_claims_missing"] || codes["major_claims_unlinked"] ||
+		codes["required_answers_unreported"] || codes["report_structure_incomplete"] || codes["report_author_missing"] || codes["quality_evaluation_failed"] {
 		return TaskKindSynthesize, gateObjective("Produce a decision-useful report from the normalized claims and verified evidence. Link every report section to claim keys.", gate), "reporter"
 	}
-	if codes["quality_evaluation_missing"] {
+	if codes["quality_evaluation_missing"] || codes["quality_evaluation_not_independent"] {
 		return TaskKindQualityGate, gateObjective("Independently evaluate the latest report. Check factual grounding, coverage, analytical depth, source quality, contradiction handling, instruction adherence, and readability.", gate), "validator"
 	}
-	if codes["citation_audit_missing"] {
+	if codes["citation_audit_missing"] || codes["citation_audit_not_independent"] {
 		return TaskKindCitationAudit, gateObjective("Audit every latest-report claim against exact observations and source snapshots. Fail unsupported, misquoted, or unresolved contradictory claims.", gate), "validator"
 	}
 	return TaskKindReplan, gateObjective("Inspect the remaining gate findings and create the smallest evidence-producing remediation graph that resolves all of them.", gate), "lead"
@@ -589,6 +589,8 @@ func buildTaskPrompt(run Run, task Task, attempt Attempt, snapshot RunSnapshot, 
 	switch run.OrchestratorVersion {
 	case OrchestratorVersionV1:
 		return buildTaskPromptV1(run, task, attempt, snapshot, members), nil
+	case OrchestratorVersionV2:
+		return buildTaskPromptV2(run, task, attempt, snapshot, members), nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnsupportedVersion, run.OrchestratorVersion)
 	}
@@ -641,6 +643,56 @@ func buildTaskPromptV1(run Run, task Task, attempt Attempt, snapshot RunSnapshot
 		b.WriteString("7. Keep result artifacts scoped to this assignment and create follow-up tasks only when they resolve an identified frontier gap.\n")
 	}
 	b.WriteString("8. Submit the JSON exactly once with:\n\n")
+	fmt.Fprintf(&b, "```bash\nmultica research task-result %s %s %s --file /absolute/path/research-result.json\n```\n", run.SessionID, task.ID, attempt.ID)
+	b.WriteString("\nDo not use graph-append, source-upsert, report-patch, or stage-eval for this task. Do not claim completion in chat before task-result succeeds.\n")
+	return b.String()
+}
+
+func buildTaskPromptV2(run Run, task Task, attempt Attempt, snapshot RunSnapshot, members []FleetMember) string {
+	var b strings.Builder
+	b.WriteString("## Durable Research Run task\n\n")
+	fmt.Fprintf(&b, "- Session ID: `%s`\n- Task ID: `%s`\n- Attempt ID: `%s`\n- Dispatch key: `%s`\n", run.SessionID, task.ID, attempt.ID, attempt.DispatchKey)
+	fmt.Fprintf(&b, "- Goal version: %d\n- Plan version: %d\n- Task kind: `%s`\n- Expected result: `%s`\n", task.GoalVersion, task.PlanVersion, task.Kind, task.ExpectedResult)
+	fmt.Fprintf(&b, "- Research goal: %s\n- Objective: %s\n", run.Goal, task.Objective)
+	fmt.Fprintf(&b, "- Contract language: %s\n- Contract audience: %s\n- Contract freshness: %s\n", snapshot.Contract.Language, snapshot.Contract.Audience, snapshot.Contract.Freshness)
+	fmt.Fprintf(&b, "- Contract scope: `%s`\n- Source policy: `%s`\n", compactJSON(snapshot.Contract.Scope), compactJSON(snapshot.Contract.SourcePolicy))
+	if len(task.AcceptanceCriteria) > 0 {
+		fmt.Fprintf(&b, "- Acceptance criteria: `%s`\n", string(task.AcceptanceCriteria))
+	}
+	b.WriteString("- Active fleet roles:")
+	for _, member := range members {
+		if member.Status == "active" {
+			fmt.Fprintf(&b, " `%s`", strings.ToLower(strings.TrimSpace(member.Role)))
+		}
+	}
+	b.WriteString("\n\nCurrent required questions:\n")
+	for _, question := range snapshot.Questions {
+		if question.GoalVersion == run.GoalVersion && question.PlanVersion == run.PlanVersion && question.Required {
+			fmt.Fprintf(&b, "- `%s` [%s, coverage %.2f]: %s\n", question.ClientKey, question.Status, question.Coverage, question.Question)
+		}
+	}
+	fmt.Fprintf(&b, "\nCanonical evidence ledger: %d source snapshots, %d observations, %d claims. Read the complete session with `multica research session get %s --output json`; chat messages are not evidence.\n", len(snapshot.Sources), len(snapshot.Observations), len(snapshot.Claims), run.SessionID)
+
+	b.WriteString("\nExecution contract:\n")
+	b.WriteString("1. Inspect current state before working. Return exactly one strict JSON object with schema_version=2 and a globally unique client_request_id. Allowed top-level fields: schema_version, client_request_id, summary, questions, plan, sources, observations, claims, proposed_tasks, report, evaluation, answer_claim_key, coverage_delta, confidence, incomplete_reason.\n")
+	b.WriteString("2. Preserve retrieved source text in bounded snapshots. Source fields are client_key,url,title,publisher,source_class,independence_key,retrieved_at,snapshot_text,metadata. Observation fields are client_key,source_key,quote,datum,locator,interpretation. Claim fields are client_key,text,significance,confidence,status,resolution,evidence; evidence uses observation_key,relation,strength,rationale. Every Observation quote must occur exactly in its snapshot. Separate independent source families and record counterevidence.\n")
+	b.WriteString("3. Every proposed task uses an active fleet role and this exact expected_result mapping: plan/replan=research_plan_v2; discover/deep_read/verify/counter_search=research_evidence_v2; synthesize=research_report_v2; quality_gate=research_quality_evaluation_v2; citation_audit=research_citation_audit_v2. Delivery roles are fixed: synthesize=reporter; quality_gate=validator; citation_audit=validator. Every plan includes all three delivery tasks, and both audit tasks directly depend on a synthesize task.\n")
+	b.WriteString("4. A question-scoped evidence result that increases coverage supplies answer_claim_key pointing to one Claim in that result.\n")
+	b.WriteString("5. A report uses the existing reader schema exactly: report={content_md,structured,claims}; structured={schema_version:1,title,outline:[{id,title,level,children}],sections:[{id,title,level,markdown,citation_ids}],citations:[{id,index,source_id,label,quote,locator}],sources:[{source_id,title,url,credibility_weight,source_class}],gaps,conclusion}; claims=[{claim_key,section_id,anchor_quote}]. Every outline item maps to a section; every section markdown and the conclusion occur verbatim in content_md; every citation resolves to a source. Every report Claim link uses an exact anchor_quote from its section, and that section cites verified evidence supporting the Claim.\n")
+	policy := reportPolicyForDepth(run.DepthTier)
+	fmt.Fprintf(&b, "6. This %s run requires at least %d sections, %d substantive characters per section, and %d in the conclusion. These reject placeholders; evidence coverage and independent review remain the quality gates.\n", run.DepthTier, policy.MinimumSections, policy.MinimumSectionCharacters, policy.MinimumConclusionCharacters)
+	b.WriteString("7. A quality or citation evaluation reviews a report written by another Agent. Return evaluation={passed,factual_grounding,coverage,analytical_depth,source_quality,contradiction_handling,instruction_adherence,readability,dimension_findings with one substantive rationale for each named score,reviewed_claim_keys covering every report Claim,reviewed_section_ids covering every report section,findings}. Fail the evaluation when any material defect remains.\n")
+	switch task.Kind {
+	case TaskKindVerify, TaskKindCounterSearch:
+		b.WriteString("8. Include every source, observation, claim, and evidence link being verified. Reuse stable keys and exact ledger content when corroborating existing artifacts; deduplication upgrades verification state transactionally.\n")
+	case TaskKindSynthesize:
+		b.WriteString("8. Cover every required question's answer Claim and every supported high-significance Claim in the report. Report metadata without explanatory prose and verified citations is rejected.\n")
+	case TaskKindQualityGate, TaskKindCitationAudit:
+		b.WriteString("8. Evaluate the latest report and current evidence ledger independently. Do not add evidence or manufacture passing scores.\n")
+	default:
+		b.WriteString("8. Keep result artifacts scoped to this assignment and propose follow-up work only for an identified frontier gap.\n")
+	}
+	b.WriteString("9. Submit the JSON exactly once with:\n\n")
 	fmt.Fprintf(&b, "```bash\nmultica research task-result %s %s %s --file /absolute/path/research-result.json\n```\n", run.SessionID, task.ID, attempt.ID)
 	b.WriteString("\nDo not use graph-append, source-upsert, report-patch, or stage-eval for this task. Do not claim completion in chat before task-result succeeds.\n")
 	return b.String()

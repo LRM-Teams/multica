@@ -610,6 +610,52 @@ func TestPostgresStoreBlocksTasksWhoseDependencyIsTerminal(t *testing.T) {
 	}
 }
 
+func TestCreateControlTaskDoesNotReuseSucceededDeliveryTask(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	run, _, err := store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Revise a report",
+		Title: "Revision", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	succeededID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_task (
+		  id, workspace_id, session_id, client_key, kind, objective,
+		  required_capability, expected_result, status, goal_version, plan_version,
+		  max_attempts, timeout_seconds, completed_at
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'synthesize-initial', 'synthesize', 'Initial report',
+		  'reporter', 'research_report_v2', 'succeeded', $4, $5, 3, 1800, now())
+	`, succeededID, fixture.workspaceID, fixture.sessionID, run.GoalVersion, run.PlanVersion); err != nil {
+		t.Fatal(err)
+	}
+	task, _, err := store.CreateControlTask(ctx, fixture.sessionID, TaskKindSynthesize, "Revise the report after quality failure", "reporter", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.ID == succeededID || task.Status != TaskStatusReady || task.ClientKey == "synthesize-initial" {
+		t.Fatalf("control task reused succeeded work: %+v", task)
+	}
+}
+
 func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -637,19 +683,19 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := ResultEnvelope{
-		SchemaVersion: 1, ClientRequestID: "e2e-plan", Summary: "dependency-safe plan", Confidence: 0.8,
+		SchemaVersion: 2, ClientRequestID: "e2e-plan", Summary: "dependency-safe plan", Confidence: 0.8,
 		Plan: &PlanProposal{
 			Questions: []QuestionProposal{{
 				ClientKey: "answer-question", Kind: QuestionKindDimension, Text: "What is the measured value?",
 				Required: true, Priority: 1, Impact: 1, Uncertainty: 0.8, Novelty: 0.5,
 			}},
 			Tasks: []TaskProposal{
-				{ClientKey: "verify-1", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Triangulate three primary sources", RequiredCapability: "lead", ExpectedResult: "research_evidence_v1", Priority: 1},
-				{ClientKey: "verify-2", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Repeat verification for marginal-gain measurement", RequiredCapability: "lead", ExpectedResult: "research_evidence_v1", Priority: 0.9, DependsOn: []string{"verify-1"}},
-				{ClientKey: "verify-3", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Confirm saturation", RequiredCapability: "lead", ExpectedResult: "research_evidence_v1", Priority: 0.8, DependsOn: []string{"verify-2"}},
-				{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write evidence-linked report", RequiredCapability: "lead", ExpectedResult: "research_report_v1", Priority: 0.7, DependsOn: []string{"verify-3"}},
-				{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Evaluate report quality", RequiredCapability: "lead", ExpectedResult: "research_quality_evaluation_v1", Priority: 0.6, DependsOn: []string{"synthesize"}},
-				{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit report citations", RequiredCapability: "lead", ExpectedResult: "research_citation_audit_v1", Priority: 0.6, DependsOn: []string{"synthesize"}},
+				{ClientKey: "verify-1", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Triangulate three primary sources", RequiredCapability: "validator", ExpectedResult: "research_evidence_v2", Priority: 1},
+				{ClientKey: "verify-2", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Repeat verification for marginal-gain measurement", RequiredCapability: "validator", ExpectedResult: "research_evidence_v2", Priority: 0.9, DependsOn: []string{"verify-1"}},
+				{ClientKey: "verify-3", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Confirm saturation", RequiredCapability: "validator", ExpectedResult: "research_evidence_v2", Priority: 0.8, DependsOn: []string{"verify-2"}},
+				{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write evidence-linked report", RequiredCapability: "reporter", ExpectedResult: "research_report_v2", Priority: 0.7, DependsOn: []string{"verify-3"}},
+				{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Evaluate report quality", RequiredCapability: "validator", ExpectedResult: "research_quality_evaluation_v2", Priority: 0.6, DependsOn: []string{"synthesize"}},
+				{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit report citations", RequiredCapability: "validator", ExpectedResult: "research_citation_audit_v2", Priority: 0.6, DependsOn: []string{"synthesize"}},
 			},
 			InclusionCriteria: []string{"Primary evidence"}, ExclusionCriteria: []string{"Unverifiable summaries"},
 			SourceStrategy: []string{"Independent source families"}, Uncertainties: []string{"Measurement context"}, PlanningRisks: []string{"Source disagreement"},
@@ -658,6 +704,8 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
 
 	evidence := e2eVerifiedEvidence()
+	evidence.SchemaVersion = 2
+	evidence.AnswerClaimKey = "answer-claim"
 	evidence.ClientRequestID = "e2e-evidence-1"
 	evidence.CoverageDelta = 0.8
 	submitStoreTask(t, ctx, pool, store, fixture, "verify-1", evidence, run.Config)
@@ -667,22 +715,22 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 	evidence.ClientRequestID = "e2e-evidence-3"
 	submitStoreTask(t, ctx, pool, store, fixture, "verify-3", evidence, run.Config)
 
+	report := e2eStructuredReport(t, ctx, pool, fixture.sessionID)
 	submitStoreTask(t, ctx, pool, store, fixture, "synthesize", ResultEnvelope{
-		SchemaVersion: 1, ClientRequestID: "e2e-report", Summary: "report", Confidence: 0.9,
-		Report: &ReportProposal{
-			ContentMD: "# Finding\n\nThe measured value is 42.", Structured: json.RawMessage(`{"sections":["finding"]}`),
-			Claims: []ReportClaimProposal{{ClaimKey: "answer-claim", SectionID: "finding"}},
-		},
+		SchemaVersion: 2, ClientRequestID: "e2e-report", Summary: "report", Confidence: 0.9,
+		Report: &report,
 	}, run.Config)
 	evaluation := EvaluationProposal{
 		Passed: true, FactualGrounding: 0.9, Coverage: 0.9, AnalyticalDepth: 0.9,
 		SourceQuality: 0.9, ContradictionHandling: 0.9, InstructionAdherence: 0.9, Readability: 0.9,
+		DimensionFindings: e2eDimensionFindings(), ReviewedClaimKeys: []string{"answer-claim"},
+		ReviewedSectionIDs: []string{"executive-summary", "method", "finding", "limitations", "conclusion"},
 	}
 	submitStoreTask(t, ctx, pool, store, fixture, "quality", ResultEnvelope{
-		SchemaVersion: 1, ClientRequestID: "e2e-quality", Summary: "quality passed", Confidence: 0.9, Evaluation: &evaluation,
+		SchemaVersion: 2, ClientRequestID: "e2e-quality", Summary: "quality passed", Confidence: 0.9, Evaluation: &evaluation,
 	}, run.Config)
 	submitStoreTask(t, ctx, pool, store, fixture, "citations", ResultEnvelope{
-		SchemaVersion: 1, ClientRequestID: "e2e-citations", Summary: "citations passed", Confidence: 0.9, Evaluation: &evaluation,
+		SchemaVersion: 2, ClientRequestID: "e2e-citations", Summary: "citations passed", Confidence: 0.9, Evaluation: &evaluation,
 	}, run.Config)
 
 	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
@@ -747,6 +795,84 @@ func TestEvaluateGateIgnoresReportFromPriorPlanVersion(t *testing.T) {
 	}
 }
 
+func TestEvaluateGateBlocksUnreportedRequiredAnswerAndAuthorSelfReview(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	if _, _, err = store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Audit delivery",
+		Title: "Audit delivery", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard")); err != nil {
+		t.Fatal(err)
+	}
+	claimID := uuid.NewString()
+	questionID := uuid.NewString()
+	reportID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_claim (
+		  id, workspace_id, session_id, client_key, claim_text, significance,
+		  confidence, status, goal_version, plan_version
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'required-answer', 'The required answer', 'high', 0.9, 'supported', 1, 1)
+	`, claimID, fixture.workspaceID, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_question (
+		  id, workspace_id, session_id, client_key, kind, question, required,
+		  status, priority, impact, uncertainty, novelty, coverage,
+		  goal_version, plan_version, answer_claim_id
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'required-question', 'dimension', 'What is the answer?', true,
+		  'answered', 1, 1, 0.5, 0.5, 1, 1, 1, $4::uuid)
+	`, questionID, fixture.workspaceID, fixture.sessionID, claimID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_report (
+		  id, workspace_id, session_id, revision, content_md, structured,
+		  goal_version, plan_version, author_agent_id
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, '# Short', '{"schema_version":1}'::jsonb, 1, 1, $4::uuid)
+	`, reportID, fixture.workspaceID, fixture.sessionID, fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	evaluation := `{"passed":true,"factual_grounding":0.9,"coverage":0.9,"analytical_depth":0.9,"source_quality":0.9,"contradiction_handling":0.9,"instruction_adherence":0.9,"readability":0.9,"findings":[]}`
+	for _, kind := range []TaskKind{TaskKindQualityGate, TaskKindCitationAudit} {
+		if _, err = pool.Exec(ctx, `
+			INSERT INTO research_decision (
+			  workspace_id, session_id, decision_kind, actor_type, actor_id,
+			  goal_version, plan_version, inputs, outcome
+			) VALUES ($1::uuid, $2::uuid, $3, 'agent', $4::uuid, 1, 1,
+			  jsonb_build_object('report_id', $5::text), $6::jsonb)
+		`, fixture.workspaceID, fixture.sessionID, kind, fixture.agentID, reportID, evaluation); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []string{"required_answers_unreported", "quality_evaluation_not_independent", "citation_audit_not_independent", "report_structure_incomplete"} {
+		if !hasGateFinding(gate, code) {
+			t.Fatalf("gate missing %q: %+v", code, gate.Findings)
+		}
+	}
+}
+
 func submitStoreTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, store *PostgresStore, fixture researchRunFixture, clientKey string, result ResultEnvelope, config RunConfig) {
 	t.Helper()
 	if _, err := store.ActivateReadyTasks(ctx, fixture.sessionID); err != nil {
@@ -766,7 +892,14 @@ func submitStoreTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, stor
 	if task.ID == "" || task.Status != TaskStatusReady {
 		t.Fatalf("task %q is not ready: %+v", clientKey, task)
 	}
-	attempt, _, err := store.CreateAttempt(ctx, fixture.sessionID, task.ID, fixture.agentID)
+	agentID := fixture.agentID
+	switch task.RequiredCapability {
+	case "reporter":
+		agentID = fixture.reporterID
+	case "validator":
+		agentID = fixture.validatorID
+	}
+	attempt, _, err := store.CreateAttempt(ctx, fixture.sessionID, task.ID, agentID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -774,7 +907,7 @@ func submitStoreTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, stor
 	if _, err = pool.Exec(ctx, `
 		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
 		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'draining')
-	`, inboxID, fixture.workspaceID, fixture.agentID); err != nil {
+	`, inboxID, fixture.workspaceID, agentID); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxID); err != nil {
@@ -784,12 +917,16 @@ func submitStoreTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, stor
 	if err != nil {
 		t.Fatal(err)
 	}
-	validated, hash, err := DecodeAndValidateResult(raw, task, config)
+	run, err := store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validated, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, task, config)
 	if err != nil {
 		t.Fatalf("validate %s: %v", clientKey, err)
 	}
 	if _, err = store.AcceptResult(ctx, AcceptResultInput{
-		SessionID: fixture.sessionID, AttemptID: attempt.ID, AgentID: fixture.agentID,
+		SessionID: fixture.sessionID, AttemptID: attempt.ID, AgentID: agentID,
 		InboxTaskID: inboxID, Raw: raw, Result: validated, Hash: hash,
 	}); err != nil {
 		t.Fatalf("accept %s: %v", clientKey, err)
@@ -822,6 +959,78 @@ func e2eVerifiedEvidence() ResultEnvelope {
 			Confidence: 0.9, Status: ClaimStatusSupported, Evidence: evidence,
 		}},
 	}
+}
+
+func e2eStructuredReport(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sessionID string) ReportProposal {
+	t.Helper()
+	type projectedSource struct {
+		ID          string
+		URL         string
+		Title       string
+		Weight      float64
+		SourceClass string
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT id::text, url, title, credibility_weight, source_class
+		FROM research_source WHERE session_id = $1::uuid ORDER BY url
+	`, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	projected := []projectedSource{}
+	for rows.Next() {
+		var source projectedSource
+		if err = rows.Scan(&source.ID, &source.URL, &source.Title, &source.Weight, &source.SourceClass); err != nil {
+			t.Fatal(err)
+		}
+		projected = append(projected, source)
+	}
+	if err = rows.Err(); err != nil || len(projected) != 3 {
+		t.Fatalf("projected sources=%d err=%v", len(projected), err)
+	}
+
+	sectionText := func(topic string) string {
+		return strings.Repeat(topic+" explains the evidence boundary, comparison method, observed result, uncertainty, and decision consequence in complete prose. ", 3)
+	}
+	conclusion := strings.Repeat("The independently reproduced measurements support the value 42 while preserving the stated scope, uncertainty, and evidence limits. ", 2)
+	sections := []reportStructuredSection{
+		{ID: "executive-summary", Title: "Executive summary", Level: 1, Markdown: sectionText("The executive summary")},
+		{ID: "method", Title: "Method", Level: 1, Markdown: sectionText("The method section")},
+		{ID: "finding", Title: "Finding", Level: 1, Markdown: "The independently measured value is 42 across three source families. " + sectionText("The finding section"), CitationIDs: []string{"citation-1", "citation-2", "citation-3"}},
+		{ID: "limitations", Title: "Limitations", Level: 1, Markdown: sectionText("The limitations section")},
+		{ID: "conclusion", Title: "Conclusion", Level: 1, Markdown: conclusion},
+	}
+	structured := reportStructuredV1{SchemaVersion: 1, Title: "Measured value research report", Conclusion: conclusion}
+	for i, section := range sections {
+		structured.Sections = append(structured.Sections, section)
+		structured.Outline = append(structured.Outline, reportOutlineItem{ID: section.ID, Title: section.Title, Level: section.Level, Children: []string{}})
+		if i < len(projected) {
+			citationID := fmt.Sprintf("citation-%d", i+1)
+			structured.Citations = append(structured.Citations, reportStructuredCitation{ID: citationID, Index: i + 1, SourceID: projected[i].ID, Label: fmt.Sprintf("[%d]", i+1)})
+			structured.Sources = append(structured.Sources, reportStructuredSource{SourceID: projected[i].ID, Title: projected[i].Title, URL: projected[i].URL, CredibilityWeight: projected[i].Weight, SourceClass: projected[i].SourceClass})
+		}
+	}
+	structuredJSON, err := json.Marshal(structured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentParts := []string{"# " + structured.Title}
+	for _, section := range sections {
+		contentParts = append(contentParts, "## "+section.Title+"\n\n"+section.Markdown)
+	}
+	return ReportProposal{
+		ContentMD: strings.Join(contentParts, "\n\n"), Structured: structuredJSON,
+		Claims: []ReportClaimProposal{{ClaimKey: "answer-claim", SectionID: "finding", AnchorQuote: "The independently measured value is 42 across three source families."}},
+	}
+}
+
+func e2eDimensionFindings() map[string]string {
+	findings := map[string]string{}
+	for _, dimension := range evaluationDimensionNames {
+		findings[dimension] = "The reviewer checked every report section and normalized claim against the stored evidence ledger and recorded no unresolved defect."
+	}
+	return findings
 }
 
 func containsString(values []string, target string) bool {
@@ -870,6 +1079,8 @@ type researchRunFixture struct {
 	workspaceID string
 	userID      string
 	agentID     string
+	reporterID  string
+	validatorID string
 	fleetID     string
 	sessionID   string
 }
@@ -879,6 +1090,7 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	suffix := uuid.NewString()
 	fixture := researchRunFixture{
 		workspaceID: uuid.NewString(), userID: uuid.NewString(), agentID: uuid.NewString(),
+		reporterID: uuid.NewString(), validatorID: uuid.NewString(),
 		fleetID: uuid.NewString(), sessionID: uuid.NewString(),
 	}
 	runtimeID := uuid.NewString()
@@ -890,8 +1102,12 @@ func seedResearchRunFixture(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		{`INSERT INTO workspace (id, name, slug) VALUES ($1::uuid, $2, $3)`, []any{fixture.workspaceID, "Research workspace", "research-" + suffix}},
 		{`INSERT INTO agent_runtime (id, workspace_id, name, runtime_mode, provider, status, owner_id) VALUES ($1::uuid, $2::uuid, $3, 'local', 'codex', 'online', $4::uuid)`, []any{runtimeID, fixture.workspaceID, "research-runtime-" + suffix, fixture.userID}},
 		{`INSERT INTO agent (id, workspace_id, name, avatar_url, runtime_mode, status, owner_id, runtime_id, model, managed_role) VALUES ($1::uuid, $2::uuid, $3, '/avatars/default.png', 'local', 'idle', $4::uuid, $5::uuid, 'test-model', 'research_fleet')`, []any{fixture.agentID, fixture.workspaceID, "research-agent-" + suffix, fixture.userID, runtimeID}},
+		{`INSERT INTO agent (id, workspace_id, name, avatar_url, runtime_mode, status, owner_id, runtime_id, model, managed_role) VALUES ($1::uuid, $2::uuid, $3, '/avatars/default.png', 'local', 'idle', $4::uuid, $5::uuid, 'test-model', 'research_fleet')`, []any{fixture.reporterID, fixture.workspaceID, "research-reporter-" + suffix, fixture.userID, runtimeID}},
+		{`INSERT INTO agent (id, workspace_id, name, avatar_url, runtime_mode, status, owner_id, runtime_id, model, managed_role) VALUES ($1::uuid, $2::uuid, $3, '/avatars/default.png', 'local', 'idle', $4::uuid, $5::uuid, 'test-model', 'research_fleet')`, []any{fixture.validatorID, fixture.workspaceID, "research-validator-" + suffix, fixture.userID, runtimeID}},
 		{`INSERT INTO research_fleet (id, workspace_id, lead_agent_id) VALUES ($1::uuid, $2::uuid, $3::uuid)`, []any{fixture.fleetID, fixture.workspaceID, fixture.agentID}},
 		{`INSERT INTO research_fleet_member (workspace_id, fleet_id, agent_id, role, status, is_lead) VALUES ($1::uuid, $2::uuid, $3::uuid, 'lead', 'active', true)`, []any{fixture.workspaceID, fixture.fleetID, fixture.agentID}},
+		{`INSERT INTO research_fleet_member (workspace_id, fleet_id, agent_id, role, status, is_lead) VALUES ($1::uuid, $2::uuid, $3::uuid, 'reporter', 'active', false)`, []any{fixture.workspaceID, fixture.fleetID, fixture.reporterID}},
+		{`INSERT INTO research_fleet_member (workspace_id, fleet_id, agent_id, role, status, is_lead) VALUES ($1::uuid, $2::uuid, $3::uuid, 'validator', 'active', false)`, []any{fixture.workspaceID, fixture.fleetID, fixture.validatorID}},
 		{`INSERT INTO research_session (id, workspace_id, fleet_id, created_by, title, goal, status, depth_tier) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'Evidence comparison', 'Compare the evidence', 'running', 'standard')`, []any{fixture.sessionID, fixture.workspaceID, fixture.fleetID, fixture.userID}},
 	}
 	for _, statement := range statements {

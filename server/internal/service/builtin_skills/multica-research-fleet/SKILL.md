@@ -56,17 +56,24 @@ chat before `task-result` succeeds.
 - `plan` / `replan`: required questions, inclusion and exclusion criteria,
   source strategy, uncertainties, risks, and an acyclic dependency graph.
 - `discover` / `deep_read`: source snapshots, exact observations, supported or
-  disputed claims, and evidence-producing follow-up tasks where needed.
+  disputed claims, and evidence-producing follow-up tasks where needed. A v2
+  question-scoped result that increases coverage sets `answer_claim_key` to a
+  Claim included in that result.
 - `verify` / `counter_search`: independent corroboration, contradictory
   evidence, and explicit claim resolutions. Agreement without source evidence
   is not verification. Include the source, observation, claim, and evidence
   objects being verified in the result; stable content deduplicates against the
   ledger and upgrades verification state transactionally.
-- `synthesize`: a report linked to normalized claim keys. Report prose without
-  claim links is rejected by the delivery gate.
+- `synthesize`: only the `reporter` role. A v2 report uses the full existing
+  reader structure (outline, sections, citations, sources, gaps, conclusion),
+  repeats every section and conclusion exactly in `content_md`, and links
+  normalized Claim keys to section IDs with exact `anchor_quote` prose. Each
+  linked section cites a stored source that verifiably supports that Claim.
 - `quality_gate` / `citation_audit`: independent evaluation of the latest report
-  revision. Fail it when any material claim is unsupported, stale, misquoted,
-  or hides unresolved contradiction.
+  revision by a `validator` Agent other than the report author. V2 evaluations
+  provide substantive findings for all seven score dimensions and enumerate
+  every reviewed report Claim and section. Fail when any material claim is
+  unsupported, stale, misquoted, omitted, or hides unresolved contradiction.
 
 The server decides readiness, retries, timeouts, concurrency, replans,
 diminishing information gain, and final delivery. Never manufacture a passing

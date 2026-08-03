@@ -51,6 +51,7 @@ type ResultEnvelope struct {
 	ProposedTasks    []TaskProposal        `json:"proposed_tasks,omitempty"`
 	Report           *ReportProposal       `json:"report,omitempty"`
 	Evaluation       *EvaluationProposal   `json:"evaluation,omitempty"`
+	AnswerClaimKey   string                `json:"answer_claim_key,omitempty"`
 	CoverageDelta    float64               `json:"coverage_delta"`
 	Confidence       float64               `json:"confidence"`
 	IncompleteReason *string               `json:"incomplete_reason,omitempty"`
@@ -63,6 +64,8 @@ func DecodeAndValidateResultForVersion(version string, raw json.RawMessage, task
 	switch version {
 	case OrchestratorVersionV1:
 		return DecodeAndValidateResult(raw, task, config)
+	case OrchestratorVersionV2:
+		return decodeAndValidateResult(raw, task, config, (*ResultEnvelope).validateV2)
 	default:
 		return ResultEnvelope{}, "", fmt.Errorf("%w: %q", ErrUnsupportedVersion, version)
 	}
@@ -70,7 +73,7 @@ func DecodeAndValidateResultForVersion(version string, raw json.RawMessage, task
 
 func ensureSupportedOrchestratorVersion(version string) error {
 	switch version {
-	case OrchestratorVersionV1:
+	case OrchestratorVersionV1, OrchestratorVersionV2:
 		return nil
 	default:
 		return fmt.Errorf("%w: %q", ErrUnsupportedVersion, version)
@@ -152,8 +155,9 @@ type ClaimProposal struct {
 }
 
 type ReportClaimProposal struct {
-	ClaimKey  string `json:"claim_key"`
-	SectionID string `json:"section_id"`
+	ClaimKey    string `json:"claim_key"`
+	SectionID   string `json:"section_id"`
+	AnchorQuote string `json:"anchor_quote,omitempty"`
 }
 
 type ReportProposal struct {
@@ -163,19 +167,26 @@ type ReportProposal struct {
 }
 
 type EvaluationProposal struct {
-	Passed                bool           `json:"passed"`
-	FactualGrounding      float64        `json:"factual_grounding"`
-	Coverage              float64        `json:"coverage"`
-	AnalyticalDepth       float64        `json:"analytical_depth"`
-	SourceQuality         float64        `json:"source_quality"`
-	ContradictionHandling float64        `json:"contradiction_handling"`
-	InstructionAdherence  float64        `json:"instruction_adherence"`
-	Readability           float64        `json:"readability"`
-	Findings              []string       `json:"findings"`
-	Metadata              map[string]any `json:"metadata,omitempty"`
+	Passed                bool              `json:"passed"`
+	FactualGrounding      float64           `json:"factual_grounding"`
+	Coverage              float64           `json:"coverage"`
+	AnalyticalDepth       float64           `json:"analytical_depth"`
+	SourceQuality         float64           `json:"source_quality"`
+	ContradictionHandling float64           `json:"contradiction_handling"`
+	InstructionAdherence  float64           `json:"instruction_adherence"`
+	Readability           float64           `json:"readability"`
+	Findings              []string          `json:"findings"`
+	DimensionFindings     map[string]string `json:"dimension_findings,omitempty"`
+	ReviewedClaimKeys     []string          `json:"reviewed_claim_keys,omitempty"`
+	ReviewedSectionIDs    []string          `json:"reviewed_section_ids,omitempty"`
+	Metadata              map[string]any    `json:"metadata,omitempty"`
 }
 
 func DecodeAndValidateResult(raw []byte, task Task, cfg RunConfig) (ResultEnvelope, string, error) {
+	return decodeAndValidateResult(raw, task, cfg, (*ResultEnvelope).Validate)
+}
+
+func decodeAndValidateResult(raw []byte, task Task, cfg RunConfig, validate func(*ResultEnvelope, Task, RunConfig) error) (ResultEnvelope, string, error) {
 	if len(raw) == 0 || len(raw) > cfg.MaxResultBytes {
 		return ResultEnvelope{}, "", fmt.Errorf("%w: result size must be between 1 and %d bytes", ErrInvalidResult, cfg.MaxResultBytes)
 	}
@@ -192,7 +203,7 @@ func DecodeAndValidateResult(raw []byte, task Task, cfg RunConfig) (ResultEnvelo
 		}
 		return ResultEnvelope{}, "", fmt.Errorf("%w: trailing JSON: %v", ErrInvalidResult, err)
 	}
-	if err := result.Validate(task, cfg); err != nil {
+	if err := validate(&result, task, cfg); err != nil {
 		return ResultEnvelope{}, "", err
 	}
 	canonical, err := json.Marshal(result)
@@ -206,6 +217,19 @@ func DecodeAndValidateResult(raw []byte, task Task, cfg RunConfig) (ResultEnvelo
 func (r *ResultEnvelope) Validate(task Task, cfg RunConfig) error {
 	if r.SchemaVersion != 1 {
 		return fmt.Errorf("%w: unsupported schema_version %d", ErrInvalidResult, r.SchemaVersion)
+	}
+	if r.AnswerClaimKey != "" {
+		return fmt.Errorf("%w: answer_claim_key requires schema_version 2", ErrInvalidResult)
+	}
+	if r.Report != nil {
+		for _, link := range r.Report.Claims {
+			if link.AnchorQuote != "" {
+				return fmt.Errorf("%w: report anchor_quote requires schema_version 2", ErrInvalidResult)
+			}
+		}
+	}
+	if r.Evaluation != nil && (len(r.Evaluation.DimensionFindings) > 0 || len(r.Evaluation.ReviewedClaimKeys) > 0 || len(r.Evaluation.ReviewedSectionIDs) > 0) {
+		return fmt.Errorf("%w: structured review coverage requires schema_version 2", ErrInvalidResult)
 	}
 	if err := validateKey("client_request_id", r.ClientRequestID); err != nil {
 		return err

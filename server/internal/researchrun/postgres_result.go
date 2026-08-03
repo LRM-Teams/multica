@@ -14,6 +14,7 @@ import (
 
 type acceptedResultState struct {
 	workspaceID string
+	attemptID   string
 	task        Task
 	run         Run
 	stale       bool
@@ -208,6 +209,7 @@ func isEvidenceTask(kind TaskKind) bool {
 
 func lockResultAttempt(ctx context.Context, tx pgx.Tx, in AcceptResultInput) (acceptedResultState, *AcceptResultOutcome, error) {
 	var state acceptedResultState
+	state.attemptID = in.AttemptID
 	var attemptStatus AttemptStatus
 	var assignedAgentID, assignedInboxTaskID, existingRequestID, existingHash string
 	var runStatus RunStatus
@@ -768,21 +770,42 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 }
 
 func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState, report ReportProposal, resultClaimIDs map[string]string) (string, error) {
+	var structuredReport reportStructuredV1
+	var err error
+	if state.run.OrchestratorVersion == OrchestratorVersionV2 {
+		structuredReport, err = validateStructuredReportV2(report, reportPolicyForDepth(state.run.DepthTier))
+		if err != nil {
+			return "", err
+		}
+	}
 	var revision int
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(max(revision), 0) + 1 FROM research_report WHERE session_id = $1::uuid`, state.run.SessionID).Scan(&revision); err != nil {
 		return "", err
 	}
-	structured := normalizeJSON(report.Structured, `{}`)
+	structuredJSON := normalizeJSON(report.Structured, `{}`)
 	var reportID string
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO research_report (
 			workspace_id, session_id, revision, content_md, structured,
-			goal_version, plan_version
+			goal_version, plan_version, produced_by_task_id,
+			produced_by_attempt_id, author_agent_id
 		)
-		VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7) RETURNING id::text
-	`, state.workspaceID, state.run.SessionID, revision, report.ContentMD, structured,
-		state.run.GoalVersion, state.targetPlan).Scan(&reportID); err != nil {
+		VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::uuid, $9::uuid, NULLIF($10, '')::uuid)
+		RETURNING id::text
+	`, state.workspaceID, state.run.SessionID, revision, report.ContentMD, structuredJSON,
+		state.run.GoalVersion, state.targetPlan, state.task.ID, state.attemptID,
+		state.task.AssignedAgentID).Scan(&reportID); err != nil {
 		return "", err
+	}
+	sections := map[string]reportStructuredSection{}
+	citations := map[string]reportStructuredCitation{}
+	if state.run.OrchestratorVersion == OrchestratorVersionV2 {
+		for _, section := range structuredReport.Sections {
+			sections[section.ID] = section
+		}
+		for _, citation := range structuredReport.Citations {
+			citations[citation.ID] = citation
+		}
 	}
 	for _, link := range report.Claims {
 		claimID := resultClaimIDs[link.ClaimKey]
@@ -797,10 +820,38 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				return "", err
 			}
 		}
+		if state.run.OrchestratorVersion == OrchestratorVersionV2 {
+			section := sections[link.SectionID]
+			sourceIDs := make([]string, 0, len(section.CitationIDs))
+			for _, citationID := range section.CitationIDs {
+				sourceIDs = append(sourceIDs, citations[citationID].SourceID)
+			}
+			var supportedByCitedSource bool
+			if err := tx.QueryRow(ctx, `
+				SELECT EXISTS (
+				  SELECT 1
+				  FROM research_claim_evidence evidence
+				  JOIN research_observation observation ON observation.id = evidence.observation_id
+				  JOIN research_source source ON source.source_snapshot_id = observation.source_snapshot_id
+				  JOIN research_source_snapshot snapshot ON snapshot.id = observation.source_snapshot_id
+				  WHERE evidence.claim_id = $1::uuid
+				    AND evidence.relation = 'supports'
+				    AND evidence.verification_status = 'verified'
+				    AND observation.verification_status = 'verified'
+				    AND snapshot.verification_status = 'verified'
+				    AND source.id::text = ANY($2::text[])
+				)
+			`, claimID, sourceIDs).Scan(&supportedByCitedSource); err != nil {
+				return "", err
+			}
+			if !supportedByCitedSource {
+				return "", fmt.Errorf("%w: report claim %q lacks a cited verified supporting source", ErrInvalidResult, link.ClaimKey)
+			}
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO research_report_claim (report_id, claim_id, section_id)
-			VALUES ($1::uuid, $2::uuid, $3) ON CONFLICT DO NOTHING
-		`, reportID, claimID, truncateBytes(link.SectionID, 160)); err != nil {
+			INSERT INTO research_report_claim (report_id, claim_id, section_id, anchor_quote)
+			VALUES ($1::uuid, $2::uuid, $3, $4) ON CONFLICT DO NOTHING
+		`, reportID, claimID, truncateBytes(link.SectionID, 160), truncateBytes(link.AnchorQuote, 8192)); err != nil {
 			return "", err
 		}
 	}
@@ -812,17 +863,38 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 	if err != nil {
 		return err
 	}
-	var reportID string
+	var reportID, reportAuthorID string
+	var structuredRaw json.RawMessage
 	if err := tx.QueryRow(ctx, `
-		SELECT id::text
+		SELECT id::text, COALESCE(author_agent_id::text, ''), structured
 		FROM research_report
 		WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3
 		ORDER BY revision DESC LIMIT 1
-	`, state.run.SessionID, state.run.GoalVersion, state.targetPlan).Scan(&reportID); err != nil {
+	`, state.run.SessionID, state.run.GoalVersion, state.targetPlan).Scan(&reportID, &reportAuthorID, &structuredRaw); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("%w: evaluation requires a report", ErrInvalidResult)
 		}
 		return err
+	}
+	if state.run.OrchestratorVersion == OrchestratorVersionV2 {
+		if reportAuthorID == "" || reportAuthorID == state.task.AssignedAgentID {
+			return fmt.Errorf("%w: report evaluation must be submitted by an agent other than the report author", ErrInvalidResult)
+		}
+		var structured reportStructuredV1
+		if err := json.Unmarshal(structuredRaw, &structured); err != nil {
+			return fmt.Errorf("%w: latest report structure is invalid: %v", ErrInvalidResult, err)
+		}
+		claimKeys, err := loadReportClaimKeys(ctx, tx, reportID)
+		if err != nil {
+			return err
+		}
+		sectionIDs := make([]string, 0, len(structured.Sections))
+		for _, section := range structured.Sections {
+			sectionIDs = append(sectionIDs, section.ID)
+		}
+		if !sameUniqueStringSet(evaluation.ReviewedClaimKeys, claimKeys) || !sameUniqueStringSet(evaluation.ReviewedSectionIDs, sectionIDs) {
+			return fmt.Errorf("%w: evaluation review coverage does not match the latest report", ErrInvalidResult)
+		}
 	}
 	inputs, err := json.Marshal(map[string]any{"task_id": state.task.ID, "task_kind": state.task.Kind, "report_id": reportID})
 	if err != nil {
@@ -839,15 +911,42 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 	return err
 }
 
+func loadReportClaimKeys(ctx context.Context, tx pgx.Tx, reportID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT DISTINCT claim.client_key
+		FROM research_report_claim link
+		JOIN research_claim claim ON claim.id = link.claim_id
+		WHERE link.report_id = $1::uuid
+		ORDER BY claim.client_key
+	`, reportID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keys := []string{}
+	for rows.Next() {
+		var key string
+		if err = rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
 func updateQuestionProgress(ctx context.Context, tx pgx.Tx, state acceptedResultState, result ResultEnvelope, claimIDs map[string]string) error {
 	if state.task.QuestionID == "" || state.stale {
 		return nil
 	}
 	answerClaimID := ""
-	for _, claim := range result.Claims {
-		if id := claimIDs[claim.ClientKey]; id != "" {
-			answerClaimID = id
-			break
+	if state.run.OrchestratorVersion == OrchestratorVersionV2 {
+		answerClaimID = claimIDs[result.AnswerClaimKey]
+	} else {
+		for _, claim := range result.Claims {
+			if id := claimIDs[claim.ClientKey]; id != "" {
+				answerClaimID = id
+				break
+			}
 		}
 	}
 	_, err := tx.Exec(ctx, `

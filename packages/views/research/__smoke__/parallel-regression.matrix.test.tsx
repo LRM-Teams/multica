@@ -192,7 +192,8 @@ describe(`Smoke · list duplicate info (${SMOKE_ISSUES.listDuplicate})`, () => {
     ).toBe(true);
   });
 
-  it.fails(
+  // LRM-1104 chip dedupe shipped — hard gate now (was it.fails).
+  it(
     `${SMOKE_ISSUES.listDuplicate}: empty-title row must omit redundant goal chip (flip to it after fix)`,
     () => {
       render(<ResearchSessionRow session={session()} href="/research/s1" />);
@@ -208,7 +209,8 @@ describe(`Smoke · list duplicate info (${SMOKE_ISSUES.listDuplicate})`, () => {
     },
   );
 
-  it.fails(
+  // LRM-1104 chip dedupe shipped — hard gate now (was it.fails).
+  it(
     `${SMOKE_ISSUES.listDuplicate}: title that is a prefix of goal still hides chip; distinct goal keeps chip`,
     () => {
       const { unmount } = render(
@@ -434,7 +436,8 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
     ).toHaveBeenCalled();
   });
 
-  it.fails(
+  // LRM-1091 planar canvas shipped role=application + name — hard gate now (was it.fails).
+  it(
     `${SMOKE_ISSUES.canvasKeyboard}: canvas root declares role=application with accessible name`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
@@ -529,7 +532,8 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     expect(BRANCH_VS_STATUS_COLOR_CONTRACT.branchTokens.length).toBeGreaterThan(0);
   });
 
-  it.fails(
+  // LRM-1091 planar layout ships — hard gate now (was it.fails).
+  it(
     `${SMOKE_ISSUES.canvasPlanar}: 30-node layout has no card AABB overlap / pierce`,
     () => {
       const { nodes, edges } = thirtyNodeFixture();
@@ -588,7 +592,8 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     },
   );
 
-  it.fails(
+  // LRM-1091 planar keyboard wiring shipped — hard gate now (was it.fails).
+  it(
     `${SMOKE_ISSUES.canvasPlanar}: canvas wires planar keyboard map (topo ↑↓, branch ←→, Enter/Esc, Shift+F10)`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");

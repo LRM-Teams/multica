@@ -624,11 +624,15 @@ function MachineDetailView({
     [machine, agents],
   );
   const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
-  const [selectMode, setSelectMode] = useState(false);
-  const [selectedAgentIds, setSelectedAgentIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [bulkBusy, setBulkBusy] = useState<"stop" | "restart" | null>(null);
+  // One object for Select mode (react-doctor: avoid many related useState).
+  const [select, setSelect] = useState<{
+    mode: boolean;
+    ids: Set<string>;
+    busy: "stop" | "restart" | null;
+  }>(() => ({ mode: false, ids: new Set(), busy: null }));
+  const selectMode = select.mode;
+  const selectedAgentIds = select.ids;
+  const bulkBusy = select.busy;
   const [showCreateAgent, setShowCreateAgent] = useState(false);
   const { data: allRuntimes = [], isLoading: runtimesLoading } = useQuery(
     runtimeListOptions(wsId),
@@ -639,25 +643,27 @@ function MachineDetailView({
     machineAgents.length > 0 && selectedCount === machineAgents.length;
 
   const exitSelectMode = useCallback(() => {
-    setSelectMode(false);
-    setSelectedAgentIds(new Set());
+    setSelect({ mode: false, ids: new Set(), busy: null });
   }, []);
 
   const toggleAgentSelected = (agentId: string) => {
-    setSelectedAgentIds((prev) => {
-      const next = new Set(prev);
+    setSelect((prev) => {
+      const next = new Set(prev.ids);
       if (next.has(agentId)) next.delete(agentId);
       else next.add(agentId);
-      return next;
+      return { ...prev, ids: next };
     });
   };
 
   const selectAllAgents = () => {
-    setSelectedAgentIds(new Set(machineAgents.map((a) => a.id)));
+    setSelect((prev) => ({
+      ...prev,
+      ids: new Set(machineAgents.map((a) => a.id)),
+    }));
   };
 
   const clearSelection = () => {
-    setSelectedAgentIds(new Set());
+    setSelect((prev) => ({ ...prev, ids: new Set() }));
   };
 
   const handleCreateAgent = async (data: CreateAgentRequest) => {
@@ -670,17 +676,24 @@ function MachineDetailView({
   /** Raft-aligned bulk bar: Stop = cancel active tasks; Restart = lifecycle restart. */
   const handleBulkStop = async () => {
     if (selectedCount === 0 || bulkBusy) return;
-    setBulkBusy("stop");
-    let cancelled = 0;
-    let failed = 0;
+    const ids = Array.from(selectedAgentIds);
+    setSelect((prev) => ({ ...prev, busy: "stop" }));
     try {
-      for (const id of selectedAgentIds) {
-        try {
-          const res = await api.cancelAgentTasks(id);
-          cancelled += res.cancelled ?? 0;
-        } catch {
-          failed += 1;
-        }
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const res = await api.cancelAgentTasks(id);
+            return { ok: true as const, cancelled: res.cancelled ?? 0 };
+          } catch {
+            return { ok: false as const, cancelled: 0 };
+          }
+        }),
+      );
+      let cancelled = 0;
+      let failed = 0;
+      for (const r of results) {
+        if (r.ok) cancelled += r.cancelled;
+        else failed += 1;
       }
       await qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       if (failed > 0) {
@@ -696,27 +709,34 @@ function MachineDetailView({
         );
       }
     } finally {
-      setBulkBusy(null);
+      setSelect((prev) => ({ ...prev, busy: null }));
     }
   };
 
   const handleBulkRestart = async () => {
     if (selectedCount === 0 || bulkBusy) return;
-    setBulkBusy("restart");
-    let ok = 0;
-    let failed = 0;
+    const ids = Array.from(selectedAgentIds);
+    setSelect((prev) => ({ ...prev, busy: "restart" }));
     try {
-      for (const id of selectedAgentIds) {
-        try {
-          await api.startAgentLifecycleAction(
-            id,
-            "restart",
-            crypto.randomUUID(),
-          );
-          ok += 1;
-        } catch {
-          failed += 1;
-        }
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            await api.startAgentLifecycleAction(
+              id,
+              "restart",
+              crypto.randomUUID(),
+            );
+            return true;
+          } catch {
+            return false;
+          }
+        }),
+      );
+      let ok = 0;
+      let failed = 0;
+      for (const r of results) {
+        if (r) ok += 1;
+        else failed += 1;
       }
       await qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       if (failed > 0) {
@@ -729,7 +749,7 @@ function MachineDetailView({
         );
       }
     } finally {
-      setBulkBusy(null);
+      setSelect((prev) => ({ ...prev, busy: null }));
     }
   };
 
@@ -922,10 +942,11 @@ function MachineDetailView({
                       size="xs"
                       className="h-7 gap-1 px-2.5 text-[11px]"
                       onClick={() => {
-                        setSelectMode(true);
-                        setSelectedAgentIds(
-                          new Set(machineAgents.map((a) => a.id)),
-                        );
+                        setSelect({
+                          mode: true,
+                          ids: new Set(machineAgents.map((a) => a.id)),
+                          busy: null,
+                        });
                       }}
                       data-testid="machine-agents-select"
                       disabled={machineAgents.length === 0}

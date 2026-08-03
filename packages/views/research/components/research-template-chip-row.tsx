@@ -53,7 +53,6 @@ export function ResearchTemplateChipRow({
             type="button"
             role="radio"
             aria-checked={selected}
-            aria-pressed={selected}
             title={blurb}
             onClick={() => onToggle(template)}
             data-testid={`research-template-chip-${template.id}`}

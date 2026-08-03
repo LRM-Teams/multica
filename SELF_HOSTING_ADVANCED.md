@@ -126,6 +126,16 @@ The `Secure` flag on session cookies is derived automatically from the scheme of
 | `CORS_ALLOWED_ORIGINS` | Value of `FRONTEND_ORIGIN` | Comma-separated list of allowed origins. Governs **both** the HTTP CORS allowlist **and** the WebSocket `Origin` check. A browser origin that isn't listed here (and isn't `localhost`) has its real-time WebSocket upgrade rejected with `403`, so live updates stop working until a manual refresh. |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 
+### API p95 SLO metric
+
+When Prometheus scrapes `/metrics`, query the API p95 SLO per route with:
+
+```promql
+histogram_quantile(0.95, sum by (le, method, route) (rate(multica_http_slo_request_duration_seconds_bucket[5m])))
+```
+
+`multica_http_slo_request_duration_seconds` includes only ordinary API requests. It excludes WebSocket upgrades, event streams, file transfers, and daemon/sandbox agent transport so long-lived connections and jobs do not distort the `<1s` API target. `multica_http_request_duration_seconds` remains the all-request operational metric.
+
 ### CLI / Daemon
 
 These are configured on each user's machine, not on the server:

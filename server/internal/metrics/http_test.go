@@ -49,6 +49,52 @@ func TestHTTPMiddlewareUsesRoutePatternLabels(t *testing.T) {
 	}
 }
 
+func TestHTTPMiddlewareOnlyIncludesEligibleAPIRoutesInSLOMetric(t *testing.T) {
+	registry := NewRegistry(RegistryOptions{})
+	r := chi.NewRouter()
+	r.Use(registry.HTTP.Middleware)
+	r.Get("/api/issues/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	r.Post("/api/upload-file", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	r.Get("/api/events", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	})
+	r.Get("/api/daemon/ws", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/api/issues/issue-1", nil),
+		httptest.NewRequest(http.MethodPost, "/api/upload-file", nil),
+		httptest.NewRequest(http.MethodGet, "/api/events", nil),
+		httptest.NewRequest(http.MethodGet, "/api/daemon/ws", nil),
+	} {
+		r.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	metricsRec := httptest.NewRecorder()
+	NewHandler(registry.Gatherer).ServeHTTP(metricsRec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	var sloLines []string
+	for _, line := range strings.Split(metricsRec.Body.String(), "\n") {
+		if strings.HasPrefix(line, "multica_http_slo_request_duration_seconds") {
+			sloLines = append(sloLines, line)
+		}
+	}
+	body := strings.Join(sloLines, "\n")
+	if !strings.Contains(body, `route="/api/issues/{id}"`) {
+		t.Fatalf("SLO metric missing eligible API route:\n%s", body)
+	}
+	for _, excludedRoute := range []string{"/api/upload-file", "/api/events", "/api/daemon/ws"} {
+		if strings.Contains(body, `route="`+excludedRoute+`"`) {
+			t.Fatalf("SLO metric unexpectedly includes excluded route %q:\n%s", excludedRoute, body)
+		}
+	}
+}
+
 func TestMetricsHandlerOnlyServesMetricsPath(t *testing.T) {
 	registry := NewRegistry(RegistryOptions{})
 	handler := NewHandler(registry.Gatherer)

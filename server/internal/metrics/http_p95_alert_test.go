@@ -74,7 +74,7 @@ func TestHTTPRequestSLOAlerterFiresOnSustainedBreach(t *testing.T) {
 
 	// Window 1: slow activity traffic.
 	for i := 0; i < 50; i++ {
-		httpM.duration.WithLabelValues("GET", "/api/agents/{id}/activity", "200").Observe(1.5)
+		httpM.sloDuration.WithLabelValues("GET", "/api/agents/{id}/activity", "200").Observe(1.5)
 	}
 	now.Store(start.Add(30 * time.Second))
 	alerter.Evaluate(context.Background())
@@ -85,7 +85,7 @@ func TestHTTPRequestSLOAlerterFiresOnSustainedBreach(t *testing.T) {
 	// Keep breaching across sustain window (each window adds more slow samples).
 	for step := 1; step <= 5; step++ {
 		for i := 0; i < 50; i++ {
-			httpM.duration.WithLabelValues("GET", "/api/agents/{id}/activity", "200").Observe(1.5)
+			httpM.sloDuration.WithLabelValues("GET", "/api/agents/{id}/activity", "200").Observe(1.5)
 		}
 		now.Store(start.Add(time.Duration(step)*30*time.Second + 2*time.Minute))
 		alerter.Evaluate(context.Background())
@@ -106,7 +106,7 @@ func TestHTTPRequestSLOAlerterFiresOnSustainedBreach(t *testing.T) {
 
 	// No spam while still slow.
 	for i := 0; i < 50; i++ {
-		httpM.duration.WithLabelValues("GET", "/api/agents/{id}/activity", "200").Observe(1.5)
+		httpM.sloDuration.WithLabelValues("GET", "/api/agents/{id}/activity", "200").Observe(1.5)
 	}
 	now.Store(start.Add(5 * time.Minute))
 	alerter.Evaluate(context.Background())
@@ -116,7 +116,7 @@ func TestHTTPRequestSLOAlerterFiresOnSustainedBreach(t *testing.T) {
 
 	// Recover window: only fast samples in the delta.
 	for i := 0; i < 50; i++ {
-		httpM.duration.WithLabelValues("GET", "/api/agents/{id}/activity", "200").Observe(0.05)
+		httpM.sloDuration.WithLabelValues("GET", "/api/agents/{id}/activity", "200").Observe(0.05)
 	}
 	now.Store(start.Add(6 * time.Minute))
 	alerter.Evaluate(context.Background())

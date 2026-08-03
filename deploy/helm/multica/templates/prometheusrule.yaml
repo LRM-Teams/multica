@@ -67,7 +67,7 @@ spec:
             histogram_quantile(
               0.95,
               sum by (le, method, route) (
-                rate(multica_http_request_duration_seconds_bucket[5m])
+                rate(multica_http_slo_request_duration_seconds_bucket[5m])
               )
             ) > {{ .Values.monitoring.prometheusRule.httpP95Seconds | default 1 }}
           for: {{ .Values.monitoring.prometheusRule.httpP95For | default "2m" | quote }}

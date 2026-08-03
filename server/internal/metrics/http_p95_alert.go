@@ -37,8 +37,8 @@ var PriorityHTTPRoutes = []string{
 //
 // Why in-process: production docker (aliyun) historically had METRICS_ADDR
 // empty and no Prometheus Operator — helm PrometheusRule alone never fired.
-// This watcher evaluates the same histogram the scrape endpoint exposes so
-// alerts work on every deployment that records HTTP metrics.
+// This watcher evaluates the SLO-only histogram exposed by the scrape endpoint
+// so alerts work on every deployment while preserving its exclusion policy.
 type HTTPRequestSLOConfig struct {
 	// ThresholdSeconds is the p95 ceiling (default 1s).
 	ThresholdSeconds float64
@@ -399,7 +399,7 @@ func (a *HTTPRequestSLOAlerter) readCumulative() (map[string]histSnap, error) {
 	}
 	byKey := map[string]*histSnap{}
 	for _, mf := range mfs {
-		if mf.GetName() != "multica_http_request_duration_seconds" {
+		if mf.GetName() != "multica_http_slo_request_duration_seconds" {
 			continue
 		}
 		for _, m := range mf.GetMetric() {

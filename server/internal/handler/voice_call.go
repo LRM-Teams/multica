@@ -284,6 +284,9 @@ func (h *Handler) StopVoiceCall(w http.ResponseWriter, r *http.Request) {
 		err     error
 	)
 	// Duplex media never started RTC VoiceChat; skip provider.Stop.
+	// After a process restart DuplexGateway.Has is empty even though the DB row
+	// is still active/ending — fall back to EndWithoutProviderStop so hangup
+	// (and the active-pair unique index) do not stay wedged.
 	if h.DuplexGateway != nil && h.DuplexGateway.Has(callID) {
 		h.DuplexGateway.Close(callID)
 		if duplex, ok := h.VoiceCallService.(VoiceCallDuplexAPI); ok {
@@ -293,6 +296,13 @@ func (h *Handler) StopVoiceCall(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		session, err = h.VoiceCallService.Stop(r.Context(), stopInput)
+		if err != nil && h.DuplexGateway != nil && h.DuplexGateway.Configured() {
+			if duplex, ok := h.VoiceCallService.(VoiceCallDuplexAPI); ok {
+				if ended, duplexErr := duplex.EndWithoutProviderStop(r.Context(), stopInput); duplexErr == nil {
+					session, err = ended, nil
+				}
+			}
+		}
 	}
 	if err != nil {
 		writeVoiceCallServiceError(w, "stop", err)

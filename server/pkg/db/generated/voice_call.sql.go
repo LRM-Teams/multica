@@ -430,6 +430,82 @@ func (q *Queries) CreateVoiceCallSession(ctx context.Context, arg CreateVoiceCal
 	return i, err
 }
 
+const failVoiceCallSessionsForActivePair = `-- name: FailVoiceCallSessionsForActivePair :many
+UPDATE voice_call_session
+SET
+  status = 'failed',
+  ended_at = COALESCE(ended_at, now()),
+  end_reason = CASE
+    WHEN btrim(end_reason) = '' THEN $1
+    ELSE end_reason
+  END,
+  error_code = CASE
+    WHEN btrim(error_code) = '' THEN $2
+    ELSE error_code
+  END,
+  updated_at = now()
+WHERE workspace_id = $3
+  AND user_id = $4
+  AND agent_id = $5
+  AND status NOT IN ('ended', 'failed')
+RETURNING id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at
+`
+
+type FailVoiceCallSessionsForActivePairParams struct {
+	EndReason   string      `json:"end_reason"`
+	ErrorCode   string      `json:"error_code"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+	AgentID     pgtype.UUID `json:"agent_id"`
+}
+
+// Reclaim rows that still hold voice_call_session_active_pair_idx after a
+// process restart / failed duplex hangup (in-memory DuplexGateway.Has is gone).
+func (q *Queries) FailVoiceCallSessionsForActivePair(ctx context.Context, arg FailVoiceCallSessionsForActivePairParams) ([]VoiceCallSession, error) {
+	rows, err := q.db.Query(ctx, failVoiceCallSessionsForActivePair,
+		arg.EndReason,
+		arg.ErrorCode,
+		arg.WorkspaceID,
+		arg.UserID,
+		arg.AgentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VoiceCallSession{}
+	for rows.Next() {
+		var i VoiceCallSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ChannelID,
+			&i.AgentID,
+			&i.UserID,
+			&i.Provider,
+			&i.ProviderTaskID,
+			&i.RoomID,
+			&i.Status,
+			&i.StartedAt,
+			&i.ConnectedAt,
+			&i.EndedAt,
+			&i.EndReason,
+			&i.ErrorCode,
+			&i.InputAudioMs,
+			&i.OutputAudioMs,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const failVoiceCallSessionsStartedBefore = `-- name: FailVoiceCallSessionsStartedBefore :many
 UPDATE voice_call_session
 SET

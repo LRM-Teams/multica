@@ -3811,6 +3811,22 @@ export function ChannelsPage({
       }}
     />
   ) : null;
+  // LRM-1067 — hoist description meta so ConversationHeader is not fed a
+  // fresh JSX identity every render (React Doctor jsx-no-jsx-as-prop).
+  const channelHeaderDescription = active?.description?.trim() ?? "";
+  const channelHeaderDescriptionMeta = useMemo(
+    () =>
+      channelHeaderDescription ? (
+        <p
+          data-testid="channel-header-description"
+          className="truncate text-xs text-muted-foreground"
+          title={channelHeaderDescription}
+        >
+          {channelHeaderDescription}
+        </p>
+      ) : undefined,
+    [channelHeaderDescription],
+  );
   const channelConversationPane = (
     <main
       ref={detailHeaderContainerRef}
@@ -3894,17 +3910,7 @@ export function ChannelsPage({
               </button>
             }
             // LRM-1067 — channel description under the name; empty = no row / no placeholder.
-            meta={
-              active.description?.trim() ? (
-                <p
-                  data-testid="channel-header-description"
-                  className="truncate text-xs text-muted-foreground"
-                  title={active.description.trim()}
-                >
-                  {active.description.trim()}
-                </p>
-              ) : undefined
-            }
+            meta={channelHeaderDescriptionMeta}
             badges={
               <>
                 {isConversationMuted(active) && (

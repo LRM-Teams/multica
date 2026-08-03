@@ -185,7 +185,10 @@
     "danger_zone": {
       "title": "Danger Zone",
       "description": "Permanently delete this computer and its runtimes from the workspace."
-    }
+    },
+    "agents_select": "Select",
+    "agents_create": "Create",
+    "agents_done": "Done"
   },
   "health": {
     "online": {

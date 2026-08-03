@@ -182,7 +182,10 @@
     "danger_zone": {
       "title": "危険ゾーン",
       "description": "このコンピュータとランタイムをワークスペースから完全に削除します。"
-    }
+    },
+    "agents_select": "選択",
+    "agents_create": "作成",
+    "agents_done": "完了"
   },
   "health": {
     "online": {

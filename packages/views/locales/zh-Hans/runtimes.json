@@ -182,7 +182,10 @@
     "danger_zone": {
       "title": "危险区",
       "description": "从工作区永久删除此电脑及其全部 Runtime。"
-    }
+    },
+    "agents_select": "选择",
+    "agents_create": "创建",
+    "agents_done": "完成"
   },
   "health": {
     "online": {

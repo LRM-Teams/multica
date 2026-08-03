@@ -184,7 +184,10 @@
     "danger_zone": {
       "title": "위험 구역",
       "description": "이 컴퓨터와 런타임을 워크스페이스에서 영구 삭제합니다."
-    }
+    },
+    "agents_select": "선택",
+    "agents_create": "만들기",
+    "agents_done": "완료"
   },
   "health": {
     "online": {

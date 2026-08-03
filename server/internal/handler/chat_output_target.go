@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -15,6 +16,12 @@ import (
 
 var errChatOutputInvalidTarget = errors.New("invalid chat output target")
 
+// errReminderSendOutsideAnchor is returned when a reminder-wake task tries to
+// post outside the anchor message surface (msg-id hard bind). Not prompt-only.
+// thread → that thread; main-channel message → main timeline. Not "any post in
+// the anchor channel".
+var errReminderSendOutsideAnchor = errors.New("reminder wake can only send to the anchor message surface")
+
 type chatOutputTargetKind string
 
 const (
@@ -22,6 +29,54 @@ const (
 	chatOutputTargetThread  chatOutputTargetKind = "thread"
 	chatOutputTargetDM      chatOutputTargetKind = "dm"
 )
+
+// reminderAnchorSurface returns the hard-bound surface for a reminder wake:
+// channel id + optional thread root (empty = main timeline). ok=false if not a
+// reminder task with a channel.
+func reminderAnchorSurface(task db.AgentInboxEvent) (channelID string, threadRootID string, ok bool) {
+	if strings.TrimSpace(task.Reason) != "reminder" || !task.ChannelID.Valid {
+		return "", "", false
+	}
+	channelID = uuidToString(task.ChannelID)
+	if len(task.Context) > 0 {
+		var wake channelWakeContext
+		if err := json.Unmarshal(task.Context, &wake); err == nil && wake.Type == channelWakeContextType {
+			threadRootID = strings.TrimSpace(wake.ThreadRootMessageID)
+		}
+	}
+	return channelID, threadRootID, true
+}
+
+// enforceReminderAnchorSurface rejects sends that leave the msg-id surface.
+// - Same channel required.
+// - If anchor is a thread: target must be that thread (not main, not other thread).
+// - If anchor is main timeline: target must be channel main (not a thread).
+// - Cross-channel / unrelated DM: reject.
+func enforceReminderAnchorSurface(task db.AgentInboxEvent, channelID string, kind chatOutputTargetKind, targetThreadRootID string) error {
+	anchorChannelID, anchorThreadRoot, ok := reminderAnchorSurface(task)
+	if !ok {
+		return nil
+	}
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" || channelID != anchorChannelID {
+		return errReminderSendOutsideAnchor
+	}
+	targetThreadRootID = strings.TrimSpace(targetThreadRootID)
+	if anchorThreadRoot != "" {
+		// Thread-anchored: only that thread.
+		if kind != chatOutputTargetThread || targetThreadRootID == "" || targetThreadRootID != anchorThreadRoot {
+			return errReminderSendOutsideAnchor
+		}
+		return nil
+	}
+	// Main-timeline / DM-channel anchor: stay on that surface (no other thread).
+	// chatOutputTargetDM is OK only when channelID already matches (DM materializes
+	// to the same channel id as the anchor DM).
+	if kind == chatOutputTargetThread {
+		return errReminderSendOutsideAnchor
+	}
+	return nil
+}
 
 type chatOutputOrigin struct {
 	channelID   pgtype.UUID
@@ -42,8 +97,16 @@ func (h *Handler) validateChatOutputTarget(ctx context.Context, task db.AgentInb
 	if !ok {
 		return errChatOutputInvalidTarget
 	}
-	_, err := h.resolveChatOutputTarget(ctx, origin, rawTarget)
-	return err
+	resolved, err := h.resolveChatOutputTarget(ctx, origin, rawTarget)
+	if err != nil {
+		return err
+	}
+	// Reminder: msg-id surface hard bind (Frank: 从哪来回哪去).
+	threadRootID := ""
+	if resolved.kind == chatOutputTargetThread {
+		threadRootID = strings.TrimSpace(resolved.threadRoot.ID)
+	}
+	return enforceReminderAnchorSurface(task, resolved.channel.ID, resolved.kind, threadRootID)
 }
 
 func (h *Handler) chatOutputOriginForTask(ctx context.Context, task db.AgentInboxEvent) (chatOutputOrigin, bool) {

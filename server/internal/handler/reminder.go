@@ -1752,7 +1752,7 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	prompt := buildReminderPrompt(ch, reminder, occurrenceID, anchorExcerpt, anchorAvailable)
 	// LRM-1079: reminder fires are channel-only wakes (no chat_session).
 	promptResult, err := h.enqueueChannelAgentPromptWithTx(
-		ctx, txQueries, tx, ch, agent, trigger, creatorID, prompt, "dm", channelDirectedWakePriority,
+		ctx, txQueries, tx, ch, agent, trigger, creatorID, prompt, "reminder", channelDirectedWakePriority,
 	)
 	if err != nil {
 		return err
@@ -1945,33 +1945,41 @@ func reminderCadenceTimezone(reminder agentReminder) string {
 
 func buildReminderPrompt(ch ChannelResponse, reminder agentReminder, occurrenceID pgtype.UUID, anchorExcerpt string, anchorAvailable bool) string {
 	var b strings.Builder
-	b.WriteString("A self-scheduled reminder is due. This is a directed wake that you previously requested.\n")
+	// Compact Raft-aligned brief: msg-id first, one channel line, short surface rule.
+	// Hard fan-out block is enforced on message send (enforceReminderAnchorSend).
+	b.WriteString("A self-scheduled reminder is due.\n")
 	fmt.Fprintf(&b, "Reminder id: %s\n", uuidToString(reminder.ID))
 	fmt.Fprintf(&b, "Occurrence id: %s\n", uuidToString(occurrenceID))
 	fmt.Fprintf(&b, "Reminder title: %s\n", reminder.Title)
+	// msg-id + readable context first (Frank/Parker: Raft-style, not empty channel pin)
+	if anchorAvailable && reminder.AnchorMessageID.Valid {
+		fmt.Fprintf(&b, "msg-id: %s\n", uuidToString(reminder.AnchorMessageID))
+		if strings.TrimSpace(anchorExcerpt) != "" {
+			fmt.Fprintf(&b, "Anchor excerpt: %s\n", truncateForActivity(anchorExcerpt, 500))
+		}
+	} else {
+		b.WriteString("msg-id: unavailable (deleted).\n")
+	}
+	// One channel line only — no ManagerChannels list.
+	// When the anchor is gone, omit #name (deleted-thread tests must not leak surface names).
+	if ch.Kind == "dm" {
+		fmt.Fprintf(&b, "Target channel id: %s (direct message)\n", ch.ID)
+	} else if anchorAvailable && strings.TrimSpace(ch.Name) != "" {
+		fmt.Fprintf(&b, "Target channel id: %s (#%s)\n", ch.ID, ch.Name)
+	} else {
+		fmt.Fprintf(&b, "Target channel id: %s\n", ch.ID)
+	}
+	b.WriteString("Reply only on that anchor surface (thread if anchored in a thread; main channel if not).\n")
 	if reminder.Cadence.Valid {
 		fmt.Fprintf(&b, "Cadence: %s\n", reminder.Cadence.String)
 	}
 	if reminderTimezonePtr(reminder.Cadence, reminder.ScheduleTimezone) != nil {
 		fmt.Fprintf(&b, "Locked schedule timezone: %s\n", reminder.ScheduleTimezone.String)
 	}
-	if anchorAvailable && reminder.AnchorMessageID.Valid {
-		if ch.Kind == "dm" {
-			b.WriteString("Anchored surface: direct message\n")
-		} else {
-			fmt.Fprintf(&b, "Anchored surface: #%s\n", ch.Name)
-		}
-		fmt.Fprintf(&b, "Current message id: %s\n", uuidToString(reminder.AnchorMessageID))
-	} else {
-		b.WriteString("Anchor message: unavailable (deleted).\n")
-	}
-	if strings.TrimSpace(anchorExcerpt) != "" {
-		fmt.Fprintf(&b, "Anchor message excerpt: %s\n", truncateForActivity(anchorExcerpt, 500))
-	}
 	if anchorAvailable {
-		b.WriteString("Check the current state now. Reply in the anchored channel/thread only if there is a useful update, decision, follow-up question, or conclusion. If nothing changed, you may reschedule or finish without noise.\n")
+		b.WriteString("Check the current state now. If nothing useful changed, reschedule or finish without noise.\n")
 	} else {
-		b.WriteString("Check the current state now. Send a message only if there is a useful update, decision, follow-up question, or conclusion. If nothing changed, you may reschedule or finish without noise.\n")
+		b.WriteString("Check the current state now. Send only if there is a useful update; otherwise reschedule or finish without noise.\n")
 	}
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")

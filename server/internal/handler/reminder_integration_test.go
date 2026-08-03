@@ -335,8 +335,8 @@ func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 		"Reminder id: " + reminderID,
 		"Occurrence id: " + occurrenceID,
 		"Reminder title: " + title,
-		"Current message id: " + anchor.ID,
-		"Anchor message excerpt: anchor",
+		"msg-id: " + anchor.ID,
+		"Anchor excerpt: anchor",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("directed wake prompt missing %q: %q", want, prompt)
@@ -1813,7 +1813,7 @@ func TestDeletedReminderAnchorFiresWithUnavailableMarker(t *testing.T) {
 		"Reminder id: " + reminderID,
 		"Occurrence id: " + occurrenceID,
 		"Reminder title: " + title,
-		"Anchor message: unavailable (deleted).",
+		"msg-id: unavailable (deleted).",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("deleted-anchor directed wake prompt missing %q: %q", want, prompt)
@@ -1877,7 +1877,7 @@ func TestDeletedReminderThreadRootHidesAnchorEverywhere(t *testing.T) {
 			t.Fatalf("deleted root leaked %q in prompt=%q", leaked, prompt)
 		}
 	}
-	if available || !receiptNull || !strings.Contains(prompt, "Anchor message: unavailable") {
+	if available || !receiptNull || !strings.Contains(prompt, "msg-id: unavailable") {
 		t.Fatalf("deleted root projection available=%v receipt_null=%v prompt=%q", available, receiptNull, prompt)
 	}
 	reminder, err := scanAgentReminder(testPool.QueryRow(context.Background(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1`, reminderID))

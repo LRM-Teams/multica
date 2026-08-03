@@ -122,7 +122,7 @@ func TestReminderFireEnqueueIsChannelOnly(t *testing.T) {
 	for _, want := range []string{
 		"A self-scheduled reminder is due.",
 		"Reminder id: " + reminderID,
-		"Current message id: " + anchor.ID,
+		"msg-id: " + anchor.ID,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("reminder prompt missing %q:\n%s", want, prompt)

@@ -1737,11 +1737,18 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			model = config.Model
 			thinkingLevel = config.ThinkingLevel
 		}
+		managerChannels := h.agentManagerChannels(ctx, event.WorkspaceID, agent.ID)
+		// Reminder fires are single-channel: listing every managed channel
+		// confuses the agent into posting the same patrol to all groups
+		// (Frank 2026-08-03: 3 reminders × 3 channels = 3× spam).
+		if strings.TrimSpace(event.Reason) == "reminder" && event.ChannelID.Valid {
+			managerChannels = filterManagerChannelsTo(managerChannels, uuidToString(event.ChannelID))
+		}
 		resp.Agent = &TaskAgentData{
 			ID:              uuidToString(agent.ID),
 			Name:            agentDisplayName(agent),
 			ManagedRole:     agent.ManagedRole.String,
-			ManagerChannels: h.agentManagerChannels(ctx, event.WorkspaceID, agent.ID),
+			ManagerChannels: managerChannels,
 			Instructions:    agent.Instructions,
 			Skills:          skills,
 			CustomEnv:       customEnv,
@@ -1908,6 +1915,21 @@ func (h *Handler) agentManagerChannels(
 		return nil
 	}
 	return channels
+}
+
+// filterManagerChannelsTo keeps only the channel matching id (reminder fires).
+func filterManagerChannelsTo(channels []ManagerChannelData, channelID string) []ManagerChannelData {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" || len(channels) == 0 {
+		return channels
+	}
+	out := make([]ManagerChannelData, 0, 1)
+	for _, ch := range channels {
+		if ch.ID == channelID {
+			out = append(out, ch)
+		}
+	}
+	return out
 }
 
 // attachCanonicalRuntimeState ensures the agent×runtime row exists and copies
@@ -2876,7 +2898,7 @@ func (h *Handler) populateAgentInboxChannelWakeContext(ctx context.Context, even
 // agent_inbox_event.context.channel_wake (no chat_session bridge).
 func channelOnlyWakeReason(reason string) bool {
 	switch strings.TrimSpace(reason) {
-	case "mention", "dm", "thread_reply", "handoff", "continuation", channelMessageWakeReason:
+	case "mention", "dm", "reminder", "thread_reply", "handoff", "continuation", channelMessageWakeReason:
 		return true
 	default:
 		return false

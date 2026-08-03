@@ -127,7 +127,7 @@ func (g *Gateway) Start(
 		g.config.Model,
 		g.config.Voice,
 		doubaodialog.DefaultDialogInstructions(),
-		[]doubaodialog.Tool{doubaodialog.MulticaDelegateTool()},
+		doubaodialog.DefaultDialogTools(),
 	))
 	if err != nil {
 		return nil, fmt.Errorf("open duplex dialog: %w", err)
@@ -287,6 +287,10 @@ func (s *Session) handleProviderEvent(ctx context.Context, event doubaodialog.Se
 			Text:      text,
 		})
 	case doubaodialog.EventFunctionCallArgumentsDone:
+		toolName := doubaodialog.MulticaDelegateToolName
+		if len(event.FunctionCalls) > 0 && strings.TrimSpace(event.FunctionCalls[0].Name) != "" {
+			toolName = strings.TrimSpace(event.FunctionCalls[0].Name)
+		}
 		for _, call := range event.FunctionCalls {
 			_ = s.safeEmit(ServerEvent{
 				Type:   ServerTool,
@@ -298,11 +302,11 @@ func (s *Session) handleProviderEvent(ctx context.Context, event doubaodialog.Se
 		handled, err := s.bridge.HandleServerEvent(ctx, event)
 		if err != nil {
 			_ = s.safeEmit(ServerEvent{
-				Type:    ServerTool,
-				CallID:  s.CallID,
-				Name:    doubaodialog.MulticaDelegateToolName,
-				Status:  "error",
-				Result:  err.Error(),
+				Type:   ServerTool,
+				CallID: s.CallID,
+				Name:   toolName,
+				Status: "error",
+				Result: err.Error(),
 			})
 			return err
 		}
@@ -310,7 +314,7 @@ func (s *Session) handleProviderEvent(ctx context.Context, event doubaodialog.Se
 			_ = s.safeEmit(ServerEvent{
 				Type:   ServerTool,
 				CallID: s.CallID,
-				Name:   doubaodialog.MulticaDelegateToolName,
+				Name:   toolName,
 				Status: "done",
 			})
 		}

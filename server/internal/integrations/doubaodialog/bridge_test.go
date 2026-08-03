@@ -119,3 +119,90 @@ func TestMulticaDelegateToolSchema(t *testing.T) {
 		t.Fatalf("duplex tools must be flat, got nested function: %s", encoded)
 	}
 }
+
+func TestWebSearchAndFetchToolsHandled(t *testing.T) {
+	web := &RecordingWebToolkit{
+		SearchResult: "北京今天多云，气温 28 度。",
+		FetchResult:  "页面说今天多云。",
+	}
+	sender := &fakeSender{}
+	bridge, err := NewMulticaToolBridgeWithWeb(&RecordingExecutor{}, web, sender)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handled, err := bridge.HandleServerEvent(context.Background(), ServerEvent{
+		Type: EventFunctionCallArgumentsDone,
+		FunctionCalls: []FunctionCall{{
+			CallID:    "call-search",
+			Name:      WebSearchToolName,
+			Arguments: `{"query":"北京 今天天气"}`,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || len(web.Searches) != 1 || web.Searches[0] != "北京 今天天气" {
+		t.Fatalf("search handling failed: handled=%v searches=%v", handled, web.Searches)
+	}
+	if len(sender.outputs) != 1 || sender.outputs[0].Output != "北京今天多云，气温 28 度。" {
+		t.Fatalf("search outputs = %#v", sender.outputs)
+	}
+
+	sender.outputs = nil
+	handled, err = bridge.HandleServerEvent(context.Background(), ServerEvent{
+		Type: EventFunctionCallArgumentsDone,
+		FunctionCalls: []FunctionCall{{
+			CallID:    "call-fetch",
+			Name:      WebFetchToolName,
+			Arguments: `{"url":"https://example.com/weather"}`,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || len(web.Fetches) != 1 {
+		t.Fatalf("fetch handling failed: handled=%v fetches=%v", handled, web.Fetches)
+	}
+	if len(sender.outputs) != 1 || sender.outputs[0].Output != "页面说今天多云。" {
+		t.Fatalf("fetch outputs = %#v", sender.outputs)
+	}
+}
+
+func TestDefaultDialogToolsIncludesWebLookup(t *testing.T) {
+	tools := DefaultDialogTools()
+	if len(tools) != 3 {
+		t.Fatalf("tools=%d want 3", len(tools))
+	}
+	names := map[string]bool{}
+	for _, tool := range tools {
+		names[tool.Name] = true
+		encoded, err := json.Marshal(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), `"function":`) {
+			t.Fatalf("duplex tools must be flat: %s", encoded)
+		}
+	}
+	for _, want := range []string{MulticaDelegateToolName, WebSearchToolName, WebFetchToolName} {
+		if !names[want] {
+			t.Fatalf("missing tool %s in %#v", want, names)
+		}
+	}
+	if !strings.Contains(DefaultDialogInstructions(), WebSearchToolName) {
+		t.Fatal("instructions should mention web_search")
+	}
+}
+
+func TestRejectPrivateHost(t *testing.T) {
+	if err := rejectPrivateHost("127.0.0.1"); err == nil {
+		t.Fatal("expected loopback blocked")
+	}
+	if err := rejectPrivateHost("10.0.0.1"); err == nil {
+		t.Fatal("expected private blocked")
+	}
+	if err := rejectPrivateHost("example.com"); err != nil {
+		t.Fatalf("public host should pass: %v", err)
+	}
+}

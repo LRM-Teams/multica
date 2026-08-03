@@ -1064,8 +1064,12 @@ func (h *Handler) requireAgentTransportInboxEvent(w http.ResponseWriter, r *http
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	event, err := h.Queries.GetAgentInboxEvent(r.Context(), eventID)
-	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID || !event.ChatSessionID.Valid {
+	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID {
 		writeError(w, http.StatusForbidden, "inbox token does not match this agent event")
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+	if !agentInboxEventHasChatTransportOrigin(event) {
+		writeError(w, http.StatusForbidden, "agent inbox event has no channel transport origin")
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	var deliveryActive bool
@@ -1121,8 +1125,12 @@ func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWrite
 	}
 
 	event, err := h.Queries.GetAgentInboxEvent(r.Context(), eventID)
-	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID || !event.ChatSessionID.Valid {
+	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID {
 		writeError(w, http.StatusForbidden, "agent credential does not match this agent event")
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+	if !agentInboxEventHasChatTransportOrigin(event) {
+		writeError(w, http.StatusForbidden, "agent inbox event has no channel transport origin")
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	var runtimeID pgtype.UUID

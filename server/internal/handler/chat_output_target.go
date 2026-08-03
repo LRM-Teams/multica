@@ -47,14 +47,35 @@ func (h *Handler) validateChatOutputTarget(ctx context.Context, task db.AgentInb
 }
 
 func (h *Handler) chatOutputOriginForTask(ctx context.Context, task db.AgentInboxEvent) (chatOutputOrigin, bool) {
-	if !task.ChatSessionID.Valid {
-		return chatOutputOrigin{}, false
+	// Prefer chat-session origin: channel_agent_session is the durable mapping
+	// for mention/DM/reminder fires that provision a session.
+	if task.ChatSessionID.Valid {
+		channelID, workspaceID, agentID, ok := h.channelAgentForChatSession(ctx, uuidToString(task.ChatSessionID))
+		if !ok {
+			return chatOutputOrigin{}, false
+		}
+		return chatOutputOrigin{channelID: channelID, workspaceID: workspaceID, agentID: agentID}, true
 	}
-	channelID, workspaceID, agentID, ok := h.channelAgentForChatSession(ctx, uuidToString(task.ChatSessionID))
-	if !ok {
-		return chatOutputOrigin{}, false
+	// Channel-scoped wakes (ambient observe, channel_role_changed, some GM
+	// patrol paths) may carry channel_id without a chat_session. Still allow
+	// message/reminder transport when the agent currently has surface access.
+	if task.ChannelID.Valid && task.WorkspaceID.Valid && task.AgentID.Valid {
+		if !h.agentHasSurfaceAccess(ctx, task.WorkspaceID, task.AgentID, task.ChannelID) {
+			return chatOutputOrigin{}, false
+		}
+		return chatOutputOrigin{
+			channelID:   task.ChannelID,
+			workspaceID: task.WorkspaceID,
+			agentID:     task.AgentID,
+		}, true
 	}
-	return chatOutputOrigin{channelID: channelID, workspaceID: workspaceID, agentID: agentID}, true
+	return chatOutputOrigin{}, false
+}
+
+// agentInboxEventHasChatTransportOrigin reports whether an inbox event can
+// resolve a channel transport origin (chat session and/or channel_id).
+func agentInboxEventHasChatTransportOrigin(event db.AgentInboxEvent) bool {
+	return event.ChatSessionID.Valid || event.ChannelID.Valid
 }
 
 func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutputOrigin, rawTarget string) (resolvedChatOutputTarget, error) {

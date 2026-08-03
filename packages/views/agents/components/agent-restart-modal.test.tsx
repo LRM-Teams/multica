@@ -64,8 +64,8 @@ beforeEach(() => {
   lifecycleState.current = { preflight: ALL_SUPPORTED, operation: null, isPending: false };
 });
 
-describe("AgentRestartModal (#27 simplify)", () => {
-  it("renders three short blocks; default Restart CTA; no long scope paragraphs", () => {
+describe("AgentRestartModal (#27 / #28 scope under each tier)", () => {
+  it("renders three blocks with title + scope so each restart kind is clear", () => {
     renderModal();
     expect(screen.getByTestId("restart-tier-blocks")).toBeInTheDocument();
     expect(screen.getByTestId("restart-tier-restart")).toHaveTextContent("Restart");
@@ -73,10 +73,16 @@ describe("AgentRestartModal (#27 simplify)", () => {
       "Reset session",
     );
     expect(screen.getByTestId("restart-tier-full_reset_restart")).toHaveTextContent("Full reset");
-    // long scope lines gone
+    // Frank #28: each option must explain meaning (locale scope lines)
     expect(
-      screen.queryByText(/Keeps the session, workspace/i),
-    ).not.toBeInTheDocument();
+      screen.getByText(/Restarts the process\. Keeps the session, workspace/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Clears the model session and context, then restarts/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Clears the session and permanently deletes the workspace/i),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Restart" })).toBeInTheDocument();
   });
 

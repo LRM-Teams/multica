@@ -26,9 +26,10 @@ const TIERS: AgentLifecycleActionKind[] = [
 ];
 
 /**
- * Agent lifecycle restart modal (#633 / #26 / #27).
- * Short selectable blocks; default Restart. Full reset: no type-to-confirm
- * (Frank 2026-08-03) — select Full and click CTA.
+ * Agent lifecycle restart modal (#633 / #26 / #27 / #28).
+ * Three selectable blocks with short title + one-line scope (Frank: each
+ * restart kind must be clear). Full reset: no type-to-confirm — select Full
+ * and click CTA.
  */
 export function AgentRestartModal({
   agentId,
@@ -130,6 +131,9 @@ export function AgentRestartModal({
                       {t(($) => $.restart_modal.recommended)}
                     </span>
                   ) : null}
+                </div>
+                <div className="mt-1 text-xs font-normal leading-snug text-muted-foreground">
+                  {t(($) => $.restart_modal.tier[kind].scope)}
                 </div>
                 {!state.supported ? (
                   <div className="mt-1 text-xs font-normal text-muted-foreground">

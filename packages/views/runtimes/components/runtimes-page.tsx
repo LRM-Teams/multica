@@ -9,7 +9,6 @@ import {
   Folder,
   Loader2,
   Monitor,
-  MoreHorizontal,
   Plus,
   Server,
 } from "lucide-react";
@@ -36,12 +35,6 @@ import { useActorName } from "@multica/core/workspace/hooks";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import type { Agent, AgentRuntime, AgentTask } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@multica/ui/components/ui/dropdown-menu";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import {
   Collapsible,
@@ -72,8 +65,9 @@ import {
 } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { MachineCodeAgentsSection } from "./machine-code-agents-section";
+import { MachineDangerZone } from "./machine-danger-zone";
+import { MachineDaemonUpgrade } from "./machine-daemon-upgrade";
 import { MachineHeaderOps } from "./machine-header-ops";
-import { MachineSharingSection } from "./machine-sharing-section";
 import { formatLastSeen } from "../utils";
 import { useT } from "../../i18n/use-t";
 
@@ -640,14 +634,29 @@ function MachineDetailView({
   const { t } = useT("runtimes");
   const { getActorName } = useActorName();
   const openAgentPanel = useAgentPanelStore((s) => s.open);
+  const user = useAuthStore((s) => s.user);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const [workspacesEnabled, setWorkspacesEnabled] = useState(false);
 
   const primaryRuntimeId = machinePrimaryRuntimeId(machine, now);
+  const primaryRuntime =
+    machine.runtimes.find((r) => r.id === primaryRuntimeId) ??
+    machine.runtimes[0] ??
+    null;
   const ownerId = machine.runtimes[0]?.owner_id ?? null;
   const ownerMember = ownerId
     ? members.find((m) => m.user_id === ownerId) ?? null
     : null;
+  const currentMember = user
+    ? members.find((m) => m.user_id === user.id)
+    : null;
+  const isAdmin = currentMember
+    ? currentMember.role === "owner" || currentMember.role === "admin"
+    : false;
+  const canUpdate =
+    !!user &&
+    !!primaryRuntime &&
+    (primaryRuntime.owner_id === user.id || isAdmin);
   const { data: workspacesData, isFetching: workspacesLoading } =
     useRuntimeAgentWorkspaces(primaryRuntimeId, workspacesEnabled);
   const deleteWorkspace = useDeleteRuntimeAgentWorkspace(primaryRuntimeId ?? "");
@@ -706,24 +715,6 @@ function MachineDetailView({
           )}
         </div>
         <div className="flex items-center gap-1">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={t(($) => $.list.row_actions_aria)}
-                />
-              }
-            >
-              <MoreHorizontal className="h-4 w-4" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem onClick={scanWorkspaces}>
-                {t(($) => $.machine.scan_workspaces)}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
           {showListActions ? headerActions : null}
         </div>
       </PageHeader>
@@ -749,29 +740,14 @@ function MachineDetailView({
                   Frank/Iris 2026-08-02: this line answers exactly one question —
                   is the computer connected. No last-seen, no secondary
                   runtimeHealth badge (those collided as Online · … · Offline).
-                  LRM-1036 / Parker 2026-08-03: daemon version lives once on
-                  this subtitle — Basics no longer repeats it (Frank's
-                  "版本号重复" complaint).
+                  LRM-1071 / v5: daemon version + Upgrade live on the Basics
+                  Daemon row — not repeated on this subtitle.
                 */}
                 <MachineConnectedStatus health={machine.health} />
-                {machine.cliVersion ? (
-                  <>
-                    <span aria-hidden>·</span>
-                    <span data-testid="machine-header-daemon-version">
-                      {t(($) => $.machine.daemon_version_chip, {
-                        version: machine.cliVersion,
-                      })}
-                    </span>
-                  </>
-                ) : null}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <MachineHeaderOps
-                machine={machine}
-                now={now}
-                onDeleted={onComputerDeleted}
-              />
+              <MachineHeaderOps machine={machine} now={now} />
               {actions}
             </div>
           </div>
@@ -794,6 +770,18 @@ function MachineDetailView({
               <InfoRow label={t(($) => $.machine.basics_os)}>
                 <span className="truncate text-sm">{osLabel}</span>
               </InfoRow>
+              {primaryRuntime ? (
+                <InfoRow label={t(($) => $.machine.basics_daemon)}>
+                  <MachineDaemonUpgrade
+                    runtime={primaryRuntime}
+                    cliVersion={machine.cliVersion}
+                    updateTargetVersion={machine.updateTargetVersion}
+                    updateError={machine.updateError}
+                    isOnline={machine.health === "online"}
+                    canUpdate={canUpdate}
+                  />
+                </InfoRow>
+              ) : null}
               {primaryPinnedVersion?.trim() && (
                 <InfoRow label={t(($) => $.machine.basics_pinned_version)}>
                   <span
@@ -817,8 +805,6 @@ function MachineDetailView({
           </section>
 
           <MachineCodeAgentsSection machine={machine} />
-
-          <MachineSharingSection machine={machine} />
 
           <section>
             <SectionTitle>{t(($) => $.machine.agents_section)}</SectionTitle>
@@ -923,12 +909,35 @@ function MachineDetailView({
             )}
           </section>
 
-          {workspacesEnabled && (
-            <section>
-              <SectionTitle>
-                {t(($) => $.machine.workspaces_section)}
-              </SectionTitle>
-              {workspacesLoading ? (
+          <section data-testid="machine-workspaces-section">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  {t(($) => $.machine.workspaces_section)}
+                </h3>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  className="h-6 shrink-0 px-2 text-[11px]"
+                  onClick={scanWorkspaces}
+                  disabled={
+                    !primaryRuntimeId ||
+                    machine.health !== "online" ||
+                    workspacesLoading
+                  }
+                  data-testid="machine-scan-workspaces"
+                >
+                  {workspacesLoading ? (
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  ) : null}
+                  {t(($) => $.machine.scan_workspaces)}
+                </Button>
+              </div>
+              {!workspacesEnabled ? (
+                <p className="px-1 text-sm text-muted-foreground">
+                  {t(($) => $.machine.scan_workspaces_empty)}
+                </p>
+              ) : workspacesLoading ? (
                 <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   {t(($) => $.machine.scan_workspaces)}
@@ -981,7 +990,11 @@ function MachineDetailView({
                 </div>
               )}
             </section>
-          )}
+
+          <MachineDangerZone
+            machine={machine}
+            onDeleted={onComputerDeleted}
+          />
 
         </div>
       </div>

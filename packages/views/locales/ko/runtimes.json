@@ -163,7 +163,9 @@
       "restart_no_permission": "소유자만",
       "restart_offline": "오프라인",
       "restart_updating": "업데이트 중",
-      "delete_owner_only": "소유자만"
+      "delete_owner_only": "소유자만",
+      "restart": "재시작",
+      "more_empty": "추가 작업 없음"
     },
     "sharing": {
       "section": "공유 설정",
@@ -173,6 +175,10 @@
         "public": "공개로 전환",
         "private": "비공개로 전환"
       }
+    },
+    "danger_zone": {
+      "title": "위험 구역",
+      "description": "이 컴퓨터와 런타임을 워크스페이스에서 영구 삭제합니다."
     }
   },
   "health": {

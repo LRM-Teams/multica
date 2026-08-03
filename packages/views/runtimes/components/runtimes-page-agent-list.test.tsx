@@ -93,8 +93,12 @@ vi.mock("./machine-header-ops", () => ({
   MachineHeaderOps: () => null,
 }));
 
-vi.mock("./machine-sharing-section", () => ({
-  MachineSharingSection: () => null,
+vi.mock("./machine-daemon-upgrade", () => ({
+  MachineDaemonUpgrade: () => null,
+}));
+
+vi.mock("./machine-danger-zone", () => ({
+  MachineDangerZone: () => null,
 }));
 
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));

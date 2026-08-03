@@ -23,9 +23,12 @@ func TestAgentInboxDrainSerializesSameAgentAndKeepsDifferentAgentsConcurrent(t *
 	}
 
 	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
+	// Dedicated runtime: shared handlerTestRuntimeID accumulates pending wakes
+	// from other tests, which can lease concurrently with this fixture and
+	// falsely fail the same-agent serialization assertion.
+	runtimeID := createClaimReclaimRuntime(t, ctx, "inbox-serial-runtime-"+uuid.NewString())
 	firstAgentName := "Inbox Serial Agent A " + uuid.NewString()[:8]
-	firstAgentID := createHandlerTestAgent(t, firstAgentName, nil)
+	firstAgentID := createHandlerTestAgentOnRuntime(t, firstAgentName, runtimeID)
 	var firstAgentHandle string
 	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, firstAgentID).Scan(&firstAgentHandle); err != nil {
 		t.Fatalf("load first agent handle: %v", err)
@@ -118,7 +121,7 @@ ON CONFLICT DO NOTHING`, firstChannelID, testWorkspaceID, firstAgentID); err != 
 	}
 
 	secondAgentName := "Inbox Serial Agent B " + uuid.NewString()[:8]
-	secondAgentID := createHandlerTestAgent(t, secondAgentName, nil)
+	secondAgentID := createHandlerTestAgentOnRuntime(t, secondAgentName, runtimeID)
 	var secondAgentHandle string
 	if err := testPool.QueryRow(ctx, `SELECT name FROM agent WHERE id = $1`, secondAgentID).Scan(&secondAgentHandle); err != nil {
 		t.Fatalf("load second agent handle: %v", err)
@@ -1175,15 +1178,9 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(testUserID))
 
-	var chatSessionID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT chat_session_id
-		FROM agent_inbox_event
-		WHERE source_message_id = $1 AND agent_id = $2
-		ORDER BY created_at DESC
-		LIMIT 1`, trigger.ID, agentID).Scan(&chatSessionID); err != nil {
-		t.Fatalf("load chat session: %v", err)
-	}
+	// Unrelated legacy chat_session with a foreign runtime pointer must not leak
+	// into channel-only wakes (which have no chat_session_id).
+	chatSessionID := ensureLegacyChannelChatBridgeForTest(t, channel, agentID, trigger, "foreign pointer bridge")
 	var foreignRuntimeID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
@@ -1228,6 +1225,9 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if task.RuntimeID != runtimeID {
 		t.Fatalf("task runtime = %q, want %q", task.RuntimeID, runtimeID)
 	}
+	if task.ChatSessionID != "" {
+		t.Fatalf("channel-only wake leaked chat_session_id=%q", task.ChatSessionID)
+	}
 	if task.PriorSessionID != "" || task.PriorWorkDir != "" {
 		t.Fatalf("foreign runtime pointer leaked into task: session=%q workdir=%q", task.PriorSessionID, task.PriorWorkDir)
 	}
@@ -1259,15 +1259,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(testUserID))
 
-	var chatSessionID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT chat_session_id
-		FROM agent_inbox_event
-		WHERE source_message_id = $1 AND agent_id = $2
-		ORDER BY created_at DESC
-		LIMIT 1`, trigger.ID, agentID).Scan(&chatSessionID); err != nil {
-		t.Fatalf("load chat session: %v", err)
-	}
+	chatSessionID := ensureLegacyChannelChatBridgeForTest(t, channel, agentID, trigger, "foreign fallback bridge")
 	if _, err := testPool.Exec(ctx, `
 		UPDATE chat_session
 		SET session_id = NULL, work_dir = NULL, runtime_id = NULL
@@ -1423,27 +1415,9 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if sendRec.Code != http.StatusCreated {
 		t.Fatalf("send attachment mention: status=%d body=%s", sendRec.Code, sendRec.Body.String())
 	}
-	var sourceMessage ChannelMessageResponse
-	if err := json.Unmarshal(sendRec.Body.Bytes(), &sourceMessage); err != nil {
-		t.Fatalf("decode source message: %v", err)
-	}
-	var promptMessageID, chatSessionID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT prompt.id, prompt.chat_session_id
-		FROM agent_inbox_event event
-		JOIN chat_message prompt ON prompt.task_id = event.id AND prompt.role = 'user'
-		WHERE event.source_message_id = $1 AND event.agent_id = $2
-		ORDER BY event.created_at DESC
-		LIMIT 1`, sourceMessage.ID, agentID).Scan(&promptMessageID, &chatSessionID); err != nil {
-		t.Fatalf("load synthetic prompt: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE attachment
-		SET chat_session_id = $2, chat_message_id = $3
-		WHERE id = $1`, attachmentID, chatSessionID, promptMessageID); err != nil {
-		t.Fatalf("also bind attachment to synthetic prompt: %v", err)
-	}
 
+	// Channel-only wakes have no synthetic chat_message prompt; source attachment
+	// must still appear exactly once on claim.
 	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "attachment-dedupe-daemon")
 	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
 	drainRec := httptest.NewRecorder()
@@ -1490,25 +1464,22 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	testHandler.dispatchChannelMessageToAgents(ctx, channel, trigger, parseUUID(testUserID))
 
-	var eventID, chatSessionID string
+	var eventID string
 	if err := testPool.QueryRow(ctx, `
-		SELECT id, chat_session_id
+		SELECT id::text
 		FROM agent_inbox_event
 		WHERE source_message_id = $1 AND agent_id = $2
 		ORDER BY created_at DESC
-		LIMIT 1`, trigger.ID, agentID).Scan(&eventID, &chatSessionID); err != nil {
+		LIMIT 1`, trigger.ID, agentID).Scan(&eventID); err != nil {
 		t.Fatalf("load inbox event: %v", err)
 	}
+	// Channel-only wakes store the exact prompt in context; clearing it must
+	// fail-closed (no silent work-context claim).
 	if _, err := testPool.Exec(ctx, `
-		UPDATE chat_message
-		SET task_id = NULL
-		WHERE task_id = $1 AND role = 'user'`, eventID); err != nil {
-		t.Fatalf("remove exact event prompt link: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO chat_message (chat_session_id, role, content, task_id)
-		VALUES ($1, 'user', 'WRONG_LATEST_PROMPT_MUST_NOT_RUN', $2)`, chatSessionID, uuid.NewString()); err != nil {
-		t.Fatalf("seed unrelated latest prompt: %v", err)
+		UPDATE agent_inbox_event
+		SET context = '{}'::jsonb
+		WHERE id = $1`, eventID); err != nil {
+		t.Fatalf("clear channel_wake context: %v", err)
 	}
 
 	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "exact-prompt-daemon")

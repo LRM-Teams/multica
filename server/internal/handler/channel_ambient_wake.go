@@ -51,11 +51,16 @@ func (h *Handler) createOrCoalesceChannelAmbientWakeTx(ctx context.Context, tx p
 	if existingPendingToSeq > pendingToSeq {
 		pendingToSeq = existingPendingToSeq
 	}
-	prompt := h.buildChannelAmbientUnreadPromptWithDB(ctx, tx, ch, agent, trigger, cursorSeq, pendingToSeq)
-	session, task, queued := h.createChannelAmbientPromptTaskRowTx(ctx, tx, ch, agent, trigger, initiatorUserID, prompt)
-	if !queued {
+	// LRM-1079: ambient wakes are channel-only (no forced chat_session).
+	txQueries := h.Queries.WithTx(tx)
+	promptResult, err := h.enqueueOrCoalesceChannelMessageWakeWithTx(
+		ctx, txQueries, tx, ch, agent, trigger, initiatorUserID, conversationID, workspaceID, cursorSeq, pendingToSeq,
+	)
+	if err != nil {
+		slog.Warn("channel ambient wake: enqueue channel-only wake failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return db.AgentInboxEvent{}, false, false
 	}
+	task := promptResult.Event
 	lastTriggerID := channelAmbientTriggerID(trigger)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO channel_ambient_pending_wake (
@@ -63,11 +68,11 @@ func (h *Handler) createOrCoalesceChannelAmbientWakeTx(ctx context.Context, tx p
 		  status, pending_from_seq, pending_to_seq, delivered_to_seq, last_trigger_message_id,
 		  last_decision, updated_at, completed_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, $8, $9, $10, now(), NULL)
+		VALUES ($1, $2, $3, $4, NULL, $5, 'queued', $6, $7, $7, $8, $9, now(), NULL)
 		ON CONFLICT (conversation_id, agent_id)
 		DO UPDATE SET channel_id = EXCLUDED.channel_id,
 		              workspace_id = EXCLUDED.workspace_id,
-		              chat_session_id = EXCLUDED.chat_session_id,
+		              chat_session_id = NULL,
 		              task_id = EXCLUDED.task_id,
 		              status = 'queued',
 		              pending_from_seq = EXCLUDED.pending_from_seq,
@@ -77,11 +82,11 @@ func (h *Handler) createOrCoalesceChannelAmbientWakeTx(ctx context.Context, tx p
 		              last_decision = EXCLUDED.last_decision,
 		              updated_at = now(),
 		              completed_at = NULL`,
-		conversationID, parseUUID(ch.ID), workspaceID, agent.ID, session.ID, task.ID, cursorSeq+1, pendingToSeq, nullableUUID(lastTriggerID), channelAmbientGateReasonAccepted); err != nil {
+		conversationID, parseUUID(ch.ID), workspaceID, agent.ID, task.ID, cursorSeq+1, pendingToSeq, nullableUUID(lastTriggerID), channelAmbientGateReasonAccepted); err != nil {
 		slog.Warn("channel ambient wake: upsert pending row failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
 		return db.AgentInboxEvent{}, false, false
 	}
-	return task, true, true
+	return task, !promptResult.Coalesced, true
 }
 
 func (h *Handler) channelAmbientWakeCursorTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse) (pgtype.UUID, pgtype.UUID, int64, int64, bool) {
@@ -241,13 +246,13 @@ func (h *Handler) settleChannelAmbientWakeForTask(ctx context.Context, taskID pg
 	}
 	defer tx.Rollback(ctx)
 
-	var conversationID, channelID, workspaceID, agentID, chatSessionID, lastTriggerID pgtype.UUID
+	var conversationID, channelID, workspaceID, agentID, lastTriggerID pgtype.UUID
 	var pendingToSeq, deliveredToSeq int64
 	err = tx.QueryRow(ctx, `
-		SELECT conversation_id, channel_id, workspace_id, agent_id, chat_session_id, last_trigger_message_id, pending_to_seq, delivered_to_seq
+		SELECT conversation_id, channel_id, workspace_id, agent_id, last_trigger_message_id, pending_to_seq, delivered_to_seq
 		FROM channel_ambient_pending_wake
 		WHERE task_id = $1
-		FOR UPDATE`, taskID).Scan(&conversationID, &channelID, &workspaceID, &agentID, &chatSessionID, &lastTriggerID, &pendingToSeq, &deliveredToSeq)
+		FOR UPDATE`, taskID).Scan(&conversationID, &channelID, &workspaceID, &agentID, &lastTriggerID, &pendingToSeq, &deliveredToSeq)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			slog.Warn("channel ambient wake: settle load failed", "task", uuidToString(taskID), "error", err)
@@ -292,35 +297,28 @@ func (h *Handler) settleChannelAmbientWakeForTask(ctx context.Context, taskID pg
 		}
 	}
 	prompt := h.buildChannelAmbientUnreadPromptWithDB(ctx, tx, ch, agent, trigger, deliveredToSeq, pendingToSeq)
-	session := db.ChatSession{ID: chatSessionID, WorkspaceID: workspaceID, AgentID: agentID}
-	if !session.ID.Valid {
-		return
-	}
-	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, trigger)
+	// LRM-1079: ambient drain follow-ups are channel-only (no chat_session bridge).
+	txQueries := h.Queries.WithTx(tx)
+	promptResult, err := h.enqueueChannelAgentPromptRangeWithTx(
+		ctx, txQueries, tx, ch, agent, trigger, pgtype.UUID{}, prompt,
+		channelMessageWakeReason, channelMessageWakePriority, deliveredToSeq+1, pendingToSeq,
+	)
 	if err != nil {
-		slog.Warn("channel ambient wake: create drain prompt failed", "task", uuidToString(taskID), "error", err)
+		slog.Warn("channel ambient wake: enqueue channel-only drain failed", "task", uuidToString(taskID), "error", err)
 		return
 	}
-	newTask, err := h.TaskService.CreateAmbientChatTaskRow(ctx, h.Queries.WithTx(tx), session, pgtype.UUID{})
-	if err != nil {
-		slog.Warn("channel ambient wake: create drain task failed", "task", uuidToString(taskID), "error", err)
-		return
-	}
-	if _, err := tx.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, newTask.ID, promptMsg.ID); err != nil {
-		slog.Warn("channel ambient wake: tag drain prompt failed", "task", uuidToString(taskID), "new_task", uuidToString(newTask.ID), "error", err)
-		return
-	}
+	newTask := promptResult.Event
 	if _, err := tx.Exec(ctx, `
 		UPDATE channel_ambient_pending_wake
 		SET task_id = $2,
-		    chat_session_id = $3,
+		    chat_session_id = NULL,
 		    status = 'queued',
-		    pending_from_seq = $4,
-		    delivered_to_seq = $5,
+		    pending_from_seq = $3,
+		    delivered_to_seq = $4,
 		    updated_at = now(),
 		    completed_at = NULL
 		WHERE task_id = $1`,
-		taskID, newTask.ID, session.ID, deliveredToSeq+1, pendingToSeq); err != nil {
+		taskID, newTask.ID, deliveredToSeq+1, pendingToSeq); err != nil {
 		slog.Warn("channel ambient wake: advance drain row failed", "task", uuidToString(taskID), "new_task", uuidToString(newTask.ID), "error", err)
 		return
 	}

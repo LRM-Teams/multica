@@ -248,8 +248,11 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if !ok {
 		t.Fatalf("queued inbox event %s missing from snapshot", queuedInboxEventID)
 	}
-	if queuedInboxTask.Kind != "chat" || queuedInboxTask.ChatSessionID == "" || queuedInboxTask.TriggerSummary == nil || strings.TrimSpace(*queuedInboxTask.TriggerSummary) == "" {
-		t.Fatalf("queued inbox task = %+v, want chat task with session and trigger summary", queuedInboxTask)
+	if queuedInboxTask.Kind != "chat" || queuedInboxTask.ChannelID == "" || queuedInboxTask.TriggerSummary == nil || strings.TrimSpace(*queuedInboxTask.TriggerSummary) == "" {
+		t.Fatalf("queued inbox task = %+v, want channel wake (kind=chat) with trigger summary", queuedInboxTask)
+	}
+	if queuedInboxTask.ChatSessionID != "" {
+		t.Fatalf("channel-only queued inbox leaked chat_session_id=%q", queuedInboxTask.ChatSessionID)
 	}
 	if queuedInboxTask.ActorID != agentD || queuedInboxTask.ActorType != "agent" || queuedInboxTask.DisplayName == "" || queuedInboxTask.ActorStatus != "visible" || queuedInboxTask.Actor == nil || queuedInboxTask.Actor.DisplayName != queuedInboxTask.DisplayName || queuedInboxTask.Handle == nil {
 		t.Fatalf("queued inbox actor identity = %+v, want stable visible agent snapshot", queuedInboxTask)
@@ -399,16 +402,12 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	inboxEventID := latestChannelAgentInboxEventForRootForTest(t, root.ID, agentID)
 	setAgentInboxTerminalOutcomeForTest(t, inboxEventID, "replied", false)
 
-	var chatSessionID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT COALESCE(chat_session_id::text, '')
-		FROM agent_inbox_event
-		WHERE id = $1`, inboxEventID).Scan(&chatSessionID); err != nil {
-		t.Fatalf("load inbox chat session: %v", err)
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(channelID))
+	if !found {
+		t.Fatal("channel not found")
 	}
-	if chatSessionID == "" {
-		t.Fatalf("inbox event %s has no chat_session_id", inboxEventID)
-	}
+	// Standalone chat_session used only for the legacy chat history row.
+	chatSessionID := ensureLegacyChannelChatBridgeForTest(t, ch, agentID, root, "legacy list history prompt")
 
 	var legacyChatTaskID, legacyMiscTaskID, activeMiscTaskID string
 	if err := testPool.QueryRow(ctx, `
@@ -472,8 +471,11 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if !ok {
 		t.Fatalf("missing inbox event task %s in response: %+v", inboxEventID, tasks)
 	}
-	if inboxTask.Status != "completed" || inboxTask.Kind != "chat" || inboxTask.ChatSessionID != chatSessionID || inboxTask.CompletedAt == nil {
-		t.Fatalf("inbox task = %+v, want completed chat row with chat_session_id + completed_at", inboxTask)
+	if inboxTask.Status != "completed" || inboxTask.CompletedAt == nil {
+		t.Fatalf("inbox task = %+v, want completed row with completed_at", inboxTask)
+	}
+	if inboxTask.ChatSessionID != "" {
+		t.Fatalf("channel-only inbox task leaked chat_session_id=%q", inboxTask.ChatSessionID)
 	}
 	if inboxTask.TriggerSummary == nil || strings.TrimSpace(*inboxTask.TriggerSummary) == "" || strings.Contains(*inboxTask.TriggerSummary, "legacy chat") {
 		t.Fatalf("inbox task trigger summary = %#v, want non-empty inbox summary", inboxTask.TriggerSummary)

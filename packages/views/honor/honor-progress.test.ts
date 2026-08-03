@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { HonorBadgeCatalogItem } from "@multica/core/types/honor";
 import {

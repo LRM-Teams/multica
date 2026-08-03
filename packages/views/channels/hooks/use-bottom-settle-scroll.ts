@@ -13,8 +13,8 @@ const MAX_FRAMES = 180;
 
 /**
  * "Land at the bottom on cold open" settle for the DEFAULT case — no deep-link
- * highlight and no unread anchor, i.e. a normal channel/DM open that should show
- * the latest message.
+ * highlight and no unread anchor, i.e. a normal channel / DM / thread open that
+ * should show the latest message.
  *
  * Why direct scrollTop, not scrollToIndex (real-device P0, 2026-07-25): the
  * latest-message position was first seeded by the mount-once declarative
@@ -58,8 +58,8 @@ export function useBottomSettleScroll({
   messages: readonly ChannelMessage[];
   /**
    * True only when the default-bottom position owns the mount — no deep-link
-   * highlight and no unread anchor, and the list wants to open at the latest
-   * message (`initialScroll === "bottom"`).
+   * highlight and no unread anchor. Every chat surface (channel, DM, thread)
+   * wants the latest row on open (LRM-1156).
    */
   enabled: boolean;
   /** True once Virtuoso's imperative handle has attached — a value-comparable

@@ -346,29 +346,31 @@ describe("MessageViewport", () => {
     expect(screen.getByTestId("message-gutter-time")).toHaveTextContent("09:16");
   });
 
-  it("opens thread lists at the root context when requested", () => {
+  // LRM-1156 — a thread list (pinned root as `header`) must open on the LAST
+  // reply, not the first. Frank: 「thread里读消息，能不能优先跳到最后一行？别老是
+  // 让我滑动」. The root stays reachable by scrolling up; the landing belongs to
+  // the newest reply, same as any chat surface.
+  it("opens thread lists at the latest reply, not the root context (LRM-1156)", () => {
     render(
       <MessageViewport
         messages={[
           makeMessage("m1", "First thread reply"),
-          makeMessage("m2", "Second thread reply"),
-          makeMessage("m3", "Later thread reply"),
+          makeMessage("m2", "Middle thread reply"),
+          makeMessage("m3", "Latest thread reply"),
         ]}
         currentUserId="user-1"
         emptyLabel="No replies"
-        initialScroll="top"
         header={<div data-testid="thread-root-preview">Root preview</div>}
         // #1194 regression guard: a large firstItemIndex must NOT leak into
-        // the thread-top local index (0).
+        // the local landing index (here: 2, the last local row).
         firstItemIndex={1_000_000}
       />,
     );
 
     expect(screen.getByTestId("thread-root-preview")).toBeInTheDocument();
-    expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute("data-initial-index", "0");
-    expect(screen.getByText("First thread reply")).toBeInTheDocument();
-    expect(screen.getByText("Second thread reply")).toBeInTheDocument();
-    expect(screen.queryByText("Later thread reply")).not.toBeInTheDocument();
+    expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute("data-initial-index", "2");
+    expect(screen.getByText("Latest thread reply")).toBeInTheDocument();
+    expect(screen.queryByText("First thread reply")).not.toBeInTheDocument();
   });
 
   it("pins a 'new messages' divider above the first unread but opens at latest (LRM-1068)", () => {

@@ -1362,7 +1362,6 @@ function DmChannelConversation({
           currentUserId={currentUserId}
           ownName={currentUserName ?? undefined}
           emptyLabel={t(($) => $.thread.empty_replies)}
-          initialScroll="top"
           highlightMessageId={deepLinkHighlightId}
           // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ChannelMessageList header slot
           header={

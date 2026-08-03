@@ -2827,7 +2827,14 @@ export function ChannelsPage({
     t,
   ]);
 
+  // LRM-1195 — dismiss the mobile "…" Drawer before opening Add people.
+  // Same Vaul lock as LRM-265 archive/delete: body gets pointer-events:none
+  // while DrawerContent alone is unlocked; ChannelAddPeopleDialog portals to
+  // body as a sibling, so the search input inherits the lock and cannot
+  // focus. Closing first also avoids stacked-modal focus traps; Dialog itself
+  // sets pointer-events:auto as defense-in-depth while the drawer animates out.
   const openAddPeopleDialog = useCallback(() => {
+    setMobilePanel(null);
     setInviteQuery("");
     setDebouncedInviteQuery("");
     setSelectedInvites(new Set());

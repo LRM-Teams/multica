@@ -229,7 +229,12 @@ export type { MessagePart } from "./message-part";
 export { buildChannelMessageParts } from "./message-part";
 export type { StickerAsset, StickerCatalogResponse, StickerPack } from "./sticker";
 export type { Attachment } from "./attachment";
-export { attachmentDownloadPath, attachmentIdFromDownloadURL, contentReferencesAttachment } from "./attachment-url";
+export {
+  attachmentDownloadPath,
+  attachmentIdFromDownloadURL,
+  attachmentIdFromRef,
+  contentReferencesAttachment,
+} from "./attachment-url";
 export type {
   RuntimeTokenStats,
   ChatSession,

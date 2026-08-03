@@ -185,7 +185,17 @@
     },
     "agents_select": "选择",
     "agents_create": "创建",
-    "agents_done": "完成"
+    "agents_done": "完成",
+    "agents_select_all": "全选",
+    "agents_clear_all": "清除选择",
+    "agents_cancel": "取消",
+    "agents_selected_count": "已选 {{count}}",
+    "agents_bulk_stop": "停止",
+    "agents_bulk_restart": "重启",
+    "agents_bulk_stop_done": "已停止 {{count}} 个 agent 的任务。",
+    "agents_bulk_stop_partial": "部分停止成功（取消 {{cancelled}}，失败 {{failed}}）。",
+    "agents_bulk_restart_done": "已重启 {{count}} 个 agent。",
+    "agents_bulk_restart_partial": "重启成功 {{ok}}，失败 {{failed}}。"
   },
   "health": {
     "online": {

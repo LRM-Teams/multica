@@ -185,7 +185,17 @@
     },
     "agents_select": "選択",
     "agents_create": "作成",
-    "agents_done": "完了"
+    "agents_done": "完了",
+    "agents_select_all": "Select all",
+    "agents_clear_all": "Clear all",
+    "agents_cancel": "Cancel",
+    "agents_selected_count": "{{count}} selected",
+    "agents_bulk_stop": "Stop",
+    "agents_bulk_restart": "Restart",
+    "agents_bulk_stop_done": "Stopped tasks on {{count}} agent(s).",
+    "agents_bulk_stop_partial": "Stopped some tasks ({{cancelled}} cancelled, {{failed}} failed).",
+    "agents_bulk_restart_done": "Restarted {{count}} agent(s).",
+    "agents_bulk_restart_partial": "Restarted {{ok}}; {{failed}} failed."
   },
   "health": {
     "online": {

@@ -5,6 +5,9 @@
  * must agree; 640–767 is no longer a dead zone where JS mobile coexists with
  * sm: desktop CSS.
  */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { render, screen } from "@testing-library/react";
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,6 +152,36 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
   });
 
   describe("CSS companions use md: (768), not sm: (640)", () => {
+    it("LRM-1164: report outline and list-row structural companions wait until md", () => {
+      const researchRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+      const read = (relativePath: string) =>
+        fs.readFileSync(path.join(researchRoot, relativePath), "utf8");
+      const [reader, listPage, row, skeleton] = [
+        read("report/report-reader.tsx"),
+        read("components/research-list-page.tsx"),
+        read("components/research-session-row.tsx"),
+        read("components/research-session-row-skeleton.tsx"),
+      ];
+
+      expect(reader).toMatch(
+        /className="md:hidden"\s+data-testid="research-report-outline-toggle"/,
+      );
+      expect(reader).toMatch(
+        /data-testid="research-report-outline-drawer"\s+className="[^"]*\bmd:hidden"/,
+      );
+      expect(reader).toMatch(
+        /data-testid="research-report-outline-aside"\s+className="[^"]*\bmd:block"/,
+      );
+      expect(listPage).toMatch(/className="hidden text-xs text-muted-foreground md:block"/);
+      // LRM-1106: no goal chip; stage/time use md:inline (D2 chip removed).
+      expect(row).toMatch(/className="hidden [^"]*\bmd:inline"/);
+      expect(row).toMatch(/className="hidden shrink-0 md:flex"/);
+      expect(row).toMatch(
+        /className="[^"]*shrink-0 opacity-100 md:opacity-0 md:transition-opacity/,
+      );
+      expect(skeleton).toMatch(/className="hidden items-center md:flex"/);
+      expect(skeleton).toMatch(/className="hidden h-3 w-10 shrink-0 md:block"/);
+    });
 
     it("source strategy strip grids at md (no sm:grid beside logic-strip)", () => {
       setViewport(700);

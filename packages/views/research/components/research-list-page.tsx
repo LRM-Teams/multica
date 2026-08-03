@@ -57,6 +57,7 @@ import { ResearchCreateEstimateSummary } from "./research-create-estimate";
 import { ResearchCreateParamsPanel } from "./research-create-params-panel";
 import { ResearchEmptyState } from "./research-empty-state";
 import { ResearchHomeHero } from "./research-home-hero";
+import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
 import { ResearchServerErrorPage } from "./research-server-error-page";
 import { ResearchSessionFilterBar } from "./research-session-filter-bar";
 import { ResearchSessionRow } from "./research-session-row";
@@ -407,7 +408,7 @@ export function ResearchListPage() {
       <div className="space-y-6">
         {inProgress.length > 0 && (
           <section>
-            <h2 className="px-3 text-xs font-semibold text-muted-foreground">
+            <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.groups.in_progress)}
               <span className="ml-1.5 tabular-nums font-medium opacity-80">
                 {inProgress.length}
@@ -418,7 +419,7 @@ export function ResearchListPage() {
         )}
         {completed.length > 0 && (
           <section>
-            <h2 className="px-3 text-xs font-semibold text-muted-foreground">
+            <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.groups.completed)}
               <span className="ml-1.5 tabular-nums font-medium opacity-80">
                 {completed.length}
@@ -429,7 +430,7 @@ export function ResearchListPage() {
         )}
         {failed.length > 0 && (
           <section>
-            <h2 className="px-3 text-xs font-semibold text-muted-foreground">
+            <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.filter.status_failed)}
               <span className="ml-1.5 tabular-nums font-medium opacity-80">
                 {failed.length}
@@ -467,12 +468,16 @@ export function ResearchListPage() {
         <div
           className={cn(
             RESEARCH_LIST_WORKBENCH_CLASS,
-            "flex w-full flex-col gap-5 py-4 md:gap-6 md:py-6",
+            "relative flex w-full flex-col gap-5 py-4 md:gap-6 md:py-6",
           )}
           data-testid="research-list-workbench"
         >
+          {/* LRM-1144 Δ1: dot-grid matches workbench width; omit on skeleton/error. */}
+          {!isLoading && !isError ? (
+            <ResearchShellAtmosphere className="-top-2" heightClassName="h-[200px]" />
+          ) : null}
           {/* LRM-783 / LRM-784 / LRM-1106: brand-hero + full-width composer (12 cols). */}
-          <div ref={composerCardRef}>
+          <div ref={composerCardRef} className="relative z-[1]">
             <ResearchHomeHero>
               <div
                 className={cn(
@@ -520,7 +525,7 @@ export function ResearchListPage() {
                       fieldErrors?.goal ? "research-create-goal-error" : undefined
                     }
                     data-testid="research-create-goal"
-                    className="min-h-[64px] flex-1 border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:ring-0 focus-visible:border-transparent"
+                    className="min-h-[64px] flex-1 border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:ring-0 focus-visible:border-transparent md:min-h-[88px]"
                     onKeyDown={(e) => {
                       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                         e.preventDefault();
@@ -555,7 +560,7 @@ export function ResearchListPage() {
                       }
                       disabled={create.isPending}
                       className={cn(
-                        "h-10 w-full shrink-0 rounded-full px-3.5 text-[13px] font-medium md:h-9 md:w-auto",
+                        "h-10 w-full shrink-0 rounded-full px-3.5 text-sm font-medium md:h-9 md:w-auto",
                         HERO_CTA_SECONDARY_CLASS,
                       )}
                       data-testid="research-create-params-open"
@@ -569,7 +574,7 @@ export function ResearchListPage() {
                       disabled={create.isPending}
                       data-testid="research-create-submit"
                       className={cn(
-                        "h-10 w-full shrink-0 rounded-full bg-brand px-4 text-[13.5px] font-semibold text-brand-foreground md:h-9 md:w-auto",
+                        "h-10 w-full shrink-0 rounded-full bg-brand px-4 text-sm font-medium text-brand-foreground md:h-9 md:w-auto",
                         HERO_CTA_PRIMARY_CLASS,
                       )}
                     >
@@ -637,7 +642,7 @@ export function ResearchListPage() {
               data-testid="research-list-waiting-network"
               className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-warning/35 bg-warning/5 px-6 py-12 text-center"
             >
-              <p className="text-sm font-semibold text-foreground">
+              <p className="text-sm font-medium text-foreground">
                 {t(($) => $.connectivity.waiting_network)}
               </p>
               <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
@@ -653,7 +658,7 @@ export function ResearchListPage() {
               <div className="flex min-w-0 flex-1 items-start gap-3">
                 <AlertCircle className="mt-0.5 size-5 shrink-0 text-destructive" />
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-foreground">
+                  <p className="text-sm font-medium text-foreground">
                     {error instanceof Error && error.message
                       ? error.message
                       : t(($) => $.list.load_failed)}
@@ -678,9 +683,9 @@ export function ResearchListPage() {
               onStart={focusComposer}
             />
           ) : (
-            <div data-testid="research-session-list-content" className="space-y-3">
+            <div data-testid="research-session-list-content" className="relative z-[1] space-y-3">
               <div className="flex items-baseline gap-2 px-0.5">
-                <h2 className="text-sm font-semibold text-foreground">
+                <h2 className="text-sm font-medium text-foreground">
                   {t(($) => $.list.recent_heading)}
                 </h2>
                 <span className="text-xs tabular-nums text-muted-foreground">

@@ -282,6 +282,41 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(list?.textContent).toContain("Alpha");
     expect(list?.querySelector('[role="radiogroup"]')).toBeTruthy();
   });
+
+  it("LRM-1144 Δ1–Δ3: workbench atmosphere, sunk desc, desktop textarea 88px", () => {
+    setQuery({
+      data: {
+        sessions: [session({ id: "s-run", status: "running", title: "Alpha" })],
+      },
+    });
+    const { container, rerender } = render(<ResearchListPage />);
+    const workbench = container.querySelector('[data-testid="research-list-workbench"]');
+    const atmosphere = screen.getByTestId("research-shell-atmosphere");
+    expect(workbench?.contains(atmosphere)).toBe(true);
+    expect(screen.getByTestId("research-home-hero").contains(atmosphere)).toBe(false);
+    expect(atmosphere.className).toContain("h-[200px]");
+
+    const desc = screen.getByText(enResearch.home.hero_desc);
+    expect(desc.className).not.toContain("max-w-[36rem]");
+    expect(desc.className).toContain("md:line-clamp-1");
+
+    const goal = screen.getByTestId("research-create-goal");
+    expect(goal.className).toContain("min-h-[64px]");
+    expect(goal.className).toContain("md:min-h-[88px]");
+
+    setQuery({ data: undefined, isLoading: true });
+    rerender(<ResearchListPage />);
+    expect(screen.queryByTestId("research-shell-atmosphere")).toBeNull();
+
+    setQuery({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("boom"),
+    });
+    rerender(<ResearchListPage />);
+    expect(screen.queryByTestId("research-shell-atmosphere")).toBeNull();
+  });
 });
 
 describe("ResearchListPage first-visit empty state (LRM-816)", () => {

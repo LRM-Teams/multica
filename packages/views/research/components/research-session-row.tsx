@@ -151,13 +151,7 @@ export function ResearchSessionRow({
       />
 
       {/* Visible on hover AND focus-within (keyboard). */}
-      <div
-        className={cn(
-          "relative z-[1] shrink-0",
-          "opacity-100 md:opacity-0 md:transition-opacity",
-          "md:group-hover:opacity-100 md:group-focus-within:opacity-100",
-        )}
-      >
+      <div className="relative z-[1] shrink-0 opacity-100 md:opacity-0 md:transition-opacity md:group-hover:opacity-100 md:group-focus-within:opacity-100">
         <ResearchSessionRowActions session={session} href={href} />
       </div>
     </div>

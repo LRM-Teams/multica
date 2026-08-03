@@ -31,6 +31,7 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { cn } from "@multica/ui/lib/utils";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { useT } from "../../i18n/use-t";
@@ -925,11 +926,19 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                         type="button"
                         size="default"
                         variant="outline"
-                        className="h-9 min-w-[88px] gap-1.5 px-3 text-[13px] font-semibold"
-                        disabled={stop.isPending}
+                        className={cn(
+                          "h-9 min-w-[88px] gap-1.5 px-3 text-[13px] font-semibold",
+                          // LRM-1246 S3 — keep Stop focusable while pending (LRM-1213).
+                          stop.isPending && "opacity-50 cursor-not-allowed",
+                        )}
+                        aria-disabled={stop.isPending || undefined}
                         aria-label={t(($) => $.panel.stop_aria)}
                         title={t(($) => $.panel.stop_tooltip)}
-                        onClick={() => stop.mutate()}
+                        data-testid="research-session-composer-stop"
+                        onClick={() => {
+                          if (stop.isPending) return;
+                          stop.mutate();
+                        }}
                       >
                         <Square className="h-3.5 w-3.5 fill-current" />
                         {stop.isPending

@@ -54,6 +54,7 @@ function AgentVoiceCall({
     preferDuplex: false,
   });
   const [open, setOpen] = useState(false);
+  const [minimized, setMinimized] = useState(false);
   const [durationSeconds, setDurationSeconds] = useState(0);
   const connectedAtRef = useRef<number | null>(null);
 
@@ -74,6 +75,7 @@ function AgentVoiceCall({
   const start = useCallback(() => {
     connectedAtRef.current = null;
     setDurationSeconds(0);
+    setMinimized(false);
     setOpen(true);
     void controller.start({
       channel_id: channelId,
@@ -85,9 +87,13 @@ function AgentVoiceCall({
 
   const hangUp = useCallback(() => {
     void controller.hangUp()
-      .then(() => setOpen(false))
+      .then(() => {
+        setMinimized(false);
+        setOpen(false);
+      })
       .catch(() => {
         // A stop failure must keep the panel visible for an explicit retry.
+        setMinimized(false);
       });
   }, [controller]);
 
@@ -100,6 +106,7 @@ function AgentVoiceCall({
         controller.error?.source !== "stop"
       );
     if (canCloseWithoutStop) {
+      setMinimized(false);
       setOpen(false);
       return;
     }
@@ -136,6 +143,7 @@ function AgentVoiceCall({
       </Button>
       <VoiceCallPanel
         open={open}
+        minimized={minimized}
         agentId={agentId}
         agentName={agentName}
         phase={controller.phase}
@@ -146,6 +154,8 @@ function AgentVoiceCall({
         toolStatus={controller.toolStatus}
         speakerphone={controller.speakerphone}
         onRequestClose={requestClose}
+        onMinimize={() => setMinimized(true)}
+        onExpand={() => setMinimized(false)}
         onToggleMute={toggleMute}
         onToggleSpeakerphone={toggleSpeakerphone}
         onHangUp={hangUp}

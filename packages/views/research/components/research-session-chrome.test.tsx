@@ -273,6 +273,31 @@ describe("ResearchSessionChrome", () => {
     expect(onReject).toHaveBeenCalledWith("来源权重不够");
   });
 
+  it("LRM-1240: gateBusy keeps approve/reject focusable via aria-disabled (not native disabled)", () => {
+    const onConfirm = vi.fn();
+    const onReject = vi.fn();
+    renderChrome(makeSession({ status: "awaiting_user_confirm" }), {
+      onConfirm,
+      onReject,
+      confirmPending: true,
+    });
+
+    const approve = screen.getByTestId("research-session-primary");
+    const reject = screen.getByTestId("research-session-gate-reject");
+
+    expect(approve).toHaveProperty("disabled", false);
+    expect(approve.getAttribute("aria-disabled")).toBe("true");
+    expect(reject).toHaveProperty("disabled", false);
+    expect(reject.getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.click(approve);
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    fireEvent.click(reject);
+    expect(screen.queryByTestId("research-session-gate-reject-popover")).toBeNull();
+    expect(onReject).not.toHaveBeenCalled();
+  });
+
   it("completed shows handoff primary; checkboxes live inside the popover", () => {
     renderChrome(makeSession({ status: "completed" }));
     expect(screen.queryByText("Approve")).toBeNull();

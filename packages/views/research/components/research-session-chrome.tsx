@@ -291,9 +291,18 @@ export function ResearchSessionChrome({
           {showConfirm ? (
             <Button
               size="sm"
-              className={primaryClass}
-              onClick={onConfirm}
-              disabled={gateBusy}
+              className={cn(
+                primaryClass,
+                // LRM-1240 — keep focusable while gateBusy (same frozen pattern as LRM-1213).
+                gateBusy && "opacity-50 cursor-not-allowed",
+              )}
+              // Native `disabled` drops focus to <body> in Chromium after the
+              // click that started the pending request. Guard the handler instead.
+              aria-disabled={gateBusy || undefined}
+              onClick={() => {
+                if (gateBusy) return;
+                onConfirm();
+              }}
               data-testid="research-session-primary"
               data-gate-action="approve"
             >
@@ -304,6 +313,8 @@ export function ResearchSessionChrome({
             <Popover
               open={rejectOpen}
               onOpenChange={(open) => {
+                // LRM-1240 — do not open reject popover while gate is busy.
+                if (gateBusy && open) return;
                 setRejectOpen(open);
                 if (!open) setRejectReason("");
               }}
@@ -313,7 +324,8 @@ export function ResearchSessionChrome({
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={gateBusy}
+                    aria-disabled={gateBusy || undefined}
+                    className={cn(gateBusy && "opacity-50 cursor-not-allowed")}
                     data-testid="research-session-gate-reject"
                     data-gate-action="reject"
                   />

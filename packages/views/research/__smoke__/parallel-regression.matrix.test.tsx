@@ -312,7 +312,7 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
     expect(isMobileViewport(360)).toBe(true);
   });
 
-  it(`${SMOKE_ISSUES.breakpoints}: baseline inventory — template chip-row still mixes sm: (dead-zone risk)`, () => {
+  it(`${SMOKE_ISSUES.breakpoints}: baseline inventory — template chip-row uses md: (768)`, () => {
     // LRM-1109 #1947: meta-menu no longer pairs useIsMobile with sm: classes.
     const meta = readResearchSource("components/research-session-meta-menu.tsx");
     expect(meta.includes("useIsMobile")).toBe(true);
@@ -324,13 +324,13 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
       ),
     ).toBe(false);
 
-    // LRM-1092: composer chip row still switches layout at sm: (640) — tracked below.
+    // LRM-1106: composer chip row aligns with md / 768.
     const templates = readResearchSource("components/research-template-chip-row.tsx");
     expect(
-      hasTailwindSmClass(templates),
+      /\bmd:/.test(templates) && !hasTailwindSmClass(templates),
       failHint(
         SMOKE_ISSUES.breakpoints,
-        "template-chip-row still switches layout at sm: (640)",
+        "template-chip-row should switch layout at md: (768)",
       ),
     ).toBe(true);
   });
@@ -346,7 +346,7 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
     ).toBe(true);
   });
 
-  it.fails(
+  it(
     `${SMOKE_ISSUES.breakpoints}: template chip-row layout switch should be md: (align with 768)`,
     () => {
       const templates = readResearchSource("components/research-template-chip-row.tsx");

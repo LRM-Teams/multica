@@ -324,7 +324,19 @@
     "templates_hint": "点选框内模板 pill 预填开题文案，可改字后再开始",
     "template_chip": "{{title}} 提示词已加入，继续输入开发目标即可",
     "template_chip_clear": "移除模板",
-    "goal_placeholder_with_template": "补充你的具体目标…"
+    "goal_placeholder_with_template": "补充你的具体目标…",
+    "template_injected_hint": "已注入权威模板；将与下方意图一并提交",
+    "template_prompt_edit": "查看/编辑完整模板",
+    "template_prompt_title": "编辑完整权威模板",
+    "template_prompt_desc": "完整提示词仅在此编辑与提交 payload 中出现，不会灌进主输入框。",
+    "template_prompt_count": "{{count}} / ≥{{min}} 汉字",
+    "template_prompt_count_en": "{{count}} / ≥{{min}} chars",
+    "template_prompt_too_short": "内容不足 {{min}} 汉字（当前 {{count}}），请补全后再应用。",
+    "template_prompt_too_short_en": "Need at least {{min}} characters (now {{count}}) before applying.",
+    "template_prompt_empty": "完整模板不能为空。",
+    "template_prompt_reset": "恢复默认",
+    "template_prompt_cancel": "取消",
+    "template_prompt_apply": "应用更改"
   },
   "ring": {
     "title": "节点操作",

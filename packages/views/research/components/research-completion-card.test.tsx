@@ -67,8 +67,11 @@ describe("ResearchCompletionCard (LRM-832)", () => {
     expect(screen.queryByText("Research complete")).toBeNull();
   });
 
-  // LRM-1235 — fullscreen dismiss mask must stay mouse-only (out of tab / SR name tree).
-  it("keeps backdrop dismiss clickable but out of tab order and SR name tree", () => {
+  // LRM-1244 — no fullscreen dismiss scrim (same root cause as LRM-1243 / #2082).
+  // aria-hidden + tabIndex=-1 is still focusable; native dialog focusing steps
+  // parked initial focus on the invisible layer. Delete the node; gutter click
+  // on the dialog box itself dismisses.
+  it("exposes no dismiss scrim; gutter click on dialog dismisses", () => {
     const onDismiss = vi.fn();
     render(
       <ResearchCompletionCard
@@ -80,17 +83,22 @@ describe("ResearchCompletionCard (LRM-832)", () => {
       />,
     );
     const dialog = screen.getByTestId("research-completion-card");
-    const backdrop = dialog.querySelector(
-      'button.absolute.inset-0[aria-hidden="true"]',
-    );
-    expect(backdrop).toBeTruthy();
-    expect(backdrop).toHaveAttribute("tabindex", "-1");
-    expect(backdrop).not.toHaveAttribute("aria-label");
+    expect(dialog.tagName).toBe("DIALOG");
+    expect(dialog.querySelector("button.absolute.inset-0")).toBeNull();
+    expect(
+      dialog.querySelector('[aria-hidden="true"][tabindex="-1"]'),
+    ).toBeNull();
 
     const namedDismiss = screen.getAllByRole("button", { name: "Dismiss" });
     expect(namedDismiss).toHaveLength(1);
 
-    fireEvent.click(backdrop!);
+    fireEvent.click(dialog);
     expect(onDismiss).toHaveBeenCalledTimes(1);
+
+    onDismiss.mockClear();
+    const card = dialog.querySelector("[role='document']");
+    expect(card).toBeTruthy();
+    fireEvent.click(card!);
+    expect(onDismiss).not.toHaveBeenCalled();
   });
 });

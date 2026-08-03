@@ -25,48 +25,40 @@ const TIERS: AgentLifecycleActionKind[] = [
   "full_reset_restart",
 ];
 
-// Compare handles ignoring a leading "@": the handle renders as `@name`
-// elsewhere, so typing the "@" the user sees must still match (no dead-end).
-const normalizeHandle = (value: string) => value.trim().replace(/^@+/, "");
-
 /**
  * Agent lifecycle restart modal (#633 / #26 / #27).
- * Default path: Restart one-click. Three short selectable blocks (Raft-like);
- * long scope copy removed. Full-reset handle confirm only after Full is selected.
- * `scheduled` is non-blocking (#26); force semantics are BE (#1900).
+ * Short selectable blocks; default Restart. Full reset: no type-to-confirm
+ * (Frank 2026-08-03) — select Full and click CTA.
  */
 export function AgentRestartModal({
   agentId,
-  agentHandle,
+  agentHandle: _agentHandle,
   agentName,
   open,
   onOpenChange,
 }: {
   agentId: string;
+  /** Kept for call-site stability; type-to-confirm removed. */
   agentHandle: string;
   agentName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  void _agentHandle;
   const { t } = useT("agents");
   const lifecycle = useAgentLifecycle(agentId, open);
   const [selected, setSelected] = useState<AgentLifecycleActionKind>("restart");
-  const [confirmText, setConfirmText] = useState("");
 
   const selectedState = agentLifecycleActionState(lifecycle.preflight, selected);
   const op = lifecycle.operation;
-  // Only hard-block while actually running — scheduled never auto-promotes (#26).
   const isBlocking =
     op?.status === "running" || lifecycle.start.isPending;
   const isScheduled = op?.status === "scheduled";
   const isTerminalSuccess = op?.status === "succeeded";
   const isTerminalFailed = op?.status === "failed";
   const isFullReset = selected === "full_reset_restart";
-  const handleConfirmed =
-    !isFullReset || normalizeHandle(confirmText) === normalizeHandle(agentHandle);
   const canSubmit =
     selectedState.supported &&
-    handleConfirmed &&
     !isBlocking &&
     !isScheduled &&
     !isTerminalSuccess;
@@ -77,7 +69,6 @@ export function AgentRestartModal({
   const close = () => {
     if (op) lifecycle.refreshAfterTerminal();
     lifecycle.reset();
-    setConfirmText("");
     setSelected("restart");
     onOpenChange(false);
   };
@@ -100,7 +91,6 @@ export function AgentRestartModal({
           {t(($) => $.restart_modal.description_short, { name: agentName })}
         </DialogDescription>
 
-        {/* Three short blocks — title only (Frank: not dense radio + long copy) */}
         <div
           role="radiogroup"
           aria-label={t(($) => $.restart_modal.title)}
@@ -122,10 +112,7 @@ export function AgentRestartModal({
                 data-testid={`restart-tier-${kind}`}
                 data-selected={isSelected || undefined}
                 data-disabled={!state.supported || undefined}
-                onClick={() => {
-                  setSelected(kind);
-                  setConfirmText("");
-                }}
+                onClick={() => setSelected(kind)}
                 className={cn(
                   "rounded-lg border px-3 py-3 text-left text-sm font-medium transition-colors",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -153,30 +140,6 @@ export function AgentRestartModal({
             );
           })}
         </div>
-
-        {/* Full-reset confirm only after Full is selected */}
-        {isFullReset && selectedState.supported && !op && (
-          <div className="rounded-md border border-destructive/20 bg-destructive/5 p-3">
-            <p className="text-xs leading-relaxed text-destructive">
-              {t(($) => $.restart_modal.full_reset_confirm, { handle: agentHandle })}
-            </p>
-            <input
-              type="text"
-              value={confirmText}
-              onChange={(e) => setConfirmText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.preventDefault();
-              }}
-              placeholder={t(($) => $.restart_modal.full_reset_confirm_placeholder, {
-                handle: agentHandle,
-              })}
-              aria-label={t(($) => $.restart_modal.full_reset_confirm_placeholder, {
-                handle: agentHandle,
-              })}
-              className="mt-2 w-full rounded border bg-background px-2 py-1 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
-          </div>
-        )}
 
         <output aria-live="polite" className="block text-xs leading-relaxed empty:hidden">
           {isBlocking && (
@@ -214,9 +177,6 @@ export function AgentRestartModal({
                 variant={isFullReset ? "destructive" : "default"}
                 onClick={isTerminalFailed ? retry : submit}
                 disabled={!isTerminalFailed && !canSubmit}
-                onKeyDown={(e) => {
-                  if (isFullReset && e.key === "Enter") e.preventDefault();
-                }}
               >
                 {isBlocking && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 {isTerminalFailed

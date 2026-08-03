@@ -16,7 +16,6 @@ import {
   DialogFooter,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
-import { RadioGroup, RadioGroupItem } from "@multica/ui/components/ui/radio-group";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 
@@ -30,16 +29,11 @@ const TIERS: AgentLifecycleActionKind[] = [
 // elsewhere, so typing the "@" the user sees must still match (no dead-end).
 const normalizeHandle = (value: string) => value.trim().replace(/^@+/, "");
 
-
 /**
- * Agent lifecycle three-tier restart modal (#633). Reads the server-authoritative
- * per-action preflight (never `agent.status`) for enable/disable +
- * immediate-vs-scheduled. Full reset is destructive and idle-only: it requires
- * typing the agent's stable @handle to confirm and can never be triggered by
- * Enter. Operation status is BE truth (no optimistic success); a failure shows
- * the reason + Retry. While dormant (before #677 D6 advertises the capability)
- * every tier renders disabled with a reason — correct with zero UI change once
- * the daemon activates.
+ * Agent lifecycle restart modal (#633 / #26 / #27).
+ * Default path: Restart one-click. Three short selectable blocks (Raft-like);
+ * long scope copy removed. Full-reset handle confirm only after Full is selected.
+ * `scheduled` is non-blocking (#26); force semantics are BE (#1900).
  */
 export function AgentRestartModal({
   agentId,
@@ -61,9 +55,7 @@ export function AgentRestartModal({
 
   const selectedState = agentLifecycleActionState(lifecycle.preflight, selected);
   const op = lifecycle.operation;
-  // task #26: only hard-block the modal while the op is actually running.
-  // `scheduled` is a dead-end server state (never auto-promoted) — treat it as
-  // non-blocking so the user can close instead of staring at a spinner forever.
+  // Only hard-block while actually running — scheduled never auto-promotes (#26).
   const isBlocking =
     op?.status === "running" || lifecycle.start.isPending;
   const isScheduled = op?.status === "scheduled";
@@ -102,57 +94,67 @@ export function AgentRestartModal({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !isBlocking && close()}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md" showCloseButton={!isBlocking}>
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-sm" showCloseButton={!isBlocking}>
         <DialogTitle>{t(($) => $.restart_modal.title)}</DialogTitle>
         <DialogDescription>
-          {t(($) => $.restart_modal.description, { name: agentName })}
+          {t(($) => $.restart_modal.description_short, { name: agentName })}
         </DialogDescription>
 
-        <RadioGroup
-          value={selected}
-          onValueChange={(value) => {
-            setSelected(value as AgentLifecycleActionKind);
-            setConfirmText("");
-          }}
-          className="flex flex-col gap-2"
+        {/* Three short blocks — title only (Frank: not dense radio + long copy) */}
+        <div
+          role="radiogroup"
+          aria-label={t(($) => $.restart_modal.title)}
+          className="grid grid-cols-1 gap-2"
+          data-testid="restart-tier-blocks"
         >
           {TIERS.map((kind) => {
             const state = agentLifecycleActionState(lifecycle.preflight, kind);
             const destructive = kind === "full_reset_restart";
+            const isSelected = selected === kind;
+            const primary = kind === "restart";
             return (
-              <label
+              <button
                 key={kind}
+                type="button"
+                role="radio"
+                aria-checked={isSelected}
+                disabled={!state.supported || isBlocking || isScheduled || isTerminalSuccess}
+                data-testid={`restart-tier-${kind}`}
+                data-selected={isSelected || undefined}
                 data-disabled={!state.supported || undefined}
+                onClick={() => {
+                  setSelected(kind);
+                  setConfirmText("");
+                }}
                 className={cn(
-                  "flex cursor-pointer items-start gap-3 rounded-md border p-3 text-sm transition-colors",
-                  "has-[:checked]:border-primary has-[:checked]:bg-accent/40",
-                  destructive && "has-[:checked]:border-destructive/50",
-                  !state.supported && "cursor-not-allowed opacity-60",
+                  "rounded-lg border px-3 py-3 text-left text-sm font-medium transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  isSelected && !destructive && "border-primary bg-accent/40",
+                  isSelected && destructive && "border-destructive/50 bg-destructive/5 text-destructive",
+                  !isSelected && "border-border hover:bg-muted/40",
+                  primary && !isSelected && "border-primary/40",
+                  !state.supported && "cursor-not-allowed opacity-50",
                 )}
               >
-                <RadioGroupItem
-                  value={kind}
-                  disabled={!state.supported}
-                  className="mt-0.5 shrink-0"
-                />
-                <div className="min-w-0">
-                  <div className={cn("font-medium", destructive && "text-destructive")}>
-                    {t(($) => $.restart_modal.tier[kind].title)}
-                  </div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">
-                    {t(($) => $.restart_modal.tier[kind].scope)}
-                  </div>
-                  {!state.supported ? (
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {reasonLabel(state.disabled_reason)}
-                    </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span>{t(($) => $.restart_modal.tier[kind].title_short)}</span>
+                  {primary ? (
+                    <span className="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
+                      {t(($) => $.restart_modal.recommended)}
+                    </span>
                   ) : null}
                 </div>
-              </label>
+                {!state.supported ? (
+                  <div className="mt-1 text-xs font-normal text-muted-foreground">
+                    {reasonLabel(state.disabled_reason)}
+                  </div>
+                ) : null}
+              </button>
             );
           })}
-        </RadioGroup>
+        </div>
 
+        {/* Full-reset confirm only after Full is selected */}
         {isFullReset && selectedState.supported && !op && (
           <div className="rounded-md border border-destructive/20 bg-destructive/5 p-3">
             <p className="text-xs leading-relaxed text-destructive">
@@ -162,8 +164,6 @@ export function AgentRestartModal({
               type="text"
               value={confirmText}
               onChange={(e) => setConfirmText(e.target.value)}
-              // #633: the destructive confirm must never fire on Enter — swallow it
-              // so a held Enter can't submit a workspace wipe.
               onKeyDown={(e) => {
                 if (e.key === "Enter") e.preventDefault();
               }}
@@ -214,7 +214,6 @@ export function AgentRestartModal({
                 variant={isFullReset ? "destructive" : "default"}
                 onClick={isTerminalFailed ? retry : submit}
                 disabled={!isTerminalFailed && !canSubmit}
-                // Enter-protection: a full reset must be an explicit click.
                 onKeyDown={(e) => {
                   if (isFullReset && e.key === "Enter") e.preventDefault();
                 }}

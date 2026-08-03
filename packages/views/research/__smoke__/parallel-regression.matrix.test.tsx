@@ -8,12 +8,13 @@
  * Known open gaps use `it.fails` so CI stays green until the owning PR flips them to `it`.
  * Do not edit production components from this suite — avoids file conflicts with parallel knives.
  *
- * Gate status (dev):
+ * Gate status (dev @22d89477b+):
  * - 1100 overlay Esc/a11y — hard
  * - 1104 goal-chip dedupe (#1949) + no max-w-3xl shell (#1962) — hard
- * - 1105 helpers (#1952) + canvas role=application (1091) — hard; Home/End still `it.fails`
+ * - 1105 helpers (#1952) + role=application (1091) — hard; Home/End key handlers still `it.fails` (slice3)
  * - 1109 meta-menu md: (#1947) — hard; template chip-row sm: still `it.fails`
- * - 1091 planar layout/keyboard — hard; branch tokens + ring confirm still `it.fails`
+ * - 1091 planar layout + arrow/Enter/Esc/F10 + retry status gate — hard;
+ *   dedicated --branch-* tokens + destructive confirm/undo still `it.fails`
  */
 // @vitest-environment jsdom
 import fs from "node:fs";
@@ -482,23 +483,16 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
     },
   );
 
+  // Arrow/Enter/Escape already hard-gated via planar map below. Home/End wait on 1105 slice3.
+  // Match `e.key === "Home"|"End"` only — bare "End" false-positives from isLogicEndNode / onMoveEnd.
   it.fails(
-    `${SMOKE_ISSUES.canvasKeyboard}: canvas wires Arrow/Enter/Escape/Home/End keydown handlers (after 1091 wire)`,
+    `${SMOKE_ISSUES.canvasKeyboard}: canvas wires Home/End keydown handlers (1105 slice3)`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
-      for (const key of [
-        "ArrowLeft",
-        "ArrowRight",
-        "ArrowUp",
-        "ArrowDown",
-        "Enter",
-        "Escape",
-        "Home",
-        "End",
-      ]) {
+      for (const key of ["Home", "End"]) {
         expect(
-          canvasSrc.includes(key),
-          failHint(SMOKE_ISSUES.canvasKeyboard, `research-canvas.tsx missing ${key} handling`),
+          new RegExp(String.raw`e\.key\s*===\s*["']${key}["']`).test(canvasSrc),
+          failHint(SMOKE_ISSUES.canvasKeyboard, `research-canvas.tsx missing e.key === "${key}"`),
         ).toBe(true);
       }
     },
@@ -666,29 +660,32 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     },
   );
 
+  // #1956: leads_to uses --brand (not status success/warning/destructive) — hard gate.
+  it(`${SMOKE_ISSUES.canvasPlanar}: leads_to edge stroke must not reuse status accent tokens`, () => {
+    const branchStroke = visualForEdgeType("leads_to").stroke;
+    const statusAccents = [
+      visualForNodeType("finding").accentBarClass,
+      visualForNodeType("conflict").accentBarClass,
+      visualForNodeType("dead_end").accentBarClass,
+    ];
+    for (const accent of statusAccents) {
+      expect(
+        branchStroke.includes("success") ||
+          branchStroke.includes("warning") ||
+          branchStroke.includes("destructive") ||
+          accent.includes(branchStroke.replace(/var\(|\)/g, "")),
+        failHint(
+          SMOKE_ISSUES.canvasPlanar,
+          `branch stroke ${branchStroke} collides with status accent ${accent}`,
+        ),
+      ).toBe(false);
+    }
+  });
+
+  // Dedicated --branch-* chrome still missing on graph-node after #1956.
   it.fails(
-    `${SMOKE_ISSUES.canvasPlanar}: branch/edge accent tokens ≠ status shell tokens`,
+    `${SMOKE_ISSUES.canvasPlanar}: research-graph-node exposes dedicated --branch-* tokens`,
     () => {
-      const branchStroke = visualForEdgeType("leads_to").stroke;
-      const statusAccents = [
-        visualForNodeType("finding").accentBarClass,
-        visualForNodeType("conflict").accentBarClass,
-        visualForNodeType("dead_end").accentBarClass,
-      ];
-      // Branch stroke must not literally reuse a status accent token class/var.
-      for (const accent of statusAccents) {
-        expect(
-          branchStroke.includes("success") ||
-            branchStroke.includes("warning") ||
-            branchStroke.includes("destructive") ||
-            accent.includes(branchStroke.replace(/var\(|\)/g, "")),
-          failHint(
-            SMOKE_ISSUES.canvasPlanar,
-            `branch stroke ${branchStroke} collides with status accent ${accent}`,
-          ),
-        ).toBe(false);
-      }
-      // Explicit SoT tokens must exist once 1091 wires branch chrome.
       const graphNodeSrc = readResearchSource("components/research-graph-node.tsx");
       expect(
         BRANCH_VS_STATUS_COLOR_CONTRACT.branchTokens.some((t) => graphNodeSrc.includes(t)),
@@ -722,42 +719,47 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     },
   );
 
-  it.fails(
-    `${SMOKE_ISSUES.canvasPlanar}: ring actions gated by status; destructive path has confirm/undo hook`,
-    () => {
-      const active = ringActionsForNode({
-        id: "a",
-        session_id: "s1",
-        title: "Active probe",
-        summary: "",
-        status: "active",
-        node_type: "probe",
-        actor_agent_id: null,
-        payload: {},
-        created_at: "2026-07-31T00:00:00Z",
-        updated_at: "2026-07-31T00:00:00Z",
-      });
-      const failed = ringActionsForNode({
-        id: "b",
-        session_id: "s1",
-        title: "Failed",
-        summary: "",
-        status: "failed",
-        node_type: "probe",
-        actor_agent_id: null,
-        payload: {},
-        created_at: "2026-07-31T00:00:00Z",
-        updated_at: "2026-07-31T00:00:00Z",
-      });
-      expect(
-        active.find((a) => a.id === "retry")?.disabled,
-        failHint(SMOKE_ISSUES.canvasPlanar, "active probe should not expose live retry"),
-      ).toBe(true);
-      expect(
-        failed.find((a) => a.id === "retry")?.disabled,
-        failHint(SMOKE_ISSUES.canvasPlanar, "failed probe should enable retry"),
-      ).toBeFalsy();
+  // #1956 / LRM-981: retry gated by failed|error|dead_end|refuted — hard gate.
+  it(`${SMOKE_ISSUES.canvasPlanar}: ring retry gated by node status`, () => {
+    const active = ringActionsForNode({
+      id: "a",
+      session_id: "s1",
+      title: "Active probe",
+      summary: "",
+      status: "active",
+      node_type: "probe",
+      actor_agent_id: null,
+      payload: {},
+      created_at: "2026-07-31T00:00:00Z",
+      updated_at: "2026-07-31T00:00:00Z",
+    });
+    const failed = ringActionsForNode({
+      id: "b",
+      session_id: "s1",
+      title: "Failed",
+      summary: "",
+      status: "failed",
+      node_type: "probe",
+      actor_agent_id: null,
+      payload: {},
+      created_at: "2026-07-31T00:00:00Z",
+      updated_at: "2026-07-31T00:00:00Z",
+    });
+    expect(
+      active.find((a) => a.id === "retry")?.disabled,
+      failHint(SMOKE_ISSUES.canvasPlanar, "active probe should not expose live retry"),
+    ).toBe(true);
+    expect(
+      failed.find((a) => a.id === "retry")?.disabled,
+      failHint(SMOKE_ISSUES.canvasPlanar, "failed probe should enable retry"),
+    ).toBeFalsy();
+    expect(ACTION_VISIBILITY_CONTRACT.destructiveActionIds.length).toBeGreaterThan(0);
+  });
 
+  // Destructive confirm/undo hook still missing on ring/canvas after #1956.
+  it.fails(
+    `${SMOKE_ISSUES.canvasPlanar}: destructive ring/canvas path has confirm/undo hook`,
+    () => {
       const ringSrc = readResearchSource("lib/node-action-ring.ts");
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
       const hasConfirmOrUndo =
@@ -770,7 +772,6 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
           "destructive canvas actions missing confirm or undo hook",
         ),
       ).toBe(true);
-      expect(ACTION_VISIBILITY_CONTRACT.destructiveActionIds.length).toBeGreaterThan(0);
     },
   );
 });

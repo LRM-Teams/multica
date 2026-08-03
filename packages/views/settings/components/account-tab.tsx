@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Camera, Loader2, Save } from "lucide-react";
-import { HonorBadgeCrest } from "@multica/ui/components/honor/honor-badge";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { Button } from "@multica/ui/components/ui/button";
@@ -21,6 +20,7 @@ import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { ActorStyledName } from "../../common/actor-styled-name";
+import { UserHonorLevelIcon } from "../../honor/user-honor-level-icon";
 import { honorLevelProgress } from "../../honor/honor-progress";
 
 // Mirror server/internal/handler/auth.go:MaxProfileDescriptionLen. Counted in
@@ -147,12 +147,11 @@ export function AccountTab() {
             className="absolute -bottom-24 left-1/3 size-48 rounded-full bg-violet-500/10 blur-3xl"
           />
           <div className="relative flex items-center gap-4">
-            <HonorBadgeCrest
-              svgKey={equippedBadge?.svg_key ?? "stardust"}
-              title={equippedBadge?.title}
-              locked={!equippedBadge}
-              animated={Boolean(equippedBadge)}
-              className="size-14"
+            <UserHonorLevelIcon
+              level={honor.level}
+              title={t(($) => $.honor.account_level, { level: honor.level })}
+              className="size-14 drop-shadow-[0_0_16px_rgba(34,211,238,0.3)]"
+              priority
             />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">

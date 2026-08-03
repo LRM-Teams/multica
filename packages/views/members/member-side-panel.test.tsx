@@ -257,6 +257,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
           email: "self@example.com",
           avatar_url: null,
           profile_description: "Hello",
+          honor: { level: 42, name_style: "default" },
         },
       ],
       isPending: false,
@@ -277,9 +278,10 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
       isPending: false,
     });
     agentsMock.mockReturnValue({ data: [], isPending: false });
-    renderPanel("u-self");
+    const { container } = renderPanel("u-self");
     expect(screen.getByTestId("member-self-avatar-change")).toBeTruthy();
     expect(screen.getByTestId("member-profile-name-trigger").textContent).toContain("Me");
+    expect(container.querySelector('[data-user-honor-level="42"]')).not.toBeNull();
     expect(screen.getByTestId("member-profile-description-trigger")).toBeTruthy();
     const editLink = screen.getByTestId("member-side-panel-edit-profile").closest("a");
     expect(editLink?.getAttribute("href")).toBe("/ws-1/settings?tab=profile");

@@ -3,16 +3,11 @@
 import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
 import type { HonorSnapshot } from "@multica/core/types/honor";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
-import { HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
 import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 import { cn } from "@multica/ui/lib/utils";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@multica/ui/components/ui/tooltip";
 import { useAgentFleetClassName } from "../agents/hooks/use-agent-fleet-class-name";
 import { AgentHonorLevelIcon } from "../agents/components/agent-honor-level-icon";
+import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
 
 export interface ActorStyledNameProps {
   displayName: string;
@@ -56,17 +51,12 @@ export function ActorStyledName({
       >
         {displayName}
       </span>
-      {showBadges && honor?.equipped_badge ? (
-        <Tooltip>
-          <TooltipTrigger className="inline-flex shrink-0">
-            <HonorBadgeIcon
-              svgKey={honor.equipped_badge.svg_key}
-              title={honor.equipped_badge.title}
-              medal
-            />
-          </TooltipTrigger>
-          <TooltipContent side="top">{honor.equipped_badge.title}</TooltipContent>
-        </Tooltip>
+      {showBadges && honor ? (
+        <UserHonorLevelIcon
+          level={honor.level}
+          title={`LV.${honor.level}`}
+          className="size-6 drop-shadow-sm"
+        />
       ) : null}
       {showBadges && agentHonorLevel ? (
         <AgentHonorLevelIcon

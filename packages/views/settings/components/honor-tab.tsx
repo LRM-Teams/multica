@@ -32,6 +32,7 @@ import {
   Zap,
 } from "lucide-react";
 import { ActorStyledName } from "../../common/actor-styled-name";
+import { UserHonorLevelIcon } from "../../honor/user-honor-level-icon";
 import { HonorBadgeCatalog } from "../../honor/honor-badge-catalog";
 import { HonorNextTargets } from "../../honor/honor-next-targets";
 import {
@@ -260,6 +261,12 @@ export function HonorTab() {
         <div
           aria-hidden="true"
           className="absolute inset-0 bg-[linear-gradient(0deg,rgba(2,6,23,0.9),transparent_54%)]"
+        />
+        <UserHonorLevelIcon
+          level={dashboard.level}
+          title={t(($) => $.honor.level_value, { level: dashboard.level })}
+          className="absolute right-8 top-1/2 z-10 hidden size-44 -translate-y-1/2 drop-shadow-[0_0_30px_rgba(99,102,241,0.4)] lg:block"
+          priority
         />
         <div className="relative flex min-h-[340px] max-w-2xl flex-col justify-between p-6 sm:p-8">
           <div>

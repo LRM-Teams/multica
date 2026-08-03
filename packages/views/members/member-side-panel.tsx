@@ -29,7 +29,6 @@ import {
 } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
 import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 import { cn } from "@multica/ui/lib/utils";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
@@ -43,6 +42,7 @@ import { ActorStyledName } from "../common/actor-styled-name";
 import { ConversationSidePanelShell } from "../common/conversation-side-panel-shell";
 import { AppLink } from "../navigation";
 import { HonorWall } from "../honor/honor-wall";
+import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
 import { useT } from "../i18n/use-t";
 
 const MAX_PROFILE_DESCRIPTION_LEN = 2000;
@@ -410,11 +410,11 @@ function MemberSidePanelReady({
                     >
                       {displayName}
                     </span>
-                    {selfHonor?.equipped_badge ? (
-                      <HonorBadgeIcon
-                        svgKey={selfHonor.equipped_badge.svg_key}
-                        title={selfHonor.equipped_badge.title}
-                        medal
+                    {selfHonor ? (
+                      <UserHonorLevelIcon
+                        level={selfHonor.level}
+                        title={`LV.${selfHonor.level}`}
+                        className="size-6 drop-shadow-sm"
                       />
                     ) : null}
                   </span>

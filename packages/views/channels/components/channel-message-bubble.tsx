@@ -350,6 +350,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const tapFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mobileActionsDialogRef = useRef<HTMLDialogElement | null>(null);
   const mobileReactionDialogRef = useRef<HTMLDialogElement | null>(null);
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
   const messageBodyRef = useRef<HTMLDivElement | null>(null);
   const measureContentOverflowRef = useRef<() => void>(() => {});
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -378,6 +379,22 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     if (typeof dialog.showModal === "function") dialog.showModal();
     else dialog.setAttribute("open", "");
   }, []);
+
+  // LRM-1174 (LRM-1173 freeze B): dismissing a top-layer <dialog> leaves
+  // activeElement on <body>, so the next keyboard/AT step restarts from the top
+  // of the list instead of the message the sheet belonged to. Hand focus back to
+  // the bubble that opened it. Only a real dismissal (→ "none") returns focus:
+  // the actions → reaction handover (#568) keeps focus inside the overlay stack.
+  const mobileOverlayWasOpenRef = useRef(false);
+  useEffect(() => {
+    const open = mobileOverlay !== "none";
+    const wasOpen = mobileOverlayWasOpenRef.current;
+    mobileOverlayWasOpenRef.current = open;
+    if (!wasOpen || open) return;
+    // preventScroll: the bubble is already on screen (it was just long-pressed);
+    // a Virtuoso row must not be yanked into view by the focus call.
+    bubbleRef.current?.focus({ preventScroll: true });
+  }, [mobileOverlay]);
 
   const measureContentOverflow = useCallback(() => {
     const body = messageBodyRef.current;
@@ -767,6 +784,10 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const bubble = (
     <div
       id={`message-${message.id}`}
+      ref={bubbleRef}
+      // Programmatic focus target only (never tab-reachable): the mobile sheets
+      // return focus here on dismissal (LRM-1174).
+      tabIndex={-1}
       data-testid="message-bubble"
       data-message-group={compact ? "compact" : "lead"}
       data-message-id={message.id}
@@ -1068,7 +1089,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         {!isEditing && mobileActionsOpen && (
           <dialog
             ref={showMobileActionsDialog}
-            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10 [@media(pointer:fine)]:hidden"
+            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10"
             aria-label={t(($) => $.message.actions_menu)}
             onCancel={(event) => {
               event.preventDefault();
@@ -1135,7 +1156,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         {!isEditing && onReact && mobileReactionOpen && (
           <dialog
             ref={showMobileReactionDialog}
-            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10 [@media(pointer:fine)]:hidden"
+            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10"
             aria-label={t(($) => $.message.add_reaction)}
             onCancel={(event) => {
               event.preventDefault();

@@ -533,6 +533,26 @@ describe("ChannelMessageBubble", () => {
     });
   };
 
+  // LRM-1174: a touch laptop in a narrow window is the dead-zone cell — the JS
+  // gate sees `innerWidth < 768` and a touch pointerType, while the SAME device
+  // reports `(pointer: fine)`. Only `(pointer: coarse)` is false here.
+  const setMixedPointerNarrowViewport = () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 760 });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: query.includes("max-width") || query.includes("pointer: fine"),
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+  };
+
   beforeEach(() => {
     copyTextMock.mockReset();
     getActorAvatarUrlMock.mockReset();
@@ -1832,6 +1852,82 @@ describe("ChannelMessageBubble", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
     );
+  });
+
+  // LRM-1174 (LRM-1173 freeze B): the JS gate (pointerType === "touch" +
+  // isMobileActionViewport) can open the sheet on a touch laptop in a narrow
+  // window, but the dialog also carried `[@media(pointer:fine)]:hidden` — the
+  // same device reports `pointer: fine`, so showModal() put an INVISIBLE modal
+  // in the top layer and the page went inert (cellA-mixed-760-DEAD). Visibility
+  // and modality must come from one source: the JS gate only.
+  it("keeps the mobile action sheet visible on a mixed-pointer narrow window (LRM-1174)", async () => {
+    setMixedPointerNarrowViewport();
+    render(
+      <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" onReact={vi.fn()} />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const menu = await screen.findByRole("dialog", { name: "Message actions" });
+    expect(menu.className).not.toMatch(/\[@media\(pointer:fine\)\]:hidden/);
+
+    await userEvent.click(within(menu).getByRole("button", { name: "Add reaction" }));
+    const reactionSheet = await screen.findByRole("dialog", { name: "Add reaction" });
+    expect(reactionSheet.className).not.toMatch(/\[@media\(pointer:fine\)\]:hidden/);
+
+    // LRM-1126 stays intact: the hover action bar is still fine-pointer only.
+    expect(screen.getByTestId("message-action-bar")).toHaveClass(
+      "[@media(pointer:fine)]:flex",
+    );
+  });
+
+  it("returns focus to the triggering bubble when the mobile action sheet closes (LRM-1174)", async () => {
+    setMobileViewport();
+    copyTextMock.mockResolvedValue(true);
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const menu = await screen.findByRole("dialog", { name: "Message actions" });
+    await userEvent.click(within(menu).getByRole("button", { name: "Copy" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
+    );
+    // Removing a top-layer <dialog> drops activeElement to <body>; the bubble
+    // that opened the sheet must get focus back so the next action/keyboard
+    // step continues from the same message.
+    await waitFor(() => expect(document.activeElement).toBe(bubble));
+  });
+
+  it("returns focus to the triggering bubble when the mobile reaction sheet closes (LRM-1174)", async () => {
+    setMobileViewport();
+    const onReact = vi.fn();
+    render(
+      <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" onReact={onReact} />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const menu = await screen.findByRole("dialog", { name: "Message actions" });
+    await userEvent.click(within(menu).getByRole("button", { name: "Add reaction" }));
+    const reactionSheet = await screen.findByRole("dialog", { name: "Add reaction" });
+
+    // Handing the primary sheet over to the reaction sheet is NOT a dismissal —
+    // focus must stay inside the overlay stack, not snap back to the bubble.
+    expect(document.activeElement).not.toBe(bubble);
+
+    await userEvent.click(within(reactionSheet).getByRole("button", { name: "🎉" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Add reaction" })).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(document.activeElement).toBe(bubble));
   });
 
   it("hides the permanent mobile More trigger; long-press and left-swipe open the action sheet (LRM-495)", async () => {

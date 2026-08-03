@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
@@ -155,6 +156,11 @@ export function ResearchCreateParamsPanel({
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
+  // LRM-1237: stable ids so depth/language radiogroups expose accessible names
+  // and depth validation errors are described to AT.
+  const depthTitleId = useId();
+  const depthErrorId = useId();
+  const languageTitleId = useId();
   const params = draftCreateParams(value);
   const depthInvalid =
     Boolean(errors?.depth) || !isValidDepthTier(params.depth_tier);
@@ -225,7 +231,10 @@ export function ResearchCreateParamsPanel({
 
           <section className="space-y-3" data-testid="research-create-depth">
             <div>
-              <h3 className="text-sm font-semibold text-foreground">
+              <h3
+                id={depthTitleId}
+                className="text-sm font-semibold text-foreground"
+              >
                 {t(($) => $.create_params.depth_label)}
               </h3>
               <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
@@ -240,7 +249,9 @@ export function ResearchCreateParamsPanel({
                 }
               }}
               className="grid gap-2"
+              aria-labelledby={depthTitleId}
               aria-invalid={depthInvalid || undefined}
+              aria-describedby={depthInvalid ? depthErrorId : undefined}
             >
               {DEPTH_TIERS.map((tier) => {
                 const label =
@@ -280,6 +291,7 @@ export function ResearchCreateParamsPanel({
             </RadioGroup>
             {depthInvalid ? (
               <p
+                id={depthErrorId}
                 role="alert"
                 data-testid="research-create-depth-error"
                 className="text-[11px] leading-relaxed text-destructive"
@@ -311,7 +323,10 @@ export function ResearchCreateParamsPanel({
 
           <section className="space-y-3" data-testid="research-create-language">
             <div>
-              <h3 className="text-sm font-semibold text-foreground">
+              <h3
+                id={languageTitleId}
+                className="text-sm font-semibold text-foreground"
+              >
                 {t(($) => $.create_params.language_label)}
               </h3>
               <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
@@ -333,6 +348,7 @@ export function ResearchCreateParamsPanel({
                 }
               }}
               className="grid grid-cols-2 gap-2"
+              aria-labelledby={languageTitleId}
             >
               {CREATE_LANGUAGES.map((lang) => (
                 <label

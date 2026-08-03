@@ -171,6 +171,16 @@ verification results.
 - `git diff --check` passes and the worktree contains only the intended
   Research Run repair, regression-test corrections, and this repair record.
 
+### 12. Merged the current `dev` baseline
+
+- Fetched and merged `origin/dev` at `60b1f3bac` before opening the PR.
+- Upstream had independently landed the same two stale-test corrections for
+  LRM-1104 and the provider quota reset-time fixture. Both conflicts were
+  resolved with the upstream versions because they test the same behavior and
+  include the current comments/assertions.
+- The Research Run production code, Dispatcher integration test, Engine
+  lifecycle test, and prompt corrections had no merge conflicts.
+
 ## Pending steps
 
 - [x] Add regression tests and observe them fail on the unmodified code.

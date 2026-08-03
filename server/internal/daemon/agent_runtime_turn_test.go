@@ -333,3 +333,52 @@ func testAgentRuntimeTurnRequest(t *testing.T, root string) agentRuntimeTurnRequ
 func agentRuntimeTurnTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
+
+// TestAgentRuntimeTurnSharedWorkdirAnchor is the T009 daemon-side shared
+// workdir assertion (research D5, FR-008): when the claimed task carries the
+// shared_sandbox env anchor, the turn's provider workdir is the SAMPLE's
+// single shared workdir (<root>/<ws>/.multica/envs/<env>/workspace) instead of
+// the per-agent root, while the per-agent workspace (turn subtree, transport,
+// memory) is untouched. Without the anchor the workdir stays per-agent
+// (covered by TestAgentRuntimeTurnCoordinatorBindsCanonicalD1D2D3Contracts).
+func TestAgentRuntimeTurnSharedWorkdirAnchor(t *testing.T) {
+	root := t.TempDir()
+	coordinator := newAgentRuntimeTurnCoordinator(Config{WorkspacesRoot: root}, agentRuntimeTurnTestLogger())
+	envID := uuid.NewString()
+
+	// Two agents of the same sample (shared env) must land in ONE workdir.
+	requestA := testAgentRuntimeTurnRequest(t, root)
+	requestB := testAgentRuntimeTurnRequest(t, root)
+	requestB.WorkspaceID = requestA.WorkspaceID
+	requestB.Environment["MULTICA_WORKSPACE_ID"] = requestA.WorkspaceID
+	requestA.SharedWorkdirEnvID = envID
+	requestB.SharedWorkdirEnvID = envID
+
+	turnA, err := coordinator.Begin(requestA)
+	if err != nil {
+		t.Fatalf("Begin(agent A): %v", err)
+	}
+	defer turnA.Close()
+	turnB, err := coordinator.Begin(requestB)
+	if err != nil {
+		t.Fatalf("Begin(agent B): %v", err)
+	}
+	defer turnB.Close()
+
+	wantShared := filepath.Join(root, requestA.WorkspaceID, ".multica", "envs", envID, "workspace")
+	if turnA.WorkDir != wantShared {
+		t.Fatalf("agent A workdir = %q, want shared %q", turnA.WorkDir, wantShared)
+	}
+	if turnB.WorkDir != wantShared {
+		t.Fatalf("agent B workdir = %q, want shared %q", turnB.WorkDir, wantShared)
+	}
+	// Per-agent workspace roots (turns, transport, memory) stay agent-keyed.
+	if got, want := turnA.Workspace.WorkDir, filepath.Join(
+		root, requestA.WorkspaceID, ".multica", "agents", requestA.AgentID, "workspace",
+	); got != want {
+		t.Fatalf("agent A workspace = %q, want per-agent %q", got, want)
+	}
+	if info, statErr := os.Stat(wantShared); statErr != nil || !info.IsDir() {
+		t.Fatalf("shared workdir not provisioned: info=%v err=%v", info, statErr)
+	}
+}

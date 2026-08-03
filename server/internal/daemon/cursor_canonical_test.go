@@ -30,8 +30,11 @@ func TestUsesCanonicalResidentChatRuntimeIncludesCursorFullChat(t *testing.T) {
 	if usesCanonicalResidentChatRuntime("codex", issueTask) {
 		t.Fatal("codex without ChatSessionID must stay one-shot")
 	}
-	if usesCanonicalResidentChatRuntime("claude", chatTask) {
-		t.Fatal("claude has no canonical resident adapter")
+	if !usesCanonicalResidentChatRuntime("claude", chatTask) {
+		t.Fatal("claude full chat should enter canonical resident path")
+	}
+	if usesCanonicalResidentChatRuntime("claude", issueTask) {
+		t.Fatal("claude without ChatSessionID must stay one-shot")
 	}
 }
 
@@ -43,7 +46,7 @@ func TestUsesCanonicalResidentChatRuntimeIncludesCursorFullChat(t *testing.T) {
 // reaching a backend. Both functions must agree on the same provider set.
 func TestCanonicalResidentProviderListsStayInSync(t *testing.T) {
 	chatTask := Task{ChatSessionID: "chat-1"}
-	providers := []string{"grok", "pi", "cursor", "opencode", "kiro", "codex"}
+	providers := []string{"grok", "pi", "cursor", "opencode", "kiro", "codex", "claude"}
 	for _, provider := range providers {
 		if !usesCanonicalResidentChatRuntime(provider, chatTask) {
 			t.Fatalf("test fixture assumption wrong: %q should route to canonical resident chat", provider)
@@ -60,8 +63,8 @@ func TestCanonicalResidentProviderListsStayInSync(t *testing.T) {
 	if usesCanonicalResidentChatRuntime("claude", chatTask) != isCanonicalResidentProvider("claude") {
 		t.Error("claude must be consistently rejected by both the dispatch switch and the entry gate")
 	}
-	if agent.Capabilities("claude").CanonicalResident {
-		t.Error("claude must not be CanonicalResident in the capability table")
+	if !agent.Capabilities("claude").CanonicalResident {
+		t.Error("claude must be CanonicalResident after ACP resident PR")
 	}
 }
 

@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelMessage } from "@multica/core/types";
+import type { AgentFleetRank, ChannelMessage } from "@multica/core/types";
 import { stickerCatalogKeys } from "@multica/core/stickers";
 import { __resetAuthorAvatarOkCacheForTests } from "./author-avatar-cache";
 import { ChannelMessageBubble } from "./channel-message-bubble";
@@ -166,6 +166,10 @@ vi.mock("../../navigation/app-link", () => ({
 const getActorAvatarUrlMock = vi.fn(
   (_type: string, _id: string): string | null => null,
 );
+const getAgentHonorLevelMock = vi.fn((_agentId: string): number | undefined => undefined);
+const getAgentFleetRankMock = vi.fn(
+  (_agentId: string): AgentFleetRank | undefined => undefined,
+);
 // LRM-281 system rows may call useWorkspaceId + useQuery(member-profiles).
 // Layout tests stub the actor directory; give them a stable workspace id so
 // profile resolution does not throw outside a workspace route.
@@ -205,7 +209,8 @@ vi.mock("@multica/core/workspace/hooks", () => ({
             ? ("member" as const)
             : null,
     getMemberHonor: () => undefined,
-    getAgentFleetRank: () => undefined,
+    getAgentFleetRank: getAgentFleetRankMock,
+    getAgentHonorLevel: getAgentHonorLevelMock,
   }),
 }));
 
@@ -528,6 +533,10 @@ describe("ChannelMessageBubble", () => {
     copyTextMock.mockReset();
     getActorAvatarUrlMock.mockReset();
     getActorAvatarUrlMock.mockReturnValue(null);
+    getAgentHonorLevelMock.mockReset();
+    getAgentHonorLevelMock.mockReturnValue(undefined);
+    getAgentFleetRankMock.mockReset();
+    getAgentFleetRankMock.mockReturnValue(undefined);
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
     __resetAuthorAvatarOkCacheForTests();
@@ -555,6 +564,29 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByTestId("message-author-role")).not.toBeInTheDocument();
     expect(screen.getByText("Here is the data.")).toBeInTheDocument();
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
+  });
+
+  it("uses the permanent honor-level crest beside an agent author name", () => {
+    getAgentHonorLevelMock.mockReturnValue(8);
+    getAgentFleetRankMock.mockReturnValue({
+      agent_id: "agent-1",
+      fleet_score: 0,
+      class_id: "reserve",
+      class_label: "Reserve",
+      fleet_rank: 0,
+      fleet_size: 1,
+      sample_tasks: 0,
+      sample_sufficient: false,
+      frozen: false,
+      pillars: { delivery: 0, evolution: 0, growth: 0, efficiency: 0 },
+    });
+
+    const { container } = render(
+      <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />,
+    );
+
+    expect(container.querySelector('[data-agent-honor-level="8"]')).toBeInTheDocument();
+    expect(screen.queryByTitle("Reserve")).not.toBeInTheDocument();
   });
 
   it("centers the quiet timestamp with the author name and earned badge row", () => {

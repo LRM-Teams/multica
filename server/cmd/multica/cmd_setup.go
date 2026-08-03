@@ -18,9 +18,11 @@ import (
 
 var setupCmd = &cobra.Command{
 	Use:   "setup [/workspace]",
-	Short: "Configure the CLI, authenticate, and start the daemon",
+	Short: "Configure the CLI, authenticate, and install the daemon service",
 	Long: `Configures the CLI to connect to Multica Cloud (multica.ai), then
-authenticates via browser and starts the agent daemon.
+authenticates via browser and installs the agent daemon as a per-user OS
+service (LaunchAgent / systemd --user / Windows Scheduled Task) so it
+survives terminal close and restarts after upgrade.
 
 If a configuration already exists, you will be prompted before overwriting.
 
@@ -178,11 +180,10 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "\nStarting daemon...")
-	if err := runDaemonBackground(cmd); err != nil {
-		return fmt.Errorf("start daemon: %w", err)
+	if err := startDaemonAfterSetup(cmd); err != nil {
+		return err
 	}
-	fmt.Fprintln(os.Stderr, "\n✓ Setup complete! Your machine is now connected to Multica.")
+	fmt.Fprintln(os.Stderr, "\n✓ Setup complete! Your machine is now connected to Multica (daemon supervised).")
 
 	return nil
 }
@@ -261,12 +262,24 @@ func runSetupSelfHost(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "\nStarting daemon...")
-	if err := runDaemonBackground(cmd); err != nil {
-		return fmt.Errorf("start daemon: %w", err)
+	if err := startDaemonAfterSetup(cmd); err != nil {
+		return err
 	}
-	fmt.Fprintln(os.Stderr, "\n✓ Setup complete! Your machine is now connected to Multica.")
+	fmt.Fprintln(os.Stderr, "\n✓ Setup complete! Your machine is now connected to Multica (daemon supervised).")
 
+	return nil
+}
+
+// startDaemonAfterSetup installs the per-user OS service so setup always ends
+// with a supervised daemon (launchd / systemd --user / Windows Scheduled Task).
+// Bare `multica daemon start` remains for development/emergency only and is
+// not treated as a completed machine setup — unsupervised processes stay
+// stopped after an auto-update self-stop (see daemon update logs).
+func startDaemonAfterSetup(cmd *cobra.Command) error {
+	fmt.Fprintln(os.Stderr, "\nInstalling daemon service (auto-start at login + auto-restart)...")
+	if err := runDaemonInstallService(cmd, nil); err != nil {
+		return fmt.Errorf("install daemon service: %w\n  For development only you can fall back to `multica daemon start`; setup expects install-service so upgrades can reconnect without a terminal", err)
+	}
 	return nil
 }
 

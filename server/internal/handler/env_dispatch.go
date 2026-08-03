@@ -39,6 +39,11 @@ type EnvDispatchRequest struct {
 	// inferred from the presence of train_agent_id. A pointer distinguishes an
 	// omitted JSON field (nil) from an explicit false.
 	TrainingMode *bool `json:"training_mode"`
+	// SharedSandbox optionally requests that all agents of each rollout (sample)
+	// share one sandbox + one daemon + one working directory. Omitted (nil) or
+	// false preserves the current per-agent isolation; the pointer distinguishes
+	// an omitted JSON field from an explicit false, matching training_mode.
+	SharedSandbox *bool `json:"shared_sandbox,omitempty"`
 	// Template optionally overrides the server's default self_play sandbox
 	// template (MULTICA_DEFAULT_SELF_PLAY_TEMPLATE) for the auto-created default
 	// base env. Only consulted when env_id is empty and no default is configured
@@ -188,6 +193,7 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		CriticAgentID:       req.CriticAgentID,
 		IdempotencyKey:      req.IdempotencyKey,
 		TrainingMode:        *req.TrainingMode,
+		SharedSandbox:       req.SharedSandbox != nil && *req.SharedSandbox,
 		DefaultBaseTemplate: template,
 		Issue:               mapIssueInput(req.Issue),
 		Message:             mapMessageInput(req.Message),
@@ -925,6 +931,10 @@ SELECT name FROM channel WHERE id = $1 AND workspace_id = $2`,
 	// marker for execution identity/retry metadata, but do not reclaim the
 	// sandbox when the first channel task reaches a terminal state.
 	taskContext := mergeEphemeralSandboxContext(nil, in.SandboxInstanceID, userID, false)
+	// Shared_sandbox rollouts (research D5): stamp the sample env as the
+	// shared-workdir anchor so the daemon routes this run's agents into the
+	// sample's single working directory. Empty keeps the per-agent root.
+	taskContext = mergeSharedWorkdirContext(taskContext, in.SharedWorkdirEnvID)
 	taskContext, err = service.WithTaskExecutionConfig(taskContext, targetAgent.Model.String, targetAgent.ThinkingLevel.String)
 	if err != nil {
 		return "", stackerr.Wrap(err, "snapshot env-dispatch channel task execution config")
@@ -1443,6 +1453,28 @@ func mergeEphemeralSandboxContext(existing []byte, instanceID, actorUserID strin
 	}
 	marker, _ := json.Marshal(markerFields)
 	obj["ephemeral_sandbox"] = marker
+	merged, _ := json.Marshal(obj)
+	return merged
+}
+
+// mergeSharedWorkdirContext stamps the shared_sandbox workdir anchor into a
+// task-context JSON blob, preserving any existing keys (e.g.
+// ephemeral_sandbox). The daemon reads context.shared_workdir at claim time
+// and anchors the run to the sample env's single shared working directory
+// (research D5, FR-008). Returns the input unchanged when envID is empty
+// (non-shared dispatch), keeping non-shared task contexts byte-identical.
+func mergeSharedWorkdirContext(existing []byte, envID string) []byte {
+	if envID == "" {
+		return existing
+	}
+	obj := map[string]json.RawMessage{}
+	if len(existing) > 0 {
+		if err := json.Unmarshal(existing, &obj); err != nil {
+			return existing
+		}
+	}
+	marker, _ := json.Marshal(map[string]any{"env_id": envID})
+	obj["shared_workdir"] = marker
 	merged, _ := json.Marshal(obj)
 	return merged
 }

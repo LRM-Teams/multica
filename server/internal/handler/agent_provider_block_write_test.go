@@ -23,8 +23,9 @@ func TestFailAgentInboxEvent_StickyQuotaWritesProviderBlock(t *testing.T) {
 	ctx := context.Background()
 	agentID, runtimeID, eventID, deliveryID, leaseToken, daemonID := seedLeasedInboxForProviderBlockTest(t)
 
-	resetAt := time.Now().In(time.Local).Add(2 * time.Hour).Truncate(time.Second)
-	stickyErr := fmt.Sprintf(`429: {"code":"1310","message":"已达到 7 天使用上限，%s 后可继续使用。"}`, resetAt.Format("2006-01-02 15:04:05"))
+	blockedUntil := time.Now().In(time.Local).Add(2 * time.Hour).Truncate(time.Second)
+	stickyErr := `429: {"code":"1310","message":"已达到 7 天使用上限，` +
+		blockedUntil.Format("2006-01-02 15:04:05") + ` 后可继续使用。"}`
 	failReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+eventID+"/fail", FailAgentInboxEventRequest{
 		DeliveryID:    deliveryID,
 		LeaseToken:    leaseToken,

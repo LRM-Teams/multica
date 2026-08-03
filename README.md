@@ -76,10 +76,10 @@ The script installs the Multica CLI from the current Multica release source.
 irm https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.ps1 | iex
 ```
 
-Then configure, authenticate, and start the daemon in one command:
+Then configure, authenticate, and install the supervised daemon service in one command:
 
 ```bash
-multica setup          # Connect to Multica Cloud, log in, start daemon
+multica setup          # Connect to Multica Cloud, log in, install daemon service
 ```
 
 > **Self-hosting?** Add `--with-server` to deploy a full Multica server on your machine:
@@ -96,10 +96,10 @@ multica setup          # Connect to Multica Cloud, log in, start daemon
 
 ## Getting Started
 
-### 1. Set up and start the daemon
+### 1. Set up and install the daemon service
 
 ```bash
-multica setup           # Configure, authenticate, and start the daemon
+multica setup           # Configure, authenticate, and install the daemon service
 ```
 
 The daemon runs in the background and auto-detects agent CLIs (`claude`, `codex`, `copilot`, `openclaw`, `opencode`, `hermes`, `gemini`, `pi`, `cursor-agent`, `kimi`, `kiro-cli`, `agy`, `grok`) on your PATH.
@@ -129,7 +129,7 @@ The `multica` CLI connects your local machine to Multica — authenticate, manag
 | `multica login` | Authenticate (opens browser) |
 | `multica daemon start` | Start the local agent runtime |
 | `multica daemon status` | Check daemon status |
-| `multica setup` | One-command setup for Multica Cloud (configure + login + start daemon) |
+| `multica setup` | One-command setup for Multica Cloud (configure + login + install daemon service) |
 | `multica setup self-host` | Same, but for self-hosted deployments |
 | `multica workspace list` | List your workspaces (current is marked with `*`) |
 | `multica workspace switch <id\|slug>` | Switch the default workspace for this profile |

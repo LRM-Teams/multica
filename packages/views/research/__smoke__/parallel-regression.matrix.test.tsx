@@ -4,9 +4,16 @@
  * Reuse:
  *   pnpm --filter @multica/views test:research-parallel-smoke
  *
- * Failure titles always include the owning Issue (LRM-1104 / 1109 / 1100 / 1105).
+ * Failure titles always include the owning Issue (LRM-1104 / 1109 / 1100 / 1105 / 1091).
  * Known open gaps use `it.fails` so CI stays green until the owning PR flips them to `it`.
  * Do not edit production components from this suite — avoids file conflicts with parallel knives.
+ *
+ * Gate status (dev):
+ * - 1100 overlay Esc/a11y — hard
+ * - 1104 goal-chip dedupe (#1949) + no max-w-3xl shell (#1962) — hard
+ * - 1105 helpers (#1952) — hard; canvas wiring `it.fails` until after 1091
+ * - 1109 meta-menu md: (#1947) — hard; template chip-row sm: still `it.fails`
+ * - 1091 planar / action — still `it.fails`
  */
 // @vitest-environment jsdom
 import fs from "node:fs";
@@ -31,7 +38,15 @@ import {
   isMobileViewport,
   type SmokeRect,
 } from "./contracts";
-import { layoutResearchGraph, RESEARCH_NODE_HEIGHT, RESEARCH_NODE_WIDTH } from "../lib/layout-graph";
+import {
+  crossLaneNeighbor,
+  isForkPoint,
+  layoutResearchGraph,
+  mainChainNeighbor,
+  mainChainOrder,
+  RESEARCH_NODE_HEIGHT,
+  RESEARCH_NODE_WIDTH,
+} from "../lib/layout-graph";
 import { ringActionsForNode } from "../lib/node-action-ring";
 import { visualForEdgeType, visualForNodeType } from "../lib/node-visuals";
 import {
@@ -192,73 +207,67 @@ describe(`Smoke · list duplicate info (${SMOKE_ISSUES.listDuplicate})`, () => {
     ).toBe(true);
   });
 
-  it(
-    `${SMOKE_ISSUES.listDuplicate}: empty-title row omits redundant goal chip`,
-    () => {
-      render(<ResearchSessionRow session={session()} href="/research/s1" />);
-      const titleEl = document.querySelector(
-        '[data-testid="research-session-row"] .font-medium.tracking-tight',
-      );
-      const chip = screen.queryByTestId("research-session-goal-chip");
-      expect(
-        chip,
-        failHint(SMOKE_ISSUES.listDuplicate, "redundant goal chip still rendered"),
-      ).toBeNull();
-      expect(titleEl?.textContent?.length).toBeGreaterThan(0);
-    },
-  );
+  // LRM-1104 #1949/#1962 merged — chip dedupe + no max-w-3xl shell are hard gates.
+  it(`${SMOKE_ISSUES.listDuplicate}: empty-title row must omit redundant goal chip`, () => {
+    render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    const titleEl = document.querySelector(
+      '[data-testid="research-session-row"] .font-medium.tracking-tight',
+    );
+    const chip = screen.queryByTestId("research-session-goal-chip");
+    expect(
+      chip,
+      failHint(SMOKE_ISSUES.listDuplicate, "redundant goal chip still rendered"),
+    ).toBeNull();
+    expect(titleEl?.textContent?.length).toBeGreaterThan(0);
+  });
 
-  it(
-    `${SMOKE_ISSUES.listDuplicate}: title that is a prefix of goal still hides chip; distinct goal keeps chip`,
-    () => {
-      const { unmount } = render(
-        <ResearchSessionRow
-          session={session({
-            title: "如何开发一个网页游戏",
-            goal: "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员",
-          })}
-          href="/research/s1"
-        />,
-      );
-      expect(
-        screen.queryByTestId("research-session-goal-chip"),
-        failHint(SMOKE_ISSUES.listDuplicate, "prefix-redundant chip should be hidden"),
-      ).toBeNull();
-      unmount();
+  it(`${SMOKE_ISSUES.listDuplicate}: title that is a prefix of goal still hides chip; distinct goal keeps chip`, () => {
+    const { unmount } = render(
+      <ResearchSessionRow
+        session={session({
+          title: "如何开发一个网页游戏",
+          goal: "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员",
+        })}
+        href="/research/s1"
+      />,
+    );
+    expect(
+      screen.queryByTestId("research-session-goal-chip"),
+      failHint(SMOKE_ISSUES.listDuplicate, "prefix-redundant chip should be hidden"),
+    ).toBeNull();
+    unmount();
 
-      render(
-        <ResearchSessionRow
-          session={session({
-            title: "Alpha market map",
-            goal: "Map the alpha market across regions with pricing and share",
-          })}
-          href="/research/s1"
-        />,
-      );
-      expect(screen.getByTestId("research-session-goal-chip")).toBeTruthy();
-    },
-  );
+    render(
+      <ResearchSessionRow
+        session={session({
+          title: "Alpha market map",
+          goal: "Map the alpha market across regions with pricing and share",
+        })}
+        href="/research/s1"
+      />,
+    );
+    expect(screen.getByTestId("research-session-goal-chip")).toBeTruthy();
+  });
 
-  it.fails(
-    `${SMOKE_ISSUES.listDuplicate}: filter bar and session row share the same content max-width token`,
-    () => {
-      const filterSrc = readResearchSource("components/research-session-filter-bar.tsx");
-      const rowSrc = readResearchSource("components/research-session-row.tsx");
-      const filterMax = filterSrc.match(/\bmax-w-\S+/)?.[0];
-      expect(
-        filterMax,
-        failHint(SMOKE_ISSUES.listDuplicate, "filter bar missing max-w token"),
-      ).toBeTruthy();
-      expect(
-        rowSrc.includes(filterMax!),
-        failHint(
-          SMOKE_ISSUES.listDuplicate,
-          `session row missing shared width token ${filterMax}`,
-        ),
-      ).toBe(true);
-    },
-  );
+  // LRM-1104 #1962: list shell no longer uses max-w-3xl (width owned by LRM-1106).
+  it(`${SMOKE_ISSUES.listDuplicate}: research list content has no max-w-3xl shell`, () => {
+    const listSrc = stripComments(readResearchSource("components/research-list-page.tsx"));
+    const filterSrc = stripComments(readResearchSource("components/research-session-filter-bar.tsx"));
+    expect(
+      !/\bmax-w-3xl\b/.test(listSrc),
+      failHint(SMOKE_ISSUES.listDuplicate, "research-list-page.tsx still has max-w-3xl shell"),
+    ).toBe(true);
+    expect(
+      !/\bmax-w-3xl\b/.test(filterSrc),
+      failHint(SMOKE_ISSUES.listDuplicate, "research-session-filter-bar.tsx still has max-w-3xl"),
+    ).toBe(true);
+  });
 });
+
+/** Strip // and /* *\/ comments so inventory assertions ignore documentation mentions. */
+function stripComments(source: string): string {
+  return source.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+}
 
 describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, () => {
   afterEach(() => {
@@ -284,21 +293,22 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
     expect(isMobileViewport(360)).toBe(true);
   });
 
-  it(`${SMOKE_ISSUES.breakpoints}: baseline inventory — known sm: companions beside useIsMobile`, () => {
+  it(`${SMOKE_ISSUES.breakpoints}: baseline inventory — template chip-row still mixes sm: (dead-zone risk)`, () => {
+    // LRM-1109 #1947: meta-menu no longer pairs useIsMobile with sm: classes.
     const meta = readResearchSource("components/research-session-meta-menu.tsx");
     expect(meta.includes("useIsMobile")).toBe(true);
     expect(
-      meta.includes("sm:"),
+      hasTailwindSmClass(meta),
       failHint(
         SMOKE_ISSUES.breakpoints,
-        "meta-menu still mixes useIsMobile with sm: (dead-zone risk at 640–767)",
+        "meta-menu regressed: sm: class companion returned beside useIsMobile",
       ),
-    ).toBe(true);
+    ).toBe(false);
 
-    // LRM-1092: external template cards → composer chip row (still uses sm: wrap).
+    // LRM-1092: composer chip row still switches layout at sm: (640) — tracked below.
     const templates = readResearchSource("components/research-template-chip-row.tsx");
     expect(
-      /\bsm:/.test(templates),
+      hasTailwindSmClass(templates),
       failHint(
         SMOKE_ISSUES.breakpoints,
         "template-chip-row still switches layout at sm: (640)",
@@ -306,26 +316,23 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
     ).toBe(true);
   });
 
-  it.fails(
-    `${SMOKE_ISSUES.breakpoints}: useIsMobile companions must use md: not sm: (meta-menu)`,
-    () => {
-      const meta = readResearchSource("components/research-session-meta-menu.tsx");
-      expect(
-        meta.includes("useIsMobile") && !/\bsm:/.test(meta),
-        failHint(
-          SMOKE_ISSUES.breakpoints,
-          "replace companion sm: with md: in research-session-meta-menu.tsx",
-        ),
-      ).toBe(true);
-    },
-  );
+  it(`${SMOKE_ISSUES.breakpoints}: useIsMobile companions must use md: not sm: (meta-menu)`, () => {
+    const meta = readResearchSource("components/research-session-meta-menu.tsx");
+    expect(
+      meta.includes("useIsMobile") && !hasTailwindSmClass(meta),
+      failHint(
+        SMOKE_ISSUES.breakpoints,
+        "replace companion sm: with md: in research-session-meta-menu.tsx",
+      ),
+    ).toBe(true);
+  });
 
   it.fails(
     `${SMOKE_ISSUES.breakpoints}: template chip-row layout switch should be md: (align with 768)`,
     () => {
       const templates = readResearchSource("components/research-template-chip-row.tsx");
       expect(
-        /\bmd:/.test(templates) && !/\bsm:/.test(templates),
+        /\bmd:/.test(templates) && !hasTailwindSmClass(templates),
         failHint(
           SMOKE_ISSUES.breakpoints,
           "research-template-chip-row.tsx still uses sm: instead of md:",
@@ -334,6 +341,11 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
     },
   );
 });
+
+/** Detect Tailwind `sm:` utility classes; ignore `sm:` mentioned only in comments. */
+function hasTailwindSmClass(source: string): boolean {
+  return /(^|[^a-zA-Z0-9_-])sm:/.test(stripComments(source));
+}
 
 describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE_ISSUES.canvasKeyboard})`, () => {
   beforeEach(() => {
@@ -434,8 +446,28 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
     ).toHaveBeenCalled();
   });
 
+  // LRM-1105 slice 1 (#1952) landed pure helpers — hard gates. Canvas wiring waits on 1091.
+  it(`${SMOKE_ISSUES.canvasKeyboard}: layout-graph exports main-chain / fork-A helpers`, () => {
+    const { nodes, edges } = keyboardForkFixture();
+    expect(mainChainOrder(nodes, edges)[0]).toBe("goal");
+    expect(mainChainNeighbor(nodes, edges, "goal", 1)).toBe("fork");
+    expect(
+      isForkPoint("fork", nodes, edges),
+      failHint(SMOKE_ISSUES.canvasKeyboard, "fork fixture should be a fork point"),
+    ).toBe(true);
+    expect(
+      isForkPoint("goal", nodes, edges),
+      failHint(SMOKE_ISSUES.canvasKeyboard, "goal must not be a fork point"),
+    ).toBe(false);
+    expect(
+      crossLaneNeighbor(nodes, edges, "a", 1),
+      failHint(SMOKE_ISSUES.canvasKeyboard, "↑↓ must be null off fork (semantics A)"),
+    ).toBeNull();
+    expect(crossLaneNeighbor(nodes, edges, "fork", 1)).toBe("a");
+  });
+
   it.fails(
-    `${SMOKE_ISSUES.canvasKeyboard}: canvas root declares role=application with accessible name`,
+    `${SMOKE_ISSUES.canvasKeyboard}: canvas root declares role=application with accessible name (after 1091 wire)`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
       expect(
@@ -450,7 +482,7 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
   );
 
   it.fails(
-    `${SMOKE_ISSUES.canvasKeyboard}: canvas wires Arrow/Enter/Escape/Home/End keydown handlers`,
+    `${SMOKE_ISSUES.canvasKeyboard}: canvas wires Arrow/Enter/Escape/Home/End keydown handlers (after 1091 wire)`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
       for (const key of [
@@ -471,6 +503,84 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
     },
   );
 });
+
+/** Minimal fork for 1105 helper smoke (goal→fork→a|b→merge). */
+function keyboardForkFixture(): {
+  nodes: ResearchGraphNode[];
+  edges: import("@multica/core/types").ResearchGraphEdge[];
+} {
+  const base = {
+    session_id: "s1",
+    summary: "",
+    status: "active" as const,
+    actor_agent_id: null,
+    payload: {},
+    created_at: "2026-07-31T00:00:00Z",
+    updated_at: "2026-07-31T00:00:00Z",
+  };
+  const nodes: ResearchGraphNode[] = [
+    { ...base, id: "goal", title: "Goal", node_type: "goal" },
+    { ...base, id: "fork", title: "Fork", node_type: "stage_gate" },
+    {
+      ...base,
+      id: "a",
+      title: "Lane A",
+      node_type: "probe",
+      payload: { logic_lane: "source" },
+    },
+    {
+      ...base,
+      id: "b",
+      title: "Lane B",
+      node_type: "finding",
+      payload: { logic_lane: "deep_read" },
+    },
+    { ...base, id: "merge", title: "Merge", node_type: "finding" },
+  ];
+  const edges = [
+    {
+      id: "e1",
+      session_id: "s1",
+      from_node_id: "goal",
+      to_node_id: "fork",
+      edge_type: "leads_to" as const,
+      created_at: "2026-07-31T00:00:00Z",
+    },
+    {
+      id: "e2",
+      session_id: "s1",
+      from_node_id: "fork",
+      to_node_id: "a",
+      edge_type: "leads_to" as const,
+      created_at: "2026-07-31T00:00:00Z",
+    },
+    {
+      id: "e3",
+      session_id: "s1",
+      from_node_id: "fork",
+      to_node_id: "b",
+      edge_type: "leads_to" as const,
+      created_at: "2026-07-31T00:00:00Z",
+    },
+    {
+      id: "e4",
+      session_id: "s1",
+      from_node_id: "a",
+      to_node_id: "merge",
+      edge_type: "leads_to" as const,
+      created_at: "2026-07-31T00:00:00Z",
+    },
+    {
+      id: "e5",
+      session_id: "s1",
+      from_node_id: "b",
+      to_node_id: "merge",
+      edge_type: "leads_to" as const,
+      created_at: "2026-07-31T00:00:00Z",
+    },
+  ];
+  return { nodes, edges };
+}
 
 function thirtyNodeFixture(): {
   nodes: ResearchGraphNode[];

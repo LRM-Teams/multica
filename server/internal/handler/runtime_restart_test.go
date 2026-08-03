@@ -141,11 +141,10 @@ func TestInMemoryRestartStore_PendingTimesOut(t *testing.T) {
 	}
 }
 
-// TestRestartEndpointsRequireRuntimeOwnerOrAdmin locks the permission bar at
-// exactly canEditRuntime's (task #43 asked for the same bar as InitiateUpdate):
-// a plain workspace member with no relation to the runtime is forbidden; the
-// runtime's own owner and a workspace admin/owner are both allowed.
-func TestRestartEndpointsRequireRuntimeOwnerOrAdmin(t *testing.T) {
+// TestRestartEndpointsRequireComputerOwner locks restart to the Computer
+// owner only (Frank 2026-08-03; same canOwnRuntime gate as upgrade).
+// Workspace admin who is not the owner gets 403 — FE hide is not enough.
+func TestRestartEndpointsRequireComputerOwner(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -182,7 +181,7 @@ func TestRestartEndpointsRequireRuntimeOwnerOrAdmin(t *testing.T) {
 	}{
 		{name: "unrelated plain member", userID: plainMemberID, wantStatus: http.StatusForbidden},
 		{name: "runtime owner", userID: testUserID, wantStatus: http.StatusOK},
-		{name: "workspace admin", userID: adminID, wantStatus: http.StatusOK},
+		{name: "workspace admin non-owner", userID: adminID, wantStatus: http.StatusForbidden},
 	}
 
 	for _, caller := range callers {

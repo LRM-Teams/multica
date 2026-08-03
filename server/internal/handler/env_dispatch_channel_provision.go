@@ -211,6 +211,24 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "decode config failed")
 		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("decode binding sandbox config: %w", err)
 	}
+	// Shared-sandbox attach (research D3): when the binding belongs to a
+	// shared_sandbox rollout and the sample's env already has its shared
+	// runtime (the eagerly provisioned leader/trigger), skip the per-agent
+	// sandbox claim entirely — clone the derived agent onto the shared runtime
+	// and mark the binding ready with the shared identifiers. Idempotent
+	// under concurrent first-mentions: every caller resolves the same anchor
+	// binding. When no shared runtime exists yet this binding IS the
+	// leader/trigger and falls through to establish it below.
+	if config.Shared {
+		shared, found, sErr := store.sharedRuntimeBinding(ctx, h.DB, in.EnvID, in.AgentID)
+		if sErr != nil {
+			_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "shared runtime lookup failed")
+			return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("resolve shared env runtime: %w", sErr)
+		}
+		if found {
+			return h.attachEnvDispatchAgentToSharedRuntime(ctx, in, store, binding, shared)
+		}
+	}
 	lifecycle := newEnvSandboxLifecycleService(h)
 	if lifecycle == nil {
 		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "lifecycle unavailable")
@@ -315,6 +333,62 @@ func (h *Handler) provisionEnvDispatchAgent(ctx context.Context, in ProvisionEnv
 		return cleanup(fmt.Errorf("mark env-dispatch binding ready: %w", err))
 	}
 	return ProvisionEnvDispatchAgentResult{AgentID: derivedID, SandboxInstanceID: ref.InstanceID, RuntimeID: runtimeRef.ID, DaemonID: ref.DaemonID, ChatSessionID: sessionID}, nil
+}
+
+// attachEnvDispatchAgentToSharedRuntime provisions a shared_sandbox squad
+// member onto the sample's existing shared sandbox/runtime (research D3,
+// FR-003/004). It creates no sandbox and waits for no daemon: the derived
+// execution agent is cloned bound to the shared runtime, its channel session
+// is opened on the same runtime (keeping session.RuntimeID ==
+// binding.RuntimeID == task runtime, T013), and the binding is marked ready
+// with the shared identifiers. Compensation on failure touches only the
+// derived agent and the binding status — the shared sandbox/runtime is owned
+// by the leader binding and is never reclaimed here.
+func (h *Handler) attachEnvDispatchAgentToSharedRuntime(ctx context.Context, in ProvisionEnvDispatchAgentInput, store envDispatchChannelStore, binding envAgentSandboxBinding, shared envAgentSandboxBinding) (ProvisionEnvDispatchAgentResult, error) {
+	if shared.SandboxInstanceID == nil || shared.RuntimeID == nil || shared.DaemonID == nil {
+		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "shared runtime incomplete")
+		return ProvisionEnvDispatchAgentResult{}, fmt.Errorf("shared env runtime anchor is incomplete")
+	}
+	sandboxInstanceID, runtimeID, daemonID := *shared.SandboxInstanceID, *shared.RuntimeID, *shared.DaemonID
+	derivedID := ""
+	cleanup := func(cause error) (ProvisionEnvDispatchAgentResult, error) {
+		if cleanupErr := h.cleanupFailedEnvDispatchDerivedAgent(context.WithoutCancel(ctx), binding.ID, in.AgentID, derivedID); cleanupErr != nil {
+			cause = fmt.Errorf("%w (cleanup derived agent: %v)", cause, cleanupErr)
+		}
+		_ = store.markFailed(context.WithoutCancel(ctx), h.DB, in.EnvID, in.AgentID, "shared attach failed")
+		return ProvisionEnvDispatchAgentResult{}, cause
+	}
+	var err error
+	derivedID, err = CloneEnvDispatchAgentTx(ctx, h, service.CloneEnvDispatchAgentInput{
+		WorkspaceID:   in.WorkspaceID,
+		SourceAgentID: in.AgentID,
+		RuntimeID:     runtimeID,
+		EnvID:         in.EnvID,
+		ChannelID:     in.ChannelID,
+		BindingID:     binding.ID,
+	})
+	if err != nil {
+		return cleanup(fmt.Errorf("clone derived agent onto shared runtime: %w", err))
+	}
+	sessionID, sessionCreated, err := h.ensureEnvDispatchChannelSession(ctx, envDispatchChannelSessionInput{
+		WorkspaceID: in.WorkspaceID,
+		ProjectID:   in.ProjectID,
+		ChannelID:   in.ChannelID,
+		AgentID:     derivedID,
+		CreatorID:   in.UserID,
+		RuntimeID:   runtimeID,
+	})
+	if err != nil {
+		return cleanup(fmt.Errorf("ensure env-dispatch channel session: %w", err))
+	}
+	if err := store.markReady(ctx, h.DB, in.EnvID, in.AgentID, sandboxInstanceID, runtimeID, daemonID); err != nil {
+		if sessionCreated {
+			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, in.ChannelID, derivedID)
+			_, _ = h.DB.Exec(context.WithoutCancel(ctx), `DELETE FROM chat_session WHERE id = $1`, sessionID)
+		}
+		return cleanup(fmt.Errorf("mark env-dispatch binding ready: %w", err))
+	}
+	return ProvisionEnvDispatchAgentResult{AgentID: derivedID, SandboxInstanceID: sandboxInstanceID, RuntimeID: runtimeID, DaemonID: daemonID, ChatSessionID: sessionID}, nil
 }
 
 // cleanupFailedEnvDispatchDerivedAgent removes the runtime-owning derived

@@ -67,7 +67,7 @@ func caps(
 // ForceRestart is filled by deriveForceRestart (not by caps).
 var providerCapabilities = map[string]ProviderCapabilities{
 	//                    canonical, inlinePrompt, modelSel, customID, thinking
-	"claude":    caps(false, false, true, true, true),
+	"claude":    caps(true, false, true, true, true), // resident via claude-agent-acp adapter
 	"codebuddy": caps(false, false, true, false, true),
 	"codex":     caps(true, false, true, true, true), // resident app-server; chat full only
 	"copilot":   caps(false, false, true, true, false),
@@ -99,6 +99,7 @@ var forceRestartResidentConstructors = map[string]func(Config) Backend{
 	"opencode": func(cfg Config) Backend { return newOpenCodeServeBackend(cfg) },
 	"kiro":     func(cfg Config) Backend { return newKiroACPBackend(cfg) },
 	"codex":    func(cfg Config) Backend { return newCodexAppServerBackend(cfg) },
+	"claude":   func(cfg Config) Backend { return newClaudeACPBackend(cfg) },
 }
 
 func init() {

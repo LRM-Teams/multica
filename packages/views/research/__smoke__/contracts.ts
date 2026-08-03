@@ -49,8 +49,9 @@ export const OVERLAY_A11Y_CONTRACT = {
 } as const;
 
 /**
- * LRM-1105 keyboard map freeze (parent LRM-1102). Smoke only — implementers
- * wire these in research-canvas / graph nodes.
+ * LRM-1105 keyboard map freeze (parent LRM-1102).
+ * Slice 1 (#1952): pure helpers in layout-graph — hard-gated in smoke.
+ * Slice 2: canvas/graph-node wiring waits on LRM-1091; remain `it.fails`.
  */
 export const CANVAS_KEYBOARD_CONTRACT = {
   ArrowLeft: "main-chain-prev",

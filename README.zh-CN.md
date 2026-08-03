@@ -79,7 +79,7 @@ irm https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.ps1 | i
 安装完成后，一条命令完成配置、认证和启动：
 
 ```bash
-multica setup          # 连接 Multica Cloud，登录，启动 daemon
+multica setup          # 连接 Multica Cloud，登录，安装 daemon 管家服务
 ```
 
 > **自部署？** 加上 `--with-server` 在本地部署完整的 Multica 服务：
@@ -100,7 +100,7 @@ multica setup          # 连接 Multica Cloud，登录，启动 daemon
 ### 1. 配置并启动 daemon
 
 ```bash
-multica setup           # 配置、认证、启动 daemon（一条命令搞定）
+multica setup           # 配置、认证、安装 daemon 管家服务（一条命令搞定）
 ```
 
 daemon 在后台运行，保持你的机器与 Multica 的连接。它会自动检测 PATH 中可用的 Agent CLI（`claude`、`codex`、`copilot`、`openclaw`、`opencode`、`hermes`、`gemini`、`pi`、`cursor-agent`、`kimi`、`kiro-cli`、`agy`、`grok`）。

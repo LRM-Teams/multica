@@ -30,7 +30,4 @@ func TestCodexCanonicalResidentCapability(t *testing.T) {
 	if !Capabilities("codex").ForceRestart {
 		t.Fatal("codex ForceRestart must derive true from resident ForceKill")
 	}
-	if Capabilities("claude").CanonicalResident {
-		t.Fatal("claude must not be CanonicalResident until ACP shell exists")
-	}
 }

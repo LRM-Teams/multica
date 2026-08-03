@@ -28,8 +28,8 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 			t.Errorf("%q must be CanonicalResident", name)
 		}
 	}
-	if Capabilities("claude").CanonicalResident {
-		t.Error("claude must not be CanonicalResident")
+	if !Capabilities("claude").CanonicalResident {
+		t.Error("claude must be CanonicalResident (ACP adapter resident)")
 	}
 
 	// Inline system prompt — was providerNeedsInlineSystemPrompt.
@@ -76,16 +76,13 @@ func TestProviderCapabilitiesPinnedValues(t *testing.T) {
 	// Force restart — DERIVED from ResidentRuntimeForceKillable (#62), not
 	// hand-filled. Today equal to the canonical-resident set; pinned so a
 	// future split does not silently widen/narrow the FE restart button.
-	for _, name := range []string{"pi", "grok", "cursor", "opencode"} {
+	for _, name := range []string{"pi", "grok", "cursor", "opencode", "kiro", "codex", "claude"} {
 		if !Capabilities(name).ForceRestart {
 			t.Errorf("%q must advertise ForceRestart (resident backend must implement ForceKill)", name)
 		}
 		if !ForceRestartSupported(name) {
 			t.Errorf("%q ForceRestartSupported wrapper must read true from the table", name)
 		}
-	}
-	if Capabilities("claude").ForceRestart || ForceRestartSupported("claude") {
-		t.Error("claude must not advertise ForceRestart")
 	}
 }
 

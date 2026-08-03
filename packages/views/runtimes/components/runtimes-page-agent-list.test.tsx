@@ -27,6 +27,31 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   }),
 }));
 
+
+const presenceWorkload = vi.hoisted(() => ({ current: "idle" as string }));
+
+vi.mock("@multica/core/agents", async () => {
+  const actual = await vi.importActual<typeof import("@multica/core/agents")>(
+    "@multica/core/agents",
+  );
+  return {
+    ...actual,
+    useWorkspacePresenceMap: () => ({
+      byAgent: new Map([
+        [
+          "agent-1",
+          {
+            agent_id: "agent-1",
+            availability: "online",
+            workload: presenceWorkload.current,
+          },
+        ],
+      ]),
+      loading: false,
+    }),
+  };
+});
+
 vi.mock("@multica/core/agents/stores", () => ({
   useAgentPanelStore: (sel: (s: { open: (id: string) => void }) => unknown) =>
     sel({ open: openAgentPanel }),
@@ -220,6 +245,7 @@ function renderDetail(
 // agent list, not a 4-column table, and never shows a duration.
 describe("ComputersMachineDetail — desktop agent list", () => {
   it("shows name · runtime · activity on one line, opens the panel on click", () => {
+    presenceWorkload.current = "idle";
     renderDetail(makeMachine(), [makeAgent()]);
 
     const row = screen.getByRole("button", { name: /jianghp3's helper/ });
@@ -230,18 +256,14 @@ describe("ComputersMachineDetail — desktop agent list", () => {
     expect(openAgentPanel).toHaveBeenCalledWith("agent-1");
   });
 
-  it("shows Thinking (not the raw task status) while a task is active", () => {
-    const runningTask = {
-      id: "task-1",
-      agent_id: "agent-1",
-      status: "running",
-      created_at: "2026-08-01T00:00:00Z",
-    } as AgentTask;
-    renderDetail(makeMachine(), [makeAgent()], [runningTask]);
+  it("shows Working (Activity band) while a task is active", () => {
+    presenceWorkload.current = "working";
+    renderDetail(makeMachine(), [makeAgent()]);
 
     expect(
       screen.getByRole("button", { name: /jianghp3's helper/ }),
-    ).toHaveTextContent("Thinking");
+    ).toHaveTextContent("Working");
+    presenceWorkload.current = "idle";
   });
 
   it("never shows a duration (no table headers, no relative-time text)", () => {

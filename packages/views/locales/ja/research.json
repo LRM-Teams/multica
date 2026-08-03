@@ -320,7 +320,7 @@
     "creating": "艦隊を編成中…",
     "create_failed": "調査セッションを作成できませんでした",
     "templates_label": "クイックテンプレート",
-    "templates_hint": "選択すると専門プロンプトがチップで付き、目標を続けて入力できます",
+    "templates_hint": "入力欄のテンプレ pill を選ぶと起文句が入り、編集して開始できます",
     "template_chip": "{{title}} prompt added — keep typing your goal",
     "template_chip_clear": "Remove template",
     "goal_placeholder_with_template": "Add your specific goal…"

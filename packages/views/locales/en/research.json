@@ -320,7 +320,7 @@
     "creating": "Assembling fleet…",
     "create_failed": "Couldn't create the research session",
     "templates_label": "Quick templates",
-    "templates_hint": "Pick one to attach a professional prompt as a chip — keep typing your goal",
+    "templates_hint": "Pick a pill in the composer to prefill a starter — edit, then start",
     "template_chip": "{{title}} prompt added — keep typing your goal",
     "template_chip_clear": "Remove template",
     "goal_placeholder_with_template": "Add your specific goal…"

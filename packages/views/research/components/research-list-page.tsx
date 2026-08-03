@@ -14,7 +14,7 @@ import type { ResearchSession } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
-import { AlertCircle, Loader2, SlidersHorizontal, X } from "lucide-react";
+import { AlertCircle, Loader2, SlidersHorizontal } from "lucide-react";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import {
@@ -40,6 +40,7 @@ import {
 } from "../lib/session-list-filter";
 import {
   buildCreateGoal,
+  composeTemplateStarter,
   localizeTemplateField,
   type ResearchTemplate,
 } from "../lib/research-templates";
@@ -53,7 +54,7 @@ import { ResearchServerErrorPage } from "./research-server-error-page";
 import { ResearchSessionFilterBar } from "./research-session-filter-bar";
 import { ResearchSessionRow } from "./research-session-row";
 import { ResearchSessionListSkeleton } from "./research-session-row-skeleton";
-import { ResearchTemplateCards } from "./research-template-cards";
+import { ResearchTemplateChipRow } from "./research-template-chip-row";
 
 /**
  * Composer draft — one state object so create/template/goal/params update
@@ -61,6 +62,8 @@ import { ResearchTemplateCards } from "./research-template-cards";
  */
 type ComposerDraft = {
   goal: string;
+  /** Last value written programmatically (starter / clear); dirty when goal differs. */
+  goalBaseline: string;
   template: ResearchTemplate | null;
   draftTitle: string | undefined;
   params: ResearchCreateParamsDraft;
@@ -71,6 +74,7 @@ type ComposerDraft = {
 function emptyComposer(uiLanguage?: string): ComposerDraft {
   return {
     goal: "",
+    goalBaseline: "",
     template: null,
     draftTitle: undefined,
     params: defaultCreateParams(uiLanguage),
@@ -97,12 +101,14 @@ export function ResearchListPage() {
 
   const {
     goal,
+    goalBaseline,
     template: selectedTemplate,
     draftTitle,
     params: createParams,
     paramsOpen,
     fieldErrors,
   } = composer;
+  const goalDirty = goal !== goalBaseline;
 
   // Seed language from UI locale once i18n is ready (defaults stay standard/weights).
   useEffect(() => {
@@ -200,6 +206,7 @@ export function ResearchListPage() {
     setComposer((prev) => ({
       ...prev,
       goal: text,
+      goalBaseline: text,
       template: null,
       draftTitle: title,
     }));
@@ -207,24 +214,53 @@ export function ResearchListPage() {
     queueMicrotask(focusComposer);
   };
 
-  /** LRM-906 T2: chip only — never dump ≥800-char professional prompt into the box. */
-  const applyTemplate = (template: ResearchTemplate) => {
+  /**
+   * LRM-1092: toggle chip in composer.
+   * Select → prefill short starter (skip overwrite when dirty).
+   * Reselect → clear selection; clear body only when not dirty.
+   * Long professional prompts stay on submit via buildCreateGoal.
+   */
+  const toggleTemplate = (template: ResearchTemplate) => {
     const language = i18n?.language;
-    setComposer((prev) => ({
-      ...prev,
-      goal: "",
-      template,
-      draftTitle: localizeTemplateField(template.sessionTitle, language),
-    }));
+    setComposer((prev) => {
+      const dirty = prev.goal !== prev.goalBaseline;
+      if (prev.template?.id === template.id) {
+        if (dirty) {
+          return {
+            ...prev,
+            template: null,
+            draftTitle: prev.goal.trim() ? prev.draftTitle : undefined,
+          };
+        }
+        return {
+          ...prev,
+          goal: "",
+          goalBaseline: "",
+          template: null,
+          draftTitle: undefined,
+        };
+      }
+      const starter = composeTemplateStarter(template, language);
+      const title = localizeTemplateField(template.sessionTitle, language);
+      if (dirty) {
+        return {
+          ...prev,
+          template,
+          draftTitle: title,
+        };
+      }
+      return {
+        ...prev,
+        goal: starter,
+        goalBaseline: starter,
+        template,
+        draftTitle: title,
+        fieldErrors: prev.fieldErrors?.goal
+          ? { ...prev.fieldErrors, goal: undefined }
+          : prev.fieldErrors,
+      };
+    });
     queueMicrotask(focusComposer);
-  };
-
-  const clearTemplate = () => {
-    setComposer((prev) => ({
-      ...prev,
-      template: null,
-      draftTitle: prev.goal.trim() ? prev.draftTitle : undefined,
-    }));
   };
 
   const submitCreate = () => {
@@ -280,10 +316,6 @@ export function ResearchListPage() {
     <ResearchSessionRow key={s.id} session={s} href={paths.researchDetail(s.id)} />
   );
 
-  const templateTitle = selectedTemplate
-    ? localizeTemplateField(selectedTemplate.title, i18n?.language)
-    : "";
-
   // LRM-833 — 5xx with no cache: dedicated error page + retry (not a blank shell).
   if (!isLoading && !data && isError && isServerError(error)) {
     return (
@@ -316,23 +348,10 @@ export function ResearchListPage() {
             )}
             data-testid="research-home-composer"
           >
-            {selectedTemplate ? (
-              <div className="flex flex-wrap gap-1.5 px-3 pt-2.5 sm:px-3.5">
-                <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-brand/25 bg-brand/8 px-2.5 py-1 text-[11px] font-semibold text-brand">
-                  <span className="truncate">
-                    {t(($) => $.home.template_chip, { title: templateTitle })}
-                  </span>
-                  <button
-                    type="button"
-                    className="shrink-0 rounded-full p-0.5 opacity-60 hover:opacity-100"
-                    aria-label={t(($) => $.home.template_chip_clear)}
-                    onClick={clearTemplate}
-                  >
-                    <X className="size-3" aria-hidden />
-                  </button>
-                </span>
-              </div>
-            ) : null}
+            <ResearchTemplateChipRow
+              selectedId={selectedTemplate?.id ?? null}
+              onToggle={toggleTemplate}
+            />
             <Textarea
               ref={goalInputRef}
               value={goal}
@@ -346,7 +365,7 @@ export function ResearchListPage() {
                 }))
               }
               placeholder={
-                selectedTemplate
+                selectedTemplate && !goalDirty
                   ? t(($) => $.home.goal_placeholder_with_template)
                   : t(($) => $.goal_placeholder)
               }
@@ -465,9 +484,6 @@ export function ResearchListPage() {
           ) : null}
         </ResearchHomeHero>
       </div>
-
-      {/* LRM-817: quick template cards — chip injection (LRM-906 T2). */}
-      <ResearchTemplateCards onSelect={applyTemplate} />
 
       {isLoading ? (
         <ResearchSessionListSkeleton rows={4} label={t(($) => $.list.loading)} />

@@ -75,6 +75,25 @@ export function composeTemplateGoal(
   return `${goal}\n\n${label}：${params.join("、")}`;
 }
 
+/**
+ * LRM-1092 / LRM-1072: short starter written into the composer on chip select.
+ * Long professional prompts stay hidden via buildCreateGoal on submit.
+ */
+export function composeTemplateStarter(
+  template: ResearchTemplate,
+  language: string | undefined,
+): string {
+  const blurb = localizeTemplateField(template.blurb, language);
+  const title = localizeTemplateField(template.title, language);
+  const params = localizeTemplateField(template.params, language);
+  const focus = params.slice(0, 3);
+  const isZh = (language ?? "en").toLowerCase().startsWith("zh");
+  if (isZh) {
+    return `围绕「${blurb}」做${title}：覆盖${focus.join("、")}，并给出可验证结论。`;
+  }
+  return `Research around "${blurb}" for ${title}: cover ${focus.join(", ")}, and deliver verifiable conclusions.`;
+}
+
 /** Merge hidden template prompt with the user's short goal line for create. */
 export function buildCreateGoal(
   template: ResearchTemplate | null | undefined,

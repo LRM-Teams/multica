@@ -474,44 +474,61 @@ describe("ResearchListPage search & status filter (LRM-818)", () => {
   });
 });
 
-describe("ResearchListPage quick templates (LRM-817 / LRM-906 T2)", () => {
+describe("ResearchListPage template chips in composer (LRM-1092)", () => {
   beforeEach(() => {
     setQuery({ data: { sessions: [] } });
   });
 
-  it("renders at least 3 template cards", () => {
+  it("renders TemplateChipRow inside composer and no external template cards", () => {
     render(<ResearchListPage />);
-    expect(screen.getByText(enResearch.home.templates_label)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Industry research/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Competitor analysis/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Tech selection/i })).toBeInTheDocument();
+    expect(screen.getByTestId("research-template-chip-row")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Industry research/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Competitor analysis/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Tech selection/i })).toBeInTheDocument();
+    // External three-card section title was the only home.templates_label usage outside chips.
+    expect(screen.queryByRole("heading", { name: enResearch.home.templates_label })).toBeNull();
   });
 
-  it("clicking a template shows a chip and does not dump the long prompt into the textarea", () => {
+  it("selecting a chip prefills a short starter and does not dump the long prompt", () => {
     render(<ResearchListPage />);
-    fireEvent.click(screen.getByRole("button", { name: /Industry research/i }));
-    const chip = screen.getByText(/Industry research prompt added/i);
-    expect(chip).toBeInTheDocument();
-    const textarea = screen.getByPlaceholderText(
-      enResearch.home.goal_placeholder_with_template,
-    ) as HTMLTextAreaElement;
-    expect(textarea.value).toBe("");
-    expect(screen.getByRole("button", { name: enResearch.start })).toBeEnabled();
-    fireEvent.change(textarea, { target: { value: "Vector DB for RAG" } });
-    expect(textarea.value).toBe("Vector DB for RAG");
+    fireEvent.click(screen.getByRole("radio", { name: /Industry research/i }));
+    const textarea = screen.getByTestId("research-create-goal") as HTMLTextAreaElement;
+    expect(textarea.value).toMatch(/Industry research/);
+    expect(textarea.value.length).toBeLessThan(800);
+    expect(screen.getByRole("radio", { name: /Industry research/i })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 
-  it("clearing the template chip blocks empty submit with near-field error (LRM-835)", () => {
+  it("reselecting clears selection and starter when not dirty", () => {
+    render(<ResearchListPage />);
+    const chip = screen.getByRole("radio", { name: /Competitor analysis/i });
+    fireEvent.click(chip);
+    expect((screen.getByTestId("research-create-goal") as HTMLTextAreaElement).value.length).toBeGreaterThan(0);
+    fireEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-checked", "false");
+    expect((screen.getByTestId("research-create-goal") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("dirty edits are kept when deselecting a chip", () => {
+    render(<ResearchListPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /Tech selection/i }));
+    const textarea = screen.getByTestId("research-create-goal") as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Keep my custom goal" } });
+    fireEvent.click(screen.getByRole("radio", { name: /Tech selection/i }));
+    expect(screen.getByRole("radio", { name: /Tech selection/i })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(textarea.value).toBe("Keep my custom goal");
+  });
+
+  it("empty submit without template or goal shows near-field error (LRM-835)", () => {
     const mutate = vi.fn();
     mutationRef.current = { ...mutationRef.current, mutate };
     render(<ResearchListPage />);
-    fireEvent.click(screen.getByRole("button", { name: /Competitor analysis/i }));
-    expect(screen.getByRole("button", { name: enResearch.start })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: enResearch.home.template_chip_clear }));
-    expect(screen.queryByText(/prompt added/i)).toBeNull();
-    const start = screen.getByRole("button", { name: enResearch.start });
-    expect(start).toBeEnabled();
-    fireEvent.click(start);
+    fireEvent.click(screen.getByRole("button", { name: enResearch.start }));
     expect(mutate).not.toHaveBeenCalled();
     expect(screen.getByTestId("research-create-goal-error")).toHaveTextContent(
       enResearch.create_params.errors.empty_goal,

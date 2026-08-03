@@ -141,7 +141,7 @@ describe("ResearchSessionRow (LRM-790 narrow + dark tokens)", () => {
     expect(chip.className).toContain("text-brand");
     expect(chip.className).not.toContain("violet");
     expect(chip.className).toContain("hidden");
-    expect(chip.className).toContain("sm:inline-flex");
+    expect(chip.className).toContain("md:inline-flex");
   });
 
   it("opens a goal dialog from the colored chip", () => {
@@ -152,13 +152,13 @@ describe("ResearchSessionRow (LRM-790 narrow + dark tokens)", () => {
     expect(screen.getByText(enResearch.list.goal_dialog_title)).toBeTruthy();
   });
 
-  it("keeps stage · relative time in meta; avatars yield below sm", () => {
+  it("keeps stage · relative time in meta; avatars yield below md", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
     expect(screen.getByText(enResearch.stage.s2_sources)).toBeTruthy();
     expect(screen.getByText("ago:2026-07-30T03:00:00Z")).toBeTruthy();
     expect(screen.getByText("Ronaldo working")).toBeTruthy();
     expect(screen.getByTestId("avatar-stack").className).toContain("hidden");
-    expect(screen.getByTestId("avatar-stack").className).toContain("sm:flex");
+    expect(screen.getByTestId("avatar-stack").className).toContain("md:flex");
     expect(avatarStackRef.agentIds).toEqual(["agent-1", "agent-2"]);
   });
 

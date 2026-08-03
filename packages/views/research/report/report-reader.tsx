@@ -296,7 +296,7 @@ export function ReportReader({
               type="button"
               size="sm"
               variant="ghost"
-              className="sm:hidden"
+              className="md:hidden"
               data-testid="research-report-outline-toggle"
               onClick={() => setOutlineOpen((v) => !v)}
               aria-expanded={outlineOpen}
@@ -349,7 +349,7 @@ export function ReportReader({
         {showReaderChrome && outlineOpen ? (
           <div
             data-testid="research-report-outline-drawer"
-            className="max-h-[40vh] overflow-y-auto border-b bg-muted/20 px-2 py-2 sm:hidden"
+            className="max-h-[40vh] overflow-y-auto border-b bg-muted/20 px-2 py-2 md:hidden"
           >
             <OutlineNav items={outlineItems} activeId={activeId} onPick={scrollTo} />
           </div>
@@ -367,7 +367,7 @@ export function ReportReader({
           <div className="flex min-h-0 flex-1">
             <aside
               data-testid="research-report-outline-aside"
-              className="hidden w-[220px] shrink-0 overflow-y-auto border-r p-3 sm:block"
+              className="hidden w-[220px] shrink-0 overflow-y-auto border-r p-3 md:block"
             >
               <OutlineNav items={outlineItems} activeId={activeId} onPick={scrollTo} />
             </aside>

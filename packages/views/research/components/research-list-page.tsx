@@ -410,7 +410,7 @@ export function ResearchListPage() {
               {/* LRM-839: estimate line; LRM-790 ⌘ hint yields on narrow. */}
               <div className="min-w-0 space-y-0.5">
                 <ResearchCreateEstimateSummary params={createParams} />
-                <p className="hidden text-xs text-muted-foreground sm:block">
+                <p className="hidden text-xs text-muted-foreground md:block">
                   {t(($) => $.home.composer_hint)}
                 </p>
               </div>

@@ -188,19 +188,18 @@ export function ResearchProductRoundCardView({
             </div>
 
             {autoAdopted ? (
-              <p
-                role="status"
-                className="rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[11px] text-warning"
+              // LRM-1239 — native <output> (status) for react-doctor prefer-tag-over-role.
+              <output
+                className="block rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[11px] text-warning"
               >
                 {t(($) => $.round.auto_adopted)}
-              </p>
+              </output>
             ) : secondsLeft > 0 && !pending ? (
-              <p
-                role="status"
-                className="rounded-md border bg-muted/40 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground tabular-nums"
+              <output
+                className="block rounded-md border bg-muted/40 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground tabular-nums"
               >
                 {t(($) => $.round.auto_adopt_countdown, { s: secondsLeft })}
-              </p>
+              </output>
             ) : null}
 
             <section>
@@ -260,30 +259,42 @@ export function ResearchProductRoundCardView({
                 <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"
-                    disabled={pending}
+                    data-testid="research-round-goal-confirm"
+                    // LRM-1239 — pending must stay focusable (same root cause as LRM-1213).
+                    aria-disabled={pending || undefined}
                     onClick={() => {
+                      if (pending) return;
                       setGoalDraft(card.goal_patch_proposal ?? "");
                       setGoalOpen(true);
                     }}
+                    className={cn(pending && "opacity-50 cursor-not-allowed")}
                   >
                     {t(($) => $.round.goal_confirm)}
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={pending}
+                    data-testid="research-round-goal-edit"
+                    aria-disabled={pending || undefined}
                     onClick={() => {
+                      if (pending) return;
                       setGoalDraft(card.goal_patch_proposal ?? "");
                       setGoalOpen(true);
                     }}
+                    className={cn(pending && "opacity-50 cursor-not-allowed")}
                   >
                     {t(($) => $.round.goal_edit)}
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={pending}
-                    onClick={() => onRejectGoalPatch?.()}
+                    data-testid="research-round-goal-reject"
+                    aria-disabled={pending || undefined}
+                    onClick={() => {
+                      if (pending) return;
+                      onRejectGoalPatch?.();
+                    }}
+                    className={cn(pending && "opacity-50 cursor-not-allowed")}
                   >
                     {t(($) => $.round.goal_reject)}
                   </Button>
@@ -294,9 +305,17 @@ export function ResearchProductRoundCardView({
 
           <DialogFooter className="flex-col gap-2 sm:flex-col sm:space-x-0">
             <Button
-              className="w-full"
-              disabled={pending || autoAdopted}
+              className={cn(
+                "w-full",
+                pending && !autoAdopted && "opacity-50 cursor-not-allowed",
+              )}
+              data-testid="research-round-agree"
+              // True unavailability (auto-adopted) may keep native disabled; pending
+              // alone must stay focusable (LRM-1239 / LRM-1213).
+              disabled={autoAdopted || undefined}
+              aria-disabled={pending || undefined}
               onClick={() => {
+                if (pending || autoAdopted) return;
                 markInteracted();
                 onAgree?.();
                 setOpen(false);
@@ -306,10 +325,21 @@ export function ResearchProductRoundCardView({
             </Button>
             {isContinue ? (
               <Button
-                className="w-full"
+                className={cn(
+                  "w-full",
+                  pending &&
+                    !autoAdopted &&
+                    card.budget_remaining > 0 &&
+                    "opacity-50 cursor-not-allowed",
+                )}
                 variant="outline"
-                disabled={pending || autoAdopted || card.budget_remaining <= 0}
+                data-testid="research-round-reject-continue"
+                disabled={
+                  autoAdopted || card.budget_remaining <= 0 || undefined
+                }
+                aria-disabled={pending || undefined}
                 onClick={() => {
+                  if (pending || autoAdopted || card.budget_remaining <= 0) return;
                   markInteracted();
                   onRejectContinue?.();
                   setOpen(false);
@@ -320,10 +350,21 @@ export function ResearchProductRoundCardView({
             ) : null}
             {isStop ? (
               <Button
-                className="w-full"
+                className={cn(
+                  "w-full",
+                  pending &&
+                    !autoAdopted &&
+                    card.budget_remaining > 0 &&
+                    "opacity-50 cursor-not-allowed",
+                )}
                 variant="outline"
-                disabled={pending || autoAdopted || card.budget_remaining <= 0}
+                data-testid="research-round-reject-stop"
+                disabled={
+                  autoAdopted || card.budget_remaining <= 0 || undefined
+                }
+                aria-disabled={pending || undefined}
                 onClick={() => {
+                  if (pending || autoAdopted || card.budget_remaining <= 0) return;
                   markInteracted();
                   onRejectStop?.();
                   setOpen(false);
@@ -350,20 +391,33 @@ export function ResearchProductRoundCardView({
           <DialogFooter className="gap-2">
             <Button
               variant="outline"
+              data-testid="research-round-goal-edit-send"
+              // Empty draft is truly unavailable; pending alone stays focusable.
+              disabled={!goalDraft.trim() || undefined}
+              aria-disabled={pending || undefined}
               onClick={() => {
+                if (pending || !goalDraft.trim()) return;
                 onEditGoalPatch?.(goalDraft.trim());
                 setGoalOpen(false);
               }}
-              disabled={pending || !goalDraft.trim()}
+              className={cn(
+                pending && goalDraft.trim() && "opacity-50 cursor-not-allowed",
+              )}
             >
               {t(($) => $.round.goal_edit_send)}
             </Button>
             <Button
+              data-testid="research-round-goal-confirm-send"
+              disabled={!goalDraft.trim() || undefined}
+              aria-disabled={pending || undefined}
               onClick={() => {
+                if (pending || !goalDraft.trim()) return;
                 onConfirmGoalPatch?.(goalDraft.trim());
                 setGoalOpen(false);
               }}
-              disabled={pending || !goalDraft.trim()}
+              className={cn(
+                pending && goalDraft.trim() && "opacity-50 cursor-not-allowed",
+              )}
             >
               {t(($) => $.round.goal_confirm)}
             </Button>

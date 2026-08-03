@@ -583,28 +583,7 @@ describe("ResearchListPage template chips in composer (LRM-1092)", () => {
     );
   });
 
-  it("LRM-1139 A2: expand bar + dialog edit full prompt; submit payload includes override", async () => {
-    const createResearchSession = vi.fn().mockResolvedValue({
-      session: { id: "s-new" },
-      fleet: null,
-      nodes: [],
-      edges: [],
-      messages: [],
-      run: null,
-    });
-    const { api } = await import("@multica/core/api");
-    (api.createResearchSession as ReturnType<typeof vi.fn>).mockImplementation(
-      createResearchSession,
-    );
-    // useMutation mock calls mutationFn via mutate — wire through
-    mutationRef.current = {
-      ...mutationRef.current,
-      mutate: (params: unknown) => {
-        // Mirror page: mutationFn builds goal from closure; call api with a stub
-        // by invoking the real page path — instead assert editor UI + apply path.
-        void params;
-      },
-    };
+  it("LRM-1139 A2: expand bar + dialog edit full prompt; apply persists override", () => {
     render(<ResearchListPage />);
     expect(screen.queryByTestId("research-template-prompt-bar")).toBeNull();
     fireEvent.click(screen.getByRole("radio", { name: /Industry research/i }));

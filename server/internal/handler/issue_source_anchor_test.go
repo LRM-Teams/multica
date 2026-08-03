@@ -235,6 +235,9 @@ func TestCreateIssueWithGroupChannelDoesNotInferProjectAndCanClearAnchor(t *test
 	if got.SourceRefs == nil || got.SourceRefs.Channel == nil || got.SourceRefs.Channel.ChannelID != channelID || got.SourceRefs.Message != nil {
 		t.Fatalf("source_refs = %#v, want group-only channel", got.SourceRefs)
 	}
+	if got.Channel == nil || got.Channel.ChannelID != channelID {
+		t.Fatalf("channel = %#v, want top-level associated group %s", got.Channel, channelID)
+	}
 
 	replace := httptest.NewRecorder()
 	replaceReq := newRequest("PUT", "/api/issues/"+created.ID+"/channel?workspace_id="+testWorkspaceID, map[string]any{"channel_id": replacementChannelID})
@@ -393,6 +396,9 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if setResponse.SourceRefs == nil || setResponse.SourceRefs.Channel == nil || setResponse.SourceRefs.Channel.ChannelID != channelID {
 		t.Fatalf("agent set source_refs = %#v, want private group %s", setResponse.SourceRefs, channelID)
 	}
+	if setResponse.Channel == nil || setResponse.Channel.ChannelID != channelID {
+		t.Fatalf("agent set channel = %#v, want top-level associated group %s", setResponse.Channel, channelID)
+	}
 	if updated == nil || updated.ActorType != "agent" || updated.ActorID != agentID {
 		t.Fatalf("issue:updated actor = %#v, want agent/%s", updated, agentID)
 	}
@@ -412,6 +418,9 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	if getResponse.SourceRefs == nil || getResponse.SourceRefs.Channel == nil || getResponse.SourceRefs.Channel.ChannelID != channelID {
 		t.Fatalf("agent get source_refs = %#v, want private group %s", getResponse.SourceRefs, channelID)
+	}
+	if getResponse.Channel == nil || getResponse.Channel.ChannelID != channelID {
+		t.Fatalf("agent get channel = %#v, want top-level associated group %s", getResponse.Channel, channelID)
 	}
 }
 

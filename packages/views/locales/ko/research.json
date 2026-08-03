@@ -291,6 +291,7 @@
     "label": "리서치 로직",
     "lr_hint": "왼쪽→오른쪽 · not Git",
     "strip_label": "로직 구조",
+    "strip_position": "현재 {{current}} / 총 {{total}}",
     "start": "시작",
     "end": "종료",
     "end_title": "결과물 보기",

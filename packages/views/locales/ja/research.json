@@ -291,6 +291,7 @@
     "label": "調査ロジック",
     "lr_hint": "左→右 · not Git",
     "strip_label": "ロジック構造",
+    "strip_position": "現在 {{current}} / 全 {{total}}",
     "start": "起点",
     "end": "終点",
     "end_title": "成果物を見る",

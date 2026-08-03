@@ -41,6 +41,10 @@ func decodeCursorToolEvents(evt *cursorStreamEvent, occurredAt time.Time) []curs
 func decodeCursorCurrentToolCall(evt *cursorStreamEvent, occurredAt time.Time) []cursorDecodedToolEvent {
 	phase := RuntimeToolEventPhase(evt.Subtype)
 	tool, input, result, ok := parseCursorToolCall(evt.ToolCall)
+	// #103: writeToolCall (and some read) completed frames often omit args
+	// and only put the path on result.success.path. Backfill needs Input to
+	// carry path, so enrich when args are empty/missing path.
+	input = enrichCursorToolCallInputFromResult(input, result)
 	event := RuntimeToolEvent{
 		Schema:        RuntimeToolEventSchemaV1,
 		EventID:       cursorToolEventID(evt.SessionID, evt.CallID, phase),
@@ -61,6 +65,75 @@ func decodeCursorCurrentToolCall(evt *cursorStreamEvent, occurredAt time.Time) [
 		return []cursorDecodedToolEvent{{event: event, reason: "unsupported_subtype"}}
 	}
 	return []cursorDecodedToolEvent{{event: event}}
+}
+
+// enrichCursorToolCallInputFromResult fills Input.path from the Cursor
+// result payload when args were empty. Observed shapes:
+//
+//	{"success":{"path":"/abs/file", ...}}
+//	{"path":"/abs/file"}
+//
+// Does not overwrite an existing non-empty path on args.
+func enrichCursorToolCallInputFromResult(input map[string]any, result json.RawMessage) map[string]any {
+	if pathFromMap(input) != "" {
+		return input
+	}
+	path := cursorToolCallResultPath(result)
+	if path == "" {
+		return input
+	}
+	out := make(map[string]any, len(input)+1)
+	for k, v := range input {
+		out[k] = v
+	}
+	out["path"] = path
+	return out
+}
+
+func pathFromMap(m map[string]any) string {
+	if m == nil {
+		return ""
+	}
+	for _, key := range []string{"path", "file_path", "filepath", "filePath", "file", "filename", "absolute_path", "absolutePath"} {
+		if v, ok := m[key].(string); ok {
+			if p := strings.TrimSpace(v); p != "" {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+func cursorToolCallResultPath(result json.RawMessage) string {
+	if len(result) == 0 || string(result) == "null" {
+		return ""
+	}
+	var root any
+	if err := json.Unmarshal(result, &root); err != nil {
+		return ""
+	}
+	return cursorResultPathValue(root, 0)
+}
+
+func cursorResultPathValue(v any, depth int) string {
+	if depth > 4 || v == nil {
+		return ""
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if p := pathFromMap(m); p != "" {
+		return p
+	}
+	for _, key := range []string{"success", "result", "data", "value"} {
+		if nested, ok := m[key]; ok {
+			if p := cursorResultPathValue(nested, depth+1); p != "" {
+				return p
+			}
+		}
+	}
+	return ""
 }
 
 func decodeCursorLegacyToolUse(evt *cursorStreamEvent, occurredAt time.Time) []cursorDecodedToolEvent {

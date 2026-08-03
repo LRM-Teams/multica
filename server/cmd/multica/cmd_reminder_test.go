@@ -12,7 +12,7 @@ func TestReminderScheduleBodyValidation(t *testing.T) {
 	cmd.Flags().Set("delay-seconds", "300")
 	cmd.Flags().Set("fire-at", "")
 	cmd.Flags().Set("repeat", "")
-	cmd.Flags().Set("message-id", "00000000-0000-0000-0000-000000000001")
+	cmd.Flags().Set("msgid", "00000000-0000-0000-0000-000000000001")
 	body, err := reminderScheduleBody(cmd, true)
 	if err != nil {
 		t.Fatalf("delay body: %v", err)
@@ -51,7 +51,7 @@ func TestReminderScheduleBodyRequiresExactlyOneSchedule(t *testing.T) {
 	cmd.Flags().Set("delay-seconds", "0")
 	cmd.Flags().Set("fire-at", "")
 	cmd.Flags().Set("repeat", "")
-	cmd.Flags().Set("message-id", "00000000-0000-0000-0000-000000000001")
+	cmd.Flags().Set("msgid", "00000000-0000-0000-0000-000000000001")
 	if _, err := reminderScheduleBody(cmd, true); err == nil {
 		t.Fatal("expected validation error when schedule is missing")
 	}
@@ -68,9 +68,10 @@ func TestReminderScheduleBodyRequiresMessageID(t *testing.T) {
 	cmd.Flags().Int64("delay-seconds", 300, "")
 	cmd.Flags().String("fire-at", "", "")
 	cmd.Flags().String("repeat", "", "")
+	cmd.Flags().String("msgid", "", "")
 	cmd.Flags().String("message-id", "", "")
-	if _, err := reminderScheduleBody(cmd, true); err == nil || err.Error() != "--message-id is required" {
-		t.Fatalf("missing message id error = %v, want required", err)
+	if _, err := reminderScheduleBody(cmd, true); err == nil || err.Error() != "--msgid is required" {
+		t.Fatalf("missing msgid error = %v, want required", err)
 	}
 }
 
@@ -151,5 +152,40 @@ func TestReminderUpdateBodyRejectsInvalidSelectedValue(t *testing.T) {
 				t.Fatal("expected selected-value validation error")
 			}
 		})
+	}
+}
+
+func TestReminderScheduleBodyAcceptsLegacyMessageIDAlias(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("title", "check CI", "")
+	cmd.Flags().Int64("delay-seconds", 300, "")
+	cmd.Flags().String("fire-at", "", "")
+	cmd.Flags().String("repeat", "", "")
+	cmd.Flags().String("msgid", "", "")
+	cmd.Flags().String("message-id", "", "")
+	if err := cmd.Flags().Set("message-id", "00000000-0000-0000-0000-000000000099"); err != nil {
+		t.Fatal(err)
+	}
+	body, err := reminderScheduleBody(cmd, true)
+	if err != nil {
+		t.Fatalf("legacy alias: %v", err)
+	}
+	if body["message_id"] != "00000000-0000-0000-0000-000000000099" {
+		t.Fatalf("body message_id = %#v", body["message_id"])
+	}
+}
+
+func TestReminderScheduleBodyRejectsConflictingMsgIDFlags(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("title", "check CI", "")
+	cmd.Flags().Int64("delay-seconds", 300, "")
+	cmd.Flags().String("fire-at", "", "")
+	cmd.Flags().String("repeat", "", "")
+	cmd.Flags().String("msgid", "", "")
+	cmd.Flags().String("message-id", "", "")
+	_ = cmd.Flags().Set("msgid", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	_ = cmd.Flags().Set("message-id", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+	if _, err := reminderScheduleBody(cmd, true); err == nil {
+		t.Fatal("expected conflict error")
 	}
 }

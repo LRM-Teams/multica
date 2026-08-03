@@ -1810,17 +1810,6 @@ func (h *Handler) persistChatRuntimeTokenStats(ctx context.Context, chatSessionI
 	}
 }
 
-func parseUUIDMaybe(raw string) (pgtype.UUID, bool) {
-	if strings.TrimSpace(raw) == "" {
-		return pgtype.UUID{}, false
-	}
-	id, err := util.ParseUUID(raw)
-	if err != nil {
-		return pgtype.UUID{}, false
-	}
-	return id, true
-}
-
 func (h *Handler) normalizeTaskCompleteOutput(ctx context.Context, task db.AgentInboxEvent, req *TaskCompleteRequest) error {
 	channelTask := h.isChannelAgentTask(ctx, task)
 	explicitAction := strings.TrimSpace(req.Action) != ""

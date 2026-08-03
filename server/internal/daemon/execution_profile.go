@@ -203,35 +203,6 @@ func boundedRestrictedContext(value string, maxMessages, maxBytes int) string {
 	return truncateUTF8Tail(strings.Join(bounded, "\n"), maxBytes)
 }
 
-func restrictedMemorySummary(memories []MemoryData, budget int) string {
-	if budget <= 0 || len(memories) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for _, memory := range memories {
-		content := strings.TrimSpace(memory.Content)
-		if content == "" || b.Len() >= budget {
-			continue
-		}
-		prefix := "- "
-		if name := strings.TrimSpace(memory.Name); name != "" {
-			prefix += name + ": "
-		}
-		remaining := budget - b.Len()
-		if len(prefix) >= remaining {
-			break
-		}
-		if b.Len() > 0 {
-			b.WriteByte('\n')
-			remaining--
-		}
-		b.WriteString(prefix)
-		remaining -= len(prefix)
-		b.WriteString(truncateUTF8Bytes(content, remaining))
-	}
-	return truncateUTF8Bytes(b.String(), budget)
-}
-
 func restrictedExecutionSystemPrompt(profile string) string {
 	switch profile {
 	case executionProfileProtocolTurn:

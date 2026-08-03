@@ -40,10 +40,6 @@ func memberManagementError(status int, message string) error {
 	return &memberManagementHTTPError{Status: status, Message: message}
 }
 
-func codedMemberManagementError(status int, code, message string) error {
-	return &memberManagementHTTPError{Status: status, Code: code, Message: message}
-}
-
 func writeMemberManagementError(w http.ResponseWriter, err error, fallback string) {
 	if errors.Is(err, errChannelSystemProtected) {
 		writeSystemChannelProtected(w)
@@ -752,13 +748,13 @@ func insertMemberManagementActivityTx(
 		authoritySource = "workspace_admin_override"
 	}
 	details := map[string]any{
-		"channel_id":                    uuidToString(channelID),
-		"actor_workspace_role":          string(principal.WorkspaceRole),
-		"actor_channel_role":            string(principal.ChannelRole),
-		"target_type":                   string(target.Kind),
-		"target_id":                     uuidToString(target.ID),
-		"target_role":                   string(target.Role),
-		"authority_source":              authoritySource,
+		"channel_id":           uuidToString(channelID),
+		"actor_workspace_role": string(principal.WorkspaceRole),
+		"actor_channel_role":   string(principal.ChannelRole),
+		"target_type":          string(target.Kind),
+		"target_id":            uuidToString(target.ID),
+		"target_role":          string(target.Role),
+		"authority_source":     authoritySource,
 		"request_id":           requestID,
 	}
 	encoded, err := json.Marshal(details)

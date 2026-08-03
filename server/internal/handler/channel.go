@@ -3612,22 +3612,6 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
-func channelTaskResultAction(raw string) (string, string, *string) {
-	var result struct {
-		Action                 string `json:"action"`
-		Type                   string `json:"type"`
-		OutputSuppressedReason string `json:"output_suppressed_reason"`
-	}
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return "", "", nil
-	}
-	var reason *string
-	if trimmed := strings.TrimSpace(result.OutputSuppressedReason); trimmed != "" {
-		reason = &trimmed
-	}
-	return strings.TrimSpace(result.Action), strings.TrimSpace(result.Type), reason
-}
-
 func (h *Handler) UpdateChannelMessage(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {

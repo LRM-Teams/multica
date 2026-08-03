@@ -105,29 +105,6 @@ func envPositiveInt64(name string, def int64) int64 {
 	return v
 }
 
-// envPositiveBytes accepts an explicit byte count or the IEC KiB suffix
-// (for example, "4096" or "4KiB").
-func envPositiveBytes(name string, def int) int {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return def
-	}
-
-	number := raw
-	multiplier := int64(1)
-	if strings.HasSuffix(strings.ToLower(number), "kib") {
-		number = strings.TrimSpace(number[:len(number)-3])
-		multiplier = 1024
-	}
-	v, err := strconv.ParseInt(number, 10, 64)
-	maxInt := int64(^uint(0) >> 1)
-	if err != nil || v <= 0 || v > maxInt/multiplier {
-		slog.Warn("invalid env var, using default", "name", name, "value", raw, "default", def, "error", err)
-		return def
-	}
-	return int(v * multiplier)
-}
-
 func envDuration(name string, def time.Duration) time.Duration {
 	raw := os.Getenv(name)
 	if raw == "" {
@@ -139,22 +116,6 @@ func envDuration(name string, def time.Duration) time.Duration {
 		return def
 	}
 	return v
-}
-
-func envBoolDefault(name string, def bool) bool {
-	raw := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
-	if raw == "" {
-		return def
-	}
-	switch raw {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		slog.Warn("invalid env var, using default", "name", name, "value", raw, "default", def)
-		return def
-	}
 }
 
 func main() {

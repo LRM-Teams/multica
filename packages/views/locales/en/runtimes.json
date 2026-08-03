@@ -151,11 +151,19 @@
     "ops": {
       "section": "Actions",
       "local_only": "Local only",
+      "more_aria": "More computer actions",
+      "restart_menu": "Restart…",
+      "delete_menu": "Delete computer…",
+      "upgrade": "Upgrade",
+      "upgrade_to": "Upgrade daemon to v{{version}}",
+      "updating": "Updating…",
+      "upgrade_failed_retry": "Upgrade failed · Retry",
       "restart_not_local": "Local only",
-      "restart_managed_desktop": "Restart from desktop app",
-      "restart_sandbox": "Not available for sandbox",
-      "restart_no_permission": "Owner or admin only",
+      "restart_managed_desktop": "Desktop managed",
+      "restart_sandbox": "Sandbox",
+      "restart_no_permission": "Owner only",
       "restart_offline": "Offline",
+      "restart_updating": "Updating",
       "delete_owner_only": "Owner only"
     },
     "sharing": {

@@ -72,7 +72,7 @@ import {
 } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { MachineCodeAgentsSection } from "./machine-code-agents-section";
-import { MachineOpsSection } from "./machine-ops-section";
+import { MachineHeaderOps } from "./machine-header-ops";
 import { MachineSharingSection } from "./machine-sharing-section";
 import { formatLastSeen } from "../utils";
 import { useT } from "../../i18n/use-t";
@@ -749,11 +749,30 @@ function MachineDetailView({
                   Frank/Iris 2026-08-02: this line answers exactly one question —
                   is the computer connected. No last-seen, no secondary
                   runtimeHealth badge (those collided as Online · … · Offline).
+                  LRM-1036: daemon version also appears once here (Basics row
+                  from LRM-1029 stays — not a hero chip).
                 */}
                 <MachineConnectedStatus health={machine.health} />
+                {machine.cliVersion ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span data-testid="machine-header-daemon-version">
+                      {t(($) => $.machine.daemon_version_chip, {
+                        version: machine.cliVersion,
+                      })}
+                    </span>
+                  </>
+                ) : null}
               </div>
             </div>
-            {actions && <div className="shrink-0">{actions}</div>}
+            <div className="flex shrink-0 items-center gap-2">
+              <MachineHeaderOps
+                machine={machine}
+                now={now}
+                onDeleted={onComputerDeleted}
+              />
+              {actions}
+            </div>
           </div>
 
           <section>
@@ -804,12 +823,6 @@ function MachineDetailView({
               )}
             </div>
           </section>
-
-          <MachineOpsSection
-            machine={machine}
-            now={now}
-            onDeleted={onComputerDeleted}
-          />
 
           <MachineCodeAgentsSection machine={machine} />
 

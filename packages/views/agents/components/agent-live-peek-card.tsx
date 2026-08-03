@@ -20,11 +20,9 @@ interface AgentLivePeekCardProps {
   agentId: string;
 }
 
-// Live "peek" card for an agent avatar — shows the three live signals the
-// squad members tab cares about (workload, current issue, last activity).
-// Companion to AgentProfileCard, which surfaces static identity (description,
-// runtime, skills, owner). Keeping them separate avoids polluting the 23+
-// existing AgentProfileCard call sites with live-only concerns.
+// Live activity peek (workload / current issue / last activity). Identity
+// hover peeks use `ActorProfileContent` sitewide (task #25) — this card is
+// not that surface.
 export function AgentLivePeekCard({ agentId }: AgentLivePeekCardProps) {
   const { t } = useT("agents");
   const wsId = useWorkspaceId();

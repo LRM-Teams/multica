@@ -79,14 +79,6 @@
       "tests_ms": 221.9817280000002
     },
     {
-      "file": "agents/components/agent-profile-card.test.tsx",
-      "import_ms": 1155.3646939999999,
-      "environment_ms": 933.7849329999999,
-      "setup_ms": 201.39098200000012,
-      "prepare_ms": 11.68815699999982,
-      "tests_ms": 430.4538090000001
-    },
-    {
       "file": "agents/components/agent-profile-message-button.test.tsx",
       "import_ms": 204.9805040000001,
       "environment_ms": 666.300106,

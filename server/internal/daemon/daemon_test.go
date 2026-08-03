@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -476,6 +477,7 @@ func TestHandleUpdateRestartsWhenStableBinaryVerifiedAndIdle(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var restartCalls atomic.Int32
+	var activateCalls atomic.Int32
 	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
 	d := &Daemon{
 		client:            NewClient(srv.URL),
@@ -498,7 +500,8 @@ func TestHandleUpdateRestartsWhenStableBinaryVerifiedAndIdle(t *testing.T) {
 		},
 		// Tests that mock stage/verify skip real VersionStore CAS.
 		activateStagedFn: func(context.Context, string, string) (string, error) {
-			return "", nil
+			activateCalls.Add(1)
+			return "/tmp/staged-multica-v0.3.36", nil
 		},
 		cancelFunc: func() {
 			restartCalls.Add(1)
@@ -511,8 +514,16 @@ func TestHandleUpdateRestartsWhenStableBinaryVerifiedAndIdle(t *testing.T) {
 		SupportsReadyToApply: true,
 	})
 
+	// #110 gate: idle-now path must activate staged Active before restart.
+	// Nash's reproduce was activateCalls=0 + restartCalls=1 on this branch.
+	if activateCalls.Load() != 1 {
+		t.Fatalf("activate calls on idle path = %d, want 1 (must not skip activateStagedAndRestart)", activateCalls.Load())
+	}
 	if restartCalls.Load() != 1 {
 		t.Fatalf("restart calls = %d, want 1", restartCalls.Load())
+	}
+	if got := d.restartBinary; got != "/tmp/staged-multica-v0.3.36" {
+		t.Fatalf("restartBinary = %q, want staged path from activate", got)
 	}
 	if len(reports) != 2 {
 		t.Fatalf("reports = %d, want running + ready_to_apply before restart: %#v", len(reports), reports)
@@ -522,6 +533,128 @@ func TestHandleUpdateRestartsWhenStableBinaryVerifiedAndIdle(t *testing.T) {
 	}
 	if got := reports[1]["status"]; got != "ready_to_apply" {
 		t.Fatalf("second status = %v, want ready_to_apply", got)
+	}
+	assertUpdateObservation(t, observation, "restart_pending", "update_succeeded")
+}
+
+func TestHandleUpdateIdlePathDoesNotRestartWhenActivateFails(t *testing.T) {
+	withFastUpdateReportBackoffs(t)
+
+	var reports []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode report payload: %v", err)
+		}
+		reports = append(reports, payload)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var restartCalls atomic.Int32
+	var activateCalls atomic.Int32
+	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
+	d := &Daemon{
+		client:            NewClient(srv.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		updateObservation: observation,
+		runUpdateFn: func(string) (string, error) {
+			return "updated", nil
+		},
+		verifyUpdatedBinaryFn: func(string, string) (string, error) {
+			return "0.3.36", nil
+		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			activateCalls.Add(1)
+			return "", errors.New("forced activate fail")
+		},
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
+		ID:                   "upd-1",
+		TargetVersion:        "v0.3.36",
+		SupportsReadyToApply: true,
+	})
+
+	if activateCalls.Load() != 1 {
+		t.Fatalf("activate calls = %d, want 1", activateCalls.Load())
+	}
+	if restartCalls.Load() != 0 {
+		t.Fatalf("restart calls after activate fail = %d, want 0", restartCalls.Load())
+	}
+	if len(reports) < 3 {
+		t.Fatalf("reports = %#v, want running + ready_to_apply + failed", reports)
+	}
+	if reports[0]["status"] != "running" || reports[1]["status"] != "ready_to_apply" {
+		t.Fatalf("early statuses = %#v, want running then ready_to_apply", reports)
+	}
+	last := reports[len(reports)-1]
+	if last["status"] != "failed" {
+		t.Fatalf("final status = %v, want failed", last["status"])
+	}
+	if got := fmt.Sprint(last["error"]); got != "drain_timeout" {
+		t.Fatalf("final error = %q, want drain_timeout", got)
+	}
+	waitForClaimBarrierState(t, d, false)
+}
+
+func TestHandleUpdateOldServerIdlePathActivatesBeforeRestart(t *testing.T) {
+	withFastUpdateReportBackoffs(t)
+
+	var reports []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode report payload: %v", err)
+		}
+		reports = append(reports, payload)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	var restartCalls atomic.Int32
+	var activateCalls atomic.Int32
+	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
+	d := &Daemon{
+		client:            NewClient(srv.URL),
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		updateObservation: observation,
+		runUpdateFn: func(string) (string, error) {
+			return "updated", nil
+		},
+		verifyUpdatedBinaryFn: func(string, string) (string, error) {
+			return "0.3.36", nil
+		},
+		activateStagedFn: func(context.Context, string, string) (string, error) {
+			activateCalls.Add(1)
+			return "/tmp/staged-multica-old-server", nil
+		},
+		cancelFunc: func() {
+			restartCalls.Add(1)
+		},
+	}
+
+	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
+		ID:            "upd-1",
+		TargetVersion: "v0.3.36",
+	})
+
+	if activateCalls.Load() != 1 {
+		t.Fatalf("activate calls on old-server idle path = %d, want 1", activateCalls.Load())
+	}
+	if restartCalls.Load() != 1 {
+		t.Fatalf("restart calls = %d, want 1", restartCalls.Load())
+	}
+	if got := d.restartBinary; got != "/tmp/staged-multica-old-server" {
+		t.Fatalf("restartBinary = %q, want staged path", got)
+	}
+	if len(reports) != 2 || reports[0]["status"] != "running" || reports[1]["status"] != "completed" {
+		t.Fatalf("report statuses = %#v, want running then completed", reports)
 	}
 	assertUpdateObservation(t, observation, "restart_pending", "update_succeeded")
 }

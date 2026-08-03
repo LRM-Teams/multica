@@ -706,7 +706,13 @@ export function ChannelsPage({
     appliedMessageParamRef.current = searchParams.get("message");
   }
   const openedThreadDeepLinkRef = useRef<string | null>(null);
+  // LRM-1063: drop mid-history around_seq cache once per deep-link target so
+  // jump walks latest → older (infinite query has no newer direction).
+  const deepLinkMessagesResetKeyRef = useRef<string | null>(null);
   const searchParamsString = searchParams.toString();
+  const urlDeepLinkMessage = searchParams.get("message");
+  const urlDeepLinkThread = searchParams.get("thread");
+  const hasConversationDeepLink = !!(urlDeepLinkMessage || urlDeepLinkThread);
   useEffect(() => {
     const urlMessage = searchParams.get("message");
     if (urlMessage && urlMessage !== appliedMessageParamRef.current) {
@@ -1101,9 +1107,14 @@ export function ChannelsPage({
     active?.last_read_seq,
     active?.real_unread_count ?? active?.unread_count,
   );
+  // LRM-1063: notification / Activity / Reminder deep-links must not open on a
+  // mid-history around_seq window — jump can only page older, so a tip target
+  // ahead of last_read would false-exhaust as 「找不到消息」.
+  const deepLinkAroundSeq = hasConversationDeepLink ? null : entryAnchor.aroundSeq;
   const {
     data: messagePages,
     isLoading: messagesLoading,
+    isPending: messagesPending,
     isError: messagesError,
     refetch: refetchMessages,
     fetchNextPage: fetchOlderMessages,
@@ -1111,10 +1122,18 @@ export function ChannelsPage({
     isFetchingNextPage: isFetchingOlderMessages,
   } = useInfiniteQuery(
     channelMessagesPageOptions(active?.id ?? "", {
-      aroundSeq: entryAnchor.aroundSeq,
+      aroundSeq: deepLinkAroundSeq,
     }),
   );
   const activeChannelId = active?.id ?? "";
+  useEffect(() => {
+    const target = urlDeepLinkMessage || urlDeepLinkThread;
+    if (!target || !activeChannelId) return;
+    const key = `${activeChannelId}:${target}`;
+    if (deepLinkMessagesResetKeyRef.current === key) return;
+    deepLinkMessagesResetKeyRef.current = key;
+    qc.removeQueries({ queryKey: channelKeys.messagesPage(activeChannelId) });
+  }, [urlDeepLinkMessage, urlDeepLinkThread, activeChannelId, qc]);
   // Land on the conversation whenever the active channel changes; the Tasks tab
   // is a per-channel view, not a sticky global mode. Reset during render (the
   // React "adjust state on prop change" pattern used elsewhere in this file for
@@ -1645,6 +1664,9 @@ export function ChannelsPage({
     hasOlder: !!hasOlderMessages,
     isFetchingOlder: isFetchingOlderMessages,
     fetchOlder: fetchOlderMessages,
+    // LRM-1063: channel id may still be reconciling (query disabled) or the
+    // first page in flight — never toast/exhaust in that window.
+    isPending: !activeChannelId || messagesPending,
   });
   // LRM-736 AC — toast + keep the inline notice (#835 durable record).
   useJumpNotFoundToast({

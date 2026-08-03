@@ -98,6 +98,7 @@ const RESOURCES = {
     disabled_reason: {
       unsupported_runtime_capability: "Requires daemon v0.3.95 or newer.",
       unavailable: "This action isn't available right now.",
+      no_force_capability: "This code agent can't force-restart yet.",
     },
   },
 };
@@ -236,12 +237,15 @@ describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
     expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
   });
 
-  // task #22: providers that don't support forced restart never get the
-  // button at all — not greyed, absent. All 4 shipped providers currently
-  // support it, so this can only be exercised via the prop, never real data.
-  it("hides the Restart entry when the runtime doesn't support forced restart", () => {
+  // task #26 / Parker: canManage still sees Restart when force_restart is
+  // false — disabled with human copy, never a missing entry.
+  it("shows Restart disabled with reason when the runtime lacks force_restart", () => {
     render(<AgentProfileActions agent={agent} canManage forceRestartSupported={false} />);
-    expect(screen.queryByTestId("agent-profile-action-restart")).not.toBeInTheDocument();
+    const trigger = screen.getByTestId("agent-profile-action-restart");
+    expect(trigger).toBeDisabled();
+    expect(screen.getByTestId("agent-profile-action-restart-reason")).toHaveTextContent(
+      /can.t force-restart|force-restart/i,
+    );
   });
 
   it("shows the Restart entry when the runtime supports forced restart", () => {

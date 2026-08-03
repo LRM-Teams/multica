@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   CheckCircle2,
@@ -8,6 +8,7 @@ import {
   Loader2,
   Medal,
   Pencil,
+  RotateCcw,
   Sparkles,
   Trash2,
   XCircle,
@@ -16,12 +17,15 @@ import {
 import type { Agent, AgentRuntime, AgentTask, AgentFleetRank } from "@multica/core/types";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import { agentTasksOptions } from "@multica/core/agents";
+import { resolveActorDisplayName, resolveActorHandle } from "@multica/core/identity";
+import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT, useTimeAgo } from "../../i18n";
+import { AgentRestartModal } from "./agent-restart-modal";
 
 export interface AgentMetric {
   /** Cumulative runs in the last 30d. */
@@ -149,10 +153,28 @@ export function AgentDetailOverview({
   const wsId = useWorkspaceId();
   const { data: tasks = [] } = useQuery(agentTasksOptions(wsId, agent.id));
   const recentTasks = useMemo(() => tasks.slice(0, 6), [tasks]);
+  const [restartOpen, setRestartOpen] = useState(false);
 
   const isArchived = !!agent.archived_at;
   const costText = metric.cost === null ? "—" : `$${metric.cost.toFixed(2)}`;
   const successText = metric.successRate === null ? "—" : `${Math.round(metric.successRate)}%`;
+  // Agents list detail previously had Honor/Edit/Delete only — no Restart.
+  // Parker #26: canManage + online → show Restart; no force → disable + copy.
+  const forceRestartSupported =
+    runtime?.provider_capabilities?.force_restart ?? false;
+  const isRuntimeOnline =
+    !!runtime &&
+    deriveRuntimeHealth(
+      {
+        status: runtime.status,
+        last_seen_at: runtime.last_seen_at ?? null,
+      },
+      Date.now(),
+    ) === "online";
+  const showRestart = canManage && !isArchived && isRuntimeOnline;
+  const restartBlocked = !forceRestartSupported;
+  const agentHandle = resolveActorHandle(agent) ?? agent.name;
+  const agentName = resolveActorDisplayName(agent, agent.id);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -196,6 +218,26 @@ export function AgentDetailOverview({
             <Pencil className="size-3.5" />
             {t(($) => $.dashboard.edit_config)}
           </Button>
+          {showRestart ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="agent-detail-action-restart"
+              disabled={restartBlocked}
+              title={
+                restartBlocked
+                  ? t(($) => $.restart_modal.disabled_reason.no_force_capability)
+                  : undefined
+              }
+              onClick={() => {
+                if (!restartBlocked) setRestartOpen(true);
+              }}
+            >
+              <RotateCcw className="size-3.5" />
+              {t(($) => $.restart_modal.trigger)}
+            </Button>
+          ) : null}
           {canManage && (
             <Button variant="outline" size="sm" onClick={onDelete} className="text-destructive hover:text-destructive">
               <Trash2 className="size-3.5" />
@@ -326,6 +368,16 @@ export function AgentDetailOverview({
           </SectionCard>
         </div>
       </div>
+
+      {showRestart ? (
+        <AgentRestartModal
+          agentId={agent.id}
+          agentHandle={agentHandle}
+          agentName={agentName}
+          open={restartOpen}
+          onOpenChange={setRestartOpen}
+        />
+      ) : null}
     </div>
   );
 }

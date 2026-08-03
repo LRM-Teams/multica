@@ -53,12 +53,10 @@ export function AgentProfileActions({
   agent: Agent;
   canManage: boolean;
   /**
-   * From the bound runtime's `provider_capabilities.force_restart` (task
-   * #22) — providers that don't support forced restart never expose the
-   * button at all (not greyed out; the disabled-vs-hidden split is for
-   * "supported but not right now" vs "not a thing this system does").
-   * Missing/undefined (older backend, no runtime) means false — never
-   * default this to true.
+   * From the bound runtime's `provider_capabilities.force_restart`.
+   * Task #26 / Parker 2026-08-03: do NOT hide Restart when false — keep
+   * the button for canManage users and disable with human copy. Missing
+   * capability means false (fail closed for enablement, not visibility).
    */
   forceRestartSupported: boolean;
 }) {
@@ -88,18 +86,21 @@ export function AgentProfileActions({
   // (e.g. pre-v0.3.95 daemons predate agent_lifecycle_actions_v1). Fetch the
   // real preflight whenever we'd otherwise offer the button, so a stale
   // daemon shows a standing reason instead of a click that silently no-ops.
-  const wantsRestartOffer = canManage && !isArchived && isRuntimeOnline && forceRestartSupported;
+  // Visibility: managers always see Restart while online (Parker #26) —
+  // hiding when force_restart is false made the feature look missing.
+  const wantsRestartOffer = canManage && !isArchived && isRuntimeOnline;
   const { data: restartPreflightData, isSuccess: restartPreflightSucceeded } = useQuery(
-    agentLifecyclePreflightOptions(agent.id, wantsRestartOffer),
+    agentLifecyclePreflightOptions(agent.id, wantsRestartOffer && forceRestartSupported),
   );
   const restartState = agentLifecycleActionState(restartPreflightData, "restart");
-  // Only trust a disabled+reason render once the preflight has actually
-  // resolved — otherwise the pre-fetch fallback (agentLifecycleActionState's
-  // "unavailable") would flash for every agent during the initial fetch.
-  const restartBlocked = restartPreflightSucceeded && !restartState.supported;
-  const restartDisabledReason = restartBlocked
-    ? t(($) => $.restart_modal.disabled_reason[resolveLifecycleDisabledReasonKey(restartState.disabled_reason)])
-    : null;
+  // Only trust preflight disable once resolved — don't flash "unavailable".
+  const preflightBlocked = forceRestartSupported && restartPreflightSucceeded && !restartState.supported;
+  const restartBlocked = !forceRestartSupported || preflightBlocked;
+  const restartDisabledReason = !forceRestartSupported
+    ? t(($) => $.restart_modal.disabled_reason.no_force_capability)
+    : preflightBlocked
+      ? t(($) => $.restart_modal.disabled_reason[resolveLifecycleDisabledReasonKey(restartState.disabled_reason)])
+      : null;
 
   const invalidateAgents = () => {
     qc.invalidateQueries({ queryKey: workspaceKeys.agents(agent.workspace_id) });
@@ -161,7 +162,9 @@ export function AgentProfileActions({
               className="w-full gap-2"
               data-testid="agent-profile-action-restart"
               disabled={restartBlocked}
-              onClick={() => setRestartOpen(true)}
+              onClick={() => {
+                if (!restartBlocked) setRestartOpen(true);
+              }}
             >
               <RotateCcw className="size-4 shrink-0" aria-hidden />
               {t(($) => $.restart_modal.trigger)}

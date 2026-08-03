@@ -63,7 +63,10 @@ export function ResearchCompletionCard({
     };
     dialog.addEventListener("click", handle);
     return () => dialog.removeEventListener("click", handle);
-  }, [onGutterClose]);
+    // Intentionally omit onGutterClose: useEffectEvent must not be listed in
+    // deps (react-doctor: Effect Event listed in effect deps).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- SoT LRM-1243
+  }, []);
 
   if (typeof document === "undefined") return null;
 

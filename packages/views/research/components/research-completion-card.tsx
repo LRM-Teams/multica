@@ -68,7 +68,8 @@ export function ResearchCompletionCard({
       <button
         type="button"
         className="absolute inset-0 z-0 cursor-default bg-transparent"
-        aria-label={t(($) => $.completion_guide.dismiss)}
+        aria-hidden="true"
+        tabIndex={-1}
         onClick={() => closeThen(onDismiss)}
       />
       <div

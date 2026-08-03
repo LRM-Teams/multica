@@ -564,6 +564,69 @@ describe("ResearchListPage search & status filter (LRM-818)", () => {
     ).toBeNull();
     expect(screen.getByText(enResearch.empty_title)).toBeInTheDocument();
   });
+
+  // LRM-1134: harden filter/empty gates aligned with LRM-1115 (not a full 1117 matrix).
+  it("LRM-1134: single status filter hides group headers even when multiple buckets exist on All", () => {
+    render(<ResearchListPage />);
+    // Baseline All: ≥2 nonempty buckets → group headers present (LRM-1106).
+    expect(
+      screen.getByRole("heading", { name: new RegExp(enResearch.groups.in_progress) }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: new RegExp(enResearch.groups.completed) }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: /Completed/ }));
+    expect(screen.getByText("Beta report")).toBeInTheDocument();
+    expect(screen.queryByText("Alpha research")).not.toBeInTheDocument();
+    // Status segment → flat list: no In progress / Completed / Failed group headers.
+    expect(
+      screen.queryByRole("heading", { name: new RegExp(enResearch.groups.in_progress) }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: new RegExp(enResearch.groups.completed) }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: new RegExp(enResearch.filter.status_failed) }),
+    ).toBeNull();
+  });
+
+  it("LRM-1134: search no-results echoes active filter scope (query + status)", () => {
+    render(<ResearchListPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /In progress/ }));
+    fireEvent.change(screen.getByLabelText(enResearch.filter.search_label), {
+      target: { value: "zzz-no-hit" },
+    });
+    const empty = screen.getByTestId("research-filter-no-results");
+    expect(empty).toHaveTextContent(enResearch.filter.no_results);
+    const expectedScope = enResearch.filter.no_results_scope.replace(
+      "{{scope}}",
+      `“zzz-no-hit” · ${enResearch.filter.status_in_progress}`,
+    );
+    expect(empty).toHaveTextContent(expectedScope);
+    expect(empty).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("LRM-1134: clear filters restores All + full list and drops no-results scope", () => {
+    render(<ResearchListPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /Failed/ }));
+    fireEvent.change(screen.getByLabelText(enResearch.filter.search_label), {
+      target: { value: "nope" },
+    });
+    expect(screen.getByTestId("research-filter-no-results")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("research-filter-no-results-clear"));
+    expect(screen.queryByTestId("research-filter-no-results")).toBeNull();
+    expect(screen.getByRole("radio", { name: /^All/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(
+      (screen.getByLabelText(enResearch.filter.search_label) as HTMLInputElement).value,
+    ).toBe("");
+    expect(screen.getByText("Alpha research")).toBeInTheDocument();
+    expect(screen.getByText("Beta report")).toBeInTheDocument();
+    expect(screen.getByText("Alpha failed")).toBeInTheDocument();
+  });
 });
 
 describe("ResearchListPage template chips in composer (LRM-1092)", () => {

@@ -184,26 +184,6 @@ func (h *Handler) createChannelAmbientPromptTaskTx(ctx context.Context, tx pgx.T
 	return task, true
 }
 
-// createChannelAmbientPromptTaskRowTx remains for tests that exercise the
-// ambient enqueue path in isolation. Production ambient wakes go through
-// createOrCoalesceChannelAmbientWakeTx (channel-only, LRM-1079).
-func (h *Handler) createChannelAmbientPromptTaskRowTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt string) (db.ChatSession, db.AgentInboxEvent, bool) {
-	if h.TaskService == nil {
-		slog.Warn("channel ambient observation: task service missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
-		return db.ChatSession{}, db.AgentInboxEvent{}, false
-	}
-	txQueries := h.Queries.WithTx(tx)
-	promptResult, err := h.enqueueChannelAgentPromptRangeWithTx(
-		ctx, txQueries, tx, ch, agent, trigger, initiatorUserID, prompt,
-		channelMessageWakeReason, channelMessageWakePriority, trigger.Seq, trigger.Seq,
-	)
-	if err != nil {
-		slog.Warn("channel ambient observation: enqueue channel-only wake failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return db.ChatSession{}, db.AgentInboxEvent{}, false
-	}
-	return db.ChatSession{ID: promptResult.Event.ChatSessionID}, promptResult.Event, true
-}
-
 func (h *Handler) lockChannelAmbientGate(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent) error {
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, ch.ID, uuidToString(agent.ID))
 	return err
@@ -237,62 +217,35 @@ func (h *Handler) channelAmbientGateStats(ctx context.Context, channelID, agentI
 
 func (h *Handler) channelAmbientGateStatsWithDB(ctx context.Context, exec db.DBTX, channelID, agentID, runtimeID pgtype.UUID, window time.Duration) (channelAmbientGateStats, error) {
 	var stats channelAmbientGateStats
-	// LRM-1079 / LRM-1080: count channel-bound wakes by agent_inbox_event.channel_id
-	// first. Fall back to channel_agent_session for legacy rows that only carry
-	// chat_session_id. Do not require chat_session for gate accuracy.
+	// LRM-1079: gate stats count by agent_inbox_event.channel_id only.
+	// No channel_agent_session fallback — ordinary wakes are channel-only.
 	err := exec.QueryRow(ctx, `
 		SELECT
 			COALESCE((
 				SELECT count(*)
 				FROM agent_inbox_event atq
 				WHERE atq.agent_id = $2
+				  AND atq.channel_id = $1
 				  AND atq.priority = 1
 				  AND COALESCE(atq.force_fresh_session, false) = true
 				  AND atq.status IN ('pending', 'draining', 'failed')
-				  AND (
-				    atq.channel_id = $1
-				    OR EXISTS (
-				      SELECT 1
-				      FROM channel_agent_session cas
-				      WHERE cas.chat_session_id = atq.chat_session_id
-				        AND cas.channel_id = $1
-				        AND cas.agent_id = $2
-				    )
-				  )
 			), 0) AS active_for_agent,
 			COALESCE((
 				SELECT count(*)
 				FROM agent_inbox_event atq
 				WHERE atq.agent_id = $2
+				  AND atq.channel_id = $1
 				  AND atq.priority = 1
 				  AND COALESCE(atq.force_fresh_session, false) = true
 				  AND atq.created_at >= now() - make_interval(secs => $4::double precision)
-				  AND (
-				    atq.channel_id = $1
-				    OR EXISTS (
-				      SELECT 1
-				      FROM channel_agent_session cas
-				      WHERE cas.chat_session_id = atq.chat_session_id
-				        AND cas.channel_id = $1
-				        AND cas.agent_id = $2
-				    )
-				  )
 			), 0) AS recent_for_agent,
 			COALESCE((
 				SELECT count(*)
 				FROM agent_inbox_event atq
-				WHERE atq.priority = 1
+				WHERE atq.channel_id = $1
+				  AND atq.priority = 1
 				  AND COALESCE(atq.force_fresh_session, false) = true
 				  AND atq.created_at >= now() - make_interval(secs => $4::double precision)
-				  AND (
-				    atq.channel_id = $1
-				    OR EXISTS (
-				      SELECT 1
-				      FROM channel_agent_session cas
-				      WHERE cas.chat_session_id = atq.chat_session_id
-				        AND cas.channel_id = $1
-				    )
-				  )
 			), 0) AS recent_for_channel,
 			COALESCE((
 				SELECT count(*)

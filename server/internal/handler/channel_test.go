@@ -2416,6 +2416,19 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	testHandler.dispatchChannelAmbientDelivery(ctx, ch, first)
 
+	// Shared handlerTestRuntimeID is reused across tests; cancel leftover pending
+	// wakes for other agents so drain returns this ambient observe event.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event e
+		SET status = 'cancelled', updated_at = now()
+		FROM agent a
+		WHERE a.id = e.agent_id
+		  AND a.runtime_id = $1
+		  AND e.agent_id <> $2
+		  AND e.status IN ('pending', 'draining')`, runtimeID, agentID); err != nil {
+		t.Fatalf("cancel foreign pending inbox events: %v", err)
+	}
+
 	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-ambient-daemon")
 	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
 	drainRec := httptest.NewRecorder()

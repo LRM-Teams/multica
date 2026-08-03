@@ -5435,8 +5435,9 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 		return channelAgentPromptTxResult{}, fmt.Errorf("route env-dispatch channel agent: %w", err)
 	}
 	// LRM-1079: ordinary channel wakes are channel-only (no chat_session).
-	// Env-dispatch and live voice-call turns still need the legacy chat_session
-	// bridge (voice waits on chat_message assistant rows).
+	// Explicit keeps (not silent fallbacks):
+	// - env-dispatch collaboration still stores triggers against chat_session
+	// - live voice-call turns still wait on chat_message assistant rows
 	var chatSessionID pgtype.UUID
 	if handled {
 		if binding.DerivedAgentID != nil && *binding.DerivedAgentID != "" {
@@ -5447,13 +5448,12 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 		}
 		chatSessionID = session.ID
 	} else if reason == "dm" && strings.Contains(prompt, "Live voice call delivery:") {
-		// Voice-call turns still wait on chat_message assistant rows.
-		legacySession, ensureErr := h.ensureChannelAgentSessionWithDB(ctx, qtx, exec, ch, agent.ID, initiatorUserID)
+		voiceSession, ensureErr := h.ensureChannelAgentSessionWithDB(ctx, qtx, exec, ch, agent.ID, initiatorUserID)
 		if ensureErr != nil {
 			return channelAgentPromptTxResult{}, fmt.Errorf("ensure voice-call chat session: %w", ensureErr)
 		}
-		chatSessionID = legacySession.ID
-		session = legacySession
+		chatSessionID = voiceSession.ID
+		session = voiceSession
 	}
 	conversationID, err := h.channelConversationIDWithDB(ctx, exec, parseUUID(ch.ID))
 	if err != nil {

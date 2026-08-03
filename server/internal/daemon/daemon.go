@@ -2086,8 +2086,8 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 			if d.abortStagedRestartIfCanceled(restartCtx, runtimeID, update.ID, true) {
 				return
 			}
-			restartTriggered = true
-			d.triggerRestart()
+			// #110: never restart without activating staged Active first.
+			restartTriggered = d.activateStagedAndRestart(restartCtx, runtimeID, update.ID, stagedOutput)
 			return
 		}
 		d.logger.Info("CLI update ready; waiting for an idle opportunity before the stop-claim deadline", "runtime_id", runtimeID, "update_id", update.ID)
@@ -2118,8 +2118,8 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		"status": "completed",
 		"output": stagedOutput,
 	})
-	restartTriggered = true
-	d.triggerRestart()
+	// #110: old-server idle path must activate staged Active before restart too.
+	restartTriggered = d.activateStagedAndRestart(ctx, runtimeID, update.ID, stagedOutput)
 }
 
 // runUpdate stages targetVersion into the immutable VersionStore. It does not
@@ -2127,6 +2127,31 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 // restart from the staged path are owned by handleUpdate / activate path.
 func (d *Daemon) runUpdate(targetVersion string) (string, error) {
 	return d.runStageUpdate(targetVersion)
+}
+
+
+// activateStagedAndRestart is the sole post-stage restart entry for handleUpdate.
+// It CAS-activates the staged release, sets d.restartBinary, then triggerRestart.
+// Both the immediate-idle path and waitForSafeRestart must call this — never
+// triggerRestart alone after a staged update (#110). Returns true if restart
+// was scheduled; false if activation failed (path A abandon, no restart).
+func (d *Daemon) activateStagedAndRestart(ctx context.Context, runtimeID, updateID, output string) bool {
+	// Thin activate: CAS staged tag to Active, then re-exec staged path.
+	// Full candidate health/register is a follow-up; path A already safe.
+	activate := d.activateStagedFn
+	if activate == nil {
+		activate = d.commitStagedActivation
+	}
+	if path, err := activate(ctx, updateID, output); err != nil {
+		d.logger.Error("CLI update activate CAS failed; path A abandon", "error", err, "runtime_id", runtimeID, "update_id", updateID)
+		d.abandonStagedUpdatePathA(ctx, runtimeID, updateID, output)
+		return false
+	} else if path != "" {
+		d.restartBinary = path
+	}
+	d.logger.Info("CLI update ready; daemon drained, restarting from staged Active", "runtime_id", runtimeID, "update_id", updateID, "output", output, "binary", d.restartBinary)
+	d.triggerRestart()
+	return true
 }
 
 func (d *Daemon) waitForSafeRestart(ctx context.Context, runtimeID, updateID, output string) bool {
@@ -2250,22 +2275,7 @@ func (d *Daemon) waitForSafeRestartWithWindows(
 		if d.abortStagedRestartIfCanceled(ctx, runtimeID, updateID, barrierHeld) {
 			return false
 		}
-		// Thin activate: CAS staged tag to Active, then re-exec staged path.
-		// Full candidate health/register is a follow-up; path A already safe.
-		activate := d.activateStagedFn
-		if activate == nil {
-			activate = d.commitStagedActivation
-		}
-		if path, err := activate(ctx, updateID, output); err != nil {
-			d.logger.Error("CLI update activate CAS failed; path A abandon", "error", err, "runtime_id", runtimeID, "update_id", updateID)
-			d.abandonStagedUpdatePathA(ctx, runtimeID, updateID, output)
-			return false
-		} else if path != "" {
-			d.restartBinary = path
-		}
-		d.logger.Info("CLI update ready; daemon drained, restarting from staged Active", "runtime_id", runtimeID, "update_id", updateID, "output", output, "binary", d.restartBinary)
-		d.triggerRestart()
-		return true
+		return d.activateStagedAndRestart(ctx, runtimeID, updateID, output)
 	}
 
 	for {

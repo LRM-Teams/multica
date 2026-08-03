@@ -18,8 +18,9 @@ import { useT } from "../../i18n/use-t";
 import { formatRuntimeUpdateError } from "./update-error";
 
 /**
- * LRM-1071 / v5 — Upgrade sits on the Basics Daemon row (S3), outline xs,
- * only when an update is available. Not a header primary.
+ * Basics Daemon row upgrade (LRM-1071 / task #29).
+ * Idle: version + outline CTA. Active: current → target + status line only
+ * (no grey disabled button — Frank 2026-08-03). Failed: reason + retry.
  */
 export function MachineDaemonUpgrade({
   runtime,
@@ -42,13 +43,20 @@ export function MachineDaemonUpgrade({
   const isManaged = launchedBy === "desktop";
   const isSandbox = isSandboxRuntime(runtime);
   const currentVersion = cliVersion ?? runtimeCurrentVersion(runtime);
-  const targetVersion = updateTargetVersion ?? runtimeTargetVersion(runtime);
+  const targetVersion =
+    updateTargetVersion ?? runtimeTargetVersion(runtime) ?? null;
   const updateState = runtime.update_state;
   const runtimeHealth = runtime.runtime_health;
-  const pinnedVersion = runtime.pinned_version;
+  const pinnedVersion =
+    "pinned_version" in runtime
+      ? (runtime as AgentRuntime & { pinned_version?: string | null }).pinned_version
+      : null;
 
   const [status, setStatus] = useState<RuntimeUpdateStatus | null>(null);
   const [updating, setUpdating] = useState(false);
+  // Keep the last target we tried so a failed attempt still shows `→ target`
+  // even if the server drops target_version after health flips to failed.
+  const [lastAttemptTarget, setLastAttemptTarget] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const cleanup = useCallback(() => {
@@ -67,12 +75,15 @@ export function MachineDaemonUpgrade({
   }, [qc]);
 
   const handleUpdate = async () => {
-    if (!targetVersion) return;
+    const aim = targetVersion ?? lastAttemptTarget;
+    if (!aim) return;
     cleanup();
     setUpdating(true);
+    setLastAttemptTarget(aim);
+    // Immediate local feedback (≤200ms) before first poll tick.
     setStatus("pending");
     try {
-      const update = await api.initiateUpdate(runtime.id, targetVersion);
+      const update = await api.initiateUpdate(runtime.id, aim);
       pollRef.current = setInterval(async () => {
         try {
           const result = await api.getUpdateResult(runtime.id, update.id);
@@ -105,6 +116,7 @@ export function MachineDaemonUpgrade({
           }),
         );
         setUpdating(false);
+        setStatus(null);
         return;
       }
       setStatus("failed");
@@ -118,9 +130,22 @@ export function MachineDaemonUpgrade({
     runtimeHealth,
   });
   const hasUpdate = runtimeHealth === "update_available" && !!targetVersion;
+  // ready_to_apply / completed mid-restart still need progress chrome
+  const isApplying =
+    derivedStatus === "ready_to_apply" || derivedStatus === "completed";
+  const displayTarget = targetVersion ?? lastAttemptTarget;
   const isActive =
-    updating || derivedStatus === "pending" || derivedStatus === "running";
-  const isFailed = derivedStatus === "failed" || derivedStatus === "timeout";
+    updating ||
+    derivedStatus === "pending" ||
+    derivedStatus === "running" ||
+    // poll may report "queued" before pending (older type packages omit it)
+    (status as string | null) === "queued" ||
+    isApplying;
+  // Health may flip off `update_available` after a failed attempt — still failed.
+  const isFailed =
+    derivedStatus === "failed" ||
+    derivedStatus === "timeout" ||
+    (runtimeHealth === "failed" && !!updateError?.trim());
   const isPinned = !!pinnedVersion?.trim();
   const canStartUpdate =
     hasUpdate &&
@@ -131,8 +156,10 @@ export function MachineDaemonUpgrade({
     !isSandbox &&
     !isPinned &&
     !isActive;
+  // Parker #29: retry when we still know a target — do NOT require
+  // runtime_health === update_available (that hid the button after fail).
   const canRetry =
-    !!targetVersion &&
+    !!displayTarget &&
     isOnline &&
     canUpdate &&
     !isManaged &&
@@ -141,91 +168,166 @@ export function MachineDaemonUpgrade({
     !isActive &&
     isFailed;
 
-  // Basics Daemon cell always shows the version. Upgrade chrome only when
-  // an update is available / in-flight / failed (and not desktop-managed /
-  // sandbox — those stay version-only).
   const showUpgradeChrome =
-    !isManaged &&
-    !isSandbox &&
-    (hasUpdate || isActive || isFailed) &&
-    (isOnline || isFailed || isActive);
+    !isManaged && !isSandbox && (hasUpdate || isActive || isFailed);
 
-  const versionPath = (
-    <span className="inline-flex flex-wrap items-center gap-1.5 font-mono text-xs">
-      <span data-testid="machine-basics-daemon-version">
-        {currentVersion ?? t(($) => $.update.version_unknown)}
-      </span>
-      {showUpgradeChrome && targetVersion ? (
-        <>
-          <span className="text-muted-foreground">→</span>
-          <span className="text-brand">{targetVersion}</span>
-          <span className="font-sans text-muted-foreground">
-            {t(($) => $.update.available)}
-          </span>
-        </>
-      ) : null}
-    </span>
-  );
+  const versionLabel = currentVersion ?? t(($) => $.update.version_unknown);
+
+  const progressLabel = (() => {
+    if (
+      derivedStatus === "pending" ||
+      (status as string | null) === "queued" ||
+      status === "pending"
+    ) {
+      return t(($) => $.machine.ops.upgrade_progress_pending);
+    }
+    if (derivedStatus === "running") {
+      return t(($) => $.machine.ops.upgrade_progress_running);
+    }
+    if (isApplying) {
+      return t(($) => $.machine.ops.upgrade_progress_applying);
+    }
+    // Local click before poll settles
+    if (updating) {
+      return t(($) => $.machine.ops.upgrade_progress_pending);
+    }
+    return t(($) => $.machine.ops.upgrade_progress_running);
+  })();
 
   if (!showUpgradeChrome) {
     return (
       <span
-        className="inline-flex flex-wrap items-center gap-2"
+        className="inline-flex flex-wrap items-center justify-end gap-2"
         data-testid="machine-daemon-upgrade"
       >
-        {versionPath}
+        <span
+          className="font-mono text-xs"
+          data-testid="machine-basics-daemon-version"
+        >
+          {versionLabel}
+        </span>
       </span>
     );
   }
 
+  // Active: current → target + status line only (no grey button).
   if (isActive) {
     return (
-      <span className="inline-flex flex-wrap items-center gap-2" data-testid="machine-daemon-upgrade">
-        {versionPath}
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
-          className="h-6 gap-1 px-2 text-[11px]"
-          disabled
-          data-testid="machine-daemon-upgrade-btn"
+      <span
+        className="inline-flex max-w-full flex-col items-end gap-1"
+        data-testid="machine-daemon-upgrade"
+        data-state="active"
+      >
+        <span className="inline-flex flex-wrap items-center justify-end gap-1.5 font-mono text-xs">
+          <span data-testid="machine-basics-daemon-version">{versionLabel}</span>
+          {displayTarget ? (
+            <>
+              <span className="text-muted-foreground" aria-hidden>
+                →
+              </span>
+              <span className="text-brand" data-testid="machine-basics-daemon-target">
+                {displayTarget}
+              </span>
+            </>
+          ) : null}
+        </span>
+        <output
+          className="inline-flex items-center gap-1.5 text-[11px] leading-none text-muted-foreground"
+          data-testid="machine-daemon-upgrade-progress"
         >
-          <Loader2 className="h-3 w-3 animate-spin" />
-          {t(($) => $.machine.ops.updating)}
-        </Button>
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-brand" />
+          {progressLabel}
+        </output>
       </span>
     );
   }
 
   if (isFailed) {
+    const reason =
+      formatRuntimeUpdateError({
+        rawError: updateError,
+        currentVersion,
+        targetVersion: displayTarget,
+        t,
+      }) || t(($) => $.machine.ops.upgrade_failed_unknown);
     return (
-      <span className="inline-flex flex-wrap items-center gap-2" data-testid="machine-daemon-upgrade">
-        {versionPath}
-        <button
-          type="button"
-          className="inline-flex h-6 items-center rounded-md bg-destructive/10 px-2 text-[11px] text-destructive"
-          onClick={() => {
-            if (canRetry) void handleUpdate();
-          }}
-          data-testid="machine-daemon-upgrade-fail"
-          title={
-            formatRuntimeUpdateError({
-              rawError: updateError,
-              currentVersion,
-              targetVersion,
-              t,
-            }) || undefined
-          }
+      <span
+        className="inline-flex max-w-full flex-col items-end gap-1"
+        data-testid="machine-daemon-upgrade"
+        data-state="failed"
+      >
+        <span className="inline-flex flex-wrap items-center justify-end gap-1.5 font-mono text-xs">
+          <span data-testid="machine-basics-daemon-version">{versionLabel}</span>
+          {displayTarget ? (
+            <>
+              <span className="text-muted-foreground" aria-hidden>
+                →
+              </span>
+              <span className="text-brand" data-testid="machine-basics-daemon-target">
+                {displayTarget}
+              </span>
+            </>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            className="h-6 gap-1 px-2 font-sans text-[11px]"
+            onClick={() => {
+              if (canRetry) void handleUpdate();
+            }}
+            disabled={!canRetry}
+            data-testid="machine-daemon-upgrade-fail"
+          >
+            {t(($) => $.update.retry)}
+          </Button>
+        </span>
+        <span
+          className="max-w-[min(100%,20rem)] text-right text-[11px] leading-snug text-destructive"
+          data-testid="machine-daemon-upgrade-error"
         >
-          {t(($) => $.machine.ops.upgrade_failed_retry)}
-        </button>
+          {t(($) => $.machine.ops.upgrade_failed_prefix)}
+          {reason}
+        </span>
+      </span>
+    );
+  }
+
+  // Idle · update available — non-owners see version only (Frank: owner-only upgrade).
+  if (!canUpdate) {
+    return (
+      <span
+        className="inline-flex max-w-full flex-col items-end gap-1"
+        data-testid="machine-daemon-upgrade"
+        data-state="owner-only"
+      >
+        <span
+          className="font-mono text-xs"
+          data-testid="machine-basics-daemon-version"
+        >
+          {versionLabel}
+        </span>
+        {displayTarget ? (
+          <span className="text-[11px] text-muted-foreground">
+            {t(($) => $.machine.ops.upgrade_owner_only)}
+          </span>
+        ) : null}
       </span>
     );
   }
 
   return (
-    <span className="inline-flex flex-wrap items-center gap-2" data-testid="machine-daemon-upgrade">
-      {versionPath}
+    <span
+      className="inline-flex flex-wrap items-center justify-end gap-2"
+      data-testid="machine-daemon-upgrade"
+      data-state="available"
+    >
+      <span
+        className="font-mono text-xs"
+        data-testid="machine-basics-daemon-version"
+      >
+        {versionLabel}
+      </span>
       <Button
         type="button"
         variant="outline"
@@ -236,7 +338,9 @@ export function MachineDaemonUpgrade({
         data-testid="machine-daemon-upgrade-btn"
       >
         <ArrowUpCircle className="h-3 w-3" />
-        {t(($) => $.machine.ops.upgrade)}
+        {targetVersion
+          ? t(($) => $.machine.ops.upgrade_to, { version: targetVersion })
+          : t(($) => $.machine.ops.upgrade)}
       </Button>
     </span>
   );

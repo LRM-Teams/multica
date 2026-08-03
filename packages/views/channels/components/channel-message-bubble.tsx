@@ -298,7 +298,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
 // react-doctor-disable-next-line react-doctor/prefer-useReducer
 }) {
   const { t } = useT("channels");
-  const { getActorName, getMemberHonor, getAgentFleetRank } = useActorName();
+  const {
+    getActorName,
+    getMemberHonor,
+    getAgentFleetRank,
+    getAgentHonorLevel,
+  } = useActorName();
   // LRM-364: group managers miss ListAgents → resolve via member-profile, never
   // surface "Unknown Agent" in the reaction hover card.
   const getReactionActorName = useReactionActorName(message.reactions ?? []);
@@ -505,6 +510,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   // overflow the box and lift the dot off the avatar's bottom edge).
   const authorFleet =
     isAgent && message.author_id ? getAgentFleetRank(message.author_id) : undefined;
+  const authorHonorLevel =
+    isAgent && message.author_id ? getAgentHonorLevel(message.author_id) : undefined;
   const avatarNode =
     identityActorType && message.author_id ? (
       <ActorAvatar
@@ -532,6 +539,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       displayName={displayName}
       honor={authorHonor}
       fleet={authorFleet}
+      agentHonorLevel={authorHonorLevel}
       className="shrink-0 text-[13.5px] font-semibold text-foreground"
       nameClassName="whitespace-nowrap"
     />

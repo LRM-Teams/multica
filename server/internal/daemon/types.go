@@ -128,6 +128,12 @@ type Task struct {
 	// the bridge. Nil for non-trained tasks (the vast majority); omitempty so
 	// old servers that never send it are handled transparently.
 	ArealProxy *ArealProxy `json:"areal_proxy,omitempty"`
+	// SharedWorkdirEnvID carries the shared_sandbox sample env id the server
+	// extracts from the task's context.shared_workdir at claim time (research
+	// D5, FR-008). When set, the canonical turn anchors the provider workdir
+	// to the sample env's single shared working directory instead of the
+	// per-agent root. Empty for non-shared tasks.
+	SharedWorkdirEnvID string `json:"shared_workdir_env_id,omitempty"`
 	// AuthToken is the bearer token the daemon writes into the spawned agent's
 	// MULTICA_TOKEN_FILE wrapper. Legacy queue runs bind it to a task; legacy
 	// inbox runs bind it to a single delivery. Credential-transport-capable

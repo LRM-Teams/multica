@@ -362,8 +362,8 @@ func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canEditRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the runtime owner or a workspace admin can update this runtime")
+	if !canOwnRuntime(member, rt) {
+		writeError(w, http.StatusForbidden, "only the computer owner can update this runtime")
 		return
 	}
 
@@ -422,8 +422,8 @@ func (h *Handler) CancelUpdateIntent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canEditRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the runtime owner or a workspace admin can cancel this update")
+	if !canOwnRuntime(member, rt) {
+		writeError(w, http.StatusForbidden, "only the computer owner can cancel this update")
 		return
 	}
 
@@ -454,8 +454,8 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canEditRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the runtime owner or a workspace admin can inspect this update")
+	if !canOwnRuntime(member, rt) {
+		writeError(w, http.StatusForbidden, "only the computer owner can inspect this update")
 		return
 	}
 

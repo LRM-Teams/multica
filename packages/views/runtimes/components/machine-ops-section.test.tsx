@@ -180,9 +180,11 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
       />,
     );
     expect(screen.getByTestId("machine-daemon-upgrade-btn")).toHaveTextContent(
-      /Upgrade/i,
+      /Upgrade to 1\.5\.0/,
     );
-    expect(screen.getByText("1.5.0")).toBeInTheDocument();
+    expect(screen.getByTestId("machine-basics-daemon-version")).toHaveTextContent(
+      "0.3.94",
+    );
   });
 });
 

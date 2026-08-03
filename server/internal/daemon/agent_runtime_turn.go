@@ -37,6 +37,10 @@ type agentRuntimeTurnRequest struct {
 	MulticaBinary          string
 	Token                  string
 	Environment            map[string]string
+	// SharedWorkdirEnvID, when non-empty, is the shared_sandbox sample env
+	// whose single shared working directory this turn anchors to (research
+	// D5, FR-008). Empty keeps the per-agent workdir root.
+	SharedWorkdirEnvID string
 }
 
 // agentRuntimeTurn is the prepared, single-owner handoff from D1-D3 into the
@@ -130,6 +134,18 @@ func (c *agentRuntimeTurnCoordinator) Begin(request agentRuntimeTurnRequest) (*a
 	if err != nil {
 		return nil, fmt.Errorf("provision canonical agent workspace: %w", err)
 	}
+	// Shared_sandbox routing (research D5, FR-008): all agents of the sample
+	// anchor to the sample env's single shared workdir. The per-agent
+	// workspace above is untouched — turn subtrees, transport, and memory
+	// stay agent-keyed; only the provider workdir (cwd) moves.
+	turnWorkDir := workspace.WorkDir
+	if envID := strings.TrimSpace(request.SharedWorkdirEnvID); envID != "" {
+		shared, err := execenv.ProvisionSharedEnvWorkspace(c.cfg.WorkspacesRoot, request.WorkspaceID, envID, c.logger)
+		if err != nil {
+			return nil, fmt.Errorf("provision shared env workspace: %w", err)
+		}
+		turnWorkDir = shared.WorkDir
+	}
 	turn, err := execenv.ProvisionAgentTurn(*workspace, request.TurnID)
 	if err != nil {
 		return nil, fmt.Errorf("provision canonical agent turn: %w", err)
@@ -165,7 +181,7 @@ func (c *agentRuntimeTurnCoordinator) Begin(request agentRuntimeTurnRequest) (*a
 		RuntimeID:              request.RuntimeID,
 		PriorSessionID:         request.PriorSessionID,
 		RuntimeStateGeneration: request.RuntimeStateGeneration,
-		WorkDir:                workspace.WorkDir,
+		WorkDir:                turnWorkDir,
 		Workspace:              *workspace,
 		Turn:                   *turn,
 		StableEnvironment:      cloneEnvironment(stableEnvironment),

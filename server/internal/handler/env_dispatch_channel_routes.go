@@ -144,6 +144,17 @@ func (h *Handler) deleteEnvDispatchChannelRollout(ctx context.Context, workspace
 	}
 	lifecycle := newEnvSandboxLifecycleService(h)
 	adapter := &envDispatchDepsAdapter{h: h}
+	// Shared_sandbox rollouts (US3/T022, research D4): N bindings of one env
+	// can point at the SAME shared sandbox_instance and agent_runtime, so the
+	// reclaim below dedupes — each distinct sandbox/runtime is torn down
+	// exactly once. Derived agents stay per-binding: every one is archived
+	// FIRST (across all bindings), because they all hold agent.runtime_id
+	// (ON DELETE RESTRICT) on the shared runtime and the runtime delete fails
+	// until every archived agent is hard-deleted. Previously the interleaved
+	// per-binding order only succeeded by retrying the runtime delete on the
+	// last binding after N-1 FK violations.
+	var sandboxIDs, runtimeIDs []string
+	seenSandbox, seenRuntime := map[string]bool{}, map[string]bool{}
 	for _, b := range bindings {
 		// markDeleting above moved every ready binding to "deleting", so
 		// gating on "ready" alone skipped the whole reclaim below and left the
@@ -171,44 +182,54 @@ func (h *Handler) deleteEnvDispatchChannelRollout(ctx context.Context, workspace
 				slog.Warn("env-dispatch channel cleanup: archive derived agent", "derived_agent_id", *b.DerivedAgentID, "error", aerr)
 			}
 		}
-		if lifecycle != nil {
+		if !seenSandbox[*b.SandboxInstanceID] {
+			seenSandbox[*b.SandboxInstanceID] = true
+			sandboxIDs = append(sandboxIDs, *b.SandboxInstanceID)
+		}
+		if b.RuntimeID != nil && !seenRuntime[*b.RuntimeID] {
+			seenRuntime[*b.RuntimeID] = true
+			runtimeIDs = append(runtimeIDs, *b.RuntimeID)
+		}
+	}
+	if lifecycle != nil {
+		for _, instanceID := range sandboxIDs {
 			// The actor must be a real user: Delete enqueues a sandboxd
 			// "delete" job whose initiator_user_id is NOT NULL, and it only
 			// falls back to a force-delete when the node is unavailable - an
 			// empty actor fails to parse and leaves the cube sandbox running.
-			if derr := lifecycle.Delete(ctx, service.SandboxInstanceRef{WorkspaceID: workspaceID, InstanceID: *b.SandboxInstanceID}, actorUserID); derr != nil {
-				slog.Warn("env-dispatch channel cleanup: delete sandbox", "instance_id", *b.SandboxInstanceID, "error", derr)
+			if derr := lifecycle.Delete(ctx, service.SandboxInstanceRef{WorkspaceID: workspaceID, InstanceID: instanceID}, actorUserID); derr != nil {
+				slog.Warn("env-dispatch channel cleanup: delete sandbox", "instance_id", instanceID, "error", derr)
 			}
 		}
-		if b.RuntimeID != nil {
-			runtimeUUID := parseUUID(*b.RuntimeID)
-			// ArchiveAgent above only sets archived_at; the derived agent still
-			// holds agent.runtime_id (ON DELETE RESTRICT), so the runtime
-			// delete fails until the archived agents are hard-deleted. Same
-			// sequence as the runtime cascade endpoint (see runtime.go). Left
-			// undone, the runtime row outlives the rollout and the in-sandbox
-			// daemon keeps re-registering itself against it.
-			archived, aerr := h.Queries.ListArchivedAgentIDsByRuntime(ctx, runtimeUUID)
-			if aerr != nil {
-				slog.Warn("env-dispatch channel cleanup: list archived agents", "runtime_id", *b.RuntimeID, "error", aerr)
-			} else if len(archived) > 0 {
-				if terr := teardownArchivedAgentDependents(ctx, h.Queries, archived); terr != nil {
-					slog.Warn("env-dispatch channel cleanup: teardown archived agent dependents", "runtime_id", *b.RuntimeID, "error", terr)
-				}
-				if derr := h.Queries.DeleteArchivedAgentsByRuntime(ctx, runtimeUUID); derr != nil {
-					slog.Warn("env-dispatch channel cleanup: delete archived agents", "runtime_id", *b.RuntimeID, "error", derr)
-				}
-			}
-			// Logged, not discarded: a swallowed error here is what kept this
-			// leak invisible.
-			if rerr := adapter.DeleteAgentRuntime(ctx, workspaceID, *b.RuntimeID); rerr != nil {
-				slog.Warn("env-dispatch channel cleanup: delete runtime", "runtime_id", *b.RuntimeID, "error", rerr)
-			}
-		}
-		// Nothing to tear down on the AReaL side: v2 has no end_session, and a
-		// session is reclaimed there by export_trajectories(remove_session) or
-		// the stale-session reaper once this rollout stops driving it.
 	}
+	for _, runtimeID := range runtimeIDs {
+		runtimeUUID := parseUUID(runtimeID)
+		// ArchiveAgent above only sets archived_at; the derived agent still
+		// holds agent.runtime_id (ON DELETE RESTRICT), so the runtime
+		// delete fails until the archived agents are hard-deleted. Same
+		// sequence as the runtime cascade endpoint (see runtime.go). Left
+		// undone, the runtime row outlives the rollout and the in-sandbox
+		// daemon keeps re-registering itself against it.
+		archived, aerr := h.Queries.ListArchivedAgentIDsByRuntime(ctx, runtimeUUID)
+		if aerr != nil {
+			slog.Warn("env-dispatch channel cleanup: list archived agents", "runtime_id", runtimeID, "error", aerr)
+		} else if len(archived) > 0 {
+			if terr := teardownArchivedAgentDependents(ctx, h.Queries, archived); terr != nil {
+				slog.Warn("env-dispatch channel cleanup: teardown archived agent dependents", "runtime_id", runtimeID, "error", terr)
+			}
+			if derr := h.Queries.DeleteArchivedAgentsByRuntime(ctx, runtimeUUID); derr != nil {
+				slog.Warn("env-dispatch channel cleanup: delete archived agents", "runtime_id", runtimeID, "error", derr)
+			}
+		}
+		// Logged, not discarded: a swallowed error here is what kept this
+		// leak invisible.
+		if rerr := adapter.DeleteAgentRuntime(ctx, workspaceID, runtimeID); rerr != nil {
+			slog.Warn("env-dispatch channel cleanup: delete runtime", "runtime_id", runtimeID, "error", rerr)
+		}
+	}
+	// Nothing to tear down on the AReaL side: v2 has no end_session, and a
+	// session is reclaimed there by export_trajectories(remove_session) or
+	// the stale-session reaper once this rollout stops driving it.
 	// Foreign-key-safe order: channel (cascades messages/members/sessions and
 	// the bindings' channel_id FK) -> project (cascades DAG/chat/issues) ->
 	// environment_agent_sandbox rows (env_id FK backstop) -> environment.

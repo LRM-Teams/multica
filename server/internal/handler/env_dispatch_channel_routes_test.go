@@ -205,3 +205,133 @@ func TestChannelCleanupIsIdempotent(t *testing.T) {
 		t.Fatalf("second delete: status = %d, want 204 (idempotent); body=%s", w2.Code, w2.Body.String())
 	}
 }
+
+// TestChannelCleanupSharedBindingsReclaimOnce pins the shared_sandbox channel
+// lifecycle (FR-006/007, research D4, SC-005): when N bindings of one env point
+// at the SAME shared sandbox_instance and agent_runtime, channel delete must
+// reclaim the shared sandbox and runtime exactly once, archive/delete ALL
+// derived agents before the runtime delete (agent.runtime_id is ON DELETE
+// RESTRICT), and leave no residue.
+func TestChannelCleanupSharedBindingsReclaimOnce(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	envID, _, channelID, agentAID := setupEnvDispatchChannelRolloutFixture(t)
+
+	// Second roster member with its own pending binding on the same env.
+	agentBID := createHandlerTestAgent(t, "Shared Cleanup Agent B", nil)
+	_, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+		ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentBID)
+	require.NoError(t, err)
+	_, err = testPool.Exec(ctx, `
+		INSERT INTO environment_agent_sandbox (env_id, channel_id, agent_id, status, sandbox_config)
+		VALUES ($1, $2, $3, 'pending', '{}'::jsonb)`, envID, channelID, agentBID)
+	require.NoError(t, err)
+
+	// One shared runtime R' with TWO derived agents bound to it (the FK
+	// RESTRICT order under test: both must go before the runtime delete).
+	var sharedRuntimeID string
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, metadata, last_seen_at)
+		VALUES ($1, 'shared cleanup runtime', 'cloud', 'pi', 'online', '{}'::jsonb, now())
+		RETURNING id`, testWorkspaceID).Scan(&sharedRuntimeID))
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, sharedRuntimeID)
+	})
+	var derivedAID, derivedBID string
+	for i, name := range []string{"shared-derived-a", "shared-derived-b"} {
+		var id string
+		require.NoError(t, testPool.QueryRow(ctx, `
+			INSERT INTO agent (
+				workspace_id, name, description, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks, owner_id
+			, model) VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 1, $4, 'composer-1.5')
+			RETURNING id`, testWorkspaceID, name+"-"+uuid.NewString(), sharedRuntimeID, testUserID).Scan(&id))
+		if i == 0 {
+			derivedAID = id
+		} else {
+			derivedBID = id
+		}
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id IN ($1, $2)`, derivedAID, derivedBID)
+	})
+
+	// One shared sandbox_instance.
+	var nodeID, instanceID string
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO sandbox_node (node_key, name, owner_user_id, capabilities, max_concurrency, metadata)
+		VALUES ($1, 'shared cleanup node', $2, '{}'::jsonb, 1, '{}'::jsonb)
+		RETURNING id`, "shared-cleanup-"+uuid.NewString(), testUserID).Scan(&nodeID))
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO sandbox_instance (workspace_id, creator_user_id, node_id, status, template, limits, metadata)
+		VALUES ($1, $2, $3, 'running', 'default', '{}'::jsonb, '{}'::jsonb)
+		RETURNING id`, testWorkspaceID, testUserID, nodeID).Scan(&instanceID))
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM sandbox_instance WHERE id = $1`, instanceID)
+		testPool.Exec(context.Background(), `DELETE FROM sandbox_node WHERE id = $1`, nodeID)
+	})
+
+	// Both bindings ready on the SAME shared sandbox/runtime, carrying the
+	// shared marker (as T011/T012 persist it).
+	sharedConfig := `{"template":"default","shared":true}`
+	for agentID, derivedID := range map[string]string{agentAID: derivedAID, agentBID: derivedBID} {
+		_, err = testPool.Exec(ctx, `
+			UPDATE environment_agent_sandbox
+			   SET status = 'ready', sandbox_instance_id = $3, runtime_id = $4,
+			       daemon_id = $5, derived_agent_id = $6, sandbox_config = $7::jsonb
+			 WHERE env_id = $1 AND agent_id = $2`,
+			envID, agentID, instanceID, sharedRuntimeID, uuid.NewString(), derivedID, sharedConfig)
+		require.NoError(t, err)
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.DeleteEnvDispatchChannel(w, authedChannelRequest(http.MethodDelete, "/api/v1/env-dispatch/channels/"+channelID, "channelID", channelID))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", w.Code, w.Body.String())
+	}
+
+	// The shared sandbox was reclaimed EXACTLY once despite two bindings: one
+	// delete job queued for its node, or the row force-deleted once.
+	var deleteJobs int
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT count(*) FROM sandbox_job WHERE instance_id = $1 AND type = 'delete'`,
+		instanceID).Scan(&deleteJobs))
+	var instanceExists bool
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM sandbox_instance WHERE id = $1)`,
+		instanceID).Scan(&instanceExists))
+	if instanceExists {
+		if deleteJobs != 1 {
+			t.Errorf("shared sandbox must be deleted exactly once across N bindings, got %d delete jobs", deleteJobs)
+		}
+	} else if deleteJobs > 0 {
+		t.Errorf("force-deleted shared sandbox must not also queue delete jobs, got %d", deleteJobs)
+	}
+
+	// The shared runtime and BOTH derived agents are gone (derived agents
+	// hard-deleted ahead of the runtime; FK RESTRICT would block otherwise).
+	var runtimeExists, derivedAExists, derivedBExists bool
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM agent_runtime WHERE id = $1)`, sharedRuntimeID).Scan(&runtimeExists))
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM agent WHERE id = $1)`, derivedAID).Scan(&derivedAExists))
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM agent WHERE id = $1)`, derivedBID).Scan(&derivedBExists))
+	if runtimeExists {
+		t.Error("shared runtime should be deleted with the rollout")
+	}
+	if derivedAExists || derivedBExists {
+		t.Errorf("all derived agents must be deleted before/with the shared runtime; a=%v b=%v", derivedAExists, derivedBExists)
+	}
+
+	// No residue: bindings, channel, project, env all gone.
+	var bindings int
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT count(*) FROM environment_agent_sandbox WHERE env_id = $1`, envID).Scan(&bindings))
+	if bindings != 0 {
+		t.Errorf("bindings should be deleted, %d remain", bindings)
+	}
+}

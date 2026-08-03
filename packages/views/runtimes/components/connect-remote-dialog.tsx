@@ -40,7 +40,7 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
   const newRuntimeIdRef = useRef<string | null>(null);
 
   // `multica setup` is one blocking command that handles config + login
-  // + daemon start; the dialog passively listens for the resulting
+  // + install-service via setup; the dialog passively listens for the resulting
   // `daemon:register` WS event and auto-advances to success.
   const handleDaemonRegister = useCallback(
     (payload: unknown) => {
@@ -209,7 +209,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
             </p>
           </div>
 
-          <LiveListening />
+          <WaitingStatus />
 
           <TroubleshootingDetails />
         </div>
@@ -218,6 +218,10 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
       <DialogFooter className="m-0 rounded-b-xl border-t bg-muted/30 px-6 py-3">
         <Button variant="outline" size="sm" onClick={onClose}>
           {t(($) => $.connect.cancel)}
+        </Button>
+        {/* Done stays disabled until daemon:register replaces this panel with success. */}
+        <Button size="sm" disabled>
+          {t(($) => $.connect.done)}
         </Button>
       </DialogFooter>
     </>
@@ -336,27 +340,29 @@ function TroubleshootingDetails() {
 }
 
 // ---------------------------------------------------------------------------
-// Live-listening indicator
+// Waiting indicator (LRM-1129 freeze v2 — brand-soft, not success green)
 // ---------------------------------------------------------------------------
 
-function LiveListening() {
+function WaitingStatus() {
   const { t } = useT("runtimes");
   return (
     <div
-      className="flex items-center gap-2.5 rounded-lg border bg-muted/40 px-3 py-2.5 text-xs"
+      className="flex items-start gap-2.5 rounded-lg border border-brand/30 bg-brand/5 px-3 py-2.5 text-xs"
       role="status"
       aria-live="polite"
     >
-      <span className="relative inline-flex shrink-0" aria-hidden>
-        <span className="absolute inline-flex h-2 w-2 animate-ping rounded-full bg-success opacity-60 motion-reduce:hidden" />
-        <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
+      <span className="relative mt-1 inline-flex shrink-0" aria-hidden>
+        <span className="absolute inline-flex h-2 w-2 animate-ping rounded-full bg-brand opacity-60 motion-reduce:hidden" />
+        <span className="relative inline-flex h-2 w-2 rounded-full bg-brand" />
       </span>
-      <span className="font-medium text-foreground">
-        {t(($) => $.connect.live_listening)}
-      </span>
-      <span className="text-muted-foreground">
-        {t(($) => $.connect.live_listening_hint)}
-      </span>
+      <div className="min-w-0 space-y-0.5">
+        <p className="font-medium text-foreground">
+          {t(($) => $.connect.live_listening)}
+        </p>
+        <p className="leading-[1.4] text-muted-foreground">
+          {t(($) => $.connect.live_listening_hint)}
+        </p>
+      </div>
     </div>
   );
 }
@@ -373,6 +379,12 @@ function SuccessStep({
   onGoToRuntime?: () => void;
 }) {
   const { t } = useT("runtimes");
+  const primaryRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    primaryRef.current?.focus();
+  }, []);
+
   return (
     <>
       <DialogHeader className="px-6 pt-6 pb-2">
@@ -399,7 +411,7 @@ function SuccessStep({
             {t(($) => $.connect.view_runtime)}
           </Button>
         )}
-        <Button size="sm" onClick={onGoToAgents}>
+        <Button ref={primaryRef} size="sm" onClick={onGoToAgents}>
           {t(($) => $.connect.create_agent)}
           <ChevronRight className="h-3.5 w-3.5" aria-hidden />
         </Button>

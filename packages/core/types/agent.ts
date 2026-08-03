@@ -403,6 +403,8 @@ export interface Agent {
   name: string;
   /** Human-facing label. Falls back to `name` for older server payloads. */
   display_name?: string;
+  /** Permanent agent honor level used by compact identity surfaces. */
+  honor_level?: number;
   description: string;
   instructions: string;
   avatar_url: string | null;

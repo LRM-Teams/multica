@@ -12,11 +12,13 @@ import {
   TooltipTrigger,
 } from "@multica/ui/components/ui/tooltip";
 import { useAgentFleetClassName } from "../agents/hooks/use-agent-fleet-class-name";
+import { AgentHonorLevelIcon } from "../agents/components/agent-honor-level-icon";
 
 export interface ActorStyledNameProps {
   displayName: string;
   honor?: HonorSnapshot | null;
   fleet?: AgentFleetRank | null;
+  agentHonorLevel?: number | null;
   honorSurface?: "inline" | "profile";
   /** Dense lists can keep earned name styling while omitting space-consuming badges. */
   showBadges?: boolean;
@@ -29,6 +31,7 @@ export function ActorStyledName({
   displayName,
   honor,
   fleet,
+  agentHonorLevel,
   honorSurface = "inline",
   showBadges = true,
   className,
@@ -65,7 +68,14 @@ export function ActorStyledName({
           <TooltipContent side="top">{honor.equipped_badge.title}</TooltipContent>
         </Tooltip>
       ) : null}
-      {showBadges && fleet ? (
+      {showBadges && agentHonorLevel ? (
+        <AgentHonorLevelIcon
+          level={agentHonorLevel}
+          title={`LV.${agentHonorLevel}`}
+          className="size-6 drop-shadow-sm"
+        />
+      ) : null}
+      {showBadges && !agentHonorLevel && fleet ? (
         <FleetRankBadge
           classId={fleet.class_id}
           classLabel={fleetClassName(fleet.class_id, fleet.class_label)}

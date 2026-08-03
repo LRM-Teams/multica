@@ -186,8 +186,15 @@ export function ResearchSessionRowActions({
               <AlertDialogCancel>{t(($) => $.actions.cancel)}</AlertDialogCancel>
               <AlertDialogAction
                 variant="destructive"
-                disabled={del.isPending}
-                onClick={() => del.mutate()}
+                // LRM-1246 S2 — keep Confirm focusable while delete is pending
+                // (native `disabled` drops focus to <body>, same as LRM-1213).
+                aria-disabled={del.isPending || undefined}
+                className={del.isPending ? "opacity-50 cursor-not-allowed" : undefined}
+                data-testid="research-session-delete-confirm"
+                onClick={() => {
+                  if (del.isPending) return;
+                  del.mutate();
+                }}
               >
                 {t(($) => $.actions.delete_confirm)}
               </AlertDialogAction>

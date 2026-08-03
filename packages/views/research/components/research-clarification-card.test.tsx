@@ -103,8 +103,10 @@ describe("ResearchClarificationCard", () => {
     const error = screen.getByTestId("research-clarification-error");
     const budget = screen.getByLabelText(/Budget/);
     expect(error).toHaveAttribute("role", "alert");
+    expect(budget).toHaveAttribute("aria-required", "true");
     expect(budget).toHaveAttribute("aria-invalid", "true");
     expect(budget).toHaveAttribute("aria-describedby", error.id);
+    expect(budget).toHaveFocus();
   });
 
   it("locks controls after skip and shows status", () => {

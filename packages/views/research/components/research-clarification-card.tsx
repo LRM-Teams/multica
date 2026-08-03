@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ResearchClarificationQuestion } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -33,6 +33,7 @@ export function ResearchClarificationCard({
   });
   const [localError, setLocalError] = useState<string | null>(null);
   const [invalidFieldId, setInvalidFieldId] = useState<string | null>(null);
+  const fieldRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
 
   const resolved = resolution.status !== "pending";
   const interactive = !resolved && !pending;
@@ -51,6 +52,7 @@ export function ResearchClarificationCard({
       if (field.required && !value) {
         setInvalidFieldId(field.id);
         setLocalError(t(($) => $.clarification.required_fields));
+        fieldRefs.current[field.id]?.focus();
         return;
       }
       values[field.id] = value;
@@ -103,8 +105,13 @@ export function ResearchClarificationCard({
                 </span>
                 {field.type === "textarea" ? (
                   <Textarea
+                    ref={(node) => {
+                      fieldRefs.current[field.id] = node;
+                    }}
                     value={draft[field.id] ?? ""}
                     disabled={!interactive}
+                    required={field.required}
+                    aria-required={field.required || undefined}
                     aria-invalid={invalid || undefined}
                     aria-describedby={invalid ? localErrorId : undefined}
                     placeholder={field.placeholder}
@@ -114,8 +121,13 @@ export function ResearchClarificationCard({
                   />
                 ) : (
                   <Input
+                    ref={(node) => {
+                      fieldRefs.current[field.id] = node;
+                    }}
                     value={draft[field.id] ?? ""}
                     disabled={!interactive}
+                    required={field.required}
+                    aria-required={field.required || undefined}
                     aria-invalid={invalid || undefined}
                     aria-describedby={invalid ? localErrorId : undefined}
                     placeholder={field.placeholder}

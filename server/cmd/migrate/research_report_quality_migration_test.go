@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestResearchReportQualityMigration275RoundTrips(t *testing.T) {
+func TestResearchReportQualityMigration276RoundTrips(t *testing.T) {
 	pool := openTestPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -19,7 +19,7 @@ func TestResearchReportQualityMigration275RoundTrips(t *testing.T) {
 	}
 	defer conn.Release()
 
-	schema := fmt.Sprintf("research_report_quality_275_test_%d", time.Now().UnixNano())
+	schema := fmt.Sprintf("research_report_quality_276_test_%d", time.Now().UnixNano())
 	quotedSchema := pgx.Identifier{schema}.Sanitize()
 	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
 		t.Fatalf("create schema: %v", err)
@@ -50,9 +50,9 @@ func TestResearchReportQualityMigration275RoundTrips(t *testing.T) {
 		t.Fatalf("create pre-275 schema: %v", err)
 	}
 
-	upSQL, downSQL := readMigrationPair(t, "275_research_report_quality")
+	upSQL, downSQL := readMigrationPair(t, "276_research_report_quality")
 	if _, err = conn.Exec(ctx, upSQL); err != nil {
-		t.Fatalf("apply 275 up: %v", err)
+		t.Fatalf("apply 276 up: %v", err)
 	}
 	if _, err = conn.Exec(ctx, `
 		INSERT INTO research_task VALUES ('10000000-0000-4000-8000-000000000001');
@@ -72,7 +72,7 @@ func TestResearchReportQualityMigration275RoundTrips(t *testing.T) {
 		DELETE FROM research_task WHERE id = '10000000-0000-4000-8000-000000000001';
 		DELETE FROM research_task_attempt WHERE id = '10000000-0000-4000-8000-000000000002';
 	`); err != nil {
-		t.Fatalf("exercise 275 attribution: %v", err)
+		t.Fatalf("exercise 276 attribution: %v", err)
 	}
 	var taskID, attemptID *string
 	var authorID, anchor string
@@ -90,10 +90,10 @@ func TestResearchReportQualityMigration275RoundTrips(t *testing.T) {
 	}
 
 	if _, err = conn.Exec(ctx, downSQL); err != nil {
-		t.Fatalf("apply 275 down: %v", err)
+		t.Fatalf("apply 276 down: %v", err)
 	}
 	if _, err = conn.Exec(ctx, upSQL); err != nil {
-		t.Fatalf("re-apply 275 up: %v", err)
+		t.Fatalf("re-apply 276 up: %v", err)
 	}
 	var attributionColumns, anchorColumns int
 	if err = conn.QueryRow(ctx, `

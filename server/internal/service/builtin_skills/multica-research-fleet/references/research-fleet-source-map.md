@@ -5,7 +5,7 @@
 | HTTP routes under `/api/research` | `server/cmd/server/router.go` Research Fleet block |
 | Durable Run HTTP and task-bound result authorization | `server/internal/handler/research_run_http.go`, `server/cmd/server/router.go` |
 | Run scheduler, leases, retries, recovery, marginal-gain and delivery decisions | `server/internal/researchrun/engine.go`, `postgres_tasks.go`, `postgres_gate.go`, `server/internal/scheduler/jobs_research_run.go` |
-| Canonical task/progress/evidence/event ledgers | migrations `274_research_run_backend`, `275_research_report_quality`; `server/internal/researchrun/postgres*.go` |
+| Canonical task/progress/evidence/event ledgers | migrations `274_research_run_backend`, `276_research_report_quality`; `server/internal/researchrun/postgres*.go` |
 | Current contract read model and validated steering limits | `server/internal/researchrun/config.go`, `postgres.go`, `postgres_tasks.go` |
 | Strict structured result envelope, report/evaluation v2 contract, and evidence validation | `server/internal/researchrun/result.go`, `result_v2.go`, `result_test.go`, `postgres_result.go`, `postgres_gate.go` |
 | Inbox dispatch idempotency and event projection | `server/internal/handler/research_run_adapter.go` |

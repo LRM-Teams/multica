@@ -21,6 +21,21 @@ describe("research templates (LRM-817 / LRM-906)", () => {
     expect(titles).toEqual(expect.arrayContaining(["行业调研", "竞品分析", "技术选型"]));
   });
 
+  it("does not pad long prompts by repeating instructions", () => {
+    for (const template of RESEARCH_TEMPLATES) {
+      for (const prompt of [template.goal.zh, template.goal.en]) {
+        const sentences = prompt
+          .split(/[。！？.!?]+/u)
+          .map((sentence) => sentence.trim())
+          .filter((sentence) => sentence.length >= 12);
+        const uniqueSentences = new Set(sentences);
+        expect(uniqueSentences.size, `${template.id} contains repeated sentences`).toBe(
+          sentences.length,
+        );
+      }
+    }
+  });
+
   it("composeTemplateGoal includes params and localizes", () => {
     const industry = RESEARCH_TEMPLATES.find((t) => t.id === "industry")!;
     const zh = composeTemplateGoal(industry, "zh-Hans");

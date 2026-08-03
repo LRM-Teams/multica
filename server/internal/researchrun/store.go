@@ -3,6 +3,7 @@ package researchrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -87,6 +88,36 @@ type Dispatcher interface {
 	Dispatch(context.Context, DispatchRequest) (DispatchResult, error)
 	Inspect(context.Context, []string) (map[string]InboxTaskState, error)
 	Cancel(context.Context, []string, string) error
+}
+
+type classifiedDispatchError struct {
+	err       error
+	retryable bool
+}
+
+func (e classifiedDispatchError) Error() string   { return e.err.Error() }
+func (e classifiedDispatchError) Unwrap() error   { return e.err }
+func (e classifiedDispatchError) Retryable() bool { return e.retryable }
+
+// NonRetryableDispatchError marks an Adapter failure that cannot be repaired by
+// dispatching the same Research Task again. The Engine fails the run instead of
+// consuming attempt and remediation budgets on a deterministic defect.
+func NonRetryableDispatchError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return classifiedDispatchError{err: err, retryable: false}
+}
+
+func dispatchErrorRetryable(err error) bool {
+	var classified interface{ Retryable() bool }
+	if errors.As(err, &classified) {
+		return classified.Retryable()
+	}
+	// Existing Dispatcher implementations predate explicit classification.
+	// Preserve bounded retry for unknown/transient errors; production Adapters
+	// must classify deterministic contract/configuration failures.
+	return true
 }
 
 type Projector interface {

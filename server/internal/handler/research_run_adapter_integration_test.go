@@ -1,0 +1,162 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/multica-ai/multica/server/internal/researchrun"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+func TestClassifyResearchDispatchErrorOnlyStopsDeterministicSQLFailures(t *testing.T) {
+	contractErr := classifyResearchDispatchError(&pgconn.PgError{Code: "42P18", Message: "ambiguous parameter type"})
+	var classified interface{ Retryable() bool }
+	if !errors.As(contractErr, &classified) || classified.Retryable() {
+		t.Fatalf("SQL contract error was not classified non-retryable: %v", contractErr)
+	}
+
+	transientErr := classifyResearchDispatchError(&pgconn.PgError{Code: "40001", Message: "serialization failure"})
+	classified = nil
+	if errors.As(transientErr, &classified) {
+		t.Fatalf("transient transaction error was classified as permanent: %v", transientErr)
+	}
+}
+
+func TestResearchRunStartWillRetryMatchesDispatchClassification(t *testing.T) {
+	if researchRunStartWillRetry(nil) {
+		t.Fatal("nil start error was classified for retry")
+	}
+	if researchRunStartWillRetry(researchrun.NonRetryableDispatchError(errors.New("invalid dispatch contract"))) {
+		t.Fatal("non-retryable dispatch error was classified for retry")
+	}
+	if researchRunStartWillRetry(researchrun.ErrCapabilityUnavailable) {
+		t.Fatal("missing capability was classified for retry")
+	}
+	if !researchRunStartWillRetry(errors.New("temporary dispatcher outage")) {
+		t.Fatal("unclassified transient error was not classified for retry")
+	}
+}
+
+func TestResearchRunDispatcherBindsTypedInboxContext(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler integration database is unavailable")
+	}
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	creatorIDText := uuid.NewString()
+	workspaceIDText := uuid.NewString()
+	runtimeIDText := uuid.NewString()
+	agentIDText := uuid.NewString()
+	setup := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO "user" (id, name, email) VALUES ($1::uuid, $2, $3)`, []any{creatorIDText, "Research dispatch test user", suffix + "@dispatch.test"}},
+		{`INSERT INTO workspace (id, name, slug) VALUES ($1::uuid, $2, $3)`, []any{workspaceIDText, "Research dispatch test", "research-dispatch-" + suffix}},
+		{`INSERT INTO member (workspace_id, user_id, role) VALUES ($1::uuid, $2::uuid, 'owner')`, []any{workspaceIDText, creatorIDText}},
+		{`INSERT INTO agent_runtime (id, workspace_id, name, runtime_mode, provider, status, owner_id) VALUES ($1::uuid, $2::uuid, $3, 'cloud', 'codex', 'online', $4::uuid)`, []any{runtimeIDText, workspaceIDText, "research-dispatch-runtime-" + suffix, creatorIDText}},
+		{`INSERT INTO agent (id, workspace_id, name, runtime_mode, runtime_id, status, owner_id, model) VALUES ($1::uuid, $2::uuid, $3, 'cloud', $4::uuid, 'idle', $5::uuid, 'test-model')`, []any{agentIDText, workspaceIDText, "research-dispatch-agent-" + suffix, runtimeIDText, creatorIDText}},
+	}
+	for _, statement := range setup {
+		if _, err := testPool.Exec(ctx, statement.query, statement.args...); err != nil {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, workspaceIDText)
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, creatorIDText)
+			t.Fatalf("seed dispatch fixture: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, workspaceIDText)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, creatorIDText)
+	})
+	workspaceID := parseUUID(workspaceIDText)
+	creatorID := parseUUID(creatorIDText)
+	agentID := parseUUID(agentIDText)
+
+	fleet, err := testHandler.Queries.CreateResearchFleet(ctx, db.CreateResearchFleetParams{
+		WorkspaceID: workspaceID,
+		LeadAgentID: agentID,
+	})
+	if err != nil {
+		t.Fatalf("create research fleet: %v", err)
+	}
+	if _, err = testHandler.Queries.CreateResearchFleetMember(ctx, db.CreateResearchFleetMemberParams{
+		WorkspaceID: workspaceID,
+		FleetID:     fleet.ID,
+		AgentID:     agentID,
+		Role:        "lead",
+		Status:      "active",
+		IsLead:      true,
+	}); err != nil {
+		t.Fatalf("create research fleet member: %v", err)
+	}
+	session, err := testHandler.Queries.CreateResearchSession(ctx, db.CreateResearchSessionParams{
+		WorkspaceID:        workspaceID,
+		FleetID:            fleet.ID,
+		CreatedBy:          creatorID,
+		Title:              "Typed dispatch context",
+		Goal:               "Verify the canonical dispatch metadata",
+		Status:             "running",
+		CurrentStage:       "s1_plan",
+		DepthTier:          "standard",
+		ProductRound:       1,
+		ProductRoundBudget: 5,
+	})
+	if err != nil {
+		t.Fatalf("create research session: %v", err)
+	}
+
+	dispatchKey := "research-dispatch-test:" + uuid.NewString()
+	researchTaskID := uuid.NewString()
+	attemptID := uuid.NewString()
+	criteria := json.RawMessage(`[{"criterion":"return a structured plan"}]`)
+	result, err := (&researchRunDispatcher{handler: testHandler}).Dispatch(ctx, researchrun.DispatchRequest{
+		Run: researchrun.Run{
+			SessionID:   uuidToString(session.ID),
+			WorkspaceID: workspaceIDText,
+		},
+		Task: researchrun.Task{
+			ID:                 researchTaskID,
+			TimeoutSeconds:     1800,
+			AcceptanceCriteria: criteria,
+		},
+		AttemptID: attemptID,
+		AgentID:   uuidToString(agentID),
+		Prompt:    "Return the research plan through the task-result command.",
+		Key:       dispatchKey,
+	})
+	if err != nil {
+		t.Fatalf("dispatch research task: %v", err)
+	}
+	if result.InboxTaskID == "" {
+		t.Fatal("dispatch returned an empty inbox task ID")
+	}
+
+	var gotKey, gotSessionID, gotTaskID, gotAttemptID, timeoutJSONType, criteriaJSONType string
+	var gotTimeout int
+	if err = testPool.QueryRow(ctx, `
+		SELECT context->>'research_dispatch_key',
+		       context->>'research_session_id',
+		       context->>'research_task_id',
+		       context->>'research_attempt_id',
+		       (context->>'research_task_timeout_seconds')::int,
+		       jsonb_typeof(context->'research_task_timeout_seconds'),
+		       jsonb_typeof(context->'research_task_acceptance_criteria')
+		FROM agent_inbox_event
+		WHERE id = $1::uuid
+	`, result.InboxTaskID).Scan(
+		&gotKey, &gotSessionID, &gotTaskID, &gotAttemptID,
+		&gotTimeout, &timeoutJSONType, &criteriaJSONType,
+	); err != nil {
+		t.Fatalf("load dispatched inbox context: %v", err)
+	}
+	if gotKey != dispatchKey || gotSessionID != uuidToString(session.ID) || gotTaskID != researchTaskID || gotAttemptID != attemptID {
+		t.Fatalf("dispatch context IDs = %q %q %q %q", gotKey, gotSessionID, gotTaskID, gotAttemptID)
+	}
+	if gotTimeout != 1800 || timeoutJSONType != "number" || criteriaJSONType != "array" {
+		t.Fatalf("dispatch context types: timeout=%d timeout_type=%q criteria_type=%q", gotTimeout, timeoutJSONType, criteriaJSONType)
+	}
+}

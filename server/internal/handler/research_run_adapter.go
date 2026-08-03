@@ -8,8 +8,10 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/researchrun"
+	"github.com/multica-ai/multica/server/internal/researchwake"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -19,10 +21,13 @@ type researchRunDispatcher struct {
 	handler *Handler
 }
 
-func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchrun.DispatchRequest) (researchrun.DispatchResult, error) {
+func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchrun.DispatchRequest) (result researchrun.DispatchResult, retErr error) {
+	defer func() {
+		retErr = classifyResearchDispatchError(retErr)
+	}()
 	h := d.handler
 	if h == nil || h.TaskService == nil || h.TxStarter == nil {
-		return researchrun.DispatchResult{}, errors.New("research task dispatcher is unavailable")
+		return researchrun.DispatchResult{}, researchrun.NonRetryableDispatchError(errors.New("research task dispatcher is unavailable"))
 	}
 	var existingID pgtype.UUID
 	if err := h.DB.QueryRow(ctx, `
@@ -96,11 +101,11 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 		UPDATE agent_inbox_event
 		SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object(
 		  'type', 'research_run_task',
-		  'research_dispatch_key', $2,
-		  'research_session_id', $3,
-		  'research_task_id', $4,
-		  'research_attempt_id', $5,
-		  'research_task_timeout_seconds', $6,
+		  'research_dispatch_key', $2::text,
+		  'research_session_id', $3::text,
+		  'research_task_id', $4::text,
+		  'research_attempt_id', $5::text,
+		  'research_task_timeout_seconds', $6::integer,
 		  'research_task_acceptance_criteria', $7::jsonb
 		), updated_at = now()
 		WHERE id = $1
@@ -119,6 +124,28 @@ func (d *researchRunDispatcher) Dispatch(ctx context.Context, request researchru
 	}
 	h.TaskService.PublishChatTaskQueued(ctx, task, false)
 	return researchrun.DispatchResult{InboxTaskID: uuidToString(task.ID)}, nil
+}
+
+func classifyResearchDispatchError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var alreadyClassified interface{ Retryable() bool }
+	if errors.As(err, &alreadyClassified) {
+		return err
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "42") {
+		return researchrun.NonRetryableDispatchError(err)
+	}
+	var wakeErr *researchwake.Error
+	if errors.As(err, &wakeErr) ||
+		errors.Is(err, service.ErrChatTaskAgentArchived) ||
+		errors.Is(err, service.ErrChatTaskAgentNoRuntime) ||
+		errors.Is(err, service.ErrAgentModelRequired) {
+		return researchrun.NonRetryableDispatchError(err)
+	}
+	return err
 }
 
 func (d *researchRunDispatcher) Inspect(ctx context.Context, keys []string) (map[string]researchrun.InboxTaskState, error) {

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -305,7 +306,7 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if createErr != nil {
-		slog.Warn("research run start deferred to reconciler", "session_id", createdRun.SessionID, "error", createErr)
+		slog.Warn("research run initial dispatch failed", "session_id", createdRun.SessionID, "will_retry", researchRunStartWillRetry(createErr), "error", createErr)
 	}
 	sessionID := parseUUID(createdRun.SessionID)
 	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
@@ -332,9 +333,24 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		"run":      runSnapshot,
 	}
 	if createErr != nil {
-		response["warning"] = "research run was persisted but immediate dispatch failed; the reconciler will retry"
+		if researchRunStartWillRetry(createErr) {
+			response["warning"] = "research run was persisted but immediate dispatch failed; the reconciler will retry"
+		} else {
+			response["warning"] = "research run was created but initial dispatch failed and will not be retried automatically; review run diagnostics before retrying"
+		}
 	}
 	writeJSON(w, http.StatusCreated, response)
+}
+
+func researchRunStartWillRetry(err error) bool {
+	if err == nil || errors.Is(err, researchrun.ErrCapabilityUnavailable) {
+		return false
+	}
+	var classified interface{ Retryable() bool }
+	if errors.As(err, &classified) {
+		return classified.Retryable()
+	}
+	return true
 }
 
 func truncateRunes(s string, n int) string {

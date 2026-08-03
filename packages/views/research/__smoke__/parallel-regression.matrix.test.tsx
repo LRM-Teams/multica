@@ -192,8 +192,8 @@ describe(`Smoke · list duplicate info (${SMOKE_ISSUES.listDuplicate})`, () => {
     ).toBe(true);
   });
 
-  it.fails(
-    `${SMOKE_ISSUES.listDuplicate}: empty-title row must omit redundant goal chip (flip to it after fix)`,
+  it(
+    `${SMOKE_ISSUES.listDuplicate}: empty-title row omits redundant goal chip`,
     () => {
       render(<ResearchSessionRow session={session()} href="/research/s1" />);
       const titleEl = document.querySelector(
@@ -208,7 +208,7 @@ describe(`Smoke · list duplicate info (${SMOKE_ISSUES.listDuplicate})`, () => {
     },
   );
 
-  it.fails(
+  it(
     `${SMOKE_ISSUES.listDuplicate}: title that is a prefix of goal still hides chip; distinct goal keeps chip`,
     () => {
       const { unmount } = render(

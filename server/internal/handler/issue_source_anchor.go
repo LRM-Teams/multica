@@ -168,13 +168,29 @@ func (h *Handler) SetIssueSourceChannel(w http.ResponseWriter, r *http.Request) 
 	actorType, actorID := h.resolveActor(r, requesterID, uuidToString(issue.WorkspaceID))
 	if channelID.Valid {
 		if refs := h.issueSourceRefsForActor(r.Context(), issue, actorType, parseUUID(actorID)); refs != nil {
-			resp.SourceRefs = refs
+			applyIssueDiscussionRefs(&resp, refs)
 		}
 	}
 	h.publish(protocol.EventIssueUpdated, uuidToString(issue.WorkspaceID), actorType, actorID, map[string]any{
 		"issue": resp,
 	})
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// applyIssueDiscussionRefs copies membership-gated discussion context onto an
+// issue detail response. SourceRefs keeps the richer navigation payload;
+// Channel is the top-level Properties field the FE AssociatedGroupPicker reads
+// (LRM-1122). Both point at the same issue_source_message row.
+func applyIssueDiscussionRefs(resp *IssueResponse, refs *IssueSourceRefsResponse) {
+	if resp == nil || refs == nil {
+		return
+	}
+	resp.SourceRefs = refs
+	if refs.Channel == nil {
+		return
+	}
+	ch := *refs.Channel
+	resp.Channel = &ch
 }
 
 // issueSourceRefsForActor returns the detail-only source ref if it remains

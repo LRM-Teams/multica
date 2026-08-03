@@ -63,6 +63,12 @@ type IssueResponse struct {
 	// produced this issue. It is deliberately detail-only: board/list payloads
 	// stay small and must not leak a private source channel.
 	SourceRefs *IssueSourceRefsResponse `json:"source_refs,omitempty"`
+	// Channel is the Properties "associated group" (#574 / #629 / LRM-1122).
+	// Same durable row as SourceRefs (issue_source_message); exposed at the
+	// top level so the FE AssociatedGroupPicker can read `issue.channel`
+	// without digging into source_refs. Detail-only + membership-gated,
+	// same visibility rules as SourceRefs.
+	Channel *IssueSourceChannelRefResponse `json:"channel,omitempty"`
 	// Labels are bulk-attached by list/detail endpoints so the client can render
 	// chips without an N+1 round-trip per row. Pointer + omitempty so paths that
 	// don't load labels (e.g. UpdateIssue, batch UpdateIssues, the issue:updated
@@ -1621,7 +1627,7 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 	if requesterID, ok := requireUserID(w, r); ok {
 		actorType, actorID := h.resolveActor(r, requesterID, uuidToString(issue.WorkspaceID))
 		if sourceRefs := h.issueSourceRefsForActor(r.Context(), issue, actorType, parseUUID(actorID)); sourceRefs != nil {
-			resp.SourceRefs = sourceRefs
+			applyIssueDiscussionRefs(&resp, sourceRefs)
 		}
 	}
 
@@ -2357,6 +2363,9 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	resp := issueToResponse(issue, prefix)
 	resp.Attachments = buildAttachmentResponses(res.Attachments)
+	if refs := h.issueSourceRefsForActor(r.Context(), issue, creatorType, parseUUID(actualCreatorID)); refs != nil {
+		applyIssueDiscussionRefs(&resp, refs)
+	}
 	if creatorType == "member" {
 		h.awardHonorXP(r.Context(), parseUUID(actualCreatorID), "issue.create", uuidToString(issue.ID))
 	}

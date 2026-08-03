@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -39,30 +39,27 @@ type ResearchTemplatePromptEditorProps = {
   disabled?: boolean;
 };
 
-/**
- * LRM-1139 / LRM-1140 A2: expand/edit full authoritative prompt.
- * Desktop → Dialog; viewport &lt;768 → Sheet. Does not dump into main textarea.
- */
-export function ResearchTemplatePromptEditor({
-  open,
-  onOpenChange,
+type EditorFormProps = {
+  initialDraft: string;
+  defaultPrompt: string;
+  disabled: boolean;
+  onApply: (next: string) => void;
+  onClose: () => void;
+};
+
+function PromptEditorForm({
+  initialDraft,
   defaultPrompt,
-  value,
+  disabled,
   onApply,
-  disabled = false,
-}: ResearchTemplatePromptEditorProps) {
+  onClose,
+}: EditorFormProps) {
   const { t, i18n } = useT("research");
-  const isMobile = useIsMobile();
   const errorId = useId();
-  const [draft, setDraft] = useState(value);
+  // Remounted by parent `key` when the dialog opens — no prop→state effect.
+  const [draft, setDraft] = useState(initialDraft);
   const [attempted, setAttempted] = useState(false);
   const isZh = (i18n?.language ?? "en").toLowerCase().startsWith("zh");
-
-  useEffect(() => {
-    if (!open) return;
-    setDraft(value);
-    setAttempted(false);
-  }, [open, value]);
 
   const han = countHanChars(draft);
   const len = draft.trim().length;
@@ -87,15 +84,10 @@ export function ResearchTemplatePromptEditor({
     setAttempted(true);
     if (empty || tooShort) return;
     onApply(draft);
-    onOpenChange(false);
+    onClose();
   };
 
-  const handleReset = () => {
-    setDraft(defaultPrompt);
-    setAttempted(false);
-  };
-
-  const body = (
+  return (
     <>
       <Textarea
         value={draft}
@@ -136,38 +128,66 @@ export function ResearchTemplatePromptEditor({
           </p>
         ) : null}
       </div>
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          onClick={() => {
+            setDraft(defaultPrompt);
+            setAttempted(false);
+          }}
+          data-testid="research-template-prompt-reset"
+        >
+          {t(($) => $.home.template_prompt_reset)}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          onClick={onClose}
+        >
+          {t(($) => $.home.template_prompt_cancel)}
+        </Button>
+        <Button
+          type="button"
+          disabled={disabled}
+          onClick={handleApply}
+          data-testid="research-template-prompt-apply"
+        >
+          {t(($) => $.home.template_prompt_apply)}
+        </Button>
+      </div>
     </>
   );
+}
 
-  const footer = (
-    <>
-      <Button
-        type="button"
-        variant="outline"
-        disabled={disabled}
-        onClick={handleReset}
-        data-testid="research-template-prompt-reset"
-      >
-        {t(($) => $.home.template_prompt_reset)}
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        disabled={disabled}
-        onClick={() => onOpenChange(false)}
-      >
-        {t(($) => $.home.template_prompt_cancel)}
-      </Button>
-      <Button
-        type="button"
-        disabled={disabled}
-        onClick={handleApply}
-        data-testid="research-template-prompt-apply"
-      >
-        {t(($) => $.home.template_prompt_apply)}
-      </Button>
-    </>
-  );
+/**
+ * LRM-1139 / LRM-1140 A2: expand/edit full authoritative prompt.
+ * Desktop → Dialog; viewport &lt;768 → Sheet. Does not dump into main textarea.
+ */
+export function ResearchTemplatePromptEditor({
+  open,
+  onOpenChange,
+  defaultPrompt,
+  value,
+  onApply,
+  disabled = false,
+}: ResearchTemplatePromptEditorProps) {
+  const { t } = useT("research");
+  const isMobile = useIsMobile();
+  const close = () => onOpenChange(false);
+  // Remount form whenever the surface opens so draft seeds from `value`.
+  const form = open ? (
+    <PromptEditorForm
+      key={value}
+      initialDraft={value}
+      defaultPrompt={defaultPrompt}
+      disabled={disabled}
+      onApply={onApply}
+      onClose={close}
+    />
+  ) : null;
 
   if (isMobile) {
     return (
@@ -183,12 +203,9 @@ export function ResearchTemplatePromptEditor({
               {t(($) => $.home.template_prompt_desc)}
             </SheetDescription>
           </SheetHeader>
-          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden px-4">
-            {body}
+          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto px-4 pb-4">
+            {form}
           </div>
-          <SheetFooter className="shrink-0 flex-row flex-wrap justify-end gap-2 border-t">
-            {footer}
-          </SheetFooter>
         </SheetContent>
       </Sheet>
     );
@@ -206,10 +223,9 @@ export function ResearchTemplatePromptEditor({
             {t(($) => $.home.template_prompt_desc)}
           </DialogDescription>
         </DialogHeader>
-        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
-          {body}
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto">
+          {form}
         </div>
-        <DialogFooter className="sm:justify-end">{footer}</DialogFooter>
       </DialogContent>
     </Dialog>
   );

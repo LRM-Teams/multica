@@ -3,8 +3,8 @@
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 
 /**
- * LRM-783 / LRM-781 — list-row skeleton matching dense `ResearchSessionRow`
- * (~58px · status dot · title · meta · avatars).
+ * LRM-783 / LRM-1106 — list-row skeleton matching dense `ResearchSessionRow`
+ * (status · title · stage · time · people). Breakpoint: md / 768.
  */
 export function ResearchSessionRowSkeleton() {
   return (
@@ -17,11 +17,12 @@ export function ResearchSessionRowSkeleton() {
         <Skeleton className="h-3.5 w-[55%] max-w-[16rem]" />
         <Skeleton className="h-2.5 w-[34%] max-w-[10rem] opacity-70" />
       </div>
+      <Skeleton className="hidden h-3 w-14 shrink-0 md:block" />
+      <Skeleton className="hidden h-3 w-10 shrink-0 md:block" />
       <span className="hidden items-center md:flex">
         <Skeleton className="size-[22px] rounded-full" />
         <Skeleton className="-ml-1.5 size-[22px] rounded-full" />
       </span>
-      <Skeleton className="hidden h-3 w-10 shrink-0 md:block" />
     </div>
   );
 }

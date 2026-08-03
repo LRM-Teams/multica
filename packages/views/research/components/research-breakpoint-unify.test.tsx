@@ -173,9 +173,12 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
         /data-testid="research-report-outline-aside"\s+className="[^"]*\bmd:block"/,
       );
       expect(listPage).toMatch(/className="hidden text-xs text-muted-foreground md:block"/);
-      expect(row).toMatch(/className="hidden [^"]*\bmd:inline-flex"/);
+      // LRM-1106: no goal chip; stage/time use md:inline (D2 chip removed).
+      expect(row).toMatch(/className="hidden [^"]*\bmd:inline"/);
       expect(row).toMatch(/className="hidden shrink-0 md:flex"/);
-      expect(row).toMatch(/className="shrink-0 opacity-100 md:opacity-0 md:transition-opacity/);
+      expect(row).toMatch(
+        /className="[^"]*shrink-0 opacity-100 md:opacity-0 md:transition-opacity/,
+      );
       expect(skeleton).toMatch(/className="hidden items-center md:flex"/);
       expect(skeleton).toMatch(/className="hidden h-3 w-10 shrink-0 md:block"/);
     });

@@ -106,6 +106,10 @@ vi.mock("../../i18n/use-time-ago", () => ({
   useTimeAgo: () => (dateStr: string) => `ago:${dateStr}`,
 }));
 
+vi.mock("../../i18n/time", () => ({
+  Time: ({ value }: { value: string }) => <time data-testid="list-time">{value}</time>,
+}));
+
 vi.mock("../../navigation/app-link", () => ({
   AppLink: ({
     children,
@@ -221,38 +225,45 @@ describe(`Smoke · list duplicate info (${SMOKE_ISSUES.listDuplicate})`, () => {
     expect(titleEl?.textContent?.length).toBeGreaterThan(0);
   });
 
-  it(`${SMOKE_ISSUES.listDuplicate}: title that is a prefix of goal still hides chip; distinct goal keeps chip`, () => {
-    const { unmount } = render(
-      <ResearchSessionRow
-        session={session({
-          title: "如何开发一个网页游戏",
-          goal: "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员",
-        })}
-        href="/research/s1"
-      />,
-    );
-    expect(
-      screen.queryByTestId("research-session-goal-chip"),
-      failHint(SMOKE_ISSUES.listDuplicate, "prefix-redundant chip should be hidden"),
-    ).toBeNull();
-    unmount();
+  it(
+    `${SMOKE_ISSUES.listDuplicate}: LRM-1106 D2 — inline goal chip never renders (goal lives in ⋯ menu)`,
+    () => {
+      const { unmount } = render(
+        <ResearchSessionRow
+          session={session({
+            title: "如何开发一个网页游戏",
+            goal: "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员",
+          })}
+          href="/research/s1"
+        />,
+      );
+      expect(
+        screen.queryByTestId("research-session-goal-chip"),
+        failHint(SMOKE_ISSUES.listDuplicate, "prefix-redundant chip should be hidden"),
+      ).toBeNull();
+      unmount();
 
-    render(
-      <ResearchSessionRow
-        session={session({
-          title: "Alpha market map",
-          goal: "Map the alpha market across regions with pricing and share",
-        })}
-        href="/research/s1"
-      />,
-    );
-    expect(screen.getByTestId("research-session-goal-chip")).toBeTruthy();
-  });
+      render(
+        <ResearchSessionRow
+          session={session({
+            title: "Alpha market map",
+            goal: "Map the alpha market across regions with pricing and share",
+          })}
+          href="/research/s1"
+        />,
+      );
+      expect(
+        screen.queryByTestId("research-session-goal-chip"),
+        failHint(SMOKE_ISSUES.listDuplicate, "distinct goal must not revive inline chip under D2"),
+      ).toBeNull();
+    },
+  );
 
-  // LRM-1104 #1962: list shell no longer uses max-w-3xl (width owned by LRM-1106).
-  it(`${SMOKE_ISSUES.listDuplicate}: research list content has no max-w-3xl shell`, () => {
+  // LRM-1104 #1962 + LRM-1106: no max-w-3xl shell; workbench owns max-w-[1240px].
+  it(`${SMOKE_ISSUES.listDuplicate}: research list workbench has max-w-[1240px] and no max-w-3xl shell`, () => {
     const listSrc = stripComments(readResearchSource("components/research-list-page.tsx"));
     const filterSrc = stripComments(readResearchSource("components/research-session-filter-bar.tsx"));
+    const heroSrc = stripComments(readResearchSource("components/research-home-hero.tsx"));
     expect(
       !/\bmax-w-3xl\b/.test(listSrc),
       failHint(SMOKE_ISSUES.listDuplicate, "research-list-page.tsx still has max-w-3xl shell"),
@@ -260,6 +271,14 @@ describe(`Smoke · list duplicate info (${SMOKE_ISSUES.listDuplicate})`, () => {
     expect(
       !/\bmax-w-3xl\b/.test(filterSrc),
       failHint(SMOKE_ISSUES.listDuplicate, "research-session-filter-bar.tsx still has max-w-3xl"),
+    ).toBe(true);
+    expect(
+      !/\bmax-w-3xl\b/.test(heroSrc),
+      failHint(SMOKE_ISSUES.listDuplicate, "hero still pins max-w-3xl"),
+    ).toBe(true);
+    expect(
+      /\bmax-w-\[1240px\]\b/.test(listSrc) || listSrc.includes("RESEARCH_LIST_WORKBENCH"),
+      failHint(SMOKE_ISSUES.listDuplicate, "list page missing workbench width"),
     ).toBe(true);
   });
 });
@@ -293,7 +312,7 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
     expect(isMobileViewport(360)).toBe(true);
   });
 
-  it(`${SMOKE_ISSUES.breakpoints}: baseline inventory — template chip-row still mixes sm: (dead-zone risk)`, () => {
+  it(`${SMOKE_ISSUES.breakpoints}: baseline inventory — template chip-row uses md: (768)`, () => {
     // LRM-1109 #1947: meta-menu no longer pairs useIsMobile with sm: classes.
     const meta = readResearchSource("components/research-session-meta-menu.tsx");
     expect(meta.includes("useIsMobile")).toBe(true);
@@ -305,13 +324,13 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
       ),
     ).toBe(false);
 
-    // LRM-1092: composer chip row still switches layout at sm: (640) — tracked below.
+    // LRM-1106: composer chip row aligns with md / 768.
     const templates = readResearchSource("components/research-template-chip-row.tsx");
     expect(
-      hasTailwindSmClass(templates),
+      /\bmd:/.test(templates) && !hasTailwindSmClass(templates),
       failHint(
         SMOKE_ISSUES.breakpoints,
-        "template-chip-row still switches layout at sm: (640)",
+        "template-chip-row should switch layout at md: (768)",
       ),
     ).toBe(true);
   });
@@ -327,7 +346,7 @@ describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, (
     ).toBe(true);
   });
 
-  it.fails(
+  it(
     `${SMOKE_ISSUES.breakpoints}: template chip-row layout switch should be md: (align with 768)`,
     () => {
       const templates = readResearchSource("components/research-template-chip-row.tsx");

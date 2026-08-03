@@ -41,9 +41,11 @@
     "goal_dialog_title": "Research goal",
     "goal_dialog_close": "Close",
     "goal_dialog_open": "Open session",
-    "who_working": "{{name}} working",
+    "who_working": "{{name}}",
     "output_line": "Output · {{summary}}",
-    "no_output": "Output · none yet"
+    "no_output": "Output · none yet",
+    "recent_heading": "최근 리서치",
+    "recent_count": "{{count}}"
   },
   "filter": {
     "search_label": "세션 제목 검색",
@@ -54,7 +56,12 @@
     "status_failed": "실패",
     "clear": "필터 지우기",
     "no_results": "일치하는 세션이 없습니다",
-    "no_results_hint": "다른 키워드를 시도하거나 필터를 지워 전체를 보세요"
+    "no_results_hint": "다른 키워드를 시도하거나 필터를 지워 전체를 보세요",
+    "status_all": "전체",
+    "count_aria": "{{label}} {{count}}",
+    "scope_line": "{{scope}} · 세션 {{count}}개",
+    "scope_query": "“{{query}}”",
+    "no_results_scope": "현재 조건: {{scope}}"
   },
   "actions": {
     "menu": "Research actions",
@@ -65,7 +72,8 @@
     "delete_desc": "The canvas, chat, and sources will be permanently removed.",
     "delete_confirm": "Delete",
     "delete_done": "Research deleted",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "view_goal": "목표 보기"
   },
   "goal_card": {
     "label": "GOAL",

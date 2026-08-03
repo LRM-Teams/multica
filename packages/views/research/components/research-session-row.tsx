@@ -1,25 +1,12 @@
 "use client";
 
-import { useState } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import type { ResearchSession } from "@multica/core/types";
-import { Button } from "@multica/ui/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n/use-t";
-import { useTimeAgo } from "../../i18n/use-time-ago";
+import { Time } from "../../i18n/time";
 import { AppLink } from "../../navigation/app-link";
 import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
-import {
-  sessionGoalSummary,
-  sessionShortTitle,
-  shouldShowSessionGoalChip,
-} from "../lib/session-list-filter";
+import { sessionDisplayTitle } from "../lib/session-list-filter";
 import { ResearchSessionRowActions } from "./research-session-row-actions";
 
 type StatusTone = { text: string; dot: string };
@@ -39,6 +26,8 @@ const DEFAULT_TONE: StatusTone = {
 interface ResearchSessionRowProps {
   session: ResearchSession;
   href: string;
+  /** Persist list filter state before navigating to detail (D-IX). */
+  onNavigate?: () => void;
 }
 
 function leadName(session: ResearchSession): string | null {
@@ -50,14 +39,16 @@ function leadName(session: ResearchSession): string | null {
 }
 
 /**
- * LRM-783 dense row + LRM-790 narrow/dark:
- * status · title · stage·time (avatars/time column yield <sm; stage kept).
- * Goal chip uses brand tokens (no hard-coded violet).
+ * LRM-1106 row — status · title+meta · stage · time · people · ⋯
+ * No inline goal chip (D2 → ⋯「查看目标」). Time uses `<Time kind="list">` (D3).
+ * Breakpoint: md / 768 only.
  */
-export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
+export function ResearchSessionRow({
+  session,
+  href,
+  onNavigate,
+}: ResearchSessionRowProps) {
   const { t } = useT("research");
-  const timeAgo = useTimeAgo();
-  const [goalOpen, setGoalOpen] = useState(false);
 
   const status = session.status;
   const tone = STATUS_TONES[status] ?? DEFAULT_TONE;
@@ -66,129 +57,103 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
     ($) => $.stage[session.current_stage as keyof typeof $.stage] ?? session.current_stage,
   );
   const fleetIds = (session.fleet_preview ?? []).map((m) => m.agent_id);
-  const title = sessionShortTitle(session);
-  const goalSummary = sessionGoalSummary(session);
-  const showGoalChip = shouldShowSessionGoalChip(session);
+  const title = sessionDisplayTitle(session);
   const who = leadName(session);
   const archived = status === "archived";
   const awaiting = status === "awaiting_user_confirm";
-  const relative = timeAgo(session.updated_at);
 
   return (
-    <>
-      <div
-        data-testid="research-session-row"
+    <div
+      data-testid="research-session-row"
+      data-session-id={session.id}
+      className={cn(
+        "group relative flex min-h-[58px] items-center gap-3 rounded-[10px] px-3 py-1.5 transition-colors",
+        "hover:bg-accent/70 focus-within:bg-accent/70",
+        "has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[a:focus-visible]:ring-offset-1",
+        archived && "opacity-55",
+      )}
+    >
+      <span
+        aria-hidden
         className={cn(
-          "group flex min-h-[58px] items-center gap-3 rounded-[10px] px-3 py-1.5 transition-colors hover:bg-accent/70",
-          archived && "opacity-55",
+          "size-2 shrink-0 rounded-full",
+          tone.dot,
+          status === "running" && "motion-safe:animate-pulse",
         )}
-      >
-        <span
-          aria-hidden
+      />
+      <span className="sr-only">{statusLabel}</span>
+
+      <div className="min-w-0 flex-1">
+        {/* Single primary tab stop — stretched hit target for the whole row. */}
+        <AppLink
+          href={href}
+          onClick={onNavigate}
           className={cn(
-            "size-2 shrink-0 rounded-full",
-            tone.dot,
-            status === "running" && "motion-safe:animate-pulse",
+            "relative block min-w-0 rounded-sm outline-none",
+            "after:absolute after:inset-y-[-6px] after:inset-x-[-8px] after:-z-0 after:content-['']",
           )}
-        />
-        <span className="sr-only">{statusLabel}</span>
-
-        <div className="min-w-0 flex-1">
-          <AppLink href={href} className="block min-w-0">
-            <div className="truncate text-[13.5px] font-medium tracking-tight">
-              {title}
-            </div>
-          </AppLink>
-
-          <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-            {/* Desktop-only goal chip — yields on narrow so stage·time stay scannable.
-                LRM-1104: omit when chip text duplicates the title (equal / mutual prefix). */}
-            {showGoalChip ? (
-              <button
-                type="button"
-                data-testid="research-session-goal-chip"
-                className="hidden max-w-[min(100%,14rem)] items-center gap-1 truncate rounded-md border border-brand/25 bg-brand/10 px-1.5 py-px text-[11px] font-semibold text-brand hover:bg-brand/15 md:inline-flex"
-                onClick={() => setGoalOpen(true)}
-              >
-                <span
-                  aria-hidden
-                  className="size-1.5 shrink-0 rounded-full bg-brand"
-                />
-                <span className="truncate">
-                  {t(($) => $.list.goal_chip, { summary: goalSummary })}
-                </span>
-              </button>
+        >
+          <div
+            className={cn(
+              "relative z-[1] text-sm font-medium tracking-tight text-foreground",
+              "line-clamp-2 md:truncate md:whitespace-nowrap",
+            )}
+          >
+            {title}
+          </div>
+          <div className="relative z-[1] mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+            {awaiting ? (
+              <span className="shrink-0 font-medium text-warning">{statusLabel}</span>
             ) : null}
-
-            <AppLink
-              href={href}
-              className="flex min-w-0 items-center gap-1.5 truncate text-[11.5px] text-muted-foreground"
-            >
-              {awaiting ? (
-                <span className="shrink-0 font-semibold text-warning">{statusLabel}</span>
-              ) : null}
-              {awaiting ? (
+            {awaiting && who ? (
+              <span aria-hidden className="text-muted-foreground/50">
+                ·
+              </span>
+            ) : null}
+            {who ? (
+              <span className="min-w-0 truncate">
+                {t(($) => $.list.who_working, { name: who })}
+              </span>
+            ) : null}
+            {/* Narrow: fold stage · time into the secondary line. */}
+            <span className="inline-flex min-w-0 items-center gap-1.5 md:hidden">
+              {(awaiting || who) && stageLabel ? (
                 <span aria-hidden className="text-muted-foreground/50">
                   ·
                 </span>
               ) : null}
-              <span className="shrink-0 font-medium tracking-wide text-foreground/80">
-                {stageLabel}
-              </span>
+              <span className="shrink-0 font-medium text-foreground/80">{stageLabel}</span>
               <span aria-hidden className="text-muted-foreground/50">
                 ·
               </span>
-              <span className="shrink-0 tabular-nums">{relative}</span>
-              {who ? (
-                <span className="hidden min-w-0 truncate sm:inline">
-                  <span aria-hidden className="text-muted-foreground/50">
-                    {" "}
-                    ·{" "}
-                  </span>
-                  {t(($) => $.list.who_working, { name: who })}
-                </span>
-              ) : null}
-            </AppLink>
+              <Time kind="list" value={session.updated_at} className="shrink-0 tabular-nums" />
+            </span>
           </div>
-        </div>
-
-        {/* LRM-790: avatar pile yields below sm. */}
-        <AgentAvatarStack
-          agentIds={fleetIds}
-          size={22}
-          max={3}
-          className="hidden shrink-0 md:flex"
-        />
-
-        <div className="shrink-0 opacity-100 md:opacity-0 md:transition-opacity md:group-hover:opacity-100">
-          <ResearchSessionRowActions session={session} />
-        </div>
+        </AppLink>
       </div>
 
-      {showGoalChip ? (
-        <Dialog open={goalOpen} onOpenChange={setGoalOpen}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>{t(($) => $.list.goal_dialog_title)}</DialogTitle>
-            </DialogHeader>
-            <p className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-              {session.goal}
-            </p>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setGoalOpen(false)}>
-                {t(($) => $.list.goal_dialog_close)}
-              </Button>
-              <AppLink
-                href={href}
-                className="inline-flex h-8 items-center justify-center rounded-lg bg-brand px-2.5 text-sm font-medium text-brand-foreground"
-                onClick={() => setGoalOpen(false)}
-              >
-                {t(($) => $.list.goal_dialog_open)}
-              </AppLink>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      ) : null}
-    </>
+      {/* Desktop columns: stage | time | people */}
+      <span
+        className="hidden shrink-0 text-xs font-medium text-foreground/80 md:inline"
+        aria-hidden
+      >
+        {stageLabel}
+      </span>
+      <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground md:inline" aria-hidden>
+        <Time kind="list" value={session.updated_at} />
+      </span>
+
+      <AgentAvatarStack
+        agentIds={fleetIds}
+        size={22}
+        max={3}
+        className="hidden shrink-0 md:flex"
+      />
+
+      {/* Visible on hover AND focus-within (keyboard). */}
+      <div className="relative z-[1] shrink-0 opacity-100 md:opacity-0 md:transition-opacity md:group-hover:opacity-100 md:group-focus-within:opacity-100">
+        <ResearchSessionRowActions session={session} href={href} />
+      </div>
+    </div>
   );
 }

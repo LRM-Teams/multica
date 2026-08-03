@@ -17,6 +17,9 @@ const (
 type cursorDecodedToolEvent struct {
 	event  RuntimeToolEvent
 	reason string
+	// Diag-only (not Activity facts). Set on completed tool_call decode.
+	inputEnrich    string // args_path | result_path | result_miss | ""
+	resultKeyShape string // key tree of result payload, no values
 }
 
 type cursorToolEventDecoder func(*cursorStreamEvent, time.Time) []cursorDecodedToolEvent
@@ -44,7 +47,8 @@ func decodeCursorCurrentToolCall(evt *cursorStreamEvent, occurredAt time.Time) [
 	// #103: writeToolCall (and some read) completed frames often omit args
 	// and only put the path on result.success.path. Backfill needs Input to
 	// carry path, so enrich when args are empty/missing path.
-	input = enrichCursorToolCallInputFromResult(input, result)
+	var enrichSrc string
+	input, enrichSrc = enrichCursorToolCallInputFromResult(input, result)
 	event := RuntimeToolEvent{
 		Schema:        RuntimeToolEventSchemaV1,
 		EventID:       cursorToolEventID(evt.SessionID, evt.CallID, phase),
@@ -58,13 +62,20 @@ func decodeCursorCurrentToolCall(evt *cursorStreamEvent, occurredAt time.Time) [
 		Output:        cursorToolCallResultText(result),
 		OccurredAt:    occurredAt,
 	}
+	decoded := cursorDecodedToolEvent{event: event}
+	if phase == RuntimeToolEventCompleted {
+		decoded.inputEnrich = enrichSrc
+		decoded.resultKeyShape = cursorResultKeyShape(result)
+	}
 	if !ok {
-		return []cursorDecodedToolEvent{{event: event, reason: "unsupported_payload"}}
+		decoded.reason = "unsupported_payload"
+		return []cursorDecodedToolEvent{decoded}
 	}
 	if phase != RuntimeToolEventStarted && phase != RuntimeToolEventCompleted {
-		return []cursorDecodedToolEvent{{event: event, reason: "unsupported_subtype"}}
+		decoded.reason = "unsupported_subtype"
+		return []cursorDecodedToolEvent{decoded}
 	}
-	return []cursorDecodedToolEvent{{event: event}}
+	return []cursorDecodedToolEvent{decoded}
 }
 
 // enrichCursorToolCallInputFromResult fills Input.path from the Cursor
@@ -74,20 +85,80 @@ func decodeCursorCurrentToolCall(evt *cursorStreamEvent, occurredAt time.Time) [
 //	{"path":"/abs/file"}
 //
 // Does not overwrite an existing non-empty path on args.
-func enrichCursorToolCallInputFromResult(input map[string]any, result json.RawMessage) map[string]any {
+// Second return is a dig label: args_path | result_path | result_miss.
+func enrichCursorToolCallInputFromResult(input map[string]any, result json.RawMessage) (map[string]any, string) {
 	if pathFromMap(input) != "" {
-		return input
+		return input, "args_path"
 	}
 	path := cursorToolCallResultPath(result)
 	if path == "" {
-		return input
+		return input, "result_miss"
 	}
 	out := make(map[string]any, len(input)+1)
 	for k, v := range input {
 		out[k] = v
 	}
 	out["path"] = path
-	return out
+	return out, "result_path"
+}
+
+// cursorResultKeyShape returns a compact key tree of the result payload
+// (types only, no string values) for #103 dig when path enrichment misses.
+func cursorResultKeyShape(result json.RawMessage) string {
+	if len(result) == 0 || string(result) == "null" {
+		return "<empty>"
+	}
+	var root any
+	if err := json.Unmarshal(result, &root); err != nil {
+		return "<invalid_json>"
+	}
+	return cursorKeyShapeValue(root, 0)
+}
+
+func cursorKeyShapeValue(v any, depth int) string {
+	if depth > 3 || v == nil {
+		return "..."
+	}
+	switch t := v.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		// insertion-sort for stable log grepping without importing sort in hot path concerns
+		for i := 0; i < len(keys); i++ {
+			for j := i + 1; j < len(keys); j++ {
+				if keys[j] < keys[i] {
+					keys[i], keys[j] = keys[j], keys[i]
+				}
+			}
+		}
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			nested := cursorKeyShapeValue(t[k], depth+1)
+			switch t[k].(type) {
+			case map[string]any:
+				parts = append(parts, k+"={"+nested+"}")
+			case []any:
+				parts = append(parts, k+":arr")
+			case string:
+				parts = append(parts, k+":str")
+			case float64:
+				parts = append(parts, k+":num")
+			case bool:
+				parts = append(parts, k+":bool")
+			case nil:
+				parts = append(parts, k+":null")
+			default:
+				parts = append(parts, k+":"+nested)
+			}
+		}
+		return strings.Join(parts, ",")
+	case []any:
+		return "arr"
+	default:
+		return ""
+	}
 }
 
 func pathFromMap(m map[string]any) string {
@@ -245,4 +316,26 @@ func (d *cursorToolEventDiagnostics) accepted(shape string) {
 
 func (d *cursorToolEventDiagnostics) dropped(reason string) {
 	d.droppedByReason[reason]++
+}
+
+
+// classifyWriteInputEnrich maps decode+tracker outcome to Parker/Barry tags:
+// result_path | started_fallback | none (plus args_path when started args already had path).
+func classifyWriteInputEnrich(decoded cursorDecodedToolEvent, message Message) string {
+	finalPath := pathFromMap(message.Input)
+	if finalPath == "" {
+		return "none"
+	}
+	// completed event already carried path after enrich
+	if pathFromMap(decoded.event.Input) != "" {
+		if decoded.inputEnrich == "result_path" {
+			return "result_path"
+		}
+		if decoded.inputEnrich == "args_path" {
+			return "args_path"
+		}
+		return "result_path"
+	}
+	// completed Input empty but tracker filled from started
+	return "started_fallback"
 }

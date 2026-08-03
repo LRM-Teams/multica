@@ -17,19 +17,30 @@ func researchChatSessionTitle(sessionID pgtype.UUID) string {
 	return "research:" + uuidToString(sessionID)
 }
 
-func buildResearchWakePrompt(session db.ResearchSession, body string, senderType string) string {
+func buildResearchWakePrompt(session db.ResearchSession, body string, senderType string, durableRun bool) string {
 	var b strings.Builder
-	b.WriteString("## Research Fleet assignment\n\n")
+	b.WriteString("## Research Fleet conversation\n\n")
 	b.WriteString(fmt.Sprintf("- Session ID: `%s`\n", uuidToString(session.ID)))
 	b.WriteString(fmt.Sprintf("- Title: %s\n", session.Title))
 	b.WriteString(fmt.Sprintf("- Goal: %s\n", session.Goal))
 	b.WriteString(fmt.Sprintf("- Status: %s\n", session.Status))
 	b.WriteString(fmt.Sprintf("- Current stage: %s\n\n", session.CurrentStage))
-	b.WriteString("Use `multica research` CLI tools (graph-append, source-upsert, report-patch, presence, stage-eval, hire, optimize, archive).\n")
-	b.WriteString("Do NOT rewrite the user's session goal; only the user may change it mid-flight. Prefer hire/archive for roster gaps (lead only).\n")
+	if durableRun {
+		b.WriteString("This wake is for conversation only. The durable Research Run owns planning, task state, evidence, reports, and quality gates.\n")
+		b.WriteString(fmt.Sprintf("Read the canonical run with `multica research session get %s --output json` when context is needed.\n", uuidToString(session.ID)))
+		b.WriteString("Do not use graph-append, source-upsert, report-patch, stage-eval, or product-round commands to advance the run.\n")
+		b.WriteString("Canonical work arrives as a separate task-bound assignment and must be returned with `multica research task-result`.\n")
+	} else {
+		b.WriteString("Use `multica research` CLI tools (graph-append, source-upsert, report-patch, presence, stage-eval, hire, optimize, archive).\n")
+		b.WriteString("Prefer hire/archive for roster gaps (lead only).\n")
+	}
+	b.WriteString("Do NOT rewrite the user's session goal; only the user may change it mid-flight.\n")
 	b.WriteString("Your assistant reply in this chat is mirrored into the research session drawer — answer the user there.\n")
-	b.WriteString("Also keep the exploration canvas dense: record probes / findings / dead_ends / pivots via graph-append.\n")
-	b.WriteString("Do not treat a single generic web_search dump as completion.\n\n")
+	if !durableRun {
+		b.WriteString("Also keep the exploration canvas dense: record probes / findings / dead_ends / pivots via graph-append.\n")
+		b.WriteString("Do not treat a single generic web_search dump as completion.\n")
+	}
+	b.WriteString("\n")
 	if senderType == "user" {
 		b.WriteString("### User message (reply now)\n\n")
 	} else {
@@ -97,7 +108,15 @@ func (h *Handler) enqueueResearchAgentWake(
 		return err
 	}
 
-	prompt := buildResearchWakePrompt(session, body, senderType)
+	var durableRun bool
+	if err = h.DB.QueryRow(ctx, `
+		SELECT run_initialized_at IS NOT NULL
+		FROM research_session
+		WHERE id = $1 AND workspace_id = $2
+	`, session.ID, workspaceID).Scan(&durableRun); err != nil {
+		return fmt.Errorf("inspect research run ownership: %w", err)
+	}
+	prompt := buildResearchWakePrompt(session, body, senderType, durableRun)
 	msg, err := h.Queries.CreateChatMessage(ctx, db.CreateChatMessageParams{
 		ChatSessionID: chatSession.ID,
 		Role:          "user",

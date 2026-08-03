@@ -115,7 +115,7 @@ func TestBuildResearchWakePromptStillMentionsTools(t *testing.T) {
 	_ = sid.Scan("11111111-1111-1111-1111-111111111111")
 	prompt := buildResearchWakePrompt(db.ResearchSession{
 		ID: sid, Title: "T", Goal: "G", Status: "running", CurrentStage: "s1_plan",
-	}, "ResearchNextStep (unattended): kind=expand_subquestion", "system")
+	}, "ResearchNextStep (unattended): kind=expand_subquestion", "system", false)
 	if !strings.Contains(prompt, "graph-append") {
 		t.Fatal("wake must keep research CLI tools")
 	}

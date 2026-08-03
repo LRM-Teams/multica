@@ -27,6 +27,7 @@ import (
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/realtime"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	"github.com/multica-ai/multica/server/internal/sandboxws"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/storage"
@@ -143,6 +144,7 @@ type Handler struct {
 	Analytics           analytics.Client
 	WendyComposer       WendyComposer
 	WorkGraph           *workgraph.Store
+	ResearchRun         *researchrun.Engine
 	// Metrics is the shared business-metrics collector built by main.go.
 	// May be nil in tests / self-hosted with the metrics listener disabled;
 	// every Record* method is nil-safe and obsmetrics.RecordEvent treats a
@@ -321,6 +323,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	}
 	if pool, ok := txStarter.(*pgxpool.Pool); ok {
 		h.WorkGraph = workgraph.NewStore(pool)
+		researchStore := researchrun.NewPostgresStore(pool)
+		h.ResearchRun = researchrun.NewEngine(researchStore, &researchRunDispatcher{handler: h}, &researchRunProjector{handler: h})
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
 	}
 	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit

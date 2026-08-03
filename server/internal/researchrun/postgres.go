@@ -1,0 +1,674 @@
+package researchrun
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+type PostgresStore struct {
+	pool *pgxpool.Pool
+}
+
+func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
+	return &PostgresStore{pool: pool}
+}
+
+func prepareRunInitialization(in StartInput, cfg RunConfig) (json.RawMessage, []byte, error) {
+	if err := validateRunConfig(cfg); err != nil {
+		return nil, nil, err
+	}
+	if strings.TrimSpace(in.Goal) == "" || len(strings.TrimSpace(in.Goal)) > 32<<10 || len(strings.TrimSpace(in.Title)) > 1024 || len(strings.TrimSpace(in.Language)) > 64 {
+		return nil, nil, fmt.Errorf("%w: invalid start contract text", ErrInvalidContract)
+	}
+	sourcePolicy, err := resolveContractObject(json.RawMessage(`{}`), in.SourcePolicy, "source_policy")
+	if err != nil {
+		return nil, nil, err
+	}
+	configJSON, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sourcePolicy, configJSON, nil
+}
+
+func (s *PostgresStore) CreateRun(ctx context.Context, in StartInput, cfg RunConfig) (Run, RunEvent, error) {
+	if strings.TrimSpace(in.SessionID) != "" {
+		return Run{}, RunEvent{}, fmt.Errorf("%w: create run assigns the session id", ErrInvalidContract)
+	}
+	sourcePolicy, configJSON, err := prepareRunInitialization(in, cfg)
+	if err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	productRound := in.ProductRound
+	if productRound <= 0 {
+		productRound = 1
+	}
+	productRoundBudget := in.ProductRoundBudget
+	if productRoundBudget <= 0 {
+		switch in.DepthTier {
+		case "shallow":
+			productRoundBudget = 2
+		case "deep":
+			productRoundBudget = 10
+		default:
+			productRoundBudget = 5
+		}
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = tx.QueryRow(ctx, `
+		INSERT INTO research_session (
+			workspace_id, fleet_id, created_by, title, goal, status, current_stage,
+			depth_tier, product_round, product_round_budget
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, 'running', 's1_plan', $6, $7, $8)
+		RETURNING id::text
+	`, in.WorkspaceID, in.FleetID, in.CreatedBy, strings.TrimSpace(in.Title),
+		strings.TrimSpace(in.Goal), in.DepthTier, productRound, productRoundBudget).Scan(&in.SessionID); err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	event, err := initializeRunTx(ctx, tx, in, cfg, sourcePolicy, configJSON)
+	if err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	run, err := loadRun(ctx, tx, in.SessionID, in.WorkspaceID, false)
+	if err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	return run, event, nil
+}
+
+func (s *PostgresStore) InitializeRun(ctx context.Context, in StartInput, cfg RunConfig) (Run, RunEvent, error) {
+	sourcePolicy, configJSON, err := prepareRunInitialization(in, cfg)
+	if err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	run, err := loadRunForUpdate(ctx, tx, in.SessionID, in.WorkspaceID)
+	if err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	if run.InitializedAt != nil {
+		return run, RunEvent{}, tx.Commit(ctx)
+	}
+	event, err := initializeRunTx(ctx, tx, in, cfg, sourcePolicy, configJSON)
+	if err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	run, err = loadRun(ctx, tx, in.SessionID, in.WorkspaceID, false)
+	if err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Run{}, RunEvent{}, err
+	}
+	return run, event, nil
+}
+
+func initializeRunTx(ctx context.Context, tx pgx.Tx, in StartInput, cfg RunConfig, sourcePolicy json.RawMessage, configJSON []byte) (RunEvent, error) {
+	var err error
+	if _, err = tx.Exec(ctx, `
+		UPDATE research_session
+		SET orchestrator_version = $2,
+		    run_config = $3,
+		    run_initialized_at = now(),
+		    last_progress_at = now(),
+		    next_reconcile_at = now(),
+		    stop_reason = '',
+		    last_error = '',
+		    updated_at = now()
+		WHERE id = $1::uuid
+	`, in.SessionID, OrchestratorVersion, configJSON); err != nil {
+		return RunEvent{}, err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_contract_revision (
+			workspace_id, session_id, goal_version, goal, language,
+			source_policy, run_limits, authored_by, reason
+		) VALUES ($1::uuid, $2::uuid, 1, $3, $4, $5, $6, $7::uuid, 'run_started')
+		ON CONFLICT (session_id, goal_version) DO NOTHING
+	`, in.WorkspaceID, in.SessionID, strings.TrimSpace(in.Goal), strings.TrimSpace(in.Language),
+		sourcePolicy, configJSON, in.CreatedBy); err != nil {
+		return RunEvent{}, err
+	}
+	var rootQuestionID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO research_question (
+			workspace_id, session_id, client_key, kind, question, required,
+			status, priority, impact, uncertainty, novelty, coverage,
+			goal_version, plan_version
+		) VALUES ($1::uuid, $2::uuid, 'root', 'dimension', $3, false,
+		          'in_progress', 1, 1, 0.8, 1, 0, 1, 1)
+		ON CONFLICT (session_id, goal_version, plan_version, client_key)
+		DO UPDATE SET question = EXCLUDED.question
+		RETURNING id::text
+	`, in.WorkspaceID, in.SessionID, strings.TrimSpace(in.Goal)).Scan(&rootQuestionID)
+	if err != nil {
+		return RunEvent{}, err
+	}
+	objective := buildPlanningObjective(in.Goal, in.Language)
+	var planTaskID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO research_task (
+			workspace_id, session_id, question_id, client_key, kind, objective,
+			required_capability, expected_result, acceptance_criteria, priority,
+			status, assigned_agent_id, goal_version, plan_version, max_attempts,
+			timeout_seconds, ready_at
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'plan:1', 'plan', $4,
+		          'lead', 'research_plan_v1', '{"schema_version":1}'::jsonb, 1,
+		          'ready', NULLIF($5, '')::uuid, 1, 1, $6, $7, now())
+		ON CONFLICT (session_id, goal_version, plan_version, client_key)
+		DO UPDATE SET objective = EXCLUDED.objective
+		RETURNING id::text
+	`, in.WorkspaceID, in.SessionID, rootQuestionID, objective, in.LeadAgentID,
+		cfg.MaxAttemptsPerTask, cfg.TaskTimeoutSeconds).Scan(&planTaskID)
+	if err != nil {
+		return RunEvent{}, err
+	}
+	event, err := appendEvent(ctx, tx, in.WorkspaceID, in.SessionID, "run_started", "run-started", "user", in.CreatedBy, map[string]any{
+		"goal_version":         1,
+		"plan_version":         1,
+		"root_question_id":     rootQuestionID,
+		"plan_task_id":         planTaskID,
+		"orchestrator_version": OrchestratorVersion,
+	})
+	if err != nil {
+		return RunEvent{}, err
+	}
+	return event, nil
+}
+
+func (s *PostgresStore) GetRun(ctx context.Context, sessionID, workspaceID string) (Run, error) {
+	return loadRun(ctx, s.pool, sessionID, workspaceID, false)
+}
+
+func (s *PostgresStore) GetCurrentContract(ctx context.Context, sessionID, workspaceID string) (ResearchContract, error) {
+	var contract ResearchContract
+	err := s.pool.QueryRow(ctx, `
+		SELECT revision.goal_version, revision.goal, revision.scope,
+		       revision.audience, revision.freshness, revision.language,
+		       revision.source_policy, revision.run_limits, revision.reason,
+		       revision.created_at
+		FROM research_contract_revision revision
+		JOIN research_session session ON session.id = revision.session_id
+		WHERE revision.session_id = $1::uuid AND session.workspace_id = $2::uuid
+		ORDER BY revision.goal_version DESC
+		LIMIT 1
+	`, sessionID, workspaceID).Scan(
+		&contract.GoalVersion, &contract.Goal, &contract.Scope,
+		&contract.Audience, &contract.Freshness, &contract.Language,
+		&contract.SourcePolicy, &contract.RunLimits, &contract.Reason,
+		&contract.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ResearchContract{}, ErrRunNotFound
+	}
+	return contract, err
+}
+
+func loadRunForUpdate(ctx context.Context, tx pgx.Tx, sessionID, workspaceID string) (Run, error) {
+	return loadRun(ctx, tx, sessionID, workspaceID, true)
+}
+
+type rowQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func loadRun(ctx context.Context, q rowQuerier, sessionID, workspaceID string, forUpdate bool) (Run, error) {
+	query := `
+		SELECT id::text, workspace_id::text, fleet_id::text, created_by::text,
+		       title, goal, status, current_stage, depth_tier,
+		       goal_version, plan_version, state_version, orchestrator_version,
+		       run_config, run_stats, run_initialized_at, last_progress_at, next_reconcile_at,
+		       stop_reason, last_error
+		FROM research_session
+		WHERE id = $1::uuid AND workspace_id = $2::uuid`
+	if forUpdate {
+		query += " FOR UPDATE"
+	}
+	var run Run
+	var configJSON, statsJSON []byte
+	if err := q.QueryRow(ctx, query, sessionID, workspaceID).Scan(
+		&run.SessionID, &run.WorkspaceID, &run.FleetID, &run.CreatedBy,
+		&run.Title, &run.Goal, &run.Status, &run.CurrentStage, &run.DepthTier,
+		&run.GoalVersion, &run.PlanVersion, &run.StateVersion, &run.OrchestratorVersion,
+		&configJSON, &statsJSON, &run.InitializedAt, &run.LastProgressAt, &run.NextReconcileAt,
+		&run.StopReason, &run.LastError,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Run{}, ErrRunNotFound
+		}
+		return Run{}, err
+	}
+	run.Config = DefaultRunConfig(run.DepthTier)
+	if len(configJSON) > 0 {
+		if err := json.Unmarshal(configJSON, &run.Config); err != nil {
+			return Run{}, fmt.Errorf("decode run config: %w", err)
+		}
+	}
+	if len(statsJSON) > 0 {
+		if err := json.Unmarshal(statsJSON, &run.Stats); err != nil {
+			return Run{}, fmt.Errorf("decode run stats: %w", err)
+		}
+	}
+	return run, nil
+}
+
+func (s *PostgresStore) ListQuestions(ctx context.Context, sessionID string) ([]Question, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, session_id::text, COALESCE(parent_question_id::text, ''),
+		       COALESCE(created_by_task_id::text, ''), client_key, kind, question,
+		       required, status, priority, impact, uncertainty, novelty, coverage,
+		       goal_version, plan_version, COALESCE(answer_claim_id::text, ''), terminal_explanation
+		FROM research_question WHERE session_id = $1::uuid
+		ORDER BY required DESC, priority DESC, created_at, id
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Question{}
+	for rows.Next() {
+		var item Question
+		if err := rows.Scan(&item.ID, &item.SessionID, &item.ParentQuestionID, &item.CreatedByTaskID,
+			&item.ClientKey, &item.Kind, &item.Question, &item.Required, &item.Status,
+			&item.Priority, &item.Impact, &item.Uncertainty, &item.Novelty, &item.Coverage,
+			&item.GoalVersion, &item.PlanVersion, &item.AnswerClaimID, &item.TerminalExplanation); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) ListTasks(ctx context.Context, sessionID string) ([]Task, error) {
+	rows, err := s.pool.Query(ctx, taskSelectSQL+` WHERE t.session_id = $1::uuid ORDER BY t.priority DESC, t.created_at, t.id`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Task{}
+	for rows.Next() {
+		item, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) ListAttempts(ctx context.Context, sessionID string) ([]Attempt, error) {
+	rows, err := s.pool.Query(ctx, attemptSelectSQL+` WHERE a.session_id = $1::uuid ORDER BY a.created_at, a.id`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Attempt{}
+	for rows.Next() {
+		item, err := scanAttempt(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) ListPendingCancellations(ctx context.Context, sessionID string) ([]PendingCancellation, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, COALESCE(inbox_task_id::text, ''), dispatch_key, dispatched_at
+		FROM research_task_attempt
+		WHERE session_id = $1::uuid
+		  AND status = 'cancelled'
+		  AND cancellation_completed_at IS NULL
+		ORDER BY dispatched_at, id
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PendingCancellation{}
+	for rows.Next() {
+		var item PendingCancellation
+		if err = rows.Scan(&item.AttemptID, &item.InboxTaskID, &item.DispatchKey, &item.DispatchedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) MarkCancellationsCompleted(ctx context.Context, sessionID string, attemptIDs []string) error {
+	if len(attemptIDs) == 0 {
+		return nil
+	}
+	command, err := s.pool.Exec(ctx, `
+		UPDATE research_task_attempt
+		SET cancellation_completed_at = COALESCE(cancellation_completed_at, now()), updated_at = now()
+		WHERE session_id = $1::uuid
+		  AND id::text = ANY($2::text[])
+		  AND status = 'cancelled'
+	`, sessionID, attemptIDs)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != int64(len(attemptIDs)) {
+		return fmt.Errorf("%w: cancellation attempts changed concurrently", ErrInvalidTransition)
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListFleetMembers(ctx context.Context, sessionID, workspaceID string) ([]FleetMember, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT m.agent_id::text, m.role, m.status, m.is_lead
+		FROM research_fleet_member m
+		JOIN research_session s ON s.fleet_id = m.fleet_id
+		WHERE s.id = $1::uuid AND s.workspace_id = $2::uuid AND m.workspace_id = s.workspace_id
+		ORDER BY m.is_lead DESC, m.created_at, m.id
+	`, sessionID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []FleetMember{}
+	for rows.Next() {
+		var item FleetMember
+		if err := rows.Scan(&item.AgentID, &item.Role, &item.Status, &item.IsLead); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) GetTask(ctx context.Context, taskID, sessionID string) (Task, error) {
+	row := s.pool.QueryRow(ctx, taskSelectSQL+` WHERE t.id = $1::uuid AND t.session_id = $2::uuid`, taskID, sessionID)
+	task, err := scanTask(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, ErrRunNotFound
+	}
+	return task, err
+}
+
+func (s *PostgresStore) TaskContext(ctx context.Context, taskID, workspaceID string) (RunSnapshot, error) {
+	var sessionID string
+	if err := s.pool.QueryRow(ctx, `SELECT session_id::text FROM research_task WHERE id = $1::uuid AND workspace_id = $2::uuid`, taskID, workspaceID).Scan(&sessionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RunSnapshot{}, ErrRunNotFound
+		}
+		return RunSnapshot{}, err
+	}
+	run, err := s.GetRun(ctx, sessionID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	contract, err := s.GetCurrentContract(ctx, sessionID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	questions, err := s.ListQuestions(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	tasks, err := s.ListTasks(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	attempts, err := s.ListAttempts(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	sources, err := s.ListSourceSnapshots(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	observations, err := s.ListObservations(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	claims, err := s.ListClaims(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	gate, err := s.EvaluateGate(ctx, sessionID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
+	return RunSnapshot{
+		Run: run, Contract: contract, Questions: questions, Tasks: tasks, Attempts: attempts,
+		Sources: sources, Observations: observations, Claims: claims, Gate: gate,
+	}, nil
+}
+
+func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, duration time.Duration) (Run, bool, error) {
+	var workspaceID string
+	err := s.pool.QueryRow(ctx, `
+		UPDATE research_session
+		SET reconcile_lease_token = $2::uuid,
+		    reconcile_lease_expires_at = now() + $3::interval,
+		    updated_at = now()
+		WHERE id = $1::uuid
+		  AND (
+		    status = 'running'
+		    OR EXISTS (
+		      SELECT 1 FROM research_task_attempt attempt
+		      WHERE attempt.session_id = research_session.id
+		        AND attempt.status = 'cancelled'
+		        AND attempt.cancellation_completed_at IS NULL
+		    )
+		    OR EXISTS (
+		      SELECT 1 FROM research_run_event event
+		      WHERE event.session_id = research_session.id
+		        AND event.projected_at IS NULL
+		        AND event.next_projection_at <= now()
+		    )
+		  )
+		  AND (reconcile_lease_expires_at IS NULL OR reconcile_lease_expires_at < now() OR reconcile_lease_token = $2::uuid)
+		RETURNING workspace_id::text
+	`, sessionID, token, duration.String()).Scan(&workspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Run{}, false, nil
+	}
+	if err != nil {
+		return Run{}, false, err
+	}
+	run, err := s.GetRun(ctx, sessionID, workspaceID)
+	return run, true, err
+}
+
+func (s *PostgresStore) ReleaseRun(ctx context.Context, sessionID, token string, next time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE research_session
+		SET reconcile_lease_token = NULL, reconcile_lease_expires_at = NULL,
+		    next_reconcile_at = $3, updated_at = now()
+		WHERE id = $1::uuid AND reconcile_lease_token = $2::uuid
+	`, sessionID, token, next)
+	return err
+}
+
+func (s *PostgresStore) ListDueRunIDs(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text FROM research_session
+		WHERE run_initialized_at IS NOT NULL
+		  AND (
+		    (status = 'running' AND next_reconcile_at <= now())
+		    OR EXISTS (
+		      SELECT 1 FROM research_task_attempt attempt
+		      WHERE attempt.session_id = research_session.id
+		        AND attempt.status = 'cancelled'
+		        AND attempt.cancellation_completed_at IS NULL
+		    )
+		    OR EXISTS (
+		      SELECT 1 FROM research_run_event event
+		      WHERE event.session_id = research_session.id
+		        AND event.projected_at IS NULL
+		        AND event.next_projection_at <= now()
+		    )
+		  )
+		ORDER BY LEAST(
+		  CASE WHEN status = 'running' THEN next_reconcile_at ELSE 'infinity'::timestamptz END,
+		  COALESCE((
+		    SELECT min(event.next_projection_at)
+		    FROM research_run_event event
+		    WHERE event.session_id = research_session.id AND event.projected_at IS NULL
+		  ), 'infinity'::timestamptz)
+		), id LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+const taskSelectSQL = `
+	SELECT t.id::text, t.session_id::text, t.workspace_id::text,
+	       COALESCE(t.question_id::text, ''), COALESCE(t.parent_task_id::text, ''),
+	       t.client_key, t.kind, t.objective, t.required_capability,
+	       t.expected_result, t.acceptance_criteria, t.priority, t.status,
+	       COALESCE(t.assigned_agent_id::text, ''), t.goal_version, t.plan_version,
+	       t.max_attempts, t.timeout_seconds,
+	       (SELECT count(*)::int FROM research_task_attempt a WHERE a.task_id = t.id),
+	       t.ready_at, t.started_at, t.completed_at, t.terminal_reason
+	FROM research_task t`
+
+type scanner interface{ Scan(...any) error }
+
+func scanTask(row scanner) (Task, error) {
+	var item Task
+	err := row.Scan(&item.ID, &item.SessionID, &item.WorkspaceID, &item.QuestionID, &item.ParentTaskID,
+		&item.ClientKey, &item.Kind, &item.Objective, &item.RequiredCapability,
+		&item.ExpectedResult, &item.AcceptanceCriteria, &item.Priority, &item.Status,
+		&item.AssignedAgentID, &item.GoalVersion, &item.PlanVersion, &item.MaxAttempts,
+		&item.TimeoutSeconds, &item.AttemptCount, &item.ReadyAt, &item.StartedAt,
+		&item.CompletedAt, &item.TerminalReason)
+	return item, err
+}
+
+const attemptSelectSQL = `
+	SELECT a.id::text, a.session_id::text, a.workspace_id::text, a.task_id::text,
+	       a.attempt_number, a.assigned_agent_id::text,
+	       COALESCE(a.inbox_task_id::text, ''), a.dispatch_key,
+	       COALESCE(a.client_request_id, ''), a.status, COALESCE(a.result_hash, ''),
+	       a.failure_class, a.diagnostics, a.dispatched_at, a.started_at,
+	       a.result_submitted_at, a.completed_at
+	FROM research_task_attempt a`
+
+func scanAttempt(row scanner) (Attempt, error) {
+	var item Attempt
+	err := row.Scan(&item.ID, &item.SessionID, &item.WorkspaceID, &item.TaskID,
+		&item.AttemptNumber, &item.AssignedAgentID, &item.InboxTaskID, &item.DispatchKey,
+		&item.ClientRequestID, &item.Status, &item.ResultHash, &item.FailureClass,
+		&item.Diagnostics, &item.DispatchedAt, &item.StartedAt, &item.ResultSubmittedAt,
+		&item.CompletedAt)
+	return item, err
+}
+
+func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventType, key, actorType, actorID string, payload any) (RunEvent, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return RunEvent{}, err
+	}
+	if _, err = tx.Exec(ctx, `
+		SELECT 1 FROM research_session
+		WHERE id = $1::uuid AND workspace_id = $2::uuid
+		FOR UPDATE
+	`, sessionID, workspaceID); err != nil {
+		return RunEvent{}, err
+	}
+	var existing RunEvent
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, workspace_id::text, session_id::text, sequence,
+		       event_type, idempotency_key, actor_type, COALESCE(actor_id::text, ''),
+		       payload, projection_attempts, created_at
+		FROM research_run_event
+		WHERE session_id = $1::uuid AND idempotency_key = $2
+	`, sessionID, key).Scan(
+		&existing.ID, &existing.WorkspaceID, &existing.SessionID, &existing.Sequence,
+		&existing.Type, &existing.IdempotencyKey, &existing.ActorType, &existing.ActorID,
+		&existing.Payload, &existing.ProjectionAttempts, &existing.CreatedAt,
+	)
+	if err == nil {
+		if existing.Type != eventType || existing.ActorType != actorType || existing.ActorID != actorID || !semanticJSONEqual(existing.Payload, encoded) {
+			return RunEvent{}, fmt.Errorf("%w: event idempotency key %q was reused for different content", ErrResultConflict, key)
+		}
+		return existing, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return RunEvent{}, err
+	}
+	var sequence int64
+	if err := tx.QueryRow(ctx, `
+		UPDATE research_session SET state_version = state_version + 1, updated_at = now()
+		WHERE id = $1::uuid AND workspace_id = $2::uuid
+		RETURNING state_version
+	`, sessionID, workspaceID).Scan(&sequence); err != nil {
+		return RunEvent{}, err
+	}
+	var event RunEvent
+	err = tx.QueryRow(ctx, `
+		INSERT INTO research_run_event (
+			workspace_id, session_id, sequence, event_type, idempotency_key,
+			actor_type, actor_id, payload
+		) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, NULLIF($7, '')::uuid, $8)
+		RETURNING id::text, workspace_id::text, session_id::text, sequence,
+		          event_type, idempotency_key, actor_type, COALESCE(actor_id::text, ''),
+		          payload, created_at
+	`, workspaceID, sessionID, sequence, eventType, key, actorType, actorID, encoded).Scan(
+		&event.ID, &event.WorkspaceID, &event.SessionID, &event.Sequence, &event.Type,
+		&event.IdempotencyKey, &event.ActorType, &event.ActorID, &event.Payload, &event.CreatedAt,
+	)
+	return event, err
+}
+
+func semanticJSONEqual(left, right []byte) bool {
+	var leftValue, rightValue any
+	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
+		return false
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
+}
+
+func normalizeJSON(raw json.RawMessage, fallback string) json.RawMessage {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return json.RawMessage(fallback)
+	}
+	return raw
+}
+
+func buildPlanningObjective(goal, language string) string {
+	if strings.TrimSpace(language) == "" {
+		language = "follow the user's language"
+	}
+	return fmt.Sprintf("Create an adaptive, evidence-oriented research plan for this goal:\n\n%s\n\nDelivery language: %s. Start wide, identify independent perspectives, define required questions, source strategy, inclusion/exclusion criteria, uncertainties, and a dependency-safe task graph. Return only through the structured Research Run result command.", strings.TrimSpace(goal), strings.TrimSpace(language))
+}

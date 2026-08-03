@@ -841,6 +841,8 @@ func defaultCanonicalRuntimeFactory(provider string, mode canonicalRuntimeMode) 
 				return newCanonicalCursorResidentBackend(config)
 			case "opencode":
 				return newCanonicalOpenCodeResidentBackend(config)
+			case "kiro":
+				return newCanonicalKiroResidentBackend(config)
 			default:
 				return nil, nil, fmt.Errorf("provider %q has no resident adapter", provider)
 			}

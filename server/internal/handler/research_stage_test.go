@@ -17,8 +17,8 @@ func TestBuildResearchWakePrompt(t *testing.T) {
 		Goal:         "G",
 		Status:       "running",
 		CurrentStage: "s1_plan",
-	}, "please dig deeper", "user")
-	if !strings.Contains(prompt, "Research Fleet assignment") {
+	}, "please dig deeper", "user", false)
+	if !strings.Contains(prompt, "Research Fleet conversation") {
 		t.Fatal("missing header")
 	}
 	if !strings.Contains(prompt, "please dig deeper") {
@@ -29,6 +29,26 @@ func TestBuildResearchWakePrompt(t *testing.T) {
 	}
 	if !strings.Contains(prompt, researchChatSessionTitle(sid)[len("research:"):]) {
 		t.Fatal("missing session id")
+	}
+}
+
+func TestBuildDurableResearchWakePromptSeparatesConversationFromWork(t *testing.T) {
+	var sid pgtype.UUID
+	_ = sid.Scan("11111111-1111-1111-1111-111111111111")
+	prompt := buildResearchWakePrompt(db.ResearchSession{
+		ID:           sid,
+		Title:        "T",
+		Goal:         "G",
+		Status:       "running",
+		CurrentStage: "s2_sources",
+	}, "what have you found?", "user", true)
+	for _, want := range []string{"conversation only", "session get", "task-result", "what have you found?"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("missing durable run instruction %q", want)
+		}
+	}
+	if strings.Contains(prompt, "keep the exploration canvas dense") {
+		t.Fatal("durable conversation prompt must not issue legacy execution instructions")
 	}
 }
 

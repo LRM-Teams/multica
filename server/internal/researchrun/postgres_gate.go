@@ -1,0 +1,454 @@
+package researchrun
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (GateResult, error) {
+	var run Run
+	var configJSON, statsJSON []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT depth_tier, goal_version, plan_version, orchestrator_version, run_config, run_stats
+		FROM research_session WHERE id = $1::uuid
+	`, sessionID).Scan(&run.DepthTier, &run.GoalVersion, &run.PlanVersion, &run.OrchestratorVersion, &configJSON, &statsJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GateResult{}, ErrRunNotFound
+	}
+	if err != nil {
+		return GateResult{}, err
+	}
+	if err = ensureSupportedOrchestratorVersion(run.OrchestratorVersion); err != nil {
+		return GateResult{}, err
+	}
+	run.Config = DefaultRunConfig(run.DepthTier)
+	if len(configJSON) > 0 {
+		if err = json.Unmarshal(configJSON, &run.Config); err != nil {
+			return GateResult{}, fmt.Errorf("decode run config: %w", err)
+		}
+	}
+	if len(statsJSON) > 0 {
+		if err = json.Unmarshal(statsJSON, &run.Stats); err != nil {
+			return GateResult{}, fmt.Errorf("decode run stats: %w", err)
+		}
+	}
+	minimumEvaluationScore := 0.75
+	minimumMajorClaimSources := 2
+	switch run.DepthTier {
+	case "shallow":
+		minimumEvaluationScore = 0.65
+		minimumMajorClaimSources = 1
+	case "deep":
+		minimumEvaluationScore = 0.8
+		minimumMajorClaimSources = 3
+	}
+
+	type gateCounts struct {
+		planSucceeded       int
+		unfinishedTasks     int
+		blockedTasks        int
+		requiredQuestions   int
+		unansweredRequired  int
+		verifiedSources     int
+		independentSources  int
+		reportCount         int
+		reportClaimCount    int
+		wrongVersionClaims  int
+		unsupportedClaims   int
+		weakMajorClaims     int
+		unresolvedConflicts int
+		unlinkedMajorClaims int
+		qualityEvaluations  int
+		qualityPassed       int
+		citationEvaluations int
+		citationPassed      int
+		budgetExhausted     int
+	}
+	var counts gateCounts
+	err = s.pool.QueryRow(ctx, `
+		WITH current_claims AS (
+		  SELECT c.id, c.significance, c.resolution
+		  FROM research_claim c
+		  WHERE c.session_id = $1::uuid AND c.goal_version = $2 AND c.plan_version = $3
+		), latest_report AS (
+		  SELECT id FROM research_report
+		  WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3
+		  ORDER BY revision DESC LIMIT 1
+		), report_claims AS (
+		  SELECT rc.claim_id
+		  FROM research_report_claim rc
+		  JOIN latest_report r ON r.id = rc.report_id
+		  JOIN current_claims c ON c.id = rc.claim_id
+		), supported AS (
+		  SELECT DISTINCT e.claim_id, ss.id AS source_id, ss.independence_key
+		  FROM research_claim_evidence e
+		  JOIN current_claims current ON current.id = e.claim_id
+		  JOIN research_observation o ON o.id = e.observation_id
+		  JOIN research_source_snapshot ss ON ss.id = o.source_snapshot_id
+		  WHERE e.session_id = $1::uuid AND e.relation = 'supports'
+		    AND e.verification_status = 'verified'
+		    AND o.verification_status = 'verified'
+		    AND ss.verification_status = 'verified'
+		), contradicted AS (
+		  SELECT DISTINCT e.claim_id
+		  FROM research_claim_evidence e
+		  WHERE e.session_id = $1::uuid AND e.relation = 'contradicts'
+		    AND e.verification_status = 'verified'
+		), latest_quality AS (
+		  SELECT outcome FROM research_decision
+		  WHERE session_id = $1::uuid AND decision_kind = 'quality_gate'
+		    AND goal_version = $2 AND plan_version = $3
+		    AND inputs->>'report_id' = (SELECT id::text FROM latest_report)
+		  ORDER BY created_at DESC LIMIT 1
+		), latest_citation AS (
+		  SELECT outcome FROM research_decision
+		  WHERE session_id = $1::uuid AND decision_kind = 'citation_audit'
+		    AND goal_version = $2 AND plan_version = $3
+		    AND inputs->>'report_id' = (SELECT id::text FROM latest_report)
+		  ORDER BY created_at DESC LIMIT 1
+		)
+		SELECT
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND kind IN ('plan', 'replan') AND status = 'succeeded'),
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND status IN ('pending', 'ready', 'dispatching', 'running')),
+		  (SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND status IN ('failed', 'blocked')),
+		  (SELECT count(*)::int FROM research_question WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND required),
+		  (SELECT count(*)::int FROM research_question q
+		   WHERE q.session_id = $1::uuid AND q.goal_version = $2 AND q.plan_version = $3 AND q.required
+		     AND (q.status <> 'answered' OR q.coverage < 0.8 OR q.answer_claim_id IS NULL
+		          OR NOT EXISTS (SELECT 1 FROM supported s WHERE s.claim_id = q.answer_claim_id))),
+		  (SELECT count(DISTINCT source_id)::int FROM supported),
+		  (SELECT count(DISTINCT independence_key)::int FROM supported),
+		  (SELECT count(*)::int FROM latest_report),
+		  (SELECT count(*)::int FROM report_claims),
+		  (SELECT count(*)::int FROM research_report_claim rc JOIN latest_report r ON r.id = rc.report_id WHERE NOT EXISTS (SELECT 1 FROM current_claims c WHERE c.id = rc.claim_id)),
+		  (SELECT count(*)::int FROM report_claims rc WHERE NOT EXISTS (SELECT 1 FROM supported s WHERE s.claim_id = rc.claim_id)),
+		  (SELECT count(*)::int
+		   FROM report_claims rc JOIN current_claims c ON c.id = rc.claim_id
+		   WHERE c.significance IN ('high', 'critical')
+		     AND (SELECT count(DISTINCT s.independence_key) FROM supported s WHERE s.claim_id = c.id) < $5::int),
+		  (SELECT count(*)::int FROM report_claims rc JOIN current_claims c ON c.id = rc.claim_id JOIN contradicted x ON x.claim_id = c.id WHERE btrim(c.resolution) = ''),
+		  (SELECT count(*)::int FROM current_claims c WHERE c.significance IN ('high', 'critical') AND EXISTS (SELECT 1 FROM supported s WHERE s.claim_id = c.id) AND NOT EXISTS (SELECT 1 FROM report_claims rc WHERE rc.claim_id = c.id)),
+		  (SELECT count(*)::int FROM latest_quality),
+		  (SELECT count(*)::int FROM latest_quality
+		   WHERE COALESCE((outcome->>'passed')::boolean, false)
+		     AND LEAST(
+		       COALESCE((outcome->>'factual_grounding')::double precision, 0),
+		       COALESCE((outcome->>'coverage')::double precision, 0),
+		       COALESCE((outcome->>'analytical_depth')::double precision, 0),
+		       COALESCE((outcome->>'source_quality')::double precision, 0),
+		       COALESCE((outcome->>'contradiction_handling')::double precision, 0),
+		       COALESCE((outcome->>'instruction_adherence')::double precision, 0),
+		       COALESCE((outcome->>'readability')::double precision, 0)
+		     ) >= $4::double precision),
+		  (SELECT count(*)::int FROM latest_citation),
+		  (SELECT count(*)::int FROM latest_citation
+		   WHERE COALESCE((outcome->>'passed')::boolean, false)
+		     AND LEAST(
+		       COALESCE((outcome->>'factual_grounding')::double precision, 0),
+		       COALESCE((outcome->>'coverage')::double precision, 0),
+		       COALESCE((outcome->>'analytical_depth')::double precision, 0),
+		       COALESCE((outcome->>'source_quality')::double precision, 0),
+		       COALESCE((outcome->>'contradiction_handling')::double precision, 0),
+		       COALESCE((outcome->>'instruction_adherence')::double precision, 0),
+		       COALESCE((outcome->>'readability')::double precision, 0)
+		     ) >= $4::double precision),
+		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid
+		     AND decision_kind = 'budget_exhausted' AND goal_version = $2 AND plan_version = $3)
+	`, sessionID, run.GoalVersion, run.PlanVersion, minimumEvaluationScore, minimumMajorClaimSources).Scan(
+		&counts.planSucceeded, &counts.unfinishedTasks, &counts.blockedTasks,
+		&counts.requiredQuestions, &counts.unansweredRequired,
+		&counts.verifiedSources, &counts.independentSources,
+		&counts.reportCount, &counts.reportClaimCount, &counts.wrongVersionClaims, &counts.unsupportedClaims, &counts.weakMajorClaims,
+		&counts.unresolvedConflicts, &counts.unlinkedMajorClaims,
+		&counts.qualityEvaluations, &counts.qualityPassed,
+		&counts.citationEvaluations, &counts.citationPassed,
+		&counts.budgetExhausted,
+	)
+	if err != nil {
+		return GateResult{}, err
+	}
+
+	minimumIndependentSources := 3
+	switch run.DepthTier {
+	case "shallow":
+		minimumIndependentSources = 2
+	case "deep":
+		minimumIndependentSources = 5
+	}
+	findings := make([]GateFinding, 0, 12)
+	add := func(code, message string, metadata map[string]any) {
+		findings = append(findings, GateFinding{Code: code, Severity: "blocker", Message: message, Metadata: metadata})
+	}
+	if counts.planSucceeded == 0 {
+		add("plan_incomplete", "The current plan has not been accepted.", nil)
+	}
+	if counts.unfinishedTasks > 0 {
+		add("tasks_incomplete", "Current-plan research tasks are still active.", map[string]any{"count": counts.unfinishedTasks})
+	}
+	if counts.blockedTasks > 0 {
+		add("tasks_blocked", "Current-plan tasks are blocked or failed.", map[string]any{"count": counts.blockedTasks})
+	}
+	if counts.requiredQuestions == 0 {
+		add("required_questions_missing", "The plan contains no required research questions.", nil)
+	} else if counts.unansweredRequired > 0 {
+		add("required_questions_unanswered", "Required questions lack an accepted answer and sufficient coverage.", map[string]any{"count": counts.unansweredRequired})
+	}
+	if counts.independentSources < minimumIndependentSources {
+		add("independent_sources_insufficient", "Verified evidence does not span enough independent sources.", map[string]any{"actual": counts.independentSources, "required": minimumIndependentSources})
+	}
+	if counts.reportCount == 0 {
+		add("report_missing", "No report revision exists for delivery.", nil)
+	} else {
+		if counts.reportClaimCount == 0 {
+			add("report_claims_missing", "The latest report has no normalized claim links.", nil)
+		}
+		if counts.wrongVersionClaims > 0 {
+			add("report_claims_stale", "The latest report cites claims from an earlier goal or plan version.", map[string]any{"count": counts.wrongVersionClaims})
+		}
+		if counts.unsupportedClaims > 0 {
+			add("report_claims_unsupported", "Report claims lack verified supporting evidence.", map[string]any{"count": counts.unsupportedClaims})
+		}
+		if counts.weakMajorClaims > 0 {
+			add("major_claim_sources_insufficient", "High-significance report claims lack enough independent verified source families.", map[string]any{"count": counts.weakMajorClaims, "required_per_claim": minimumMajorClaimSources})
+		}
+		if counts.unresolvedConflicts > 0 {
+			add("report_conflicts_unresolved", "Report claims have verified contradictions without a recorded resolution.", map[string]any{"count": counts.unresolvedConflicts})
+		}
+		if counts.unlinkedMajorClaims > 0 {
+			add("major_claims_unlinked", "Supported high-significance claims are absent from the latest report.", map[string]any{"count": counts.unlinkedMajorClaims})
+		}
+	}
+	if counts.qualityEvaluations == 0 {
+		add("quality_evaluation_missing", "The latest report has not passed an independent quality evaluation.", nil)
+	} else if counts.qualityPassed == 0 {
+		add("quality_evaluation_failed", "The latest independent quality evaluation failed or fell below the depth-tier score floor.", map[string]any{"minimum_score": minimumEvaluationScore})
+	}
+	if counts.citationEvaluations == 0 {
+		add("citation_audit_missing", "The latest report has not passed a citation audit.", nil)
+	} else if counts.citationPassed == 0 {
+		add("citation_audit_failed", "The latest citation audit failed or fell below the depth-tier score floor.", map[string]any{"minimum_score": minimumEvaluationScore})
+	}
+	if counts.budgetExhausted == 0 && run.Stats.LowGainStreak < run.Config.MarginalGainRounds {
+		add("marginal_gain_not_saturated", "Recent evidence batches have not yet demonstrated diminishing information gain.", map[string]any{
+			"actual_low_gain_streak":   run.Stats.LowGainStreak,
+			"required_low_gain_streak": run.Config.MarginalGainRounds,
+			"threshold":                run.Config.MarginalGainThreshold,
+			"last_measured_gain":       run.Stats.LastMeasuredGain,
+		})
+	}
+	return GateResult{Passed: len(findings) == 0, Findings: findings}, nil
+}
+
+func (s *PostgresStore) RecordBudgetExhausted(ctx context.Context, sessionID, budgetKind, details string) (RunEvent, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return RunEvent{}, err
+	}
+	defer tx.Rollback(ctx)
+	var workspaceID string
+	var goalVersion, planVersion int
+	if err = tx.QueryRow(ctx, `
+		SELECT workspace_id::text, goal_version, plan_version
+		FROM research_session WHERE id = $1::uuid FOR UPDATE
+	`, sessionID).Scan(&workspaceID, &goalVersion, &planVersion); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RunEvent{}, ErrRunNotFound
+		}
+		return RunEvent{}, err
+	}
+	key := fmt.Sprintf("budget-exhausted:%s:%d:%d", budgetKind, goalVersion, planVersion)
+	var existing RunEvent
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, workspace_id::text, session_id::text, sequence,
+		       event_type, idempotency_key, actor_type, COALESCE(actor_id::text, ''),
+		       payload, projection_attempts, created_at
+		FROM research_run_event
+		WHERE session_id = $1::uuid AND idempotency_key = $2
+	`, sessionID, key).Scan(
+		&existing.ID, &existing.WorkspaceID, &existing.SessionID, &existing.Sequence,
+		&existing.Type, &existing.IdempotencyKey, &existing.ActorType, &existing.ActorID,
+		&existing.Payload, &existing.ProjectionAttempts, &existing.CreatedAt,
+	)
+	if err == nil {
+		return existing, tx.Commit(ctx)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return RunEvent{}, err
+	}
+	inputs, _ := json.Marshal(map[string]any{"budget_kind": budgetKind, "details": details})
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_decision (
+			workspace_id, session_id, decision_kind, actor_type,
+			goal_version, plan_version, inputs, outcome, rationale
+		) VALUES ($1::uuid, $2::uuid, 'budget_exhausted', 'system', $3, $4, $5, '{}', $6)
+	`, workspaceID, sessionID, goalVersion, planVersion, inputs, truncateBytes(details, 4096)); err != nil {
+		return RunEvent{}, err
+	}
+	if _, err = tx.Exec(ctx, `
+		UPDATE research_session
+		SET run_stats = run_stats || jsonb_build_object(
+		      'budget_exhaustion_count', COALESCE((run_stats->>'budget_exhaustion_count')::int, 0) + 1
+		    ),
+		    stop_reason = 'budget_exhausted', updated_at = now()
+		WHERE id = $1::uuid
+	`, sessionID); err != nil {
+		return RunEvent{}, err
+	}
+	event, err := appendEvent(ctx, tx, workspaceID, sessionID, "budget_exhausted", key, "system", "", map[string]any{
+		"budget_kind": budgetKind,
+		"details":     truncateBytes(details, 4096),
+	})
+	if err != nil {
+		return RunEvent{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return RunEvent{}, err
+	}
+	return event, nil
+}
+
+func (s *PostgresStore) ListUnprojectedEvents(ctx context.Context, sessionID string, limit int) ([]RunEvent, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, workspace_id::text, session_id::text, sequence,
+		       event_type, idempotency_key, actor_type, COALESCE(actor_id::text, ''),
+		       payload, projection_attempts, created_at
+		FROM research_run_event
+		WHERE session_id = $1::uuid AND projected_at IS NULL AND next_projection_at <= now()
+		  AND NOT EXISTS (
+		    SELECT 1 FROM research_run_event earlier
+		    WHERE earlier.session_id = research_run_event.session_id
+		      AND earlier.sequence < research_run_event.sequence
+		      AND earlier.projected_at IS NULL
+		  )
+		ORDER BY sequence LIMIT $2
+	`, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := []RunEvent{}
+	for rows.Next() {
+		var event RunEvent
+		if err = rows.Scan(&event.ID, &event.WorkspaceID, &event.SessionID,
+			&event.Sequence, &event.Type, &event.IdempotencyKey, &event.ActorType,
+			&event.ActorID, &event.Payload, &event.ProjectionAttempts, &event.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
+func (s *PostgresStore) MarkEventProjected(ctx context.Context, eventID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE research_run_event
+		SET projected_at = now(), projection_attempts = projection_attempts + 1,
+		    projection_error = ''
+		WHERE id = $1::uuid
+	`, eventID)
+	return err
+}
+
+func (s *PostgresStore) MarkEventProjectionFailed(ctx context.Context, eventID, message string, next time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE research_run_event
+		SET projection_attempts = projection_attempts + 1,
+		    projection_error = $2, next_projection_at = $3
+		WHERE id = $1::uuid AND projected_at IS NULL
+	`, eventID, truncateBytes(message, 4096), next)
+	return err
+}
+
+func (s *PostgresStore) ReconcileAttempts(ctx context.Context, sessionID string, states map[string]InboxTaskState) ([]RunEvent, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT a.id::text, COALESCE(a.inbox_task_id::text, ''), a.dispatch_key,
+		       a.status, a.dispatched_at,
+		       now() > a.dispatched_at + make_interval(secs => t.timeout_seconds),
+		       now() > a.dispatched_at + make_interval(secs => COALESCE((s.run_config->>'stale_after_seconds')::int, 900))
+		FROM research_task_attempt a
+		JOIN research_task t ON t.id = a.task_id
+		JOIN research_session s ON s.id = a.session_id
+		WHERE a.session_id = $1::uuid AND a.status IN ('dispatching', 'running')
+		ORDER BY a.dispatched_at
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	type activeAttempt struct {
+		id, inboxID, dispatchKey string
+		status                   AttemptStatus
+		dispatchedAt             time.Time
+		timedOut, stale          bool
+	}
+	active := []activeAttempt{}
+	for rows.Next() {
+		var item activeAttempt
+		if err = rows.Scan(&item.id, &item.inboxID, &item.dispatchKey, &item.status,
+			&item.dispatchedAt, &item.timedOut, &item.stale); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		active = append(active, item)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	events := []RunEvent{}
+	for _, attempt := range active {
+		key := attempt.inboxID
+		if key == "" {
+			key = attempt.dispatchKey
+		}
+		state, found := states[key]
+		if !found {
+			state, found = states[attempt.dispatchKey]
+		}
+		if found && attempt.inboxID == "" && state.ID != "" {
+			_, event, attachErr := s.AttachInboxTask(ctx, attempt.id, state.ID)
+			if attachErr != nil && !errors.Is(attachErr, ErrInvalidTransition) {
+				return events, attachErr
+			}
+			if event.ID != "" {
+				events = append(events, event)
+			}
+		}
+		failure := AttemptFailure{AttemptID: attempt.id, Retryable: true}
+		switch {
+		case attempt.timedOut:
+			failure.FailureClass = "task_timeout"
+			failure.Diagnostics = "The agent task exceeded its configured timeout without a valid result."
+		case found && (state.Status == "failed" || state.Status == "cancelled"):
+			failure.FailureClass = "inbox_task_" + state.Status
+			failure.Diagnostics = state.FailureReason
+			failure.Retryable = state.Retryable
+		case found && state.Status == "completed":
+			failure.FailureClass = "result_not_submitted"
+			failure.Diagnostics = "The agent task completed without submitting the structured research result."
+		case !found && attempt.stale:
+			failure.FailureClass = "dispatch_lost"
+			failure.Diagnostics = "No durable inbox task could be found for the research attempt."
+		default:
+			continue
+		}
+		event, failErr := s.FailAttempt(ctx, failure)
+		if failErr != nil {
+			if errors.Is(failErr, ErrInvalidTransition) {
+				continue
+			}
+			return events, failErr
+		}
+		events = append(events, event)
+	}
+	return events, nil
+}

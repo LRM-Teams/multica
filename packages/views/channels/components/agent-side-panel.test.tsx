@@ -51,6 +51,12 @@ vi.mock("../../agents/components/tabs/activity-tab", () => ({
   ActivityTab: () => <div>Activity content</div>,
 }));
 
+vi.mock("../../agents/components/agent-honor-panel-section", () => ({
+  AgentHonorPanelSection: () => (
+    <div data-testid="agent-honor-panel-section">Honor</div>
+  ),
+}));
+
 vi.mock("../../agents/components/tabs/reminders-tab", () => ({
   RemindersTab: () => <div>Reminders content</div>,
 }));
@@ -399,6 +405,11 @@ describe("AgentSidePanel", () => {
     mockRuntimes.current = [];
     renderPanel();
     expect(screen.getByText("No computer")).toBeInTheDocument();
+  });
+
+  it("shows the agent honor summary on the profile tab", () => {
+    renderPanel();
+    expect(screen.getByTestId("agent-honor-panel-section")).toBeInTheDocument();
   });
 
   it("defaults forceRestartSupported to false when the capability object is missing (older backend)", () => {

@@ -1,7 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import type { ResearchFleetMember, ResearchSession, ResearchSource } from "@multica/core/types";
+import type {
+  ResearchFleetMember,
+  ResearchRunContract,
+  ResearchSession,
+  ResearchSource,
+} from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import {
@@ -86,6 +91,7 @@ function ContextChip({
 
 export function ResearchSessionChrome({
   session,
+  contract,
   canConfirm,
   canHandoff,
   createProject,
@@ -109,6 +115,7 @@ export function ResearchSessionChrome({
   onGoalRetry,
 }: {
   session: ResearchSession;
+  contract?: ResearchRunContract | null;
   canConfirm: boolean;
   canHandoff: boolean;
   createProject: boolean;
@@ -149,6 +156,7 @@ export function ResearchSessionChrome({
   const createParams = resolveSessionCreateParams({
     goal: session.goal,
     depth_tier: session.depth_tier,
+    contract,
   });
   const depthTierLabel =
     createParams.depth_tier === "shallow"
@@ -410,6 +418,7 @@ export function ResearchSessionChrome({
             members={members}
             sources={sources}
             session={session}
+            contract={contract}
             sessionStatus={session.status}
             leadingActions={
               foldDeliveryIntoTools && onOpenDelivery

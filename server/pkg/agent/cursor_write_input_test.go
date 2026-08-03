@@ -60,7 +60,10 @@ func TestWriteToolCallCompletedBackfillViaTracker(t *testing.T) {
 	if !ok || tool != "write_file" {
 		t.Fatalf("parse ok=%v tool=%q", ok, tool)
 	}
-	input = enrichCursorToolCallInputFromResult(input, result)
+	input, src := enrichCursorToolCallInputFromResult(input, result)
+	if src != "result_path" {
+		t.Fatalf("enrich src=%q want result_path", src)
+	}
 	completed := RuntimeToolEvent{
 		Schema: RuntimeToolEventSchemaV1, EventID: "e2", Source: cursorToolEventSource,
 		ProtocolShape: cursorCurrentToolCallShape, CallID: "c1",
@@ -87,7 +90,10 @@ func TestWriteToolCallCompletedBackfillViaTracker(t *testing.T) {
 func TestEnrichDoesNotOverwriteExistingPath(t *testing.T) {
 	t.Parallel()
 	in := map[string]any{"path": "/from/args"}
-	out := enrichCursorToolCallInputFromResult(in, json.RawMessage(`{"success":{"path":"/from/result"}}`))
+	out, src := enrichCursorToolCallInputFromResult(in, json.RawMessage(`{"success":{"path":"/from/result"}}`))
+	if src != "args_path" {
+		t.Fatalf("src=%q want args_path", src)
+	}
 	if out["path"] != "/from/args" {
 		t.Fatalf("got %v", out["path"])
 	}

@@ -29,14 +29,19 @@ type WebToolkit interface {
 	Fetch(ctx context.Context, pageURL string) (string, error)
 }
 
-// HTTPWebToolkit uses public HTTP endpoints (DuckDuckGo Instant Answer + page GET).
+// HTTPWebToolkit uses public HTTP endpoints (DuckDuckGo Instant Answer,
+// HTML results fallback, and bounded page GET).
 type HTTPWebToolkit struct {
-	Client *http.Client
+	Client    *http.Client
+	SearchURL string // Instant Answer base; tests override
+	HTMLURL   string // HTML search base; tests override
 }
 
 func DefaultHTTPWebToolkit() *HTTPWebToolkit {
 	return &HTTPWebToolkit{
-		Client: &http.Client{Timeout: webHTTPTimeout},
+		Client:    &http.Client{Timeout: webHTTPTimeout},
+		SearchURL: "https://api.duckduckgo.com/",
+		HTMLURL:   "https://html.duckduckgo.com/html/",
 	}
 }
 
@@ -47,38 +52,49 @@ func (t *HTTPWebToolkit) client() *http.Client {
 	return DefaultHTTPWebToolkit().Client
 }
 
+func (t *HTTPWebToolkit) searchBase() string {
+	if t != nil && strings.TrimSpace(t.SearchURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(t.SearchURL), "/") + "/"
+	}
+	return "https://api.duckduckgo.com/"
+}
+
+func (t *HTTPWebToolkit) htmlBase() string {
+	if t != nil && strings.TrimSpace(t.HTMLURL) != "" {
+		return strings.TrimRight(strings.TrimSpace(t.HTMLURL), "/") + "/"
+	}
+	return "https://html.duckduckgo.com/html/"
+}
+
 func (t *HTTPWebToolkit) Search(ctx context.Context, query string) (string, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return "", fmt.Errorf("web_search query is required")
 	}
-	endpoint := "https://api.duckduckgo.com/?q=" + url.QueryEscape(query) +
+	if text, err := t.searchInstantAnswer(ctx, query); err == nil && strings.TrimSpace(text) != "" {
+		return text, nil
+	}
+	if text, err := t.searchHTML(ctx, query); err == nil && strings.TrimSpace(text) != "" {
+		return text, nil
+	}
+	return truncateRunes(fmt.Sprintf("未找到关于「%s」的可靠摘要。可改用 web_fetch 打开具体网址。", query), maxWebToolOutputRunes), nil
+}
+
+func (t *HTTPWebToolkit) searchInstantAnswer(ctx context.Context, query string) (string, error) {
+	endpoint := t.searchBase() + "?q=" + url.QueryEscape(query) +
 		"&format=json&no_html=1&skip_disambig=1"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "MulticaDuplexWebTools/1.0")
-	resp, err := t.client().Do(req)
-	if err != nil {
-		return "", fmt.Errorf("web_search request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("web_search status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBodyBytes))
+	body, err := t.getBytes(ctx, endpoint)
 	if err != nil {
 		return "", err
 	}
 	var payload struct {
-		Heading        string `json:"Heading"`
-		AbstractText   string `json:"AbstractText"`
-		AbstractURL    string `json:"AbstractURL"`
-		Answer         string `json:"Answer"`
-		Definition     string `json:"Definition"`
-		RelatedTopics  []any  `json:"RelatedTopics"`
-		Results        []any  `json:"Results"`
+		Heading       string `json:"Heading"`
+		AbstractText  string `json:"AbstractText"`
+		AbstractURL   string `json:"AbstractURL"`
+		Answer        string `json:"Answer"`
+		Definition    string `json:"Definition"`
+		RelatedTopics []any  `json:"RelatedTopics"`
+		Results       []any  `json:"Results"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return "", fmt.Errorf("web_search decode: %w", err)
@@ -111,10 +127,99 @@ func (t *HTTPWebToolkit) Search(ctx context.Context, query string) (string, erro
 		}
 	}
 	if len(parts) == 0 {
-		return truncateRunes(fmt.Sprintf("未找到关于「%s」的可靠摘要。可改用 web_fetch 打开具体网址。", query), maxWebToolOutputRunes), nil
+		return "", fmt.Errorf("instant answer empty")
 	}
 	out := "搜索「" + query + "」结果：\n" + strings.Join(parts, "\n")
 	return truncateRunes(out, maxWebToolOutputRunes), nil
+}
+
+var (
+	ddgResultBlockRE = regexp.MustCompile(`(?is)<div[^>]*class="[^"]*result[^"]*"[^>]*>[\s\S]*?</div>\s*</div>`)
+	ddgAnchorRE      = regexp.MustCompile(`(?is)<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
+	ddgSnippetRE     = regexp.MustCompile(`(?is)<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>`)
+	hrefUDDGRE       = regexp.MustCompile(`[?&]uddg=([^&"]+)`)
+)
+
+func (t *HTTPWebToolkit) searchHTML(ctx context.Context, query string) (string, error) {
+	endpoint := t.htmlBase() + "?q=" + url.QueryEscape(query)
+	body, err := t.getBytes(ctx, endpoint)
+	if err != nil {
+		return "", fmt.Errorf("web_search html failed: %w", err)
+	}
+	html := string(body)
+	blocks := ddgResultBlockRE.FindAllString(html, 10)
+	if len(blocks) == 0 {
+		blocks = []string{html}
+	}
+	var parts []string
+	seen := map[string]struct{}{}
+	for _, block := range blocks {
+		m := ddgAnchorRE.FindStringSubmatch(block)
+		if len(m) < 3 {
+			continue
+		}
+		href := unwrapDDGRedirect(m[1])
+		title := strings.TrimSpace(stripTags(m[2]))
+		snippet := ""
+		if sm := ddgSnippetRE.FindStringSubmatch(block); len(sm) == 2 {
+			snippet = strings.TrimSpace(stripTags(sm[1]))
+		}
+		key := strings.ToLower(title + "|" + href)
+		if title == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		line := title
+		if snippet != "" {
+			line += " — " + snippet
+		}
+		if href != "" {
+			line += " (" + href + ")"
+		}
+		parts = append(parts, "- "+line)
+		if len(parts) >= 5 {
+			break
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("html search empty")
+	}
+	out := "搜索「" + query + "」结果：\n" + strings.Join(parts, "\n")
+	return truncateRunes(out, maxWebToolOutputRunes), nil
+}
+
+func (t *HTTPWebToolkit) getBytes(ctx context.Context, endpoint string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "MulticaDuplexWebTools/1.0")
+	req.Header.Set("Accept", "text/html,application/json;q=0.9,*/*;q=0.8")
+	resp, err := t.client().Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("web_search request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("web_search status %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, maxFetchBodyBytes))
+}
+
+func unwrapDDGRedirect(href string) string {
+	href = strings.TrimSpace(href)
+	if m := hrefUDDGRE.FindStringSubmatch(href); len(m) == 2 {
+		if decoded, err := url.QueryUnescape(m[1]); err == nil && strings.TrimSpace(decoded) != "" {
+			return strings.TrimSpace(decoded)
+		}
+	}
+	if strings.HasPrefix(href, "//") {
+		return "https:" + href
+	}
+	return href
 }
 
 func relatedTopicLine(item any) string {

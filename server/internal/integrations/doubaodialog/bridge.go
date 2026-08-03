@@ -154,7 +154,18 @@ func (b *MulticaToolBridge) handleFunctionCall(ctx context.Context, call Functio
 			return b.web.Fetch(ctx, pageURL)
 		})
 	default:
-		return false, nil
+		failText := fmt.Sprintf("当前通话不支持工具 %s，请换个说法，或让我用 web_search 查事实、用派活工具开任务。", name)
+		if _, loaded := b.inFlight.LoadOrStore(callID, struct{}{}); loaded {
+			return true, nil
+		}
+		defer b.inFlight.Delete(callID)
+		if sendErr := b.sender.SendFunctionCallOutputs(ctx, []FunctionCallOutput{{
+			CallID: callID,
+			Output: failText,
+		}}); sendErr != nil {
+			return true, fmt.Errorf("unknown tool %s and could not return tool output: %w", name, sendErr)
+		}
+		return true, nil
 	}
 }
 

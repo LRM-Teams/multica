@@ -3,6 +3,8 @@ package doubaodialog
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -72,7 +74,7 @@ func TestMulticaToolBridgeCancelsOnASRStarted(t *testing.T) {
 	}
 }
 
-func TestMulticaToolBridgeIgnoresUnknownTools(t *testing.T) {
+func TestMulticaToolBridgeReturnsSpeakableErrorForUnknownTools(t *testing.T) {
 	executor := &RecordingExecutor{}
 	sender := &fakeSender{}
 	bridge, err := NewMulticaToolBridge(executor, sender)
@@ -90,8 +92,13 @@ func TestMulticaToolBridgeIgnoresUnknownTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if handled || len(executor.Calls) != 0 || len(sender.outputs) != 0 {
-		t.Fatalf("unexpected handling: handled=%v calls=%v outputs=%v", handled, executor.Calls, sender.outputs)
+	if !handled || len(executor.Calls) != 0 {
+		t.Fatalf("unexpected handling: handled=%v calls=%v", handled, executor.Calls)
+	}
+	if len(sender.outputs) != 1 ||
+		sender.outputs[0].CallID != "call-weather" ||
+		!strings.Contains(sender.outputs[0].Output, "lookup_weather") {
+		t.Fatalf("expected speakable unknown-tool output, got %#v", sender.outputs)
 	}
 }
 
@@ -204,5 +211,35 @@ func TestRejectPrivateHost(t *testing.T) {
 	}
 	if err := rejectPrivateHost("example.com"); err != nil {
 		t.Fatalf("public host should pass: %v", err)
+	}
+}
+
+func TestHTTPWebToolkitSearchHTMLFallback(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	})
+	mux.HandleFunc("/html/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`
+			<div class="result results_links"><div>
+				<a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fweather">北京今日天气</a>
+				<a class="result__snippet">晴，气温 28 度</a>
+			</div></div>
+		`))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	tools := &HTTPWebToolkit{
+		Client:    server.Client(),
+		SearchURL: server.URL + "/",
+		HTMLURL:   server.URL + "/html/",
+	}
+	out, err := tools.Search(context.Background(), "北京天气")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "北京今日天气") || !strings.Contains(out, "example.com/weather") {
+		t.Fatalf("unexpected html fallback output: %q", out)
 	}
 }

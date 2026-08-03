@@ -1099,9 +1099,8 @@ export function ChannelsPage({
     }
     storeSetComposerDraft(key, value);
   }, [storeSetComposerDraft, storeClearDraftContent]);
-  // #340: freeze the entry read cursor + true unread count (sidebar-same source)
-  // at entry — anchors the cold load on the unread divider and gives the divider
-  // the real "N new" (not the count within the loaded window). See the hook.
+  // LRM-1068: freeze entry unread count for the divider/pill label. Cold load
+  // no longer uses around_seq — latest page + bottom settle (see useEntryAnchor).
   const entryAnchor = useEntryAnchor(
     active?.id,
     active?.last_read_seq,

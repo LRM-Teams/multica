@@ -626,9 +626,8 @@ function DmChannelConversation({
   // Throwing `upload` so tray chips show the real API error (LRM-426).
   const { upload } = useFileUpload(api);
 
-  // #340: freeze the entry read cursor + true unread count (sidebar-same source)
-  // per DM — anchors the cold load on the unread divider and gives the divider
-  // the real "N new" (not the count within the loaded window). See useEntryAnchor.
+  // LRM-1068: freeze entry unread count for the divider/pill. Cold load uses
+  // the latest page (no around_seq) — see useEntryAnchor.
   const entryAnchor = useEntryAnchor(
     channelId,
     dm.last_read_seq,

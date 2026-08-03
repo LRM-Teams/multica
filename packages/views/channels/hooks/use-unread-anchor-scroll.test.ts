@@ -150,10 +150,28 @@ function landedAt(anchorId: string) {
 }
 
 describe("useUnreadAnchorScroll", () => {
-  it("scrolls the anchor to the top on cold-load entry", () => {
+  it("LRM-1068: default open does not steal viewport to first-unread", () => {
     const { scrollToIndex, ref } = handleWithSpy();
     const { result } = renderHook(() =>
       useUnreadAnchorScroll({
+        channelId: "c1",
+        messages: messages(["m1", "m2", "m3", "m4"]),
+        newMessagesDivider: { anchorMessageId: "m3", count: 1 },
+        highlightMessageId: null,
+        handleAttached: true,
+        virtuosoRef: ref,
+        ...landedAt("m3"),
+      }),
+    );
+    expect(result.current.unreadAnchorIndex).toBe(-1);
+    expect(scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  it("scrolls the anchor to the top on cold-load entry when anchorOnOpen", () => {
+    const { scrollToIndex, ref } = handleWithSpy();
+    const { result } = renderHook(() =>
+      useUnreadAnchorScroll({
+        anchorOnOpen: true,
         channelId: "c1",
         messages: messages(["m1", "m2", "m3", "m4"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
@@ -173,6 +191,7 @@ describe("useUnreadAnchorScroll", () => {
   it("scrolls only once per conversation visit (guarded re-renders don't re-anchor)", () => {
     const { scrollToIndex, ref } = handleWithSpy();
     const props = {
+      anchorOnOpen: true,
       channelId: "c1",
       messages: messages(["m1", "m2", "m3"]),
       highlightMessageId: null as string | null,
@@ -192,6 +211,7 @@ describe("useUnreadAnchorScroll", () => {
     const { scrollToIndex, ref } = handleWithSpy();
     renderHook(() =>
       useUnreadAnchorScroll({
+        anchorOnOpen: true,
         channelId: "c1",
         messages: messages(["m1", "m2", "m3"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
@@ -207,6 +227,7 @@ describe("useUnreadAnchorScroll", () => {
   it("cursor arrives late — anchor flips invalid→valid, must still scroll (permanent watchdog)", () => {
     const { scrollToIndex, ref } = handleWithSpy();
     const base = {
+      anchorOnOpen: true,
       channelId: "c1",
       messages: messages(["m1", "m2", "m3"]),
       highlightMessageId: null as string | null,
@@ -227,6 +248,7 @@ describe("useUnreadAnchorScroll", () => {
   it("waits for the scroll container: no scroll until it exists", () => {
     const { scrollToIndex, ref } = handleWithSpy();
     const base = {
+      anchorOnOpen: true,
       channelId: "c1",
       messages: messages(["m1", "m2", "m3"]),
       newMessagesDivider: { anchorMessageId: "m3", count: 1 },
@@ -254,6 +276,7 @@ describe("useUnreadAnchorScroll", () => {
     // actually attached, not fire-and-silently-no-op while it's still null.
     const { scrollToIndex, ref } = handleWithSpy();
     const base = {
+      anchorOnOpen: true,
       channelId: "c1",
       messages: messages(["m1", "m2", "m3"]),
       newMessagesDivider: { anchorMessageId: "m3", count: 1 },
@@ -289,6 +312,7 @@ describe("useUnreadAnchorScroll", () => {
     const { scrollToIndex, ref } = handleWithSpy();
     const messageRefMap = new Map<string, HTMLElement>(); // anchor not yet virtualized in
     const props = {
+      anchorOnOpen: true,
       channelId: "c1",
       messages: messages(["m1", "m2", "m3"]),
       newMessagesDivider: { anchorMessageId: "m3", count: 1 },
@@ -333,6 +357,7 @@ describe("useUnreadAnchorScroll", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     renderHook(() =>
       useUnreadAnchorScroll({
+        anchorOnOpen: true,
         channelId: "c1",
         messages: messages(["m1", "m2", "m3", "m4", "m5"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
@@ -369,6 +394,7 @@ describe("useUnreadAnchorScroll", () => {
     const messageRefMap = new Map<string, HTMLElement>(); // anchor not yet virtualized in
     const { result, rerender } = renderHook(() =>
       useUnreadAnchorScroll({
+        anchorOnOpen: true,
         channelId: "c1",
         messages: messages(["m1", "m2", "m3"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
@@ -395,6 +421,7 @@ describe("useUnreadAnchorScroll", () => {
     const { ref } = handleWithSpy();
     const { result } = renderHook(() =>
       useUnreadAnchorScroll({
+        anchorOnOpen: true,
         channelId: "c1",
         messages: messages(["m1", "m2", "m3", "m4", "m5"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },
@@ -413,6 +440,7 @@ describe("useUnreadAnchorScroll", () => {
     const { scrollToIndex, ref } = handleWithSpy();
     const { result } = renderHook(() =>
       useUnreadAnchorScroll({
+        anchorOnOpen: true,
         channelId: "c1",
         messages: messages(["m1"]),
         newMessagesDivider: null,
@@ -438,6 +466,7 @@ describe("useUnreadAnchorScroll", () => {
     const removeSpy = vi.spyOn(container, "removeEventListener");
     const { unmount } = renderHook(() =>
       useUnreadAnchorScroll({
+        anchorOnOpen: true,
         channelId: "c1",
         messages: messages(["m1", "m2", "m3"]),
         newMessagesDivider: { anchorMessageId: "m3", count: 1 },

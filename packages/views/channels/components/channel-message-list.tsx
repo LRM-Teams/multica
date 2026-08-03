@@ -572,21 +572,10 @@ function MessageViewport({
     );
   }
 
-  // Open scrolled to: a deep-link target first, else the "new messages" divider
-  // so the viewer starts where they left off (#303, Iris), else the chat
-  // default (latest / thread root).
-  //
-  // #340: with `around_seq` the window is loaded centered on the anchor, so this
-  // mount-only prop lands the first render correctly — no post-mount scroll
-  // chase, no settle fallback. Unread opens pin the FIRST-UNREAD row to the top
-  // (align:start): the "N new messages" divider is rendered at the HEAD of that
-  // row's render unit, so pinning it puts the divider at the very top of the
-  // viewport CONSTRUCTIVELY — independent of message height — with the unread
-  // messages right below it. There is no "tall last-read pushes the divider off
-  // screen" edge to catch, because the last-read row is never the pin target.
-  // (Read context above the divider is intentionally omitted in v1 — Slack's
-  // "new messages" convention; add later via pure CSS if wanted, not mechanism.)
-  // Deep-link/search centers on the target.
+  // Open scrolled to: a deep-link target first, else the chat default (latest /
+  // thread root). LRM-1068: do NOT pin the first-unread row on cold open — that
+  // landed busy channels on 「今天」+ 当日第一条. Unread stays visible via the
+  // divider + "N new" pill; jump-on-demand, don't steal the landing.
   // #689/#1189 index-contract fix: `initialTopMostItemIndex` resolves
   // against the LOCAL data array (0..messages.length-1), same as
   // `scrollToIndex` above — never offset by `firstItemIndex`. See that

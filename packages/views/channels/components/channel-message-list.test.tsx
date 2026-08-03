@@ -370,8 +370,8 @@ describe("MessageViewport", () => {
     expect(screen.queryByText("Later thread reply")).not.toBeInTheDocument();
   });
 
-  it("pins a 'new messages' divider above the first unread message and opens there", () => {
-    // seq 5,6,7,8 with the read cursor at 6 → first unread is m7 (index 2).
+  it("pins a 'new messages' divider above the first unread but opens at latest (LRM-1068)", () => {
+    // seq 5,6,7,8 with the read cursor at 6 → first unread is m7; latest is m8 (index 3).
     const messages = [
       { ...makeMessage("m5", "Read one"), seq: 5 },
       { ...makeMessage("m6", "Read two"), seq: 6 },
@@ -384,17 +384,13 @@ describe("MessageViewport", () => {
         currentUserId="user-1"
         emptyLabel="No messages"
         lastReadSeq={6}
-        // #1194 regression guard: a large firstItemIndex must NOT leak into
-        // the unread-anchor local index (2) below.
         firstItemIndex={1_000_000}
       />,
     );
 
     expect(screen.getByTestId("unread-divider")).toBeInTheDocument();
-    // #340: opens with the first-unread row (m7, index 2) pinned to the top
-    // (align:start) — the divider is rendered at the head of that row's unit, so
-    // it lands at the very top of the viewport. Not the latest message.
-    expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute("data-initial-index", "2");
+    // LRM-1068: cold open lands on the latest row (index 3), not first-unread.
+    expect(screen.getByTestId("virtuoso-scroller")).toHaveAttribute("data-initial-index", "3");
   });
 
   it("#340: the divider shows the real unread count (frozen at entry), not the loaded-window count", () => {

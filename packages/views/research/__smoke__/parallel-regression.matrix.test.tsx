@@ -236,7 +236,7 @@ describe(`Smoke · list duplicate info (${SMOKE_ISSUES.listDuplicate})`, () => {
     () => {
       const filterSrc = readResearchSource("components/research-session-filter-bar.tsx");
       const rowSrc = readResearchSource("components/research-session-row.tsx");
-      const filterMax = filterSrc.match(/max-w-[\w\[\]\.\/]+/)?.[0];
+      const filterMax = filterSrc.match(/\bmax-w-\S+/)?.[0];
       expect(
         filterMax,
         failHint(SMOKE_ISSUES.listDuplicate, "filter bar missing max-w token"),

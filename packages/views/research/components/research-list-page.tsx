@@ -517,7 +517,11 @@ export function ResearchListPage() {
           onStart={focusComposer}
         />
       ) : (
-        <div className="space-y-4">
+        <div
+          data-testid="research-session-list-shell"
+          className="w-full max-w-3xl space-y-4"
+        >
+          {/* LRM-1104: one max-width shell so filter bar and session rows share edges. */}
           <ResearchSessionFilterBar
             query={titleQuery}
             status={statusFilter}

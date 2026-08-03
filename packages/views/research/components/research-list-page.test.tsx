@@ -472,6 +472,18 @@ describe("ResearchListPage search & status filter (LRM-818)", () => {
     expect(screen.getByText("Beta report")).toBeInTheDocument();
     expect(screen.getByText("Alpha failed")).toBeInTheDocument();
   });
+
+  it("LRM-1104: filter bar and session rows share one max-w-3xl shell", () => {
+    const { container } = render(<ResearchListPage />);
+    const shell = container.querySelector('[data-testid="research-session-list-shell"]');
+    expect(shell?.className).toContain("max-w-3xl");
+    const filter = container.querySelector('[data-testid="research-session-filter-bar"]');
+    expect(filter).toBeTruthy();
+    expect(shell?.contains(filter)).toBe(true);
+    expect(filter?.className).not.toContain("max-w-3xl");
+    expect(screen.getByText("Alpha research")).toBeInTheDocument();
+    expect(shell?.textContent).toContain("Alpha research");
+  });
 });
 
 describe("ResearchListPage quick templates (LRM-817 / LRM-906 T2)", () => {

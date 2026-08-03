@@ -175,6 +175,20 @@ describe("ResearchSessionRow (LRM-790 narrow + dark tokens)", () => {
     expect(titleEl?.textContent?.length ?? 0).toBeLessThan(longGoal.length);
   });
 
+  it("hides the goal chip when title falls back to goal (equal / prefix dedupe)", () => {
+    const longGoal =
+      "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员，开发环境要求。目前我们的设备是几台 linux 服务器";
+    render(
+      <ResearchSessionRow session={session({ title: "", goal: longGoal })} href="/research/s1" />,
+    );
+    expect(screen.queryByTestId("research-session-goal-chip")).toBeNull();
+  });
+
+  it("keeps the goal chip when title is distinct and goal adds information", () => {
+    render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    expect(screen.getByTestId("research-session-goal-chip")).toBeTruthy();
+  });
+
   it("renders the localized stage and falls back to the raw stage key", () => {
     const { rerender } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
     expect(screen.getByText(enResearch.stage.s2_sources)).toBeTruthy();

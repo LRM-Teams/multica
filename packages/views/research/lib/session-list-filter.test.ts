@@ -2,9 +2,12 @@
 import { describe, expect, it } from "vitest";
 import {
   filterSessions,
+  isRedundantGoalChip,
   isSessionListFilterActive,
   matchesStatusFilter,
   matchesTitleQuery,
+  sessionGoalChipSummary,
+  sessionShortTitle,
 } from "./session-list-filter";
 import type { ResearchSession } from "@multica/core/types";
 
@@ -68,5 +71,45 @@ describe("session-list-filter (LRM-818)", () => {
     expect(isSessionListFilterActive("", null)).toBe(false);
     expect(isSessionListFilterActive("  x ", null)).toBe(true);
     expect(isSessionListFilterActive("", "completed")).toBe(true);
+  });
+});
+
+describe("session goal chip dedupe (LRM-1104)", () => {
+  it("treats equal title/goal summaries as redundant", () => {
+    expect(isRedundantGoalChip("如何开发一个网页游戏", "如何开发一个网页游戏")).toBe(
+      true,
+    );
+  });
+
+  it("treats mutual prefixes (truncated title vs shorter goal chip) as redundant", () => {
+    const goal =
+      "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员，开发环境要求。目前我们的设备是几台 linux 服务器";
+    const title = sessionShortTitle({ title: "", goal });
+    const chip = sessionGoalChipSummary({ title: "", goal });
+    expect(title.includes("…")).toBe(true);
+    expect(chip).toBeNull();
+    expect(isRedundantGoalChip(title, title.slice(0, 35) + "…")).toBe(true);
+  });
+
+  it("keeps the chip when title is set and goal adds extra information", () => {
+    const session = s({
+      id: "1",
+      status: "running",
+      title: "Alpha market map",
+      goal: "Map the alpha market across regions with pricing and share",
+    });
+    expect(sessionGoalChipSummary(session)).toBe(
+      "Map the alpha market across regions…",
+    );
+  });
+
+  it("hides the chip when an explicit title equals the goal", () => {
+    const session = s({
+      id: "1",
+      status: "running",
+      title: "行业调研",
+      goal: "行业调研",
+    });
+    expect(sessionGoalChipSummary(session)).toBeNull();
   });
 });

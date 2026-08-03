@@ -41,6 +41,37 @@ export function sessionGoalSummary(
   return truncateOneLine(session.goal || "", maxChars);
 }
 
+/**
+ * LRM-1104: hide the goal chip when it adds no information beyond the row title.
+ * Compares display strings after stripping a trailing ellipsis so truncated
+ * title/goal fallbacks (equal or mutual prefix) collapse to a single line.
+ */
+export function isRedundantGoalChip(title: string, goalSummary: string): boolean {
+  const chip = goalSummary.trim();
+  if (!chip) return true;
+  const rowTitle = title.trim();
+  if (!rowTitle) return false;
+
+  const stripEllipsis = (value: string) =>
+    value.endsWith("…") ? value.slice(0, -1) : value;
+  const a = stripEllipsis(rowTitle);
+  const b = stripEllipsis(chip);
+  if (!a || !b) return a === b;
+  return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
+/** Goal chip text when it is non-empty and not redundant with the row title. */
+export function sessionGoalChipSummary(
+  session: Pick<ResearchSession, "title" | "goal">,
+  titleMaxChars = 48,
+  goalMaxChars = 36,
+): string | null {
+  const title = sessionShortTitle(session, titleMaxChars);
+  const goalSummary = sessionGoalSummary(session, goalMaxChars);
+  if (isRedundantGoalChip(title, goalSummary)) return null;
+  return goalSummary;
+}
+
 export function matchesTitleQuery(
   session: Pick<ResearchSession, "title" | "goal">,
   query: string,

@@ -40,7 +40,11 @@ export function ResearchSessionFilterBar({
   };
 
   return (
-    <div className="flex w-full max-w-3xl flex-col gap-2 sm:flex-row sm:items-center">
+    // Width cap lives on the shared list shell (LRM-1104) so filter + rows align.
+    <div
+      data-testid="research-session-filter-bar"
+      className="flex w-full flex-col gap-2 sm:flex-row sm:items-center"
+    >
       <div className="relative min-w-0 flex-1">
         <Search
           className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"

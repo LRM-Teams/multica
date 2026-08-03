@@ -89,8 +89,11 @@ Upgrade path:
 - Never mutate the meaning of an existing `revision` row in place — PATCH
   creates a new row with a higher `revision`.
 - Future `schema_version: 2+` must remain readable via `content_md`; unknown
-  versions are treated as read-only markdown (see below). Server does **not**
-  hard-validate `structured` today.
+  versions are treated as read-only markdown (see below). The legacy report
+  endpoint continues to accept opaque/empty `structured` for compatibility.
+  Durable `research-run-v2` synthesis hard-validates the complete v1 shape,
+  exact section/conclusion presence in `content_md`, citation/source
+  references, and normalized Claim anchors before creating a report revision.
 
 ## Legacy / compatibility
 

@@ -58,6 +58,8 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		independentSources  int
 		reportCount         int
 		reportClaimCount    int
+		reportAuthorCount   int
+		unreportedRequired  int
 		wrongVersionClaims  int
 		unsupportedClaims   int
 		weakMajorClaims     int
@@ -65,8 +67,10 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		unlinkedMajorClaims int
 		qualityEvaluations  int
 		qualityPassed       int
+		qualityIndependent  int
 		citationEvaluations int
 		citationPassed      int
+		citationIndependent int
 		budgetExhausted     int
 	}
 	var counts gateCounts
@@ -76,7 +80,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		  FROM research_claim c
 		  WHERE c.session_id = $1::uuid AND c.goal_version = $2 AND c.plan_version = $3
 		), latest_report AS (
-		  SELECT id FROM research_report
+		  SELECT id, author_agent_id FROM research_report
 		  WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3
 		  ORDER BY revision DESC LIMIT 1
 		), report_claims AS (
@@ -100,13 +104,13 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		  WHERE e.session_id = $1::uuid AND e.relation = 'contradicts'
 		    AND e.verification_status = 'verified'
 		), latest_quality AS (
-		  SELECT outcome FROM research_decision
+		  SELECT actor_id, outcome FROM research_decision
 		  WHERE session_id = $1::uuid AND decision_kind = 'quality_gate'
 		    AND goal_version = $2 AND plan_version = $3
 		    AND inputs->>'report_id' = (SELECT id::text FROM latest_report)
 		  ORDER BY created_at DESC LIMIT 1
 		), latest_citation AS (
-		  SELECT outcome FROM research_decision
+		  SELECT actor_id, outcome FROM research_decision
 		  WHERE session_id = $1::uuid AND decision_kind = 'citation_audit'
 		    AND goal_version = $2 AND plan_version = $3
 		    AND inputs->>'report_id' = (SELECT id::text FROM latest_report)
@@ -125,6 +129,11 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		  (SELECT count(DISTINCT independence_key)::int FROM supported),
 		  (SELECT count(*)::int FROM latest_report),
 		  (SELECT count(*)::int FROM report_claims),
+		  (SELECT count(*)::int FROM latest_report WHERE author_agent_id IS NOT NULL),
+		  (SELECT count(*)::int FROM research_question question
+		   WHERE question.session_id = $1::uuid AND question.goal_version = $2 AND question.plan_version = $3
+		     AND question.required AND question.answer_claim_id IS NOT NULL
+		     AND NOT EXISTS (SELECT 1 FROM report_claims report_claim WHERE report_claim.claim_id = question.answer_claim_id)),
 		  (SELECT count(*)::int FROM research_report_claim rc JOIN latest_report r ON r.id = rc.report_id WHERE NOT EXISTS (SELECT 1 FROM current_claims c WHERE c.id = rc.claim_id)),
 		  (SELECT count(*)::int FROM report_claims rc WHERE NOT EXISTS (SELECT 1 FROM supported s WHERE s.claim_id = rc.claim_id)),
 		  (SELECT count(*)::int
@@ -145,6 +154,18 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		       COALESCE((outcome->>'instruction_adherence')::double precision, 0),
 		       COALESCE((outcome->>'readability')::double precision, 0)
 		     ) >= $4::double precision),
+		  (SELECT count(*)::int FROM latest_quality quality CROSS JOIN latest_report report
+		   WHERE report.author_agent_id IS NOT NULL AND quality.actor_id IS DISTINCT FROM report.author_agent_id
+		     AND COALESCE((quality.outcome->>'passed')::boolean, false)
+		     AND LEAST(
+		       COALESCE((quality.outcome->>'factual_grounding')::double precision, 0),
+		       COALESCE((quality.outcome->>'coverage')::double precision, 0),
+		       COALESCE((quality.outcome->>'analytical_depth')::double precision, 0),
+		       COALESCE((quality.outcome->>'source_quality')::double precision, 0),
+		       COALESCE((quality.outcome->>'contradiction_handling')::double precision, 0),
+		       COALESCE((quality.outcome->>'instruction_adherence')::double precision, 0),
+		       COALESCE((quality.outcome->>'readability')::double precision, 0)
+		     ) >= $4::double precision),
 		  (SELECT count(*)::int FROM latest_citation),
 		  (SELECT count(*)::int FROM latest_citation
 		   WHERE COALESCE((outcome->>'passed')::boolean, false)
@@ -157,20 +178,41 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		       COALESCE((outcome->>'instruction_adherence')::double precision, 0),
 		       COALESCE((outcome->>'readability')::double precision, 0)
 		     ) >= $4::double precision),
+		  (SELECT count(*)::int FROM latest_citation citation CROSS JOIN latest_report report
+		   WHERE report.author_agent_id IS NOT NULL AND citation.actor_id IS DISTINCT FROM report.author_agent_id
+		     AND COALESCE((citation.outcome->>'passed')::boolean, false)
+		     AND LEAST(
+		       COALESCE((citation.outcome->>'factual_grounding')::double precision, 0),
+		       COALESCE((citation.outcome->>'coverage')::double precision, 0),
+		       COALESCE((citation.outcome->>'analytical_depth')::double precision, 0),
+		       COALESCE((citation.outcome->>'source_quality')::double precision, 0),
+		       COALESCE((citation.outcome->>'contradiction_handling')::double precision, 0),
+		       COALESCE((citation.outcome->>'instruction_adherence')::double precision, 0),
+		       COALESCE((citation.outcome->>'readability')::double precision, 0)
+		     ) >= $4::double precision),
 		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid
 		     AND decision_kind = 'budget_exhausted' AND goal_version = $2 AND plan_version = $3)
 	`, sessionID, run.GoalVersion, run.PlanVersion, minimumEvaluationScore, minimumMajorClaimSources).Scan(
 		&counts.planSucceeded, &counts.unfinishedTasks, &counts.blockedTasks,
 		&counts.requiredQuestions, &counts.unansweredRequired,
 		&counts.verifiedSources, &counts.independentSources,
-		&counts.reportCount, &counts.reportClaimCount, &counts.wrongVersionClaims, &counts.unsupportedClaims, &counts.weakMajorClaims,
+		&counts.reportCount, &counts.reportClaimCount, &counts.reportAuthorCount, &counts.unreportedRequired,
+		&counts.wrongVersionClaims, &counts.unsupportedClaims, &counts.weakMajorClaims,
 		&counts.unresolvedConflicts, &counts.unlinkedMajorClaims,
-		&counts.qualityEvaluations, &counts.qualityPassed,
-		&counts.citationEvaluations, &counts.citationPassed,
+		&counts.qualityEvaluations, &counts.qualityPassed, &counts.qualityIndependent,
+		&counts.citationEvaluations, &counts.citationPassed, &counts.citationIndependent,
 		&counts.budgetExhausted,
 	)
 	if err != nil {
 		return GateResult{}, err
+	}
+	var reportStructureErr error
+	if run.OrchestratorVersion == OrchestratorVersionV2 && counts.reportCount > 0 {
+		var report ReportProposal
+		report, reportStructureErr = s.loadLatestReportForGate(ctx, sessionID, run.GoalVersion, run.PlanVersion)
+		if reportStructureErr == nil {
+			_, reportStructureErr = validateStructuredReportV2(report, reportPolicyForDepth(run.DepthTier))
+		}
 	}
 
 	minimumIndependentSources := 3
@@ -204,6 +246,15 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	if counts.reportCount == 0 {
 		add("report_missing", "No report revision exists for delivery.", nil)
 	} else {
+		if reportStructureErr != nil {
+			add("report_structure_incomplete", "The latest report does not satisfy the durable structure and prose-coverage contract.", map[string]any{"reason": reportStructureErr.Error()})
+		}
+		if run.OrchestratorVersion == OrchestratorVersionV2 && counts.reportAuthorCount == 0 {
+			add("report_author_missing", "The latest report has no durable author attribution.", nil)
+		}
+		if run.OrchestratorVersion == OrchestratorVersionV2 && counts.unreportedRequired > 0 {
+			add("required_answers_unreported", "Required question answer claims are absent from the latest report.", map[string]any{"count": counts.unreportedRequired})
+		}
 		if counts.reportClaimCount == 0 {
 			add("report_claims_missing", "The latest report has no normalized claim links.", nil)
 		}
@@ -227,11 +278,15 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		add("quality_evaluation_missing", "The latest report has not passed an independent quality evaluation.", nil)
 	} else if counts.qualityPassed == 0 {
 		add("quality_evaluation_failed", "The latest independent quality evaluation failed or fell below the depth-tier score floor.", map[string]any{"minimum_score": minimumEvaluationScore})
+	} else if run.OrchestratorVersion == OrchestratorVersionV2 && counts.qualityIndependent == 0 {
+		add("quality_evaluation_not_independent", "The latest quality evaluation was submitted by the report author.", nil)
 	}
 	if counts.citationEvaluations == 0 {
 		add("citation_audit_missing", "The latest report has not passed a citation audit.", nil)
 	} else if counts.citationPassed == 0 {
 		add("citation_audit_failed", "The latest citation audit failed or fell below the depth-tier score floor.", map[string]any{"minimum_score": minimumEvaluationScore})
+	} else if run.OrchestratorVersion == OrchestratorVersionV2 && counts.citationIndependent == 0 {
+		add("citation_audit_not_independent", "The latest citation audit was submitted by the report author.", nil)
 	}
 	if counts.budgetExhausted == 0 && run.Stats.LowGainStreak < run.Config.MarginalGainRounds {
 		add("marginal_gain_not_saturated", "Recent evidence batches have not yet demonstrated diminishing information gain.", map[string]any{
@@ -242,6 +297,38 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		})
 	}
 	return GateResult{Passed: len(findings) == 0, Findings: findings}, nil
+}
+
+func (s *PostgresStore) loadLatestReportForGate(ctx context.Context, sessionID string, goalVersion, planVersion int) (ReportProposal, error) {
+	var report ReportProposal
+	var reportID string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT id::text, content_md, structured
+		FROM research_report
+		WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3
+		ORDER BY revision DESC LIMIT 1
+	`, sessionID, goalVersion, planVersion).Scan(&reportID, &report.ContentMD, &report.Structured); err != nil {
+		return ReportProposal{}, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT claim.client_key, link.section_id, link.anchor_quote
+		FROM research_report_claim link
+		JOIN research_claim claim ON claim.id = link.claim_id
+		WHERE link.report_id = $1::uuid
+		ORDER BY claim.client_key, link.section_id
+	`, reportID)
+	if err != nil {
+		return ReportProposal{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var link ReportClaimProposal
+		if err = rows.Scan(&link.ClaimKey, &link.SectionID, &link.AnchorQuote); err != nil {
+			return ReportProposal{}, err
+		}
+		report.Claims = append(report.Claims, link)
+	}
+	return report, rows.Err()
 }
 
 func (s *PostgresStore) RecordBudgetExhausted(ctx context.Context, sessionID, budgetKind, details string) (RunEvent, error) {

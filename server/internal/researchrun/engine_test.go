@@ -76,6 +76,13 @@ func TestRemediationRoutesMarginalGainToEvidenceReplan(t *testing.T) {
 	}
 }
 
+func TestRemediationRoutesReportQualityFailureToSynthesis(t *testing.T) {
+	kind, objective, capability := remediationTask(GateResult{Findings: []GateFinding{{Code: "quality_evaluation_failed"}}})
+	if kind != TaskKindSynthesize || capability != "reporter" || !strings.Contains(objective, "report") {
+		t.Fatalf("kind=%s capability=%s objective=%q", kind, capability, objective)
+	}
+}
+
 func TestTaskPromptCarriesOnlyDurableSubmissionProtocol(t *testing.T) {
 	run := Run{SessionID: "session-1", Goal: "Investigate", GoalVersion: 2, PlanVersion: 3, OrchestratorVersion: OrchestratorVersionV1}
 	task := Task{ID: "task-1", Kind: TaskKindDiscover, Objective: "Find evidence", ExpectedResult: "research_evidence_v1"}
@@ -113,6 +120,36 @@ func TestTaskPromptV1IsPinned(t *testing.T) {
 	sum := sha256.Sum256([]byte(prompt))
 	if got, want := hex.EncodeToString(sum[:]), "d8c7121001c1b211782d934e306ebab5dc385e06a3acdb65d04694cd3a1fa489"; got != want {
 		t.Fatalf("research-run-v1 prompt changed: got %s; introduce a new orchestrator version for behavioral changes", got)
+	}
+}
+
+func TestTaskPromptV2CarriesAndPinsReportQualityContract(t *testing.T) {
+	run := Run{SessionID: "session-2", Goal: "Investigate deeply", GoalVersion: 1, PlanVersion: 1, DepthTier: "deep", OrchestratorVersion: OrchestratorVersionV2}
+	task := Task{ID: "task-2", Kind: TaskKindSynthesize, Objective: "Produce report", RequiredCapability: "reporter", ExpectedResult: "research_report_v2"}
+	attempt := Attempt{ID: "attempt-2", DispatchKey: "dispatch-2"}
+	prompt, err := buildTaskPrompt(run, task, attempt, RunSnapshot{Contract: ResearchContract{Language: "zh"}}, []FleetMember{{Role: "reporter", Status: "active"}, {Role: "validator", Status: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"answer_claim_key",
+		"discover/deep_read/verify/counter_search=research_evidence_v2",
+		"synthesize=reporter; quality_gate=validator; citation_audit=validator",
+		"both audit tasks directly depend on a synthesize task",
+		"citations:[{id,index,source_id,label,quote,locator}]",
+		"claims=[{claim_key,section_id,anchor_quote}]",
+		"at least 7 sections, 160 substantive characters per section, and 160 in the conclusion",
+		"dimension_findings",
+		"reviewed_claim_keys covering every report Claim",
+		"report written by another Agent",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("prompt missing %q:\n%s", required, prompt)
+		}
+	}
+	sum := sha256.Sum256([]byte(prompt))
+	if got, want := hex.EncodeToString(sum[:]), "a188db9f78c4413823f8e6060030244fc6d97db8e25cc8a9d1131dce5549fac8"; got != want {
+		t.Fatalf("research-run-v2 prompt changed: got %s; introduce a new orchestrator version for behavioral changes", got)
 	}
 }
 

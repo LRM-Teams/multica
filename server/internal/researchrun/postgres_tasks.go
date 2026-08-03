@@ -304,14 +304,14 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, sessionID string,
 	defer tx.Rollback(ctx)
 	var workspaceID string
 	var goalVersion, planVersion, maxTasks, maxAttempts, timeout int
-	var status string
+	var status, orchestratorVersion string
 	err = tx.QueryRow(ctx, `
-		SELECT workspace_id::text, goal_version, plan_version, status,
+		SELECT workspace_id::text, goal_version, plan_version, status, orchestrator_version,
 		       COALESCE((run_config->>'max_tasks')::int, 60),
 		       COALESCE((run_config->>'max_attempts_per_task')::int, 3),
 		       COALESCE((run_config->>'task_timeout_seconds')::int, 1800)
 		FROM research_session WHERE id = $1::uuid FOR UPDATE
-	`, sessionID).Scan(&workspaceID, &goalVersion, &planVersion, &status, &maxTasks, &maxAttempts, &timeout)
+	`, sessionID).Scan(&workspaceID, &goalVersion, &planVersion, &status, &orchestratorVersion, &maxTasks, &maxAttempts, &timeout)
 	if err != nil {
 		return Task{}, RunEvent{}, err
 	}
@@ -325,10 +325,9 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, sessionID string,
 	if count >= maxTasks {
 		return Task{}, RunEvent{}, fmt.Errorf("%w: run task budget exhausted", ErrBudgetExhausted)
 	}
-	clientKey := fmt.Sprintf("control:%s:%d:%d", kind, goalVersion, planVersion)
 	row := tx.QueryRow(ctx, taskSelectSQL+`
 		WHERE t.session_id = $1::uuid AND t.goal_version = $2 AND t.plan_version = $3
-		  AND t.kind = $4 AND t.status IN ('pending', 'ready', 'dispatching', 'running', 'succeeded')
+		  AND t.kind = $4 AND t.status IN ('pending', 'ready', 'dispatching', 'running')
 		ORDER BY t.created_at DESC LIMIT 1
 	`, sessionID, goalVersion, planVersion, kind)
 	if existing, scanErr := scanTask(row); scanErr == nil {
@@ -336,17 +335,26 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, sessionID string,
 	} else if !errors.Is(scanErr, pgx.ErrNoRows) {
 		return Task{}, RunEvent{}, scanErr
 	}
-	expected := expectedResultForTask(kind)
+	var kindSequence int
+	if err = tx.QueryRow(ctx, `
+		SELECT count(*)::int + 1 FROM research_task
+		WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND kind = $4
+	`, sessionID, goalVersion, planVersion, kind).Scan(&kindSequence); err != nil {
+		return Task{}, RunEvent{}, err
+	}
+	clientKey := fmt.Sprintf("control:%s:%d:%d:%d", kind, goalVersion, planVersion, kindSequence)
+	expected := expectedResultForTaskVersion(orchestratorVersion, kind)
+	acceptanceCriteria, _ := json.Marshal(map[string]any{"schema_version": resultSchemaVersionForOrchestrator(orchestratorVersion)})
 	var taskID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_task (
 			workspace_id, session_id, client_key, kind, objective,
 			required_capability, expected_result, acceptance_criteria, priority,
 			status, goal_version, plan_version, max_attempts, timeout_seconds, ready_at
-		) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7,
-		          '{"schema_version":1}'::jsonb, $8, 'ready', $9, $10, $11, $12, now())
+			) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7,
+			          $8, $9, 'ready', $10, $11, $12, $13, now())
 		RETURNING id::text
-	`, workspaceID, sessionID, clientKey, kind, objective, capability, expected,
+		`, workspaceID, sessionID, clientKey, kind, objective, capability, expected, acceptanceCriteria,
 		priority, goalVersion, planVersion, maxAttempts, timeout).Scan(&taskID)
 	if err != nil {
 		return Task{}, RunEvent{}, err
@@ -669,18 +677,33 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 }
 
 func expectedResultForTask(kind TaskKind) string {
-	switch kind {
-	case TaskKindReplan:
-		return "research_plan_v1"
-	case TaskKindSynthesize:
-		return "research_report_v1"
-	case TaskKindQualityGate:
-		return "research_quality_evaluation_v1"
-	case TaskKindCitationAudit:
-		return "research_citation_audit_v1"
-	default:
-		return "research_evidence_v1"
+	return expectedResultForTaskVersion(OrchestratorVersionV1, kind)
+}
+
+func expectedResultForTaskVersion(version string, kind TaskKind) string {
+	suffix := "v1"
+	if version == OrchestratorVersionV2 {
+		suffix = "v2"
 	}
+	switch kind {
+	case TaskKindPlan, TaskKindReplan:
+		return "research_plan_" + suffix
+	case TaskKindSynthesize:
+		return "research_report_" + suffix
+	case TaskKindQualityGate:
+		return "research_quality_evaluation_" + suffix
+	case TaskKindCitationAudit:
+		return "research_citation_audit_" + suffix
+	default:
+		return "research_evidence_" + suffix
+	}
+}
+
+func resultSchemaVersionForOrchestrator(version string) int {
+	if version == OrchestratorVersionV2 {
+		return 2
+	}
+	return 1
 }
 
 func truncateBytes(value string, max int) string {

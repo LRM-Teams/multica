@@ -70,6 +70,65 @@ func TestDecodeAndValidateResultRejectsCyclicTaskGraph(t *testing.T) {
 	}
 }
 
+func TestResearchRunV2RejectsPlaceholderReport(t *testing.T) {
+	raw := []byte(`{
+		"schema_version":2,
+		"client_request_id":"report-request-2",
+		"summary":"report",
+		"report":{
+			"content_md":"结论：可行。",
+			"structured":{"schema_version":1,"title":"结论","outline":[],"sections":[],"citations":[],"sources":[],"conclusion":"可行。"},
+			"claims":[{"claim_key":"claim-1","section_id":"conclusion","anchor_quote":"可行"}]
+		},
+		"coverage_delta":0,
+		"confidence":0.8
+	}`)
+	_, _, err := DecodeAndValidateResultForVersion("research-run-v2", raw, Task{Kind: TaskKindSynthesize, RequiredCapability: "reporter", ExpectedResult: "research_report_v2"}, DefaultRunConfig("deep"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "report") {
+		t.Fatalf("error=%v, want placeholder report rejection", err)
+	}
+}
+
+func TestResearchRunV2RequiresCanonicalDeliveryRoles(t *testing.T) {
+	result := validPlanResult(t)
+	result.SchemaVersion = 2
+	result.Plan.Tasks[0].ExpectedResult = "research_evidence_v2"
+	result.Plan.Tasks = append(result.Plan.Tasks,
+		TaskProposal{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write report", RequiredCapability: "lead", ExpectedResult: "research_report_v2", Priority: 0.7},
+		TaskProposal{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Review report", RequiredCapability: "lead", ExpectedResult: "research_quality_evaluation_v2", Priority: 0.6, DependsOn: []string{"synthesize"}},
+		TaskProposal{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit citations", RequiredCapability: "lead", ExpectedResult: "research_citation_audit_v2", Priority: 0.6, DependsOn: []string{"synthesize"}},
+	)
+	raw, _ := json.Marshal(result)
+	_, _, err := DecodeAndValidateResultForVersion("research-run-v2", raw, Task{Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v2"}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "reporter") {
+		t.Fatalf("error=%v, want canonical reporter role rejection", err)
+	}
+}
+
+func TestResearchRunV2RequiresDeliveryTasksInsidePlan(t *testing.T) {
+	result := validPlanResult(t)
+	result.SchemaVersion = 2
+	result.Plan.Tasks[0].ExpectedResult = "research_evidence_v2"
+	result.ProposedTasks = []TaskProposal{
+		{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write report", RequiredCapability: "reporter", ExpectedResult: "research_report_v2", Priority: 0.7},
+		{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Review report", RequiredCapability: "validator", ExpectedResult: "research_quality_evaluation_v2", Priority: 0.6, DependsOn: []string{"synthesize"}},
+		{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit citations", RequiredCapability: "validator", ExpectedResult: "research_citation_audit_v2", Priority: 0.6, DependsOn: []string{"synthesize"}},
+	}
+	raw, _ := json.Marshal(result)
+	_, _, err := DecodeAndValidateResultForVersion(OrchestratorVersionV2, raw, Task{Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v2"}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "v2 plan requires a synthesize") {
+		t.Fatalf("error=%v, want plan-local delivery task rejection", err)
+	}
+}
+
+func TestResearchRunV1ContractRemainsAccepted(t *testing.T) {
+	result := validPlanResult(t)
+	raw, _ := json.Marshal(result)
+	if _, _, err := DecodeAndValidateResultForVersion(OrchestratorVersionV1, raw, Task{Kind: TaskKindPlan}, DefaultRunConfig("standard")); err != nil {
+		t.Fatalf("v1 contract changed: %v", err)
+	}
+}
+
 func TestCanonicalURLNormalizesWithoutLosingQuery(t *testing.T) {
 	got, err := CanonicalURL("HTTPS://Example.COM:443/path?q=1#fragment")
 	if err != nil {

@@ -578,7 +578,7 @@ export function ComputersMachineDetail(props: MachineDetailViewProps) {
 function MachineDetailView({
   machine,
   agents,
-  snapshot,
+  snapshot: _snapshot,
   now,
   wsId,
   isMobile,
@@ -590,6 +590,7 @@ function MachineDetailView({
   showBack,
   showListActions,
 }: MachineDetailViewProps) {
+  void _snapshot;
   const { t } = useT("runtimes");
   const { getActorName } = useActorName();
   const openAgentPanel = useAgentPanelStore((s) => s.open);

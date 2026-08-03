@@ -84,3 +84,28 @@ func sleepWithContextOrWakeup(ctx context.Context, d time.Duration, wakeups <-ch
 		return nil
 	}
 }
+
+// toolResultInputHasPath reports whether a tool_result Input map carries a
+// non-empty path-like key (same vocabulary as activityPathFactFromInput).
+// Used only for #103 temporary diagnostics — not a second source of truth.
+func toolResultInputHasPath(input map[string]any) bool {
+	if len(input) == 0 {
+		return false
+	}
+	for _, key := range []string{
+		"path", "file_path", "filepath", "filePath", "file", "filename",
+		"absolute_path", "absolutePath", "relative_path", "relativePath",
+	} {
+		v, ok := input[key]
+		if !ok || v == nil {
+			continue
+		}
+		switch t := v.(type) {
+		case string:
+			if strings.TrimSpace(t) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}

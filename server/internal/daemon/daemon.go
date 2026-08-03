@@ -2129,7 +2129,6 @@ func (d *Daemon) runUpdate(targetVersion string) (string, error) {
 	return d.runStageUpdate(targetVersion)
 }
 
-
 // activateStagedAndRestart is the sole post-stage restart entry for handleUpdate.
 // It CAS-activates the staged release, sets d.restartBinary, then triggerRestart.
 // SupportsReadyToApply (#105 force-apply) and the legacy idle-only server path
@@ -4929,7 +4928,23 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					trajectory.flush(time.Now(), true, emitTrajectory)
 					phase.leave()
 					s := seq.Add(1)
-					taskLog.Info("tool_result observed", "seq", s, "tool", toolName, "call_id", msg.CallID)
+					// #103 temporary: when MULTICA_DEBUG_TOOL_RESULT_INPUT=1, log
+					// whether completed tool Input is empty (backfill depends on it).
+					// No Input contents — keys/emptiness only. Remove after dig.
+					if strings.TrimSpace(os.Getenv("MULTICA_DEBUG_TOOL_RESULT_INPUT")) == "1" {
+						inputEmpty := len(msg.Input) == 0
+						hasPath := toolResultInputHasPath(msg.Input)
+						taskLog.Info("tool_result observed",
+							"seq", s,
+							"tool", toolName,
+							"call_id", msg.CallID,
+							"input_empty", inputEmpty,
+							"input_has_path", hasPath,
+							"input_key_count", len(msg.Input),
+						)
+					} else {
+						taskLog.Info("tool_result observed", "seq", s, "tool", toolName, "call_id", msg.CallID)
+					}
 					batch = append(batch, TaskMessageData{
 						Seq:    int(s),
 						Type:   "tool_result",

@@ -273,8 +273,9 @@ function SetupModeSelector({
 // install tips stay (Parker/#1581); content is not deleted — only re-homed.
 function TroubleDetails() {
   const { t } = useT("runtimes");
+  // LRM-1199: solid/subtle border — dashed is dropzone/placeholder vocabulary.
   return (
-    <details className="group rounded-lg border border-dashed">
+    <details className="group rounded-lg border border-border">
       <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
         <ChevronRight
           className="h-3 w-3 transition-transform group-open:rotate-90"

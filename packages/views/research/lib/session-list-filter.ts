@@ -73,9 +73,6 @@ export function shouldShowSessionGoalChip(
   return !textsAreEqualOrMutualPrefix(titleSource, goal);
 }
 
-/** Shared list content width: filter bar + rows (LRM-1104). */
-export const RESEARCH_SESSION_LIST_CONTENT_CLASS = "w-full max-w-3xl";
-
 export function matchesTitleQuery(
   session: Pick<ResearchSession, "title" | "goal">,
   query: string,

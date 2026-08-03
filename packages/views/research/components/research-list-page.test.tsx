@@ -264,22 +264,19 @@ describe("ResearchListPage list states (LRM-789)", () => {
     ).toBeNull();
   });
 
-  it("LRM-1104: filter bar and session rows share one max-w content shell", () => {
+  it("LRM-1104: list content has no max-w-3xl shell (width owned by LRM-1106)", () => {
     setQuery({
       data: {
         sessions: [session({ id: "s-run", status: "running", title: "Alpha" })],
       },
     });
     const { container } = render(<ResearchListPage />);
-    const shell = container.querySelector(
+    const list = container.querySelector(
       '[data-testid="research-session-list-content"]',
     );
-    expect(shell?.className).toContain("max-w-3xl");
-    expect(shell?.className).toContain("w-full");
-    // Filter + rows are descendants of the same width shell (not independently capped).
-    expect(shell?.querySelector('[aria-label]') || shell).toBeTruthy();
-    expect(shell?.textContent).toContain("Alpha");
-    expect(shell?.querySelector('[placeholder], input, [role="radiogroup"]')).toBeTruthy();
+    expect(list?.className).not.toContain("max-w-3xl");
+    expect(list?.textContent).toContain("Alpha");
+    expect(list?.querySelector('[role="radiogroup"]')).toBeTruthy();
   });
 });
 

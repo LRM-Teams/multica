@@ -36,7 +36,6 @@ import {
   FAILED_STATUSES,
   filterSessions,
   isSessionListFilterActive,
-  RESEARCH_SESSION_LIST_CONTENT_CLASS,
   type SessionStatusFilter,
 } from "../lib/session-list-filter";
 import {
@@ -534,10 +533,8 @@ export function ResearchListPage() {
           onStart={focusComposer}
         />
       ) : (
-        <div
-          data-testid="research-session-list-content"
-          className={cn("space-y-4", RESEARCH_SESSION_LIST_CONTENT_CLASS)}
-        >
+        <div data-testid="research-session-list-content" className="space-y-4">
+          {/* LRM-1104: no max-w-3xl list shell — width alignment owned by LRM-1106. */}
           <ResearchSessionFilterBar
             query={titleQuery}
             status={statusFilter}

@@ -144,6 +144,9 @@ describe("ConnectRemoteDialog", () => {
 
     const details = baseElement.querySelectorAll("details");
     expect(details).toHaveLength(1);
+    // LRM-1199: expandable help uses solid border vocabulary, not dropzone dashed.
+    expect(details[0]).toHaveClass("border", "border-border");
+    expect(details[0]).not.toHaveClass("border-dashed");
     const waiting = screen.getByRole("status");
     expect(
       waiting.compareDocumentPosition(details[0]!) &

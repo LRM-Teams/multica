@@ -38,6 +38,7 @@ import {
   type DuplexMediaSessionFactory,
   type DuplexToolStatus,
 } from "./duplex-media-session";
+import { preflightMicrophoneAccess } from "./voice-call-mic-preflight";
 
 export type VoiceCallControllerPhase =
   | "idle"
@@ -555,8 +556,12 @@ export function useVoiceCallController(
     const operation = (async () => {
       let createdCallId = "";
       let cleanupAttempted = false;
-      let failureSource: VoiceCallControllerErrorSource = "create";
+      let failureSource: VoiceCallControllerErrorSource = "media";
       try {
+        // Must run before createCall/network awaits so mobile browsers still
+        // treat mic permission as part of the click gesture.
+        await preflightMicrophoneAccess(microphoneDeviceId);
+        failureSource = "create";
         const created = await createCallMutation.mutateAsync(input);
         failureSource = "media";
         createdCallId = created.call.id;
@@ -599,6 +604,12 @@ export function useVoiceCallController(
             );
             const duplexEvents: DuplexMediaSessionEvents = {
               onReady: () => {
+                if (endingRef.current || cancelRequestedRef.current) return;
+                // Ready is transport-only. UI connected waits for audible TTS
+                // playback (onPlaybackStarted), matching Volcengine evidence.
+                providerStartedRef.current = true;
+              },
+              onPlaybackStarted: () => {
                 if (endingRef.current || cancelRequestedRef.current) return;
                 providerAnsweredRef.current = true;
                 providerStartedRef.current = true;

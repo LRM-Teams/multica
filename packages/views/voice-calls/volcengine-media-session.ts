@@ -171,6 +171,11 @@ class BrowserVoiceCallRemoteAudioOutput
     audio.autoplay = true;
     audio.muted = false;
     audio.volume = 1;
+    // Mobile Chromium / WebKit often require playsInline before remote
+    // MediaStream playback is accepted after RTC first-frame.
+    audio.setAttribute("playsinline", "true");
+    audio.setAttribute("webkit-playsinline", "true");
+    (audio as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
     audio.srcObject = new MediaStream([track]);
     await audio.play();
   }
@@ -553,19 +558,11 @@ export class VolcengineVoiceMediaSession {
         ),
       );
     }
-    const track = engine.getRemoteAudioTrack(remoteUserId);
-    if (!track) {
-      return Promise.reject(
-        new VoiceCallMediaError(
-          "playback_failed",
-          "Remote voice stream is not available",
-        ),
-      );
-    }
     const output = this.remoteAudioOutput ?? this.createRemoteAudioOutput();
     this.remoteAudioOutput = output;
 
-    const attempt = output.play(track)
+    const attempt = waitForRemoteAudioTrack(engine, remoteUserId)
+      .then((track) => output.play(track))
       .then(() => {
         if (
           this.engine !== engine ||
@@ -705,6 +702,27 @@ function expectedVoiceAgentUserId(memberUserId: string): string {
     );
   }
   return `voice-agent-${normalized.slice(memberPrefix.length)}`;
+}
+
+const REMOTE_TRACK_RETRY_ATTEMPTS = 8;
+const REMOTE_TRACK_RETRY_MS = 40;
+
+async function waitForRemoteAudioTrack(
+  engine: VoiceCallRTCEngine,
+  remoteUserId: string,
+): Promise<MediaStreamTrack> {
+  for (let attempt = 0; attempt < REMOTE_TRACK_RETRY_ATTEMPTS; attempt += 1) {
+    const track = engine.getRemoteAudioTrack(remoteUserId);
+    if (track) return track;
+    if (attempt + 1 >= REMOTE_TRACK_RETRY_ATTEMPTS) break;
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, REMOTE_TRACK_RETRY_MS);
+    });
+  }
+  throw new VoiceCallMediaError(
+    "playback_failed",
+    "Remote voice stream is not available",
+  );
 }
 
 export function createVolcengineVoiceMediaSession(

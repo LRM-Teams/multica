@@ -256,6 +256,8 @@ describe("VolcengineVoiceMediaSession", () => {
       muted: true,
       volume: 0,
       srcObject: null,
+      playsInline: false,
+      setAttribute: vi.fn(),
       play,
       pause: vi.fn(),
     };
@@ -288,7 +290,13 @@ describe("VolcengineVoiceMediaSession", () => {
       muted: false,
       volume: 1,
       srcObject: mediaStream,
+      playsInline: true,
     });
+    expect(audio.setAttribute).toHaveBeenCalledWith("playsinline", "true");
+    expect(audio.setAttribute).toHaveBeenCalledWith(
+      "webkit-playsinline",
+      "true",
+    );
     expect(play).toHaveBeenCalledOnce();
     expect(harness.engine.getRemoteAudioTrack).toHaveBeenCalledWith(
       "voice-agent-call-1",
@@ -303,6 +311,36 @@ describe("VolcengineVoiceMediaSession", () => {
     await session.disconnect();
     expect(audio.pause).toHaveBeenCalledOnce();
     expect(audio.srcObject).toBeNull();
+  });
+
+  it("retries remote track lookup after first frame before failing playback", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    harness.engine.getRemoteAudioTrack = vi.fn()
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValue(harness.remoteTrack);
+    const output: VoiceCallRemoteAudioOutput = {
+      play: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn(),
+    };
+    const onRemoteAudioStarted = vi.fn();
+    const session = new VolcengineVoiceMediaSession(
+      { onRemoteAudioStarted },
+      async () => harness.driver,
+      () => output,
+    );
+    await session.connect(media);
+
+    harness.getCallbacks()?.onRemoteAudioStarted("voice-agent-call-1");
+    await vi.advanceTimersByTimeAsync(200);
+
+    await vi.waitFor(() => {
+      expect(onRemoteAudioStarted).toHaveBeenCalledWith("voice-agent-call-1");
+    });
+    expect(output.play).toHaveBeenCalledWith(harness.remoteTrack);
+    expect(harness.engine.getRemoteAudioTrack).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
   });
 
   it("ignores decoded audio from a user other than the call-scoped agent", async () => {

@@ -25,6 +25,12 @@ import type {
   DuplexMediaSessionEvents,
 } from "./duplex-media-session";
 
+vi.mock("./voice-call-mic-preflight", () => ({
+  preflightMicrophoneAccess: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { preflightMicrophoneAccess } from "./voice-call-mic-preflight";
+
 const createdCall: CreateVoiceCallResponse = {
   call: {
     id: "call-1",
@@ -119,6 +125,7 @@ function createFakeDuplexSession(
         await connectImpl(events);
       } else {
         events.onReady?.("duplex-session-1");
+        events.onPlaybackStarted?.();
       }
     }),
     setMuted: vi.fn(),
@@ -164,6 +171,8 @@ describe("useVoiceCallController", () => {
         mutations: { retry: false },
       },
     });
+    vi.mocked(preflightMicrophoneAccess).mockClear();
+    vi.mocked(preflightMicrophoneAccess).mockResolvedValue(undefined);
     createVoiceCall = vi.fn().mockResolvedValue(createdCall);
     connectVoiceCall = vi.fn().mockResolvedValue({
       call: { ...createdCall.call, status: "connecting" },
@@ -937,11 +946,61 @@ describe("useVoiceCallController", () => {
       });
     });
 
+    expect(preflightMicrophoneAccess).toHaveBeenCalledOnce();
     expect(startVoiceCallDuplex).toHaveBeenCalledWith("workspace-1", "call-1");
     expect(duplex.factory).not.toHaveBeenCalled();
     expect(media.factory).toHaveBeenCalledTimes(1);
     expect(connectVoiceCall).toHaveBeenCalledWith("workspace-1", "call-1");
     expect(result.current.mode).toBe("rtc");
+  });
+
+  it("keeps duplex joining until TTS playback starts", async () => {
+    startVoiceCallDuplex.mockResolvedValue({
+      call: {
+        ...createdCall.call,
+        status: "active",
+        connected_at: "2026-08-01T00:12:00Z",
+      },
+      mode: "duplex",
+      ws_path: "/api/workspaces/workspace-1/voice-calls/call-1/duplex/ws",
+      audio: {
+        input_format: "pcm_s16le",
+        input_sample_rate: 16000,
+        output_format: "pcm_s16le",
+        output_sample_rate: 24000,
+      },
+      events: { client: [], server: [] },
+    });
+    const duplex = createFakeDuplexSession(async (events) => {
+      events.onReady?.("duplex-session-1");
+    });
+    const ringback = createFakeRingback();
+    const { result } = renderHook(
+      () => useVoiceCallController("workspace-1", {
+        duplexSessionFactory: duplex.factory,
+        mediaSessionFactory: createFakeMediaSession().factory,
+        ringbackFactory: ringback.factory,
+      }),
+      { wrapper: wrapper(queryClient) },
+    );
+
+    await act(async () => {
+      await result.current.start({
+        channel_id: "channel-1",
+        agent_id: "agent-1",
+      });
+    });
+
+    expect(result.current.mode).toBe("duplex");
+    expect(result.current.phase).toBe("joining");
+    expect(ringback.ringback.stop).not.toHaveBeenCalled();
+
+    await act(async () => {
+      duplex.events().onPlaybackStarted?.();
+    });
+
+    expect(result.current.phase).toBe("connected");
+    expect(ringback.ringback.stop).toHaveBeenCalled();
   });
 
   it("connects duplex media when activation succeeds", async () => {

@@ -105,6 +105,14 @@ describe("DmAgentVoiceCall", () => {
     expect(mocks.useVoiceCallController).not.toHaveBeenCalled();
   });
 
+  it("pins DM agent calls to Volcengine RTC (no duplex prefer)", () => {
+    renderCall();
+
+    expect(mocks.useVoiceCallController).toHaveBeenCalledWith("workspace-1", {
+      preferDuplex: false,
+    });
+  });
+
   it("starts an agent call with the current DM channel", () => {
     renderCall();
 

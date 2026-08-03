@@ -1011,6 +1011,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/product-rounds/{round}", h.GetResearchProductRoundCard)
 					r.Post("/product-rounds/judgment", h.SubmitResearchProductRoundJudgment)
 					r.Post("/confirm", h.ConfirmResearchSession)
+					r.Post("/archive", h.ArchiveResearchSession)
+					r.Post("/single-line", h.ConfirmResearchSingleLine)
 					r.Post("/handoff", h.ResearchSessionHandoff)
 				})
 			})

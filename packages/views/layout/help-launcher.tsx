@@ -8,10 +8,14 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useModalStore } from "@multica/core/modals";
+import {
+  PRODUCT_CHANGELOG_URL,
+  PRODUCT_DOCS_ORIGIN,
+} from "@multica/core/constants/product-origin";
 import { useT } from "../i18n";
 
-const DOCS_URL = "https://multica.ai/docs";
-const CHANGELOG_URL = "https://multica.ai/changelog";
+const DOCS_URL = PRODUCT_DOCS_ORIGIN;
+const CHANGELOG_URL = PRODUCT_CHANGELOG_URL;
 
 export function HelpLauncher() {
   const { t } = useT("layout");

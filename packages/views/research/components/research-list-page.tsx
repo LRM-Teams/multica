@@ -55,6 +55,7 @@ import { ResearchSessionFilterBar } from "./research-session-filter-bar";
 import { ResearchSessionRow } from "./research-session-row";
 import { ResearchSessionListSkeleton } from "./research-session-row-skeleton";
 import { ResearchTemplateChipRow } from "./research-template-chip-row";
+import { ResearchTemplateInjectTag } from "./research-template-inject-tag";
 
 /**
  * Composer draft — one state object so create/template/goal/params update
@@ -352,37 +353,49 @@ export function ResearchListPage() {
               selectedId={selectedTemplate?.id ?? null}
               onToggle={toggleTemplate}
             />
-            <Textarea
-              ref={goalInputRef}
-              value={goal}
-              onChange={(e) =>
-                setComposer((prev) => ({
-                  ...prev,
-                  goal: e.target.value,
-                  fieldErrors: prev.fieldErrors?.goal
-                    ? { ...prev.fieldErrors, goal: undefined }
-                    : prev.fieldErrors,
-                }))
-              }
-              placeholder={
-                selectedTemplate && !goalDirty
-                  ? t(($) => $.home.goal_placeholder_with_template)
-                  : t(($) => $.goal_placeholder)
-              }
-              rows={2}
-              aria-invalid={fieldErrors?.goal ? true : undefined}
-              aria-describedby={
-                fieldErrors?.goal ? "research-create-goal-error" : undefined
-              }
-              data-testid="research-create-goal"
-              className="min-h-[64px] border-0 bg-transparent px-3 py-3 text-[13.5px] shadow-none focus-visible:ring-0 focus-visible:border-transparent sm:px-3.5"
-              onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  submitCreate();
+            {/* LRM-1138 / LRM-1140 A2: colored inject tag beside short intent. */}
+            <div
+              className="flex items-start gap-2 px-3 py-3 sm:px-3.5"
+              data-testid="research-composer-intent"
+            >
+              {selectedTemplate ? (
+                <ResearchTemplateInjectTag
+                  template={selectedTemplate}
+                  className="mt-0.5"
+                />
+              ) : null}
+              <Textarea
+                ref={goalInputRef}
+                value={goal}
+                onChange={(e) =>
+                  setComposer((prev) => ({
+                    ...prev,
+                    goal: e.target.value,
+                    fieldErrors: prev.fieldErrors?.goal
+                      ? { ...prev.fieldErrors, goal: undefined }
+                      : prev.fieldErrors,
+                  }))
                 }
-              }}
-            />
+                placeholder={
+                  selectedTemplate && !goalDirty
+                    ? t(($) => $.home.goal_placeholder_with_template)
+                    : t(($) => $.goal_placeholder)
+                }
+                rows={2}
+                aria-invalid={fieldErrors?.goal ? true : undefined}
+                aria-describedby={
+                  fieldErrors?.goal ? "research-create-goal-error" : undefined
+                }
+                data-testid="research-create-goal"
+                className="min-h-[64px] flex-1 border-0 bg-transparent px-0 py-0 text-[13.5px] shadow-none focus-visible:ring-0 focus-visible:border-transparent"
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    submitCreate();
+                  }
+                }}
+              />
+            </div>
             {fieldErrors?.goal ? (
               <p
                 id="research-create-goal-error"

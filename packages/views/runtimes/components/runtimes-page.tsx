@@ -5,7 +5,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Cloud,
-  Folder,
   Loader2,
   Monitor,
   Plus,
@@ -75,6 +74,7 @@ import { MachineCodeAgentsSection } from "./machine-code-agents-section";
 import { MachineDangerZone } from "./machine-danger-zone";
 import { MachineDaemonUpgrade } from "./machine-daemon-upgrade";
 import { MachineHeaderOps } from "./machine-header-ops";
+import { MachineWorkspacesSection } from "./machine-workspaces-section";
 import { useT } from "../../i18n/use-t";
 
 interface RuntimesPageProps {
@@ -1059,87 +1059,20 @@ function MachineDetailView({
             ) : null}
           </section>
 
-          <section data-testid="machine-workspaces-section">
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                  {t(($) => $.machine.workspaces_section)}
-                </h3>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  className="h-6 shrink-0 px-2 text-[11px]"
-                  onClick={scanWorkspaces}
-                  disabled={
-                    !primaryRuntimeId ||
-                    machine.health !== "online" ||
-                    workspacesLoading
-                  }
-                  data-testid="machine-scan-workspaces"
-                >
-                  {workspacesLoading ? (
-                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                  ) : null}
-                  {t(($) => $.machine.scan_workspaces)}
-                </Button>
-              </div>
-              {!workspacesEnabled ? (
-                <p className="px-1 text-sm text-muted-foreground">
-                  {t(($) => $.machine.scan_workspaces_empty)}
-                </p>
-              ) : workspacesLoading ? (
-                <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  {t(($) => $.machine.scan_workspaces)}
-                </div>
-              ) : workspacesData?.status === "offline" ||
-                workspacesData?.status === "error" ? (
-                <p className="px-1 text-sm text-muted-foreground">
-                  {t(($) => $.machine.scan_workspaces_error)}
-                </p>
-              ) : (workspacesData?.items.length ?? 0) === 0 ? (
-                <p className="px-1 text-sm text-muted-foreground">
-                  {t(($) => $.machine.scan_workspaces_empty)}
-                </p>
-              ) : (
-                <div className="overflow-hidden rounded-xl border bg-card">
-                  {workspacesData!.items.map((ws, idx) => (
-                    <div
-                      key={ws.dir_name}
-                      className={cn(
-                        "flex items-center gap-3 px-4 py-3",
-                        idx < workspacesData!.items.length - 1 && "border-b",
-                      )}
-                    >
-                      <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-mono text-xs">
-                          {ws.rel_path}
-                        </span>
-                        {ws.orphan && (
-                          <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                            {t(($) => $.machine.workspace_orphan)}
-                          </span>
-                        )}
-                      </span>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="shrink-0 text-destructive hover:text-destructive"
-                        disabled={deleteWorkspace.isPending || !primaryRuntimeId}
-                        onClick={() => {
-                          if (!primaryRuntimeId) return;
-                          deleteWorkspace.mutate(ws.dir_name);
-                        }}
-                      >
-                        {t(($) => $.machine.workspace_delete)}
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
+          <MachineWorkspacesSection
+            machineOnline={machine.health === "online"}
+            primaryRuntimeId={primaryRuntimeId}
+            canUpdate={canUpdate}
+            scanned={workspacesEnabled}
+            loading={workspacesLoading}
+            data={workspacesData}
+            deletePending={deleteWorkspace.isPending}
+            onScan={scanWorkspaces}
+            onDelete={(dirName) => {
+              if (!primaryRuntimeId) return;
+              deleteWorkspace.mutate(dirName);
+            }}
+          />
 
           <MachineDangerZone
             machine={machine}

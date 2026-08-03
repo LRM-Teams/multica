@@ -42,21 +42,20 @@ export function ResearchDeliveryModeChip({ mode }: { mode: DeliveryMode }) {
         LRM-1229 — delivery flips loading → running inside one mount, so the
         announcement cannot live on a mode-specific subtree (that node is
         unmounted exactly when the content becomes ready). This chip renders in
-        every mode, so it hosts the one persistent live region for the modal,
-        the same way research-chat-mode-body (LRM-1225) and research-canvas keep
-        a standing sr-only region. The visible chip is aria-hidden to avoid
-        speaking the label twice.
+        every mode, so it hosts the one persistent live region for the modal
+        (same shape as LRM-1225 chat + research-canvas). Use native <output>
+        (prefer-tag-over-role) instead of role=status. Visible chip is
+        aria-hidden to avoid speaking the label twice.
       */}
-      <span
+      <output
         data-testid="research-delivery-mode-live"
         className="sr-only"
-        role="status"
         aria-live="polite"
         aria-atomic="true"
         aria-busy={mode === "loading"}
       >
         {label}
-      </span>
+      </output>
     </>
   );
 }

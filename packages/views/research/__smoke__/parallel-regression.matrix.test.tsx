@@ -11,7 +11,7 @@
  * Gate status (dev @22d89477b+):
  * - 1100 overlay Esc/a11y — hard
  * - 1104 goal-chip dedupe (#1949) + no max-w-3xl shell (#1962) — hard
- * - 1105 helpers (#1952) + role=application (1091) — hard; Home/End key handlers still `it.fails` (slice3)
+ * - 1105 helpers (#1952) + role=application (1091) + Home/End via resolveCanvasKeyEvent — hard
  * - 1109 meta-menu md: (#1947) — hard; template chip-row sm: still `it.fails`
  * - 1091 planar layout + arrow/Enter/Esc/F10 + retry status gate — hard;
  *   dedicated --branch-* tokens + destructive confirm/undo still `it.fails`
@@ -48,6 +48,10 @@ import {
   RESEARCH_NODE_HEIGHT,
   RESEARCH_NODE_WIDTH,
 } from "../lib/layout-graph";
+import {
+  resolveCanvasKeyEvent,
+  type CanvasKeyboardContext,
+} from "../lib/canvas-keyboard-nav";
 import { ringActionsForNode } from "../lib/node-action-ring";
 import { visualForEdgeType, visualForNodeType } from "../lib/node-visuals";
 import {
@@ -502,18 +506,37 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
     },
   );
 
-  // Arrow/Enter/Escape already hard-gated via planar map below. Home/End wait on 1105 slice3.
-  // Match `e.key === "Home"|"End"` only — bare "End" false-positives from isLogicEndNode / onMoveEnd.
-  it.fails(
-    `${SMOKE_ISSUES.canvasKeyboard}: canvas wires Home/End keydown handlers (1105 slice3)`,
+  // LRM-1105 #2010 + LRM-1190: Home/End live in canvas-keyboard-nav; canvas wires resolveCanvasKeyEvent.
+  // Do NOT require research-canvas.tsx literal `e.key === "Home"|"End"` (false-positives from
+  // isLogicEndNode / onMoveEnd).
+  it(
+    `${SMOKE_ISSUES.canvasKeyboard}: Home/End jump via canvas-keyboard-nav + resolveCanvasKeyEvent`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
+      const navSrc = readResearchSource("lib/canvas-keyboard-nav.ts");
+      expect(
+        canvasSrc.includes("resolveCanvasKeyEvent"),
+        failHint(
+          SMOKE_ISSUES.canvasKeyboard,
+          "research-canvas.tsx missing resolveCanvasKeyEvent wiring",
+        ),
+      ).toBe(true);
       for (const key of ["Home", "End"]) {
         expect(
-          new RegExp(String.raw`e\.key\s*===\s*["']${key}["']`).test(canvasSrc),
-          failHint(SMOKE_ISSUES.canvasKeyboard, `research-canvas.tsx missing e.key === "${key}"`),
+          navSrc.includes(`"${key}"`) || navSrc.includes(`'${key}'`),
+          failHint(SMOKE_ISSUES.canvasKeyboard, `canvas-keyboard-nav.ts missing ${key}`),
         ).toBe(true);
       }
+      const { nodes, edges } = keyboardForkFixture();
+      const ctx: CanvasKeyboardContext = { nodes, edges, focusId: "merge", overlay: null };
+      expect(
+        resolveCanvasKeyEvent({ key: "Home", shiftKey: false }, ctx),
+        failHint(SMOKE_ISSUES.canvasKeyboard, "Home should jump to first main-chain node"),
+      ).toEqual({ type: "moveFocus", nodeId: "goal" });
+      expect(
+        resolveCanvasKeyEvent({ key: "End", shiftKey: false }, { ...ctx, focusId: "goal" }),
+        failHint(SMOKE_ISSUES.canvasKeyboard, "End should jump to last main-chain node"),
+      ).toEqual({ type: "moveFocus", nodeId: "merge" });
     },
   );
 });

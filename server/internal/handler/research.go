@@ -2,12 +2,13 @@ package handler
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type ResearchSessionResponse struct {
@@ -19,7 +20,7 @@ type ResearchSessionResponse struct {
 	Goal                string  `json:"goal"`
 	Status              string  `json:"status"`
 	CurrentStage        string  `json:"current_stage"`
-	DepthTier            string  `json:"depth_tier"`
+	DepthTier           string  `json:"depth_tier"`
 	ProductRound        int32   `json:"product_round"`
 	ProductRoundBudget  int32   `json:"product_round_budget"`
 	UnattendedEnabled   bool    `json:"unattended_enabled"`
@@ -57,15 +58,16 @@ type ResearchPresenceEntry struct {
 }
 
 type ResearchSessionSnapshot struct {
-	Session       ResearchSessionResponse      `json:"session"`
-	Fleet         ResearchFleetResponse        `json:"fleet"`
-	Nodes         []ResearchGraphNodeResp      `json:"nodes"`
-	Edges         []ResearchGraphEdgeResp      `json:"edges"`
-	Sources       []ResearchSourceResp         `json:"sources"`
-	Report        *ResearchReportResp          `json:"report"`
-	Evals         []ResearchStageEvalResp      `json:"evals"`
-	Messages      []ResearchMessageResp        `json:"messages"`
+	Session       ResearchSessionResponse        `json:"session"`
+	Fleet         ResearchFleetResponse          `json:"fleet"`
+	Nodes         []ResearchGraphNodeResp        `json:"nodes"`
+	Edges         []ResearchGraphEdgeResp        `json:"edges"`
+	Sources       []ResearchSourceResp           `json:"sources"`
+	Report        *ResearchReportResp            `json:"report"`
+	Evals         []ResearchStageEvalResp        `json:"evals"`
+	Messages      []ResearchMessageResp          `json:"messages"`
 	ProductRounds []ResearchProductRoundCardResp `json:"product_rounds"`
+	Run           *researchrun.RunSnapshot       `json:"run,omitempty"`
 }
 
 type ResearchGraphNodeResp struct {
@@ -151,7 +153,7 @@ func researchSessionToResponse(s db.ResearchSession) ResearchSessionResponse {
 		Goal:                s.Goal,
 		Status:              s.Status,
 		CurrentStage:        s.CurrentStage,
-		DepthTier:            s.DepthTier,
+		DepthTier:           s.DepthTier,
 		ProductRound:        s.ProductRound,
 		ProductRoundBudget:  s.ProductRoundBudget,
 		UnattendedEnabled:   s.UnattendedEnabled,
@@ -209,12 +211,24 @@ func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 type createResearchSessionRequest struct {
-	Goal      string `json:"goal"`
-	Title     string `json:"title"`
-	DepthTier string `json:"depth_tier"` // shallow|standard|deep — LRM-676 product-round caps
+	Goal          string                 `json:"goal"`
+	Title         string                 `json:"title"`
+	DepthTier     string                 `json:"depth_tier"` // shallow|standard|deep — LRM-676 product-round caps
+	Language      string                 `json:"language"`
+	SourceWeights *researchSourceWeights `json:"source_weights"`
+}
+
+type researchSourceWeights struct {
+	Primary   float64 `json:"primary"`
+	Secondary float64 `json:"secondary"`
+	Community float64 `json:"community"`
 }
 
 func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) {
+	if h.ResearchRun == nil {
+		writeError(w, http.StatusServiceUnavailable, "research run engine is unavailable")
+		return
+	}
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
 	if !ok {
@@ -225,12 +239,11 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req createResearchSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeResearchJSON(w, r, &req) {
 		return
 	}
 	req.Goal = strings.TrimSpace(req.Goal)
-	if req.Goal == "" {
+	if req.Goal == "" || len(req.Goal) > 32<<10 {
 		writeError(w, http.StatusBadRequest, "goal is required")
 		return
 	}
@@ -238,45 +251,90 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 	if title == "" {
 		title = truncateRunes(req.Goal, 80)
 	}
+	if len(title) > 1024 {
+		writeError(w, http.StatusBadRequest, "title exceeds 1024 bytes")
+		return
+	}
+	language := strings.TrimSpace(req.Language)
+	if len(language) > 64 {
+		writeError(w, http.StatusBadRequest, "language exceeds 64 bytes")
+		return
+	}
+	if language == "" {
+		language = "follow the user's language"
+	}
+	sourcePolicy := map[string]any{
+		"require_snapshot":                 true,
+		"prefer_primary":                   true,
+		"require_independent_verification": true,
+	}
+	if req.SourceWeights != nil {
+		weights := *req.SourceWeights
+		if weights.Primary < 0 || weights.Primary > 1 || weights.Secondary < 0 || weights.Secondary > 1 || weights.Community < 0 || weights.Community > 1 {
+			writeError(w, http.StatusBadRequest, "source weights must be in [0,1]")
+			return
+		}
+		sourcePolicy["weights"] = weights
+	}
+	sourcePolicyJSON, err := json.Marshal(sourcePolicy)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve source policy")
+		return
+	}
 	fleet, members, err := h.ensureResearchFleet(r.Context(), wsUUID, parseUUID(userID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	depthTier := normalizeResearchDepthTier(req.DepthTier)
-	session, err := h.Queries.CreateResearchSession(r.Context(), db.CreateResearchSessionParams{
-		WorkspaceID:        wsUUID,
-		FleetID:            fleet.ID,
-		CreatedBy:          parseUUID(userID),
-		Title:              title,
+	createdRun, createErr := h.ResearchRun.Create(r.Context(), researchrun.StartInput{
+		WorkspaceID:        workspaceID,
+		FleetID:            uuidToString(fleet.ID),
+		CreatedBy:          userID,
+		LeadAgentID:        uuidToString(fleet.LeadAgentID),
 		Goal:               req.Goal,
-		Status:             "running",
-		CurrentStage:       "s1_plan",
-		DepthTier:           depthTier,
+		Title:              title,
+		DepthTier:          depthTier,
+		Language:           language,
+		SourcePolicy:       sourcePolicyJSON,
 		ProductRound:       1,
 		ProductRoundBudget: productRoundBudgetForTier(depthTier),
 	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create research session")
+	if createErr != nil && createdRun.InitializedAt == nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize research run")
 		return
 	}
-	h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, "user", userID, map[string]any{
-		"session": researchSessionToResponse(session),
-	})
-	// Fan-out goal + subquestions + per-member activity, process cards, and wakes.
-	h.seedResearchSessionKickoff(r.Context(), workspaceID, wsUUID, session, fleet, members, userID)
+	if createErr != nil {
+		slog.Warn("research run start deferred to reconciler", "session_id", createdRun.SessionID, "error", createErr)
+	}
+	sessionID := parseUUID(createdRun.SessionID)
+	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load initialized research session")
+		return
+	}
+	runSnapshot, snapshotErr := h.ResearchRun.Snapshot(r.Context(), createdRun.SessionID, workspaceID)
+	if snapshotErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load initialized research run")
+		return
+	}
 
 	// Return a fresh snapshot so the client can paint the kickoff graph without waiting on WS.
 	nodes, _ := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: session.ID, WorkspaceID: wsUUID})
 	edges, _ := h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: session.ID, WorkspaceID: wsUUID})
 	messages, _ := h.Queries.ListResearchMessages(r.Context(), db.ListResearchMessagesParams{SessionID: session.ID, WorkspaceID: wsUUID})
-	writeJSON(w, http.StatusCreated, map[string]any{
+	response := map[string]any{
 		"session":  researchSessionToResponse(session),
 		"fleet":    h.researchFleetToResponse(r.Context(), fleet, members),
 		"nodes":    mapNodes(nodes),
 		"edges":    mapEdges(edges),
 		"messages": mapMessages(messages),
-	})
+		"run":      runSnapshot,
+	}
+	if createErr != nil {
+		response["warning"] = "research run was persisted but immediate dispatch failed; the reconciler will retry"
+	}
+	writeJSON(w, http.StatusCreated, response)
 }
 
 func truncateRunes(s string, n int) string {
@@ -326,6 +384,24 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 		rr := researchReportToResp(rep)
 		report = &rr
 	}
+	var loadedRun *researchrun.RunSnapshot
+	durableRun, ownershipErr := h.hasDurableResearchRun(r.Context(), wsUUID, sessionID)
+	if ownershipErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to inspect research run ownership")
+		return
+	}
+	if durableRun {
+		if h.ResearchRun == nil {
+			writeError(w, http.StatusServiceUnavailable, "research run engine is unavailable")
+			return
+		}
+		snapshot, runErr := h.ResearchRun.Snapshot(r.Context(), uuidToString(sessionID), workspaceID)
+		if runErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load research run state")
+			return
+		}
+		loadedRun = &snapshot
+	}
 
 	writeJSON(w, http.StatusOK, ResearchSessionSnapshot{
 		Session:       researchSessionToResponse(session),
@@ -337,6 +413,7 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 		Evals:         mapEvals(evals),
 		Messages:      mapMessages(messages),
 		ProductRounds: mapProductRoundCards(productRounds),
+		Run:           loadedRun,
 	})
 }
 

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type {
   ResearchFleetMember,
+  ResearchRunContract,
   ResearchSession,
   ResearchSource,
 } from "@multica/core/types";
@@ -40,12 +41,14 @@ export function ResearchSessionMetaMenu({
   members,
   sources,
   session,
+  contract,
   sessionStatus,
   leadingActions,
 }: {
   members: ResearchFleetMember[];
   sources: ResearchSource[];
   session?: Pick<ResearchSession, "goal" | "depth_tier"> | null;
+  contract?: Pick<ResearchRunContract, "language" | "source_policy"> | null;
   sessionStatus?: string | null;
   /** LRM-995: narrow secondary actions (e.g. 查看交付) folded into tools. */
   leadingActions?: Array<{ id: string; label: string; onSelect: () => void }>;
@@ -131,7 +134,7 @@ export function ResearchSessionMetaMenu({
               <ResearchSourceBadges sources={sources} embedded />
             ) : null}
             {panel === "params" && session ? (
-              <ResearchSessionParamsSummary session={session} />
+              <ResearchSessionParamsSummary session={session} contract={contract} />
             ) : null}
           </div>
         </SheetContent>

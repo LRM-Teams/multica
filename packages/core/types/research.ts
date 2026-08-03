@@ -301,6 +301,7 @@ export interface CreateResearchSessionResponse {
   nodes?: ResearchGraphNode[];
   edges?: ResearchGraphEdge[];
   messages?: ResearchMessage[];
+  run?: ResearchRunSnapshot;
 }
 
 export interface ResearchSessionSnapshot {
@@ -312,9 +313,183 @@ export interface ResearchSessionSnapshot {
   report: ResearchReport | null;
   evals: ResearchStageEval[];
   messages: ResearchMessage[];
+  /** Durable execution state. */
+  run?: ResearchRunSnapshot;
 }
 
-/** Create-time source preference weights (0–1). Persisted via goal trailer until BE columns land. */
+export interface ResearchRunConfig {
+  max_tasks: number;
+  max_parallel_tasks: number;
+  max_attempts_per_task: number;
+  max_snapshot_bytes: number;
+  max_result_bytes: number;
+  max_run_seconds: number;
+  task_timeout_seconds: number;
+  stale_after_seconds: number;
+  marginal_gain_threshold: number;
+  marginal_gain_rounds: number;
+}
+
+export interface ResearchRunStats {
+  accepted_results: number;
+  evidence_batches: number;
+  low_gain_streak: number;
+  last_coverage_delta: number;
+  last_measured_gain: number;
+  last_confidence: number;
+  sources_created: number;
+  observations_created: number;
+  claims_created: number;
+  budget_exhaustion_count: number;
+}
+
+export interface ResearchRun {
+  session_id: string;
+  workspace_id: string;
+  fleet_id: string;
+  created_by: string;
+  title: string;
+  goal: string;
+  status: string;
+  current_stage: string;
+  depth_tier: string;
+  goal_version: number;
+  plan_version: number;
+  state_version: number;
+  orchestrator_version: string;
+  config: ResearchRunConfig;
+  stats: ResearchRunStats;
+  initialized_at?: string;
+  last_progress_at: string;
+  next_reconcile_at: string;
+  stop_reason?: string;
+  last_error?: string;
+}
+
+export interface ResearchRunContract {
+  goal_version: number;
+  goal: string;
+  scope: Record<string, unknown>;
+  audience: string;
+  freshness: string;
+  language: string;
+  source_policy: Record<string, unknown>;
+  run_limits: ResearchRunConfig;
+  reason: string;
+  created_at: string;
+}
+
+export interface ResearchRunQuestion {
+  id: string;
+  client_key: string;
+  kind: string;
+  question: string;
+  required: boolean;
+  status: string;
+  priority: number;
+  coverage: number;
+  goal_version: number;
+  plan_version: number;
+}
+
+export interface ResearchRunTask {
+  id: string;
+  client_key: string;
+  kind: string;
+  objective: string;
+  required_capability: string;
+  status: string;
+  assigned_agent_id?: string;
+  attempt_count: number;
+  goal_version: number;
+  plan_version: number;
+}
+
+export interface ResearchRunSourceSnapshot {
+  id: string;
+  produced_by_task_id?: string;
+  canonical_url: string;
+  title: string;
+  publisher: string;
+  source_class: string;
+  independence_key: string;
+  retrieved_at: string;
+  content_hash: string;
+  snapshot_excerpt: string;
+  metadata: unknown;
+  verification_status: string;
+  created_at: string;
+}
+
+export interface ResearchRunObservation {
+  id: string;
+  source_snapshot_id: string;
+  produced_by_task_id?: string;
+  quote?: string;
+  datum: unknown;
+  locator?: string;
+  interpretation?: string;
+  verification_status: string;
+  created_at: string;
+}
+
+export interface ResearchRunClaimEvidence {
+  observation_id: string;
+  relation: string;
+  strength: number;
+  verification_status: string;
+  verified_by_task_id?: string;
+  rationale?: string;
+}
+
+export interface ResearchRunClaim {
+  id: string;
+  produced_by_task_id?: string;
+  client_key: string;
+  text: string;
+  significance: string;
+  confidence: number;
+  status: string;
+  goal_version: number;
+  plan_version: number;
+  resolution?: string;
+  evidence: ResearchRunClaimEvidence[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ResearchRunGateFinding {
+  code: string;
+  severity: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ResearchRunSnapshot {
+  run: ResearchRun;
+  contract: ResearchRunContract;
+  questions: ResearchRunQuestion[];
+  tasks: ResearchRunTask[];
+  attempts: Array<Record<string, unknown>>;
+  sources: ResearchRunSourceSnapshot[];
+  observations: ResearchRunObservation[];
+  claims: ResearchRunClaim[];
+  gate: { passed: boolean; findings: ResearchRunGateFinding[] };
+}
+
+export interface SteerResearchRunRequest {
+  goal: string;
+  reason?: string;
+  allow_running_finish?: boolean;
+  scope?: Record<string, unknown>;
+  audience?: string;
+  freshness?: string;
+  language?: string;
+  source_policy?: Record<string, unknown>;
+  run_limits?: Partial<ResearchRunConfig>;
+}
+
+/** Create-time source preference weights (0–1), persisted in the Research Contract source policy. */
 export interface ResearchSourceWeights {
   primary: number;
   secondary: number;

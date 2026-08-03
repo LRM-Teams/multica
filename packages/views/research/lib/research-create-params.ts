@@ -1,8 +1,7 @@
 /**
  * LRM-838 — create-time research levers (depth / source weights / language).
- * depth_tier is a first-class create API field; weights + language also ride a
- * parseable goal trailer so session detail can round-trip them without a BE
- * schema change.
+ * depth_tier, weights, and language are first-class create API fields. Trailer
+ * parsing remains for sessions created before the durable Research Contract.
  *
  * LRM-835 — FE validation: empty goal blocked; depth/weight out-of-range
  * blocked with near-field errors (draft values are preserved, not wiped).
@@ -267,35 +266,45 @@ export function parseCreateParamsFromGoal(
   });
 }
 
-/**
- * Resolve params for session detail: prefer trailer, fall back to session
- * depth_tier + defaults (so older sessions still show a depth chip).
- */
+/** Resolve current contract fields first, then legacy goal trailers/defaults. */
 export function resolveSessionCreateParams(input: {
   goal?: string | null;
   depth_tier?: string | null;
   uiLanguage?: string;
+  contract?: {
+    language?: string | null;
+    source_policy?: Record<string, unknown> | null;
+  } | null;
 }): ResearchCreateParams {
   const fromGoal = parseCreateParamsFromGoal(input.goal);
-  if (fromGoal) {
-    const depth =
-      input.depth_tier &&
-      DEPTH_TIERS.includes(input.depth_tier as ResearchCreateDepthTier)
-        ? (input.depth_tier as ResearchCreateDepthTier)
-        : fromGoal.depth_tier;
-    return { ...fromGoal, depth_tier: depth };
-  }
-  const base = defaultCreateParams(input.uiLanguage);
-  if (
-    input.depth_tier &&
-    DEPTH_TIERS.includes(input.depth_tier as ResearchCreateDepthTier)
-  ) {
-    return {
-      ...base,
-      depth_tier: input.depth_tier as ResearchCreateDepthTier,
-    };
-  }
-  return base;
+  const fallback = fromGoal ?? defaultCreateParams(input.uiLanguage);
+  const rawWeights = input.contract?.source_policy?.weights;
+  const weights =
+    rawWeights && typeof rawWeights === "object"
+      ? (rawWeights as Record<string, unknown>)
+      : null;
+  const weight = (key: ResearchSourceWeightKey): number => {
+    const candidate = weights?.[key];
+    return typeof candidate === "number" && Number.isFinite(candidate)
+      ? candidate
+      : fallback.source_weights[key];
+  };
+  return normalizeCreateParams(
+    {
+      depth_tier: isValidDepthTier(input.depth_tier)
+        ? input.depth_tier
+        : fallback.depth_tier,
+      language: isValidCreateLanguage(input.contract?.language)
+        ? input.contract.language
+        : fallback.language,
+      source_weights: {
+        primary: weight("primary"),
+        secondary: weight("secondary"),
+        community: weight("community"),
+      },
+    },
+    input.uiLanguage,
+  );
 }
 
 export function createParamsSummaryLine(

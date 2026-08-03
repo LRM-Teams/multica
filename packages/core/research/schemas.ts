@@ -172,6 +172,186 @@ const ResearchMessageSchema = z
   })
   .passthrough();
 
+export const ResearchRunSchema = z
+  .object({
+    session_id: z.string(),
+    workspace_id: z.string(),
+    fleet_id: z.string(),
+    created_by: z.string(),
+    title: z.string(),
+    goal: z.string(),
+    status: z.string(),
+    current_stage: z.string(),
+    depth_tier: z.string(),
+    goal_version: z.number(),
+    plan_version: z.number(),
+    state_version: z.number(),
+    orchestrator_version: z.string(),
+    config: z
+      .object({
+        max_tasks: z.number(),
+        max_parallel_tasks: z.number(),
+        max_attempts_per_task: z.number(),
+        max_snapshot_bytes: z.number(),
+        max_result_bytes: z.number(),
+        max_run_seconds: z.number(),
+        task_timeout_seconds: z.number(),
+        stale_after_seconds: z.number(),
+        marginal_gain_threshold: z.number(),
+        marginal_gain_rounds: z.number(),
+      })
+      .passthrough(),
+    stats: z
+      .object({
+        accepted_results: z.number(),
+        evidence_batches: z.number(),
+        low_gain_streak: z.number(),
+        last_coverage_delta: z.number(),
+        last_measured_gain: z.number(),
+        last_confidence: z.number(),
+        sources_created: z.number(),
+        observations_created: z.number(),
+        claims_created: z.number(),
+        budget_exhaustion_count: z.number(),
+      })
+      .passthrough(),
+    initialized_at: z.string().optional(),
+    last_progress_at: z.string(),
+    next_reconcile_at: z.string(),
+    stop_reason: z.string().optional(),
+    last_error: z.string().optional(),
+  })
+  .passthrough();
+
+const ResearchRunSnapshotSchema = z
+  .object({
+    run: ResearchRunSchema,
+    contract: z
+      .object({
+        goal_version: z.number(),
+        goal: z.string(),
+        scope: z.record(z.string(), z.unknown()),
+        audience: z.string(),
+        freshness: z.string(),
+        language: z.string(),
+        source_policy: z.record(z.string(), z.unknown()),
+        run_limits: ResearchRunSchema.shape.config,
+        reason: z.string(),
+        created_at: z.string(),
+      })
+      .passthrough(),
+    questions: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            client_key: z.string(),
+            kind: z.string(),
+            question: z.string(),
+            required: z.boolean(),
+            status: z.string(),
+            priority: z.number(),
+            coverage: z.number(),
+            goal_version: z.number(),
+            plan_version: z.number(),
+          })
+          .passthrough(),
+      )
+      .default([]),
+    tasks: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            client_key: z.string(),
+            kind: z.string(),
+            objective: z.string(),
+            required_capability: z.string(),
+            status: z.string(),
+            attempt_count: z.number(),
+            goal_version: z.number(),
+            plan_version: z.number(),
+          })
+          .passthrough(),
+      )
+      .default([]),
+    attempts: z.array(z.record(z.string(), z.unknown())).default([]),
+    sources: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            canonical_url: z.string(),
+            title: z.string(),
+            publisher: z.string(),
+            source_class: z.string(),
+            independence_key: z.string(),
+            retrieved_at: z.string(),
+            content_hash: z.string(),
+            snapshot_excerpt: z.string(),
+            metadata: z.unknown(),
+            verification_status: z.string(),
+            created_at: z.string(),
+          })
+          .passthrough(),
+      )
+      .default([]),
+    observations: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            source_snapshot_id: z.string(),
+            datum: z.unknown(),
+            verification_status: z.string(),
+            created_at: z.string(),
+          })
+          .passthrough(),
+      )
+      .default([]),
+    claims: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            client_key: z.string(),
+            text: z.string(),
+            significance: z.string(),
+            confidence: z.number(),
+            status: z.string(),
+            goal_version: z.number(),
+            plan_version: z.number(),
+            evidence: z.array(z.record(z.string(), z.unknown())).default([]),
+            created_at: z.string(),
+            updated_at: z.string(),
+          })
+          .passthrough(),
+      )
+      .default([]),
+    gate: z
+      .object({
+        passed: z.boolean(),
+        findings: z
+          .array(
+            z
+              .object({
+                code: z.string(),
+                severity: z.string(),
+                message: z.string(),
+                metadata: z.record(z.string(), z.unknown()).optional(),
+              })
+              .passthrough(),
+          )
+          .default([]),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+export const SteerResearchRunResponseSchema = z
+  .object({ run: ResearchRunSchema })
+  .passthrough();
+
 export const CreateResearchSessionResponseSchema = z
   .object({
     session: ResearchSessionSchema,
@@ -179,6 +359,7 @@ export const CreateResearchSessionResponseSchema = z
     nodes: z.array(ResearchGraphNodeSchema).optional().default([]),
     edges: z.array(ResearchGraphEdgeSchema).optional().default([]),
     messages: z.array(ResearchMessageSchema).optional().default([]),
+    run: ResearchRunSnapshotSchema.optional(),
   })
   .passthrough();
 
@@ -198,6 +379,7 @@ export const ResearchSessionSnapshotSchema = z
     report: ResearchReportSchema.nullable().optional().default(null),
     evals: z.array(ResearchStageEvalSchema).optional().default([]),
     messages: z.array(ResearchMessageSchema).optional().default([]),
+    run: ResearchRunSnapshotSchema.optional(),
   })
   .passthrough();
 

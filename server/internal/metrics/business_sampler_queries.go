@@ -329,3 +329,211 @@ func (c *BusinessSamplerCollector) queryWorkspaceTotal(
 	snap.workspaceTotalKnown = true
 	return nil
 }
+
+// queryResearchExecution samples the durable execution ledger. Each SELECT
+// has a statically bounded label space and its own LIMIT, so one category
+// cannot truncate another category or create user-controlled Prometheus
+// series.
+func (c *BusinessSamplerCollector) queryResearchExecution(
+	ctx context.Context, tx pgx.Tx, snap *samplerSnapshot,
+) error {
+	const runsStmt = `
+SELECT
+  status,
+  CASE
+    WHEN run_initialized_at IS NULL THEN 'legacy'
+    WHEN orchestrator_version = 'research-run-v1' THEN orchestrator_version
+    ELSE 'other'
+  END,
+  count(*) AS n
+FROM research_session
+GROUP BY 1, 2
+LIMIT 100
+`
+	runRows, err := tx.Query(ctx, runsStmt)
+	if err != nil {
+		return fmt.Errorf("research_execution runs: %w", err)
+	}
+	for runRows.Next() {
+		var status, version string
+		var n int64
+		if err := runRows.Scan(&status, &version, &n); err != nil {
+			runRows.Close()
+			return fmt.Errorf("research_execution runs scan: %w", err)
+		}
+		key := researchMetricKey{
+			first:  normalizeResearchRunStatus(status),
+			second: normalizeResearchOrchestratorVersion(version),
+		}
+		snap.researchRuns[key] += float64(n)
+	}
+	if err := runRows.Err(); err != nil {
+		runRows.Close()
+		return fmt.Errorf("research_execution runs rows: %w", err)
+	}
+	runRows.Close()
+
+	const tasksStmt = `
+SELECT kind, status, count(*) AS n
+FROM research_task
+GROUP BY 1, 2
+LIMIT 100
+`
+	taskRows, err := tx.Query(ctx, tasksStmt)
+	if err != nil {
+		return fmt.Errorf("research_execution tasks: %w", err)
+	}
+	for taskRows.Next() {
+		var kind, status string
+		var n int64
+		if err := taskRows.Scan(&kind, &status, &n); err != nil {
+			taskRows.Close()
+			return fmt.Errorf("research_execution tasks scan: %w", err)
+		}
+		key := researchMetricKey{
+			first:  normalizeResearchTaskKind(kind),
+			second: normalizeResearchTaskStatus(status),
+		}
+		snap.researchTasks[key] += float64(n)
+	}
+	if err := taskRows.Err(); err != nil {
+		taskRows.Close()
+		return fmt.Errorf("research_execution tasks rows: %w", err)
+	}
+	taskRows.Close()
+
+	const attemptsStmt = `
+SELECT
+  status,
+  CASE
+    WHEN failure_class = '' THEN 'none'
+    WHEN failure_class IN (
+      'dispatch_failed', 'context_load_failed', 'missing_structured_result',
+      'task_timeout', 'inbox_missing', 'goal_steered'
+    ) THEN failure_class
+    ELSE 'other'
+  END AS normalized_failure_class,
+  count(*) AS n
+FROM research_task_attempt
+GROUP BY 1, 2
+LIMIT 100
+`
+	attemptRows, err := tx.Query(ctx, attemptsStmt)
+	if err != nil {
+		return fmt.Errorf("research_execution attempts: %w", err)
+	}
+	for attemptRows.Next() {
+		var status, failureClass string
+		var n int64
+		if err := attemptRows.Scan(&status, &failureClass, &n); err != nil {
+			attemptRows.Close()
+			return fmt.Errorf("research_execution attempts scan: %w", err)
+		}
+		key := researchMetricKey{
+			first:  normalizeResearchAttemptStatus(status),
+			second: normalizeResearchFailureClass(failureClass),
+		}
+		snap.researchAttempts[key] += float64(n)
+	}
+	if err := attemptRows.Err(); err != nil {
+		attemptRows.Close()
+		return fmt.Errorf("research_execution attempts rows: %w", err)
+	}
+	attemptRows.Close()
+
+	return nil
+}
+
+// queryResearchIntegrity samples evidence verification, the unresolved
+// question frontier, and projection lag. Snapshot contents, question text,
+// and projection errors never become metric labels.
+func (c *BusinessSamplerCollector) queryResearchIntegrity(
+	ctx context.Context, tx pgx.Tx, snap *samplerSnapshot,
+) error {
+	const evidenceStmt = `
+SELECT artifact, verification_status, count(*) AS n
+FROM (
+  SELECT 'source_snapshot'::text AS artifact, verification_status
+  FROM research_source_snapshot
+  UNION ALL
+  SELECT 'observation'::text AS artifact, verification_status
+  FROM research_observation
+  UNION ALL
+  SELECT 'claim_evidence'::text AS artifact, verification_status
+  FROM research_claim_evidence
+) evidence
+GROUP BY 1, 2
+LIMIT 100
+`
+	evidenceRows, err := tx.Query(ctx, evidenceStmt)
+	if err != nil {
+		return fmt.Errorf("research_integrity evidence: %w", err)
+	}
+	for evidenceRows.Next() {
+		var artifact, status string
+		var n int64
+		if err := evidenceRows.Scan(&artifact, &status, &n); err != nil {
+			evidenceRows.Close()
+			return fmt.Errorf("research_integrity evidence scan: %w", err)
+		}
+		key := researchMetricKey{
+			first:  normalizeResearchArtifact(artifact),
+			second: normalizeResearchVerificationStatus(status),
+		}
+		snap.researchEvidence[key] += float64(n)
+	}
+	if err := evidenceRows.Err(); err != nil {
+		evidenceRows.Close()
+		return fmt.Errorf("research_integrity evidence rows: %w", err)
+	}
+	evidenceRows.Close()
+
+	const frontierStmt = `
+SELECT
+  count(*) AS open_count,
+  COALESCE(GREATEST(0, EXTRACT(EPOCH FROM (now() - min(q.created_at)))), 0)::float8 AS oldest_age_seconds
+FROM research_question q
+JOIN research_session s ON s.id = q.session_id
+WHERE s.status = 'running'
+  AND q.goal_version = s.goal_version
+  AND q.plan_version = s.plan_version
+  AND q.status IN ('open', 'in_progress', 'unresolved')
+LIMIT 100
+`
+	var frontierCount int64
+	if err := tx.QueryRow(ctx, frontierStmt).Scan(&frontierCount, &snap.researchFrontierOldestAge); err != nil {
+		return fmt.Errorf("research_integrity frontier: %w", err)
+	}
+	snap.researchFrontierOpen = float64(frontierCount)
+
+	const projectionStmt = `
+SELECT
+  count(*) AS pending_count,
+  COALESCE(GREATEST(0, EXTRACT(EPOCH FROM (now() - min(created_at)))), 0)::float8 AS oldest_age_seconds
+FROM research_run_event
+WHERE projected_at IS NULL
+LIMIT 100
+`
+	var projectionCount int64
+	if err := tx.QueryRow(ctx, projectionStmt).Scan(&projectionCount, &snap.researchProjectionOldestAge); err != nil {
+		return fmt.Errorf("research_integrity projection: %w", err)
+	}
+	snap.researchProjectionPending = float64(projectionCount)
+
+	const cancellationStmt = `
+SELECT
+  count(*) AS pending_count,
+  COALESCE(GREATEST(0, EXTRACT(EPOCH FROM (now() - min(dispatched_at)))), 0)::float8 AS oldest_age_seconds
+FROM research_task_attempt
+WHERE status = 'cancelled'
+  AND cancellation_completed_at IS NULL
+LIMIT 100
+`
+	var cancellationCount int64
+	if err := tx.QueryRow(ctx, cancellationStmt).Scan(&cancellationCount, &snap.researchCancellationOldestAge); err != nil {
+		return fmt.Errorf("research_integrity cancellation: %w", err)
+	}
+	snap.researchCancellationPending = float64(cancellationCount)
+
+	return nil
+}

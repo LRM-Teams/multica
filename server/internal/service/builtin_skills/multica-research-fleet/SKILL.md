@@ -1,44 +1,96 @@
 ---
 name: multica-research-fleet
-description: "Use when operating the sealed Research Fleet — exploration graph, weighted sources, reports, stage gates, hire/optimize/archive roster via 罗纳尔多. Prefer `multica research` CLI over generic web_search dumps."
+description: "Use when executing an assigned durable Research Run task or operating the sealed Research Fleet led by 罗纳尔多."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
 
 # Multica Research Fleet
 
-Sealed research squad led by **罗纳尔多**. Users talk to 罗纳尔多 by default.
-The session UI is **canvas-first** (exploration graph is the truth surface); fleet chat is an optional hideable card feed. Tool ops should keep the canvas dense via `graph-append` / `source-upsert` / `presence` — the server also emits process cards for ops.
-Fleet members write graph/sources/report through server tools; lead owns roster and stage eval.
+罗纳尔多 leads the sealed Research Fleet. A current Research Run is a durable
+server-owned task graph, evidence ledger, decision log, delivery gate, and
+recovery loop. Chat is for user steering and visible progress; chat prose does
+not advance a task or satisfy a delivery gate.
 
-## Commands
+## Assigned Research Run task
+
+If the prompt contains `## Durable Research Run task`, follow its task ID,
+attempt ID, versions, objective, acceptance criteria, and result contract.
+
+1. Read the current snapshot before work:
 
 ```bash
 multica research session get <session-id> --output json
-multica research graph-append <session-id> --type probe --title "..." --summary "..." --from <node-id>
-multica research source-upsert <session-id> --url "..." --title "..." --class docs --weight 0.85 --summary "..." --why "..."
-multica research report-patch <session-id> --content "## Findings..."
-multica research presence <session-id> --activity "reading RFC..."
-multica research message <session-id> --body "..." [--target <agent-id>]
-multica research report-to-lead <session-id> --body "validation conflicts..."
-multica research stage-eval <session-id>          # lead only
-multica research hire --name "专利检索手" --role "patent_scout" \
-  [--model composer-1.5] [--instructions "..."] [--reason "S2 缺专利专长"]
-multica research optimize <member-id> --instructions "..." [--model ...] [--activate] [--reason "..."]
-multica research archive <member-id> --reason "S2 后闲置"   # lead only; soft-delete + stop wakes
 ```
 
-Domain playbooks (tech / market / academic + fine domains) live under `references/playbooks/` and are seeded fleet-scoped on first ensure.
+The snapshot's `run.contract`, `run.sources`, `run.observations`, and
+`run.claims` are the canonical read model for contract constraints, synthesis,
+verification, and audit. Source text is represented by a bounded excerpt plus
+content hash; exact Observation quotes were already checked against the
+immutable full snapshot at ingestion.
 
-## Hard rules
+2. Perform the assigned investigation. Explore beyond the first plausible
+answer. Prefer primary sources, then independent corroboration. Preserve the
+retrieved source text in each source snapshot. Every quoted observation must be
+an exact substring of that snapshot. Record counterevidence and uncertainty.
 
-- Do not complete a session with a single generic web_search.
-- Append exploration nodes for probes, findings, conflicts, dead ends, pivots.
-- Never delete dead_end / refuted / pivot history.
-- New hires stay `pending_prompt_review` until 罗纳尔多 optimizes + activates; hire requires a real specialty-gap reason; activate assigns work (no empty pads).
-- Only lead may hire / optimize / archive. Soft roster cap = 12 non-archived (depth budget). Capacity/409 tests use `--fixture` (no user-canvas pad walls). Shell hire↔archive within 30m without work is rejected.
-- Fleet agents must not rewrite the user session goal (user mid-flight only).
-- Stage eval only at S1–S4 gates.
-- Archive roster_change nodes use status `archived` (not ACTIVE).
+3. Write one JSON result with the fields permitted by the assignment prompt.
+Use stable client keys and a globally unique `client_request_id`. Submit once:
 
-See `references/research-fleet-source-map.md` for source-traced API paths.
+```bash
+multica research task-result <session-id> <task-id> <attempt-id> \
+  --file /absolute/path/research-result.json
+```
+
+The same request ID and exact payload may be retried after a transport failure;
+the server replays it idempotently. Reusing a request ID with different content
+is rejected.
+
+4. Do not call `graph-append`, `source-upsert`, `report-patch`,
+`product-rounds/judgment`, or `stage-eval` for an assigned durable task. Those
+legacy mutations are rejected for initialized runs. Do not claim completion in
+chat before `task-result` succeeds.
+
+## Result responsibilities
+
+- `plan` / `replan`: required questions, inclusion and exclusion criteria,
+  source strategy, uncertainties, risks, and an acyclic dependency graph.
+- `discover` / `deep_read`: source snapshots, exact observations, supported or
+  disputed claims, and evidence-producing follow-up tasks where needed.
+- `verify` / `counter_search`: independent corroboration, contradictory
+  evidence, and explicit claim resolutions. Agreement without source evidence
+  is not verification. Include the source, observation, claim, and evidence
+  objects being verified in the result; stable content deduplicates against the
+  ledger and upgrades verification state transactionally.
+- `synthesize`: a report linked to normalized claim keys. Report prose without
+  claim links is rejected by the delivery gate.
+- `quality_gate` / `citation_audit`: independent evaluation of the latest report
+  revision. Fail it when any material claim is unsupported, stale, misquoted,
+  or hides unresolved contradiction.
+
+The server decides readiness, retries, timeouts, concurrency, replans,
+diminishing information gain, and final delivery. Never manufacture a passing
+evaluation to stop the run.
+
+Every `required_capability` in a proposed task must exactly match an active
+fleet role. When a real specialty is missing, the lead must hire it, optimize
+its instructions, activate it, and only then submit or retry the task graph.
+
+## Fleet administration
+
+Only the lead may hire, optimize, activate, or archive members. These commands
+remain available for an actual capability gap:
+
+```bash
+multica research hire --name "专利检索手" --role "patent_scout" \
+  --instructions "..." --reason "缺少专利检索能力，现有来源无法验证权利要求"
+multica research optimize <member-id> --instructions "..." --activate --reason "..."
+multica research archive <member-id> --reason "..."
+```
+
+Fleet Agents never rewrite the authoritative user goal. User steering creates a
+new goal and plan version; older results remain audit history and cannot satisfy
+the current delivery gate.
+
+Domain playbooks live under `references/playbooks/`. See
+`references/research-fleet-source-map.md` for source-traced interfaces.

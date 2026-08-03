@@ -243,6 +243,16 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       showErrorToast(err instanceof Error ? err.message : String(err)),
   });
 
+  const steer = useMutation({
+    mutationFn: ({ goal, reason }: { goal: string; reason: string }) =>
+      api.steerResearchRun(sessionId, { goal, reason }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+    },
+    onError: (err) => mutationErrorToast(t(($) => $.session_page.send_failed), err),
+  });
+
   const confirm = useMutation({
     mutationFn: () => api.confirmResearchSession(sessionId),
     onSuccess: () => {
@@ -531,6 +541,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
       <ResearchShellAtmosphere heightClassName="h-[320px]" />
       <ResearchSessionChrome
         session={session}
+        contract={data.run?.contract}
         canConfirm={canConfirm}
         canHandoff={canHandoff}
         createProject={ui.createProject}
@@ -555,7 +566,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             : null
         }
         onConfirmSubstantiveGoal={(proposal) =>
-          postUser(`确认将调研最终目标更新为：${proposal}`)
+          steer.mutate({
+            goal: proposal,
+            reason: "user_confirmed_substantive_goal_proposal",
+          })
         }
       />
 

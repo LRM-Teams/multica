@@ -68,6 +68,21 @@ func filledSnapshot(now time.Time) *samplerSnapshot {
 
 	snap.workspaceTotal = 250
 	snap.workspaceTotalKnown = true
+
+	snap.researchRuns[researchMetricKey{first: "running", second: "research-run-v1"}] = 2
+	snap.researchRuns[researchMetricKey{first: "completed", second: "research-run-v1"}] = 9
+	snap.researchTasks[researchMetricKey{first: "verify", second: "running"}] = 3
+	snap.researchTasks[researchMetricKey{first: "synthesize", second: "ready"}] = 1
+	snap.researchAttempts[researchMetricKey{first: "failed", second: "task_timeout"}] = 2
+	snap.researchAttempts[researchMetricKey{first: "succeeded", second: "none"}] = 12
+	snap.researchEvidence[researchMetricKey{first: "source_snapshot", second: "verified"}] = 17
+	snap.researchEvidence[researchMetricKey{first: "claim_evidence", second: "pending"}] = 4
+	snap.researchFrontierOpen = 6
+	snap.researchFrontierOldestAge = 185
+	snap.researchProjectionPending = 2
+	snap.researchProjectionOldestAge = 14
+	snap.researchCancellationPending = 3
+	snap.researchCancellationOldestAge = 27
 	return snap
 }
 
@@ -120,6 +135,16 @@ func TestBusinessSamplerCollectorEmitsExpectedMetrics(t *testing.T) {
 		`multica_runtime_heartbeat_age_seconds_count{runtime_mode="local"} 3`,
 		`multica_runtime_heartbeat_age_seconds_sum{runtime_mode="local"} 45`,
 		`multica_workspace_total 250`,
+		`multica_research_runs{orchestrator_version="research-run-v1",status="running"} 2`,
+		`multica_research_tasks{kind="verify",status="running"} 3`,
+		`multica_research_attempts{failure_class="task_timeout",status="failed"} 2`,
+		`multica_research_evidence_artifacts{artifact="source_snapshot",verification_status="verified"} 17`,
+		`multica_research_frontier{measure="open"} 6`,
+		`multica_research_frontier{measure="oldest_age_seconds"} 185`,
+		`multica_research_projection_backlog{measure="pending"} 2`,
+		`multica_research_projection_backlog{measure="oldest_age_seconds"} 14`,
+		`multica_research_cancellation_backlog{measure="pending"} 3`,
+		`multica_research_cancellation_backlog{measure="oldest_age_seconds"} 27`,
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(body, want) {
@@ -216,6 +241,20 @@ func TestBusinessSamplerCollectorBoundedCardinality(t *testing.T) {
 				provider:    NormalizeRuntimeProvider("attacker-provider"),
 			}] += 1
 		}
+		for i := 0; i < 50; i++ {
+			snap.researchRuns[researchMetricKey{
+				first:  normalizeResearchRunStatus("rogue-status"),
+				second: normalizeResearchOrchestratorVersion("user-version-" + string(rune('A'+i%26))),
+			}] += 1
+			snap.researchAttempts[researchMetricKey{
+				first:  normalizeResearchAttemptStatus("rogue-status"),
+				second: normalizeResearchFailureClass("raw-agent-error-" + string(rune('A'+i%26))),
+			}] += 1
+			snap.researchEvidence[researchMetricKey{
+				first:  normalizeResearchArtifact("rogue-artifact"),
+				second: normalizeResearchVerificationStatus("rogue-verification"),
+			}] += 1
+		}
 		return snap
 	})
 	c.now = func() time.Time { return now }
@@ -232,6 +271,18 @@ func TestBusinessSamplerCollectorBoundedCardinality(t *testing.T) {
 	}
 	if got := testutil.CollectAndCount(c, "multica_runtime_online"); got != 1 {
 		t.Fatalf("runtime_online series = %d, want 1 (collapsed by normalizers)", got)
+	}
+	if got := testutil.CollectAndCount(c, "multica_research_runs"); got != 1 {
+		t.Fatalf("research_runs series = %d, want 1 (collapsed by normalizers)", got)
+	}
+	if got := testutil.CollectAndCount(c, "multica_research_attempts"); got != 1 {
+		t.Fatalf("research_attempts series = %d, want 1 (collapsed by normalizers)", got)
+	}
+	if got := testutil.CollectAndCount(c, "multica_research_evidence_artifacts"); got != 1 {
+		t.Fatalf("research_evidence series = %d, want 1 (collapsed by normalizers)", got)
+	}
+	if got := testutil.CollectAndCount(c, "multica_research_frontier"); got != 2 {
+		t.Fatalf("research_frontier series = %d, want 2 fixed measures", got)
 	}
 }
 
@@ -328,5 +379,17 @@ func TestSamplerHistogramBucketing(t *testing.T) {
 		if got := buckets[b]; got != want {
 			t.Errorf("bucket le=%g count = %d, want %d", b, got, want)
 		}
+	}
+}
+
+func TestResearchMetricNormalizersPreserveBoundedEmptyFailureClass(t *testing.T) {
+	if got := normalizeResearchFailureClass(""); got != "none" {
+		t.Fatalf("empty failure class = %q, want none", got)
+	}
+	if got := normalizeResearchFailureClass("none"); got != "none" {
+		t.Fatalf("SQL-normalized failure class = %q, want none", got)
+	}
+	if got := normalizeResearchFailureClass("provider returned user-controlled text"); got != "other" {
+		t.Fatalf("unbounded failure class = %q, want other", got)
 	}
 }

@@ -3,9 +3,16 @@
 | Claim | Source |
 | --- | --- |
 | HTTP routes under `/api/research` | `server/cmd/server/router.go` Research Fleet block |
+| Durable Run HTTP and task-bound result authorization | `server/internal/handler/research_run_http.go`, `server/cmd/server/router.go` |
+| Run scheduler, leases, retries, recovery, marginal-gain and delivery decisions | `server/internal/researchrun/engine.go`, `postgres_tasks.go`, `postgres_gate.go`, `server/internal/scheduler/jobs_research_run.go` |
+| Canonical task/progress/evidence/event ledgers | migration `273_research_run_backend`, `server/internal/researchrun/postgres*.go` |
+| Current contract read model and validated steering limits | `server/internal/researchrun/config.go`, `postgres.go`, `postgres_tasks.go` |
+| Strict structured result envelope and evidence validation | `server/internal/researchrun/result.go`, `result_test.go` |
+| Inbox dispatch idempotency and event projection | `server/internal/handler/research_run_adapter.go` |
+| Legacy authoritative mutations rejected for initialized runs | `server/internal/handler/research_run_guard.go` plus guarded handlers in `research_ops.go` and `research_product_rounds.go` |
 | Fleet ensure + seed roles | `server/internal/handler/research_fleet.go`, `research_templates.go` |
 | Dynamic roster hire/optimize/archive (lead-only, cap, audit) | `server/internal/handler/research_ops.go`, `research_roster.go` |
-| Graph/source/report/message/stage/handoff | `server/internal/handler/research_ops.go`, `research_stage.go`, `research_handoff.go` |
+| Legacy graph/source/report/message/stage/handoff for uninitialized sessions | `server/internal/handler/research_ops.go`, `research_stage.go`, `research_handoff.go` |
 | Session kickoff graph + process cards | `server/internal/handler/research_kickoff.go`, `research_process.go` |
 | Message `card_kind` / `meta` | migration `246_research_message_cards` |
 | Unique active fleet role + dedupe | migration `247_research_fleet_member_role_unique` |
@@ -15,5 +22,5 @@
 | Schema | `server/migrations/244_research_fleet.up.sql` |
 | SQL | `server/pkg/db/queries/research.sql` |
 | WS events | `server/pkg/protocol/research_events.go` |
-| CLI | `server/cmd/multica/cmd_research.go` (`hire` / `optimize` / `archive`) |
+| CLI | `server/cmd/multica/cmd_research.go` (`task-result`, session snapshot, roster administration) |
 | Frontend | `packages/views/research/`, paths `research` / `researchDetail` |

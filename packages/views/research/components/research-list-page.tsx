@@ -23,7 +23,6 @@ import {
   HERO_CTA_SECONDARY_CLASS,
 } from "../lib/hero-cta-motion";
 import {
-  appendCreateParamsToGoal,
   defaultCreateParams,
   draftCreateParams,
   normalizeCreateParams,
@@ -127,12 +126,8 @@ export function ResearchListPage() {
   const create = useMutation({
     mutationFn: (params: ReturnType<typeof normalizeCreateParams>) => {
       const language = i18n?.language;
-      const mergedGoal = appendCreateParamsToGoal(
-        buildCreateGoal(selectedTemplate, goal, language),
-        params,
-      );
       return api.createResearchSession({
-        goal: mergedGoal,
+        goal: buildCreateGoal(selectedTemplate, goal, language),
         depth_tier: params.depth_tier,
         language: params.language,
         source_weights: params.source_weights,
@@ -151,6 +146,7 @@ export function ResearchListPage() {
         report: null,
         evals: [],
         messages: res.messages ?? [],
+        run: res.run,
       });
       void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
       nav.push(paths.researchDetail(res.session.id));

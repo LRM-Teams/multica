@@ -108,16 +108,34 @@ describe("research-create-params (LRM-838 / LRM-835)", () => {
     expect(parseCreateParamsFromGoal(second)?.language).toBe("en");
   });
 
-  it("session resolve prefers trailer, then session depth_tier", () => {
+  it("session resolve prefers durable contract, then trailer/defaults", () => {
+    const legacyGoal = appendCreateParamsToGoal(
+      "x",
+      normalizeCreateParams({ depth_tier: "shallow", language: "en" }),
+    );
     const withTrailer = resolveSessionCreateParams({
-      goal: appendCreateParamsToGoal(
-        "x",
-        normalizeCreateParams({ depth_tier: "shallow", language: "en" }),
-      ),
+      goal: legacyGoal,
       depth_tier: "deep",
     });
     expect(withTrailer.depth_tier).toBe("deep");
     expect(withTrailer.language).toBe("en");
+
+    const durable = resolveSessionCreateParams({
+      goal: legacyGoal,
+      depth_tier: "deep",
+      contract: {
+        language: "zh",
+        source_policy: {
+          weights: { primary: 0.95, secondary: 0.55, community: 0.15 },
+        },
+      },
+    });
+    expect(durable.language).toBe("zh");
+    expect(durable.source_weights).toEqual({
+      primary: 0.95,
+      secondary: 0.55,
+      community: 0.15,
+    });
 
     const legacy = resolveSessionCreateParams({
       goal: "plain goal",

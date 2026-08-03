@@ -191,6 +191,9 @@ func (h *Handler) SubmitResearchProductRoundJudgment(w http.ResponseWriter, r *h
 	if !ok {
 		return
 	}
+	if h.rejectLegacyResearchMutation(w, r, wsUUID, sessionID) {
+		return
+	}
 	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "research session not found")
@@ -316,8 +319,8 @@ func (h *Handler) SubmitResearchProductRoundJudgment(w http.ResponseWriter, r *h
 	cardResp := researchProductRoundCardToResp(card)
 	actorID := uuidToString(lead.AgentID)
 	h.publish(protocol.EventResearchSessionProductRound, workspaceID, "agent", actorID, map[string]any{
-		"session_id": uuidToString(sessionID),
-		"card":       cardResp,
+		"session_id":         uuidToString(sessionID),
+		"card":               cardResp,
 		"forced_stop_budget": forced,
 	})
 	h.publish(protocol.EventResearchSessionStatusChanged, workspaceID, "agent", actorID, map[string]any{
@@ -340,15 +343,15 @@ func (h *Handler) SubmitResearchProductRoundJudgment(w http.ResponseWriter, r *h
 		Status:       ternary(closed, "done", "active"),
 		ActorAgentID: lead.AgentID,
 		Payload: marshalJSONRaw(map[string]any{
-			"round":                 round,
-			"decision":              decision,
-			"coverage_gaps":         json.RawMessage(gaps),
-			"budget_used":           budgetUsed,
-			"budget_remaining":      budgetRemaining,
-			"goal_patch_proposal":   goalPatch,
-			"next_round_focus":      nextFocus,
-			"forced_stop_budget":    forced,
-			"goal_not_written":      true, // proposal only; authoritative goal → LRM-898
+			"round":               round,
+			"decision":            decision,
+			"coverage_gaps":       json.RawMessage(gaps),
+			"budget_used":         budgetUsed,
+			"budget_remaining":    budgetRemaining,
+			"goal_patch_proposal": goalPatch,
+			"next_round_focus":    nextFocus,
+			"forced_stop_budget":  forced,
+			"goal_not_written":    true, // proposal only; authoritative goal → LRM-898
 		}),
 	}, pgtype.UUID{}, "leads_to")
 	h.emitResearchProcessCard(r.Context(), workspaceID, wsUUID, sessionID, "agent", actorID, researchProcessEvent{

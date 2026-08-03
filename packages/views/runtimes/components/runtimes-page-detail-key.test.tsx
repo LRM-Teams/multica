@@ -120,9 +120,6 @@ vi.mock("./machine-code-agents-section", () => ({
 vi.mock("./machine-header-ops", () => ({
   MachineHeaderOps: FakeMachineHeaderOps,
 }));
-vi.mock("./machine-ops-section", () => ({
-  MachineOpsSection: FakeMachineHeaderOps,
-}));
 
 vi.mock("./machine-sharing-section", () => ({
   MachineSharingSection: () => null,

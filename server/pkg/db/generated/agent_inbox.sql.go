@@ -824,12 +824,19 @@ WITH original AS (
 guarded AS (
   SELECT original.id, original.workspace_id, original.agent_session_id, original.conversation_id, original.channel_id, original.chat_session_id, original.agent_id, original.source_message_id, original.reason, original.requires_wake, original.status, original.priority, original.seq_from, original.seq_to, original.attempt, original.last_error, original.claimed_at, original.acked_at, original.created_at, original.updated_at, original.terminal_outcome, original.terminal_delivery_id, original.retryable, original.terminal_at, original.runtime_id, original.execution_config, original.delivery_mode, original.response_mode, original.channel_onboarding_id, original.issue_id, original.source_chat_message_id, original.context, original.dispatched_at, original.started_at, original.completed_at, original.result, original.error, original.session_id, original.work_dir, original.trigger_comment_id, original.autopilot_run_id, original.max_attempts, original.parent_task_id, original.failure_reason, original.trigger_summary, original.force_fresh_session, original.is_leader_task, original.wait_reason, original.initiator_user_id
   FROM original
-  WHERE EXISTS (
-    SELECT 1
-    FROM chat_message prompt
-    WHERE prompt.task_id = original.id
-      AND prompt.role = 'user'
-  )
+  WHERE (
+      EXISTS (
+        SELECT 1
+        FROM chat_message prompt
+        WHERE prompt.task_id = original.id
+          AND prompt.role = 'user'
+      )
+      OR (
+        original.chat_session_id IS NULL
+        AND COALESCE(original.context->>'type', '') = 'channel_wake'
+        AND COALESCE(original.context->>'prompt', '') <> ''
+      )
+    )
     AND NOT EXISTS (
     SELECT 1
     FROM agent_inbox_event newer
@@ -870,7 +877,9 @@ retried_event AS (
     status,
     priority,
     seq_from,
-    seq_to
+    seq_to,
+    context,
+    initiator_user_id
   )
   SELECT
     guarded.workspace_id,
@@ -891,7 +900,9 @@ retried_event AS (
     'pending',
     guarded.priority,
     guarded.seq_from,
-    guarded.seq_to
+    guarded.seq_to,
+    guarded.context,
+    guarded.initiator_user_id
   FROM guarded
   JOIN agent a ON a.id = guarded.agent_id
   JOIN refreshed_session ON refreshed_session.id = guarded.agent_session_id
@@ -921,11 +932,19 @@ copied_prompt AS (
   JOIN original ON prompt.task_id = original.id
   CROSS JOIN retried_event
   WHERE prompt.role = 'user'
+    AND original.chat_session_id IS NOT NULL
   RETURNING id
 )
 SELECT retried_event.id, retried_event.workspace_id, retried_event.agent_session_id, retried_event.conversation_id, retried_event.channel_id, retried_event.chat_session_id, retried_event.agent_id, retried_event.source_message_id, retried_event.reason, retried_event.requires_wake, retried_event.status, retried_event.priority, retried_event.seq_from, retried_event.seq_to, retried_event.attempt, retried_event.last_error, retried_event.claimed_at, retried_event.acked_at, retried_event.created_at, retried_event.updated_at, retried_event.terminal_outcome, retried_event.terminal_delivery_id, retried_event.retryable, retried_event.terminal_at, retried_event.runtime_id, retried_event.execution_config, retried_event.delivery_mode, retried_event.response_mode, retried_event.channel_onboarding_id, retried_event.issue_id, retried_event.source_chat_message_id, retried_event.context, retried_event.dispatched_at, retried_event.started_at, retried_event.completed_at, retried_event.result, retried_event.error, retried_event.session_id, retried_event.work_dir, retried_event.trigger_comment_id, retried_event.autopilot_run_id, retried_event.max_attempts, retried_event.parent_task_id, retried_event.failure_reason, retried_event.trigger_summary, retried_event.force_fresh_session, retried_event.is_leader_task, retried_event.wait_reason, retried_event.initiator_user_id
 FROM retried_event
 WHERE EXISTS (SELECT 1 FROM copied_prompt)
+   OR EXISTS (
+     SELECT 1
+     FROM original
+     WHERE original.chat_session_id IS NULL
+       AND COALESCE(original.context->>'type', '') = 'channel_wake'
+       AND COALESCE(original.context->>'prompt', '') <> ''
+   )
 `
 
 type RetryAgentInboxEventParams struct {

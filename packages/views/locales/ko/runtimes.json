@@ -257,6 +257,16 @@
   "running_other": "실행 중 {{count}}개",
   "queued_one": "대기 중 {{count}}개",
   "queued_other": "대기 중 {{count}}개",
+  "add_computer": {
+    "title": "컴퓨터 추가",
+    "description": "이 워크스페이스에 추가할 컴퓨터 유형을 선택하세요.",
+    "your_computer": "내 컴퓨터",
+    "your_computer_hint": "내 컴퓨터에서 에이전트를 실행합니다.",
+    "cloud": "클라우드 컴퓨터",
+    "cloud_coming_soon": "곧 제공",
+    "next": "다음",
+    "cancel": "취소"
+  },
   "connect": {
     "title": "컴퓨터 추가",
     "description": "추가하려는 컴퓨터에서 아래 두 명령을 실행하세요. 데몬이 온라인이 되는 순간 감지합니다.",

@@ -4,6 +4,7 @@ import {
   RESEARCH_TEMPLATES,
   buildCreateGoal,
   composeTemplateGoal,
+  composeTemplateStarter,
   localizeTemplateField,
 } from "./research-templates";
 
@@ -29,6 +30,17 @@ describe("research templates (LRM-817 / LRM-906)", () => {
     const en = composeTemplateGoal(industry, "en");
     expect(en.startsWith(industry.goal.en.trim())).toBe(true);
     expect(en).toContain("Focus");
+  });
+
+  it("composeTemplateStarter writes short prefill (LRM-1092), not the long prompt", () => {
+    const industry = RESEARCH_TEMPLATES.find((t) => t.id === "industry")!;
+    const zh = composeTemplateStarter(industry, "zh-Hans");
+    expect(zh).toContain("市场规模、格局与趋势");
+    expect(zh).toContain("行业调研");
+    expect(zh.length).toBeLessThan(200);
+    const en = composeTemplateStarter(industry, "en");
+    expect(en).toContain("Industry research");
+    expect(en.length).toBeLessThan(200);
   });
 
   it("buildCreateGoal merges template prompt with user supplement without dumping into UI", () => {

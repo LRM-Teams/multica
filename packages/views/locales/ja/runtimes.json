@@ -252,6 +252,16 @@
   },
   "running_other": "実行中 {{count}} 件",
   "queued_other": "キュー待ち {{count}} 件",
+  "add_computer": {
+    "title": "コンピュータを追加",
+    "description": "このワークスペースに追加するコンピュータの種類を選んでください。",
+    "your_computer": "自分のコンピュータ",
+    "your_computer_hint": "自分のコンピュータでエージェントを実行します。",
+    "cloud": "クラウド コンピュータ",
+    "cloud_coming_soon": "近日公開",
+    "next": "次へ",
+    "cancel": "キャンセル"
+  },
   "connect": {
     "title": "コンピュータを追加",
     "description": "追加したいコンピュータで、この 2 つのコマンドを実行してください。デーモンがオンラインになった瞬間に検出します。",

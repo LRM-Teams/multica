@@ -305,25 +305,24 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err !
 
 	testHandler.dispatchChannelMentions(ctx, ch, trigger, parseUUID(testUserID))
 
-	var sessionID string
-	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
-		t.Fatalf("channel agent session not created: %v", err)
-	}
-	var threadID string
-	var promptRoot pgtype.Text
-	var depth int
-	var prompt string
+	// LRM-1079: ordinary mentions are channel-only (context prompt, no chat_session).
+	var rawContext []byte
 	if err := testPool.QueryRow(ctx, `
-		SELECT thread_id, channel_thread_root_message_id, trigger_depth, content
-		FROM chat_message
-		WHERE chat_session_id = $1 AND role = 'user'
+		SELECT context
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2 AND reason = 'mention'
 		ORDER BY created_at DESC
-		LIMIT 1`, sessionID).Scan(&threadID, &promptRoot, &depth, &prompt); err != nil {
-		t.Fatalf("load prompt message: %v", err)
+		LIMIT 1`, channelID, agentID).Scan(&rawContext); err != nil {
+		t.Fatalf("load mention wake context: %v", err)
 	}
-	if threadID != "debate-thread" || promptRoot.Valid || depth != 2 {
-		t.Fatalf("prompt thread/root/depth = %q/%+v/%d, want debate-thread/no-root/2", threadID, promptRoot, depth)
+	var wake channelWakeContext
+	if err := json.Unmarshal(rawContext, &wake); err != nil {
+		t.Fatalf("decode wake context: %v", err)
 	}
+	if wake.ThreadID != "debate-thread" || wake.TriggerDepth != 2 {
+		t.Fatalf("wake thread/depth = %q/%d, want debate-thread/2", wake.ThreadID, wake.TriggerDepth)
+	}
+	prompt := wake.Prompt
 	if !strings.Contains(prompt, agentHandle+" joined this channel") {
 		t.Fatalf("prompt should retain the canonical membership context before the trigger:\n%s", prompt)
 	}
@@ -331,6 +330,17 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, testUserID, agentID); err !
 		t.Fatalf("current trigger should appear exactly once, got %d:\n%s", count, prompt)
 	}
 
+	// Legacy ChatDone bridge still works when a channel_agent_session exists
+	// (env-dispatch / pre-migration). Seed session + prompt thread context only
+	// for the bridge assertion.
+	session, err := testHandler.ensureChannelAgentSession(ctx, ch, parseUUID(agentID), parseUUID(testUserID))
+	if err != nil {
+		t.Fatalf("ensure legacy bridge session: %v", err)
+	}
+	sessionID := uuidToString(session.ID)
+	if _, err := testHandler.createChannelAgentPromptMessageWithDB(ctx, testPool, session.ID, prompt, trigger); err != nil {
+		t.Fatalf("seed legacy bridge prompt: %v", err)
+	}
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
 		ChatSessionID: sessionID,
 		Content:       "@" + agentHandle + " says hi",
@@ -408,22 +418,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 
 	testHandler.dispatchChannelMentions(ctx, ch, trigger, parseUUID(testUserID))
 
-	var sessionID string
-	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
-		t.Fatalf("channel agent session not created: %v", err)
-	}
-	var promptRoot *string
-	if err := testPool.QueryRow(ctx, `
-		SELECT channel_thread_root_message_id::text
-		FROM chat_message
-		WHERE chat_session_id = $1 AND role = 'user'
-		ORDER BY created_at DESC
-		LIMIT 1`, sessionID).Scan(&promptRoot); err != nil {
-		t.Fatalf("load greeting prompt root: %v", err)
-	}
-	if promptRoot != nil {
-		t.Fatalf("greeting prompt thread root = %q, want nil", *promptRoot)
-	}
+	// Bridge assertion only needs a legacy session prompt without thread root.
+	sessionID := ensureLegacyChannelChatBridgeForTest(t, ch, agentID, trigger, "greeting bridge prompt")
 
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{ChatSessionID: sessionID, Content: "hi there"}})
 	var replyRoot *string
@@ -464,10 +460,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	testHandler.dispatchChannelMentions(ctx, ch, trigger, parseUUID(testUserID))
 
-	var sessionID string
-	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
-		t.Fatalf("channel agent session not created: %v", err)
-	}
+	sessionID := ensureLegacyChannelChatBridgeForTest(t, ch, agentID, trigger, "react only bridge prompt")
 
 	noReplyContent := "internal analysis should not become a channel reply"
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
@@ -587,10 +580,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	testHandler.dispatchChannelMentions(ctx, ch, trigger, parseUUID(testUserID))
 
-	var sessionID string
-	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
-		t.Fatalf("channel agent session not created: %v", err)
-	}
+	sessionID := ensureLegacyChannelChatBridgeForTest(t, ch, agentID, trigger, "legacy bridge prompt")
 
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
 		ChatSessionID:          sessionID,
@@ -637,10 +627,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	testHandler.dispatchChannelMentions(ctx, ch, trigger, parseUUID(testUserID))
 
-	var sessionID string
-	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
-		t.Fatalf("channel agent session not created: %v", err)
-	}
+	sessionID := ensureLegacyChannelChatBridgeForTest(t, ch, agentID, trigger, "legacy bridge prompt")
 
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{
 		ChatSessionID:          sessionID,
@@ -800,12 +787,10 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	var prompt string
 	if err := testPool.QueryRow(ctx, `
-		SELECT cm.content
-		FROM chat_message cm
-		JOIN agent_inbox_event e ON e.id = cm.task_id
-		WHERE e.channel_id = $1 AND e.agent_id = $2 AND e.reason = 'channel_message'
-		  AND cm.role = 'user'
-		ORDER BY cm.created_at DESC
+		SELECT COALESCE(context->>'prompt', '')
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2 AND reason = 'channel_message'
+		ORDER BY created_at DESC
 		LIMIT 1`, channelID, agentIDs[0]).Scan(&prompt); err != nil {
 		t.Fatalf("load coalesced wake prompt: %v", err)
 	}
@@ -1131,8 +1116,15 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 			if !ok {
 				t.Fatalf("%s lifecycle payload type = %T, want map", eventType, event.Payload)
 			}
-			if payload["task_id"] != got.ID || payload["inbox_event_id"] != got.ID || payload["agent_id"] != agentID || payload["status"] != status || payload["chat_session_id"] != got.ChatSessionID {
-				t.Fatalf("%s lifecycle payload = %#v, want inbox event %s agent %s status %s chat %s", eventType, payload, got.ID, agentID, status, got.ChatSessionID)
+			if payload["task_id"] != got.ID || payload["inbox_event_id"] != got.ID || payload["agent_id"] != agentID || payload["status"] != status {
+				t.Fatalf("%s lifecycle payload = %#v, want inbox event %s agent %s status %s", eventType, payload, got.ID, agentID, status)
+			}
+			if got.ChatSessionID != "" {
+				if payload["chat_session_id"] != got.ChatSessionID {
+					t.Fatalf("%s lifecycle chat_session_id = %#v, want %s", eventType, payload["chat_session_id"], got.ChatSessionID)
+				}
+			} else if _, ok := payload["chat_session_id"]; ok {
+				t.Fatalf("%s lifecycle unexpectedly set chat_session_id for channel-only wake: %#v", eventType, payload["chat_session_id"])
 			}
 			return
 		}
@@ -1320,8 +1312,11 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if got.Task == nil {
 		t.Fatalf("drained directed event missing executable task: %+v", got)
 	}
-	if got.Task.ID != got.ID || got.Task.ChatSessionID == "" || got.Task.InboxEvent == nil {
-		t.Fatalf("drained task = %+v, want inbox-backed chat task for event %s", got.Task, got.ID)
+	if got.Task.ID != got.ID || got.Task.ChannelID == "" || got.Task.InboxEvent == nil || strings.TrimSpace(got.Task.ChatMessage) == "" {
+		t.Fatalf("drained task = %+v, want channel-only inbox task for event %s", got.Task, got.ID)
+	}
+	if got.Task.ChatSessionID != "" {
+		t.Fatalf("directed mention drain must be channel-only; got chat_session_id=%s", got.Task.ChatSessionID)
 	}
 
 	// Reproduce the exact interleaving from #646: while the original directed
@@ -1381,8 +1376,13 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("complete inbox event: status=%d body=%s", completeRec.Code, completeRec.Body.String())
 	}
 	assertChannelMessageContentCount(t, channelID, reply, 0)
-	if chatDoneEvents != 1 {
-		t.Fatalf("completion chat-done events = %d, want 1 to finish the suppressed-output run", chatDoneEvents)
+	// LRM-1079: channel-only wakes finalize without ChatDone; transport owns
+	// visible output and complete settles ambient / typing directly.
+	if got.ChatSessionID != "" && chatDoneEvents != 1 {
+		t.Fatalf("legacy session completion chat-done events = %d, want 1", chatDoneEvents)
+	}
+	if got.ChatSessionID == "" && chatDoneEvents != 0 {
+		t.Fatalf("channel-only completion unexpectedly published chat-done: %d", chatDoneEvents)
 	}
 	var completionReceipt struct {
 		OK              bool   `json:"ok"`
@@ -2416,6 +2416,19 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	testHandler.dispatchChannelAmbientDelivery(ctx, ch, first)
 
+	// Shared handlerTestRuntimeID is reused across tests; cancel leftover pending
+	// wakes for other agents so drain returns this ambient observe event.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event e
+		SET status = 'cancelled', updated_at = now()
+		FROM agent a
+		WHERE a.id = e.agent_id
+		  AND a.runtime_id = $1
+		  AND e.agent_id <> $2
+		  AND e.status IN ('pending', 'draining')`, runtimeID, agentID); err != nil {
+		t.Fatalf("cancel foreign pending inbox events: %v", err)
+	}
+
 	drainReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/agent-inbox/drain", nil, testWorkspaceID, "agent-inbox-ambient-daemon")
 	drainReq = withURLParam(drainReq, "runtimeId", runtimeID)
 	drainRec := httptest.NewRecorder()
@@ -2805,17 +2818,19 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("failed terminal projection = outcome:%q delivery:%q retryable:%v terminal_at:%v, want failed/%s/retryable/timestamp", terminalOutcome, terminalDeliveryID, retryable, terminalAt.Valid, got.DeliveryID)
 	}
 
-	var assistantFailureMessages int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM chat_message
-		WHERE chat_session_id = $1
-		  AND role = 'assistant'
-		  AND task_id = $2`, got.ChatSessionID, got.ID).Scan(&assistantFailureMessages); err != nil {
-		t.Fatalf("count failed inbox chat messages: %v", err)
-	}
-	if assistantFailureMessages != 0 {
-		t.Fatalf("assistant failure chat messages = %d, want 0 (classified terminal failure belongs in Activity only)", assistantFailureMessages)
+	if got.ChatSessionID != "" {
+		var assistantFailureMessages int
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM chat_message
+			WHERE chat_session_id = $1
+			  AND role = 'assistant'
+			  AND task_id = $2`, got.ChatSessionID, got.ID).Scan(&assistantFailureMessages); err != nil {
+			t.Fatalf("count failed inbox chat messages: %v", err)
+		}
+		if assistantFailureMessages != 0 {
+			t.Fatalf("assistant failure chat messages = %d, want 0 (classified terminal failure belongs in Activity only)", assistantFailureMessages)
+		}
 	}
 
 	var visibleAgentMessages int
@@ -2860,8 +2875,11 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if err := json.Unmarshal(drainRec.Body.Bytes(), &drainResp); err != nil {
 		t.Fatalf("decode second drain response: %v", err)
 	}
-	if len(drainResp.Events) != 0 {
-		t.Fatalf("terminal failure drained %d events, want none: %+v", len(drainResp.Events), drainResp.Events)
+	for _, event := range drainResp.Events {
+		if event.Reason == channelOnboardingReason {
+			continue
+		}
+		t.Fatalf("terminal failure drained unexpected event reason=%s id=%s", event.Reason, event.ID)
 	}
 }
 
@@ -2985,16 +3003,18 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("stale complete status=%d body=%s, want 409", staleCompleteRec.Code, staleCompleteRec.Body.String())
 	}
 	assertChannelMessageContentCount(t, channelID, staleReply, 0)
-	var staleChatMessages int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM chat_message
-		WHERE chat_session_id = $1 AND role = 'assistant' AND content = $2
-	`, secondDelivery.Task.ChatSessionID, staleReply).Scan(&staleChatMessages); err != nil {
-		t.Fatalf("count stale complete chat messages: %v", err)
-	}
-	if staleChatMessages != 0 {
-		t.Fatalf("stale complete chat messages = %d, want 0", staleChatMessages)
+	if secondDelivery.Task != nil && secondDelivery.Task.ChatSessionID != "" {
+		var staleChatMessages int
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM chat_message
+			WHERE chat_session_id = $1 AND role = 'assistant' AND content = $2
+		`, secondDelivery.Task.ChatSessionID, staleReply).Scan(&staleChatMessages); err != nil {
+			t.Fatalf("count stale complete chat messages: %v", err)
+		}
+		if staleChatMessages != 0 {
+			t.Fatalf("stale complete chat messages = %d, want 0", staleChatMessages)
+		}
 	}
 
 	ackReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+secondDelivery.ID+"/ack", AckAgentInboxEventRequest{
@@ -7856,27 +7876,29 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("agent thread participant after first mention count=%d, want 1", agentParticipants)
 	}
 
-	var sessionID string
-	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&sessionID); err != nil {
-		t.Fatalf("channel agent session not created: %v", err)
-	}
-	var promptThreadRoot, prompt string
+	var rawContext []byte
 	if err := testPool.QueryRow(ctx, `
-		SELECT channel_thread_root_message_id, content
-		FROM chat_message
-		WHERE chat_session_id = $1 AND role = 'user'
+		SELECT context
+		FROM agent_inbox_event
+		WHERE channel_id = $1 AND agent_id = $2 AND reason IN ('mention', 'thread_reply')
 		ORDER BY created_at DESC
-		LIMIT 1`, sessionID).Scan(&promptThreadRoot, &prompt); err != nil {
-		t.Fatalf("load prompt thread root: %v", err)
+		LIMIT 1`, channelID, agentID).Scan(&rawContext); err != nil {
+		t.Fatalf("load thread wake context: %v", err)
 	}
-	if promptThreadRoot != root.ID {
-		t.Fatalf("prompt thread root = %q, want %s", promptThreadRoot, root.ID)
+	var wake channelWakeContext
+	if err := json.Unmarshal(rawContext, &wake); err != nil {
+		t.Fatalf("decode thread wake: %v", err)
 	}
+	if wake.ThreadRootMessageID != root.ID {
+		t.Fatalf("wake thread root = %q, want %s", wake.ThreadRootMessageID, root.ID)
+	}
+	prompt := wake.Prompt
 	for _, want := range []string{"Thread context (root message first, then bounded recent replies from this thread only):", "root", triggerContent} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("thread prompt missing %q:\n%s", want, prompt)
 		}
 	}
+	sessionID := ensureLegacyChannelChatBridgeForTest(t, ch, agentID, trigger, prompt)
 
 	testHandler.handleChannelChatDone(events.Event{Payload: protocol.ChatDonePayload{ChatSessionID: sessionID, Content: "answer in thread"}})
 	var replyRoot string
@@ -8437,6 +8459,24 @@ func TestImportLarkChannelMessageRequiresChannelMember(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("non-member lark import persisted %d message(s)", count)
 	}
+}
+
+
+// ensureLegacyChannelChatBridgeForTest seeds channel_agent_session + optional
+// prompt chat_message so legacy ChatDone bridge tests still exercise that path
+// after ordinary wakes became channel-only (LRM-1079).
+func ensureLegacyChannelChatBridgeForTest(t *testing.T, ch ChannelResponse, agentID string, trigger ChannelMessageResponse, prompt string) string {
+	t.Helper()
+	session, err := testHandler.ensureChannelAgentSession(context.Background(), ch, parseUUID(agentID), parseUUID(testUserID))
+	if err != nil {
+		t.Fatalf("ensure legacy channel chat bridge session: %v", err)
+	}
+	if strings.TrimSpace(prompt) != "" {
+		if _, err := testHandler.createChannelAgentPromptMessageWithDB(context.Background(), testPool, session.ID, prompt, trigger); err != nil {
+			t.Fatalf("seed legacy channel chat bridge prompt: %v", err)
+		}
+	}
+	return uuidToString(session.ID)
 }
 
 func seedChannelForTest(t *testing.T, name string, memberIDs ...string) string {

@@ -614,6 +614,7 @@ func taskToResponse(t db.AgentInboxEvent, workspaceID string) AgentTaskResponse 
 		// Surface task source so the UI can distinguish issue-linked tasks
 		// from chat-spawned or autopilot-spawned ones; all three may arrive
 		// with issue_id = "" once a task has no linked issue.
+		ChannelID:      uuidToString(t.ChannelID),
 		ChatSessionID:  uuidToString(t.ChatSessionID),
 		AutopilotRunID: uuidToString(t.AutopilotRunID),
 		Kind:           computeTaskKind(t),
@@ -734,6 +735,11 @@ func basename(p string) string {
 // (assignee-driven task on an existing issue).
 func computeTaskKind(t db.AgentInboxEvent) string {
 	if uuidToString(t.ChatSessionID) != "" {
+		return "chat"
+	}
+	// LRM-1079: channel-only wakes have no chat_session_id but still present as
+	// chat work for presence / activity labeling.
+	if uuidToString(t.ChannelID) != "" && uuidToString(t.IssueID) == "" {
 		return "chat"
 	}
 	if uuidToString(t.AutopilotRunID) != "" {

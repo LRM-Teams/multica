@@ -129,6 +129,20 @@ export function isMineMachine(
   return machine.runtimes.some((r) => r.owner_id === currentUserId);
 }
 
+/**
+ * LRM-1094 — desktop detail default: isCurrent → first Mine machine.
+ * Never fall back to Team public `machines[0]`.
+ */
+export function defaultDesktopSelectedMachineId(
+  machines: RuntimeMachine[],
+  currentUserId: string | null,
+): string | null {
+  const current = machines.find((m) => m.isCurrent);
+  if (current) return current.id;
+  const mine = machines.find((m) => isMineMachine(m, currentUserId));
+  return mine?.id ?? null;
+}
+
 export function splitRuntimeName(name: string): {
   base: string;
   hostname: string | null;

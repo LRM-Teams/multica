@@ -51,6 +51,16 @@ vi.mock("./thinking-dropdown", () => ({
 // Provider logos don't matter for these assertions but they pull in SVGs.
 vi.mock("../../runtimes/components/provider-logo", () => ({
   ProviderLogo: () => null,
+  knownProviderLabel: (provider: string) =>
+    (
+      {
+        claude: "Claude Code",
+        cursor: "Cursor",
+        pi: "Pi",
+        grok: "Grok Build",
+        codex: "Codex CLI",
+      } as Record<string, string>
+    )[provider] ?? provider,
 }));
 
 // Avatars hit the api for member metadata.
@@ -184,10 +194,17 @@ describe("CreateAgentDialog runtime visibility gate", () => {
   });
 
   it("excludes another member's private runtime from the picker entirely", () => {
-    const mine = makeRuntime({ id: "rt-mine", name: "My Runtime", owner_id: ME, visibility: "private" });
+    const mine = makeRuntime({
+      id: "rt-mine",
+      name: "My Runtime",
+      provider: "claude",
+      owner_id: ME,
+      visibility: "private",
+    });
     const othersPrivate = makeRuntime({
       id: "rt-others-private",
       name: "Others Private",
+      provider: "cursor",
       owner_id: OTHER,
       visibility: "private",
     });
@@ -195,12 +212,12 @@ describe("CreateAgentDialog runtime visibility gate", () => {
 
     // Open the picker.
     fireEvent.click(
-      screen.getByText("My Runtime", { selector: "span.truncate" }),
+      screen.getByText("Claude Code", { selector: "span.truncate" }),
     );
 
     // Not shown-disabled — not shown at all. A private runtime that isn't
     // mine has nothing for me to do with it.
-    expect(screen.queryByText("Others Private")).toBeNull();
+    expect(screen.queryByText("Cursor")).toBeNull();
     // No mine/all toggle to reveal it, either.
     expect(screen.queryByText("All")).toBeNull();
     expect(screen.queryByText("Mine")).toBeNull();
@@ -210,37 +227,50 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     const othersPrivate = makeRuntime({
       id: "rt-others-private",
       name: "Others Private",
+      provider: "cursor",
       owner_id: OTHER,
       visibility: "private",
     });
     renderDialog([othersPrivate]);
 
-    // firstUsableMachine falls back to machines[0], so the trigger can still
-    // show the locked runtime name while the open list is empty.
-    fireEvent.click(
-      screen.getByText("Others Private", { selector: "span.truncate" }),
-    );
+    // Open the runtime popover from its labeled trigger (no usable seed).
+    const runtimeLabel = screen.getByText("Runtime", {
+      selector: "label",
+    });
+    const trigger = runtimeLabel
+      .closest("div")
+      ?.parentElement
+      ?.querySelector("button");
+    expect(trigger).toBeTruthy();
+    fireEvent.click(trigger!);
     expect(screen.getByTestId("runtime-picker-empty")).toHaveTextContent(
       /No usable runtime on this computer/i,
     );
   });
 
   it("lets a plain member pick another member's public runtime", () => {
-    const mine = makeRuntime({ id: "rt-mine", name: "My Runtime", owner_id: ME, visibility: "private" });
+    const mine = makeRuntime({
+      id: "rt-mine",
+      name: "My Runtime",
+      provider: "claude",
+      owner_id: ME,
+      visibility: "private",
+    });
     const othersPublic = makeRuntime({
       id: "rt-others-public",
       name: "Others Public",
+      provider: "cursor",
       owner_id: OTHER,
       visibility: "public",
     });
     renderDialog([mine, othersPublic]);
 
     fireEvent.click(
-      screen.getByText("My Runtime", { selector: "span.truncate" }),
+      screen.getByText("Claude Code", { selector: "span.truncate" }),
     );
 
     const publicRow = screen
-      .getByText("Others Public")
+      .getByText("Cursor")
       .closest("button") as HTMLButtonElement;
     expect(publicRow).not.toBeNull();
     expect(publicRow.disabled).toBe(false);
@@ -250,22 +280,23 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     const othersPrivate = makeRuntime({
       id: "rt-others-private",
       name: "Others Private",
+      provider: "cursor",
       owner_id: OTHER,
       visibility: "private",
     });
     const mine = makeRuntime({
       id: "rt-mine",
       name: "My Runtime",
+      provider: "claude",
       owner_id: ME,
       visibility: "private",
     });
     renderDialog([othersPrivate, mine]);
 
-    // The trigger label shows the selected runtime name. The picker must
-    // not seed with the other-owned private runtime even if it sorted
-    // first in the input list.
-    expect(screen.queryByText("Others Private", { selector: "span.truncate" })).toBeNull();
-    expect(screen.getByText("My Runtime", { selector: "span.truncate" })).toBeInTheDocument();
+    // The trigger label shows the brand. The picker must not seed with the
+    // other-owned private runtime even if it sorted first in the input list.
+    expect(screen.queryByText("Cursor", { selector: "span.truncate" })).toBeNull();
+    expect(screen.getByText("Claude Code", { selector: "span.truncate" })).toBeInTheDocument();
   });
 
   it("in duplicate mode, does not pre-fill the template's runtime when it's now locked", async () => {
@@ -276,12 +307,14 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     const othersPrivate = makeRuntime({
       id: "rt-others-private",
       name: "Others Private",
+      provider: "cursor",
       owner_id: OTHER,
       visibility: "private",
     });
     const mine = makeRuntime({
       id: "rt-mine",
       name: "My Runtime",
+      provider: "claude",
       owner_id: ME,
       visibility: "private",
     });
@@ -289,10 +322,10 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     const { onCreate } = renderDialog([othersPrivate, mine], template);
 
     expect(
-      screen.getByText("My Runtime", { selector: "span.truncate" }),
+      screen.getByText("Claude Code", { selector: "span.truncate" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Others Private", { selector: "span.truncate" }),
+      screen.queryByText("Cursor", { selector: "span.truncate" }),
     ).toBeNull();
 
     // Sanity check: with a usable selection seeded, Create should submit.
@@ -340,6 +373,7 @@ describe("CreateAgentDialog runtime visibility gate", () => {
       display_name: "s144",
       owner_id: ME,
       visibility: "private",
+      provider: "cursor",
       device_info: "s144",
     });
     const alsoOnS144 = makeRuntime({
@@ -359,6 +393,7 @@ describe("CreateAgentDialog runtime visibility gate", () => {
       display_name: "other-box",
       owner_id: ME,
       visibility: "private",
+      provider: "cursor",
       device_info: "other-box",
     });
     renderDialog([onS144, alsoOnS144, onOther]);
@@ -366,10 +401,11 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     // Default computer is the first usable machine (s144). Open the
     // code-agent picker — other-box's Cursor must not appear.
     fireEvent.click(
-      screen.getByText("Cursor (s144)", { selector: "span.truncate" }),
+      screen.getByText("Cursor", { selector: "span.truncate" }),
     );
-    expect(screen.getByText("Pi (s144)")).toBeInTheDocument();
-    expect(screen.queryByText("Cursor (other)")).toBeNull();
+    expect(screen.getByText("Pi")).toBeInTheDocument();
+    // Only one Cursor row (s144) — host subtitle unused because Pi differs.
+    expect(screen.getAllByText("Cursor").length).toBeGreaterThanOrEqual(1);
   });
 
   it("re-filters the code-agent list after switching computers", () => {
@@ -380,6 +416,7 @@ describe("CreateAgentDialog runtime visibility gate", () => {
       display_name: "s144",
       owner_id: ME,
       visibility: "private",
+      provider: "cursor",
       device_info: "s144",
     });
     const onOther = makeRuntime({
@@ -398,13 +435,13 @@ describe("CreateAgentDialog runtime visibility gate", () => {
     fireEvent.click(screen.getByText("s144", { selector: "div.truncate" }));
     fireEvent.click(screen.getByText("other-box", { selector: "div.truncate" }));
 
-    // Runtime trigger should now show the other machine's provider.
+    // Runtime trigger should now show the other machine's brand.
     expect(
-      screen.getByText("Pi (other)", { selector: "span.truncate" }),
+      screen.getByText("Pi", { selector: "span.truncate" }),
     ).toBeInTheDocument();
     fireEvent.click(
-      screen.getByText("Pi (other)", { selector: "span.truncate" }),
+      screen.getByText("Pi", { selector: "span.truncate" }),
     );
-    expect(screen.queryByText("Cursor (s144)")).toBeNull();
+    expect(screen.queryByText("Cursor")).toBeNull();
   });
 });

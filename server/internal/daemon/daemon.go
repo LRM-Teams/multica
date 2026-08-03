@@ -3655,6 +3655,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	agentRootPath := ""
 	agentMemoryDir := ""
+	deviceMemoryDir := ""
 	agentSkillDir := ""
 	agentSkillDraftsPath := ""
 	if !restrictedExecution && task.WorkspaceID != "" && agentID != "" {
@@ -3700,6 +3701,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				}, nil
 			}
 			d.hydrateAgentMemoryCenter(ctx, task.WorkspaceID, agentID, task.RuntimeID, agentRoot)
+			var deviceErr error
+			deviceMemoryDir, deviceErr = ensureDeviceMemoryRoot(agentRoot, d.cfg.DaemonID)
+			if deviceErr != nil {
+				taskLog.Warn("device-local memory root creation failed", "error", deviceErr)
+			}
 		}
 		agentRootPath = agentRoot
 		agentMemoryDir = filepath.Join(agentRootPath, "memory")
@@ -3733,6 +3739,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentInstructions:                instructions,
 		AgentRoot:                        agentRootPath,
 		AgentMemoryDir:                   agentMemoryDir,
+		DeviceMemoryDir:                  deviceMemoryDir,
 		UserMemoryDir:                    scopedMemory.UserDir,
 		ProjectMemoryDir:                 scopedMemory.ProjectDir,
 		ChannelMemoryDir:                 scopedMemory.ChannelDir,
@@ -5496,6 +5503,9 @@ func addMulticaAgentEnv(env map[string]string, cfg Config, workspaceID, agentID,
 	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
 	env["MULTICA_AGENT_ROOT"] = agentRoot
 	env["MULTICA_AGENT_MEMORY_DIR"] = filepath.Join(agentRoot, "memory")
+	if deviceRoot := deviceMemoryRoot(agentRoot, cfg.DaemonID); deviceRoot != "" {
+		env["MULTICA_DEVICE_MEMORY_DIR"] = deviceRoot
+	}
 	env["MULTICA_AGENT_NOTES_DIR"] = filepath.Join(agentRoot, "notes")
 	env["MULTICA_AGENT_PROFILE_DIR"] = filepath.Join(agentRoot, "profile")
 	env["MULTICA_AGENT_FEEDBACK_DIR"] = filepath.Join(agentRoot, "feedback")

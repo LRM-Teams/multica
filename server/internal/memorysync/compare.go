@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	StatusActive      = "active"
-	StatusConflict    = "conflict"
-	StatusSuperseded  = "superseded"
+	StatusActive     = "active"
+	StatusConflict   = "conflict"
+	StatusSuperseded = "superseded"
 
 	KindPreference   = "preference"
 	KindRelationship = "relationship"
@@ -51,9 +51,13 @@ type CompareResult struct {
 }
 
 var (
-	bulletRE = regexp.MustCompile(`(?m)^\s*[-*]\s+(.+)$`)
-	negationRE = regexp.MustCompile(`(?i)(不要|别再|别|禁止|从不|勿|never|don't|do\s+not|no\s+longer|避免)`)
-	positiveRE = regexp.MustCompile(`(?i)(必须|一定要|总是|先|务必|always|must|should|require)`)
+	bulletRE        = regexp.MustCompile(`(?m)^\s*[-*]\s+(.+)$`)
+	negationRE      = regexp.MustCompile(`(?i)(不要|别再|别|禁止|从不|勿|never|don't|do\s+not|no\s+longer|避免)`)
+	positiveRE      = regexp.MustCompile(`(?i)(必须|一定要|总是|先|务必|always|must|should|require)`)
+	unixLocalPathRE = regexp.MustCompile(`(?i)(^|[\s\x60'"(])/(home|users|tmp|private|opt|mnt|volumes|var/(tmp|run))(/|\b)`)
+	windowsPathRE   = regexp.MustCompile(`(?i)(^|[\s\x60'"(])[a-z]:[\\/]`)
+	loopbackRE      = regexp.MustCompile(`(?i)(^|[^a-z0-9])(localhost|127\.0\.0\.1|0\.0\.0\.0|::1)([^a-z0-9]|$)`)
+	secretRE        = regexp.MustCompile(`(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|\bAKIA[0-9A-Z]{16}\b|\b(ghp|github_pat|xox[baprs]|sk)-[a-z0-9_-]{12,}\b|\b(password|passwd|api[_-]?key|access[_-]?token|secret)\s*[:=]\s*\S+)`)
 )
 
 // NormalizeTopic keeps topic keys short and stable.
@@ -243,6 +247,36 @@ func tokenSet(s string) map[string]bool {
 	}
 	flush()
 	return out
+}
+
+// PortabilityReason returns a stable reason when content is bound to one
+// machine or appears to contain a credential. Empty means the content is safe
+// to replicate as portable center memory. The detector is intentionally
+// conservative: rejected content remains available in the local agent tree.
+func PortabilityReason(content string) string {
+	content = NormalizeContent(content)
+	if content == "" {
+		return "empty"
+	}
+	switch {
+	case secretRE.MatchString(content):
+		return "credential_like"
+	case unixLocalPathRE.MatchString(content):
+		return "absolute_local_path"
+	case windowsPathRE.MatchString(content):
+		return "absolute_local_path"
+	case loopbackRE.MatchString(content):
+		return "loopback_endpoint"
+	default:
+		return ""
+	}
+}
+
+// IsPortableContent reports whether a memory atom may leave the source
+// device. Device-local content is retained on disk but excluded from center
+// sync and cross-device hydration.
+func IsPortableContent(content string) bool {
+	return PortabilityReason(content) == ""
 }
 
 // ScopeFromRelPath derives scope/subject/kind from a Multica agent-root relative path.

@@ -358,6 +358,9 @@ func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task) {
 	triggerText := memoryWriteTriggerText(task)
 	signals := loadMemorySignals(agentRoot)
 	if len(changes) == 0 && !memorysignal.ShouldReportEvenWithoutWrites(triggerText, toMemorySignals(signals)) {
+		// A removed durable file produces no current-file write event. Reconcile
+		// the atom index anyway so the deletion becomes a center tombstone.
+		d.syncAgentMemoryCenter(ctx, task, nil)
 		return
 	}
 	entries := make([]AgentMemoryWriteEntry, 0, len(changes))

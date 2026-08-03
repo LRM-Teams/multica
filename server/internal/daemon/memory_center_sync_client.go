@@ -2,8 +2,12 @@ package daemon
 
 import "context"
 
-func (c *Client) SyncAgentMemoryCenter(ctx context.Context, report AgentMemoryCenterSyncReport) error {
-	return c.postJSONWithRetry(ctx, "/api/daemon/agent-memory-center/sync", report, nil, defaultTerminalRetrySchedule)
+func (c *Client) SyncAgentMemoryCenter(ctx context.Context, report AgentMemoryCenterSyncReport) (AgentMemoryCenterSyncResponse, error) {
+	var resp AgentMemoryCenterSyncResponse
+	if err := c.postJSONWithRetry(ctx, "/api/daemon/agent-memory-center/sync", report, &resp, defaultTerminalRetrySchedule); err != nil {
+		return AgentMemoryCenterSyncResponse{}, err
+	}
+	return resp, nil
 }
 
 func (c *Client) HydrateAgentMemoryCenter(ctx context.Context, req AgentMemoryHydrateRequest) (AgentMemoryHydrateResponse, error) {
@@ -16,6 +20,9 @@ func (c *Client) HydrateAgentMemoryCenter(ctx context.Context, req AgentMemoryHy
 	}
 	if resp.Conflicts == nil {
 		resp.Conflicts = []AgentMemoryHydrateEntry{}
+	}
+	if resp.Deleted == nil {
+		resp.Deleted = []AgentMemoryHydrateEntry{}
 	}
 	return resp, nil
 }

@@ -610,7 +610,8 @@
       "no_runtime": "该智能体未绑定运行时。",
       "offline": "运行时离线。",
       "no_permission": "你没有重启该智能体的权限。",
-      "unavailable": "此操作当前不可用。"
+      "unavailable": "此操作当前不可用。",
+      "no_force_capability": "该 Code Agent 暂不支持强制重启。"
     },
     "status": {
       "scheduled": "重启已排队，但可能不会自动执行。请关闭，等智能体空闲后再试。",

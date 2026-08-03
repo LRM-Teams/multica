@@ -620,7 +620,8 @@
       "no_runtime": "No runtime is bound to this agent.",
       "offline": "The runtime is offline.",
       "no_permission": "You don't have permission to restart this agent.",
-      "unavailable": "This action isn't available right now."
+      "unavailable": "This action isn't available right now.",
+      "no_force_capability": "This code agent can't force-restart yet."
     },
     "status": {
       "scheduled": "Restart was queued but may not run automatically. Close and try again when the agent is idle.",

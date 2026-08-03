@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResearchChatDrawer } from "./research-chat-drawer";
 
@@ -90,5 +92,67 @@ describe("ResearchChatDrawer", () => {
     const el = screen.getByTestId("research-chat-drawer");
     expect(el).toHaveAttribute("data-placement", "sheet");
     expect(screen.getByTestId("sheet-root")).toBeInTheDocument();
+  });
+
+  // LRM-1100 — the narrow Sheet branch already gets Escape/focus handling from
+  // Radix; the desktop float branch had none.
+  it("closes the desktop float on Escape (LRM-1100)", async () => {
+    const onClose = vi.fn();
+    render(
+      <ResearchChatDrawer open onClose={onClose}>
+        <span>body</span>
+      </ResearchChatDrawer>,
+    );
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire onClose on Escape while closed (LRM-1100)", async () => {
+    const onClose = vi.fn();
+    render(
+      <ResearchChatDrawer open={false} onClose={onClose}>
+        <span>body</span>
+      </ResearchChatDrawer>,
+    );
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("exposes an accessible name on the desktop float (LRM-1100)", () => {
+    render(
+      <ResearchChatDrawer open onClose={() => {}}>
+        <span>body</span>
+      </ResearchChatDrawer>,
+    );
+    expect(screen.getByRole("complementary", { name: "舰队对话" })).toBe(
+      screen.getByTestId("research-chat-drawer"),
+    );
+  });
+
+  it("moves focus into the float on open and restores it on close (LRM-1100)", async () => {
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          <button type="button" onClick={() => setOpen(true)}>
+            open chat
+          </button>
+          <ResearchChatDrawer open={open} onClose={() => setOpen(false)}>
+            <button type="button">send</button>
+          </ResearchChatDrawer>
+        </div>
+      );
+    }
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "open chat" });
+    trigger.focus();
+    await userEvent.click(trigger);
+
+    const drawer = screen.getByTestId("research-chat-drawer");
+    expect(drawer.contains(document.activeElement)).toBe(true);
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByTestId("research-chat-drawer")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
   });
 });

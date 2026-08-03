@@ -11,12 +11,17 @@ import {
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
+import { useOverlayPanelA11y } from "../hooks/use-overlay-panel-a11y";
 
 /**
  * LRM-1061 / LRM-1056 v2 — fleet chat float:
  * - Desktop: floating overlay (does not shrink the canvas as a permanent dock).
  * - Narrow: full-viewport sheet; canvas stays full-bleed underneath.
  * Default open=false is owned by the research UI store.
+ *
+ * LRM-1100: the desktop float is a bare <aside>, so Escape-to-close, the
+ * accessible name and focus move-in/restore are wired explicitly here — the
+ * narrow Sheet branch already gets all three from Radix.
  */
 export function ResearchChatDrawer({
   open,
@@ -31,6 +36,10 @@ export function ResearchChatDrawer({
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
+  const { bindPanel } = useOverlayPanelA11y({
+    active: open && !isMobile,
+    onClose,
+  });
 
   if (isMobile) {
     return (
@@ -66,10 +75,13 @@ export function ResearchChatDrawer({
 
   return (
     <aside
+      ref={bindPanel}
+      tabIndex={-1}
+      aria-label={t(($) => $.panel.chat)}
       data-testid="research-chat-drawer"
       data-placement="float"
       className={cn(
-        "pointer-events-auto absolute inset-y-3 right-3 z-40 flex w-[min(100%,380px)] flex-col overflow-hidden rounded-xl border border-border/60 bg-card/95 shadow-xl backdrop-blur-md",
+        "pointer-events-auto absolute inset-y-3 right-3 z-40 flex w-[min(100%,380px)] flex-col overflow-hidden rounded-xl border border-border/60 bg-card/95 shadow-xl backdrop-blur-md outline-none",
         className,
       )}
     >

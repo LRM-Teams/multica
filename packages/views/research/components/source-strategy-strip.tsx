@@ -101,7 +101,8 @@ export function SourceStrategyStrip({
             <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />
             <span>{t(($) => $.m2.strategy_loading)}</span>
           </div>
-          <div className="grid gap-2 sm:grid-cols-3">
+          {/* LRM-1109: md (768) matches useIsMobile — avoid 3-col beside logic-strip. */}
+          <div className="grid gap-2 md:grid-cols-3">
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
@@ -152,7 +153,7 @@ export function SourceStrategyStrip({
       ) : null}
       <div
         data-testid="source-strategy-cards"
-        className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3"
+        className="grid gap-2 md:grid-cols-2 lg:grid-cols-3"
       >
         {model.chips.map((chip) => (
           <article

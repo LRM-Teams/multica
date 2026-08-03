@@ -65,7 +65,9 @@ export function ResearchAuxDrawer({
           showCloseButton={false}
           data-testid="research-aux-drawer"
           data-panel={panel ?? undefined}
-          className="flex w-full max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-md"
+          // LRM-1109 / LRM-1118 SoT: beat Sheet's `sm:max-w-sm` with !max-w-none —
+          // no `sm:*` inside the isMobile branch (forbids 640–767 layout flip).
+          className="flex w-full !max-w-none flex-col gap-0 overflow-hidden p-0"
         >
           <SheetHeader className="sr-only">
             <SheetTitle>{title}</SheetTitle>

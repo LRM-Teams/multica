@@ -41,7 +41,8 @@ export function VisibilityTabs({
   return (
     <div
       data-testid="visibility-tabs"
-      className={cn("flex flex-col border-b bg-background sm:hidden", className)}
+      // LRM-1109: hide only at md+ so 640–767 still shows tabs with logic-strip.
+      className={cn("flex flex-col border-b bg-background md:hidden", className)}
     >
       <div className="flex border-b">
         {(

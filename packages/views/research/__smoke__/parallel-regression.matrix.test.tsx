@@ -701,19 +701,31 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
   );
 
   // LRM-1091 planar keyboard wiring shipped — hard gate now.
+  // LRM-1105 slice3: key literals live in canvas-keyboard-nav; canvas only wires resolveCanvasKeyEvent.
   it(
     `${SMOKE_ISSUES.canvasPlanar}: canvas wires planar keyboard map (topo ↑↓, branch ←→, Enter/Esc, Shift+F10)`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
+      const navSrc = readResearchSource("lib/canvas-keyboard-nav.ts");
+      expect(
+        canvasSrc.includes("resolveCanvasKeyEvent"),
+        failHint(
+          SMOKE_ISSUES.canvasPlanar,
+          "research-canvas.tsx missing resolveCanvasKeyEvent wiring",
+        ),
+      ).toBe(true);
       for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "Escape"]) {
         expect(
-          canvasSrc.includes(key),
-          failHint(SMOKE_ISSUES.canvasPlanar, `research-canvas.tsx missing ${key}`),
+          navSrc.includes(key),
+          failHint(SMOKE_ISSUES.canvasPlanar, `canvas-keyboard-nav.ts missing ${key}`),
         ).toBe(true);
       }
       expect(
-        /Shift\+F10|shiftKey.*F10|F10/.test(canvasSrc),
-        failHint(SMOKE_ISSUES.canvasPlanar, "research-canvas.tsx missing Shift+F10 context menu"),
+        /Shift\+F10|shiftKey.*F10|F10/.test(navSrc),
+        failHint(
+          SMOKE_ISSUES.canvasPlanar,
+          "canvas-keyboard-nav.ts missing Shift+F10 context menu",
+        ),
       ).toBe(true);
       expect(
         canvasSrc.includes("topology") || canvasSrc.includes("branch"),

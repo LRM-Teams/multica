@@ -232,7 +232,7 @@ export interface AgentTaskFeedItem {
   agent_id: string;
   issue_id: string;
   // The linked issue's "PREFIX-N" identifier and title, resolved server-side.
-  // Absent for tasks with no linked issue (chat/autopilot-spawned). The title
+  // Absent for tasks with no linked issue (chat/schedule-spawned). The title
   // is the primary "what did this agent do" description in the timeline row.
   issue_identifier?: string;
   issue_title?: string;
@@ -311,7 +311,7 @@ export interface AgentTask {
   agent_id: string;
   runtime_id: string;
   // Empty string ("") when the task has no linked issue — either chat- or
-  // autopilot-spawned. Check chat_session_id / autopilot_run_id to tell
+  // schedule-spawned. Check chat_session_id / autopilot_run_id to tell
   // which source produced it.
   issue_id: string;
   // `waiting_local_directory` is the daemon-emitted hold state for the
@@ -345,7 +345,7 @@ export interface AgentTask {
   created_at: string;
   /** Non-empty when the task was spawned from a chat session. */
   chat_session_id?: string;
-  /** Non-empty when the task was spawned by an autopilot run. */
+  /** Non-empty when the task was spawned by a legacy autopilot run (read-only). */
   autopilot_run_id?: string;
   /** Set when this task was created as an auto-retry of a parent task. */
   parent_task_id?: string;
@@ -356,9 +356,9 @@ export interface AgentTask {
   /**
    * Canonical short description of what triggered this task — snapshot
    * taken at creation time. For comment-triggered tasks it's the
-   * comment text (truncated to ~200 chars); for autopilot it's the
-   * autopilot title; NULL for direct assignments and chat tasks.
-   * Persists even if the source comment / autopilot is later edited
+   * comment text (truncated to ~200 chars); for legacy schedule runs it's the
+   * schedule title; NULL for direct assignments and chat tasks.
+   * Persists even if the source comment / schedule is later edited
    * or deleted.
    */
   trigger_summary?: string;

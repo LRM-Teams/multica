@@ -45,7 +45,7 @@ CI やヘッドレス環境では、ブラウザフローをスキップでき�
 ## イシューとプロジェクト
 
 <Callout type="info">
-`list` 系のコマンド（`multica issue list`、`autopilot list`、`project list` など）は、デフォルトで短く**そのままコピー＆ペーストできる** ID を出力します。イシューは `MUL-123` のようなイシューキー、それ以外のリソースは短い UUID プレフィックスです。以下の後続コマンドの `<id>` 引数は短い ID と完全な UUID のどちらも受け取るため、一般的な流れは `multica issue list` → キーをコピー → `multica issue get MUL-123` となります。正式な UUID が必要なときは `list` コマンドに `--full-id` を渡してください。
+`list` 系のコマンド（`multica issue list`、`project list` など）は、デフォルトで短く**そのままコピー＆ペーストできる** ID を出力します。イシューは `MUL-123` のようなイシューキー、それ以外のリソースは短い UUID プレフィックスです。以下の後続コマンドの `<id>` 引数は短い ID と完全な UUID のどちらも受け取るため、一般的な流れは `multica issue list` → キーをコピー → `multica issue get MUL-123` となります。正式な UUID が必要なときは `list` コマンドに `--full-id` を渡してください。
 </Callout>
 
 | コマンド | 用途 |
@@ -93,17 +93,8 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 ```
 
 
-## オートパイロット
-
 | コマンド | 用途 |
 |---|---|
-| `multica autopilot list` | ワークスペースのすべてのオートパイロットを一覧 |
-| `multica autopilot get <id>` | 単一のオートパイロットを表示 |
-| `multica autopilot create ...` | オートパイロットを作成 |
-| `multica autopilot update <id> ...` | 更新 |
-| `multica autopilot delete <id>` | 削除 |
-| `multica autopilot runs <id>` | 実行履歴を表示 |
-| `multica autopilot trigger <id>` | 手動で実行をトリガー |
 
 ## デーモンとランタイム
 

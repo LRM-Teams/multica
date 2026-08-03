@@ -114,12 +114,11 @@ Chinese term reference:
 
 > **2026-07-17 decision (Frank) — the `issue` entity stays `Issue` in every locale.** A brief attempt to rename the user-facing `issue` entity (工单, keys like `LRM-137`) to `任务`/Task on a few surfaces (the channel board tab, activity/system-event rows) was **reversed**. Final ruling: the **issue entity = `Issue` everywhere** — keep the English word in all locales (en/zh `Issue`, ja `イシュー`, ko `이슈`), never `任务`. The word `任务` is reserved for the **agent-run / chat-task (`task #N`)** concept — two concepts, two words. Workflow **status names stay localized** (待办 / 处理中 / 审核中 / 已完成 …), since they hide the internal enum and are unrelated to entity naming. Internal code / API / DB `issue` is unchanged.
 
-**Why `issue` / `skill` / `task` aren't forced into Chinese the way `project` / `autopilot` are**:
+**Why `issue` / `skill` / `task` aren't forced into Chinese the way `project` is**:
 
 - **`issue` / `task`**: dev teams talk in English. The Chinese candidates ("任务" — too vague, almost synonymous with "工作"; "工单" — IT ticket connotation; "议题" — GitHub-style but doesn't match the product feel) all read worse than `issue`. **But** in long-form doc prose, repeating lowercase `task` 50× breaks the rhythm — so prose is allowed to use `执行任务`, while UI strings and state names stay lowercase English.
 - **`skill`**: Multica-specific concept with no established Chinese term.
 - **`project` → "项目"**: settled mainstream Chinese word. Feishu / Tower / Teambition / PingCode / GitHub Projects — every Chinese product translates it. No product keeps `project` in Chinese context.
-- **`autopilot` → "自动化"**: in Chinese, "autopilot" associates with Tesla's "自动驾驶" and doesn't match what the feature does (run tasks on a schedule). Notion and Feishu both use "自动化"; that's the industry consensus.
 
 ### Don't translate — brands and acronyms
 
@@ -135,7 +134,6 @@ Chinese term reference:
 | Workspace | **工作区** |
 | Agent | **智能体** |
 | Project | **项目** |
-| Autopilot | **自动化** |
 | Daemon | **守护进程** |
 | Runtime | **运行时** |
 | Inbox | **收件箱** |

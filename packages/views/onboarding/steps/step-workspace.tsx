@@ -13,7 +13,6 @@ import {
   MoreHorizontal,
   Monitor,
   Plus,
-  Zap,
 } from "lucide-react";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { Button } from "@multica/ui/components/ui/button";
@@ -608,11 +607,6 @@ function WorkspacePreviewCard({
           icon={<FolderKanban className="h-4 w-4" />}
           label={t(($) => $.step_workspace.preview.projects_label)}
           meta={t(($) => $.step_workspace.preview.projects_meta)}
-        />
-        <EntityRow
-          icon={<Zap className="h-4 w-4" />}
-          label={t(($) => $.step_workspace.preview.autopilot_label)}
-          meta={t(($) => $.step_workspace.preview.autopilot_meta)}
         />
         <EntityRow
           icon={<Monitor className="h-4 w-4" />}

@@ -167,7 +167,7 @@ S3 の前段に CloudFront を置く場合、3 つの変数が適用されます
 **リバースプロキシの背後では `RATE_LIMIT_TRUSTED_PROXIES` を必ず設定する必要があります。** そうしないと、バックエンドの観点ではすべての実際のユーザーがプロキシの IP を共有することになり、デプロイ全体が 1 つのバケットに入り、`/auth/send-code` がサイト全体で毎分 5 リクエストになってしまいます。一般的な値: 同一ホストの Caddy / Nginx には `127.0.0.1/32,::1/128`、Cloudflare / ALB / CloudFront には該当 CDN が公開している IP 範囲。`RemoteAddr` がこれらの CIDR のいずれかに含まれる IP のみが、`X-Forwarded-For` を使ってクライアントを識別できます。
 </Callout>
 
-この独立した `RATE_LIMIT_TRUSTED_PROXIES` は、オートパイロット webhook リミッター（`/api/webhooks/autopilots/{token}`）を制御する `MULTICA_TRUSTED_PROXIES` とは**異なります**。各リミッターは自身のリストをパースするため、プロキシの背後にあるデプロイは両方を設定すべきです。
+この独立した `RATE_LIMIT_TRUSTED_PROXIES` は、レガシー webhook 入站のリミッターを制御する `MULTICA_TRUSTED_PROXIES` とは**異なります**。各リミッターは自身のリストをパースするため、プロキシの背後にあるデプロイは両方を設定すべきです。
 
 ## デーモンのチューニングパラメータ
 

@@ -108,7 +108,6 @@ vi.mock("@multica/core/paths", () => ({
     projects: () => "/acme/projects",
     research: () => "/acme/research",
     channels: () => "/acme/channels",
-    autopilots: () => "/acme/autopilots",
     agents: () => "/acme/agents",
     usage: () => "/acme/usage",
     evolution: () => "/acme/evolution",
@@ -218,6 +217,12 @@ describe("AppSidebar navigation", () => {
   it("does not render the New Issue row (removed from the sidebar)", () => {
     renderSidebar();
     expect(screen.queryByText("New Issue")).toBeNull();
+  });
+
+  it("does not render Autopilot nav (LRM-1050 hard-cut)", () => {
+    renderSidebar();
+    expect(screen.queryByText("Autopilot")).toBeNull();
+    expect(screen.queryByText("Autopilots")).toBeNull();
   });
 
   it("does not render the My Issues shortcut row (removed; app leads with Messages)", () => {

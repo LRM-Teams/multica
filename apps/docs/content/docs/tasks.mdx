@@ -6,7 +6,7 @@ description: The unit of work for every agent run, with a clear state machine, t
 import { Callout } from "fumadocs-ui/components/callout";
 import { Mermaid } from "@/components/mermaid";
 
-A **task** is the unit of every [agent](/agents) run — [assigning an issue to an agent](/assigning-issues), [@-mentioning an agent in a comment](/mentioning-agents), sending a message in [chat](/chat), or an [Autopilot](/autopilots) firing on schedule all produce a task. Multica puts it in a queue; a [daemon](/daemon-runtimes) picks it up and hands it off to the corresponding [AI coding tool](/providers), then writes the result back to the server when it finishes.
+A **task** is the unit of every [agent](/agents) run — [assigning an issue to an agent](/assigning-issues), [@-mentioning an agent in a comment](/mentioning-agents), sending a message in [chat](/chat) all produce a task. Multica puts it in a queue; a [daemon](/daemon-runtimes) picks it up and hands it off to the corresponding [AI coding tool](/providers), then writes the result back to the server when it finishes.
 
 Tasks and [issues](/issues) are two different objects. A single issue can be assigned, @-mentioned, and manually rerun many times — each produces a **new** task.
 
@@ -59,12 +59,10 @@ Failures fall into two categories: **retryable** and **non-retryable**.
 Automatic retry also has two extra conditions:
 
 1. **At most 2 attempts** — 1 original + 1 retry. If the retry also fails, no further retries, even if the reason is retryable.
-2. **Only for issue- and chat-triggered tasks** — Autopilot-triggered tasks do **not** retry automatically.
+2. **Only for issue- and chat-triggered tasks** — other sources do **not** retry automatically.
 
-<Callout type="warning">
-**Autopilot tasks don't retry automatically** by design. An Autopilot has its own firing cadence (e.g. daily); automatic retries on failure would overlap with the next scheduled run. If you need an immediate re-run after failure, use a manual rerun (next section).
-
-**How you'll know an Autopilot task failed**: a notification lands in your [Inbox](/inbox), and the associated issue's status reverts from `in_progress` back to `todo`. The [Autopilots](/autopilots) page also shows the latest run result per autopilot.
+<Callout type="info">
+**How you'll know a task failed**: a notification lands in your [Inbox](/inbox), and the associated issue's status reverts from `in_progress` back to `todo`.
 </Callout>
 
 ## Manual rerun vs. automatic retry
@@ -114,4 +112,4 @@ See [Providers Matrix → Session resumption](/providers#session-resumption-who-
 ## Next
 
 - [Providers Matrix](/providers) — capability differences across the 12 AI coding tools (including the exact session-resumption status)
-- [Assigning issues to agents](/assigning-issues) / [@-mentioning agents in comments](/mentioning-agents) / [Chat](/chat) / [Autopilots](/autopilots) — the four ways to trigger a task
+- [Assigning issues to agents](/assigning-issues) / [@-mentioning agents in comments](/mentioning-agents) / [Chat](/chat) — the three ways to trigger a task

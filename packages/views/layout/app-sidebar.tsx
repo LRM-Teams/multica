@@ -38,7 +38,6 @@ import {
   Sparkles,
   CreditCard,
   X,
-  Zap,
   MessageCircle,
   SearchIcon,
   Telescope,
@@ -119,7 +118,6 @@ type NavKey =
   | "projects"
   | "research"
   | "channels"
-  | "autopilots"
   | "agents"
   | "usage"
   | "evolution"
@@ -138,7 +136,6 @@ type NavLabelKey =
   | "projects"
   | "research"
   | "channels"
-  | "autopilots"
   | "agents"
   | "usage"
   | "evolution"
@@ -161,7 +158,6 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity 
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "projects", labelKey: "projects", icon: FolderKanban },
   { key: "research", labelKey: "research", icon: Telescope },
-  { key: "autopilots", labelKey: "autopilots", icon: Zap },
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "usage", labelKey: "usage", icon: BarChart3 },
   { key: "evolution", labelKey: "evolution", icon: Sparkles },

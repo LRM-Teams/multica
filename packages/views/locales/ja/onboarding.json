@@ -198,8 +198,6 @@
     "way_mention_body": "会話に呼んで、すばやく意見をもらえます。",
     "way_chat_title": "1 対 1 でチャット",
     "way_chat_body": "イシューを作らずに、すばやく質問できます。",
-    "way_autopilot_title": "オートパイロットに設定",
-    "way_autopilot_body": "毎日のトリアージ、週次ダイジェスト、月次監査などをスケジュールに沿って実行します。",
     "add_more_hint": "エージェントはいつでも追加できます。1 人の万能型より、専門エージェントの小さなチームのほうが優れています。",
     "docs_link": "最初のエージェントを作成する →"
   },
@@ -226,7 +224,7 @@
           "subtitle": "Multica とは何か、何ができるのかを 1〜2 段落で説明します。"
         },
         "tour": {
-          "subtitle": "イシュー、エージェント、オートパイロットがどう連携するかをご案内します。"
+          "subtitle": "issue と agent がどう連携するかをご案内します。"
         },
         "welcome_page": {
           "subtitle": "あなたの役割に合わせた単一ファイルの HTML スライドデックを作成します。コピーしてブラウザで開けます。"
@@ -312,8 +310,6 @@
       "agents_meta": "あなたの AI チームメイト",
       "projects_label": "プロジェクト",
       "projects_meta": "関連するイシューをまとめる",
-      "autopilot_label": "オートパイロット",
-      "autopilot_meta": "スケジュールされた自動化",
       "computers_label": "コンピュータ",
       "computers_meta": "エージェントが動く場所",
       "skills_label": "スキル",

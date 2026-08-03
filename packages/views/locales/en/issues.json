@@ -373,7 +373,7 @@
     "trigger_retry_attempt": "Retry #{{attempt}}",
     "trigger_retry_attempt_prefix": "Retry #{{attempt}} · ",
     "trigger_retry_prefix": "Retry · ",
-    "trigger_autopilot": "Autopilot run",
+    "trigger_autopilot": "Scheduled run",
     "trigger_comment": "Comment trigger",
     "trigger_initial": "Initial run",
     "status_queued": "Queued",

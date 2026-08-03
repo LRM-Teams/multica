@@ -28,7 +28,7 @@ interface TranscriptButtonProps {
   title?: string;
   /**
    * Optional content rendered above the transcript event list. Used to
-   * surface autopilot webhook payloads inline with the run history.
+   * surface webhook payloads inline with the run history.
    */
   headerSlot?: React.ReactNode;
 }

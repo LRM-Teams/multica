@@ -223,3 +223,80 @@ func TestSystemGeneralHandlersReturnStableProtectedConflict(t *testing.T) {
 		t.Fatalf("protected operations changed channel/roster/messages = %d/%d/%d", channelCount, memberCount, messageCount)
 	}
 }
+
+// TestListChannelMembersHealsLegacyAgentIntoGeneral covers LRM-915: agents
+// left out of #general by migration 251's deliberate no-backfill (no UPDATE
+// ever re-fired the sync trigger) must appear after ListChannelMembers, which
+// lazily re-runs ensure_system_general_channel.
+func TestListChannelMembersHealsLegacyAgentIntoGeneral(t *testing.T) {
+	fixture := newSystemGeneralHandlerFixture(t)
+	ctx := context.Background()
+
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, visibility, last_seen_at
+		) VALUES ($1, NULL, $2, 'cloud', $3, 'online', '', '{}'::jsonb, 'public', now())
+		RETURNING id
+	`, fixture.workspaceID, "heal-general-rt-"+uuid.NewString()[:8], "heal_general_"+uuid.NewString()).Scan(&runtimeID); err != nil {
+		t.Fatalf("seed runtime: %v", err)
+	}
+
+	// Simulate a pre-251 leftover: insert the agent without firing
+	// trg_sync_system_general_agent so it never joins #general.
+	if _, err := testPool.Exec(ctx, `ALTER TABLE agent DISABLE TRIGGER trg_sync_system_general_agent`); err != nil {
+		t.Fatalf("disable sync trigger: %v", err)
+	}
+	var agentID string
+	err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, display_name, description, runtime_mode, runtime_config,
+			runtime_id, max_concurrent_tasks, owner_id, instructions, custom_env, custom_args, model
+		) VALUES ($1, $2, 'Wendy', '', 'cloud', '{}'::jsonb, $3, 1, $4, '', '{}'::jsonb, '[]'::jsonb, 'composer-1.5')
+		RETURNING id
+	`, fixture.workspaceID, "wendy-heal-"+uuid.NewString()[:8], runtimeID, testUserID).Scan(&agentID)
+	_, enableErr := testPool.Exec(ctx, `ALTER TABLE agent ENABLE TRIGGER trg_sync_system_general_agent`)
+	if enableErr != nil {
+		t.Fatalf("re-enable sync trigger: %v", enableErr)
+	}
+	if err != nil {
+		t.Fatalf("seed legacy Wendy without general membership: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+
+	var before int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_member
+		WHERE channel_id = $1 AND member_type = 'agent' AND member_id = $2
+	`, fixture.channelID, agentID).Scan(&before); err != nil {
+		t.Fatalf("count pre-heal roster: %v", err)
+	}
+	if before != 0 {
+		t.Fatalf("legacy Wendy already in general before heal (count=%d)", before)
+	}
+
+	req := fixture.request(http.MethodGet, "/api/channels/"+fixture.channelID+"/members", nil, "channelId", fixture.channelID)
+	rec := httptest.NewRecorder()
+	testHandler.ListChannelMembers(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ListChannelMembers: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var members []ChannelMemberResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &members); err != nil {
+		t.Fatalf("decode members: %v", err)
+	}
+	found := false
+	for _, m := range members {
+		if m.MemberType == "agent" && m.MemberID == agentID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("ListChannelMembers did not heal legacy Wendy %s into #general: %+v", agentID, members)
+	}
+}

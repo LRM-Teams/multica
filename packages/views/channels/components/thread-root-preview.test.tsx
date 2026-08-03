@@ -72,6 +72,7 @@ vi.mock("@multica/core/workspace/hooks", () => ({
       id === "user-owner" || id === "user-1" ? ("owner" as const) : null,
     getMemberHonor: () => undefined,
     getAgentFleetRank: () => undefined,
+    getAgentHonorLevel: () => 8,
   }),
 }));
 
@@ -152,6 +153,14 @@ function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
 }
 
 describe("ThreadRootPreview", () => {
+  it("uses the permanent honor-level crest for an agent root author", () => {
+    const { container } = render(
+      <ThreadRootPreview message={makeMessage()} currentUserId="user-1" />,
+    );
+
+    expect(container.querySelector('[data-agent-honor-level="8"]')).toBeInTheDocument();
+  });
+
   it("keeps parent preview lightweight without duplicate navigation actions", () => {
     render(
       <ThreadRootPreview

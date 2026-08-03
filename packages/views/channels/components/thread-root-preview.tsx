@@ -47,7 +47,12 @@ export function ThreadRootPreview({
 }) {
   const { t } = useT("channels");
   const messageTime = useMessageTime();
-  const { getActorName, getMemberHonor, getAgentFleetRank } = useActorName();
+  const {
+    getActorName,
+    getMemberHonor,
+    getAgentFleetRank,
+    getAgentHonorLevel,
+  } = useActorName();
   const isAgent = message.type === "agent";
   const voicePresentation = resolveVoiceMessagePresentation(message);
   const hidesVoiceTranscript =
@@ -87,6 +92,8 @@ export function ThreadRootPreview({
     message.type === "user" && profileActorId ? getMemberHonor(profileActorId) : undefined;
   const authorFleet =
     isAgent && profileActorId ? getAgentFleetRank(profileActorId) : undefined;
+  const authorHonorLevel =
+    isAgent && profileActorId ? getAgentHonorLevel(profileActorId) : undefined;
   const avatar = profileActorId ? (
     <ActorAvatar
       actorType={avatarActorType}
@@ -124,6 +131,7 @@ export function ThreadRootPreview({
       displayName={displayName}
       honor={authorHonor}
       fleet={authorFleet}
+      agentHonorLevel={authorHonorLevel}
       className="text-sm font-medium text-foreground"
     />
   );

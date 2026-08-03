@@ -47,20 +47,31 @@ export function useActorName() {
     return m;
   }, [fleetRankings]);
 
+  const agentById = useMemo(() => {
+    const m = new Map<string, (typeof agents)[number]>();
+    for (const agent of agents) m.set(agent.id, agent);
+    return m;
+  }, [agents]);
+
   const getAgentFleetRank = useCallback(
     (agentId: string): AgentFleetRank | undefined => fleetByAgentId.get(agentId),
     [fleetByAgentId],
   );
 
+  const getAgentHonorLevel = useCallback(
+    (agentId: string): number | undefined => agentById.get(agentId)?.honor_level,
+    [agentById],
+  );
+
   const getAgentName = useCallback((agentId: string, fallback?: string) => {
-    const a = agents.find((a) => a.id === agentId);
+    const a = agentById.get(agentId);
     return resolveActorDisplayName(a, fallback ?? "Unknown Agent");
-  }, [agents]);
+  }, [agentById]);
 
   const getAgentHandle = useCallback((agentId: string, fallback?: string) => {
-    const a = agents.find((a) => a.id === agentId);
+    const a = agentById.get(agentId);
     return resolveActorHandle(a, fallback);
-  }, [agents]);
+  }, [agentById]);
 
   const getActorName = useCallback((type: string, id: string, fallback?: string) => {
     if (type === "member") return getMemberName(id, fallback);
@@ -93,9 +104,9 @@ export function useActorName() {
     if (type === "member") return resolvePublicFileUrl(members.find((m) => m.user_id === id)?.avatar_url);
     // Missing values fall back to the actor's initials in the avatar
     // component; never derive a second display truth from the mutable pool.
-    if (type === "agent") return resolvePublicFileUrl(agents.find((a) => a.id === id)?.avatar_url);
+    if (type === "agent") return resolvePublicFileUrl(agentById.get(id)?.avatar_url);
     return null;
-  }, [agents, members]);
+  }, [agentById, members]);
 
   return useMemo(
     () => ({
@@ -104,6 +115,7 @@ export function useActorName() {
       getMemberRole,
       getMemberHonor,
       getAgentFleetRank,
+      getAgentHonorLevel,
       getAgentName,
       getAgentHandle,
       getActorName,
@@ -123,6 +135,7 @@ export function useActorName() {
       getMemberRole,
       getMemberHonor,
       getAgentFleetRank,
+      getAgentHonorLevel,
     ],
   );
 }

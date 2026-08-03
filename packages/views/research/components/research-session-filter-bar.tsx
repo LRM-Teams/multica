@@ -183,7 +183,7 @@ export function ResearchSessionFilterBar({
             >
               <span aria-hidden>
                 {opt.label}
-                <span className="ml-1 tabular-nums text-[10px] opacity-80">
+                <span className="ml-1 tabular-nums text-xs opacity-80">
                   {opt.count}
                 </span>
               </span>

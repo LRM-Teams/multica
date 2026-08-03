@@ -10,8 +10,8 @@ verification results.
   `s1_plan` while generating repeated failed attempts.
 - Prevent a non-retryable dispatch defect from consuming the Research Run task
   budget through repeated replan tasks.
-- Remove duplicated built-in research-template instructions that are sent on a
-  normal user-created session.
+- Record the duplicated built-in template instructions as required frontend
+  follow-up without changing the frontend package in this backend repair.
 - Preserve the canonical Research Run / Agent inbox architecture and existing
   APIs.
 
@@ -213,6 +213,17 @@ verification results.
 - The complete Views suite passes: 402 test files, 3,569 passing tests, seven
   documented expected failures, and five skipped tests.
 - Monorepo TypeScript typecheck passes on the merged `dev` baseline.
+
+### 16. Enforced the backend-only change boundary before publication
+
+- The template prompt duplication is real and appeared verbatim in the
+  production session goal, but its source and tests live in `packages/views`.
+- Reverted the prompt rewrite and uniqueness test to the exact current `dev`
+  versions before publishing. They did not cause SQLSTATE `42P18`, the 74
+  dispatch failures, or the repeated failure nodes.
+- Frontend follow-up: replace repeated Chinese template padding with distinct
+  instructions and add the sentence-uniqueness regression that was validated
+  during diagnosis. The backend PR contains no `packages/views` delta.
 
 ## Pending steps
 

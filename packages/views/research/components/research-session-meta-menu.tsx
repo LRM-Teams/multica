@@ -111,11 +111,14 @@ export function ResearchSessionMetaMenu({
           side={isMobile ? "bottom" : "right"}
           className={cn(
             "gap-0 overflow-y-auto p-0",
+            // LRM-1109: override Sheet's `sm:max-w-sm` for the whole mobile
+            // range (<768); desktop branch is only mounted at ≥768 so plain
+            // max-w-md is enough (no sm: that would fight the dead zone).
             isMobile && panel === "params"
-              ? "inset-0 h-dvh max-h-dvh w-full border-0 sm:max-w-none"
+              ? "inset-0 h-dvh max-h-dvh w-full max-w-none border-0 sm:max-w-none"
               : isMobile
-                ? "max-h-[85vh]"
-                : "w-full sm:max-w-md",
+                ? "max-h-[85vh] max-w-none sm:max-w-none"
+                : "w-full max-w-md",
           )}
         >
           <SheetHeader className="border-b">

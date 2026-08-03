@@ -60,9 +60,9 @@ export function ResearchStageTimeline({
     >
       <ol
         className={cn(
-          // Narrow: horizontal scroll strip; sm+: full-width equal steps.
-          "flex gap-0 overflow-x-auto px-3 py-2 sm:overflow-visible sm:px-4",
-          "snap-x snap-mandatory sm:snap-none",
+          // Narrow: horizontal scroll strip; md+ (768 = useIsMobile): full-width equal steps.
+          "flex gap-0 overflow-x-auto px-3 py-2 md:overflow-visible md:px-4",
+          "snap-x snap-mandatory md:snap-none",
           "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         )}
       >
@@ -82,7 +82,7 @@ export function ResearchStageTimeline({
               key={stage}
               data-stage-state={state}
               className={cn(
-                "relative flex min-w-[6.5rem] flex-1 snap-start items-center sm:min-w-0",
+                "relative flex min-w-[6.5rem] flex-1 snap-start items-center md:min-w-0",
                 index < RESEARCH_STAGE_ORDER.length - 1 && "pr-2",
                 state === "upcoming" && "opacity-75",
               )}
@@ -91,7 +91,7 @@ export function ResearchStageTimeline({
                 <span
                   aria-hidden
                   className={cn(
-                    "pointer-events-none absolute top-[0.7rem] right-0 left-9 h-px sm:left-11",
+                    "pointer-events-none absolute top-[0.7rem] right-0 left-9 h-px md:left-11",
                     state === "done" ? "bg-success/50" : "bg-border/80",
                     state === "current" && "bg-gradient-to-r from-brand/50 to-border/80",
                   )}
@@ -125,7 +125,7 @@ export function ResearchStageTimeline({
                     {label}
                   </span>
                   {state === "current" ? (
-                    <span className="mt-0.5 hidden text-[10px] font-medium text-brand sm:block">
+                    <span className="mt-0.5 hidden text-[10px] font-medium text-brand md:block">
                       {t(($) => $.timeline.current)}
                     </span>
                   ) : null}

@@ -55,7 +55,8 @@ export function ResearchChatDrawer({
           data-testid="research-chat-drawer"
           data-placement="sheet"
           className={cn(
-            "flex !h-[100dvh] !max-h-[100dvh] min-h-[100dvh] w-full flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none",
+            // LRM-1109: beat any Sheet max-width for the full mobile range (<768).
+            "flex !h-[100dvh] !max-h-[100dvh] min-h-[100dvh] w-full max-w-none flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none",
             className,
           )}
         >

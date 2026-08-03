@@ -206,9 +206,11 @@ export function ResearchCreateParamsPanel({
         data-testid="research-create-params-panel"
         className={cn(
           "gap-0 overflow-hidden p-0",
+          // LRM-1109: keep Sheet `sm:max-w-sm` overridden through 640–767;
+          // desktop (≥768) uses plain max-w-md — no sm: paired with isMobile.
           isMobile
-            ? "inset-0 h-dvh max-h-dvh w-full border-0 sm:max-w-none"
-            : "w-full sm:max-w-md",
+            ? "inset-0 h-dvh max-h-dvh w-full max-w-none border-0 sm:max-w-none"
+            : "w-full max-w-md",
         )}
       >
         <SheetHeader className="shrink-0 border-b px-4 py-3 pr-12 text-left">

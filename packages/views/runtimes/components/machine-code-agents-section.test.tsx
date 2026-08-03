@@ -109,7 +109,7 @@ function renderSection(machine: RuntimeMachine) {
 }
 
 describe("MachineCodeAgentsSection", () => {
-  it("renders installed + supported-not-installed inventory with install guide", () => {
+  it("renders A2 status: green-dot version, no Installed/Supported copy (LRM-1108)", () => {
     renderSection(
       makeMachine([
         makeRuntime({
@@ -122,15 +122,15 @@ describe("MachineCodeAgentsSection", () => {
     expect(
       screen.getByRole("heading", { name: "Runtimes on this computer" }),
     ).toBeInTheDocument();
+    expect(screen.getByText(/^\d+ \/ \d+$/)).toBeInTheDocument();
+    expect(screen.getByText("v1.4.2")).toBeInTheDocument();
+    expect(screen.queryByText(/Installed ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Installed")).not.toBeInTheDocument();
     expect(
-      screen.getByText(/Installed 1 of \d+ supported runtimes/i),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Installed · v1\.4\.2/)).toBeInTheDocument();
+      screen.queryByText("Supported · not installed"),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("provider-logo-cursor")).toBeInTheDocument();
     expect(screen.getByText("Grok Build")).toBeInTheDocument();
-    expect(
-      screen.getAllByText("Supported · not installed").length,
-    ).toBeGreaterThan(0);
     expect(
       screen.getAllByText("View install guide").length,
     ).toBeGreaterThan(0);
@@ -149,6 +149,9 @@ describe("MachineCodeAgentsSection", () => {
     expect(screen.getByTestId("machine-sharing-toggle-rt-cursor")).toHaveTextContent(
       /Make public/i,
     );
+    // No inline Private/Public next to the version (A2).
+    const card = screen.getByTestId("machine-runtime-card-cursor");
+    expect(card.textContent).not.toMatch(/·\s*Private|·\s*Public/);
   });
 
   it("renders an off-catalog installed provider with its raw id as the label", () => {
@@ -163,20 +166,21 @@ describe("MachineCodeAgentsSection", () => {
 
     expect(screen.getByText("kimi")).toBeInTheDocument();
     expect(screen.getByTestId("provider-logo-kimi")).toBeInTheDocument();
-    expect(screen.getByText(/Installed · v9\.9\.9/)).toBeInTheDocument();
+    expect(screen.getByText("v9.9.9")).toBeInTheDocument();
   });
 
-  it("keeps the section mounted and shows the empty copy when nothing is installed", () => {
+  it("keeps the section mounted with compact count when nothing is installed", () => {
     renderSection(makeMachine([]));
 
     expect(
       screen.getByRole("heading", { name: "Runtimes on this computer" }),
     ).toBeInTheDocument();
+    expect(screen.getByText(/^0 \/ \d+$/)).toBeInTheDocument();
     expect(
-      screen.getByText(/Installed 0 of \d+ supported runtimes/i),
-    ).toBeInTheDocument();
+      screen.queryByText("Supported · not installed"),
+    ).not.toBeInTheDocument();
     expect(
-      screen.getAllByText("Supported · not installed").length,
+      screen.getAllByText("View install guide").length,
     ).toBeGreaterThan(0);
   });
 });

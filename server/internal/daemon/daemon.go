@@ -2082,16 +2082,16 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		if d.abortStagedRestartIfCanceled(restartCtx, runtimeID, update.ID, false) {
 			return
 		}
-		if d.trySetClaimBarrier() {
-			if d.abortStagedRestartIfCanceled(restartCtx, runtimeID, update.ID, true) {
-				return
-			}
-			// #110: never restart without activating staged Active first.
-			restartTriggered = d.activateStagedAndRestart(restartCtx, runtimeID, update.ID, stagedOutput)
+		// #105 (Frank c): server/page InitiateUpdate (SupportsReadyToApply) force-applies
+		// immediately — no waitForSafeRestart idle window. Busy runtimes still activate
+		// + restart; setClaimBarrier blocks new claims while the process is going down.
+		// #110: never restart without activateStagedAndRestart (no bare triggerRestart).
+		d.setClaimBarrier()
+		if d.abortStagedRestartIfCanceled(restartCtx, runtimeID, update.ID, true) {
 			return
 		}
-		d.logger.Info("CLI update ready; waiting for an idle opportunity before the stop-claim deadline", "runtime_id", runtimeID, "update_id", update.ID)
-		restartTriggered = d.waitForSafeRestart(restartCtx, runtimeID, update.ID, stagedOutput)
+		d.logger.Info("CLI update ready; force activating staged release and restarting", "runtime_id", runtimeID, "update_id", update.ID, "active_tasks", d.activeTasks.Load(), "claims_in_flight", d.claimsInFlight)
+		restartTriggered = d.activateStagedAndRestart(restartCtx, runtimeID, update.ID, stagedOutput)
 		return
 	}
 
@@ -2132,9 +2132,10 @@ func (d *Daemon) runUpdate(targetVersion string) (string, error) {
 
 // activateStagedAndRestart is the sole post-stage restart entry for handleUpdate.
 // It CAS-activates the staged release, sets d.restartBinary, then triggerRestart.
-// Both the immediate-idle path and waitForSafeRestart must call this — never
-// triggerRestart alone after a staged update (#110). Returns true if restart
-// was scheduled; false if activation failed (path A abandon, no restart).
+// SupportsReadyToApply (#105 force-apply) and the legacy idle-only server path
+// must both call this — never triggerRestart alone after a staged update (#110).
+// Returns true if restart was scheduled; false if activation failed (path A
+// abandon, no restart).
 func (d *Daemon) activateStagedAndRestart(ctx context.Context, runtimeID, updateID, output string) bool {
 	// Thin activate: CAS staged tag to Active, then re-exec staged path.
 	// Full candidate health/register is a follow-up; path A already safe.

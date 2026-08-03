@@ -940,7 +940,9 @@ func TestHandleUpdateOldServerBusyDoesNotClaimRestartPending(t *testing.T) {
 	assertUpdateObservation(t, observation, "waiting", "update_succeeded")
 }
 
-func TestHandleUpdateReportsReadyToApplyWhenBusyAndServerSupportsIt(t *testing.T) {
+func TestHandleUpdateForceActivatesWhenBusyAndServerSupportsReadyToApply(t *testing.T) {
+	// #105: page/server InitiateUpdate must force activate+restart even when busy.
+	// Prior behavior waited via waitForSafeRestart (restartCalls=0 while busy).
 	withFastUpdateReportBackoffs(t)
 
 	var reports []map[string]any
@@ -955,17 +957,12 @@ func TestHandleUpdateReportsReadyToApplyWhenBusyAndServerSupportsIt(t *testing.T
 	}))
 	t.Cleanup(srv.Close)
 
-	rootCtx, cancel := context.WithCancel(context.Background())
-	cancel()
 	var restartCalls atomic.Int32
+	var activateCalls atomic.Int32
 	observation := newTestUpdateObservationCoordinator(t, filepath.Join(t.TempDir(), "daemon-update-status.json"))
 	d := &Daemon{
-		cfg: Config{
-			PollInterval: time.Millisecond,
-		},
 		client:            NewClient(srv.URL),
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		rootCtx:           rootCtx,
 		updateObservation: observation,
 		runUpdateFn: func(string) (string, error) {
 			return "updated", nil
@@ -974,13 +971,16 @@ func TestHandleUpdateReportsReadyToApplyWhenBusyAndServerSupportsIt(t *testing.T
 			return "0.3.36", nil
 		},
 		activateStagedFn: func(context.Context, string, string) (string, error) {
-			return "", nil
+			activateCalls.Add(1)
+			return "/tmp/staged-force-busy", nil
 		},
 		cancelFunc: func() {
 			restartCalls.Add(1)
 		},
 	}
+	// Machine is busy (active task in flight).
 	d.activeTasks.Store(1)
+	d.claimsInFlight = 1
 
 	d.handleUpdate(context.Background(), "rt-1", &PendingUpdate{
 		ID:                   "upd-1",
@@ -988,8 +988,14 @@ func TestHandleUpdateReportsReadyToApplyWhenBusyAndServerSupportsIt(t *testing.T
 		SupportsReadyToApply: true,
 	})
 
-	if restartCalls.Load() != 0 {
-		t.Fatalf("restart calls = %d, want 0 while busy", restartCalls.Load())
+	if activateCalls.Load() != 1 {
+		t.Fatalf("activate calls while busy = %d, want 1 (force apply)", activateCalls.Load())
+	}
+	if restartCalls.Load() != 1 {
+		t.Fatalf("restart calls while busy = %d, want 1 (force apply)", restartCalls.Load())
+	}
+	if got := d.restartBinary; got != "/tmp/staged-force-busy" {
+		t.Fatalf("restartBinary = %q, want staged path", got)
 	}
 	if len(reports) != 2 {
 		t.Fatalf("reports = %d, want running + ready_to_apply: %#v", len(reports), reports)
@@ -1000,8 +1006,11 @@ func TestHandleUpdateReportsReadyToApplyWhenBusyAndServerSupportsIt(t *testing.T
 	if got := reports[1]["status"]; got != "ready_to_apply" {
 		t.Fatalf("second status = %v, want ready_to_apply", got)
 	}
-	assertUpdateObservation(t, observation, "waiting", "update_succeeded")
+	assertUpdateObservation(t, observation, "restart_pending", "update_succeeded")
+	// Barrier held through force restart (no release on success path).
+	waitForClaimBarrierState(t, d, true)
 }
+
 
 func TestWaitForSafeRestartAllowsClaimsBeforeDeadlineThenStopsAndDrains(t *testing.T) {
 	var restartCalls atomic.Int32

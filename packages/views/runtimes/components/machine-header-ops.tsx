@@ -10,14 +10,8 @@ import { useAuthStore } from "@multica/core/auth";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { api } from "@multica/core/api";
-import { Loader2, MoreHorizontal, RotateCcw } from "lucide-react";
+import { Loader2, RotateCcw } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@multica/ui/components/ui/dropdown-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,9 +30,10 @@ import {
 } from "./runtime-machines";
 
 /**
- * LRM-1071 / action-areas v5 — detail-header right slot (S1):
- * Restart outline (visible secondary) + ghost ⋯ for leftover overflow.
+ * LRM-1071 / LRM-1085 — detail-header right slot (S1):
+ * Restart outline only. Empty/disabled ⋯ removed (Frank: 点不了就删).
  * Upgrade lives on the Daemon Basics row; Delete lives in Danger Zone only.
+ * Blocked Restart reason stays on the Restart button `title`.
  */
 export function MachineHeaderOps({
   machine,
@@ -148,11 +143,6 @@ export function MachineHeaderOps({
 
   if (!machine.runtimes.length) return null;
 
-  // Overflow keeps a ghost ⋯ shell for visual parity with v5; Restart is the
-  // only page-level verb here, so the menu surfaces the blocked reason when
-  // Restart itself is disabled (desktop narrow affordance).
-  const showOverflowHint = !!restartBlockedReason;
-
   return (
     <div
       className="flex shrink-0 items-center gap-2"
@@ -179,53 +169,6 @@ export function MachineHeaderOps({
           {t(($) => $.machine.ops.restart)}
         </span>
       </Button>
-
-      {/* v5 keeps a ghost ⋯ slot; Delete moved to Danger Zone so the menu
-          only surfaces Restart's blocked reason when present. */}
-      {showOverflowHint ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="h-[30px] w-[30px]"
-                aria-label={t(($) => $.machine.ops.more_aria)}
-                data-testid="machine-actions-menu-trigger"
-              />
-            }
-          >
-            <MoreHorizontal className="h-4 w-4" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-[200px]">
-            <DropdownMenuItem disabled data-testid="machine-actions-restart">
-              <span className="min-w-0 flex-1">
-                {t(($) => $.machine.ops.restart_menu)}
-              </span>
-              <span
-                className="ml-3 shrink-0 text-[11px] text-muted-foreground"
-                data-testid="machine-ops-restart-reason"
-              >
-                {restartBlockedReason}
-              </span>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="h-[30px] w-[30px]"
-          aria-label={t(($) => $.machine.ops.more_aria)}
-          data-testid="machine-actions-menu-trigger"
-          disabled
-          title={t(($) => $.machine.ops.more_empty)}
-        >
-          <MoreHorizontal className="h-4 w-4" />
-        </Button>
-      )}
 
       <AlertDialog open={restartConfirmOpen} onOpenChange={setRestartConfirmOpen}>
         <AlertDialogContent>

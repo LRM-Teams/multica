@@ -3,7 +3,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ReactElement } from "react";
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { AgentRuntime } from "@multica/core/types";
@@ -118,20 +117,21 @@ function wrap(ui: ReactElement) {
   );
 }
 
-describe("MachineHeaderOps (LRM-1071 / v5)", () => {
+describe("MachineHeaderOps (LRM-1071 / LRM-1085)", () => {
   const now = Date.parse("2026-08-01T00:00:05Z");
 
-  it("shows Restart outline + ⋯; no Upgrade or Delete in header", () => {
+  it("shows Restart outline only; no dead ⋯ / Upgrade / Delete in header", () => {
     wrap(<MachineHeaderOps machine={makeMachine()} now={now} />);
     expect(screen.getByTestId("machine-header-ops")).toBeInTheDocument();
     expect(screen.getByTestId("machine-header-restart")).toBeInTheDocument();
-    expect(screen.getByTestId("machine-actions-menu-trigger")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("machine-actions-menu-trigger"),
+    ).not.toBeInTheDocument();
     expect(screen.queryByTestId("machine-header-upgrade")).not.toBeInTheDocument();
     expect(screen.queryByText("Actions")).not.toBeInTheDocument();
   });
 
-  it("surfaces desktop-managed Restart reason inside ⋯", async () => {
-    const user = userEvent.setup();
+  it("puts desktop-managed Restart reason on Restart title; still no ⋯", () => {
     wrap(
       <MachineHeaderOps
         machine={makeMachine({
@@ -140,15 +140,12 @@ describe("MachineHeaderOps (LRM-1071 / v5)", () => {
         now={now}
       />,
     );
-    await user.click(screen.getByTestId("machine-actions-menu-trigger"));
-    const reason = await screen.findByTestId("machine-ops-restart-reason");
-    expect(reason).toHaveTextContent(/Desktop managed/i);
-    const item = screen.getByTestId("machine-actions-restart");
+    const restart = screen.getByTestId("machine-header-restart");
+    expect(restart).toBeDisabled();
+    expect(restart).toHaveAttribute("title", expect.stringMatching(/Desktop managed/i));
     expect(
-      item.getAttribute("data-disabled") !== null ||
-        item.getAttribute("aria-disabled") === "true" ||
-        (item as HTMLButtonElement).disabled,
-    ).toBe(true);
+      screen.queryByTestId("machine-actions-menu-trigger"),
+    ).not.toBeInTheDocument();
   });
 });
 

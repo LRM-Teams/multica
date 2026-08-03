@@ -1802,27 +1802,6 @@ func sharedWorkdirAnchor(in EnvDispatchInput, r EnvRollout) string {
 // Order matters under ON DELETE RESTRICT: delete the project first (it
 // references env_id), then the env row, then its sandboxes. Every rollout
 // forks its own sandboxes, so this never touches a shared/source sandbox.
-// reclaimSharedRuntimes best-effort deletes the pre-created shared runtime R'
-// carried on sandbox refs after a shared-mode reset failure has rolled the
-// sandbox back (US3/T024, FR-007): without it the offline R' row lingers and
-// the in-sandbox daemon can still adopt it. Distinct runtimes are reclaimed
-// once. No-op for non-shared inputs: their pre-created runtimes follow the
-// pre-existing lifecycle (runtime GC backstop) — changing that is out of
-// scope for the shared_sandbox feature.
-func (s *EnvDispatchService) reclaimSharedRuntimes(ctx context.Context, in EnvDispatchInput, refs []SandboxInstanceRef) {
-	if !in.SharedSandbox {
-		return
-	}
-	seen := map[string]bool{}
-	for _, ref := range refs {
-		if ref.RuntimeID == "" || seen[ref.RuntimeID] {
-			continue
-		}
-		seen[ref.RuntimeID] = true
-		_ = s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, ref.RuntimeID)
-	}
-}
-
 func (s *EnvDispatchService) rollbackRollout(ctx context.Context, workspaceID string, r EnvRollout) {
 	if r.ChannelID != "" {
 		_ = s.deps.DeleteChannel(ctx, workspaceID, r.ChannelID)

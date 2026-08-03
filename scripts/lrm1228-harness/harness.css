@@ -1,0 +1,19 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "../../packages/ui/styles/tokens.css";
+@import "../../packages/ui/styles/base.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@source "../../packages/ui/**/*.{ts,tsx}";
+@source "../../packages/views/**/*.{ts,tsx}";
+/* The BEFORE class strings only exist in this harness (they were replaced in the
+   component), so Tailwind must scan the harness itself to emit them. */
+@source "./main.tsx";
+
+html,
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+}

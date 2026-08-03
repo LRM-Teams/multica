@@ -4332,6 +4332,28 @@ export class ApiClient {
     });
   }
 
+  async steerResearchRun(
+    id: string,
+    data: import("../types/research").SteerResearchRunRequest,
+  ): Promise<import("../types/research").ResearchRun> {
+    type SteerResponse = { run: import("../types/research").ResearchRun };
+    const { SteerResearchRunResponseSchema } = await import("../research/schemas");
+    const raw = await this.fetch(`/api/research/sessions/${id}/steer`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    const parsed = parseWithFallback<SteerResponse | null>(
+      raw,
+      SteerResearchRunResponseSchema,
+      null,
+      { endpoint: "POST /api/research/sessions/:id/steer" },
+    );
+    if (parsed === null) {
+      throw new Error("Invalid research steering response");
+    }
+    return parsed.run;
+  }
+
   async confirmResearchSession(id: string): Promise<import("../types/research").ResearchSession> {
     return this.fetch(`/api/research/sessions/${id}/confirm`, { method: "POST" });
   }

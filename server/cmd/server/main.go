@@ -438,6 +438,11 @@ func main() {
 	} else {
 		schedulerRegistered = true
 	}
+	if err := schedulerMgr.Register(scheduler.ResearchRunReconcileJob(h)); err != nil {
+		slog.Warn("scheduler: failed to register research run reconciliation job", "error", err)
+	} else {
+		schedulerRegistered = true
+	}
 	if schedulerRegistered {
 		go func() {
 			_ = schedulerMgr.Run(sweepCtx)

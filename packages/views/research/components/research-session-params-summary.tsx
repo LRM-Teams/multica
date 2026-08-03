@@ -1,6 +1,6 @@
 "use client";
 
-import type { ResearchSession } from "@multica/core/types";
+import type { ResearchRunContract, ResearchSession } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 import { resolveSessionCreateParams } from "../lib/research-create-params";
 
@@ -9,14 +9,17 @@ import { resolveSessionCreateParams } from "../lib/research-create-params";
  */
 export function ResearchSessionParamsSummary({
   session,
+  contract,
 }: {
   session: Pick<ResearchSession, "goal" | "depth_tier">;
+  contract?: Pick<ResearchRunContract, "language" | "source_policy"> | null;
 }) {
   const { t, i18n } = useT("research");
   const params = resolveSessionCreateParams({
     goal: session.goal,
     depth_tier: session.depth_tier,
     uiLanguage: i18n?.language,
+    contract,
   });
   const w = params.source_weights;
   const depthLabel =

@@ -271,6 +271,14 @@
 - 代理 URL 可能携带凭据：持久配置仍走原子 `0600` config；CLI show/set receipt 只能显示 presence，禁止回显原值。没有真实 caller 的“image pull”等能力不得虚报覆盖；新增 subprocess caller 只有继承 canonical daemon env 才自动纳入。
 - **物**：`applyProxyConfig` 的 env-over-config、大小写归一、NO_PROXY 去重+loopback 回归；`taskWakeupDialer` 必须使用 `http.ProxyFromEnvironment`。双向 mutation gate 固定为：配置 `HTTP_PROXY` 时 proxy decision 必须非空（删 Proxy hook 即红）；目标命中 `NO_PROXY` 时 decision 必须为空（强制走 proxy 即红）。
 
+### 4.16 调研进度只认服务端账本，Agent prose 不得推进状态 — `可执行`（① canonical ledger + ② strict envelope + ③单一调度器 + ⑤迁移/幂等回归；owner: @Codex ✅ 已签）
+- Research Run Module 拥有目标/计划版本、问题前沿、任务及尝试、来源快照、Observation、Claim/Evidence、Decision、事件序列和交付门槛。Agent 只实现有界 Research Task Interface；聊天、画布节点和旧版报告接口都是 projection 或兼容入口，不能成为 canonical progress。普通群聊仍按消息驱动，不能宣称具备 Research Run 的恢复、证据和交付语义。
+- 分派以 `(session, task, attempt)` 生成唯一 dispatch key；结果必须由对应 inbox task 的 task-scoped credential 提交 strict JSON envelope。重复的 request ID + 相同 payload 幂等回放；相同 ID + 不同 payload、错 Agent、错 inbox task、跨 workspace、未知字段、循环依赖、snapshot 中不存在的 quote 全部 fail closed。
+- 调度器只有一个 Store Interface：PostgreSQL lease 决定多副本单 owner，状态机决定并发、能力路由、超时、重试、stale result、replan 和恢复。Agent 不得用 `graph-append/source-upsert/report-patch/stage-eval/product-round judgment` 绕过它；initialized run 在 handler guard 直接 409。
+- 证据方向固定为 `Source Snapshot → Observation → Claim ↔ Evidence → Report Claim`。最终交付必须同时通过当前 goal/plan 版本、required question coverage、独立 verified source、claim support、矛盾 resolution、major claim inclusion、quality evaluation、citation audit 和连续低边际收益检查。预算耗尽必须写 Decision；只有其余 hard gate 均通过时才能交给用户确认，否则 run 明确失败并保留已有证据。
+- **物**：migration `273_research_run_backend`；`server/internal/researchrun`；`research_run_adapter.go` / `research_run_http.go` / `research_run_guard.go`；scheduler `research_run_reconcile`；CLI `multica research task-result`；builtin skill `multica-research-fleet`；前端 typed Run snapshot 和 steer API。
+- **已见红**：全新 PostgreSQL 逐迁移到 273 通过；273 down/up 直接回放通过；真实 Store 集成回归首次执行在 `run_stats` 参数推断处失败，显式 SQL casts 修复后锁住 initialize→attempt→result materialize→dependency activation→idempotent replay。后续回归覆盖证据去重计数、证据只读视图、依赖失败传播、重试退避、terminal projection recovery；strict envelope、exact quote、DAG cycle、capability routing 和 durable-only prompt 另有单测。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

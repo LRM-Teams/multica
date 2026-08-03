@@ -245,6 +245,17 @@ func (h *Handler) ProcessResearchNextSteps(ctx context.Context, sessionLimit int
 	processed := 0
 	now := time.Now().UTC()
 	for _, session := range sessions {
+		durableRun, ownershipErr := h.hasDurableResearchRun(ctx, session.WorkspaceID, session.ID)
+		if ownershipErr != nil {
+			slog.Warn("research nextstep: ownership inspection failed",
+				"session_id", uuidToString(session.ID),
+				"error", ownershipErr,
+			)
+			continue
+		}
+		if durableRun {
+			continue
+		}
 		n, err := h.processResearchSessionNextSteps(ctx, session, maxPer, now)
 		if err != nil {
 			slog.Warn("research nextstep: session tick failed",
@@ -458,7 +469,7 @@ func (h *Handler) maybeRecordResearchUnattendedMutation(
 		SessionID:   session.ID,
 		EventType:   "unattended_auto_step",
 		Detail: marshalJSONRaw(map[string]any{
-			"op":                   op,
+			"op":                    op,
 			"unattended_auto_steps": updated.UnattendedAutoSteps,
 		}),
 	})
@@ -555,7 +566,36 @@ func (h *Handler) ArchiveResearchSession(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "completed sessions cannot be archived; they already finished")
 		return
 	}
-	h.stopResearchSessionWakes(r.Context(), wsUUID, sessionID)
+	durableRun, ownershipErr := h.hasDurableResearchRun(r.Context(), wsUUID, sessionID)
+	if ownershipErr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to inspect research run ownership")
+		return
+	}
+	if durableRun {
+		if h.ResearchRun == nil {
+			writeError(w, http.StatusServiceUnavailable, "research run engine is unavailable")
+			return
+		}
+		if _, err = h.ResearchRun.Archive(r.Context(), uuidToString(sessionID), workspaceID, userID, "research session archived by user"); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to archive research run")
+			return
+		}
+		if err = h.stopResearchSessionWakes(r.Context(), wsUUID, sessionID); err != nil {
+			writeError(w, http.StatusInternalServerError, "research run archived but wake cancellation failed")
+			return
+		}
+		updated, loadErr := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
+		if loadErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to reload archived research run")
+			return
+		}
+		writeJSON(w, http.StatusOK, researchSessionToResponse(updated))
+		return
+	}
+	if err = h.stopResearchSessionWakes(r.Context(), wsUUID, sessionID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to cancel active research tasks")
+		return
+	}
 	updated, err := h.Queries.UpdateResearchSession(r.Context(), db.UpdateResearchSessionParams{
 		ID:          sessionID,
 		WorkspaceID: wsUUID,
@@ -596,6 +636,9 @@ func (h *Handler) ConfirmResearchSingleLine(w http.ResponseWriter, r *http.Reque
 	}
 	sessionID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "id")
 	if !ok {
+		return
+	}
+	if h.rejectLegacyResearchMutation(w, r, wsUUID, sessionID) {
 		return
 	}
 	updated, err := h.Queries.UpdateResearchSession(r.Context(), db.UpdateResearchSessionParams{

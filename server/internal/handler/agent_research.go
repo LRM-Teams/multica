@@ -37,7 +37,15 @@ func (h *Handler) ArchiveAgentResearchFleetMember(w http.ResponseWriter, r *http
 }
 
 func (h *Handler) GetAgentResearchSessionSnapshot(w http.ResponseWriter, r *http.Request) {
-	if _, ok := h.requireAgentPrincipal(w, r); !ok {
+	principal, ok := h.requireAgentPrincipal(w, r)
+	if !ok {
+		return
+	}
+	workspaceID, valid := parseUUIDOrBadRequest(w, principal.WorkspaceID, "workspace_id")
+	if !valid {
+		return
+	}
+	if _, active := h.requireActiveFleetMember(w, r, workspaceID); !active {
 		return
 	}
 	h.GetResearchSessionSnapshot(w, r)

@@ -110,14 +110,21 @@ type BusinessSamplerCollector struct {
 	// the values are computed once per scrape from a fresh DB read; we
 	// never want stale series sticking around because a label has stopped
 	// appearing in the result set.
-	descActiveUsers      *prometheus.Desc
-	descActiveWorkspaces *prometheus.Desc
-	descTaskQueued       *prometheus.Desc
-	descTaskRunning      *prometheus.Desc
-	descTaskStuck        *prometheus.Desc
-	descRuntimeOnline    *prometheus.Desc
-	descHeartbeatAgeHist *prometheus.Desc
-	descWorkspaceTotal   *prometheus.Desc
+	descActiveUsers                 *prometheus.Desc
+	descActiveWorkspaces            *prometheus.Desc
+	descTaskQueued                  *prometheus.Desc
+	descTaskRunning                 *prometheus.Desc
+	descTaskStuck                   *prometheus.Desc
+	descRuntimeOnline               *prometheus.Desc
+	descHeartbeatAgeHist            *prometheus.Desc
+	descWorkspaceTotal              *prometheus.Desc
+	descResearchRuns                *prometheus.Desc
+	descResearchTasks               *prometheus.Desc
+	descResearchAttempts            *prometheus.Desc
+	descResearchEvidence            *prometheus.Desc
+	descResearchFrontier            *prometheus.Desc
+	descResearchBacklog             *prometheus.Desc
+	descResearchCancellationBacklog *prometheus.Desc
 
 	mu       sync.Mutex
 	snapshot *samplerSnapshot
@@ -191,6 +198,34 @@ func NewBusinessSamplerCollector(opts *BusinessSamplerOptions) *BusinessSamplerC
 			"multica_workspace_total",
 			"Lifetime workspace row count. Useful for sizing alerts and dashboards.",
 			nil, nil),
+		descResearchRuns: prometheus.NewDesc(
+			"multica_research_runs",
+			"Current research sessions by durable run status and bounded orchestrator version.",
+			[]string{"status", "orchestrator_version"}, nil),
+		descResearchTasks: prometheus.NewDesc(
+			"multica_research_tasks",
+			"Current durable research tasks by task kind and status.",
+			[]string{"kind", "status"}, nil),
+		descResearchAttempts: prometheus.NewDesc(
+			"multica_research_attempts",
+			"Current durable research task attempts by status and bounded failure class.",
+			[]string{"status", "failure_class"}, nil),
+		descResearchEvidence: prometheus.NewDesc(
+			"multica_research_evidence_artifacts",
+			"Current normalized research evidence artifacts by type and verification status.",
+			[]string{"artifact", "verification_status"}, nil),
+		descResearchFrontier: prometheus.NewDesc(
+			"multica_research_frontier",
+			"Research question frontier size and age. The measure label is bounded to open or oldest_age_seconds.",
+			[]string{"measure"}, nil),
+		descResearchBacklog: prometheus.NewDesc(
+			"multica_research_projection_backlog",
+			"Unprojected research event count and oldest event age. The measure label is bounded to pending or oldest_age_seconds.",
+			[]string{"measure"}, nil),
+		descResearchCancellationBacklog: prometheus.NewDesc(
+			"multica_research_cancellation_backlog",
+			"Research attempt cancellations awaiting durable inbox cleanup, including oldest pending age.",
+			[]string{"measure"}, nil),
 	}
 	c.refreshFn = c.refreshFromDB
 	return c
@@ -220,6 +255,13 @@ func (c *BusinessSamplerCollector) Describe(ch chan<- *prometheus.Desc) {
 		c.descRuntimeOnline,
 		c.descHeartbeatAgeHist,
 		c.descWorkspaceTotal,
+		c.descResearchRuns,
+		c.descResearchTasks,
+		c.descResearchAttempts,
+		c.descResearchEvidence,
+		c.descResearchFrontier,
+		c.descResearchBacklog,
+		c.descResearchCancellationBacklog,
 	} {
 		ch <- d
 	}
@@ -253,7 +295,7 @@ func (c *BusinessSamplerCollector) maybeRefresh() *samplerSnapshot {
 	// Bound the entire refresh to N×queryTimeout so an in-flight scrape
 	// can never block forever even if SET LOCAL is somehow ignored by a
 	// misconfigured Postgres.
-	ctx, cancel := context.WithTimeout(context.Background(), 8*c.queryTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*c.queryTimeout)
 	defer cancel()
 
 	next := c.refreshFn(ctx, now)
@@ -310,6 +352,35 @@ func (c *BusinessSamplerCollector) emit(ch chan<- prometheus.Metric, snap *sampl
 		ch <- prometheus.MustNewConstMetric(
 			c.descWorkspaceTotal, prometheus.GaugeValue, snap.workspaceTotal)
 	}
+
+	for key, value := range snap.researchRuns {
+		ch <- prometheus.MustNewConstMetric(
+			c.descResearchRuns, prometheus.GaugeValue, value, key.first, key.second)
+	}
+	for key, value := range snap.researchTasks {
+		ch <- prometheus.MustNewConstMetric(
+			c.descResearchTasks, prometheus.GaugeValue, value, key.first, key.second)
+	}
+	for key, value := range snap.researchAttempts {
+		ch <- prometheus.MustNewConstMetric(
+			c.descResearchAttempts, prometheus.GaugeValue, value, key.first, key.second)
+	}
+	for key, value := range snap.researchEvidence {
+		ch <- prometheus.MustNewConstMetric(
+			c.descResearchEvidence, prometheus.GaugeValue, value, key.first, key.second)
+	}
+	ch <- prometheus.MustNewConstMetric(
+		c.descResearchFrontier, prometheus.GaugeValue, snap.researchFrontierOpen, "open")
+	ch <- prometheus.MustNewConstMetric(
+		c.descResearchFrontier, prometheus.GaugeValue, snap.researchFrontierOldestAge, "oldest_age_seconds")
+	ch <- prometheus.MustNewConstMetric(
+		c.descResearchBacklog, prometheus.GaugeValue, snap.researchProjectionPending, "pending")
+	ch <- prometheus.MustNewConstMetric(
+		c.descResearchBacklog, prometheus.GaugeValue, snap.researchProjectionOldestAge, "oldest_age_seconds")
+	ch <- prometheus.MustNewConstMetric(
+		c.descResearchCancellationBacklog, prometheus.GaugeValue, snap.researchCancellationPending, "pending")
+	ch <- prometheus.MustNewConstMetric(
+		c.descResearchCancellationBacklog, prometheus.GaugeValue, snap.researchCancellationOldestAge, "oldest_age_seconds")
 }
 
 // knownSourceLabels enumerates the source values we always emit a zero for.
@@ -339,6 +410,85 @@ type runtimeOnlineKey struct {
 	provider    string
 }
 
+type researchMetricKey struct {
+	first  string
+	second string
+}
+
+func normalizeResearchRunStatus(raw string) string {
+	switch raw {
+	case "drafting", "running", "awaiting_user_confirm", "completed", "archived", "paused", "failed", "cancelled":
+		return raw
+	default:
+		return "other"
+	}
+}
+
+func normalizeResearchOrchestratorVersion(raw string) string {
+	switch raw {
+	case "research-run-v1", "legacy":
+		return raw
+	default:
+		return "other"
+	}
+}
+
+func normalizeResearchTaskKind(raw string) string {
+	switch raw {
+	case "plan", "discover", "deep_read", "verify", "counter_search", "replan", "synthesize", "quality_gate", "citation_audit":
+		return raw
+	default:
+		return "other"
+	}
+}
+
+func normalizeResearchTaskStatus(raw string) string {
+	switch raw {
+	case "pending", "ready", "dispatching", "running", "succeeded", "failed", "blocked", "obsolete", "cancelled":
+		return raw
+	default:
+		return "other"
+	}
+}
+
+func normalizeResearchAttemptStatus(raw string) string {
+	switch raw {
+	case "dispatching", "running", "succeeded", "failed", "cancelled", "lost":
+		return raw
+	default:
+		return "other"
+	}
+}
+
+func normalizeResearchFailureClass(raw string) string {
+	switch raw {
+	case "", "none":
+		return "none"
+	case "dispatch_failed", "context_load_failed", "missing_structured_result", "task_timeout", "inbox_missing", "goal_steered":
+		return raw
+	default:
+		return "other"
+	}
+}
+
+func normalizeResearchArtifact(raw string) string {
+	switch raw {
+	case "source_snapshot", "observation", "claim_evidence":
+		return raw
+	default:
+		return "other"
+	}
+}
+
+func normalizeResearchVerificationStatus(raw string) string {
+	switch raw {
+	case "pending", "verified", "rejected":
+		return raw
+	default:
+		return "other"
+	}
+}
+
 // samplerHistogram is the in-memory representation of a single
 // prometheus.ConstHistogram for one runtime_mode. We bucketise in Go
 // because Postgres does not return histogram-shaped data directly.
@@ -364,6 +514,18 @@ type samplerSnapshot struct {
 	runtimeOnline map[runtimeOnlineKey]float64
 	heartbeatAge  map[string]samplerHistogram
 
+	researchRuns     map[researchMetricKey]float64
+	researchTasks    map[researchMetricKey]float64
+	researchAttempts map[researchMetricKey]float64
+	researchEvidence map[researchMetricKey]float64
+
+	researchFrontierOpen          float64
+	researchFrontierOldestAge     float64
+	researchProjectionPending     float64
+	researchProjectionOldestAge   float64
+	researchCancellationPending   float64
+	researchCancellationOldestAge float64
+
 	workspaceTotal      float64
 	workspaceTotalKnown bool
 }
@@ -378,6 +540,10 @@ func newSamplerSnapshot(t time.Time) *samplerSnapshot {
 		taskStuck:        map[string]float64{},
 		runtimeOnline:    map[runtimeOnlineKey]float64{},
 		heartbeatAge:     map[string]samplerHistogram{},
+		researchRuns:     map[researchMetricKey]float64{},
+		researchTasks:    map[researchMetricKey]float64{},
+		researchAttempts: map[researchMetricKey]float64{},
+		researchEvidence: map[researchMetricKey]float64{},
 	}
 }
 
@@ -421,6 +587,12 @@ func (c *BusinessSamplerCollector) refreshFromDB(ctx context.Context, now time.T
 	})
 	c.runQuery(ctx, conn, "workspace_total", func(ctx context.Context, tx pgx.Tx) error {
 		return c.queryWorkspaceTotal(ctx, tx, snap)
+	})
+	c.runQuery(ctx, conn, "research_execution", func(ctx context.Context, tx pgx.Tx) error {
+		return c.queryResearchExecution(ctx, tx, snap)
+	})
+	c.runQuery(ctx, conn, "research_integrity", func(ctx context.Context, tx pgx.Tx) error {
+		return c.queryResearchIntegrity(ctx, tx, snap)
 	})
 
 	return snap

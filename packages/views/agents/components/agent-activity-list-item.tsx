@@ -11,8 +11,73 @@ import {
 } from "../resolve-agent-live-status";
 
 /**
+ * Shared Activity mark for agent list surfaces (Idle / Working / Disconnected…).
+ * Same vocabulary as `AgentActivityListItem` — do not hand-roll another path.
+ */
+export function AgentActivityStatus({
+  presence,
+  className,
+  alignEnd = false,
+  unknownLabel,
+  testId = "agent-activity-status",
+}: {
+  presence?: AgentPresenceDetail | null;
+  className?: string;
+  /** Raft desktop list: push mark to the trailing edge. */
+  alignEnd?: boolean;
+  /** When presence is missing — callers that need a localized unknown string. */
+  unknownLabel?: string;
+  testId?: string;
+}) {
+  const band = resolveAgentActivityBand(presence ?? null);
+  if (!band) {
+    return (
+      <span
+        className={cn(
+          "inline-flex min-w-0 items-center gap-1.5 text-muted-foreground/60",
+          alignEnd && "ml-auto shrink-0",
+          className,
+        )}
+        data-testid={testId}
+      >
+        {unknownLabel ?? "—"}
+      </span>
+    );
+  }
+  const view = presentAgentActivityBand(band, true);
+  const isWorking = band === "working" && presence?.workload !== "queued";
+  const isQueued = presence?.workload === "queued";
+
+  return (
+    <span
+      className={cn(
+        "inline-flex min-w-0 max-w-[50%] items-center gap-1.5 text-muted-foreground",
+        alignEnd && "ml-auto shrink-0",
+        className,
+      )}
+      data-testid={testId}
+      data-activity-band={band}
+    >
+      {isWorking ? (
+        <Loader2 className="h-3 w-3 shrink-0 animate-spin text-running" />
+      ) : null}
+      {isQueued ? (
+        <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
+      ) : null}
+      {!isWorking && !isQueued ? (
+        <span
+          className={cn("size-1.5 shrink-0 rounded-full", view.dotClass)}
+          aria-hidden
+        />
+      ) : null}
+      <span className="truncate text-[13px]">{view.label}</span>
+    </span>
+  );
+}
+
+/**
  * Canonical agent list row (Frank / Parker 2026-08-03 task #30):
- * avatar · name · runtime · Activity (Idle / Working / Disconnected…).
+ * Raft-aligned: avatar · name · runtime ………… Activity (right).
  *
  * All surfaces that list agent entries should use this — do not hand-roll
  * another row with a private activity label path.
@@ -31,6 +96,7 @@ export function AgentActivityListItem({
   avatarSize,
   selectionMode = false,
   selected = false,
+  trailingLabel,
 }: {
   agentId: string;
   displayName: string;
@@ -47,34 +113,21 @@ export function AgentActivityListItem({
   /** Multi-select mode (Computer Agents section Select). */
   selectionMode?: boolean;
   selected?: boolean;
+  /** Optional trailing text (e.g. "View agent" in delete dialogs). */
+  trailingLabel?: string;
 }) {
-  const band = resolveAgentActivityBand(presence ?? null);
-  const view = band
-    ? presentAgentActivityBand(band, true)
-    : { label: "—", dotClass: "bg-muted-foreground/40" };
-  const isWorking = band === "working" && presence?.workload !== "queued";
-  const isQueued = presence?.workload === "queued";
   const size = avatarSize ?? (layout === "stacked" ? 28 : 22);
+  const trailing = trailingLabel ? (
+    <span className="shrink-0 text-primary">{trailingLabel}</span>
+  ) : null;
 
   const activity = (
-    <span
-      className="inline-flex min-w-0 items-center gap-1 text-muted-foreground"
-      data-testid="agent-activity-list-item-activity"
-    >
-      {isWorking ? (
-        <Loader2 className="h-3 w-3 shrink-0 animate-spin text-running" />
-      ) : null}
-      {isQueued ? (
-        <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
-      ) : null}
-      {!isWorking && !isQueued ? (
-        <span
-          className={cn("size-1.5 shrink-0 rounded-full", view.dotClass)}
-          aria-hidden
-        />
-      ) : null}
-      <span className="truncate">{view.label}</span>
-    </span>
+    <AgentActivityStatus
+      presence={presence}
+      alignEnd={layout === "inline"}
+      className={layout === "inline" ? undefined : "max-w-none"}
+      testId="agent-activity-list-item-activity"
+    />
   );
 
   const runtime = (
@@ -83,45 +136,57 @@ export function AgentActivityListItem({
         <ProviderLogo provider={provider} className="h-3.5 w-3.5 shrink-0" />
       ) : null}
       {runtimeLabel ? (
-        <span className="truncate" data-testid="agent-activity-list-item-runtime">
+        <span
+          className="truncate text-[13px]"
+          data-testid="agent-activity-list-item-runtime"
+        >
           {runtimeLabel}
         </span>
       ) : null}
     </span>
   );
 
-  const body =
-    layout === "stacked" ? (
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium underline decoration-muted-foreground/40 underline-offset-2">
-          {displayName}
-        </span>
-        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs">
-          {runtime}
-          <span aria-hidden>·</span>
-          {activity}
-        </span>
-      </span>
-    ) : (
-      <>
-        <span className="shrink-0 truncate font-medium underline decoration-muted-foreground/40 underline-offset-2">
-          {displayName}
-        </span>
-        {(provider || runtimeLabel) && (
-          <>
-            <span className="shrink-0 text-muted-foreground" aria-hidden>
-              ·
-            </span>
-            {runtime}
-          </>
+  if (layout === "stacked") {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        data-testid="agent-activity-list-item"
+        data-agent-id={agentId}
+        data-selected={selected || undefined}
+        aria-pressed={selectionMode ? selected : undefined}
+        className={cn(
+          "flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition-colors hover:bg-accent/50",
+          showBorder && "border-b",
+          selected && "bg-accent/60",
+          className,
         )}
-        <span className="shrink-0 text-muted-foreground" aria-hidden>
-          ·
+      >
+        {selectionMode ? <SelectionCheck selected={selected} /> : null}
+        <ActorAvatar
+          actorType="agent"
+          actorId={agentId}
+          size={size}
+          profileLink={false}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">
+            {displayName}
+          </span>
+          <span className="mt-0.5 flex min-w-0 items-center justify-between gap-2 text-xs">
+            {runtime}
+            {activity}
+          </span>
         </span>
-        {activity}
-      </>
+        {trailing}
+        {showChevron && !selectionMode ? (
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/45" />
+        ) : null}
+      </button>
     );
+  }
 
+  // Raft desktop: [avatar] [name · runtime] ………… [activity] [trailing?]
   return (
     <button
       type="button"
@@ -131,37 +196,45 @@ export function AgentActivityListItem({
       data-selected={selected || undefined}
       aria-pressed={selectionMode ? selected : undefined}
       className={cn(
-        "flex w-full items-center gap-1.5 px-4 py-3 text-left text-sm transition-colors hover:bg-accent/50",
-        layout === "stacked" && "gap-3",
+        "flex w-full items-center gap-2.5 px-4 py-3 text-left text-sm transition-colors hover:bg-accent/50",
         showBorder && "border-b",
         selected && "bg-accent/60",
         className,
       )}
     >
-      {selectionMode ? (
-        <span
-          className={cn(
-            "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]",
-            selected
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-muted-foreground/40",
-          )}
-          aria-hidden
-          data-testid="agent-activity-list-item-check"
-        >
-          {selected ? "✓" : ""}
-        </span>
-      ) : null}
+      {selectionMode ? <SelectionCheck selected={selected} /> : null}
       <ActorAvatar
         actorType="agent"
         actorId={agentId}
         size={size}
         profileLink={false}
       />
-      {body}
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+        <span className="shrink-0 truncate font-medium">{displayName}</span>
+        {(provider || runtimeLabel) && runtime}
+      </span>
+      {activity}
+      {trailing}
       {showChevron && !selectionMode ? (
-        <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-muted-foreground/45" />
+        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/45" />
       ) : null}
     </button>
+  );
+}
+
+function SelectionCheck({ selected }: { selected: boolean }) {
+  return (
+    <span
+      className={cn(
+        "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]",
+        selected
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-muted-foreground/40",
+      )}
+      aria-hidden
+      data-testid="agent-activity-list-item-check"
+    >
+      {selected ? "✓" : ""}
+    </span>
   );
 }

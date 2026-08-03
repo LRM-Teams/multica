@@ -1991,6 +1991,12 @@ func (h *Handler) suppressChannelTaskCompleteOutput(_ context.Context, _ db.Agen
 }
 
 func (h *Handler) isChannelAgentTask(ctx context.Context, task db.AgentInboxEvent) bool {
+	// LRM-1079 / LRM-1080: product surface is channel_id. A wake that already
+	// binds a channel is a channel task even when chat_session_id is absent
+	// (ambient / role-changed / future session-free paths).
+	if task.ChannelID.Valid {
+		return true
+	}
 	if !task.ChatSessionID.Valid {
 		return false
 	}

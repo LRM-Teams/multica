@@ -245,36 +245,62 @@ func (h *Handler) channelAmbientGateStats(ctx context.Context, channelID, agentI
 
 func (h *Handler) channelAmbientGateStatsWithDB(ctx context.Context, exec db.DBTX, channelID, agentID, runtimeID pgtype.UUID, window time.Duration) (channelAmbientGateStats, error) {
 	var stats channelAmbientGateStats
+	// LRM-1079 / LRM-1080: count channel-bound wakes by agent_inbox_event.channel_id
+	// first. Fall back to channel_agent_session for legacy rows that only carry
+	// chat_session_id. Do not require chat_session for gate accuracy.
 	err := exec.QueryRow(ctx, `
 		SELECT
 			COALESCE((
 				SELECT count(*)
 				FROM agent_inbox_event atq
-				JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
-				WHERE cas.channel_id = $1
-				  AND cas.agent_id = $2
+				WHERE atq.agent_id = $2
 				  AND atq.priority = 1
 				  AND COALESCE(atq.force_fresh_session, false) = true
 				  AND atq.status IN ('pending', 'draining', 'failed')
+				  AND (
+				    atq.channel_id = $1
+				    OR EXISTS (
+				      SELECT 1
+				      FROM channel_agent_session cas
+				      WHERE cas.chat_session_id = atq.chat_session_id
+				        AND cas.channel_id = $1
+				        AND cas.agent_id = $2
+				    )
+				  )
 			), 0) AS active_for_agent,
 			COALESCE((
 				SELECT count(*)
 				FROM agent_inbox_event atq
-				JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
-				WHERE cas.channel_id = $1
-				  AND cas.agent_id = $2
+				WHERE atq.agent_id = $2
 				  AND atq.priority = 1
 				  AND COALESCE(atq.force_fresh_session, false) = true
 				  AND atq.created_at >= now() - make_interval(secs => $4::double precision)
+				  AND (
+				    atq.channel_id = $1
+				    OR EXISTS (
+				      SELECT 1
+				      FROM channel_agent_session cas
+				      WHERE cas.chat_session_id = atq.chat_session_id
+				        AND cas.channel_id = $1
+				        AND cas.agent_id = $2
+				    )
+				  )
 			), 0) AS recent_for_agent,
 			COALESCE((
 				SELECT count(*)
 				FROM agent_inbox_event atq
-				JOIN channel_agent_session cas ON cas.chat_session_id = atq.chat_session_id
-				WHERE cas.channel_id = $1
-				  AND atq.priority = 1
+				WHERE atq.priority = 1
 				  AND COALESCE(atq.force_fresh_session, false) = true
 				  AND atq.created_at >= now() - make_interval(secs => $4::double precision)
+				  AND (
+				    atq.channel_id = $1
+				    OR EXISTS (
+				      SELECT 1
+				      FROM channel_agent_session cas
+				      WHERE cas.chat_session_id = atq.chat_session_id
+				        AND cas.channel_id = $1
+				    )
+				  )
 			), 0) AS recent_for_channel,
 			COALESCE((
 				SELECT count(*)

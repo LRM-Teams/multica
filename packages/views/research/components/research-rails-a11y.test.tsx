@@ -33,6 +33,7 @@ vi.mock("../../i18n/use-t", () => ({
           rail_title: "Exploration",
           rail_hint: "Dimensions to cover",
           rail_loading: "Generating dimensions…",
+          rail_ready_live: "Exploration dimensions ready",
           rail_error: "Failed to load rail",
           rail_empty_title: "No dimensions yet",
           rail_empty_body: "Start the session to explore.",
@@ -76,12 +77,13 @@ describe("research rails a11y static contract (LRM-1204)", () => {
     }
   });
 
-  it("source: ExplorationRail declares labelled shell + loading live region", () => {
+  it("source: ExplorationRail declares labelled shell + persistent live region", () => {
     const src = readSrc("exploration-rail.tsx");
     expect(src).toMatch(/data-testid=["']exploration-rail["']/);
     expect(src).toMatch(/aria-labelledby=\{labelledBy\}/);
     expect(src).toMatch(/data-testid=["']exploration-rail-loading["']/);
-    expect(src).toMatch(/aria-busy/);
+    expect(src).toMatch(/data-testid=["']exploration-rail-live["']/);
+    expect(src).toMatch(/aria-busy=\{mode === ["']loading["']\}/);
     expect(src).toMatch(/aria-live=["']polite["']/);
     expect(src).toMatch(/role=["']alert["']/);
     expect(src).toMatch(/data-testid=["']exploration-rail-error["']/);
@@ -101,13 +103,17 @@ describe("research rails a11y static contract (LRM-1204)", () => {
     const root = container.querySelector('[data-testid="exploration-rail"]');
     expect(root).toBeTruthy();
     expect(root).toHaveAttribute("aria-labelledby");
+    // LRM-1201 — busy + polite live region live on the shell, not the loading child.
+    expect(root).toHaveAttribute("aria-busy", "true");
+    const live = container.querySelector(
+      '[data-testid="exploration-rail-live"]',
+    );
+    expect(live).toHaveAttribute("aria-live", "polite");
+    expect(live?.textContent).toContain("Generating dimensions…");
     const loading = container.querySelector(
       '[data-testid="exploration-rail-loading"]',
     );
     expect(loading).toBeTruthy();
-    expect(loading).toHaveAttribute("aria-busy", "true");
-    expect(loading).toHaveAttribute("aria-live", "polite");
-    expect(screen.getByText("Generating dimensions…")).toBeTruthy();
     const spinner = loading?.querySelector("svg");
     expect(spinner).toHaveAttribute("aria-hidden", "true");
   });
@@ -123,11 +129,17 @@ describe("research rails a11y static contract (LRM-1204)", () => {
     expect(screen.getByText("boom")).toBeTruthy();
 
     rerender(<ExplorationRail dimensions={[]} sessionStatus="drafting" />);
+    const empty = container.querySelector(
+      '[data-testid="exploration-rail-empty"]',
+    );
+    expect(empty).toBeTruthy();
+    // Title also mirrors into the persistent live region (LRM-1201).
+    expect(empty?.textContent).toContain("No dimensions yet");
+    expect(empty?.textContent).toContain("Start the session to explore.");
     expect(
-      container.querySelector('[data-testid="exploration-rail-empty"]'),
-    ).toBeTruthy();
-    expect(screen.getByText("No dimensions yet")).toBeTruthy();
-    expect(screen.getByText("Start the session to explore.")).toBeTruthy();
+      container.querySelector('[data-testid="exploration-rail-live"]')
+        ?.textContent,
+    ).toContain("No dimensions yet");
   });
 
   it("render: ready cards expose aria-expanded; decorative icons hidden", () => {

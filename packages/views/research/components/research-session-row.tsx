@@ -107,7 +107,7 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
               <button
                 type="button"
                 data-testid="research-session-goal-chip"
-                className="hidden max-w-[min(100%,14rem)] items-center gap-1 truncate rounded-md border border-brand/25 bg-brand/10 px-1.5 py-px text-[11px] font-semibold text-brand hover:bg-brand/15 sm:inline-flex"
+                className="hidden max-w-[min(100%,14rem)] items-center gap-1 truncate rounded-md border border-brand/25 bg-brand/10 px-1.5 py-px text-[11px] font-semibold text-brand hover:bg-brand/15 md:inline-flex"
                 onClick={() => setGoalOpen(true)}
               >
                 <span
@@ -157,10 +157,10 @@ export function ResearchSessionRow({ session, href }: ResearchSessionRowProps) {
           agentIds={fleetIds}
           size={22}
           max={3}
-          className="hidden shrink-0 sm:flex"
+          className="hidden shrink-0 md:flex"
         />
 
-        <div className="shrink-0 opacity-100 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100">
+        <div className="shrink-0 opacity-100 md:opacity-0 md:transition-opacity md:group-hover:opacity-100">
           <ResearchSessionRowActions session={session} />
         </div>
       </div>

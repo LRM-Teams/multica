@@ -17,11 +17,11 @@ export function ResearchSessionRowSkeleton() {
         <Skeleton className="h-3.5 w-[55%] max-w-[16rem]" />
         <Skeleton className="h-2.5 w-[34%] max-w-[10rem] opacity-70" />
       </div>
-      <span className="hidden items-center sm:flex">
+      <span className="hidden items-center md:flex">
         <Skeleton className="size-[22px] rounded-full" />
         <Skeleton className="-ml-1.5 size-[22px] rounded-full" />
       </span>
-      <Skeleton className="hidden h-3 w-10 shrink-0 sm:block" />
+      <Skeleton className="hidden h-3 w-10 shrink-0 md:block" />
     </div>
   );
 }

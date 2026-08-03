@@ -304,19 +304,17 @@
     "title": "컴퓨터 연결",
     "description": "이 컴퓨터에 Multica를 설치한 뒤 설정을 완료하면 워크스페이스에 연결됩니다.",
     "mode_label": "어디에서 실행하나요?",
+    "commands_heading": "설치 명령",
     "modes": {
       "unix": "Mac / Linux",
       "windows-powershell": "Windows"
-    },
-    "mode_hints": {
-      "unix": "macOS, Linux, SSH 기기, 대부분의 호스팅 터미널에 사용하세요.",
-      "windows-powershell": "Windows PowerShell에서 사용하세요."
     },
     "step1_label": "설치",
     "step2_label": "설정",
     "step2_hint": "로그인을 위해 브라우저를 열고, 이후 데몬을 백그라운드에서 계속 실행합니다.",
     "live_listening": "컴퓨터 연결 대기 중",
     "live_listening_hint": "이 대화 상자를 열어 두세요. 컴퓨터가 등록되면 자동으로 계속됩니다.",
+    "trouble_summary": "문제가 있나요?",
     "troubleshooting": "해당 컴퓨터에서 브라우저를 열 수 없나요?",
     "install_trouble_summary": "명령이 잘 안 되나요?",
     "install_trouble_retry": "인터넷 연결을 확인하고 명령을 다시 시도해 보세요 — 일시적인 네트워크 문제가 가장 흔한 원인입니다.",

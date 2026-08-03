@@ -91,27 +91,88 @@ export function MessageAttachmentZone({
 }
 
 function ImageGallery({ items }: { items: ResolvedAttachmentItem[] }) {
-  const [aspects, setAspects] = React.useState<Array<number | undefined>>(
-    () => items.map(() => undefined),
-  );
+  const itemKey = items.map((item) => item.attachmentId).join("|");
+  const [tracked, setTracked] = React.useState(() => ({
+    key: itemKey,
+    aspects: items.map(() => undefined as number | undefined),
+  }));
 
-  React.useEffect(() => {
-    setAspects(items.map(() => undefined));
-  }, [items]);
-
-  const layout: GalleryLayoutMode = resolveGalleryLayout(aspects, items.length);
-
-  const onAspect = React.useCallback((index: number, aspect: number) => {
-    setAspects((prev) => {
-      if (prev[index] === aspect) return prev;
-      const next = prev.slice();
-      next[index] = aspect;
-      return next;
+  // Reset measured aspects when the attachment set changes (render-time
+  // adjust — avoids a derived-state useEffect that React Doctor blocks).
+  if (tracked.key !== itemKey) {
+    setTracked({
+      key: itemKey,
+      aspects: items.map(() => undefined),
     });
-  }, []);
+  }
+
+  const aspects = tracked.key === itemKey ? tracked.aspects : items.map(() => undefined);
+  const layout: GalleryLayoutMode = resolveGalleryLayout(aspects, items.length);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+
+  // Parent observes cell <img> natural sizes directly — no child→parent
+  // callback-in-effect (react-doctor/no-pass-data-to-parent).
+  React.useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    const cleanups: Array<() => void> = [];
+
+    const readAspects = () => {
+      const cells = root.querySelectorAll<HTMLElement>("[data-testid='gallery-cell']");
+      const next: Array<number | undefined> = Array.from(cells, (cell) => {
+        const img = cell.querySelector("img");
+        if (
+          img instanceof HTMLImageElement &&
+          img.naturalWidth > 0 &&
+          img.naturalHeight > 0
+        ) {
+          return img.naturalWidth / img.naturalHeight;
+        }
+        return undefined;
+      });
+      setTracked((prev) => {
+        if (prev.key !== itemKey) return prev;
+        if (
+          prev.aspects.length === next.length &&
+          prev.aspects.every((value, index) => value === next[index])
+        ) {
+          return prev;
+        }
+        return { key: itemKey, aspects: next };
+      });
+    };
+
+    const attachImg = (img: HTMLImageElement) => {
+      if (img.complete) readAspects();
+      else {
+        const onLoad = () => readAspects();
+        img.addEventListener("load", onLoad, { once: true });
+        cleanups.push(() => img.removeEventListener("load", onLoad));
+      }
+    };
+
+    root.querySelectorAll("img").forEach((node) => {
+      if (node instanceof HTMLImageElement) attachImg(node);
+    });
+
+    const mo = new MutationObserver(() => {
+      root.querySelectorAll("img").forEach((node) => {
+        if (node instanceof HTMLImageElement) attachImg(node);
+      });
+      readAspects();
+    });
+    mo.observe(root, { childList: true, subtree: true });
+    cleanups.push(() => mo.disconnect());
+
+    return () => {
+      for (const cleanup of cleanups) cleanup();
+    };
+  }, [itemKey]);
 
   return (
     <div
+      ref={rootRef}
       data-testid="message-attachment-gallery"
       data-layout={layout}
       className={cn(
@@ -119,60 +180,15 @@ function ImageGallery({ items }: { items: ResolvedAttachmentItem[] }) {
         layout === "grid" ? "gallery-layout-grid" : "gallery-layout-stack",
       )}
     >
-      {items.map((item, index) => (
-        <GalleryCell
+      {items.map((item) => (
+        <div
           key={item.attachmentId}
-          index={index}
-          onAspect={onAspect}
+          className="gallery-cell min-w-0"
+          data-testid="gallery-cell"
         >
           <AttachmentSlot item={item} />
-        </GalleryCell>
+        </div>
       ))}
-    </div>
-  );
-}
-
-function GalleryCell({
-  index,
-  onAspect,
-  children,
-}: {
-  index: number;
-  onAspect: (index: number, aspect: number) => void;
-  children: React.ReactNode;
-}) {
-  const ref = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    const root = ref.current;
-    if (!root) return;
-
-    const report = (img: HTMLImageElement) => {
-      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-        onAspect(index, img.naturalWidth / img.naturalHeight);
-      }
-    };
-
-    const existing = root.querySelector("img");
-    if (existing instanceof HTMLImageElement) {
-      if (existing.complete) report(existing);
-      else existing.addEventListener("load", () => report(existing), { once: true });
-    }
-
-    const mo = new MutationObserver(() => {
-      const img = root.querySelector("img");
-      if (img instanceof HTMLImageElement) {
-        if (img.complete) report(img);
-        else img.addEventListener("load", () => report(img), { once: true });
-      }
-    });
-    mo.observe(root, { childList: true, subtree: true });
-    return () => mo.disconnect();
-  }, [index, onAspect]);
-
-  return (
-    <div ref={ref} className="gallery-cell min-w-0" data-testid="gallery-cell">
-      {children}
     </div>
   );
 }

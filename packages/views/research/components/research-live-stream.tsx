@@ -69,7 +69,8 @@ export function ResearchLiveStream({ sessionId }: { sessionId: string }) {
   return (
     <article
       data-testid="research-live-stream"
-      aria-live="polite"
+      // LRM-1203: announce only while tokens stream; settled transcript stays quiet.
+      aria-live={isGenerating ? "polite" : undefined}
       className={cn(
         "mr-1 rounded-xl border border-primary/20 bg-card px-3 py-2.5 text-sm shadow-sm",
         isGenerating && "ring-1 ring-primary/15",

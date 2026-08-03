@@ -37,7 +37,29 @@ const expandedCatalogTones: Record<string, HonorBadgeTone> = {
   black_hole: "violet",
 };
 
+const agentArmorTones: Record<string, HonorBadgeTone> = {
+  agent_armor_first_launch: "cyan",
+  agent_armor_proven_crew: "cyan",
+  agent_armor_veteran_core: "amber",
+  agent_armor_centurion: "gold",
+  agent_armor_streak_5: "amber",
+  agent_armor_streak_20: "violet",
+  agent_armor_memory_spark: "cyan",
+  agent_armor_memory_archive: "cyan",
+  agent_armor_memory_constellation: "violet",
+  agent_armor_evolution_seed: "emerald",
+  agent_armor_evolution_engine: "violet",
+  agent_armor_deep_space: "emerald",
+  agent_armor_phoenix: "amber",
+  agent_armor_corvette: "violet",
+  agent_armor_cruiser: "gold",
+  agent_armor_dreadnought: "gold",
+  agent_armor_locked: "neutral",
+};
+
 export function honorBadgeTone(svgKey: string): HonorBadgeTone {
+  const agentTone = agentArmorTones[svgKey];
+  if (agentTone) return agentTone;
   const catalogTone = expandedCatalogTones[svgKey];
   if (catalogTone) return catalogTone;
   if (svgKey.includes("genesis") || svgKey === "founding") return "gold";

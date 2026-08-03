@@ -48,6 +48,10 @@ import { Switch } from "@multica/ui/components/ui/switch";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { cn } from "@multica/ui/lib/utils";
 import { useT, useTimeAgo } from "../../../i18n";
+import {
+  AgentHonorLevelIcon,
+  MAX_AGENT_HONOR_LEVEL,
+} from "../agent-honor-level-icon";
 
 const fleetPillars = ["delivery", "evolution", "growth", "efficiency"] as const;
 
@@ -348,9 +352,12 @@ export function AgentHonorTab({
     .slice(0, 3);
   const unlockedCount = dashboard.achievements.filter((item) => item.unlocked).length;
   const levelStart = dashboard.level <= 1 ? 0 : 25 * (dashboard.level - 1) ** 2;
-  const levelEnd = dashboard.level >= 60 ? dashboard.total_xp : 25 * dashboard.level ** 2;
+  const levelEnd =
+    dashboard.level >= MAX_AGENT_HONOR_LEVEL
+      ? dashboard.total_xp
+      : 25 * dashboard.level ** 2;
   const levelProgress =
-    dashboard.level >= 60
+    dashboard.level >= MAX_AGENT_HONOR_LEVEL
       ? 100
       : progressPercent(dashboard.total_xp - levelStart, levelEnd - levelStart);
   const equipped =
@@ -411,27 +418,40 @@ export function AgentHonorTab({
               />
             </div>
           </div>
-          <div className="flex items-center gap-5 self-start rounded-2xl border border-white/10 bg-white/[0.04] p-4 backdrop-blur-sm">
-            {equipped ? (
-              <HonorBadgeCrest
-                svgKey={equipped.svg_key}
-                title={equipped.title}
-                animated
-                rare={equipped.rarity >= 75}
-                className="size-20"
-              />
-            ) : (
-              <span className="grid size-20 place-items-center rounded-2xl border border-dashed border-white/20 text-slate-400">
-                <Award className="size-7" />
-              </span>
-            )}
-            <div>
-              <p className="text-[10px] uppercase tracking-widest text-slate-400">
-                {t(($) => $.honor_agent.equipped)}
+          <div className="flex items-center gap-4 self-start rounded-2xl border border-white/10 bg-white/[0.04] p-4 backdrop-blur-sm">
+            <AgentHonorLevelIcon
+              level={dashboard.level}
+              title={t(($) => $.honor_agent.level_value, { level: dashboard.level })}
+              className="size-24 drop-shadow-[0_0_20px_rgba(99,102,241,0.35)]"
+              priority
+            />
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-widest text-cyan-200/70">
+                {t(($) => $.honor_agent.level_value, { level: dashboard.level })}
               </p>
-              <p className="mt-1 max-w-36 text-sm font-semibold">
-                {equipped?.title ?? t(($) => $.honor_agent.no_equipped)}
-              </p>
+              <div className="mt-3 flex items-center gap-2.5">
+                {equipped ? (
+                  <HonorBadgeCrest
+                    svgKey={equipped.svg_key}
+                    title={equipped.title}
+                    animated
+                    rare={equipped.rarity >= 75}
+                    className="size-10"
+                  />
+                ) : (
+                  <span className="grid size-10 shrink-0 place-items-center rounded-lg border border-dashed border-white/20 text-slate-400">
+                    <Award className="size-4" />
+                  </span>
+                )}
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-widest text-slate-400">
+                    {t(($) => $.honor_agent.equipped)}
+                  </p>
+                  <p className="mt-0.5 max-w-32 truncate text-sm font-semibold">
+                    {equipped?.title ?? t(($) => $.honor_agent.no_equipped)}
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         </div>

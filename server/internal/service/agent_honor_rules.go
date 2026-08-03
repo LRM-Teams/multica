@@ -16,7 +16,7 @@ import (
 
 const (
 	AgentHonorRulesVersion = "2026-07-31.1"
-	MaxAgentHonorLevel     = 60
+	MaxAgentHonorLevel     = 30
 )
 
 type AgentHonorClassThreshold struct {
@@ -51,22 +51,22 @@ type AgentAchievementDefinition struct {
 }
 
 var agentAchievementCatalog = []AgentAchievementDefinition{
-	{ID: "first_launch", Title: "First Launch", Description: "Complete the first accepted task.", SvgKey: "stardust", Category: "delivery", Metric: "completed", Target: 1, XPReward: 25, Rarity: 10},
-	{ID: "proven_crew", Title: "Proven Crew", Description: "Complete 10 accepted tasks.", SvgKey: "mercury", Category: "delivery", Metric: "completed", Target: 10, XPReward: 50, Rarity: 18},
-	{ID: "veteran_core", Title: "Veteran Core", Description: "Complete 50 accepted tasks.", SvgKey: "red_giant", Category: "delivery", Metric: "completed", Target: 50, XPReward: 125, Rarity: 42},
-	{ID: "centurion", Title: "Centurion", Description: "Complete 100 accepted tasks.", SvgKey: "jupiter", Category: "delivery", Metric: "completed", Target: 100, XPReward: 250, Rarity: 65},
-	{ID: "streak_5", Title: "Clean Burn", Description: "Complete 5 tasks in a row without failure.", SvgKey: "venus", Category: "reliability", Metric: "success_streak", Target: 5, XPReward: 75, Rarity: 30},
-	{ID: "streak_20", Title: "Unbroken Orbit", Description: "Complete 20 tasks in a row without failure.", SvgKey: "saturn", Category: "reliability", Metric: "success_streak", Target: 20, XPReward: 250, Rarity: 78, Secret: true},
-	{ID: "memory_spark", Title: "Memory Spark", Description: "Create 3 valid memory updates.", SvgKey: "earth", Category: "growth", Metric: "memory_writes", Target: 3, XPReward: 30, Rarity: 15},
-	{ID: "memory_archive", Title: "Living Archive", Description: "Create 24 valid memory updates.", SvgKey: "forge_ring", Category: "growth", Metric: "memory_writes", Target: 24, XPReward: 100, Rarity: 40},
-	{ID: "memory_constellation", Title: "Memory Constellation", Description: "Create 100 valid memory updates.", SvgKey: "neptune", Category: "growth", Metric: "memory_writes", Target: 100, XPReward: 300, Rarity: 82, Secret: true},
-	{ID: "evolution_seed", Title: "Evolution Seed", Description: "Promote the first evolution unit.", SvgKey: "twin_stars", Category: "evolution", Metric: "evolution_promotions", Target: 1, XPReward: 100, Rarity: 35},
-	{ID: "evolution_engine", Title: "Evolution Engine", Description: "Promote 10 evolution units.", SvgKey: "quasar", Category: "evolution", Metric: "evolution_promotions", Target: 10, XPReward: 350, Rarity: 90, Secret: true},
-	{ID: "deep_space_explorer", Title: "Deep Space Explorer", Description: "Deliver accepted work in 3 projects.", SvgKey: "uranus", Category: "mastery", Metric: "distinct_projects", Target: 3, XPReward: 125, Rarity: 48},
-	{ID: "phoenix_protocol", Title: "Phoenix Protocol", Description: "Recover 3 issues after an earlier failed attempt.", SvgKey: "mars", Category: "reliability", Metric: "recoveries", Target: 3, XPReward: 175, Rarity: 70, Secret: true},
-	{ID: "corvette_command", Title: "Corvette Command", Description: "Reach Corvette fleet class.", SvgKey: "pluto", Category: "fleet", Metric: "fleet_class", Target: 1, XPReward: 50, Rarity: 20},
-	{ID: "cruiser_command", Title: "Cruiser Command", Description: "Reach Cruiser fleet class.", SvgKey: "blue_giant", Category: "fleet", Metric: "fleet_class", Target: 3, XPReward: 175, Rarity: 62},
-	{ID: "dreadnought_command", Title: "Dreadnought Command", Description: "Reach Dreadnought fleet class.", SvgKey: "genesis_nebula", Category: "fleet", Metric: "fleet_class", Target: 5, XPReward: 500, Rarity: 96, Secret: true},
+	{ID: "first_launch", Title: "First Launch", Description: "Complete the first accepted task.", SvgKey: "agent_armor_first_launch", Category: "delivery", Metric: "completed", Target: 1, XPReward: 25, Rarity: 10},
+	{ID: "proven_crew", Title: "Proven Crew", Description: "Complete 10 accepted tasks.", SvgKey: "agent_armor_proven_crew", Category: "delivery", Metric: "completed", Target: 10, XPReward: 50, Rarity: 18},
+	{ID: "veteran_core", Title: "Veteran Core", Description: "Complete 50 accepted tasks.", SvgKey: "agent_armor_veteran_core", Category: "delivery", Metric: "completed", Target: 50, XPReward: 125, Rarity: 42},
+	{ID: "centurion", Title: "Centurion", Description: "Complete 100 accepted tasks.", SvgKey: "agent_armor_centurion", Category: "delivery", Metric: "completed", Target: 100, XPReward: 250, Rarity: 65},
+	{ID: "streak_5", Title: "Clean Burn", Description: "Complete 5 tasks in a row without failure.", SvgKey: "agent_armor_streak_5", Category: "reliability", Metric: "success_streak", Target: 5, XPReward: 75, Rarity: 30},
+	{ID: "streak_20", Title: "Unbroken Orbit", Description: "Complete 20 tasks in a row without failure.", SvgKey: "agent_armor_streak_20", Category: "reliability", Metric: "success_streak", Target: 20, XPReward: 250, Rarity: 78, Secret: true},
+	{ID: "memory_spark", Title: "Memory Spark", Description: "Create 3 valid memory updates.", SvgKey: "agent_armor_memory_spark", Category: "growth", Metric: "memory_writes", Target: 3, XPReward: 30, Rarity: 15},
+	{ID: "memory_archive", Title: "Living Archive", Description: "Create 24 valid memory updates.", SvgKey: "agent_armor_memory_archive", Category: "growth", Metric: "memory_writes", Target: 24, XPReward: 100, Rarity: 40},
+	{ID: "memory_constellation", Title: "Memory Constellation", Description: "Create 100 valid memory updates.", SvgKey: "agent_armor_memory_constellation", Category: "growth", Metric: "memory_writes", Target: 100, XPReward: 300, Rarity: 82, Secret: true},
+	{ID: "evolution_seed", Title: "Evolution Seed", Description: "Promote the first evolution unit.", SvgKey: "agent_armor_evolution_seed", Category: "evolution", Metric: "evolution_promotions", Target: 1, XPReward: 100, Rarity: 35},
+	{ID: "evolution_engine", Title: "Evolution Engine", Description: "Promote 10 evolution units.", SvgKey: "agent_armor_evolution_engine", Category: "evolution", Metric: "evolution_promotions", Target: 10, XPReward: 350, Rarity: 90, Secret: true},
+	{ID: "deep_space_explorer", Title: "Deep Space Explorer", Description: "Deliver accepted work in 3 projects.", SvgKey: "agent_armor_deep_space", Category: "mastery", Metric: "distinct_projects", Target: 3, XPReward: 125, Rarity: 48},
+	{ID: "phoenix_protocol", Title: "Phoenix Protocol", Description: "Recover 3 issues after an earlier failed attempt.", SvgKey: "agent_armor_phoenix", Category: "reliability", Metric: "recoveries", Target: 3, XPReward: 175, Rarity: 70, Secret: true},
+	{ID: "corvette_command", Title: "Corvette Command", Description: "Reach Corvette fleet class.", SvgKey: "agent_armor_corvette", Category: "fleet", Metric: "fleet_class", Target: 1, XPReward: 50, Rarity: 20},
+	{ID: "cruiser_command", Title: "Cruiser Command", Description: "Reach Cruiser fleet class.", SvgKey: "agent_armor_cruiser", Category: "fleet", Metric: "fleet_class", Target: 3, XPReward: 175, Rarity: 62},
+	{ID: "dreadnought_command", Title: "Dreadnought Command", Description: "Reach Dreadnought fleet class.", SvgKey: "agent_armor_dreadnought", Category: "fleet", Metric: "fleet_class", Target: 5, XPReward: 500, Rarity: 96, Secret: true},
 }
 
 func DefaultAgentHonorRules() AgentHonorRules {

@@ -1,3 +1,4 @@
+import { AGENT_ACHIEVEMENT_ICONS } from "./agent-achievement-icons";
 import { HONOR_BADGE_ICONS, GenesisNebulaIcon } from "./honor-badge-icons";
 import { ActorBadgeFrame } from "../common/actor-badge-frame";
 import { honorBadgeTone } from "../../lib/honor-badge-tone";
@@ -15,7 +16,8 @@ export function HonorBadgeIcon({
   /** QQ-style pedestal for inline chat surfaces. */
   medal?: boolean;
 }) {
-  const Icon = HONOR_BADGE_ICONS[svgKey] ?? GenesisNebulaIcon;
+  const Icon =
+    AGENT_ACHIEVEMENT_ICONS[svgKey] ?? HONOR_BADGE_ICONS[svgKey] ?? GenesisNebulaIcon;
   const icon = (
     <Icon
       title={title}

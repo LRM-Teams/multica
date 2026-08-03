@@ -225,10 +225,28 @@ verification results.
   instructions and add the sentence-uniqueness regression that was validated
   during diagnosis. The backend PR contains no `packages/views` delta.
 
-## Pending steps
+### 17. Published, merged, and confirmed the production deployment
+
+- Opened non-draft PR #1992 and confirmed the final diff contained only Go
+  backend code, backend tests, and this repair record.
+- GitHub CI passed: backend in 6m53s and frontend in 16m09s. The PR was merged
+  into `dev` as `9ad3dd53bd4fd683fcf7e5f6ea480b4e09557bde`.
+- The merge commit's own Deploy run was cancelled before it acquired a job
+  because newer `dev` pushes superseded it. Deploy run `30813522308` built
+  commit `22725924afc768fb57a3deaab070b977acf90a82`, which contains the #1992
+  merge commit as an ancestor.
+- That replacement run passed immutable bundle validation, image builds and
+  pushes for backend/web/db-bridge, database migration, container restart,
+  served-image provenance checks, Caddy HTTP/HTTPS checks, backend `/readyz`,
+  and db-bridge `/healthz`.
+- The polluted production session remains paused with its recorded failure
+  history; it was not rewritten as successful. A new user-created Research Run
+  is required to acceptance-test real Agent execution with the deployed fix.
+
+## Completion checklist
 
 - [x] Add regression tests and observe them fail on the unmodified code.
 - [x] Implement the root fixes.
 - [x] Run focused and repository verification.
-- [ ] Review, commit, publish, and merge a non-draft PR.
-- [ ] Confirm deployment and verify the production recovery path.
+- [x] Review, commit, publish, and merge a non-draft PR.
+- [x] Confirm deployment, image provenance, migrations, and service health.

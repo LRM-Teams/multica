@@ -332,7 +332,19 @@
     "templates_hint": "입력란의 템플릿 pill을 고르면 시작 문구가 채워지고, 수정 후 시작할 수 있습니다",
     "template_chip": "{{title}} prompt added — keep typing your goal",
     "template_chip_clear": "Remove template",
-    "goal_placeholder_with_template": "Add your specific goal…"
+    "goal_placeholder_with_template": "Add your specific goal…",
+    "template_injected_hint": "Authoritative template injected; submitted with your intent below",
+    "template_prompt_edit": "View / edit full template",
+    "template_prompt_title": "Edit full authoritative template",
+    "template_prompt_desc": "The full prompt is edited here and included in the submit payload — it is not dumped into the main textarea.",
+    "template_prompt_count": "{{count}} / ≥{{min}} Han chars",
+    "template_prompt_count_en": "{{count}} / ≥{{min}} chars",
+    "template_prompt_too_short": "Need at least {{min}} Han characters (now {{count}}) before applying.",
+    "template_prompt_too_short_en": "Need at least {{min}} characters (now {{count}}) before applying.",
+    "template_prompt_empty": "Full template cannot be empty.",
+    "template_prompt_reset": "Restore default",
+    "template_prompt_cancel": "Cancel",
+    "template_prompt_apply": "Apply changes"
   },
   "ring": {
     "title": "노드 작업",
@@ -347,7 +359,7 @@
     "retry_message": "노드 「{{title}}」({{id}})에서 재시도 / 경로 변경으로 다시 탐색해 주세요."
   },
   "dock": {
-    "label": "캔버스 컨트롤",
+    "label": "리서치 캔버스 도구",
     "north_star": "북극성",
     "zoom_in": "확대",
     "zoom_out": "축소",

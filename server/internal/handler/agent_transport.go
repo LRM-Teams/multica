@@ -402,6 +402,10 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 	}
 	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, true)
 	if err != nil {
+		if errors.Is(err, errReminderSendOutsideAnchor) {
+			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid or ambiguous target; use #channel, #channel:<threadId>, or `dm:@<handle>`")
 		return
 	}
@@ -586,6 +590,10 @@ func (h *Handler) AgentTransportReactMessage(w http.ResponseWriter, r *http.Requ
 	}
 	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
 	if err != nil {
+		if errors.Is(err, errReminderSendOutsideAnchor) {
+			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
@@ -653,6 +661,10 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 	limit := clampAgentTransportLimit(req.Limit, 20)
 	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
 	if err != nil {
+		if errors.Is(err, errReminderSendOutsideAnchor) {
+			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
@@ -701,6 +713,10 @@ func (h *Handler) agentTransportSendDraft(w http.ResponseWriter, r *http.Request
 	}
 	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, draft.Target, true)
 	if err != nil {
+		if errors.Is(err, errReminderSendOutsideAnchor) {
+			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
@@ -911,6 +927,10 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 	limit := clampAgentTransportLimit(req.Limit, 50)
 	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
 	if err != nil {
+		if errors.Is(err, errReminderSendOutsideAnchor) {
+			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
@@ -958,7 +978,15 @@ func (h *Handler) AgentTransportUnfollowThread(w http.ResponseWriter, r *http.Re
 		return
 	}
 	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
-	if err != nil || !target.threadRootMessageID.Valid {
+	if err != nil {
+		if errors.Is(err, errReminderSendOutsideAnchor) {
+			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid target")
+		return
+	}
+	if !target.threadRootMessageID.Valid {
 		writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
@@ -1202,6 +1230,16 @@ func (h *Handler) resolveAgentTransportTarget(ctx context.Context, task db.Agent
 		out.threadRootMessageID = parseUUID(resolved.threadRoot.ID)
 		out.threadID = threadID
 		out.triggerDepth = resolved.threadRoot.TriggerDepth + 1
+	}
+	// Reminder wake: hard pin to msg-id surface (thread→thread, main→main).
+	threadRootID := ""
+	if out.threadRootMessageID.Valid {
+		threadRootID = uuidToString(out.threadRootMessageID)
+	} else if strings.TrimSpace(out.threadRoot.ID) != "" {
+		threadRootID = strings.TrimSpace(out.threadRoot.ID)
+	}
+	if err := enforceReminderAnchorSurface(task, out.channel.ID, out.kind, threadRootID); err != nil {
+		return agentTransportTarget{}, err
 	}
 	return out, nil
 }

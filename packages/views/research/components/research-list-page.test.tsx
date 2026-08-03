@@ -659,5 +659,32 @@ describe("ResearchListPage template chips in composer (LRM-1092)", () => {
       enResearch.create_params.errors.empty_goal,
     );
   });
+
+  it("LRM-1139 A2: expand bar + dialog edit full prompt; apply persists override", () => {
+    render(<ResearchListPage />);
+    expect(screen.queryByTestId("research-template-prompt-bar")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: /Industry research/i }));
+    expect(screen.getByTestId("research-template-prompt-bar")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("research-template-prompt-edit"));
+    expect(screen.getByTestId("research-template-prompt-dialog")).toBeInTheDocument();
+    const editor = screen.getByTestId(
+      "research-template-prompt-editor",
+    ) as HTMLTextAreaElement;
+    expect(editor.value.length).toBeGreaterThan(800);
+    expect(
+      (screen.getByTestId("research-create-goal") as HTMLTextAreaElement).value
+        .length,
+    ).toBeLessThan(200);
+    const marker = "\n\nCUSTOM_FULL_PROMPT_OVERRIDE_MARKER";
+    fireEvent.change(editor, { target: { value: editor.value + marker } });
+    fireEvent.click(screen.getByTestId("research-template-prompt-apply"));
+    expect(screen.queryByTestId("research-template-prompt-dialog")).toBeNull();
+    // Re-open and confirm applied value persisted
+    fireEvent.click(screen.getByTestId("research-template-prompt-edit"));
+    expect(
+      (screen.getByTestId("research-template-prompt-editor") as HTMLTextAreaElement)
+        .value,
+    ).toContain("CUSTOM_FULL_PROMPT_OVERRIDE_MARKER");
+  });
 });
 

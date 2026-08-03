@@ -332,7 +332,19 @@
     "templates_hint": "入力欄のテンプレ pill を選ぶと起文句が入り、編集して開始できます",
     "template_chip": "{{title}} prompt added — keep typing your goal",
     "template_chip_clear": "Remove template",
-    "goal_placeholder_with_template": "Add your specific goal…"
+    "goal_placeholder_with_template": "Add your specific goal…",
+    "template_injected_hint": "Authoritative template injected; submitted with your intent below",
+    "template_prompt_edit": "View / edit full template",
+    "template_prompt_title": "Edit full authoritative template",
+    "template_prompt_desc": "The full prompt is edited here and included in the submit payload — it is not dumped into the main textarea.",
+    "template_prompt_count": "{{count}} / ≥{{min}} Han chars",
+    "template_prompt_count_en": "{{count}} / ≥{{min}} chars",
+    "template_prompt_too_short": "Need at least {{min}} Han characters (now {{count}}) before applying.",
+    "template_prompt_too_short_en": "Need at least {{min}} characters (now {{count}}) before applying.",
+    "template_prompt_empty": "Full template cannot be empty.",
+    "template_prompt_reset": "Restore default",
+    "template_prompt_cancel": "Cancel",
+    "template_prompt_apply": "Apply changes"
   },
   "ring": {
     "title": "ノード操作",
@@ -347,7 +359,7 @@
     "retry_message": "ノード「{{title}}」（{{id}}）から再試行 / 別経路で探索してください。"
   },
   "dock": {
-    "label": "キャンバス操作",
+    "label": "リサーチキャンバスツール",
     "north_star": "ノーススター",
     "zoom_in": "拡大",
     "zoom_out": "縮小",

@@ -124,8 +124,8 @@ func setupRetryTestDB(t *testing.T, failureReason string) *retryTestEnv {
 		Instructions:       "",
 		CustomEnv:          []byte("{}"),
 		CustomArgs:         []byte("[]"),
-			Model:              pgtype.Text{String: "composer-1.5", Valid: true},
-})
+		Model:              pgtype.Text{String: "composer-1.5", Valid: true},
+	})
 	require.NoError(t, err)
 
 	// Project carries an env_id; D9 requires the child's StartSession env_id to

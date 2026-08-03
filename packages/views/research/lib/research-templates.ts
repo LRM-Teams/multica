@@ -1,9 +1,15 @@
 /**
- * LRM-817 / LRM-906: homepage quick-start templates.
- * Long professional prompts (≥800 chars) live in research-template-prompts.ts.
- * Cards never dump the full prompt into the composer — chip + hidden goal (T2).
+ * LRM-817 / LRM-906 / LRM-1139: homepage quick-start templates.
+ * Long professional prompts (zh ≥3000 汉字) live in research-template-prompts.ts.
+ * A2: short intent in composer; full prompt editable via expand; submit merges both.
  */
-import { RESEARCH_TEMPLATE_PROMPTS } from "./research-template-prompts";
+import {
+  countHanChars,
+  RESEARCH_TEMPLATE_MIN_HAN,
+  RESEARCH_TEMPLATE_PROMPTS,
+} from "./research-template-prompts";
+
+export { countHanChars, RESEARCH_TEMPLATE_MIN_HAN };
 
 export type ResearchTemplate = {
   id: string;
@@ -63,7 +69,7 @@ export function localizeTemplateField<T>(
   return lang.startsWith("zh") ? field.zh : field.en;
 }
 
-/** Compose the hidden professional goal (params appended). Never dump into the textarea. */
+/** Compose the professional goal (params appended). Used as default full prompt. */
 export function composeTemplateGoal(
   template: ResearchTemplate,
   language: string | undefined,
@@ -76,8 +82,8 @@ export function composeTemplateGoal(
 }
 
 /**
- * LRM-1092 / LRM-1072: short starter written into the composer on chip select.
- * Long professional prompts stay hidden via buildCreateGoal on submit.
+ * LRM-1092 / LRM-1072 / LRM-1140 A2: short starter written into the composer on chip select.
+ * Long professional prompts stay in templatePrompt / expand editor; submit via buildCreateGoal.
  */
 export function composeTemplateStarter(
   template: ResearchTemplate,
@@ -94,18 +100,37 @@ export function composeTemplateStarter(
   return `Research around "${blurb}" for ${title}: cover ${focus.join(", ")}, and deliver verifiable conclusions.`;
 }
 
-/** Merge hidden template prompt with the user's short goal line for create. */
+/**
+ * Merge full template prompt with the user's short goal line for create.
+ * `promptOverride` is the expand-editor draft (defaults to composeTemplateGoal).
+ */
 export function buildCreateGoal(
   template: ResearchTemplate | null | undefined,
   userGoal: string,
   language: string | undefined,
+  promptOverride?: string | null,
 ): string {
   const user = userGoal.trim();
   if (!template) return user;
-  const prompt = composeTemplateGoal(template, language);
+  const prompt = (promptOverride ?? composeTemplateGoal(template, language)).trim();
   if (!user) return prompt;
   const label = (language ?? "en").toLowerCase().startsWith("zh")
     ? "用户补充目标"
     : "User goal";
   return `${prompt}\n\n${label}：\n${user}`;
+}
+
+/** Locale-aware gate for expand-editor apply (zh: ≥3000 汉字; else length ≥800). */
+export function isTemplatePromptAboveMin(
+  text: string,
+  language: string | undefined,
+): boolean {
+  const isZh = (language ?? "en").toLowerCase().startsWith("zh");
+  if (isZh) return countHanChars(text) >= RESEARCH_TEMPLATE_MIN_HAN;
+  return text.trim().length >= 800;
+}
+
+/** @deprecated use isTemplatePromptAboveMin — kept for zh-only call sites/tests */
+export function isTemplatePromptAboveMinHan(text: string): boolean {
+  return countHanChars(text) >= RESEARCH_TEMPLATE_MIN_HAN;
 }

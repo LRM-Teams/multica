@@ -98,15 +98,18 @@ type linkSessionCall struct {
 type fakeEnvDispatchDeps struct {
 	mu sync.Mutex
 
-	envs             map[string]Env        // by envID
-	sandboxes        map[string]string     // sandboxID -> sourceSandboxID (for fork provenance)
-	projects         map[string]string     // projectID -> envID
-	issues           map[string][]IssueRow // projectID -> issues
-	chatSess         map[string]string     // sessionID -> projectID
-	agentRuns        []string              // every enqueued runID
-	runCounter       int
-	idem             map[string]EnvDispatchResult // idempotency ledger
-	linkSessionCalls []linkSessionCall            // AC-4: records LinkEnvDispatchTrainingSession calls
+	envs                map[string]Env        // by envID
+	sandboxes           map[string]string     // sandboxID -> sourceSandboxID (for fork provenance)
+	projects            map[string]string     // projectID -> envID
+	issues              map[string][]IssueRow // projectID -> issues
+	sourceTasks         map[string]SourceTask // sourceTaskID -> immutable source task
+	createdIssues       []IssueInput
+	setLocalTargetCalls []setEnvDispatchRunLocalTargetsCall
+	chatSess            map[string]string // sessionID -> projectID
+	agentRuns           []string          // every enqueued runID
+	runCounter          int
+	idem                map[string]EnvDispatchResult // idempotency ledger
+	linkSessionCalls    []linkSessionCall            // AC-4: records LinkEnvDispatchTrainingSession calls
 
 	defaultSelfPlayEnv string // per-workspace default self_play base env ("" = unconfigured)
 
@@ -171,16 +174,25 @@ type fakeEnvDispatchDeps struct {
 func newFakeEnvDispatchDeps() *fakeEnvDispatchDeps {
 	return &fakeEnvDispatchDeps{
 		envs: map[string]Env{}, sandboxes: map[string]string{}, projects: map[string]string{},
-		issues: map[string][]IssueRow{}, chatSess: map[string]string{}, channels: map[string]string{},
+		issues: map[string][]IssueRow{}, sourceTasks: map[string]SourceTask{}, chatSess: map[string]string{}, channels: map[string]string{},
 		dispatchRuns: map[string]fakeEnvDispatchRun{},
 	}
 }
 
 // fakeEnvDispatchRun is the in-memory env_dispatch_run row for service tests.
 type fakeEnvDispatchRun struct {
-	WorkspaceID  string
-	TrainingMode bool
-	RootTaskID   string
+	WorkspaceID    string
+	TrainingMode   bool
+	RootTaskID     string
+	RunID          string
+	SourceTaskID   string
+	SampleIndex    int
+	LocalIssueID   string
+	LocalChannelID string
+}
+
+type setEnvDispatchRunLocalTargetsCall struct {
+	ProjectID, WorkspaceID, LocalIssueID, LocalChannelID string
 }
 
 type createEnvDispatchRunCall struct {
@@ -190,6 +202,71 @@ type createEnvDispatchRunCall struct {
 
 type bindRootTaskCall struct {
 	ProjectID, RootTaskID string
+}
+
+func (f *fakeEnvDispatchDeps) GetSourceTask(_ context.Context, sourceTaskID, workspaceID string) (SourceTask, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	source, ok := f.sourceTasks[sourceTaskID]
+	if !ok || source.WorkspaceID != workspaceID {
+		return SourceTask{}, pgx.ErrNoRows
+	}
+	return source, nil
+}
+
+func (f *fakeEnvDispatchDeps) GetEnvDispatchRunSourceTask(_ context.Context, projectID, workspaceID string) (SourceTask, error) {
+	f.mu.Lock()
+	run, ok := f.dispatchRuns[projectID]
+	if ok && run.WorkspaceID == workspaceID && run.SourceTaskID != "" {
+		source, exists := f.sourceTasks[run.SourceTaskID]
+		f.mu.Unlock()
+		if !exists {
+			return SourceTask{}, pgx.ErrNoRows
+		}
+		return source, nil
+	}
+	// Older service tests predate durable source-task seeding. Keep those
+	// fixture-only branches focused on their original behavior by deriving a
+	// valid typed placeholder from their source-project shape. Production never
+	// takes this path: its adapter delegates directly to the durable query.
+	isMessage := false
+	for _, pid := range f.chatSess {
+		if pid == projectID {
+			isMessage = true
+			break
+		}
+	}
+	f.mu.Unlock()
+	if isMessage {
+		return SourceTask{ID: "legacy-message-source", WorkspaceID: workspaceID, Type: SourceTaskMessage, Payload: json.RawMessage(`{"content":"legacy"}`)}, nil
+	}
+	return SourceTask{ID: "legacy-issue-source", WorkspaceID: workspaceID, Type: SourceTaskIssue, Payload: json.RawMessage(`{"title":"legacy","description":"legacy"}`)}, nil
+}
+
+func (f *fakeEnvDispatchDeps) CreateEnvDispatchRunWithSource(_ context.Context, projectID, workspaceID string, trainingMode bool, sourceTaskID string, sampleIndex int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.runCounter++
+	runID := fmt.Sprintf("dispatch-run-%d", f.runCounter)
+	f.dispatchRuns[projectID] = fakeEnvDispatchRun{
+		WorkspaceID: workspaceID, TrainingMode: trainingMode, RunID: runID,
+		SourceTaskID: sourceTaskID, SampleIndex: sampleIndex,
+	}
+	return runID, nil
+}
+
+func (f *fakeEnvDispatchDeps) SetEnvDispatchRunLocalTargets(_ context.Context, projectID, workspaceID, localIssueID, localChannelID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.setLocalTargetCalls = append(f.setLocalTargetCalls, setEnvDispatchRunLocalTargetsCall{projectID, workspaceID, localIssueID, localChannelID})
+	run, ok := f.dispatchRuns[projectID]
+	if !ok {
+		return fmt.Errorf("no env_dispatch_run for project %s", projectID)
+	}
+	run.LocalIssueID = localIssueID
+	run.LocalChannelID = localChannelID
+	f.dispatchRuns[projectID] = run
+	return nil
 }
 
 func (f *fakeEnvDispatchDeps) CreateEnvDispatchRun(_ context.Context, projectID, workspaceID string, trainingMode bool) error {
@@ -475,14 +552,18 @@ func (f *fakeEnvDispatchDeps) ListChatSessionsByProject(_ context.Context, pid, 
 	}
 	return out, nil
 }
-func (f *fakeEnvDispatchDeps) CreateIssue(_ context.Context, pid, _, _, title, _ string, _, _, _ []string) (string, error) {
+func (f *fakeEnvDispatchDeps) CreateIssue(_ context.Context, pid, _, _, title, description string, acceptanceCriteria, failToPass, passToPass []string) (string, error) {
 	if f.createIssueErr != nil {
 		return "", f.createIssueErr
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.createdIssues = append(f.createdIssues, IssueInput{
+		Title: title, Description: description, AcceptanceCriteria: acceptanceCriteria,
+		FailToPass: failToPass, PassToPass: passToPass,
+	})
 	id := fmt.Sprintf("issue-%d", len(f.issues))
-	f.issues[pid] = append(f.issues[pid], IssueRow{ID: id, ProjectID: pid, Title: title})
+	f.issues[pid] = append(f.issues[pid], IssueRow{ID: id, ProjectID: pid, Title: title, Description: description})
 	return id, nil
 }
 func (f *fakeEnvDispatchDeps) CreateChatSession(_ context.Context, pid, _, _, _ string) (string, error) {
@@ -2810,5 +2891,147 @@ func TestDispatch_SharedSandboxResetFailureReclaimsSharedResources(t *testing.T)
 	}
 	if len(f.envs) != 1 {
 		t.Fatalf("want only the base env left after rollback, got %+v", f.envs)
+	}
+}
+
+func TestReclaimSharedRuntimesDeletesEachPrecreatedRuntimeOnce(t *testing.T) {
+	deps := newFakeEnvDispatchDeps()
+	svc := NewEnvDispatchService(deps, 1)
+	svc.reclaimSharedRuntimes(context.Background(), EnvDispatchInput{WorkspaceID: "ws", SharedSandbox: true}, []SandboxInstanceRef{
+		{RuntimeID: "runtime-1"},
+		{RuntimeID: "runtime-1"},
+		{RuntimeID: ""},
+	})
+
+	if len(deps.deleteRuntimeCalls) != 1 || deps.deleteRuntimeCalls[0] != "runtime-1" {
+		t.Fatalf("DeleteAgentRuntime calls = %#v, want [runtime-1]", deps.deleteRuntimeCalls)
+	}
+}
+
+func TestReclaimSharedRuntimesDoesNotTouchNonSharedRefs(t *testing.T) {
+	deps := newFakeEnvDispatchDeps()
+	svc := NewEnvDispatchService(deps, 1)
+	svc.reclaimSharedRuntimes(context.Background(), EnvDispatchInput{WorkspaceID: "ws"}, []SandboxInstanceRef{{RuntimeID: "runtime-1"}})
+
+	if len(deps.deleteRuntimeCalls) != 0 {
+		t.Fatalf("DeleteAgentRuntime calls = %#v, want none", deps.deleteRuntimeCalls)
+	}
+}
+
+func TestDispatch_ScratchSourceIssueCreatesDistinctRunsAndLocalProvenance(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.sourceTasks["source-issue"] = SourceTask{
+		ID: "source-issue", WorkspaceID: "ws", Type: SourceTaskIssue,
+		Payload: json.RawMessage(`{"title":"source title","description":"source description","acceptance_criteria":["accept"],"fail_to_pass":["fails"],"pass_to_pass":["passes"]}`),
+	}
+
+	res, err := NewEnvDispatchService(f, 1).Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 2,
+		AgentID: "ag", SourceTaskID: "source-issue",
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(res.Rollouts) != 2 {
+		t.Fatalf("rollouts = %d, want 2", len(res.Rollouts))
+	}
+	seenRunIDs := map[string]bool{}
+	for i, rollout := range res.Rollouts {
+		if rollout.SourceTaskID != "source-issue" {
+			t.Fatalf("rollout %d source_task_id = %q, want source-issue", i, rollout.SourceTaskID)
+		}
+		if rollout.RunID == "" || seenRunIDs[rollout.RunID] {
+			t.Fatalf("rollout %d run_id = %q, want a unique non-empty id", i, rollout.RunID)
+		}
+		seenRunIDs[rollout.RunID] = true
+		if rollout.IssueID == "" {
+			t.Fatalf("rollout %d missing local issue", i)
+		}
+	}
+	if len(f.createdIssues) != 2 {
+		t.Fatalf("created issues = %d, want 2", len(f.createdIssues))
+	}
+	for _, issue := range f.createdIssues {
+		if issue.Title != "source title" || issue.Description != "source description" {
+			t.Fatalf("issue was not materialized from source task: %+v", issue)
+		}
+	}
+	if len(f.setLocalTargetCalls) != 2 {
+		t.Fatalf("local-target writes = %d, want 2", len(f.setLocalTargetCalls))
+	}
+}
+
+func TestDispatch_RejectsSourceTaskTypeMismatchBeforeResourceCreation(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.sourceTasks["source-message"] = SourceTask{
+		ID: "source-message", WorkspaceID: "ws", Type: SourceTaskMessage,
+		Payload: json.RawMessage(`{"content":"hello"}`),
+	}
+
+	_, err := NewEnvDispatchService(f, 1).Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1,
+		AgentID: "ag", SourceTaskID: "source-message",
+	})
+	if err == nil || !strings.Contains(err.Error(), "source task type") {
+		t.Fatalf("error = %v, want source task type validation failure", err)
+	}
+	if len(f.projects) != 0 || len(f.sandboxes) != 0 {
+		t.Fatalf("type mismatch created resources: projects=%v sandboxes=%v", f.projects, f.sandboxes)
+	}
+}
+
+func TestDispatch_BranchInheritsSourceTaskWithoutRematerializing(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	const sourceProjectID = "source-project"
+	const sourceTaskID = "source-task"
+	const stateEnv = "state-env"
+	f.envs[stateEnv] = Env{ID: stateEnv, SandboxIDs: []string{"state-sandbox"}, Mode: EnvModeBranch, Domain: EnvDomainSweLego}
+	f.projects[sourceProjectID] = stateEnv
+	f.issues[sourceProjectID] = []IssueRow{{ID: "source-issue", ProjectID: sourceProjectID, Title: "already local"}}
+	f.sourceTasks[sourceTaskID] = SourceTask{
+		ID: sourceTaskID, WorkspaceID: "ws", Type: SourceTaskIssue,
+		Payload: json.RawMessage(`{"title":"canonical source","description":"canonical description"}`),
+	}
+	f.dispatchRuns[sourceProjectID] = fakeEnvDispatchRun{WorkspaceID: "ws", SourceTaskID: sourceTaskID, RunID: "source-run"}
+
+	res, err := NewEnvDispatchService(f, 1).Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeBranch, EnvID: stateEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 1, AgentID: "ag",
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	r := res.Rollouts[0]
+	if r.SourceTaskID != sourceTaskID || r.RunID == "" {
+		t.Fatalf("branch rollout identity = source_task_id=%q run_id=%q", r.SourceTaskID, r.RunID)
+	}
+	if r.IssueID != "copied-issue-1" {
+		t.Fatalf("branch must target copied issue, got %q", r.IssueID)
+	}
+	if len(f.createdIssues) != 0 {
+		t.Fatalf("branch must not rematerialize a source issue, created=%+v", f.createdIssues)
+	}
+}
+
+func TestDerivedTaskTemplateForcesInstanceBackendAndOverridesPerAgentTemplate(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	lc := &fakeSandboxInstanceCreator{}
+	svc := NewEnvDispatchService(f, 1).WithSandboxLifecycle(lc)
+	if !svc.useSandboxInstanceBackend(EnvDispatchInput{TaskTemplateID: "derived-template"}) {
+		t.Fatal("derived task template must force sandbox-instance backend")
+	}
+	_, _, err := svc.createSandboxInstanceRefs(context.Background(), EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", TaskTemplateID: "derived-template",
+		PerAgentEnvSpecs: []PerAgentEnvSpec{{AgentID: "a", Template: "caller-template"}},
+	}, Env{}, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lc.calls) != 1 || lc.calls[0].Template != "derived-template" || !lc.calls[0].DaemonEnabled {
+		t.Fatalf("derived template create = %+v", lc.calls)
 	}
 }

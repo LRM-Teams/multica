@@ -977,3 +977,15 @@ func TestEnvDispatch_NonSharedResponseRefsStayDistinct(t *testing.T) {
 		}
 	}
 }
+
+func TestMapRolloutsIncludesSourceAndRunIdentity(t *testing.T) {
+	got := mapRollouts([]service.EnvRollout{{
+		RunID: "run-1", SourceTaskID: "source-1", ProjectID: "project-1",
+	}})
+	if len(got) != 1 {
+		t.Fatalf("rollouts = %d, want 1", len(got))
+	}
+	if got[0].RunID != "run-1" || got[0].SourceTaskID != "source-1" {
+		t.Fatalf("mapped identity = %+v", got[0])
+	}
+}

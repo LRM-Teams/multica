@@ -47,6 +47,7 @@ import {
 } from "../lib/research-list-persist";
 import {
   buildCreateGoal,
+  composeTemplateGoal,
   composeTemplateStarter,
   localizeTemplateField,
   type ResearchTemplate,
@@ -64,6 +65,7 @@ import { ResearchSessionRow } from "./research-session-row";
 import { ResearchSessionListSkeleton } from "./research-session-row-skeleton";
 import { ResearchTemplateChipRow } from "./research-template-chip-row";
 import { ResearchTemplateInjectTag } from "./research-template-inject-tag";
+import { ResearchTemplatePromptEditor } from "./research-template-prompt-editor";
 
 /**
  * Composer draft — one state object so create/template/goal/params update
@@ -74,6 +76,8 @@ type ComposerDraft = {
   /** Last value written programmatically (starter / clear); dirty when goal differs. */
   goalBaseline: string;
   template: ResearchTemplate | null;
+  /** LRM-1139 A2: full authoritative prompt (editable via expand); null when no template. */
+  templatePrompt: string | null;
   draftTitle: string | undefined;
   params: ResearchCreateParamsDraft;
   paramsOpen: boolean;
@@ -85,6 +89,7 @@ function emptyComposer(uiLanguage?: string): ComposerDraft {
     goal: "",
     goalBaseline: "",
     template: null,
+    templatePrompt: null,
     draftTitle: undefined,
     params: defaultCreateParams(uiLanguage),
     paramsOpen: false,
@@ -105,6 +110,7 @@ export function ResearchListPage() {
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter | null>(
     () => readResearchListPersist()?.status ?? null,
   );
+  const [promptEditorOpen, setPromptEditorOpen] = useState(false);
   const goalInputRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const composerCardRef = useRef<HTMLDivElement>(null);
@@ -121,12 +127,17 @@ export function ResearchListPage() {
     goal,
     goalBaseline,
     template: selectedTemplate,
+    templatePrompt,
     draftTitle,
     params: createParams,
     paramsOpen,
     fieldErrors,
   } = composer;
   const goalDirty = goal !== goalBaseline;
+  const defaultTemplatePrompt = selectedTemplate
+    ? composeTemplateGoal(selectedTemplate, i18n?.language)
+    : "";
+  const appliedTemplatePrompt = templatePrompt ?? defaultTemplatePrompt;
 
   // Seed language from UI locale once i18n is ready (defaults stay standard/weights).
   useEffect(() => {
@@ -164,7 +175,12 @@ export function ResearchListPage() {
     mutationFn: (params: ReturnType<typeof normalizeCreateParams>) => {
       const language = i18n?.language;
       return api.createResearchSession({
-        goal: buildCreateGoal(selectedTemplate, goal, language),
+        goal: buildCreateGoal(
+          selectedTemplate,
+          goal,
+          language,
+          selectedTemplate ? appliedTemplatePrompt : null,
+        ),
         depth_tier: params.depth_tier,
         language: params.language,
         source_weights: params.source_weights,
@@ -272,17 +288,19 @@ export function ResearchListPage() {
       goal: text,
       goalBaseline: text,
       template: null,
+      templatePrompt: null,
       draftTitle: title,
     }));
+    setPromptEditorOpen(false);
     // Defer focus so the controlled value paints before the caret moves.
     queueMicrotask(focusComposer);
   };
 
   /**
-   * LRM-1092: toggle chip in composer.
-   * Select → prefill short starter (skip overwrite when dirty).
+   * LRM-1092 / LRM-1140 A2 / LRM-1139: toggle chip in composer.
+   * Select → prefill short starter (skip overwrite when dirty) + seed full prompt.
    * Reselect → clear selection; clear body only when not dirty.
-   * Long professional prompts stay on submit via buildCreateGoal.
+   * Long professional prompts submit via buildCreateGoal(templatePrompt).
    */
   const toggleTemplate = (template: ResearchTemplate) => {
     const language = i18n?.language;
@@ -293,6 +311,7 @@ export function ResearchListPage() {
           return {
             ...prev,
             template: null,
+            templatePrompt: null,
             draftTitle: prev.goal.trim() ? prev.draftTitle : undefined,
           };
         }
@@ -301,15 +320,18 @@ export function ResearchListPage() {
           goal: "",
           goalBaseline: "",
           template: null,
+          templatePrompt: null,
           draftTitle: undefined,
         };
       }
       const starter = composeTemplateStarter(template, language);
+      const fullPrompt = composeTemplateGoal(template, language);
       const title = localizeTemplateField(template.sessionTitle, language);
       if (dirty) {
         return {
           ...prev,
           template,
+          templatePrompt: fullPrompt,
           draftTitle: title,
         };
       }
@@ -318,12 +340,14 @@ export function ResearchListPage() {
         goal: starter,
         goalBaseline: starter,
         template,
+        templatePrompt: fullPrompt,
         draftTitle: title,
         fieldErrors: prev.fieldErrors?.goal
           ? { ...prev.fieldErrors, goal: undefined }
           : prev.fieldErrors,
       };
     });
+    setPromptEditorOpen(false);
     queueMicrotask(focusComposer);
   };
 
@@ -534,6 +558,49 @@ export function ResearchListPage() {
                     }}
                   />
                 </div>
+                {selectedTemplate ? (
+                  <div
+                    className="flex flex-wrap items-center justify-between gap-2 px-3 pb-2 text-xs text-muted-foreground md:px-3.5"
+                    data-testid="research-template-prompt-bar"
+                  >
+                    <span>{t(($) => $.home.template_injected_hint)}</span>
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      className="h-auto px-0 py-0 text-xs"
+                      data-testid="research-template-prompt-edit"
+                      onClick={() => setPromptEditorOpen(true)}
+                    >
+                      {t(($) => $.home.template_prompt_edit)}
+                    </Button>
+                  </div>
+                ) : null}
+                {selectedTemplate ? (
+                  <ResearchTemplatePromptEditor
+                    open={promptEditorOpen}
+                    onOpenChange={(open) => {
+                      setPromptEditorOpen(open);
+                      if (!open) {
+                        queueMicrotask(() => {
+                          const el = document.querySelector(
+                            '[data-testid="research-template-prompt-edit"]',
+                          );
+                          if (el instanceof HTMLElement) el.focus();
+                        });
+                      }
+                    }}
+                    defaultPrompt={defaultTemplatePrompt}
+                    value={appliedTemplatePrompt}
+                    onApply={(next) =>
+                      setComposer((prev) => ({
+                        ...prev,
+                        templatePrompt: next,
+                      }))
+                    }
+                    disabled={create.isPending}
+                  />
+                ) : null}
                 {fieldErrors?.goal ? (
                   <p
                     id="research-create-goal-error"

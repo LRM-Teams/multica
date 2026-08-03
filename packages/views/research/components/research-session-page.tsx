@@ -96,10 +96,7 @@ import { ResearchConnectivityShell } from "./research-connectivity-shell";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
-import {
-  ResearchModuleRail,
-  type ResearchAuxPanelId,
-} from "./research-module-rail";
+import { type ResearchAuxPanelId } from "./research-module-rail";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchServerErrorPage } from "./research-server-error-page";
@@ -593,12 +590,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           className="relative z-[1] min-h-0 min-w-0 flex-1"
           data-testid="research-session-canvas-host"
         >
-          <ResearchModuleRail
-            active={auxPanel}
-            onSelect={(id) =>
-              setAuxPanel((prev) => (prev === id ? null : id))
-            }
-          />
           <ResearchCanvas
             nodes={data.nodes}
             edges={data.edges}
@@ -613,6 +604,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             chatOpen={chatOpen}
             chatMode={chatMode}
             detailPlacement="drawer"
+            auxPanel={auxPanel}
+            onAuxPanelSelect={(id) =>
+              setAuxPanel((prev) => (prev === id ? null : id))
+            }
             onOpenDetail={(node) => {
               dispatch({ type: "select", node });
               setAuxPanel("detail");

@@ -332,7 +332,19 @@
     "templates_hint": "Pick a pill in the composer to prefill a starter — edit, then start",
     "template_chip": "{{title}} prompt added — keep typing your goal",
     "template_chip_clear": "Remove template",
-    "goal_placeholder_with_template": "Add your specific goal…"
+    "goal_placeholder_with_template": "Add your specific goal…",
+    "template_injected_hint": "Authoritative template injected; submitted with your intent below",
+    "template_prompt_edit": "View / edit full template",
+    "template_prompt_title": "Edit full authoritative template",
+    "template_prompt_desc": "The full prompt is edited here and included in the submit payload — it is not dumped into the main textarea.",
+    "template_prompt_count": "{{count}} / ≥{{min}} Han chars",
+    "template_prompt_count_en": "{{count}} / ≥{{min}} chars",
+    "template_prompt_too_short": "Need at least {{min}} Han characters (now {{count}}) before applying.",
+    "template_prompt_too_short_en": "Need at least {{min}} characters (now {{count}}) before applying.",
+    "template_prompt_empty": "Full template cannot be empty.",
+    "template_prompt_reset": "Restore default",
+    "template_prompt_cancel": "Cancel",
+    "template_prompt_apply": "Apply changes"
   },
   "ring": {
     "title": "Node actions",
@@ -347,7 +359,7 @@
     "retry_message": "Retry / reroute exploration from «{{title}}» (node {{id}})."
   },
   "dock": {
-    "label": "Canvas controls",
+    "label": "Research canvas tools",
     "north_star": "North star",
     "zoom_in": "Zoom in",
     "zoom_out": "Zoom out",

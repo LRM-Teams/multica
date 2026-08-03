@@ -63,3 +63,22 @@ SELECT atq.status
 FROM env_dispatch_run r
 JOIN agent_inbox_event atq ON atq.id = r.root_task_id
 WHERE r.project_id = $1 AND r.workspace_id = $2;
+
+
+-- name: CreateEnvDispatchRunWithSource :one
+INSERT INTO env_dispatch_run (project_id, workspace_id, training_mode, source_task_id, sample_index)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING project_id, workspace_id, training_mode, root_task_id, created_at,
+          run_id, source_task_id, sample_index, local_issue_id, local_channel_id;
+
+-- name: SetEnvDispatchRunLocalTargets :exec
+UPDATE env_dispatch_run
+SET local_issue_id = $3,
+    local_channel_id = $4
+WHERE project_id = $1 AND workspace_id = $2;
+
+-- name: GetEnvDispatchRunSourceTask :one
+SELECT st.id, st.workspace_id, st.type, st.payload, st.content_hash, st.created_at
+FROM env_dispatch_run edr
+JOIN source_task st ON st.id = edr.source_task_id
+WHERE edr.project_id = $1 AND edr.workspace_id = $2;

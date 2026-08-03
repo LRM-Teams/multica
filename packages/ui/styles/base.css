@@ -38,6 +38,13 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* Tailwind v4 utilities animate by default; preserve the static element and
+     its semantics while removing vestibular motion across both apps. */
+  .animate-pulse,
+  .animate-spin {
+    animation: none;
+  }
+
   .research-anchor-flash {
     animation: none;
     outline: 2px solid var(--brand);

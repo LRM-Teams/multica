@@ -48,6 +48,7 @@ import { ResearchFleetAvatarStack } from "./research-fleet-avatar-stack";
 import { ResearchGraphNode as ResearchGraphNodeView } from "./research-graph-node";
 import { ResearchLaneBandNodeView } from "./research-lane-band-node";
 import { ResearchLogicStrip } from "./research-logic-strip";
+import type { ResearchAuxPanelId } from "./research-module-rail";
 import { SYSTEM_NODE_TYPES, type NodeRingAction } from "../lib/node-action-ring";
 import { ResearchNodeActionRing } from "./research-node-action-ring";
 import { ResearchNodeDetail } from "./research-node-detail";
@@ -85,6 +86,8 @@ function ResearchCanvasInner({
   chatMode = "empty",
   detailPlacement = "overlay",
   onOpenDetail,
+  auxPanel = null,
+  onAuxPanelSelect,
 }: {
   nodes: ResearchGraphNode[];
   edges: ResearchGraphEdge[];
@@ -103,6 +106,9 @@ function ResearchCanvasInner({
   /** LRM-1061 — node detail goes to the aux drawer instead of a floating card. */
   detailPlacement?: "overlay" | "drawer";
   onOpenDetail?: (node: ResearchGraphNode) => void;
+  /** LRM-1151 — active 轨/源/详 module (drawer content owned by session page). */
+  auxPanel?: ResearchAuxPanelId | null;
+  onAuxPanelSelect?: (id: ResearchAuxPanelId) => void;
 }) {
   const { t } = useT("research");
   const laid = useMemo(() => layoutResearchGraph(nodes, edges), [nodes, edges]);
@@ -304,54 +310,98 @@ function ResearchCanvasInner({
       <ResearchChatFab mode={chatMode} onOpen={onOpenChat} isMobile={isMobile} />
     ) : null;
 
+  const detailToggleOpen =
+    detailPlacement === "drawer" ? auxPanel === "detail" : showOverlayDetail;
+
+  const handleToggleDetail = useCallback(() => {
+    if (detailPlacement === "drawer") {
+      onAuxPanelSelect?.("detail");
+      return;
+    }
+    if (showOverlayDetail) {
+      clearDetail();
+    } else if (selectedNode || ringNode) {
+      const n = selectedNode ?? ringNode!;
+      pinDetail(n);
+      closeRing();
+    }
+  }, [
+    detailPlacement,
+    onAuxPanelSelect,
+    showOverlayDetail,
+    clearDetail,
+    selectedNode,
+    ringNode,
+    pinDetail,
+    closeRing,
+  ]);
+
   if (isMobile) {
     return (
       <div
-        className="relative h-full w-full bg-canvas-bg text-foreground"
+        className="relative flex h-full w-full flex-col bg-canvas-bg text-foreground"
         data-testid="research-canvas-overlay-grid"
         data-overlay="narrow"
       >
         <style>{NODE_ENTER_MOTION_CSS}</style>
-        <ResearchLogicStrip
-          nodes={nodes}
-          edges={edges}
-          selectedId={selectedId}
-          presence={presence}
-          onSelect={(node) => {
-            if (node && isLogicEndNode(node)) {
-              onOpenDelivery?.();
-              return;
-            }
-            onSelect?.(node);
-            if (node) {
-              setPinnedNodeId(node.id);
-              setDetailPinned(true);
-            }
-          }}
-          onOpenDelivery={onOpenDelivery}
-          onRetry={onRetry}
-        />
-        <ResearchFleetAvatarStack
-          members={members}
-          sessionStatus={sessionStatus}
-          className="absolute top-3 right-3 z-20"
-        />
-        {chatFab}
-        {showOverlayDetail && detailNode ? (
-          <ResearchNodeDetail
-            node={detailNode}
-            sources={sourceList}
-            open={showOverlayDetail}
-            placement="sheet"
-            onClose={clearDetail}
+        <div className="relative min-h-0 flex-1">
+          <ResearchLogicStrip
+            nodes={nodes}
+            edges={edges}
+            selectedId={selectedId}
+            presence={presence}
+            onSelect={(node) => {
+              if (node && isLogicEndNode(node)) {
+                onOpenDelivery?.();
+                return;
+              }
+              onSelect?.(node);
+              if (node) {
+                setPinnedNodeId(node.id);
+                setDetailPinned(true);
+              }
+            }}
+            onOpenDelivery={onOpenDelivery}
+            onRetry={onRetry}
           />
-        ) : null}
-        {ringNode ? (
-          <ResearchNodeActionRing
-            node={ringNode}
-            mode="sheet"
-            onAction={handleRingAction}
-            onClose={closeRing}
+          <ResearchFleetAvatarStack
+            members={members}
+            sessionStatus={sessionStatus}
+            className="absolute top-3 right-3 z-20"
+          />
+          {chatFab}
+          {showOverlayDetail && detailNode ? (
+            <ResearchNodeDetail
+              node={detailNode}
+              sources={sourceList}
+              open={showOverlayDetail}
+              placement="sheet"
+              onClose={clearDetail}
+            />
+          ) : null}
+          {ringNode ? (
+            <ResearchNodeActionRing
+              node={ringNode}
+              mode="sheet"
+              onAction={handleRingAction}
+              onClose={closeRing}
+            />
+          ) : null}
+        </div>
+        {/* LRM-1151: full-width Dock under Logic Strip; zoom hidden on narrow. */}
+        {onAuxPanelSelect ? (
+          <ResearchCanvasDock
+            layout="mobile"
+            zoomPct={100}
+            onZoomIn={() => {}}
+            onZoomOut={() => {}}
+            onFit={() => {}}
+            showZoom={false}
+            showDetailToggle={false}
+            detailOpen={detailToggleOpen}
+            onToggleDetail={handleToggleDetail}
+            activeModule={auxPanel}
+            onSelectModule={onAuxPanelSelect}
           />
         ) : null}
       </div>
@@ -462,10 +512,14 @@ function ResearchCanvasInner({
           </NodeToolbar>
         ) : null}
       </ReactFlow>
-      {/* LRM-797: Controls bottom-left (outside RF so Panel centering cannot win). */}
+      {/* LRM-1151: Canvas Dock bottom-center (modules + zoom + detail). */}
       <div
         className="pointer-events-auto absolute z-20"
-        style={{ left: OVERLAY_INSET_PX, bottom: CONTROLS_BOTTOM_PX }}
+        style={{
+          left: "50%",
+          bottom: CONTROLS_BOTTOM_PX,
+          transform: "translateX(-50%)",
+        }}
         data-testid="research-canvas-controls-slot"
       >
         <ResearchCanvasDock
@@ -483,16 +537,10 @@ function ResearchCanvasInner({
             void fitView({ padding: 0.18, duration: 240 });
             setZoomPct(Math.round(getZoom() * 100));
           }}
-          detailOpen={showOverlayDetail}
-          onToggleDetail={() => {
-            if (showOverlayDetail) {
-              clearDetail();
-            } else if (selectedNode || ringNode) {
-              const n = selectedNode ?? ringNode!;
-              pinDetail(n);
-              closeRing();
-            }
-          }}
+          detailOpen={detailToggleOpen}
+          onToggleDetail={handleToggleDetail}
+          activeModule={auxPanel}
+          onSelectModule={onAuxPanelSelect}
         />
       </div>
       {/* LRM-797: detail card 12px above Controls — skipped when LRM-1061 drawer owns detail. */}
@@ -535,6 +583,8 @@ export function ResearchCanvas(props: {
   chatMode?: ChatDrawerMode;
   detailPlacement?: "overlay" | "drawer";
   onOpenDetail?: (node: ResearchGraphNode) => void;
+  auxPanel?: ResearchAuxPanelId | null;
+  onAuxPanelSelect?: (id: ResearchAuxPanelId) => void;
 }) {
   return (
     <ReactFlowProvider>

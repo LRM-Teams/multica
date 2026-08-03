@@ -231,15 +231,13 @@ export function MachineDaemonUpgrade({
             </>
           ) : null}
         </span>
-        <span
+        <output
           className="inline-flex items-center gap-1.5 text-[11px] leading-none text-muted-foreground"
           data-testid="machine-daemon-upgrade-progress"
-          role="status"
-          aria-live="polite"
         >
           <Loader2 className="h-3 w-3 shrink-0 animate-spin text-brand" />
           {progressLabel}
-        </span>
+        </output>
       </span>
     );
   }

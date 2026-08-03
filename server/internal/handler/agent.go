@@ -1844,6 +1844,12 @@ func (h *Handler) reconciledThinkingLevelFromCatalog(ctx context.Context, reques
 }
 
 func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
+	result := "error"
+	defer func() {
+		h.Metrics.ObserveAgentDelete(result, time.Since(startedAt).Seconds())
+	}()
+
 	id := chi.URLParam(r, "id")
 	agent, ok := h.loadAgentForUser(w, r, id)
 	if !ok {
@@ -1889,6 +1895,8 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 	if h.AgentFleetRankService != nil {
 		if err := h.AgentFleetRankService.FreezeAgentOnArchive(r.Context(), archived.WorkspaceID, archived.ID); err != nil {
 			slog.Warn("freeze agent fleet rank on archive failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+		} else {
+			h.AgentFleetRankService.RefreshWorkspaceAfterArchiveAsync(archived.WorkspaceID)
 		}
 	}
 	h.attachAgentRuntimeName(r.Context(), &resp)
@@ -1898,6 +1906,7 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 		h.projectReminderOwnerStop(r.Context(), uuidToString(archived.ID), uuidToString(archived.RuntimeID))
 	}
 	redactAgentResponseForActor(&resp, actorType)
+	result = "success"
 	writeJSON(w, http.StatusOK, resp)
 }
 

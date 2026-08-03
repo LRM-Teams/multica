@@ -46,4 +46,12 @@ describe("duplex-media-session helpers", () => {
     expect(parseDuplexServerEvent(null)).toBeNull();
     expect(parseDuplexServerEvent({ nope: true })).toBeNull();
   });
+
+  it("exposes a higher barge-in threshold for speakerphone echo", async () => {
+    const {
+      DUPLEX_BARGE_IN_RMS,
+      DUPLEX_SPEAKERPHONE_BARGE_IN_RMS,
+    } = await import("./duplex-media-session");
+    expect(DUPLEX_SPEAKERPHONE_BARGE_IN_RMS).toBeGreaterThan(DUPLEX_BARGE_IN_RMS);
+  });
 });

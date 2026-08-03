@@ -28,12 +28,14 @@ type Session struct {
 	CallID    string
 	SessionID string
 
-	dialog  *doubaodialog.Session
-	bridge  *doubaodialog.MulticaToolBridge
-	emit    Emitter
-	cancel  context.CancelFunc
-	done    chan struct{}
-	closeOnce sync.Once
+	dialog         *doubaodialog.Session
+	bridge         *doubaodialog.MulticaToolBridge
+	emit           Emitter
+	speak          func(context.Context, string) error
+	welcomeMessage string
+	cancel         context.CancelFunc
+	done           chan struct{}
+	closeOnce      sync.Once
 }
 
 // Gateway tracks in-flight Duplex sessions keyed by Multica voice call id.
@@ -42,7 +44,7 @@ type Gateway struct {
 	config   doubaodialog.Config
 	mu       sync.Mutex
 	sessions map[string]*Session
-	pending  map[string]struct{} // activated via HTTP before WS connects
+	pending  map[string]string // call ID -> localized, identity-aware welcome message
 }
 
 func NewGateway(client DialogClient, config doubaodialog.Config) (*Gateway, error) {
@@ -57,7 +59,7 @@ func NewGateway(client DialogClient, config doubaodialog.Config) (*Gateway, erro
 		client:   client,
 		config:   cfg,
 		sessions: make(map[string]*Session),
-		pending:  make(map[string]struct{}),
+		pending:  make(map[string]string),
 	}, nil
 }
 
@@ -67,17 +69,18 @@ func (g *Gateway) Configured() bool {
 
 // MarkPending records that callID chose Duplex media (no RTC VoiceChat).
 // Stop must skip provider.Stop even before the browser opens the WS.
-func (g *Gateway) MarkPending(callID string) {
+func (g *Gateway) MarkPending(callID, welcomeMessage string) {
 	if g == nil {
 		return
 	}
 	callID = strings.TrimSpace(callID)
-	if callID == "" {
+	welcomeMessage = strings.TrimSpace(welcomeMessage)
+	if callID == "" || welcomeMessage == "" {
 		return
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.pending[callID] = struct{}{}
+	g.pending[callID] = welcomeMessage
 }
 
 func (g *Gateway) Has(callID string) bool {
@@ -121,7 +124,11 @@ func (g *Gateway) Start(
 		g.mu.Unlock()
 		return nil, fmt.Errorf("duplex session already active for call %s", callID)
 	}
+	welcomeMessage := strings.TrimSpace(g.pending[callID])
 	g.mu.Unlock()
+	if welcomeMessage == "" {
+		return nil, fmt.Errorf("duplex welcome message is required for call %s", callID)
+	}
 
 	dialog, err := g.client.OpenSession(ctx, doubaodialog.DefaultSessionConfig(
 		g.config.Model,
@@ -141,12 +148,14 @@ func (g *Gateway) Start(
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	session := &Session{
-		CallID: callID,
-		dialog: dialog,
-		bridge: bridge,
-		emit:   emit,
-		cancel: cancel,
-		done:   make(chan struct{}),
+		CallID:         callID,
+		dialog:         dialog,
+		bridge:         bridge,
+		emit:           emit,
+		speak:          dialog.SendSpeechText,
+		welcomeMessage: welcomeMessage,
+		cancel:         cancel,
+		done:           make(chan struct{}),
 	}
 
 	g.mu.Lock()
@@ -234,13 +243,22 @@ func (s *Session) handleProviderEvent(ctx context.Context, event doubaodialog.Se
 	switch event.Type {
 	case doubaodialog.EventSessionCreated:
 		s.SessionID = strings.TrimSpace(event.SessionID)
-		return s.safeEmit(ServerEvent{
+		if err := s.safeEmit(ServerEvent{
 			Type:        ServerReady,
 			CallID:      s.CallID,
 			SessionID:   s.SessionID,
 			SampleRate:  24000, // Duplex TTS output rate; client mic ingress remains 16 kHz PCM
 			AudioFormat: "pcm_s16le",
-		})
+		}); err != nil {
+			return err
+		}
+		if s.speak == nil {
+			return nil
+		}
+		if err := s.speak(ctx, s.welcomeMessage); err != nil {
+			return fmt.Errorf("start duplex welcome audio: %w", err)
+		}
+		return nil
 	case doubaodialog.EventASRStarted:
 		_, _ = s.bridge.HandleServerEvent(ctx, event)
 		return s.safeEmit(ServerEvent{
@@ -320,6 +338,11 @@ func (s *Session) handleProviderEvent(ctx context.Context, event doubaodialog.Se
 		}
 		return nil
 	case doubaodialog.EventError:
+		slog.Warn(
+			"duplex provider error",
+			"call_id", s.CallID,
+			"message", strings.TrimSpace(event.ErrorMessage),
+		)
 		return s.safeEmit(ServerEvent{
 			Type:    ServerError,
 			CallID:  s.CallID,

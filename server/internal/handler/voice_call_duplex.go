@@ -22,7 +22,7 @@ var duplexUpgrader = websocket.Upgrader{
 }
 
 type VoiceCallDuplexAPI interface {
-	ActivateDuplex(context.Context, voicecall.AnswerInput) (voicecall.Session, error)
+	ActivateDuplex(context.Context, voicecall.AnswerInput) (voicecall.DuplexActivation, error)
 	EndWithoutProviderStop(context.Context, voicecall.StopInput) (voicecall.Session, error)
 	Get(context.Context, string, string, string) (voicecall.Session, error)
 }
@@ -31,7 +31,7 @@ type VoiceCallDuplexAPI interface {
 type DuplexGatewayAPI interface {
 	Configured() bool
 	Has(callID string) bool
-	MarkPending(callID string)
+	MarkPending(callID, welcomeMessage string)
 	Close(callID string)
 	Start(
 		ctx context.Context,
@@ -42,11 +42,11 @@ type DuplexGatewayAPI interface {
 }
 
 type duplexStartResponse struct {
-	Call voiceCallResponse `json:"call"`
-	Mode string            `json:"mode"`
-	WSPath string          `json:"ws_path"`
-	Audio  duplexAudioHint `json:"audio"`
-	Events duplexEventHint `json:"events"`
+	Call   voiceCallResponse `json:"call"`
+	Mode   string            `json:"mode"`
+	WSPath string            `json:"ws_path"`
+	Audio  duplexAudioHint   `json:"audio"`
+	Events duplexEventHint   `json:"events"`
 }
 
 type duplexAudioHint struct {
@@ -92,7 +92,7 @@ func (h *Handler) StartVoiceCallDuplex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := service.ActivateDuplex(r.Context(), voicecall.AnswerInput{
+	activation, err := service.ActivateDuplex(r.Context(), voicecall.AnswerInput{
 		WorkspaceID: workspaceID,
 		UserID:      userID,
 		CallID:      callID,
@@ -101,11 +101,11 @@ func (h *Handler) StartVoiceCallDuplex(w http.ResponseWriter, r *http.Request) {
 		writeVoiceCallServiceError(w, "duplex_start", err)
 		return
 	}
-	h.DuplexGateway.MarkPending(callID)
-	h.publishVoiceCallUpdated(session)
+	h.DuplexGateway.MarkPending(callID, activation.WelcomeMessage)
+	h.publishVoiceCallUpdated(activation.Session)
 
 	writeJSON(w, http.StatusOK, duplexStartResponse{
-		Call:   voiceCallResponseFromSession(session),
+		Call:   voiceCallResponseFromSession(activation.Session),
 		Mode:   "duplex",
 		WSPath: "/api/workspaces/" + workspaceID + "/voice-calls/" + callID + "/duplex/ws",
 		Audio: duplexAudioHint{

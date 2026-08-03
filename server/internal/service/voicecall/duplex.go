@@ -7,28 +7,44 @@ import (
 	"strings"
 )
 
+// DuplexActivation carries the durable session and its localized, identity-aware greeting.
+type DuplexActivation struct {
+	Session        Session
+	WelcomeMessage string
+}
+
 // ActivateDuplex promotes a starting voice_call_session to active without
 // starting Volcengine VoiceChat. Duplex media is owned by the Doubao gateway;
 // the shared session row still scopes Multica agent dispatch (channel/agent).
-func (service *Service) ActivateDuplex(ctx context.Context, input AnswerInput) (Session, error) {
+func (service *Service) ActivateDuplex(ctx context.Context, input AnswerInput) (DuplexActivation, error) {
 	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
 	input.UserID = strings.TrimSpace(input.UserID)
 	input.CallID = strings.TrimSpace(input.CallID)
 	if input.WorkspaceID == "" || input.UserID == "" || input.CallID == "" {
-		return Session{}, errors.New("voice call workspace, user, and call IDs are required")
+		return DuplexActivation{}, errors.New("voice call workspace, user, and call IDs are required")
 	}
 
 	session, err := service.store.Get(ctx, input.WorkspaceID, input.UserID, input.CallID)
 	if err != nil {
-		return Session{}, fmt.Errorf("get voice call for duplex activate: %w", err)
+		return DuplexActivation{}, fmt.Errorf("get voice call for duplex activate: %w", err)
 	}
 	if err := service.authorizer.Authorize(ctx, sessionScope(session)); err != nil {
-		return Session{}, fmt.Errorf("authorize duplex activate: %w", err)
+		return DuplexActivation{}, fmt.Errorf("authorize duplex activate: %w", err)
+	}
+	conversationContext, err := service.contextBuilder.Build(ctx, sessionScope(session))
+	if err != nil {
+		return DuplexActivation{}, fmt.Errorf("build duplex voice call context: %w", err)
+	}
+	if err := validateConversationContext(conversationContext); err != nil {
+		return DuplexActivation{}, err
 	}
 	switch session.Status {
 	case StatusActive, StatusReconnecting:
 		if session.ConnectedAt != nil && session.Status == StatusActive {
-			return session, nil
+			return DuplexActivation{
+				Session:        session,
+				WelcomeMessage: strings.TrimSpace(conversationContext.WelcomeMessage),
+			}, nil
 		}
 	case StatusStarting:
 		// Duplex does not start Volcengine VoiceChat, but it still follows the
@@ -41,12 +57,12 @@ func (service *Service) ActivateDuplex(ctx context.Context, input AnswerInput) (
 			input.CallID,
 		)
 		if err != nil {
-			return Session{}, fmt.Errorf("begin duplex voice call connection: %w", err)
+			return DuplexActivation{}, fmt.Errorf("begin duplex voice call connection: %w", err)
 		}
 		session = connecting.Session
 	case StatusConnecting:
 	default:
-		return Session{}, ErrScopeUnavailable
+		return DuplexActivation{}, ErrScopeUnavailable
 	}
 
 	activated, err := service.store.ApplyClientAnswered(
@@ -57,11 +73,14 @@ func (service *Service) ActivateDuplex(ctx context.Context, input AnswerInput) (
 	)
 	if err != nil {
 		if errors.Is(err, ErrCallNotFound) {
-			return Session{}, ErrScopeUnavailable
+			return DuplexActivation{}, ErrScopeUnavailable
 		}
-		return Session{}, fmt.Errorf("activate duplex voice call: %w", err)
+		return DuplexActivation{}, fmt.Errorf("activate duplex voice call: %w", err)
 	}
-	return activated, nil
+	return DuplexActivation{
+		Session:        activated,
+		WelcomeMessage: strings.TrimSpace(conversationContext.WelcomeMessage),
+	}, nil
 }
 
 // EndWithoutProviderStop ends a call that never started RTC VoiceChat (Duplex

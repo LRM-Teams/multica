@@ -33,6 +33,7 @@ type RuntimeToolEvent struct {
 
 type runtimeToolEventState struct {
 	tool      string
+	input     map[string]any // started Input; completed may fall back when empty
 	completed bool
 	updatedAt time.Time
 }
@@ -90,7 +91,11 @@ func (t *runtimeToolEventTracker) accept(event RuntimeToolEvent) (Message, bool,
 		if t.maxCalls > 0 && len(t.states) >= t.maxCalls {
 			return Message{}, false, "state_capacity_exceeded"
 		}
-		t.states[event.CallID] = runtimeToolEventState{tool: event.Tool, updatedAt: now}
+		t.states[event.CallID] = runtimeToolEventState{
+			tool:      event.Tool,
+			input:     cloneToolInputMap(event.Input),
+			updatedAt: now,
+		}
 		return Message{
 			Type:   MessageToolUse,
 			Tool:   event.Tool,
@@ -111,13 +116,18 @@ func (t *runtimeToolEventTracker) accept(event RuntimeToolEvent) (Message, bool,
 		state.completed = true
 		state.updatedAt = now
 		t.states[event.CallID] = state
-		// Carry completed Input so the UI can backfill a started-empty
-		// tool_use row (Cursor often emits args only on completed).
+		// Prefer completed Input (may include result.success.path enrichment).
+		// Fall back to started Input when completed args were empty (#103
+		// writeToolCall often ships path only on result, not args).
+		input := event.Input
+		if len(input) == 0 {
+			input = state.input
+		}
 		return Message{
 			Type:   MessageToolResult,
 			Tool:   state.tool,
 			CallID: event.CallID,
-			Input:  event.Input,
+			Input:  input,
 			Output: event.Output,
 		}, true, ""
 
@@ -148,4 +158,15 @@ func (t *runtimeToolEventTracker) finish() (missingCompletion, expiredIncomplete
 		}
 	}
 	return missingCompletion, t.expiredIncomplete
+}
+
+func cloneToolInputMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

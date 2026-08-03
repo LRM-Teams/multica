@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 

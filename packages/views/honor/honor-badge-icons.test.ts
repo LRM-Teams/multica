@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { HONOR_BADGE_ICONS } from "@multica/ui/components/honor/honor-badge-icons";
 

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi } from "vitest";
 import type { QueryClient } from "@tanstack/react-query";
 import { channelKeys } from "@multica/core/channels/queries";

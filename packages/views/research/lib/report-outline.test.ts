@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { NormalizedReportStructured } from "@multica/core/research";
 import {

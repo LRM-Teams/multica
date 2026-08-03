@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { ResearchReport } from "@multica/core/types";
 import { buildReportMarkdown } from "./report-markdown";

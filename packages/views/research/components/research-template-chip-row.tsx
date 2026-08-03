@@ -23,6 +23,13 @@ type ResearchTemplateChipRowProps = {
 
 /**
  * LRM-1092 / LRM-1072: template pills inside the home composer (replaces external cards).
+ *
+ * LRM-1189: the selected pill reuses the frozen "template" blue triple from
+ * `research-template-inject-tag.tsx` (chip and inject tag are the same semantic
+ * pair, so they must stay one colour family); light values are unchanged and dark
+ * variants are supplied for both selected and hover. No raw hex and no selection
+ * halo: selection already reads from border + tint + text, and a halo would sit
+ * concentric with this button's own `focus-visible` ring.
  */
 export function ResearchTemplateChipRow({
   selectedId,
@@ -60,8 +67,8 @@ export function ResearchTemplateChipRow({
               "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium whitespace-nowrap transition-colors",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
               selected
-                ? "border-blue-400 bg-blue-50 text-blue-700 shadow-[0_0_0_2px_#dbeafe]"
-                : "border-border bg-muted/40 text-foreground/80 hover:border-blue-300 hover:bg-blue-50/60 hover:text-blue-700",
+                ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-400/45 dark:bg-blue-400/[0.14] dark:text-blue-200"
+                : "border-border bg-muted/40 text-foreground/80 hover:border-blue-300 hover:bg-blue-50/60 hover:text-blue-700 dark:hover:border-blue-400/45 dark:hover:bg-blue-400/[0.10] dark:hover:text-blue-200",
             )}
           >
             <Icon className="size-3 opacity-70" aria-hidden />

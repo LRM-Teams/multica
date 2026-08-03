@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { configStore } from "@multica/core/config";
 import enCommon from "../../locales/en/common.json";
@@ -8,6 +8,8 @@ import enRuntimes from "../../locales/en/runtimes.json";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 
 const TEST_RESOURCES = { en: { common: enCommon, runtimes: enRuntimes } };
+
+const wsHandlers = new Map<string, (payload: unknown) => void>();
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-test",
@@ -24,7 +26,9 @@ vi.mock("@multica/core/paths", () => ({
 }));
 
 vi.mock("@multica/core/realtime", () => ({
-  useWSEvent: vi.fn(),
+  useWSEvent: (event: string, handler: (payload: unknown) => void) => {
+    wsHandlers.set(event, handler);
+  },
 }));
 
 vi.mock("../../navigation/context", () => ({
@@ -66,6 +70,10 @@ const ligatureClasses = [
 ];
 
 describe("ConnectRemoteDialog", () => {
+  beforeEach(() => {
+    wsHandlers.clear();
+  });
+
   it("uses cloud setup commands by default", () => {
     const { baseElement } = renderDialog();
 
@@ -145,5 +153,32 @@ describe("ConnectRemoteDialog", () => {
     );
     expect(baseElement).not.toHaveTextContent("multica config set server_url");
     expect(baseElement).not.toHaveTextContent("multica login --token");
+  });
+
+  // LRM-1141 / LRM-1129 freeze v2 — Waiting is brand-soft status; Done disabled
+  // until daemon:register replaces the panel with the existing success state.
+  it("shows Waiting status and disabled Done before register", () => {
+    renderDialog();
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Waiting for computer to connect");
+    expect(status).toHaveTextContent(
+      "Keep this dialog open. It will continue automatically when the computer is registered.",
+    );
+    expect(status.className).toContain("bg-brand/5");
+    expect(status.className).not.toContain("bg-success");
+    expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
+  });
+
+  it("replaces Waiting with success after daemon:register", () => {
+    renderDialog();
+
+    act(() => {
+      wsHandlers.get("daemon:register")!({ runtime_id: "rt-1" });
+    });
+
+    expect(screen.getByText("Computer connected")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
+    expect(screen.getByRole("button", { name: /Create an agent/i })).toBeInTheDocument();
   });
 });

@@ -49,6 +49,11 @@ import { cn } from "@multica/ui/lib/utils";
 import { useT, useTimeAgo } from "../../../i18n";
 import { AgentHonorAchievementIcon } from "../agent-honor-achievement-icon";
 import {
+  useAgentAchievementCategoryName,
+  useAgentAchievementCopy,
+} from "../../hooks/use-agent-achievement-copy";
+import { useAgentFleetClassName } from "../../hooks/use-agent-fleet-class-name";
+import {
   AgentHonorLevelIcon,
   MAX_AGENT_HONOR_LEVEL,
 } from "../agent-honor-level-icon";
@@ -170,6 +175,8 @@ export function AchievementCard({
   onEquip: () => void;
 }) {
   const { t } = useT("agents");
+  const achievementCopy = useAgentAchievementCopy();
+  const copy = achievementCopy(achievement);
   const progress = achievement.progress
     ? progressPercent(achievement.progress.current, achievement.progress.target)
     : achievement.unlocked
@@ -190,14 +197,14 @@ export function AchievementCard({
       <div className="flex items-start justify-between gap-2">
         <AgentHonorAchievementIcon
           rarity={achievement.rarity}
-          title={achievement.title}
+          title={copy.title}
           locked={!achievement.unlocked}
           featured={equipped || selected}
           className="size-14"
         />
         <div className="flex flex-col items-end gap-1">
           <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-            {achievement.category}
+            {copy.category}
           </span>
           {achievement.unlocked ? (
             <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-600 dark:text-emerald-300">
@@ -209,9 +216,9 @@ export function AchievementCard({
           )}
         </div>
       </div>
-      <h4 className="mt-3 text-sm font-semibold text-foreground">{achievement.title}</h4>
+      <h4 className="mt-3 text-sm font-semibold text-foreground">{copy.title}</h4>
       <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-        {achievement.description}
+        {copy.description}
       </p>
       <div className="mt-auto pt-3">
         {achievement.progress ? (
@@ -269,6 +276,9 @@ export function AgentHonorTab({
   canManage: boolean;
 }) {
   const { t } = useT("agents");
+  const achievementCopy = useAgentAchievementCopy();
+  const achievementCategoryName = useAgentAchievementCategoryName();
+  const fleetClassName = useAgentFleetClassName();
   const timeAgo = useTimeAgo();
   const workspaceId = useWorkspaceId();
   const queryClient = useQueryClient();
@@ -362,6 +372,7 @@ export function AgentHonorTab({
   const equipped =
     dashboard.achievements.find((item) => item.id === dashboard.equipped_achievement_id) ??
     null;
+  const equippedTitle = equipped ? achievementCopy(equipped).title : "";
 
   const setShowcase = (achievement: AgentAchievement) => {
     const selected = dashboard.showcase_achievement_ids.includes(achievement.id);
@@ -411,7 +422,10 @@ export function AgentHonorTab({
               </span>
               <FleetRankBadge
                 classId={dashboard.fleet.class_id}
-                classLabel={dashboard.fleet.class_label}
+                classLabel={fleetClassName(
+                  dashboard.fleet.class_id,
+                  dashboard.fleet.class_label,
+                )}
                 fleetRank={dashboard.fleet.fleet_rank}
                 frozen={dashboard.fleet.frozen}
               />
@@ -432,7 +446,7 @@ export function AgentHonorTab({
                 {equipped ? (
                   <AgentHonorAchievementIcon
                     rarity={equipped.rarity}
-                    title={equipped.title}
+                    title={equippedTitle}
                     featured
                     className="size-10"
                   />
@@ -446,7 +460,7 @@ export function AgentHonorTab({
                     {t(($) => $.honor_agent.equipped)}
                   </p>
                   <p className="mt-0.5 max-w-32 truncate text-sm font-semibold">
-                    {equipped?.title ?? t(($) => $.honor_agent.no_equipped)}
+                    {equippedTitle || t(($) => $.honor_agent.no_equipped)}
                   </p>
                 </div>
               </div>
@@ -501,37 +515,47 @@ export function AgentHonorTab({
           />
           <div className="grid gap-2 md:grid-cols-3">
             {nextTargets.length > 0 ? (
-              nextTargets.map((item) => (
-                <div key={item.id} className="rounded-xl border border-border/60 bg-muted/20 p-3">
-                  <div className="flex items-center gap-2">
-                    <AgentHonorAchievementIcon
-                      rarity={item.rarity}
-                      title={item.title}
-                      locked
-                      className="size-10"
-                    />
-                    <div className="min-w-0">
-                      <p className="truncate text-xs font-semibold text-foreground">{item.title}</p>
-                      <p className="text-[10px] text-muted-foreground">+{item.xp_reward} XP</p>
-                    </div>
-                  </div>
-                  {item.progress ? (
-                    <>
-                      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full rounded-full bg-primary"
-                          style={{
-                            width: `${progressPercent(item.progress.current, item.progress.target)}%`,
-                          }}
-                        />
+              nextTargets.map((item) => {
+                const copy = achievementCopy(item);
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-xl border border-border/60 bg-muted/20 p-3"
+                  >
+                    <div className="flex items-center gap-2">
+                      <AgentHonorAchievementIcon
+                        rarity={item.rarity}
+                        title={copy.title}
+                        locked
+                        className="size-10"
+                      />
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-semibold text-foreground">
+                          {copy.title}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          +{item.xp_reward} XP
+                        </p>
                       </div>
-                      <p className="mt-1 text-right text-[10px] tabular-nums text-muted-foreground">
-                        {item.progress.current}/{item.progress.target}
-                      </p>
-                    </>
-                  ) : null}
-                </div>
-              ))
+                    </div>
+                    {item.progress ? (
+                      <>
+                        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary"
+                            style={{
+                              width: `${progressPercent(item.progress.current, item.progress.target)}%`,
+                            }}
+                          />
+                        </div>
+                        <p className="mt-1 text-right text-[10px] tabular-nums text-muted-foreground">
+                          {item.progress.current}/{item.progress.target}
+                        </p>
+                      </>
+                    ) : null}
+                  </div>
+                );
+              })
             ) : (
               <p className="text-xs text-muted-foreground">
                 {t(($) => $.honor_agent.all_unlocked)}
@@ -576,6 +600,7 @@ export function AgentHonorTab({
             const achievement = dashboard.achievements.find(
               (item) => item.id === dashboard.showcase_achievement_ids[index],
             );
+            const copy = achievement ? achievementCopy(achievement) : null;
             return (
               <div
                 key={index}
@@ -585,12 +610,14 @@ export function AgentHonorTab({
                   <>
                     <AgentHonorAchievementIcon
                       rarity={achievement.rarity}
-                      title={achievement.title}
+                      title={copy?.title ?? achievement.title}
                       featured
                       className="size-14"
                     />
                     <div>
-                      <p className="text-xs font-semibold text-foreground">{achievement.title}</p>
+                      <p className="text-xs font-semibold text-foreground">
+                        {copy?.title ?? achievement.title}
+                      </p>
                       <p className="mt-1 text-[10px] text-muted-foreground">
                         {achievement.rarity}% {t(($) => $.honor_agent.rarity)}
                       </p>
@@ -630,7 +657,9 @@ export function AgentHonorTab({
                     : "bg-muted text-muted-foreground hover:text-foreground",
                 )}
               >
-                {item === "all" ? t(($) => $.honor_agent.all) : item}
+                {item === "all"
+                  ? t(($) => $.honor_agent.all)
+                  : achievementCategoryName(item)}
               </button>
             ))}
           </div>
@@ -714,7 +743,9 @@ export function AgentHonorTab({
                   </span>
                   <div className="min-w-0 flex-1 rounded-lg border border-border/50 px-3 py-2">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium">{entry.class_label}</span>
+                      <span className="text-xs font-medium">
+                        {fleetClassName(entry.class_id, entry.class_label)}
+                      </span>
                       <span className="text-[10px] text-muted-foreground">
                         {timeAgo(entry.recorded_at)}
                       </span>
@@ -804,6 +835,8 @@ function AgentHonorAdminContent({
   }>;
 }) {
   const { t } = useT("agents");
+  const achievementCopy = useAgentAchievementCopy();
+  const fleetClassName = useAgentFleetClassName();
   const timeAgo = useTimeAgo();
   const workspaceId = useWorkspaceId();
   const queryClient = useQueryClient();
@@ -942,7 +975,7 @@ function AgentHonorAdminContent({
             {rules.fleet_classes.map((fleetClass, index) => (
               <NumberField
                 key={fleetClass.class_id}
-                label={fleetClass.label}
+                label={fleetClassName(fleetClass.class_id, fleetClass.label)}
                 value={fleetClass.score}
                 min={0}
                 max={100}
@@ -987,7 +1020,9 @@ function AgentHonorAdminContent({
                   }
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-medium">{achievement.title}</p>
+                  <p className="truncate text-xs font-medium">
+                    {achievementCopy(achievement).title}
+                  </p>
                   <p className="text-[10px] text-muted-foreground">{achievement.metric}</p>
                 </div>
                 <Input
@@ -1053,7 +1088,7 @@ function AgentHonorAdminContent({
             >
               {rulesView.achievements.map((achievement) => (
                 <option key={achievement.id} value={achievement.id}>
-                  {achievement.title}
+                  {achievementCopy(achievement).title}
                 </option>
               ))}
             </select>

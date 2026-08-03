@@ -35,6 +35,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
 import { InlineFieldEditor } from "../agents/components/inline-field-editor";
+import { useAgentFleetClassName } from "../agents/hooks/use-agent-fleet-class-name";
 import { MemberSelfAvatarEditor } from "./member-self-avatar-editor";
 import { useOpenAgentPanel } from "../common/agent-panel-context";
 import { ActorAvatar } from "../common/actor-avatar";
@@ -610,6 +611,7 @@ function CreatedAgentRow({
   href: string;
   onOpenPanel?: () => void;
 }) {
+  const fleetClassName = useAgentFleetClassName();
   const displayName = resolveActorDisplayName(agent, agent.id);
   const roleHint = agent.description?.trim().split("\n")[0]?.trim() ?? "";
   const title =
@@ -640,7 +642,7 @@ function CreatedAgentRow({
           {fleet ? (
             <FleetRankBadge
               classId={fleet.class_id}
-              classLabel={fleet.class_label}
+              classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
               fleetRank={fleet.fleet_rank}
               frozen={fleet.frozen}
               medal

@@ -750,7 +750,90 @@
     "no_equipped": "장착한 업적 없음",
     "dismiss_unlock": "업적 알림 닫기",
     "unlock_toast_title": "에이전트 업적 해제",
-    "fleet_upgraded": "에이전트가 {{className}} 등급으로 승급했습니다",
+    "fleet_upgraded": "{{agentName}}가 {{className}} 등급으로 승급했습니다",
+    "agent_fallback": "에이전트",
+    "fleet_classes": {
+      "reserve": "예비함",
+      "corvette": "초계함",
+      "frigate": "호위함",
+      "cruiser": "순양함",
+      "battleship": "전함",
+      "dreadnought": "드레드노트"
+    },
+    "achievement_categories": {
+      "delivery": "납품",
+      "reliability": "신뢰성",
+      "growth": "성장",
+      "evolution": "진화",
+      "mastery": "숙련",
+      "fleet": "함대"
+    },
+    "achievements": {
+      "first_launch": {
+        "title": "성해의 첫 항해",
+        "description": "처음으로 승인된 작업을 완료합니다."
+      },
+      "proven_crew": {
+        "title": "단련된 승조원",
+        "description": "승인된 작업 10개를 완료합니다."
+      },
+      "veteran_core": {
+        "title": "백전 중추",
+        "description": "승인된 작업 50개를 완료합니다."
+      },
+      "centurion": {
+        "title": "백인대장",
+        "description": "승인된 작업 100개를 완료합니다."
+      },
+      "streak_5": {
+        "title": "클린 번",
+        "description": "실패 없이 작업 5개를 연속 완료합니다."
+      },
+      "streak_20": {
+        "title": "불멸 궤도",
+        "description": "실패 없이 작업 20개를 연속 완료합니다."
+      },
+      "memory_spark": {
+        "title": "기억의 불꽃",
+        "description": "유효한 메모리 업데이트 3개를 만듭니다."
+      },
+      "memory_archive": {
+        "title": "살아 있는 기록고",
+        "description": "유효한 메모리 업데이트 24개를 만듭니다."
+      },
+      "memory_constellation": {
+        "title": "기억 성도",
+        "description": "유효한 메모리 업데이트 100개를 만듭니다."
+      },
+      "evolution_seed": {
+        "title": "진화의 씨앗",
+        "description": "첫 번째 진화 유닛을 승급합니다."
+      },
+      "evolution_engine": {
+        "title": "진화 엔진",
+        "description": "진화 유닛 10개를 승급합니다."
+      },
+      "deep_space_explorer": {
+        "title": "심우주 항해자",
+        "description": "3개 프로젝트에서 승인된 결과물을 전달합니다."
+      },
+      "phoenix_protocol": {
+        "title": "피닉스 프로토콜",
+        "description": "이전 실패 후 이슈 3개를 복구합니다."
+      },
+      "corvette_command": {
+        "title": "초계함 지휘관",
+        "description": "초계함 등급에 도달합니다."
+      },
+      "cruiser_command": {
+        "title": "순양함 지휘관",
+        "description": "순양함 등급에 도달합니다."
+      },
+      "dreadnought_command": {
+        "title": "드레드노트 사령관",
+        "description": "드레드노트 등급에 도달합니다."
+      }
+    },
     "achievements_unlocked": "개 업적 해제",
     "level_value": "LV.{{level}}",
     "next_level": "다음 레벨",

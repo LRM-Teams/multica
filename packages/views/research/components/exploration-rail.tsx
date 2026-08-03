@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { AlertCircle, ChevronDown, Loader2 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
@@ -25,13 +25,19 @@ const statusChip: Record<DimensionStatus, string> = {
 function RailHeader({
   title,
   hint,
+  titleId,
 }: {
   title: string;
   hint: string;
+  /** LRM-1172: id for <aside aria-labelledby>. */
+  titleId: string;
 }) {
   return (
     <div className="border-b border-border/55 px-3 py-2.5">
-      <h3 className="text-xs font-semibold tracking-wide text-foreground uppercase">
+      <h3
+        id={titleId}
+        className="text-xs font-semibold tracking-wide text-foreground uppercase"
+      >
         {title}
       </h3>
       <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">{hint}</p>
@@ -41,14 +47,17 @@ function RailHeader({
 
 function RailShell({
   className,
+  labelledBy,
   children,
 }: {
   className?: string;
+  labelledBy: string;
   children: ReactNode;
 }) {
   return (
     <aside
       data-testid="exploration-rail"
+      aria-labelledby={labelledBy}
       className={cn(
         "relative z-[1] flex w-[300px] shrink-0 flex-col overflow-hidden border-r border-border/55 bg-background/55 backdrop-blur-sm",
         className,
@@ -82,16 +91,16 @@ export function ExplorationRail({
   className?: string;
 }) {
   const { t } = useT("research");
+  const titleId = useId();
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const mode = resolveExplorationRailMode(dimensions, sessionStatus, error);
+  const title = t(($) => $.m2.rail_title);
+  const hint = t(($) => $.m2.rail_hint);
 
   if (mode === "error") {
     return (
-      <RailShell className={className}>
-        <RailHeader
-          title={t(($) => $.m2.rail_title)}
-          hint={t(($) => $.m2.rail_hint)}
-        />
+      <RailShell className={className} labelledBy={titleId}>
+        <RailHeader title={title} hint={hint} titleId={titleId} />
         <div
           role="alert"
           data-testid="exploration-rail-error"
@@ -113,11 +122,8 @@ export function ExplorationRail({
 
   if (mode === "loading") {
     return (
-      <RailShell className={className}>
-        <RailHeader
-          title={t(($) => $.m2.rail_title)}
-          hint={t(($) => $.m2.rail_hint)}
-        />
+      <RailShell className={className} labelledBy={titleId}>
+        <RailHeader title={title} hint={hint} titleId={titleId} />
         <div
           data-testid="exploration-rail-loading"
           className="flex flex-1 flex-col gap-2 p-2"
@@ -146,11 +152,8 @@ export function ExplorationRail({
 
   if (mode === "empty") {
     return (
-      <RailShell className={className}>
-        <RailHeader
-          title={t(($) => $.m2.rail_title)}
-          hint={t(($) => $.m2.rail_hint)}
-        />
+      <RailShell className={className} labelledBy={titleId}>
+        <RailHeader title={title} hint={hint} titleId={titleId} />
         <div
           data-testid="exploration-rail-empty"
           className="flex flex-1 flex-col gap-2 px-3 py-6"
@@ -167,11 +170,8 @@ export function ExplorationRail({
   }
 
   return (
-    <RailShell className={className}>
-      <RailHeader
-        title={t(($) => $.m2.rail_title)}
-        hint={t(($) => $.m2.rail_hint)}
-      />
+    <RailShell className={className} labelledBy={titleId}>
+      <RailHeader title={title} hint={hint} titleId={titleId} />
       <div
         data-testid="exploration-rail-cards"
         className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2"

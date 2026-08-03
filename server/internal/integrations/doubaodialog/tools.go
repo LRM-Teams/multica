@@ -14,13 +14,14 @@ const (
 	multicaDelegateRequestDescription = "完整保留用户要执行的任务、对象、约束和验收要求，使用中文。"
 
 	webSearchToolDescription = "" +
-		"当用户询问天气、新闻、事实、百科、实时信息或需要联网检索时调用。" +
+		"仅当用户本轮明确要求查询天气、新闻、实时事实、百科或联网信息时调用。" +
+		"问候、闲聊、寒暄、确认、闲扯不要调用；不要在通话刚开始时主动搜索。" +
 		"不要凭记忆编造时效性答案。"
 	webSearchQueryDescription = "搜索关键词，尽量具体（例如「北京 今天天气」）。"
 
 	webFetchToolDescription = "" +
-		"当已有具体 http(s) URL，需要读取页面正文以回答用户时调用。" +
-		"不要抓取内网或非 http(s) 地址。"
+		"仅当用户给出具体 http(s) URL，或搜索后需要打开某一页正文时调用。" +
+		"不要抓取内网或非 http(s) 地址；不要在闲聊时主动抓取。"
 	webFetchURLDescription = "要抓取的完整 http 或 https URL。"
 )
 
@@ -95,9 +96,12 @@ func jsonString(value string) string {
 func DefaultDialogInstructions() string {
 	return "" +
 		"你是 Multica 语音助手。用自然口语简短回答。" +
-		"只要用户提到创建 issue、开发任务、派活或需要真实 Multica 工具，必须先调用工具 " +
-		MulticaDelegateToolName + "，不要直接口头答应而不调用。" +
-		"只要用户问天气、新闻、事实、百科或任何可能过时的信息，必须先调用 " +
-		WebSearchToolName + " 或 " + WebFetchToolName + "，不要凭记忆编造。" +
-		"不要使用 Markdown。工具结果返回后，用一两句口语向用户播报结果。"
+		"接通后先正常闲聊寒暄，不要一开口就调用任何工具。" +
+		"只有用户本轮明确要求查询天气、新闻、实时信息，或给出网址要你打开时，才调用 " +
+		WebSearchToolName + " 或 " + WebFetchToolName +
+		"；问候、闲聊、确认不要搜索。调用搜索前先口头说一句「我帮你查一下」。" +
+		"只有用户明确要求创建 issue、开发任务、派活或需要真实 Multica 工具时，才调用 " +
+		MulticaDelegateToolName +
+		"。派活后立刻告诉用户已安排后台执行、可以继续聊天，不要假装卡住等待。" +
+		"不要使用 Markdown。工具结果返回后，用一两句口语向用户播报。"
 }

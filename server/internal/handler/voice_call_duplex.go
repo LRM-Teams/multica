@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -283,20 +282,14 @@ func (e *voiceCallDuplexExecutor) Delegate(ctx context.Context, request string) 
 	if e == nil || e.bridge == nil {
 		return "", errors.New("duplex multica executor is not configured")
 	}
-	reply, err := e.bridge.Reply(ctx, VoiceCallLLMInput{
+	// Fire-and-forget: keep the Duplex session free to keep talking while the
+	// real agent turn runs in the DM (same product intent as RTC comfort+async).
+	if err := e.bridge.EnqueueAgentWork(ctx, VoiceCallLLMInput{
 		VoiceCallID: e.callID,
 		RoundID:     "duplex-" + uuid.NewString(),
 		Transcript:  request,
-	})
-	if err != nil {
-		if errors.Is(err, errVoiceCallAgentTurnTimeout) {
-			return "任务已交给真实 Agent 继续执行。电话等待已超时，执行过程和结果会保留在当前私聊中。", nil
-		}
+	}); err != nil {
 		return "", err
 	}
-	content := strings.TrimSpace(reply.Content)
-	if content == "" {
-		return "任务已交给真实 Agent，请在当前私聊查看执行详情。", nil
-	}
-	return content, nil
+	return "已经安排后台继续干活了，你可以接着跟我聊天，进度会留在私聊里。", nil
 }

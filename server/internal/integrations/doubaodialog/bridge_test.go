@@ -200,6 +200,16 @@ func TestDefaultDialogToolsIncludesWebLookup(t *testing.T) {
 	if !strings.Contains(DefaultDialogInstructions(), WebSearchToolName) {
 		t.Fatal("instructions should mention web_search")
 	}
+	instr := DefaultDialogInstructions()
+	if !strings.Contains(instr, "先正常闲聊") {
+		t.Fatal("instructions should prefer chat before tools")
+	}
+	if !strings.Contains(instr, "不要一开口就调用") {
+		t.Fatal("instructions should forbid immediate tool use on connect")
+	}
+	if !strings.Contains(WebSearchTool().Description, "不要在通话刚开始时主动搜索") {
+		t.Fatal("web_search tool should discourage proactive search")
+	}
 }
 
 func TestRejectPrivateHost(t *testing.T) {

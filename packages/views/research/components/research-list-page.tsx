@@ -505,7 +505,7 @@ export function ResearchListPage() {
             <ResearchHomeHero>
               <div
                 className={cn(
-                  "overflow-hidden rounded-2xl border bg-card",
+                  "w-full overflow-hidden rounded-2xl border bg-card",
                   "focus-within:ring-2 focus-within:ring-ring",
                   HERO_COMPOSER_CARD_CLASS,
                 )}

@@ -227,6 +227,7 @@ export function ResearchNodeActionRing({
         <div
           role="menu"
           id={menuId}
+          tabIndex={-1}
           className="flex flex-col gap-0.5 overflow-y-auto"
           onKeyDown={onMenuKeyDown}
         >
@@ -271,6 +272,7 @@ export function ResearchNodeActionRing({
     <div
       role="menu"
       id={menuId}
+      tabIndex={-1}
       aria-label={t(($) => $.ring.title)}
       className="relative z-20 grid animate-in fade-in zoom-in-95 grid-cols-3 gap-x-1.5 gap-y-2 rounded-[14px] border bg-card/95 p-2.5 shadow-lg backdrop-blur-md duration-150"
       style={{

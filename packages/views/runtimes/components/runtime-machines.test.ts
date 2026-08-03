@@ -96,6 +96,65 @@ describe("runtime machine grouping", () => {
     expect(filterRuntimeMachines(machines, "", "issues")).toHaveLength(1);
   });
 
+  it("Basics Daemon version ignores stale offline runtimes (Frank 2026-08-03)", () => {
+    // One-off code-agent crash: Grok exited on 0.3.94 while Pi/Cursor
+    // moved to 0.3.95 with the daemon. The strict every-runtime-agrees
+    // read nulled the row and the machine's daemon version vanished.
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-pi",
+          provider: "pi",
+          current_version: "0.3.95",
+          runtime_health: "update_available",
+        }),
+        makeRuntime({
+          id: "rt-cursor",
+          provider: "cursor",
+          current_version: "0.3.95",
+          runtime_health: "update_available",
+        }),
+        makeRuntime({
+          id: "rt-grok",
+          provider: "grok",
+          current_version: "0.3.94",
+          runtime_health: "offline",
+          status: "offline",
+          last_seen_at: new Date(NOW - 24 * 60 * 60_000).toISOString(),
+        }),
+      ],
+      { now: NOW },
+    );
+
+    expect(machines[0]?.cliVersion).toBe("0.3.95");
+  });
+
+  it("Basics Daemon version falls back to the freshest sighting when all runtimes are offline", () => {
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-old",
+          provider: "claude",
+          current_version: "0.3.90",
+          runtime_health: "offline",
+          status: "offline",
+          last_seen_at: new Date(NOW - 7 * 24 * 60 * 60_000).toISOString(),
+        }),
+        makeRuntime({
+          id: "rt-recent",
+          provider: "codex",
+          current_version: "0.3.95",
+          runtime_health: "offline",
+          status: "offline",
+          last_seen_at: new Date(NOW - 60_000).toISOString(),
+        }),
+      ],
+      { now: NOW },
+    );
+
+    expect(machines[0]?.cliVersion).toBe("0.3.95");
+  });
+
   it("does not surface agent CLI version branding as the machine subtitle", () => {
     // Reproduces the bug where every machine row's subtitle read
     // "Claude Code …" because compactDeviceInfo flipped the parenthetical

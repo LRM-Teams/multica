@@ -24,7 +24,15 @@ export type MachineCodeAgentGroups = {
 };
 
 function normalizeVersion(raw: string): string {
-  return raw.trim().replace(/^v/i, "");
+  const trimmed = raw.trim();
+  // Providers don't all register a bare semver — Grok reports
+  // "grok 0.2.111 (94172f2aa4)" (Frank 2026-08-03: tile rendered
+  // "vgrok 0.2.111 …"). Reduce to the version-shaped token like
+  // codeAgentVersionFromDeviceInfo does, so the `v{{version}}` label
+  // never glues onto a provider word. Non-shaped strings pass through.
+  const match = trimmed.match(/v?\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?/);
+  if (match?.[0]) return match[0].replace(/^v/i, "");
+  return trimmed.replace(/^v/i, "");
 }
 
 /**

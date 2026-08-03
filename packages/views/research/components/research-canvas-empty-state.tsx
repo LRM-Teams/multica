@@ -6,6 +6,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { researchKeys } from "@multica/core/research";
 import { Button } from "@multica/ui/components/ui/button";
+import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import { useNavigation } from "../../navigation/context";
 
@@ -117,10 +118,17 @@ export function ResearchCanvasEmptyState() {
           </Button>
           <Button
             type="button"
-            className="rounded-full bg-brand text-brand-foreground hover:bg-brand/90"
+            className={cn(
+              "rounded-full bg-brand text-brand-foreground hover:bg-brand/90",
+              create.isPending && "opacity-50 cursor-not-allowed",
+            )}
             data-testid="research-canvas-empty-create"
-            disabled={create.isPending}
-            onClick={() => create.mutate()}
+            // LRM-1241 — pending must stay focusable (same root cause as LRM-1213/1236).
+            aria-disabled={create.isPending || undefined}
+            onClick={() => {
+              if (create.isPending) return;
+              create.mutate();
+            }}
           >
             {create.isPending
               ? t(($) => $.session_page.canvas_empty_creating)

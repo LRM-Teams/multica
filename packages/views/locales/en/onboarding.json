@@ -198,8 +198,6 @@
     "way_mention_body": "Pull it into a conversation for a quick take.",
     "way_chat_title": "Chat one-on-one",
     "way_chat_body": "Ask quick questions without creating an issue.",
-    "way_autopilot_title": "Put it on Autopilot",
-    "way_autopilot_body": "Daily triage, weekly digest, monthly audit — on a schedule.",
     "add_more_hint": "Add more agents anytime. A small team of specialized agents beats one jack-of-all-trades.",
     "docs_link": "Creating your first agent →"
   },
@@ -226,7 +224,7 @@
           "subtitle": "Let me explain in 1–2 paragraphs what Multica is and what it can do."
         },
         "tour": {
-          "subtitle": "I'll walk you through how issue, agent, and autopilot fit together."
+          "subtitle": "I'll walk you through how issues and agents fit together."
         },
         "welcome_page": {
           "subtitle": "I'll build you a single-file HTML slide deck — tailored to your role, ready to copy and open in a browser."
@@ -312,8 +310,6 @@
       "agents_meta": "your AI teammates",
       "projects_label": "Projects",
       "projects_meta": "group related issues",
-      "autopilot_label": "Autopilot",
-      "autopilot_meta": "scheduled automation",
       "computers_label": "Computers",
       "computers_meta": "where agents run",
       "skills_label": "Skills",

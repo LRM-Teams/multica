@@ -33,8 +33,6 @@ function workspaceScoped(slug: string) {
     researchDetail: (id: string) => `${ws}/research/${encode(id)}`,
     channels: () => `${ws}/channels`,
     channelDetail: (id: string) => `${ws}/channels/${encode(id)}`,
-    autopilots: () => `${ws}/autopilots`,
-    autopilotDetail: (id: string) => `${ws}/autopilots/${encode(id)}`,
     agents: () => `${ws}/agents`,
     agentDetail: (id: string) => `${ws}/agents/${encode(id)}`,
     memberDetail: (id: string) => `${ws}/members/${encode(id)}`,

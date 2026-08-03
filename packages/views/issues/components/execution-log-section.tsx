@@ -175,7 +175,7 @@ export function ExecutionLogSection({ issueId }: ExecutionLogSectionProps) {
 // ─── Trigger description ────────────────────────────────────────────────────
 
 // Primary source: the canonical snapshot taken at task creation time
-// (comment text / autopilot title). Survives source edits/deletes and
+// (comment text / schedule title). Survives source edits/deletes and
 // is information-dense — far better than a structural label.
 //
 // Retry tasks inherit the parent's trigger_summary on the DB side (so the

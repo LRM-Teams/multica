@@ -5,7 +5,6 @@ import {
 import type { RouteObject } from "react-router-dom";
 import { IssueDetailPage } from "./pages/issue-detail-page";
 import { ProjectDetailPage } from "./pages/project-detail-page";
-import { AutopilotDetailPage } from "./pages/autopilot-detail-page";
 import { SkillDetailPage } from "./pages/skill-detail-page";
 import { AgentDetailPage } from "./pages/agent-detail-page";
 import { MemberDetailPage } from "./pages/member-detail-page";
@@ -18,7 +17,6 @@ import { ProjectsPage } from "@multica/views/projects/components";
 import { DashboardPage } from "@multica/views/dashboard";
 import { OverviewPage } from "@multica/views/overview";
 import { PlanBillingPage } from "@multica/views/plan-billing";
-import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { ResearchListPage } from "@multica/views/research";
 import { MyIssuesPage } from "@multica/views/my-issues";
 import { SkillsPage } from "@multica/views/skills";
@@ -96,16 +94,6 @@ export const appRoutes: RouteObject[] = [
             path: "research/:id",
             element: <DesktopResearchSessionPage />,
             handle: { title: "Research" },
-          },
-          {
-            path: "autopilots",
-            element: <AutopilotsPage />,
-            handle: { title: "Autopilot" },
-          },
-          {
-            path: "autopilots/:id",
-            element: <AutopilotDetailPage />,
-            handle: { title: "Autopilot" },
           },
           {
             path: "my-issues",

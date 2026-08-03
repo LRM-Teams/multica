@@ -50,7 +50,7 @@ interface AgentTranscriptDialogProps {
   isLive?: boolean;
   /**
    * Optional content rendered between the header chips and the event list.
-   * Used by autopilot run rows to surface the inbound webhook trigger
+   * Used by scheduled-run rows to surface an inbound webhook trigger
    * payload so it's visible regardless of whether the agent echoes it.
    * The dialog stays generic — slot content is the caller's concern.
    */

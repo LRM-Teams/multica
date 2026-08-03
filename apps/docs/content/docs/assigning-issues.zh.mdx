@@ -12,7 +12,6 @@ import { Callout } from "fumadocs-ui/components/callout";
 | **分配** | 让智能体正式负责 | 改 assignee | issue + 全部 comments | 继承 issue | ✓ |
 | [**@ 提及**](/mentioning-agents) | 评论里让它看一眼 | 都不改 | issue + 触发评论 | 继承 issue | ✓ |
 | [**对话**](/chat) | 独立于 issue 的一对一聊天 | 不涉及 issue | 当前对话历史 | 固定中 | ✓ |
-| [**Autopilots**](/autopilots) | 定时 / 手动自动化 | 视模式 | 视模式 | autopilot 自定 | ✗ |
 
 "自动重试"指基础设施故障（运行时离线、超时）导致的重试；智能体侧业务错误（比如模型自己报错）不会自动重试。详见 [**执行任务**](/tasks)。
 
@@ -79,4 +78,3 @@ multica issue assign MUL-42 --unassign
 
 - [**在评论里 @ 智能体**](/mentioning-agents) —— 更轻量的触发方式，不改 assignee / status
 - [**对话**](/chat) —— 脱离 issue 和智能体一对一聊
-- [**Autopilots**](/autopilots) —— 让智能体定时自动开工

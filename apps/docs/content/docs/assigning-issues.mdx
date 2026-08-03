@@ -11,7 +11,6 @@ import { Callout } from "fumadocs-ui/components/callout";
 | **Assign** | Hand an agent ownership | Changes assignee | Issue + all comments | Inherits from issue | ✓ |
 | [**@-mention**](/mentioning-agents) | Pull it in to take a look | No changes | Issue + trigger comment | Inherits from issue | ✓ |
 | [**Chat**](/chat) | One-to-one conversation outside any issue | No issue involved | Current conversation history | Fixed medium | ✓ |
-| [**Autopilots**](/autopilots) | Scheduled or manual automation | Depends on mode | Depends on mode | Set by autopilot | ✗ |
 
 "Auto retry" refers to retries after infrastructure failures (runtime offline, timeout). Business errors on the agent side (for example, the model reporting an error) are not retried. See [**Tasks**](/tasks) for details.
 
@@ -78,4 +77,3 @@ But **different agents can work on the same issue in parallel** — for example,
 
 - [**@-mention an agent in a comment**](/mentioning-agents) — a lighter trigger that leaves assignee and status untouched
 - [**Chat**](/chat) — one-to-one conversation outside any issue
-- [**Autopilots**](/autopilots) — let agents start work automatically on a schedule

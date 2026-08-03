@@ -44,10 +44,10 @@ export const HELPER_STARTER_PROMPTS: Record<StarterCardId, StarterPrompt> = {
       ja: "主要な機能を案内してください",
     },
     prompt: {
-      en: "Walk me through Multica's core features — issue, agent, autopilot, chat. Pick one realistic scenario I might run into and explain how all these pieces fit together.",
-      zh: "陪我熟悉 Multica 的每个核心功能 —— issue、agent、autopilot、chat。挑一个我可能用得上的真实场景,讲讲这几个东西是怎么配合的。",
-      ko: "Multica의 핵심 기능인 issue, agent, autopilot, chat을 안내해 주세요. 제가 실제로 겪을 만한 상황 하나를 골라 이 요소들이 어떻게 함께 작동하는지 설명해 주세요.",
-      ja: "Multica の主要な機能 — issue、agent、autopilot、chat を案内してください。私が実際に遭遇しそうな現実的なシナリオを1つ選び、これらの要素がどう連携するのかを説明してください。",
+      en: "Walk me through Multica's core features — issue, agent, reminder, chat. Pick one realistic scenario I might run into and explain how all these pieces fit together.",
+      zh: "陪我熟悉 Multica 的每个核心功能 —— issue、agent、reminder、chat。挑一个我可能用得上的真实场景,讲讲这几个东西是怎么配合的。",
+      ko: "Multica의 핵심 기능인 issue, agent, reminder, chat을 안내해 주세요. 제가 실제로 겪을 만한 상황 하나를 골라 이 요소들이 어떻게 함께 작동하는지 설명해 주세요.",
+      ja: "Multica の主要な機能 — issue、agent、reminder、chat を案内してください。私が実際に遭遇しそうな現実的なシナリオを1つ選び、これらの要素がどう連携するのかを説明してください。",
     },
   },
   welcome_page: {

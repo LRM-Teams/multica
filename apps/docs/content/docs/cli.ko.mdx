@@ -45,7 +45,7 @@ CI나 headless 환경에서는 브라우저 플로우를 건너뛰세요. 웹 �
 ## 이슈와 프로젝트
 
 <Callout type="info">
-`list` 계열 명령(`multica issue list`, `autopilot list`, `project list` 등)은 기본적으로 짧고 **바로 복사해 붙여 넣을 수 있는** ID를 출력합니다. 이슈는 `MUL-123` 같은 이슈 키이고, 나머지 리소스는 짧은 UUID 접두사입니다. 아래 후속 명령의 `<id>` 인자는 짧은 ID와 전체 UUID를 모두 받으므로, 일반적인 흐름은 `multica issue list` → 키 복사 → `multica issue get MUL-123`입니다. 정식 UUID가 필요할 때는 `list` 명령에 `--full-id`를 전달하세요.
+`list` 계열 명령(`multica issue list`, `project list` 등)은 기본적으로 짧고 **바로 복사해 붙여 넣을 수 있는** ID를 출력합니다. 이슈는 `MUL-123` 같은 이슈 키이고, 나머지 리소스는 짧은 UUID 접두사입니다. 아래 후속 명령의 `<id>` 인자는 짧은 ID와 전체 UUID를 모두 받으므로, 일반적인 흐름은 `multica issue list` → 키 복사 → `multica issue get MUL-123`입니다. 정식 UUID가 필요할 때는 `list` 명령에 `--full-id`를 전달하세요.
 </Callout>
 
 | 명령어 | 용도 |
@@ -93,17 +93,8 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 ```
 
 
-## 오토파일럿
-
 | 명령어 | 용도 |
 |---|---|
-| `multica autopilot list` | 워크스페이스의 모든 오토파일럿 나열 |
-| `multica autopilot get <id>` | 단일 오토파일럿 표시 |
-| `multica autopilot create ...` | 오토파일럿 생성 |
-| `multica autopilot update <id> ...` | 업데이트 |
-| `multica autopilot delete <id>` | 삭제 |
-| `multica autopilot runs <id>` | 실행 기록 표시 |
-| `multica autopilot trigger <id>` | 수동으로 실행 트리거 |
 
 ## 데몬과 런타임
 

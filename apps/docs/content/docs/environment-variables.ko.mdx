@@ -167,7 +167,7 @@ S3 앞에 CloudFront를 두는 경우 세 가지 변수가 적용됩니다: `CLO
 **리버스 프록시 뒤에서는 `RATE_LIMIT_TRUSTED_PROXIES`를 반드시 설정해야 합니다.** 그렇지 않으면 백엔드 관점에서 모든 실제 사용자가 프록시의 IP를 공유하게 되어, 배포 전체가 하나의 버킷에 들어가고, `/auth/send-code`가 사이트 전체에 대해 분당 5회가 됩니다. 일반적인 값: 같은 호스트의 Caddy / Nginx에는 `127.0.0.1/32,::1/128`; Cloudflare / ALB / CloudFront에는 해당 CDN의 공개된 IP 범위. `RemoteAddr`이 이 CIDR 중 하나에 속하는 IP만 `X-Forwarded-For`를 사용해 클라이언트를 식별할 수 있습니다.
 </Callout>
 
-이 별도의 `RATE_LIMIT_TRUSTED_PROXIES`는 오토파일럿 webhook 리미터(`/api/webhooks/autopilots/{token}`)를 제어하는 `MULTICA_TRUSTED_PROXIES`와는 **다릅니다**. 각 리미터는 자체 목록을 파싱하므로, 프록시 뒤에 있는 배포는 둘 다 설정해야 합니다.
+이 별도의 `RATE_LIMIT_TRUSTED_PROXIES`는 레거시 webhook 수신 경로 리미터를 제어하는 `MULTICA_TRUSTED_PROXIES`와는 **다릅니다**. 각 리미터는 자체 목록을 파싱하므로, 프록시 뒤에 있는 배포는 둘 다 설정해야 합니다.
 
 ## 데몬 튜닝 파라미터
 

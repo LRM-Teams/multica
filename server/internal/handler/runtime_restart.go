@@ -166,7 +166,7 @@ func (s *InMemoryRestartStore) PopPending(_ context.Context, runtimeID string) (
 
 // InitiateRestart creates a new remote restart request for a runtime
 // (protected route, called by frontend). Same permission bar as
-// InitiateUpdate: only the runtime owner or a workspace admin may restart it.
+// InitiateUpdate: only the computer owner may restart it (Frank 2026-08-03).
 func (h *Handler) InitiateRestart(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
 	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
@@ -184,8 +184,8 @@ func (h *Handler) InitiateRestart(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canEditRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the runtime owner or a workspace admin can restart this runtime")
+	if !canOwnRuntime(member, rt) {
+		writeError(w, http.StatusForbidden, "only the computer owner can restart this runtime")
 		return
 	}
 
@@ -216,8 +216,8 @@ func (h *Handler) GetRestart(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canEditRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the runtime owner or a workspace admin can inspect this restart request")
+	if !canOwnRuntime(member, rt) {
+		writeError(w, http.StatusForbidden, "only the computer owner can inspect this restart request")
 		return
 	}
 

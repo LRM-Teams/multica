@@ -285,19 +285,17 @@
     "title": "连接电脑",
     "description": "在这台电脑上安装 Multica，完成设置后即可连接到本工作区。",
     "mode_label": "你会在哪里运行？",
+    "commands_heading": "安装命令",
     "modes": {
       "unix": "Mac / Linux",
       "windows-powershell": "Windows"
-    },
-    "mode_hints": {
-      "unix": "适用于 macOS、Linux、SSH 机器和大多数云端终端。",
-      "windows-powershell": "适用于 Windows PowerShell。"
     },
     "step1_label": "安装",
     "step2_label": "设置",
     "step2_hint": "会打开浏览器登录，然后在后台保持守护进程运行。",
     "live_listening": "等待电脑连接",
     "live_listening_hint": "请保持此对话框打开。电脑注册成功后会自动继续。",
+    "trouble_summary": "遇到问题？",
     "troubleshooting": "那台电脑打不开浏览器？",
     "install_trouble_summary": "命令跑不通？",
     "install_trouble_retry": "检查一下网络连接，再试一次这条命令——大部分情况是一次性的网络波动。",

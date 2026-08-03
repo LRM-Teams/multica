@@ -291,19 +291,17 @@
     "title": "Connect computer",
     "description": "Install Multica on this computer, then complete setup to connect it to this workspace.",
     "mode_label": "Where are you running this?",
+    "commands_heading": "Install commands",
     "modes": {
       "unix": "Mac / Linux",
       "windows-powershell": "Windows"
-    },
-    "mode_hints": {
-      "unix": "Use this for macOS, Linux, SSH boxes, and most hosted terminals.",
-      "windows-powershell": "Use this in PowerShell on Windows."
     },
     "step1_label": "Install",
     "step2_label": "Setup",
     "step2_hint": "Opens a browser to sign in, then keeps the daemon running in the background.",
     "live_listening": "Waiting for computer to connect",
     "live_listening_hint": "Keep this dialog open. It will continue automatically when the computer is registered.",
+    "trouble_summary": "Having trouble?",
     "troubleshooting": "Can't open a browser on that computer?",
     "install_trouble_summary": "Command not working?",
     "install_trouble_retry": "Check your internet connection and try the command again — a one-off network blip is the most common cause.",

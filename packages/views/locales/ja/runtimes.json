@@ -285,19 +285,17 @@
     "title": "コンピュータを接続",
     "description": "このコンピュータに Multica をインストールし、セットアップを完了してワークスペースに接続します。",
     "mode_label": "どこで実行しますか?",
+    "commands_heading": "インストールコマンド",
     "modes": {
       "unix": "Mac / Linux",
       "windows-powershell": "Windows"
-    },
-    "mode_hints": {
-      "unix": "macOS、Linux、SSH 接続先、ほとんどのホスト型ターミナルで使います。",
-      "windows-powershell": "Windows の PowerShell で使います。"
     },
     "step1_label": "インストール",
     "step2_label": "セットアップ",
     "step2_hint": "サインインのためにブラウザを開き、その後デーモンをバックグラウンドで実行し続けます。",
     "live_listening": "コンピュータの接続を待っています",
     "live_listening_hint": "このダイアログを開いたままにしてください。コンピュータが登録されると自動的に続行します。",
+    "trouble_summary": "うまくいきませんか?",
     "troubleshooting": "そのコンピュータでブラウザを開けませんか?",
     "install_trouble_summary": "コマンドがうまくいきませんか?",
     "install_trouble_retry": "インターネット接続を確認して、もう一度コマンドを試してください——一時的な通信の乱れが最も多い原因です。",

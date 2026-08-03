@@ -195,8 +195,6 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
             copyAria={t(($) => $.connect.copy_aria)}
           />
 
-          <InstallFailureDetails />
-
           <div>
             <CommandStep
               n={2}
@@ -211,7 +209,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
 
           <WaitingStatus />
 
-          <TroubleshootingDetails />
+          <TroubleDetails />
         </div>
       </div>
 
@@ -228,6 +226,9 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
   );
 }
 
+// LRM-1129 freeze ① / LRM-1176: OS sits on the same row as the commands
+// heading (Frank CONNECT COMMAND layout). mode_label stays aria-only;
+// mode_hints is removed from the visible layer (and locale bundles).
 function SetupModeSelector({
   mode,
   onChange,
@@ -237,12 +238,13 @@ function SetupModeSelector({
 }) {
   const { t } = useT("runtimes");
   return (
-    <div className="space-y-2">
-      <div className="text-xs font-medium text-foreground">
-        {t(($) => $.connect.mode_label)}
+    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+        <Terminal className="h-3 w-3 shrink-0" aria-hidden />
+        {t(($) => $.connect.commands_heading)}
       </div>
       <div
-        className="grid grid-cols-1 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-2"
+        className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-[3px] sm:grid-cols-[auto_auto]"
         role="radiogroup"
         aria-label={t(($) => $.connect.mode_label)}
       >
@@ -254,7 +256,7 @@ function SetupModeSelector({
             aria-checked={mode === item}
             onClick={() => onChange(item)}
             className={cn(
-              "rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors",
+              "rounded-md px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors",
               mode === item && "bg-background text-foreground shadow-sm",
             )}
           >
@@ -262,21 +264,14 @@ function SetupModeSelector({
           </button>
         ))}
       </div>
-      <p className="text-[11px] leading-[1.55] text-muted-foreground">
-        {t(($) => $.connect.mode_hints[mode])}
-      </p>
     </div>
   );
 }
 
-// Distinct from TroubleshootingDetails below: that one covers "the CLI is
-// installed but I can't open a browser to sign in" (step 2). This one covers
-// step 1 itself failing — the install command couldn't reach its script host
-// at all. Deliberately host-agnostic: naming a specific domain here would go
-// stale the next time the install source moves (task #11), and per Parker
-// this is generic self-service guidance, not a notice about any one
-// incident.
-function InstallFailureDetails() {
+// LRM-1129 freeze ①: merge install-failure + browser-trouble guidance into
+// one <details> after Waiting so steps 1→2 stay consecutive. Host-agnostic
+// install tips stay (Parker/#1581); content is not deleted — only re-homed.
+function TroubleDetails() {
   const { t } = useT("runtimes");
   return (
     <details className="group rounded-lg border border-dashed">
@@ -285,55 +280,52 @@ function InstallFailureDetails() {
           className="h-3 w-3 transition-transform group-open:rotate-90"
           aria-hidden
         />
-        {t(($) => $.connect.install_trouble_summary)}
+        {t(($) => $.connect.trouble_summary)}
       </summary>
-      <ul className="space-y-1.5 border-t px-3 pt-2.5 pb-3 text-[11px] leading-[1.55] text-muted-foreground">
-        <li>{t(($) => $.connect.install_trouble_retry)}</li>
-        <li>{t(($) => $.connect.install_trouble_network)}</li>
-      </ul>
-    </details>
-  );
-}
-
-function TroubleshootingDetails() {
-  const { t } = useT("runtimes");
-  return (
-    <details className="group rounded-lg border border-dashed">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        <ChevronRight
-          className="h-3 w-3 transition-transform group-open:rotate-90"
-          aria-hidden
-        />
-        {t(($) => $.connect.troubleshooting)}
-      </summary>
-      <div className="space-y-2 border-t px-3 pt-2.5 pb-3 text-[11px] leading-[1.55] text-muted-foreground">
-        <p>{t(($) => $.connect.trouble_intro)}</p>
-        <ul className="space-y-1">
-          <li className="flex items-center gap-1.5">
-            <span>{t(($) => $.connect.trouble_check_status)}</span>
-            {/* CLI command — literal shell string, not i18n content. */}
-            <code
-              className={cn(
-                "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",
-                CODE_LIGATURE_CLASS,
-              )}
-            >
-              {"multica daemon status"}
-            </code>
-          </li>
-          <li className="flex items-center gap-1.5">
-            <span>{t(($) => $.connect.trouble_view_logs)}</span>
-            {/* CLI command — literal shell string, not i18n content. */}
-            <code
-              className={cn(
-                "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",
-                CODE_LIGATURE_CLASS,
-              )}
-            >
-              {"multica daemon logs -f"}
-            </code>
-          </li>
-        </ul>
+      <div className="space-y-3 border-t px-3 pt-2.5 pb-3 text-[11px] leading-[1.55] text-muted-foreground">
+        <div>
+          <h4 className="text-[11px] font-medium text-foreground">
+            {t(($) => $.connect.install_trouble_summary)}
+          </h4>
+          <ul className="mt-1.5 space-y-1.5">
+            <li>{t(($) => $.connect.install_trouble_retry)}</li>
+            <li>{t(($) => $.connect.install_trouble_network)}</li>
+          </ul>
+        </div>
+        <div className="border-t pt-2.5">
+          <h4 className="text-[11px] font-medium text-foreground">
+            {t(($) => $.connect.troubleshooting)}
+          </h4>
+          <div className="mt-1.5 space-y-2">
+            <p>{t(($) => $.connect.trouble_intro)}</p>
+            <ul className="space-y-1">
+              <li className="flex items-center gap-1.5">
+                <span>{t(($) => $.connect.trouble_check_status)}</span>
+                {/* CLI command — literal shell string, not i18n content. */}
+                <code
+                  className={cn(
+                    "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",
+                    CODE_LIGATURE_CLASS,
+                  )}
+                >
+                  {"multica daemon status"}
+                </code>
+              </li>
+              <li className="flex items-center gap-1.5">
+                <span>{t(($) => $.connect.trouble_view_logs)}</span>
+                {/* CLI command — literal shell string, not i18n content. */}
+                <code
+                  className={cn(
+                    "rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground",
+                    CODE_LIGATURE_CLASS,
+                  )}
+                >
+                  {"multica daemon logs -f"}
+                </code>
+              </li>
+            </ul>
+          </div>
+        </div>
       </div>
     </details>
   );

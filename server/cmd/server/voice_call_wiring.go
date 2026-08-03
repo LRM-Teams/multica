@@ -295,6 +295,19 @@ func configureVoiceCallService(
 	if err != nil {
 		return fmt.Errorf("initialize voice call service: %w", err)
 	}
+	recoveredSessions, err := store.RecoverInterruptedSessionsAtStartup(
+		config.CleanupTimeout,
+		time.Now(),
+	)
+	if err != nil {
+		return fmt.Errorf("recover interrupted voice call sessions: %w", err)
+	}
+	if len(recoveredSessions) > 0 {
+		slog.Warn(
+			"voice call restart recovery terminated interrupted sessions",
+			"count", len(recoveredSessions),
+		)
+	}
 	callbackService, err := voicecall.NewCallbackService("volcengine", store)
 	if err != nil {
 		return fmt.Errorf("initialize voice call callback service: %w", err)

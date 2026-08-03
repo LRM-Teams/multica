@@ -58,7 +58,7 @@ describe("ResearchChatDrawer", () => {
     mobileState.isMobile = false;
   });
 
-  it("renders a side aside on desktop when open", () => {
+  it("renders a floating overlay on desktop when open (LRM-1061)", () => {
     render(
       <ResearchChatDrawer open onClose={() => {}}>
         <span>body</span>
@@ -66,8 +66,9 @@ describe("ResearchChatDrawer", () => {
     );
     const el = screen.getByTestId("research-chat-drawer");
     expect(el.tagName.toLowerCase()).toBe("aside");
-    expect(el).toHaveAttribute("data-placement", "aside");
-    expect(screen.getByText("body")).toBeInTheDocument();
+    // LRM-1056 v2: float, not a permanent dock that squeezes the canvas.
+    expect(el.getAttribute("data-placement")).toBe("float");
+    expect(screen.getByText("body")).toBeTruthy();
   });
 
   it("renders nothing on desktop when closed", () => {

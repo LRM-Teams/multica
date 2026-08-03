@@ -14,11 +14,12 @@ type ResearchUiState = {
 export const useResearchUiStore = create<ResearchUiState>()(
   persist(
     (set) => ({
-      chatDrawerOpen: true,
+      // LRM-1061 / LRM-1056 v2: chat enters closed; FAB reopens a float.
+      chatDrawerOpen: false,
       setChatDrawerOpen: (open) => set({ chatDrawerOpen: open }),
     }),
     {
-      name: "multica_research_ui",
+      name: "multica_research_ui_v2",
       storage: createJSONStorage(() => createWorkspaceAwareStorage(defaultStorage)),
       partialize: (s) => ({ chatDrawerOpen: s.chatDrawerOpen }),
     },

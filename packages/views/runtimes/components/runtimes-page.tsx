@@ -46,11 +46,13 @@ import { cn } from "@multica/ui/lib/utils";
 import { PageHeader } from "../../layout/page-header";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ACTIVITY_LABEL_EN } from "../../agents/components/tabs/activity-event";
+import { AddComputerDialog } from "./add-computer-dialog";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
 import { buildWorkloadIndex } from "./runtime-list";
 import {
   buildRuntimeMachines,
+  defaultDesktopSelectedMachineId,
   isMineMachine,
   machineHostname,
   machinePrimaryRuntimeId,
@@ -97,10 +99,6 @@ function agentsOnMachine(
   return agents.filter(
     (a) => a.runtime_id && runtimeIds.has(a.runtime_id) && !a.archived_at,
   );
-}
-
-function agentCountOnMachine(machine: RuntimeMachine, agents: Agent[]): number {
-  return agentsOnMachine(machine, agents).length;
 }
 
 function runtimeForAgent(
@@ -195,6 +193,9 @@ function activityLabelOnly(agentId: string, snapshot: AgentTask[]): string {
     : ACTIVITY_LABEL_EN.idle;
 }
 
+/** Mutually exclusive Computers overlays — one discriminant (prefer-useReducer). */
+type PageOverlay = null | "add-chooser" | "connect" | "cloud";
+
 /**
  * LRM-863 — Runtimes per **v8c** freeze (Frank 2026-07-31):
  * Desktop = left machine list (~300px) + right detail on the same page
@@ -218,8 +219,7 @@ export function RuntimesPage({
   const isMobile = useIsMobile();
   const [userPickId, setUserPickId] = useState<string | null>(null);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
-  const [showConnectDialog, setShowConnectDialog] = useState(false);
-  const [showCloudRuntimeDialog, setShowCloudRuntimeDialog] = useState(false);
+  const [pageOverlay, setPageOverlay] = useState<PageOverlay>(null);
 
   const { data: runtimes = [], isLoading: fetching } = useQuery(
     runtimeListOptions(wsId),
@@ -264,11 +264,12 @@ export function RuntimesPage({
   const userPickValid =
     !!userPickId && machines.some((m) => m.id === userPickId);
 
+  // LRM-1094: desktop default = isCurrent → Mine[0]; never Team public machines[0].
   const selectedMachineId = isMobile
     ? userPickId
     : userPickValid
       ? userPickId
-      : (machines.find((m) => m.isCurrent)?.id ?? machines[0]?.id ?? null);
+      : defaultDesktopSelectedMachineId(machines, currentUserId ?? null);
 
   const selectedMachine =
     machines.find((m) => m.id === selectedMachineId) ?? null;
@@ -285,6 +286,14 @@ export function RuntimesPage({
     setMobileDetailOpen(false);
   }, []);
 
+  const openAddChooser = useCallback(() => setPageOverlay("add-chooser"), []);
+  const closeOverlay = useCallback(() => setPageOverlay(null), []);
+  const openConnectFromChooser = useCallback(
+    () => setPageOverlay("connect"),
+    [],
+  );
+  const openCloudRuntime = useCallback(() => setPageOverlay("cloud"), []);
+
   if (isLoading || fetching) return <RuntimesPageSkeleton isMobile={isMobile} />;
 
   const totalCount = runtimes.length;
@@ -300,10 +309,16 @@ export function RuntimesPage({
           </div>
         </PageHeader>
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
-          <EmptyState onConnectRemote={() => setShowConnectDialog(true)} />
+          <EmptyState onConnectRemote={openAddChooser} />
         </div>
-        {showConnectDialog && (
-          <ConnectRemoteDialog onClose={() => setShowConnectDialog(false)} />
+        {pageOverlay === "add-chooser" && (
+          <AddComputerDialog
+            onClose={closeOverlay}
+            onChooseYourComputer={openConnectFromChooser}
+          />
+        )}
+        {pageOverlay === "connect" && (
+          <ConnectRemoteDialog onClose={closeOverlay} />
         )}
       </div>
     );
@@ -311,9 +326,9 @@ export function RuntimesPage({
 
   const headerActions = (
     <MachineListActions
-      onAdd={() => setShowConnectDialog(true)}
+      onAdd={openAddChooser}
       cloudRuntimeEnabled={cloudRuntimeEnabled}
-      onOpenCloudRuntime={() => setShowCloudRuntimeDialog(true)}
+      onOpenCloudRuntime={openCloudRuntime}
     />
   );
 
@@ -384,11 +399,17 @@ export function RuntimesPage({
         </div>
       )}
 
-      {showConnectDialog && (
-        <ConnectRemoteDialog onClose={() => setShowConnectDialog(false)} />
+      {pageOverlay === "add-chooser" && (
+        <AddComputerDialog
+          onClose={closeOverlay}
+          onChooseYourComputer={openConnectFromChooser}
+        />
       )}
-      {cloudRuntimeEnabled && showCloudRuntimeDialog && (
-        <CloudRuntimeDialog onClose={() => setShowCloudRuntimeDialog(false)} />
+      {pageOverlay === "connect" && (
+        <ConnectRemoteDialog onClose={closeOverlay} />
+      )}
+      {cloudRuntimeEnabled && pageOverlay === "cloud" && (
+        <CloudRuntimeDialog onClose={closeOverlay} />
       )}
     </div>
   );
@@ -434,7 +455,7 @@ function MachineListActions({
 
 export function MachineListView({
   machines,
-  agents,
+  agents: _agents,
   now: _now,
   wsId,
   currentUserId,
@@ -473,9 +494,14 @@ export function MachineListView({
       : tAgents(($) => $.inspector.computer_disconnected);
 
   const renderRow = (machine: RuntimeMachine, showOwnerBadge: boolean) => {
-    const count = agentCountOnMachine(machine, agents);
     const selected = selectedMachineId === machine.id;
     const ownerId = showOwnerBadge ? (machine.runtimes[0]?.owner_id ?? null) : null;
+    const versionLabel = machine.cliVersion?.trim()
+      ? t(($) => $.machine.version_prefix, {
+          version: machine.cliVersion.trim(),
+        })
+      : "—";
+    const statusLabel = connectivityLabel(machine);
     return (
       <div
         key={machine.id}
@@ -492,7 +518,7 @@ export function MachineListView({
         <button
           type="button"
           aria-pressed={selected}
-          aria-label={machine.title}
+          aria-label={`${machine.title}, ${statusLabel}`}
           onClick={() => onSelect(machine.id)}
           className="absolute inset-0 z-0 rounded-[inherit]"
         />
@@ -500,41 +526,33 @@ export function MachineListView({
           <HealthDot health={machine.health} />
         </span>
         <div className="relative z-10 min-w-0 flex-1 pointer-events-none">
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 items-center">
             <MachineNameEditor
               machine={machine}
               wsId={wsId}
               variant="list"
             />
-            {ownerId && (
-              // Scoped to just the avatar+name, not the whole row content —
-              // it's the only thing here with its own click handler
-              // (ActorAvatar opens a profile popover). The name text next to
-              // it has none, so it must stay pointer-events-none and let the
-              // click fall through to the row's select button underneath
-              // (LRM-923 / #23: this div used to carry pointer-events-auto
-              // for a pencil-rename button that list rows no longer render,
-              // silently eating clicks meant to select the row).
-              <span className="pointer-events-auto inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                <ActorAvatar actorType="member" actorId={ownerId} size={18} />
-                <span className="max-w-20 truncate">
-                  {getActorName("member", ownerId)}
-                </span>
-              </span>
-            )}
           </div>
-          <div className="mt-0.5 truncate text-xs text-muted-foreground">
-            {connectivityLabel(machine)}
-            {count > 0 && (
-              <>
-                {" · "}
-                {t(($) => $.machine.table_agents_count, {
-                  count,
-                })}
-              </>
-            )}
+          <div className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground">
+            {versionLabel}
           </div>
         </div>
+        {ownerId ? (
+          // Scoped to just the avatar+name, not the whole row content —
+          // it's the only thing here with its own click handler
+          // (ActorAvatar opens a profile popover). The name text next to
+          // it has none, so it must stay pointer-events-none and let the
+          // click fall through to the row's select button underneath
+          // (LRM-923 / #23: this div used to carry pointer-events-auto
+          // for a pencil-rename button that list rows no longer render,
+          // silently eating clicks meant to select the row).
+          <span className="pointer-events-auto relative z-10 inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+            <ActorAvatar actorType="member" actorId={ownerId} size={18} />
+            <span className="max-w-20 truncate">
+              {getActorName("member", ownerId)}
+            </span>
+          </span>
+        ) : null}
         {showChevron ? (
           <ChevronRight
             className="relative z-10 h-4 w-4 shrink-0 pointer-events-none text-muted-foreground/45"

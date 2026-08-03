@@ -258,6 +258,16 @@
   "running_other": "{{count}} running",
   "queued_one": "{{count}} queued",
   "queued_other": "{{count}} queued",
+  "add_computer": {
+    "title": "Add computer",
+    "description": "Choose how you want to add a computer to this workspace.",
+    "your_computer": "Your computer",
+    "your_computer_hint": "Run agents on your own computer.",
+    "cloud": "Cloud computer",
+    "cloud_coming_soon": "Coming soon",
+    "next": "Next",
+    "cancel": "Cancel"
+  },
   "connect": {
     "title": "Add a computer",
     "description": "Run these two commands on the computer you want to add. We'll detect it the moment the daemon comes online.",

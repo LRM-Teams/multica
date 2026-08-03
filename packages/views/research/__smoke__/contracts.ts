@@ -1,7 +1,7 @@
 /**
  * Parallel FE smoke contracts for LRM-1117.
  * Test-only helpers — no production imports from this file.
- * Implementation PRs (1104 / 1109 / 1100 / 1105) should flip matching
+ * Implementation PRs (1104 / 1109 / 1100 / 1105 / 1091) should flip matching
  * `it.fails` cases in `parallel-regression.matrix.test.tsx` to `it` once green.
  */
 
@@ -10,6 +10,8 @@ export const SMOKE_ISSUES = {
   breakpoints: "LRM-1109",
   overlayA11y: "LRM-1100",
   canvasKeyboard: "LRM-1105",
+  /** Planar topology + action visibility — flip after LRM-1091 lands. */
+  canvasPlanar: "LRM-1091",
 } as const;
 
 /** useIsMobile / Tailwind md boundary (packages/ui/hooks/use-mobile.ts). */
@@ -64,6 +66,60 @@ export const CANVAS_KEYBOARD_CONTRACT = {
   "0": "zoom-reset",
   Home: "jump-first",
   End: "jump-last",
+} as const;
+
+/**
+ * LRM-1091 planar keyboard AC (product increment on top of LRM-1105 freeze).
+ * Implementers flip matching `it.fails` after topology wiring lands.
+ */
+export const PLANAR_KEYBOARD_CONTRACT = {
+  ArrowUp: "topology-prev",
+  ArrowDown: "topology-next",
+  ArrowLeft: "branch-prev",
+  ArrowRight: "branch-next",
+  Enter: "open-detail-drawer",
+  Escape: "dismiss-layer",
+  "Shift+F10": "open-context-menu",
+} as const;
+
+/** Card AABB used by the 30-node no-overlap / no-pierce smoke. */
+export type SmokeRect = { id: string; x: number; y: number; w: number; h: number };
+
+export function rectsOverlap(a: SmokeRect, b: SmokeRect, epsilon = 0.5): boolean {
+  return (
+    a.x < b.x + b.w - epsilon &&
+    a.x + a.w - epsilon > b.x &&
+    a.y < b.y + b.h - epsilon &&
+    a.y + a.h - epsilon > b.y
+  );
+}
+
+export function findOverlappingPairs(rects: SmokeRect[]): Array<[string, string]> {
+  const pairs: Array<[string, string]> = [];
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      if (rectsOverlap(rects[i]!, rects[j]!)) {
+        pairs.push([rects[i]!.id, rects[j]!.id]);
+      }
+    }
+  }
+  return pairs;
+}
+
+/**
+ * Branch accent (fork/lane chrome) must not reuse status token colors.
+ * Smoke asserts string inequality after 1091 exposes stable CSS vars / classes.
+ */
+export const BRANCH_VS_STATUS_COLOR_CONTRACT = {
+  branchTokens: ["--branch-fork", "--branch-lane"] as const,
+  statusTokens: ["--success", "--warning", "--destructive", "--muted-foreground"] as const,
+} as const;
+
+/** Action visibility + destructive safety hooks (status/permission gated). */
+export const ACTION_VISIBILITY_CONTRACT = {
+  gatedByStatusOrPermission: true,
+  destructiveNeedsConfirmOrUndo: true,
+  destructiveActionIds: ["delete", "abandon", "force_stop"] as const,
 } as const;
 
 export function failHint(issue: string, detail: string): string {

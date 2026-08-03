@@ -17,15 +17,23 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchGraphNode, ResearchSession } from "@multica/core/types";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import {
+  ACTION_VISIBILITY_CONTRACT,
+  BRANCH_VS_STATUS_COLOR_CONTRACT,
   BREAKPOINT_SMOKE_WIDTHS,
   CANVAS_KEYBOARD_CONTRACT,
   MOBILE_BREAKPOINT_PX,
   OVERLAY_A11Y_CONTRACT,
+  PLANAR_KEYBOARD_CONTRACT,
   SMOKE_ISSUES,
   failHint,
+  findOverlappingPairs,
   isGoalChipRedundant,
   isMobileViewport,
+  type SmokeRect,
 } from "./contracts";
+import { layoutResearchGraph, RESEARCH_NODE_HEIGHT, RESEARCH_NODE_WIDTH } from "../lib/layout-graph";
+import { ringActionsForNode } from "../lib/node-action-ring";
+import { visualForEdgeType, visualForNodeType } from "../lib/node-visuals";
 import {
   sessionGoalSummary,
   sessionShortTitle,
@@ -464,6 +472,196 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
           failHint(SMOKE_ISSUES.canvasKeyboard, `research-canvas.tsx missing ${key} handling`),
         ).toBe(true);
       }
+    },
+  );
+});
+
+function thirtyNodeFixture(): {
+  nodes: ResearchGraphNode[];
+  edges: import("@multica/core/types").ResearchGraphEdge[];
+} {
+  // Root + 29 same-type siblings → same layer:lane bucket, which today stacks
+  // with a 10px offset and overlaps card AABBs (planar AC forbids this).
+  const nodes: ResearchGraphNode[] = [
+    {
+      id: "root",
+      session_id: "s1",
+      title: "Goal",
+      summary: "root",
+      status: "active",
+      node_type: "goal",
+      actor_agent_id: null,
+      payload: {},
+      created_at: "2026-07-31T00:00:00Z",
+      updated_at: "2026-07-31T00:00:00Z",
+    },
+    ...Array.from({ length: 29 }, (_, i) => ({
+      id: `n${i}`,
+      session_id: "s1",
+      title: `Probe ${i}`,
+      summary: `summary-${i}`,
+      status: i % 5 === 0 ? "failed" : "active",
+      node_type: "probe" as const,
+      actor_agent_id: null,
+      payload: {},
+      created_at: "2026-07-31T00:00:00Z",
+      updated_at: "2026-07-31T00:00:00Z",
+    })),
+  ];
+  const edges = nodes.slice(1).map((n, i) => ({
+    id: `e${i}`,
+    session_id: "s1",
+    from_node_id: "root",
+    to_node_id: n.id,
+    edge_type: "leads_to" as const,
+    created_at: "2026-07-31T00:00:00Z",
+  }));
+  return { nodes, edges };
+}
+
+describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () => {
+  it(`${SMOKE_ISSUES.canvasPlanar}: planar keyboard + action contracts freeze`, () => {
+    expect(PLANAR_KEYBOARD_CONTRACT.ArrowUp).toBe("topology-prev");
+    expect(PLANAR_KEYBOARD_CONTRACT.ArrowDown).toBe("topology-next");
+    expect(PLANAR_KEYBOARD_CONTRACT.ArrowLeft).toBe("branch-prev");
+    expect(PLANAR_KEYBOARD_CONTRACT.ArrowRight).toBe("branch-next");
+    expect(PLANAR_KEYBOARD_CONTRACT.Enter).toBe("open-detail-drawer");
+    expect(PLANAR_KEYBOARD_CONTRACT.Escape).toBe("dismiss-layer");
+    expect(PLANAR_KEYBOARD_CONTRACT["Shift+F10"]).toBe("open-context-menu");
+    expect(ACTION_VISIBILITY_CONTRACT.gatedByStatusOrPermission).toBe(true);
+    expect(ACTION_VISIBILITY_CONTRACT.destructiveNeedsConfirmOrUndo).toBe(true);
+    expect(BRANCH_VS_STATUS_COLOR_CONTRACT.branchTokens.length).toBeGreaterThan(0);
+  });
+
+  it.fails(
+    `${SMOKE_ISSUES.canvasPlanar}: 30-node layout has no card AABB overlap / pierce`,
+    () => {
+      const { nodes, edges } = thirtyNodeFixture();
+      const laid = layoutResearchGraph(nodes, edges, { includeEnd: false });
+      const cards = laid.nodes.filter((n) => n.type === "research");
+      expect(cards.length).toBe(30);
+      const rects: SmokeRect[] = cards.map((n) => ({
+        id: n.id,
+        x: n.position.x,
+        y: n.position.y,
+        w: Number(n.style?.width ?? RESEARCH_NODE_WIDTH),
+        h: RESEARCH_NODE_HEIGHT,
+      }));
+      const overlaps = findOverlappingPairs(rects);
+      expect(
+        overlaps,
+        failHint(
+          SMOKE_ISSUES.canvasPlanar,
+          `overlapping pairs: ${overlaps.map(([a, b]) => `${a}/${b}`).join(", ")}`,
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.fails(
+    `${SMOKE_ISSUES.canvasPlanar}: branch/edge accent tokens ≠ status shell tokens`,
+    () => {
+      const branchStroke = visualForEdgeType("leads_to").stroke;
+      const statusAccents = [
+        visualForNodeType("finding").accentBarClass,
+        visualForNodeType("conflict").accentBarClass,
+        visualForNodeType("dead_end").accentBarClass,
+      ];
+      // Branch stroke must not literally reuse a status accent token class/var.
+      for (const accent of statusAccents) {
+        expect(
+          branchStroke.includes("success") ||
+            branchStroke.includes("warning") ||
+            branchStroke.includes("destructive") ||
+            accent.includes(branchStroke.replace(/var\(|\)/g, "")),
+          failHint(
+            SMOKE_ISSUES.canvasPlanar,
+            `branch stroke ${branchStroke} collides with status accent ${accent}`,
+          ),
+        ).toBe(false);
+      }
+      // Explicit SoT tokens must exist once 1091 wires branch chrome.
+      const graphNodeSrc = readResearchSource("components/research-graph-node.tsx");
+      expect(
+        BRANCH_VS_STATUS_COLOR_CONTRACT.branchTokens.some((t) => graphNodeSrc.includes(t)),
+        failHint(
+          SMOKE_ISSUES.canvasPlanar,
+          "research-graph-node.tsx missing dedicated branch token (--branch-*)",
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.fails(
+    `${SMOKE_ISSUES.canvasPlanar}: canvas wires planar keyboard map (topo ↑↓, branch ←→, Enter/Esc, Shift+F10)`,
+    () => {
+      const canvasSrc = readResearchSource("components/research-canvas.tsx");
+      for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", "Escape"]) {
+        expect(
+          canvasSrc.includes(key),
+          failHint(SMOKE_ISSUES.canvasPlanar, `research-canvas.tsx missing ${key}`),
+        ).toBe(true);
+      }
+      expect(
+        /Shift\+F10|shiftKey.*F10|F10/.test(canvasSrc),
+        failHint(SMOKE_ISSUES.canvasPlanar, "research-canvas.tsx missing Shift+F10 context menu"),
+      ).toBe(true);
+      expect(
+        canvasSrc.includes("topology") || canvasSrc.includes("branch"),
+        failHint(SMOKE_ISSUES.canvasPlanar, "planar nav helpers not referenced in canvas"),
+      ).toBe(true);
+    },
+  );
+
+  it.fails(
+    `${SMOKE_ISSUES.canvasPlanar}: ring actions gated by status; destructive path has confirm/undo hook`,
+    () => {
+      const active = ringActionsForNode({
+        id: "a",
+        session_id: "s1",
+        title: "Active probe",
+        summary: "",
+        status: "active",
+        node_type: "probe",
+        actor_agent_id: null,
+        payload: {},
+        created_at: "2026-07-31T00:00:00Z",
+        updated_at: "2026-07-31T00:00:00Z",
+      });
+      const failed = ringActionsForNode({
+        id: "b",
+        session_id: "s1",
+        title: "Failed",
+        summary: "",
+        status: "failed",
+        node_type: "probe",
+        actor_agent_id: null,
+        payload: {},
+        created_at: "2026-07-31T00:00:00Z",
+        updated_at: "2026-07-31T00:00:00Z",
+      });
+      expect(
+        active.find((a) => a.id === "retry")?.disabled,
+        failHint(SMOKE_ISSUES.canvasPlanar, "active probe should not expose live retry"),
+      ).toBe(true);
+      expect(
+        failed.find((a) => a.id === "retry")?.disabled,
+        failHint(SMOKE_ISSUES.canvasPlanar, "failed probe should enable retry"),
+      ).toBeFalsy();
+
+      const ringSrc = readResearchSource("lib/node-action-ring.ts");
+      const canvasSrc = readResearchSource("components/research-canvas.tsx");
+      const hasConfirmOrUndo =
+        /confirm|undo|AlertDialog|destructiveNeedsConfirm/i.test(ringSrc) ||
+        /confirm|undo|AlertDialog/i.test(canvasSrc);
+      expect(
+        hasConfirmOrUndo,
+        failHint(
+          SMOKE_ISSUES.canvasPlanar,
+          "destructive canvas actions missing confirm or undo hook",
+        ),
+      ).toBe(true);
+      expect(ACTION_VISIBILITY_CONTRACT.destructiveActionIds.length).toBeGreaterThan(0);
     },
   );
 });

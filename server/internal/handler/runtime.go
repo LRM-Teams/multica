@@ -387,13 +387,14 @@ func runtimeUpdateError(update *UpdateRequest, currentVersion *string, updateSta
 	}
 	// Surface the last terminal failure/timeout reason on the runtime
 	// projection so a page refresh still shows human-readable cause
-	// (Frank 2026-08-03). Prefer the store's Error text; fall back to a
-	// stable code when empty.
-	if updateState == "timed_out" || updateState == "failed" ||
-		update.Status == UpdateFailed || update.Status == UpdateTimeout {
+	// (Frank 2026-08-03). Key off derived updateState only — when a
+	// failed/timeout attempt already matches target, runtimeUpdateState
+	// remaps to "completed" and we must not keep a stale error that
+	// masks the healthy register (see TestRuntimeToResponseRetained…).
+	if updateState == "timed_out" || updateState == "failed" {
 		reason := strings.TrimSpace(update.Error)
 		if reason == "" {
-			if updateState == "timed_out" || update.Status == UpdateTimeout {
+			if updateState == "timed_out" {
 				reason = "runtime_update_timed_out"
 			} else {
 				reason = "runtime_update_failed"

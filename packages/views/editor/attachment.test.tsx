@@ -122,6 +122,10 @@ vi.mock("@multica/core/paths", async (importOriginal) => {
 // useAttachmentDownloadResolver hook the component reads.
 const resolverState: { attachments: AttachmentRecord[] } = { attachments: [] };
 function attachmentIdFromTestDownloadURL(url: string): string | undefined {
+  const scheme = url.trim().match(
+    /^attachment:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+  );
+  if (scheme) return scheme[1];
   const path = /^https?:\/\//i.test(url)
     ? (() => {
         try {
@@ -708,5 +712,51 @@ describe("Attachment — absolutize site-relative URLs (MUL-3192)", () => {
     // /api/* to the API host, so the relative path loads through the same
     // origin as the rendered HTML.
     expect(img?.getAttribute("src")).toBe("/api/attachments/abc-3/download");
+  });
+});
+
+describe("Attachment — attachment:<uuid> shorthand (LRM-1130)", () => {
+  const ID = "019fc691-f5d7-7bd0-aed4-9ec84213be62";
+
+  it("rewrites attachment:<uuid> to the stable download path for <img> src", () => {
+    getBaseUrlMock.mockReturnValue("");
+    renderWithQuery(
+      <Attachment
+        attachment={{
+          kind: "url",
+          url: `attachment:${ID}`,
+          filename: "shot.png",
+          forceKind: "image",
+        }}
+      />,
+    );
+    const img = document.querySelector("img");
+    expect(img?.getAttribute("src")).toBe(`/api/attachments/${ID}/download`);
+  });
+
+  it("resolves a surrounding attachments record via attachment:<uuid>", () => {
+    getBaseUrlMock.mockReturnValue("");
+    resolverState.attachments = [
+      makeRecord({
+        id: ID,
+        filename: "drawer.png",
+        content_type: "image/png",
+        url: "https://cdn.example.test/drawer.png",
+        markdown_url: "https://cdn.example.test/drawer.png",
+        download_url: `/api/attachments/${ID}/download`,
+      }),
+    ];
+    renderWithQuery(
+      <Attachment
+        attachment={{
+          kind: "url",
+          url: `attachment:${ID}`,
+          filename: "drawer.png",
+          forceKind: "image",
+        }}
+      />,
+    );
+    const img = document.querySelector("img");
+    expect(img?.getAttribute("src")).toBe("https://cdn.example.test/drawer.png");
   });
 });

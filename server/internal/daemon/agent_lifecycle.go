@@ -62,15 +62,10 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 	if err := e.validateDependencies(request); err != nil {
 		return lifecycleStepError("validate", err)
 	}
-	// Plain restart (task #62) must interrupt a busy/stuck turn rather than
-	// refuse it — a genuinely stuck agent's turn never ends on its own, so
-	// requiring hasActiveTurn==false here would mean restart can never fire
-	// for exactly the case it exists to fix. reset_session_restart and
-	// full_reset_restart keep the busy guard: see the design doc's Scope
-	// boundary / Future work sections for why those still require it today.
-	if request.ActionKind != agentLifecycleActionRestart && e.turns.hasActiveTurn(request.AgentID, request.RuntimeID) {
-		return lifecycleStepError("drain", ErrCanonicalAgentRuntimeBusy)
-	}
+	// #112 / #62: all lifecycle restart kinds force-interrupt a busy turn.
+	// hasActiveTurn permanently true is the stuck-agent case. Never refuse
+	// with ErrCanonicalAgentRuntimeBusy — that recreated "scheduled forever"
+	// hangs for reset_session/full_reset (阿泰 2026-08-03).
 
 	switch request.ActionKind {
 	case agentLifecycleActionRestart:
@@ -79,12 +74,12 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 		if err := e.resetSession(ctx, request); err != nil {
 			return err
 		}
-		return e.invalidateRuntime(request)
+		return e.forceInvalidateRuntime(request)
 	case agentLifecycleActionFullResetRestart:
 		if err := e.resetSession(ctx, request); err != nil {
 			return err
 		}
-		if err := e.invalidateRuntime(request); err != nil {
+		if err := e.forceInvalidateRuntime(request); err != nil {
 			return err
 		}
 		return e.resetWorkspace(request)

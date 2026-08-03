@@ -169,30 +169,14 @@ func (h *Handler) CreateAgentLifecycleOperation(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	active, err := agentLifecycleHasActiveRun(r.Context(), tx, lockedAgent.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create agent lifecycle operation")
-		return
-	}
-	if active && req.ActionKind == agentLifecycleFullResetRestart {
-		writeError(w, http.StatusConflict, "agent_active")
-		return
-	}
+	// Task #112 / Frank 2026-08-03: never create after_current_run/scheduled
+	// lifecycle ops — there is no promotion trigger, so "runs after current
+	// task" is a permanent hang (阿泰 Reset session). All three action kinds
+	// force immediate dispatch; busy agents are interrupted via #62 force-kill.
+	// (agentLifecycleHasActiveRun is still used by preflight only.)
 	executionMode := agentLifecycleImmediate
 	status := agentLifecycleRunning
 	var startedAt any = time.Now()
-	// Plain restart (task #62) always goes immediate, even while active: a
-	// busy agent is exactly the stuck-agent case restart exists to recover,
-	// and "scheduled" never fires on its own once created (there is no
-	// trigger that promotes it once the blocking turn ends — see the design
-	// doc). reset_session_restart and full_reset_restart keep the existing
-	// scheduled/rejected behavior below; extending force-interrupt to them
-	// is separate, tracked work, not done here.
-	if active && req.ActionKind != agentLifecycleRestart {
-		executionMode = agentLifecycleAfterCurrentRun
-		status = agentLifecycleScheduled
-		startedAt = nil
-	}
 	actorID, ok := parseUUIDOrBadRequest(w, requestUserID(r), "user_id")
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "authentication required")
@@ -229,11 +213,8 @@ func (h *Handler) CreateAgentLifecycleOperation(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to create agent lifecycle operation")
 		return
 	}
-	// Dispatch only the immediate case here. A "scheduled" (after_current_run)
-	// operation still has no trigger that dispatches it once the blocking
-	// turn ends — a known, pre-existing gap (see the package doc comment in
-	// agent_lifecycle_dispatch.go), not something this handler silently
-	// drops: it simply doesn't claim to solve it yet.
+	// Always immediate now (#112): dispatch every accepted create. The old
+	// scheduled/after_current_run branch is gone — it never auto-fired.
 	if status == agentLifecycleRunning && h.AgentLifecycleDispatchStore != nil {
 		if _, err := h.AgentLifecycleDispatchStore.Create(
 			r.Context(), op.ID, uuidToString(lockedAgent.ID), uuidToString(runtime.ID),
@@ -298,10 +279,9 @@ func (h *Handler) agentLifecyclePreflight(ctx context.Context, target db.Agent) 
 	if err != nil {
 		return AgentLifecyclePreflight{}, err
 	}
-	mode := agentLifecycleImmediate
-	if active {
-		mode = agentLifecycleAfterCurrentRun
-	}
+	// #112: every lifecycle action is immediate force (including busy). Do not
+	// advertise after_current_run — that mode never auto-dispatches.
+	_ = active
 	activeOperation, err := getActiveAgentLifecycleOperation(ctx, h.DB, target.ID)
 	if err != nil {
 		return AgentLifecyclePreflight{}, err
@@ -312,27 +292,10 @@ func (h *Handler) agentLifecyclePreflight(ctx context.Context, target db.Agent) 
 		agentLifecycleResetSessionRestart,
 		agentLifecycleFullResetRestart,
 	} {
-		actionSupported := supported
-		actionReason := reason
-		actionMode := mode
-		if action == agentLifecycleFullResetRestart && active {
-			actionSupported = false
-			actionReason = "agent_active"
-			actionMode = agentLifecycleImmediate
-		}
-		// Task #62: plain restart bypasses the busy-check entirely
-		// (CreateAgentLifecycleOperation always dispatches it immediately,
-		// even on an active agent) — the preview must match that, not the
-		// shared "mode" default, or the confirmation dialog tells the user
-		// their click will queue behind the current run when it will
-		// actually interrupt it right away.
-		if action == agentLifecycleRestart {
-			actionMode = agentLifecycleImmediate
-		}
 		actions[action] = AgentLifecycleActionPreflight{
-			Supported:      actionSupported,
-			DisabledReason: actionReason,
-			ExecutionMode:  actionMode,
+			Supported:      supported,
+			DisabledReason: reason,
+			ExecutionMode:  agentLifecycleImmediate,
 		}
 	}
 	return AgentLifecyclePreflight{

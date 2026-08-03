@@ -95,7 +95,11 @@ func TestAgentLifecycleExecutorPreserveAndDeleteBoundaries(t *testing.T) {
 	}
 }
 
-func TestAgentLifecycleExecutorFailsClosedOnActiveTurn(t *testing.T) {
+// TestAgentLifecycleExecutorResetSessionInterruptsActiveTurn pins #112:
+// reset_session_restart must not refuse a busy turn (old drain guard).
+// With an empty pool slot forceInvalidate is a no-op success; session reset
+// must still run (no ErrCanonicalAgentRuntimeBusy).
+func TestAgentLifecycleExecutorResetSessionInterruptsActiveTurn(t *testing.T) {
 	agentID := uuid.NewString()
 	runtimeID := uuid.NewString()
 	turnID := uuid.NewString()
@@ -118,24 +122,19 @@ func TestAgentLifecycleExecutorFailsClosedOnActiveTurn(t *testing.T) {
 		WorkspaceID: uuid.NewString(),
 		AgentID:     agentID,
 		RuntimeID:   runtimeID,
-		ActionKind:  agentLifecycleActionFullResetRestart,
+		ActionKind:  agentLifecycleActionResetSessionRestart,
 	})
-	var stepErr *agentLifecycleExecutionError
-	if !errors.As(err, &stepErr) || stepErr.Step != "drain" ||
-		!errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
-		t.Fatalf("active turn error=%v", err)
+	if err != nil {
+		t.Fatalf("reset_session_restart on active turn error=%v, want success (force path)", err)
 	}
-	if len(resetter.calls) != 0 {
-		t.Fatal("active turn reached session reset")
+	if len(resetter.calls) != 1 {
+		t.Fatalf("session reset calls=%d, want 1", len(resetter.calls))
 	}
 }
 
-// TestAgentLifecycleExecutorPlainRestartInterruptsActiveTurn pins task #62's
-// core requirement at the executor layer: unlike full_reset_restart (which
-// must stay fail-closed on a busy turn, see the test above), plain restart
-// must not refuse a busy turn — it must skip the hasActiveTurn guard and
-// proceed to force-interrupt the canonical pool slot instead of returning
-// ErrCanonicalAgentRuntimeBusy.
+// TestAgentLifecycleExecutorPlainRestartInterruptsActiveTurn pins #62/#112:
+// plain restart force-interrupts a busy pool slot (ForceKill) instead of
+// returning ErrCanonicalAgentRuntimeBusy.
 func TestAgentLifecycleExecutorPlainRestartInterruptsActiveTurn(t *testing.T) {
 	agentID := uuid.NewString()
 	runtimeID := uuid.NewString()

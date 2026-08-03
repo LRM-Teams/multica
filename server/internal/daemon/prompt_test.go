@@ -1018,3 +1018,39 @@ func TestBuildPromptChatBackedIssueUsesIssueWorkflow(t *testing.T) {
 		t.Fatalf("chat transport selected a chat semantic prompt:\n%s", prompt)
 	}
 }
+
+func TestBuildPromptChannelWakeWithoutChatSession(t *testing.T) {
+	// LRM-1081 / empty assignment: channel wake has ChatMessage + ChannelID,
+	// no ChatSessionID, no IssueID. Must not emit empty New Assignment template.
+	out := BuildPrompt(Task{
+		ChannelID:   "ch-dm-1",
+		ChatMessage: "先看看什么问题",
+	}, "claude", "")
+	if strings.Contains(out, "Your assigned issue ID is:") {
+		t.Fatalf("channel wake used empty assignment template:\n%s", out)
+	}
+	if !strings.Contains(out, "先看看什么问题") {
+		t.Fatalf("user message missing from prompt:\n%s", out)
+	}
+	if !strings.Contains(out, "User message:") {
+		t.Fatalf("expected chat prompt shape:\n%s", out)
+	}
+}
+
+func TestBuildPromptEmptyIssueAssignmentFallbackAvoidedWhenChatMessagePresent(t *testing.T) {
+	out := BuildPrompt(Task{ChatMessage: "hello from mention"}, "codex", "")
+	if strings.Contains(out, "multica issue get") {
+		t.Fatalf("unexpected issue get for chat-like wake:\n%s", out)
+	}
+}
+
+func TestBuildPromptChatSessionIDAloneIsNotChat(t *testing.T) {
+	// ChatSessionID must not drive chat detection (retired dual-track).
+	out := BuildPrompt(Task{ChatSessionID: "legacy-chat-only"}, "claude", "")
+	if strings.Contains(out, "User message:") {
+		t.Fatalf("ChatSessionID alone must not select chat prompt:\n%s", out)
+	}
+	if !strings.Contains(out, "Your assigned issue ID is:") {
+		t.Fatalf("expected issue assignment fallback without chat surface:\n%s", out)
+	}
+}

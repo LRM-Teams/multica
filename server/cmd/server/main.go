@@ -280,6 +280,7 @@ func main() {
 	var httpMetrics *obsmetrics.HTTPMetrics
 	var businessMetrics *obsmetrics.BusinessMetrics
 	var httpSLOAlerter *obsmetrics.HTTPRequestSLOAlerter
+	var platformHealthAlerter *obsmetrics.PlatformHealthAlerter
 	var samplerPool *pgxpool.Pool
 	sloCtx, sloCancel := context.WithCancel(context.Background())
 	defer sloCancel()
@@ -328,6 +329,14 @@ func main() {
 		httpSLOAlerter = obsmetrics.NewHTTPRequestSLOAlerter(
 			metricsRegistry.Gatherer,
 			obsmetrics.HTTPRequestSLOConfigFromEnv(),
+		)
+		// Platform-ops aggregate alerter (task #73 Phase A): fires when
+		// multica_reminder_scheduled_overdue >= 3. Silent if sampler is
+		// disabled (series absent). Webhook: OPS_ALERT_WEBHOOK_URL, else
+		// HTTP_SLO_ALERT_WEBHOOK_URL fallback, else slog only.
+		platformHealthAlerter = obsmetrics.NewPlatformHealthAlerter(
+			metricsRegistry.Gatherer,
+			obsmetrics.PlatformHealthAlertConfigFromEnv(),
 		)
 	}
 	if samplerPool != nil {
@@ -464,6 +473,9 @@ func main() {
 	}
 	if httpSLOAlerter != nil {
 		go httpSLOAlerter.Run(sloCtx)
+	}
+	if platformHealthAlerter != nil {
+		go platformHealthAlerter.Run(sloCtx)
 	}
 
 	go func() {

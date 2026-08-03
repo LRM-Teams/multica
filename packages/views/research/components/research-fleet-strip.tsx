@@ -73,9 +73,27 @@ export function ResearchFleetStrip({
             "rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
             modeChip[mode],
           )}
+          aria-hidden
         >
           {modeLabel}
         </span>
+        {/*
+          LRM-1230 — mode flips loading → running/done inside one mount, so the
+          announcement cannot live on the loading-only subtree (that node is
+          unmounted exactly when the fleet becomes ready). The mode chip renders
+          in every mode, so it hosts the one persistent live region — same shape
+          as ResearchChatModeChip (LRM-1225). Visible chip is aria-hidden to
+          avoid speaking the label twice.
+        */}
+        <output
+          data-testid="research-fleet-strip-mode-live"
+          className="sr-only"
+          aria-live="polite"
+          aria-atomic="true"
+          aria-busy={mode === "loading"}
+        >
+          {modeLabel}
+        </output>
         {active.length > 0 ? (
           <span className="text-[10px] text-muted-foreground">
             {t(($) => $.panel.fleet_count, { count: active.length })}
@@ -88,7 +106,6 @@ export function ResearchFleetStrip({
           data-testid="research-fleet-strip-loading"
           className="space-y-2"
           aria-busy
-          aria-live="polite"
         >
           <div className="flex items-center gap-2 px-0.5 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />

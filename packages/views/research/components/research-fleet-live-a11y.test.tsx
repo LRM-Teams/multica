@@ -2,6 +2,8 @@
 
 /**
  * LRM-1203 — [巡检][F] no-login static a11y contract for fleet strip + live stream.
+ * LRM-1230 — fleet mode live region must persist across loading→running (chip
+ * hosts native <output>; loading body keeps aria-busy only).
  * Source scan + render asserts; no authenticated routes.
  */
 import fs from "node:fs";
@@ -77,13 +79,20 @@ describe("research fleet/live a11y static contract (LRM-1203)", () => {
     }
   });
 
-  it("source: fleet loading subtree has aria-busy + aria-live=polite; root shell does not", () => {
+  it("source: fleet hosts persistent OUTPUT live region on mode chip; loading body keeps busy only", () => {
     const src = readSrc("research-fleet-strip.tsx");
+    expect(src).toMatch(
+      /data-testid=["']research-fleet-strip-mode-live["'][\s\S]{0,200}aria-live=["']polite["']/,
+    );
+    expect(src).toMatch(
+      /<output\b[\s\S]{0,160}data-testid=["']research-fleet-strip-mode-live["']|data-testid=["']research-fleet-strip-mode-live["'][\s\S]{0,80}>/,
+    );
     expect(src).toMatch(
       /data-testid=["']research-fleet-strip-loading["'][\s\S]{0,200}aria-busy/,
     );
-    expect(src).toMatch(
-      /data-testid=["']research-fleet-strip-loading["'][\s\S]{0,240}aria-live=["']polite["']/,
+    // Announcement must not live on the loading-only subtree (unmounted on ready).
+    expect(src).not.toMatch(
+      /data-testid=["']research-fleet-strip-loading["'][\s\S]{0,240}aria-live/,
     );
     // Outer shell must not permanently announce.
     expect(src).not.toMatch(
@@ -104,24 +113,48 @@ describe("research fleet/live a11y static contract (LRM-1203)", () => {
     expect(src).toMatch(/streaming_from/);
   });
 
-  it("render: fleet loading exposes busy polite live region; mode label visible", () => {
-    render(
+  it("render: fleet keeps one persistent live region across mode flips", () => {
+    const { rerender } = render(
       <ResearchFleetStrip members={[]} sessionStatus="running" loading />,
     );
-    const root = screen.getByTestId("research-fleet-strip");
-    expect(root.getAttribute("aria-live")).toBeNull();
+    const live = screen.getByTestId("research-fleet-strip-mode-live");
+    // Native <output> carries the status role (react-doctor prefer-tag-over-role).
+    expect(live.tagName).toBe("OUTPUT");
+    expect(live).toHaveAttribute("aria-live", "polite");
+    expect(live).toHaveAttribute("aria-busy", "true");
+    expect(live).toHaveTextContent("Loading");
+    expect(screen.getByTestId("research-fleet-strip").getAttribute("aria-live")).toBeNull();
     expect(screen.getByTestId("research-fleet-strip-mode")).toHaveTextContent(
       "Loading",
     );
     const loading = screen.getByTestId("research-fleet-strip-loading");
     expect(loading.getAttribute("aria-busy")).toBe("true");
-    expect(loading.getAttribute("aria-live")).toBe("polite");
+    expect(loading.getAttribute("aria-live")).toBeNull();
+
+    const member: ResearchFleetMember = {
+      id: "fm-1",
+      agent_id: "ag-1",
+      name: "Scout",
+      display_name: "Scout",
+      role: "researcher",
+      status: "active",
+      is_lead: true,
+    };
+    rerender(
+      <ResearchFleetStrip members={[member]} sessionStatus="running" />,
+    );
+    // Same DOM node — a remount would reset the live region and swallow the
+    // ready announcement.
+    expect(screen.getByTestId("research-fleet-strip-mode-live")).toBe(live);
+    expect(live).toHaveAttribute("aria-busy", "false");
+    expect(live).toHaveTextContent("Running");
   });
 
   it("render: fleet empty/running keep mode text; no root aria-live", () => {
     const { unmount } = render(<ResearchFleetStrip members={[]} />);
     expect(screen.getByTestId("research-fleet-strip").getAttribute("aria-live")).toBeNull();
     expect(screen.getByTestId("research-fleet-strip-mode")).toHaveTextContent("Empty");
+    expect(screen.getByTestId("research-fleet-strip-mode-live")).toHaveTextContent("Empty");
     expect(screen.getByTestId("research-fleet-strip-empty")).toBeTruthy();
     unmount();
 

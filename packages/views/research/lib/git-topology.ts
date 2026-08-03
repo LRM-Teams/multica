@@ -6,7 +6,20 @@ import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
  * Does not require backend parent/merge schema changes.
  */
 
-export const GIT_BRANCH_COLORS = ["#0f766e", "#c2410c", "#1d4ed8", "#7c3aed", "#b45309"] as const;
+/**
+ * Branch lane colors resolve through `tokens.css` semantic tokens
+ * (`--research-lane-1..5`), never inline hex: these values land on SVG
+ * `stroke` and inline `style.borderColor`, which cannot carry a `dark:`
+ * variant. The token indirection is what gives the dark theme its lightened
+ * pair — see LRM-1208.
+ */
+export const GIT_BRANCH_COLORS = [
+  "var(--research-lane-1)",
+  "var(--research-lane-2)",
+  "var(--research-lane-3)",
+  "var(--research-lane-4)",
+  "var(--research-lane-5)",
+] as const;
 
 export type GitTopologyNode = {
   id: string;

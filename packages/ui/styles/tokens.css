@@ -122,6 +122,13 @@
     --source-general: #3d6f9c;
     --source-domain: #2a8f7a;
     --role-human: #8a5a2b;
+    /* LRM-1208 — research Git topology branch lanes (replaces inline hex in
+       git-topology.ts; SVG stroke / style colors cannot carry `dark:`). */
+    --research-lane-1: #0f766e;
+    --research-lane-2: #c2410c;
+    --research-lane-3: #1d4ed8;
+    --research-lane-4: #7c3aed;
+    --research-lane-5: #b45309;
     /* Activity timeline command node (LRM-560; replaces hardcoded #F5B301) */
     --running: #e5a00d;
     /* Charts stay brand-anchored (hue ≈ #1264a3) */
@@ -206,6 +213,15 @@
     --source-general: oklch(0.72 0.08 240);
     --source-domain: oklch(0.70 0.09 170);
     --role-human: oklch(0.72 0.08 70);
+    /* LRM-1208 — research Git topology branch lanes (dark).
+       Light hexes sit at 2.6–3.5:1 on the dark card and fail WCAG 1.4.11 for a
+       2px lane line; these lightened same-hue pairs measure 7.7–10.8:1 while
+       keeping ≥45° oklch hue separation between adjacent lanes. */
+    --research-lane-1: oklch(0.78 0.12 175);
+    --research-lane-2: oklch(0.78 0.13 50);
+    --research-lane-3: oklch(0.74 0.12 255);
+    --research-lane-4: oklch(0.76 0.13 300);
+    --research-lane-5: oklch(0.84 0.14 85);
     /* Activity timeline command node (LRM-560) */
     --running: oklch(0.78 0.14 85);
     --scrollbar-thumb: oklch(1 0 0 / 8%);

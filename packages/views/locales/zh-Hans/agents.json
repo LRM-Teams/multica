@@ -738,7 +738,90 @@
     "no_equipped": "尚未佩戴成就",
     "dismiss_unlock": "关闭成就通知",
     "unlock_toast_title": "智能体解锁新成就",
-    "fleet_upgraded": "智能体已晋升至 {{className}}",
+    "fleet_upgraded": "{{agentName}}晋升至{{className}}",
+    "agent_fallback": "智能体",
+    "fleet_classes": {
+      "reserve": "预备舰",
+      "corvette": "轻型护卫舰",
+      "frigate": "护卫舰",
+      "cruiser": "巡洋舰",
+      "battleship": "战列舰",
+      "dreadnought": "无畏舰"
+    },
+    "achievement_categories": {
+      "delivery": "交付",
+      "reliability": "可靠性",
+      "growth": "成长",
+      "evolution": "演化",
+      "mastery": "精通",
+      "fleet": "舰队"
+    },
+    "achievements": {
+      "first_launch": {
+        "title": "星海首航",
+        "description": "首次完成一项通过验收的任务。"
+      },
+      "proven_crew": {
+        "title": "砺炼成军",
+        "description": "累计完成 10 项通过验收的任务。"
+      },
+      "veteran_core": {
+        "title": "百战中枢",
+        "description": "累计完成 50 项通过验收的任务。"
+      },
+      "centurion": {
+        "title": "百夫长",
+        "description": "累计完成 100 项通过验收的任务。"
+      },
+      "streak_5": {
+        "title": "净焰连航",
+        "description": "连续完成 5 项任务且无失败。"
+      },
+      "streak_20": {
+        "title": "不坠星轨",
+        "description": "连续完成 20 项任务且无失败。"
+      },
+      "memory_spark": {
+        "title": "记忆星火",
+        "description": "创建 3 条有效记忆更新。"
+      },
+      "memory_archive": {
+        "title": "活态星库",
+        "description": "创建 24 条有效记忆更新。"
+      },
+      "memory_constellation": {
+        "title": "记忆星图",
+        "description": "创建 100 条有效记忆更新。"
+      },
+      "evolution_seed": {
+        "title": "演化星种",
+        "description": "晋升首个演化单元。"
+      },
+      "evolution_engine": {
+        "title": "演化引擎",
+        "description": "累计晋升 10 个演化单元。"
+      },
+      "deep_space_explorer": {
+        "title": "深空行者",
+        "description": "在 3 个项目中交付通过验收的成果。"
+      },
+      "phoenix_protocol": {
+        "title": "凤凰协议",
+        "description": "在先前失败后挽回 3 个事项。"
+      },
+      "corvette_command": {
+        "title": "轻型护卫舰指挥官",
+        "description": "晋升至轻型护卫舰级。"
+      },
+      "cruiser_command": {
+        "title": "巡洋舰指挥官",
+        "description": "晋升至巡洋舰级。"
+      },
+      "dreadnought_command": {
+        "title": "无畏舰统帅",
+        "description": "晋升至无畏舰级。"
+      }
+    },
     "achievements_unlocked": "项成就已解锁",
     "level_value": "LV.{{level}}",
     "next_level": "下一等级",

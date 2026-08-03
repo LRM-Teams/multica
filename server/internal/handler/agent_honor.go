@@ -230,20 +230,21 @@ func (h *Handler) wireAgentHonorEvents() {
 	if h.AgentHonorService == nil {
 		return
 	}
-	recipient := func(ctx context.Context, agentID pgtype.UUID) []string {
+	audience := func(ctx context.Context, agentID pgtype.UUID) ([]string, string) {
 		agent, err := h.Queries.GetAgent(ctx, agentID)
 		if err != nil || !agent.OwnerID.Valid {
-			return nil
+			return nil, ""
 		}
-		return []string{util.UUIDToString(agent.OwnerID)}
+		return []string{util.UUIDToString(agent.OwnerID)}, agentDisplayName(agent)
 	}
 	h.AgentHonorService.OnAchievementUnlocked = func(ctx context.Context, evt service.AgentHonorUnlockEvent) {
+		recipients, _ := audience(ctx, evt.AgentID)
 		h.publishToUsers(
 			protocol.EventAgentHonorUnlocked,
 			util.UUIDToString(evt.WorkspaceID),
 			"system",
 			"",
-			recipient(ctx, evt.AgentID),
+			recipients,
 			map[string]any{
 				"agent_id":    util.UUIDToString(evt.AgentID),
 				"achievement": evt.Achievement,
@@ -251,19 +252,25 @@ func (h *Handler) wireAgentHonorEvents() {
 		)
 	}
 	h.AgentHonorService.OnFleetClassChanged = func(ctx context.Context, evt service.AgentFleetClassEvent) {
+		recipients, agentName := audience(ctx, evt.AgentID)
 		h.publishToUsers(
 			protocol.EventAgentFleetClassChanged,
 			util.UUIDToString(evt.WorkspaceID),
 			"system",
 			"",
-			recipient(ctx, evt.AgentID),
-			map[string]any{
-				"agent_id":          util.UUIDToString(evt.AgentID),
-				"previous_class_id": evt.Previous,
-				"class_id":          evt.Current,
-				"fleet_score":       evt.FleetScore,
-			},
+			recipients,
+			agentFleetClassChangedPayload(evt, agentName),
 		)
+	}
+}
+
+func agentFleetClassChangedPayload(evt service.AgentFleetClassEvent, agentName string) map[string]any {
+	return map[string]any{
+		"agent_id":          util.UUIDToString(evt.AgentID),
+		"agent_name":        agentName,
+		"previous_class_id": evt.Previous,
+		"class_id":          evt.Current,
+		"fleet_score":       evt.FleetScore,
 	}
 }
 

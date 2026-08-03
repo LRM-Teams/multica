@@ -2,6 +2,7 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { Agent } from "@multica/core/types";
 import type {
   AgentFleetClassChangedPayload,
   AgentHonorUnlockedPayload,
@@ -15,14 +16,20 @@ import {
   honorUnlockToastOptions,
 } from "../../honor/honor-unlock-toast";
 import { useT } from "../../i18n";
+import { resolveActorDisplayName } from "@multica/core/identity";
 import { AgentHonorAchievementIcon } from "./agent-honor-achievement-icon";
+import { useAgentAchievementCopy } from "../hooks/use-agent-achievement-copy";
+import { useAgentFleetClassName } from "../hooks/use-agent-fleet-class-name";
 
 export function AgentHonorUnlockListener() {
   const queryClient = useQueryClient();
   const { t } = useT("agents");
+  const achievementCopy = useAgentAchievementCopy();
+  const fleetClassName = useAgentFleetClassName();
 
   useWSEvent("agent_honor:achievement_unlocked", (payload: unknown) => {
     const event = payload as AgentHonorUnlockedPayload;
+    const achievement = achievementCopy(event.achievement);
     const workspaceId = getCurrentWsId();
     if (workspaceId) {
       void queryClient.invalidateQueries({
@@ -33,13 +40,13 @@ export function AgentHonorUnlockListener() {
       (toastId) => (
         <HonorUnlockToast
           eyebrow={t(($) => $.honor_agent.unlock_toast_title)}
-          title={event.achievement.title}
+          title={achievement.title}
           meta={`+${event.achievement.xp_reward} XP`}
           svgKey={event.achievement.svg_key}
           icon={
             <AgentHonorAchievementIcon
               rarity={event.achievement.rarity}
-              title={event.achievement.title}
+              title={achievement.title}
               featured
               className="size-9"
             />
@@ -63,9 +70,17 @@ export function AgentHonorUnlockListener() {
     void queryClient.invalidateQueries({
       queryKey: [...workspaceKeys.agents(workspaceId), "fleet-rankings"],
     });
+    const cachedAgent = queryClient
+      .getQueryData<Agent[]>(workspaceKeys.agents(workspaceId))
+      ?.find((agent) => agent.id === event.agent_id);
+    const agentName =
+      event.agent_name?.trim() ||
+      (cachedAgent ? resolveActorDisplayName(cachedAgent, cachedAgent.name) : "") ||
+      t(($) => $.honor_agent.agent_fallback);
     toast.success(
       t(($) => $.honor_agent.fleet_upgraded, {
-        className: event.class_id,
+        agentName,
+        className: fleetClassName(event.class_id),
       }),
     );
   });

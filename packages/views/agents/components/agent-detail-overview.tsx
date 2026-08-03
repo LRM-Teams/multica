@@ -26,6 +26,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT, useTimeAgo } from "../../i18n";
 import { AgentRestartModal } from "./agent-restart-modal";
+import { useAgentFleetClassName } from "../hooks/use-agent-fleet-class-name";
 
 export interface AgentMetric {
   /** Cumulative runs in the last 30d. */
@@ -150,6 +151,7 @@ export function AgentDetailOverview({
   onDelete: () => void;
 }) {
   const { t } = useT("agents");
+  const fleetClassName = useAgentFleetClassName();
   const wsId = useWorkspaceId();
   const { data: tasks = [] } = useQuery(agentTasksOptions(wsId, agent.id));
   const recentTasks = useMemo(() => tasks.slice(0, 6), [tasks]);
@@ -271,7 +273,7 @@ export function AgentDetailOverview({
             <div className="flex flex-wrap items-center gap-3">
               <FleetRankBadge
                 classId={fleet.class_id}
-                classLabel={fleet.class_label}
+                classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
                 fleetRank={fleet.fleet_rank}
                 frozen={fleet.frozen || isArchived}
               />

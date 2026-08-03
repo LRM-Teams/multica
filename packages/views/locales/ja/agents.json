@@ -738,7 +738,90 @@
     "no_equipped": "実績は未装備です",
     "dismiss_unlock": "実績通知を閉じる",
     "unlock_toast_title": "エージェント実績を解除",
-    "fleet_upgraded": "エージェントが {{className}} に昇格しました",
+    "fleet_upgraded": "{{agentName}}が {{className}} に昇格しました",
+    "agent_fallback": "エージェント",
+    "fleet_classes": {
+      "reserve": "予備艦",
+      "corvette": "コルベット",
+      "frigate": "フリゲート",
+      "cruiser": "巡洋艦",
+      "battleship": "戦艦",
+      "dreadnought": "ドレッドノート"
+    },
+    "achievement_categories": {
+      "delivery": "デリバリー",
+      "reliability": "信頼性",
+      "growth": "成長",
+      "evolution": "進化",
+      "mastery": "熟練",
+      "fleet": "艦隊"
+    },
+    "achievements": {
+      "first_launch": {
+        "title": "星海の初航",
+        "description": "初めて承認済みタスクを完了する。"
+      },
+      "proven_crew": {
+        "title": "歴戦のクルー",
+        "description": "承認済みタスクを 10 件完了する。"
+      },
+      "veteran_core": {
+        "title": "百戦の中枢",
+        "description": "承認済みタスクを 50 件完了する。"
+      },
+      "centurion": {
+        "title": "センチュリオン",
+        "description": "承認済みタスクを 100 件完了する。"
+      },
+      "streak_5": {
+        "title": "クリーンバーン",
+        "description": "失敗せずにタスクを 5 件連続で完了する。"
+      },
+      "streak_20": {
+        "title": "不落軌道",
+        "description": "失敗せずにタスクを 20 件連続で完了する。"
+      },
+      "memory_spark": {
+        "title": "記憶の火花",
+        "description": "有効なメモリ更新を 3 件作成する。"
+      },
+      "memory_archive": {
+        "title": "生けるアーカイブ",
+        "description": "有効なメモリ更新を 24 件作成する。"
+      },
+      "memory_constellation": {
+        "title": "記憶星図",
+        "description": "有効なメモリ更新を 100 件作成する。"
+      },
+      "evolution_seed": {
+        "title": "進化の種",
+        "description": "最初の進化ユニットを昇格させる。"
+      },
+      "evolution_engine": {
+        "title": "進化エンジン",
+        "description": "進化ユニットを 10 件昇格させる。"
+      },
+      "deep_space_explorer": {
+        "title": "深宇宙の航行者",
+        "description": "3 つのプロジェクトで承認済み成果を届ける。"
+      },
+      "phoenix_protocol": {
+        "title": "フェニックス・プロトコル",
+        "description": "以前の失敗後に 3 件の課題を挽回する。"
+      },
+      "corvette_command": {
+        "title": "コルベット司令官",
+        "description": "コルベット級に到達する。"
+      },
+      "cruiser_command": {
+        "title": "巡洋艦司令官",
+        "description": "巡洋艦級に到達する。"
+      },
+      "dreadnought_command": {
+        "title": "ドレッドノート総帥",
+        "description": "ドレッドノート級に到達する。"
+      }
+    },
     "achievements_unlocked": "件の実績を解除",
     "level_value": "LV.{{level}}",
     "next_level": "次のレベル",

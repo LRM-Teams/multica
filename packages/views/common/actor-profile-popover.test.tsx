@@ -8,6 +8,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { MemberProfile } from "@multica/core/types";
 import type { AgentLiveStatusView } from "../agents/resolve-agent-live-status";
 import type { ActivityEvent } from "../agents/components/tabs/activity-event";
+import enAgents from "../locales/en/agents.json";
 import { ActorProfileContentLoaded } from "./actor-profile-popover";
 
 // Live status is resolved by useAgentLiveStatus (snapshot + task-messages +
@@ -106,12 +107,12 @@ vi.mock("../i18n/use-t", () => {
     },
   };
   return {
-    useT: () => ({
+    useT: (namespace?: string) => ({
       t: (
         selector: (r: any) => string,
         values?: Record<string, string | number>,
       ) => {
-        let value = selector(CHANNELS_RES);
+        let value = selector(namespace === "agents" ? enAgents : CHANNELS_RES);
         for (const [key, replacement] of Object.entries(values ?? {})) {
           value = value.replaceAll(`{{${key}}}`, String(replacement));
         }

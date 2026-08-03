@@ -750,7 +750,90 @@
     "no_equipped": "No achievement equipped",
     "dismiss_unlock": "Dismiss achievement notification",
     "unlock_toast_title": "Agent achievement unlocked",
-    "fleet_upgraded": "Agent promoted to {{className}}",
+    "fleet_upgraded": "{{agentName}} promoted to {{className}}",
+    "agent_fallback": "Agent",
+    "fleet_classes": {
+      "reserve": "Reserve",
+      "corvette": "Corvette",
+      "frigate": "Frigate",
+      "cruiser": "Cruiser",
+      "battleship": "Battleship",
+      "dreadnought": "Dreadnought"
+    },
+    "achievement_categories": {
+      "delivery": "Delivery",
+      "reliability": "Reliability",
+      "growth": "Growth",
+      "evolution": "Evolution",
+      "mastery": "Mastery",
+      "fleet": "Fleet"
+    },
+    "achievements": {
+      "first_launch": {
+        "title": "First Launch",
+        "description": "Complete the first accepted task."
+      },
+      "proven_crew": {
+        "title": "Proven Crew",
+        "description": "Complete 10 accepted tasks."
+      },
+      "veteran_core": {
+        "title": "Veteran Core",
+        "description": "Complete 50 accepted tasks."
+      },
+      "centurion": {
+        "title": "Centurion",
+        "description": "Complete 100 accepted tasks."
+      },
+      "streak_5": {
+        "title": "Clean Burn",
+        "description": "Complete 5 tasks in a row without failure."
+      },
+      "streak_20": {
+        "title": "Unbroken Orbit",
+        "description": "Complete 20 tasks in a row without failure."
+      },
+      "memory_spark": {
+        "title": "Memory Spark",
+        "description": "Create 3 valid memory updates."
+      },
+      "memory_archive": {
+        "title": "Living Archive",
+        "description": "Create 24 valid memory updates."
+      },
+      "memory_constellation": {
+        "title": "Memory Constellation",
+        "description": "Create 100 valid memory updates."
+      },
+      "evolution_seed": {
+        "title": "Evolution Seed",
+        "description": "Promote the first evolution unit."
+      },
+      "evolution_engine": {
+        "title": "Evolution Engine",
+        "description": "Promote 10 evolution units."
+      },
+      "deep_space_explorer": {
+        "title": "Deep Space Explorer",
+        "description": "Deliver accepted work in 3 projects."
+      },
+      "phoenix_protocol": {
+        "title": "Phoenix Protocol",
+        "description": "Recover 3 issues after an earlier failed attempt."
+      },
+      "corvette_command": {
+        "title": "Corvette Command",
+        "description": "Reach Corvette fleet class."
+      },
+      "cruiser_command": {
+        "title": "Cruiser Command",
+        "description": "Reach Cruiser fleet class."
+      },
+      "dreadnought_command": {
+        "title": "Dreadnought Command",
+        "description": "Reach Dreadnought fleet class."
+      }
+    },
     "achievements_unlocked": "achievements unlocked",
     "level_value": "LV.{{level}}",
     "next_level": "Next level",

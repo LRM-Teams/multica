@@ -15,6 +15,7 @@ import {
   AgentHonorLevelIcon,
   MAX_AGENT_HONOR_LEVEL,
 } from "./agent-honor-level-icon";
+import { useAgentFleetClassName } from "../hooks/use-agent-fleet-class-name";
 
 function progressPercent(current: number, target: number) {
   if (target <= 0) return 100;
@@ -39,6 +40,7 @@ export function AgentHonorPanelSection({
   className?: string;
 }) {
   const { t } = useT("agents");
+  const fleetClassName = useAgentFleetClassName();
   const paths = useWorkspacePaths();
   const { data: honor, isPending, isError } = useQuery(
     agentHonorOptions(workspaceId, agentId),
@@ -92,7 +94,10 @@ export function AgentHonorPanelSection({
               </span>
               <FleetRankBadge
                 classId={honor.fleet.class_id}
-                classLabel={honor.fleet.class_label}
+                classLabel={fleetClassName(
+                  honor.fleet.class_id,
+                  honor.fleet.class_label,
+                )}
                 fleetRank={honor.fleet.fleet_rank}
                 frozen={honor.fleet.frozen}
               />

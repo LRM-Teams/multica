@@ -115,7 +115,10 @@ export function ResearchNodeActionRing({
   const actions = ringActionsForNode(node);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const [focusIndex, setFocusIndex] = useState(0);
+  const [roving, setRoving] = useState({ key: `${node.id}:${mode}`, index: 0 });
+  const rovingKey = `${node.id}:${mode}`;
+  const focusIndex = roving.key === rovingKey ? roving.index : 0;
+  const setFocusIndex = (index: number) => setRoving({ key: rovingKey, index });
   const menuId = useId();
 
   const bindDialog = useCallback((dialog: HTMLDialogElement | null) => {
@@ -141,11 +144,10 @@ export function ResearchNodeActionRing({
     return () => window.removeEventListener("keydown", onKey);
   }, [mode]);
 
+  // Focus primary item when ring opens / node changes — do not mirror props into state.
   useEffect(() => {
-    // Roving: land on primary (index 0) when ring opens.
-    setFocusIndex(0);
     queueMicrotask(() => itemRefs.current[0]?.focus());
-  }, [node.id, mode]);
+  }, [rovingKey]);
 
   const labelFor = (id: NodeRingAction) => {
     switch (id) {

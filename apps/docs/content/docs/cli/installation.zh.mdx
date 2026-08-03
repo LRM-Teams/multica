@@ -92,6 +92,51 @@ resolves from an older system/Homebrew path, rerun the install script first to
 migrate to `$HOME/.local/bin/multica`; then use `multica update` on that
 canonical installation.
 
+
+## Stuck on an old CLI (auto-update never runs)
+
+Some older daemons (for example **0.3.64–0.3.x** installs) never self-upgrade:
+
+- self-host defaults **auto-update off**
+- the binary's compile-time release feed points at a dead URL
+- the process is not a release build (`git describe` version), or is pinned
+
+You cannot fix those gates by waiting for the old binary to update itself.
+Use an **out-of-band** install from the OSS release feed, then restart the daemon.
+
+### Runbook (macOS/Linux)
+
+```bash
+# 1) Install latest CLI into the canonical path (same as "Download directly")
+curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash
+
+# 2) Confirm the new binary
+export PATH="$HOME/.local/bin:$PATH"
+hash -r
+multica version   # expect 0.4.x (or whatever latest.json reports)
+
+# 3) Adopt it for the running daemon (wait until no agent tasks if possible)
+multica daemon install-service   # preferred: user service + supervise (all platforms)
+# or, if you already manage the process yourself:
+# multica daemon restart
+
+# 4) Confirm the daemon reports the same version
+multica daemon status
+```
+
+Optional (self-host only, after the new binary is on PATH): enable auto-update and point at OSS so the *next* releases do not get stuck again:
+
+```bash
+export MULTICA_RELEASE_MANIFEST_BASE_URL="https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases"
+export MULTICA_DAEMON_AUTO_UPDATE=true
+# put these in the daemon service environment, then:
+multica daemon install-service
+```
+
+Windows: download the `windows-amd64` zip from `latest.json` under the same OSS base URL, replace `multica.exe`, then `multica daemon install-service` (or restart the existing service).
+
+Do **not** change `server_url` to `https://…` until TLS to that host works from the machine (see ops notes for temporary `http://IP:port` configs).
+
 ## Quick Start
 
 ```bash

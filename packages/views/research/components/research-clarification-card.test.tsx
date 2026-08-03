@@ -104,4 +104,65 @@ describe("ResearchClarificationCard", () => {
       expect((opt as HTMLButtonElement).disabled).toBe(true);
     }
   });
+
+  // LRM-1169 — an answered option must stay readable by keyboard / screen reader.
+  it("keeps the answered option focusable and announces it as selected", () => {
+    const onSelect = vi.fn();
+    render(
+      <ResearchClarificationCard
+        question={listQuestion}
+        resolution={{
+          status: "answered",
+          optionId: "cost",
+          optionLabel: "Cost",
+          replyMessageId: "u1",
+        }}
+        onSelectOption={onSelect}
+      />,
+    );
+
+    const answered = screen
+      .getAllByTestId("research-clarification-option")
+      .find((el) => el.getAttribute("data-option-id") === "cost") as HTMLButtonElement;
+    const notPicked = screen
+      .getAllByTestId("research-clarification-option")
+      .find((el) => el.getAttribute("data-option-id") === "recall") as HTMLButtonElement;
+
+    // The picked option is not removed from the tab order.
+    expect(answered.hasAttribute("disabled")).toBe(false);
+    expect(answered.disabled).toBe(false);
+    expect(answered.getAttribute("aria-disabled")).toBe("true");
+    expect(answered.getAttribute("aria-pressed")).toBe("true");
+    expect(answered.getAttribute("aria-label")).toBe("Cost");
+    answered.focus();
+    expect(document.activeElement).toBe(answered);
+
+    // Options the user did not pick still leave the tab order.
+    expect(notPicked.disabled).toBe(true);
+    expect(notPicked.getAttribute("aria-pressed")).toBe("false");
+
+    // Re-activating the answered option must not resubmit.
+    fireEvent.click(answered);
+    fireEvent.keyDown(answered, { key: "Enter" });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("does not resubmit while a pending answer is in flight", () => {
+    const onSelect = vi.fn();
+    render(
+      <ResearchClarificationCard
+        question={listQuestion}
+        resolution={{ status: "pending" }}
+        pending
+        onSelectOption={onSelect}
+      />,
+    );
+    const options = screen.getAllByTestId("research-clarification-option");
+    for (const opt of options) {
+      expect((opt as HTMLButtonElement).disabled).toBe(true);
+      expect(opt.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(opt);
+    }
+    expect(onSelect).not.toHaveBeenCalled();
+  });
 });

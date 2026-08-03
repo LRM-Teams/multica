@@ -146,16 +146,24 @@ export function ResearchClarificationCard({
           >
             {question.options.map((opt) => {
               const selected = selectedOptionId === opt.id;
+              // LRM-1169 — the answered option stays focusable so keyboard and
+              // screen reader users can read back their own answer; only the
+              // options they did not pick leave the tab order.
+              const locked = !interactive || selected;
               return (
                 <button
                   key={opt.id}
                   type="button"
-                  disabled={!interactive || selected}
+                  disabled={locked && !selected}
+                  aria-disabled={locked || undefined}
                   aria-label={opt.label}
                   aria-pressed={selected}
                   data-testid="research-clarification-option"
                   data-option-id={opt.id}
-                  onClick={() => onSelectOption?.(opt.id)}
+                  onClick={() => {
+                    if (locked) return;
+                    onSelectOption?.(opt.id);
+                  }}
                   className={cn(
                     "w-full min-h-8 touch-manipulation rounded-md border px-3 py-2 text-left text-sm transition-colors",
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",

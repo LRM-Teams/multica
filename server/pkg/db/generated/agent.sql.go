@@ -3104,6 +3104,7 @@ WHERE atq.workspace_id = $1
   AND (
     atq.issue_id IS NOT NULL
     OR atq.chat_session_id IS NOT NULL
+    OR atq.channel_id IS NOT NULL
     OR atq.autopilot_run_id IS NOT NULL
     OR (
       atq.context->>'type' = 'quick_create'
@@ -3124,6 +3125,7 @@ JOIN LATERAL (
     AND (
       atq.issue_id IS NOT NULL
       OR atq.chat_session_id IS NOT NULL
+      OR atq.channel_id IS NOT NULL
       OR atq.autopilot_run_id IS NOT NULL
       OR (
         atq.context->>'type' = 'quick_create'

@@ -65,21 +65,34 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	assertIssueThreadBackflowReference(t, events[1], issueID)
 	assertIssueThreadBackflowReference(t, events[2], issueID)
 
+	// LRM-1079: directed issue-event wakes are channel-only inbox events
+	// (no channel_agent_session / chat_session bridge).
 	for _, agentID := range []string{creatorID, assigneeID} {
 		var count int
-		if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&count); err != nil {
-			t.Fatalf("count target agent sessions: %v", err)
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM agent_inbox_event
+			WHERE channel_id = $1
+			  AND agent_id = $2
+			  AND requires_wake = true
+			  AND reason = 'mention'`, channelID, agentID).Scan(&count); err != nil {
+			t.Fatalf("count target agent wakes: %v", err)
 		}
 		if count == 0 {
 			t.Fatalf("target agent %s was not woken by its directed issue event", agentID)
 		}
 	}
-	var unrelatedSessions int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, unrelatedID).Scan(&unrelatedSessions); err != nil {
-		t.Fatalf("count unrelated agent sessions: %v", err)
+	var unrelatedWakes int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM agent_inbox_event
+		WHERE channel_id = $1
+		  AND agent_id = $2
+		  AND requires_wake = true`, channelID, unrelatedID).Scan(&unrelatedWakes); err != nil {
+		t.Fatalf("count unrelated agent wakes: %v", err)
 	}
-	if unrelatedSessions != 0 {
-		t.Fatalf("unrelated agent received %d issue-event wake(s), want 0", unrelatedSessions)
+	if unrelatedWakes != 0 {
+		t.Fatalf("unrelated agent received %d issue-event wake(s), want 0", unrelatedWakes)
 	}
 	var managedReminders int
 	if err := testPool.QueryRow(ctx, `
@@ -146,8 +159,13 @@ func TestIssueThreadBackflowLeavesNonMembersUntargeted(t *testing.T) {
 	}
 	for _, agentID := range []string{creatorID, assigneeID} {
 		var count int
-		if err := testPool.QueryRow(ctx, `SELECT count(*) FROM channel_agent_session WHERE channel_id = $1 AND agent_id = $2`, channelID, agentID).Scan(&count); err != nil {
-			t.Fatalf("count non-member agent sessions: %v", err)
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*)
+			FROM agent_inbox_event
+			WHERE channel_id = $1
+			  AND agent_id = $2
+			  AND requires_wake = true`, channelID, agentID).Scan(&count); err != nil {
+			t.Fatalf("count non-member agent wakes: %v", err)
 		}
 		if count != 0 {
 			t.Fatalf("non-member agent %s received %d issue-event wake(s), want 0", agentID, count)

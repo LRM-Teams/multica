@@ -69,6 +69,12 @@ type EnvDispatchInput struct {
 	// value (nil is rejected at the HTTP boundary).
 	TrainingMode bool
 
+	// SharedSandbox is the resolved per-rollout sandbox sharing switch: when
+	// true, all agents of each rollout (sample) share one sandbox + one daemon +
+	// one working directory. The handler resolves the optional request pointer
+	// (nil ⇒ false), so the service only ever sees an explicit boolean.
+	SharedSandbox bool
+
 	// PerAgentEnvSpecs optionally assigns individual squad agents to sandbox
 	// templates or base environments while preserving a shared Multica entity
 	// subtree. Empty preserves existing default/shared sandbox behavior.
@@ -134,6 +140,11 @@ type ExternalModelRuntime struct {
 type ResolvedPerAgentSandboxPolicy struct {
 	Template string
 	Runtime  *ExternalModelRuntime
+	// Shared marks the binding as belonging to a shared_sandbox rollout: the
+	// sample's agents attach to the rollout's single shared sandbox/runtime
+	// instead of claiming per-agent sandboxes (research D3). Persisted on the
+	// binding's sandbox_config as "shared".
+	Shared bool
 }
 
 // NormalizeExternalModelRuntime trims whitespace and validates that the
@@ -201,6 +212,10 @@ type EnvDispatchAgentProvisionResult struct {
 type ChannelRunInput struct {
 	AgentID, ChannelID, ProjectID, EnvID, ChatSessionID string
 	SandboxInstanceID, RuntimeID, SourceMessageID       string
+	// SharedWorkdirEnvID, when non-empty, is the sample env whose single
+	// shared working directory the daemon must anchor this run to (research
+	// D5, FR-008). Empty keeps the per-agent workdir root.
+	SharedWorkdirEnvID string
 }
 
 type AgentSandboxStatus struct {
@@ -660,6 +675,9 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		for i, r := range rollouts {
 			if r.ProjectID != "" || r.EnvID != "" {
 				s.rollbackRollout(ctx, in.WorkspaceID, r)
+				// Shared mode (US3/T024): the rolled-back sibling's pre-created
+				// shared runtime R' must not linger either.
+				s.reclaimSharedRuntimes(ctx, in, r.SandboxRefs)
 			}
 			rollouts[i] = EnvRollout{}
 		}
@@ -886,6 +904,9 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 			return fmt.Errorf("validation_failed: env_id is required except for scratch self_play")
 		}
 	}
+	// shared_sandbox is accepted for every mode (scratch/branch, including
+	// resume-normalized inputs), both dispatch types, and the single-agent
+	// degenerate case; it carries no rejection rules of its own.
 	if err := validatePerAgentEnvSpecsShape(in); err != nil {
 		return err
 	}
@@ -1032,6 +1053,7 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	envID, err := s.deps.CreateEnv(ctx, in.WorkspaceID, forked, sourceEnv.ID, mode, in.Domain)
 	if err != nil {
 		s.deleteSandboxes(ctx, forked)
+		s.reclaimSharedRuntimes(ctx, in, sandboxRefs)
 		return EnvRollout{}, fmt.Errorf("create env: %w", err)
 	}
 
@@ -1043,6 +1065,7 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		pid, err := s.deps.CreateProject(ctx, in.WorkspaceID, name, envID)
 		if err != nil {
 			s.rollbackRollout(ctx, in.WorkspaceID, EnvRollout{EnvID: envID})
+			s.reclaimSharedRuntimes(ctx, in, sandboxRefs)
 			return EnvRollout{}, fmt.Errorf("create project: %w", err)
 		}
 		projectID = pid
@@ -1052,6 +1075,7 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		pid, imap, smap, err := s.deps.CopyProjectSubtree(ctx, in.SourceProjectID, in.WorkspaceID, envID)
 		if err != nil {
 			s.rollbackRollout(ctx, in.WorkspaceID, EnvRollout{EnvID: envID})
+			s.reclaimSharedRuntimes(ctx, in, sandboxRefs)
 			return EnvRollout{}, fmt.Errorf("copy project: %w", err)
 		}
 		projectID = pid
@@ -1063,11 +1087,13 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeBranch {
 		if in.BranchMessageSource == nil {
 			s.rollbackRollout(ctx, in.WorkspaceID, r)
+			s.reclaimSharedRuntimes(ctx, in, r.SandboxRefs)
 			return EnvRollout{}, fmt.Errorf("missing validated branch message source")
 		}
 		copyMap, err := s.deps.CopyEnvDispatchChannel(ctx, in.WorkspaceID, in.BranchMessageSource.SourceChannelID, projectID, envID)
 		if err != nil {
 			s.rollbackRollout(ctx, in.WorkspaceID, r)
+			s.reclaimSharedRuntimes(ctx, in, r.SandboxRefs)
 			return EnvRollout{}, fmt.Errorf("copy env-dispatch channel: %w", err)
 		}
 		r.ChannelID = copyMap.ChannelID
@@ -1081,10 +1107,13 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		// so the binding specs are the resolved per-agent sandbox policies. The
 		// sandbox_instance backend (agentSandboxRefs) is never used for scratch
 		// message dispatch (useSandboxInstanceBackend returns false), so binding
-		// specs are built solely from PerAgentEnvSpecs.
+		// specs are built solely from PerAgentEnvSpecs. In shared mode every
+		// roster binding is stamped shared (including members without an
+		// explicit spec) so first-mention provisioning attaches to the sample's
+		// shared runtime instead of claiming a per-agent sandbox.
 		var bindingSpecs map[string]ResolvedPerAgentSandboxPolicy
-		if len(in.PerAgentEnvSpecs) > 0 {
-			bindingSpecs = make(map[string]ResolvedPerAgentSandboxPolicy, len(in.PerAgentEnvSpecs))
+		if len(in.PerAgentEnvSpecs) > 0 || in.SharedSandbox {
+			bindingSpecs = make(map[string]ResolvedPerAgentSandboxPolicy, len(roster.AgentIDs))
 			for _, spec := range in.PerAgentEnvSpecs {
 				policy, err := s.deps.ResolvePerAgentEnvSpec(ctx, in.WorkspaceID, spec)
 				if err != nil {
@@ -1092,6 +1121,13 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 					return EnvRollout{}, fmt.Errorf("resolve channel sandbox policy: %w", err)
 				}
 				bindingSpecs[spec.AgentID] = policy
+			}
+			if in.SharedSandbox {
+				for _, agentID := range roster.AgentIDs {
+					policy := bindingSpecs[agentID]
+					policy.Shared = true
+					bindingSpecs[agentID] = policy
+				}
 			}
 		}
 		channelID, err := s.deps.CreateEnvDispatchChannel(ctx, in.WorkspaceID, in.UserID, projectID, envID, roster, bindingSpecs)
@@ -1139,12 +1175,18 @@ func (s *EnvDispatchService) useSandboxInstanceBackend(in EnvDispatchInput) bool
 
 // createSandboxInstanceRefs creates one sandbox_instance per per-agent env
 // spec, or a single default sandbox_instance when no per-agent specs are set.
-// Branch (D7) creates from the source env's template; scratch creates from the
-// requested template. v1 resolves the workspace/node via the lifecycle creator
-// deps; production adapter wiring (node selection) is injected by the handler.
-// Returns the flat slice (for SandboxIDs/SandboxRefs) and, when per-agent specs
-// are used, an agent_id→ref map for AgentSandboxRefs.
+// In shared mode (SharedSandbox=true) it collapses the per-agent dimension:
+// exactly one sandbox_instance + one pre-created runtime R' per rollout, with
+// every per-agent ref pointing at it (research D1/D2). Branch (D7) creates
+// from the source env's template; scratch creates from the requested template.
+// v1 resolves the workspace/node via the lifecycle creator deps; production
+// adapter wiring (node selection) is injected by the handler. Returns the flat
+// slice (for SandboxIDs/SandboxRefs) and, when per-agent specs are used, an
+// agent_id→ref map for AgentSandboxRefs.
 func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in EnvDispatchInput, sourceEnv Env, runtimeAgentID string) ([]SandboxInstanceRef, map[string]SandboxInstanceRef, error) {
+	if in.SharedSandbox {
+		return s.createSharedSandboxInstanceRefs(ctx, in, sourceEnv, runtimeAgentID)
+	}
 	if len(in.PerAgentEnvSpecs) > 0 {
 		refs := make([]SandboxInstanceRef, 0, len(in.PerAgentEnvSpecs))
 		agentRefs := make(map[string]SandboxInstanceRef, len(in.PerAgentEnvSpecs))
@@ -1217,6 +1259,89 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 	ref.RuntimeID = runtimeID
 	ref.DaemonID = daemonID
 	return []SandboxInstanceRef{ref}, nil, nil
+}
+
+// createSharedSandboxInstanceRefs provisions the sample's single shared
+// execution environment (research D1/D2, FR-003/004/005): one sandbox_instance
+// + one pre-created daemon runtime R' per rollout, with every roster agent's
+// ref pointing at the same ref. group_size>1 rollouts stay isolated because
+// the collapse happens strictly inside the per-rollout pipeline.
+//
+// Template resolution: a shared rollout runs every agent in one sandbox, so a
+// single template must win — the runtime owner's spec template when present,
+// else the first spec's, else the default branch/instance-backed derivation
+// (per-agent base_env_id fan-out is meaningless under sharing and falls back
+// to the same default). Returns the one-ref slice plus, when per-agent specs
+// exist, an agent_id→ref map whose values are all the shared ref.
+func (s *EnvDispatchService) createSharedSandboxInstanceRefs(ctx context.Context, in EnvDispatchInput, sourceEnv Env, runtimeAgentID string) ([]SandboxInstanceRef, map[string]SandboxInstanceRef, error) {
+	template := "default"
+	if len(sourceEnv.SandboxIDs) > 0 && (in.Mode == EnvModeBranch || in.InstanceBackedBase) {
+		sourceRef, err := s.lifecycle.GetSandboxInstanceRef(ctx, in.WorkspaceID, sourceEnv.SandboxIDs[0])
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve source sandbox template: %w", err)
+		}
+		if sourceRef.Template != "" {
+			template = sourceRef.Template
+		}
+	}
+	if specTemplate := sharedRolloutSpecTemplate(in.PerAgentEnvSpecs, runtimeAgentID); specTemplate != "" {
+		template = specTemplate
+	}
+	// Pre-create the shared agent_runtime R' keyed by a fresh daemon_id and
+	// inject it as MULTICA_DAEMON_ID, exactly like the single-agent default
+	// path: the in-sandbox daemon adopts R' on register and every agent run of
+	// the sample is routed to it.
+	runtimeEnv := map[string]string{}
+	var runtimeID, daemonID string
+	if runtimeAgentID != "" {
+		rid, did, err := s.deps.PrecreateAgentRuntime(ctx, in.WorkspaceID, in.UserID, runtimeAgentID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("precreate shared agent runtime: %w", err)
+		}
+		runtimeID, daemonID = rid, did
+		runtimeEnv["MULTICA_DAEMON_ID"] = daemonID
+	}
+	ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
+		WorkspaceID:   in.WorkspaceID,
+		Template:      template,
+		DaemonEnabled: true,
+		RuntimeEnv:    runtimeEnv,
+	}, in.UserID)
+	if err != nil {
+		// Sandbox create failed after R' was pre-created: reclaim R' so the
+		// offline row does not linger (best-effort; the runtime GC is backstop).
+		if runtimeID != "" {
+			_ = s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, runtimeID)
+		}
+		return nil, nil, err
+	}
+	ref.RuntimeID = runtimeID
+	ref.DaemonID = daemonID
+	var agentRefs map[string]SandboxInstanceRef
+	if len(in.PerAgentEnvSpecs) > 0 {
+		agentRefs = make(map[string]SandboxInstanceRef, len(in.PerAgentEnvSpecs))
+		for _, spec := range in.PerAgentEnvSpecs {
+			agentRefs[spec.AgentID] = ref
+		}
+	}
+	return []SandboxInstanceRef{ref}, agentRefs, nil
+}
+
+// sharedRolloutSpecTemplate picks the single winning template for a shared
+// rollout: the runtime owner's spec first (its agent owns R'), then the first
+// spec with a template. Empty when no spec carries a template.
+func sharedRolloutSpecTemplate(specs []PerAgentEnvSpec, runtimeAgentID string) string {
+	for _, spec := range specs {
+		if spec.AgentID == runtimeAgentID && spec.Template != "" {
+			return spec.Template
+		}
+	}
+	for _, spec := range specs {
+		if spec.Template != "" {
+			return spec.Template
+		}
+	}
+	return ""
 }
 
 // rolloutRuntimeID resolves the pre-created sandbox runtime R' (Phase 2) for a
@@ -1371,7 +1496,15 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 	r.ChatSessionID = provisioned.ChatSessionID
 	r.AgentSandboxes = make(map[string]AgentSandboxStatus, len(in.MessageRoster.AgentIDs))
 	for _, agentID := range in.MessageRoster.AgentIDs {
-		r.AgentSandboxes[agentID] = AgentSandboxStatus{Status: "pending"}
+		status := AgentSandboxStatus{Status: "pending"}
+		if in.SharedSandbox {
+			// Shared mode (FR-005): every roster member reports the sample's
+			// shared identifiers; lazily-attached members stay "pending" until
+			// their first mention.
+			status.SandboxInstanceID = provisioned.SandboxInstanceID
+			status.RuntimeID = provisioned.RuntimeID
+		}
+		r.AgentSandboxes[agentID] = status
 	}
 	r.AgentSandboxes[leaderID] = AgentSandboxStatus{
 		Status:            "ready",
@@ -1386,14 +1519,15 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 		return
 	}
 	runID, err := s.deps.EnqueueEnvDispatchChannelRun(ctx, in.WorkspaceID, in.UserID, ChannelRunInput{
-		AgentID:           provisioned.AgentID,
-		ChannelID:         r.ChannelID,
-		ProjectID:         r.ProjectID,
-		EnvID:             r.EnvID,
-		ChatSessionID:     provisioned.ChatSessionID,
-		SandboxInstanceID: provisioned.SandboxInstanceID,
-		RuntimeID:         provisioned.RuntimeID,
-		SourceMessageID:   messageID,
+		AgentID:            provisioned.AgentID,
+		ChannelID:          r.ChannelID,
+		ProjectID:          r.ProjectID,
+		EnvID:              r.EnvID,
+		ChatSessionID:      provisioned.ChatSessionID,
+		SandboxInstanceID:  provisioned.SandboxInstanceID,
+		RuntimeID:          provisioned.RuntimeID,
+		SourceMessageID:    messageID,
+		SharedWorkdirEnvID: sharedWorkdirAnchor(in, *r),
 	}, idx)
 	if err != nil {
 		r.Error = fmt.Sprintf("enqueue channel leader: %v", err)
@@ -1498,14 +1632,15 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 		return
 	}
 	runID, err := s.deps.EnqueueEnvDispatchChannelRun(ctx, in.WorkspaceID, in.UserID, ChannelRunInput{
-		AgentID:           provisioned.AgentID,
-		ChannelID:         r.ChannelID,
-		ProjectID:         r.ProjectID,
-		EnvID:             r.EnvID,
-		ChatSessionID:     provisioned.ChatSessionID,
-		SandboxInstanceID: provisioned.SandboxInstanceID,
-		RuntimeID:         provisioned.RuntimeID,
-		SourceMessageID:   dst.SourceMessageID,
+		AgentID:            provisioned.AgentID,
+		ChannelID:          r.ChannelID,
+		ProjectID:          r.ProjectID,
+		EnvID:              r.EnvID,
+		ChatSessionID:      provisioned.ChatSessionID,
+		SandboxInstanceID:  provisioned.SandboxInstanceID,
+		RuntimeID:          provisioned.RuntimeID,
+		SourceMessageID:    dst.SourceMessageID,
+		SharedWorkdirEnvID: sharedWorkdirAnchor(in, *r),
 	}, idx)
 	if err != nil {
 		r.Error = fmt.Sprintf("enqueue branch trigger: %v", err)
@@ -1525,7 +1660,15 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 	r.AgentRunID = runID
 	r.AgentSandboxes = make(map[string]AgentSandboxStatus, len(in.MessageRoster.AgentIDs))
 	for _, agentID := range in.MessageRoster.AgentIDs {
-		r.AgentSandboxes[agentID] = AgentSandboxStatus{Status: "pending"}
+		status := AgentSandboxStatus{Status: "pending"}
+		if in.SharedSandbox {
+			// Shared mode (FR-005): every roster member reports the sample's
+			// shared identifiers; lazily-attached members stay "pending" until
+			// their first mention.
+			status.SandboxInstanceID = provisioned.SandboxInstanceID
+			status.RuntimeID = provisioned.RuntimeID
+		}
+		r.AgentSandboxes[agentID] = status
 	}
 	r.AgentSandboxes[dst.AgentID] = AgentSandboxStatus{
 		Status:            "ready",
@@ -1534,10 +1677,41 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 	}
 }
 
+// sharedWorkdirAnchor returns the sample env whose single shared working
+// directory all of the rollout's agents anchor to (research D5, FR-008), or ""
+// for non-shared dispatches (the daemon then keeps per-agent workdir roots).
+func sharedWorkdirAnchor(in EnvDispatchInput, r EnvRollout) string {
+	if !in.SharedSandbox {
+		return ""
+	}
+	return r.EnvID
+}
+
 // rollbackRollout cleans up a partially-created rollout (reset phase only).
 // Order matters under ON DELETE RESTRICT: delete the project first (it
 // references env_id), then the env row, then its sandboxes. Every rollout
 // forks its own sandboxes, so this never touches a shared/source sandbox.
+// reclaimSharedRuntimes best-effort deletes the pre-created shared runtime R'
+// carried on sandbox refs after a shared-mode reset failure has rolled the
+// sandbox back (US3/T024, FR-007): without it the offline R' row lingers and
+// the in-sandbox daemon can still adopt it. Distinct runtimes are reclaimed
+// once. No-op for non-shared inputs: their pre-created runtimes follow the
+// pre-existing lifecycle (runtime GC backstop) — changing that is out of
+// scope for the shared_sandbox feature.
+func (s *EnvDispatchService) reclaimSharedRuntimes(ctx context.Context, in EnvDispatchInput, refs []SandboxInstanceRef) {
+	if !in.SharedSandbox {
+		return
+	}
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		if ref.RuntimeID == "" || seen[ref.RuntimeID] {
+			continue
+		}
+		seen[ref.RuntimeID] = true
+		_ = s.deps.DeleteAgentRuntime(ctx, in.WorkspaceID, ref.RuntimeID)
+	}
+}
+
 func (s *EnvDispatchService) rollbackRollout(ctx context.Context, workspaceID string, r EnvRollout) {
 	if r.ChannelID != "" {
 		_ = s.deps.DeleteChannel(ctx, workspaceID, r.ChannelID)

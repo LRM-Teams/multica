@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -838,4 +840,140 @@ func seedHandlerDagNonTrainingCompletedRoot(t *testing.T, ctx context.Context, w
 		t.Fatalf("create env_dispatch_run: %v", err)
 	}
 	return projectID, rootTaskID
+}
+
+// --- T007: shared_sandbox 201 response refs (FR-005) -------------------------
+
+// recordingSandboxCreator is a minimal service.SandboxInstanceCreator fake for
+// handler-package tests: it hands out distinct refs per Create call so sharing
+// assertions can distinguish per-agent from per-rollout provisioning.
+type recordingSandboxCreator struct {
+	mu    sync.Mutex
+	calls []service.CreateSandboxInstanceInput
+}
+
+func (c *recordingSandboxCreator) CreateSandboxInstance(_ context.Context, in service.CreateSandboxInstanceInput, _ string) (service.SandboxInstanceRef, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, in)
+	return service.SandboxInstanceRef{
+		InstanceID:  fmt.Sprintf("inst-%d", len(c.calls)),
+		WorkspaceID: in.WorkspaceID,
+		Template:    in.Template,
+	}, nil
+}
+
+func (c *recordingSandboxCreator) GetSandboxInstanceRef(_ context.Context, _, instanceID string) (service.SandboxInstanceRef, error) {
+	return service.SandboxInstanceRef{}, fmt.Errorf("sandbox_instance not found: %s", instanceID)
+}
+
+func (c *recordingSandboxCreator) DeleteSandboxInstance(_ context.Context, _ service.SandboxInstanceRef, _ string) error {
+	return nil
+}
+
+// countingRuntimeDeps overrides two stub methods so squad dispatch tests can
+// run a full Dispatch: GetEnv returns a base-mode env (the stub's zero Env
+// fails the scratch base-env check), and PrecreateAgentRuntime hands out
+// distinct runtimes (the stub's constant "stub-runtime" would hide
+// cross-rollout sharing violations).
+type countingRuntimeDeps struct {
+	service.EnvDispatchDeps
+	n atomic.Int64
+}
+
+func (d *countingRuntimeDeps) GetEnv(_ context.Context, envID, workspaceID string) (service.Env, error) {
+	return service.Env{ID: envID, WorkspaceID: workspaceID, Mode: service.EnvModeBase}, nil
+}
+
+func (d *countingRuntimeDeps) PrecreateAgentRuntime(_ context.Context, _, _, _ string) (string, string, error) {
+	n := d.n.Add(1)
+	return fmt.Sprintf("rt-%d", n), fmt.Sprintf("daemon-%d", n), nil
+}
+
+// dispatchSquadForResponseTest drives the same service + mapRollouts pipeline
+// the EnvDispatch handler uses to build its 201 body, with the stub deps the
+// DB-less handler falls back to. shared selects the shared_sandbox request
+// field (resolved by the handler into EnvDispatchInput.SharedSandbox).
+func dispatchSquadForResponseTest(t *testing.T, shared bool) EnvDispatchResponse {
+	t.Helper()
+	creator := &recordingSandboxCreator{}
+	svc := service.NewEnvDispatchService(&countingRuntimeDeps{EnvDispatchDeps: &stubEnvDispatchDeps{}}, 8).
+		WithSandboxLifecycle(creator)
+	res, err := svc.Dispatch(context.Background(), service.EnvDispatchInput{
+		WorkspaceID: "ws1", UserID: "u1", Mode: service.EnvModeScratch, EnvID: validUUID,
+		Domain: service.EnvDomainSweLego, DispatchType: service.EnvDispatchIssue, GroupSize: 2,
+		AgentID: validUUID, TrainAgentID: validUUID, TrainingMode: true,
+		SharedSandbox: shared,
+		Issue:         &service.IssueInput{Title: "t"},
+		PerAgentEnvSpecs: []service.PerAgentEnvSpec{
+			{AgentID: validUUID, Template: "py312"},
+			{AgentID: "22222222-2222-2222-2222-222222222222", Template: "py312"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	// Exactly what EnvDispatch writes on success (handler/env_dispatch.go).
+	return EnvDispatchResponse{ChannelID: res.ChannelID, ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts)}
+}
+
+// TestEnvDispatch_SharedSandboxResponseRefs asserts the FR-005 response
+// contract: in shared mode every agent_sandbox_refs entry within one rollout
+// reports the SAME sandbox_instance_id/runtime_id, and entries in different
+// rollouts report different identifiers.
+func TestEnvDispatch_SharedSandboxResponseRefs(t *testing.T) {
+	resp := dispatchSquadForResponseTest(t, true)
+	if len(resp.Rollouts) != 2 {
+		t.Fatalf("want 2 rollouts, got %d", len(resp.Rollouts))
+	}
+	seen := map[string]bool{}
+	for i, r := range resp.Rollouts {
+		if r.Error != "" {
+			t.Fatalf("rollout %d errored: %s", i, r.Error)
+		}
+		if len(r.AgentSandboxRefs) != 2 {
+			t.Fatalf("rollout %d: want 2 agent_sandbox_refs, got %+v", i, r.AgentSandboxRefs)
+		}
+		var instanceID, runtimeID string
+		first := true
+		for agentID, ref := range r.AgentSandboxRefs {
+			if first {
+				instanceID, runtimeID, first = ref.InstanceID, ref.RuntimeID, false
+				continue
+			}
+			if ref.InstanceID != instanceID || ref.RuntimeID != runtimeID {
+				t.Fatalf("rollout %d: agent %s ref %+v must share the rollout's sandbox/runtime (%s/%s)", i, agentID, ref, instanceID, runtimeID)
+			}
+		}
+		if instanceID == "" || runtimeID == "" {
+			t.Fatalf("rollout %d: shared refs must carry instance+runtime ids, got %+v", i, r.AgentSandboxRefs)
+		}
+		if seen[instanceID] {
+			t.Fatalf("rollout %d: sandbox instance %s already used by another rollout (samples must stay isolated)", i, instanceID)
+		}
+		seen[instanceID] = true
+	}
+	if seen[resp.Rollouts[0].AgentSandboxRefs[validUUID].InstanceID] != seen[resp.Rollouts[1].AgentSandboxRefs[validUUID].InstanceID] {
+		t.Fatal("internal: rollout isolation bookkeeping broken")
+	}
+}
+
+// TestEnvDispatch_NonSharedResponseRefsStayDistinct pins today's response
+// values when shared_sandbox is false/omitted: per-agent refs within a rollout
+// report distinct identifiers (FR-001/002, SC-002).
+func TestEnvDispatch_NonSharedResponseRefsStayDistinct(t *testing.T) {
+	resp := dispatchSquadForResponseTest(t, false)
+	if len(resp.Rollouts) != 2 {
+		t.Fatalf("want 2 rollouts, got %d", len(resp.Rollouts))
+	}
+	for i, r := range resp.Rollouts {
+		if len(r.AgentSandboxRefs) != 2 {
+			t.Fatalf("rollout %d: want 2 agent_sandbox_refs, got %+v", i, r.AgentSandboxRefs)
+		}
+		a := r.AgentSandboxRefs[validUUID]
+		b := r.AgentSandboxRefs["22222222-2222-2222-2222-222222222222"]
+		if a.InstanceID == b.InstanceID {
+			t.Fatalf("rollout %d: non-shared agents must report distinct sandboxes, got %+v", i, r.AgentSandboxRefs)
+		}
+	}
 }

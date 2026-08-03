@@ -357,11 +357,18 @@ type AgentTaskResponse struct {
 	// routes through the bridge and its trajectory is captured. Nil for the
 	// overwhelming majority of (non-trained) tasks; omitempty so old daemons
 	// ignore it. See §4.4.
-	ArealProxy  *ArealProxyData `json:"areal_proxy,omitempty"`
-	Repos       []RepoData      `json:"repos,omitempty"`
-	ProjectID   string          `json:"project_id,omitempty"`   // issue's project, when present
-	ChannelID   string          `json:"channel_id,omitempty"`   // exact DM/channel surface, when present
-	ChannelKind string          `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; personal-memory entry gate
+	ArealProxy *ArealProxyData `json:"areal_proxy,omitempty"`
+	// SharedWorkdirEnvID carries the shared_sandbox workdir anchor extracted
+	// from the task's context.shared_workdir at claim time (stamped by the
+	// env-dispatch enqueue for shared-mode runs). When present the daemon
+	// anchors the run to the sample env's single shared working directory
+	// instead of the per-agent root (research D5, FR-008). Empty for
+	// non-shared tasks; omitempty so old daemons ignore it.
+	SharedWorkdirEnvID string     `json:"shared_workdir_env_id,omitempty"`
+	Repos              []RepoData `json:"repos,omitempty"`
+	ProjectID          string     `json:"project_id,omitempty"`   // issue's project, when present
+	ChannelID          string     `json:"channel_id,omitempty"`   // exact DM/channel surface, when present
+	ChannelKind        string     `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; personal-memory entry gate
 	// ScopedSecrets carries channel/project secrets for daemon injection after
 	// scope filtering (LRM-953). Empty until a secret store populates them.
 	ScopedSecrets    []ScopedSecretData    `json:"scoped_secrets,omitempty"`
@@ -625,7 +632,34 @@ func taskToResponse(t db.AgentInboxEvent, workspaceID string) AgentTaskResponse 
 	// Trained-task RL proxy override (§4.4): surface context.areal_proxy on the
 	// claim response so the daemon can route the runtime through the bridge.
 	resp.ArealProxy = parseArealProxy(t.Context)
+	// Shared_sandbox workdir anchor (research D5): surface
+	// context.shared_workdir on the claim response so the daemon anchors the
+	// run to the sample's single shared working directory.
+	resp.SharedWorkdirEnvID = parseSharedWorkdirEnvID(t.Context)
 	return resp
+}
+
+// parseSharedWorkdirEnvID extracts the shared_sandbox sample env id from a
+// task's context JSONB. It returns "" for the common case of a non-shared
+// task (no context / no shared_workdir key), for malformed JSON, and for an
+// incomplete marker (missing env_id) — so a normal task keeps its per-agent
+// workdir root.
+func parseSharedWorkdirEnvID(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var envelope struct {
+		SharedWorkdir *struct {
+			EnvID string `json:"env_id"`
+		} `json:"shared_workdir"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return ""
+	}
+	if envelope.SharedWorkdir == nil {
+		return ""
+	}
+	return envelope.SharedWorkdir.EnvID
 }
 
 // relativeWorkDir produces a privacy-safe display form of the daemon-reported

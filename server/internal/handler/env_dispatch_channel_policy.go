@@ -16,6 +16,11 @@ import (
 type envDispatchSandboxConfig struct {
 	Template string                        `json:"template"`
 	Runtime  *service.ExternalModelRuntime `json:"runtime,omitempty"`
+	// Shared marks the binding as part of a shared_sandbox rollout: a
+	// first-mention provision attaches the member to the sample's existing
+	// shared sandbox/runtime instead of claiming a per-agent sandbox
+	// (research D3).
+	Shared bool `json:"shared,omitempty"`
 }
 
 // marshalEnvDispatchSandboxConfig serializes a resolved per-agent sandbox policy
@@ -31,7 +36,7 @@ func marshalEnvDispatchSandboxConfig(policy service.ResolvedPerAgentSandboxPolic
 	if template == "" {
 		template = "default"
 	}
-	out, err := json.Marshal(envDispatchSandboxConfig{Template: template, Runtime: runtime})
+	out, err := json.Marshal(envDispatchSandboxConfig{Template: template, Runtime: runtime, Shared: policy.Shared})
 	if err != nil {
 		return nil, fmt.Errorf("encode sandbox config: %w", err)
 	}

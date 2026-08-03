@@ -2,10 +2,15 @@
  * LRM-797 — canvas overlay grid spacing.
  * Desktop: bottom-left Controls + detail card 12px above;
  *          bottom-right MiniMap + FAB 12px above (no overlap).
+ * LRM-1151 — when Aux Drawer is open, Dock yields into the free canvas
+ *            (center of remaining width, not under the overlay).
  */
 
 export const OVERLAY_GAP_PX = 12;
 export const OVERLAY_INSET_PX = 16;
+
+/** Matches ResearchAuxDrawer desktop `w-[min(100%,360px)]`. */
+export const AUX_DRAWER_WIDTH_PX = 360;
 
 /** Controls / dock height (toolbar pill; matches ResearchCanvasDock). */
 export const CONTROLS_HEIGHT_PX = 52;

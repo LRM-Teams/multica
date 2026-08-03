@@ -90,6 +90,23 @@ describe("ResearchClarificationCard", () => {
     );
   });
 
+  it("announces a missing required field and describes the invalid input", () => {
+    render(
+      <ResearchClarificationCard
+        question={formQuestion}
+        resolution={{ status: "pending" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("research-clarification-submit"));
+
+    const error = screen.getByTestId("research-clarification-error");
+    const budget = screen.getByLabelText(/Budget/);
+    expect(error).toHaveAttribute("role", "alert");
+    expect(budget).toHaveAttribute("aria-invalid", "true");
+    expect(budget).toHaveAttribute("aria-describedby", error.id);
+  });
+
   it("locks controls after skip and shows status", () => {
     render(
       <ResearchClarificationCard

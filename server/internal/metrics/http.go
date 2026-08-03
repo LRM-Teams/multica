@@ -3,6 +3,7 @@ package metrics
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -11,9 +12,10 @@ import (
 )
 
 type HTTPMetrics struct {
-	requests *prometheus.CounterVec
-	duration *prometheus.HistogramVec
-	inFlight prometheus.Gauge
+	requests    *prometheus.CounterVec
+	duration    *prometheus.HistogramVec
+	sloDuration *prometheus.HistogramVec
+	inFlight    prometheus.Gauge
 }
 
 func NewHTTPMetrics() *HTTPMetrics {
@@ -31,6 +33,13 @@ func NewHTTPMetrics() *HTTPMetrics {
 			Help:      "HTTP request duration observed by the API server.",
 			Buckets:   []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
 		}, []string{"method", "route", "status"}),
+		sloDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "multica",
+			Subsystem: "http",
+			Name:      "slo_request_duration_seconds",
+			Help:      "Eligible API request duration for the HTTP p95 SLO, excluding streams, transfers, and agent transport.",
+			Buckets:   []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+		}, []string{"method", "route", "status"}),
 		inFlight: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "multica",
 			Subsystem: "http",
@@ -41,7 +50,7 @@ func NewHTTPMetrics() *HTTPMetrics {
 }
 
 func (m *HTTPMetrics) Collectors() []prometheus.Collector {
-	return []prometheus.Collector{m.requests, m.duration, m.inFlight}
+	return []prometheus.Collector{m.requests, m.duration, m.sloDuration, m.inFlight}
 }
 
 func (m *HTTPMetrics) Middleware(next http.Handler) http.Handler {
@@ -70,8 +79,12 @@ func (m *HTTPMetrics) Middleware(next http.Handler) http.Handler {
 			"route":  routePattern(r),
 			"status": strconv.Itoa(status),
 		}
+		duration := time.Since(start).Seconds()
 		m.requests.With(labels).Inc()
-		m.duration.With(labels).Observe(time.Since(start).Seconds())
+		m.duration.With(labels).Observe(duration)
+		if isSLOEligibleRequest(r, labels["route"], ww.Header()) {
+			m.sloDuration.With(labels).Observe(duration)
+		}
 	})
 }
 
@@ -82,6 +95,23 @@ func routePattern(r *http.Request) string {
 		}
 	}
 	return "unmatched"
+}
+
+func isSLOEligibleRequest(r *http.Request, route string, responseHeaders http.Header) bool {
+	if !strings.HasPrefix(route, "/api/") {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") || strings.HasSuffix(route, "/ws") {
+		return false
+	}
+	if strings.HasPrefix(route, "/api/daemon/") || strings.HasPrefix(route, "/api/sandbox/") || strings.HasPrefix(route, "/api/agent/") {
+		return false
+	}
+	switch route {
+	case "/api/upload-file", "/api/agent/attachments/upload", "/api/agent/upload-file":
+		return false
+	}
+	return !strings.HasPrefix(strings.ToLower(responseHeaders.Get("Content-Type")), "text/event-stream")
 }
 
 func isHealthProbePath(path string) bool {

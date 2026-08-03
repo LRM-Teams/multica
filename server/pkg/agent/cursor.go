@@ -158,6 +158,22 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				return
 			}
 			toolDiagnostics.accepted(decoded.event.ProtocolShape)
+			// #103 dig: which path filled tool_result.Input (Frank/Parker tags).
+			if strings.TrimSpace(os.Getenv("MULTICA_DEBUG_TOOL_RESULT_INPUT")) == "1" &&
+				message.Type == MessageToolResult {
+				tag := classifyWriteInputEnrich(decoded, message)
+				b.cfg.Logger.Info(
+					"tool_result input enrich path",
+					"tool", message.Tool,
+					"call_id", message.CallID,
+					"write_input_enrich", tag,
+					"decode_enrich", decoded.inputEnrich,
+					"result_key_shape", decoded.resultKeyShape,
+					"input_empty", len(message.Input) == 0,
+					"input_has_path", pathFromMap(message.Input) != "",
+					"input_key_count", len(message.Input),
+				)
+			}
 			trySend(msgCh, message)
 		}
 

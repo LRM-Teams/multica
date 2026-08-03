@@ -125,4 +125,71 @@ describe("ResearchAuxDrawer desktop a11y (LRM-1100)", () => {
     expect(screen.queryByTestId("research-aux-drawer")).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
+
+  it("restores focus to a trigger that unmounts while the drawer is open (LRM-1177)", async () => {
+    // Shared useOverlayPanelA11y contract: opener may unmount for the whole
+    // open window (chat FAB path). Aux drawer uses the same hook — cover the
+    // remount+testid re-locate path here so chat-only coverage cannot regress
+    // the aux consumer silently.
+    function Harness() {
+      const [panel, setPanel] = useState<"trajectory" | null>(null);
+      return (
+        <div>
+          {panel ? null : (
+            <button
+              type="button"
+              data-testid="research-module-trajectory"
+              onClick={() => setPanel("trajectory")}
+            >
+              open trajectory
+            </button>
+          )}
+          <ResearchAuxDrawer panel={panel} onClose={() => setPanel(null)}>
+            <span>body</span>
+          </ResearchAuxDrawer>
+        </div>
+      );
+    }
+    render(<Harness />);
+    const opener = screen.getByTestId("research-module-trajectory");
+    opener.focus();
+    await userEvent.click(opener);
+
+    const drawer = screen.getByTestId("research-aux-drawer");
+    expect(drawer.contains(document.activeElement)).toBe(true);
+    expect(opener.isConnected).toBe(false);
+
+    await userEvent.keyboard("{Escape}");
+    const remounted = screen.getByTestId("research-module-trajectory");
+    expect(remounted).not.toBe(opener);
+    expect(document.activeElement).toBe(remounted);
+  });
+
+  it("keeps focus put when an unmounted aux trigger has no relocatable key (LRM-1177)", async () => {
+    function Harness() {
+      const [panel, setPanel] = useState<"sources" | null>(null);
+      return (
+        <div>
+          {panel ? null : (
+            <button type="button" onClick={() => setPanel("sources")}>
+              open sources
+            </button>
+          )}
+          <ResearchAuxDrawer panel={panel} onClose={() => setPanel(null)}>
+            <span>body</span>
+          </ResearchAuxDrawer>
+        </div>
+      );
+    }
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "open sources" });
+    trigger.focus();
+    await userEvent.click(trigger);
+    expect(
+      screen.getByTestId("research-aux-drawer").contains(document.activeElement),
+    ).toBe(true);
+
+    await userEvent.keyboard("{Escape}");
+    expect(document.activeElement).toBe(document.body);
+  });
 });

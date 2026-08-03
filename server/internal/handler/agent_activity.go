@@ -2084,23 +2084,6 @@ func taskMessageActivityToolTarget(message db.TaskMessage) (string, string) {
 	return agentActivitySafeToolTargetForTool(canonicalTool, input)
 }
 
-func agentActivitySafeToolTarget(input map[string]any) (string, string) {
-	for _, key := range []string{"path", "file_path", "filepath"} {
-		if value := basenameFromMap(input, key); value != "" {
-			return value, "file_path"
-		}
-	}
-	for _, key := range []string{"query", "pattern"} {
-		if value := clippedStringFromMap(input, key, 80); value != "" {
-			return value, key
-		}
-	}
-	if value := clippedStringFromMap(input, "url", 80); value != "" {
-		return value, "url"
-	}
-	return "", ""
-}
-
 type agentActivityToolInputSummary struct {
 	ToolTarget  string
 	SummaryKind string
@@ -2935,20 +2918,6 @@ func stringPtrFromMap(m map[string]any, key string) *string {
 	return nil
 }
 
-func basenameFromMap(m map[string]any, key string) string {
-	value := stringFromMap(m, key)
-	if value == "" {
-		return ""
-	}
-	parts := strings.FieldsFunc(value, func(r rune) bool {
-		return r == '/' || r == '\\'
-	})
-	if len(parts) == 0 {
-		return value
-	}
-	return parts[len(parts)-1]
-}
-
 func sourcePathFromMap(m map[string]any, key string) string {
 	return stringFromMap(m, key)
 }
@@ -2995,29 +2964,6 @@ func activityPathIsDisplayableSearchTarget(path string) bool {
 		return false
 	}
 	return strings.ContainsAny(path, "*?[")
-}
-
-func commandNameFromMap(m map[string]any, key string) string {
-	value := stringFromMap(m, key)
-	if value == "" {
-		return ""
-	}
-	value = redact.Text(value)
-	fields := strings.Fields(value)
-	if len(fields) == 0 {
-		return ""
-	}
-	cmd := strings.Trim(fields[0], `"'`)
-	if cmd == "" {
-		return ""
-	}
-	parts := strings.FieldsFunc(cmd, func(r rune) bool {
-		return r == '/' || r == '\\'
-	})
-	if len(parts) == 0 {
-		return truncateForActivity(cmd, 40)
-	}
-	return truncateForActivity(parts[len(parts)-1], 40)
 }
 
 func clippedStringFromMap(m map[string]any, key string, limit int) string {

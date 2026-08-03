@@ -55,18 +55,6 @@ func parseFlexDuration(value string) (time.Duration, error) {
 	return time.ParseDuration(expanded)
 }
 
-func intFromEnv(key string, fallback int) (int, error) {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback, nil
-	}
-	n, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, fmt.Errorf("%s: invalid integer %q: %w", key, value, err)
-	}
-	return n, nil
-}
-
 func sleepWithContext(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()

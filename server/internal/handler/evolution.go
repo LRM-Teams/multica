@@ -13,7 +13,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
-	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -364,8 +363,4 @@ func hashEvolutionFiles(files []EvolutionSubmissionFile) string {
 		_, _ = h.Write([]byte("\x00" + file.Path + "\x00" + file.Content))
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil))
-}
-
-func parseEvolutionUUID(raw string) (pgtype.UUID, error) {
-	return util.ParseUUID(strings.TrimSpace(raw))
 }

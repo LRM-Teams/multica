@@ -19,17 +19,6 @@ type honorSnapshotResponse struct {
 	Badge     *service.HonorBadgeView `json:"equipped_badge,omitempty"`
 }
 
-func honorSnapshotFromService(s service.HonorSnapshot) *honorSnapshotResponse {
-	if s.Level == 0 && s.NameStyle == "" {
-		return nil
-	}
-	return &honorSnapshotResponse{
-		Level:     s.Level,
-		NameStyle: s.NameStyle,
-		Badge:     s.Badge,
-	}
-}
-
 func (h *Handler) GetHonorRules(w http.ResponseWriter, r *http.Request) {
 	if h.HonorService == nil {
 		writeError(w, http.StatusServiceUnavailable, "honor service unavailable")

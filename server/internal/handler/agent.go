@@ -2031,25 +2031,6 @@ func timestampToTime(value pgtype.Timestamptz) time.Time {
 	return time.Time{}
 }
 
-func jsonStringField(raw []byte, key string) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var obj map[string]any
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return ""
-	}
-	value, ok := obj[key]
-	if !ok {
-		return ""
-	}
-	s, ok := value.(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(s)
-}
-
 // AgentActivityBucket is one day-bucketed throughput sample for the
 // Agents-list ACTIVITY sparkline. bucket_at is midnight UTC of the day.
 type AgentActivityBucket struct {

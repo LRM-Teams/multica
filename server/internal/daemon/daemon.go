@@ -2325,25 +2325,6 @@ func (d *Daemon) verifyUpdatedBinary(targetVersion, updateOutput string) (string
 	return d.verifyStagedBinary(targetVersion, updateOutput)
 }
 
-func parseMulticaVersionOutput(output string) (string, error) {
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) >= 2 && fields[0] == "multica" {
-			return fields[1], nil
-		}
-	}
-	return "", errors.New("could not parse multica version output")
-}
-
-func versionStringsMatch(left, right string) bool {
-	normalize := func(value string) string {
-		return strings.TrimPrefix(strings.TrimSpace(value), "v")
-	}
-	left = normalize(left)
-	right = normalize(right)
-	return left != "" && left == right
-}
-
 func compactUpdateOutput(output string) string {
 	compact := strings.Join(strings.Fields(strings.TrimSpace(output)), " ")
 	if len(compact) <= updateFailureOutputLimit {

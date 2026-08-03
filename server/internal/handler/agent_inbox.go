@@ -345,6 +345,11 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		}
 		if lineage := strings.TrimSpace(msg.Lineage); lineage != "" {
 			details["lineage"] = lineage
+			// P0: Claude stream-json (and any provider that stamps Message.Lineage)
+			// surfaces nested trajectories. Emit one user-facing Activity row the
+			// first time we see each lineage on this inbox event — FE already
+			// treats event_type containing "subagent" as Subagent activity.
+			h.maybeRecordProviderSubagentStarted(r.Context(), event, runtimeID, deliveryID, lineage, details)
 		}
 		if taskMessageIsPhaseStatus(msg.Type, msg.Content) {
 			// Match Raft's bare thinking phase entry. It is a user-facing task
@@ -2125,6 +2130,111 @@ func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageReque
 		return protocol.TaskMessagePayload{}, false
 	}
 	return payload, true
+}
+
+// parseProviderLineageSubagentType reads the Claude nativeLineage JSON shape
+// {"parent_tool_use_id":"...","subagent_type":"Explore"}. Empty lineage or
+// non-JSON returns ok=false. A non-empty parent without subagent_type still
+// counts as a nested trajectory (ok=true, type empty).
+func parseProviderLineageSubagentType(lineage string) (subagentType string, ok bool) {
+	lineage = strings.TrimSpace(lineage)
+	if lineage == "" {
+		return "", false
+	}
+	var payload struct {
+		ParentToolUseID string `json:"parent_tool_use_id"`
+		SubagentType    string `json:"subagent_type"`
+	}
+	if err := json.Unmarshal([]byte(lineage), &payload); err != nil {
+		// Non-JSON lineage still means a nested trajectory was stamped.
+		return "", true
+	}
+	if payload.ParentToolUseID == "" && payload.SubagentType == "" {
+		return "", false
+	}
+	return strings.TrimSpace(payload.SubagentType), true
+}
+
+func providerSubagentStartedMessage(subagentType string) string {
+	subagentType = strings.TrimSpace(subagentType)
+	if subagentType == "" {
+		return "Subagent started"
+	}
+	return "Subagent started: " + subagentType
+}
+
+// maybeRecordProviderSubagentStarted inserts one custom Activity event per
+// (inbox event, lineage) when a provider message carries Message.Lineage.
+// Fail-soft: duplicate lookup / insert errors never fail the message report.
+func (h *Handler) maybeRecordProviderSubagentStarted(
+	ctx context.Context,
+	event db.AgentInboxEvent,
+	runtimeID, deliveryID pgtype.UUID,
+	lineage string,
+	baseDetails map[string]any,
+) {
+	if h == nil || h.DB == nil {
+		return
+	}
+	subagentType, ok := parseProviderLineageSubagentType(lineage)
+	if !ok {
+		return
+	}
+	if h.providerSubagentStartedExists(ctx, event.WorkspaceID, event.AgentID, event.ID, lineage) {
+		return
+	}
+	targetKind, targetID := agentInboxActivityTarget(event)
+	details := map[string]any{
+		"lineage":           lineage,
+		"inbox_event_id":    uuidToString(event.ID),
+		"source_message_id": uuidToString(event.SourceMessageID),
+	}
+	if deliveryID.Valid {
+		details["delivery_id"] = uuidToString(deliveryID)
+	}
+	if subagentType != "" {
+		details["subagent_type"] = subagentType
+	}
+	// Preserve seq when the caller already had one on the message details.
+	if baseDetails != nil {
+		if seq, exists := baseDetails["seq"]; exists {
+			details["seq"] = seq
+		}
+	}
+	h.recordAgentActivityEvent(ctx, h.DB,
+		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
+		activityKindCustom, "subagent_started", "info",
+		targetKind, targetID, "",
+		"provider_lineage", providerSubagentStartedMessage(subagentType),
+		details,
+	)
+}
+
+func (h *Handler) providerSubagentStartedExists(ctx context.Context, workspaceID, agentID, inboxEventID pgtype.UUID, lineage string) bool {
+	if h == nil || h.DB == nil {
+		return false
+	}
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM agent_activity_event
+  WHERE workspace_id = $1
+    AND agent_id = $2
+    AND event_kind = $3
+    AND event_type = $4
+    AND details->>'inbox_event_id' = $5
+    AND COALESCE(details->>'lineage', '') = $6
+)
+`, workspaceID, agentID, activityKindCustom, "subagent_started", uuidToString(inboxEventID), lineage).Scan(&exists)
+	if err != nil {
+		slog.Warn("provider subagent activity: duplicate lookup failed",
+			"agent_id", uuidToString(agentID),
+			"inbox_event_id", uuidToString(inboxEventID),
+			"error", err)
+		return false
+	}
+	return exists
 }
 
 func agentInboxActivityMessageKind(messageType string) (kind, eventType, severity string) {

@@ -252,6 +252,16 @@
   },
   "running_other": "{{count}} 个运行中",
   "queued_other": "{{count}} 个排队中",
+  "add_computer": {
+    "title": "添加电脑",
+    "description": "选择要把哪种电脑加入这个工作区。",
+    "your_computer": "你的电脑",
+    "your_computer_hint": "在你自己的电脑上运行智能体。",
+    "cloud": "云端电脑",
+    "cloud_coming_soon": "即将推出",
+    "next": "下一步",
+    "cancel": "取消"
+  },
   "connect": {
     "title": "添加电脑",
     "description": "在要添加的电脑上运行这两条命令。守护进程一上线，这里就会自动识别。",

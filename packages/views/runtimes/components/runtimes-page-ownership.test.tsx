@@ -6,10 +6,11 @@ import type { AgentRuntime } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
+import enAgents from "../../locales/en/agents.json";
 import type { RuntimeMachine } from "./runtime-machines";
 
 const TEST_RESOURCES = {
-  en: { common: enCommon, runtimes: enRuntimes },
+  en: { common: enCommon, runtimes: enRuntimes, agents: enAgents },
 };
 
 vi.mock("@multica/core/workspace/hooks", () => ({
@@ -32,12 +33,16 @@ vi.mock("../../common/actor-avatar", () => ({
 }));
 
 import { MachineListView } from "./runtimes-page";
-import { isMineMachine } from "./runtime-machines";
+import {
+  defaultDesktopSelectedMachineId,
+  isMineMachine,
+} from "./runtime-machines";
 
 function makeMachine(
   id: string,
   title: string,
   ownerId: string,
+  opts: { isCurrent?: boolean; cliVersion?: string | null; health?: "online" | "offline" } = {},
 ): RuntimeMachine {
   const runtime: AgentRuntime = {
     id: `${id}-rt`,
@@ -66,11 +71,11 @@ function makeMachine(
     subtitle: null,
     deviceInfo: null,
     deviceName: null,
-    cliVersion: "1.0.0",
+    cliVersion: opts.cliVersion === undefined ? "1.0.15" : opts.cliVersion,
     mode: "local",
     section: "local",
-    isCurrent: false,
-    health: "online",
+    isCurrent: opts.isCurrent ?? false,
+    health: opts.health ?? "online",
     runtimeHealth: "ok",
     updateError: null,
     updateTargetVersion: null,
@@ -148,6 +153,58 @@ describe("MachineListView — ownership grouping", () => {
     fireEvent.click(screen.getByText("Team public (1)"));
     expect(screen.getByText("Their box")).toBeInTheDocument();
     expect(screen.getByTestId("owner-avatar")).toHaveTextContent("user-other");
+  });
+});
+
+describe("MachineListView — LRM-1094 row info", () => {
+  it("shows cliVersion on the subline and omits Connected / agents count", () => {
+    const machines = [makeMachine("m1", "My box", "user-mine", { cliVersion: "1.0.15" })];
+    renderList(machines, "user-mine");
+    expect(screen.getByText("v1.0.15")).toBeInTheDocument();
+    expect(screen.queryByText(/Connected/)).toBeNull();
+    expect(screen.queryByText(/agent/i)).toBeNull();
+  });
+
+  it("shows an em dash when cliVersion is missing", () => {
+    const machines = [makeMachine("m1", "My box", "user-mine", { cliVersion: null })];
+    renderList(machines, "user-mine");
+    expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("puts connectivity into the row aria-label, not visible text", () => {
+    const machines = [
+      makeMachine("m1", "My box", "user-mine", { health: "offline" }),
+    ];
+    renderList(machines, "user-mine");
+    expect(screen.getByRole("button", { name: /My box/ })).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/My box/),
+    );
+  });
+});
+
+describe("defaultDesktopSelectedMachineId — LRM-1094", () => {
+  it("prefers isCurrent even when other Mine machines exist", () => {
+    const machines = [
+      makeMachine("team", "Team box", "user-other"),
+      makeMachine("mine-a", "Mine A", "user-mine"),
+      makeMachine("mine-b", "Mine B", "user-mine", { isCurrent: true }),
+    ];
+    expect(defaultDesktopSelectedMachineId(machines, "user-mine")).toBe("mine-b");
+  });
+
+  it("falls back to the first Mine machine, never Team public machines[0]", () => {
+    const machines = [
+      makeMachine("team", "Team box", "user-other"),
+      makeMachine("mine-a", "Mine A", "user-mine"),
+      makeMachine("mine-b", "Mine B", "user-mine"),
+    ];
+    expect(defaultDesktopSelectedMachineId(machines, "user-mine")).toBe("mine-a");
+  });
+
+  it("returns null when there is no Mine machine (no Team public fallback)", () => {
+    const machines = [makeMachine("team", "Team box", "user-other")];
+    expect(defaultDesktopSelectedMachineId(machines, "user-mine")).toBeNull();
   });
 });
 

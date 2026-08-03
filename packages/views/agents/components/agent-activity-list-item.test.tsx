@@ -63,6 +63,21 @@ describe("AgentActivityListItem", () => {
     );
   });
 
+  it("puts activity on the right in inline (Raft) layout", () => {
+    render(
+      <AgentActivityListItem
+        agentId="a1"
+        displayName="Alice"
+        provider="cursor"
+        runtimeLabel="Cursor"
+        presence={presence({ workload: "idle" })}
+        layout="inline"
+      />,
+    );
+    const activity = screen.getByTestId("agent-activity-list-item-activity");
+    expect(activity.className).toMatch(/ml-auto/);
+  });
+
   it("fires onClick", () => {
     const onClick = vi.fn();
     render(

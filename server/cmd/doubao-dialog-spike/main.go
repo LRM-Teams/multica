@@ -96,7 +96,7 @@ func runLive(cfg doubaodialog.Config, listen time.Duration) error {
 		cfg.Model,
 		cfg.Voice,
 		doubaodialog.DefaultDialogInstructions(),
-		[]doubaodialog.Tool{doubaodialog.MulticaDelegateTool()},
+		doubaodialog.DefaultDialogTools(),
 	))
 	if err != nil {
 		return fmt.Errorf("open session: %w", err)

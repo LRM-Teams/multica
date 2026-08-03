@@ -43,30 +43,46 @@ type SessionSender interface {
 	CancelResponse(ctx context.Context) error
 }
 
-// MulticaToolBridge maps Duplex function-call events onto Multica and feeds
-// spoken results back into the dialog session.
+// MulticaToolBridge maps Duplex function-call events onto Multica / web tools
+// and feeds spoken results back into the dialog session.
 type MulticaToolBridge struct {
 	executor MulticaExecutor
+	web      WebToolkit
 	sender   SessionSender
 	inFlight sync.Map
 }
 
 func NewMulticaToolBridge(executor MulticaExecutor, sender SessionSender) (*MulticaToolBridge, error) {
+	return NewMulticaToolBridgeWithWeb(executor, DefaultHTTPWebToolkit(), sender)
+}
+
+func NewMulticaToolBridgeWithWeb(executor MulticaExecutor, web WebToolkit, sender SessionSender) (*MulticaToolBridge, error) {
 	if executor == nil {
 		return nil, fmt.Errorf("multica dialog tool bridge requires an executor")
 	}
 	if sender == nil {
 		return nil, fmt.Errorf("multica dialog tool bridge requires a session sender")
 	}
-	return &MulticaToolBridge{executor: executor, sender: sender}, nil
+	if web == nil {
+		web = DefaultHTTPWebToolkit()
+	}
+	return &MulticaToolBridge{executor: executor, web: web, sender: sender}, nil
 }
 
 type delegateArguments struct {
 	Request string `json:"request"`
 }
 
+type webSearchArguments struct {
+	Query string `json:"query"`
+}
+
+type webFetchArguments struct {
+	URL string `json:"url"`
+}
+
 // HandleServerEvent processes one inbound Duplex event.
-// Returns true when the event was a Multica function call that was handled.
+// Returns true when the event was a known function call that was handled.
 func (b *MulticaToolBridge) HandleServerEvent(ctx context.Context, event ServerEvent) (bool, error) {
 	if b == nil {
 		return false, fmt.Errorf("multica dialog tool bridge is nil")
@@ -100,31 +116,73 @@ func (b *MulticaToolBridge) handleFunctionCall(ctx context.Context, call Functio
 	if callID == "" {
 		return false, fmt.Errorf("function call missing call_id")
 	}
-	if name != MulticaDelegateToolName {
-		return false, nil
+	switch name {
+	case MulticaDelegateToolName:
+		return b.runAndReturn(ctx, callID, name, func() (string, error) {
+			var args delegateArguments
+			if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
+				return "", fmt.Errorf("parse %s arguments: %w", MulticaDelegateToolName, err)
+			}
+			request := strings.TrimSpace(args.Request)
+			if request == "" {
+				return "", fmt.Errorf("%s request is required", MulticaDelegateToolName)
+			}
+			return b.executor.Delegate(ctx, request)
+		})
+	case WebSearchToolName:
+		return b.runAndReturn(ctx, callID, name, func() (string, error) {
+			var args webSearchArguments
+			if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
+				return "", fmt.Errorf("parse %s arguments: %w", WebSearchToolName, err)
+			}
+			query := strings.TrimSpace(args.Query)
+			if query == "" {
+				return "", fmt.Errorf("%s query is required", WebSearchToolName)
+			}
+			return b.web.Search(ctx, query)
+		})
+	case WebFetchToolName:
+		return b.runAndReturn(ctx, callID, name, func() (string, error) {
+			var args webFetchArguments
+			if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
+				return "", fmt.Errorf("parse %s arguments: %w", WebFetchToolName, err)
+			}
+			pageURL := strings.TrimSpace(args.URL)
+			if pageURL == "" {
+				return "", fmt.Errorf("%s url is required", WebFetchToolName)
+			}
+			return b.web.Fetch(ctx, pageURL)
+		})
+	default:
+		failText := fmt.Sprintf("当前通话不支持工具 %s，请换个说法，或让我用 web_search 查事实、用派活工具开任务。", name)
+		if _, loaded := b.inFlight.LoadOrStore(callID, struct{}{}); loaded {
+			return true, nil
+		}
+		defer b.inFlight.Delete(callID)
+		if sendErr := b.sender.SendFunctionCallOutputs(ctx, []FunctionCallOutput{{
+			CallID: callID,
+			Output: failText,
+		}}); sendErr != nil {
+			return true, fmt.Errorf("unknown tool %s and could not return tool output: %w", name, sendErr)
+		}
+		return true, nil
 	}
+}
+
+func (b *MulticaToolBridge) runAndReturn(ctx context.Context, callID, name string, run func() (string, error)) (bool, error) {
 	if _, loaded := b.inFlight.LoadOrStore(callID, struct{}{}); loaded {
 		return true, nil
 	}
 	defer b.inFlight.Delete(callID)
 
-	var args delegateArguments
-	if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
-		return true, fmt.Errorf("parse %s arguments: %w", MulticaDelegateToolName, err)
-	}
-	request := strings.TrimSpace(args.Request)
-	if request == "" {
-		return true, fmt.Errorf("%s request is required", MulticaDelegateToolName)
-	}
-
-	result, err := b.executor.Delegate(ctx, request)
+	result, err := run()
 	if err != nil {
-		failText := fmt.Sprintf("Multica 执行失败：%s", err.Error())
+		failText := fmt.Sprintf("%s 失败：%s", name, err.Error())
 		if sendErr := b.sender.SendFunctionCallOutputs(ctx, []FunctionCallOutput{{
 			CallID: callID,
 			Output: failText,
 		}}); sendErr != nil {
-			return true, fmt.Errorf("delegate failed (%v) and could not return tool output: %w", err, sendErr)
+			return true, fmt.Errorf("%s failed (%v) and could not return tool output: %w", name, err, sendErr)
 		}
 		return true, err
 	}
@@ -132,7 +190,7 @@ func (b *MulticaToolBridge) handleFunctionCall(ctx context.Context, call Functio
 		CallID: callID,
 		Output: result,
 	}}); err != nil {
-		return true, fmt.Errorf("return multica tool output: %w", err)
+		return true, fmt.Errorf("return %s tool output: %w", name, err)
 	}
 	return true, nil
 }

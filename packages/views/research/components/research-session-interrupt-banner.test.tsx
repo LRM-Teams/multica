@@ -71,7 +71,11 @@ describe("ResearchSessionInterruptBanner (LRM-823)", () => {
     expect(screen.getByText("Retry again")).toBeTruthy();
   });
 
-  it("disables retry while pending", () => {
+  // LRM-1213 — the pending retry must stay a real focus target. A native
+  // `disabled` on the control the user just activated drops focus to <body> in
+  // Chromium and never returns it, so keyboard / screen reader users lose their
+  // place and never hear the retry outcome (same root cause as LRM-1169).
+  it("keeps retry focusable while pending: aria-disabled, not native disabled", () => {
     render(
       <ResearchSessionInterruptBanner
         interrupt={interrupt}
@@ -79,9 +83,57 @@ describe("ResearchSessionInterruptBanner (LRM-823)", () => {
         onRetry={() => {}}
       />,
     );
-    expect(
-      (screen.getByTestId("research-session-interrupt-retry") as HTMLButtonElement).disabled,
-    ).toBe(true);
+    const retry = screen.getByTestId("research-session-interrupt-retry") as HTMLButtonElement;
+    expect(retry.hasAttribute("disabled")).toBe(false);
+    expect(retry.disabled).toBe(false);
+    expect(retry.getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByText("Retrying…")).toBeTruthy();
+  });
+
+  it("swallows repeat activation while pending, and retries again once re-enabled", () => {
+    const onRetry = vi.fn();
+    const { rerender } = render(
+      <ResearchSessionInterruptBanner interrupt={interrupt} phase="idle" onRetry={onRetry} />,
+    );
+    const retry = screen.getByTestId("research-session-interrupt-retry");
+    fireEvent.click(retry);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ResearchSessionInterruptBanner interrupt={interrupt} phase="pending" onRetry={onRetry} />,
+    );
+    fireEvent.click(screen.getByTestId("research-session-interrupt-retry"));
+    fireEvent.keyDown(screen.getByTestId("research-session-interrupt-retry"), { key: "Enter" });
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ResearchSessionInterruptBanner
+        interrupt={interrupt}
+        phase="retry_failed"
+        onRetry={onRetry}
+      />,
+    );
+    const again = screen.getByTestId("research-session-interrupt-retry");
+    expect(again.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(again);
+    expect(onRetry).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not blur the pending retry control on re-render", () => {
+    const { rerender } = render(
+      <ResearchSessionInterruptBanner interrupt={interrupt} phase="idle" onRetry={() => {}} />,
+    );
+    const retry = screen.getByTestId("research-session-interrupt-retry");
+    retry.focus();
+    rerender(
+      <ResearchSessionInterruptBanner interrupt={interrupt} phase="pending" onRetry={() => {}} />,
+    );
+    const pendingRetry = screen.getByTestId("research-session-interrupt-retry");
+    expect(pendingRetry).toBe(retry);
+    expect(document.activeElement).toBe(pendingRetry);
+    // jsdom does not enforce the disabled-focus restriction, so the browser-level
+    // proof lives on LRM-1213 (real Chromium probe). The contract asserted here is
+    // that the DOM never carries `disabled` on a control the user can be focused on.
+    expect((pendingRetry as HTMLButtonElement).hasAttribute("disabled")).toBe(false);
   });
 });

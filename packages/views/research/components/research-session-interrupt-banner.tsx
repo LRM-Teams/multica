@@ -93,10 +93,21 @@ export function ResearchSessionInterruptBanner({
           type="button"
           size="sm"
           variant={showSecondary ? "outline" : "default"}
-          disabled={pending}
+          // LRM-1213 — the pending control must stay a real focus target. A native
+          // `disabled` on the button the user just activated drops focus to <body>
+          // in Chromium and never gives it back, so keyboard / screen reader users
+          // lose their place and never hear the retry outcome. Same frozen pattern
+          // as LRM-1169: keep it focusable, guard the handler.
+          aria-disabled={pending || undefined}
           data-testid="research-session-interrupt-retry"
-          onClick={onRetry}
-          className="shrink-0 self-start sm:self-auto"
+          onClick={() => {
+            if (pending) return;
+            onRetry();
+          }}
+          className={cn(
+            "shrink-0 self-start sm:self-auto",
+            pending && "opacity-50 cursor-not-allowed",
+          )}
         >
           <RefreshCw
             className={cn("size-3.5", pending && "animate-spin")}

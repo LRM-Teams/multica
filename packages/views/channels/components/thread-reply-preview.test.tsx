@@ -142,29 +142,34 @@ describe("ThreadReplyPreview", () => {
     });
   });
 
-  it("shows HH:mm, top count, and View thread CTA when ≤3", () => {
+  it("shows HH:mm and top count with no bottom CTA when ≤3", () => {
+    const onOpenThread = vi.fn();
     render(
       <ThreadReplyPreview
         message={replies[0]!}
-        onOpenThread={() => undefined}
+        onOpenThread={onOpenThread}
       />,
     );
 
     expect(screen.getByTestId("thread-reply-preview-count")).toHaveTextContent(
       "3 replies · 2 new",
     );
-    expect(screen.getByTestId("thread-reply-preview-open")).toHaveTextContent(
-      "View thread →",
+    expect(screen.getByTestId("thread-reply-preview")).toHaveAttribute(
+      "aria-label",
+      "3 replies · 2 new",
     );
+    expect(screen.queryByTestId("thread-reply-preview-open")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("thread-reply-preview-view-all")).not.toBeInTheDocument();
     const times = screen.getAllByTestId("thread-reply-preview-time");
     expect(times).toHaveLength(3);
     expect(times[0]).toHaveTextContent("09:03");
     expect(times[1]).toHaveTextContent("09:04");
     expect(times[2]).toHaveTextContent("09:05");
-    expect(screen.queryByTestId("thread-reply-preview-view-all")).not.toBeInTheDocument();
+    screen.getByTestId("thread-reply-preview").click();
+    expect(onOpenThread).toHaveBeenCalledWith(replies[0]);
   });
 
-  it("shows brand View all CTA at bottom when reply count > 3", () => {
+  it("keeps top count and omits bottom CTA when reply count > 3", () => {
     const many = [
       ...replies,
       {
@@ -205,20 +210,26 @@ describe("ThreadReplyPreview", () => {
       refetch: vi.fn(),
     });
 
+    const onOpenThread = vi.fn();
     render(
       <ThreadReplyPreview
         message={{ ...replies[0]!, thread_reply_count: 5, thread_unread_count: 0 }}
-        onOpenThread={() => undefined}
+        onOpenThread={onOpenThread}
       />,
     );
 
     expect(screen.getByTestId("thread-reply-preview-count")).toHaveTextContent(
       "5 replies",
     );
-    expect(screen.getByTestId("thread-reply-preview-view-all")).toHaveTextContent(
-      "View all 5 →",
+    expect(screen.getByTestId("thread-reply-preview")).toHaveAttribute(
+      "aria-label",
+      "5 replies",
     );
+    expect(screen.queryByTestId("thread-reply-preview-view-all")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("thread-reply-preview-open")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("thread-reply-preview-time")).toHaveLength(3);
+    screen.getByTestId("thread-reply-preview").click();
+    expect(onOpenThread).toHaveBeenCalled();
   });
 
   it("shows retryable error state when thread load fails", () => {

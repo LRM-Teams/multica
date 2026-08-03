@@ -638,7 +638,12 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 							return err
 						}
 					} else {
-						terminalOutcome = "completed"
+						// LRM-1079: channel-only wakes have no chat_message prompt /
+						// ChatDone bridge; terminal outcome still follows transport
+						// + completion action (no_reply / replied / held).
+						terminalOutcome = agentInboxCompletionTerminalOutcome(
+							r.Context(), h, event, req.TaskCompleteRequest, nil,
+						)
 					}
 					if len(freshnessResolutionPublications) > 0 {
 						terminalOutcome = "no_reply"
@@ -664,6 +669,12 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 		ackedSeq = workCompletion.AckedSeq
 		event = workCompletion.Task
 		task = agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
+		// Channel-only completions never publish ChatDone, so settle ambient
+		// pending wakes here (legacy path settled inside handleChannelChatDone).
+		if event.ChannelID.Valid {
+			h.settleChannelAmbientWakeForTask(r.Context(), event.ID, true)
+			h.publishChannelTypingStopForInboxEvent(r.Context(), event)
+		}
 	} else {
 		if h.TxStarter == nil {
 			writeError(w, http.StatusInternalServerError, "transaction starter unavailable")
@@ -1106,6 +1117,10 @@ func (h *Handler) completeFailedNonChatAgentInboxEvent(
 		return
 	}
 	event = outcome.Task
+	if event.ChannelID.Valid {
+		h.settleChannelAmbientWakeForTask(r.Context(), event.ID, false)
+		h.publishChannelTypingStopForInboxEvent(r.Context(), event)
+	}
 	h.finishFailedAgentInboxEvent(
 		w, r, event, deliveryID, errText, failureReason, reasonCode, alreadyReplied, collaborationWakes, outcome.AckedSeq,
 	)
@@ -1654,6 +1669,16 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			slog.Warn("agent inbox claim: exact prompt missing",
 				"inbox_event_id", uuidToString(event.ID),
 				"chat_session_id", uuidToString(event.ChatSessionID),
+			)
+			return nil
+		}
+	} else if event.ChannelID.Valid {
+		// LRM-1079: channel-only wakes carry the exact prompt in context.
+		if !h.populateAgentInboxChannelWakeContext(ctx, event, &resp) {
+			slog.Error("agent inbox claim: channel wake context missing",
+				"inbox_event_id", uuidToString(event.ID),
+				"reason", event.Reason,
+				"channel_id", uuidToString(event.ChannelID),
 			)
 			return nil
 		}
@@ -2494,6 +2519,60 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 	resp.ThreadName = event.TriggerSummary.String
 	loadWorkspaceRepos()
 	return len(event.Context) > 0 || len(event.ExecutionConfig) > 0
+}
+
+func (h *Handler) populateAgentInboxChannelWakeContext(ctx context.Context, event db.AgentInboxEvent, resp *AgentTaskResponse) bool {
+	prompt, ok := channelWakePromptFromContext(event.Context)
+	if !ok {
+		return false
+	}
+	resp.WorkspaceID = uuidToString(event.WorkspaceID)
+	resp.ChannelID = uuidToString(event.ChannelID)
+	resp.Kind = event.Reason
+	resp.ChatMessage = prompt
+	resp.ThreadName = event.TriggerSummary.String
+	if strings.TrimSpace(resp.ThreadName) == "" {
+		resp.ThreadName = prompt
+	}
+	if event.InitiatorUserID.Valid {
+		resp.InitiatorType = "member"
+		resp.InitiatorID = uuidToString(event.InitiatorUserID)
+		if user, err := h.Queries.GetUser(ctx, event.InitiatorUserID); err == nil {
+			resp.InitiatorName = userDisplayName(user)
+			resp.InitiatorEmail = user.Email
+		}
+	} else if event.SourceMessageID.Valid {
+		h.populateAgentInboxInitiator(ctx, event.SourceMessageID, resp)
+	}
+	var channelProjectID pgtype.UUID
+	_ = h.DB.QueryRow(ctx, `SELECT project_id FROM channel WHERE id = $1`, event.ChannelID).Scan(&channelProjectID)
+	if channelProjectID.Valid {
+		resp.ProjectID = uuidToString(channelProjectID)
+		if project, err := h.Queries.GetProject(ctx, channelProjectID); err == nil {
+			resp.ProjectTitle = project.Title
+		}
+		resources, repos := h.mapProjectResources(ctx, channelProjectID)
+		resp.ProjectResources = resources
+		resp.Repos = repos
+	}
+	if len(resp.Repos) == 0 {
+		if workspace, err := h.Queries.GetWorkspace(ctx, event.WorkspaceID); err == nil && workspace.Repos != nil {
+			var repos []RepoData
+			if json.Unmarshal(workspace.Repos, &repos) == nil {
+				resp.Repos = repos
+			}
+		}
+	}
+	references := h.hydrateReferencedEntities(
+		ctx,
+		resp.WorkspaceID,
+		resp.InitiatorType,
+		resp.InitiatorID,
+		referencedEntitySource{Content: resp.ChatMessage},
+	)
+	resp.ReferencedEntities = references.Snapshots
+	resp.ReferencedEntityOmittedCount = references.OmittedCount
+	return true
 }
 
 func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.AgentInboxEvent, resp *AgentTaskResponse) bool {

@@ -5330,6 +5330,55 @@ type channelAgentPromptTxResult struct {
 	Coalesced    bool
 }
 
+// channelWakeContextType is stored on agent_inbox_event.context for ordinary
+// channel wakes that no longer create a chat_session / chat_message prompt
+// (LRM-1079). Claim hydrates Task.ChatMessage from context.prompt.
+const channelWakeContextType = "channel_wake"
+
+type channelWakeContext struct {
+	Type                    string `json:"type"`
+	Prompt                  string `json:"prompt"`
+	ChannelID               string `json:"channel_id,omitempty"`
+	ThreadID                string `json:"thread_id,omitempty"`
+	ThreadRootMessageID     string `json:"thread_root_message_id,omitempty"`
+	TriggerDepth            int    `json:"trigger_depth,omitempty"`
+	ReactionTargetMessageID string `json:"reaction_target_message_id,omitempty"`
+}
+
+func buildChannelWakeContext(ch ChannelResponse, trigger ChannelMessageResponse, prompt string) ([]byte, error) {
+	payload := channelWakeContext{
+		Type:      channelWakeContextType,
+		Prompt:    prompt,
+		ChannelID: ch.ID,
+	}
+	if trigger.ThreadID != nil {
+		payload.ThreadID = strings.TrimSpace(*trigger.ThreadID)
+	}
+	if trigger.ThreadRootMessageID != nil {
+		payload.ThreadRootMessageID = strings.TrimSpace(*trigger.ThreadRootMessageID)
+	}
+	payload.TriggerDepth = trigger.TriggerDepth
+	if trigger.ID != "" {
+		payload.ReactionTargetMessageID = trigger.ID
+	}
+	return json.Marshal(payload)
+}
+
+func channelWakePromptFromContext(raw []byte) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var payload channelWakeContext
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", false
+	}
+	if payload.Type != channelWakeContextType {
+		return "", false
+	}
+	prompt := strings.TrimSpace(payload.Prompt)
+	return prompt, prompt != ""
+}
+
 func (h *Handler) enqueueChannelAgentPrompt(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt, logScope string, showTyping bool, reason string, priority int32) (db.AgentInboxEvent, error) {
 	typingActive := false
 	if showTyping {
@@ -5385,13 +5434,26 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 	if err != nil {
 		return channelAgentPromptTxResult{}, fmt.Errorf("route env-dispatch channel agent: %w", err)
 	}
-	if !handled {
-		session, err = h.ensureChannelAgentSessionWithDB(ctx, qtx, exec, ch, agent.ID, initiatorUserID)
-	} else if binding.DerivedAgentID != nil && *binding.DerivedAgentID != "" {
-		agent, err = qtx.GetAgent(ctx, parseUUID(*binding.DerivedAgentID))
-	}
-	if err != nil {
-		return channelAgentPromptTxResult{}, fmt.Errorf("resolve channel execution agent session: %w", err)
+	// LRM-1079: ordinary channel wakes are channel-only (no chat_session).
+	// Env-dispatch and live voice-call turns still need the legacy chat_session
+	// bridge (voice waits on chat_message assistant rows).
+	var chatSessionID pgtype.UUID
+	if handled {
+		if binding.DerivedAgentID != nil && *binding.DerivedAgentID != "" {
+			agent, err = qtx.GetAgent(ctx, parseUUID(*binding.DerivedAgentID))
+			if err != nil {
+				return channelAgentPromptTxResult{}, fmt.Errorf("resolve channel execution agent session: %w", err)
+			}
+		}
+		chatSessionID = session.ID
+	} else if reason == "dm" && strings.Contains(prompt, "Live voice call delivery:") {
+		// Voice-call turns still wait on chat_message assistant rows.
+		legacySession, ensureErr := h.ensureChannelAgentSessionWithDB(ctx, qtx, exec, ch, agent.ID, initiatorUserID)
+		if ensureErr != nil {
+			return channelAgentPromptTxResult{}, fmt.Errorf("ensure voice-call chat session: %w", ensureErr)
+		}
+		chatSessionID = legacySession.ID
+		session = legacySession
 	}
 	conversationID, err := h.channelConversationIDWithDB(ctx, exec, parseUUID(ch.ID))
 	if err != nil {
@@ -5403,7 +5465,7 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 		ConversationID: conversationID,
 		Scope:          channelAgentSessionScope(ch.Kind),
 		ChannelID:      parseUUID(ch.ID),
-		ChatSessionID:  session.ID,
+		ChatSessionID:  chatSessionID,
 	})
 	if err != nil {
 		return channelAgentPromptTxResult{}, fmt.Errorf("upsert channel agent session: %w", err)
@@ -5438,9 +5500,13 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 	if err := service.RequireAgentModel(agent.Model.String); err != nil {
 		return channelAgentPromptTxResult{}, fmt.Errorf("channel agent wake: %w", err)
 	}
-	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, exec, session.ID, prompt, trigger)
-	if err != nil {
-		return channelAgentPromptTxResult{}, fmt.Errorf("create channel agent prompt: %w", err)
+	var promptMsgID pgtype.UUID
+	if chatSessionID.Valid {
+		promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, exec, chatSessionID, prompt, trigger)
+		if err != nil {
+			return channelAgentPromptTxResult{}, fmt.Errorf("create channel agent prompt: %w", err)
+		}
+		promptMsgID = promptMsg.ID
 	}
 	event, err := qtx.CreateAgentInboxEvent(ctx, db.CreateAgentInboxEventParams{
 		WorkspaceID:     parseUUID(ch.WorkspaceID),
@@ -5453,14 +5519,31 @@ func (h *Handler) enqueueChannelAgentPromptRangeWithTx(ctx context.Context, qtx 
 		SeqFrom:         seqFrom,
 		SeqTo:           seqTo,
 		ChannelID:       parseUUID(ch.ID),
-		ChatSessionID:   session.ID,
+		ChatSessionID:   chatSessionID,
 		SourceMessageID: channelAmbientTriggerID(trigger),
 	})
 	if err != nil {
 		return channelAgentPromptTxResult{}, fmt.Errorf("create channel agent inbox event: %w", err)
 	}
-	if _, err := exec.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, event.ID, promptMsg.ID); err != nil {
-		return channelAgentPromptTxResult{}, fmt.Errorf("tag channel prompt with inbox event: %w", err)
+	if chatSessionID.Valid {
+		if _, err := exec.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, event.ID, promptMsgID); err != nil {
+			return channelAgentPromptTxResult{}, fmt.Errorf("tag channel prompt with inbox event: %w", err)
+		}
+	} else {
+		wakeContext, err := buildChannelWakeContext(ch, trigger, prompt)
+		if err != nil {
+			return channelAgentPromptTxResult{}, fmt.Errorf("encode channel wake context: %w", err)
+		}
+		if _, err := exec.Exec(ctx, `
+			UPDATE agent_inbox_event
+			SET context = $2,
+			    initiator_user_id = $3,
+			    updated_at = now()
+			WHERE id = $1`, event.ID, wakeContext, nullableUUID(initiatorUserID)); err != nil {
+			return channelAgentPromptTxResult{}, fmt.Errorf("attach channel wake context: %w", err)
+		}
+		event.Context = wakeContext
+		event.InitiatorUserID = initiatorUserID
 	}
 	if handled {
 		if binding.RuntimeID == nil {
@@ -5708,6 +5791,10 @@ func (h *Handler) coalesceDirectedIssueInboxEventTx(ctx context.Context, qtx *db
 	if existingSeqTo > seqTo {
 		seqTo = existingSeqTo
 	}
+	wakeContext, err := buildChannelWakeContext(ch, trigger, prompt)
+	if err != nil {
+		return channelAgentPromptTxResult{}, false, fmt.Errorf("encode coalesced channel wake context: %w", err)
+	}
 	if _, err := exec.Exec(ctx, `
 		UPDATE agent_inbox_event
 		SET source_message_id = COALESCE($2, source_message_id),
@@ -5715,17 +5802,23 @@ func (h *Handler) coalesceDirectedIssueInboxEventTx(ctx context.Context, qtx *db
 		    priority = GREATEST(priority, $3),
 		    seq_from = $4,
 		    seq_to = $5,
+		    context = CASE
+		      WHEN chat_session_id IS NULL THEN $6::jsonb
+		      ELSE context
+		    END,
 		    updated_at = now()
-		WHERE id = $1`, existingEventID, nullableUUID(channelAmbientTriggerID(trigger)), priority, seqFrom, seqTo); err != nil {
+		WHERE id = $1`, existingEventID, nullableUUID(channelAmbientTriggerID(trigger)), priority, seqFrom, seqTo, wakeContext); err != nil {
 		return channelAgentPromptTxResult{}, false, fmt.Errorf("coalesce directed inbox event: %w", err)
 	}
-	if _, err := exec.Exec(ctx, `
-		UPDATE chat_message
-		SET content = $3
-		WHERE chat_session_id = $1
-		  AND task_id = $2
-		  AND role = 'user'`, existingChatSessionID, existingEventID, prompt); err != nil {
-		return channelAgentPromptTxResult{}, false, fmt.Errorf("refresh directed inbox prompt: %w", err)
+	if existingChatSessionID.Valid {
+		if _, err := exec.Exec(ctx, `
+			UPDATE chat_message
+			SET content = $3
+			WHERE chat_session_id = $1
+			  AND task_id = $2
+			  AND role = 'user'`, existingChatSessionID, existingEventID, prompt); err != nil {
+			return channelAgentPromptTxResult{}, false, fmt.Errorf("refresh directed inbox prompt: %w", err)
+		}
 	}
 	event, err := qtx.GetAgentInboxEvent(ctx, existingEventID)
 	if err != nil {
@@ -5774,6 +5867,10 @@ func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context,
 		if pendingToSeq > seqTo {
 			seqTo = pendingToSeq
 		}
+		wakeContext, err := buildChannelWakeContext(ch, trigger, prompt)
+		if err != nil {
+			return channelAgentPromptTxResult{}, fmt.Errorf("encode coalesced channel message wake context: %w", err)
+		}
 		if _, err := exec.Exec(ctx, `
 			UPDATE agent_inbox_event
 			SET agent_session_id = $2,
@@ -5785,19 +5882,25 @@ func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context,
 			    priority = GREATEST(priority, $7),
 			    seq_from = $8,
 			    seq_to = $9,
+			    context = CASE
+			      WHEN $3::uuid IS NULL THEN $10::jsonb
+			      ELSE context
+			    END,
 			    updated_at = now()
 			WHERE id = $1`,
-			existingEventID, existingAgentSessionID, existingChatSessionID, parseUUID(ch.ID), workspaceID, nullableUUID(channelAmbientTriggerID(trigger)), channelMessageWakePriority, seqFrom, seqTo); err != nil {
+			existingEventID, existingAgentSessionID, existingChatSessionID, parseUUID(ch.ID), workspaceID, nullableUUID(channelAmbientTriggerID(trigger)), channelMessageWakePriority, seqFrom, seqTo, wakeContext); err != nil {
 			return channelAgentPromptTxResult{}, fmt.Errorf("coalesce channel message wake: %w", err)
 		}
-		if _, err := exec.Exec(ctx, `
-			UPDATE chat_message
-			SET content = $3
-			WHERE chat_session_id = $1
-			  AND task_id = $2
-			  AND role = 'user'`,
-			existingChatSessionID, existingEventID, prompt); err != nil {
-			return channelAgentPromptTxResult{}, fmt.Errorf("refresh channel message wake prompt: %w", err)
+		if existingChatSessionID.Valid {
+			if _, err := exec.Exec(ctx, `
+				UPDATE chat_message
+				SET content = $3
+				WHERE chat_session_id = $1
+				  AND task_id = $2
+				  AND role = 'user'`,
+				existingChatSessionID, existingEventID, prompt); err != nil {
+				return channelAgentPromptTxResult{}, fmt.Errorf("refresh channel message wake prompt: %w", err)
+			}
 		}
 		event, err := qtx.GetAgentInboxEvent(ctx, existingEventID)
 		if err != nil {
@@ -6899,6 +7002,21 @@ func (h *Handler) handleChannelChatStopped(e events.Event) {
 		ActorType: "agent",
 		ActorID:   uuidToString(agentID),
 		ActorName: h.agentName(context.Background(), agentID),
+		IsTyping:  false,
+	})
+}
+
+// publishChannelTypingStopForInboxEvent clears the channel typing indicator for
+// channel-only inbox completions/failures that never emit ChatDone.
+func (h *Handler) publishChannelTypingStopForInboxEvent(ctx context.Context, event db.AgentInboxEvent) {
+	if !event.ChannelID.Valid || !event.AgentID.Valid || !event.WorkspaceID.Valid {
+		return
+	}
+	h.publishChannelToMembers(ctx, protocol.EventChannelTyping, uuidToString(event.WorkspaceID), "agent", uuidToString(event.AgentID), event.ChannelID, protocol.ChannelTypingPayload{
+		ChannelID: uuidToString(event.ChannelID),
+		ActorType: "agent",
+		ActorID:   uuidToString(event.AgentID),
+		ActorName: h.agentName(ctx, event.AgentID),
 		IsTyping:  false,
 	})
 }

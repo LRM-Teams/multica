@@ -125,9 +125,25 @@ export function ReportReader({
   const { t } = useT("research");
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const outlineDrawerRef = useRef<HTMLDivElement | null>(null);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  /** LRM-1212 — restore focus to the narrow outline toggle after drawer closes. */
+  const focusOutlineToggle = useCallback(() => {
+    queueMicrotask(() => {
+      const toggle = document.querySelector<HTMLElement>(
+        '[data-testid="research-report-outline-toggle"]',
+      );
+      toggle?.focus();
+    });
+  }, []);
+
+  const closeOutlineDrawer = useCallback(() => {
+    setOutlineOpen(false);
+    focusOutlineToggle();
+  }, [focusOutlineToggle]);
 
   const contentCount = deliveryContentCount(report, sources.length);
   const mode = resolveDeliveryMode(contentCount, sessionStatus, {
@@ -211,17 +227,34 @@ export function ReportReader({
     return () => root.removeEventListener("scroll", syncActive);
   }, [open, showReaderChrome, outlineItems]);
 
-  const scrollTo = useCallback((id: string) => {
-    setActiveId(id);
-    setOutlineOpen(false);
-    const el = document.getElementById(outlineSectionDomId(id));
-    anchorTarget(el);
-  }, []);
+  // LRM-1212 — when the narrow outline drawer opens, move focus into it.
+  useEffect(() => {
+    if (!outlineOpen) return;
+    const drawer = outlineDrawerRef.current;
+    if (!drawer) return;
+    const focusable = drawer.querySelector<HTMLElement>(
+      'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    focusable?.focus();
+  }, [outlineOpen]);
 
-  const locateCitation = useCallback((citationId: string) => {
-    setOutlineOpen(false);
-    anchorTarget(document.getElementById(citationAnchorId(citationId)));
-  }, []);
+  const scrollTo = useCallback(
+    (id: string) => {
+      setActiveId(id);
+      closeOutlineDrawer();
+      const el = document.getElementById(outlineSectionDomId(id));
+      anchorTarget(el);
+    },
+    [closeOutlineDrawer],
+  );
+
+  const locateCitation = useCallback(
+    (citationId: string) => {
+      closeOutlineDrawer();
+      anchorTarget(document.getElementById(citationAnchorId(citationId)));
+    },
+    [closeOutlineDrawer],
+  );
 
   const copyMarkdown = async () => {
     const md = buildReportMarkdown(report);
@@ -265,6 +298,11 @@ export function ReportReader({
       aria-modal="true"
       onCancel={(event) => {
         event.preventDefault();
+        // LRM-1212 — Escape closes the outline drawer first, then the modal.
+        if (outlineOpen) {
+          closeOutlineDrawer();
+          return;
+        }
         const dialog = dialogRef.current;
         if (dialog?.open) {
           if (typeof dialog.close === "function") dialog.close();
@@ -300,6 +338,7 @@ export function ReportReader({
               data-testid="research-report-outline-toggle"
               onClick={() => setOutlineOpen((v) => !v)}
               aria-expanded={outlineOpen}
+              aria-controls="research-report-outline-drawer"
               aria-label={t(($) => $.reader.outline)}
             >
               <List className="size-4" />
@@ -348,6 +387,8 @@ export function ReportReader({
         {/* LRM-829 — narrow: outline folds into a top drawer under the header. */}
         {showReaderChrome && outlineOpen ? (
           <div
+            ref={outlineDrawerRef}
+            id="research-report-outline-drawer"
             data-testid="research-report-outline-drawer"
             className="max-h-[40vh] overflow-y-auto border-b bg-muted/20 px-2 py-2 md:hidden"
           >

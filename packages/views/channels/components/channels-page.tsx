@@ -3893,6 +3893,18 @@ export function ChannelsPage({
                 )}
               </button>
             }
+            // LRM-1067 — channel description under the name; empty = no row / no placeholder.
+            meta={
+              active.description?.trim() ? (
+                <p
+                  data-testid="channel-header-description"
+                  className="truncate text-xs text-muted-foreground"
+                  title={active.description.trim()}
+                >
+                  {active.description.trim()}
+                </p>
+              ) : undefined
+            }
             badges={
               <>
                 {isConversationMuted(active) && (

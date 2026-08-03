@@ -3,9 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, Cloud, Loader2 } from "lucide-react";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
-import { runtimeDisplayLabel } from "../../runtimes/components/runtime-machines";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import type { MemberWithUser, RuntimeDevice } from "@multica/core/types";
 import { resolveActorDisplayName } from "@multica/core/identity";
 import {
@@ -15,6 +13,10 @@ import {
 } from "@multica/ui/components/ui/popover";
 import { Label } from "@multica/ui/components/ui/label";
 import { useT } from "../../i18n";
+import {
+  runtimePickerBrandLabel,
+  runtimePickerHostSubtitle,
+} from "./runtime-picker-labels";
 
 export function RuntimePicker({
   runtimes,
@@ -29,12 +31,6 @@ export function RuntimePicker({
    * label elsewhere so we don't do a product-wide rename.
    */
   label,
-  /**
-   * Per-row label. Default keeps `runtimeDisplayLabel` (honours machine
-   * rename). Code-agent-after-computer passes `runtime.name` so Cursor vs
-   * Pi stay distinct when they share the machine `display_name`.
-   */
-  getItemLabel = runtimeDisplayLabel,
 }: {
   runtimes: RuntimeDevice[];
   runtimesLoading?: boolean;
@@ -43,7 +39,6 @@ export function RuntimePicker({
   selectedRuntimeId: string;
   onSelect: (id: string) => void;
   label?: string;
-  getItemLabel?: (runtime: RuntimeDevice) => string;
 }) {
   const { t } = useT("agents");
   const [open, setOpen] = useState(false);
@@ -75,16 +70,21 @@ export function RuntimePicker({
     if (firstUsable) onSelect(firstUsable.id);
   }, [visibleRuntimes, selectedRuntimeId, onSelect]);
 
-  // Computed once per render, outside JSX, so react:doctor's
-  // hydration-mismatch rule doesn't flag a fresh Date.now() per row.
-  const now = Date.now();
+  const selectedOwner = selectedRuntime
+    ? getOwnerMember(selectedRuntime.owner_id)
+    : null;
+  const selectedIsMine =
+    !!selectedRuntime &&
+    !!currentUserId &&
+    selectedRuntime.owner_id === currentUserId;
+  const selectedHost = selectedRuntime
+    ? runtimePickerHostSubtitle(selectedRuntime, visibleRuntimes)
+    : null;
 
   return (
     <div className="flex flex-col min-w-0">
       <div className="flex h-6 items-center justify-between">
-        <Label className="text-xs text-muted-foreground">
-          {pickerLabel}
-        </Label>
+        <Label className="text-xs text-muted-foreground">{pickerLabel}</Label>
       </div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
@@ -106,9 +106,9 @@ export function RuntimePicker({
               <span className="truncate font-medium">
                 {runtimesLoading
                   ? t(($) => $.create_dialog.runtime_loading)
-                  : (selectedRuntime
-                      ? getItemLabel(selectedRuntime)
-                      : t(($) => $.create_dialog.runtime_none))}
+                  : selectedRuntime
+                    ? runtimePickerBrandLabel(selectedRuntime)
+                    : t(($) => $.create_dialog.runtime_none)}
               </span>
               {selectedRuntime?.runtime_mode === "cloud" && (
                 <span className="shrink-0 rounded bg-brand/10 px-1.5 py-0.5 text-xs font-medium text-brand">
@@ -116,12 +116,15 @@ export function RuntimePicker({
                 </span>
               )}
             </div>
-            {selectedRuntime && (
+            {selectedRuntime && !selectedIsMine && selectedOwner ? (
               <div className="truncate text-xs text-muted-foreground">
-                {getOwnerMember(selectedRuntime.owner_id)?.name ??
-                  selectedRuntime.device_info}
+                {resolveActorDisplayName(selectedOwner, selectedOwner.user_id)}
               </div>
-            )}
+            ) : selectedHost ? (
+              <div className="truncate text-xs text-muted-foreground">
+                {selectedHost}
+              </div>
+            ) : null}
           </div>
           <ChevronDown
             className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
@@ -143,6 +146,10 @@ export function RuntimePicker({
           ) : (
             visibleRuntimes.map((device) => {
               const ownerMember = getOwnerMember(device.owner_id);
+              const isMine =
+                !!currentUserId && device.owner_id === currentUserId;
+              const host = runtimePickerHostSubtitle(device, visibleRuntimes);
+              const showOwner = !isMine && !!ownerMember;
               return (
                 <button
                   key={device.id}
@@ -163,37 +170,38 @@ export function RuntimePicker({
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="truncate font-medium">{getItemLabel(device)}</span>
+                      <span className="truncate font-medium">
+                        {runtimePickerBrandLabel(device)}
+                      </span>
                       {device.runtime_mode === "cloud" && (
                         <span className="shrink-0 rounded bg-brand/10 px-1.5 py-0.5 text-xs font-medium text-brand">
                           {t(($) => $.create_dialog.runtime_cloud_badge)}
                         </span>
                       )}
                     </div>
-                    <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-                      {ownerMember ? (
-                        <>
-                          <ActorAvatar
-                            actorType="member"
-                            actorId={ownerMember.user_id}
-                            size={14}
-                          />
-                          <span className="truncate">
-                            {resolveActorDisplayName(ownerMember, ownerMember.user_id)}
-                          </span>
-                        </>
-                      ) : (
-                        <span className="truncate">{device.device_info}</span>
-                      )}
-                    </div>
+                    {showOwner || host ? (
+                      <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                        {showOwner && ownerMember ? (
+                          <>
+                            <ActorAvatar
+                              actorType="member"
+                              actorId={ownerMember.user_id}
+                              size={14}
+                            />
+                            <span className="truncate">
+                              {resolveActorDisplayName(
+                                ownerMember,
+                                ownerMember.user_id,
+                              )}
+                            </span>
+                          </>
+                        ) : null}
+                        {!showOwner && host ? (
+                          <span className="truncate">{host}</span>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
-                  <span
-                    className={`h-2 w-2 shrink-0 rounded-full ${
-                      deriveRuntimeHealth(device, now) === "online"
-                        ? "bg-success"
-                        : "bg-muted-foreground/40"
-                    }`}
-                  />
                 </button>
               );
             })

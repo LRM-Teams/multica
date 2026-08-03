@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -194,6 +195,9 @@ type canonicalAgentRuntimeAcquireRequest struct {
 	// on the reuse path. Must not leave a half-created slot if it fails.
 	BeforeCreate func() error
 	Now          time.Time
+	// Context bounds capacity-wait when the pool is full of running agents
+	// and no idle resident can be evicted. Nil → context.Background().
+	Context context.Context
 }
 
 // ResidentRuntimeRecoveredSubscriber is notified when a resident backend is
@@ -204,6 +208,18 @@ type ResidentRuntimeRecoveredSubscriber func(agentID, runtimeID string)
 type canonicalAgentRuntimePool struct {
 	mu    sync.Mutex
 	slots map[string]*canonicalAgentRuntimeSlot
+
+	// maxAgentProcesses bounds distinct agents with a live resident backend
+	// (backend != nil). 0 = unlimited. See #35 / resolveMaxAgentProcesses.
+	maxAgentProcesses int
+	// pendingAgents reserves capacity for in-flight creates so concurrent
+	// acquires cannot overshoot the cap between reserve and backend attach.
+	pendingAgents map[string]struct{}
+	capacityCond  *sync.Cond
+
+	// Metrics (#35): live distinct agents with backend; idle-for-cap evictions.
+	liveAgentProcesses atomic.Int64
+	evictForCapTotal   atomic.Int64
 
 	crashMu          sync.Mutex
 	crashSubscribers []ResidentRuntimeCrashSubscriber
@@ -224,7 +240,43 @@ type canonicalAgentRuntimeSlot struct {
 }
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
-	return &canonicalAgentRuntimePool{slots: make(map[string]*canonicalAgentRuntimeSlot)}
+	p := &canonicalAgentRuntimePool{
+		slots:         make(map[string]*canonicalAgentRuntimeSlot),
+		pendingAgents: make(map[string]struct{}),
+	}
+	p.capacityCond = sync.NewCond(&p.mu)
+	return p
+}
+
+// setMaxAgentProcesses configures the #35 live-resident-agent process ceiling.
+// 0 disables the cap (unlimited). Safe to call once at daemon init.
+func (p *canonicalAgentRuntimePool) setMaxAgentProcesses(n int) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if n < 0 {
+		n = 0
+	}
+	p.maxAgentProcesses = n
+	p.capacityCond.Broadcast()
+}
+
+// LiveAgentProcessCount returns the last published distinct-agent live count.
+func (p *canonicalAgentRuntimePool) LiveAgentProcessCount() int64 {
+	if p == nil {
+		return 0
+	}
+	return p.liveAgentProcesses.Load()
+}
+
+// EvictForCapTotal returns how many idle residents were closed to free cap.
+func (p *canonicalAgentRuntimePool) EvictForCapTotal() int64 {
+	if p == nil {
+		return 0
+	}
+	return p.evictForCapTotal.Load()
 }
 
 func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquireRequest) (*canonicalAgentRuntimeLease, error) {
@@ -268,6 +320,23 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		now = time.Now()
 	}
 
+	// #35: resident acquires may need a new live process for this agent.
+	// Reserve capacity (and close idle other-runtime slots for rebind) before
+	// locking the target slot. One-shot does not retain a pool backend and is
+	// not counted toward the cap (Parker: v1 one-shot out of scope).
+	reserved := false
+	if request.Mode == canonicalRuntimeResident {
+		if err := p.reserveAgentProcessCapacity(request.Context, request.Identity.AgentID, request.Identity.RuntimeID); err != nil {
+			return nil, err
+		}
+		reserved = true
+		defer func() {
+			if reserved {
+				p.releaseAgentProcessReservation(request.Identity.AgentID)
+			}
+		}()
+	}
+
 	p.mu.Lock()
 	slot := p.slots[key]
 	if slot == nil {
@@ -277,7 +346,20 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 	slot.mu.Lock()
 	p.mu.Unlock()
 
-	defer slot.mu.Unlock()
+	// After unlock: never call pool methods that take p.mu while holding
+	// slot.mu (reserve/count take p.mu then slot.mu — reverse order deadlocks).
+	publishLiveAfterUnlock := false
+	clearReservationAfterUnlock := false
+	reservationAgentID := request.Identity.AgentID
+	defer func() {
+		slot.mu.Unlock()
+		if clearReservationAfterUnlock {
+			p.clearAgentProcessReservation(reservationAgentID)
+		}
+		if publishLiveAfterUnlock {
+			p.publishLiveAgentProcessCount()
+		}
+	}()
 	if slot.running {
 		return nil, ErrCanonicalAgentRuntimeBusy
 	}
@@ -348,11 +430,19 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		backend:            backend,
 		canonicalSessionID: resumeSessionID,
 	}
+	// Resident success: backend attached/reused counts as live. Drop pending
+	// reservation + publish gauge only after slot.mu is released.
+	if request.Mode == canonicalRuntimeResident {
+		reserved = false
+		clearReservationAfterUnlock = true
+		publishLiveAfterUnlock = true
+	}
 	return &canonicalAgentRuntimeLease{
 		slot:      slot,
 		backend:   wrapped,
 		mode:      request.Mode,
 		turnClose: closeBackend,
+		pool:      p,
 	}, nil
 }
 
@@ -394,6 +484,7 @@ type canonicalAgentRuntimeLease struct {
 	backend   agent.Backend
 	mode      canonicalRuntimeMode
 	turnClose func()
+	pool      *canonicalAgentRuntimePool
 	once      sync.Once
 }
 
@@ -415,8 +506,9 @@ func (l *canonicalAgentRuntimeLease) releaseAt(healthy bool, now time.Time) {
 	}
 	l.once.Do(func() {
 		l.slot.mu.Lock()
-		defer l.slot.mu.Unlock()
+		closedLive := false
 		if !l.slot.running {
+			l.slot.mu.Unlock()
 			return
 		}
 		if l.mode == canonicalRuntimeOneShot {
@@ -424,10 +516,17 @@ func (l *canonicalAgentRuntimeLease) releaseAt(healthy bool, now time.Time) {
 				l.turnClose()
 			}
 		} else if !healthy {
+			if l.slot.backend != nil {
+				closedLive = true
+			}
 			l.slot.closeBackend()
 		}
 		l.slot.running = false
 		l.slot.idleSince = now
+		l.slot.mu.Unlock()
+		if closedLive && l.pool != nil {
+			l.pool.signalAgentProcessCapacityFreed()
+		}
 	})
 }
 
@@ -470,9 +569,18 @@ func (p *canonicalAgentRuntimePool) invalidateSession(agentID, runtimeID string)
 	}
 	slot.mu.Lock()
 	p.mu.Unlock()
-	defer slot.mu.Unlock()
+	freed := false
+	defer func() {
+		slot.mu.Unlock()
+		if freed {
+			p.signalAgentProcessCapacityFreed()
+		}
+	}()
 	if slot.running {
 		return ErrCanonicalAgentRuntimeBusy
+	}
+	if slot.backend != nil {
+		freed = true
 	}
 	slot.closeBackend()
 	slot.fingerprint = ""
@@ -544,6 +652,10 @@ func (p *canonicalAgentRuntimePool) evictIdle(before time.Time) int {
 			removed++
 		}
 		slot.mu.Unlock()
+	}
+	if removed > 0 {
+		p.publishLiveAgentProcessCountLocked()
+		p.capacityCond.Broadcast()
 	}
 	return removed
 }

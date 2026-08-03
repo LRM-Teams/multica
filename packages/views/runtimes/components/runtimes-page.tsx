@@ -29,10 +29,11 @@ import { useWSEvent } from "@multica/core/realtime";
 import {
   agentListOptions,
   memberListOptions,
+  workspaceKeys,
 } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { resolveActorDisplayName } from "@multica/core/identity";
-import type { Agent, AgentRuntime, AgentTask } from "@multica/core/types";
+import type { Agent, AgentRuntime, AgentTask, CreateAgentRequest } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import {
@@ -45,6 +46,8 @@ import { cn } from "@multica/ui/lib/utils";
 import { PageHeader } from "../../layout/page-header";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { AgentActivityListItem } from "../../agents/components/agent-activity-list-item";
+import { CreateAgentDialog } from "../../agents/components/create-agent-dialog";
+import { api } from "@multica/core/api";
 import { AddComputerDialog } from "./add-computer-dialog";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
@@ -622,6 +625,32 @@ function MachineDetailView({
     [machine, agents],
   );
   const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedAgentIds, setSelectedAgentIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [showCreateAgent, setShowCreateAgent] = useState(false);
+  const { data: allRuntimes = [], isLoading: runtimesLoading } = useQuery(
+    runtimeListOptions(wsId),
+  );
+  const qc = useQueryClient();
+
+  const toggleAgentSelected = (agentId: string) => {
+    setSelectedAgentIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(agentId)) next.delete(agentId);
+      else next.add(agentId);
+      return next;
+    });
+  };
+
+  const handleCreateAgent = async (data: CreateAgentRequest) => {
+    const agent = await api.createAgent(data);
+    await qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+    setShowCreateAgent(false);
+    return agent;
+  };
+
 
 
   const hostname = machineHostname(machine);
@@ -764,8 +793,45 @@ function MachineDetailView({
 
           <MachineCodeAgentsSection machine={machine} />
 
-          <section>
-            <SectionTitle>{t(($) => $.machine.agents_section)}</SectionTitle>
+          <section data-testid="machine-agents-section">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                {t(($) => $.machine.agents_section)}
+                {machineAgents.length > 0 ? (
+                  <span className="ml-1.5 font-mono tabular-nums text-muted-foreground/70">
+                    {machineAgents.length}
+                  </span>
+                ) : null}
+              </h3>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  className="h-7 gap-1 px-2.5 text-[11px]"
+                  onClick={() => {
+                    setSelectMode((v) => !v);
+                    setSelectedAgentIds(new Set());
+                  }}
+                  data-testid="machine-agents-select"
+                  disabled={machineAgents.length === 0}
+                >
+                  {selectMode
+                    ? t(($) => $.machine.agents_done)
+                    : t(($) => $.machine.agents_select)}
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  className="h-7 gap-1 px-2.5 text-[11px]"
+                  onClick={() => setShowCreateAgent(true)}
+                  data-testid="machine-agents-create"
+                >
+                  <Plus className="h-3 w-3" />
+                  {t(($) => $.machine.agents_create)}
+                </Button>
+              </div>
+            </div>
             {machineAgents.length === 0 ? (
               <p className="px-1 text-sm text-muted-foreground">
                 {t(($) => $.detail.no_agents)}
@@ -782,15 +848,32 @@ function MachineDetailView({
                       provider={runtime?.provider}
                       runtimeLabel={providerLabel(runtime)}
                       presence={presenceMap.get(agent.id) ?? null}
-                      onClick={() => openAgentPanel(agent.id)}
+                      onClick={() =>
+                        selectMode
+                          ? toggleAgentSelected(agent.id)
+                          : openAgentPanel(agent.id)
+                      }
                       layout={isMobile ? "stacked" : "inline"}
-                      showChevron={isMobile}
+                      showChevron={isMobile && !selectMode}
                       showBorder={idx < machineAgents.length - 1}
+                      selectionMode={selectMode}
+                      selected={selectedAgentIds.has(agent.id)}
                     />
                   );
                 })}
               </div>
             )}
+            {showCreateAgent ? (
+              <CreateAgentDialog
+                runtimes={allRuntimes.length > 0 ? allRuntimes : machine.runtimes}
+                runtimesLoading={runtimesLoading}
+                members={members}
+                currentUserId={user?.id ?? null}
+                defaultMachineId={machine.id}
+                onClose={() => setShowCreateAgent(false)}
+                onCreate={handleCreateAgent}
+              />
+            ) : null}
           </section>
 
           <section data-testid="machine-workspaces-section">

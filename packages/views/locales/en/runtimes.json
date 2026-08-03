@@ -77,7 +77,7 @@
     "basics_os": "OS",
     "basics_daemon": "Daemon",
     "basics_pinned_version": "Version pin",
-    "agents_section": "Activity on this computer",
+    "agents_section": "Agents on this computer",
     "code_agents_section": "Runtimes on this computer",
     "code_agents_installed": "Installed",
     "code_agents_not_installed": "Not installed",
@@ -179,7 +179,10 @@
     "danger_zone": {
       "title": "Danger Zone",
       "description": "Permanently delete this computer and its runtimes from the workspace."
-    }
+    },
+    "agents_select": "Select",
+    "agents_create": "Create",
+    "agents_done": "Done"
   },
   "health": {
     "online": {

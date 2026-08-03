@@ -74,7 +74,7 @@
     "basics_os": "OS",
     "basics_daemon": "Daemon",
     "basics_pinned_version": "指定バージョン",
-    "agents_section": "このコンピュータの Activity",
+    "agents_section": "このコンピュータの Agents",
     "code_agents_section": "このコンピュータの Runtime",
     "code_agents_installed": "インストール済み",
     "code_agents_not_installed": "未インストール",
@@ -176,7 +176,10 @@
     "danger_zone": {
       "title": "危険ゾーン",
       "description": "このコンピュータとランタイムをワークスペースから完全に削除します。"
-    }
+    },
+    "agents_select": "選択",
+    "agents_create": "作成",
+    "agents_done": "完了"
   },
   "health": {
     "online": {

@@ -76,7 +76,7 @@
     "basics_os": "OS",
     "basics_daemon": "Daemon",
     "basics_pinned_version": "지정된 버전",
-    "agents_section": "이 컴퓨터의 Activity",
+    "agents_section": "이 컴퓨터의 Agents",
     "code_agents_section": "이 컴퓨터의 Runtime",
     "code_agents_installed": "설치됨",
     "code_agents_not_installed": "미설치",
@@ -178,7 +178,10 @@
     "danger_zone": {
       "title": "위험 구역",
       "description": "이 컴퓨터와 런타임을 워크스페이스에서 영구 삭제합니다."
-    }
+    },
+    "agents_select": "선택",
+    "agents_create": "만들기",
+    "agents_done": "완료"
   },
   "health": {
     "online": {

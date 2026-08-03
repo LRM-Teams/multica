@@ -29,6 +29,8 @@ export function AgentActivityListItem({
   showBorder = false,
   className,
   avatarSize,
+  selectionMode = false,
+  selected = false,
 }: {
   agentId: string;
   displayName: string;
@@ -42,6 +44,9 @@ export function AgentActivityListItem({
   showBorder?: boolean;
   className?: string;
   avatarSize?: number;
+  /** Multi-select mode (Computer Agents section Select). */
+  selectionMode?: boolean;
+  selected?: boolean;
 }) {
   const band = resolveAgentActivityBand(presence ?? null);
   const view = band
@@ -123,13 +128,30 @@ export function AgentActivityListItem({
       onClick={onClick}
       data-testid="agent-activity-list-item"
       data-agent-id={agentId}
+      data-selected={selected || undefined}
+      aria-pressed={selectionMode ? selected : undefined}
       className={cn(
         "flex w-full items-center gap-1.5 px-4 py-3 text-left text-sm transition-colors hover:bg-accent/50",
         layout === "stacked" && "gap-3",
         showBorder && "border-b",
+        selected && "bg-accent/60",
         className,
       )}
     >
+      {selectionMode ? (
+        <span
+          className={cn(
+            "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]",
+            selected
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-muted-foreground/40",
+          )}
+          aria-hidden
+          data-testid="agent-activity-list-item-check"
+        >
+          {selected ? "✓" : ""}
+        </span>
+      ) : null}
       <ActorAvatar
         actorType="agent"
         actorId={agentId}
@@ -137,7 +159,7 @@ export function AgentActivityListItem({
         profileLink={false}
       />
       {body}
-      {showChevron ? (
+      {showChevron && !selectionMode ? (
         <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-muted-foreground/45" />
       ) : null}
     </button>

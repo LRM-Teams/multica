@@ -162,7 +162,6 @@ vi.mock("../../common/project-picker-button", () => ({
 
 vi.mock("./dm-conversation", () => ({ DmConversation: () => <div /> }));
 vi.mock("./channel-files-panel", () => ({ ChannelFilesPanel: () => <div /> }));
-vi.mock("./channel-stats-panel", () => ({ ChannelStatsPanel: () => <div /> }));
 
 // The message list is mocked so we can capture the exact props ChannelsPage
 // hands it — this is the parent→list contract the live bug broke.

@@ -84,7 +84,7 @@ var workspaceInfoCmd = &cobra.Command{
 		"Aligned with `raft server info` list flags:\n" +
 		"  --agents / --computers  list only that section (default: both)\n" +
 		"  --query                 filter rows by visible text (name, status, error)\n" +
-		"  --limit / --offset      page list output (default limit 50 when set; 0 = no limit)\n\n" +
+		"  --limit / --offset      page list output (0 = unlimited, default; set limit to page)\n\n" +
 		"Accepts a full UUID, slug, or short UUID prefix; omit to use the default workspace.",
 	Args: cobra.MaximumNArgs(1),
 	RunE: runWorkspaceInfo,

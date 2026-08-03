@@ -480,6 +480,27 @@ networking, allowlists, NetworkPolicy, or proxy authentication. If you bind
 trusted network, for example a host-local mapping such as
 `127.0.0.1:9090:9090`.
 
+### Report-only API route p95
+
+Use this query for the periodic API performance report. It aggregates p95 by
+normalized `method` and `route` over the previous five minutes:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le, method, route) (
+    rate(multica_http_slo_request_duration_seconds_bucket[5m])
+  )
+)
+```
+
+The report target is **p95 < 1 second**. To show only breaches, append `> 1`
+to the expression. `multica_http_request_duration_seconds` remains the full
+HTTP diagnostic series; the `*_slo_*` series deliberately excludes WebSocket
+upgrades, SSE responses, file uploads, and daemon/sandbox/agent transport.
+This is **report-only**: a breach can be logged or sent to the configured
+webhook, but it does not block CI, review, or merge.
+
 ## Upgrading
 
 ```bash

@@ -94,22 +94,16 @@ function DetailBody({
     payloadString(node.payload, "dead_end_reason") ||
     (node.node_type === "dead_end" ? node.summary : null);
 
-  const relatedSources = sources
+  // Only explicitly associated sources (source_id / source_ids). Never fall
+  // back to session-wide sources — that would attribute other nodes' evidence
+  // to a node with no associations (LRM-1091 C-area audit).
+  const evidenceList = sources
     .filter((s) => {
       if (linked && s.id === linked.id) return true;
       const ids = (node.payload as { source_ids?: unknown } | null)?.source_ids;
       return Array.isArray(ids) && ids.includes(s.id);
     })
     .slice(0, 12);
-
-  const evidenceList =
-    relatedSources.length > 0
-      ? relatedSources
-      : linked
-        ? [linked]
-        : sources
-            .toSorted((a, b) => (b.credibility_weight ?? 0) - (a.credibility_weight ?? 0))
-            .slice(0, 6);
 
   return (
     <>

@@ -290,6 +290,8 @@
   "logic": {
     "label": "Research logic",
     "lr_hint": "Left → right · not Git",
+    "git_hint": "Top → bottom · Git lanes",
+    "git_list_label": "Research Git list",
     "strip_label": "Logic structure",
     "strip_position": "Current {{current}} of {{total}}",
     "start": "Start",
@@ -312,6 +314,21 @@
       "failed": "Failed",
       "abandoned": "Abandoned"
     }
+  },
+  "card_menu": {
+    "open": "Open actions menu",
+    "view_evidence": "View evidence",
+    "view_io": "View inputs / outputs",
+    "fork_from": "Fork from here",
+    "retry_failed": "Retry failed",
+    "reassign": "Reassign",
+    "cancel_run": "Cancel run",
+    "confirm": "Confirm: {{action}}?"
+  },
+  "a11y": {
+    "focus_node": "Focus {{title}}, branch {{branch}}",
+    "opened_detail": "Opened detail for {{title}}",
+    "closed_detail": "Closed detail"
   },
   "home": {
     "composer_label": "Create a research session",

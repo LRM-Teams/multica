@@ -290,6 +290,8 @@
   "logic": {
     "label": "調査ロジック",
     "lr_hint": "左→右 · not Git",
+    "git_hint": "上→下 · Git lanes",
+    "git_list_label": "調査 Git リスト",
     "strip_label": "ロジック構造",
     "strip_position": "現在 {{current}} / 全 {{total}}",
     "start": "起点",
@@ -312,6 +314,21 @@
       "failed": "失敗",
       "abandoned": "中止"
     }
+  },
+  "card_menu": {
+    "open": "操作メニューを開く",
+    "view_evidence": "エビデンスを見る",
+    "view_io": "入出力を見る",
+    "fork_from": "ここから分岐",
+    "retry_failed": "失敗を再試行",
+    "reassign": "再割当",
+    "cancel_run": "実行を取消",
+    "confirm": "確認：{{action}}？"
+  },
+  "a11y": {
+    "focus_node": "フォーカス {{title}}、分岐 {{branch}}",
+    "opened_detail": "{{title}} の詳細を開きました",
+    "closed_detail": "詳細を閉じました"
   },
   "home": {
     "composer_label": "調査セッションを作成",

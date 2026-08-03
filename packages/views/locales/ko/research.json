@@ -290,6 +290,8 @@
   "logic": {
     "label": "리서치 로직",
     "lr_hint": "왼쪽→오른쪽 · not Git",
+    "git_hint": "위→아래 · Git 레인",
+    "git_list_label": "리서치 Git 목록",
     "strip_label": "로직 구조",
     "strip_position": "현재 {{current}} / 총 {{total}}",
     "start": "시작",
@@ -312,6 +314,21 @@
       "failed": "실패",
       "abandoned": "중단"
     }
+  },
+  "card_menu": {
+    "open": "작업 메뉴 열기",
+    "view_evidence": "근거 보기",
+    "view_io": "입출력 보기",
+    "fork_from": "여기서 분기",
+    "retry_failed": "실패 재시도",
+    "reassign": "재할당",
+    "cancel_run": "실행 취소",
+    "confirm": "확인: {{action}}?"
+  },
+  "a11y": {
+    "focus_node": "포커스 {{title}}, 분기 {{branch}}",
+    "opened_detail": "{{title}} 상세 열림",
+    "closed_detail": "상세 닫힘"
   },
   "home": {
     "composer_label": "리서치 세션 만들기",

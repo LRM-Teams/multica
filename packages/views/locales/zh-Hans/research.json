@@ -290,6 +290,8 @@
   "logic": {
     "label": "调研逻辑",
     "lr_hint": "左→右 · 非 Git",
+    "git_hint": "上→下 · Git 分支线",
+    "git_list_label": "调研 Git 列表",
     "strip_label": "逻辑结构",
     "strip_position": "当前 {{current}} / 共 {{total}}",
     "start": "起点",
@@ -312,6 +314,21 @@
       "failed": "失败",
       "abandoned": "已放弃"
     }
+  },
+  "card_menu": {
+    "open": "打开操作菜单",
+    "view_evidence": "查看证据",
+    "view_io": "查看输入/输出",
+    "fork_from": "从此分叉",
+    "retry_failed": "重试失败",
+    "reassign": "重新分配",
+    "cancel_run": "取消运行",
+    "confirm": "确认：{{action}}？"
+  },
+  "a11y": {
+    "focus_node": "焦点 {{title}}，分支 {{branch}}",
+    "opened_detail": "已打开 {{title}} 详情",
+    "closed_detail": "已关闭详情"
   },
   "home": {
     "composer_label": "创建调研会话",

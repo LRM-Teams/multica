@@ -11,9 +11,9 @@
  * Gate status (dev):
  * - 1100 overlay Esc/a11y — hard
  * - 1104 goal-chip dedupe (#1949) + no max-w-3xl shell (#1962) — hard
- * - 1105 helpers (#1952) — hard; canvas wiring `it.fails` until after 1091
+ * - 1105 helpers (#1952) + canvas role=application (1091) — hard; Home/End still `it.fails`
  * - 1109 meta-menu md: (#1947) — hard; template chip-row sm: still `it.fails`
- * - 1091 planar / action — still `it.fails`
+ * - 1091 planar layout/keyboard — hard; branch tokens + ring confirm still `it.fails`
  */
 // @vitest-environment jsdom
 import fs from "node:fs";
@@ -466,7 +466,8 @@ describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE
     expect(crossLaneNeighbor(nodes, edges, "fork", 1)).toBe("a");
   });
 
-  it.fails(
+  // LRM-1091 planar canvas shipped role=application + name — hard gate now.
+  it(
     `${SMOKE_ISSUES.canvasKeyboard}: canvas root declares role=application with accessible name (after 1091 wire)`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");
@@ -639,7 +640,8 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     expect(BRANCH_VS_STATUS_COLOR_CONTRACT.branchTokens.length).toBeGreaterThan(0);
   });
 
-  it.fails(
+  // LRM-1091 planar layout ships — hard gate now.
+  it(
     `${SMOKE_ISSUES.canvasPlanar}: 30-node layout has no card AABB overlap / pierce`,
     () => {
       const { nodes, edges } = thirtyNodeFixture();
@@ -698,7 +700,8 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     },
   );
 
-  it.fails(
+  // LRM-1091 planar keyboard wiring shipped — hard gate now.
+  it(
     `${SMOKE_ISSUES.canvasPlanar}: canvas wires planar keyboard map (topo ↑↓, branch ←→, Enter/Esc, Shift+F10)`,
     () => {
       const canvasSrc = readResearchSource("components/research-canvas.tsx");

@@ -48,6 +48,11 @@ CREATE INDEX IF NOT EXISTS research_work_item_workspace_pending_idx
   ON research_work_item (workspace_id, status, created_at ASC)
   WHERE status IN ('pending', 'enqueued');
 
+-- Supporting index for agent hard-delete FK scans (assignee_agent_id ON DELETE SET NULL).
+CREATE INDEX IF NOT EXISTS research_work_item_assignee_agent_id_idx
+  ON research_work_item (assignee_agent_id)
+  WHERE assignee_agent_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS research_scheduler_event (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,

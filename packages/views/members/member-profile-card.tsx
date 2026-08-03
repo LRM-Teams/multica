@@ -22,11 +22,11 @@ interface MemberProfileCardProps {
   userId: string;
 }
 
-// Mirrors AgentProfileCard's structure so the two hover surfaces feel like
-// twins ("agent and human are both first-class team members"). Content is
-// asymmetric on purpose: humans get identity + the AI agents they own; they
-// don't get a status dot because there's no member-presence backbone today
-// and we don't want to fabricate one.
+/**
+ * Human member identity + owned-agents list. Task #25: NOT the avatar hover
+ * card — hover peeks use `ActorProfileContent` via `ActorAvatar` /
+ * `ActorProfileTrigger`. Do not wire this into a HoverCard again.
+ */
 export function MemberProfileCard({ userId }: MemberProfileCardProps) {
   const { t } = useT("members");
   const wsId = useWorkspaceId();

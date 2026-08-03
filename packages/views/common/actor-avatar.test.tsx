@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ActorAvatar, AgentPresenceOverlay, AgentStatusDot } from "./actor-avatar";
 
@@ -114,6 +115,44 @@ vi.mock("./agent-panel-context", () => ({
 
 vi.mock("../navigation", () => ({
   useNavigation: () => ({ openInNewTab: openInNewTabMock }),
+}));
+
+vi.mock("./actor-profile-popover", () => ({
+  ActorProfileContent: ({
+    memberType,
+    memberId,
+  }: {
+    memberType: string;
+    memberId: string;
+  }) => (
+    <div
+      data-testid="actor-profile-content"
+      data-member-type={memberType}
+      data-member-id={memberId}
+    />
+  ),
+}));
+
+vi.mock("@multica/ui/components/ui/hover-card", () => ({
+  HoverCard: ({ children }: { children: ReactNode }) => (
+    <div data-testid="hover-card">{children}</div>
+  ),
+  HoverCardTrigger: ({
+    children,
+    ...props
+  }: {
+    children: ReactNode;
+    render?: ReactElement;
+    className?: string;
+    tabIndex?: number;
+  }) => (
+    <span data-testid="hover-card-trigger" className={props.className} tabIndex={props.tabIndex}>
+      {children}
+    </span>
+  ),
+  HoverCardContent: ({ children }: { children: ReactNode }) => (
+    <div data-testid="hover-card-content">{children}</div>
+  ),
 }));
 
 describe("AgentPresenceOverlay", () => {
@@ -462,5 +501,26 @@ describe("ActorAvatar agent panel click (#349 app-wide)", () => {
     fireEvent.click(avatarTrigger);
     expect(openMemberFromStoreMock).toHaveBeenCalledWith("user-1");
     expect(rowClick).not.toHaveBeenCalled();
+  });
+});
+
+describe("ActorAvatar enableHoverCard (task #25 — one sitewide identity card)", () => {
+  it("renders ActorProfileContent for agents (not AgentProfileCard)", () => {
+    render(
+      <ActorAvatar actorType="agent" actorId="agent-1" enableHoverCard />,
+    );
+    const content = screen.getByTestId("actor-profile-content");
+    expect(content).toHaveAttribute("data-member-type", "agent");
+    expect(content).toHaveAttribute("data-member-id", "agent-1");
+    expect(screen.getByTestId("hover-card")).toBeInTheDocument();
+  });
+
+  it("renders ActorProfileContent for members (not MemberProfileCard)", () => {
+    render(
+      <ActorAvatar actorType="member" actorId="user-9" enableHoverCard />,
+    );
+    const content = screen.getByTestId("actor-profile-content");
+    expect(content).toHaveAttribute("data-member-type", "user");
+    expect(content).toHaveAttribute("data-member-id", "user-9");
   });
 });

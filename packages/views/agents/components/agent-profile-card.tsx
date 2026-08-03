@@ -1,5 +1,12 @@
 "use client";
 
+/**
+ * Full agent inspector body (Send message / Detail / Role / Computer /
+ * Runtime Config). Task #25: NOT the avatar hover card — hover peeks use
+ * `ActorProfileContent` via `ActorAvatar` / `ActorProfileTrigger`. Do not
+ * wire this into a HoverCard again.
+ */
+
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";

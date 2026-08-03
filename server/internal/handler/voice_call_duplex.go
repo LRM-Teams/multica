@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/internal/integrations/doubaodialog"
 	"github.com/multica-ai/multica/server/internal/service/duplexcall"
 	"github.com/multica-ai/multica/server/internal/service/voicecall"
 )
@@ -30,7 +31,7 @@ type VoiceCallDuplexAPI interface {
 type DuplexGatewayAPI interface {
 	Configured() bool
 	Has(callID string) bool
-	MarkPending(callID, welcomeMessage string)
+	MarkPending(callID, welcomeMessage, instructions string)
 	Close(callID string)
 	Start(
 		ctx context.Context,
@@ -100,7 +101,11 @@ func (h *Handler) StartVoiceCallDuplex(w http.ResponseWriter, r *http.Request) {
 		writeVoiceCallServiceError(w, "duplex_start", err)
 		return
 	}
-	h.DuplexGateway.MarkPending(callID, activation.WelcomeMessage)
+	instructions := doubaodialog.ComposeDialogInstructions(
+		doubaodialog.DefaultDialogInstructions(),
+		activation.SystemMessages,
+	)
+	h.DuplexGateway.MarkPending(callID, activation.WelcomeMessage, instructions)
 	h.publishVoiceCallUpdated(activation.Session)
 
 	writeJSON(w, http.StatusOK, duplexStartResponse{

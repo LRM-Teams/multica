@@ -7,10 +7,12 @@ import (
 	"strings"
 )
 
-// DuplexActivation carries the durable session and its localized, identity-aware greeting.
+// DuplexActivation carries the durable session, localized greeting, and the
+// same Agent-scoped system context RTC VoiceChat already injects.
 type DuplexActivation struct {
 	Session        Session
 	WelcomeMessage string
+	SystemMessages []string
 }
 
 // ActivateDuplex promotes a starting voice_call_session to active without
@@ -44,6 +46,7 @@ func (service *Service) ActivateDuplex(ctx context.Context, input AnswerInput) (
 			return DuplexActivation{
 				Session:        session,
 				WelcomeMessage: strings.TrimSpace(conversationContext.WelcomeMessage),
+				SystemMessages: append([]string(nil), conversationContext.SystemMessages...),
 			}, nil
 		}
 	case StatusStarting:
@@ -80,6 +83,7 @@ func (service *Service) ActivateDuplex(ctx context.Context, input AnswerInput) (
 	return DuplexActivation{
 		Session:        activated,
 		WelcomeMessage: strings.TrimSpace(conversationContext.WelcomeMessage),
+		SystemMessages: append([]string(nil), conversationContext.SystemMessages...),
 	}, nil
 }
 

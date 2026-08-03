@@ -1,6 +1,10 @@
 package doubaodialog
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+	"unicode/utf8"
+)
 
 // MulticaDelegateToolName matches the existing RTC VoiceChat tool so product
 // copy and agent prompts stay aligned across transports.
@@ -100,8 +104,48 @@ func DefaultDialogInstructions() string {
 		"只有用户本轮明确要求查询天气、新闻、实时信息，或给出网址要你打开时，才调用 " +
 		WebSearchToolName + " 或 " + WebFetchToolName +
 		"；问候、闲聊、确认不要搜索。调用搜索前先口头说一句「我帮你查一下」。" +
+		"调用 " + WebSearchToolName + " / " + WebFetchToolName + " 时继续保持通话可听可说，不要假装静音卡住。" +
 		"只有用户明确要求创建 issue、开发任务、派活或需要真实 Multica 工具时，才调用 " +
 		MulticaDelegateToolName +
 		"。派活后立刻告诉用户已安排后台执行、可以继续聊天，不要假装卡住等待。" +
 		"不要使用 Markdown。工具结果返回后，用一两句口语向用户播报。"
+}
+
+const (
+	dialogContextPreamble = "" +
+		"以下是当前被叫 Agent 的身份与近期对话/任务上下文。" +
+		"接通后必须据此回答，不要以空白会话开场装作什么都不知道。"
+
+	// Keep composed instructions within a conservative Duplex prompt budget.
+	maxDialogInstructionsRunes = 24000
+)
+
+// ComposeDialogInstructions joins product spoken rules with the Agent-scoped
+// Multica context built for the voice call (identity, recent DM, issues, …).
+func ComposeDialogInstructions(base string, systemMessages []string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = DefaultDialogInstructions()
+	}
+	parts := make([]string, 0, 2+len(systemMessages))
+	parts = append(parts, base)
+	contextParts := make([]string, 0, len(systemMessages))
+	for _, message := range systemMessages {
+		message = strings.TrimSpace(message)
+		if message == "" {
+			continue
+		}
+		contextParts = append(contextParts, message)
+	}
+	if len(contextParts) > 0 {
+		parts = append(parts, dialogContextPreamble)
+		parts = append(parts, contextParts...)
+	}
+	joined := strings.Join(parts, "\n\n")
+	if utf8.RuneCountInString(joined) <= maxDialogInstructionsRunes {
+		return joined
+	}
+	runes := []rune(joined)
+	trimmed := string(runes[:maxDialogInstructionsRunes])
+	return trimmed + "\n...[duplex context truncated by Multica]..."
 }

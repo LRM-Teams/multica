@@ -55,6 +55,7 @@ type EnvDispatchInput struct {
 	Mode            EnvMode
 	EnvID           string    // base env (scratch) or state env (branch)
 	SourceProjectID string    // branch only: the single project on EnvID (1:1 invariant), resolved by the handler
+	SourceTaskID    string    // durable reusable sampling identity; resolved before idempotency/fan-out
 	Domain          EnvDomain // required
 	DispatchType    EnvDispatchType
 	GroupSize       int
@@ -95,6 +96,11 @@ type EnvDispatchInput struct {
 	// already configured.
 	DefaultBaseTemplate string
 
+	// TaskTemplateID is the ready, sanitized Cube template produced for a
+	// scratch SWE-Lego issue source. It is internal dispatch state, never a
+	// caller-selected template, and takes precedence for every rollout sandbox.
+	TaskTemplateID string
+
 	// InstanceBackedBase is resolved by Dispatch after GetEnv: true when the base
 	// env's sandbox is a sandbox_instance (e.g. an auto-created default env), so
 	// forking uses the sandbox_instance backend instead of the Fleet fork path.
@@ -106,6 +112,7 @@ type EnvDispatchInput struct {
 	// dispatch state, not an HTTP request field.
 	MessageRoster       MessageRoster
 	BranchMessageSource *ValidatedBranchMessageSource
+	SourceTask          *SourceTask
 }
 
 // PerAgentEnvSpec assigns one squad agent to a sandbox template or base
@@ -226,6 +233,8 @@ type AgentSandboxStatus struct {
 
 // EnvRollout is one element of the response array (spec §6.3).
 type EnvRollout struct {
+	RunID          string // unique per rollout; never used as DAG/cleanup identity
+	SourceTaskID   string // durable reusable task identity
 	ChannelID      string
 	LeaderRunID    string
 	AgentSandboxes map[string]AgentSandboxStatus
@@ -361,7 +370,17 @@ type EnvDispatchDeps interface {
 	// reward by project_id. Keyed by projectID (upsert on conflict).
 	SaveTrainingDispatch(ctx context.Context, projectID, workspaceID, trainAgentID, criticAgentID string, defaultReward float64) error
 
-	// CreateEnvDispatchRun persists the durable dispatch root row for a project
+	// Source-task operations. Scratch resolves the request identity before
+	// idempotency; branch inherits it from the source project's durable run.
+	GetSourceTask(ctx context.Context, sourceTaskID, workspaceID string) (SourceTask, error)
+	GetEnvDispatchRunSourceTask(ctx context.Context, projectID, workspaceID string) (SourceTask, error)
+
+	// CreateEnvDispatchRunWithSource persists one unique durable rollout run
+	// after a project exists. project_id remains the DAG and cleanup identity.
+	CreateEnvDispatchRunWithSource(ctx context.Context, projectID, workspaceID string, trainingMode bool, sourceTaskID string, sampleIndex int) (runID string, err error)
+	SetEnvDispatchRunLocalTargets(ctx context.Context, projectID, workspaceID, localIssueID, localChannelID string) error
+
+	// CreateEnvDispatchRun persists the legacy durable dispatch root row for a project
 	// (spec: durable dispatch identity independent of training_dispatch). One row
 	// per project, keyed by project_id, carrying workspace_id and training_mode.
 	// root_task_id starts NULL and is bound later via BindEnvDispatchRootTask.
@@ -550,6 +569,19 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	if err := s.validate(in); err != nil {
 		return EnvDispatchResult{}, err
 	}
+	// Scratch resolves its durable source task before an idempotency replay or
+	// any fan-out. The local issue/message payload is materialized exclusively
+	// from that immutable canonical source; request payloads are legacy-only
+	// when source_task_id is absent.
+	if in.Mode == EnvModeScratch && in.SourceTaskID != "" {
+		source, err := s.deps.GetSourceTask(ctx, in.SourceTaskID, in.WorkspaceID)
+		if err != nil {
+			return EnvDispatchResult{}, fmt.Errorf("validation_failed: resolve source task: %w", err)
+		}
+		if err := materializeScratchSourceTask(&in, source); err != nil {
+			return EnvDispatchResult{}, fmt.Errorf("validation_failed: %w", err)
+		}
+	}
 	var messageRoster MessageRoster
 	if in.DispatchType == EnvDispatchMessage {
 		var err error
@@ -565,15 +597,6 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	// when PerAgentEnvSpecs is empty, preserving current behavior.
 	if err := s.validatePerAgentEnvSpecsDB(ctx, in); err != nil {
 		return EnvDispatchResult{}, err
-	}
-
-	// Idempotency replay (spec §7.7): a repeat key returns the stored response.
-	if in.IdempotencyKey != "" {
-		if prev, ok, err := s.deps.GetIdempotentResponse(ctx, in.WorkspaceID, in.IdempotencyKey); err != nil {
-			return EnvDispatchResult{}, fmt.Errorf("idempotency lookup: %w", err)
-		} else if ok {
-			return prev, nil
-		}
 	}
 
 	// Resolve the per-workspace default self_play base env when env_id is empty.
@@ -639,6 +662,28 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		if err := s.validateBranchSource(ctx, in); err != nil {
 			return EnvDispatchResult{}, err
 		}
+		source, err := s.deps.GetEnvDispatchRunSourceTask(ctx, in.SourceProjectID, in.WorkspaceID)
+		if err != nil {
+			return EnvDispatchResult{}, fmt.Errorf("validation_failed: resolve branch source task: %w", err)
+		}
+		if err := validateSourceTaskType(in.DispatchType, source); err != nil {
+			return EnvDispatchResult{}, fmt.Errorf("validation_failed: %w", err)
+		}
+		if in.SourceTaskID != "" && in.SourceTaskID != source.ID {
+			return EnvDispatchResult{}, fmt.Errorf("validation_failed: branch source_task_id must match the source project")
+		}
+		in.SourceTaskID = source.ID
+		in.SourceTask = &source
+	}
+
+	// Idempotency replay runs only after the source task is resolved for either
+	// scratch or branch dispatch, so replay never bypasses source authorization.
+	if in.IdempotencyKey != "" {
+		if prev, ok, err := s.deps.GetIdempotentResponse(ctx, in.WorkspaceID, in.IdempotencyKey); err != nil {
+			return EnvDispatchResult{}, fmt.Errorf("idempotency lookup: %w", err)
+		} else if ok {
+			return prev, nil
+		}
 	}
 
 	rollouts := make([]EnvRollout, in.GroupSize)
@@ -694,6 +739,16 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		if rollouts[i].ProjectID == "" {
 			continue
 		}
+		if in.SourceTaskID != "" {
+			runID, err := s.deps.CreateEnvDispatchRunWithSource(ctx, rollouts[i].ProjectID, in.WorkspaceID, in.TrainingMode, in.SourceTaskID, i)
+			if err != nil {
+				rollouts[i].Error = fmt.Sprintf("create source-aware env_dispatch_run: %v", err)
+				continue
+			}
+			rollouts[i].RunID = runID
+			rollouts[i].SourceTaskID = in.SourceTaskID
+			continue
+		}
 		if err := s.deps.CreateEnvDispatchRun(ctx, rollouts[i].ProjectID, in.WorkspaceID, in.TrainingMode); err != nil {
 			rollouts[i].Error = fmt.Sprintf("create env_dispatch_run: %v", err)
 		}
@@ -731,6 +786,20 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		}(i)
 	}
 	dispatchWG.Wait()
+
+	// Local targets are per-rollout materialization provenance, not reusable
+	// sampling identities. Persist them only for source-aware runs after the
+	// issue/channel has been created or copied.
+	if in.SourceTaskID != "" {
+		for i := range rollouts {
+			if rollouts[i].ProjectID == "" {
+				continue
+			}
+			if err := s.deps.SetEnvDispatchRunLocalTargets(ctx, rollouts[i].ProjectID, in.WorkspaceID, rollouts[i].IssueID, rollouts[i].ChannelID); err != nil && rollouts[i].Error == "" {
+				rollouts[i].Error = fmt.Sprintf("set env_dispatch local targets: %v", err)
+			}
+		}
+	}
 
 	// Bind the enqueued leader task as the dispatch root (spec: bind
 	// root_task_id immediately after enqueuing the leader task). The leader task
@@ -834,6 +903,38 @@ func (s *EnvDispatchService) ensureDefaultSelfPlayEnv(ctx context.Context, in En
 	return envID, nil
 }
 
+// materializeScratchSourceTask validates that source type matches dispatch type
+// and replaces the inline payload with the source's canonical immutable data.
+func materializeScratchSourceTask(in *EnvDispatchInput, source SourceTask) error {
+	if err := validateSourceTaskType(in.DispatchType, source); err != nil {
+		return err
+	}
+	var err error
+	switch in.DispatchType {
+	case EnvDispatchIssue:
+		in.Issue, err = source.IssueInput()
+	case EnvDispatchMessage:
+		in.Message, err = source.MessageInput()
+	}
+	if err != nil {
+		return fmt.Errorf("materialize source task: %w", err)
+	}
+	in.SourceTaskID = source.ID
+	in.SourceTask = &source
+	return nil
+}
+
+func validateSourceTaskType(dispatchType EnvDispatchType, source SourceTask) error {
+	expected := SourceTaskIssue
+	if dispatchType == EnvDispatchMessage {
+		expected = SourceTaskMessage
+	}
+	if source.Type != expected {
+		return fmt.Errorf("source task type %q does not match dispatch_type %q", source.Type, dispatchType)
+	}
+	return nil
+}
+
 // validate implements the §6.3 validation table (the subset that's
 // service-level; UUID-shape validation lives in the handler).
 func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
@@ -891,10 +992,10 @@ func (s *EnvDispatchService) validate(in EnvDispatchInput) error {
 	if in.Mode == EnvModeBranch && in.Domain == EnvDomainSweLego && in.Issue != nil {
 		return fmt.Errorf("validation_failed: issue must not be supplied for branch+swe_lego (copied issue is reused)")
 	}
-	if in.Mode == EnvModeScratch && in.Domain == EnvDomainSweLego && in.Issue == nil {
+	if in.Mode == EnvModeScratch && in.Domain == EnvDomainSweLego && in.Issue == nil && in.SourceTaskID == "" {
 		return fmt.Errorf("validation_failed: issue required for scratch+swe_lego")
 	}
-	if in.DispatchType == EnvDispatchMessage && (in.Message == nil || in.Message.Content == "") {
+	if in.DispatchType == EnvDispatchMessage && (in.Message == nil || in.Message.Content == "") && in.SourceTaskID == "" {
 		return fmt.Errorf("validation_failed: message.content required")
 	}
 	// env_id may be empty ONLY for scratch+self_play (resolves the workspace
@@ -1170,7 +1271,7 @@ func (s *EnvDispatchService) useSandboxInstanceBackend(in EnvDispatchInput) bool
 	// extends it to any dispatch forking a sandbox_instance-backed base env (e.g.
 	// an auto-created default self_play env), so the non-trained self_play case
 	// forks via the sandbox_instance backend instead of the Fleet fork path.
-	return s.lifecycle != nil && (in.TrainAgentID != "" || in.InstanceBackedBase)
+	return s.lifecycle != nil && (in.TrainAgentID != "" || in.InstanceBackedBase || in.TaskTemplateID != "")
 }
 
 // createSandboxInstanceRefs creates one sandbox_instance per per-agent env
@@ -1191,6 +1292,10 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 		refs := make([]SandboxInstanceRef, 0, len(in.PerAgentEnvSpecs))
 		agentRefs := make(map[string]SandboxInstanceRef, len(in.PerAgentEnvSpecs))
 		for _, spec := range in.PerAgentEnvSpecs {
+			template := spec.Template
+			if in.TaskTemplateID != "" {
+				template = in.TaskTemplateID
+			}
 			// spec.Template is used directly; BaseEnvID → template resolution is
 			// deferred to Step 6c (production adapter wiring). Shape validation
 			// guarantees exactly one of Template/BaseEnvID is set.
@@ -1199,7 +1304,7 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 			// deferred (single-agent default path above handles R' for now).
 			ref, err := s.lifecycle.CreateSandboxInstance(ctx, CreateSandboxInstanceInput{
 				WorkspaceID:   in.WorkspaceID,
-				Template:      spec.Template,
+				Template:      template,
 				DaemonEnabled: true,
 			}, in.UserID)
 			if err != nil {
@@ -1226,6 +1331,9 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 		if sourceRef.Template != "" {
 			template = sourceRef.Template
 		}
+	}
+	if in.TaskTemplateID != "" {
+		template = in.TaskTemplateID
 	}
 	// Phase 2: for a single-agent rollout, pre-create the agent_runtime row R'
 	// keyed by a fresh daemon_id and inject it as MULTICA_DAEMON_ID into the
@@ -1286,6 +1394,9 @@ func (s *EnvDispatchService) createSharedSandboxInstanceRefs(ctx context.Context
 	}
 	if specTemplate := sharedRolloutSpecTemplate(in.PerAgentEnvSpecs, runtimeAgentID); specTemplate != "" {
 		template = specTemplate
+	}
+	if in.TaskTemplateID != "" {
+		template = in.TaskTemplateID
 	}
 	// Pre-create the shared agent_runtime R' keyed by a fresh daemon_id and
 	// inject it as MULTICA_DAEMON_ID, exactly like the single-agent default
@@ -1802,4 +1913,25 @@ func (s *EnvDispatchService) DeleteProject(ctx context.Context, projectID, works
 		return fmt.Errorf("delete project: %w", err)
 	}
 	return nil
+}
+
+// reclaimSharedRuntimes removes pre-created runtimes after reset fails before
+// any task is enqueued. Shared rollouts expose the same runtime through every
+// agent ref, so each non-empty runtime ID is deleted once. Non-shared cleanup
+// remains owned by the existing single-rollout error paths.
+func (s *EnvDispatchService) reclaimSharedRuntimes(ctx context.Context, in EnvDispatchInput, refs []SandboxInstanceRef) {
+	if !in.SharedSandbox {
+		return
+	}
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		if ref.RuntimeID == "" {
+			continue
+		}
+		if _, ok := seen[ref.RuntimeID]; ok {
+			continue
+		}
+		seen[ref.RuntimeID] = struct{}{}
+		_ = s.deps.DeleteAgentRuntime(context.WithoutCancel(ctx), in.WorkspaceID, ref.RuntimeID)
+	}
 }

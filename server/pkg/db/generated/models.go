@@ -591,11 +591,37 @@ type EnvDispatchRequest struct {
 }
 
 type EnvDispatchRun struct {
-	ProjectID    pgtype.UUID        `json:"project_id"`
-	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
-	TrainingMode bool               `json:"training_mode"`
-	RootTaskID   pgtype.UUID        `json:"root_task_id"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	TrainingMode   bool               `json:"training_mode"`
+	RootTaskID     pgtype.UUID        `json:"root_task_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	RunID          pgtype.UUID        `json:"run_id"`
+	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
+	SampleIndex    int32              `json:"sample_index"`
+	LocalIssueID   pgtype.UUID        `json:"local_issue_id"`
+	LocalChannelID pgtype.UUID        `json:"local_channel_id"`
+}
+
+type SourceTask struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Type        string             `json:"type"`
+	Payload     []byte             `json:"payload"`
+	ContentHash string             `json:"content_hash"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type SweLegoTemplateCache struct {
+	NodeID            pgtype.UUID        `json:"node_id"`
+	CacheKey          string             `json:"cache_key"`
+	ParentTemplateID  string             `json:"parent_template_id"`
+	TaskTemplateID    pgtype.Text        `json:"task_template_id"`
+	Status            string             `json:"status"`
+	Error             pgtype.Text        `json:"error"`
+	BuilderInstanceID pgtype.UUID        `json:"builder_instance_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Environment struct {

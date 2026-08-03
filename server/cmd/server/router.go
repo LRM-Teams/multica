@@ -1203,6 +1203,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// route group with the four endpoints backing the env-state model.
 			r.Post("/api/v1/env", h.CreateEnv)
 			r.Delete("/api/v1/env/{envID}", h.DeleteEnv)
+			r.Post("/api/v1/source-tasks", h.CreateSourceTask)
+			r.Get("/api/v1/source-tasks/{sourceTaskID}", h.GetSourceTask)
 			r.Post("/api/v1/env-dispatch", h.EnvDispatch)
 			r.Delete("/api/v1/env-dispatch/{projectID}", h.DeleteEnvDispatchProject)
 			r.Get("/api/v1/env-dispatch/{projectID}/dag", h.GetDag)

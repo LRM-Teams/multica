@@ -241,6 +241,9 @@ func TestChannelCleanupSharedBindingsReclaimOnce(t *testing.T) {
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, sharedRuntimeID)
 	})
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, sharedRuntimeID)
+	})
 	var derivedAID, derivedBID string
 	for i, name := range []string{"shared-derived-a", "shared-derived-b"} {
 		var id string

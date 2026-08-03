@@ -345,3 +345,51 @@ RETURNING *;
 -- name: DeleteSandboxSnapshot :exec
 DELETE FROM sandbox_snapshot
 WHERE id = @id AND workspace_id = @workspace_id;
+
+
+-- name: GetSweLegoTemplateCache :one
+SELECT node_id, cache_key, parent_template_id, task_template_id, status, error,
+       builder_instance_id, created_at, updated_at
+FROM swe_lego_template_cache
+WHERE node_id = $1 AND cache_key = $2;
+
+-- name: ClaimSweLegoTemplateBuild :one
+INSERT INTO swe_lego_template_cache (node_id, cache_key, parent_template_id, status)
+VALUES ($1, $2, $3, 'building')
+ON CONFLICT (node_id, cache_key) DO UPDATE
+SET status = 'building',
+    task_template_id = NULL,
+    error = NULL,
+    builder_instance_id = NULL,
+    updated_at = now()
+WHERE swe_lego_template_cache.status = 'failed'
+RETURNING node_id, cache_key, parent_template_id, task_template_id, status, error,
+          builder_instance_id, created_at, updated_at;
+
+-- name: SetSweLegoTemplateBuildBuilder :exec
+UPDATE swe_lego_template_cache
+SET builder_instance_id = $3,
+    updated_at = now()
+WHERE node_id = $1 AND cache_key = $2 AND status = 'building';
+
+-- name: CompleteSweLegoTemplateBuild :one
+UPDATE swe_lego_template_cache
+SET task_template_id = $3,
+    status = 'ready',
+    error = NULL,
+    builder_instance_id = NULL,
+    updated_at = now()
+WHERE node_id = $1 AND cache_key = $2 AND status = 'building'
+RETURNING node_id, cache_key, parent_template_id, task_template_id, status, error,
+          builder_instance_id, created_at, updated_at;
+
+-- name: FailSweLegoTemplateBuild :one
+UPDATE swe_lego_template_cache
+SET status = 'failed',
+    task_template_id = NULL,
+    error = $3,
+    builder_instance_id = NULL,
+    updated_at = now()
+WHERE node_id = $1 AND cache_key = $2 AND status = 'building'
+RETURNING node_id, cache_key, parent_template_id, task_template_id, status, error,
+          builder_instance_id, created_at, updated_at;

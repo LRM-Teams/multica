@@ -42,33 +42,40 @@ export function ResearchSessionFilterBar({
     label: string;
     count: number;
     show: boolean;
-  }> = [
-    {
-      id: null,
-      label: t(($) => $.filter.status_all),
-      count: counts.all,
-      show: true,
-    },
-    {
-      id: "in_progress",
-      label: t(($) => $.filter.status_in_progress),
-      count: counts.in_progress,
-      show: true,
-    },
-    {
-      id: "completed",
-      label: t(($) => $.filter.status_completed),
-      count: counts.completed,
-      show: true,
-    },
-    {
-      id: "failed",
-      label: t(($) => $.filter.status_failed),
-      count: counts.failed,
-      // D1=A: only render Failed when count > 0
-      show: counts.failed > 0,
-    },
-  ].filter((o) => o.show);
+  }> = (
+    [
+      {
+        id: null,
+        label: t(($) => $.filter.status_all),
+        count: counts.all,
+        show: true,
+      },
+      {
+        id: "in_progress" as const,
+        label: t(($) => $.filter.status_in_progress),
+        count: counts.in_progress,
+        show: true,
+      },
+      {
+        id: "completed" as const,
+        label: t(($) => $.filter.status_completed),
+        count: counts.completed,
+        show: true,
+      },
+      {
+        id: "failed" as const,
+        label: t(($) => $.filter.status_failed),
+        count: counts.failed,
+        // D1=A: only render Failed when count > 0
+        show: counts.failed > 0,
+      },
+    ] satisfies Array<{
+      id: StatusOption;
+      label: string;
+      count: number;
+      show: boolean;
+    }>
+  ).filter((o) => o.show);
 
   const selectedIndex = Math.max(
     0,

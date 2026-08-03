@@ -74,7 +74,7 @@
     "basics_os": "OS",
     "basics_daemon": "Daemon",
     "basics_pinned_version": "指定バージョン",
-    "agents_section": "このコンピュータの Agents",
+    "agents_section": "このコンピュータの Activity",
     "code_agents_section": "このコンピュータの Runtime",
     "code_agents_installed": "インストール済み",
     "code_agents_not_installed": "未インストール",

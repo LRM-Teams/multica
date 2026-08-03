@@ -74,7 +74,7 @@
     "basics_os": "操作系统",
     "basics_daemon": "Daemon",
     "basics_pinned_version": "指定版本",
-    "agents_section": "本机 Agents",
+    "agents_section": "本机 Activity",
     "code_agents_section": "本机 Runtime",
     "code_agents_installed": "已安装",
     "code_agents_not_installed": "未安装",

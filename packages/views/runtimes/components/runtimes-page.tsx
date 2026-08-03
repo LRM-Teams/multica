@@ -4,7 +4,6 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
-  Clock,
   Cloud,
   Folder,
   Loader2,
@@ -19,6 +18,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import {
   agentTaskSnapshotOptions,
   deriveWorkloadDetail,
+  useWorkspacePresenceMap,
 } from "@multica/core/agents";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { runtimeListOptions, runtimeKeys } from "@multica/core/runtimes/queries";
@@ -45,7 +45,7 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { PageHeader } from "../../layout/page-header";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { ACTIVITY_LABEL_EN } from "../../agents/components/tabs/activity-event";
+import { AgentActivityListItem } from "../../agents/components/agent-activity-list-item";
 import { AddComputerDialog } from "./add-computer-dialog";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
@@ -65,12 +65,10 @@ import {
   HealthDot,
   MachineConnectedStatus,
 } from "./shared";
-import { ProviderLogo } from "./provider-logo";
 import { MachineCodeAgentsSection } from "./machine-code-agents-section";
 import { MachineDangerZone } from "./machine-danger-zone";
 import { MachineDaemonUpgrade } from "./machine-daemon-upgrade";
 import { MachineHeaderOps } from "./machine-header-ops";
-import { formatLastSeen } from "../utils";
 import { useT } from "../../i18n/use-t";
 
 interface RuntimesPageProps {
@@ -133,65 +131,6 @@ function providerLabel(runtime: AgentRuntime | null): string {
   }
 }
 
-
-// LRM-922 / LRM-863: Agents table uses User Activity vocabulary — never the
-// old Workload Idle/Working primary labels. Without a per-row activity-event
-// subscription here, active work falls back to Thinking (same as the
-// timeline opener when a task is on the plate but nothing has streamed yet).
-function formatAgentActivity(agentId: string, snapshot: AgentTask[]): string {
-  const tasks = snapshot.filter((task) => task.agent_id === agentId);
-  const detail = deriveWorkloadDetail(tasks);
-
-  if (detail.workload === "working" || detail.workload === "queued") {
-    const label = ACTIVITY_LABEL_EN.thinking;
-    const active = tasks.find(
-      (task) =>
-        task.status === "running" ||
-        task.status === "queued" ||
-        task.status === "dispatched" ||
-        task.status === "waiting_local_directory",
-    );
-    if (active?.issue_id) {
-      const hint =
-        active.issue_id.length > 12
-          ? `${active.issue_id.slice(0, 8)}…`
-          : active.issue_id;
-      return `${label} · ${hint}`;
-    }
-    return label;
-  }
-
-  const label = ACTIVITY_LABEL_EN.idle;
-  const terminal = tasks
-    .filter(
-      (task) =>
-        task.status === "completed" ||
-        task.status === "failed" ||
-        task.status === "cancelled",
-    )
-    .toSorted((a, b) => {
-      const at = a.completed_at ?? a.created_at;
-      const bt = b.completed_at ?? b.created_at;
-      return new Date(bt).getTime() - new Date(at).getTime();
-    });
-  if (terminal[0]) {
-    const at = terminal[0].completed_at ?? terminal[0].created_at;
-    return `${label} · ${formatLastSeen(at)}`;
-  }
-  return label;
-}
-
-// Frank 08-02: the machine detail Agent list should not show a duration —
-// `formatAgentActivity` bakes one in (issue-id hint or "· 3h ago"). This is
-// the same working/queued-vs-idle branch as that function, minus the
-// suffix — deliberately not touched, since other callers still want it.
-function activityLabelOnly(agentId: string, snapshot: AgentTask[]): string {
-  const tasks = snapshot.filter((task) => task.agent_id === agentId);
-  const detail = deriveWorkloadDetail(tasks);
-  return detail.workload === "working" || detail.workload === "queued"
-    ? ACTIVITY_LABEL_EN.thinking
-    : ACTIVITY_LABEL_EN.idle;
-}
 
 /** Mutually exclusive Computers overlays — one discriminant (prefer-useReducer). */
 type PageOverlay = null | "add-chooser" | "connect" | "cloud";
@@ -683,6 +622,8 @@ function MachineDetailView({
     () => agentsOnMachine(machine, agents),
     [machine, agents],
   );
+  const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
+
 
   const hostname = machineHostname(machine);
   // Structured register field only (Alice #1723). Never parse device_info
@@ -830,97 +771,23 @@ function MachineDetailView({
               <p className="px-1 text-sm text-muted-foreground">
                 {t(($) => $.detail.no_agents)}
               </p>
-            ) : isMobile ? (
-              <div className="overflow-hidden rounded-xl border bg-card">
-                {machineAgents.map((agent, idx) => {
-                  const runtime = runtimeForAgent(agent, machine);
-                  const activity = formatAgentActivity(agent.id, snapshot);
-                  return (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      onClick={() => openAgentPanel(agent.id)}
-                      className={cn(
-                        "flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/50",
-                        idx < machineAgents.length - 1 && "border-b",
-                      )}
-                    >
-                      <ActorAvatar
-                        actorType="agent"
-                        actorId={agent.id}
-                        size={28}
-                        profileLink={false}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium underline decoration-muted-foreground/40 underline-offset-2">
-                          {getActorName("agent", agent.id)}
-                        </span>
-                        <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                          {providerLabel(runtime)} · {activity}
-                        </span>
-                      </span>
-                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/45" />
-                    </button>
-                  );
-                })}
-              </div>
             ) : (
-              // Frank 08-02: no table — one line per agent (name · runtime ·
-              // activity), same shape as the mobile list above just laid out
-              // on a single line instead of two. No duration text
-              // (`activityLabelOnly`, not `formatAgentActivity`).
               <div className="overflow-hidden rounded-xl border bg-card">
                 {machineAgents.map((agent, idx) => {
                   const runtime = runtimeForAgent(agent, machine);
-                  const activity = activityLabelOnly(agent.id, snapshot);
-                  const tasks = snapshot.filter(
-                    (task) => task.agent_id === agent.id,
-                  );
-                  const wl = deriveWorkloadDetail(tasks).workload;
                   return (
-                    <button
+                    <AgentActivityListItem
                       key={agent.id}
-                      type="button"
+                      agentId={agent.id}
+                      displayName={getActorName("agent", agent.id)}
+                      provider={runtime?.provider}
+                      runtimeLabel={providerLabel(runtime)}
+                      presence={presenceMap.get(agent.id) ?? null}
                       onClick={() => openAgentPanel(agent.id)}
-                      className={cn(
-                        "flex w-full items-center gap-1.5 px-4 py-3 text-left text-sm transition-colors hover:bg-accent/50",
-                        idx < machineAgents.length - 1 && "border-b",
-                      )}
-                    >
-                      <ActorAvatar
-                        actorType="agent"
-                        actorId={agent.id}
-                        size={22}
-                        profileLink={false}
-                      />
-                      <span className="shrink-0 truncate font-medium underline decoration-muted-foreground/40 underline-offset-2">
-                        {getActorName("agent", agent.id)}
-                      </span>
-                      <span className="shrink-0 text-muted-foreground" aria-hidden>
-                        ·
-                      </span>
-                      {runtime && (
-                        <ProviderLogo
-                          provider={runtime.provider}
-                          className="h-3.5 w-3.5 shrink-0"
-                        />
-                      )}
-                      <span className="shrink-0 text-muted-foreground">
-                        {providerLabel(runtime)}
-                      </span>
-                      <span className="shrink-0 text-muted-foreground" aria-hidden>
-                        ·
-                      </span>
-                      {wl === "working" && (
-                        <Loader2 className="h-3 w-3 shrink-0 animate-spin text-running" />
-                      )}
-                      {wl === "queued" && (
-                        <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
-                      )}
-                      <span className="min-w-0 truncate text-muted-foreground">
-                        {activity}
-                      </span>
-                    </button>
+                      layout={isMobile ? "stacked" : "inline"}
+                      showChevron={isMobile}
+                      showBorder={idx < machineAgents.length - 1}
+                    />
                   );
                 })}
               </div>

@@ -320,7 +320,7 @@
     "creating": "组建舰队中…",
     "create_failed": "调研会话创建失败",
     "templates_label": "快捷模板",
-    "templates_hint": "点选后以彩色 chip 加入专业提示词，继续输入你的具体目标",
+    "templates_hint": "点选框内模板 pill 预填开题文案，可改字后再开始",
     "template_chip": "{{title}} 提示词已加入，继续输入开发目标即可",
     "template_chip_clear": "移除模板",
     "goal_placeholder_with_template": "补充你的具体目标…"

@@ -111,11 +111,55 @@ describe("MessageAttachmentZone", () => {
     render(<MessageAttachmentZone parts={parts} attachments={attachments} />);
 
     const zone = screen.getByTestId("message-attachment-zone");
+    const gallery = within(zone).getByTestId("message-attachment-gallery");
+    expect(gallery).toHaveAttribute("data-layout", "grid");
+    expect(within(gallery).getAllByTestId("gallery-cell")).toHaveLength(2);
     const images = within(zone).getAllByTestId("attachment-image");
     expect(images).toHaveLength(2);
     expect(images[0]).toHaveAttribute("data-attachment-id", "img-a");
     expect(images[1]).toHaveAttribute("data-attachment-id", "img-b");
     expect(within(zone).queryByText("check these")).not.toBeInTheDocument();
+  });
+
+  it("keeps a single image outside the multi-image gallery", () => {
+    const parts: MessagePart[] = [
+      { type: "attachment", attachment_id: "img-a" },
+    ];
+    const attachments = [
+      makeAttachment({ id: "img-a", filename: "a.png", content_type: "image/png" }),
+    ];
+
+    render(<MessageAttachmentZone parts={parts} attachments={attachments} />);
+
+    expect(screen.queryByTestId("message-attachment-gallery")).not.toBeInTheDocument();
+    expect(screen.getByTestId("attachment-image")).toHaveAttribute(
+      "data-attachment-id",
+      "img-a",
+    );
+  });
+
+  it("keeps file tiles outside the image gallery when mixed with images", () => {
+    const parts: MessagePart[] = [
+      { type: "attachment", attachment_id: "img-a" },
+      { type: "attachment", attachment_id: "img-b" },
+      { type: "attachment", attachment_id: "doc-1" },
+    ];
+    const attachments = [
+      makeAttachment({ id: "img-a", filename: "a.png", content_type: "image/png" }),
+      makeAttachment({ id: "img-b", filename: "b.png", content_type: "image/png" }),
+      makeAttachment({
+        id: "doc-1",
+        filename: "spec.pdf",
+        content_type: "application/pdf",
+      }),
+    ];
+
+    render(<MessageAttachmentZone parts={parts} attachments={attachments} />);
+
+    const gallery = screen.getByTestId("message-attachment-gallery");
+    expect(within(gallery).getAllByTestId("attachment-image")).toHaveLength(2);
+    expect(within(gallery).queryByTestId("attachment-file")).not.toBeInTheDocument();
+    expect(screen.getByTestId("attachment-file")).toHaveTextContent("spec.pdf");
   });
 
   it("renders non-image attachments as file tiles", () => {
@@ -243,7 +287,9 @@ describe("MessageAttachmentZone", () => {
     expect(screen.queryByTestId("message-attachment-zone")).not.toBeInTheDocument();
   });
 
-  it("preserves mixed image/file order from attachment parts", () => {
+  // LRM-1098: images are grouped into the equal-cell gallery (part order among
+  // images preserved); non-images render after the gallery.
+  it("groups images into the gallery then renders file tiles", () => {
     const parts: MessagePart[] = [
       { type: "attachment", attachment_id: "img-1" },
       { type: "attachment", attachment_id: "file-1" },
@@ -258,10 +304,12 @@ describe("MessageAttachmentZone", () => {
     render(<MessageAttachmentZone parts={parts} attachments={attachments} />);
 
     const zone = screen.getByTestId("message-attachment-zone");
-    const items = zone.querySelectorAll("[data-attachment-id], [data-testid='attachment-unavailable']");
-    expect(items[0]).toHaveAttribute("data-attachment-id", "img-1");
-    expect(items[1]).toHaveAttribute("data-attachment-id", "file-1");
-    expect(items[2]).toHaveAttribute("data-attachment-id", "img-2");
+    const gallery = within(zone).getByTestId("message-attachment-gallery");
+    const images = within(gallery).getAllByTestId("attachment-image");
+    expect(images).toHaveLength(2);
+    expect(images[0]).toHaveAttribute("data-attachment-id", "img-1");
+    expect(images[1]).toHaveAttribute("data-attachment-id", "img-2");
+    expect(within(zone).getByTestId("attachment-file")).toHaveTextContent("notes.txt");
   });
 });
 

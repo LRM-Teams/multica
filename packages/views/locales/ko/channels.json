@@ -575,6 +575,7 @@
     "project_tooltip": "이 채널이 작업할 프로젝트 설정",
     "tray_remove_aria": "{{filename}} 제거",
     "tray_retry_aria": "{{filename}} 업로드 재시도",
+    "tray_preview_aria": "{{filename}} 미리 보기",
     "tray_uploading": "업로드 중",
     "tray_upload_failed": "업로드 실패",
     "voice_unsent": "음성 메시지가 전송되지 않았습니다({{duration}})",

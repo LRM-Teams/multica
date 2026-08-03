@@ -81,9 +81,23 @@ import { CodeBlockStatic } from "./code-block-static";
 // pasted URL instead of silently degrading to a download. Without an id, text
 // kinds remain ungated-out because the proxy is unaddressable.
 
+// LRM-1180: a URL-only source MAY also carry the real `contentType`. Without
+// it `normalize()` hardcodes `""` and `getPreviewKind` can only fall back to
+// the filename extension — a pasted screenshot usually has no extension, so
+// the kind resolves to null and the modal degrades to
+// "preview unsupported" + Download for a plain PNG. Callers that already hold
+// the MIME (e.g. the composer tray) pass it; the 10 existing `kind: "url"`
+// call sites omit it and keep the previous behaviour exactly.
+
 export type PreviewSource =
   | { kind: "full"; attachment: Attachment }
-  | { kind: "url"; url: string; filename: string; attachmentId?: string };
+  | {
+      kind: "url";
+      url: string;
+      filename: string;
+      contentType?: string;
+      attachmentId?: string;
+    };
 
 // Normalized view used everywhere downstream of `useAttachmentPreview`.
 // `attachmentId === null` signals URL-only mode (download falls back to
@@ -117,7 +131,9 @@ function normalize(source: PreviewSource): PreviewState {
   }
   return {
     filename: source.filename,
-    contentType: "",
+    // LRM-1180: prefer the caller's real MIME; `""` keeps the pre-existing
+    // filename-extension fallback for the callers that don't have one.
+    contentType: source.contentType ?? "",
     mediaUrl: resolvePublicFileUrl(source.url) ?? source.url,
     // #831: keep the id when the caller could recover one from the URL — it
     // unlocks the text `/content` proxy and the re-signing download path.

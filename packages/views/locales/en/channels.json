@@ -575,6 +575,7 @@
     "project_tooltip": "Set the project this channel works in",
     "tray_remove_aria": "Remove {{filename}}",
     "tray_retry_aria": "Retry upload of {{filename}}",
+    "tray_preview_aria": "Preview {{filename}}",
     "tray_uploading": "Uploading",
     "tray_upload_failed": "Upload failed",
     "voice_unsent": "Voice message not sent ({{duration}})",

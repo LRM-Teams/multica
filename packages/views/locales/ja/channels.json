@@ -575,6 +575,7 @@
     "project_tooltip": "このチャンネルが作業するプロジェクトを設定",
     "tray_remove_aria": "{{filename}} を削除",
     "tray_retry_aria": "{{filename}} のアップロードを再試行",
+    "tray_preview_aria": "{{filename}} をプレビュー",
     "tray_uploading": "アップロード中",
     "tray_upload_failed": "アップロードに失敗しました",
     "voice_unsent": "音声メッセージは送信されていません（{{duration}}）",

@@ -300,7 +300,7 @@ function ResearchCanvasInner({
 
   // Narrow + detail sheet: hide FAB so it does not sit under the sheet / drawer.
   const chatFab =
-    !chatOpen && onOpenChat && !(isMobile && showDetail) ? (
+    !chatOpen && onOpenChat && !(isMobile && showOverlayDetail) ? (
       <ResearchChatFab mode={chatMode} onOpen={onOpenChat} isMobile={isMobile} />
     ) : null;
 

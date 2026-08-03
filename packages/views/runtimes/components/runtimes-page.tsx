@@ -193,6 +193,9 @@ function activityLabelOnly(agentId: string, snapshot: AgentTask[]): string {
     : ACTIVITY_LABEL_EN.idle;
 }
 
+/** Mutually exclusive Computers overlays — one discriminant (prefer-useReducer). */
+type PageOverlay = null | "add-chooser" | "connect" | "cloud";
+
 /**
  * LRM-863 — Runtimes per **v8c** freeze (Frank 2026-07-31):
  * Desktop = left machine list (~300px) + right detail on the same page
@@ -216,9 +219,7 @@ export function RuntimesPage({
   const isMobile = useIsMobile();
   const [userPickId, setUserPickId] = useState<string | null>(null);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
-  const [showAddChooser, setShowAddChooser] = useState(false);
-  const [showConnectDialog, setShowConnectDialog] = useState(false);
-  const [showCloudRuntimeDialog, setShowCloudRuntimeDialog] = useState(false);
+  const [pageOverlay, setPageOverlay] = useState<PageOverlay>(null);
 
   const { data: runtimes = [], isLoading: fetching } = useQuery(
     runtimeListOptions(wsId),
@@ -285,12 +286,13 @@ export function RuntimesPage({
     setMobileDetailOpen(false);
   }, []);
 
-  const openAddChooser = useCallback(() => setShowAddChooser(true), []);
-  const closeAddChooser = useCallback(() => setShowAddChooser(false), []);
-  const openConnectFromChooser = useCallback(() => {
-    setShowAddChooser(false);
-    setShowConnectDialog(true);
-  }, []);
+  const openAddChooser = useCallback(() => setPageOverlay("add-chooser"), []);
+  const closeOverlay = useCallback(() => setPageOverlay(null), []);
+  const openConnectFromChooser = useCallback(
+    () => setPageOverlay("connect"),
+    [],
+  );
+  const openCloudRuntime = useCallback(() => setPageOverlay("cloud"), []);
 
   if (isLoading || fetching) return <RuntimesPageSkeleton isMobile={isMobile} />;
 
@@ -309,14 +311,14 @@ export function RuntimesPage({
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-6">
           <EmptyState onConnectRemote={openAddChooser} />
         </div>
-        {showAddChooser && (
+        {pageOverlay === "add-chooser" && (
           <AddComputerDialog
-            onClose={closeAddChooser}
+            onClose={closeOverlay}
             onChooseYourComputer={openConnectFromChooser}
           />
         )}
-        {showConnectDialog && (
-          <ConnectRemoteDialog onClose={() => setShowConnectDialog(false)} />
+        {pageOverlay === "connect" && (
+          <ConnectRemoteDialog onClose={closeOverlay} />
         )}
       </div>
     );
@@ -326,7 +328,7 @@ export function RuntimesPage({
     <MachineListActions
       onAdd={openAddChooser}
       cloudRuntimeEnabled={cloudRuntimeEnabled}
-      onOpenCloudRuntime={() => setShowCloudRuntimeDialog(true)}
+      onOpenCloudRuntime={openCloudRuntime}
     />
   );
 
@@ -397,17 +399,17 @@ export function RuntimesPage({
         </div>
       )}
 
-      {showAddChooser && (
+      {pageOverlay === "add-chooser" && (
         <AddComputerDialog
-          onClose={closeAddChooser}
+          onClose={closeOverlay}
           onChooseYourComputer={openConnectFromChooser}
         />
       )}
-      {showConnectDialog && (
-        <ConnectRemoteDialog onClose={() => setShowConnectDialog(false)} />
+      {pageOverlay === "connect" && (
+        <ConnectRemoteDialog onClose={closeOverlay} />
       )}
-      {cloudRuntimeEnabled && showCloudRuntimeDialog && (
-        <CloudRuntimeDialog onClose={() => setShowCloudRuntimeDialog(false)} />
+      {cloudRuntimeEnabled && pageOverlay === "cloud" && (
+        <CloudRuntimeDialog onClose={closeOverlay} />
       )}
     </div>
   );

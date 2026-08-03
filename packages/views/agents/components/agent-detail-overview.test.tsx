@@ -29,6 +29,14 @@ vi.mock("../../common/actor-identity-row", () => ({
   ActorIdentityRow: () => <span>Agent</span>,
 }));
 
+vi.mock("./agent-open-dm-button", () => ({
+  AgentOpenDmButton: () => (
+    <button type="button" data-testid="agent-open-dm-button">
+      Message
+    </button>
+  ),
+}));
+
 import { AgentDetailOverview } from "./agent-detail-overview";
 
 const agent: Agent = {
@@ -107,6 +115,12 @@ describe("AgentDetailOverview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Honor" }));
 
     expect(onHonor).toHaveBeenCalledOnce();
+  });
+
+  it("exposes a Message DM entry on the detail header", () => {
+    renderOverview(makeTask("queued"));
+
+    expect(screen.getByTestId("agent-open-dm-button")).toBeInTheDocument();
   });
 
   it("keeps the existing title rules for ordinary tasks", () => {

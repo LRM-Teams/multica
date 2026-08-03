@@ -219,6 +219,12 @@ describe("AppSidebar navigation", () => {
     expect(screen.queryByText("New Issue")).toBeNull();
   });
 
+  it("does not render Autopilot nav (LRM-1050 hard-cut)", () => {
+    renderSidebar();
+    expect(screen.queryByText("Autopilot")).toBeNull();
+    expect(screen.queryByText("Autopilots")).toBeNull();
+  });
+
   it("does not render the My Issues shortcut row (removed; app leads with Messages)", () => {
     renderSidebar();
     expect(screen.queryByText("My Issues")).toBeNull();

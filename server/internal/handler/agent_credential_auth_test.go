@@ -1608,3 +1608,210 @@ func tokenPrefixForTest(token string) string {
 	}
 	return token[:12]
 }
+
+// LRM-1055: ambient / channel_role_changed wakes have channel_id but no
+// chat_session_id. Transport auth must resolve origin from the channel and
+// not hard-reject on the missing session.
+func TestAgentCredentialTransportAllowsChannelBoundWakeWithoutChatSession(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	fixture := seedAgentCredentialTransportFixture(t)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET chat_session_id = NULL,
+		    reason = 'channel_role_changed',
+		    delivery_mode = 'execute',
+		    response_mode = 'public_response'
+		WHERE id = $1`, fixture.event.ID); err != nil {
+		t.Fatalf("clear chat_session on channel-bound wake: %v", err)
+	}
+
+	event, err := testHandler.Queries.GetAgentInboxEvent(ctx, parseUUID(fixture.event.ID))
+	if err != nil {
+		t.Fatalf("reload inbox event: %v", err)
+	}
+	if event.ChatSessionID.Valid {
+		t.Fatal("expected chat_session_id cleared")
+	}
+	origin, ok := testHandler.chatOutputOriginForTask(ctx, event)
+	if !ok || uuidToString(origin.channelID) != fixture.channelID || uuidToString(origin.agentID) != fixture.agentID {
+		t.Fatalf("channel origin = %+v ok=%v, want channel=%s agent=%s", origin, ok, fixture.channelID, fixture.agentID)
+	}
+
+	router := chi.NewRouter()
+	router.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
+		r.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
+		r.Post("/api/agent/messages/read", testHandler.AgentTransportReadMessages)
+		r.Post("/api/agent/messages/send", testHandler.AgentTransportSendMessage)
+		r.Post("/api/agent/reminders/list", testHandler.AgentTransportListReminders)
+	})
+
+	authHeaders := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+fixture.credentialToken)
+		req.Header.Set("X-Workspace-ID", testWorkspaceID)
+		req.Header.Set("X-Agent-Inbox-Event-ID", fixture.event.ID)
+		req.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.event.DeliveryID)
+		req.Header.Set("X-Agent-Inbox-Lease-Token", fixture.event.LeaseToken)
+	}
+
+	target := "#" + channelNameForTransportTest(t, fixture.channelID)
+	readReq := newRequest(http.MethodPost, "/api/agent/messages/read", map[string]any{
+		"target": target,
+		"limit":  5,
+	})
+	authHeaders(readReq)
+	readRec := httptest.NewRecorder()
+	router.ServeHTTP(readRec, readReq)
+	if readRec.Code != http.StatusOK {
+		t.Fatalf("channel-bound read without chat_session: status=%d body=%s", readRec.Code, readRec.Body.String())
+	}
+
+	listReq := newRequest(http.MethodPost, "/api/agent/reminders/list", map[string]any{"status": "active"})
+	authHeaders(listReq)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("channel-bound reminder list without chat_session: status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+
+	clientID := "lrm-1055-role-wake-" + uuid.NewString()
+	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
+		"target": target,
+		"parts": []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: "huaji",
+		}},
+		"client_message_id": clientID,
+	})
+	authHeaders(sendReq)
+	sendRec := httptest.NewRecorder()
+	router.ServeHTTP(sendRec, sendReq)
+	if sendRec.Code != http.StatusCreated {
+		t.Fatalf("channel_role_changed send without chat_session: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+	}
+}
+
+func TestAgentCredentialTransportAmbientManagerMaySpeakWithoutChatSession(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	fixture := seedAgentCredentialTransportFixture(t)
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_inbox_event
+		SET chat_session_id = NULL,
+		    reason = 'ambient',
+		    delivery_mode = 'observe',
+		    response_mode = 'no_public_output'
+		WHERE id = $1`, fixture.event.ID); err != nil {
+		t.Fatalf("convert wake to ambient observe: %v", err)
+	}
+
+	router := chi.NewRouter()
+	router.Group(func(r chi.Router) {
+		r.Use(middleware.Auth(testHandler.Queries, nil, nil))
+		r.Use(middleware.RequireWorkspaceMember(testHandler.Queries))
+		r.Post("/api/agent/messages/send", testHandler.AgentTransportSendMessage)
+		r.Post("/api/agent/reminders/list", testHandler.AgentTransportListReminders)
+	})
+	authHeaders := func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+fixture.credentialToken)
+		req.Header.Set("X-Workspace-ID", testWorkspaceID)
+		req.Header.Set("X-Agent-Inbox-Event-ID", fixture.event.ID)
+		req.Header.Set("X-Agent-Inbox-Delivery-ID", fixture.event.DeliveryID)
+		req.Header.Set("X-Agent-Inbox-Lease-Token", fixture.event.LeaseToken)
+	}
+	target := "#" + channelNameForTransportTest(t, fixture.channelID)
+
+	// Non-manager ambient: list/read origin works, send stays blocked by response_mode.
+	listReq := newRequest(http.MethodPost, "/api/agent/reminders/list", map[string]any{"status": "active"})
+	authHeaders(listReq)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("ambient reminder list: status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+
+	blockedSend := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
+		"target": target,
+		"parts": []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: "huaji",
+		}},
+		"client_message_id": "lrm-1055-ambient-blocked-" + uuid.NewString(),
+	})
+	authHeaders(blockedSend)
+	blockedRec := httptest.NewRecorder()
+	router.ServeHTTP(blockedRec, blockedSend)
+	if blockedRec.Code != http.StatusForbidden {
+		t.Fatalf("non-manager ambient send status=%d, want 403: %s", blockedRec.Code, blockedRec.Body.String())
+	}
+	if !strings.Contains(blockedRec.Body.String(), "no_public_output") {
+		t.Fatalf("non-manager ambient send body=%s, want response_mode error", blockedRec.Body.String())
+	}
+
+	if _, err := testPool.Exec(ctx, `
+		UPDATE channel_member SET role = 'manager'
+		WHERE member_type = 'agent' AND member_id = $1 AND channel_id = $2`,
+		fixture.agentID, fixture.channelID); err != nil {
+		t.Fatalf("promote ambient agent to channel manager: %v", err)
+	}
+
+	okSend := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
+		"target": target,
+		"parts": []protocol.MessagePart{{
+			Type:      protocol.MessagePartTypeSticker,
+			StickerID: "huaji",
+		}},
+		"client_message_id": "lrm-1055-ambient-manager-" + uuid.NewString(),
+	})
+	authHeaders(okSend)
+	okRec := httptest.NewRecorder()
+	router.ServeHTTP(okRec, okSend)
+	if okRec.Code != http.StatusCreated {
+		t.Fatalf("manager ambient send: status=%d body=%s", okRec.Code, okRec.Body.String())
+	}
+}
+
+func TestChatOutputOriginForTaskFallsBackToChannelID(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "origin-channel-fallback-"+uuid.NewString()[:8], nil)
+	channelID := seedChannelForTest(t, "origin-channel-fallback-"+uuid.NewString(), testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id)
+		VALUES ($1, $2, 'agent', $3)
+ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("seed channel member: %v", err)
+	}
+
+	task := db.AgentInboxEvent{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		ChannelID:   parseUUID(channelID),
+		AgentID:     parseUUID(agentID),
+	}
+	origin, ok := testHandler.chatOutputOriginForTask(ctx, task)
+	if !ok {
+		t.Fatal("expected channel_id origin fallback")
+	}
+	if uuidToString(origin.channelID) != channelID || uuidToString(origin.agentID) != agentID {
+		t.Fatalf("origin=%+v, want channel=%s agent=%s", origin, channelID, agentID)
+	}
+
+	// Issue-only wake: no channel, no session → no transport origin.
+	issueOnly := db.AgentInboxEvent{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		AgentID:     parseUUID(agentID),
+	}
+	if _, ok := testHandler.chatOutputOriginForTask(ctx, issueOnly); ok {
+		t.Fatal("issue-only wake must not resolve a channel transport origin")
+	}
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, type KeyboardEvent } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -33,7 +33,11 @@ import {
   OVERLAY_INSET_PX,
 } from "../lib/canvas-overlay-grid";
 import type { ChatDrawerMode } from "../lib/chat-drawer-mode";
-import { neighborByLane, neighborByRow } from "../lib/git-topology";
+import {
+  resolveCanvasKeyEvent,
+  type CanvasKeyboardAction,
+  type CanvasOverlayLayer,
+} from "../lib/canvas-keyboard-nav";
 import { layoutResearchGraph, type ResearchFlowNodeData } from "../lib/layout-graph";
 import { LOGIC_END_NODE_ID, isLogicEndNode } from "../lib/logic-lanes";
 import {
@@ -318,6 +322,106 @@ function ResearchCanvasInner({
     [laid.topology, nodes, announce, t, getNode, setCenter, getZoom],
   );
 
+  /** LRM-1105: apply pure keyboard actions (semantics A) — no neighborByLane B. */
+  const applyKeyboardAction = useCallback(
+    (action: CanvasKeyboardAction, currentId: string | null) => {
+      switch (action.type) {
+        case "moveFocus": {
+          focusNode(action.nodeId);
+          const n = nodes.find((x) => x.id === action.nodeId);
+          if (n) onSelect?.(n);
+          return;
+        }
+        case "openDetail": {
+          if (!currentId) return;
+          const n = nodes.find((x) => x.id === currentId);
+          if (!n) return;
+          if (isLogicEndNode(n)) onOpenDelivery?.();
+          else pinDetail(n);
+          return;
+        }
+        case "openRing": {
+          if (!currentId) return;
+          dispatch({
+            type: "setMenu",
+            nodeId: menuNodeId === currentId ? null : currentId,
+          });
+          return;
+        }
+        case "closeOverlay": {
+          if (action.layer === "ring") {
+            dispatch({ type: "setMenu", nodeId: null });
+          } else {
+            clearDetail();
+          }
+          return;
+        }
+        case "zoomIn":
+          void zoomIn({ duration: prefersReducedMotion() ? 0 : 160 });
+          return;
+        case "zoomOut":
+          void zoomOut({ duration: prefersReducedMotion() ? 0 : 160 });
+          return;
+        case "fitView":
+          void fitView({
+            padding: 0.18,
+            duration: prefersReducedMotion() ? 0 : 240,
+          });
+          return;
+        default:
+          return;
+      }
+    },
+    [
+      focusNode,
+      nodes,
+      onSelect,
+      onOpenDelivery,
+      pinDetail,
+      menuNodeId,
+      clearDetail,
+      zoomIn,
+      zoomOut,
+      fitView,
+    ],
+  );
+
+  const handleDesktopKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLDivElement>) => {
+      const current = focusIdRef.current ?? selectedId ?? null;
+      const overlay: CanvasOverlayLayer = menuNodeId
+        ? "ring"
+        : showOverlayDetail || detailPinned
+          ? "detail"
+          : null;
+      const action = resolveCanvasKeyEvent(
+        { key: e.key, shiftKey: e.shiftKey },
+        {
+          focusId: current,
+          nodes,
+          edges,
+          activeBranchId: current
+            ? (laid.topology.get(current)?.branchId ?? null)
+            : null,
+          overlay,
+        },
+      );
+      if (action.type === "noop") return;
+      e.preventDefault();
+      applyKeyboardAction(action, current);
+    },
+    [
+      selectedId,
+      menuNodeId,
+      showOverlayDetail,
+      detailPinned,
+      nodes,
+      edges,
+      laid.topology,
+      applyKeyboardAction,
+    ],
+  );
+
   const chatFab =
     !chatOpen && onOpenChat && !(isMobile && showOverlayDetail) ? (
       <ResearchChatFab mode={chatMode} onOpen={onOpenChat} isMobile={isMobile} />
@@ -414,54 +518,7 @@ function ResearchCanvasInner({
       className="relative h-full w-full bg-canvas-bg text-foreground outline-none"
       data-testid="research-canvas-overlay-grid"
       data-overlay="desktop"
-      onKeyDown={(e) => {
-        const current = focusIdRef.current ?? selectedId;
-        if (!current) return;
-        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-          e.preventDefault();
-          const next = neighborByRow(
-            laid.topology,
-            current,
-            e.key === "ArrowDown" ? 1 : -1,
-          );
-          if (next) {
-            focusNode(next);
-            const n = nodes.find((x) => x.id === next);
-            if (n) onSelect?.(n);
-          }
-        } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-          e.preventDefault();
-          const next = neighborByLane(
-            laid.topology,
-            current,
-            e.key === "ArrowRight" ? 1 : -1,
-          );
-          if (next) {
-            focusNode(next);
-            const n = nodes.find((x) => x.id === next);
-            if (n) onSelect?.(n);
-          }
-        } else if (e.key === "Enter") {
-          e.preventDefault();
-          const n = nodes.find((x) => x.id === current);
-          if (n) {
-            if (isLogicEndNode(n)) onOpenDelivery?.();
-            else pinDetail(n);
-          }
-        } else if (e.key === "Escape") {
-          if (menuNodeId) {
-            dispatch({ type: "setMenu", nodeId: null });
-          } else if (showOverlayDetail || detailPinned) {
-            clearDetail();
-          }
-        } else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
-          e.preventDefault();
-          dispatch({
-            type: "setMenu",
-            nodeId: menuNodeId === current ? null : current,
-          });
-        }
-      }}
+      onKeyDown={handleDesktopKeyDown}
     >
       <div className="sr-only" aria-live="polite" data-testid="research-canvas-live">
         {liveText}

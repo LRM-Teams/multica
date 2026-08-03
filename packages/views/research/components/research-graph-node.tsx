@@ -6,6 +6,7 @@ import { MoreHorizontal } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspaceId } from "@multica/core/hooks";
 import type { ResearchFlowNodeData } from "../lib/layout-graph";
+import { buildNodeAccessibleName } from "../lib/canvas-keyboard-nav";
 import {
   isLogicEndNode,
   isLogicStartNode,
@@ -69,12 +70,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
   const title =
     logicRole === "end" ? t(($) => $.logic.end_title) : n.title || t(($) => $.logic.lane[laneId]);
 
-  const ariaLabel = [
-    title,
-    t(($) => $.logic.status[status.key]),
-    data.branchId ?? "main",
-    ownerLabel,
-  ].join(", ");
+  const ariaLabel = buildNodeAccessibleName(n);
 
   const menuOpen = !!data.menuOpen;
 
@@ -84,7 +80,6 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
         "research-graph-node-shell relative grid w-[240px] grid-cols-[1fr_auto] gap-x-2 gap-y-1 overflow-hidden rounded-lg border bg-card px-3 py-2.5 text-left transition-colors duration-150",
         "min-h-[68px] max-h-[88px]",
         "hover:border-muted-foreground/40",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand)]",
         selected &&
           "border-[var(--brand)] ring-2 ring-[color-mix(in_oklch,var(--brand)_18%,transparent)]",
         status.tone === "run" &&
@@ -105,7 +100,6 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
             ? "research-logic-end"
             : "research-logic-card"
       }
-      aria-label={ariaLabel}
     >
       {/* Port dot — visual only; edges live in gutter */}
       <span
@@ -118,9 +112,42 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
         position={Position.Left}
         className="!h-2 !w-2 !opacity-0"
       />
-      <div className="col-start-1 line-clamp-2 text-sm font-medium leading-snug text-foreground">
-        {title}
-      </div>
+      {/* LRM-1105: native button + roving tabindex (avoid nested role=button). */}
+      <button
+        type="button"
+        tabIndex={selected ? 0 : -1}
+        aria-label={ariaLabel}
+        aria-busy={pulse || undefined}
+        className={cn(
+          "nodrag nopan col-start-1 row-span-2 grid w-full grid-cols-1 gap-y-1 rounded-md text-left outline-none",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand)]",
+        )}
+        onClick={() => data.onViewDetail?.(n)}
+      >
+        <span className="line-clamp-2 text-sm font-medium leading-snug text-foreground">
+          {title}
+        </span>
+        <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <span
+            data-status-dot
+            className={cn(
+              "inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-xs font-medium",
+              status.tone === "ok" && "bg-success/15 text-success",
+              status.tone === "run" && "bg-brand/15 text-brand",
+              status.tone === "wait" && "bg-warning/15 text-warning",
+              status.tone === "fail" && "bg-destructive/15 text-destructive",
+              status.tone === "mute" && "bg-muted text-muted-foreground",
+            )}
+          >
+            {t(($) => $.logic.status[status.key])}
+          </span>
+          <span className="truncate">{ownerLabel}</span>
+          <span className="shrink-0 truncate">
+            {phaseLabel}
+            {updated ? ` · ${updated}` : ""}
+          </span>
+        </span>
+      </button>
       <button
         type="button"
         className="nodrag nopan col-start-2 row-span-2 self-start inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -134,26 +161,6 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
       >
         <MoreHorizontal className="size-4" aria-hidden />
       </button>
-      <div className="col-start-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-        <span
-          data-status-dot
-          className={cn(
-            "inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-xs font-medium",
-            status.tone === "ok" && "bg-success/15 text-success",
-            status.tone === "run" && "bg-brand/15 text-brand",
-            status.tone === "wait" && "bg-warning/15 text-warning",
-            status.tone === "fail" && "bg-destructive/15 text-destructive",
-            status.tone === "mute" && "bg-muted text-muted-foreground",
-          )}
-        >
-          {t(($) => $.logic.status[status.key])}
-        </span>
-        <span className="truncate">{ownerLabel}</span>
-        <span className="shrink-0 truncate">
-          {phaseLabel}
-          {updated ? ` · ${updated}` : ""}
-        </span>
-      </div>
       {menuOpen ? (
         <ResearchCardMenu
           node={n}

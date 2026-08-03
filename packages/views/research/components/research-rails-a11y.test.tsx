@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ExplorationDimension } from "../lib/m2-visibility";
 import { ExplorationRail } from "./exploration-rail";
@@ -101,13 +101,20 @@ describe("research rails a11y static contract (LRM-1204)", () => {
     const root = container.querySelector('[data-testid="exploration-rail"]');
     expect(root).toBeTruthy();
     expect(root).toHaveAttribute("aria-labelledby");
+    // LRM-1201: busy + polite live region live on the shell, not the loading subtree.
+    expect(root).toHaveAttribute("aria-busy", "true");
+    const live = container.querySelector(
+      '[data-testid="exploration-rail-live"]',
+    );
+    expect(live).toHaveAttribute("aria-live", "polite");
+    expect(live).toHaveTextContent("Generating dimensions…");
     const loading = container.querySelector(
       '[data-testid="exploration-rail-loading"]',
     );
     expect(loading).toBeTruthy();
-    expect(loading).toHaveAttribute("aria-busy", "true");
-    expect(loading).toHaveAttribute("aria-live", "polite");
-    expect(screen.getByText("Generating dimensions…")).toBeTruthy();
+    expect(
+      within(loading as HTMLElement).getByText("Generating dimensions…"),
+    ).toBeTruthy();
     const spinner = loading?.querySelector("svg");
     expect(spinner).toHaveAttribute("aria-hidden", "true");
   });
@@ -123,11 +130,15 @@ describe("research rails a11y static contract (LRM-1204)", () => {
     expect(screen.getByText("boom")).toBeTruthy();
 
     rerender(<ExplorationRail dimensions={[]} sessionStatus="drafting" />);
+    const empty = container.querySelector(
+      '[data-testid="exploration-rail-empty"]',
+    );
+    expect(empty).toBeTruthy();
+    // Empty title is also mirrored into the persistent live region — scope to empty.
+    expect(within(empty as HTMLElement).getByText("No dimensions yet")).toBeTruthy();
     expect(
-      container.querySelector('[data-testid="exploration-rail-empty"]'),
+      within(empty as HTMLElement).getByText("Start the session to explore."),
     ).toBeTruthy();
-    expect(screen.getByText("No dimensions yet")).toBeTruthy();
-    expect(screen.getByText("Start the session to explore.")).toBeTruthy();
   });
 
   it("render: ready cards expose aria-expanded; decorative icons hidden", () => {

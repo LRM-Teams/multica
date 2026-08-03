@@ -121,8 +121,12 @@ type Config struct {
 	MemoryCurationRunTimeout        time.Duration         // wall-clock timeout for one daemon-claimed curation run
 	GrokPersistentIdleTTL           time.Duration         // 0 disables idle chat-session eviction
 	PiPersistentIdleTTL             time.Duration         // 0 disables idle Pi chat-session eviction
-	PollInterval                    time.Duration
-	HeartbeatInterval               time.Duration
+	// MaxAgentProcesses bounds distinct agents with a live resident provider
+	// process on this daemon (#35). 0 = unlimited. Default = f(NumCPU) clamped
+	// FLOOR/CEIL; override with MULTICA_MAX_AGENT_PROCESSES.
+	MaxAgentProcesses int
+	PollInterval      time.Duration
+	HeartbeatInterval time.Duration
 	// InboundWatchdog is the daemon-ws silence threshold for probe→terminate
 	// reconnect (default 70s). 0 disables. Override: MULTICA_DAEMON_INBOUND_WATCHDOG.
 	InboundWatchdog                time.Duration
@@ -612,6 +616,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	maxAgentProcesses, err := resolveMaxAgentProcessesFromEnv(os.Getenv)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		ServerBaseURL:                   serverBaseURL,
@@ -645,6 +653,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		MemoryCurationRunTimeout:        memoryCurationRunTimeout,
 		GrokPersistentIdleTTL:           grokPersistentIdleTTL,
 		PiPersistentIdleTTL:             piPersistentIdleTTL,
+		MaxAgentProcesses:               maxAgentProcesses,
 		HealthPort:                      healthPort,
 		PollInterval:                    pollInterval,
 		HeartbeatInterval:               heartbeatInterval,

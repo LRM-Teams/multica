@@ -304,6 +304,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 	}
+	d.canonicalRuntimes.setMaxAgentProcesses(cfg.MaxAgentProcesses)
 	d.canonicalRuntimes.subscribeResidentRuntimeCrash(func(ev ResidentRuntimeCrashEvent) {
 		d.onResidentRuntimeCrash(ev)
 	})
@@ -782,6 +783,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		"poll_interval", d.cfg.PollInterval,
 		"heartbeat_interval", d.cfg.HeartbeatInterval,
 		"agent_timeout", d.cfg.AgentTimeout,
+		"max_agent_processes", d.cfg.MaxAgentProcesses,
 		"idle_watchdog", d.cfg.AgentIdleWatchdog,
 		"gc_enabled", d.cfg.GCEnabled,
 		"auto_update", d.cfg.AutoUpdateEnabled,
@@ -2128,7 +2130,6 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 func (d *Daemon) runUpdate(targetVersion string) (string, error) {
 	return d.runStageUpdate(targetVersion)
 }
-
 
 // activateStagedAndRestart is the sole post-stage restart entry for handleUpdate.
 // It CAS-activates the staged release, sets d.restartBinary, then triggerRestart.

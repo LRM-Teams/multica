@@ -30,19 +30,41 @@ export function inviteableUndeliveredMentions(
   undelivered: readonly {
     type: string;
     id: string;
+    handle?: string;
+    label?: string;
     actions?: readonly string[];
   }[] | null | undefined,
-): Array<{ member_type: "user" | "agent"; member_id: string }> {
+): Array<{
+  member_type: "user" | "agent";
+  member_id: string;
+  display: string;
+}> {
   if (!undelivered?.length) return [];
-  const out: Array<{ member_type: "user" | "agent"; member_id: string }> = [];
+  const out: Array<{
+    member_type: "user" | "agent";
+    member_id: string;
+    display: string;
+  }> = [];
   const seen = new Set<string>();
   for (const u of undelivered) {
-    if (!u.id || !u.actions?.includes("invite")) continue;
+    if (!u.id) continue;
+    let canInvite = false;
+    for (const a of u.actions ?? []) {
+      if (a === "invite") {
+        canInvite = true;
+        break;
+      }
+    }
+    if (!canInvite) continue;
     const member_type = u.type === "agent" ? "agent" : "user";
     const key = `${member_type}:${u.id}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ member_type, member_id: u.id });
+    out.push({
+      member_type,
+      member_id: u.id,
+      display: u.label || u.handle || u.id,
+    });
   }
   return out;
 }

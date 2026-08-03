@@ -27,11 +27,13 @@ describe("inviteableUndeliveredMentions", () => {
         {
           type: "member",
           id: "u9",
+          label: "Alice",
           actions: ["invite"],
         },
         {
           type: "agent",
           id: "a9",
+          handle: "bob",
           actions: ["invite"],
         },
         {
@@ -41,8 +43,8 @@ describe("inviteableUndeliveredMentions", () => {
         },
       ]),
     ).toEqual([
-      { member_type: "user", member_id: "u9" },
-      { member_type: "agent", member_id: "a9" },
+      { member_type: "user", member_id: "u9", display: "Alice" },
+      { member_type: "agent", member_id: "a9", display: "bob" },
     ]);
   });
 

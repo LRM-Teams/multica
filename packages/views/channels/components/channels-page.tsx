@@ -2222,16 +2222,18 @@ export function ChannelsPage({
         }>;
       },
     ) => {
-      const undelivered = msg.undelivered_mentions;
-      const members = inviteableUndeliveredMentions(undelivered);
-      if (members.length === 0) return;
-      const names = (undelivered ?? [])
-        .filter((u) => u.actions?.includes("invite"))
-        .map((u) => u.label || u.handle || u.id)
-        .filter(Boolean);
+      const invitees = inviteableUndeliveredMentions(msg.undelivered_mentions);
+      if (invitees.length === 0) return;
+      const names: string[] = [];
+      const members: Array<{ member_type: "user" | "agent"; member_id: string }> =
+        [];
+      for (const m of invitees) {
+        names.push(m.display);
+        members.push({ member_type: m.member_type, member_id: m.member_id });
+      }
       const who =
         names.length === 0
-          ? String(members.length)
+          ? String(invitees.length)
           : names.length <= 3
             ? names.join(", ")
             : `${names.slice(0, 3).join(", ")}…`;

@@ -24,22 +24,20 @@ export function ResearchSessionPageSkeleton() {
             <Skeleton className="hidden h-8 w-20 rounded-md sm:block" />
           </div>
         </div>
-        <div className="flex items-center gap-2 px-4 pb-2.5">
+        <div className="flex items-center gap-2 px-4 pb-1">
           <Skeleton className="h-3 w-[70%] max-w-md" />
         </div>
+        <nav className="px-4 pt-2 pb-2.5">
+          <ol className="flex flex-wrap gap-y-1">
+            {Array.from({ length: 4 }, (_, i) => (
+              <li key={i} className="flex min-w-[4rem] flex-1 items-center gap-2 sm:min-w-[6.5rem]">
+                <Skeleton className="size-5 shrink-0 rounded-full" />
+                <Skeleton className="h-3 w-16" />
+              </li>
+            ))}
+          </ol>
+        </nav>
       </header>
-
-      {/* Stage timeline strip */}
-      <nav className="shrink-0 border-b bg-background/70 px-3 py-2 sm:px-4">
-        <ol className="flex gap-2">
-          {Array.from({ length: 4 }, (_, i) => (
-            <li key={i} className="flex min-w-[7.5rem] flex-1 items-center gap-2 sm:min-w-0">
-              <Skeleton className="size-5 shrink-0 rounded-full" />
-              <Skeleton className="h-3 w-16" />
-            </li>
-          ))}
-        </ol>
-      </nav>
 
       {/* Visibility tabs */}
       <div className="flex shrink-0 gap-2 border-b px-3 py-2 sm:px-4">

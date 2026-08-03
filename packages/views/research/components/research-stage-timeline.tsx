@@ -56,14 +56,12 @@ export function ResearchStageTimeline({
     <nav
       aria-label={t(($) => $.timeline.label)}
       data-testid="research-stage-timeline"
-      className="relative z-[1] shrink-0 border-b border-border/55 bg-background/55 backdrop-blur-sm"
+      className="min-w-0 flex-1"
     >
       <ol
         className={cn(
-          // Narrow: horizontal scroll strip; sm+: full-width equal steps.
-          "flex gap-0 overflow-x-auto px-3 py-2 sm:overflow-visible sm:px-4",
-          "snap-x snap-mandatory sm:snap-none",
-          "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+          // The shared header owns the surface; steps wrap rather than overflow on narrow screens.
+          "flex flex-wrap gap-y-1 px-0 py-0",
         )}
       >
         {RESEARCH_STAGE_ORDER.map((stage, index) => {
@@ -82,8 +80,8 @@ export function ResearchStageTimeline({
               key={stage}
               data-stage-state={state}
               className={cn(
-                "relative flex min-w-[6.5rem] flex-1 snap-start items-center sm:min-w-0",
-                index < RESEARCH_STAGE_ORDER.length - 1 && "pr-2",
+                "relative flex min-w-[4rem] flex-1 items-center sm:min-w-[6.5rem]",
+                index < RESEARCH_STAGE_ORDER.length - 1 && "pr-1.5 sm:pr-2",
                 state === "upcoming" && "opacity-75",
               )}
             >
@@ -124,11 +122,6 @@ export function ResearchStageTimeline({
                   >
                     {label}
                   </span>
-                  {state === "current" ? (
-                    <span className="mt-0.5 hidden text-[10px] font-medium text-brand sm:block">
-                      {t(($) => $.timeline.current)}
-                    </span>
-                  ) : null}
                 </span>
                 {state === "done" ? (
                   <span className="sr-only">{t(($) => $.timeline.done_feedback)}</span>

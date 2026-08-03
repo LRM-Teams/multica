@@ -148,3 +148,19 @@ describe("ResearchSessionGoalCard (LRM-1008 / LRM-1010)", () => {
     expect(screen.getByTestId("research-session-goal-card")).toBeTruthy();
   });
 });
+
+  it("uses an icon-only trigger when the session chrome requests compact mode", () => {
+    render(
+      <ResearchSessionGoalCard
+        compact
+        sessionId="s1"
+        goal="桌面顶栏默认不展开目标摘要"
+      />,
+    );
+    expect(screen.getByTestId("research-session-goal-icon")).toBeTruthy();
+    expect(screen.getByTestId("research-session-goal-icon")).toHaveAttribute(
+      "aria-label",
+      "最终目标",
+    );
+    expect(screen.queryByTestId("research-session-goal-card")).toBeNull();
+  });

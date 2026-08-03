@@ -50,6 +50,7 @@ export function ResearchSessionGoalCard({
   onRetry,
   onConfirmSubstantive,
   className,
+  compact = false,
 }: {
   sessionId: string;
   goal: string;
@@ -59,6 +60,8 @@ export function ResearchSessionGoalCard({
   onRetry?: () => void;
   onConfirmSubstantive?: (proposal: string) => void;
   className?: string;
+  /** Frozen top-bar mode: keep GOAL at icon priority even on desktop. */
+  compact?: boolean;
 }) {
   const { t } = useT("research");
   const isMobile = useIsMobile();
@@ -175,6 +178,7 @@ export function ResearchSessionGoalCard({
         setCollapsedPersist(false);
       }}
       title={t(($) => $.goal_card.icon_title)}
+      aria-label={t(($) => $.goal_card.icon_title)}
       className={cn(
         "relative inline-flex size-7 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-brand",
         "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
@@ -195,7 +199,7 @@ export function ResearchSessionGoalCard({
   );
 
   // LRM-1010: narrow toolbar keeps Goal as icon so Approve/Reject never overflow.
-  const showIcon = isMobile || collapsed;
+  const showIcon = compact || isMobile || collapsed;
 
   return (
     <>

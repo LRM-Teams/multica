@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ResearchSession } from "@multica/core/types";
 import { ResearchSessionChrome } from "./research-session-chrome";
 
@@ -30,6 +30,13 @@ vi.mock("../../i18n/use-t", () => ({
           s2_sources: "S2 · Explore",
           s3_validation: "S3 · Validate",
           s4_delivery: "S4 · Deliver",
+        },
+        timeline: {
+          label: "Research stages",
+          done: "Done",
+          current: "Current",
+          upcoming: "Upcoming",
+          done_feedback: "Stage completed",
         },
         panel: {
           confirm_continue: "Confirm & continue",
@@ -214,13 +221,20 @@ describe("ResearchSessionChrome", () => {
     mobileState.isMobile = false;
   });
 
-  it("renders identity + toolbar: title, status pill, stage context, goal", () => {
+  it("renders title, status, muted metadata, and timeline inside one header surface", () => {
     renderChrome(makeSession());
-    expect(screen.getByTestId("research-session-identity")).toBeTruthy();
-    expect(screen.getByTestId("research-session-toolbar")).toBeTruthy();
+    const chrome = screen.getByTestId("research-session-chrome");
+    expect(chrome.tagName).toBe("HEADER");
+    expect(within(chrome).getByTestId("research-session-identity")).toBeTruthy();
+    expect(within(chrome).getByTestId("research-session-meta").className).toContain(
+      "text-muted-foreground",
+    );
+    expect(within(chrome).getByTestId("research-stage-timeline")).toBeTruthy();
+    expect(screen.queryByTestId("research-session-toolbar")).toBeNull();
+    expect(screen.queryByTestId("research-session-context")).toBeNull();
+    expect(screen.queryByText("Current")).toBeNull();
     expect(screen.getByText("知春路沿线房产市场深度调研")).toBeTruthy();
     expect(screen.getByTestId("research-session-status").textContent).toContain("Running");
-    expect(screen.getByText("S2 · Explore")).toBeTruthy();
     expect(screen.getByText("分析知春路沿线 3 公里二手房挂牌与成交")).toBeTruthy();
     const dot = document.querySelector(".bg-brand.animate-pulse");
     expect(dot).toBeTruthy();
@@ -317,17 +331,16 @@ describe("ResearchSessionChrome", () => {
     expect(document.querySelector(".bg-muted-foreground")).toBeTruthy();
   });
 
-  it("LRM-824: stage chip becomes a button that anchors to the current stage", () => {
+  it("LRM-824: the integrated stage timeline anchors to the current stage", () => {
     const onSelectStage = vi.fn();
     renderChrome(makeSession({ current_stage: "s2_sources" }), { onSelectStage });
-    const chip = screen.getByRole("button", { name: "S2 · Explore" });
-    fireEvent.click(chip);
+    const stage = screen.getByRole("button", { name: /S2 · Explore/i });
+    fireEvent.click(stage);
     expect(onSelectStage).toHaveBeenCalledWith("s2_sources");
   });
 
-  it("LRM-824: stage chip stays inert when no anchor handler is wired", () => {
+  it("LRM-824: the integrated stage timeline stays inert when no anchor handler is wired", () => {
     renderChrome(makeSession({ current_stage: "s2_sources" }));
-    expect(screen.queryByRole("button", { name: "S2 · Explore" })).toBeNull();
-    expect(screen.getByText("S2 · Explore")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /S2 · Explore/i })).toBeDisabled();
   });
 });

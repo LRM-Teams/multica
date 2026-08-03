@@ -70,3 +70,13 @@ describe("ResearchStageTimeline", () => {
     expect(screen.getAllByText("Stage completed").length).toBe(4);
   });
 });
+
+  it("wraps on narrow layouts instead of creating a horizontal strip or duplicate current copy", () => {
+    const { container } = render(
+      <ResearchStageTimeline currentStage="s2_sources" sessionStatus="running" />,
+    );
+    const steps = container.querySelector("ol");
+    expect(steps?.className).toContain("flex-wrap");
+    expect(steps?.className).not.toContain("overflow-x-auto");
+    expect(screen.queryByText("Current")).toBeNull();
+  });

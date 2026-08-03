@@ -249,17 +249,18 @@ export function AgentArmorMemoryArchiveIcon(props: AgentArmorIconProps) {
   );
 }
 
+const MEMORY_CONSTELLATION_STARS: readonly (readonly [number, number])[] = [
+  [10, 12],
+  [16, 9],
+  [22, 13],
+  [19, 19],
+  [13, 21],
+  [11, 17],
+];
+
 export function AgentArmorMemoryConstellationIcon(props: AgentArmorIconProps) {
   const uid = useId().replace(/:/g, "");
   const p = PALETTES.constellation;
-  const stars: [number, number][] = [
-    [10, 12],
-    [16, 9],
-    [22, 13],
-    [19, 19],
-    [13, 21],
-    [11, 17],
-  ];
   return (
     <ArmorIconFrame {...props} uid={uid} palette={p}>
       <path
@@ -275,7 +276,7 @@ export function AgentArmorMemoryConstellationIcon(props: AgentArmorIconProps) {
         strokeWidth="0.7"
         strokeOpacity="0.65"
       />
-      {stars.map(([x, y]) => (
+      {MEMORY_CONSTELLATION_STARS.map(([x, y]) => (
         <circle key={`${x}-${y}`} cx={x} cy={y} r="1.1" fill={p.glow} />
       ))}
     </ArmorIconFrame>

@@ -26,16 +26,36 @@ export function ResearchChatModeChip({ mode }: { mode: ChatDrawerMode }) {
           : t(($) => $.panel.chat_mode.running);
 
   return (
-    <span
-      data-testid="research-chat-mode"
-      data-chat-mode={mode}
-      className={cn(
-        "rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
-        modeChip[mode],
-      )}
-    >
-      {label}
-    </span>
+    <>
+      <span
+        data-testid="research-chat-mode"
+        data-chat-mode={mode}
+        className={cn(
+          "rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
+          modeChip[mode],
+        )}
+        aria-hidden
+      >
+        {label}
+      </span>
+      {/*
+        LRM-1225 — the feed flips loading -> running inside one mount, so the
+        announcement cannot live on a mode-specific subtree (that node is
+        unmounted exactly when the content becomes ready). This chip renders in
+        every mode, so it hosts the one persistent live region for the drawer,
+        the same way research-canvas.tsx keeps a standing sr-only region.
+        The visible chip is aria-hidden to avoid speaking the label twice.
+      */}
+      <output
+        data-testid="research-chat-mode-live"
+        className="sr-only"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-busy={mode === "loading"}
+      >
+        {label}
+      </output>
+    </>
   );
 }
 
@@ -60,7 +80,6 @@ export function ResearchChatModeBody({
         data-testid="research-chat-loading"
         className="space-y-2 px-0.5"
         aria-busy
-        aria-live="polite"
       >
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />

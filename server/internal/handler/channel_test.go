@@ -3676,6 +3676,109 @@ func TestChannelReferenceLinksBecomeStructuredMessageParts(t *testing.T) {
 	}
 }
 
+// TestChannelBareChannelReferencesBecomeStructuredMessageParts is LRM-1153:
+// agents (and humans typing without the composer's picker) write a plain
+// `#channel-name` in prose. Before this resolver only the composer's
+// [Label](mention://channel/<id>) link produced a channel-ref, so those bare
+// occurrences shipped with no parts at all and the FE — which already renders
+// channel-ref as a ChannelChip — had nothing to render, leaving raw `#name`
+// text next to correctly chipped @mentions and issue refs in the same message.
+func TestChannelBareChannelReferencesBecomeStructuredMessageParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	suffix := uuid.NewString()[:8]
+	targetName := "pr-frontend-" + suffix
+	targetChannelID := seedChannelForTest(t, targetName, testUserID)
+	sourceChannelID := seedChannelForTest(t, "bare-channel-ref-source-"+suffix, testUserID)
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(sourceChannelID))
+	if !found {
+		t.Fatal("source channel not found after seed")
+	}
+
+	content := "巡检增量 #" + targetName + " 新反馈 → 详见 #" + targetName + "。"
+	gotContent, gotParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, content, nil)
+	if err != nil {
+		t.Fatalf("enrich bare channel references: %v", err)
+	}
+	if gotContent != content {
+		t.Fatalf("content = %q, want bare channel text unchanged %q", gotContent, content)
+	}
+
+	var refs []protocol.MessagePart
+	for _, part := range gotParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			refs = append(refs, part)
+		}
+	}
+	if len(refs) != 2 {
+		t.Fatalf("channel references = %+v, want one anchored typed ref per visible #name occurrence", refs)
+	}
+	// The anchored span must cover the whole `#name` token (including the hash)
+	// so the FE replaces the raw text with the chip instead of rendering a
+	// stray leading `#`. The label stays the bare channel name, matching the
+	// composer-authored link path (ChannelChip strips a leading `#` itself and
+	// message-preview re-adds exactly one).
+	token := "#" + targetName
+	searchFrom := 0
+	for i, ref := range refs {
+		if ref.RefID != targetChannelID || ref.Label != targetName {
+			t.Fatalf("channel reference[%d] = %+v, want ref_id=%s label=%q", i, ref, targetChannelID, targetName)
+		}
+		if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 >= *ref.ContentEndUTF16 {
+			t.Fatalf("channel reference[%d] is missing a content UTF-16 span: %+v", i, ref)
+		}
+		byteOffset := strings.Index(content[searchFrom:], token)
+		if byteOffset < 0 {
+			t.Fatalf("could not find visible #name occurrence %d in %q", i, content)
+		}
+		byteStart := searchFrom + byteOffset
+		wantStart, wantEnd := contentUTF16Span(content, byteStart, byteStart+len(token))
+		if *ref.ContentStartUTF16 != wantStart || *ref.ContentEndUTF16 != wantEnd {
+			t.Fatalf("channel reference[%d] span = [%d,%d), want exact #name occurrence [%d,%d)", i, *ref.ContentStartUTF16, *ref.ContentEndUTF16, wantStart, wantEnd)
+		}
+		searchFrom = byteStart + len(token)
+	}
+
+	// The composer-authored link must still resolve to exactly one ref — the
+	// bare matcher must not double-anchor the label inside the markdown link.
+	linked := "see [" + targetName + "](mention://channel/" + targetChannelID + ") plus `#" + targetName + "` in code"
+	_, linkedParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, linked, nil)
+	if err != nil {
+		t.Fatalf("enrich linked channel reference: %v", err)
+	}
+	var linkedRefs []protocol.MessagePart
+	for _, part := range linkedParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			linkedRefs = append(linkedRefs, part)
+		}
+	}
+	if len(linkedRefs) != 1 {
+		t.Fatalf("channel references = %+v, want only the composer link anchored (no code span, no nested label match)", linkedRefs)
+	}
+
+	// A DM channel is never a shareable bare target, and an unknown #token is
+	// left as plain prose rather than guessed at.
+	dmAgentID := createHandlerTestAgent(t, "Bare Channel Ref DM Peer "+uuid.NewString(), []byte("[]"))
+	dmChannelID := seedAgentDMChannel(t, dmAgentID)
+	var dmName string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, parseUUID(dmChannelID)).Scan(&dmName); err != nil {
+		t.Fatalf("load dm channel name: %v", err)
+	}
+	noise := "#" + dmName + " and #definitely-not-a-channel-" + suffix + " and #1973"
+	_, noiseParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, noise, nil)
+	if err != nil {
+		t.Fatalf("enrich non-channel tokens: %v", err)
+	}
+	for _, part := range noiseParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			t.Fatalf("dm/unknown #token unexpectedly produced a channel-ref: %+v", part)
+		}
+	}
+}
+
 func TestChannelLegacyActorMentionMarkdownIsRejected(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -248,8 +248,10 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
   it("on a non-interactive surface, renders a channel-ref's resolved label, never the raw markdown link (Wren, PR review)", () => {
     // Same leak class as the interactive test above, but through the OTHER
     // branch: `interactive={false}` skips ChannelRefLink and used to render
-    // `text` (the span substring) directly — which for channel-ref is always
-    // the whole `[Label](mention://channel/<uuid>)` string, not a bare id.
+    // `text` (the span substring) directly — which for a composer-authored
+    // channel-ref is the whole `[Label](mention://channel/<uuid>)` string.
+    // The label renders with exactly one `#` (LRM-1153) so this surface reads
+    // as a channel the same way the chip and the preview do.
     const raw = "[team-a](mention://channel/channel-uuid)";
     const content = `see ${raw} for context`;
     render(
@@ -259,9 +261,33 @@ describe("InlineReferenceContent (#463 projector consumer)", () => {
         interactive={false}
       />,
     );
-    expect(screen.getByText("team-a")).toBeInTheDocument();
+    expect(screen.getByText("#team-a")).toBeInTheDocument();
     expect(screen.queryByText(raw, { exact: false })).toBeNull();
     expect(screen.queryByText(/mention:\/\/channel/)).toBeNull();
+  });
+
+  it("renders a bare `#name` channel-ref as a chip, replacing the hash the author typed (LRM-1153)", () => {
+    // The server now anchors bare `#name` prose, so the span is just the token
+    // — the chip must replace it whole (its own Hash icon supplies the `#`),
+    // leaving no orphan `#` in the surrounding text.
+    const content = "巡检增量 #team-a 新反馈";
+    render(<InlineReferenceContent content={content} parts={[channelRef(5, 12)]} />);
+    const chip = screen.getByTestId("channel-chip");
+    expect(chip).toHaveTextContent("team-a");
+    expect(chip.textContent).not.toContain("#");
+    expect(chip.closest("a")).toHaveAttribute(
+      "href",
+      expect.stringContaining("channels/channel-uuid"),
+    );
+  });
+
+  it("on a non-interactive surface, keeps a bare `#name` channel-ref readable as `#name` (LRM-1153)", () => {
+    const content = "巡检增量 #team-a 新反馈";
+    render(
+      <InlineReferenceContent content={content} parts={[channelRef(5, 12)]} interactive={false} />,
+    );
+    expect(screen.getByText("#team-a")).toBeInTheDocument();
+    expect(screen.queryByText("##team-a")).toBeNull();
   });
 
   it("renders a **bold**-wrapped issue ref as actual bold, not literal asterisks (#635)", () => {

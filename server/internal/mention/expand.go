@@ -150,6 +150,42 @@ func isASCIIWordByte(b byte) bool {
 		b == '_'
 }
 
+// TextRegion is a byte range in visible content that reference discovery must
+// leave alone (fenced/inline code today).
+type TextRegion struct {
+	Start, End int
+}
+
+// FindLiteralSkipRegions exposes the code-span regions that bare-identifier
+// discovery must skip, so every bare-reference resolver (issue keys, channel
+// names) shares one definition of "this text is a literal, not a reference".
+func FindLiteralSkipRegions(content string) []TextRegion {
+	regions := findSkipRegions(content)
+	out := make([]TextRegion, 0, len(regions))
+	for _, region := range regions {
+		out = append(out, TextRegion{Start: region.start, End: region.end})
+	}
+	return out
+}
+
+// InLiteralSkipRegion reports whether a byte offset falls inside a region from
+// FindLiteralSkipRegions.
+func InLiteralSkipRegion(pos int, regions []TextRegion) bool {
+	for _, region := range regions {
+		if pos >= region.Start && pos < region.End {
+			return true
+		}
+	}
+	return false
+}
+
+// IsInsideMarkdownLink reports whether content[start:end] sits inside a
+// markdown link's label or URL, so a bare matcher never double-anchors text
+// that an explicit `[Label](mention://...)` link already owns.
+func IsInsideMarkdownLink(content string, start, end int) bool {
+	return isInsideMarkdownLink(content, start, end)
+}
+
 // skipRegion represents a region of text that should not be modified.
 type skipRegion struct {
 	start, end int

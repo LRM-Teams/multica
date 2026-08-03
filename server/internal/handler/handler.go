@@ -66,21 +66,13 @@ type Config struct {
 	DisableWorkspaceCreation bool
 	// PublicURL is the absolute base URL the API is reachable at from the
 	// public internet, with no trailing slash (e.g. "https://app.multica.ai").
-	// Used only to build webhook_url responses for autopilot webhook triggers
-	// — never for auth, routing, or workspace resolution. Empty when unset,
-	// in which case clients fall back to webhook_path + their own origin.
-	// Reading the public host from request headers (Host / X-Forwarded-Host)
-	// is intentionally avoided so a misconfigured reverse proxy cannot trick
-	// the server into minting webhook URLs pointing at an attacker-controlled
-	// host.
+	// Empty when unset. Not used for auth or workspace resolution.
 	PublicURL string
 	// TrustedProxies are CIDRs whose source IP we trust to set
 	// X-Forwarded-For / X-Real-IP. Empty means "trust nothing": the rate
 	// limiter uses r.RemoteAddr exclusively. Populated via the
 	// MULTICA_TRUSTED_PROXIES env var (comma-separated CIDRs, e.g.
-	// "10.0.0.0/8,127.0.0.1/32"). This is specifically to keep the per-IP
-	// webhook limiter from being bypassed by a spoofed XFF on deployments
-	// without a header-stripping reverse proxy in front.
+	// "10.0.0.0/8,127.0.0.1/32").
 	TrustedProxies []netip.Prefix
 	// CloudRuntimeFleetURL enables the SaaS-only remote Fleet adapter when set.
 	// Empty keeps self-hosted deployments explicit: cloud runtime endpoints
@@ -131,7 +123,6 @@ type Handler struct {
 	AgentHonorService           *service.AgentHonorService
 	IssueService                *service.IssueService
 	HonorService                *service.HonorService
-	AutopilotService            *service.AutopilotService
 	EmailService                *service.EmailService
 	EnvCheckpointService        EnvCheckpointServiceAPI
 	UpdateStore                 UpdateStore
@@ -305,7 +296,6 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		AgentHonorService:           service.NewAgentHonorService(queries, agentFleetRankService),
 		IssueService:                service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
 		HonorService:                service.NewHonorService(queries),
-		AutopilotService:            service.NewAutopilotService(queries, txStarter, bus, taskSvc),
 		EmailService:                emailService,
 		UpdateStore:                 NewPostgresUpdateStore(updateDB),
 		UpdateIntentStore:           NewPostgresUpdateIntentStore(updateDB),

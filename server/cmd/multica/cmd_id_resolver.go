@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,10 @@ import (
 
 const minShortIDPrefixLen = 4
 const resolverListPageLimit = 50
+
+// uuidRegexp matches a canonical UUID (8-4-4-4-12 hex). Shared by CLI resolvers.
+var uuidRegexp = regexp.MustCompile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
 
 type resolvedID struct {
 	ID      string
@@ -227,67 +232,11 @@ func fetchIssueCandidates(ctx context.Context, client *cli.APIClient) ([]idCandi
 }
 
 func resolveAutopilotID(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {
-	return resolveIDByPrefix(ctx, client, "autopilot", input, fetchAutopilotCandidates)
+	return resolvedID{}, fmt.Errorf("autopilot has been removed (LRM-1049); use multica reminder")
 }
 
 func fetchAutopilotCandidates(ctx context.Context, client *cli.APIClient) ([]idCandidate, error) {
-	if client.WorkspaceID == "" {
-		return nil, fmt.Errorf("workspace_id is required to resolve autopilot id prefixes")
-	}
-	const limit = resolverListPageLimit
-	candidates := []idCandidate{}
-	seen := map[string]struct{}{}
-	for offset := 0; ; {
-		params := url.Values{}
-		params.Set("workspace_id", client.WorkspaceID)
-		params.Set("limit", strconv.Itoa(limit))
-		if offset > 0 {
-			params.Set("offset", strconv.Itoa(offset))
-		}
-		var resp struct {
-			Autopilots []map[string]any `json:"autopilots"`
-			Total      int              `json:"total"`
-			HasMore    bool             `json:"has_more"`
-		}
-		if err := client.GetJSON(ctx, "/api/autopilots?"+params.Encode(), &resp); err != nil {
-			return nil, err
-		}
-		added := 0
-		for _, a := range resp.Autopilots {
-			id := strVal(a, "id")
-			if id == "" {
-				continue
-			}
-			if _, ok := seen[id]; ok {
-				continue
-			}
-			seen[id] = struct{}{}
-			added++
-			candidates = append(candidates, idCandidate{
-				ID:      id,
-				Display: strVal(a, "title"),
-				Detail:  strVal(a, "status"),
-			})
-		}
-		pageLen := len(resp.Autopilots)
-		offset += pageLen
-		if pageLen == 0 || added == 0 {
-			break
-		}
-		if pageLen < limit {
-			break
-		}
-		if resp.HasMore {
-			continue
-		}
-		if resp.Total > 0 {
-			if offset >= resp.Total {
-				break
-			}
-			continue
-		}
-	}
-	return candidates, nil
+	return nil, fmt.Errorf("autopilot has been removed (LRM-1049)")
 }
 
 func resolveTaskRunID(ctx context.Context, client *cli.APIClient, issueID, input string) (resolvedID, error) {
@@ -328,35 +277,7 @@ func fetchTaskRunCandidatesForIssue(ctx context.Context, client *cli.APIClient, 
 }
 
 func resolveAutopilotTriggerID(ctx context.Context, client *cli.APIClient, autopilotID, input string) (resolvedID, error) {
-	trimmed := strings.TrimSpace(input)
-	if uuidRegexp.MatchString(trimmed) {
-		return resolvedID{ID: trimmed, Display: trimmed}, nil
-	}
-	fetch := func(ctx context.Context, client *cli.APIClient) ([]idCandidate, error) {
-		var resp map[string]any
-		if err := client.GetJSON(ctx, "/api/autopilots/"+url.PathEscape(autopilotID), &resp); err != nil {
-			return nil, err
-		}
-		triggersRaw, _ := resp["triggers"].([]any)
-		candidates := make([]idCandidate, 0, len(triggersRaw))
-		for _, raw := range triggersRaw {
-			t, ok := raw.(map[string]any)
-			if !ok {
-				continue
-			}
-			detail := strVal(t, "kind")
-			if label := strVal(t, "label"); label != "" {
-				detail = label
-			}
-			candidates = append(candidates, idCandidate{
-				ID:      strVal(t, "id"),
-				Display: strVal(t, "id"),
-				Detail:  detail,
-			})
-		}
-		return candidates, nil
-	}
-	return resolveIDByPrefix(ctx, client, "autopilot trigger", input, fetch)
+	return resolvedID{}, fmt.Errorf("autopilot has been removed (LRM-1049); use multica reminder")
 }
 
 func resolveProjectID(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {

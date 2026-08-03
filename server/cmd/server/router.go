@@ -528,8 +528,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.Get("/api/stickers", h.ListStickers)
 	r.Get("/api/stickers/{id}", h.GetStickerAsset)
 
-	// LRM-1049: Autopilot retired — former webhook ingress hard-cut (410).
-	r.Post("/api/webhooks/autopilots/{token}", h.AutopilotRetired)
+	// LRM-1049: Autopilot webhook ingress removed (product retired).
 	// GitHub App webhook (no Multica auth — requests are authenticated via
 	// HMAC-SHA256 signature in the handler) and post-install setup callback.
 	r.Post("/api/webhooks/github", h.HandleGitHubWebhook)
@@ -595,7 +594,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 		r.Get("/issues/{issueId}/gc-check", h.GetIssueGCCheck)
 		r.Get("/chat-sessions/{sessionId}/gc-check", h.GetChatSessionGCCheck)
-		r.Get("/autopilot-runs/{runId}/gc-check", h.AutopilotRetired)
 		r.Get("/tasks/{taskId}/gc-check", h.GetTaskGCCheck)
 
 		r.Post("/runtimes/{runtimeId}/recover-orphans", h.RecoverOrphanedTasks)
@@ -1014,30 +1012,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/product-rounds/judgment", h.SubmitResearchProductRoundJudgment)
 					r.Post("/confirm", h.ConfirmResearchSession)
 					r.Post("/handoff", h.ResearchSessionHandoff)
-				})
-			})
-
-			// LRM-1049: Autopilot retired — every former path returns 410.
-			r.Route("/api/autopilots", func(r chi.Router) {
-				r.Get("/", h.AutopilotRetired)
-				r.Post("/", h.AutopilotRetired)
-				r.Route("/{id}", func(r chi.Router) {
-					r.Get("/", h.AutopilotRetired)
-					r.Patch("/", h.AutopilotRetired)
-					r.Delete("/", h.AutopilotRetired)
-					r.Post("/trigger", h.AutopilotRetired)
-					r.Get("/runs", h.AutopilotRetired)
-					r.Get("/runs/{runId}", h.AutopilotRetired)
-					r.Get("/deliveries", h.AutopilotRetired)
-					r.Get("/deliveries/{deliveryId}", h.AutopilotRetired)
-					r.Post("/deliveries/{deliveryId}/replay", h.AutopilotRetired)
-					r.Post("/triggers", h.AutopilotRetired)
-					r.Route("/triggers/{triggerId}", func(r chi.Router) {
-						r.Patch("/", h.AutopilotRetired)
-						r.Delete("/", h.AutopilotRetired)
-						r.Post("/rotate-webhook-token", h.AutopilotRetired)
-						r.Put("/signing-secret", h.AutopilotRetired)
-					})
 				})
 			})
 

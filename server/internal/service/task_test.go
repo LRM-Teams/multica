@@ -684,3 +684,115 @@ func TestMaybeCleanupEphemeralSandbox_SkipsWhenSiblingActive(t *testing.T) {
 	assert.Len(t, cleaner.calls, 0, "cleanup must skip when a sibling task is still active on R'")
 	cleaner.mu.Unlock()
 }
+
+// TestMaybeCleanupEphemeralSandbox_SharedRuntimeLastTerminalWins pins the
+// shared_sandbox lifecycle contract (FR-006/007, research D4): when every
+// agent of a sample shares one runtime R' and one sandbox instance, the
+// terminal hook must NOT reclaim while any task of the sample is still active
+// on R', and MUST reclaim exactly once after the sample's last terminal task.
+// The existing HasOtherActiveTaskForRuntime guard is keyed per-runtime, so it
+// already yields last-terminal-task-wins semantics for shared runtimes — this
+// test documents and locks that behavior.
+func TestMaybeCleanupEphemeralSandbox_SharedRuntimeLastTerminalWins(t *testing.T) {
+	pool := interactionDAGTestPool(t)
+	t.Cleanup(pool.Close)
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	q := db.New(tx)
+
+	ws, err := q.CreateWorkspace(ctx, db.CreateWorkspaceParams{
+		Name: "eph-shared", Slug: "eph-shared", IssuePrefix: "EH",
+	})
+	require.NoError(t, err)
+
+	// One shared runtime R' for the whole sample.
+	var rtID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, visibility) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		ws.ID, "daemon-shared", "shared-rt", "local", "pi", "online", "", []byte("{}"), "private",
+	).Scan(&rtID)
+	require.NoError(t, err)
+
+	// Two sample agents, both bound to the shared R'.
+	var agentAID, agentBID pgtype.UUID
+	for i, name := range []string{"shared-agent-a", "shared-agent-b"} {
+		var id pgtype.UUID
+		err = tx.QueryRow(ctx, `INSERT INTO agent (
+			workspace_id, name, display_name, runtime_mode, runtime_config, runtime_id, max_concurrent_tasks
+		, model) VALUES ($1, $2, $3, $4, $5, $6, $7, 'composer-1.5') RETURNING id`,
+			ws.ID, name, name, "local", []byte("{}"), rtID, 1,
+		).Scan(&id)
+		require.NoError(t, err)
+		if i == 0 {
+			agentAID = id
+		} else {
+			agentBID = id
+		}
+	}
+
+	var projectID pgtype.UUID
+	err = tx.QueryRow(ctx, `INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id`,
+		ws.ID, "shared-project",
+	).Scan(&projectID)
+	require.NoError(t, err)
+
+	issueAID := createEphemeralSandboxTestIssue(t, ctx, tx, ws.ID, agentAID, projectID, "Shared Issue A")
+	issueBID := createEphemeralSandboxTestIssue(t, ctx, tx, ws.ID, agentBID, projectID, "Shared Issue B")
+
+	// Both tasks carry the SAME shared sandbox marker and run on the SAME R'.
+	marker, _ := json.Marshal(map[string]any{
+		"ephemeral_sandbox": map[string]string{"sandbox_instance_id": "inst-shared-1"},
+	})
+	markTerminal := func(taskID pgtype.UUID) {
+		t.Helper()
+		_, err = tx.Exec(ctx, `UPDATE agent_inbox_event SET status = 'acked', terminal_outcome = 'completed', terminal_at = now(), acked_at = now(), completed_at = now() WHERE id = $1`, taskID)
+		require.NoError(t, err)
+	}
+	taskA, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID: agentAID, RuntimeID: rtID, IssueID: issueAID, Priority: 0, Context: marker,
+	})
+	require.NoError(t, err)
+	taskB, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID: agentBID, RuntimeID: rtID, IssueID: issueBID, Priority: 0, Context: marker,
+	})
+	require.NoError(t, err)
+
+	cleaner := &fakeEphemeralSandboxCleaner{}
+	svc := &TaskService{
+		Queries: q, Bus: &events.Bus{}, EphemeralSandboxCleaner: cleaner,
+	}
+
+	// Agent A finishes while agent B's task is still active on the shared R':
+	// the sample's shared sandbox must survive.
+	markTerminal(taskA.ID)
+	taskA, err = q.GetAgentTask(ctx, taskA.ID)
+	require.NoError(t, err)
+	svc.maybeCleanupEphemeralSandbox(ctx, taskA)
+
+	cleaner.mu.Lock()
+	assert.Len(t, cleaner.calls, 0, "shared sandbox must not be reclaimed while another sample task is active on R'")
+	cleaner.mu.Unlock()
+
+	var rtStatus string
+	err = tx.QueryRow(ctx, `SELECT status FROM agent_runtime WHERE id = $1`, rtID).Scan(&rtStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "online", rtStatus, "shared runtime must stay online while the sample has active tasks")
+
+	// Agent B (the sample's last task) finishes: reclaim exactly once, against
+	// the shared instance, and set the shared R' offline.
+	markTerminal(taskB.ID)
+	taskB, err = q.GetAgentTask(ctx, taskB.ID)
+	require.NoError(t, err)
+	svc.maybeCleanupEphemeralSandbox(ctx, taskB)
+
+	cleaner.mu.Lock()
+	require.Len(t, cleaner.calls, 1, "last terminal task of the sample must reclaim the shared sandbox exactly once")
+	assert.Equal(t, "inst-shared-1", cleaner.calls[0].SandboxInstanceID)
+	assert.Equal(t, util.UUIDToString(ws.ID), cleaner.calls[0].WorkspaceID)
+	cleaner.mu.Unlock()
+
+	err = tx.QueryRow(ctx, `SELECT status FROM agent_runtime WHERE id = $1`, rtID).Scan(&rtStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "offline", rtStatus)
+}

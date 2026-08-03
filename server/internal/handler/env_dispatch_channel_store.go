@@ -106,6 +106,25 @@ func (s envDispatchChannelStore) claimProvisioning(ctx context.Context, exec db.
 	return false, binding, nil
 }
 
+// sharedRuntimeBinding resolves the env's shared execution identity for a
+// shared_sandbox rollout (research D3): the first ready binding carrying a
+// runtime, which is the eagerly provisioned leader/trigger the sample's
+// members attach to. Deterministic under concurrent first-mentions — every
+// caller reads the same anchor row. found=false when no shared runtime exists
+// yet (the caller is the leader establishing it).
+func (s envDispatchChannelStore) sharedRuntimeBinding(ctx context.Context, exec db.DBTX, envID, excludeAgentID string) (envAgentSandboxBinding, bool, error) {
+	binding, err := scanEnvAgentSandboxBinding(exec.QueryRow(ctx, bindingSelect+`
+		WHERE env_id = $1 AND status = 'ready' AND runtime_id IS NOT NULL AND agent_id <> $2
+		ORDER BY created_at ASC LIMIT 1`, envID, excludeAgentID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return envAgentSandboxBinding{}, false, nil
+	}
+	if err != nil {
+		return envAgentSandboxBinding{}, false, err
+	}
+	return binding, true, nil
+}
+
 func (s envDispatchChannelStore) markReady(ctx context.Context, exec db.DBTX, envID, agentID, sandboxInstanceID, runtimeID, daemonID string) error {
 	ct, err := exec.Exec(ctx, `
 		UPDATE environment_agent_sandbox

@@ -14,6 +14,10 @@ import (
 )
 
 type fakeSandboxInstanceCreator struct {
+	// mu guards all recorded call slices/maps: the dispatch fan-out creates
+	// sandboxes concurrently across rollouts, so sharing assertions (call
+	// counts and per-call inputs) must be race-safe.
+	mu          sync.Mutex
 	calls       []createSandboxCall
 	ref         SandboxInstanceRef
 	err         error
@@ -27,6 +31,8 @@ func (c *fakeSandboxInstanceCreator) GetSandboxInstanceRef(_ context.Context, _,
 	if c.getErr != nil {
 		return SandboxInstanceRef{}, c.getErr
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.refs != nil {
 		if ref, ok := c.refs[instanceID]; ok {
 			return ref, nil
@@ -35,17 +41,25 @@ func (c *fakeSandboxInstanceCreator) GetSandboxInstanceRef(_ context.Context, _,
 	return SandboxInstanceRef{}, fmt.Errorf("sandbox_instance not found: %s", instanceID)
 }
 
+// createSandboxCall records one CreateSandboxInstance invocation in full, so
+// tests can assert both the count (len(calls)) and every input.
 type createSandboxCall struct {
 	WorkspaceID   string
 	ActorUserID   string
+	NodeID        string
 	Template      string
+	Name          string
 	BaseEnvID     string
+	Limits        json.RawMessage
+	Runtime       json.RawMessage
 	DaemonEnabled bool
 	RuntimeEnv    map[string]string
 }
 
 func (c *fakeSandboxInstanceCreator) CreateSandboxInstance(_ context.Context, in CreateSandboxInstanceInput, actorUserID string) (SandboxInstanceRef, error) {
-	c.calls = append(c.calls, createSandboxCall{WorkspaceID: in.WorkspaceID, ActorUserID: actorUserID, Template: in.Template, BaseEnvID: "", DaemonEnabled: in.DaemonEnabled, RuntimeEnv: in.RuntimeEnv})
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, createSandboxCall{WorkspaceID: in.WorkspaceID, ActorUserID: actorUserID, NodeID: in.NodeID, Template: in.Template, Name: in.Name, BaseEnvID: "", Limits: in.Limits, Runtime: in.Runtime, DaemonEnabled: in.DaemonEnabled, RuntimeEnv: in.RuntimeEnv})
 	if c.err != nil {
 		return SandboxInstanceRef{}, c.err
 	}
@@ -69,6 +83,8 @@ func (c *fakeSandboxInstanceCreator) CreateSandboxInstance(_ context.Context, in
 }
 
 func (c *fakeSandboxInstanceCreator) DeleteSandboxInstance(_ context.Context, ref SandboxInstanceRef, _ string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.deleteCalls = append(c.deleteCalls, ref.InstanceID)
 	return c.deleteErr
 }
@@ -118,6 +134,12 @@ type fakeEnvDispatchDeps struct {
 	branchMessageValidationErr error
 	createIssueErr             error
 	enqueueErr                 error
+
+	// US3 (T021/T024): sandbox delete recording + selective CreateEnv failure
+	// so reset/rollback cleanup of shared-mode resources is assertable.
+	deleteSandboxCalls []string
+	createEnvCalls     int
+	createEnvFailAfter int // fail CreateEnv calls after the Nth success; 0 = never fail selectively
 
 	// Phase 2: PrecreateAgentRuntime recording + canned return, and the
 	// runtime_id passed to each EnqueueAgentRun call (the pre-created R').
@@ -340,6 +362,11 @@ func (f *fakeEnvDispatchDeps) CreateEnv(_ context.Context, _ string, sandboxIDs 
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.createEnvFailAfter > 0 && f.createEnvCalls >= f.createEnvFailAfter {
+		f.createEnvCalls++
+		return "", fmt.Errorf("create env failed (selective)")
+	}
+	f.createEnvCalls++
 	id := fmt.Sprintf("env-%d", len(f.envs))
 	f.envs[id] = Env{ID: id, SandboxIDs: sandboxIDs, ParentEnvID: parentEnvID, Mode: mode, Domain: domain}
 	return id, nil
@@ -371,7 +398,12 @@ func (f *fakeEnvDispatchDeps) ForkSandbox(_ context.Context, _ string, idx int) 
 	f.sandboxes[id] = "forked"
 	return id, nil
 }
-func (f *fakeEnvDispatchDeps) DeleteSandbox(_ context.Context, _ string) error { return nil }
+func (f *fakeEnvDispatchDeps) DeleteSandbox(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleteSandboxCalls = append(f.deleteSandboxCalls, id)
+	return nil
+}
 func (f *fakeEnvDispatchDeps) BootSandbox(_ context.Context, _ string) (string, error) {
 	return "sbx-booted", nil
 }
@@ -2595,5 +2627,188 @@ func TestEnvDispatch_GetDagReadiness_NoRun(t *testing.T) {
 	}
 	if readiness != DagReadinessInProgress {
 		t.Fatalf("readiness = %v, want DagReadinessInProgress for no run", readiness)
+	}
+}
+
+// sharedSandboxSquadInput builds the T006 squad dispatch: group_size=2 trained
+// issue rollouts with a two-agent per-agent spec roster. The sandbox_instance
+// backend is active (train_agent_id set + lifecycle injected by the caller).
+func sharedSandboxSquadInput(baseEnv string, shared bool) EnvDispatchInput {
+	return EnvDispatchInput{
+		WorkspaceID: "ws", UserID: "u", Mode: EnvModeScratch, EnvID: baseEnv,
+		Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue, GroupSize: 2,
+		AgentID: "a1", TrainAgentID: "a1", TrainingMode: true,
+		SharedSandbox: shared,
+		Issue:         &IssueInput{Title: "t"},
+		PerAgentEnvSpecs: []PerAgentEnvSpec{
+			{AgentID: "a1", Template: "py312"},
+			{AgentID: "a2", Template: "py312"},
+		},
+	}
+}
+
+// TestDispatch_SharedSandboxCreatesOneSandboxPerRollout is the T006 core
+// sharing assertion (FR-003/004/005): with shared_sandbox=true each rollout
+// (sample) creates exactly ONE sandbox_instance serving all its agents, so
+// group_size=2 with a 2-agent roster creates 2 sandboxes — not 2×2 — and all
+// per-agent refs within a rollout report the same instance + runtime while
+// different rollouts report different identifiers.
+func TestDispatch_SharedSandboxCreatesOneSandboxPerRollout(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{} // distinct refs auto-generated
+	svc := NewEnvDispatchService(f, 8).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), sharedSandboxSquadInput(baseEnv, true))
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(res.Rollouts) != 2 {
+		t.Fatalf("want 2 rollouts, got %d", len(res.Rollouts))
+	}
+	if len(creator.calls) != 2 {
+		t.Fatalf("shared mode must create exactly one sandbox_instance per rollout (2 total), got %d", len(creator.calls))
+	}
+	seen := map[string]string{} // instanceID -> rollout env
+	for i, r := range res.Rollouts {
+		if r.Error != "" {
+			t.Fatalf("rollout %d errored: %s", i, r.Error)
+		}
+		if len(r.SandboxRefs) != 1 {
+			t.Fatalf("rollout %d: shared mode must carry exactly 1 sandbox ref, got %+v", i, r.SandboxRefs)
+		}
+		shared := r.SandboxRefs[0]
+		if shared.RuntimeID == "" || shared.DaemonID == "" {
+			t.Fatalf("rollout %d: shared ref must carry the pre-created runtime/daemon, got %+v", i, shared)
+		}
+		if len(r.AgentSandboxRefs) != 2 {
+			t.Fatalf("rollout %d: want per-agent refs for both roster agents, got %+v", i, r.AgentSandboxRefs)
+		}
+		for agentID, ref := range r.AgentSandboxRefs {
+			if ref.InstanceID != shared.InstanceID || ref.RuntimeID != shared.RuntimeID {
+				t.Fatalf("rollout %d agent %s: ref %+v must point at the shared ref %+v", i, agentID, ref, shared)
+			}
+		}
+		if prev, dup := seen[shared.InstanceID]; dup {
+			t.Fatalf("rollouts %s and %s share a sandbox instance (samples must stay isolated)", prev, r.EnvID)
+		}
+		seen[shared.InstanceID] = r.EnvID
+		env := f.envs[r.EnvID]
+		if len(env.SandboxIDs) != 1 || env.SandboxIDs[0] != shared.InstanceID {
+			t.Fatalf("rollout %d env must carry exactly the shared sandbox, got %+v", i, env.SandboxIDs)
+		}
+	}
+}
+
+// TestDispatch_SharedSandboxFalseKeepsPerAgentCreation is the T006 contrast
+// baseline (SC-001): shared_sandbox=false preserves today's per-agent sandbox
+// creation — group_size=2 with a 2-agent roster creates 2×2 sandboxes and
+// every per-agent ref is distinct.
+func TestDispatch_SharedSandboxFalseKeepsPerAgentCreation(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{}
+	svc := NewEnvDispatchService(f, 8).WithSandboxLifecycle(creator)
+
+	res, err := svc.Dispatch(context.Background(), sharedSandboxSquadInput(baseEnv, false))
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(creator.calls) != 4 {
+		t.Fatalf("non-shared mode must keep per-agent creation (2 rollouts × 2 agents = 4), got %d", len(creator.calls))
+	}
+	for i, r := range res.Rollouts {
+		if r.Error != "" {
+			t.Fatalf("rollout %d errored: %s", i, r.Error)
+		}
+		if len(r.AgentSandboxRefs) != 2 {
+			t.Fatalf("rollout %d: want per-agent refs for both roster agents, got %+v", i, r.AgentSandboxRefs)
+		}
+		if r.AgentSandboxRefs["a1"].InstanceID == r.AgentSandboxRefs["a2"].InstanceID {
+			t.Fatalf("rollout %d: non-shared agents must get distinct sandboxes, got %+v", i, r.AgentSandboxRefs)
+		}
+	}
+}
+
+// --- T021: shared-mode provisioning failure leaves no residue (FR-007, SC-005)
+
+// TestDispatch_SharedSandboxCreateFailureFailsFastClean: when the shared
+// sandbox_instance creation itself fails, the sample fails fast — Dispatch
+// surfaces a reset_failed error naming the rollout — and nothing lingers: no
+// sandbox ref, no env, no project, and the pre-created shared runtime R' is
+// reclaimed (T010). The lifecycle's own compensate path means no partial
+// instance row was ever persisted, so no delete is needed.
+func TestDispatch_SharedSandboxCreateFailureFailsFastClean(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	creator := &fakeSandboxInstanceCreator{err: fmt.Errorf("sandboxd unavailable")}
+	svc := NewEnvDispatchService(f, 8).WithSandboxLifecycle(creator)
+
+	_, err := svc.Dispatch(context.Background(), sharedSandboxSquadInput(baseEnv, true))
+	if err == nil {
+		t.Fatal("want reset_failed error")
+	}
+	if !strings.Contains(err.Error(), "reset_failed") {
+		t.Fatalf("want reset_failed surfacing the sample failure, got %q", err.Error())
+	}
+	if len(f.projects) != 0 {
+		t.Fatalf("want 0 projects after failed shared dispatch, got %d", len(f.projects))
+	}
+	if len(f.envs) != 1 {
+		t.Fatalf("want only the base env left, got %+v", f.envs)
+	}
+	if len(creator.deleteCalls) != 0 {
+		t.Fatalf("no instance was persisted, so no delete should be attempted, got %+v", creator.deleteCalls)
+	}
+	// Every pre-created shared R' (one per rollout) must be reclaimed.
+	if len(f.deleteRuntimeCalls) != len(f.precreateRuntimeCalls) || len(f.deleteRuntimeCalls) == 0 {
+		t.Fatalf("shared R' must be reclaimed on creation failure: precreated=%+v deleted=%+v",
+			f.precreateRuntimeCalls, f.deleteRuntimeCalls)
+	}
+}
+
+// TestDispatch_SharedSandboxResetFailureReclaimsSharedResources: when a LATER
+// reset step fails after the shared sandbox + R' were created (here: CreateEnv
+// fails for one rollout while its sibling succeeds), the rollback must delete
+// the partially created shared instance AND reclaim the shared runtime R' —
+// for the failed rollout (resetOne branch) and for the successfully reset
+// sibling rolled back by the Dispatch fan-out. Otherwise the offline shared
+// runtime rows linger and the in-sandbox daemon can still adopt them.
+func TestDispatch_SharedSandboxResetFailureReclaimsSharedResources(t *testing.T) {
+	f := newFakeEnvDispatchDeps()
+	baseEnv := f.seedBaseEnv()
+	f.createEnvFailAfter = 1 // first rollout's CreateEnv succeeds, the second's fails
+	creator := &fakeSandboxInstanceCreator{}
+	svc := NewEnvDispatchService(f, 8).WithSandboxLifecycle(creator)
+
+	_, err := svc.Dispatch(context.Background(), sharedSandboxSquadInput(baseEnv, true))
+	if err == nil {
+		t.Fatal("want reset_failed error")
+	}
+	if !strings.Contains(err.Error(), "reset_failed") {
+		t.Fatalf("want reset_failed, got %q", err.Error())
+	}
+	// Both shared instances were created (one per rollout) and both must be
+	// reclaimed: the failed rollout's via the resetOne failure branch, the
+	// sibling's via the Dispatch fan-out rollback.
+	if len(creator.calls) != 2 {
+		t.Fatalf("want 2 shared sandboxes created (one per rollout), got %d", len(creator.calls))
+	}
+	if len(f.deleteSandboxCalls) != 2 {
+		t.Fatalf("both shared instances must be deleted on rollback, got deletes=%+v", f.deleteSandboxCalls)
+	}
+	// Both pre-created shared R' rows must be reclaimed — the gap this test
+	// pins: sandbox deletion alone leaves the offline runtime rows behind.
+	if len(f.precreateRuntimeCalls) != 2 {
+		t.Fatalf("want 2 pre-created shared runtimes, got %+v", f.precreateRuntimeCalls)
+	}
+	if len(f.deleteRuntimeCalls) != 2 {
+		t.Fatalf("both shared R' rows must be reclaimed on reset failure, got deletes=%+v", f.deleteRuntimeCalls)
+	}
+	if len(f.projects) != 0 {
+		t.Fatalf("want 0 projects after rollback, got %d", len(f.projects))
+	}
+	if len(f.envs) != 1 {
+		t.Fatalf("want only the base env left after rollback, got %+v", f.envs)
 	}
 }

@@ -350,3 +350,52 @@ func TestProvisionFunctionsCannotReachDestructiveFilesystemCalls(t *testing.T) {
 		})
 	}
 }
+
+// TestSharedEnvWorkspaceLayoutUsesCanonicalEnvID pins the shared_sandbox
+// sample workdir layout (research D5, FR-008): all agents of one env-dispatch
+// sample anchor to <root>/<ws>/.multica/envs/<env>/workspace, namespaced away
+// from the per-agent roots so agent memory/skills stay per-agent.
+func TestSharedEnvWorkspaceLayoutUsesCanonicalEnvID(t *testing.T) {
+	root := t.TempDir()
+	workspaceID := uuid.NewString()
+	envID := uuid.NewString()
+
+	layout, err := ResolveSharedEnvWorkspaceLayout(root, workspaceID, envID)
+	if err != nil {
+		t.Fatalf("ResolveSharedEnvWorkspaceLayout: %v", err)
+	}
+	wantRoot := filepath.Join(root, workspaceID, ".multica", "envs", envID)
+	if layout.RootDir != wantRoot {
+		t.Fatalf("RootDir = %q, want %q", layout.RootDir, wantRoot)
+	}
+	if layout.WorkDir != filepath.Join(wantRoot, "workspace") {
+		t.Fatalf("WorkDir = %q", layout.WorkDir)
+	}
+
+	if _, err := ResolveSharedEnvWorkspaceLayout(root, workspaceID, "not-a-uuid"); err == nil {
+		t.Fatal("non-canonical env id must fail closed")
+	}
+}
+
+// TestProvisionSharedEnvWorkspaceIsIdempotent ensures concurrent first-turn
+// anchors of the same sample race safely and never remove existing content.
+func TestProvisionSharedEnvWorkspaceIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	workspaceID := uuid.NewString()
+	envID := uuid.NewString()
+
+	layout, err := ProvisionSharedEnvWorkspace(root, workspaceID, envID, testLogger())
+	if err != nil {
+		t.Fatalf("ProvisionSharedEnvWorkspace: %v", err)
+	}
+	marker := filepath.Join(layout.WorkDir, "kept.txt")
+	if err := os.WriteFile(marker, []byte("durable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ProvisionSharedEnvWorkspace(root, workspaceID, envID, testLogger()); err != nil {
+		t.Fatalf("re-provision: %v", err)
+	}
+	if raw, err := os.ReadFile(marker); err != nil || string(raw) != "durable" {
+		t.Fatalf("re-provision must preserve content: read=%q err=%v", raw, err)
+	}
+}

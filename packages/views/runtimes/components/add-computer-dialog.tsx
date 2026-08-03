@@ -17,7 +17,7 @@ import { useT } from "../../i18n/use-t";
 type Choice = "your_computer" | "cloud";
 
 /**
- * LRM-1094 Step A — Add computer chooser.
+ * LRM-1141 / LRM-1129 Step A — Add computer chooser.
  * Visual uses existing Dialog tokens (not neo-brutal yellow/pink).
  * Cloud stays Coming soon / disabled until that path ships.
  */
@@ -62,7 +62,7 @@ export function AddComputerDialog({
               onSelect={() => {}}
               icon={<Cloud className="h-5 w-5" aria-hidden />}
               title={t(($) => $.add_computer.cloud)}
-              subtitle={t(($) => $.add_computer.cloud_coming_soon)}
+              subtitle={t(($) => $.add_computer.cloud_hint)}
               badge={t(($) => $.add_computer.cloud_coming_soon)}
             />
           </div>

@@ -137,6 +137,43 @@ func ProvisionAgentWorkspace(workspacesRoot, workspaceID, agentID string, logger
 	return &layout, nil
 }
 
+// ResolveSharedEnvWorkspaceLayout returns the shared_sandbox sample workdir
+// layout (research D5, FR-008): all agents of one env-dispatch sample anchor
+// to <root>/<ws>/.multica/envs/<env>/workspace. It is deliberately namespaced
+// away from .multica/agents/ so agent memory/skills roots stay per-agent —
+// only the working directory is shared.
+func ResolveSharedEnvWorkspaceLayout(workspacesRoot, workspaceID, envID string) (AgentWorkspaceLayout, error) {
+	if strings.TrimSpace(workspacesRoot) == "" ||
+		!isCanonicalFullUUID(workspaceID) ||
+		!isCanonicalFullUUID(envID) {
+		return AgentWorkspaceLayout{}, errors.New("execenv: workspaces root and canonical full workspace/env UUIDs are required")
+	}
+	root := filepath.Join(workspacesRoot, workspaceID, ".multica", "envs", envID)
+	return AgentWorkspaceLayout{
+		RootDir: root,
+		WorkDir: filepath.Join(root, "workspace"),
+	}, nil
+}
+
+// ProvisionSharedEnvWorkspace idempotently creates the sample's shared
+// workdir. Like ProvisionAgentWorkspace it never removes or resets existing
+// content, so concurrent first-turn anchors of the same sample race safely.
+func ProvisionSharedEnvWorkspace(workspacesRoot, workspaceID, envID string, logger *slog.Logger) (*AgentWorkspaceLayout, error) {
+	layout, err := ResolveSharedEnvWorkspaceLayout(workspacesRoot, workspaceID, envID)
+	if err != nil {
+		return nil, err
+	}
+	for _, dir := range []string{layout.RootDir, layout.WorkDir} {
+		if err := mkdirAllWithoutSymlink(paramsRoot(workspacesRoot), dir, 0o755); err != nil {
+			return nil, fmt.Errorf("execenv: create shared env workspace directory %s: %w", dir, err)
+		}
+	}
+	if logger != nil {
+		logger.Debug("execenv: provisioned shared env workspace", "root", layout.RootDir)
+	}
+	return &layout, nil
+}
+
 // ProvisionAgentTurn idempotently creates only the disposable subtree for one
 // turn. It never changes durable workspace or repo material.
 func ProvisionAgentTurn(layout AgentWorkspaceLayout, turnID string) (*AgentTurnLayout, error) {

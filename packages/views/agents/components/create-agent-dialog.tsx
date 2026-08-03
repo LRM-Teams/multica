@@ -55,6 +55,7 @@ export function CreateAgentDialog({
   currentUserId,
   template,
   draft,
+  defaultMachineId = null,
   onClose,
   onCreate,
 }: {
@@ -75,6 +76,8 @@ export function CreateAgentDialog({
   draft?: AgentCreationDraft | null;
   /** Prefer this group as home when opening on「仅本群」(channel context). */
   defaultHomeChannelId?: string | null;
+  /** Prefill computer (machine id from buildRuntimeMachines). */
+  defaultMachineId?: string | null;
   onClose: () => void;
   // Returns the created Agent so the dialog can run a follow-up
   // setAgentSkills with the IDs the user picked in the form. Pre-skill-
@@ -138,6 +141,9 @@ export function CreateAgentDialog({
       : undefined;
     if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
       return machineForRuntime(templateRuntime, initialMachines)?.id ?? "";
+    }
+    if (defaultMachineId && initialMachines.some((m) => m.id === defaultMachineId)) {
+      return defaultMachineId;
     }
     const usableRuntime = runtimes.find((r) =>
       isRuntimeUsableForUser(r, currentUserId),

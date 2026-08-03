@@ -73,6 +73,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 		MulticaBinary:          selfBin,
 		Token:                  agentToken,
 		Environment:            stripProviderCredentialTransport(agentEnv),
+		SharedWorkdirEnvID:     task.SharedWorkdirEnvID,
 	})
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("canonical turn begin: %w", err)

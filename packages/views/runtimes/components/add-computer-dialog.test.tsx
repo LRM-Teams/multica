@@ -21,12 +21,13 @@ function renderChooser(onChooseYourComputer = vi.fn(), onClose = vi.fn()) {
   return { onChooseYourComputer, onClose };
 }
 
-describe("AddComputerDialog — LRM-1094 Step A", () => {
+describe("AddComputerDialog — LRM-1141 Step A", () => {
   it("shows Your computer and disabled Cloud Coming soon", () => {
     renderChooser();
     expect(screen.getByText("Your computer")).toBeInTheDocument();
     expect(screen.getByText("Cloud computer")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Cloud computer/i })).toBeDisabled();
+    expect(screen.getByText("Managed computers are not available yet.")).toBeInTheDocument();
     expect(screen.getAllByText("Coming soon").length).toBeGreaterThan(0);
   });
 

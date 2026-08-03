@@ -1961,9 +1961,10 @@ func buildReminderPrompt(ch ChannelResponse, reminder agentReminder, occurrenceI
 		b.WriteString("msg-id: unavailable (deleted).\n")
 	}
 	// One channel line only — no ManagerChannels list.
+	// When the anchor is gone, omit #name (deleted-thread tests must not leak surface names).
 	if ch.Kind == "dm" {
 		fmt.Fprintf(&b, "Target channel id: %s (direct message)\n", ch.ID)
-	} else if strings.TrimSpace(ch.Name) != "" {
+	} else if anchorAvailable && strings.TrimSpace(ch.Name) != "" {
 		fmt.Fprintf(&b, "Target channel id: %s (#%s)\n", ch.ID, ch.Name)
 	} else {
 		fmt.Fprintf(&b, "Target channel id: %s\n", ch.ID)

@@ -72,6 +72,11 @@ UPDATE research_session SET
   depth_tier = COALESCE(sqlc.narg('depth_tier'), depth_tier),
   product_round = COALESCE(sqlc.narg('product_round'), product_round),
   product_round_budget = COALESCE(sqlc.narg('product_round_budget'), product_round_budget),
+  unattended_enabled = COALESCE(sqlc.narg('unattended_enabled'), unattended_enabled),
+  max_open_branches = COALESCE(sqlc.narg('max_open_branches'), max_open_branches),
+  single_line_confirmed = COALESCE(sqlc.narg('single_line_confirmed'), single_line_confirmed),
+  unattended_auto_steps = COALESCE(sqlc.narg('unattended_auto_steps'), unattended_auto_steps),
+  last_user_activity_at = COALESCE(sqlc.narg('last_user_activity_at'), last_user_activity_at),
   updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING *;
@@ -244,3 +249,80 @@ INSERT INTO research_fleet_feedback (
   workspace_id, fleet_id, session_id, stage, score, notes, metadata
 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
+
+-- name: ListRunningUnattendedResearchSessions :many
+-- LRM-1076: scanner input — running sessions with unattended default on.
+SELECT * FROM research_session
+WHERE status = 'running'
+  AND unattended_enabled = true
+ORDER BY updated_at ASC
+LIMIT $1;
+
+-- name: IncrementResearchUnattendedAutoSteps :one
+UPDATE research_session
+SET unattended_auto_steps = unattended_auto_steps + $3,
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING *;
+
+-- name: TouchResearchSessionUserActivity :one
+UPDATE research_session
+SET last_user_activity_at = now(),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING *;
+
+-- name: CreateResearchWorkItem :one
+INSERT INTO research_work_item (
+  workspace_id, session_id, kind, target_node_id, assignee_agent_id, status, reason, payload
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING *;
+
+-- name: UpdateResearchWorkItemStatus :one
+UPDATE research_work_item
+SET status = $3,
+    enqueued_at = CASE WHEN $3 = 'enqueued' THEN COALESCE(enqueued_at, now()) ELSE enqueued_at END,
+    completed_at = CASE WHEN $3 IN ('done', 'cancelled', 'failed') THEN COALESCE(completed_at, now()) ELSE completed_at END,
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING *;
+
+-- name: ListOpenResearchWorkItems :many
+SELECT * FROM research_work_item
+WHERE session_id = $1
+  AND workspace_id = $2
+  AND status IN ('pending', 'enqueued')
+ORDER BY created_at ASC;
+
+-- name: CountOpenResearchWorkItems :one
+SELECT COUNT(*)::int AS count
+FROM research_work_item
+WHERE session_id = $1
+  AND workspace_id = $2
+  AND status IN ('pending', 'enqueued');
+
+-- name: CreateResearchSchedulerEvent :one
+INSERT INTO research_scheduler_event (
+  workspace_id, session_id, event_type, detail
+) VALUES ($1, $2, $3, $4)
+RETURNING *;
+
+-- name: CountResearchOpenBranches :one
+-- Open branch ≈ active exploration leaves: active subquestion/probe without
+-- a child edge of type leads_to to another active subquestion/probe/finding.
+SELECT COUNT(*)::int AS count
+FROM research_graph_node n
+WHERE n.session_id = $1
+  AND n.workspace_id = $2
+  AND n.status = 'active'
+  AND n.node_type IN ('subquestion', 'probe')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM research_graph_edge e
+    JOIN research_graph_node c ON c.id = e.to_node_id
+    WHERE e.session_id = n.session_id
+      AND e.from_node_id = n.id
+      AND e.edge_type = 'leads_to'
+      AND c.status = 'active'
+      AND c.node_type IN ('subquestion', 'probe', 'finding', 'conflict')
+  );

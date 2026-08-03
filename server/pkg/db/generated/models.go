@@ -1599,22 +1599,52 @@ type ResearchReport struct {
 }
 
 type ResearchSession struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	FleetID            pgtype.UUID        `json:"fleet_id"`
-	CreatedBy          pgtype.UUID        `json:"created_by"`
-	Title              string             `json:"title"`
-	Goal               string             `json:"goal"`
-	Status             string             `json:"status"`
-	CurrentStage       string             `json:"current_stage"`
-	ProjectID          pgtype.UUID        `json:"project_id"`
-	ChannelID          pgtype.UUID        `json:"channel_id"`
-	HandoffSummary     pgtype.Text        `json:"handoff_summary"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	DepthTier          string             `json:"depth_tier"`
-	ProductRound       int32              `json:"product_round"`
-	ProductRoundBudget int32              `json:"product_round_budget"`
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	FleetID             pgtype.UUID        `json:"fleet_id"`
+	CreatedBy           pgtype.UUID        `json:"created_by"`
+	Title               string             `json:"title"`
+	Goal                string             `json:"goal"`
+	Status              string             `json:"status"`
+	CurrentStage        string             `json:"current_stage"`
+	ProjectID           pgtype.UUID        `json:"project_id"`
+	ChannelID           pgtype.UUID        `json:"channel_id"`
+	HandoffSummary      pgtype.Text        `json:"handoff_summary"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	DepthTier            string             `json:"depth_tier"`
+	ProductRound        int32              `json:"product_round"`
+	ProductRoundBudget  int32              `json:"product_round_budget"`
+	UnattendedEnabled   bool               `json:"unattended_enabled"`
+	MaxOpenBranches     int32              `json:"max_open_branches"`
+	SingleLineConfirmed bool               `json:"single_line_confirmed"`
+	UnattendedAutoSteps int32              `json:"unattended_auto_steps"`
+	LastUserActivityAt  pgtype.Timestamptz `json:"last_user_activity_at"`
+}
+
+type ResearchWorkItem struct {
+	ID              pgtype.UUID        `json:"id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	SessionID       pgtype.UUID        `json:"session_id"`
+	Kind            string             `json:"kind"`
+	TargetNodeID    pgtype.UUID        `json:"target_node_id"`
+	AssigneeAgentID pgtype.UUID        `json:"assignee_agent_id"`
+	Status          string             `json:"status"`
+	Reason          string             `json:"reason"`
+	Payload         []byte             `json:"payload"`
+	EnqueuedAt      pgtype.Timestamptz `json:"enqueued_at"`
+	CompletedAt     pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ResearchSchedulerEvent struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	SessionID   pgtype.UUID        `json:"session_id"`
+	EventType   string             `json:"event_type"`
+	Detail      []byte             `json:"detail"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type ResearchSource struct {

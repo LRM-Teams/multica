@@ -515,7 +515,7 @@ INSERT INTO research_session (
   workspace_id, fleet_id, created_by, title, goal, status, current_stage,
   depth_tier, product_round, product_round_budget
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget
+RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at
 `
 
 type CreateResearchSessionParams struct {
@@ -562,6 +562,11 @@ func (q *Queries) CreateResearchSession(ctx context.Context, arg CreateResearchS
 		&i.DepthTier,
 		&i.ProductRound,
 		&i.ProductRoundBudget,
+		&i.UnattendedEnabled,
+		&i.MaxOpenBranches,
+		&i.SingleLineConfirmed,
+		&i.UnattendedAutoSteps,
+		&i.LastUserActivityAt,
 	)
 	return i, err
 }
@@ -788,7 +793,7 @@ func (q *Queries) GetResearchProductRoundCard(ctx context.Context, arg GetResear
 }
 
 const getResearchSession = `-- name: GetResearchSession :one
-SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget FROM research_session
+SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at FROM research_session
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -817,6 +822,11 @@ func (q *Queries) GetResearchSession(ctx context.Context, arg GetResearchSession
 		&i.DepthTier,
 		&i.ProductRound,
 		&i.ProductRoundBudget,
+		&i.UnattendedEnabled,
+		&i.MaxOpenBranches,
+		&i.SingleLineConfirmed,
+		&i.UnattendedAutoSteps,
+		&i.LastUserActivityAt,
 	)
 	return i, err
 }
@@ -1097,7 +1107,7 @@ func (q *Queries) ListResearchReports(ctx context.Context, arg ListResearchRepor
 }
 
 const listResearchSessions = `-- name: ListResearchSessions :many
-SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget FROM research_session
+SELECT id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at FROM research_session
 WHERE workspace_id = $1
 ORDER BY updated_at DESC
 `
@@ -1128,6 +1138,11 @@ func (q *Queries) ListResearchSessions(ctx context.Context, workspaceID pgtype.U
 			&i.DepthTier,
 			&i.ProductRound,
 			&i.ProductRoundBudget,
+			&i.UnattendedEnabled,
+			&i.MaxOpenBranches,
+			&i.SingleLineConfirmed,
+			&i.UnattendedAutoSteps,
+			&i.LastUserActivityAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1340,24 +1355,34 @@ UPDATE research_session SET
   depth_tier = COALESCE($10, depth_tier),
   product_round = COALESCE($11, product_round),
   product_round_budget = COALESCE($12, product_round_budget),
+  unattended_enabled = COALESCE($13, unattended_enabled),
+  max_open_branches = COALESCE($14, max_open_branches),
+  single_line_confirmed = COALESCE($15, single_line_confirmed),
+  unattended_auto_steps = COALESCE($16, unattended_auto_steps),
+  last_user_activity_at = COALESCE($17, last_user_activity_at),
   updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget
+RETURNING id, workspace_id, fleet_id, created_by, title, goal, status, current_stage, project_id, channel_id, handoff_summary, created_at, updated_at, depth_tier, product_round, product_round_budget, unattended_enabled, max_open_branches, single_line_confirmed, unattended_auto_steps, last_user_activity_at
 `
 
 type UpdateResearchSessionParams struct {
-	ID                 pgtype.UUID `json:"id"`
-	WorkspaceID        pgtype.UUID `json:"workspace_id"`
-	Title              pgtype.Text `json:"title"`
-	Goal               pgtype.Text `json:"goal"`
-	Status             pgtype.Text `json:"status"`
-	CurrentStage       pgtype.Text `json:"current_stage"`
-	ProjectID          pgtype.UUID `json:"project_id"`
-	ChannelID          pgtype.UUID `json:"channel_id"`
-	HandoffSummary     pgtype.Text `json:"handoff_summary"`
-	DepthTier          pgtype.Text `json:"depth_tier"`
-	ProductRound       pgtype.Int4 `json:"product_round"`
-	ProductRoundBudget pgtype.Int4 `json:"product_round_budget"`
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	Title               pgtype.Text        `json:"title"`
+	Goal                pgtype.Text        `json:"goal"`
+	Status              pgtype.Text        `json:"status"`
+	CurrentStage        pgtype.Text        `json:"current_stage"`
+	ProjectID           pgtype.UUID        `json:"project_id"`
+	ChannelID           pgtype.UUID        `json:"channel_id"`
+	HandoffSummary      pgtype.Text        `json:"handoff_summary"`
+	DepthTier            pgtype.Text        `json:"depth_tier"`
+	ProductRound        pgtype.Int4        `json:"product_round"`
+	ProductRoundBudget  pgtype.Int4        `json:"product_round_budget"`
+	UnattendedEnabled   pgtype.Bool        `json:"unattended_enabled"`
+	MaxOpenBranches     pgtype.Int4        `json:"max_open_branches"`
+	SingleLineConfirmed pgtype.Bool        `json:"single_line_confirmed"`
+	UnattendedAutoSteps pgtype.Int4        `json:"unattended_auto_steps"`
+	LastUserActivityAt  pgtype.Timestamptz `json:"last_user_activity_at"`
 }
 
 func (q *Queries) UpdateResearchSession(ctx context.Context, arg UpdateResearchSessionParams) (ResearchSession, error) {
@@ -1374,6 +1399,11 @@ func (q *Queries) UpdateResearchSession(ctx context.Context, arg UpdateResearchS
 		arg.DepthTier,
 		arg.ProductRound,
 		arg.ProductRoundBudget,
+		arg.UnattendedEnabled,
+		arg.MaxOpenBranches,
+		arg.SingleLineConfirmed,
+		arg.UnattendedAutoSteps,
+		arg.LastUserActivityAt,
 	)
 	var i ResearchSession
 	err := row.Scan(
@@ -1393,6 +1423,11 @@ func (q *Queries) UpdateResearchSession(ctx context.Context, arg UpdateResearchS
 		&i.DepthTier,
 		&i.ProductRound,
 		&i.ProductRoundBudget,
+		&i.UnattendedEnabled,
+		&i.MaxOpenBranches,
+		&i.SingleLineConfirmed,
+		&i.UnattendedAutoSteps,
+		&i.LastUserActivityAt,
 	)
 	return i, err
 }

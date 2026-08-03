@@ -11,22 +11,27 @@ import (
 )
 
 type ResearchSessionResponse struct {
-	ID                 string  `json:"id"`
-	WorkspaceID        string  `json:"workspace_id"`
-	FleetID            string  `json:"fleet_id"`
-	CreatedBy          string  `json:"created_by"`
-	Title              string  `json:"title"`
-	Goal               string  `json:"goal"`
-	Status             string  `json:"status"`
-	CurrentStage       string  `json:"current_stage"`
-	DepthTier           string  `json:"depth_tier"`
-	ProductRound       int32   `json:"product_round"`
-	ProductRoundBudget int32   `json:"product_round_budget"`
-	ProjectID          *string `json:"project_id"`
-	ChannelID          *string `json:"channel_id"`
-	HandoffSummary     *string `json:"handoff_summary"`
-	CreatedAt          string  `json:"created_at"`
-	UpdatedAt          string  `json:"updated_at"`
+	ID                  string  `json:"id"`
+	WorkspaceID         string  `json:"workspace_id"`
+	FleetID             string  `json:"fleet_id"`
+	CreatedBy           string  `json:"created_by"`
+	Title               string  `json:"title"`
+	Goal                string  `json:"goal"`
+	Status              string  `json:"status"`
+	CurrentStage        string  `json:"current_stage"`
+	DepthTier            string  `json:"depth_tier"`
+	ProductRound        int32   `json:"product_round"`
+	ProductRoundBudget  int32   `json:"product_round_budget"`
+	UnattendedEnabled   bool    `json:"unattended_enabled"`
+	MaxOpenBranches     int32   `json:"max_open_branches"`
+	SingleLineConfirmed bool    `json:"single_line_confirmed"`
+	UnattendedAutoSteps int32   `json:"unattended_auto_steps"`
+	LastUserActivityAt  *string `json:"last_user_activity_at,omitempty"`
+	ProjectID           *string `json:"project_id"`
+	ChannelID           *string `json:"channel_id"`
+	HandoffSummary      *string `json:"handoff_summary"`
+	CreatedAt           string  `json:"created_at"`
+	UpdatedAt           string  `json:"updated_at"`
 }
 
 // ResearchFleetPreviewMember is a list-row avatar stack item (LRM-805).
@@ -137,24 +142,33 @@ type ResearchMessageResp struct {
 }
 
 func researchSessionToResponse(s db.ResearchSession) ResearchSessionResponse {
-	return ResearchSessionResponse{
-		ID:                 uuidToString(s.ID),
-		WorkspaceID:        uuidToString(s.WorkspaceID),
-		FleetID:            uuidToString(s.FleetID),
-		CreatedBy:          uuidToString(s.CreatedBy),
-		Title:              s.Title,
-		Goal:               s.Goal,
-		Status:             s.Status,
-		CurrentStage:       s.CurrentStage,
-		DepthTier:           s.DepthTier,
-		ProductRound:       s.ProductRound,
-		ProductRoundBudget: s.ProductRoundBudget,
-		ProjectID:          uuidToPtr(s.ProjectID),
-		ChannelID:          uuidToPtr(s.ChannelID),
-		HandoffSummary:     textToPtr(s.HandoffSummary),
-		CreatedAt:          timestampToString(s.CreatedAt),
-		UpdatedAt:          timestampToString(s.UpdatedAt),
+	resp := ResearchSessionResponse{
+		ID:                  uuidToString(s.ID),
+		WorkspaceID:         uuidToString(s.WorkspaceID),
+		FleetID:             uuidToString(s.FleetID),
+		CreatedBy:           uuidToString(s.CreatedBy),
+		Title:               s.Title,
+		Goal:                s.Goal,
+		Status:              s.Status,
+		CurrentStage:        s.CurrentStage,
+		DepthTier:            s.DepthTier,
+		ProductRound:        s.ProductRound,
+		ProductRoundBudget:  s.ProductRoundBudget,
+		UnattendedEnabled:   s.UnattendedEnabled,
+		MaxOpenBranches:     s.MaxOpenBranches,
+		SingleLineConfirmed: s.SingleLineConfirmed,
+		UnattendedAutoSteps: s.UnattendedAutoSteps,
+		ProjectID:           uuidToPtr(s.ProjectID),
+		ChannelID:           uuidToPtr(s.ChannelID),
+		HandoffSummary:      textToPtr(s.HandoffSummary),
+		CreatedAt:           timestampToString(s.CreatedAt),
+		UpdatedAt:           timestampToString(s.UpdatedAt),
 	}
+	if s.LastUserActivityAt.Valid {
+		ts := timestampToString(s.LastUserActivityAt)
+		resp.LastUserActivityAt = &ts
+	}
+	return resp
 }
 
 func (h *Handler) ListResearchSessions(w http.ResponseWriter, r *http.Request) {

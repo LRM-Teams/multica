@@ -60,6 +60,10 @@ func (h *Handler) AppendResearchGraphNode(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusForbidden, "fleet agents cannot rewrite the user goal; only the user may change it mid-flight")
 		return
 	}
+	// LRM-1076: soft open-branch budget — reject expand past budget + audit.
+	if !h.enforceResearchOpenBranchBudget(r.Context(), w, session, req.NodeType) {
+		return
+	}
 	if req.Status == "" {
 		req.Status = "active"
 	}
@@ -120,6 +124,7 @@ func (h *Handler) AppendResearchGraphNode(w http.ResponseWriter, r *http.Request
 			"status":    node.Status,
 		},
 	})
+	h.maybeRecordResearchUnattendedMutation(r.Context(), session, "graph_append")
 	writeJSON(w, http.StatusCreated, map[string]any{"node": nodeResp, "edge": edge})
 }
 
@@ -150,6 +155,11 @@ func (h *Handler) UpsertResearchSourceHandler(w http.ResponseWriter, r *http.Req
 	}
 	sessionID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "id")
 	if !ok {
+		return
+	}
+	session, sessErr := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
+	if sessErr != nil {
+		writeError(w, http.StatusNotFound, "research session not found")
 		return
 	}
 	var req upsertSourceRequest
@@ -255,6 +265,7 @@ func (h *Handler) UpsertResearchSourceHandler(w http.ResponseWriter, r *http.Req
 			"source_class":       source.SourceClass,
 		},
 	})
+	h.maybeRecordResearchUnattendedMutation(r.Context(), session, "source_upsert")
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -382,6 +393,14 @@ func (h *Handler) PostResearchMessage(w http.ResponseWriter, r *http.Request) {
 	// User chat while paused / awaiting confirm resumes before wake.
 	// LRM-840: reject-confirm tips post as chat and must leave awaiting_user_confirm
 	// so status updates immediately (approve still uses POST /confirm → completed).
+	if senderType == "user" {
+		if touched, terr := h.Queries.TouchResearchSessionUserActivity(r.Context(), db.TouchResearchSessionUserActivityParams{
+			ID:          sessionID,
+			WorkspaceID: wsUUID,
+		}); terr == nil {
+			session = touched
+		}
+	}
 	if senderType == "user" && (session.Status == "paused" || session.Status == "awaiting_user_confirm") {
 		resumed, resumeErr := h.Queries.UpdateResearchSession(r.Context(), db.UpdateResearchSessionParams{
 			ID:          sessionID,
@@ -588,6 +607,19 @@ func (h *Handler) RequestResearchStageEval(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "research session not found")
 		return
 	}
+	// LRM-1076: before running S2→S3 content eval, require ≥2 open branches or single_line_confirmed.
+	if session.CurrentStage == "s2_sources" {
+		if okBranch, why := h.researchS2ParallelBranchOK(r.Context(), session); !okBranch {
+			_, _ = h.Queries.CreateResearchSchedulerEvent(r.Context(), db.CreateResearchSchedulerEventParams{
+				WorkspaceID: wsUUID,
+				SessionID:   sessionID,
+				EventType:   "s2_parallel_branch_gate",
+				Detail:      marshalJSONRaw(map[string]any{"ok": false, "reason": why}),
+			})
+			writeError(w, http.StatusConflict, why)
+			return
+		}
+	}
 	eval, nextStage, err := h.evaluateResearchStage(r.Context(), wsUUID, session)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -782,6 +814,26 @@ func (h *Handler) ConfirmResearchSession(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "session cannot be confirmed in current status")
 		return
 	}
+	// LRM-1076: completed requires S4 + non-empty report + evidence gate.
+	// Early stop must use POST /archive (status=archived), not completed.
+	nodes, _ := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+	edges, _ := h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+	sources, _ := h.Queries.ListResearchSources(r.Context(), db.ListResearchSourcesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+	var reportPtr *db.ResearchReport
+	if rep, rerr := h.Queries.GetLatestResearchReport(r.Context(), db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: wsUUID}); rerr == nil {
+		reportPtr = &rep
+	}
+	if blockers := researchCompletionBlockers(session, nodes, edges, sources, reportPtr); len(blockers) > 0 {
+		_, _ = h.Queries.CreateResearchSchedulerEvent(r.Context(), db.CreateResearchSchedulerEventParams{
+			WorkspaceID: wsUUID,
+			SessionID:   sessionID,
+			EventType:   "completed_rejected",
+			Detail:      marshalJSONRaw(map[string]any{"blockers": blockers}),
+		})
+		writeError(w, http.StatusConflict, "cannot complete research session: "+strings.Join(blockers, "; ")+
+			". Use archive for early stop; research truth surface remains graph+sources+stages (not Goal+chat).")
+		return
+	}
 	updated, err := h.Queries.UpdateResearchSession(r.Context(), db.UpdateResearchSessionParams{
 		ID:          sessionID,
 		WorkspaceID: wsUUID,
@@ -827,6 +879,22 @@ func (h *Handler) ResearchSessionHandoff(w http.ResponseWriter, r *http.Request)
 	if session.Status != "completed" && session.Status != "awaiting_user_confirm" {
 		writeError(w, http.StatusBadRequest, "confirm research completion before handoff")
 		return
+	}
+	// LRM-1076: handoff must not mint completed without S4/report/evidence,
+	// and must not treat Goal+channel as the research truth surface.
+	if session.Status != "awaiting_user_confirm" {
+		nodes, _ := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		edges, _ := h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		sources, _ := h.Queries.ListResearchSources(r.Context(), db.ListResearchSourcesParams{SessionID: sessionID, WorkspaceID: wsUUID})
+		var reportPtr *db.ResearchReport
+		if rep, rerr := h.Queries.GetLatestResearchReport(r.Context(), db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: wsUUID}); rerr == nil {
+			reportPtr = &rep
+		}
+		if blockers := researchCompletionBlockers(session, nodes, edges, sources, reportPtr); len(blockers) > 0 {
+			writeError(w, http.StatusConflict, "handoff cannot complete research session: "+strings.Join(blockers, "; ")+
+				". Archive for early stop; graph+sources+stages remain the truth surface.")
+			return
+		}
 	}
 	var req researchHandoffRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

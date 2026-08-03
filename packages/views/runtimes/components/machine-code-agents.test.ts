@@ -72,6 +72,21 @@ describe("codeAgentVersion", () => {
       ),
     ).toBeNull();
   });
+
+  it("reduces provider-prefixed metadata.version to the version token (Grok)", () => {
+    // Frank 2026-08-03: Grok registers metadata.version as
+    // "grok 0.2.111 (94172f2aa4)"; rendering it under `v{{version}}`
+    // read "vgrok 0.2.111 …" on the machine tile.
+    expect(
+      codeAgentVersion(
+        runtime({
+          provider: "grok",
+          metadata: { version: "grok 0.2.111 (94172f2aa4)" },
+          device_info: "ubuntu · grok 0.2.111 (94172f2aa4)",
+        }),
+      ),
+    ).toBe("0.2.111");
+  });
 });
 
 describe("partitionMachineCodeAgents", () => {

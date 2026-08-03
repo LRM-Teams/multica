@@ -552,15 +552,25 @@ function latestMachineLastSeenAt(runtimes: AgentRuntime[]): string | null {
 }
 
 /**
- * Daemon version shown in machine Basics. Prefer a single shared version;
- * when runtimes disagree (or only some report `current_version`), keep a
- * row visible by picking the most recently daemon-seen runtime's version
- * instead of hiding the field entirely (looked like "version disappeared").
- * `v` prefixes are normalized so `0.3.94` and `v0.3.94` count as the same.
+ * Daemon version shown in machine Basics. All runtimes on one machine share
+ * the daemon, so the strict "every runtime agrees" read would null the row
+ * whenever a stale runtime still carries the daemon's previous version —
+ * one-off code-agent crashes leave exactly that residue (Frank 2026-08-03:
+ * live Pi/Cursor on 0.3.95 + crashed Grok holding 0.3.94 hid the row
+ * entirely). Trust the freshest sighting instead: runtimes still reported
+ * offline by the health check are dropped from the pool when any active one
+ * exists, so a crashed runtime's old version never out-votes the live ones;
+ * fall back to every runtime only when nothing is online (daemon stopped —
+ * the version is informational then anyway). `v` prefixes are normalized so
+ * `0.3.94` and `v0.3.94` count as the same.
  */
 function commonCliVersion(runtimes: AgentRuntime[]): string | null {
+  const active = runtimes.filter(
+    (runtime) => runtime.runtime_health !== "offline",
+  );
+  const pool = active.length > 0 ? active : runtimes;
   const byNorm = new Map<string, string>();
-  for (const runtime of runtimes) {
+  for (const runtime of pool) {
     const version = runtimeCurrentVersion(runtime);
     if (!version) continue;
     const norm = version.replace(/^v/i, "");
@@ -569,13 +579,19 @@ function commonCliVersion(runtimes: AgentRuntime[]): string | null {
   if (byNorm.size === 0) return null;
   if (byNorm.size === 1) return Array.from(byNorm.values())[0] ?? null;
 
+  // Disagreement inside the pool: freshest runtime-level sighting wins.
+  // `daemon_last_seen_at` is daemon-level — identical on every runtime row
+  // of one machine, so it can't break this tie.
+  const seen = (runtime: AgentRuntime): number => {
+    const at = Date.parse(runtime.last_seen_at ?? "");
+    return Number.isNaN(at) ? 0 : at;
+  };
   let best: { version: string; at: number } | null = null;
-  for (const runtime of runtimes) {
+  for (const runtime of pool) {
     const version = runtimeCurrentVersion(runtime);
     if (!version) continue;
-    const at =
-      Date.parse(runtime.daemon_last_seen_at || runtime.last_seen_at || "") || 0;
-    if (!best || at >= best.at) best = { version, at };
+    const at = seen(runtime);
+    if (!best || at > best.at) best = { version, at };
   }
   return best?.version ?? null;
 }

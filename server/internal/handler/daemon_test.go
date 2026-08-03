@@ -2846,11 +2846,10 @@ func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {
 	}
 }
 
-// Regression test for #1276: ClaimTaskByRuntime must populate workspace_id in
-// the response for run_only autopilot tasks. Before the fix, resp.WorkspaceID
-// stayed empty because ClaimTaskByRuntime only handled IssueID and
-// ChatSessionID branches, causing the daemon's execenv to fail with
-// "workspace ID is required".
+// Regression test for #1276 / LRM-1051: ClaimTaskByRuntime must populate
+// workspace_id for legacy run_only tasks that only carry autopilot_run_id.
+// After autopilot* tables dropped, title/thread hydration is gone; workspace
+// comes from agent_inbox_event.workspace_id.
 func TestClaimTask_AutopilotRunOnly_PopulatesWorkspaceID(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -2905,9 +2904,8 @@ func TestClaimTask_AutopilotRunOnly_PopulatesWorkspaceID(t *testing.T) {
 	if resp.Task.WorkspaceID != testWorkspaceID {
 		t.Fatalf("expected workspace_id %q, got %q", testWorkspaceID, resp.Task.WorkspaceID)
 	}
-	if resp.Task.ThreadName != "claim workspace fixture" {
-		t.Fatalf("autopilot task thread_name = %q, want autopilot title", resp.Task.ThreadName)
-	}
+	// LRM-1051: autopilot* tables are gone; claim no longer hydrates title/thread
+	// from GetAutopilot — workspace_id from inbox.workspace_id is the AC.
 }
 
 // TestClaimTaskByRuntime_TaskWorkspaceMismatch_CancelsAndRejects verifies

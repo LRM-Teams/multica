@@ -2482,9 +2482,10 @@ func TestReminderNaturalLanguageMutationAuthorizationAndManagedPatrolReEnable(t 
 	router := reminderModernTransportRouter()
 	outsiderID := seedWorkspaceUserForTransportTargetTest(t, "reminder-outsider-"+uuid.NewString())
 
-	t.Run("ordinary reminder belongs to its initiating member", func(t *testing.T) {
+	t.Run("ordinary reminder is owned by agent; any turn initiator may mutate", func(t *testing.T) {
+		// LRM-1057: initiator mismatch must not 403 owning-agent cancel/update/snooze.
 		scheduleRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/schedule", map[string]any{
-			"title": "initiator only reminder", "delay_seconds": 1800, "message_id": fixture.anchorMessageID,
+			"title": "owner self-manage reminder", "delay_seconds": 1800, "message_id": fixture.anchorMessageID,
 		})
 		if scheduleRec.Code != http.StatusCreated {
 			t.Fatalf("schedule status=%d body=%s", scheduleRec.Code, scheduleRec.Body.String())
@@ -2501,20 +2502,19 @@ func TestReminderNaturalLanguageMutationAuthorizationAndManagedPatrolReEnable(t 
 		for _, path := range []string{
 			"/api/agent/reminders/update",
 			"/api/agent/reminders/snooze",
-			"/api/agent/reminders/cancel",
 		} {
 			rec := serveReminderModernTransport(t, router, fixture, path, map[string]any{
 				"id": scheduled.ID, "delay_seconds": 1800,
 			})
-			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "only the reminder initiator") {
-				t.Fatalf("ordinary outsider mutation path=%s status=%d body=%s", path, rec.Code, rec.Body.String())
+			if rec.Code != http.StatusOK {
+				t.Fatalf("owner mutation with other initiator path=%s status=%d body=%s", path, rec.Code, rec.Body.String())
 			}
 		}
 
-		setReminderModernTransportInitiator(t, fixture, fixture.initiatorUserID)
+		setReminderModernTransportInitiator(t, fixture, outsiderID)
 		cancelRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/cancel", map[string]any{"id": scheduled.ID})
 		if cancelRec.Code != http.StatusOK {
-			t.Fatalf("ordinary initiator cancel status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
+			t.Fatalf("owner cancel with other initiator status=%d body=%s", cancelRec.Code, cancelRec.Body.String())
 		}
 	})
 

@@ -91,16 +91,17 @@ export function scrollToIndexUntilSettled(
 const ANCHOR_TOP_BAND_PX = 96;
 
 /**
- * #325 phase-2 block 2: "open scrolled to the unread divider" (#303, Iris) as a
- * self-contained plugin hook. Owns the anchor-index derivation, the
- * once-per-conversation-visit guard, and the measure-safe (#883) settle-scroll.
+ * Unread-divider scroll plugin (#325 / #303).
  *
- * The core list only READS the returned `unreadAnchorIndex` to seed Virtuoso's
- * mount position (`initialTopMostItemIndex`) — it holds none of this state and
- * runs none of this effect. A deep-link/search highlight always wins: while
- * `highlightMessageId` is set the anchor scroll stands down (that target owns the
- * viewport). Scrolls once per channel visit; the read cursor can arrive ~100ms
- * after mount, so the effect covers that late arrival via the settle helper.
+ * LRM-1068 product flip: cold open must land on the **latest** message, not the
+ * first-unread row. Busy channels were opening on the "今天" divider + 当日第一条
+ * because this hook pinned `align:start` on the first unread. The "N new"
+ * divider and jump pill still surface unread; this hook no longer steals the
+ * viewport on open (`anchorOnOpen` defaults false).
+ *
+ * When `anchorOnOpen` is explicitly true (legacy / opt-in), owns the
+ * once-per-visit guard and measure-safe (#883) settle-scroll. Deep-link/search
+ * highlight always wins over the anchor.
  */
 export function useUnreadAnchorScroll({
   channelId,
@@ -111,11 +112,14 @@ export function useUnreadAnchorScroll({
   virtuosoRef,
   scrollContainerEl,
   messageRefMap,
+  anchorOnOpen = false,
 }: {
   channelId: string | undefined;
   messages: readonly ChannelMessage[];
   newMessagesDivider: NewMessagesDivider | null;
   highlightMessageId: string | null | undefined;
+  /** When true, cold-open pins the first-unread row (pre-LRM-1068). Default false. */
+  anchorOnOpen?: boolean;
   /**
    * True once Virtuoso's imperative handle has attached — a value-comparable
    * BOOLEAN, not the handle object itself. Ref attachment doesn't trigger a
@@ -148,9 +152,11 @@ export function useUnreadAnchorScroll({
   messageRefMap: ReadonlyMap<string, HTMLElement>;
 }): { unreadAnchorIndex: number; isAnchorSettling: boolean } {
   const unreadAnchorIndex = useMemo(() => {
-    if (!newMessagesDivider) return -1;
+    // LRM-1068: leave the viewport to bottom-settle / highlight unless a caller
+    // explicitly opts back into first-unread open.
+    if (!anchorOnOpen || !newMessagesDivider) return -1;
     return messages.findIndex((m) => m.id === newMessagesDivider.anchorMessageId);
-  }, [messages, newMessagesDivider]);
+  }, [anchorOnOpen, messages, newMessagesDivider]);
 
   // Whether the settle loop below currently owns scroll position. Virtuoso's
   // own `followOutput` ("stick to bottom on new content") defaults on before

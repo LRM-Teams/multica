@@ -2,41 +2,42 @@ import { useRef } from "react";
 
 export interface EntryAnchor {
   /**
-   * The `around_seq` anchor for the cold message load (#340) — the viewer's list
-   * read cursor at entry. `null` when nothing is unread → keep the default
-   * latest-page load.
+   * Cold-load `around_seq` for the messages query.
+   *
+   * LRM-1068: always `null` on normal open so the first fetch is the **latest
+   * page** (cheap, lands at newest). Mid-history `around_seq` windows were
+   * anchoring busy channels on the first-unread row ("今日第一条") and pulling
+   * a heavier bidirectional page — the lag + wrong landing jianghp3 reported.
+   * Deep-link / search jump paths own their own fetch and are unaffected.
    */
   aroundSeq: number | null;
   /**
    * The TRUE unread count at entry, from the same list response (sidebar-same
-   * source), for the "N new messages" divider. The around window only holds
-   * ~limit/2 messages past the anchor, so counting unread within the loaded
-   * window undercounts large-unread conversations (486 → "~25"); this carries
-   * the real total. `null` when the list didn't provide it → the caller falls
-   * back to the window count.
+   * source), for the "N new messages" divider / pill label. Frozen per visit so
+   * mark-read echo + live arrivals don't shrink the entry snapshot (PRD §3.1).
+   * `null` when the list didn't provide it → the caller falls back to the
+   * window count.
    */
   unreadCount: number | null;
 }
 
 /**
- * The message-list anchor for a conversation, frozen at entry (#340).
+ * Entry snapshot for a conversation visit (LRM-1068 / formerly #340).
  *
- * Both values come from the sidebar list item at the moment the conversation
- * first opens and are FROZEN per conversation (a ref, like `useEntryReadCursor`'s
- * payload snapshot), NOT reactive:
- *  - the anchor only feeds the cold first fetch (the messages query keys on
- *    channel id and caches under staleTime:Infinity), so a shifting value would
- *    only jitter the query key; and
- *  - the divider is a snapshot of the entry moment (PRD §3.1) — its count must
- *    NOT change when new messages arrive after you're already here.
+ * Freezes `unreadCount` from the sidebar list item at the moment the
+ * conversation first opens (a ref — same pattern as `useEntryReadCursor`).
+ * Does **not** feed `around_seq` anymore: cold open always loads the latest
+ * page and the message list bottom-settles to newest. The divider + "N new"
+ * pill still use the frozen count so viewers can jump to unread on demand.
  *
- * `listLastReadSeq` = `Channel.last_read_seq` / `DMItem.last_read_seq`.
+ * `listLastReadSeq` is accepted for API stability / future deep-link reuse but
+ * is intentionally unused for cold-open fetch anchoring.
  * `listUnreadCount` = `Channel.real_unread_count ?? unread_count` /
  * `DMItem.real_unread ?? unread` (real unread, excluding the manual-unread boost).
  */
 export function useEntryAnchor(
   channelId: string | null | undefined,
-  listLastReadSeq: number | null | undefined,
+  _listLastReadSeq: number | null | undefined,
   listUnreadCount: number | null | undefined,
 ): EntryAnchor {
   const key = channelId ?? null;
@@ -45,15 +46,14 @@ export function useEntryAnchor(
     anchor: { aroundSeq: null, unreadCount: null },
   });
   if (ref.current.channelId !== key) {
-    const aroundSeq =
-      typeof listLastReadSeq === "number" && listLastReadSeq > 0
-        ? listLastReadSeq
-        : null;
     const unreadCount =
       typeof listUnreadCount === "number" && listUnreadCount > 0
         ? listUnreadCount
         : null;
-    ref.current = { channelId: key, anchor: { aroundSeq, unreadCount } };
+    ref.current = {
+      channelId: key,
+      anchor: { aroundSeq: null, unreadCount },
+    };
   }
   return ref.current.channelId === key
     ? ref.current.anchor

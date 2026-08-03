@@ -88,6 +88,30 @@ export function runtimeHasHealthAttention(
   return ATTENTION_HEALTH_STATES.has(runtimeHealthState(runtime));
 }
 
+/**
+ * Task #31 (Frank/Parker 2026-08-03): sidebar "N 台机器有可用更新" must count
+ * **Computers** (unique daemon), not runtimes — one machine with three
+ * providers would otherwise inflate the badge. Only runtimes that pass
+ * {@link runtimeHasHealthAttention} (owner = me, local, non-sandbox,
+ * non-desktop-managed) contribute; another member's update_available never
+ * does. Runtimes without a daemon_id fall back to runtime id so orphans still
+ * surface once each.
+ */
+export function countMyAttentionComputers(
+  runtimes: AgentRuntime[],
+  userId: string | null | undefined,
+): number {
+  if (!userId) return 0;
+  const computers = new Set<string>();
+  for (const runtime of runtimes) {
+    if (!runtimeHasHealthAttention(runtime, userId)) continue;
+    const daemonId =
+      typeof runtime.daemon_id === "string" ? runtime.daemon_id.trim() : "";
+    computers.add(daemonId || runtime.id);
+  }
+  return computers.size;
+}
+
 export function runtimeCanStartSelfUpdate(
   runtime: AgentRuntime,
   userId: string | null | undefined,

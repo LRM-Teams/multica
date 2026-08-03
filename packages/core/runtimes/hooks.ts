@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "../auth";
 import { runtimeListOptions } from "./queries";
 import {
+  countMyAttentionComputers,
   runtimeCanStartSelfUpdate,
   runtimeHasHealthAttention,
 } from "./runtime-health-state";
@@ -31,11 +32,11 @@ export function useMyRuntimeHealthAttention(wsId: string | undefined): boolean {
 export const useMyRuntimesNeedUpdate = useMyRuntimeHealthAttention;
 
 /**
- * Count of the current user's local runtimes needing health attention (task
- * #9, 2026-07-31) — same underlying predicate as `useMyRuntimeHealthAttention`
- * (`runtimeHasHealthAttention`), so the sidebar badge and its popover count
- * never disagree about which runtimes qualify (e.g. both correctly exclude
- * sandbox daemons and desktop-managed runtimes).
+ * Count of **Computers** (unique daemon) needing health attention for the
+ * current user (task #9 / #31) — same predicate as
+ * `useMyRuntimeHealthAttention` (`runtimeHasHealthAttention`: owner=me, local,
+ * non-sandbox, non-desktop-managed), so the sidebar badge and popover never
+ * disagree. Counts by daemon so one machine with multiple runtimes is "1 台".
  */
 export function useMyAttentionRuntimeCount(wsId: string | undefined): number {
   const userId = useAuthStore((s) => s.user?.id);
@@ -44,14 +45,10 @@ export function useMyAttentionRuntimeCount(wsId: string | undefined): number {
     enabled: !!wsId,
   });
 
-  return useMemo(() => {
-    if (!runtimes || !userId) return 0;
-    let count = 0;
-    for (const runtime of runtimes) {
-      if (runtimeHasHealthAttention(runtime, userId)) count += 1;
-    }
-    return count;
-  }, [runtimes, userId]);
+  return useMemo(
+    () => countMyAttentionComputers(runtimes ?? [], userId),
+    [runtimes, userId],
+  );
 }
 
 /**

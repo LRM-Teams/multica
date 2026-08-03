@@ -3,6 +3,7 @@ import type { AgentRuntime } from "../types";
 import {
   aggregateRuntimeHealthState,
   aggregateRuntimeHealthPresentation,
+  countMyAttentionComputers,
   deriveRuntimeHealthPresentation,
   isSandboxRuntime,
   runtimeCanStartSelfUpdate,
@@ -84,6 +85,31 @@ describe("runtime health contract helpers", () => {
     ).toBe(false);
   });
 
+  // Task #31: sidebar alert must ignore other members' machines.
+  it("does not flag health attention for another owner's update_available runtime", () => {
+    expect(
+      runtimeHasHealthAttention(
+        makeRuntime({
+          owner_id: "jianghp3",
+          runtime_health: "update_available",
+        }),
+        "user-1",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag attention for a cloud runtime even when owned", () => {
+    expect(
+      runtimeHasHealthAttention(
+        makeRuntime({
+          runtime_mode: "cloud",
+          runtime_health: "update_available",
+        }),
+        "user-1",
+      ),
+    ).toBe(false);
+  });
+
   it("uses current_version as the confirmed display version", () => {
     expect(
       runtimeCurrentVersion(
@@ -94,7 +120,73 @@ describe("runtime health contract helpers", () => {
       ),
     ).toBe("0.4.0");
   });
+});
 
+describe("countMyAttentionComputers (task #31)", () => {
+  it("returns 0 when another owner's update_available is the only hit", () => {
+    expect(
+      countMyAttentionComputers(
+        [
+          makeRuntime({
+            id: "rt-other",
+            owner_id: "jianghp3",
+            runtime_health: "update_available",
+          }),
+        ],
+        "user-1",
+      ),
+    ).toBe(0);
+  });
+
+  it("counts unique daemons, not runtimes on the same computer", () => {
+    expect(
+      countMyAttentionComputers(
+        [
+          makeRuntime({
+            id: "rt-a",
+            daemon_id: "daemon-box",
+            runtime_health: "update_available",
+          }),
+          makeRuntime({
+            id: "rt-b",
+            daemon_id: "daemon-box",
+            provider: "cursor",
+            runtime_health: "update_available",
+          }),
+          makeRuntime({
+            id: "rt-c",
+            daemon_id: "daemon-other",
+            owner_id: "jianghp3",
+            runtime_health: "update_available",
+          }),
+        ],
+        "user-1",
+      ),
+    ).toBe(1);
+  });
+
+  it("counts two owned daemons needing attention as two computers", () => {
+    expect(
+      countMyAttentionComputers(
+        [
+          makeRuntime({
+            id: "rt-1",
+            daemon_id: "daemon-1",
+            runtime_health: "update_available",
+          }),
+          makeRuntime({
+            id: "rt-2",
+            daemon_id: "daemon-2",
+            runtime_health: "failed",
+          }),
+        ],
+        "user-1",
+      ),
+    ).toBe(2);
+  });
+});
+
+describe("runtime health contract helpers (continued)", () => {
   it("aggregates the highest-severity runtime health state", () => {
     expect(
       aggregateRuntimeHealthState([

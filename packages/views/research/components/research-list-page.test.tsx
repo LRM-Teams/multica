@@ -484,7 +484,10 @@ describe("ResearchListPage search & status filter (LRM-818)", () => {
       target: { value: "zzz" },
     });
     expect(screen.getByText(enResearch.filter.no_results)).toBeInTheDocument();
-    expect(screen.getByTestId("research-filter-no-results")).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("research-filter-no-results")).toHaveAttribute(
+      "aria-live",
+      "polite",
+    );
     // Clear is outside the radiogroup.
     const clear = screen.getByTestId("research-filter-no-results-clear");
     expect(clear.closest('[role="radiogroup"]')).toBeNull();

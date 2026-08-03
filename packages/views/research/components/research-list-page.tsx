@@ -97,8 +97,12 @@ export function ResearchListPage() {
   const nav = useNavigation();
   const qc = useQueryClient();
   const [composer, setComposer] = useState<ComposerDraft>(() => emptyComposer());
-  const [titleQuery, setTitleQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<SessionStatusFilter | null>(null);
+  const [titleQuery, setTitleQuery] = useState(
+    () => readResearchListPersist()?.q ?? "",
+  );
+  const [statusFilter, setStatusFilter] = useState<SessionStatusFilter | null>(
+    () => readResearchListPersist()?.status ?? null,
+  );
   const goalInputRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const composerCardRef = useRef<HTMLDivElement>(null);
@@ -107,7 +111,9 @@ export function ResearchListPage() {
   const savedScrollTop = useRef<number | null>(null);
   const localeSeeded = useRef(false);
   const restoreApplied = useRef(false);
-  const pendingFocusSessionId = useRef<string | null>(null);
+  const pendingFocusSessionId = useRef<string | null>(
+    readResearchListPersist()?.sessionId ?? null,
+  );
 
   const {
     goal,
@@ -133,17 +139,14 @@ export function ResearchListPage() {
     }));
   }, [i18n?.language]);
 
-  // LRM-1115 D-IX: restore filters / scroll / focus row from sessionStorage once.
+  // LRM-1115 D-IX: restore scroll after mount (q/status already seeded via useState).
   useEffect(() => {
     if (restoreApplied.current) return;
     restoreApplied.current = true;
     const saved = readResearchListPersist();
-    if (!saved) return;
-    setTitleQuery(saved.q);
-    setStatusFilter(saved.status);
-    pendingFocusSessionId.current = saved.sessionId;
+    if (!saved || saved.scroll <= 0) return;
     queueMicrotask(() => {
-      if (scrollRef.current != null && saved.scroll > 0) {
+      if (scrollRef.current != null) {
         scrollRef.current.scrollTop = saved.scroll;
       }
     });
@@ -459,15 +462,6 @@ export function ResearchListPage() {
         ref={scrollRef}
         className="flex h-full flex-col overflow-y-auto"
         data-testid="research-list-page"
-        onKeyDown={(e) => {
-          if (e.key !== "Escape") return;
-          if (!filterActive) return;
-          const target = e.target as HTMLElement | null;
-          // Let the search input handle Escape itself.
-          if (target?.closest('input[aria-label]')) return;
-          e.preventDefault();
-          clearFilters();
-        }}
       >
         <div
           className={cn(
@@ -716,7 +710,6 @@ export function ResearchListPage() {
 
               {visibleSessions.length === 0 ? (
                 <output
-                  role="status"
                   aria-live="polite"
                   data-testid="research-filter-no-results"
                   className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"

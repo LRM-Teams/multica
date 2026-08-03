@@ -90,6 +90,11 @@ export function ResearchSessionFilterBar({
   };
 
   const onGroupKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onClear();
+      return;
+    }
     if (options.length === 0) return;
     let next = selectedIndex;
     if (e.key === "ArrowRight" || e.key === "ArrowDown") {
@@ -138,6 +143,7 @@ export function ResearchSessionFilterBar({
       <div
         ref={groupRef}
         role="radiogroup"
+        tabIndex={-1}
         aria-label={t(($) => $.filter.status_label)}
         className="flex flex-wrap items-center gap-1.5"
         onKeyDown={onGroupKeyDown}

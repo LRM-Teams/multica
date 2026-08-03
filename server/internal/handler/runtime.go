@@ -385,10 +385,19 @@ func runtimeUpdateError(update *UpdateRequest, currentVersion *string, updateSta
 			return &reason
 		}
 	}
-	if updateState == "timed_out" || updateState == "failed" {
+	// Surface the last terminal failure/timeout reason on the runtime
+	// projection so a page refresh still shows human-readable cause
+	// (Frank 2026-08-03). Prefer the store's Error text; fall back to a
+	// stable code when empty.
+	if updateState == "timed_out" || updateState == "failed" ||
+		update.Status == UpdateFailed || update.Status == UpdateTimeout {
 		reason := strings.TrimSpace(update.Error)
 		if reason == "" {
-			reason = "runtime_update_failed"
+			if updateState == "timed_out" || update.Status == UpdateTimeout {
+				reason = "runtime_update_timed_out"
+			} else {
+				reason = "runtime_update_failed"
+			}
 		}
 		return &reason
 	}
@@ -1016,6 +1025,13 @@ func canEditRuntime(member db.Member, rt db.AgentRuntime) bool {
 // canDeleteRuntime intentionally has no workspace owner/admin override.
 // Runtime deletion is reserved for the member who owns the runtime.
 func canDeleteRuntime(member db.Member, rt db.AgentRuntime) bool {
+	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+}
+
+// canOwnRuntime is Computer-owner-only for upgrade/restart mutations.
+// Frank 2026-08-03: non-owners must not upgrade or restart others' machines;
+// workspace admin is not enough — FE hide is insufficient without a server 403.
+func canOwnRuntime(member db.Member, rt db.AgentRuntime) bool {
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
 }
 

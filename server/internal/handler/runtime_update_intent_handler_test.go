@@ -136,7 +136,7 @@ func TestInitiateUpdate_RejectsWhenAttemptAlreadyInFlight(t *testing.T) {
 	}
 }
 
-func TestInitiateUpdate_RequiresRuntimeOwnerOrAdmin(t *testing.T) {
+func TestInitiateUpdate_RequiresComputerOwner(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -146,6 +146,14 @@ func TestInitiateUpdate_RequiresRuntimeOwnerOrAdmin(t *testing.T) {
 	w := doInitiateUpdate(t, plainMemberID, runtimeID)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("InitiateUpdate from unrelated member = %d, want 403: %s", w.Code, w.Body.String())
+	}
+
+	// Workspace admin who is not the computer owner must also be rejected
+	// (Frank 2026-08-03: only Computer owner may upgrade).
+	adminMemberID := createRuntimeLocalSkillTestMember(t, "admin")
+	w = doInitiateUpdate(t, adminMemberID, runtimeID)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("InitiateUpdate from workspace admin non-owner = %d, want 403: %s", w.Code, w.Body.String())
 	}
 }
 

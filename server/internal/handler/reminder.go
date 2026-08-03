@@ -1752,7 +1752,7 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	prompt := buildReminderPrompt(ch, reminder, occurrenceID, anchorExcerpt, anchorAvailable)
 	// LRM-1079: reminder fires are channel-only wakes (no chat_session).
 	promptResult, err := h.enqueueChannelAgentPromptWithTx(
-		ctx, txQueries, tx, ch, agent, trigger, creatorID, prompt, "dm", channelDirectedWakePriority,
+		ctx, txQueries, tx, ch, agent, trigger, creatorID, prompt, "reminder", channelDirectedWakePriority,
 	)
 	if err != nil {
 		return err
@@ -1949,6 +1949,12 @@ func buildReminderPrompt(ch ChannelResponse, reminder agentReminder, occurrenceI
 	fmt.Fprintf(&b, "Reminder id: %s\n", uuidToString(reminder.ID))
 	fmt.Fprintf(&b, "Occurrence id: %s\n", uuidToString(occurrenceID))
 	fmt.Fprintf(&b, "Reminder title: %s\n", reminder.Title)
+	// Hard pin: this fire only serves one channel (Frank 2026-08-03 multi-group spam).
+	fmt.Fprintf(&b, "Target channel id: %s\n", ch.ID)
+	if strings.TrimSpace(ch.Name) != "" && ch.Kind != "dm" {
+		fmt.Fprintf(&b, "Target channel name: #%s\n", ch.Name)
+	}
+	b.WriteString("This reminder ONLY serves that channel. Do NOT post, patrol, or send messages to any other channel — even if you manage other groups. One message surface only.\n")
 	if reminder.Cadence.Valid {
 		fmt.Fprintf(&b, "Cadence: %s\n", reminder.Cadence.String)
 	}
@@ -1969,7 +1975,7 @@ func buildReminderPrompt(ch ChannelResponse, reminder agentReminder, occurrenceI
 		fmt.Fprintf(&b, "Anchor message excerpt: %s\n", truncateForActivity(anchorExcerpt, 500))
 	}
 	if anchorAvailable {
-		b.WriteString("Check the current state now. Reply in the anchored channel/thread only if there is a useful update, decision, follow-up question, or conclusion. If nothing changed, you may reschedule or finish without noise.\n")
+		b.WriteString("Check the current state now. If you need to reply, use ONLY the target channel id above (or its thread). Never fan-out the same update to other managed channels. If nothing changed, you may reschedule or finish without noise.\n")
 	} else {
 		b.WriteString("Check the current state now. Send a message only if there is a useful update, decision, follow-up question, or conclusion. If nothing changed, you may reschedule or finish without noise.\n")
 	}

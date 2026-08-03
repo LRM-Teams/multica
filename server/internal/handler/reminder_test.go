@@ -90,3 +90,29 @@ func TestReminderTargetKind(t *testing.T) {
 }
 
 func int64Ptr(value int64) *int64 { return &value }
+
+func TestBuildReminderPromptPinsChannelID(t *testing.T) {
+	reminder := agentReminder{Title: "patrol"}
+	reminder.ID = parseUUID("11111111-1111-1111-1111-111111111111")
+	prompt := buildReminderPrompt(ChannelResponse{ID: "ch-abc", Name: "产品", Kind: "group"}, reminder, parseUUID("22222222-2222-2222-2222-222222222222"), "hi", true)
+	if !strings.Contains(prompt, "Target channel id: ch-abc") {
+		t.Fatalf("missing target channel id:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "ONLY serves that channel") {
+		t.Fatalf("missing hard pin language:\n%s", prompt)
+	}
+}
+
+func TestFilterManagerChannelsTo(t *testing.T) {
+	in := []ManagerChannelData{
+		{ID: "a", Name: "A"},
+		{ID: "b", Name: "B"},
+	}
+	got := filterManagerChannelsTo(in, "b")
+	if len(got) != 1 || got[0].ID != "b" {
+		t.Fatalf("got %+v", got)
+	}
+	if len(filterManagerChannelsTo(in, "missing")) != 0 {
+		t.Fatal("missing id should filter to empty")
+	}
+}

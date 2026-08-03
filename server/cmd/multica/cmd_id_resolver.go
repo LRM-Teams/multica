@@ -231,14 +231,6 @@ func fetchIssueCandidates(ctx context.Context, client *cli.APIClient) ([]idCandi
 	return candidates, nil
 }
 
-func resolveAutopilotID(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {
-	return resolvedID{}, fmt.Errorf("autopilot has been removed (LRM-1049); use multica reminder")
-}
-
-func fetchAutopilotCandidates(ctx context.Context, client *cli.APIClient) ([]idCandidate, error) {
-	return nil, fmt.Errorf("autopilot has been removed (LRM-1049)")
-}
-
 func resolveTaskRunID(ctx context.Context, client *cli.APIClient, issueID, input string) (resolvedID, error) {
 	trimmed := strings.TrimSpace(input)
 	if uuidRegexp.MatchString(trimmed) {
@@ -274,10 +266,6 @@ func fetchTaskRunCandidatesForIssue(ctx context.Context, client *cli.APIClient, 
 		})
 	}
 	return candidates, nil
-}
-
-func resolveAutopilotTriggerID(ctx context.Context, client *cli.APIClient, autopilotID, input string) (resolvedID, error) {
-	return resolvedID{}, fmt.Errorf("autopilot has been removed (LRM-1049); use multica reminder")
 }
 
 func resolveProjectID(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {

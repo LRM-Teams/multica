@@ -25,7 +25,7 @@ Date: 2026-08-03
 - [x] Implement the shared human level icon and wire every renderer to the same source.
 - [x] Add regression tests for level mapping and all affected surfaces.
 - [x] Run React Doctor and the full verification pipeline; classify the pre-existing E2E failures instead of altering product code to satisfy stale tests.
-- [ ] Open a non-draft PR to `dev`, merge it, and verify deployment/provenance/health.
+- [x] Open a non-draft PR to `dev`, merge it, and verify deployment/provenance/health.
 
 ## Findings and decisions
 
@@ -50,3 +50,8 @@ Date: 2026-08-03
 - Removed the temporary extraction/QA scripts, screenshots, generated E2E artifact, and dropped the isolated `multica_worktree_593` database after verification. The source worktree and the user's main checkout remain separate.
 - Before publication, fetched and rebased the implementation onto `origin/dev` at `10431c24b` (96 upstream commits beyond the original base) with no conflicts. On that exact base, all 422 Views test files passed (3702 passing tests, 2 expected failures, 5 existing skips), Web and desktop typechecks passed, `server/internal/service` tests passed, and React Doctor again reported 0 issues.
 - Published ready-for-review PR [#2050](https://github.com/LRM-Teams/multica/pull/2050) from `feat/human-armor-honor-icons` to `dev`; it is not a draft.
+- Merged PR #2050 into `dev` at `2026-08-03T13:25:00Z`; merge commit: `677a6d11bbd5f619549d06a0ed0f4727ae5b68b6`.
+- The deploy run created for the exact merge commit ([30817856483](https://github.com/LRM-Teams/multica/actions/runs/30817856483)) was cancelled while still pending because the workflow concurrency group replaced it with a newer `dev` push; it started no jobs.
+- Verified with `git merge-base --is-ancestor` that downstream deploy head `4185cd0a3d5ef7650a94a3a240493c11642c1009` contains merge commit `677a6d11bbd5f619549d06a0ed0f4727ae5b68b6` and is itself contained in the current `origin/dev` history.
+- Downstream [Deploy run 30817979651](https://github.com/LRM-Teams/multica/actions/runs/30817979651) completed successfully at `2026-08-03T13:36:08Z`. Backend, web, and database-bridge images built and pushed; migration 278 applied; services restarted; image provenance passed before and after health checks; Caddy HTTP/HTTPS, backend `/readyz`, and database-bridge `/healthz` checks passed.
+- An independent public `curl` from the development machine could reach `101.200.210.144` but received a `Beaver` HTTP 403 and a terminated TLS handshake. Because the deployment runner's local Caddy HTTPS probe passed and this machine is reaching an upstream network filter rather than the application response, this result is recorded as an environment-path limitation, not as proof of an application deployment failure.

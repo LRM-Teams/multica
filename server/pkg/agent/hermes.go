@@ -1063,11 +1063,45 @@ func (c *hermesClient) handleToolCallUpdate(data json.RawMessage) {
 	if output == "" {
 		output = extractACPToolCallText(msg.Content)
 	}
-	if msg.Status == "failed" {
-		toolName := hermesToolNameFromTitle(title, msg.Kind)
-		if pending != nil && pending.toolName != "" {
-			toolName = pending.toolName
+
+	// Resolve tool name + Input for tool_result. #103: Activity backfill
+	// (#1853) needs non-empty Input on MessageToolResult. Cursor ACP uses
+	// hermesClient — previously completed frames dropped Input entirely
+	// (stream-json #1931 never ran on this path).
+	toolName := hermesToolNameFromTitle(title, msg.Kind)
+	if pending != nil && pending.toolName != "" {
+		toolName = pending.toolName
+	}
+	input := rawInput
+	if len(input) == 0 && pending != nil {
+		if len(pending.input) > 0 {
+			input = pending.input
+		} else if pending.argsText != "" {
+			input = parseToolArgsJSON(pending.argsText)
 		}
+	}
+	enrichTag := "none"
+	if pathFromMap(input) != "" {
+		if len(rawInput) > 0 && pathFromMap(rawInput) != "" {
+			enrichTag = "args_path" // completed frame rawInput
+		} else {
+			enrichTag = "started_fallback"
+		}
+	}
+	if strings.TrimSpace(os.Getenv("MULTICA_DEBUG_TOOL_RESULT_INPUT")) == "1" && c.cfg.Logger != nil {
+		c.cfg.Logger.Info(
+			"tool_result input enrich path",
+			"tool", toolName,
+			"call_id", msg.ToolCallID,
+			"write_input_enrich", enrichTag,
+			"decode_enrich", "acp_hermes",
+			"input_empty", len(input) == 0,
+			"input_has_path", pathFromMap(input) != "",
+			"input_key_count", len(input),
+		)
+	}
+
+	if msg.Status == "failed" {
 		failureText := strings.TrimSpace(output)
 		if failureText == "" {
 			failureText = "tool call failed"
@@ -1081,7 +1115,9 @@ func (c *hermesClient) handleToolCallUpdate(data json.RawMessage) {
 	if c.onMessage != nil {
 		c.onMessage(Message{
 			Type:   MessageToolResult,
+			Tool:   toolName,
 			CallID: msg.ToolCallID,
+			Input:  input,
 			Output: output,
 		})
 	}

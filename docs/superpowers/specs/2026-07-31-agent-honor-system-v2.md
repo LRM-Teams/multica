@@ -17,6 +17,14 @@ Agent honor has two independent time horizons:
 The separation prevents a 30-day ranking window from erasing long-term agent
 progress.
 
+## Level progression
+
+Permanent agent honor has 30 levels. Level `n` starts at
+`25 × (n - 1)²` lifetime XP; level 30 is terminal and reports no next-level
+progress. The client derives a level crest from the numeric level using the 30
+assets in `packages/views/agents/components/assets/honor-levels/`; achievements
+and fleet classes remain independent systems.
+
 ## Achievement catalog
 
 The initial catalog has 16 achievements across delivery, reliability, memory

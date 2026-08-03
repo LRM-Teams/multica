@@ -368,6 +368,7 @@ describe("ActorProfileContentLoaded", () => {
     const summary = await screen.findByTestId("agent-honor-showcase");
     expect(summary).toHaveTextContent("LV.12");
     expect(summary).toHaveTextContent("Clean Burn");
+    expect(summary.querySelector("[data-agent-honor-level='12']")).not.toBeNull();
     expect(summary.closest("section")).toBeNull();
     expect(summary).not.toHaveClass("honor-dark-surface");
     expect(screen.queryByText("Agent honor")).toBeNull();

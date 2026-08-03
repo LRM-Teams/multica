@@ -1,0 +1,33 @@
+import { render } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import {
+  AgentHonorLevelIcon,
+  MAX_AGENT_HONOR_LEVEL,
+  agentHonorLevelIconURL,
+  normalizeAgentHonorLevel,
+} from "./agent-honor-level-icon";
+
+describe("AgentHonorLevelIcon", () => {
+  it("publishes one icon for every supported agent honor level", () => {
+    expect(MAX_AGENT_HONOR_LEVEL).toBe(30);
+    expect(agentHonorLevelIconURL(1)).toContain("agent-honor-level-01");
+    expect(agentHonorLevelIconURL(30)).toContain("agent-honor-level-30");
+  });
+
+  it("clamps stale or invalid server levels to the available asset range", () => {
+    expect(normalizeAgentHonorLevel(0)).toBe(1);
+    expect(normalizeAgentHonorLevel(12.9)).toBe(12);
+    expect(normalizeAgentHonorLevel(31)).toBe(30);
+    expect(normalizeAgentHonorLevel(Number.NaN)).toBe(1);
+  });
+
+  it("renders a sized decorative image by default", () => {
+    const { container } = render(<AgentHonorLevelIcon level={12} />);
+
+    const icon = container.querySelector("img");
+    expect(icon).not.toBeNull();
+    expect(icon).toHaveAttribute("width", "256");
+    expect(icon).toHaveAttribute("height", "256");
+    expect(icon).toHaveAttribute("data-agent-honor-level", "12");
+  });
+});

@@ -36,6 +36,7 @@ import {
   shouldShowActorHandleLabel,
 } from "@multica/core/identity";
 import { MemoryGrowthField } from "../agents/components/memory-growth-field";
+import { AgentHonorLevelIcon } from "../agents/components/agent-honor-level-icon";
 import { AgentPresenceOverlay } from "./actor-avatar";
 import { ActivityTimeline } from "../agents/components/tabs/activity-timeline";
 import { useAgentActivityEvents } from "../agents/components/tabs/use-agent-activity-events";
@@ -374,17 +375,7 @@ function AgentHonorSummary({ agentId }: { agentId: string }) {
       className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground"
       data-testid="agent-honor-showcase"
     >
-      <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border/60 bg-muted/60">
-        {equipped ? (
-          <HonorBadgeIcon
-            svgKey={equipped.svg_key}
-            title={equipped.title}
-            className="size-3.5"
-          />
-        ) : (
-          <Sparkles className="size-3" aria-hidden />
-        )}
-      </span>
+      <AgentHonorLevelIcon level={honor.level} className="size-5" />
       <span className="shrink-0 font-medium tabular-nums text-foreground/80">
         {t(($) => $.profile_popover.honor.level_value, { level: honor.level })}
       </span>

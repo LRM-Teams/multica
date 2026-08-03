@@ -15,6 +15,8 @@ func TestAgentHonorLevelBoundaries(t *testing.T) {
 		{totalXP: 25, level: 2, nextXP: 75},
 		{totalXP: 99, level: 2, nextXP: 1},
 		{totalXP: 100, level: 3, nextXP: 125},
+		{totalXP: 21_024, level: 29, nextXP: 1},
+		{totalXP: 21_025, level: MaxAgentHonorLevel, nextXP: 0},
 		{totalXP: 1_000_000, level: MaxAgentHonorLevel, nextXP: 0},
 	}
 	for _, test := range tests {

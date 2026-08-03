@@ -374,7 +374,7 @@ func (s *AgentHonorService) GetDashboard(
 		if def.Secret && !isUnlocked {
 			view.Title = "Secret achievement"
 			view.Description = "Keep developing to reveal this achievement."
-			view.SvgKey = "stardust"
+			view.SvgKey = "agent_armor_locked"
 			view.Progress = nil
 		}
 		if isUnlocked {

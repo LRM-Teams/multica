@@ -30,10 +30,10 @@ func init() {
 	reminderScheduleCmd.Flags().Int64("delay-seconds", 0, "Delay before waking (60 seconds to 90 days)")
 	reminderScheduleCmd.Flags().String("fire-at", "", "Absolute RFC3339 wake time")
 	reminderScheduleCmd.Flags().String("repeat", "", "Recurring rule: every:Nm|Nh|Nd, daily@HH:MM, or weekly:days@HH:MM")
-	reminderScheduleCmd.Flags().String("msgid", "", "Anchor message id (fire/send surface; required)")
-	reminderScheduleCmd.Flags().String("message-id", "", "Deprecated alias for --msgid")
+	reminderScheduleCmd.Flags().String("msg-id", "", "Anchor message id (fire/send surface; required)")
 	reminderScheduleCmd.Flags().String("output", "json", "Output format: json")
 	_ = reminderScheduleCmd.MarkFlagRequired("title")
+	_ = reminderScheduleCmd.MarkFlagRequired("msg-id")
 
 	reminderListCmd.Flags().String("status", "active", "Filter: active, scheduled, firing, fired, cancelled, or all")
 	reminderListCmd.Flags().String("output", "json", "Output format: json")
@@ -98,20 +98,12 @@ func reminderScheduleBody(cmd *cobra.Command, includeTitle bool) (map[string]any
 	return body, nil
 }
 
-// resolveReminderMsgID prefers --msgid; --message-id remains a compatibility alias.
+// resolveReminderMsgID reads required --msg-id (Raft-aligned; no aliases).
 func resolveReminderMsgID(cmd *cobra.Command) (string, error) {
-	msgid, _ := cmd.Flags().GetString("msgid")
-	legacy, _ := cmd.Flags().GetString("message-id")
+	msgid, _ := cmd.Flags().GetString("msg-id")
 	msgid = strings.TrimSpace(msgid)
-	legacy = strings.TrimSpace(legacy)
-	if msgid != "" && legacy != "" && msgid != legacy {
-		return "", fmt.Errorf("provide only one of --msgid or --message-id")
-	}
 	if msgid == "" {
-		msgid = legacy
-	}
-	if msgid == "" {
-		return "", fmt.Errorf("--msgid is required")
+		return "", fmt.Errorf("--msg-id is required")
 	}
 	return msgid, nil
 }

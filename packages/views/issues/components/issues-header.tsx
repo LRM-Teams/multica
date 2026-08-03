@@ -50,7 +50,10 @@ import {
   ALL_STATUSES,
   PRIORITY_ORDER,
 } from "@multica/core/issues/config";
-import { StatusIcon, PriorityIcon } from ".";
+// Direct paths — not `./index` barrel (also re-exports IssuesPage / IssueDetail;
+// task #5 B header knife, same funnel as #1925).
+import { StatusIcon } from "./status-icon";
+import { PriorityIcon } from "./priority-icon";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";

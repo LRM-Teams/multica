@@ -21,7 +21,7 @@ func usesCanonicalResidentChatRuntime(provider string, task Task) bool {
 		return usesPersistentGrokChatRuntime(provider, task)
 	case "pi":
 		return usesPersistentPiChatRuntime(provider, task)
-	case "cursor", "opencode", "kiro":
+	case "cursor", "opencode", "kiro", "codex":
 		profile, err := taskExecutionProfile(task)
 		return err == nil && profile == executionProfileFull && task.ChatSessionID != ""
 	default:
@@ -43,5 +43,12 @@ func newCanonicalCursorResidentBackend(cfg agent.Config) (agent.Backend, func(),
 // mandatory on eviction and unhealthy release.
 func newCanonicalKiroResidentBackend(cfg agent.Config) (agent.Backend, func(), error) {
 	backend := agent.NewKiroACPBackend(cfg)
+	return backend, backend.Close, nil
+}
+
+// newCanonicalCodexResidentBackend builds the resident Codex app-server adapter
+// for the agent×runtime pool. Close is mandatory on eviction and unhealthy release.
+func newCanonicalCodexResidentBackend(cfg agent.Config) (agent.Backend, func(), error) {
+	backend := agent.NewCodexAppServerBackend(cfg)
 	return backend, backend.Close, nil
 }

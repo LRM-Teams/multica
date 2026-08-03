@@ -69,7 +69,7 @@ var providerCapabilities = map[string]ProviderCapabilities{
 	//                    canonical, inlinePrompt, modelSel, customID, thinking
 	"claude":    caps(false, false, true, true, true),
 	"codebuddy": caps(false, false, true, false, true),
-	"codex":     caps(false, false, true, true, true),
+	"codex":     caps(true, false, true, true, true), // resident app-server; chat full only
 	"copilot":   caps(false, false, true, true, false),
 	// opencode/pi/grok: thinking catalogs + CLI injection already exist;
 	// ThinkingDiscovery must stay true so IsKnownThinkingValue / FE gating
@@ -98,6 +98,7 @@ var forceRestartResidentConstructors = map[string]func(Config) Backend{
 	"grok":     func(cfg Config) Backend { return newGrokACPBackend(cfg) },
 	"opencode": func(cfg Config) Backend { return newOpenCodeServeBackend(cfg) },
 	"kiro":     func(cfg Config) Backend { return newKiroACPBackend(cfg) },
+	"codex":    func(cfg Config) Backend { return newCodexAppServerBackend(cfg) },
 }
 
 func init() {

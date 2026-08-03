@@ -1180,6 +1180,12 @@ func (c *codexClient) getTurnError() string {
 	return c.turnError
 }
 
+func (c *codexClient) clearTurnError() {
+	c.turnErrorMu.Lock()
+	defer c.turnErrorMu.Unlock()
+	c.turnError = ""
+}
+
 type pendingRPC struct {
 	ch     chan rpcResult
 	method string

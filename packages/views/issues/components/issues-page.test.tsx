@@ -470,10 +470,9 @@ describe("IssuesPage (shared)", () => {
   });
 
   it("shows loading skeletons initially", () => {
-    renderWithQuery(<IssuesPage />);
-    expect(
-      screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
-    ).toBe(true);
+    const { container } = renderWithQuery(<IssuesPage />);
+    // Skeleton is aria-hidden (decorative); query DOM slot, not a11y roles.
+    expect(container.querySelector('[data-slot="skeleton"]')).toBeTruthy();
   });
 
   it("renders issue titles after data loads", async () => {

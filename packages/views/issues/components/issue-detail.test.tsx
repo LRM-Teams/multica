@@ -535,11 +535,10 @@ describe("IssueDetail (shared)", () => {
   it("shows loading skeleton while data is loading", () => {
     // Make the API hang to keep loading state
     mockApiObj.getIssue.mockReturnValue(new Promise(() => {}));
-    renderIssueDetail();
+    const { container } = renderIssueDetail();
 
-    expect(
-      screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
-    ).toBe(true);
+    // Skeleton is aria-hidden (decorative); query DOM slot, not a11y roles.
+    expect(container.querySelector('[data-slot="skeleton"]')).toBeTruthy();
   });
 
   it("renders issue title and description after loading", async () => {

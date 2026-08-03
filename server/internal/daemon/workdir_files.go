@@ -177,26 +177,25 @@ func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayl
 	// check did exactly that) would have blocked that recovery path too.
 	// Only refuse a write that would make the workspace bigger.
 	if isAgentWorkspaceRelPath(req.RelPath) {
-		quota := d.cfg.AgentWorkspaceQuotaBytes
-		if quota <= 0 {
-			quota = DefaultAgentWorkspaceQuotaBytes
-		}
-		if used := dirSize(root); used >= quota {
-			var oldSize int64
-			if info, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(req.FilePath))); statErr == nil {
-				oldSize = info.Size()
-			}
-			newSize := int64(len(req.Content))
-			if newSize > oldSize {
-				resp := protocol.WriteWorkdirFileResponsePayload{
-					RequestID: req.RequestID,
-					Error: fmt.Sprintf(
-						"agent workspace over capacity: cannot write (workspace uses %d bytes, cap is %d bytes) — a write that shrinks or keeps the same size is still allowed",
-						used, quota,
-					),
+		// quota <= 0 = unlimited (default). Only enforce when a positive cap is set.
+		if quota := d.cfg.AgentWorkspaceQuotaBytes; quota > 0 {
+			if used := dirSize(root); used >= quota {
+				var oldSize int64
+				if info, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(req.FilePath))); statErr == nil {
+					oldSize = info.Size()
 				}
-				d.sendDaemonFrame(protocol.EventDaemonWriteFileResponse, resp, req.RequestID, writes)
-				return
+				newSize := int64(len(req.Content))
+				if newSize > oldSize {
+					resp := protocol.WriteWorkdirFileResponsePayload{
+						RequestID: req.RequestID,
+						Error: fmt.Sprintf(
+							"agent workspace over capacity: cannot write (workspace uses %d bytes, cap is %d bytes) — a write that shrinks or keeps the same size is still allowed",
+							used, quota,
+						),
+					}
+					d.sendDaemonFrame(protocol.EventDaemonWriteFileResponse, resp, req.RequestID, writes)
+					return
+				}
 			}
 		}
 	}

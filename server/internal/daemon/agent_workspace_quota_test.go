@@ -70,18 +70,15 @@ func TestRunTask_RefusesTurnWhenAgentWorkspaceOverCapacity(t *testing.T) {
 }
 
 // TestRunTask_AllowsTurnWhenAgentWorkspaceUnderCapacity is the companion
-// negative case: a workspace under its cap must not be blocked by this
-// gate. Uses the default (2GiB) quota, so a small seeded file cannot
-// trigger it — proves the gate is conditional, not a blanket refusal.
+// negative case: a workspace under an explicit positive cap must not be
+// blocked by this gate.
 func TestRunTask_AllowsTurnWhenAgentWorkspaceUnderCapacity(t *testing.T) {
 	t.Parallel()
 
 	workspacesRoot := t.TempDir()
 	cfg := Config{
-		WorkspacesRoot: workspacesRoot,
-		// AgentWorkspaceQuotaBytes left zero — runTask must fall back to
-		// DefaultAgentWorkspaceQuotaBytes (2GiB), not treat zero as "no
-		// capacity at all".
+		WorkspacesRoot:           workspacesRoot,
+		AgentWorkspaceQuotaBytes: 2 << 30, // explicit cap; tiny seed stays under it
 		Agents: map[string]AgentEntry{
 			"claude": {Path: filepath.Join(t.TempDir(), "unused-agent-binary")},
 		},
@@ -122,7 +119,63 @@ func TestRunTask_AllowsTurnWhenAgentWorkspaceUnderCapacity(t *testing.T) {
 		Agent:       &AgentData{ID: agentID, Name: "test-agent"},
 	}), "claude", 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if result.FailureReason == "agent_workspace_over_capacity" {
-		t.Fatalf("result = %+v, quota gate must not fire when usage is far under the default cap", result)
+		t.Fatalf("result = %+v, quota gate must not fire when usage is far under the cap", result)
+	}
+}
+
+// TestRunTask_AllowsTurnWhenAgentWorkspaceQuotaDisabled covers LRM-1047:
+// default / explicit 0 means unlimited — a large workspace must not be refused.
+func TestRunTask_AllowsTurnWhenAgentWorkspaceQuotaDisabled(t *testing.T) {
+	t.Parallel()
+
+	workspacesRoot := t.TempDir()
+	cfg := Config{
+		WorkspacesRoot:           workspacesRoot,
+		AgentWorkspaceQuotaBytes: 0, // unlimited
+		Agents: map[string]AgentEntry{
+			"claude": {Path: filepath.Join(t.TempDir(), "unused-agent-binary")},
+		},
+	}
+
+	const workspaceID = "ws-unlimited-quota"
+	const agentID = "agent-unlimited-quota"
+	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
+		t.Fatalf("seed agent root: %v", err)
+	}
+	// Larger than the historical 2GiB default would have allowed… if we
+	// actually wrote 2GiB+ here the test would be slow; instead seed a
+	// few MiB which is already enough to prove we are not on a 10-byte
+	// test cap, and pair with quota=0 (the production default).
+	big := make([]byte, 4<<20) // 4 MiB
+	for i := range big {
+		big[i] = 'x'
+	}
+	if err := os.WriteFile(filepath.Join(agentRoot, "fat.bin"), big, 0o644); err != nil {
+		t.Fatalf("seed large file: %v", err)
+	}
+
+	d := &Daemon{
+		client:         NewClient("http://unused.invalid"),
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:     make(map[string]*workspaceState),
+		runtimeIndex:   map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
+		activeEnvRoots: make(map[string]int),
+		cfg:            cfg,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, _ := d.runTask(ctx, canonicalInboxTaskForTest(Task{
+		ID:          "task-unlimited-quota",
+		WorkspaceID: workspaceID,
+		RuntimeID:   "rt-1",
+		IssueID:     "issue-unlimited-quota",
+		AgentID:     agentID,
+		Agent:       &AgentData{ID: agentID, Name: "test-agent"},
+	}), "claude", 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if result.FailureReason == "agent_workspace_over_capacity" {
+		t.Fatalf("result = %+v, quota gate must not fire when AgentWorkspaceQuotaBytes=0 (unlimited)", result)
 	}
 }
 

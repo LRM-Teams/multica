@@ -37,6 +37,7 @@ import type {
 } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 import { formatRuntimeUpdateError } from "./update-error";
+import { isNewerCliVersion } from "@multica/core/runtimes/cli-version";
 
 const MANUAL_UPDATE_COMMANDS = [
   {
@@ -244,7 +245,10 @@ export function UpdateSection({
     updateState,
     runtimeHealth,
   });
-  const hasUpdate = runtimeHealth === "update_available" && !!targetVersion;
+  const hasUpdate =
+    runtimeHealth === "update_available" &&
+    !!targetVersion &&
+    isNewerCliVersion(targetVersion, currentVersion);
   const rawContractError =
     runtimeHealth === "failed" ? (updateError?.trim() ?? "") : "";
   const contractError =

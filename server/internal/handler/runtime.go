@@ -250,6 +250,10 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 	if runtimeHealth == "update_available" && availableUpdateTarget != nil {
 		targetVersion = availableUpdateTarget
 	}
+	// Hard gate (P0 / task #120): never project an "upgrade" target that is not
+	// strictly newer than the running CLI. Stale completed/failed rows, equal
+	// versions, and lagging latest-cache hits must not light the upgrade button.
+	targetVersion, runtimeHealth = clampUpgradeProjection(currentVersion, targetVersion, updateState, runtimeHealth)
 	updateError := runtimeUpdateError(update, currentVersion, updateState)
 	if stagedWaiting && updateError == nil {
 		// Stable code for FE i18n: staged binary waiting for daemon reconnect/switch.
@@ -483,6 +487,31 @@ func runtimeAvailableUpdateTarget(rt db.AgentRuntime, metadata any, currentVersi
 	}
 	target := release.TagName
 	return &target
+}
+
+// clampUpgradeProjection enforces IsNewer(target, current) on the API surface.
+// In-flight updates (pending/running) keep their target so the UI can show
+// progress; every other state drops a non-newer target and demotes
+// update_available → ok.
+func clampUpgradeProjection(currentVersion, targetVersion *string, updateState, runtimeHealth string) (*string, string) {
+	switch updateState {
+	case "pending", "running":
+		return targetVersion, runtimeHealth
+	}
+	if targetVersion == nil {
+		if runtimeHealth == "update_available" {
+			return nil, "ok"
+		}
+		return nil, runtimeHealth
+	}
+	if currentVersion != nil && cli.IsNewerVersion(*targetVersion, *currentVersion) {
+		return targetVersion, runtimeHealth
+	}
+	// target == current, target older, or unparsable → no upgrade affordance
+	if runtimeHealth == "update_available" {
+		runtimeHealth = "ok"
+	}
+	return nil, runtimeHealth
 }
 
 func launchedBy(metadata any) string {

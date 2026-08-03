@@ -106,6 +106,7 @@ beforeEach(() => {
   mobile.value = false;
   containerWidth.value = 1024;
   channelName.value = "general-team";
+  channelDescription.value = null;
   roRegistrations.clear();
   vi.stubGlobal("ResizeObserver", FakeResizeObserver as unknown as typeof ResizeObserver);
   // Only the page's own `<main>` (the element `detailHeaderContainerRef`
@@ -152,6 +153,7 @@ vi.mock("@multica/core/api", () => ({ api: apiMock.proxy }));
 // A normal (non-system) group channel WITH members, so the header renders
 // its LRM-447 wide rail: Members chip + Search + Stop (Invite is not on-rail).
 const channelName = vi.hoisted(() => ({ value: "general-team" }));
+const channelDescription = vi.hoisted(() => ({ value: null as string | null }));
 const channelFixture = {
   id: "chan-1",
   workspace_id: "ws-1",
@@ -159,7 +161,9 @@ const channelFixture = {
     return channelName.value;
   },
   kind: "group" as const,
-  description: null,
+  get description() {
+    return channelDescription.value;
+  },
   lark_chat_id: null,
   created_by: "user-1",
   created_at: "2026-06-17T09:00:00Z",
@@ -651,5 +655,36 @@ describe("ChannelsPage header — members chip ghost chrome (LRM-452)", () => {
     const search = screen.getByRole("button", { name: "Search in conversation" });
     expect(search.className).not.toMatch(/\bborder-border\b/);
     expect(search.className).not.toMatch(/\bbg-background\b/);
+  });
+});
+
+// LRM-1067 — description under channel name in the main chat header.
+describe("ChannelsPage header — description under name (LRM-1067)", () => {
+  it("renders description under the title when present", async () => {
+    channelDescription.value = "2.0开发群";
+    resizeContainerTo(1024);
+    renderPage();
+    await screen.findByTestId("message-list");
+    const desc = screen.getByTestId("channel-header-description");
+    expect(desc).toHaveTextContent("2.0开发群");
+    const title = screen.getByRole("button", { name: "Open channel details" });
+    expect(title.compareDocumentPosition(desc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("omits the description row when empty (no placeholder)", async () => {
+    channelDescription.value = null;
+    resizeContainerTo(1024);
+    renderPage();
+    await screen.findByTestId("message-list");
+    expect(screen.queryByTestId("channel-header-description")).toBeNull();
+  });
+
+  it("keeps the description under the title on mobile", async () => {
+    mobile.value = true;
+    channelDescription.value = "2.0开发群";
+    resizeContainerTo(390);
+    renderPage();
+    await screen.findByTestId("message-list");
+    expect(screen.getByTestId("channel-header-description")).toHaveTextContent("2.0开发群");
   });
 });

@@ -168,4 +168,33 @@ describe("ChannelDetailsPanel hero inline edit (LRM-860)", () => {
     await user.type(input, "new-name{Enter}");
     expect(onRename).toHaveBeenCalledWith("new-name");
   });
+
+  // LRM-1067 — name → description → members/agents (desc not below meta).
+  it("orders hero as name → description → meta", () => {
+    renderPanel();
+    const name = screen.getByTestId("channel-details-hero-name");
+    const description = screen.getByTestId("channel-details-hero-description");
+    const meta = screen.getByTestId("channel-details-hero-meta");
+    expect(name.compareDocumentPosition(description) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      description.compareDocumentPosition(meta) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(description).toHaveTextContent("R&D channel");
+  });
+
+  it("hides the description placeholder for read-only empty description", () => {
+    renderPanel({
+      channel: { ...testChannel, description: null },
+      access: {
+        canManage: false,
+        isArchived: false,
+        hideSettingsTab: false,
+        projectBound: false,
+        projectEditable: false,
+      },
+      onUpdateDescription: undefined,
+    });
+    expect(screen.queryByTestId("channel-details-hero-description")).toBeNull();
+    expect(screen.getByTestId("channel-details-hero-meta")).toBeInTheDocument();
+  });
 });

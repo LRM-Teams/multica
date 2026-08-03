@@ -418,14 +418,9 @@ export function ChannelDetailsPanel({
                     {channel.name}
                   </p>
                 )}
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {t(($) => $.details.hero_meta, {
-                    members: userCount,
-                    agents: agentCount,
-                  })}
-                </p>
+                {/* LRM-1067 — hero order: name → description → members/agents meta. */}
                 {heroEdit === "description" && settingsEditable && onUpdateDescription ? (
-                  <div className="mt-2">
+                  <div className="mt-0.5">
                     <Textarea
                       value={descriptionDraft}
                       onChange={(e) =>
@@ -457,7 +452,7 @@ export function ChannelDetailsPanel({
                   <button
                     type="button"
                     data-testid="channel-details-hero-description"
-                    className="-mx-1.5 mt-2 w-[calc(100%+0.75rem)] rounded-md px-1.5 py-0.5 text-left text-sm leading-5 text-muted-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="-mx-1.5 mt-0.5 w-[calc(100%+0.75rem)] rounded-md px-1.5 py-0.5 text-left text-sm leading-5 text-muted-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() =>
                       dispatch({
                         type: "begin_description_edit",
@@ -469,16 +464,23 @@ export function ChannelDetailsPanel({
                       ? channel.description
                       : t(($) => $.details.add_description)}
                   </button>
-                ) : (
+                ) : channel.description?.trim() ? (
                   <p
                     data-testid="channel-details-hero-description"
-                    className="mt-2 text-sm leading-5 text-muted-foreground"
+                    className="mt-0.5 text-sm leading-5 text-muted-foreground"
                   >
-                    {channel.description?.trim()
-                      ? channel.description
-                      : t(($) => $.details.add_description)}
+                    {channel.description}
                   </p>
-                )}
+                ) : null}
+                <p
+                  data-testid="channel-details-hero-meta"
+                  className="mt-1 text-xs text-muted-foreground"
+                >
+                  {t(($) => $.details.hero_meta, {
+                    members: userCount,
+                    agents: agentCount,
+                  })}
+                </p>
                 {settingsEditable ? (
                   <p className="mt-1 text-[10px] text-muted-foreground">
                     {t(($) => $.details.hero_manage_hint)}

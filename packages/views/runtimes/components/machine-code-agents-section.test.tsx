@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentRuntime } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -12,6 +13,28 @@ import { MachineCodeAgentsSection } from "./machine-code-agents-section";
 const TEST_RESOURCES = {
   en: { common: enCommon, runtimes: enRuntimes },
 };
+
+vi.mock("@multica/core/auth", () => ({
+  useAuthStore: (sel: (s: { user: { id: string } | null }) => unknown) =>
+    sel({ user: { id: "user-1" } }),
+}));
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
+}));
+
+vi.mock("@multica/core/workspace/queries", () => ({
+  memberListOptions: () => ({
+    queryKey: ["members"],
+    queryFn: async () => [
+      { user_id: "user-1", role: "member", user: { name: "Me" } },
+    ],
+  }),
+}));
+
+vi.mock("@multica/core/runtimes/mutations", () => ({
+  useUpdateRuntime: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 
 vi.mock("./provider-logo", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./provider-logo")>();
@@ -75,10 +98,13 @@ function makeMachine(runtimes: AgentRuntime[]): RuntimeMachine {
 }
 
 function renderSection(machine: RuntimeMachine) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <MachineCodeAgentsSection machine={machine} />
-    </I18nProvider>,
+    <QueryClientProvider client={qc}>
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <MachineCodeAgentsSection machine={machine} />
+      </I18nProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -96,26 +122,33 @@ describe("MachineCodeAgentsSection", () => {
     expect(
       screen.getByRole("heading", { name: "Runtimes on this computer" }),
     ).toBeInTheDocument();
-    // Short count only — no long summary strip under the title.
     expect(
       screen.getByText(/Installed 1 of \d+ supported runtimes/i),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Available to agents on this computer/i),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByText(/Install to make them selectable/i),
-    ).not.toBeInTheDocument();
     expect(screen.getByText(/Installed · v1\.4\.2/)).toBeInTheDocument();
     expect(screen.getByTestId("provider-logo-cursor")).toBeInTheDocument();
     expect(screen.getByText("Grok Build")).toBeInTheDocument();
-    // Recommend catalog still listed as supported · not installed.
     expect(
       screen.getAllByText("Supported · not installed").length,
     ).toBeGreaterThan(0);
     expect(
       screen.getAllByText("View install guide").length,
     ).toBeGreaterThan(0);
+  });
+
+  it("puts Make public / Make private on installed runtime cards (LRM-1071)", () => {
+    renderSection(
+      makeMachine([
+        makeRuntime({
+          provider: "cursor",
+          metadata: { version: "1.4.2" },
+          visibility: "private",
+        }),
+      ]),
+    );
+    expect(screen.getByTestId("machine-sharing-toggle-rt-cursor")).toHaveTextContent(
+      /Make public/i,
+    );
   });
 
   it("renders an off-catalog installed provider with its raw id as the label", () => {
@@ -128,9 +161,6 @@ describe("MachineCodeAgentsSection", () => {
       ]),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Runtimes on this computer" }),
-    ).toBeInTheDocument();
     expect(screen.getByText("kimi")).toBeInTheDocument();
     expect(screen.getByTestId("provider-logo-kimi")).toBeInTheDocument();
     expect(screen.getByText(/Installed · v9\.9\.9/)).toBeInTheDocument();
@@ -142,13 +172,9 @@ describe("MachineCodeAgentsSection", () => {
     expect(
       screen.getByRole("heading", { name: "Runtimes on this computer" }),
     ).toBeInTheDocument();
-    // Empty install still shows the recommend catalog (supported · not installed).
     expect(
       screen.getByText(/Installed 0 of \d+ supported runtimes/i),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Available to agents on this computer/i),
-    ).not.toBeInTheDocument();
     expect(
       screen.getAllByText("Supported · not installed").length,
     ).toBeGreaterThan(0);

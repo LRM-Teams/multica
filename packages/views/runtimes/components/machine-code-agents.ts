@@ -16,6 +16,9 @@ export type MachineCodeAgentRow = {
    */
   version: string | null;
   docsUrl: string | null;
+  /** First matching runtime id — used for visibility toggle (LRM-1071). */
+  runtimeId: string | null;
+  visibility: "public" | "private" | null;
 };
 
 export type MachineCodeAgentGroups = {
@@ -74,11 +77,13 @@ export function partitionMachineCodeAgents(
   known: readonly KnownProvider[] = KNOWN_PROVIDERS,
 ): MachineCodeAgentGroups {
   const versionByProvider = new Map<string, string | null>();
+  const runtimeByProvider = new Map<string, AgentRuntime>();
   for (const runtime of runtimes) {
     const provider = runtime.provider?.trim();
     if (!provider) continue;
     if (!versionByProvider.has(provider)) {
       versionByProvider.set(provider, codeAgentVersion(runtime));
+      runtimeByProvider.set(provider, runtime);
     }
   }
 
@@ -88,12 +93,22 @@ export function partitionMachineCodeAgents(
     .sort((a, b) =>
       (knownProviderLabel(a) ?? a).localeCompare(knownProviderLabel(b) ?? b),
     )
-    .map((id) => ({
-      id,
-      label: knownProviderLabel(id) ?? id,
-      version: versionByProvider.get(id) ?? null,
-      docsUrl: providerDocsUrl(id),
-    }));
+    .map((id) => {
+      const runtime = runtimeByProvider.get(id);
+      return {
+        id,
+        label: knownProviderLabel(id) ?? id,
+        version: versionByProvider.get(id) ?? null,
+        docsUrl: providerDocsUrl(id),
+        runtimeId: runtime?.id ?? null,
+        visibility:
+          runtime?.visibility === "public"
+            ? "public"
+            : runtime
+              ? "private"
+              : null,
+      };
+    });
 
   const notInstalled: MachineCodeAgentRow[] = known
     .filter((entry) => !installedSet.has(entry.id))
@@ -102,6 +117,8 @@ export function partitionMachineCodeAgents(
       label: entry.label,
       version: null,
       docsUrl: providerDocsUrl(entry.id),
+      runtimeId: null,
+      visibility: null,
     }));
 
   return { installed, notInstalled };

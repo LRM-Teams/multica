@@ -161,7 +161,9 @@
       "restart_no_permission": "所有者のみ",
       "restart_offline": "オフライン",
       "restart_updating": "更新中",
-      "delete_owner_only": "所有者のみ"
+      "delete_owner_only": "所有者のみ",
+      "restart": "再起動",
+      "more_empty": "その他の操作はありません"
     },
     "sharing": {
       "section": "共有設定",
@@ -171,6 +173,10 @@
         "public": "公開にする",
         "private": "非公開にする"
       }
+    },
+    "danger_zone": {
+      "title": "危険ゾーン",
+      "description": "このコンピュータとランタイムをワークスペースから完全に削除します。"
     }
   },
   "health": {

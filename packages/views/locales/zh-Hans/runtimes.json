@@ -161,7 +161,9 @@
       "restart_no_permission": "仅所有者",
       "restart_offline": "离线",
       "restart_updating": "升级中",
-      "delete_owner_only": "仅所有者"
+      "delete_owner_only": "仅所有者",
+      "restart": "重启",
+      "more_empty": "暂无更多操作"
     },
     "sharing": {
       "section": "共享设置",
@@ -171,6 +173,10 @@
         "public": "切换为公开",
         "private": "切换为私有"
       }
+    },
+    "danger_zone": {
+      "title": "危险区",
+      "description": "从工作区永久删除此电脑及其全部 Runtime。"
     }
   },
   "health": {

@@ -118,11 +118,15 @@ vi.mock("./machine-code-agents-section", () => ({
 
 
 vi.mock("./machine-header-ops", () => ({
-  MachineHeaderOps: FakeMachineHeaderOps,
+  MachineHeaderOps: () => null,
 }));
 
-vi.mock("./machine-sharing-section", () => ({
-  MachineSharingSection: () => null,
+vi.mock("./machine-daemon-upgrade", () => ({
+  MachineDaemonUpgrade: () => null,
+}));
+
+vi.mock("./machine-danger-zone", () => ({
+  MachineDangerZone: FakeMachineHeaderOps,
 }));
 
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));

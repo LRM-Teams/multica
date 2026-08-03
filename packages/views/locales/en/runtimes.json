@@ -164,7 +164,9 @@
       "restart_no_permission": "Owner only",
       "restart_offline": "Offline",
       "restart_updating": "Updating",
-      "delete_owner_only": "Owner only"
+      "delete_owner_only": "Owner only",
+      "restart": "Restart",
+      "more_empty": "No more actions"
     },
     "sharing": {
       "section": "Sharing",
@@ -174,6 +176,10 @@
         "public": "Make public",
         "private": "Make private"
       }
+    },
+    "danger_zone": {
+      "title": "Danger Zone",
+      "description": "Permanently delete this computer and its runtimes from the workspace."
     }
   },
   "health": {

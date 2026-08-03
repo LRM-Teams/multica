@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi } from "vitest";
+import type { ReactElement } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -47,6 +48,8 @@ vi.mock("@multica/core/api", () => ({
 }));
 
 import { MachineHeaderOps } from "./machine-header-ops";
+import { MachineDaemonUpgrade } from "./machine-daemon-upgrade";
+import { MachineDangerZone } from "./machine-danger-zone";
 
 const TEST_RESOURCES = { en: { common: enCommon, runtimes: enRuntimes } };
 
@@ -104,55 +107,38 @@ function makeMachine(
   };
 }
 
-function renderOps(machine: RuntimeMachine) {
+function wrap(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const now = Date.now();
   return render(
     <QueryClientProvider client={qc}>
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <MachineHeaderOps machine={machine} now={now} />
+        {ui}
       </I18nProvider>
     </QueryClientProvider>,
   );
 }
 
-describe("MachineHeaderOps (LRM-1036)", () => {
-  it("puts ops in the header slot with ⋯ menu; no Actions card title", () => {
-    renderOps(makeMachine());
+describe("MachineHeaderOps (LRM-1071 / v5)", () => {
+  const now = Date.parse("2026-08-01T00:00:05Z");
+
+  it("shows Restart outline + ⋯; no Upgrade or Delete in header", () => {
+    wrap(<MachineHeaderOps machine={makeMachine()} now={now} />);
     expect(screen.getByTestId("machine-header-ops")).toBeInTheDocument();
-    expect(screen.queryByText("Actions")).not.toBeInTheDocument();
+    expect(screen.getByTestId("machine-header-restart")).toBeInTheDocument();
     expect(screen.getByTestId("machine-actions-menu-trigger")).toBeInTheDocument();
-    // Up-to-date: no primary Upgrade button
     expect(screen.queryByTestId("machine-header-upgrade")).not.toBeInTheDocument();
+    expect(screen.queryByText("Actions")).not.toBeInTheDocument();
   });
 
-  it("shows Upgrade only when an update is available", () => {
-    renderOps(
-      makeMachine({
-        updateTargetVersion: "1.5.0",
-        runtimes: [
-          makeRuntime({
-            runtime_health: "update_available",
-            target_version: "1.5.0",
-          }),
-        ],
-      }),
-    );
-    expect(screen.getByTestId("machine-header-upgrade")).toHaveTextContent(
-      /Upgrade daemon to v1\.5\.0/i,
-    );
-  });
-
-  it("shows short disable reason inside ⋯ for desktop-managed restart", async () => {
+  it("surfaces desktop-managed Restart reason inside ⋯", async () => {
     const user = userEvent.setup();
-    renderOps(
-      makeMachine({
-        runtimes: [
-          makeRuntime({
-            metadata: { launched_by: "desktop" },
-          }),
-        ],
-      }),
+    wrap(
+      <MachineHeaderOps
+        machine={makeMachine({
+          runtimes: [makeRuntime({ metadata: { launched_by: "desktop" } })],
+        })}
+        now={now}
+      />,
     );
     await user.click(screen.getByTestId("machine-actions-menu-trigger"));
     const reason = await screen.findByTestId("machine-ops-restart-reason");
@@ -163,5 +149,56 @@ describe("MachineHeaderOps (LRM-1036)", () => {
         item.getAttribute("aria-disabled") === "true" ||
         (item as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+});
+
+describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
+  it("shows version-only when up to date", () => {
+    const runtime = makeRuntime();
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.3.94"
+        updateTargetVersion={null}
+        updateError={null}
+        isOnline
+        canUpdate
+      />,
+    );
+    expect(screen.getByTestId("machine-basics-daemon-version")).toHaveTextContent(
+      "0.3.94",
+    );
+    expect(screen.queryByTestId("machine-daemon-upgrade-btn")).not.toBeInTheDocument();
+  });
+
+  it("shows outline Upgrade when an update is available", () => {
+    const runtime = makeRuntime({
+      runtime_health: "update_available",
+      target_version: "1.5.0",
+    });
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.3.94"
+        updateTargetVersion="1.5.0"
+        updateError={null}
+        isOnline
+        canUpdate
+      />,
+    );
+    expect(screen.getByTestId("machine-daemon-upgrade-btn")).toHaveTextContent(
+      /Upgrade/i,
+    );
+    expect(screen.getByText("1.5.0")).toBeInTheDocument();
+  });
+});
+
+describe("MachineDangerZone (LRM-1071 / v5)", () => {
+  it("hosts Delete computer (not the header)", () => {
+    wrap(<MachineDangerZone machine={makeMachine()} />);
+    expect(screen.getByTestId("machine-danger-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("machine-danger-delete")).toHaveTextContent(
+      /Delete computer/i,
+    );
   });
 });

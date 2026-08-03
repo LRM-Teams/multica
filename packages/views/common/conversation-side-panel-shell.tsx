@@ -14,7 +14,9 @@ import { cn } from "@multica/ui/lib/utils";
  * one-off card, per Frank/Iris's "布局要收敛" direction.
  *
  * `"page"` variant — LRM-494 Slack channel details: full-page mobile
- * surface uses a text 「完成」/Done trailing control instead of X.
+ * surface uses a text 「完成」/Done trailing control instead of X. When no
+ * `doneLabel` is supplied the page still renders an X (LRM-1185): a `"page"`
+ * surface must never ship an empty dismiss slot.
  */
 export function ConversationSidePanelShell({
   leading,
@@ -69,7 +71,25 @@ export function ConversationSidePanelShell({
       >
         {doneLabel}
       </Button>
-    ) : null;
+    ) : (
+      // LRM-1185 / LRM-974 gate rule "page 禁止空 chrome": a `"page"` host that
+      // does not supply a Done label used to get `closeControl = null`, so the
+      // mobile actor profile (agent `header="floating"`, member bar) rendered a
+      // dismiss slot with nothing in it — users read that as "there is no close
+      // button". Fall back to a 44×44 X instead of nothing; hosts that want the
+      // text control keep passing `doneLabel`.
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={onClose}
+        aria-label={closeAriaLabel}
+        className="size-11 shrink-0"
+        data-testid="side-panel-page-close"
+      >
+        <X className="size-5" />
+      </Button>
+    );
 
   // Floating header (LRM-542): no chrome row — close control floats at the
   // top-right corner over whatever the caller renders first. The caller's

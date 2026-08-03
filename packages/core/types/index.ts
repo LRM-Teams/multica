@@ -380,6 +380,7 @@ export type {
   ChannelMemberBrief,
   ChannelLastMessage,
   ChannelMessage,
+  UndeliveredMention,
   ChannelMessageQuote,
   ChannelMessageQuoteSnapshot,
   ChannelMessagesCursor,

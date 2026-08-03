@@ -394,6 +394,7 @@ func TestRuntimeBriefHasOneContractWithoutModeIdentity(t *testing.T) {
 	}{
 		{name: "issue", ctx: TaskContextForEnv{IssueID: "issue-1"}},
 		{name: "channel", ctx: TaskContextForEnv{ChatSessionID: "chat-1", ChannelID: "channel-1"}},
+		{name: "channel_only", ctx: TaskContextForEnv{ChannelID: "channel-1"}},
 		{name: "standalone", ctx: TaskContextForEnv{ChatSessionID: "chat-1"}},
 	}
 	for _, tc := range cases {
@@ -448,7 +449,7 @@ func TestRuntimeBriefHasOneContractWithoutModeIdentity(t *testing.T) {
 						t.Fatalf("issue brief missing scoped rule %q\n---\n%s", want, out)
 					}
 				}
-			case "channel":
+			case "channel", "channel_only":
 				for _, want := range []string{
 					"Thread attention is explicit.",
 					"`ChannelID` target present",
@@ -456,7 +457,16 @@ func TestRuntimeBriefHasOneContractWithoutModeIdentity(t *testing.T) {
 					"final assistant output, is not delivered",
 				} {
 					if !strings.Contains(out, want) {
-						t.Fatalf("channel brief missing scoped rule %q\n---\n%s", want, out)
+						t.Fatalf("%s brief missing scoped rule %q\n---\n%s", tc.name, want, out)
+					}
+				}
+				for _, banned := range []string{
+					"Your assigned issue ID is:",
+					"New Assignment",
+					"multica issue get  --output json",
+				} {
+					if strings.Contains(out, banned) {
+						t.Fatalf("%s brief still looks like blank assignment (%q)\n---\n%s", tc.name, banned, out)
 					}
 				}
 			case "standalone":

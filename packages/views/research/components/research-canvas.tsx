@@ -46,6 +46,7 @@ import { ResearchFleetAvatarStack } from "./research-fleet-avatar-stack";
 import { ResearchGraphNode as ResearchGraphNodeView } from "./research-graph-node";
 import { ResearchGitGutterNodeView } from "./research-git-gutter-node";
 import { ResearchGitList } from "./research-git-list";
+import type { ResearchAuxPanelId } from "./research-module-rail";
 import { SYSTEM_NODE_TYPES } from "../lib/node-action-ring";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { useT } from "../../i18n/use-t";
@@ -122,6 +123,8 @@ function ResearchCanvasInner({
   chatMode = "empty",
   detailPlacement = "overlay",
   onOpenDetail,
+  auxPanel = null,
+  onAuxPanelSelect,
 }: {
   nodes: ResearchGraphNode[];
   edges: ResearchGraphEdge[];
@@ -138,6 +141,9 @@ function ResearchCanvasInner({
   chatMode?: ChatDrawerMode;
   detailPlacement?: "overlay" | "drawer";
   onOpenDetail?: (node: ResearchGraphNode) => void;
+  /** LRM-1151 — active 轨/源/详 module (drawer content owned by session page). */
+  auxPanel?: ResearchAuxPanelId | null;
+  onAuxPanelSelect?: (id: ResearchAuxPanelId) => void;
 }) {
   const { t } = useT("research");
   const laid = useMemo(() => layoutResearchGraph(nodes, edges), [nodes, edges]);
@@ -315,10 +321,32 @@ function ResearchCanvasInner({
       <ResearchChatFab mode={chatMode} onOpen={onOpenChat} isMobile={isMobile} />
     ) : null;
 
+  const detailToggleOpen =
+    detailPlacement === "drawer" ? auxPanel === "detail" : showOverlayDetail;
+
+  const handleToggleDetail = useCallback(() => {
+    if (detailPlacement === "drawer") {
+      onAuxPanelSelect?.("detail");
+      return;
+    }
+    if (showOverlayDetail) {
+      clearDetail();
+    } else if (selectedNode) {
+      pinDetail(selectedNode);
+    }
+  }, [
+    detailPlacement,
+    onAuxPanelSelect,
+    showOverlayDetail,
+    clearDetail,
+    selectedNode,
+    pinDetail,
+  ]);
+
   if (isMobile) {
     return (
       <div
-        className="relative h-full w-full bg-canvas-bg text-foreground"
+        className="relative flex h-full w-full flex-col bg-canvas-bg text-foreground"
         data-testid="research-canvas-overlay-grid"
         data-overlay="narrow"
       >
@@ -326,32 +354,50 @@ function ResearchCanvasInner({
         <div className="sr-only" aria-live="polite">
           {liveText}
         </div>
-        <ResearchGitList
-          nodes={nodes}
-          edges={edges}
-          selectedId={selectedId}
-          onSelect={onSelect}
-          onOpenDelivery={onOpenDelivery}
-          onRetry={onRetry}
-          onOpenDetail={(node) => {
-            if (detailPlacement === "drawer") onOpenDetail?.(node);
-            else dispatch({ type: "pin", nodeId: node.id });
-          }}
-          liveMessage={announce}
-        />
-        <ResearchFleetAvatarStack
-          members={members}
-          sessionStatus={sessionStatus}
-          className="absolute top-3 right-3 z-20"
-        />
-        {chatFab}
-        {showOverlayDetail && detailNode ? (
-          <ResearchNodeDetail
-            node={detailNode}
-            sources={sourceList}
-            open={showOverlayDetail}
-            placement="sheet"
-            onClose={clearDetail}
+        <div className="relative min-h-0 flex-1">
+          <ResearchGitList
+            nodes={nodes}
+            edges={edges}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            onOpenDelivery={onOpenDelivery}
+            onRetry={onRetry}
+            onOpenDetail={(node) => {
+              if (detailPlacement === "drawer") onOpenDetail?.(node);
+              else dispatch({ type: "pin", nodeId: node.id });
+            }}
+            liveMessage={announce}
+          />
+          <ResearchFleetAvatarStack
+            members={members}
+            sessionStatus={sessionStatus}
+            className="absolute top-3 right-3 z-20"
+          />
+          {chatFab}
+          {showOverlayDetail && detailNode ? (
+            <ResearchNodeDetail
+              node={detailNode}
+              sources={sourceList}
+              open={showOverlayDetail}
+              placement="sheet"
+              onClose={clearDetail}
+            />
+          ) : null}
+        </div>
+        {/* LRM-1151: full-width Dock under narrow Git list; zoom hidden. */}
+        {onAuxPanelSelect ? (
+          <ResearchCanvasDock
+            layout="mobile"
+            zoomPct={100}
+            onZoomIn={() => {}}
+            onZoomOut={() => {}}
+            onFit={() => {}}
+            showZoom={false}
+            showDetailToggle={false}
+            detailOpen={detailToggleOpen}
+            onToggleDetail={handleToggleDetail}
+            activeModule={auxPanel}
+            onSelectModule={onAuxPanelSelect}
           />
         ) : null}
       </div>
@@ -491,9 +537,14 @@ function ResearchCanvasInner({
           nodeColor={(n) => (n.type === "gitGutter" ? "transparent" : "var(--brand)")}
         />
       </ReactFlow>
+      {/* LRM-1151: Canvas Dock bottom-center (modules + zoom + detail). */}
       <div
         className="pointer-events-auto absolute z-20"
-        style={{ left: OVERLAY_INSET_PX, bottom: CONTROLS_BOTTOM_PX }}
+        style={{
+          left: "50%",
+          bottom: CONTROLS_BOTTOM_PX,
+          transform: "translateX(-50%)",
+        }}
         data-testid="research-canvas-controls-slot"
       >
         <ResearchCanvasDock
@@ -511,14 +562,10 @@ function ResearchCanvasInner({
             void fitView({ padding: 0.18, duration: 240 });
             dispatch({ type: "setZoom", pct: Math.round(getZoom() * 100) });
           }}
-          detailOpen={showOverlayDetail}
-          onToggleDetail={() => {
-            if (showOverlayDetail) {
-              clearDetail();
-            } else if (selectedNode) {
-              pinDetail(selectedNode);
-            }
-          }}
+          detailOpen={detailToggleOpen}
+          onToggleDetail={handleToggleDetail}
+          activeModule={auxPanel}
+          onSelectModule={onAuxPanelSelect}
         />
       </div>
       {showOverlayDetail && detailNode ? (
@@ -560,6 +607,8 @@ export function ResearchCanvas(props: {
   chatMode?: ChatDrawerMode;
   detailPlacement?: "overlay" | "drawer";
   onOpenDetail?: (node: ResearchGraphNode) => void;
+  auxPanel?: ResearchAuxPanelId | null;
+  onAuxPanelSelect?: (id: ResearchAuxPanelId) => void;
 }) {
   return (
     <ReactFlowProvider>

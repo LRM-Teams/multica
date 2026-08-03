@@ -784,7 +784,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 	renderPinnedRules(&b, ctx)
 
-	if ctx.ChatSessionID != "" && ctx.IssueID == "" {
+	if isChatLikeContext(ctx) {
 		renderChatRuntimeBrief(&b, provider, ctx)
 		return b.String()
 	}
@@ -1093,7 +1093,7 @@ func renderPinnedRules(b *strings.Builder, ctx TaskContextForEnv) {
 	if ctx.IssueID != "" {
 		b.WriteString("- Issue description + acceptance criteria + attachments = spec. Chat/comments are context. Challenge a bad spec with its owner; never silently rewrite or lower it.\n")
 	}
-	if ctx.ChatSessionID != "" {
+	if isChatLikeContext(ctx) {
 		b.WriteString("- Thread attention is explicit. Unfollow only after work and every handoff/review/decision/reply/follow-up completes. CI/deploy/human wait/reminder/idle/task-done/mute are not completion. Personal @mentions still pierce; posting re-follows.\n")
 	}
 	b.WriteString("\n")
@@ -1103,7 +1103,7 @@ func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("### Memory Operating Guide (v0.11)\n\n")
 	b.WriteString("Use high-strength auto-write for human preferences and durable work arrangements, and medium-strength auto-write for other durable knowledge: record them without waiting for a separate request when they are specific, supported by the current interaction, likely to matter in a future run, and belong to this agent. During real work, treat **human speech and peer-agent durable statements** as high-signal by default — preferences, ownership, handoffs, process lessons, corrections, and \"who works with whom\" are almost never idle chatter whether they come from a member or another agent; only skip writing when the turn is clearly a test, greeting, thanks, ack-only loop, or throwaway joke. A verbal acknowledgment such as \"got it\" / \"记住了\" does not count as remembering; a durable file write must succeed before you claim it. You judge the right destination — `USER.md`, `RELATIONSHIP.md`, agent `memory/MEMORY.md`, `notes/*`, or project/channel files — based on what the fact governs. Do not record guesses, ephemeral execution noise (one-off file paths, transient logs), raw transcripts, secrets, or facts that are useful only for the current response. Prefer updating an existing entry over creating a duplicate.\n\n")
 	b.WriteString("- **Entry gates (platform-enforced)**: group-chat wakes do not inject personal (`USER.md` / user-scoped) memory by default; a clear bring-in phrase (e.g. \"带上我的个人偏好\" / \"use my personal memory\") can temporarily allow it. Project memory loads only when this task has a bound project. Historical formal memories without a scope tag belong in `REVIEW.md` for governance — do not pretend they are already layered.\n")
-	if ctx.ChatSessionID != "" && ctx.Directed {
+	if isChatLikeContext(ctx) && ctx.Directed {
 		b.WriteString("- **Recall before action**: the effective snapshot already contains only context selected for this member, project, and channel. Read the current user's isolated `USER.md` only through `MULTICA_USER_MEMORY_DIR`; never read another member directory.\n")
 	}
 	b.WriteString("- **Source is not scope**: who said a memory is provenance, not its applicability. Do not make a rule user-scoped merely because Andong or another member stated it, and do not discard a rule merely because a peer agent stated it. Choose scope from what the memory governs: this member, this project, this channel, this agent everywhere, or the workspace/team.\n")
@@ -1286,7 +1286,7 @@ func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 		switch {
 		case ctx.IssueID != "":
 			fmt.Fprintf(b, "This issue belongs to **%s**.\n\n", ctx.ProjectTitle)
-		case ctx.ChatSessionID != "":
+		case isChatLikeContext(ctx):
 			fmt.Fprintf(b, "This conversation is associated with **%s**.\n\n", ctx.ProjectTitle)
 		case ctx.QuickCreatePrompt != "":
 			fmt.Fprintf(b, "The requested issue will be created in **%s**.\n\n", ctx.ProjectTitle)

@@ -640,6 +640,35 @@ func TestBuildChatPromptStandaloneDeliveryContract(t *testing.T) {
 	}
 }
 
+// TestBuildPromptChannelOnlyWakeUsesChatPath pins LRM-1079/1081: channel/DM
+// wakes with ChannelID+ChatMessage and no chat_session_id must not fall through
+// to the blank-Issue-ID "New Assignment" prompt.
+func TestBuildPromptChannelOnlyWakeUsesChatPath(t *testing.T) {
+	out := BuildPrompt(Task{
+		ChannelID:   "dm-channel-1",
+		ChatMessage: "先看看什么问题",
+		Priority:    2,
+	}, "cursor", "")
+
+	for _, want := range []string{
+		"You are running as a chat assistant for a Multica workspace.",
+		"User message:\n先看看什么问题",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("channel-only wake prompt missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+	for _, banned := range []string{
+		"Your assigned issue ID is:",
+		"multica issue get  --output json",
+		"New Assignment",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("channel-only wake fell through to assignment prompt (%q)\n--- output ---\n%s", banned, out)
+		}
+	}
+}
+
 // TestBuildPromptDefaultMentionsRecent pins that the catch-all fallback
 // prompt (no trigger comment, no chat, no autopilot, no quick-create) also
 // teaches the agent about --recent as the long-issue-friendly alternative

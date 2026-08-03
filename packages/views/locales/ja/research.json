@@ -356,7 +356,7 @@
     "retry_message": "ノード「{{title}}」（{{id}}）から再試行 / 別経路で探索してください。"
   },
   "dock": {
-    "label": "キャンバス操作",
+    "label": "リサーチキャンバスツール",
     "north_star": "ノーススター",
     "zoom_in": "拡大",
     "zoom_out": "縮小",

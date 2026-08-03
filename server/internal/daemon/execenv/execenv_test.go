@@ -426,6 +426,42 @@ func TestWriteContextFilesOmitsSkillsWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestWriteContextFilesChannelOnlyWakeNotBlankAssignment(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	ctx := TaskContextForEnv{
+		ChannelID: "dm-channel-1",
+	}
+	if err := writeContextFiles(dir, "cursor", ctx, nil); err != nil {
+		t.Fatalf("writeContextFiles failed: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(dir, ".agent_context", "issue_context.md"))
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+	s := string(content)
+	for _, want := range []string{
+		"# Chat / Channel Wake",
+		"**Channel ID:** dm-channel-1",
+		"not an issue assignment",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("channel-only issue_context missing %q\n---\n%s", want, s)
+		}
+	}
+	for _, banned := range []string{
+		"New Assignment",
+		"**Issue ID:**",
+		"# Task Assignment",
+		"Run `multica issue get",
+	} {
+		if strings.Contains(s, banned) {
+			t.Errorf("channel-only issue_context still looks like blank assignment (%q)\n---\n%s", banned, s)
+		}
+	}
+}
+
 func TestWriteContextFilesAutopilotRunOnly(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

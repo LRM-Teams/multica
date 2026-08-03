@@ -90,6 +90,10 @@ WHERE a.id = @agent_id AND a.workspace_id = @workspace_id
 -- a stuck starting_since surviving a crash between mark-starting and
 -- register.
 --
+-- owner_id uses first-owner-wins: COALESCE(existing, excluded). A later PAT
+-- re-register (e.g. admin helping install-service) must not steal ownership
+-- from the machine's original owner — FE upgrade alerts filter owner=me.
+--
 -- pinned_version (task #81) mirrors the same "refresh on every register"
 -- rule: the daemon sends its current MULTICA_PINNED_VERSION (empty string
 -- when unset) on every call, so unpinning a machine (removing the env var
@@ -116,7 +120,7 @@ DO UPDATE SET
     status = EXCLUDED.status,
     device_info = EXCLUDED.device_info,
     metadata = EXCLUDED.metadata,
-    owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
+    owner_id = COALESCE(agent_runtime.owner_id, EXCLUDED.owner_id),
     offline_reason = NULL,
     last_seen_at = now(),
     updated_at = now(),

@@ -516,6 +516,25 @@ describe("ResearchListPage template chips in composer (LRM-1092)", () => {
     );
   });
 
+  it("LRM-1138: selecting a chip shows a colored inject tag with the template short name", () => {
+    render(<ResearchListPage />);
+    expect(screen.queryByTestId("research-template-inject-tag")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: /Industry research/i }));
+    const tag = screen.getByTestId("research-template-inject-tag");
+    expect(tag).toHaveAttribute("data-template-id", "industry");
+    expect(tag).toHaveTextContent(/Industry research/i);
+    expect(screen.getByTestId("research-composer-intent")).toContainElement(tag);
+  });
+
+  it("LRM-1138: reselecting clears the inject tag with the selection", () => {
+    render(<ResearchListPage />);
+    const chip = screen.getByRole("radio", { name: /Competitor analysis/i });
+    fireEvent.click(chip);
+    expect(screen.getByTestId("research-template-inject-tag")).toBeInTheDocument();
+    fireEvent.click(chip);
+    expect(screen.queryByTestId("research-template-inject-tag")).toBeNull();
+  });
+
   it("reselecting clears selection and starter when not dirty", () => {
     render(<ResearchListPage />);
     const chip = screen.getByRole("radio", { name: /Competitor analysis/i });
@@ -537,6 +556,20 @@ describe("ResearchListPage template chips in composer (LRM-1092)", () => {
       "false",
     );
     expect(textarea.value).toBe("Keep my custom goal");
+    // Tag follows selection — dirty body kept, inject evidence cleared with pill.
+    expect(screen.queryByTestId("research-template-inject-tag")).toBeNull();
+  });
+
+  it("LRM-1138: dirty body keeps inject tag when switching to another template", () => {
+    render(<ResearchListPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /Industry research/i }));
+    const textarea = screen.getByTestId("research-create-goal") as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "Keep my custom goal" } });
+    fireEvent.click(screen.getByRole("radio", { name: /Tech selection/i }));
+    expect(textarea.value).toBe("Keep my custom goal");
+    const tag = screen.getByTestId("research-template-inject-tag");
+    expect(tag).toHaveAttribute("data-template-id", "tech_selection");
+    expect(tag).toHaveTextContent(/Tech selection/i);
   });
 
   it("empty submit without template or goal shows near-field error (LRM-835)", () => {

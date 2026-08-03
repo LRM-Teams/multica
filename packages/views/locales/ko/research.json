@@ -356,7 +356,7 @@
     "retry_message": "노드 「{{title}}」({{id}})에서 재시도 / 경로 변경으로 다시 탐색해 주세요."
   },
   "dock": {
-    "label": "캔버스 컨트롤",
+    "label": "리서치 캔버스 도구",
     "north_star": "북극성",
     "zoom_in": "확대",
     "zoom_out": "축소",

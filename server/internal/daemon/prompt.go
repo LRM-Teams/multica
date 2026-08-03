@@ -43,7 +43,7 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 		if task.AssignmentSnapshot != nil {
 			return withCurrentStateOverlay(buildAssignmentPrompt(task))
 		}
-	} else if task.ChatSessionID != "" {
+	} else if isChatLikeTask(task) {
 		if provider == "pi" {
 			if command, ok := piNativeSlashChatCommand(task.ChatMessage); ok {
 				// Native slash commands are handled by Pi's command router rather
@@ -221,6 +221,21 @@ func buildAssignmentPrompt(task Task) string {
 		b.WriteString("No comments existed when this assignment wake was enqueued. Do not run `multica issue comment list` merely to confirm the zero count.\n")
 	}
 	return b.String()
+}
+
+// isChatLikeTask reports conversational wakes that must not fall through to the
+// empty-issue assignment prompt. After LRM-1079/1081, ordinary channel/DM wakes
+// intentionally omit chat_session_id and carry the exact prompt in ChatMessage
+// with ChannelID only — treating ChatSessionID as the sole chat signal routed
+// those wakes into "New Assignment" with a blank Issue ID.
+func isChatLikeTask(task Task) bool {
+	if strings.TrimSpace(task.IssueID) != "" {
+		return false
+	}
+	if strings.TrimSpace(task.ChatSessionID) != "" {
+		return true
+	}
+	return strings.TrimSpace(task.ChannelID) != "" && strings.TrimSpace(task.ChatMessage) != ""
 }
 
 func buildProtocolTurnPrompt(task Task) string {

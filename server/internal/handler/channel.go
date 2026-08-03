@@ -1059,6 +1059,33 @@ func writeSystemChannelProtected(w http.ResponseWriter) {
 	writeCodedError(w, http.StatusConflict, systemChannelProtectedCode, "system channel is managed automatically")
 }
 
+// ensureSystemGeneralRosterIfNeeded re-runs ensure_system_general_channel when
+// the target is the workspace #general channel. Best-effort: failures are
+// logged and the caller still serves the current roster. Used to heal agents
+// left out by migration 251's deliberate no-backfill (LRM-915).
+func (h *Handler) ensureSystemGeneralRosterIfNeeded(ctx context.Context, workspaceID string, channelID pgtype.UUID, actorUserID string) {
+	var systemKey pgtype.Text
+	if err := h.DB.QueryRow(ctx, `
+		SELECT system_key
+		FROM channel
+		WHERE id = $1 AND workspace_id = $2`, channelID, parseUUID(workspaceID)).Scan(&systemKey); err != nil {
+		return
+	}
+	if !systemKey.Valid || systemKey.String != "general" {
+		return
+	}
+	var ignored pgtype.UUID
+	if err := h.DB.QueryRow(ctx,
+		`SELECT ensure_system_general_channel($1, $2)`,
+		parseUUID(workspaceID), parseUUID(actorUserID),
+	).Scan(&ignored); err != nil {
+		slog.Warn("ensure_system_general_channel heal failed",
+			"workspace_id", workspaceID,
+			"channel_id", uuidToString(channelID),
+			"error", err)
+	}
+}
+
 func (h *Handler) requireChannelNotSystem(w http.ResponseWriter, ctx context.Context, workspaceID string, channelID pgtype.UUID) bool {
 	var systemKey pgtype.Text
 	err := h.DB.QueryRow(ctx, `
@@ -1466,6 +1493,10 @@ func (h *Handler) ListChannelMembers(w http.ResponseWriter, r *http.Request) {
 	if !h.requireChannelUserMember(w, r.Context(), workspaceID, channelID, parseUUID(userID)) {
 		return
 	}
+	// LRM-915: migration 251 skipped historical #general backfill; heal on read
+	// so formerly-private agents (Wendy) appear in the member list/search
+	// without waiting for an agent-row UPDATE to re-fire the sync trigger.
+	h.ensureSystemGeneralRosterIfNeeded(r.Context(), workspaceID, channelID, userID)
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT cm.member_type, cm.member_id,
 		       COALESCE(u.name, a.name, ''),

@@ -84,6 +84,10 @@ func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelRe
 	}
 	parts = appendReferenceOccurrences(parts, h.resolveBareChannelIssueReferences(ctx, ch.WorkspaceID, content, parts))
 	parts = appendReferenceOccurrences(parts, h.resolveChannelReferenceLinks(ctx, ch.WorkspaceID, content))
+	// Bare `#name` runs after the link form so an explicit composer link always
+	// wins the span it already owns (appendReferenceOccurrences keeps the first
+	// verified anchor per span).
+	parts = appendReferenceOccurrences(parts, h.resolveBareChannelReferences(ctx, ch.WorkspaceID, content))
 	return content, parts, nil
 }
 
@@ -189,6 +193,133 @@ func unescapeChannelReferenceLabel(label string) string {
 	label = strings.ReplaceAll(label, `\[`, "[")
 	label = strings.ReplaceAll(label, `\]`, "]")
 	return label
+}
+
+type channelReferenceCandidate struct {
+	ID   string
+	Name string
+}
+
+type channelReferenceOccurrence struct {
+	Candidate channelReferenceCandidate
+	Start     int
+	End       int
+}
+
+// resolveBareChannelReferences attaches durable channel IDs to bare `#name`
+// tokens in group messages (LRM-1153). The composer's picker path
+// (resolveChannelReferenceLinks) only covers text a human authored through the
+// suggestion menu; agents and hand-typed prose write the plain `#name` that
+// every reader already reads as a channel, and before this resolver those
+// occurrences carried no parts at all — so the FE's ChannelRefLink had nothing
+// to anchor and the raw `#name` shipped as prose next to correctly chipped
+// @mentions and issue refs from the very same message.
+//
+// Discovery is candidate-driven rather than regex-driven, exactly like
+// resolveBareChannelMentions: channel names are unique per workspace but may
+// contain Unicode, so matching known names (longest first) is what keeps
+// `#1973` (a PR number), `#todo` (no such channel), and a DM's synthetic name
+// from being guessed into links. The visible text stays exactly as authored.
+func (h *Handler) resolveBareChannelReferences(ctx context.Context, workspaceID, content string) []protocol.MessagePart {
+	if !strings.Contains(content, "#") {
+		return nil
+	}
+	candidates := h.channelReferenceCandidates(ctx, workspaceID)
+	if len(candidates) == 0 {
+		return nil
+	}
+	out := make([]protocol.MessagePart, 0)
+	for _, occurrence := range findBareChannelReferences(content, candidates) {
+		start, end := contentUTF16Span(content, occurrence.Start, occurrence.End)
+		out = append(out, protocol.MessagePart{
+			Type:              protocol.MessagePartTypeReference,
+			RefType:           "channel-ref",
+			RefID:             occurrence.Candidate.ID,
+			Label:             occurrence.Candidate.Name,
+			ContentStartUTF16: &start,
+			ContentEndUTF16:   &end,
+		})
+	}
+	return out
+}
+
+// channelReferenceCandidates lists the linkable group channels of a workspace
+// keyed by lowercased name. DMs are excluded for the same reason
+// resolveChannelReferenceLinks drops them (private 1:1s are not a shareable
+// target, and their names are synthetic `dm:...` keys), and archived channels
+// are excluded because a chip that navigates nowhere useful is worse than the
+// author's own plain text.
+func (h *Handler) channelReferenceCandidates(ctx context.Context, workspaceID string) map[string]channelReferenceCandidate {
+	rows, err := h.DB.Query(ctx, `
+		SELECT id::text, name
+		FROM channel
+		WHERE workspace_id = $1 AND kind = 'group' AND archived_at IS NULL`,
+		parseUUID(workspaceID))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	candidates := map[string]channelReferenceCandidate{}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		key := normalizeMentionCandidateLabel(name)
+		if key == "" {
+			continue
+		}
+		candidates[key] = channelReferenceCandidate{ID: id, Name: name}
+	}
+	return candidates
+}
+
+// findBareChannelReferences walks each `#` in content and takes the longest
+// candidate name that matches at that position with handle boundaries on both
+// sides, so `#pr` never steals the front of `#pr-frontend`. Code spans and text
+// already owned by a markdown link are skipped: the explicit
+// `[Label](mention://channel/<id>)` form is resolved by
+// resolveChannelReferenceLinks and must not be anchored twice.
+func findBareChannelReferences(content string, candidates map[string]channelReferenceCandidate) []channelReferenceOccurrence {
+	keys := make([]string, 0, len(candidates))
+	for key := range candidates {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return utf8.RuneCountInString(candidates[keys[i]].Name) > utf8.RuneCountInString(candidates[keys[j]].Name)
+	})
+	skipRegions := mention.FindLiteralSkipRegions(content)
+
+	out := make([]channelReferenceOccurrence, 0)
+	for start := 0; start < len(content); {
+		hash := strings.IndexByte(content[start:], '#')
+		if hash < 0 {
+			break
+		}
+		hash += start
+		if !mentionHandleBoundaryBefore(content, hash) || mention.InLiteralSkipRegion(hash, skipRegions) {
+			start = hash + 1
+			continue
+		}
+		matchEnd := hash + 1
+		for _, key := range keys {
+			candidate := candidates[key]
+			end, ok := mentionHandlePrefix(content, hash+1, candidate.Name)
+			if !ok || !mentionHandleBoundaryAfter(content, end) {
+				continue
+			}
+			if mention.IsInsideMarkdownLink(content, hash, end) {
+				continue
+			}
+			out = append(out, channelReferenceOccurrence{Candidate: candidate, Start: hash, End: end})
+			matchEnd = end
+			break
+		}
+		start = matchEnd
+	}
+	return out
 }
 
 func (h *Handler) channelMentionCandidates(ctx context.Context, workspaceID, channelID string) map[string]channelMentionCandidate {

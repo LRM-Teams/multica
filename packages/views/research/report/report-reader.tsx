@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { Copy, Download, List, X } from "lucide-react";
@@ -238,6 +245,29 @@ export function ReportReader({
     focusable?.focus();
   }, [outlineOpen]);
 
+  /** LRM-1234 — click-outside close, attached imperatively so the modal gains
+   * no extra focusable node. The old implementation was a full-screen invisible
+   * `<button aria-label="close">`: the native dialog focusing steps parked
+   * initial focus on it, so the reader opened with focus on an invisible
+   * full-viewport control whose accessible name duplicated the header X, and the
+   * first Enter/Space closed the whole report. Clicks landing on the dialog box
+   * itself (the gutter around the card) are the "outside" clicks; anything
+   * inside the card arrives with a different target. */
+  const onGutterClose = useEffectEvent(() => {
+    onClose();
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const handle = (event: MouseEvent) => {
+      if (event.target === dialog) onGutterClose();
+    };
+    dialog.addEventListener("click", handle);
+    return () => dialog.removeEventListener("click", handle);
+  }, [open]);
+
   const scrollTo = useCallback(
     (id: string) => {
       setActiveId(id);
@@ -312,12 +342,6 @@ export function ReportReader({
       }}
       onClose={onClose}
     >
-      <button
-        type="button"
-        className="absolute inset-0 z-0 cursor-default bg-transparent"
-        aria-label={t(($) => $.panel.hide_chat)}
-        onClick={onClose}
-      />
       <div
         role="document"
         data-testid="research-delivery-modal-card"

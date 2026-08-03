@@ -435,4 +435,66 @@ describe("ReportReader", () => {
     expect(successSpy).toHaveBeenCalledWith("Markdown file downloaded");
     clickSpy.mockRestore();
   });
+
+  it("LRM-1234: no full-screen invisible button; empty-space click still closes", () => {
+    const onClose = vi.fn();
+    render(<ReportReader open onClose={onClose} report={report} sources={sources} />);
+    const dialog = screen.getByTestId("research-delivery-modal");
+
+    // The old overlay was `<button class="absolute inset-0 …">`: focusable, so
+    // the dialog focusing steps parked initial focus on an invisible rect.
+    expect(dialog.querySelector("button.absolute.inset-0")).toBeNull();
+
+    // Pointer close survives via the dialog's own box (the gutter around card).
+    fireEvent.click(dialog);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // Clicks inside the reading card must not close.
+    fireEvent.click(screen.getByTestId("research-delivery-modal-card"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("LRM-1234: only one exposed Close control inside the report modal", () => {
+    render(<ReportReader open onClose={vi.fn()} report={report} sources={sources} />);
+    // The invisible full-screen overlay used to duplicate the header X's name.
+    const closers = screen.getAllByRole("button", { name: "Close" });
+    expect(closers).toHaveLength(1);
+    expect(closers[0]?.className ?? "").not.toMatch(/inset-0/);
+  });
+
+  it("LRM-1234: every focusable control in the modal has a real layout box", () => {
+    render(<ReportReader open onClose={vi.fn()} report={report} sources={sources} />);
+    const dialog = screen.getByTestId("research-delivery-modal");
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    expect(focusable.length).toBeGreaterThan(0);
+    // No focus stop may be a full-bleed invisible layer.
+    expect(focusable.some((el) => /absolute/.test(el.className) && /inset-0/.test(el.className))).toBe(
+      false,
+    );
+    // Narrow tier keeps the outline toggle first (it is `md:hidden`, so on
+    // desktop the first stop is the copy button — both are visible chrome).
+    expect(focusable[0]?.getAttribute("data-testid")).toBe(
+      "research-report-outline-toggle",
+    );
+  });
+
+  it("LRM-1234: Escape contract unchanged — drawer first, then the modal", () => {
+    const onClose = vi.fn();
+    render(<ReportReader open onClose={onClose} report={report} sources={sources} />);
+    const dialog = screen.getByRole("dialog");
+
+    fireEvent.click(screen.getByTestId("research-report-outline-toggle"));
+    expect(screen.getByTestId("research-report-outline-drawer")).toBeInTheDocument();
+
+    fireEvent(dialog, new Event("cancel", { bubbles: true, cancelable: true }));
+    expect(screen.queryByTestId("research-report-outline-drawer")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent(dialog, new Event("cancel", { bubbles: true, cancelable: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

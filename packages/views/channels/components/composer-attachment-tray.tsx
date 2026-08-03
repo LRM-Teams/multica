@@ -39,7 +39,13 @@ function isImagePending(item: PendingAttachment): boolean {
  *     41.3% → 4.6% occlusion on mobile (36px in-image button on a 56px thumb),
  *     25.0% → 6.25% on desktop. `after:-inset-0.5` restores a 24px pointer
  *     target so WCAG SC 2.5.8 still passes at a 20px visual size.
- *     File chips are untouched — there is no image under the button there.
+ *     LRM-1228 extends the same corner rule to file/stale chips: they were the
+ *     other half of “手机端 button 太大” (a 36px `size-9` in-chip button on
+ *     mobile web). Nothing sits under the button there, but it ate ~42px of a
+ *     176px chip; moving it out gives the filename 98px → 136px and the visual
+ *     drops 36px → 20px. The chip reserves `pr-3` (the outdented button's inner
+ *     half is 12px) so `truncate` text never runs underneath. Retry keeps the
+ *     layout — centered on a thumb, inline in a chip — so only remove outdents.
  *  2. The thumb itself becomes the preview entry point (`<button>` + Enter /
  *     Space), reusing the shared `useAttachmentPreview()` modal rather than
  *     introducing a second lightbox. Desktop hover/keyboard-focus reveals a
@@ -158,7 +164,7 @@ export function ComposerAttachmentTray({
               className={cn(
                 "group relative flex w-fit max-w-[11rem] shrink-0 list-none flex-row items-center gap-1.5 rounded-lg border border-border/50 bg-muted/35",
                 chipH,
-                showImage ? cn(thumb, "max-w-none p-0") : "min-w-0 px-2",
+                showImage ? cn(thumb, "max-w-none p-0") : "min-w-0 pl-2 pr-3",
                 item.status === "error" && "border-destructive/50 bg-destructive/5",
               )}
             >
@@ -259,9 +265,9 @@ export function ComposerAttachmentTray({
                 </div>
               ) : null}
 
-              {/* LRM-1180: on an image, retry is the primary recovery action and
-                  takes the centered slot instead of fighting remove for the
-                  corner. File chips keep the inline control row. */}
+              {/* Retry is the primary recovery action and covers nothing, so it
+                  stays in the layout: centered over an image thumb, inline in a
+                  file chip's control row. Only remove goes to the corner. */}
               {showImage && item.status === "error" ? (
                 <Button
                   type="button"
@@ -275,47 +281,43 @@ export function ComposerAttachmentTray({
                 </Button>
               ) : null}
 
-              <div
-                className={cn(
-                  "flex shrink-0 items-center gap-0.5",
-                  showImage && "absolute -right-2 -top-2 z-30",
-                )}
-              >
-                {!showImage && item.status === "error" ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="icon"
-                    className={cn(iconBtn, "bg-background/95 shadow-sm")}
-                    aria-label={retryLabel}
-                    onClick={() => onRetry(item.localId)}
-                  >
-                    <RotateCcw className={iconGlyph} />
-                  </Button>
-                ) : null}
+              {!showImage && item.status === "error" ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="icon"
+                  className={cn(iconBtn, "shrink-0 bg-background/95 shadow-sm")}
+                  aria-label={retryLabel}
+                  onClick={() => onRetry(item.localId)}
+                >
+                  <RotateCcw className={iconGlyph} />
+                </Button>
+              ) : null}
+
+              {/* LRM-1228: one remove rule for every chip kind — 20px visual in
+                  the overflow corner, 24px pointer target via `after:-inset-0.5`.
+                  File chips reserve `pr-3` (the button's inner half is 12px) so
+                  the truncated filename never runs underneath. */}
+              <div className="absolute -right-2 -top-2 z-30 flex shrink-0 items-center">
                 <Button
                   type="button"
                   variant="secondary"
                   size="icon"
                   className={cn(
-                    "shadow-sm",
-                    showImage
-                      ? cn(
-                          // 20px visual, 24px hit target via the ::after pad.
-                          "relative size-5 rounded-full border border-border bg-background/95",
-                          'after:absolute after:-inset-0.5 after:content-[""]',
-                          // Desktop: reveal on hover. Mobile web: always visible
-                          // (no hover) so remove stays tappable.
-                          isMobile
-                            ? "opacity-100"
-                            : "opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100",
-                        )
-                      : cn(iconBtn, "bg-transparent hover:bg-background/80"),
+                    // 20px visual, 24px hit target via the ::after pad.
+                    "relative size-5 rounded-full border border-border bg-background/95 shadow-sm",
+                    'after:absolute after:-inset-0.5 after:content-[""]',
+                    // Only an image has something worth un-covering on desktop
+                    // hover. A file chip's remove is the chip's only control, so
+                    // hiding it until hover would just cost discoverability.
+                    showImage && !isMobile
+                      ? "opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
+                      : "opacity-100",
                   )}
                   aria-label={removeLabel}
                   onClick={() => onRemove(item.localId)}
                 >
-                  <X className={showImage ? "size-3" : iconGlyph} />
+                  <X className="size-3" />
                 </Button>
               </div>
             </li>

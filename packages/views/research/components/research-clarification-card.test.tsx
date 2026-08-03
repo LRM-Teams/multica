@@ -165,4 +165,75 @@ describe("ResearchClarificationCard", () => {
     }
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  // LRM-1170 — one dim level per state, and skip settles the same way in both layouts.
+  it("applies exactly one opacity utility per option state", () => {
+    const opacities = (el: Element) =>
+      el.className.split(/\s+/).filter((c) => c.startsWith("opacity-"));
+
+    const interactive = render(
+      <ResearchClarificationCard question={listQuestion} resolution={{ status: "pending" }} />,
+    );
+    for (const opt of screen.getAllByTestId("research-clarification-option")) {
+      expect(opacities(opt)).toEqual([]);
+    }
+    interactive.unmount();
+
+    const inFlight = render(
+      <ResearchClarificationCard
+        question={listQuestion}
+        resolution={{ status: "pending" }}
+        pending
+      />,
+    );
+    for (const opt of screen.getAllByTestId("research-clarification-option")) {
+      expect(opacities(opt)).toEqual(["opacity-60"]);
+    }
+    inFlight.unmount();
+
+    render(
+      <ResearchClarificationCard
+        question={listQuestion}
+        resolution={{
+          status: "answered",
+          optionId: "cost",
+          optionLabel: "Cost",
+          replyMessageId: "u1",
+        }}
+      />,
+    );
+    for (const opt of screen.getAllByTestId("research-clarification-option")) {
+      const expected =
+        opt.getAttribute("data-option-id") === "cost" ? [] : ["opacity-50"];
+      expect(opacities(opt)).toEqual(expected);
+    }
+  });
+
+  it("removes skip once settled in both option and form layouts", () => {
+    for (const question of [listQuestion, formQuestion]) {
+      const pendingRender = render(
+        <ResearchClarificationCard question={question} resolution={{ status: "pending" }} />,
+      );
+      expect(screen.getByTestId("research-clarification-skip")).toBeTruthy();
+      pendingRender.unmount();
+
+      const answeredRender = render(
+        <ResearchClarificationCard
+          question={question}
+          resolution={{ status: "answered", replyMessageId: "u1" }}
+        />,
+      );
+      expect(screen.queryByTestId("research-clarification-skip")).toBeNull();
+      answeredRender.unmount();
+
+      const skippedRender = render(
+        <ResearchClarificationCard
+          question={question}
+          resolution={{ status: "skipped", replyMessageId: "u1" }}
+        />,
+      );
+      expect(screen.queryByTestId("research-clarification-skip")).toBeNull();
+      skippedRender.unmount();
+    }
+  });
 });

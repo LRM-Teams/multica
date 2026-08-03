@@ -123,7 +123,9 @@ export function ResearchClarificationCard({
                 ? t(($) => $.clarification.submitting)
                 : t(($) => $.clarification.submit)}
             </Button>
-            {question.allow_skip ? (
+            {/* LRM-1170 — skip disappears once the question is settled, in both
+                layouts; a permanently greyed-out skip button is not kept around. */}
+            {question.allow_skip && !resolved ? (
               <Button
                 type="button"
                 size="sm"
@@ -170,8 +172,11 @@ export function ResearchClarificationCard({
                     selected
                       ? "border-primary bg-primary/10 text-foreground"
                       : "border-border bg-background hover:bg-accent/60",
-                    (!interactive || selected) && !selected && "opacity-60",
-                    resolved && !selected && "opacity-50",
+                    // LRM-1170 — one dim level per state, never two opacity
+                    // utilities on the same element: settled beats in-flight,
+                    // and the option the user picked is never dimmed.
+                    !selected && resolved && "opacity-50",
+                    !selected && !resolved && !interactive && "opacity-60",
                   )}
                 >
                   <span className="font-medium">{opt.label}</span>

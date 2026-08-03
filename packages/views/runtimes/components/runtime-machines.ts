@@ -551,15 +551,33 @@ function latestMachineLastSeenAt(runtimes: AgentRuntime[]): string | null {
   return latestLastSeenAt(runtimes);
 }
 
+/**
+ * Daemon version shown in machine Basics. Prefer a single shared version;
+ * when runtimes disagree (or only some report `current_version`), keep a
+ * row visible by picking the most recently daemon-seen runtime's version
+ * instead of hiding the field entirely (looked like "version disappeared").
+ * `v` prefixes are normalized so `0.3.94` and `v0.3.94` count as the same.
+ */
 function commonCliVersion(runtimes: AgentRuntime[]): string | null {
-  const versions = new Set<string>();
+  const byNorm = new Map<string, string>();
   for (const runtime of runtimes) {
     const version = runtimeCurrentVersion(runtime);
-    if (version) {
-      versions.add(version);
-    }
+    if (!version) continue;
+    const norm = version.replace(/^v/i, "");
+    if (!byNorm.has(norm)) byNorm.set(norm, version);
   }
-  return versions.size === 1 ? Array.from(versions)[0] ?? null : null;
+  if (byNorm.size === 0) return null;
+  if (byNorm.size === 1) return Array.from(byNorm.values())[0] ?? null;
+
+  let best: { version: string; at: number } | null = null;
+  for (const runtime of runtimes) {
+    const version = runtimeCurrentVersion(runtime);
+    if (!version) continue;
+    const at =
+      Date.parse(runtime.daemon_last_seen_at || runtime.last_seen_at || "") || 0;
+    if (!best || at >= best.at) best = { version, at };
+  }
+  return best?.version ?? null;
 }
 
 /** Short form for machine-detail / ops diagnostics (e.g. `a1b2c3··ef`). */

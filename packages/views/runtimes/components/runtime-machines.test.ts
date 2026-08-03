@@ -491,6 +491,66 @@ describe("machine health presentation (#687)", () => {
   });
 });
 
+describe("machine cliVersion (Basics daemon row)", () => {
+  it("keeps a shared version when every runtime reports the same current_version", () => {
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({ id: "rt-a", provider: "claude", current_version: "0.3.94" }),
+        makeRuntime({ id: "rt-b", provider: "codex", current_version: "0.3.94" }),
+      ],
+      { now: NOW, localDaemonId: "daemon-1" },
+    );
+    expect(machines[0]?.cliVersion).toBe("0.3.94");
+  });
+
+  it("treats v-prefix variants as the same version", () => {
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({ id: "rt-a", current_version: "0.3.94" }),
+        makeRuntime({ id: "rt-b", provider: "codex", current_version: "v0.3.94" }),
+      ],
+      { now: NOW, localDaemonId: "daemon-1" },
+    );
+    expect(machines[0]?.cliVersion).toMatch(/0\.3\.94$/);
+  });
+
+  it("still shows a version when runtimes disagree (prefer most recently seen)", () => {
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-old",
+          current_version: "0.3.90",
+          last_seen_at: new Date(NOW - 60_000).toISOString(),
+        }),
+        makeRuntime({
+          id: "rt-new",
+          provider: "codex",
+          current_version: "0.3.94",
+          last_seen_at: new Date(NOW - 5_000).toISOString(),
+        }),
+      ],
+      { now: NOW, localDaemonId: "daemon-1" },
+    );
+    expect(machines[0]?.cliVersion).toBe("0.3.94");
+  });
+
+  it("shows the reported version when only some runtimes have current_version", () => {
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({ id: "rt-a", current_version: "0.3.94" }),
+        makeRuntime({
+          id: "rt-b",
+          provider: "codex",
+          current_version: null,
+          metadata: {},
+        }),
+      ],
+      { now: NOW, localDaemonId: "daemon-1" },
+    );
+    expect(machines[0]?.cliVersion).toBe("0.3.94");
+  });
+});
+
 describe("splitRuntimeName", () => {
   it("separates daemon host suffix from provider name", () => {
     expect(splitRuntimeName("Claude (build-server-01)")).toEqual({

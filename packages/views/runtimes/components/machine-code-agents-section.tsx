@@ -26,8 +26,9 @@ function SectionTitle({ children }: { children: ReactNode }) {
 
 /**
  * LRM-922 / LRM-863 / LRM-960 / LRM-1071 / LRM-1108 — Code agents inventory:
- * section title + compact count + provider grid. Installed status is a green
- * dot + muted version (A2); visibility toggle on the same footer row.
+ * section title + provider grid. Installed status is a green dot + muted
+ * version (A2); visibility toggle on the same footer row. A2.1 drops the
+ * section-header installed/supported count.
  */
 export function MachineCodeAgentsSection({
   machine,
@@ -52,23 +53,14 @@ export function MachineCodeAgentsSection({
   );
   const rows = [...installed, ...notInstalled];
   const installedCount = installed.length;
-  const supportedMore = notInstalled.length;
 
   const canEditRuntime = (ownerId: string | null | undefined) =>
     !!user && (!!ownerId && (ownerId === user.id || isAdmin));
 
   return (
     <section data-testid="machine-runtimes-section">
-      <div className="mb-2 flex items-baseline justify-between gap-3 px-1">
+      <div className="mb-2 px-1">
         <SectionTitle>{t(($) => $.machine.code_agents_section)}</SectionTitle>
-        {rows.length > 0 ? (
-          <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-            {t(($) => $.machine.code_agents_help, {
-              installed: installedCount,
-              supported: installedCount + supportedMore,
-            })}
-          </span>
-        ) : null}
       </div>
       <div className="overflow-hidden rounded-xl border bg-card">
         {rows.length === 0 ? (

@@ -122,7 +122,8 @@ describe("MachineCodeAgentsSection", () => {
     expect(
       screen.getByRole("heading", { name: "Runtimes on this computer" }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/^\d+ \/ \d+$/)).toBeInTheDocument();
+    // A2.1: no section-header installed/supported count.
+    expect(screen.queryByText(/^\d+ \/ \d+$/)).not.toBeInTheDocument();
     expect(screen.getByText("v1.4.2")).toBeInTheDocument();
     expect(screen.queryByText(/Installed ·/)).not.toBeInTheDocument();
     expect(screen.queryByText("Installed")).not.toBeInTheDocument();
@@ -169,13 +170,13 @@ describe("MachineCodeAgentsSection", () => {
     expect(screen.getByText("v9.9.9")).toBeInTheDocument();
   });
 
-  it("keeps the section mounted with compact count when nothing is installed", () => {
+  it("keeps the section mounted without a header count when nothing is installed", () => {
     renderSection(makeMachine([]));
 
     expect(
       screen.getByRole("heading", { name: "Runtimes on this computer" }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/^0 \/ \d+$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^\d+ \/ \d+$/)).not.toBeInTheDocument();
     expect(
       screen.queryByText("Supported · not installed"),
     ).not.toBeInTheDocument();

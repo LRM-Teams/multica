@@ -32,8 +32,6 @@ Multica 将编码 Agent 变成真正的队友。像分配给同事一样分配�
 
 不再需要复制粘贴 prompt，不再需要盯着运行过程。你的 Agent 出现在看板上、参与对话、随着时间积累可复用的技能。可以理解为开源的 Managed Agents 基础设施——厂商中立、可自部署、专为人类 + AI 团队设计。支持 **Claude Code**、**Codex**、**GitHub Copilot CLI**、**OpenClaw**、**OpenCode**、**Hermes**、**Gemini**、**Pi**、**Cursor Agent**、**Kimi**、**Kiro CLI**、**Antigravity** 和 **Grok**。
 
-面向更大的团队，Squads（小队）提供稳定的路由层：把任务分给由 Agent 带队的小队，由队长判断谁最适合接手。
-
 <p align="center">
   <img src="docs/assets/hero-screenshot.png" alt="Multica 看板视图" width="800">
 </p>
@@ -55,7 +53,6 @@ Multica——**Mul**tiplexed **I**nformation and **C**omputing **A**gent。
 Multica 管理完整的 Agent 生命周期：从任务分配到执行监控再到技能复用。
 
 - **Agent 即队友** — 像分配给同事一样分配给 Agent。它们有个人档案、出现在看板上、发表评论、创建 Issue、主动报告阻塞问题。
-- **Squads（小队）** — 把多个 Agent（以及人类成员）组合成由 leader agent 带队的小队，直接把任务分配给小队本身。Leader 会判断谁最适合接手，团队扩容时路由方式保持不变。用 `@前端组` 代替 `@小张或小李或小王`。
 - **自主执行** — 设置后无需管理。完整的任务生命周期管理（排队、认领、执行、完成/失败），通过 WebSocket 实时推送进度。
 - **可复用技能** — 每个解决方案都成为全团队可复用的技能。部署、数据库迁移、代码审查——技能让团队能力随时间持续增长。
 - **统一运行时** — 一个控制台管理所有算力。本地 daemon 和云端运行时，自动检测可用 CLI，实时监控。

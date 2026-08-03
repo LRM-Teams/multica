@@ -263,6 +263,24 @@ describe("ResearchListPage list states (LRM-789)", () => {
       screen.queryByRole("heading", { name: enResearch.groups.completed }),
     ).toBeNull();
   });
+
+  it("LRM-1104: filter bar and session rows share one max-w content shell", () => {
+    setQuery({
+      data: {
+        sessions: [session({ id: "s-run", status: "running", title: "Alpha" })],
+      },
+    });
+    const { container } = render(<ResearchListPage />);
+    const shell = container.querySelector(
+      '[data-testid="research-session-list-content"]',
+    );
+    expect(shell?.className).toContain("max-w-3xl");
+    expect(shell?.className).toContain("w-full");
+    // Filter + rows are descendants of the same width shell (not independently capped).
+    expect(shell?.querySelector('[aria-label]') || shell).toBeTruthy();
+    expect(shell?.textContent).toContain("Alpha");
+    expect(shell?.querySelector('[placeholder], input, [role="radiogroup"]')).toBeTruthy();
+  });
 });
 
 describe("ResearchListPage first-visit empty state (LRM-816)", () => {

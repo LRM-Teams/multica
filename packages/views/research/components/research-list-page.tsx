@@ -36,6 +36,7 @@ import {
   FAILED_STATUSES,
   filterSessions,
   isSessionListFilterActive,
+  RESEARCH_SESSION_LIST_CONTENT_CLASS,
   type SessionStatusFilter,
 } from "../lib/session-list-filter";
 import {
@@ -533,7 +534,10 @@ export function ResearchListPage() {
           onStart={focusComposer}
         />
       ) : (
-        <div className="space-y-4">
+        <div
+          data-testid="research-session-list-content"
+          className={cn("space-y-4", RESEARCH_SESSION_LIST_CONTENT_CLASS)}
+        >
           <ResearchSessionFilterBar
             query={titleQuery}
             status={statusFilter}

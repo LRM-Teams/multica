@@ -30,10 +30,10 @@ func init() {
 	reminderScheduleCmd.Flags().Int64("delay-seconds", 0, "Delay before waking (60 seconds to 90 days)")
 	reminderScheduleCmd.Flags().String("fire-at", "", "Absolute RFC3339 wake time")
 	reminderScheduleCmd.Flags().String("repeat", "", "Recurring rule: every:Nm|Nh|Nd, daily@HH:MM, or weekly:days@HH:MM")
-	reminderScheduleCmd.Flags().String("message-id", "", "Anchor channel message ID")
+	reminderScheduleCmd.Flags().String("msg-id", "", "Anchor message id (fire/send surface; required)")
 	reminderScheduleCmd.Flags().String("output", "json", "Output format: json")
 	_ = reminderScheduleCmd.MarkFlagRequired("title")
-	_ = reminderScheduleCmd.MarkFlagRequired("message-id")
+	_ = reminderScheduleCmd.MarkFlagRequired("msg-id")
 
 	reminderListCmd.Flags().String("status", "active", "Filter: active, scheduled, firing, fired, cancelled, or all")
 	reminderListCmd.Flags().String("output", "json", "Output format: json")
@@ -89,14 +89,23 @@ func reminderScheduleBody(cmd *cobra.Command, includeTitle bool) (map[string]any
 		body["repeat"] = repeat
 	}
 	if includeTitle {
-		messageID, _ := cmd.Flags().GetString("message-id")
-		messageID = strings.TrimSpace(messageID)
-		if messageID == "" {
-			return nil, fmt.Errorf("--message-id is required")
+		messageID, err := resolveReminderMsgID(cmd)
+		if err != nil {
+			return nil, err
 		}
 		body["message_id"] = messageID
 	}
 	return body, nil
+}
+
+// resolveReminderMsgID reads required --msg-id (Raft-aligned; no aliases).
+func resolveReminderMsgID(cmd *cobra.Command) (string, error) {
+	msgid, _ := cmd.Flags().GetString("msg-id")
+	msgid = strings.TrimSpace(msgid)
+	if msgid == "" {
+		return "", fmt.Errorf("--msg-id is required")
+	}
+	return msgid, nil
 }
 
 func runReminderSchedule(cmd *cobra.Command, _ []string) error {

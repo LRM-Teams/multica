@@ -12,7 +12,7 @@ func TestReminderScheduleBodyValidation(t *testing.T) {
 	cmd.Flags().Set("delay-seconds", "300")
 	cmd.Flags().Set("fire-at", "")
 	cmd.Flags().Set("repeat", "")
-	cmd.Flags().Set("message-id", "00000000-0000-0000-0000-000000000001")
+	cmd.Flags().Set("msg-id", "00000000-0000-0000-0000-000000000001")
 	body, err := reminderScheduleBody(cmd, true)
 	if err != nil {
 		t.Fatalf("delay body: %v", err)
@@ -51,7 +51,7 @@ func TestReminderScheduleBodyRequiresExactlyOneSchedule(t *testing.T) {
 	cmd.Flags().Set("delay-seconds", "0")
 	cmd.Flags().Set("fire-at", "")
 	cmd.Flags().Set("repeat", "")
-	cmd.Flags().Set("message-id", "00000000-0000-0000-0000-000000000001")
+	cmd.Flags().Set("msg-id", "00000000-0000-0000-0000-000000000001")
 	if _, err := reminderScheduleBody(cmd, true); err == nil {
 		t.Fatal("expected validation error when schedule is missing")
 	}
@@ -68,9 +68,9 @@ func TestReminderScheduleBodyRequiresMessageID(t *testing.T) {
 	cmd.Flags().Int64("delay-seconds", 300, "")
 	cmd.Flags().String("fire-at", "", "")
 	cmd.Flags().String("repeat", "", "")
-	cmd.Flags().String("message-id", "", "")
-	if _, err := reminderScheduleBody(cmd, true); err == nil || err.Error() != "--message-id is required" {
-		t.Fatalf("missing message id error = %v, want required", err)
+	cmd.Flags().String("msg-id", "", "")
+	if _, err := reminderScheduleBody(cmd, true); err == nil || err.Error() != "--msg-id is required" {
+		t.Fatalf("missing msgid error = %v, want required", err)
 	}
 }
 

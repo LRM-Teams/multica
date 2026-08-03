@@ -1,0 +1,469 @@
+/**
+ * LRM-1117 — parallel regression smoke matrix (list / breakpoints / keyboard).
+ *
+ * Reuse:
+ *   pnpm --filter @multica/views test:research-parallel-smoke
+ *
+ * Failure titles always include the owning Issue (LRM-1104 / 1109 / 1100 / 1105).
+ * Known open gaps use `it.fails` so CI stays green until the owning PR flips them to `it`.
+ * Do not edit production components from this suite — avoids file conflicts with parallel knives.
+ */
+// @vitest-environment jsdom
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import type { ResearchGraphNode, ResearchSession } from "@multica/core/types";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import {
+  BREAKPOINT_SMOKE_WIDTHS,
+  CANVAS_KEYBOARD_CONTRACT,
+  MOBILE_BREAKPOINT_PX,
+  OVERLAY_A11Y_CONTRACT,
+  SMOKE_ISSUES,
+  failHint,
+  isGoalChipRedundant,
+  isMobileViewport,
+} from "./contracts";
+import {
+  sessionGoalSummary,
+  sessionShortTitle,
+} from "../lib/session-list-filter";
+import enResearch from "../../locales/en/research.json";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const RESEARCH_ROOT = path.resolve(__dirname, "..");
+
+function readResearchSource(relPath: string): string {
+  return fs.readFileSync(path.join(RESEARCH_ROOT, relPath), "utf8");
+}
+
+function setViewportWidth(widthPx: number) {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: widthPx,
+  });
+  window.matchMedia = (query: string) => {
+    const maxMatch = /max-width:\s*(\d+)px/.exec(query);
+    const minMatch = /min-width:\s*(\d+)px/.exec(query);
+    let matches = false;
+    if (maxMatch) matches = widthPx <= Number(maxMatch[1]);
+    if (minMatch) matches = widthPx >= Number(minMatch[1]);
+    return {
+      matches,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    } as MediaQueryList;
+  };
+}
+
+function ProbeMobile() {
+  const mobile = useIsMobile();
+  return <span data-testid="mobile-probe">{String(mobile)}</span>;
+}
+
+vi.mock("../../i18n/use-t", () => ({
+  useT: () => ({
+    t: (fn: (dict: typeof enResearch) => unknown, vars?: Record<string, unknown>) => {
+      const raw = fn(enResearch);
+      if (typeof raw !== "string" || !vars) return raw;
+      return raw.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(vars[key] ?? ""));
+    },
+  }),
+}));
+
+vi.mock("../../i18n/use-time-ago", () => ({
+  useTimeAgo: () => (dateStr: string) => `ago:${dateStr}`,
+}));
+
+vi.mock("../../navigation/app-link", () => ({
+  AppLink: ({
+    children,
+    href,
+    className,
+  }: {
+    children: React.ReactNode;
+    href: string;
+    className?: string;
+  }) => (
+    <a href={href} className={className}>
+      {children}
+    </a>
+  ),
+}));
+
+vi.mock("../../agents/components/agent-avatar-stack", () => ({
+  AgentAvatarStack: () => <span data-testid="avatar-stack" />,
+}));
+
+vi.mock("../components/research-session-row-actions", () => ({
+  ResearchSessionRowActions: () => <span data-testid="row-actions" />,
+}));
+
+vi.mock("@multica/ui/components/ui/dialog", () => ({
+  Dialog: ({ open, children }: { open: boolean; children: React.ReactNode }) =>
+    open ? <div data-testid="goal-dialog">{children}</div> : null,
+  DialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+  DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock("@multica/ui/components/ui/sheet", () => ({
+  Sheet: ({
+    open,
+    children,
+  }: {
+    open?: boolean;
+    children?: React.ReactNode;
+  }) => (open ? <div data-testid="sheet-root">{children}</div> : null),
+  SheetContent: ({
+    children,
+    ...rest
+  }: {
+    children?: React.ReactNode;
+    "data-testid"?: string;
+  }) => <div data-testid={rest["data-testid"]}>{children}</div>,
+  SheetHeader: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  SheetTitle: ({ children }: { children?: React.ReactNode }) => <h2>{children}</h2>,
+  SheetDescription: ({ children }: { children?: React.ReactNode }) => <p>{children}</p>,
+}));
+
+import { ResearchSessionRow } from "../components/research-session-row";
+import { ResearchAuxDrawer } from "../components/research-aux-drawer";
+import { ResearchChatDrawer } from "../components/research-chat-drawer";
+import { ResearchNodeActionRing } from "../components/research-node-action-ring";
+
+function session(partial: Partial<ResearchSession> = {}): ResearchSession {
+  return {
+    id: "s1",
+    workspace_id: "workspace-1",
+    fleet_id: "fleet-1",
+    created_by: "user-1",
+    title: "",
+    goal: "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员",
+    status: "running",
+    current_stage: "s2_sources",
+    project_id: null,
+    channel_id: null,
+    handoff_summary: null,
+    created_at: "2026-07-30T00:00:00Z",
+    updated_at: "2026-07-30T03:00:00Z",
+    fleet_preview: [],
+    ...partial,
+  };
+}
+
+describe(`Smoke · list duplicate info (${SMOKE_ISSUES.listDuplicate})`, () => {
+  it(`${SMOKE_ISSUES.listDuplicate}: pure contract — equal / prefix goal is redundant`, () => {
+    expect(isGoalChipRedundant("如何开发一个网页游戏", "如何开发一个网页游戏")).toBe(true);
+    expect(isGoalChipRedundant("如何开发一个网页游戏…", "如何开发一个网页游戏")).toBe(true);
+    expect(isGoalChipRedundant("如何开发一个网页游戏", "如何开发")).toBe(true);
+    expect(
+      isGoalChipRedundant("Alpha market map", "Map the alpha market across regions"),
+    ).toBe(false);
+  });
+
+  it(`${SMOKE_ISSUES.listDuplicate}: empty-title row short-title and goal-summary share a stem today`, () => {
+    const s = session({ title: "", goal: "如何开发一个网页游戏。对标游戏传奇网页版。" });
+    const title = sessionShortTitle(s);
+    const goal = sessionGoalSummary(s);
+    expect(
+      isGoalChipRedundant(title, goal),
+      failHint(
+        SMOKE_ISSUES.listDuplicate,
+        `title="${title}" still duplicates goal chip "${goal}"`,
+      ),
+    ).toBe(true);
+  });
+
+  it.fails(
+    `${SMOKE_ISSUES.listDuplicate}: empty-title row must omit redundant goal chip (flip to it after fix)`,
+    () => {
+      render(<ResearchSessionRow session={session()} href="/research/s1" />);
+      const titleEl = document.querySelector(
+        '[data-testid="research-session-row"] .font-medium.tracking-tight',
+      );
+      const chip = screen.queryByTestId("research-session-goal-chip");
+      expect(
+        chip,
+        failHint(SMOKE_ISSUES.listDuplicate, "redundant goal chip still rendered"),
+      ).toBeNull();
+      expect(titleEl?.textContent?.length).toBeGreaterThan(0);
+    },
+  );
+
+  it.fails(
+    `${SMOKE_ISSUES.listDuplicate}: title that is a prefix of goal still hides chip; distinct goal keeps chip`,
+    () => {
+      const { unmount } = render(
+        <ResearchSessionRow
+          session={session({
+            title: "如何开发一个网页游戏",
+            goal: "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员",
+          })}
+          href="/research/s1"
+        />,
+      );
+      expect(
+        screen.queryByTestId("research-session-goal-chip"),
+        failHint(SMOKE_ISSUES.listDuplicate, "prefix-redundant chip should be hidden"),
+      ).toBeNull();
+      unmount();
+
+      render(
+        <ResearchSessionRow
+          session={session({
+            title: "Alpha market map",
+            goal: "Map the alpha market across regions with pricing and share",
+          })}
+          href="/research/s1"
+        />,
+      );
+      expect(screen.getByTestId("research-session-goal-chip")).toBeTruthy();
+    },
+  );
+
+  it.fails(
+    `${SMOKE_ISSUES.listDuplicate}: filter bar and session row share the same content max-width token`,
+    () => {
+      const filterSrc = readResearchSource("components/research-session-filter-bar.tsx");
+      const rowSrc = readResearchSource("components/research-session-row.tsx");
+      const filterMax = filterSrc.match(/max-w-[\w\[\]\.\/]+/)?.[0];
+      expect(
+        filterMax,
+        failHint(SMOKE_ISSUES.listDuplicate, "filter bar missing max-w token"),
+      ).toBeTruthy();
+      expect(
+        rowSrc.includes(filterMax!),
+        failHint(
+          SMOKE_ISSUES.listDuplicate,
+          `session row missing shared width token ${filterMax}`,
+        ),
+      ).toBe(true);
+    },
+  );
+});
+
+describe(`Smoke · breakpoints 360/700/767/768 (${SMOKE_ISSUES.breakpoints})`, () => {
+  afterEach(() => {
+    setViewportWidth(1024);
+  });
+
+  it(`${SMOKE_ISSUES.breakpoints}: useIsMobile matches <${MOBILE_BREAKPOINT_PX} at smoke widths`, () => {
+    for (const width of BREAKPOINT_SMOKE_WIDTHS) {
+      setViewportWidth(width);
+      const { unmount } = render(<ProbeMobile />);
+      expect(
+        screen.getByTestId("mobile-probe").textContent,
+        failHint(SMOKE_ISSUES.breakpoints, `width=${width} mobile flag`),
+      ).toBe(String(isMobileViewport(width)));
+      unmount();
+    }
+  });
+
+  it(`${SMOKE_ISSUES.breakpoints}: 767 vs 768 flip exactly at the mobile boundary`, () => {
+    expect(isMobileViewport(767)).toBe(true);
+    expect(isMobileViewport(768)).toBe(false);
+    expect(isMobileViewport(700)).toBe(true);
+    expect(isMobileViewport(360)).toBe(true);
+  });
+
+  it(`${SMOKE_ISSUES.breakpoints}: baseline inventory — known sm: companions beside useIsMobile`, () => {
+    const meta = readResearchSource("components/research-session-meta-menu.tsx");
+    expect(meta.includes("useIsMobile")).toBe(true);
+    expect(
+      meta.includes("sm:"),
+      failHint(
+        SMOKE_ISSUES.breakpoints,
+        "meta-menu still mixes useIsMobile with sm: (dead-zone risk at 640–767)",
+      ),
+    ).toBe(true);
+
+    const templates = readResearchSource("components/research-template-cards.tsx");
+    expect(
+      templates.includes("sm:grid"),
+      failHint(SMOKE_ISSUES.breakpoints, "template-cards still switches layout at sm: (640)"),
+    ).toBe(true);
+  });
+
+  it.fails(
+    `${SMOKE_ISSUES.breakpoints}: useIsMobile companions must use md: not sm: (meta-menu)`,
+    () => {
+      const meta = readResearchSource("components/research-session-meta-menu.tsx");
+      expect(
+        meta.includes("useIsMobile") && !/\bsm:/.test(meta),
+        failHint(
+          SMOKE_ISSUES.breakpoints,
+          "replace companion sm: with md: in research-session-meta-menu.tsx",
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.fails(
+    `${SMOKE_ISSUES.breakpoints}: template cards layout switch should be md:grid (align with 768)`,
+    () => {
+      const templates = readResearchSource("components/research-template-cards.tsx");
+      expect(
+        templates.includes("md:grid") && !templates.includes("sm:grid"),
+        failHint(
+          SMOKE_ISSUES.breakpoints,
+          "research-template-cards.tsx still uses sm:grid instead of md:grid",
+        ),
+      ).toBe(true);
+    },
+  );
+});
+
+describe(`Smoke · Esc / focus / keyboard (${SMOKE_ISSUES.overlayA11y} / ${SMOKE_ISSUES.canvasKeyboard})`, () => {
+  beforeEach(() => {
+    setViewportWidth(1280);
+  });
+
+  it(`${SMOKE_ISSUES.overlayA11y}: contract freeze — Esc / focus / names required on desktop overlays`, () => {
+    expect(OVERLAY_A11Y_CONTRACT.escapeCloses).toBe(true);
+    expect(OVERLAY_A11Y_CONTRACT.focusMovesInOnOpen).toBe(true);
+    expect(OVERLAY_A11Y_CONTRACT.focusRestoresOnClose).toBe(true);
+    expect(OVERLAY_A11Y_CONTRACT.auxHasAriaLabelledby).toBe(true);
+    expect(OVERLAY_A11Y_CONTRACT.chatHasAriaLabel).toBe(true);
+  });
+
+  it(`${SMOKE_ISSUES.canvasKeyboard}: keyboard map freeze covers arrows / Enter / Esc / zoom / Home End`, () => {
+    expect(CANVAS_KEYBOARD_CONTRACT.ArrowLeft).toBe("main-chain-prev");
+    expect(CANVAS_KEYBOARD_CONTRACT.ArrowRight).toBe("main-chain-next");
+    expect(CANVAS_KEYBOARD_CONTRACT.Enter).toBe("open-detail-drawer");
+    expect(CANVAS_KEYBOARD_CONTRACT.Escape).toBe("dismiss-layer");
+    expect(CANVAS_KEYBOARD_CONTRACT.Home).toBe("jump-first");
+    expect(CANVAS_KEYBOARD_CONTRACT.End).toBe("jump-last");
+    expect(Object.keys(CANVAS_KEYBOARD_CONTRACT).length).toBeGreaterThanOrEqual(12);
+  });
+
+  it(`${SMOKE_ISSUES.overlayA11y}: positive control — action ring closes on Escape`, () => {
+    const onClose = vi.fn();
+    const node = {
+      id: "n1",
+      session_id: "s1",
+      title: "Blocked",
+      summary: "x",
+      status: "abandoned",
+      node_type: "dead_end",
+      actor_agent_id: null,
+      payload: {},
+      created_at: "2026-07-31T00:00:00Z",
+      updated_at: "2026-07-31T00:00:00Z",
+    } as unknown as ResearchGraphNode;
+    render(
+      <ResearchNodeActionRing
+        node={node}
+        mode="ring"
+        onAction={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it.fails(
+    `${SMOKE_ISSUES.overlayA11y}: desktop aux drawer closes on Escape`,
+    () => {
+      const onClose = vi.fn();
+      render(
+        <ResearchAuxDrawer panel="detail" onClose={onClose}>
+          <span>body</span>
+        </ResearchAuxDrawer>,
+      );
+      expect(screen.getByTestId("research-aux-drawer").tagName.toLowerCase()).toBe("aside");
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(
+        onClose,
+        failHint(SMOKE_ISSUES.overlayA11y, "desktop aux drawer ignore Escape"),
+      ).toHaveBeenCalled();
+    },
+  );
+
+  it.fails(
+    `${SMOKE_ISSUES.overlayA11y}: desktop aux drawer exposes aria-labelledby to visible title`,
+    () => {
+      render(
+        <ResearchAuxDrawer panel="trajectory" onClose={() => {}}>
+          <span>body</span>
+        </ResearchAuxDrawer>,
+      );
+      const aside = screen.getByTestId("research-aux-drawer");
+      const labelledBy = aside.getAttribute("aria-labelledby");
+      expect(
+        labelledBy,
+        failHint(SMOKE_ISSUES.overlayA11y, "aux drawer missing aria-labelledby"),
+      ).toBeTruthy();
+      expect(document.getElementById(labelledBy!)).toBeTruthy();
+    },
+  );
+
+  it.fails(
+    `${SMOKE_ISSUES.overlayA11y}: desktop chat drawer has aria-label and closes on Escape`,
+    () => {
+      const onClose = vi.fn();
+      render(
+        <ResearchChatDrawer open onClose={onClose}>
+          <span>body</span>
+        </ResearchChatDrawer>,
+      );
+      const aside = screen.getByTestId("research-chat-drawer");
+      expect(
+        aside.getAttribute("aria-label"),
+        failHint(SMOKE_ISSUES.overlayA11y, "chat drawer missing aria-label"),
+      ).toBeTruthy();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(
+        onClose,
+        failHint(SMOKE_ISSUES.overlayA11y, "desktop chat drawer ignore Escape"),
+      ).toHaveBeenCalled();
+    },
+  );
+
+  it.fails(
+    `${SMOKE_ISSUES.canvasKeyboard}: canvas root declares role=application with accessible name`,
+    () => {
+      const canvasSrc = readResearchSource("components/research-canvas.tsx");
+      expect(
+        /role=["']application["']/.test(canvasSrc),
+        failHint(SMOKE_ISSUES.canvasKeyboard, "research-canvas.tsx missing role=application"),
+      ).toBe(true);
+      expect(
+        /aria-label=/.test(canvasSrc) || /aria-labelledby=/.test(canvasSrc),
+        failHint(SMOKE_ISSUES.canvasKeyboard, "research-canvas.tsx missing accessible name"),
+      ).toBe(true);
+    },
+  );
+
+  it.fails(
+    `${SMOKE_ISSUES.canvasKeyboard}: canvas wires Arrow/Enter/Escape/Home/End keydown handlers`,
+    () => {
+      const canvasSrc = readResearchSource("components/research-canvas.tsx");
+      for (const key of [
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "Enter",
+        "Escape",
+        "Home",
+        "End",
+      ]) {
+        expect(
+          canvasSrc.includes(key),
+          failHint(SMOKE_ISSUES.canvasKeyboard, `research-canvas.tsx missing ${key} handling`),
+        ).toBe(true);
+      }
+    },
+  );
+});

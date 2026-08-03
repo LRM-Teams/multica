@@ -64,5 +64,6 @@ describe("ActorIdentityRow", () => {
     expect(screen.getByText("Aurora")).toHaveClass("honor-name--gold");
     expect(screen.queryByTitle("First delivery")).not.toBeInTheDocument();
     expect(screen.queryByTitle("Frigate")).not.toBeInTheDocument();
+    expect(document.querySelector("[data-user-honor-level]")).toBeNull();
   });
 });

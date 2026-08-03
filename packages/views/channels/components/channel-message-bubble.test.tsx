@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentFleetRank, ChannelMessage } from "@multica/core/types";
+import type { HonorSnapshot } from "@multica/core/types/honor";
 import { stickerCatalogKeys } from "@multica/core/stickers";
 import { __resetAuthorAvatarOkCacheForTests } from "./author-avatar-cache";
 import { ChannelMessageBubble } from "./channel-message-bubble";
@@ -167,6 +168,9 @@ const getActorAvatarUrlMock = vi.fn(
   (_type: string, _id: string): string | null => null,
 );
 const getAgentHonorLevelMock = vi.fn((_agentId: string): number | undefined => undefined);
+const getMemberHonorMock = vi.fn(
+  (_userId: string): HonorSnapshot | undefined => undefined,
+);
 const getAgentFleetRankMock = vi.fn(
   (_agentId: string): AgentFleetRank | undefined => undefined,
 );
@@ -208,7 +212,7 @@ vi.mock("@multica/core/workspace/hooks", () => ({
           : id === "user-1" || id === "user-2"
             ? ("member" as const)
             : null,
-    getMemberHonor: () => undefined,
+    getMemberHonor: getMemberHonorMock,
     getAgentFleetRank: getAgentFleetRankMock,
     getAgentHonorLevel: getAgentHonorLevelMock,
   }),
@@ -535,6 +539,8 @@ describe("ChannelMessageBubble", () => {
     getActorAvatarUrlMock.mockReturnValue(null);
     getAgentHonorLevelMock.mockReset();
     getAgentHonorLevelMock.mockReturnValue(undefined);
+    getMemberHonorMock.mockReset();
+    getMemberHonorMock.mockReturnValue(undefined);
     getAgentFleetRankMock.mockReset();
     getAgentFleetRankMock.mockReturnValue(undefined);
     vi.mocked(toast.success).mockReset();
@@ -587,6 +593,23 @@ describe("ChannelMessageBubble", () => {
 
     expect(container.querySelector('[data-agent-honor-level="8"]')).toBeInTheDocument();
     expect(screen.queryByTitle("Reserve")).not.toBeInTheDocument();
+  });
+
+  it("uses the user's armor level crest beside a group-message author name", () => {
+    getMemberHonorMock.mockReturnValue({ level: 42, name_style: "default" });
+
+    const { container } = render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-2",
+          author_name: "Bob Display",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(container.querySelector('[data-user-honor-level="42"]')).toBeInTheDocument();
   });
 
   it("centers the quiet timestamp with the author name and earned badge row", () => {

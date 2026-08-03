@@ -70,7 +70,8 @@ vi.mock("@multica/core/workspace/hooks", () => ({
           : fallback,
     getMemberRole: (id: string) =>
       id === "user-owner" || id === "user-1" ? ("owner" as const) : null,
-    getMemberHonor: () => undefined,
+    getMemberHonor: (id: string) =>
+      id === "user-1" ? { level: 42, name_style: "default" } : undefined,
     getAgentFleetRank: () => undefined,
     getAgentHonorLevel: () => 8,
   }),
@@ -159,6 +160,21 @@ describe("ThreadRootPreview", () => {
     );
 
     expect(container.querySelector('[data-agent-honor-level="8"]')).toBeInTheDocument();
+  });
+
+  it("uses the user's armor level crest for a human root author", () => {
+    const { container } = render(
+      <ThreadRootPreview
+        message={makeMessage({
+          type: "user",
+          author_id: "user-1",
+          author_name: "Frank An",
+        })}
+        currentUserId="user-owner"
+      />,
+    );
+
+    expect(container.querySelector('[data-user-honor-level="42"]')).toBeInTheDocument();
   });
 
   it("keeps parent preview lightweight without duplicate navigation actions", () => {

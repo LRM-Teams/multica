@@ -3,6 +3,8 @@
 -- keys to project/channel/runtime/sandbox rows: those rows can be deleted before
 -- the audit reaches a terminal verdict. The audit ledger FKs remain internal so
 -- its run, resource, obligation, and event history are removed together.
+-- No generic JSON payload is retained: the ledger stores only structured
+-- identifiers, states, timestamps, and sanitized reason/error codes.
 
 CREATE TABLE env_dispatch_audit_run (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -23,15 +25,8 @@ CREATE TABLE env_dispatch_audit_run (
     reclamation_deadline TIMESTAMPTZ NOT NULL,
     started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at TIMESTAMPTZ,
-    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT env_dispatch_audit_run_metadata_is_object
-        CHECK (jsonb_typeof(metadata) = 'object'),
-    CONSTRAINT env_dispatch_audit_run_metadata_size_limit
-        CHECK (pg_column_size(metadata) <= 4096),
-    CONSTRAINT env_dispatch_audit_run_metadata_no_sensitive_keys
-        CHECK (metadata::TEXT !~* '"(task_content|message_content|content|description|prompt|credential|credentials|token|authorization|password|secret|command|command_output|request_body|response_body)"[[:space:]]*:'),
     CHECK (reclamation_deadline >= started_at),
     CHECK (completed_at IS NULL OR completed_at >= started_at)
 );
@@ -66,19 +61,12 @@ CREATE TABLE env_dispatch_audit_resource (
     first_observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_observed_at TIMESTAMPTZ,
     reclaimed_at TIMESTAMPTZ,
-    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT env_dispatch_audit_resource_identity_unique
         UNIQUE (audit_id, resource_kind, resource_id),
     CONSTRAINT env_dispatch_audit_resource_audit_id_id_unique
         UNIQUE (audit_id, id),
-    CONSTRAINT env_dispatch_audit_resource_metadata_is_object
-        CHECK (jsonb_typeof(metadata) = 'object'),
-    CONSTRAINT env_dispatch_audit_resource_metadata_size_limit
-        CHECK (pg_column_size(metadata) <= 4096),
-    CONSTRAINT env_dispatch_audit_resource_metadata_no_sensitive_keys
-        CHECK (metadata::TEXT !~* '"(task_content|message_content|content|description|prompt|credential|credentials|token|authorization|password|secret|command|command_output|request_body|response_body)"[[:space:]]*:'),
     CHECK (last_observed_at IS NULL OR last_observed_at >= first_observed_at),
     CHECK (reclaimed_at IS NULL OR reclaimed_at >= first_observed_at)
 );
@@ -101,7 +89,7 @@ CREATE TABLE env_dispatch_reclamation_obligation (
         )),
     attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     last_error_code TEXT,
-    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    next_attempt_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT env_dispatch_reclamation_obligation_resource_unique
@@ -135,18 +123,17 @@ CREATE TABLE env_dispatch_audit_event (
             'sandbox_deletion_requested', 'reclaimed', 'cleanup_failed',
             'observation_unavailable', 'classification_updated', 'dispatch_outcome'
         )),
-    details JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reason_code TEXT,
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT env_dispatch_audit_event_sequence_unique UNIQUE (audit_id, sequence),
     CONSTRAINT env_dispatch_audit_event_resource_audit_fk
         FOREIGN KEY (audit_id, audit_resource_id)
         REFERENCES env_dispatch_audit_resource(audit_id, id) ON DELETE CASCADE,
-    CONSTRAINT env_dispatch_audit_event_details_is_object
-        CHECK (jsonb_typeof(details) = 'object'),
-    CONSTRAINT env_dispatch_audit_event_details_size_limit
-        CHECK (pg_column_size(details) <= 4096),
-    CONSTRAINT env_dispatch_audit_event_details_no_sensitive_keys
-        CHECK (details::TEXT !~* '"(task_content|message_content|content|description|prompt|credential|credentials|token|authorization|password|secret|command|command_output|request_body|response_body)"[[:space:]]*:')
+    CONSTRAINT env_dispatch_audit_event_reason_code_sanitized
+        CHECK (
+            reason_code IS NULL
+            OR reason_code ~ '^[a-z0-9][a-z0-9_.:/-]{0,127}$'
+        )
 );
 
 CREATE INDEX env_dispatch_audit_event_audit_sequence_idx

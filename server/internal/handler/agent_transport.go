@@ -240,15 +240,20 @@ func (h *Handler) requireAgentTransportPublicResponseMode(ctx context.Context, s
 		WHERE id = $1`, source.inboxEventID).Scan(&deliveryMode, &responseMode, &channelID); err != nil {
 		return err
 	}
-	if responseMode != "public_response" {
-		_ = recordChannelDecisionAuditExec(ctx, h.DB, channelDecisionAuditEvent{
-			WorkspaceID: source.origin.workspaceID, ChannelID: channelID, SourceKind: "agent_transport",
-			EventType: "unauthorized_public_send_blocked", AgentID: source.origin.agentID, InboxEventID: source.inboxEventID,
-			Payload: map[string]any{"response_mode": responseMode, "delivery_mode": deliveryMode},
-		})
-		return fmt.Errorf("agent inbox event response_mode %q does not grant public channel output", responseMode)
+	if responseMode == "public_response" {
+		return nil
 	}
-	return nil
+	// LRM-1055: ambient observe wakes stay no_public_output for ordinary members,
+	// but channel managers need send/react during GM/patrol ambient turns.
+	if channelID.Valid && h.agentIsChannelManager(ctx, source.origin.workspaceID, channelID, source.origin.agentID) {
+		return nil
+	}
+	_ = recordChannelDecisionAuditExec(ctx, h.DB, channelDecisionAuditEvent{
+		WorkspaceID: source.origin.workspaceID, ChannelID: channelID, SourceKind: "agent_transport",
+		EventType: "unauthorized_public_send_blocked", AgentID: source.origin.agentID, InboxEventID: source.inboxEventID,
+		Payload: map[string]any{"response_mode": responseMode, "delivery_mode": deliveryMode},
+	})
+	return fmt.Errorf("agent inbox event response_mode %q does not grant public channel output", responseMode)
 }
 
 // requireAgentTransportVisibilityGrantActive checks the Collaboration turn
@@ -1064,7 +1069,7 @@ func (h *Handler) requireAgentTransportInboxEvent(w http.ResponseWriter, r *http
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	event, err := h.Queries.GetAgentInboxEvent(r.Context(), eventID)
-	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID || !event.ChatSessionID.Valid {
+	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID {
 		writeError(w, http.StatusForbidden, "inbox token does not match this agent event")
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
@@ -1084,7 +1089,8 @@ func (h *Handler) requireAgentTransportInboxEvent(w http.ResponseWriter, r *http
 	task := agentInboxSyntheticTask(event, h.runtimeIDForAgentInboxDelivery(r.Context(), deliveryID))
 	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
 	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
-		writeError(w, http.StatusForbidden, "agent inbox event is not a channel task")
+		// Channel-less wakes (issue-only) legitimately have no transport origin.
+		writeError(w, http.StatusForbidden, "agent inbox event has no channel transport origin")
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	return task, origin, event.ID, true
@@ -1121,7 +1127,7 @@ func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWrite
 	}
 
 	event, err := h.Queries.GetAgentInboxEvent(r.Context(), eventID)
-	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID || !event.ChatSessionID.Valid {
+	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID {
 		writeError(w, http.StatusForbidden, "agent credential does not match this agent event")
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
@@ -1154,7 +1160,9 @@ func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWrite
 	task := agentInboxSyntheticTask(event, runtimeID)
 	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
 	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
-		writeError(w, http.StatusForbidden, "agent inbox event is not a channel task")
+		// LRM-1055: missing chat_session alone is no longer a hard reject; reject
+		// only when neither session nor channel_id yields a surface origin.
+		writeError(w, http.StatusForbidden, "agent inbox event has no channel transport origin")
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
 	return task, origin, event.ID, true

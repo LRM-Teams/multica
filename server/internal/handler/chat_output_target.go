@@ -47,14 +47,25 @@ func (h *Handler) validateChatOutputTarget(ctx context.Context, task db.AgentInb
 }
 
 func (h *Handler) chatOutputOriginForTask(ctx context.Context, task db.AgentInboxEvent) (chatOutputOrigin, bool) {
-	if !task.ChatSessionID.Valid {
-		return chatOutputOrigin{}, false
+	// Prefer the chat-session mapping when present (mention/DM/reminder fires).
+	if task.ChatSessionID.Valid {
+		channelID, workspaceID, agentID, ok := h.channelAgentForChatSession(ctx, uuidToString(task.ChatSessionID))
+		if ok {
+			return chatOutputOrigin{channelID: channelID, workspaceID: workspaceID, agentID: agentID}, true
+		}
 	}
-	channelID, workspaceID, agentID, ok := h.channelAgentForChatSession(ctx, uuidToString(task.ChatSessionID))
-	if !ok {
-		return chatOutputOrigin{}, false
+	// LRM-1055: ambient / channel_role_changed wakes bind a channel without a
+	// chat session. Allow channel-anchored transport when the agent still has
+	// direct surface membership on that channel.
+	if task.ChannelID.Valid && task.WorkspaceID.Valid && task.AgentID.Valid &&
+		h.agentHasSurfaceAccess(ctx, task.WorkspaceID, task.AgentID, task.ChannelID) {
+		return chatOutputOrigin{
+			channelID:   task.ChannelID,
+			workspaceID: task.WorkspaceID,
+			agentID:     task.AgentID,
+		}, true
 	}
-	return chatOutputOrigin{channelID: channelID, workspaceID: workspaceID, agentID: agentID}, true
+	return chatOutputOrigin{}, false
 }
 
 func (h *Handler) resolveChatOutputTarget(ctx context.Context, origin chatOutputOrigin, rawTarget string) (resolvedChatOutputTarget, error) {

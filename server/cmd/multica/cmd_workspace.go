@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"unicode/utf8"
@@ -69,9 +72,25 @@ var workspaceSwitchCmd = &cobra.Command{
 	RunE: runWorkspaceSwitch,
 }
 
+// workspaceInfoCmd is the member-usable overview of a workspace (agents +
+// computers/runtimes with status and sticky error text). Composed from
+// existing member-scoped list APIs — no admin-only endpoints.
+var workspaceInfoCmd = &cobra.Command{
+	Use:   "info [workspace-id|slug|prefix]",
+	Short: "Show workspace agents and computers with status and errors",
+	Long: "Prints a member-usable overview of the current (or specified) workspace: " +
+		"agents and computers (runtimes), including live status and sticky " +
+		"error text when the latest outcome is a failure (e.g. provider quota). " +
+		"Aligned in spirit with `raft server info`. Accepts a full UUID, slug, " +
+		"or short UUID prefix; omit to use the default workspace.",
+	Args: cobra.MaximumNArgs(1),
+	RunE: runWorkspaceInfo,
+}
+
 func init() {
 	workspaceCmd.AddCommand(workspaceListCmd)
 	workspaceCmd.AddCommand(workspaceGetCmd)
+	workspaceCmd.AddCommand(workspaceInfoCmd)
 	workspaceCmd.AddCommand(workspaceMemberCmd)
 	workspaceMemberCmd.AddCommand(workspaceMemberListCmd)
 	workspaceCmd.AddCommand(workspaceUpdateCmd)
@@ -80,6 +99,8 @@ func init() {
 	workspaceListCmd.Flags().String("output", "table", "Output format: table or json")
 	workspaceListCmd.Flags().Bool("full-id", false, "Show full UUIDs in table output")
 	workspaceGetCmd.Flags().String("output", "json", "Output format: table or json")
+	workspaceInfoCmd.Flags().String("output", "table", "Output format: table or json")
+	workspaceInfoCmd.Flags().Bool("include-archived", false, "Include archived agents")
 	workspaceMemberListCmd.Flags().String("output", "table", "Output format: table or json")
 
 	workspaceUpdateCmd.Flags().String("name", "", "New workspace name")
@@ -482,4 +503,389 @@ func runWorkspaceMembers(cmd *cobra.Command, args []string) error {
 	}
 	cli.PrintTable(os.Stdout, headers, rows)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// workspace info — member-usable agents + computers overview
+// ---------------------------------------------------------------------------
+
+// workspaceInfoActiveTaskStatuses are non-terminal task statuses that mean
+// the agent still has work on the plate. When present they suppress sticky
+// failure text (same rule as the FE presence snapshot).
+var workspaceInfoActiveTaskStatuses = map[string]bool{
+	"running":                 true,
+	"dispatched":              true,
+	"queued":                  true,
+	"waiting_local_directory": true,
+}
+
+// workspaceInfoAgentRow is one agent line in workspace info.
+type workspaceInfoAgentRow struct {
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	DisplayName          string `json:"display_name"`
+	Status               string `json:"status"`
+	RuntimeID            string `json:"runtime_id,omitempty"`
+	RuntimeName          string `json:"runtime_name,omitempty"`
+	RuntimeStatus        string `json:"runtime_status,omitempty"`
+	RuntimeDisplayStatus string `json:"runtime_display_status,omitempty"`
+	// Error is sticky failure text from the latest failed outcome when the
+	// agent has no active task. Empty when none. Shown verbatim (quota copy
+	// etc.) so members see why an agent is unusable, not only "online".
+	Error         string `json:"error,omitempty"`
+	FailureReason string `json:"failure_reason,omitempty"`
+	ArchivedAt    string `json:"archived_at,omitempty"`
+}
+
+// workspaceInfoComputerRow is one computer/runtime line in workspace info.
+type workspaceInfoComputerRow struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	DisplayName    string `json:"display_name,omitempty"`
+	Provider       string `json:"provider,omitempty"`
+	RuntimeMode    string `json:"runtime_mode,omitempty"`
+	Status         string `json:"status"`
+	RuntimeHealth  string `json:"runtime_health,omitempty"`
+	CurrentVersion string `json:"current_version,omitempty"`
+	UpdateState    string `json:"update_state,omitempty"`
+	// Error aggregates update_error and auto_update.error_message (non-empty
+	// first wins preference: update_error, then auto_update message).
+	Error             string `json:"error,omitempty"`
+	DeviceName        string `json:"device_name,omitempty"`
+	ComputerConnected *bool  `json:"computer_connected,omitempty"`
+}
+
+// workspaceInfoPayload is the structured --output json body.
+type workspaceInfoPayload struct {
+	Workspace map[string]any             `json:"workspace"`
+	Agents    []workspaceInfoAgentRow    `json:"agents"`
+	Computers []workspaceInfoComputerRow `json:"computers"`
+}
+
+func runWorkspaceInfo(cmd *cobra.Command, args []string) error {
+	wsID, err := resolveWorkspaceArg(cmd, args)
+	if err != nil {
+		return err
+	}
+	if wsID == "" {
+		return fmt.Errorf("workspace ID is required: pass an id/slug/prefix as argument or set MULTICA_WORKSPACE_ID")
+	}
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	// Force the resolved workspace onto every subsequent request (header +
+	// agents query). resolveWorkspaceArg may have come from a slug/prefix
+	// while the profile default points elsewhere.
+	client.WorkspaceID = wsID
+
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	// Workspace header.
+	var ws map[string]any
+	wsPath := "/api/workspaces/" + wsID
+	if isAgentAPIToken(cmd) {
+		wsPath = "/api/agent/workspace"
+	}
+	if err := client.GetJSON(ctx, wsPath, &ws); err != nil {
+		return fmt.Errorf("get workspace: %w", err)
+	}
+
+	// Agents (member-scoped; every workspace member can list).
+	var agents []map[string]any
+	agentParams := url.Values{}
+	agentParams.Set("workspace_id", wsID)
+	if v, _ := cmd.Flags().GetBool("include-archived"); v {
+		agentParams.Set("include_archived", "true")
+	}
+	agentPath := "/api/agents?" + agentParams.Encode()
+	if err := client.GetJSON(ctx, agentPath, &agents); err != nil {
+		return fmt.Errorf("list agents: %w", err)
+	}
+
+	// Computers / runtimes (visible set for this member — private runtimes
+	// owned by others are omitted by the server; that is intentional).
+	var runtimes []map[string]any
+	if err := client.GetJSON(ctx, "/api/runtimes", &runtimes); err != nil {
+		return fmt.Errorf("list runtimes: %w", err)
+	}
+
+	// Sticky failure text: latest failed outcome per agent when no active
+	// task. Soft-fail — if the snapshot endpoint is unavailable on an older
+	// server we still print agents/computers without error columns filled.
+	var tasks []map[string]any
+	if err := client.GetJSON(ctx, "/api/agent-task-snapshot", &tasks); err != nil {
+		// Keep going; sticky errors just stay empty.
+		tasks = nil
+	}
+	sticky := stickyTaskErrorsByAgent(tasks)
+
+	agentRows := make([]workspaceInfoAgentRow, 0, len(agents))
+	for _, a := range agents {
+		id := strVal(a, "id")
+		row := workspaceInfoAgentRow{
+			ID:                   id,
+			Name:                 strVal(a, "name"),
+			DisplayName:          strVal(a, "display_name"),
+			Status:               strVal(a, "status"),
+			RuntimeID:            strVal(a, "runtime_id"),
+			RuntimeName:          strVal(a, "runtime_name"),
+			RuntimeStatus:        strVal(a, "runtime_status"),
+			RuntimeDisplayStatus: strVal(a, "runtime_display_status"),
+			ArchivedAt:           strVal(a, "archived_at"),
+		}
+		if se, ok := sticky[id]; ok {
+			row.Error = se.Error
+			row.FailureReason = se.FailureReason
+		}
+		agentRows = append(agentRows, row)
+	}
+	sort.SliceStable(agentRows, func(i, j int) bool {
+		return strings.ToLower(agentRows[i].Name) < strings.ToLower(agentRows[j].Name)
+	})
+
+	computerRows := make([]workspaceInfoComputerRow, 0, len(runtimes))
+	for _, rt := range runtimes {
+		row := workspaceInfoComputerRow{
+			ID:             strVal(rt, "id"),
+			Name:           strVal(rt, "name"),
+			DisplayName:    strVal(rt, "display_name"),
+			Provider:       strVal(rt, "provider"),
+			RuntimeMode:    strVal(rt, "runtime_mode"),
+			Status:         strVal(rt, "status"),
+			RuntimeHealth:  strVal(rt, "runtime_health"),
+			CurrentVersion: strVal(rt, "current_version"),
+			UpdateState:    strVal(rt, "update_state"),
+			DeviceName:     strVal(rt, "device_name"),
+			Error:          computerErrorText(rt),
+		}
+		if v, ok := rt["computer_connected"].(bool); ok {
+			row.ComputerConnected = &v
+		}
+		computerRows = append(computerRows, row)
+	}
+	sort.SliceStable(computerRows, func(i, j int) bool {
+		return strings.ToLower(computerLabel(computerRows[i])) < strings.ToLower(computerLabel(computerRows[j]))
+	})
+
+	payload := workspaceInfoPayload{
+		Workspace: ws,
+		Agents:    agentRows,
+		Computers: computerRows,
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, payload)
+	}
+	printWorkspaceInfoTable(os.Stdout, payload)
+	return nil
+}
+
+type stickyTaskError struct {
+	Error         string
+	FailureReason string
+}
+
+// stickyTaskErrorsByAgent mirrors the FE snapshot rule: active tasks win
+// (no sticky error); else the latest completed/failed outcome by
+// completed_at keeps a failed error string sticky until new work starts.
+func stickyTaskErrorsByAgent(tasks []map[string]any) map[string]stickyTaskError {
+	type pick struct {
+		active        bool
+		completedAt   string
+		errorText     string
+		failureReason string
+		failed        bool
+	}
+	best := map[string]pick{}
+	for _, t := range tasks {
+		agentID := strVal(t, "agent_id")
+		if agentID == "" {
+			continue
+		}
+		status := strVal(t, "status")
+		if workspaceInfoActiveTaskStatuses[status] {
+			best[agentID] = pick{active: true}
+			continue
+		}
+		// Only terminal outcomes compete for sticky failure text.
+		if status != "failed" && status != "completed" && status != "cancelled" {
+			// Unknown status: ignore for sticky selection.
+			if cur, ok := best[agentID]; ok && cur.active {
+				continue
+			}
+			// Non-terminal non-active: skip.
+			continue
+		}
+		cur, ok := best[agentID]
+		if ok && cur.active {
+			continue
+		}
+		completedAt := strVal(t, "completed_at")
+		if ok && completedAt != "" && cur.completedAt != "" && completedAt < cur.completedAt {
+			continue
+		}
+		// Prefer equal-or-newer completed_at.
+		if ok && completedAt == cur.completedAt && completedAt != "" {
+			// Keep existing on tie (stable).
+			continue
+		}
+		errText := strVal(t, "error")
+		// Some payloads nest error differently; tolerate non-string already
+		// handled by strVal.
+		best[agentID] = pick{
+			completedAt:   completedAt,
+			errorText:     errText,
+			failureReason: strVal(t, "failure_reason"),
+			failed:        status == "failed",
+		}
+	}
+	out := make(map[string]stickyTaskError, len(best))
+	for id, p := range best {
+		if p.active || !p.failed || strings.TrimSpace(p.errorText) == "" {
+			continue
+		}
+		out[id] = stickyTaskError{Error: p.errorText, FailureReason: p.failureReason}
+	}
+	return out
+}
+
+func computerErrorText(rt map[string]any) string {
+	if e := strings.TrimSpace(strVal(rt, "update_error")); e != "" {
+		return e
+	}
+	if au, ok := rt["auto_update"].(map[string]any); ok {
+		if e := strings.TrimSpace(strVal(au, "error_message")); e != "" {
+			return e
+		}
+	}
+	return ""
+}
+
+func computerLabel(c workspaceInfoComputerRow) string {
+	if c.DisplayName != "" {
+		return c.DisplayName
+	}
+	return c.Name
+}
+
+func agentLabel(a workspaceInfoAgentRow) string {
+	if a.DisplayName != "" && a.DisplayName != a.Name {
+		return fmt.Sprintf("%s (%s)", a.Name, a.DisplayName)
+	}
+	if a.DisplayName != "" {
+		return a.DisplayName
+	}
+	return a.Name
+}
+
+// formatAgentStatusLine builds the human status for one agent: agent status,
+// runtime display (or raw) status, and sticky error when present.
+func formatAgentStatusLine(a workspaceInfoAgentRow) string {
+	parts := make([]string, 0, 3)
+	if a.Status != "" {
+		parts = append(parts, a.Status)
+	}
+	rt := a.RuntimeDisplayStatus
+	if rt == "" {
+		rt = a.RuntimeStatus
+	}
+	if rt != "" && rt != a.Status {
+		parts = append(parts, "runtime="+rt)
+	}
+	if a.Error != "" {
+		// One line; collapse internal newlines so table stays readable.
+		errText := strings.ReplaceAll(a.Error, "\n", " ")
+		errText = collapseSpaces(errText)
+		if utf8.RuneCountInString(errText) > 120 {
+			runes := []rune(errText)
+			errText = string(runes[:117]) + "..."
+		}
+		parts = append(parts, "error: "+errText)
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func formatComputerStatusLine(c workspaceInfoComputerRow) string {
+	parts := make([]string, 0, 4)
+	if c.Status != "" {
+		parts = append(parts, c.Status)
+	}
+	if c.RuntimeHealth != "" && c.RuntimeHealth != c.Status {
+		parts = append(parts, "health="+c.RuntimeHealth)
+	}
+	if c.CurrentVersion != "" {
+		parts = append(parts, "v"+c.CurrentVersion)
+	}
+	if c.Error != "" {
+		errText := strings.ReplaceAll(c.Error, "\n", " ")
+		errText = collapseSpaces(errText)
+		if utf8.RuneCountInString(errText) > 100 {
+			runes := []rune(errText)
+			errText = string(runes[:97]) + "..."
+		}
+		parts = append(parts, "error: "+errText)
+	}
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func collapseSpaces(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func printWorkspaceInfoTable(w io.Writer, p workspaceInfoPayload) {
+	wsName := strVal(p.Workspace, "name")
+	wsSlug := strVal(p.Workspace, "slug")
+	wsID := strVal(p.Workspace, "id")
+	fmt.Fprintln(w, "## Workspace")
+	if wsName != "" {
+		fmt.Fprintf(w, "- %s", wsName)
+		if wsSlug != "" {
+			fmt.Fprintf(w, " (%s)", wsSlug)
+		}
+		if wsID != "" {
+			fmt.Fprintf(w, "  %s", wsID)
+		}
+		fmt.Fprintln(w)
+	} else if wsID != "" {
+		fmt.Fprintf(w, "- %s\n", wsID)
+	}
+
+	fmt.Fprintf(w, "\n## Agents (%d)\n", len(p.Agents))
+	if len(p.Agents) == 0 {
+		fmt.Fprintln(w, "  (none)")
+	} else {
+		for _, a := range p.Agents {
+			label := agentLabel(a)
+			status := formatAgentStatusLine(a)
+			runtimeBit := ""
+			if a.RuntimeName != "" {
+				runtimeBit = " · " + a.RuntimeName
+			}
+			fmt.Fprintf(w, "  - %s%s — %s\n", label, runtimeBit, status)
+		}
+	}
+
+	fmt.Fprintf(w, "\n## Computers (%d)\n", len(p.Computers))
+	if len(p.Computers) == 0 {
+		fmt.Fprintln(w, "  (none)")
+	} else {
+		for _, c := range p.Computers {
+			label := computerLabel(c)
+			prov := c.Provider
+			if prov != "" {
+				label = fmt.Sprintf("%s [%s]", label, prov)
+			}
+			fmt.Fprintf(w, "  - %s — %s\n", label, formatComputerStatusLine(c))
+		}
+	}
 }

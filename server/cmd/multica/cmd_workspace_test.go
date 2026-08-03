@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -401,4 +402,220 @@ func TestBuildWorkspaceUpdateBody(t *testing.T) {
 			t.Errorf("body = %v, want empty", body)
 		}
 	})
+}
+
+func TestStickyTaskErrorsByAgent(t *testing.T) {
+	t.Run("failed outcome sticks when no active task", func(t *testing.T) {
+		tasks := []map[string]any{
+			{
+				"agent_id":       "a1",
+				"status":         "failed",
+				"completed_at":   "2026-08-03T10:00:00Z",
+				"error":          `429: {"message":"已达到7天使用上限"}`,
+				"failure_reason": "agent_error.provider_capacity_or_rate_limit",
+			},
+		}
+		got := stickyTaskErrorsByAgent(tasks)
+		se, ok := got["a1"]
+		if !ok {
+			t.Fatal("expected sticky error for a1")
+		}
+		if !strings.Contains(se.Error, "已达到7天使用上限") {
+			t.Errorf("error = %q, want quota text", se.Error)
+		}
+		if se.FailureReason != "agent_error.provider_capacity_or_rate_limit" {
+			t.Errorf("failure_reason = %q", se.FailureReason)
+		}
+	})
+
+	t.Run("active task clears sticky failure", func(t *testing.T) {
+		tasks := []map[string]any{
+			{
+				"agent_id":     "a1",
+				"status":       "failed",
+				"completed_at": "2026-08-03T10:00:00Z",
+				"error":        "quota exceeded",
+			},
+			{
+				"agent_id": "a1",
+				"status":   "running",
+			},
+		}
+		got := stickyTaskErrorsByAgent(tasks)
+		if _, ok := got["a1"]; ok {
+			t.Fatal("expected no sticky error while task is running")
+		}
+	})
+
+	t.Run("later completed outcome wins over earlier failure", func(t *testing.T) {
+		tasks := []map[string]any{
+			{
+				"agent_id":     "a1",
+				"status":       "failed",
+				"completed_at": "2026-08-03T10:00:00Z",
+				"error":        "old failure",
+			},
+			{
+				"agent_id":     "a1",
+				"status":       "completed",
+				"completed_at": "2026-08-03T11:00:00Z",
+				"error":        "",
+			},
+		}
+		got := stickyTaskErrorsByAgent(tasks)
+		if _, ok := got["a1"]; ok {
+			t.Fatal("expected no sticky error after a later success")
+		}
+	})
+
+	t.Run("newer failure replaces older failure", func(t *testing.T) {
+		tasks := []map[string]any{
+			{
+				"agent_id":     "a1",
+				"status":       "failed",
+				"completed_at": "2026-08-03T10:00:00Z",
+				"error":        "old",
+			},
+			{
+				"agent_id":     "a1",
+				"status":       "failed",
+				"completed_at": "2026-08-03T12:00:00Z",
+				"error":        "new",
+			},
+		}
+		got := stickyTaskErrorsByAgent(tasks)
+		if got["a1"].Error != "new" {
+			t.Errorf("error = %q, want new", got["a1"].Error)
+		}
+	})
+}
+
+func TestFormatAgentStatusLineIncludesError(t *testing.T) {
+	line := formatAgentStatusLine(workspaceInfoAgentRow{
+		Status:               "idle",
+		RuntimeDisplayStatus: "online",
+		Error:                `429: 已达到7天使用上限`,
+	})
+	if !strings.Contains(line, "idle") {
+		t.Errorf("line %q missing status", line)
+	}
+	if !strings.Contains(line, "runtime=online") {
+		t.Errorf("line %q missing runtime", line)
+	}
+	if !strings.Contains(line, "error: 429") {
+		t.Errorf("line %q missing error text", line)
+	}
+}
+
+func TestComputerErrorTextPrefersUpdateError(t *testing.T) {
+	rt := map[string]any{
+		"update_error": "activation timed out",
+		"auto_update": map[string]any{
+			"error_message": "download failed",
+		},
+	}
+	if got := computerErrorText(rt); got != "activation timed out" {
+		t.Errorf("got %q, want update_error", got)
+	}
+	rt2 := map[string]any{
+		"auto_update": map[string]any{"error_message": "download failed"},
+	}
+	if got := computerErrorText(rt2); got != "download failed" {
+		t.Errorf("got %q, want auto_update error", got)
+	}
+}
+
+func TestRunWorkspaceInfo(t *testing.T) {
+	const wsID = "7beafc96-3c51-4fcc-9fe7-8c36ceb482ff"
+	const agentID = "8f04317a-0000-0000-0000-000000000001"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/workspaces/"+wsID:
+			json.NewEncoder(w).Encode(map[string]any{
+				"id": wsID, "name": "LRM-team", "slug": "lrm-team",
+			})
+		case r.URL.Path == "/api/agents":
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"id": agentID, "name": "alice", "display_name": "Alice",
+					"status": "idle", "runtime_status": "online",
+					"runtime_display_status": "online", "runtime_name": "s144",
+				},
+			})
+		case r.URL.Path == "/api/runtimes":
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"id": "rt1", "name": "s144", "display_name": "",
+					"provider": "cursor", "status": "online",
+					"runtime_health": "ok", "current_version": "0.3.99",
+					"update_error": nil,
+				},
+				{
+					"id": "rt2", "name": "old-box", "provider": "pi",
+					"status": "offline", "current_version": "0.3.97",
+					"update_error": "activation did not complete within 20 minutes",
+				},
+			})
+		case r.URL.Path == "/api/agent-task-snapshot":
+			json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"agent_id": agentID, "status": "failed",
+					"completed_at":   "2026-08-03T05:00:00Z",
+					"error":          `429: {"message":"已达到 7 天使用上限"}`,
+					"failure_reason": "agent_error.provider_capacity_or_rate_limit",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_WORKSPACE_ID", wsID)
+
+	cmd := &cobra.Command{Use: "info"}
+	cmd.Flags().String("workspace-id", "", "")
+	cmd.Flags().String("profile", "", "")
+	cmd.Flags().String("server-url", "", "")
+	cmd.Flags().String("output", "table", "")
+	cmd.Flags().Bool("include-archived", false, "")
+
+	// Capture stdout.
+	rOut, wOut, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = wOut
+	errRun := runWorkspaceInfo(cmd, nil)
+	_ = wOut.Close()
+	os.Stdout = old
+	if errRun != nil {
+		t.Fatalf("runWorkspaceInfo: %v", errRun)
+	}
+	var buf strings.Builder
+	_, _ = io.Copy(&buf, rOut)
+	_ = rOut.Close()
+	out := buf.String()
+
+	for _, want := range []string{
+		"## Workspace",
+		"LRM-team",
+		"## Agents (1)",
+		"alice",
+		"error: 429",
+		"已达到 7 天使用上限",
+		"## Computers (2)",
+		"s144",
+		"old-box",
+		"activation did not complete",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\nfull:\n%s", want, out)
+		}
+	}
 }

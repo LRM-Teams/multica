@@ -271,7 +271,9 @@ function finalizeRuntimeMachine(
   const matchesLocalName = (value: string | null | undefined): boolean =>
     !!value && value.toLowerCase() === options.localMachineName?.toLowerCase();
   const isCurrent =
-    (!!options.localDaemonId && draft.daemonId === options.localDaemonId) ||
+    (!!options.localDaemonId &&
+      draft.daemonId === options.localDaemonId &&
+      (!options.currentUserId || ownsLocalRuntime)) ||
     (draft.mode === "local" &&
       !!options.localMachineName &&
       ownsLocalRuntime &&

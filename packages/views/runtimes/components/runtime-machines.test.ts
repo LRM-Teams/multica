@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "@multica/core/types";
 import {
   buildRuntimeMachines,
+  defaultDesktopSelectedMachineId,
   filterRuntimeMachines,
   headerRuntimeHealthBadge,
   machineDeviceName,
@@ -401,6 +402,35 @@ describe("runtime machine grouping", () => {
     expect(other).toMatchObject({ section: "remote", isCurrent: false });
     const local = machines.find((m) => m.isCurrent);
     expect(local).toMatchObject({ section: "local", runtimes: [] });
+  });
+
+  it("does not treat another user's matching daemon ID as current or the fresh default", () => {
+    const machines = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-foreign-local-daemon",
+          daemon_id: "desktop-daemon-uuid",
+          owner_id: "user-2",
+          visibility: "public",
+        }),
+        makeRuntime({
+          id: "rt-mine",
+          daemon_id: "mine-daemon-uuid",
+          owner_id: "user-1",
+        }),
+      ],
+      {
+        now: NOW,
+        localDaemonId: "desktop-daemon-uuid",
+        currentUserId: "user-1",
+      },
+    );
+
+    const foreign = machines.find((m) => m.daemonId === "desktop-daemon-uuid");
+    expect(foreign).toMatchObject({ section: "remote", isCurrent: false });
+    expect(defaultDesktopSelectedMachineId(machines, "user-1")).toBe(
+      "local:mine-daemon-uuid",
+    );
   });
 
   it("keeps cloud runtimes as cloud workers when they have no daemon", () => {

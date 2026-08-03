@@ -377,7 +377,7 @@ func TestDeleteRuntimesByDaemon_BlocksUntilExactAgentPlanIsRemoved(t *testing.T)
 	}
 }
 
-func TestRemoveAgentsByDaemon_TerminatesRunningAutopilot(t *testing.T) {
+func TestRemoveAgentsByDaemon_TerminatesRunningLegacyAutopilotTask(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -386,7 +386,7 @@ func TestRemoveAgentsByDaemon_TerminatesRunningAutopilot(t *testing.T) {
 
 	runtimeID := createBulkDaemonRuntime(t, ctx, daemonID, "claude", "offline")
 	agentID := createCascadeFixtureAgent(t, ctx, runtimeID, "Bulk Autopilot Remove Agent")
-	autopilotID, runID, eventID, executionID := createBulkRunningAutopilot(t, ctx, agentID, runtimeID)
+	_, eventID, executionID := createBulkRunningLegacyAutopilotTask(t, ctx, agentID, runtimeID)
 
 	remove := httptest.NewRecorder()
 	removeReq := newRequest("POST", "/api/runtimes/by-daemon/"+daemonID+"/remove-agents", map[string]any{
@@ -399,21 +399,11 @@ func TestRemoveAgentsByDaemon_TerminatesRunningAutopilot(t *testing.T) {
 	}
 
 	var archived bool
-	var definitionStatus, runStatus, failureReason, eventStatus, terminalOutcome string
-	var completed bool
+	var eventStatus, terminalOutcome string
 	if err := testPool.QueryRow(ctx, `
 		SELECT archived_at IS NOT NULL FROM agent WHERE id = $1
 	`, agentID).Scan(&archived); err != nil {
 		t.Fatalf("read archived agent: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `SELECT status FROM autopilot WHERE id = $1`, autopilotID).Scan(&definitionStatus); err != nil {
-		t.Fatalf("read paused autopilot: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
-		SELECT status, completed_at IS NOT NULL, failure_reason
-		FROM autopilot_run WHERE id = $1
-	`, runID).Scan(&runStatus, &completed, &failureReason); err != nil {
-		t.Fatalf("read terminal autopilot run: %v", err)
 	}
 	if err := testPool.QueryRow(ctx, `
 		SELECT status, terminal_outcome
@@ -430,18 +420,14 @@ func TestRemoveAgentsByDaemon_TerminatesRunningAutopilot(t *testing.T) {
 		t.Fatalf("read cancelled agent execution: %v", err)
 	}
 	if !archived ||
-		definitionStatus != "paused" ||
-		runStatus != "failed" ||
-		!completed ||
-		failureReason != "assigned agent removed from computer" ||
 		eventStatus != "suppressed" ||
 		terminalOutcome != "cancelled" ||
 		executionStatus != "cancelled" ||
 		!executionCompleted ||
 		executionReason != "agent removed from computer" {
 		t.Fatalf(
-			"expected archive to close all running state, archived=%t autopilot=%s run=%s completed=%t reason=%q event=%s outcome=%s execution=%s execution_completed=%t execution_reason=%q",
-			archived, definitionStatus, runStatus, completed, failureReason, eventStatus, terminalOutcome,
+			"expected archive to close running state, archived=%t event=%s outcome=%s execution=%s execution_completed=%t execution_reason=%q",
+			archived, eventStatus, terminalOutcome,
 			executionStatus, executionCompleted, executionReason,
 		)
 	}
@@ -462,7 +448,7 @@ func TestDeleteRuntimesByDaemon_DeletesVoiceCallsAndDetachesRestrictDependents(t
 	`, targetAgentID, testUserID); err != nil {
 		t.Fatalf("archive target agent: %v", err)
 	}
-	autopilotID, autopilotRunID, autopilotEventID, executionID := createBulkRunningAutopilot(
+	_, autopilotEventID, executionID := createBulkRunningLegacyAutopilotTask(
 		t,
 		ctx,
 		targetAgentID,
@@ -623,29 +609,6 @@ func TestDeleteRuntimesByDaemon_DeletesVoiceCallsAndDetachesRestrictDependents(t
 	}
 	if survivorSource != nil {
 		t.Fatalf("expected surviving derived agent lineage detached, got source=%s", *survivorSource)
-	}
-
-	var autopilotStatus, runStatus, failureReason string
-	var completed bool
-	if err := testPool.QueryRow(ctx, `
-		SELECT status FROM autopilot WHERE id = $1
-	`, autopilotID).Scan(&autopilotStatus); err != nil {
-		t.Fatalf("read surviving autopilot definition: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
-		SELECT status, completed_at IS NOT NULL, failure_reason
-		FROM autopilot_run WHERE id = $1
-	`, autopilotRunID).Scan(&runStatus, &completed, &failureReason); err != nil {
-		t.Fatalf("read permanent-delete autopilot run: %v", err)
-	}
-	if autopilotStatus != "paused" ||
-		runStatus != "failed" ||
-		!completed ||
-		failureReason != "assigned agent permanently deleted" {
-		t.Fatalf(
-			"expected permanent delete to terminalize automation, autopilot=%s run=%s completed=%t reason=%q",
-			autopilotStatus, runStatus, completed, failureReason,
-		)
 	}
 
 	var executionStatus, executionReason string
@@ -1007,30 +970,16 @@ func createBulkInboxEvent(t *testing.T, ctx context.Context, runtimeID, agentID,
 	return eventID
 }
 
-func createBulkRunningAutopilot(
+// createBulkRunningLegacyAutopilotTask seeds a draining inbox event that still
+// carries an orphan autopilot_run_id after LRM-1051 dropped autopilot* tables.
+func createBulkRunningLegacyAutopilotTask(
 	t *testing.T,
 	ctx context.Context,
 	agentID string,
 	runtimeID string,
-) (autopilotID, runID, eventID, executionID string) {
+) (runID, eventID, executionID string) {
 	t.Helper()
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO autopilot (
-			workspace_id, title, assignee_id, assignee_type, status,
-			execution_mode, created_by_type, created_by_id
-		)
-		VALUES ($1, $2, $3, 'agent', 'active', 'run_only', 'member', $4)
-		RETURNING id
-	`, testWorkspaceID, "bulk-delete-autopilot-"+uuid.NewString()[:8], agentID, testUserID).Scan(&autopilotID); err != nil {
-		t.Fatalf("insert bulk autopilot: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO autopilot_run (autopilot_id, source, status)
-		VALUES ($1, 'manual', 'running')
-		RETURNING id
-	`, autopilotID).Scan(&runID); err != nil {
-		t.Fatalf("insert bulk autopilot run: %v", err)
-	}
+	runID = uuid.NewString()
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_inbox_event (
 			workspace_id, agent_id, runtime_id, reason, status, priority,
@@ -1039,12 +988,7 @@ func createBulkRunningAutopilot(
 		VALUES ($1, $2, $3, 'autopilot', 'draining', 0, $4)
 		RETURNING id
 	`, testWorkspaceID, agentID, runtimeID, runID).Scan(&eventID); err != nil {
-		t.Fatalf("insert bulk autopilot inbox event: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		UPDATE autopilot_run SET task_id = $2 WHERE id = $1
-	`, runID, eventID); err != nil {
-		t.Fatalf("link bulk autopilot task: %v", err)
+		t.Fatalf("insert bulk legacy autopilot inbox event: %v", err)
 	}
 	executionID = uuid.NewString()
 	if _, err := testPool.Exec(ctx, `
@@ -1059,9 +1003,8 @@ func createBulkRunningAutopilot(
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM agent_execution WHERE id = $1`, executionID)
 		testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, eventID)
-		testPool.Exec(context.Background(), `DELETE FROM autopilot WHERE id = $1`, autopilotID)
 	})
-	return autopilotID, runID, eventID, executionID
+	return runID, eventID, executionID
 }
 
 func assertInboxEventRuntimeCleared(t *testing.T, ctx context.Context, eventID string) {

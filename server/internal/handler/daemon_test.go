@@ -2624,9 +2624,9 @@ func TestDaemonRegister_LegacyIDNoMatchIsNoop(t *testing.T) {
 	}
 }
 
-// Regression test for #1224: tasks linked only via AutopilotRunID (run_only
-// autopilots) must resolve to the autopilot's workspace. Before the fix,
-// resolveTaskWorkspaceID fell through and every StartTask call returned 404.
+// Regression test for #1224 (updated LRM-1051): tasks linked only via an orphan
+// AutopilotRunID resolve workspace from agent_inbox_event.workspace_id after
+// autopilot* tables were dropped.
 func TestStartTask_AutopilotRunOnlyTask_ResolvesWorkspace(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -2641,37 +2641,17 @@ func TestStartTask_AutopilotRunOnlyTask_ResolvesWorkspace(t *testing.T) {
 		t.Fatalf("setup: get agent: %v", err)
 	}
 
-	var autopilotID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO autopilot (
-			workspace_id, title, assignee_id, execution_mode,
-			created_by_type, created_by_id
-		)
-		VALUES ($1, 'run_only fixture', $2, 'run_only', 'member', $3)
-		RETURNING id
-	`, testWorkspaceID, agentID, testUserID).Scan(&autopilotID); err != nil {
-		t.Fatalf("setup: create autopilot: %v", err)
-	}
-	defer testPool.Exec(ctx, `DELETE FROM autopilot WHERE id = $1`, autopilotID)
-
-	var runID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO autopilot_run (autopilot_id, source, status)
-		VALUES ($1, 'manual', 'running')
-		RETURNING id
-	`, autopilotID).Scan(&runID); err != nil {
-		t.Fatalf("setup: create autopilot_run: %v", err)
-	}
+	runID := uuid.NewString()
 
 	// issue_id is explicitly NULL — the condition that used to trigger 404.
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_inbox_event (
-			agent_id, runtime_id, issue_id, status, priority, autopilot_run_id
+			workspace_id, agent_id, runtime_id, issue_id, status, priority, autopilot_run_id
 		)
-		VALUES ($1, $2, NULL, 'draining', 0, $3)
+		VALUES ($1, $2, $3, NULL, 'draining', 0, $4)
 		RETURNING id
-	`, agentID, runtimeID, runID).Scan(&taskID); err != nil {
+	`, testWorkspaceID, agentID, runtimeID, runID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create autopilot task: %v", err)
 	}
 	defer testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
@@ -2880,37 +2860,17 @@ func TestClaimTask_AutopilotRunOnly_PopulatesWorkspaceID(t *testing.T) {
 
 	agentID, runtimeID := createHandlerTestAgentWithIsolatedRuntime(t)
 
-	var autopilotID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO autopilot (
-			workspace_id, title, assignee_id, execution_mode,
-			created_by_type, created_by_id
-		)
-		VALUES ($1, 'claim workspace fixture', $2, 'run_only', 'member', $3)
-		RETURNING id
-	`, testWorkspaceID, agentID, testUserID).Scan(&autopilotID); err != nil {
-		t.Fatalf("setup: create autopilot: %v", err)
-	}
-	defer testPool.Exec(ctx, `DELETE FROM autopilot WHERE id = $1`, autopilotID)
-
-	var runID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO autopilot_run (autopilot_id, source, status)
-		VALUES ($1, 'manual', 'running')
-		RETURNING id
-	`, autopilotID).Scan(&runID); err != nil {
-		t.Fatalf("setup: create autopilot_run: %v", err)
-	}
+	runID := uuid.NewString()
 
 	// Create a queued task with only AutopilotRunID (no IssueID, no ChatSessionID).
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO agent_inbox_event (
-			agent_id, runtime_id, issue_id, status, priority, autopilot_run_id
+			workspace_id, agent_id, runtime_id, issue_id, status, priority, autopilot_run_id
 		)
-		VALUES ($1, $2, NULL, 'pending', 0, $3)
+		VALUES ($1, $2, $3, NULL, 'pending', 0, $4)
 		RETURNING id
-	`, agentID, runtimeID, runID).Scan(&taskID); err != nil {
+	`, testWorkspaceID, agentID, runtimeID, runID).Scan(&taskID); err != nil {
 		t.Fatalf("setup: create autopilot task: %v", err)
 	}
 	defer testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)

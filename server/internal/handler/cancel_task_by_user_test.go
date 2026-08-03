@@ -29,11 +29,9 @@ func taskStatus(t *testing.T, taskID string) string {
 	return status
 }
 
-// createAutopilotRunOnlyTask seeds the autopilot -> autopilot_run -> task chain
-// that AutopilotService.dispatchRunOnly produces: a queued task with issue_id
-// and chat_session_id NULL, linked only by autopilot_run_id. The autopilot is
-// created in the agent's own workspace so the fixture works for foreign agents
-// too.
+// createAutopilotRunOnlyTask seeds a queued task with issue_id and
+// chat_session_id NULL, linked only by an orphan autopilot_run_id (tables
+// dropped in LRM-1051). Workspace comes from agent_inbox_event.workspace_id.
 func createAutopilotRunOnlyTask(t *testing.T, agentID string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -45,31 +43,13 @@ func createAutopilotRunOnlyTask(t *testing.T, agentID string) string {
 		t.Fatalf("load agent workspace/runtime: %v", err)
 	}
 
-	var autopilotID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO autopilot (workspace_id, title, assignee_id, execution_mode, created_by_type, created_by_id)
-		VALUES ($1, 'cancel-runonly-ap', $2, 'run_only', 'member', $3)
-		RETURNING id
-	`, workspaceID, agentID, testUserID).Scan(&autopilotID); err != nil {
-		t.Fatalf("create autopilot: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM autopilot WHERE id = $1`, autopilotID) })
-
-	var runID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO autopilot_run (autopilot_id, source, status)
-		VALUES ($1, 'manual', 'running')
-		RETURNING id
-	`, autopilotID).Scan(&runID); err != nil {
-		t.Fatalf("create autopilot_run: %v", err)
-	}
-
+	runID := uuid.NewString()
 	var taskID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, autopilot_run_id)
-		VALUES ($1, $2, 'pending', 0, $3)
+		INSERT INTO agent_inbox_event (workspace_id, agent_id, runtime_id, status, priority, autopilot_run_id)
+		VALUES ($1, $2, $3, 'pending', 0, $4)
 		RETURNING id
-	`, agentID, runtimeID, runID).Scan(&taskID); err != nil {
+	`, workspaceID, agentID, runtimeID, runID).Scan(&taskID); err != nil {
 		t.Fatalf("create run_only task: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
@@ -264,8 +244,8 @@ func TestCancelTaskByUser_RetryClone_Autopilot_Succeeds(t *testing.T) {
 
 	var cloneID string
 	if err := testPool.QueryRow(context.Background(), `
-		INSERT INTO agent_inbox_event (agent_id, runtime_id, status, priority, autopilot_run_id, parent_task_id, attempt)
-		SELECT agent_id, runtime_id, 'pending', priority, autopilot_run_id, id, 1
+		INSERT INTO agent_inbox_event (workspace_id, agent_id, runtime_id, status, priority, autopilot_run_id, parent_task_id, attempt)
+		SELECT workspace_id, agent_id, runtime_id, 'pending', priority, autopilot_run_id, id, 1
 		FROM agent_inbox_event WHERE id = $1
 		RETURNING id
 	`, parentID).Scan(&cloneID); err != nil {

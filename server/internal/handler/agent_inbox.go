@@ -2445,21 +2445,9 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 		return true
 	}
 
+	// Autopilot runtime tables dropped (LRM-1051). Historical AutopilotRunID
+	// cannot hydrate title/payload; fall through to other task kinds.
 	if event.AutopilotRunID.Valid {
-		run, err := h.Queries.GetAutopilotRun(ctx, event.AutopilotRunID)
-		if err != nil {
-			return false
-		}
-		resp.AutopilotID = uuidToString(run.AutopilotID)
-		resp.AutopilotSource = run.Source
-		resp.AutopilotTriggerPayload = json.RawMessage(run.TriggerPayload)
-		if autopilot, err := h.Queries.GetAutopilot(ctx, run.AutopilotID); err == nil {
-			resp.AutopilotTitle = autopilot.Title
-			resp.ThreadName = autopilot.Title
-			if autopilot.Description.Valid {
-				resp.AutopilotDescription = autopilot.Description.String
-			}
-		}
 		loadWorkspaceRepos()
 		return true
 	}

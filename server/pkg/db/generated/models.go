@@ -366,57 +366,16 @@ type Attachment struct {
 	ChannelID     pgtype.UUID        `json:"channel_id"`
 }
 
-type Autopilot struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	Title              string             `json:"title"`
-	Description        pgtype.Text        `json:"description"`
-	AssigneeID         pgtype.UUID        `json:"assignee_id"`
-	Status             string             `json:"status"`
-	ExecutionMode      string             `json:"execution_mode"`
-	IssueTitleTemplate pgtype.Text        `json:"issue_title_template"`
-	CreatedByType      string             `json:"created_by_type"`
-	CreatedByID        pgtype.UUID        `json:"created_by_id"`
-	LastRunAt          pgtype.Timestamptz `json:"last_run_at"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	AssigneeType       string             `json:"assignee_type"`
-	ProjectID          pgtype.UUID        `json:"project_id"`
-}
-
-type AutopilotRun struct {
-	ID             pgtype.UUID        `json:"id"`
-	AutopilotID    pgtype.UUID        `json:"autopilot_id"`
-	TriggerID      pgtype.UUID        `json:"trigger_id"`
-	Source         string             `json:"source"`
-	Status         string             `json:"status"`
-	IssueID        pgtype.UUID        `json:"issue_id"`
-	TaskID         pgtype.UUID        `json:"task_id"`
-	TriggeredAt    pgtype.Timestamptz `json:"triggered_at"`
-	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
-	FailureReason  pgtype.Text        `json:"failure_reason"`
-	TriggerPayload []byte             `json:"trigger_payload"`
-	Result         []byte             `json:"result"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	SquadID        pgtype.UUID        `json:"squad_id"`
-}
-
-type AutopilotTrigger struct {
-	ID             pgtype.UUID        `json:"id"`
-	AutopilotID    pgtype.UUID        `json:"autopilot_id"`
-	Kind           string             `json:"kind"`
-	Enabled        bool               `json:"enabled"`
-	CronExpression pgtype.Text        `json:"cron_expression"`
-	Timezone       pgtype.Text        `json:"timezone"`
-	NextRunAt      pgtype.Timestamptz `json:"next_run_at"`
-	WebhookToken   pgtype.Text        `json:"webhook_token"`
-	Label          pgtype.Text        `json:"label"`
-	LastFiredAt    pgtype.Timestamptz `json:"last_fired_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	Provider       string             `json:"provider"`
-	SigningSecret  pgtype.Text        `json:"signing_secret"`
-	EventFilters   []byte             `json:"event_filters"`
+// AutopilotRetirementExport is kept after LRM-1051 drops autopilot runtime tables.
+type AutopilotRetirementExport struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	AutopilotID pgtype.UUID        `json:"autopilot_id"`
+	Snapshot    []byte             `json:"snapshot"`
+	Disposition string             `json:"disposition"`
+	ReminderID  pgtype.UUID        `json:"reminder_id"`
+	Reason      string             `json:"reason"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type Channel struct {
@@ -1351,31 +1310,6 @@ type VoiceCallSession struct {
 	OutputAudioMs  int64              `json:"output_audio_ms"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-type WebhookDelivery struct {
-	ID                     pgtype.UUID        `json:"id"`
-	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
-	AutopilotID            pgtype.UUID        `json:"autopilot_id"`
-	TriggerID              pgtype.UUID        `json:"trigger_id"`
-	Provider               string             `json:"provider"`
-	Event                  string             `json:"event"`
-	DedupeKey              pgtype.Text        `json:"dedupe_key"`
-	DedupeSource           pgtype.Text        `json:"dedupe_source"`
-	SignatureStatus        string             `json:"signature_status"`
-	Status                 string             `json:"status"`
-	AttemptCount           int32              `json:"attempt_count"`
-	SelectedHeaders        []byte             `json:"selected_headers"`
-	ContentType            pgtype.Text        `json:"content_type"`
-	RawBody                []byte             `json:"raw_body"`
-	ResponseStatus         pgtype.Int4        `json:"response_status"`
-	ResponseBody           pgtype.Text        `json:"response_body"`
-	AutopilotRunID         pgtype.UUID        `json:"autopilot_run_id"`
-	ReplayedFromDeliveryID pgtype.UUID        `json:"replayed_from_delivery_id"`
-	Error                  pgtype.Text        `json:"error"`
-	ReceivedAt             pgtype.Timestamptz `json:"received_at"`
-	LastAttemptAt          pgtype.Timestamptz `json:"last_attempt_at"`
-	CreatedAt              pgtype.Timestamptz `json:"created_at"`
 }
 
 type SandboxNode struct {

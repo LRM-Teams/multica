@@ -274,48 +274,6 @@ func (q *Queries) DeleteStaleOfflineRuntimes(ctx context.Context, staleSeconds f
 	return items, nil
 }
 
-const failRunningAutopilotRunsByAgentIDs = `-- name: FailRunningAutopilotRunsByAgentIDs :exec
-UPDATE autopilot_run AS run
-SET status = 'failed',
-    completed_at = COALESCE(run.completed_at, now()),
-    failure_reason = $1
-WHERE run.status = 'running'
-  AND (
-    EXISTS (
-      SELECT 1
-      FROM autopilot AS definition
-      WHERE definition.id = run.autopilot_id
-        AND definition.assignee_type = 'agent'
-        AND definition.assignee_id = ANY($2::uuid[])
-    )
-    OR EXISTS (
-      SELECT 1
-      FROM agent_inbox_event AS event
-      WHERE event.agent_id = ANY($2::uuid[])
-        AND (
-          event.autopilot_run_id = run.id
-          OR event.id = run.task_id
-        )
-    )
-  )
-`
-
-type FailRunningAutopilotRunsByAgentIDsParams struct {
-	FailureReason string        `json:"failure_reason"`
-	AgentIds      []pgtype.UUID `json:"agent_ids"`
-}
-
-// Makes every in-flight automation executed by the supplied agents terminal.
-// The parent autopilot relation covers the ordinary agent-assignee path. The
-// inbox-event relation additionally covers historical/special dispatches whose
-// executing agent differs from the current definition assignee. Without this
-// explicit transition, agent_inbox_event's cascading delete / SET NULL links
-// can leave an autopilot_run permanently marked running after agent teardown.
-func (q *Queries) FailRunningAutopilotRunsByAgentIDs(ctx context.Context, arg FailRunningAutopilotRunsByAgentIDsParams) error {
-	_, err := q.db.Exec(ctx, failRunningAutopilotRunsByAgentIDs, arg.FailureReason, arg.AgentIds)
-	return err
-}
-
 const failTasksForOfflineRuntimes = `-- name: FailTasksForOfflineRuntimes :many
 UPDATE agent_inbox_event
 SET status = 'pending', last_error = 'runtime went offline',
@@ -1114,25 +1072,6 @@ func (q *Queries) MarkRuntimesOfflineByIDs(ctx context.Context, arg MarkRuntimes
 		return nil, err
 	}
 	return items, nil
-}
-
-const pauseAutopilotsByAgentAssignees = `-- name: PauseAutopilotsByAgentAssignees :exec
-UPDATE autopilot
-SET status = 'paused', updated_at = now()
-WHERE status = 'active'
-  AND assignee_type = 'agent'
-  AND assignee_id = ANY($1::uuid[])
-`
-
-// Pauses every active autopilot whose agent assignee is in the supplied list.
-// Called before hard-deleting archived agents on runtime teardown so the rows
-// do not become dangling (autopilot.assignee_id no longer has an agent FK
-// since migration 096). Status='paused' makes the breakage visible in the UI
-// — operators can re-point the autopilot at a live agent or delete it —
-// rather than silently piling skipped runs.
-func (q *Queries) PauseAutopilotsByAgentAssignees(ctx context.Context, assigneeIds []pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, pauseAutopilotsByAgentAssignees, assigneeIds)
-	return err
 }
 
 const precreateAgentRuntime = `-- name: PrecreateAgentRuntime :one

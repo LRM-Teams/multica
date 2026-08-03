@@ -128,17 +128,6 @@ func (h *Handler) RemoveAgentsByDaemon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(activeAgentIDs) > 0 {
-		if err := qtx.PauseAutopilotsByAgentAssignees(r.Context(), activeAgentIDs); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to pause agent automations")
-			return
-		}
-		if err := qtx.FailRunningAutopilotRunsByAgentIDs(r.Context(), db.FailRunningAutopilotRunsByAgentIDsParams{
-			FailureReason: "assigned agent removed from computer",
-			AgentIds:      activeAgentIDs,
-		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to stop agent automations")
-			return
-		}
 		if err := qtx.CancelRunningAgentExecutionsByAgentIDs(r.Context(), db.CancelRunningAgentExecutionsByAgentIDsParams{
 			FailureReason: "agent removed from computer",
 			AgentIds:      activeAgentIDs,
@@ -393,9 +382,6 @@ func teardownRuntimeWithoutActiveAgents(ctx context.Context, qtx *db.Queries, tx
 		return err
 	}
 	if len(archivedAgentIDs) > 0 {
-		if err := qtx.PauseAutopilotsByAgentAssignees(ctx, archivedAgentIDs); err != nil {
-			return err
-		}
 		if err := teardownArchivedAgentDependents(ctx, qtx, archivedAgentIDs); err != nil {
 			return err
 		}
@@ -435,12 +421,6 @@ func teardownRuntimeWithoutActiveAgents(ctx context.Context, qtx *db.Queries, tx
 func teardownArchivedAgentDependents(ctx context.Context, qtx *db.Queries, agentIDs []pgtype.UUID) error {
 	if len(agentIDs) == 0 {
 		return nil
-	}
-	if err := qtx.FailRunningAutopilotRunsByAgentIDs(ctx, db.FailRunningAutopilotRunsByAgentIDsParams{
-		FailureReason: "assigned agent permanently deleted",
-		AgentIds:      agentIDs,
-	}); err != nil {
-		return err
 	}
 	if err := qtx.CancelRunningAgentExecutionsByAgentIDs(ctx, db.CancelRunningAgentExecutionsByAgentIDsParams{
 		FailureReason: "agent permanently deleted",

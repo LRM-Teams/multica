@@ -601,7 +601,7 @@
         "scope": "清除会话并永久删除工作区文件（MEMORY.md、notes/），然后重启。这不是删除智能体。"
       }
     },
-    "after_current_run": "将在当前任务完成后执行。",
+    "after_current_run": "任务进行中不可用——请等空闲，或用「重启」（强制）。",
     "full_reset_confirm": "此操作不可撤销。输入该智能体的标识 {{handle}} 以确认。",
     "full_reset_confirm_placeholder": "输入 {{handle}}",
     "disabled_reason": {
@@ -613,7 +613,7 @@
       "unavailable": "此操作当前不可用。"
     },
     "status": {
-      "scheduled": "已排期重启——将在当前任务完成后执行。",
+      "scheduled": "重启已排队，但可能不会自动执行。请关闭，等智能体空闲后再试。",
       "running": "重启中…",
       "succeeded": "完成。智能体已恢复在线。",
       "failed": "重启失败。",

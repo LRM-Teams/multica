@@ -611,7 +611,7 @@
         "scope": "Clears the session and permanently deletes the workspace files (MEMORY.md, notes/), then restarts. This is not Delete agent."
       }
     },
-    "after_current_run": "Runs after the current task finishes.",
+    "after_current_run": "Not available while a task is running — wait until idle, or use Restart (force).",
     "full_reset_confirm": "This can't be undone. Type this agent's handle {{handle}} to confirm.",
     "full_reset_confirm_placeholder": "Enter {{handle}}",
     "disabled_reason": {
@@ -623,7 +623,7 @@
       "unavailable": "This action isn't available right now."
     },
     "status": {
-      "scheduled": "Restart scheduled — runs after the current task finishes.",
+      "scheduled": "Restart was queued but may not run automatically. Close and try again when the agent is idle.",
       "running": "Restarting…",
       "succeeded": "Done. The agent is back online.",
       "failed": "Restart failed.",

@@ -8,10 +8,11 @@ import {
 } from "./agent-lifecycle";
 
 describe("isTerminalAgentLifecycleStatus", () => {
-  it("terminates on succeeded/failed, keeps polling otherwise", () => {
+  it("terminates on succeeded/failed/scheduled; keeps polling only while running", () => {
+    // scheduled is terminal for poll (#26): BE never auto-promotes it.
     expect(isTerminalAgentLifecycleStatus("succeeded")).toBe(true);
     expect(isTerminalAgentLifecycleStatus("failed")).toBe(true);
-    expect(isTerminalAgentLifecycleStatus("scheduled")).toBe(false);
+    expect(isTerminalAgentLifecycleStatus("scheduled")).toBe(true);
     expect(isTerminalAgentLifecycleStatus("running")).toBe(false);
     expect(isTerminalAgentLifecycleStatus(null)).toBe(false);
     expect(isTerminalAgentLifecycleStatus(undefined)).toBe(false);

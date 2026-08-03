@@ -61,17 +61,23 @@ export function AgentRestartModal({
 
   const selectedState = agentLifecycleActionState(lifecycle.preflight, selected);
   const op = lifecycle.operation;
-  const isActive =
-    op?.status === "scheduled" ||
-    op?.status === "running" ||
-    lifecycle.start.isPending;
+  // task #26: only hard-block the modal while the op is actually running.
+  // `scheduled` is a dead-end server state (never auto-promoted) — treat it as
+  // non-blocking so the user can close instead of staring at a spinner forever.
+  const isBlocking =
+    op?.status === "running" || lifecycle.start.isPending;
+  const isScheduled = op?.status === "scheduled";
   const isTerminalSuccess = op?.status === "succeeded";
   const isTerminalFailed = op?.status === "failed";
   const isFullReset = selected === "full_reset_restart";
   const handleConfirmed =
     !isFullReset || normalizeHandle(confirmText) === normalizeHandle(agentHandle);
   const canSubmit =
-    selectedState.supported && handleConfirmed && !isActive && !isTerminalSuccess;
+    selectedState.supported &&
+    handleConfirmed &&
+    !isBlocking &&
+    !isScheduled &&
+    !isTerminalSuccess;
 
   const reasonLabel = (reason: string | null | undefined): string =>
     t(($) => $.restart_modal.disabled_reason[resolveLifecycleDisabledReasonKey(reason)]);
@@ -95,8 +101,8 @@ export function AgentRestartModal({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && !isActive && close()}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md" showCloseButton={!isActive}>
+    <Dialog open={open} onOpenChange={(next) => !next && !isBlocking && close()}>
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md" showCloseButton={!isBlocking}>
         <DialogTitle>{t(($) => $.restart_modal.title)}</DialogTitle>
         <DialogDescription>
           {t(($) => $.restart_modal.description, { name: agentName })}
@@ -177,10 +183,15 @@ export function AgentRestartModal({
         )}
 
         <output aria-live="polite" className="block text-xs leading-relaxed empty:hidden">
-          {isActive && (
+          {isBlocking && (
             <span className="inline-flex items-center gap-1.5 text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {t(($) => $.restart_modal.status[op?.status === "scheduled" ? "scheduled" : "running"])}
+              {t(($) => $.restart_modal.status.running)}
+            </span>
+          )}
+          {isScheduled && (
+            <span className="text-muted-foreground">
+              {t(($) => $.restart_modal.status.scheduled)}
             </span>
           )}
           {isTerminalSuccess && (
@@ -196,11 +207,11 @@ export function AgentRestartModal({
         </output>
 
         <DialogFooter>
-          {isTerminalSuccess ? (
+          {isTerminalSuccess || isScheduled ? (
             <Button onClick={close}>{t(($) => $.restart_modal.done)}</Button>
           ) : (
             <>
-              <Button variant="ghost" onClick={close} disabled={isActive}>
+              <Button variant="ghost" onClick={close} disabled={isBlocking}>
                 {t(($) => $.restart_modal.cancel)}
               </Button>
               <Button
@@ -212,7 +223,7 @@ export function AgentRestartModal({
                   if (isFullReset && e.key === "Enter") e.preventDefault();
                 }}
               >
-                {isActive && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {isBlocking && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 {isTerminalFailed
                   ? t(($) => $.restart_modal.retry)
                   : t(($) => $.restart_modal.cta[selected])}

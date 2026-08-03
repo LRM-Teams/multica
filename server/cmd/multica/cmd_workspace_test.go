@@ -619,3 +619,26 @@ func TestRunWorkspaceInfo(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterAndPageWorkspaceInfo(t *testing.T) {
+	agents := []workspaceInfoAgentRow{
+		{Name: "alice", Status: "idle", Error: "quota"},
+		{Name: "bob", Status: "working"},
+		{Name: "carol", Status: "offline", Error: "429"},
+	}
+	got := filterWorkspaceInfoAgents(agents, "quota")
+	if len(got) != 1 || got[0].Name != "alice" {
+		t.Fatalf("query quota: %+v", got)
+	}
+	got = filterWorkspaceInfoAgents(agents, "429")
+	if len(got) != 1 || got[0].Name != "carol" {
+		t.Fatalf("query 429: %+v", got)
+	}
+	paged := pageWorkspaceInfoSlice(agents, 1, 1)
+	if len(paged) != 1 || paged[0].Name != "bob" {
+		t.Fatalf("page: %+v", paged)
+	}
+	if len(pageWorkspaceInfoSlice(agents, 10, 5)) != 0 {
+		t.Fatal("offset past end")
+	}
+}

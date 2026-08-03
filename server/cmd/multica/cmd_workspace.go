@@ -80,9 +80,12 @@ var workspaceInfoCmd = &cobra.Command{
 	Short: "Show workspace agents and computers with status and errors",
 	Long: "Prints a member-usable overview of the current (or specified) workspace: " +
 		"agents and computers (runtimes), including live status and sticky " +
-		"error text when the latest outcome is a failure (e.g. provider quota). " +
-		"Aligned in spirit with `raft server info`. Accepts a full UUID, slug, " +
-		"or short UUID prefix; omit to use the default workspace.",
+		"error text when the latest outcome is a failure (e.g. provider quota).\n\n" +
+		"Aligned with `raft server info` list flags:\n" +
+		"  --agents / --computers  list only that section (default: both)\n" +
+		"  --query                 filter rows by visible text (name, status, error)\n" +
+		"  --limit / --offset      page list output (default limit 50 when set; 0 = no limit)\n\n" +
+		"Accepts a full UUID, slug, or short UUID prefix; omit to use the default workspace.",
 	Args: cobra.MaximumNArgs(1),
 	RunE: runWorkspaceInfo,
 }
@@ -101,6 +104,11 @@ func init() {
 	workspaceGetCmd.Flags().String("output", "json", "Output format: table or json")
 	workspaceInfoCmd.Flags().String("output", "table", "Output format: table or json")
 	workspaceInfoCmd.Flags().Bool("include-archived", false, "Include archived agents")
+	workspaceInfoCmd.Flags().Bool("agents", false, "List agents only (like raft server info --agents)")
+	workspaceInfoCmd.Flags().Bool("computers", false, "List computers/runtimes only (like raft server info narrow lists)")
+	workspaceInfoCmd.Flags().String("query", "", "Filter agents/computers by visible text")
+	workspaceInfoCmd.Flags().Int("limit", 0, "Maximum rows per list section (0 = unlimited; raft default is 50 when paging)")
+	workspaceInfoCmd.Flags().Int("offset", 0, "Rows to skip per list section")
 	workspaceMemberListCmd.Flags().String("output", "table", "Output format: table or json")
 
 	workspaceUpdateCmd.Flags().String("name", "", "New workspace name")
@@ -670,6 +678,35 @@ func runWorkspaceInfo(cmd *cobra.Command, args []string) error {
 		return strings.ToLower(computerLabel(computerRows[i])) < strings.ToLower(computerLabel(computerRows[j]))
 	})
 
+	wantAgents, _ := cmd.Flags().GetBool("agents")
+	wantComputers, _ := cmd.Flags().GetBool("computers")
+	// Default: both sections. If either narrow flag is set, only those.
+	if !wantAgents && !wantComputers {
+		wantAgents, wantComputers = true, true
+	}
+	query, _ := cmd.Flags().GetString("query")
+	limit, _ := cmd.Flags().GetInt("limit")
+	offset, _ := cmd.Flags().GetInt("offset")
+	if offset < 0 {
+		return fmt.Errorf("--offset must be >= 0")
+	}
+	if limit < 0 {
+		return fmt.Errorf("--limit must be >= 0")
+	}
+
+	if wantAgents {
+		agentRows = filterWorkspaceInfoAgents(agentRows, query)
+		agentRows = pageWorkspaceInfoSlice(agentRows, offset, limit)
+	} else {
+		agentRows = nil
+	}
+	if wantComputers {
+		computerRows = filterWorkspaceInfoComputers(computerRows, query)
+		computerRows = pageWorkspaceInfoSlice(computerRows, offset, limit)
+	} else {
+		computerRows = nil
+	}
+
 	payload := workspaceInfoPayload{
 		Workspace: ws,
 		Agents:    agentRows,
@@ -682,6 +719,53 @@ func runWorkspaceInfo(cmd *cobra.Command, args []string) error {
 	}
 	printWorkspaceInfoTable(os.Stdout, payload)
 	return nil
+}
+
+func filterWorkspaceInfoAgents(rows []workspaceInfoAgentRow, query string) []workspaceInfoAgentRow {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return rows
+	}
+	out := make([]workspaceInfoAgentRow, 0, len(rows))
+	for _, r := range rows {
+		hay := strings.ToLower(strings.Join([]string{
+			r.Name, r.DisplayName, r.Status, r.RuntimeName, r.RuntimeStatus,
+			r.RuntimeDisplayStatus, r.Error, r.FailureReason, r.ID,
+		}, " "))
+		if strings.Contains(hay, q) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func filterWorkspaceInfoComputers(rows []workspaceInfoComputerRow, query string) []workspaceInfoComputerRow {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return rows
+	}
+	out := make([]workspaceInfoComputerRow, 0, len(rows))
+	for _, r := range rows {
+		hay := strings.ToLower(strings.Join([]string{
+			r.Name, r.DisplayName, r.Provider, r.Status, r.RuntimeHealth,
+			r.CurrentVersion, r.UpdateState, r.DeviceName, r.Error, r.ID,
+		}, " "))
+		if strings.Contains(hay, q) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func pageWorkspaceInfoSlice[T any](rows []T, offset, limit int) []T {
+	if offset >= len(rows) {
+		return []T{}
+	}
+	rows = rows[offset:]
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
 }
 
 type stickyTaskError struct {

@@ -24,10 +24,12 @@ import type {
 import type { ResearchPresenceMap } from "@multica/core/research";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import {
+  AUX_DRAWER_WIDTH_PX,
   CONTROLS_BOTTOM_PX,
   DETAIL_CARD_BOTTOM_PX,
   MINIMAP_HEIGHT_PX,
   MINIMAP_WIDTH_PX,
+  OVERLAY_GAP_PX,
   OVERLAY_INSET_PX,
 } from "../lib/canvas-overlay-grid";
 import type { ChatDrawerMode } from "../lib/chat-drawer-mode";
@@ -537,15 +539,18 @@ function ResearchCanvasInner({
           nodeColor={(n) => (n.type === "gitGutter" ? "transparent" : "var(--brand)")}
         />
       </ReactFlow>
-      {/* LRM-1151: Canvas Dock bottom-center (modules + zoom + detail). */}
+      {/* LRM-1151: Canvas Dock bottom-center; yield left when Aux Drawer open. */}
       <div
-        className="pointer-events-auto absolute z-20"
+        className="pointer-events-none absolute z-20 flex justify-center"
         style={{
-          left: "50%",
+          left: 0,
+          right: auxPanel
+            ? AUX_DRAWER_WIDTH_PX + OVERLAY_GAP_PX
+            : 0,
           bottom: CONTROLS_BOTTOM_PX,
-          transform: "translateX(-50%)",
         }}
         data-testid="research-canvas-controls-slot"
+        data-yield={auxPanel ? "drawer" : "none"}
       >
         <ResearchCanvasDock
           zoomPct={zoomPct}

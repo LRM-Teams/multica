@@ -10,7 +10,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../common/actor-avatar";
@@ -148,13 +148,25 @@ export function VoiceCallPanel({
     })
     : null;
 
-  // Lock body scroll while the fullscreen shell is up.
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  // Native <dialog>.showModal() — focus trap + Escape + top-layer (React Doctor).
+  // jsdom lacks showModal; fall back to the open attribute for unit tests.
   useEffect(() => {
     if (!open || minimized) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const el = dialogRef.current;
+    if (!el) return;
+    if (typeof el.showModal === "function") {
+      if (!el.open) el.showModal();
+    } else {
+      el.setAttribute("open", "");
+    }
     return () => {
-      document.body.style.overflow = prev;
+      if (typeof el.close === "function") {
+        if (el.open) el.close();
+      } else {
+        el.removeAttribute("open");
+      }
     };
   }, [open, minimized]);
 
@@ -192,15 +204,20 @@ export function VoiceCallPanel({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
+    <dialog
+      ref={dialogRef}
       aria-labelledby="voice-call-title"
       data-testid="voice-call-fullscreen"
       className={cn(
-        "fixed inset-0 z-[80] flex flex-col text-white",
+        "fixed inset-0 z-[80] m-0 flex h-dvh max-h-none w-screen max-w-none flex-col border-0 p-0 text-white",
         "bg-[radial-gradient(120%_80%_at_50%_0%,#2a2a2e_0%,#0b0b0c_55%)]",
+        "open:flex [&::backdrop]:bg-black/80",
       )}
+      onCancel={(event) => {
+        // Keep the call alive on Escape — shrink to pip when available.
+        event.preventDefault();
+        if (canMinimize) onMinimize?.();
+      }}
     >
       {canMinimize && (
         <Button
@@ -405,7 +422,7 @@ export function VoiceCallPanel({
           </>
         )}
       </div>
-    </div>
+    </dialog>
   );
 }
 

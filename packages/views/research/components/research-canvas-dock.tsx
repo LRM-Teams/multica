@@ -101,7 +101,7 @@ export function ResearchCanvasDock({
             disabled={disabled}
             onClick={onZoomOut}
           >
-            <ZoomOut className="size-4" />
+            <ZoomOut className="size-4" aria-hidden />
           </button>
           <span className="min-w-9 text-center text-[11px] text-muted-foreground tabular-nums">
             {zoomPct}%
@@ -113,7 +113,7 @@ export function ResearchCanvasDock({
             disabled={disabled}
             onClick={onZoomIn}
           >
-            <ZoomIn className="size-4" />
+            <ZoomIn className="size-4" aria-hidden />
           </button>
           <button
             type="button"
@@ -122,7 +122,7 @@ export function ResearchCanvasDock({
             disabled={disabled}
             onClick={onFit}
           >
-            <Scan className="size-4" />
+            <Scan className="size-4" aria-hidden />
           </button>
         </>
       ) : null}
@@ -143,7 +143,7 @@ export function ResearchCanvasDock({
             disabled={disabled}
             onClick={onToggleDetail}
           >
-            <PanelRight className="size-4" />
+            <PanelRight className="size-4" aria-hidden />
           </button>
         </>
       ) : null}

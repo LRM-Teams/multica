@@ -9,6 +9,7 @@ import {
   runtimeLaunchedBy,
   runtimeTargetVersion,
 } from "@multica/core/runtimes";
+import { isNewerCliVersion } from "@multica/core/runtimes/cli-version";
 import { api, ApiError } from "@multica/core/api";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUpCircle, Loader2 } from "lucide-react";
@@ -129,7 +130,10 @@ export function MachineDaemonUpgrade({
     updateState,
     runtimeHealth,
   });
-  const hasUpdate = runtimeHealth === "update_available" && !!targetVersion;
+  const hasUpdate =
+    runtimeHealth === "update_available" &&
+    !!targetVersion &&
+    isNewerCliVersion(targetVersion, currentVersion);
   // ready_to_apply / completed mid-restart still need progress chrome
   const isApplying =
     derivedStatus === "ready_to_apply" || derivedStatus === "completed";

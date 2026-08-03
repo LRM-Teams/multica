@@ -52,7 +52,7 @@ export const OVERLAY_A11Y_CONTRACT = {
  * LRM-1105 keyboard map freeze (parent LRM-1102).
  * Slice 1 (#1952): pure helpers — hard-gated.
  * Slice 2 (#1968): canvas-keyboard-nav pure module — hard-gated via helpers.
- * Slice 3: Home/End key handlers on research-canvas — still `it.fails`.
+ * Slice 3 (#2010 / LRM-1190): Home/End via resolveCanvasKeyEvent — hard-gated.
  */
 export const CANVAS_KEYBOARD_CONTRACT = {
   ArrowLeft: "main-chain-prev",

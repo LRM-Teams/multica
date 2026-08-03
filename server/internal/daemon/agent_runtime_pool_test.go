@@ -629,7 +629,7 @@ func TestCanonicalRuntimeModeUsesResidentForCanonicalProviders(t *testing.T) {
 		{provider: "pi", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "grok", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "cursor", profile: executionProfileFull, want: canonicalRuntimeResident},
-		{provider: "claude", profile: executionProfileFull, want: canonicalRuntimeOneShot},
+		{provider: "claude", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "codex", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "kiro", profile: executionProfileFull, want: canonicalRuntimeResident},
 		{provider: "opencode", profile: executionProfileFull, want: canonicalRuntimeResident},
@@ -654,7 +654,7 @@ func TestCanonicalRuntimeModeUsesResidentForCanonicalProviders(t *testing.T) {
 }
 
 func TestCanonicalRuntimeDefaultFactoriesMatchProviderMode(t *testing.T) {
-	for _, provider := range []string{"pi", "grok", "cursor", "opencode", "kiro", "codex"} {
+	for _, provider := range []string{"pi", "grok", "cursor", "opencode", "kiro", "codex", "claude"} {
 		factory := defaultCanonicalRuntimeFactory(provider, canonicalRuntimeResident)
 		backend, closeBackend, err := factory(agent.Config{ExecutablePath: "/nonexistent/" + provider})
 		if err != nil {

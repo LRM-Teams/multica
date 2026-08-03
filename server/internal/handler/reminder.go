@@ -69,6 +69,13 @@ func writeReminderMutationError(w http.ResponseWriter, operation string, err err
 	writeError(w, http.StatusInternalServerError, "failed to "+operation+" reminder")
 }
 
+// authorizeNaturalLanguageReminderMutation gates cancel/update/snooze.
+//
+// LRM-1057 / product rule: reminder list/cancel manage only the calling
+// agent's own reminders — there is no create/cancel-for-others scenario.
+// Ownership is already enforced by agent_id scoping on the mutation query
+// path, so the turn's initiator_user_id must not block the owning agent
+// (ambient wakes and different human initiators were getting 403).
 func (h *Handler) authorizeNaturalLanguageReminderMutation(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -76,16 +83,12 @@ func (h *Handler) authorizeNaturalLanguageReminderMutation(
 	source agentTransportSource,
 	reminder agentReminder,
 ) bool {
-	initiatorUserID, ok := h.agentTransportInitiatorUserID(r, source)
-	if !ok {
-		writeError(w, http.StatusForbidden, "reminder mutation requires an attributable workspace member")
-		return false
-	}
-	if reminder.InitiatorUserID.Valid && reminder.InitiatorUserID == initiatorUserID {
-		return true
-	}
-	writeError(w, http.StatusForbidden, "only the reminder initiator may manage this reminder")
-	return false
+	_ = w
+	_ = r
+	_ = tx
+	_ = source
+	_ = reminder
+	return true
 }
 
 type agentReminder struct {

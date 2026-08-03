@@ -314,3 +314,31 @@ describe("aggregateRuntimeHealthPresentation (#687)", () => {
     ).toBe("failed");
   });
 });
+
+describe("runtimeHasHealthAttention — owner gate (task #31)", () => {
+  it("does not light attention for another user's update_available runtime", () => {
+    expect(
+      runtimeHasHealthAttention(
+        makeRuntime({
+          owner_id: "user-other",
+          runtime_health: "update_available",
+          target_version: "0.4.0",
+        }),
+        "user-1",
+      ),
+    ).toBe(false);
+  });
+
+  it("lights attention only when owner_id matches the viewer", () => {
+    expect(
+      runtimeHasHealthAttention(
+        makeRuntime({
+          owner_id: "user-1",
+          runtime_health: "update_available",
+          target_version: "0.4.0",
+        }),
+        "user-1",
+      ),
+    ).toBe(true);
+  });
+});

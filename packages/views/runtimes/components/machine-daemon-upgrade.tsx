@@ -8,8 +8,8 @@ import {
   runtimeCurrentVersion,
   runtimeLaunchedBy,
   runtimeTargetVersion,
+  isNewerCliVersion,
 } from "@multica/core/runtimes";
-import { isNewerCliVersion } from "@multica/core/runtimes/cli-version";
 import { api, ApiError } from "@multica/core/api";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUpCircle, Loader2 } from "lucide-react";

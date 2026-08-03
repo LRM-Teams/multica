@@ -37,7 +37,7 @@ import type {
 } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
 import { formatRuntimeUpdateError } from "./update-error";
-import { isNewerCliVersion } from "@multica/core/runtimes/cli-version";
+import { isNewerCliVersion } from "@multica/core/runtimes";
 
 const MANUAL_UPDATE_COMMANDS = [
   {

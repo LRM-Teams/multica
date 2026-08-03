@@ -54,6 +54,9 @@ func TestEnvDispatchCloneAdapterCreateDerivedAgentUsesUniqueDerivedName(t *testi
 		!strings.Contains(fake.queryRowSQL, "agent.source_agent_id = EXCLUDED.source_agent_id") {
 		t.Fatalf("derived insert must reuse only the same lineage on retry: %s", fake.queryRowSQL)
 	}
+	if strings.Contains(fake.queryRowSQL, "visibility") {
+		t.Fatalf("derived insert references retired agent.visibility: %s", fake.queryRowSQL)
+	}
 }
 
 func TestEnvDispatchBindingExecutionAgentIDPrefersDerivedAgent(t *testing.T) {

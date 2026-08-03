@@ -60,17 +60,55 @@ func (h *Handler) SyncAgentMemoryCenter(w http.ResponseWriter, r *http.Request) 
 	}
 	var runtimeID pgtype.UUID
 	if strings.TrimSpace(req.RuntimeID) != "" {
-		runtimeID = parseUUID(req.RuntimeID)
+		var runtimeOK bool
+		runtimeID, runtimeOK = parseUUIDOrBadRequest(w, strings.TrimSpace(req.RuntimeID), "runtime_id")
+		if !runtimeOK {
+			return
+		}
 	}
 
-	resp := protocol.AgentMemoryCenterSyncResponse{}
+	resp := protocol.AgentMemoryCenterSyncResponse{ProtocolVersion: 2}
 	if h.DB == nil {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
+	seenDeletes := make(map[string]bool)
+	for _, rawIdentity := range req.DeletedIdentityKeys {
+		identity := strings.TrimSpace(rawIdentity)
+		if identity == "" || len(identity) > 256 || seenDeletes[identity] {
+			resp.Skipped++
+			continue
+		}
+		seenDeletes[identity] = true
+		result, err := h.DB.Exec(r.Context(), `
+			UPDATE agent_memory_sync_entry
+			   SET status = 'superseded',
+			       deleted_at = now(),
+			       source_runtime_id = COALESCE($4, source_runtime_id),
+			       metadata = metadata || jsonb_build_object('deleted_by_mutation_id', $5::text),
+			       change_seq = nextval('agent_memory_sync_change_seq'),
+			       seen_at = now(),
+			       updated_at = now()
+			 WHERE workspace_id = $1 AND agent_id = $2 AND identity_key = $3
+			   AND status IN ('active', 'conflict')
+		`, wsUUID, agentID, identity, runtimeID, strings.TrimSpace(req.MutationID))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "delete memory sync entry failed")
+			return
+		}
+		if result.RowsAffected() > 0 {
+			resp.Deleted++
+		} else {
+			resp.Skipped++
+		}
+	}
 	for _, atom := range req.Entries {
 		content := strings.TrimSpace(atom.Content)
 		if content == "" {
+			resp.Skipped++
+			continue
+		}
+		if !memorysync.IsPortableContent(content) {
 			resp.Skipped++
 			continue
 		}
@@ -111,6 +149,16 @@ func (h *Handler) SyncAgentMemoryCenter(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if existing == nil {
+			tombstoned, err := h.hasMemorySyncTombstone(r.Context(), agentID, identity)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "load memory sync tombstone failed")
+				return
+			}
+			if tombstoned {
+				resp.Skipped++
+				resp.TombstonedIdentityKeys = append(resp.TombstonedIdentityKeys, identity)
+				continue
+			}
 			if err := h.insertMemorySyncEntry(r.Context(), wsUUID, agentID, runtimeID, identity, scope, subjectID, kind, topic, relPath, content, hash, memorysync.StatusActive, pgtype.UUID{}); err != nil {
 				writeError(w, http.StatusInternalServerError, "insert memory sync entry failed")
 				return
@@ -138,6 +186,7 @@ func (h *Handler) SyncAgentMemoryCenter(w http.ResponseWriter, r *http.Request) 
 				       rel_path = CASE WHEN $5 <> '' THEN $5 ELSE rel_path END,
 				       source_runtime_id = COALESCE($6, source_runtime_id),
 				       metadata = metadata || jsonb_build_object('last_decision', $7::text, 'previous_content', content),
+				       change_seq = nextval('agent_memory_sync_change_seq'),
 				       seen_at = now(),
 				       updated_at = now()
 				 WHERE id = $1 AND status = 'active'
@@ -202,9 +251,15 @@ func (h *Handler) HydrateAgentMemoryCenter(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "agent not found in workspace")
 		return
 	}
+	if req.Cursor < 0 {
+		writeError(w, http.StatusBadRequest, "cursor must be non-negative")
+		return
+	}
 	resp := protocol.AgentMemoryHydrateResponse{
 		Active:    []protocol.AgentMemoryHydrateEntry{},
 		Conflicts: []protocol.AgentMemoryHydrateEntry{},
+		Deleted:   []protocol.AgentMemoryHydrateEntry{},
+		Cursor:    req.Cursor,
 	}
 	if h.DB == nil {
 		writeJSON(w, http.StatusOK, resp)
@@ -212,11 +267,13 @@ func (h *Handler) HydrateAgentMemoryCenter(w http.ResponseWriter, r *http.Reques
 	}
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT id::text, identity_key, scope, subject_id, kind, topic, rel_path, content, status,
-		       COALESCE(conflict_of::text, '')
+		       COALESCE(conflict_of::text, ''), change_seq, COALESCE(deleted_at::text, '')
 		  FROM agent_memory_sync_entry
-		 WHERE workspace_id = $1 AND agent_id = $2 AND status IN ('active', 'conflict')
-		 ORDER BY status ASC, updated_at ASC, id ASC
-	`, wsUUID, agentID)
+		 WHERE workspace_id = $1 AND agent_id = $2 AND change_seq > $3
+		   AND status IN ('active', 'conflict', 'superseded')
+		 ORDER BY change_seq ASC, id ASC
+		 LIMIT 1000
+	`, wsUUID, agentID, req.Cursor)
 	if err != nil {
 		// Table may not exist yet on partially migrated envs.
 		if strings.Contains(err.Error(), "agent_memory_sync_entry") {
@@ -229,16 +286,25 @@ func (h *Handler) HydrateAgentMemoryCenter(w http.ResponseWriter, r *http.Reques
 	defer rows.Close()
 	for rows.Next() {
 		var item protocol.AgentMemoryHydrateEntry
-		if err := rows.Scan(&item.ID, &item.IdentityKey, &item.Scope, &item.SubjectID, &item.Kind, &item.Topic, &item.RelPath, &item.Content, &item.Status, &item.ConflictOf); err != nil {
+		if err := rows.Scan(&item.ID, &item.IdentityKey, &item.Scope, &item.SubjectID, &item.Kind, &item.Topic, &item.RelPath, &item.Content, &item.Status, &item.ConflictOf, &item.ChangeSeq, &item.DeletedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan memory sync entry failed")
 			return
+		}
+		if item.ChangeSeq > resp.Cursor {
+			resp.Cursor = item.ChangeSeq
 		}
 		switch item.Status {
 		case memorysync.StatusConflict:
 			resp.Conflicts = append(resp.Conflicts, item)
+		case memorysync.StatusSuperseded:
+			resp.Deleted = append(resp.Deleted, item)
 		default:
 			resp.Active = append(resp.Active, item)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "iterate memory sync entries failed")
+		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -262,6 +328,19 @@ func (h *Handler) getActiveMemorySyncEntry(ctx context.Context, agentID pgtype.U
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (h *Handler) hasMemorySyncTombstone(ctx context.Context, agentID pgtype.UUID, identityKey string) (bool, error) {
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			  FROM agent_memory_sync_entry
+			 WHERE agent_id = $1 AND identity_key = $2
+			   AND status = 'superseded' AND deleted_at IS NOT NULL
+		)
+	`, agentID, identityKey).Scan(&exists)
+	return exists, err
 }
 
 func (h *Handler) insertMemorySyncEntry(

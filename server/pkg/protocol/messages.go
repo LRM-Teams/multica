@@ -842,10 +842,12 @@ type AgentMemoryUpdatedPayload struct {
 
 // AgentMemoryCenterSyncReport uploads durable local memory atoms to the center store.
 type AgentMemoryCenterSyncReport struct {
-	AgentID   string                      `json:"agent_id"`
-	RuntimeID string                      `json:"runtime_id,omitempty"`
-	TaskID    string                      `json:"task_id,omitempty"`
-	Entries   []AgentMemoryCenterSyncAtom `json:"entries"`
+	AgentID             string                      `json:"agent_id"`
+	RuntimeID           string                      `json:"runtime_id,omitempty"`
+	TaskID              string                      `json:"task_id,omitempty"`
+	MutationID          string                      `json:"mutation_id,omitempty"`
+	Entries             []AgentMemoryCenterSyncAtom `json:"entries,omitempty"`
+	DeletedIdentityKeys []string                    `json:"deleted_identity_keys,omitempty"`
 }
 
 // AgentMemoryCenterSyncAtom is one durable bullet/fact from a local memory file.
@@ -860,22 +862,28 @@ type AgentMemoryCenterSyncAtom struct {
 
 // AgentMemoryCenterSyncResponse summarizes upsert decisions.
 type AgentMemoryCenterSyncResponse struct {
-	Accepted  int `json:"accepted"`
-	Updated   int `json:"updated"`
-	Conflicts int `json:"conflicts"`
-	Skipped   int `json:"skipped"`
+	ProtocolVersion        int      `json:"protocol_version,omitempty"`
+	Accepted               int      `json:"accepted"`
+	Updated                int      `json:"updated"`
+	Conflicts              int      `json:"conflicts"`
+	Deleted                int      `json:"deleted"`
+	Skipped                int      `json:"skipped"`
+	TombstonedIdentityKeys []string `json:"tombstoned_identity_keys,omitempty"`
 }
 
 // AgentMemoryHydrateRequest asks the center for durable memory to materialize locally.
 type AgentMemoryHydrateRequest struct {
 	AgentID   string `json:"agent_id"`
 	RuntimeID string `json:"runtime_id,omitempty"`
+	Cursor    int64  `json:"cursor,omitempty"`
 }
 
-// AgentMemoryHydrateResponse carries active entries (for files) and conflicts (for REVIEW).
+// AgentMemoryHydrateResponse carries center changes newer than Cursor.
 type AgentMemoryHydrateResponse struct {
 	Active    []AgentMemoryHydrateEntry `json:"active"`
 	Conflicts []AgentMemoryHydrateEntry `json:"conflicts"`
+	Deleted   []AgentMemoryHydrateEntry `json:"deleted,omitempty"`
+	Cursor    int64                     `json:"cursor,omitempty"`
 }
 
 // AgentMemoryHydrateEntry is one center memory row for local materialization.
@@ -890,4 +898,6 @@ type AgentMemoryHydrateEntry struct {
 	Content     string `json:"content"`
 	Status      string `json:"status"`
 	ConflictOf  string `json:"conflict_of,omitempty"`
+	ChangeSeq   int64  `json:"change_seq,omitempty"`
+	DeletedAt   string `json:"deleted_at,omitempty"`
 }

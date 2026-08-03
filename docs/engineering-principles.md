@@ -344,6 +344,13 @@
 | "扫不到"的前提是"知道要扫什么"——负向扫描（0 命中=干净）依赖猜对全部目标形态，而内部 handle 格式**没有固定也不该固定**（agent.id=UUID；`actor_<N>`/`agent_<hex>` 只是泄漏出的历史外观），**枚举格式=给会增长的一侧发清单、必漏**（本行初版正是这么写的，20 分钟后被 Frank 一个问题打掉——见案例）。正确判据=**正向对照**：取该消息自己的原文 `content`/`parts[].id`，断言屏幕/剪贴板显示 display name 且不等于原文内部串——原文是什么格式根本不用知道，"有限的那一侧"是这条消息的原文，不是全世界的 handle 格式。fixture 类断言（handle 由测试作者给定）不受影响（Felix 切分） | ⑤测试（正向对照进 #537/#531 回归模板） | #649 验收近失：Iris 按截图扫 `/actor_\d+/`，实际泄漏体是 `@agent_4fce5ed5`；本行初版开出"双格式枚举"处方=同病复发（Iris 骂完 CJK 终止符枚举 20 分钟后在自己规矩里重写了它），Frank 问"为啥要固定 agent id 格式"当场揭穿；救场判据自始至终是 fiber 正向对照 | ⛔仅文档 owner @iris 自签（Barry 评审口径已同步更新），正向对照断言待 #537/#531 落地成用例 |
 | 台账的诚实性比完整性重要——"看起来有人在做"是最贵的台账状态；意向≠claim，挂名≠在做 | ⑥review 红线 | 同日两例：#531 早晨无主 in_progress（事后发现）；#537 执行人裁定（事前拦：Felix"明早接"明确记为意向不记 claim，直到 Wren 实 claim 才报"有主"） | ⛔仅文档 owner @iris 提出、@parker 执行签 |
 
+### 4.17 跨设备 Memory 以 portable 中心事实 + device-local overlay 同步 — `可执行`（① tombstone/change_seq + ② typed cursor/outbox + ⑤回归；owner: @Kiro ✅）
+- portable USER/RELATIONSHIP/MEMORY/project/channel atom 必须先写本机 `memory-sync-outbox.json`，server ACK 后才能移除 batch；daemon 重启和网络失败不得靠已推进的文件 hash 丢写入。每次 agent turn 前按 `change_seq` cursor 增量 pull，不再用一次性 hydrate marker。
+- 删除是 `superseded + deleted_at` tombstone，离线旧设备自动上行不得复活；active 更新、conflict 和删除都推进单调 change sequence。冲突内容移出正式文件，只进 `REVIEW.md`，不得作为权威规则注入。
+- 绝对本机路径、loopback endpoint、credential-like 内容在 daemon 和 server 双端 fail closed，不进入中心。机器环境事实写 `<agent-root>/devices/<daemon-id>/STATE.md`，通过 `MULTICA_DEVICE_MEMORY_DIR` 暴露。
+- published/bound skill 的跨机事实仍只有 `skill/skill_file/agent_skill`；`skills/enabled` 是可重建镜像，draft/sync_queue/provider-global skill root 不因换机自动搬运。OS/arch/tool capability 需要独立 typed manifest，不从路径猜测。
+- **物**：migration `278_agent_memory_cross_device_sync`；`memory_center_replication.go`；`memorysync.PortabilityReason`；`memory_center_replication_test.go`、`compare_test.go`、runtime memory-scope contract tests；完整产品模型见 `docs/agent-memory-model.md` §8.1。
+
 ---
 
 ### 4.15 Agent 临时协作空间必须保留人类所有权与幂等来源 — `可执行`（①数据库约束 + ③Agent 专用入口 + ⑤合同测试；owner: @Codex）

@@ -83,7 +83,8 @@ type TaskContextForEnv struct {
 	ManagedRole         string // structural platform-managed role; never inferred from display name
 	AgentInstructions   string // agent identity/persona instructions, injected into CLAUDE.md
 	AgentRoot           string // Multica-scoped local root for agent state (PI_AGENT_ROOT), when available
-	AgentMemoryDir      string // Multica-scoped memory root (PI_MEMORY_DIR), when available
+	AgentMemoryDir      string // portable Multica-scoped memory root (PI_MEMORY_DIR), when available
+	DeviceMemoryDir     string // daemon-device-local state root, never replicated as portable memory
 	UserMemoryDir       string // current attested member's isolated memory root
 	ProjectMemoryDir    string // current project's isolated memory root
 	ChannelMemoryDir    string // current channel/DM's isolated context root
@@ -472,7 +473,7 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 func codexWritableRoots(task TaskContextForEnv) []string {
 	roots := []string{}
 	seen := map[string]struct{}{}
-	for _, root := range []string{task.AgentMemoryDir, task.UserMemoryDir, task.ProjectMemoryDir, task.ChannelMemoryDir} {
+	for _, root := range []string{task.AgentMemoryDir, task.DeviceMemoryDir, task.UserMemoryDir, task.ProjectMemoryDir, task.ChannelMemoryDir} {
 		root = strings.TrimSpace(root)
 		if root == "" {
 			continue

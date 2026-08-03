@@ -746,10 +746,13 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			}
 		}
 		if ctx.AgentMemoryDir != "" {
-			fmt.Fprintf(&b, "- Memory root (`MULTICA_AGENT_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
+			fmt.Fprintf(&b, "- Portable memory root (`MULTICA_AGENT_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
 			if provider == "pi" {
 				fmt.Fprintf(&b, "- Pi memory root (`PI_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
 			}
+		}
+		if ctx.DeviceMemoryDir != "" {
+			fmt.Fprintf(&b, "- Device-local state (`MULTICA_DEVICE_MEMORY_DIR`): `%s`\n", ctx.DeviceMemoryDir)
 		}
 		if ctx.UserMemoryDir != "" {
 			fmt.Fprintf(&b, "- Current user memory (`MULTICA_USER_MEMORY_DIR`): `%s`\n", ctx.UserMemoryDir)
@@ -769,7 +772,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 				fmt.Fprintf(&b, "- Pi skill drafts root (`PI_SKILL_DRAFTS_DIR`): `%s`\n", ctx.AgentSkillDraftsDir)
 			}
 		}
-		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Use `MULTICA_AGENT_MEMORY_DIR` / `MULTICA_AGENT_ROOT` for durable memory changes. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
+		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Write portable preferences, decisions, and durable facts under `MULTICA_AGENT_MEMORY_DIR` or the scoped user/project/channel directories. Write absolute paths, installed-tool state, loopback endpoints, ports, and other machine-specific facts under `MULTICA_DEVICE_MEMORY_DIR`; that directory is never replicated as portable center memory. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
 		b.WriteString("### Harness boundary (kernel vs shell)\n\n")
 		b.WriteString("- **Multica kernel (not swappable with the coding harness):** Issue status machine, Goal, channel permissions, group manager, daemon claim/inbox, audit.\n")
 		b.WriteString("- **Execution shell (swappable):** coding harness / provider (Codex, Claude, Pi, …), model choice, research backends.\n")

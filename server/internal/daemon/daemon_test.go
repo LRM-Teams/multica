@@ -1011,7 +1011,6 @@ func TestHandleUpdateForceActivatesWhenBusyAndServerSupportsReadyToApply(t *test
 	waitForClaimBarrierState(t, d, true)
 }
 
-
 func TestWaitForSafeRestartAllowsClaimsBeforeDeadlineThenStopsAndDrains(t *testing.T) {
 	var restartCalls atomic.Int32
 	d := &Daemon{
@@ -2830,12 +2829,13 @@ func TestMulticaAgentEnvUsesProviderNeutralRoot(t *testing.T) {
 
 	workspaceRoot := filepath.Join(t.TempDir(), "multica_workspaces")
 	env := map[string]string{}
-	addMulticaAgentEnv(env, Config{WorkspacesRoot: workspaceRoot}, "workspace-1", "agent-1", "project-1")
+	addMulticaAgentEnv(env, Config{WorkspacesRoot: workspaceRoot, DaemonID: "daemon-1"}, "workspace-1", "agent-1", "project-1")
 
 	agentRoot := filepath.Join(workspaceRoot, "workspace-1", ".multica", "agents", "agent-1")
 	want := map[string]string{
 		"MULTICA_AGENT_ROOT":           agentRoot,
 		"MULTICA_AGENT_MEMORY_DIR":     filepath.Join(agentRoot, "memory"),
+		"MULTICA_DEVICE_MEMORY_DIR":    filepath.Join(agentRoot, "devices", "daemon-1"),
 		"MULTICA_AGENT_NOTES_DIR":      filepath.Join(agentRoot, "notes"),
 		"MULTICA_AGENT_PROFILE_DIR":    filepath.Join(agentRoot, "profile"),
 		"MULTICA_AGENT_FEEDBACK_DIR":   filepath.Join(agentRoot, "feedback"),
@@ -2852,7 +2852,7 @@ func TestMulticaAgentEnvUsesProviderNeutralRoot(t *testing.T) {
 func TestBlockedEnvKeyBlocksPiMemoryOverrides(t *testing.T) {
 	t.Parallel()
 
-	for _, key := range []string{"PI_AGENT_ROOT", "PI_MEMORY_DIR", "PI_SKILL_DRAFTS_DIR", "PI_AGENT_SYNC_QUEUE_DIR", "MULTICA_AGENT_ROOT", "MULTICA_AGENT_MEMORY_DIR", "MULTICA_PROJECT_MEMORY_DIR"} {
+	for _, key := range []string{"PI_AGENT_ROOT", "PI_MEMORY_DIR", "PI_SKILL_DRAFTS_DIR", "PI_AGENT_SYNC_QUEUE_DIR", "MULTICA_AGENT_ROOT", "MULTICA_AGENT_MEMORY_DIR", "MULTICA_DEVICE_MEMORY_DIR", "MULTICA_PROJECT_MEMORY_DIR"} {
 		if !isBlockedEnvKey(key) {
 			t.Fatalf("%s should be blocked from custom_env", key)
 		}

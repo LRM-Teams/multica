@@ -215,32 +215,49 @@ curator 额外读取的 scoped context 最多 12 个文件、约 16 KiB；不会
 - 用户记忆必须带当前成员的稳定 ID，不能读取或写入另一个成员的隔离目录。
 - 不因“大家”“都”“所有人”等集体措辞扩大秘密、敏感信息或成员专属行为。
 
-### 8.1 换机 / 双 runtime：中心同步与冲突（策略 A）
+### 8.1 换机 / 双 runtime：可靠增量同步与冲突（策略 A）
 
-同一 `agent_id` 可在多台机器、多个 runtime 上热写本地文件。平台通过 `agent_memory_sync_entry` 做中心同步：
+同一 `agent_id` 可在多台机器、多个 runtime 上热写本地文件。平台通过本地 outbox/cursor 和 `agent_memory_sync_entry` 做增量同步：
 
 ```text
 本地 durable 文件变更
-  → daemon 上行 bullet（USER / RELATIONSHIP / MEMORY / project / channel）
-  → 中心按 identity_key = scope[+subject]+kind+topic 判定
-  → 新机首次跑该 agent：hydrate active 进正式文件；conflict 只进 REVIEW.md
+  → 先原子写 `.multica/memory-sync-outbox.json`
+  → daemon 幂等上行 portable bullet / tombstone
+  → 中心以 change_seq 排序并按 identity_key 判定
+  → 每次任务前 pull cursor 之后的增量
+  → active 投影进正式文件；conflict 只进 REVIEW.md；tombstone 删除旧投影
 ```
+
+本地 `.multica/memory-sync-state.json` 保存 pull cursor、已观察的本地 atom 和中心 active 投影。只有 server ACK 后 outbox batch 才删除；网络失败或 daemon 重启不会丢写入。删除通过 `status=superseded + deleted_at` 传播，离线旧设备不能自动复活 tombstone。
 
 判定：
 
 | 情况 | 行为 |
 |---|---|
 | 同 key、内容相同 | 忽略（更新 seen_at） |
-| 同 key、新内容更具体 | 更新 active |
-| 同 key、语义对立或分歧 | **保留先到的 active**；对立内容写入 `status=conflict`，并在 hydrate 时进入 `REVIEW.md` |
+| 同 key、新内容更具体 | 更新 active 并推进 `change_seq` |
+| 同 key、语义对立或分歧 | **保留先到的 active**；对立内容写入 `status=conflict`，pull 时移出正式文件并进入 `REVIEW.md` |
+| portable 内容被删除 | 写 tombstone；其他设备增量 pull 后删除对应本地投影 |
 | Daily / REVIEW 原文 | 不上行中心（Daily 仍是本地流水；REVIEW 是冲突出口） |
+| 绝对路径、loopback、credential-like 内容 | 留在本机；中心双端拒绝 |
+
+每台 daemon 的环境事实写入：
+
+```text
+<agent-root>/devices/<daemon-id>/STATE.md
+```
+
+运行时通过 `MULTICA_DEVICE_MEMORY_DIR` 暴露该目录。绝对路径、安装工具、端口、localhost 服务和其他机器特定状态写这里，不写 portable USER/MEMORY/project/channel 文件。
 
 硬规则：
 
 1. 机器 / runtime 只做 provenance，不当优先级（禁止纯 last-write-wins）。
 2. `conflict` 条目**不作为权威记忆注入**执行上下文。
 3. 用户本轮明确新指令仍可覆盖历史；裁决后可将旧条标为 superseded（后续自审/人工）。
-4. hydrate 是并集补齐，不是整文件覆盖；已有本地 bullet 不重复追加。
+4. pull 是增量并集投影，不是整文件覆盖；已有本地 bullet 不重复追加。
+5. 本地 atom 索引必须在 outbox 落盘后才能推进；server ACK 前不得清队列。
+6. 删除必须保留 tombstone，不能用“某台机器没看到文件”直接删除其他设备内容。
+7. 删除 batch 只有在 server 返回 `protocol_version >= 2` 时才能 ACK；旧 server 忽略新字段时必须保留 outbox 等待升级。
 
 ## 9. 记忆互联 Wiki + 显式边（LRM-1000）
 

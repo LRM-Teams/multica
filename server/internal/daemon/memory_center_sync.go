@@ -2,25 +2,17 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/multica-ai/multica/server/internal/memorysync"
 )
 
-const memoryHydrateMarkerRel = ".multica/memory-hydrate.json"
-
-type memoryHydrateMarker struct {
-	HydratedAt string `json:"hydrated_at"`
-	AgentID    string `json:"agent_id"`
-}
-
-// syncAgentMemoryCenter uploads durable memory bullets after local file changes.
-func (d *Daemon) syncAgentMemoryCenter(ctx context.Context, task Task, changes []memoryWriteChange) {
-	if d == nil || d.client == nil || len(changes) == 0 {
+// syncAgentMemoryCenter reconciles the complete portable atom projection after
+// local memory files changed. The durable outbox makes network failure safe.
+func (d *Daemon) syncAgentMemoryCenter(ctx context.Context, task Task, _ []memoryWriteChange) {
+	if d == nil {
 		return
 	}
 	workspaceID := strings.TrimSpace(task.WorkspaceID)
@@ -29,67 +21,20 @@ func (d *Daemon) syncAgentMemoryCenter(ctx context.Context, task Task, changes [
 		return
 	}
 	agentRoot := multicaAgentRoot(d.cfg, workspaceID, agentID)
-	atoms := make([]AgentMemoryCenterSyncAtom, 0)
-	seenFiles := map[string]bool{}
-	for _, ch := range changes {
-		rel := filepath.ToSlash(ch.RelPath)
-		if !memorysync.IsDurableRelPath(rel) || seenFiles[rel] {
-			continue
-		}
-		seenFiles[rel] = true
-		data, err := os.ReadFile(filepath.Join(agentRoot, filepath.FromSlash(rel)))
-		if err != nil {
-			continue
-		}
-		for _, entry := range memorysync.EntriesFromFile(rel, string(data)) {
-			atoms = append(atoms, AgentMemoryCenterSyncAtom{
-				RelPath:   entry.RelPath,
-				Scope:     entry.Scope,
-				SubjectID: entry.SubjectID,
-				Kind:      entry.Kind,
-				Topic:     entry.Topic,
-				Content:   entry.Content,
-			})
-		}
+	if err := d.reconcileAgentMemoryCenter(ctx, workspaceID, agentID, task.RuntimeID, task.ID, agentRoot); err != nil {
+		d.logger.Warn("memory center sync deferred", "agent_id", agentID, "runtime_id", task.RuntimeID, "error", err)
 	}
-	if len(atoms) == 0 {
-		return
-	}
-	_ = d.client.SyncAgentMemoryCenter(ctx, AgentMemoryCenterSyncReport{
-		AgentID:   agentID,
-		RuntimeID: task.RuntimeID,
-		TaskID:    task.ID,
-		Entries:   atoms,
-	})
 }
 
-// hydrateAgentMemoryCenter materializes center active entries into local files
-// and conflicts into REVIEW.md. Runs once per agent root until marker exists.
+// hydrateAgentMemoryCenter performs one incremental push/pull round before a
+// turn. The persisted cursor replaces the old one-shot hydrate marker.
 func (d *Daemon) hydrateAgentMemoryCenter(ctx context.Context, workspaceID, agentID, runtimeID, agentRoot string) {
-	if d == nil || d.client == nil {
+	if d == nil {
 		return
 	}
-	workspaceID = strings.TrimSpace(workspaceID)
-	agentID = strings.TrimSpace(agentID)
-	agentRoot = strings.TrimSpace(agentRoot)
-	if workspaceID == "" || agentID == "" || agentRoot == "" {
-		return
+	if err := d.reconcileAgentMemoryCenter(ctx, workspaceID, agentID, runtimeID, "", agentRoot); err != nil {
+		d.logger.Warn("memory center hydrate deferred", "agent_id", agentID, "runtime_id", runtimeID, "error", err)
 	}
-	markerPath := filepath.Join(agentRoot, filepath.FromSlash(memoryHydrateMarkerRel))
-	if _, err := os.Stat(markerPath); err == nil {
-		return
-	}
-	resp, err := d.client.HydrateAgentMemoryCenter(ctx, AgentMemoryHydrateRequest{
-		AgentID:   agentID,
-		RuntimeID: runtimeID,
-	})
-	if err != nil {
-		return
-	}
-	if err := materializeHydrateEntries(agentRoot, resp); err != nil {
-		return
-	}
-	_ = writeMemoryHydrateMarker(markerPath, agentID)
 }
 
 func materializeHydrateEntries(agentRoot string, resp AgentMemoryHydrateResponse) error {
@@ -204,20 +149,6 @@ func renderConflictReviewBlock(conflicts []AgentMemoryHydrateEntry) string {
 	return b.String()
 }
 
-func writeMemoryHydrateMarker(path, agentID string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	payload, err := json.Marshal(memoryHydrateMarker{
-		HydratedAt: time.Now().UTC().Format(time.RFC3339),
-		AgentID:    agentID,
-	})
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, payload, 0o644)
-}
-
 // AgentMemoryCenterSyncAtom mirrors protocol for the daemon client.
 type AgentMemoryCenterSyncAtom struct {
 	RelPath   string `json:"rel_path"`
@@ -230,16 +161,29 @@ type AgentMemoryCenterSyncAtom struct {
 
 // AgentMemoryCenterSyncReport mirrors protocol for the daemon client.
 type AgentMemoryCenterSyncReport struct {
-	AgentID   string                      `json:"agent_id"`
-	RuntimeID string                      `json:"runtime_id,omitempty"`
-	TaskID    string                      `json:"task_id,omitempty"`
-	Entries   []AgentMemoryCenterSyncAtom `json:"entries"`
+	AgentID             string                      `json:"agent_id"`
+	RuntimeID           string                      `json:"runtime_id,omitempty"`
+	TaskID              string                      `json:"task_id,omitempty"`
+	MutationID          string                      `json:"mutation_id,omitempty"`
+	Entries             []AgentMemoryCenterSyncAtom `json:"entries,omitempty"`
+	DeletedIdentityKeys []string                    `json:"deleted_identity_keys,omitempty"`
+}
+
+type AgentMemoryCenterSyncResponse struct {
+	ProtocolVersion        int      `json:"protocol_version,omitempty"`
+	Accepted               int      `json:"accepted"`
+	Updated                int      `json:"updated"`
+	Conflicts              int      `json:"conflicts"`
+	Deleted                int      `json:"deleted"`
+	Skipped                int      `json:"skipped"`
+	TombstonedIdentityKeys []string `json:"tombstoned_identity_keys,omitempty"`
 }
 
 // AgentMemoryHydrateRequest mirrors protocol for the daemon client.
 type AgentMemoryHydrateRequest struct {
 	AgentID   string `json:"agent_id"`
 	RuntimeID string `json:"runtime_id,omitempty"`
+	Cursor    int64  `json:"cursor,omitempty"`
 }
 
 // AgentMemoryHydrateEntry mirrors protocol for the daemon client.
@@ -254,10 +198,14 @@ type AgentMemoryHydrateEntry struct {
 	Content     string `json:"content"`
 	Status      string `json:"status"`
 	ConflictOf  string `json:"conflict_of,omitempty"`
+	ChangeSeq   int64  `json:"change_seq,omitempty"`
+	DeletedAt   string `json:"deleted_at,omitempty"`
 }
 
 // AgentMemoryHydrateResponse mirrors protocol for the daemon client.
 type AgentMemoryHydrateResponse struct {
 	Active    []AgentMemoryHydrateEntry `json:"active"`
 	Conflicts []AgentMemoryHydrateEntry `json:"conflicts"`
+	Deleted   []AgentMemoryHydrateEntry `json:"deleted,omitempty"`
+	Cursor    int64                     `json:"cursor,omitempty"`
 }

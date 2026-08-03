@@ -52,3 +52,26 @@ func TestIsDurableRelPath(t *testing.T) {
 		t.Fatal("REVIEW should not be durable center sync")
 	}
 }
+
+func TestPortabilityReason(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "portable preference", content: "长任务开始前先反馈进度", want: ""},
+		{name: "portable repository URL", content: "Repository is https://github.com/LRM-Teams/multica", want: ""},
+		{name: "linux home path", content: "Use /home/alice/work/multica on this machine", want: "absolute_local_path"},
+		{name: "mac home path", content: "Checkout lives at /Users/alice/src/multica", want: "absolute_local_path"},
+		{name: "windows path", content: `Checkout lives at C:\\Users\\alice\\src`, want: "absolute_local_path"},
+		{name: "loopback", content: "Backend is http://localhost:8080", want: "loopback_endpoint"},
+		{name: "credential", content: "api_key=sk-example-secret-value", want: "credential_like"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PortabilityReason(tt.content); got != tt.want {
+				t.Fatalf("PortabilityReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

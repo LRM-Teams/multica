@@ -38,6 +38,7 @@ func StartupStaticContext(ctx TaskContextForEnv) TaskContextForEnv {
 		// Multica-owned agent roots (durable, not user CWD)
 		AgentRoot:           strings.TrimSpace(ctx.AgentRoot),
 		AgentMemoryDir:      strings.TrimSpace(ctx.AgentMemoryDir),
+		DeviceMemoryDir:     strings.TrimSpace(ctx.DeviceMemoryDir),
 		AgentSkillDir:       strings.TrimSpace(ctx.AgentSkillDir),
 		AgentSkillDraftsDir: strings.TrimSpace(ctx.AgentSkillDraftsDir),
 		AgentSkills:         skills,

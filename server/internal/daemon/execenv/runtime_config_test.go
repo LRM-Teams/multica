@@ -1131,6 +1131,7 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 		ChatSessionID:       "chat-1",
 		AgentRoot:           "/tmp/multica/workspace-1/.multica/agents/agent-1",
 		AgentMemoryDir:      "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
+		DeviceMemoryDir:     "/tmp/multica/workspace-1/.multica/agents/agent-1/devices/daemon-1",
 		AgentSkillDir:       "/tmp/multica/workspace-1/.multica/agents/agent-1/skills",
 		AgentSkillDraftsDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/skills/drafts",
 	}
@@ -1140,11 +1141,13 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 		"## Multica Agent Memory Scope",
 		"Agent root (`MULTICA_AGENT_ROOT`): `/tmp/multica/workspace-1/.multica/agents/agent-1`",
 		"Pi agent root (`PI_AGENT_ROOT`): `/tmp/multica/workspace-1/.multica/agents/agent-1`",
-		"Memory root (`MULTICA_AGENT_MEMORY_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/memory`",
+		"Portable memory root (`MULTICA_AGENT_MEMORY_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/memory`",
+		"Device-local state (`MULTICA_DEVICE_MEMORY_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/devices/daemon-1`",
 		"Pi memory root (`PI_MEMORY_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/memory`",
 		"Skill root: `/tmp/multica/workspace-1/.multica/agents/agent-1/skills`",
 		"Pi skill drafts root (`PI_SKILL_DRAFTS_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/skills/drafts`",
 		"report these Multica agent paths, not host-global runtime paths",
+		"Write absolute paths, installed-tool state, loopback endpoints, ports, and other machine-specific facts under `MULTICA_DEVICE_MEMORY_DIR`",
 		"Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`",
 		"### Harness boundary (kernel vs shell)",
 		"Multica kernel (not swappable with the coding harness)",
@@ -1313,7 +1316,7 @@ func TestMulticaMemoryScopeRenderedForNonPiProvider(t *testing.T) {
 	for _, want := range []string{
 		"## Multica Agent Memory Scope",
 		"Agent root (`MULTICA_AGENT_ROOT`): `/tmp/multica/workspace-1/.multica/agents/agent-1`",
-		"Memory root (`MULTICA_AGENT_MEMORY_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/memory`",
+		"Portable memory root (`MULTICA_AGENT_MEMORY_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/memory`",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Codex memory scope missing %q\n%s", want, out)

@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
@@ -30,6 +31,42 @@ function layerChipClass(layer: SourceStrategyChip["layer"]) {
     : "border-[color:color-mix(in_oklab,var(--source-domain)_35%,transparent)] bg-[color:color-mix(in_oklab,var(--source-domain)_12%,transparent)] text-[color:var(--source-domain)]";
 }
 
+/**
+ * Persistent shell (LRM-1201) — same contract as HumanBoundaryCard: the root and
+ * the polite live region must not be replaced when the mode flips.
+ */
+function StripShell({
+  mode,
+  shell,
+  title,
+  hint,
+  liveText,
+  children,
+}: {
+  mode: "ready" | "loading" | "empty" | "error";
+  shell: string;
+  title: string;
+  hint: string;
+  liveText: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      data-testid="source-strategy-strip"
+      role={mode === "error" ? "alert" : undefined}
+      aria-busy={mode === "loading"}
+      className={shell}
+    >
+      <StripHeader title={title} hint={hint} />
+      {/* Silent in error mode — role=alert already carries that text. */}
+      <p data-testid="source-strategy-live" className="sr-only" aria-live="polite">
+        {liveText}
+      </p>
+      {children}
+    </div>
+  );
+}
+
 export function SourceStrategyStrip({
   model,
   sessionStatus,
@@ -52,99 +89,88 @@ export function SourceStrategyStrip({
     className,
   );
 
+  const title = t(($) => $.m2.strategy_label);
+  const hint = t(($) => $.m2.strategy_hint);
+  const liveText =
+    mode === "loading"
+      ? t(($) => $.m2.strategy_loading)
+      : mode === "ready"
+        ? t(($) => $.m2.strategy_ready_live)
+        : mode === "empty"
+          ? t(($) => $.m2.strategy_empty_title)
+          : "";
+
+  const frame = (children: ReactNode) => (
+    <StripShell
+      mode={mode}
+      shell={shell}
+      title={title}
+      hint={hint}
+      liveText={liveText}
+    >
+      {children}
+    </StripShell>
+  );
+
   if (mode === "error") {
-    return (
+    return frame(
       <div
-        data-testid="source-strategy-strip"
-        role="alert"
-        className={shell}
+        data-testid="source-strategy-error"
+        className="flex flex-col items-start gap-2 py-2"
       >
-        <StripHeader
-          title={t(($) => $.m2.strategy_label)}
-          hint={t(($) => $.m2.strategy_hint)}
-        />
-        <div
-          data-testid="source-strategy-error"
-          className="flex flex-col items-start gap-2 py-2"
-        >
-          <AlertCircle className="size-4 text-destructive" aria-hidden />
-          <p className="text-sm text-destructive">
-            {error || t(($) => $.m2.strategy_error)}
-          </p>
-          {onRetry ? (
-            <Button type="button" variant="outline" size="sm" onClick={onRetry}>
-              {t(($) => $.session_page.retry)}
-            </Button>
-          ) : null}
-        </div>
-      </div>
+        <AlertCircle className="size-4 text-destructive" aria-hidden />
+        <p className="text-sm text-destructive">
+          {error || t(($) => $.m2.strategy_error)}
+        </p>
+        {onRetry ? (
+          <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+            {t(($) => $.session_page.retry)}
+          </Button>
+        ) : null}
+      </div>,
     );
   }
 
   if (mode === "loading") {
-    return (
-      <div
-        data-testid="source-strategy-strip"
-        className={shell}
-        aria-busy
-        aria-live="polite"
-      >
-        <StripHeader
-          title={t(($) => $.m2.strategy_label)}
-          hint={t(($) => $.m2.strategy_hint)}
-        />
-        <div
-          data-testid="source-strategy-loading"
-          className="flex flex-col gap-2"
-        >
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />
-            <span>{t(($) => $.m2.strategy_loading)}</span>
-          </div>
-          {/* LRM-1109: md (768) matches useIsMobile — avoid 3-col beside logic-strip. */}
-          <div className="grid gap-2 md:grid-cols-3">
-            {[0, 1, 2].map((i) => (
-              <div
-                key={i}
-                className="animate-pulse rounded-xl border border-border/50 bg-card/70 p-3"
-                style={{ animationDelay: `${i * 80}ms` }}
-              >
-                <div className="mb-2 h-3 w-[40%] rounded bg-muted/70" />
-                <div className="mb-1.5 h-2.5 w-full rounded bg-muted/50" />
-                <div className="h-2.5 w-[70%] rounded bg-muted/40" />
-              </div>
-            ))}
-          </div>
+    return frame(
+      <div data-testid="source-strategy-loading" className="flex flex-col gap-2">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />
+          <span>{t(($) => $.m2.strategy_loading)}</span>
         </div>
-      </div>
+        {/* LRM-1109: md (768) matches useIsMobile — avoid 3-col beside logic-strip. */}
+        <div className="grid gap-2 md:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="animate-pulse rounded-xl border border-border/50 bg-card/70 p-3"
+              style={{ animationDelay: `${i * 80}ms` }}
+            >
+              <div className="mb-2 h-3 w-[40%] rounded bg-muted/70" />
+              <div className="mb-1.5 h-2.5 w-full rounded bg-muted/50" />
+              <div className="h-2.5 w-[70%] rounded bg-muted/40" />
+            </div>
+          ))}
+        </div>
+      </div>,
     );
   }
 
   if (mode === "empty") {
-    return (
-      <div data-testid="source-strategy-strip" className={shell}>
-        <StripHeader
-          title={t(($) => $.m2.strategy_label)}
-          hint={t(($) => $.m2.strategy_hint)}
-        />
-        <div data-testid="source-strategy-empty" className="flex flex-col gap-1 py-1">
-          <p className="text-sm font-medium text-foreground">
-            {t(($) => $.m2.strategy_empty_title)}
-          </p>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {t(($) => $.m2.strategy_empty_body)}
-          </p>
-        </div>
-      </div>
+    return frame(
+      <div data-testid="source-strategy-empty" className="flex flex-col gap-1 py-1">
+        <p className="text-sm font-medium text-foreground">
+          {t(($) => $.m2.strategy_empty_title)}
+        </p>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {t(($) => $.m2.strategy_empty_body)}
+        </p>
+      </div>,
     );
   }
 
-  return (
-    <div data-testid="source-strategy-strip" className={shell}>
-      <StripHeader
-        title={t(($) => $.m2.strategy_label)}
-        hint={t(($) => $.m2.strategy_hint)}
-      />
+  return frame(
+    <>
       {model.whyLine ? (
         <p className="mb-2 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
           <span className="text-foreground/80">{t(($) => $.m2.why_label)} </span>
@@ -212,6 +238,6 @@ export function SourceStrategyStrip({
           </article>
         ))}
       </div>
-    </div>
+    </>,
   );
 }

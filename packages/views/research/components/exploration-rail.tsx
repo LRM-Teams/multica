@@ -5,7 +5,11 @@ import { AlertCircle, ChevronDown, Loader2 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
-import type { ExplorationDimension, DimensionStatus } from "../lib/m2-visibility";
+import type {
+  ExplorationDimension,
+  ExplorationRailMode,
+  DimensionStatus,
+} from "../lib/m2-visibility";
 import { resolveExplorationRailMode } from "../lib/m2-visibility";
 
 const statusDot: Record<DimensionStatus, string> = {
@@ -48,21 +52,35 @@ function RailHeader({
 function RailShell({
   className,
   labelledBy,
+  mode,
+  liveText,
   children,
 }: {
   className?: string;
   labelledBy: string;
+  /** LRM-1201: busy flag + polite region must persist across mode swaps. */
+  mode: ExplorationRailMode;
+  liveText: string;
   children: ReactNode;
 }) {
   return (
     <aside
       data-testid="exploration-rail"
       aria-labelledby={labelledBy}
+      aria-busy={mode === "loading"}
       className={cn(
         "relative z-[1] flex w-[300px] shrink-0 flex-col overflow-hidden border-r border-border/55 bg-background/55 backdrop-blur-sm",
         className,
       )}
     >
+      {/* Stays empty in error mode — that text already sits in role=alert. */}
+      <p
+        data-testid="exploration-rail-live"
+        className="sr-only"
+        aria-live="polite"
+      >
+        {liveText}
+      </p>
       {children}
     </aside>
   );
@@ -96,10 +114,23 @@ export function ExplorationRail({
   const mode = resolveExplorationRailMode(dimensions, sessionStatus, error);
   const title = t(($) => $.m2.rail_title);
   const hint = t(($) => $.m2.rail_hint);
+  const liveText =
+    mode === "loading"
+      ? t(($) => $.m2.rail_loading)
+      : mode === "ready"
+        ? t(($) => $.m2.rail_ready_live)
+        : mode === "empty"
+          ? t(($) => $.m2.rail_empty_title)
+          : "";
 
   if (mode === "error") {
     return (
-      <RailShell className={className} labelledBy={titleId}>
+      <RailShell
+        className={className}
+        labelledBy={titleId}
+        mode={mode}
+        liveText={liveText}
+      >
         <RailHeader title={title} hint={hint} titleId={titleId} />
         <div
           role="alert"
@@ -122,13 +153,16 @@ export function ExplorationRail({
 
   if (mode === "loading") {
     return (
-      <RailShell className={className} labelledBy={titleId}>
+      <RailShell
+        className={className}
+        labelledBy={titleId}
+        mode={mode}
+        liveText={liveText}
+      >
         <RailHeader title={title} hint={hint} titleId={titleId} />
         <div
           data-testid="exploration-rail-loading"
           className="flex flex-1 flex-col gap-2 p-2"
-          aria-busy
-          aria-live="polite"
         >
           <div className="mb-1 flex items-center gap-2 px-1.5 py-1 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />
@@ -152,7 +186,12 @@ export function ExplorationRail({
 
   if (mode === "empty") {
     return (
-      <RailShell className={className} labelledBy={titleId}>
+      <RailShell
+        className={className}
+        labelledBy={titleId}
+        mode={mode}
+        liveText={liveText}
+      >
         <RailHeader title={title} hint={hint} titleId={titleId} />
         <div
           data-testid="exploration-rail-empty"
@@ -170,7 +209,12 @@ export function ExplorationRail({
   }
 
   return (
-    <RailShell className={className} labelledBy={titleId}>
+    <RailShell
+        className={className}
+        labelledBy={titleId}
+        mode={mode}
+        liveText={liveText}
+      >
       <RailHeader title={title} hint={hint} titleId={titleId} />
       <div
         data-testid="exploration-rail-cards"

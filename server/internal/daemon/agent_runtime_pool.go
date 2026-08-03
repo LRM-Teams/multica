@@ -350,6 +350,9 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 	// slot.mu (reserve/count take p.mu then slot.mu — reverse order deadlocks).
 	publishLiveAfterUnlock := false
 	clearReservationAfterUnlock := false
+	// closedLiveForRecreate: configDrift (or similar) closed a live backend under
+	// this lock. If recreate fails we must wake capacity waiters after unlock.
+	closedLiveForRecreate := false
 	reservationAgentID := request.Identity.AgentID
 	defer func() {
 		slot.mu.Unlock()
@@ -358,6 +361,9 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 		}
 		if publishLiveAfterUnlock {
 			p.publishLiveAgentProcessCount()
+		} else if closedLiveForRecreate {
+			// Failed to re-attach after closing live process — free the cap slot.
+			p.signalAgentProcessCapacityFreed()
 		}
 	}()
 	if slot.running {
@@ -369,6 +375,9 @@ func (p *canonicalAgentRuntimePool) acquire(request canonicalAgentRuntimeAcquire
 	configDrift := slot.fingerprint != "" &&
 		(slot.fingerprint != fingerprint || slot.mode != request.Mode)
 	if configDrift {
+		if slot.backend != nil {
+			closedLiveForRecreate = true
+		}
 		slot.closeBackend()
 	}
 	prevFingerprint := slot.fingerprint

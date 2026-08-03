@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -263,3 +264,42 @@ func (p *canonicalAgentRuntimePool) agentHasLiveForTest(agentID string) bool {
 
 // silence unused import if agent not referenced
 var _ agent.Backend
+
+// configDrift closes live backend then create fails → live count drops and
+// capacity is freed so another agent can acquire (Alice #1923 nit).
+func TestAgentProcessCapConfigDriftCreateFailFreesCapacity(t *testing.T) {
+	pool := newCanonicalAgentRuntimePool()
+	pool.setMaxAgentProcesses(1)
+	probe := &canonicalRuntimeFactoryProbe{}
+
+	l1 := acquireResident(t, pool, probe, "agent-a", "rt", nil)
+	l1.release(true)
+	if got := pool.countLiveAgentsForTest(); got != 1 {
+		t.Fatalf("live=%d want 1", got)
+	}
+
+	failFactory := func(_ agent.Config) (agent.Backend, func(), error) {
+		return nil, nil, errors.New("boom create")
+	}
+	id := identityForAgent(t, "agent-a", "rt")
+	id.Model = "model-drifted"
+	_, err := pool.acquire(canonicalAgentRuntimeAcquireRequest{
+		Identity: id,
+		Mode:     canonicalRuntimeResident,
+		Factory:  failFactory,
+		Context:  context.Background(),
+	})
+	if err == nil {
+		t.Fatal("expected create failure after drift")
+	}
+	if got := pool.countLiveAgentsForTest(); got != 0 {
+		t.Fatalf("after drift-fail live=%d want 0 (capacity must free)", got)
+	}
+
+	// Cap free: a different agent can acquire immediately.
+	l2 := acquireResident(t, pool, probe, "agent-b", "rt", nil)
+	l2.release(true)
+	if got := pool.countLiveAgentsForTest(); got != 1 {
+		t.Fatalf("agent-b live=%d want 1", got)
+	}
+}

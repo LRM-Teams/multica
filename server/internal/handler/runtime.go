@@ -70,6 +70,10 @@ type AgentRuntimeResponse struct {
 	// daemon_id).
 	ComputerConnected bool    `json:"computer_connected"`
 	DaemonLastSeenAt  *string `json:"daemon_last_seen_at"`
+	// OfflineReason is the last recorded leave reason when Status is offline
+	// (e.g. daemon_deregistered). Empty when online or never set. Distinguishes
+	// "daemon not connected — start on the machine" from "no update available".
+	OfflineReason *string `json:"offline_reason,omitempty"`
 	// PinnedVersion (task #81) is non-nil when the daemon's
 	// MULTICA_PINNED_VERSION reported this machine as pinned. This only
 	// reflects the daemon's local intent — the server does not yet enforce
@@ -239,11 +243,18 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 	metadata := runtimeMetadata(rt)
 	currentVersion := runtimeCurrentVersion(metadata)
 	targetVersion, updateState := runtimeUpdateState(update, currentVersion)
+	targetVersion, updateState, stagedWaiting := applyAutoUpdateRestartWindow(autoUpdate, currentVersion, targetVersion, updateState)
 	now := time.Now()
 	availableUpdateTarget := runtimeAvailableUpdateTarget(rt, metadata, currentVersion, targetVersion, updateState, release, now)
 	runtimeHealth := deriveRuntimeHealth(rt, currentVersion, targetVersion, updateState, availableUpdateTarget, now)
 	if runtimeHealth == "update_available" && availableUpdateTarget != nil {
 		targetVersion = availableUpdateTarget
+	}
+	updateError := runtimeUpdateError(update, currentVersion, updateState)
+	if stagedWaiting && updateError == nil {
+		// Stable code for FE i18n: staged binary waiting for daemon reconnect/switch.
+		msg := "update_staged_waiting_restart"
+		updateError = &msg
 	}
 	return AgentRuntimeResponse{
 		ID:                   uuidToString(rt.ID),
@@ -264,7 +275,7 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		TargetVersion:        targetVersion,
 		UpdateState:          updateState,
 		RuntimeHealth:        runtimeHealth,
-		UpdateError:          runtimeUpdateError(update, currentVersion, updateState),
+		UpdateError:          updateError,
 		AutoUpdate:           autoUpdate,
 		OwnerID:              uuidToPtr(rt.OwnerID),
 		Visibility:           rt.Visibility,
@@ -272,6 +283,7 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		CreatedAt:            timestampToString(rt.CreatedAt),
 		UpdatedAt:            timestampToString(rt.UpdatedAt),
 		PinnedVersion:        nullableTextPtr(rt.PinnedVersion),
+		OfflineReason:        nullableTextPtr(rt.OfflineReason),
 	}
 }
 
@@ -381,6 +393,48 @@ func runtimeUpdateError(update *UpdateRequest, currentVersion *string, updateSta
 		return &reason
 	}
 	return nil
+}
+
+// applyAutoUpdateRestartWindow folds daemon observation (phase restart_pending /
+// last_outcome update_succeeded with a staged target) into the per-runtime
+// update projection so the Computer page does not show a bare old version while
+// a staged binary waits for reconnect/switch (Frank upgrade-UX #1, 2026-08-03).
+// Returns stagedWaiting=true when callers should attach a durable waiting code.
+func applyAutoUpdateRestartWindow(
+	autoUpdate *DaemonUpdateStatusResponse,
+	currentVersion, targetVersion *string,
+	updateState string,
+) (*string, string, bool) {
+	if autoUpdate == nil {
+		return targetVersion, updateState, false
+	}
+	obsTarget := autoUpdate.TargetVersion
+	if obsTarget == nil || strings.TrimSpace(*obsTarget) == "" {
+		obsTarget = autoUpdate.StagedVersion
+	}
+	if obsTarget == nil || strings.TrimSpace(*obsTarget) == "" {
+		return targetVersion, updateState, false
+	}
+	if runtimeVersionAtLeastTarget(currentVersion, obsTarget) {
+		return targetVersion, updateState, false
+	}
+	phase := strings.TrimSpace(autoUpdate.Phase)
+	outcome := strings.TrimSpace(autoUpdate.LastOutcome)
+	waiting := phase == "restart_pending" || outcome == "update_succeeded"
+	if !waiting {
+		return targetVersion, updateState, false
+	}
+	// Prefer observation target when the per-runtime row is idle/missing.
+	switch updateState {
+	case "idle", "completed":
+		updateState = "ready_to_apply"
+		targetVersion = obsTarget
+	case "ready_to_apply", "pending", "running", "failed", "timed_out":
+		if targetVersion == nil || strings.TrimSpace(*targetVersion) == "" {
+			targetVersion = obsTarget
+		}
+	}
+	return targetVersion, updateState, waiting && (updateState == "ready_to_apply" || phase == "restart_pending")
 }
 
 func runtimeShouldFetchLatestRelease(rt db.AgentRuntime, metadata any, currentVersion, targetVersion *string, updateState string, now time.Time) bool {

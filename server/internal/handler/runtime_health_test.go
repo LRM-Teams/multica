@@ -335,3 +335,80 @@ func runtimeHealthTestRuntimeWithMode(t *testing.T, mode string, metadata map[st
 		Visibility:  "private",
 	}
 }
+
+func TestRuntimeToResponseRestartPendingSurfacesStagedWaitingMessage(t *testing.T) {
+	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "v0.3.99"})
+	// Offline after staged restart — must not hide the staged window behind a bare old version.
+	rt.Status = "offline"
+	rt.LastSeenAt = pgtype.Timestamptz{}
+	target := "v0.4.0"
+	obs := &DaemonUpdateStatusResponse{
+		Phase:         "restart_pending",
+		LastOutcome:   "update_succeeded",
+		TargetVersion: &target,
+	}
+	update := &UpdateRequest{
+		ID:            "upd-1",
+		RuntimeID:     "runtime-1",
+		TargetVersion: "v0.4.0",
+		Status:        UpdateReady,
+	}
+	resp := runtimeToResponseWithUpdateReleaseAndObservation(rt, update, nil, obs)
+	if resp.UpdateState != "ready_to_apply" {
+		t.Fatalf("update_state = %q, want ready_to_apply", resp.UpdateState)
+	}
+	if resp.TargetVersion == nil || *resp.TargetVersion != "v0.4.0" {
+		t.Fatalf("target_version = %v, want v0.4.0", resp.TargetVersion)
+	}
+	if resp.UpdateError == nil || *resp.UpdateError != "update_staged_waiting_restart" {
+		t.Fatalf("update_error = %v, want update_staged_waiting_restart", resp.UpdateError)
+	}
+	// Offline connectivity still wins health (do not claim online).
+	if resp.RuntimeHealth != "offline" {
+		t.Fatalf("runtime_health = %q, want offline", resp.RuntimeHealth)
+	}
+}
+
+func TestRuntimeToResponseAutoUpdateSucceededWithoutRowStillStages(t *testing.T) {
+	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "0.3.99"})
+	target := "v0.4.0"
+	obs := &DaemonUpdateStatusResponse{
+		Phase:         "restart_pending",
+		LastOutcome:   "update_succeeded",
+		TargetVersion: &target,
+	}
+	resp := runtimeToResponseWithUpdateReleaseAndObservation(rt, nil, nil, obs)
+	if resp.UpdateState != "ready_to_apply" {
+		t.Fatalf("update_state = %q, want ready_to_apply", resp.UpdateState)
+	}
+	if resp.TargetVersion == nil || *resp.TargetVersion != "v0.4.0" {
+		t.Fatalf("target_version = %v", resp.TargetVersion)
+	}
+	if resp.UpdateError == nil || *resp.UpdateError != "update_staged_waiting_restart" {
+		t.Fatalf("update_error = %v", resp.UpdateError)
+	}
+}
+
+func TestRuntimeToResponseExposesOfflineReason(t *testing.T) {
+	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "v0.3.99"})
+	rt.Status = "offline"
+	rt.OfflineReason = pgtype.Text{String: "daemon_deregistered", Valid: true}
+	resp := runtimeToResponseWithUpdateAndRelease(rt, nil, nil)
+	if resp.OfflineReason == nil || *resp.OfflineReason != "daemon_deregistered" {
+		t.Fatalf("offline_reason = %v, want daemon_deregistered", resp.OfflineReason)
+	}
+}
+
+func TestRuntimeToResponseNoStagedMessageWhenAlreadyOnTarget(t *testing.T) {
+	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "v0.4.0"})
+	target := "v0.4.0"
+	obs := &DaemonUpdateStatusResponse{
+		Phase:         "restart_pending",
+		LastOutcome:   "update_succeeded",
+		TargetVersion: &target,
+	}
+	resp := runtimeToResponseWithUpdateReleaseAndObservation(rt, nil, nil, obs)
+	if resp.UpdateError != nil {
+		t.Fatalf("update_error = %v, want nil when already on target", *resp.UpdateError)
+	}
+}

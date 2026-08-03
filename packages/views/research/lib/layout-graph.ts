@@ -247,3 +247,192 @@ export function layoutResearchGraph(
 
   return { nodes: [...bandNodes, ...rfNodes], edges: rfEdges };
 }
+
+type GraphEdgeLike = {
+  from_node_id: string;
+  to_node_id: string;
+  edge_type: string;
+};
+
+function leadsToOuts(
+  edges: GraphEdgeLike[],
+  ids: Set<string>,
+): Map<string, string[]> {
+  const outs = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.edge_type !== "leads_to") continue;
+    if (!ids.has(e.from_node_id) || !ids.has(e.to_node_id)) continue;
+    const list = outs.get(e.from_node_id) ?? [];
+    list.push(e.to_node_id);
+    outs.set(e.from_node_id, list);
+  }
+  return outs;
+}
+
+function leadsToIns(
+  edges: GraphEdgeLike[],
+  ids: Set<string>,
+): Map<string, string[]> {
+  const ins = new Map<string, string[]>();
+  for (const e of edges) {
+    if (e.edge_type !== "leads_to") continue;
+    if (!ids.has(e.from_node_id) || !ids.has(e.to_node_id)) continue;
+    const list = ins.get(e.to_node_id) ?? [];
+    list.push(e.from_node_id);
+    ins.set(e.to_node_id, list);
+  }
+  return ins;
+}
+
+function sortByLane(
+  nodeIds: string[],
+  byId: Map<string, ResearchGraphNode>,
+): string[] {
+  return [...nodeIds].sort((a, b) => {
+    const la = LOGIC_LANE_IDS.indexOf(laneForNode(byId.get(a)!));
+    const lb = LOGIC_LANE_IDS.indexOf(laneForNode(byId.get(b)!));
+    if (la !== lb) return la - lb;
+    return a.localeCompare(b);
+  });
+}
+
+/** Rank / layer index used by layout (leads_to spine). Exported for ←→↑↓. */
+export function researchGraphRanks(
+  nodes: ResearchGraphNode[],
+  edges: GraphEdgeLike[],
+): Map<string, number> {
+  return layerIndex(nodes, edges as ResearchGraphEdge[]);
+}
+
+/**
+ * Main-chain order following `leads_to` from the goal/root (BFS).
+ * Parallel branch heads appear after their fork; extras append at end.
+ */
+export function mainChainOrder(
+  nodes: ResearchGraphNode[],
+  edges: GraphEdgeLike[],
+): string[] {
+  const ids = new Set(nodes.map((n) => n.id));
+  const outs = leadsToOuts(edges, ids);
+  const roots = nodes.filter(
+    (n) =>
+      n.node_type === "goal" ||
+      !edges.some((e) => e.to_node_id === n.id && e.edge_type === "leads_to"),
+  );
+  const start = roots.find((n) => n.node_type === "goal") ?? roots[0];
+  if (!start) return nodes.map((n) => n.id);
+
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  const queue = [start.id];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ordered.push(id);
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    for (const next of sortByLane(outs.get(id) ?? [], byId)) queue.push(next);
+  }
+  for (const n of nodes) {
+    if (!seen.has(n.id)) ordered.push(n.id);
+  }
+  return ordered;
+}
+
+/** Same-rank nodes ordered by swimlane (parallel tracks). */
+export function parallelGroupAtRank(
+  nodes: ResearchGraphNode[],
+  edges: GraphEdgeLike[],
+  rank: number,
+): string[] {
+  const ranks = researchGraphRanks(nodes, edges);
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const ids = nodes.filter((n) => ranks.get(n.id) === rank).map((n) => n.id);
+  return sortByLane(ids, byId);
+}
+
+/** Fork point = ≥2 `leads_to` outs to existing nodes (1102 semantics A gate). */
+export function isForkPoint(
+  nodeId: string,
+  nodes: ResearchGraphNode[],
+  edges: GraphEdgeLike[],
+): boolean {
+  const ids = new Set(nodes.map((n) => n.id));
+  const outs = leadsToOuts(edges, ids).get(nodeId) ?? [];
+  return outs.length >= 2;
+}
+
+/**
+ * ←→ along main chain. At a fork going forward, prefer the lane of
+ * `preferLaneFrom` (or the first outbound by lane order).
+ */
+export function mainChainNeighbor(
+  nodes: ResearchGraphNode[],
+  edges: GraphEdgeLike[],
+  currentId: string,
+  direction: 1 | -1,
+  options?: { preferLaneFrom?: string },
+): string | null {
+  const ids = new Set(nodes.map((n) => n.id));
+  if (!ids.has(currentId)) return null;
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const outs = leadsToOuts(edges, ids);
+  const ins = leadsToIns(edges, ids);
+
+  if (direction === 1) {
+    const nexts = sortByLane(outs.get(currentId) ?? [], byId);
+    if (nexts.length === 0) return null;
+    if (nexts.length === 1) return nexts[0]!;
+    const prefer = options?.preferLaneFrom;
+    if (prefer && byId.has(prefer)) {
+      const preferLane = laneForNode(byId.get(prefer)!);
+      const match = nexts.find((id) => laneForNode(byId.get(id)!) === preferLane);
+      if (match) return match;
+      if (nexts.includes(prefer)) return prefer;
+    }
+    return nexts[0]!;
+  }
+
+  const prevs = sortByLane(ins.get(currentId) ?? [], byId);
+  if (prevs.length === 0) return null;
+  return prevs[0]!;
+}
+
+/**
+ * ↑↓ cross-lane — **only at fork points** (1102 / 1116 semantics A).
+ * Cycles the fork's outbound branch heads ordered by lane.
+ * `activeBranchId` is the currently preferred branch head (or any id on that lane).
+ */
+export function crossLaneNeighbor(
+  nodes: ResearchGraphNode[],
+  edges: GraphEdgeLike[],
+  currentId: string,
+  direction: 1 | -1,
+  options?: { activeBranchId?: string },
+): string | null {
+  if (!isForkPoint(currentId, nodes, edges)) return null;
+  const ids = new Set(nodes.map((n) => n.id));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const branches = sortByLane(leadsToOuts(edges, ids).get(currentId) ?? [], byId);
+  if (branches.length < 2) return null;
+
+  const active = options?.activeBranchId;
+  if (active == null) {
+    return direction === 1 ? branches[0]! : branches[branches.length - 1]!;
+  }
+
+  let index = 0;
+  const direct = branches.indexOf(active);
+  if (direct >= 0) {
+    index = direct;
+  } else if (byId.has(active)) {
+    const lane = laneForNode(byId.get(active)!);
+    const byLane = branches.findIndex(
+      (id) => laneForNode(byId.get(id)!) === lane,
+    );
+    if (byLane >= 0) index = byLane;
+  }
+
+  const nextIndex = (index + direction + branches.length) % branches.length;
+  return branches[nextIndex]!;
+}

@@ -291,6 +291,7 @@
     "label": "调研逻辑",
     "lr_hint": "左→右 · 非 Git",
     "strip_label": "逻辑结构",
+    "strip_position": "当前 {{current}} / 共 {{total}}",
     "start": "起点",
     "end": "终点",
     "end_title": "查看交付",

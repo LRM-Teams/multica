@@ -17,7 +17,6 @@ import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   agentTaskSnapshotOptions,
-  deriveWorkloadDetail,
   useWorkspacePresenceMap,
 } from "@multica/core/agents";
 import { useAgentPanelStore } from "@multica/core/agents/stores";

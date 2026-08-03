@@ -48,6 +48,7 @@ import {
 import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useNavigation } from "../../navigation";
+import { useAgentFleetClassName } from "../hooks/use-agent-fleet-class-name";
 import { PageHeader } from "../../layout/page-header";
 import {
   availabilityConfig,
@@ -1053,6 +1054,7 @@ function AgentRailRow({
   onClick: () => void;
 }) {
   const { t } = useT("agents");
+  const fleetClassName = useAgentFleetClassName();
   const { openDM, isPending: openingDM } = useOpenDM();
   const displayName = resolveActorDisplayName(agent, agent.name);
   const isArchived = !!agent.archived_at;
@@ -1104,12 +1106,12 @@ function AgentRailRow({
             </p>
             {fleet ? (
               <FleetRankBadge
-              classId={fleet.class_id}
-              classLabel={fleet.class_label}
-              fleetRank={fleet.fleet_rank}
-              frozen={fleet.frozen || isArchived}
-              medal
-            />
+                classId={fleet.class_id}
+                classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
+                fleetRank={fleet.fleet_rank}
+                frozen={fleet.frozen || isArchived}
+                medal
+              />
             ) : null}
           </div>
           <p className="truncate text-xs text-muted-foreground">

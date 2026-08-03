@@ -525,12 +525,15 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   ) : null;
   const authorHonor =
     message.type === "user" && message.author_id ? getMemberHonor(message.author_id) : undefined;
+  // LRM-1126: author name never wraps; role/desc truncates first, time stays
+  // shrink-0. Hover action bar occupies a reserved ~184px fine-pointer gutter.
   const nameLabel = (
     <ActorStyledName
       displayName={displayName}
       honor={authorHonor}
       fleet={authorFleet}
-      className="truncate text-[13.5px] font-semibold text-foreground"
+      className="shrink-0 text-[13.5px] font-semibold text-foreground"
+      nameClassName="whitespace-nowrap"
     />
   );
 
@@ -807,12 +810,20 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       )}
       {/* LRM-400: fill the conversation column — a 760px cap left a wide empty
           right band that still read as Frank's "半屏空白" after the PanelGroup
-          shell fix (#1154). Soft wrap stays on `.message-surface`. */}
-      <div className="min-w-0 max-w-full">
+          shell fix (#1154). Soft wrap stays on `.message-surface`.
+          LRM-1126: fine-pointer md+ keeps a permanent ~184px right gutter so the
+          hover action bar never covers body text (not hover-only — avoids reflow).
+          Coarse pointers skip the gutter (no hover bar on mobile). */}
+      <div
+        className={cn(
+          "min-w-0 max-w-full",
+          "[@media(pointer:fine)]:md:pr-[184px]",
+        )}
+      >
         {showAuthor && (
           <div
             data-testid="message-author-row"
-            className="mb-0.5 flex select-none items-center gap-1.5 text-[13.5px] md:pr-24"
+            className="mb-0.5 flex min-w-0 select-none items-center gap-1.5 text-[13.5px]"
           >
             {profileActorType && profileActorId ? (
               <ActorProfileTrigger
@@ -855,8 +866,11 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             data-testid="message-action-bar"
             data-message-action-surface="true"
             className={cn(
-              "pointer-events-none absolute right-3 z-10 hidden items-center gap-0.5 text-muted-foreground opacity-0 transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:pointer-events-auto [@media(pointer:fine)]:group-hover:opacity-100 [@media(pointer:fine)]:group-focus-within:pointer-events-auto [@media(pointer:fine)]:group-focus-within:opacity-100",
-              compact ? "top-0.5" : "top-2",
+              // LRM-1126: solid popover chrome so icons never punch through body
+              // text; vertical center on author/avatar midline (lead) or first
+              // body line (compact). Lives in the permanent 184px gutter.
+              "pointer-events-none absolute right-3 z-10 hidden items-center gap-0.5 rounded-lg border border-border/70 bg-popover p-0.5 text-muted-foreground opacity-0 shadow-sm transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:pointer-events-auto [@media(pointer:fine)]:group-hover:opacity-100 [@media(pointer:fine)]:group-focus-within:pointer-events-auto [@media(pointer:fine)]:group-focus-within:opacity-100",
+              compact ? "top-0.5" : "top-1.5",
             )}
           >
             {onReact && (
@@ -864,7 +878,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 onSelect={(emoji) => onReact(message, emoji)}
                 align="end"
                 side="bottom"
-                className="size-8 rounded-md hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                className="size-8 rounded-md hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground"
                 ariaLabel={t(($) => $.message.add_reaction)}
                 sideOffset={4}
                 emojis={quickReactionEmojis}
@@ -875,7 +889,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             <button
               type="button"
               onClick={handleCopy}
-              className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+              className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground"
               aria-label={t(($) => $.message.copy_action)}
               title={t(($) => $.message.copy_action)}
             >
@@ -885,7 +899,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               <button
                 type="button"
                 onClick={handleQuote}
-                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground"
                 aria-label={t(($) => $.quote.action)}
                 title={t(($) => $.quote.action)}
               >
@@ -896,7 +910,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               <button
                 type="button"
                 onClick={() => onOpenThread?.(message)}
-                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground"
                 aria-label={t(($) => $.thread.reply)}
                 title={t(($) => $.thread.reply)}
               >
@@ -907,7 +921,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               <button
                 type="button"
                 onClick={handleStartEdit}
-                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-background/70 hover:text-foreground focus-visible:bg-background/70 focus-visible:text-foreground"
+                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground"
                 aria-label={t(($) => $.message.edit_action)}
                 title={t(($) => $.message.edit_action)}
               >

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { RotateCcw } from "lucide-react";
 import type { ResearchPresenceMap } from "@multica/core/research";
 import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
@@ -33,6 +33,10 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/** LRM-1105 / 1116: keyboard focus ring — distinct from selected `ring-brand`. */
+const STRIP_FOCUS_VISIBLE_CLASS =
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-2";
+
 /**
  * LRM-908 C8: narrow-screen vertical logic strip — start → path → end,
  * card rows (not git dots). Desktop keeps the full swimlane canvas.
@@ -40,6 +44,7 @@ function prefersReducedMotion(): boolean {
  * LRM-972: dead_end / conflict / low-confidence dual-coded on strip cards.
  * LRM-981: scannable retry CTA on dead-end / failure cards.
  * LRM-827: card enter fade+slide with batch stagger (reduced-motion off).
+ * LRM-1105: snap + current N/M + focus-visible ≠ selected ring.
  */
 export function ResearchLogicStrip({
   nodes,
@@ -59,6 +64,7 @@ export function ResearchLogicStrip({
   presence?: ResearchPresenceMap;
 }) {
   const { t } = useT("research");
+  const listRef = useRef<HTMLOListElement | null>(null);
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const pathIds = mainPathNodeIds(nodes, edges).filter((id) => byId.has(id));
 
@@ -79,6 +85,24 @@ export function ResearchLogicStrip({
     ...pathIds.map((id) => byId.get(id)!),
     endSynthetic,
   ];
+
+  const selectedIndex = (() => {
+    if (!selectedId) return 0;
+    const idx = items.findIndex(
+      (n) =>
+        n.id === selectedId ||
+        (n.id === LOGIC_END_NODE_ID && selectedId === LOGIC_END_NODE_ID),
+    );
+    return idx >= 0 ? idx : 0;
+  })();
+
+  useEffect(() => {
+    if (!selectedId || !listRef.current) return;
+    const el = listRef.current.querySelector<HTMLElement>(
+      `[data-strip-node-id="${CSS.escape(selectedId)}"]`,
+    );
+    el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selectedId]);
 
   const seenEnterIds = useRef<Set<string> | null>(null);
   if (seenEnterIds.current === null) {
@@ -107,14 +131,28 @@ export function ResearchLogicStrip({
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col overflow-y-auto bg-canvas-bg px-3 py-3"
+      className="flex h-full min-h-0 flex-col overflow-y-auto scroll-smooth bg-canvas-bg px-3 py-3"
       data-testid="research-logic-strip"
       aria-label={t(($) => $.logic.strip_label)}
     >
-      <div className="mb-3 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+      <div className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
         {t(($) => $.logic.label)}
       </div>
-      <ol className="relative space-y-0">
+      <p
+        className="mb-3 text-[11px] text-muted-foreground"
+        data-testid="research-logic-strip-position"
+        aria-live="polite"
+      >
+        {t(($) => $.logic.strip_position, {
+          current: selectedIndex + 1,
+          total: items.length,
+        })}
+      </p>
+      <ol
+        ref={listRef}
+        className="relative space-y-0"
+        style={{ scrollSnapType: "y proximity" }}
+      >
         {items.map((node, index) => {
           const enterDelayMs = enterDelayById.get(node.id);
           const entering = enterDelayMs !== undefined;
@@ -154,7 +192,12 @@ export function ResearchLogicStrip({
             : node.summary || t(($) => $.logic.status[status.key]);
 
           return (
-            <li key={node.id} className="relative flex gap-3">
+            <li
+              key={node.id}
+              className="relative flex gap-3"
+              style={{ scrollSnapAlign: "start" }}
+              data-strip-node-id={node.id}
+            >
               <div className="flex w-4 flex-col items-center">
                 <span
                   className={cn(
@@ -183,7 +226,7 @@ export function ResearchLogicStrip({
                 className={cn(
                   "mb-2 min-w-0 flex-1 rounded-xl border bg-card px-3 py-2.5 text-left shadow-sm transition-colors",
                   entering && `${NODE_ENTER_CLASS} research-logic-strip-card-enter`,
-                  selected && "border-brand ring-2 ring-brand/30",
+                  selected && "border-brand ring-2 ring-brand/25",
                   !selected &&
                     !lowConf &&
                     !isDeadEnd &&
@@ -218,7 +261,7 @@ export function ResearchLogicStrip({
               >
                 <button
                   type="button"
-                  className="w-full text-left"
+                  className={cn("w-full rounded-md text-left", STRIP_FOCUS_VISIBLE_CLASS)}
                   onClick={() => {
                     if (end) {
                       onOpenDelivery?.();

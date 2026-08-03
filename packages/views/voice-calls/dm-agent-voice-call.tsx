@@ -47,11 +47,11 @@ function AgentVoiceCall({
   agentName,
 }: AgentVoiceCallProps) {
   const { t } = useT("channels");
-  // LRM-936/938: DM Agent calls stay on Volcengine RTC + audible /answer.
-  // Duplex (LRM-950) remains available via preferDuplex, but must not hijack
-  // this surface while Volcengine welcome-audio acceptance is the gate.
+  // Prefer Duplex so DM calls get web_search / web_fetch + Multica delegate
+  // (LRM-1070 / LRM-1131). Controller falls back to Volcengine RTC when Duplex
+  // is not configured (isDuplexNotConfigured).
   const controller = useVoiceCallController(workspaceId, {
-    preferDuplex: false,
+    preferDuplex: true,
   });
   const [open, setOpen] = useState(false);
   const [minimized, setMinimized] = useState(false);

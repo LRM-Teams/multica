@@ -37,6 +37,8 @@ import {
 } from "@multica/core/identity";
 import { MemoryGrowthField } from "../agents/components/memory-growth-field";
 import { AgentHonorLevelIcon } from "../agents/components/agent-honor-level-icon";
+import { useAgentAchievementCopy } from "../agents/hooks/use-agent-achievement-copy";
+import { useAgentFleetClassName } from "../agents/hooks/use-agent-fleet-class-name";
 import { AgentPresenceOverlay } from "./actor-avatar";
 import { ActivityTimeline } from "../agents/components/tabs/activity-timeline";
 import { useAgentActivityEvents } from "../agents/components/tabs/use-agent-activity-events";
@@ -352,6 +354,8 @@ export function ActorProfileContentLoaded({ profile }: { profile: MemberProfile 
 // react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 function AgentHonorSummary({ agentId }: { agentId: string }) {
   const { t } = useT("channels");
+  const achievementCopy = useAgentAchievementCopy();
+  const fleetClassName = useAgentFleetClassName();
   const workspaceId = useWorkspaceId();
   const { data: honor, isPending, isError } = useQuery(
     agentHonorOptions(workspaceId, agentId),
@@ -370,6 +374,7 @@ function AgentHonorSummary({ agentId }: { agentId: string }) {
   const equipped = honor.achievements.find(
     (item) => item.id === honor.equipped_achievement_id && item.unlocked,
   );
+  const equippedTitle = equipped ? achievementCopy(equipped).title : "";
   return (
     <div
       className="mt-2 flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/25 px-2 py-1.5 text-xs leading-4 text-muted-foreground"
@@ -380,7 +385,9 @@ function AgentHonorSummary({ agentId }: { agentId: string }) {
         {t(($) => $.profile_popover.honor.level_value, { level: honor.level })}
       </span>
       <span aria-hidden>·</span>
-      <span className="truncate">{equipped?.title ?? honor.fleet.class_label}</span>
+      <span className="truncate">
+        {equippedTitle || fleetClassName(honor.fleet.class_id, honor.fleet.class_label)}
+      </span>
     </div>
   );
 }

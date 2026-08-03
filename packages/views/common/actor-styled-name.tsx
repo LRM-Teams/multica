@@ -11,6 +11,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@multica/ui/components/ui/tooltip";
+import { useAgentFleetClassName } from "../agents/hooks/use-agent-fleet-class-name";
 
 export interface ActorStyledNameProps {
   displayName: string;
@@ -33,6 +34,7 @@ export function ActorStyledName({
   className,
   nameClassName = "truncate",
 }: ActorStyledNameProps) {
+  const fleetClassName = useAgentFleetClassName();
   const nameDisplay = honor
     ? honorNameDisplayProps({
         nameStyle: honor.name_style,
@@ -66,7 +68,7 @@ export function ActorStyledName({
       {showBadges && fleet ? (
         <FleetRankBadge
           classId={fleet.class_id}
-          classLabel={fleet.class_label}
+          classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
           fleetRank={fleet.fleet_rank}
           frozen={fleet.frozen}
           medal

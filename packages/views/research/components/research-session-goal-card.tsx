@@ -207,7 +207,7 @@ export function ResearchSessionGoalCard({
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
           data-testid="research-session-goal-popover"
-          className="max-w-[calc(100vw-1.5rem)] gap-0 p-0 sm:max-w-[26rem]"
+          className="max-w-[calc(100vw-1.5rem)] gap-0 p-0 md:max-w-[26rem]"
         >
           <DialogHeader className="space-y-2 px-4 pt-4 pb-2 text-left">
             <DialogTitle className="flex items-center gap-2 text-sm">

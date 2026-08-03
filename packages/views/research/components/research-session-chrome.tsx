@@ -186,7 +186,7 @@ export function ResearchSessionChrome({
         className="flex min-w-0 items-start gap-2.5 px-4 pt-2.5"
       >
         <span
-          className="mt-0.5 hidden size-7 shrink-0 items-center justify-center rounded-[8px] bg-brand/12 text-brand sm:flex"
+          className="mt-0.5 hidden size-7 shrink-0 items-center justify-center rounded-[8px] bg-brand/12 text-brand md:flex"
           aria-hidden
         >
           <Compass className="size-3.5" strokeWidth={2} />

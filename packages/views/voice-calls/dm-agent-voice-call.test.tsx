@@ -105,11 +105,11 @@ describe("DmAgentVoiceCall", () => {
     expect(mocks.useVoiceCallController).not.toHaveBeenCalled();
   });
 
-  it("pins DM agent calls to Volcengine RTC (no duplex prefer)", () => {
+  it("prefers Duplex for DM agent calls (tools + search)", () => {
     renderCall();
 
     expect(mocks.useVoiceCallController).toHaveBeenCalledWith("workspace-1", {
-      preferDuplex: false,
+      preferDuplex: true,
     });
   });
 

@@ -94,17 +94,17 @@ const modelCacheTTL = 10 * time.Minute
 func ListModels(ctx context.Context, providerType, executablePath string) ([]Model, error) {
 	switch providerType {
 	case "claude":
-		models := claudeStaticModels()
-		if Capabilities(providerType).ThinkingDiscovery {
-			annotateClaudeThinking(ctx, models, executablePath)
-		}
-		return models, nil
+		// Frank 2026-08-03: dynamic only — no static picker fallback.
+		return cachedDiscovery(discoveryCacheKey(providerType, executablePath), func() ([]Model, error) {
+			return discoverClaudeModels(ctx, executablePath)
+		})
 	case "codex":
-		models := codexStaticModels()
-		if Capabilities(providerType).ThinkingDiscovery {
-			annotateCodexThinking(ctx, models, executablePath)
-		}
-		return models, nil
+		// Frank 2026-08-03: dynamic only from `codex debug models`.
+		// Picker rows are visibility=list; thinking catalog is filled
+		// from the same payload (no second shell).
+		return cachedDiscovery(discoveryCacheKey(providerType, executablePath), func() ([]Model, error) {
+			return discoverCodexModels(ctx, executablePath)
+		})
 	case "gemini":
 		return geminiStaticModels(), nil
 	case "grok":
@@ -289,6 +289,108 @@ func codexStaticModels() []Model {
 // up without a Multica redeploy. Default is `auto` to match Google's
 // recommendation — the CLI picks Pro vs Flash per task and falls back
 // when quota is exhausted.
+// discoverCodexModels builds the user-visible model picker from
+// `codex debug models --bundled`. Only visibility=list rows are
+// returned (hide stays out of the dropdown). Thinking levels are
+// attached from the same payload. Failures return a human-readable
+// error with an empty list — no static fallback (product rule).
+func discoverCodexModels(ctx context.Context, executablePath string) ([]Model, error) {
+	if executablePath == "" {
+		executablePath = "codex"
+	}
+	raw, err := runCodexDebugModels(ctx, executablePath)
+	if err != nil {
+		return nil, fmt.Errorf("unable to list models from Codex CLI (%s debug models): %w", executablePath, err)
+	}
+	models := parseCodexDebugModelsCatalog(raw)
+	if len(models) == 0 {
+		return nil, fmt.Errorf("Codex CLI returned no listable models (check login / CLI version)")
+	}
+	return models, nil
+}
+
+// discoverClaudeModels attempts dynamic discovery. Claude Code currently
+// has no models-list subcommand on known CLIs, so this fails closed with
+// a human-readable error (no static sonnet/opus/haiku fallback).
+func discoverClaudeModels(ctx context.Context, executablePath string) ([]Model, error) {
+	if executablePath == "" {
+		executablePath = "claude"
+	}
+	// Probe for a future `claude models` / list subcommand without treating
+	// help-page output as a catalog.
+	cmd := exec.CommandContext(ctx, executablePath, "models", "--help")
+	hideAgentWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	combined := string(out)
+	if err == nil && looksLikeClaudeModelsHelp(combined) {
+		// Subcommand exists — try non-interactive list forms.
+		for _, args := range [][]string{
+			{"models", "--json"},
+			{"models", "list", "--json"},
+			{"models"},
+		} {
+			listCmd := exec.CommandContext(ctx, executablePath, args...)
+			hideAgentWindow(listCmd)
+			raw, listErr := listCmd.Output()
+			if listErr != nil {
+				continue
+			}
+			if models := parseClaudeModelsList(raw); len(models) > 0 {
+				return models, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("Claude Code cannot list models: no models list command on this CLI (upgrade Claude Code if a list API is available; static catalogs are disabled)")
+}
+
+func looksLikeClaudeModelsHelp(help string) bool {
+	h := strings.ToLower(help)
+	if strings.Contains(h, "unknown command") || strings.Contains(h, "invalid command") {
+		return false
+	}
+	// Real help for a models subcommand usually mentions models/list.
+	return strings.Contains(h, "models") && (strings.Contains(h, "usage") || strings.Contains(h, "list"))
+}
+
+// parseClaudeModelsList accepts a best-effort JSON array of {id,name} or
+// newline-separated model ids. Empty/unknown shapes return nil.
+func parseClaudeModelsList(raw []byte) []Model {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		out := make([]Model, 0, len(arr))
+		for _, m := range arr {
+			id, _ := m["id"].(string)
+			if id == "" {
+				id, _ = m["slug"].(string)
+			}
+			if id == "" {
+				continue
+			}
+			label, _ := m["display_name"].(string)
+			if label == "" {
+				label, _ = m["name"].(string)
+			}
+			if label == "" {
+				label = id
+			}
+			out = append(out, Model{ID: id, Label: label, Provider: "anthropic"})
+		}
+		return out
+	}
+	var obj struct {
+		Models []map[string]any `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil && len(obj.Models) > 0 {
+		b, _ := json.Marshal(obj.Models)
+		return parseClaudeModelsList(b)
+	}
+	return nil
+}
+
 func geminiStaticModels() []Model {
 	return []Model{
 		{ID: "auto", Label: "Auto (Gemini 3)", Provider: "google", Default: true},

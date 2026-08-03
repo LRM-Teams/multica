@@ -553,6 +553,8 @@ export interface AgentHonorUnlockedPayload {
 
 export interface AgentFleetClassChangedPayload {
   agent_id: string;
+  /** Added by newer servers; older servers require the cached agent-directory fallback. */
+  agent_name?: string;
   previous_class_id: string;
   class_id: string;
   fleet_score: number;

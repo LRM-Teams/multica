@@ -673,13 +673,17 @@ export function DmConversationRow({
               </div>
             </div>
           ) : (
-            <ActorAvatar
-              actorType={actorType}
-              actorId={dm.peer.id}
-              size={40}
-              showStatusDot
-              profileLink={false}
-            />
+            // Soft pad + overflow-visible: presence ring/dot can paint past the
+            // avatar square without layout shift (LRM-1119).
+            <div className="shrink-0 overflow-visible p-0.5 -m-0.5">
+              <ActorAvatar
+                actorType={actorType}
+                actorId={dm.peer.id}
+                size={40}
+                showStatusDot
+                profileLink={false}
+              />
+            </div>
           )}
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">

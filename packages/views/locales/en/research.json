@@ -291,6 +291,7 @@
     "label": "Research logic",
     "lr_hint": "Left → right · not Git",
     "strip_label": "Logic structure",
+    "strip_position": "Current {{current}} of {{total}}",
     "start": "Start",
     "end": "End",
     "end_title": "View delivery",

@@ -7,6 +7,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:research-parallel-smoke": "vitest run research/__smoke__/parallel-regression.matrix.test.tsx",
     "test:cost-baseline": "./scripts/record-import-env-baseline.sh"
   },
   "exports": {

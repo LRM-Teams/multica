@@ -85,4 +85,39 @@ describe("ResearchNodeActionRing", () => {
     fireEvent(dialog, new Event("cancel", { cancelable: true }));
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("keeps disabled ring items in tab order via aria-disabled (LRM-1105)", () => {
+    render(
+      <ResearchNodeActionRing
+        node={{ ...base, node_type: "probe", status: "active" }}
+        mode="ring"
+        onAction={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const retry = screen.getByRole("menuitem", { name: "Retry" });
+    expect(retry).toHaveAttribute("aria-disabled", "true");
+    expect(retry).not.toBeDisabled();
+    expect(retry.tabIndex).toBe(-1);
+    const detail = screen.getByRole("menuitem", { name: "Details" });
+    expect(detail.tabIndex).toBe(0);
+  });
+
+  it("arrows rove focus across ring items", () => {
+    render(
+      <ResearchNodeActionRing
+        node={{ ...base, node_type: "dead_end" }}
+        mode="ring"
+        onAction={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const menu = screen.getByRole("menu", { name: "Node actions" });
+    const retry = screen.getByRole("menuitem", { name: "Retry" });
+    expect(retry.tabIndex).toBe(0);
+    fireEvent.keyDown(menu, { key: "ArrowRight" });
+    const source = screen.getByRole("menuitem", { name: "Source" });
+    expect(source.tabIndex).toBe(0);
+    expect(retry.tabIndex).toBe(-1);
+  });
 });

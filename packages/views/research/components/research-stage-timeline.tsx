@@ -80,8 +80,8 @@ export function ResearchStageTimeline({
               key={stage}
               data-stage-state={state}
               className={cn(
-                "relative flex min-w-[4rem] flex-1 items-center sm:min-w-[6.5rem]",
-                index < RESEARCH_STAGE_ORDER.length - 1 && "pr-1.5 sm:pr-2",
+                "relative flex min-w-[4rem] flex-1 items-center md:min-w-[6.5rem]",
+                index < RESEARCH_STAGE_ORDER.length - 1 && "pr-1.5 md:pr-2",
                 state === "upcoming" && "opacity-75",
               )}
             >
@@ -89,7 +89,7 @@ export function ResearchStageTimeline({
                 <span
                   aria-hidden
                   className={cn(
-                    "pointer-events-none absolute top-[0.7rem] right-0 left-9 h-px sm:left-11",
+                    "pointer-events-none absolute top-[0.7rem] right-0 left-9 h-px md:left-11",
                     state === "done" ? "bg-success/50" : "bg-border/80",
                     state === "current" && "bg-gradient-to-r from-brand/50 to-border/80",
                   )}

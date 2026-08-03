@@ -24,6 +24,12 @@ func TestUsesCanonicalResidentChatRuntimeIncludesCursorFullChat(t *testing.T) {
 	if !usesCanonicalResidentChatRuntime("opencode", chatTask) {
 		t.Fatal("opencode full chat should enter canonical resident path")
 	}
+	if !usesCanonicalResidentChatRuntime("codex", chatTask) {
+		t.Fatal("codex full chat should enter canonical resident path")
+	}
+	if usesCanonicalResidentChatRuntime("codex", issueTask) {
+		t.Fatal("codex without ChatSessionID must stay one-shot")
+	}
 	if usesCanonicalResidentChatRuntime("claude", chatTask) {
 		t.Fatal("claude has no canonical resident adapter")
 	}
@@ -37,7 +43,7 @@ func TestUsesCanonicalResidentChatRuntimeIncludesCursorFullChat(t *testing.T) {
 // reaching a backend. Both functions must agree on the same provider set.
 func TestCanonicalResidentProviderListsStayInSync(t *testing.T) {
 	chatTask := Task{ChatSessionID: "chat-1"}
-	providers := []string{"grok", "pi", "cursor", "opencode"}
+	providers := []string{"grok", "pi", "cursor", "opencode", "kiro", "codex"}
 	for _, provider := range providers {
 		if !usesCanonicalResidentChatRuntime(provider, chatTask) {
 			t.Fatalf("test fixture assumption wrong: %q should route to canonical resident chat", provider)

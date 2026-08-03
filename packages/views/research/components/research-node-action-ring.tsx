@@ -1,6 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useEffectEvent, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Copy,
   Eye,
@@ -34,6 +43,62 @@ function ActionIcon({ id }: { id: NodeRingAction }) {
   }
 }
 
+/** LRM-1105: disabled items stay in tab order via aria-disabled (1102). */
+function RingActionButton({
+  action,
+  label,
+  tabIndex,
+  buttonRef,
+  onFocusIndex,
+  onActivate,
+  className,
+  iconClassName,
+  labelClassName,
+  trailing,
+}: {
+  action: { id: NodeRingAction; primary?: boolean; disabled?: boolean; candidate?: boolean };
+  label: string;
+  tabIndex: number;
+  buttonRef?: (el: HTMLButtonElement | null) => void;
+  onFocusIndex: () => void;
+  onActivate: () => void;
+  className?: string;
+  iconClassName?: string;
+  labelClassName?: string;
+  trailing?: ReactNode;
+}) {
+  const disabled = !!action.disabled;
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      role="menuitem"
+      tabIndex={tabIndex}
+      aria-disabled={disabled || undefined}
+      aria-label={label}
+      onFocus={onFocusIndex}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (disabled) return;
+        onActivate();
+      }}
+      onKeyDown={(e) => {
+        if (disabled && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+      className={cn(className, disabled && "opacity-32")}
+    >
+      <span className={iconClassName}>
+        <ActionIcon id={action.id} />
+      </span>
+      <span className={labelClassName}>{label}</span>
+      {trailing}
+    </button>
+  );
+}
+
 export function ResearchNodeActionRing({
   node,
   mode,
@@ -49,6 +114,12 @@ export function ResearchNodeActionRing({
   const { t } = useT("research");
   const actions = ringActionsForNode(node);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [roving, setRoving] = useState({ key: `${node.id}:${mode}`, index: 0 });
+  const rovingKey = `${node.id}:${mode}`;
+  const focusIndex = roving.key === rovingKey ? roving.index : 0;
+  const setFocusIndex = (index: number) => setRoving({ key: rovingKey, index });
+  const menuId = useId();
 
   const bindDialog = useCallback((dialog: HTMLDialogElement | null) => {
     dialogRef.current = dialog;
@@ -73,6 +144,11 @@ export function ResearchNodeActionRing({
     return () => window.removeEventListener("keydown", onKey);
   }, [mode]);
 
+  // Focus primary item when ring opens / node changes — do not mirror props into state.
+  useEffect(() => {
+    queueMicrotask(() => itemRefs.current[0]?.focus());
+  }, [rovingKey]);
+
   const labelFor = (id: NodeRingAction) => {
     switch (id) {
       case "detail":
@@ -87,6 +163,43 @@ export function ResearchNodeActionRing({
         return t(($) => $.ring.dig_deeper);
       case "more":
         return t(($) => $.ring.more);
+    }
+  };
+
+  const moveFocus = (delta: number) => {
+    if (actions.length === 0) return;
+    const next = (focusIndex + delta + actions.length) % actions.length;
+    setFocusIndex(next);
+    itemRefs.current[next]?.focus();
+  };
+
+  const onMenuKeyDown = (e: ReactKeyboardEvent) => {
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      e.preventDefault();
+      moveFocus(1);
+      return;
+    }
+    if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      e.preventDefault();
+      moveFocus(-1);
+      return;
+    }
+    if (e.key === "Home") {
+      e.preventDefault();
+      setFocusIndex(0);
+      itemRefs.current[0]?.focus();
+      return;
+    }
+    if (e.key === "End") {
+      e.preventDefault();
+      const last = actions.length - 1;
+      setFocusIndex(last);
+      itemRefs.current[last]?.focus();
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onClose();
     }
   };
 
@@ -111,42 +224,44 @@ export function ResearchNodeActionRing({
         <p className="mb-2 text-[11px] font-bold tracking-wide text-muted-foreground uppercase">
           {t(($) => $.ring.title)}
         </p>
-        <div role="menu" className="flex flex-col gap-0.5 overflow-y-auto">
-          {actions.map((a) => (
-            <button
+        <div
+          role="menu"
+          id={menuId}
+          tabIndex={-1}
+          className="flex flex-col gap-0.5 overflow-y-auto"
+          onKeyDown={onMenuKeyDown}
+        >
+          {actions.map((a, index) => (
+            <RingActionButton
               key={a.id}
-              type="button"
-              role="menuitem"
-              disabled={a.disabled}
-              aria-label={labelFor(a.id)}
-              onClick={() => {
-                if (a.disabled) return;
-                onAction(a.id);
+              action={a}
+              label={labelFor(a.id)}
+              tabIndex={focusIndex === index ? 0 : -1}
+              buttonRef={(el) => {
+                itemRefs.current[index] = el;
               }}
+              onFocusIndex={() => setFocusIndex(index)}
+              onActivate={() => onAction(a.id)}
               className={cn(
                 "flex h-11 items-center gap-3 rounded-lg px-1 text-sm text-foreground",
-                a.disabled && "opacity-35",
                 a.candidate && "text-warning",
               )}
-            >
-              <span
-                className={cn(
-                  "flex size-8 shrink-0 items-center justify-center rounded-full bg-muted",
-                  a.primary &&
-                    "bg-brand text-brand-foreground shadow-[0_0_14px_color-mix(in_oklch,var(--brand)_50%,transparent)]",
-                  a.candidate &&
-                    "border border-dashed border-warning/75 bg-transparent text-warning",
-                )}
-              >
-                <ActionIcon id={a.id} />
-              </span>
-              <span className="font-medium">{labelFor(a.id)}</span>
-              {a.candidate ? (
-                <span className="ml-auto text-[10px] text-muted-foreground">
-                  {t(($) => $.ring.soon)}
-                </span>
-              ) : null}
-            </button>
+              iconClassName={cn(
+                "flex size-8 shrink-0 items-center justify-center rounded-full bg-muted",
+                a.primary &&
+                  "bg-brand text-brand-foreground shadow-[0_0_14px_color-mix(in_oklch,var(--brand)_50%,transparent)]",
+                a.candidate &&
+                  "border border-dashed border-warning/75 bg-transparent text-warning",
+              )}
+              labelClassName="font-medium"
+              trailing={
+                a.candidate ? (
+                  <span className="ml-auto text-[10px] text-muted-foreground">
+                    {t(($) => $.ring.soon)}
+                  </span>
+                ) : null
+              }
+            />
           ))}
         </div>
       </dialog>
@@ -156,51 +271,41 @@ export function ResearchNodeActionRing({
   return (
     <div
       role="menu"
+      id={menuId}
+      tabIndex={-1}
       aria-label={t(($) => $.ring.title)}
       className="relative z-20 grid animate-in fade-in zoom-in-95 grid-cols-3 gap-x-1.5 gap-y-2 rounded-[14px] border bg-card/95 p-2.5 shadow-lg backdrop-blur-md duration-150"
       style={{
         // NodeToolbar owns placement; size stays fixed 2×3 grid.
         width: 3 * 52 + 2 * 6 + 20,
       }}
+      onKeyDown={onMenuKeyDown}
     >
-      {actions.map((a) => (
-        <button
+      {actions.map((a, index) => (
+        <RingActionButton
           key={a.id}
-          type="button"
-          role="menuitem"
-          disabled={a.disabled}
-          aria-label={labelFor(a.id)}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (a.disabled) return;
-            onAction(a.id);
+          action={a}
+          label={labelFor(a.id)}
+          tabIndex={focusIndex === index ? 0 : -1}
+          buttonRef={(el) => {
+            itemRefs.current[index] = el;
           }}
-          className={cn(
-            "ar flex flex-col items-center gap-1",
-            a.disabled && "opacity-32",
+          onFocusIndex={() => setFocusIndex(index)}
+          onActivate={() => onAction(a.id)}
+          className={cn("ar flex flex-col items-center gap-1", a.candidate && "text-warning")}
+          iconClassName={cn(
+            "flex size-[38px] items-center justify-center rounded-full bg-muted text-foreground",
+            a.primary &&
+              "bg-brand text-brand-foreground shadow-[0_0_14px_color-mix(in_oklch,var(--brand)_50%,transparent)]",
+            a.candidate &&
+              "border border-dashed border-warning/75 bg-transparent text-warning",
           )}
-        >
-          <span
-            className={cn(
-              "flex size-[38px] items-center justify-center rounded-full bg-muted text-foreground",
-              a.primary &&
-                "bg-brand text-brand-foreground shadow-[0_0_14px_color-mix(in_oklch,var(--brand)_50%,transparent)]",
-              a.candidate &&
-                "border border-dashed border-warning/75 bg-transparent text-warning",
-            )}
-          >
-            <ActionIcon id={a.id} />
-          </span>
-          <span
-            className={cn(
-              "text-[9px] tracking-wide text-muted-foreground whitespace-nowrap",
-              a.primary && "text-brand",
-              a.candidate && "text-warning",
-            )}
-          >
-            {labelFor(a.id)}
-          </span>
-        </button>
+          labelClassName={cn(
+            "text-[9px] tracking-wide text-muted-foreground whitespace-nowrap",
+            a.primary && "text-brand",
+            a.candidate && "text-warning",
+          )}
+        />
       ))}
       <p className="col-span-3 mt-0.5 border-t pt-1.5 text-center text-[9.5px] text-muted-foreground">
         {t(($) => $.ring.esc_hint)}

@@ -155,6 +155,33 @@ func TestBusinessMetricsFreshnessHoldResolutionUsesThreeBoundedOutcomes(t *testi
 	}
 }
 
+func TestBusinessMetricsAgentDeleteDurationUsesBoundedResults(t *testing.T) {
+	m := NewBusinessMetrics()
+	m.ObserveAgentDelete("success", 0.8)
+	m.ObserveAgentDelete("error", 1.2)
+	m.ObserveAgentDelete("invalid", 9)
+
+	family := GatherForTest(t, m)["multica_agent_delete_duration_seconds"]
+	if family == nil {
+		t.Fatal("agent delete duration metric family missing")
+	}
+	if got := len(family.Metric); got != 2 {
+		t.Fatalf("agent delete result series=%d, want exactly 2", got)
+	}
+	got := map[string]uint64{}
+	for _, metric := range family.Metric {
+		if len(metric.Label) != 1 || metric.Label[0].GetName() != "result" {
+			t.Fatalf("agent delete metric labels=%+v, want result only", metric.Label)
+		}
+		got[metric.Label[0].GetValue()] = metric.GetHistogram().GetSampleCount()
+	}
+	for _, result := range []string{"success", "error"} {
+		if got[result] != 1 {
+			t.Fatalf("agent delete result %s count=%d, want 1; all=%+v", result, got[result], got)
+		}
+	}
+}
+
 func TestBusinessMetricsChannelTriggerDepthHasNoLabels(t *testing.T) {
 	m := NewBusinessMetrics()
 	m.ObserveChannelTriggerDepth(0)
@@ -208,6 +235,7 @@ func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	m.SetChannelFullExecutionAmplificationRatio(0.25)
 	m.ObserveChannelTriggerDepth(0)
 	m.ObserveFreshnessHoldResolution("send_draft", 1)
+	m.ObserveAgentDelete("success", 0.5)
 	m.RecordLLMUsage("issue", "local", "codex", "gpt-5.4", 1, 1, 1, 1)
 	m.RecordLLMUsage("issue", "local", "custom-provider", "custom-model", 1, 0, 0, 0)
 

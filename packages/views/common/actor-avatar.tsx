@@ -269,7 +269,9 @@ function ActorAvatarPanelTrigger({
     <span
       role="button"
       tabIndex={-1}
-      className="inline-flex cursor-pointer rounded-full"
+      // overflow-visible: presence ring/dot must not be shaved by rounded clip
+      // from this hit target (LRM-1119).
+      className="inline-flex cursor-pointer overflow-visible rounded-full"
       onClick={handleOpen}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -322,7 +324,7 @@ function ActorAvatarMemberPanelTrigger({
     <span
       role="button"
       tabIndex={-1}
-      className="inline-flex cursor-pointer rounded-full"
+      className="inline-flex cursor-pointer overflow-visible rounded-full"
       onClick={handleOpen}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -372,7 +374,10 @@ export function AgentPresenceOverlay({
   return (
     <span
       data-slot="agent-presence"
-      className={cn("relative inline-flex shrink-0", className)}
+      // overflow-visible: keep the corner dot + ring-2 paint from being
+      // rectangular-clipped by overflow:hidden ancestors (DM sidebar scroller /
+      // rounded hit targets). LRM-1119.
+      className={cn("relative inline-flex shrink-0 overflow-visible", className)}
       style={{ width: boxSize, height: boxSize }}
     >
       {children}
@@ -431,7 +436,10 @@ export function AgentStatusDot({ agentId, size }: { agentId: string; size?: numb
     : dotClass;
 
   return (
-    <span className="absolute bottom-0 right-0 inline-flex">
+    // Inset by 2px (ring-2 width) so the fill + cut-out ring stay inside the
+    // presence box — overflow:hidden ancestors can no longer shave the corner
+    // into a residual arc (LRM-1119).
+    <span className="pointer-events-none absolute bottom-0.5 right-0.5 z-[1] inline-flex">
       {isWorking && (
         // Motion layer only — hidden under prefers-reduced-motion so the
         // static dot below remains the sole (accessible) status signal.
@@ -472,7 +480,7 @@ export function MemberPresenceOverlay({
   return (
     <span
       data-slot="member-presence"
-      className={cn("relative inline-flex shrink-0", className)}
+      className={cn("relative inline-flex shrink-0 overflow-visible", className)}
       style={{ width: boxSize, height: boxSize }}
     >
       {children}
@@ -498,7 +506,8 @@ export function MemberStatusDot({ userId, size }: { userId: string; size?: numbe
     : dotClass;
 
   return (
-    <span className="absolute bottom-0 right-0 inline-flex">
+    // Same 2px inset as AgentStatusDot — keep fill + ring inside the box (LRM-1119).
+    <span className="pointer-events-none absolute bottom-0.5 right-0.5 z-[1] inline-flex">
       <span
         aria-label={`Status: ${label}`}
         title={label}

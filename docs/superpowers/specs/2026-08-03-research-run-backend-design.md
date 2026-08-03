@@ -337,6 +337,24 @@ inserts the complete result in one transaction. A repeated
 `client_request_id` with the same hash returns the original result; a different
 hash returns conflict.
 
+`research-run-v2` keeps the existing report reader's
+`structured.schema_version = 1`, but upgrades the task-result envelope to
+`schema_version = 2`. Question-scoped evidence that increases coverage must
+identify `answer_claim_key`. Synthesis must submit the full outline, sections,
+citations, source snapshot, conclusion, and
+`report.claims[{claim_key, section_id, anchor_quote}]`; section prose,
+conclusion, and each anchor must occur exactly in `content_md`. A report Claim
+is accepted only when the section cites a `research_source.id` that resolves
+through verified Evidence, Observation, and Source Snapshot support for that
+Claim.
+
+The v2 delivery graph fixes `synthesize` to `reporter` and both
+`quality_gate` and `citation_audit` to `validator`; both audit tasks depend on
+synthesis. Evaluations include a substantive rationale for all seven rubric
+dimensions plus `reviewed_claim_keys` and `reviewed_section_ids`. Persistence
+rejects an evaluation from the report author's Agent ID or a review set that
+does not exactly cover the latest report.
+
 ### 6.5 Adaptive loop
 
 After each accepted result, the Module:
@@ -375,10 +393,21 @@ Deterministic gates reject delivery when:
 - an Observation quote is absent from its Source Snapshot;
 - a report Claim link does not resolve through verified Evidence and an
   Observation to a stored Source Snapshot;
+- a required Research Question's answer Claim is absent from the latest
+  report;
+- the latest report is structurally incomplete, contains placeholder prose,
+  or lacks durable author attribution;
 - a report presents a high-significance Claim without a report-claim link;
 - a running, ready, dispatching, or retryable task remains;
 - result, task, or source limits were bypassed;
 - the citation audit did not pass.
+
+For v2, the report stores its producing task, attempt, and author. Quality and
+citation decisions store their reviewer actor. A passing score from the report
+author is rejected, and a passing evaluation must enumerate every Claim and
+section in the latest revision. A failed quality review schedules a new
+`synthesize` task and report revision; a succeeded delivery task is never
+reused as the remediation task.
 
 A `quality_gate` task is assigned to a verifier that did not author the report.
 It scores factual grounding, coverage, analytical depth, source quality,
@@ -507,7 +536,7 @@ revision 1 backfill but retain a null `run_initialized_at`, so their existing
 legacy execution path continues unchanged. The metrics Adapter reports those
 sessions as `legacy`. The server does not silently convert an in-progress legacy
 session into a Research Run. Sessions started through the new start operation
-initialize the durable task/evidence ledgers and use `research-run-v1`.
+initialize the durable task/evidence ledgers and use `research-run-v2`.
 
 Old desktop clients continue consuming the existing session snapshot fields.
 New response fields are additive and schema-parsed with defaults. The existing
@@ -517,6 +546,11 @@ present.
 Running Research Runs retain their orchestrator, result schema, prompt, and
 gate rubric versions across deploys. New server code must continue processing
 those versions until no active run references them.
+
+Existing `research-run-v1` runs remain on the pinned v1 prompt and result
+contract. They are not silently rewritten or re-evaluated under v2. Existing
+HTTP and WebSocket report response shapes are unchanged; author, task,
+attempt, and report-claim anchors are internal provenance fields.
 
 ## 15. Verification contract
 
@@ -563,6 +597,12 @@ and makes Agent count rather than information need control execution.
 
 Rejected because self-assigned credibility and text length do not establish
 claim support, citation accuracy, or coverage.
+
+V2 applies depth-tier section and conclusion character floors only as an
+anti-placeholder precondition. Delivery still depends on answer-Claim
+coverage, exact Claim-to-prose anchors, verified cited support, contradiction
+handling, and independent full-surface review; passing the length floor alone
+cannot satisfy any gate.
 
 ### A second Agent runtime
 

@@ -41,6 +41,41 @@ export function sessionGoalSummary(
   return truncateOneLine(session.goal || "", maxChars);
 }
 
+/** Collapse whitespace for equality / prefix checks (LRM-1104). */
+export function normalizeListText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+/**
+ * True when two texts are equal or either is a prefix of the other
+ * (after whitespace collapse). Used to drop redundant goal chips.
+ */
+export function textsAreEqualOrMutualPrefix(a: string, b: string): boolean {
+  const left = normalizeListText(a);
+  const right = normalizeListText(b);
+  if (!left || !right) return left === right;
+  return left === right || left.startsWith(right) || right.startsWith(left);
+}
+
+/**
+ * LRM-1104: hide goal chip when it duplicates the row title.
+ * Compare raw title (or goal when title is empty) against goal — not the
+ * truncated chip/title display strings, which break mutual-prefix checks
+ * once ellipsis is appended at different lengths.
+ */
+export function shouldShowSessionGoalChip(
+  session: Pick<ResearchSession, "title" | "goal">,
+): boolean {
+  const goal = normalizeListText(session.goal || "");
+  if (!goal) return false;
+  const title = normalizeListText(session.title || "");
+  const titleSource = title || goal;
+  return !textsAreEqualOrMutualPrefix(titleSource, goal);
+}
+
+/** Shared list content width: filter bar + rows (LRM-1104). */
+export const RESEARCH_SESSION_LIST_CONTENT_CLASS = "w-full max-w-3xl";
+
 export function matchesTitleQuery(
   session: Pick<ResearchSession, "title" | "goal">,
   query: string,

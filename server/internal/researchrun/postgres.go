@@ -165,6 +165,8 @@ func initializeRunTx(ctx context.Context, tx pgx.Tx, in StartInput, cfg RunConfi
 		return RunEvent{}, err
 	}
 	objective := buildPlanningObjective(in.Goal, in.Language)
+	expectedResult := expectedResultForTaskVersion(OrchestratorVersion, TaskKindPlan)
+	acceptanceCriteria, _ := json.Marshal(map[string]any{"schema_version": resultSchemaVersionForOrchestrator(OrchestratorVersion)})
 	var planTaskID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_task (
@@ -173,12 +175,12 @@ func initializeRunTx(ctx context.Context, tx pgx.Tx, in StartInput, cfg RunConfi
 			status, assigned_agent_id, goal_version, plan_version, max_attempts,
 			timeout_seconds, ready_at
 		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'plan:1', 'plan', $4,
-		          'lead', 'research_plan_v1', '{"schema_version":1}'::jsonb, 1,
-		          'ready', NULLIF($5, '')::uuid, 1, 1, $6, $7, now())
+		          'lead', $5, $6, 1,
+		          'ready', NULLIF($7, '')::uuid, 1, 1, $8, $9, now())
 		ON CONFLICT (session_id, goal_version, plan_version, client_key)
 		DO UPDATE SET objective = EXCLUDED.objective
 		RETURNING id::text
-	`, in.WorkspaceID, in.SessionID, rootQuestionID, objective, in.LeadAgentID,
+	`, in.WorkspaceID, in.SessionID, rootQuestionID, objective, expectedResult, acceptanceCriteria, in.LeadAgentID,
 		cfg.MaxAttemptsPerTask, cfg.TaskTimeoutSeconds).Scan(&planTaskID)
 	if err != nil {
 		return RunEvent{}, err

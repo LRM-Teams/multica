@@ -16,7 +16,43 @@ import { useCallback, useEffect, useEffectEvent, useRef } from "react";
  * - closes on Escape while active,
  * - moves focus into the panel when it becomes active,
  * - restores focus to the previously focused element when it deactivates.
+ *
+ * LRM-1177: restore cannot rely on node identity alone. The desktop chat
+ * float's only opener is the canvas chat FAB, which `research-canvas.tsx`
+ * renders as `!chatOpen ? <Fab/> : null` — it is unmounted for the whole time
+ * the float is open and returns as a *different* DOM node, so the old node is
+ * detached by the time we restore and the whole contract silently no-opped on
+ * its primary keyboard path. We therefore also remember a stable re-locator
+ * (`id`, else `data-testid`) and re-find the control on the way out.
  */
+
+type RestoreKey =
+  | { kind: "id"; value: string }
+  | { kind: "testId"; value: string };
+
+function restoreKeyFor(element: HTMLElement): RestoreKey | null {
+  if (element.id) return { kind: "id", value: element.id };
+  const testId = element.dataset.testid;
+  if (testId) return { kind: "testId", value: testId };
+  return null;
+}
+
+/**
+ * Resolved without building a selector string so arbitrary ids / test ids
+ * cannot produce an invalid or injected selector.
+ */
+function resolveRestoreKey(
+  doc: Document,
+  key: RestoreKey | null,
+): HTMLElement | null {
+  if (!key) return null;
+  if (key.kind === "id") return doc.getElementById(key.value);
+  for (const candidate of doc.querySelectorAll<HTMLElement>("[data-testid]")) {
+    if (candidate.dataset.testid === key.value) return candidate;
+  }
+  return null;
+}
+
 export function useOverlayPanelA11y({
   active,
   onClose,
@@ -27,6 +63,7 @@ export function useOverlayPanelA11y({
 }) {
   const panelRef = useRef<HTMLElement | null>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
+  const restoreKeyRef = useRef<RestoreKey | null>(null);
 
   const closeFromEscape = useEffectEvent(() => {
     onClose();
@@ -43,12 +80,36 @@ export function useOverlayPanelA11y({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [active]);
 
+  // Track the last control focused OUTSIDE the panel while it is closed.
+  // Capturing only at activation time is too late: React removes the opener in
+  // the same commit that opens the panel (`research-canvas.tsx` renders the
+  // chat FAB as `!chatOpen ? <Fab/> : null`), so by the time our activation
+  // effect runs `document.activeElement` is already `<body>` and there is
+  // nothing left to remember.
+  useEffect(() => {
+    if (active) return;
+    const doc = panelRef.current?.ownerDocument ?? globalThis.document;
+    const remember = () => {
+      const el = doc.activeElement;
+      if (!(el instanceof HTMLElement) || el === doc.body) return;
+      restoreRef.current = el;
+      restoreKeyRef.current = restoreKeyFor(el);
+    };
+    remember();
+    doc.addEventListener("focusin", remember);
+    return () => doc.removeEventListener("focusin", remember);
+  }, [active]);
+
   useEffect(() => {
     if (!active) return;
     const doc = panelRef.current?.ownerDocument ?? globalThis.document;
     const previous = doc?.activeElement;
-    restoreRef.current =
-      previous instanceof HTMLElement && previous !== doc.body ? previous : null;
+    // Only overwrite when there is still a live focused control; otherwise keep
+    // whatever the tracker above captured before the opener was removed.
+    if (previous instanceof HTMLElement && previous !== doc.body) {
+      restoreRef.current = previous;
+      restoreKeyRef.current = restoreKeyFor(previous);
+    }
 
     const panel = panelRef.current;
     if (panel && !panel.contains(doc.activeElement)) {
@@ -60,8 +121,15 @@ export function useOverlayPanelA11y({
 
     return () => {
       const target = restoreRef.current;
+      const key = restoreKeyRef.current;
       restoreRef.current = null;
-      if (target?.isConnected) target.focus({ preventScroll: true });
+      restoreKeyRef.current = null;
+      const resolved = target?.isConnected
+        ? target
+        : resolveRestoreKey(doc, key);
+      // No re-locator and the original node is gone: leave focus where it is
+      // rather than grabbing an unrelated control.
+      resolved?.focus({ preventScroll: true });
     };
   }, [active]);
 

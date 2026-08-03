@@ -23,6 +23,9 @@ type ResearchTemplateChipRowProps = {
 
 /**
  * LRM-1092 / LRM-1072: template pills inside the home composer (replaces external cards).
+ *
+ * LRM-1189: selected/hover reuse the frozen template blue triple from
+ * `research-template-inject-tag.tsx`; light values unchanged; no raw hex halo.
  */
 export function ResearchTemplateChipRow({
   selectedId,

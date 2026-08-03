@@ -3678,32 +3678,32 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			// starts: refuse the turn outright once the workspace is
 			// already at or over its cap, rather than letting it grow
 			// further unnoticed.
-			quota := d.cfg.AgentWorkspaceQuotaBytes
-			if quota <= 0 {
-				quota = DefaultAgentWorkspaceQuotaBytes
-			}
-			if used := dirSize(agentRoot); used >= quota {
-				// Env var name deliberately kept out of the user-visible
-				// Comment below (it contains "QUOTA", the exact substring
-				// this fix otherwise avoids) — operator-facing detail
-				// belongs in the log, not in front of the user.
-				taskLog.Warn("agent workspace at or over its size cap, refusing to start turn",
-					"agent_id", agentID, "used_bytes", used, "quota_bytes", quota,
-					"raise_cap_env", "MULTICA_AGENT_WORKSPACE_QUOTA_BYTES")
-				// This will not resolve on its own: the gate blocks every
-				// turn for this agent, including one that might otherwise
-				// clean up its own workspace, so say who else can act.
-				// UpdateAgentFileContent (owner/workspace-admin only) is
-				// the one existing path that can actually remove files
-				// here today.
-				return TaskResult{
-					Status: "failed",
-					Comment: fmt.Sprintf(
-						"agent workspace over capacity: cannot start turn (uses %d bytes, cap %d bytes) — this will not resolve on its own; an owner or workspace admin must remove files under the agent's workspace to free space",
-						used, quota,
-					),
-					FailureReason: "agent_workspace_over_capacity",
-				}, nil
+			// quota <= 0 means unlimited (default after LRM-1047). Positive
+			// MULTICA_AGENT_WORKSPACE_QUOTA_BYTES re-enables the turn-start gate.
+			if quota := d.cfg.AgentWorkspaceQuotaBytes; quota > 0 {
+				if used := dirSize(agentRoot); used >= quota {
+					// Env var name deliberately kept out of the user-visible
+					// Comment below (it contains "QUOTA", the exact substring
+					// this fix otherwise avoids) — operator-facing detail
+					// belongs in the log, not in front of the user.
+					taskLog.Warn("agent workspace at or over its size cap, refusing to start turn",
+						"agent_id", agentID, "used_bytes", used, "quota_bytes", quota,
+						"raise_cap_env", "MULTICA_AGENT_WORKSPACE_QUOTA_BYTES")
+					// This will not resolve on its own: the gate blocks every
+					// turn for this agent, including one that might otherwise
+					// clean up its own workspace, so say who else can act.
+					// UpdateAgentFileContent (owner/workspace-admin only) is
+					// the one existing path that can actually remove files
+					// here today.
+					return TaskResult{
+						Status: "failed",
+						Comment: fmt.Sprintf(
+							"agent workspace over capacity: cannot start turn (uses %d bytes, cap %d bytes) — this will not resolve on its own; an owner or workspace admin must remove files under the agent's workspace to free space",
+							used, quota,
+						),
+						FailureReason: "agent_workspace_over_capacity",
+					}, nil
+				}
 			}
 			d.hydrateAgentMemoryCenter(ctx, task.WorkspaceID, agentID, task.RuntimeID, agentRoot)
 		}

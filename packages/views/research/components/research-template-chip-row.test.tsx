@@ -97,3 +97,18 @@ describe("LRM-1189 research template chip row · tokens and dark parity", () => 
     expect(SOURCE).toContain("focus-visible:ring-brand/30");
   });
 });
+
+/** LRM-1218: non-drop divider must not use dashed border vocabulary. */
+describe("LRM-1218 research template chip row · solid divider", () => {
+  it("root row uses solid subtle bottom border, not border-dashed", () => {
+    render(<ResearchTemplateChipRow selectedId={null} onToggle={() => {}} />);
+    const row = screen.getByTestId("research-template-chip-row");
+    const className = row.getAttribute("class") ?? "";
+
+    expect(className).toContain("border-b");
+    expect(className).toContain("border-border/60");
+    expect(className).not.toContain("border-dashed");
+    // Class token only — ignore prose comments.
+    expect(SOURCE).not.toMatch(/["'`][^"'`]*\bborder-dashed\b[^"'`]*["'`]/);
+  });
+});

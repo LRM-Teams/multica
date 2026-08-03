@@ -26,6 +26,9 @@ type ResearchTemplateChipRowProps = {
  *
  * LRM-1189: selected/hover reuse the frozen template blue triple from
  * `research-template-inject-tag.tsx`; light values unchanged; no raw hex halo.
+ *
+ * LRM-1218: bottom divider uses solid/subtle border vocabulary (dashed
+ * borders stay reserved for drop/placeholder surfaces).
  */
 export function ResearchTemplateChipRow({
   selectedId,
@@ -41,7 +44,7 @@ export function ResearchTemplateChipRow({
       aria-label={t(($) => $.home.templates_label)}
       data-testid="research-template-chip-row"
       className={cn(
-        "flex gap-1.5 overflow-x-auto border-b border-dashed border-border/80 px-3 pb-2.5 pt-2.5 md:flex-wrap md:overflow-visible md:px-3.5",
+        "flex gap-1.5 overflow-x-auto border-b border-border/60 px-3 pb-2.5 pt-2.5 md:flex-wrap md:overflow-visible md:px-3.5",
         className,
       )}
     >

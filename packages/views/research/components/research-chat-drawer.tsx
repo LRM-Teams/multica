@@ -13,9 +13,10 @@ import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 
 /**
- * LRM-779 — research fleet chat shell:
- * - Desktop: ~320–400px side drawer (does not cover canvas).
- * - Narrow: full-viewport bottom sheet so the canvas is not squeezed.
+ * LRM-1061 / LRM-1056 v2 — fleet chat float:
+ * - Desktop: floating overlay (does not shrink the canvas as a permanent dock).
+ * - Narrow: full-viewport sheet; canvas stays full-bleed underneath.
+ * Default open=false is owned by the research UI store.
  */
 export function ResearchChatDrawer({
   open,
@@ -45,8 +46,6 @@ export function ResearchChatDrawer({
           data-testid="research-chat-drawer"
           data-placement="sheet"
           className={cn(
-            // Full-screen sheet on narrow: canvas stays full-bleed underneath.
-            // Sheet primitive sets `data-[side=bottom]:h-auto` — force viewport height.
             "flex !h-[100dvh] !max-h-[100dvh] min-h-[100dvh] w-full flex-col gap-0 overflow-hidden rounded-none border-0 p-0 sm:max-w-none",
             className,
           )}
@@ -68,10 +67,9 @@ export function ResearchChatDrawer({
   return (
     <aside
       data-testid="research-chat-drawer"
-      data-placement="aside"
+      data-placement="float"
       className={cn(
-        // LRM-971: drawer shell matches homepage card language (not flat gray slab).
-        "relative z-[1] flex w-[min(100%,380px)] shrink-0 flex-col border-l border-border/55 bg-card/95 backdrop-blur-sm",
+        "pointer-events-auto absolute inset-y-3 right-3 z-40 flex w-[min(100%,380px)] flex-col overflow-hidden rounded-xl border border-border/60 bg-card/95 shadow-xl backdrop-blur-md",
         className,
       )}
     >

@@ -81,6 +81,7 @@ import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
 import { useBrowserOnline } from "../lib/use-browser-online";
 import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
+import { ResearchAuxDrawer } from "./research-aux-drawer";
 import { ResearchCanvas } from "./research-canvas";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
@@ -95,6 +96,11 @@ import { ResearchConnectivityShell } from "./research-connectivity-shell";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
+import {
+  ResearchModuleRail,
+  type ResearchAuxPanelId,
+} from "./research-module-rail";
+import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchServerErrorPage } from "./research-server-error-page";
 import { ResearchSessionChrome } from "./research-session-chrome";
@@ -109,7 +115,6 @@ import {
   ResearchStageTimeline,
 } from "./research-stage-timeline";
 import { SourceStrategyStrip } from "./source-strategy-strip";
-import { VisibilityTabs } from "./visibility-tabs";
 
 type UiState = {
   selected: ResearchGraphNode | null;
@@ -178,6 +183,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
+  // LRM-1061 — one aux drawer at a time (trajectory | sources | detail).
+  const [auxPanel, setAuxPanel] = useState<ResearchAuxPanelId | null>(null);
   // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
   const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
   const completionDismissed =
@@ -560,47 +567,24 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
         />
       ) : null}
 
+      {/* LRM-1061: S1–S4 stays a thin strip under chrome; red-box rails are drawer-only. */}
       <ResearchStageTimeline
         currentStage={session.current_stage}
         sessionStatus={session.status}
         onSelectStage={handleSelectStage}
       />
 
-      <VisibilityTabs
-        dimensions={explorationDims}
-        strategy={sourceStrategy}
-        boundary={humanBoundary}
-        sessionStatus={session.status}
-        selectedFamily={ui.selectedFamily}
-        selectedQuestionId={ui.selected?.id}
-        onSelectFamily={(family) => dispatch({ type: "setFamily", family })}
-        onSelectQuestion={(id) => {
-          const node = data.nodes.find((n) => n.id === id) ?? null;
-          dispatch({ type: "select", node });
-        }}
-      />
-
-      <div className="hidden border-b sm:block">
-        <SourceStrategyStrip
-          model={sourceStrategy}
-          sessionStatus={session.status}
-        />
-      </div>
-
-      <div className="flex min-h-0 flex-1">
-        <ExplorationRail
-          className="hidden sm:flex"
-          dimensions={explorationDims}
-          sessionStatus={session.status}
-          selectedFamily={ui.selectedFamily}
-          selectedQuestionId={ui.selected?.id}
-          onSelectFamily={(family) => dispatch({ type: "setFamily", family })}
-          onSelectQuestion={(id) => {
-            const node = data.nodes.find((n) => n.id === id) ?? null;
-            dispatch({ type: "select", node });
-          }}
-        />
-        <section className="relative z-[1] min-h-0 min-w-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
+        <section
+          className="relative z-[1] min-h-0 min-w-0 flex-1"
+          data-testid="research-session-canvas-host"
+        >
+          <ResearchModuleRail
+            active={auxPanel}
+            onSelect={(id) =>
+              setAuxPanel((prev) => (prev === id ? null : id))
+            }
+          />
           <ResearchCanvas
             nodes={data.nodes}
             edges={data.edges}
@@ -614,6 +598,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             onOpenChat={() => setChatOpen(true)}
             chatOpen={chatOpen}
             chatMode={chatMode}
+            detailPlacement="drawer"
+            onOpenDetail={(node) => {
+              dispatch({ type: "select", node });
+              setAuxPanel("detail");
+            }}
             onRetry={(node) => {
               // LRM-848 entry → LRM-828 retry path. Until a dedicated BE API lands,
               // ask the fleet lead to re-explore from this dead_end via chat.
@@ -630,19 +619,61 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           />
           {canvasMode === "forming" ? <ResearchCanvasForming /> : null}
           {canvasMode === "empty" ? <ResearchCanvasEmptyState /> : null}
-        </section>
 
-        <aside
-          data-testid="research-boundary-aside"
-          className="relative z-[1] hidden w-[280px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-border/55 bg-background/55 p-3 backdrop-blur-sm lg:flex"
-        >
-          <HumanBoundaryCard
-            model={humanBoundary}
-            sessionStatus={session.status}
-          />
-        </aside>
+          <ResearchAuxDrawer
+            panel={auxPanel}
+            onClose={() => setAuxPanel(null)}
+          >
+            {auxPanel === "trajectory" ? (
+              <ExplorationRail
+                className="!static !h-auto !w-full !border-0 !bg-transparent"
+                dimensions={explorationDims}
+                sessionStatus={session.status}
+                selectedFamily={ui.selectedFamily}
+                selectedQuestionId={ui.selected?.id}
+                onSelectFamily={(family) =>
+                  dispatch({ type: "setFamily", family })
+                }
+                onSelectQuestion={(id) => {
+                  const node = data.nodes.find((n) => n.id === id) ?? null;
+                  dispatch({ type: "select", node });
+                  setAuxPanel("detail");
+                }}
+              />
+            ) : null}
+            {auxPanel === "sources" ? (
+              <div className="space-y-3">
+                <SourceStrategyStrip
+                  model={sourceStrategy}
+                  sessionStatus={session.status}
+                />
+                <HumanBoundaryCard
+                  model={humanBoundary}
+                  sessionStatus={session.status}
+                />
+              </div>
+            ) : null}
+            {auxPanel === "detail" ? (
+              ui.selected ? (
+                <ResearchNodeDetail
+                  node={ui.selected}
+                  sources={sources}
+                  open
+                  placement="overlay-card"
+                  onClose={() => {
+                    dispatch({ type: "select", node: null });
+                    setAuxPanel(null);
+                  }}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {t(($) => $.panel.aux_detail_empty)}
+                </p>
+              )
+            ) : null}
+          </ResearchAuxDrawer>
 
-        <ResearchChatDrawer open={chatOpen} onClose={() => setChatOpen(false)}>
+          <ResearchChatDrawer open={chatOpen} onClose={() => setChatOpen(false)}>
             <div
               className="flex items-center justify-between gap-2 border-b px-3 py-2.5"
               data-testid="research-chat-header"
@@ -657,12 +688,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
               <Button type="button" size="sm" variant="ghost" onClick={() => setChatOpen(false)}>
                 {t(($) => $.panel.hide_chat)}
               </Button>
-            </div>
-            <div className="border-b p-3 lg:hidden">
-              <HumanBoundaryCard
-                model={humanBoundary}
-                sessionStatus={session.status}
-              />
             </div>
             <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
               {t(($) => $.panel.fleet)}:{" "}
@@ -918,7 +943,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 </div>
               </div>
             </div>
-        </ResearchChatDrawer>
+          </ResearchChatDrawer>
+        </section>
 
         {!isMobile && agentPanelNode ? (
           <div

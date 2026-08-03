@@ -83,6 +83,8 @@ function ResearchCanvasInner({
   onOpenChat,
   chatOpen = false,
   chatMode = "empty",
+  detailPlacement = "overlay",
+  onOpenDetail,
 }: {
   nodes: ResearchGraphNode[];
   edges: ResearchGraphEdge[];
@@ -98,6 +100,9 @@ function ResearchCanvasInner({
   chatOpen?: boolean;
   /** LRM-992 — FAB four-state mode (empty / loading / running / error). */
   chatMode?: ChatDrawerMode;
+  /** LRM-1061 — node detail goes to the aux drawer instead of a floating card. */
+  detailPlacement?: "overlay" | "drawer";
+  onOpenDetail?: (node: ResearchGraphNode) => void;
 }) {
   const { t } = useT("research");
   const laid = useMemo(() => layoutResearchGraph(nodes, edges), [nodes, edges]);
@@ -232,17 +237,24 @@ function ResearchCanvasInner({
   // Prefer prop selection; keep a local pin so detail still opens if parent select lags.
   const detailNode = selectedNode ?? pinnedNode ?? (detailPinned ? ringNode : null);
   const sourceList = sources ?? [];
-  const showDetail =
-    detailPinned ||
-    (!!detailNode && SYSTEM_NODE_TYPES.has(detailNode.node_type));
+  const showOverlayDetail =
+    detailPlacement === "overlay" &&
+    (detailPinned ||
+      (!!detailNode && SYSTEM_NODE_TYPES.has(detailNode.node_type)));
 
   const pinDetail = useCallback(
     (node: ResearchGraphNode) => {
       onSelect?.(node);
+      if (detailPlacement === "drawer") {
+        onOpenDetail?.(node);
+        setDetailPinned(false);
+        setPinnedNodeId(null);
+        return;
+      }
       setPinnedNodeId(node.id);
       setDetailPinned(true);
     },
-    [onSelect],
+    [detailPlacement, onOpenDetail, onSelect],
   );
 
   const clearDetail = useCallback(() => {
@@ -325,11 +337,11 @@ function ResearchCanvasInner({
           className="absolute top-3 right-3 z-20"
         />
         {chatFab}
-        {showDetail && detailNode ? (
+        {showOverlayDetail && detailNode ? (
           <ResearchNodeDetail
             node={detailNode}
             sources={sourceList}
-            open={showDetail}
+            open={showOverlayDetail}
             placement="sheet"
             onClose={clearDetail}
           />
@@ -471,9 +483,9 @@ function ResearchCanvasInner({
             void fitView({ padding: 0.18, duration: 240 });
             setZoomPct(Math.round(getZoom() * 100));
           }}
-          detailOpen={showDetail}
+          detailOpen={showOverlayDetail}
           onToggleDetail={() => {
-            if (showDetail) {
+            if (showOverlayDetail) {
               clearDetail();
             } else if (selectedNode || ringNode) {
               const n = selectedNode ?? ringNode!;
@@ -483,8 +495,8 @@ function ResearchCanvasInner({
           }}
         />
       </div>
-      {/* LRM-797: detail card 12px above Controls (substantial, not a chip). */}
-      {showDetail && detailNode ? (
+      {/* LRM-797: detail card 12px above Controls — skipped when LRM-1061 drawer owns detail. */}
+      {showOverlayDetail && detailNode ? (
         <div
           className="pointer-events-auto absolute z-20"
           style={{
@@ -496,7 +508,7 @@ function ResearchCanvasInner({
           <ResearchNodeDetail
             node={detailNode}
             sources={sourceList}
-            open={showDetail}
+            open={showOverlayDetail}
             placement="overlay-card"
             onClose={clearDetail}
           />
@@ -521,6 +533,8 @@ export function ResearchCanvas(props: {
   onOpenChat?: () => void;
   chatOpen?: boolean;
   chatMode?: ChatDrawerMode;
+  detailPlacement?: "overlay" | "drawer";
+  onOpenDetail?: (node: ResearchGraphNode) => void;
 }) {
   return (
     <ReactFlowProvider>

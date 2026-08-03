@@ -40,7 +40,7 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
   const newRuntimeIdRef = useRef<string | null>(null);
 
   // `multica setup` is one blocking command that handles config + login
-  // + daemon start; the dialog passively listens for the resulting
+  // + install-service via setup; the dialog passively listens for the resulting
   // `daemon:register` WS event and auto-advances to success.
   const handleDaemonRegister = useCallback(
     (payload: unknown) => {

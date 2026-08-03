@@ -104,6 +104,7 @@ vi.mock("@multica/core/workspace/hooks", () => ({
     getMemberRole: () => null,
     getMemberHonor: () => undefined,
     getAgentFleetRank: () => undefined,
+    getAgentHonorLevel: () => undefined,
   }),
 }));
 

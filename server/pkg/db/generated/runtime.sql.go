@@ -1443,7 +1443,7 @@ DO UPDATE SET
     status = EXCLUDED.status,
     device_info = EXCLUDED.device_info,
     metadata = EXCLUDED.metadata,
-    owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
+    owner_id = COALESCE(agent_runtime.owner_id, EXCLUDED.owner_id),
     offline_reason = NULL,
     last_seen_at = now(),
     updated_at = now(),

@@ -520,6 +520,37 @@ func (q *Queries) ListAgentHonorAdminAudit(ctx context.Context, arg ListAgentHon
 	return items, nil
 }
 
+const listAgentHonorLevelsByWorkspace = `-- name: ListAgentHonorLevelsByWorkspace :many
+SELECT agent_id, level
+FROM agent_honor_state
+WHERE workspace_id = $1
+`
+
+type ListAgentHonorLevelsByWorkspaceRow struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	Level   int32       `json:"level"`
+}
+
+func (q *Queries) ListAgentHonorLevelsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]ListAgentHonorLevelsByWorkspaceRow, error) {
+	rows, err := q.db.Query(ctx, listAgentHonorLevelsByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAgentHonorLevelsByWorkspaceRow{}
+	for rows.Next() {
+		var i ListAgentHonorLevelsByWorkspaceRow
+		if err := rows.Scan(&i.AgentID, &i.Level); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAgentHonorUnlocks = `-- name: ListAgentHonorUnlocks :many
 SELECT workspace_id, agent_id, achievement_id, source, unlocked_at FROM agent_honor_unlock
 WHERE workspace_id = $1 AND agent_id = $2

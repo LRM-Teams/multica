@@ -26,16 +26,38 @@ export function ResearchDeliveryModeChip({ mode }: { mode: DeliveryMode }) {
           : t(($) => $.panel.delivery_mode.running);
 
   return (
-    <span
-      data-testid="research-delivery-mode"
-      data-delivery-mode={mode}
-      className={cn(
-        "rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
-        modeChip[mode],
-      )}
-    >
-      {label}
-    </span>
+    <>
+      <span
+        data-testid="research-delivery-mode"
+        data-delivery-mode={mode}
+        className={cn(
+          "rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
+          modeChip[mode],
+        )}
+        aria-hidden
+      >
+        {label}
+      </span>
+      {/*
+        LRM-1229 — delivery flips loading → running inside one mount, so the
+        announcement cannot live on a mode-specific subtree (that node is
+        unmounted exactly when the content becomes ready). This chip renders in
+        every mode, so it hosts the one persistent live region for the modal,
+        the same way research-chat-mode-body (LRM-1225) and research-canvas keep
+        a standing sr-only region. The visible chip is aria-hidden to avoid
+        speaking the label twice.
+      */}
+      <span
+        data-testid="research-delivery-mode-live"
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-busy={mode === "loading"}
+      >
+        {label}
+      </span>
+    </>
   );
 }
 
@@ -60,7 +82,6 @@ export function ResearchDeliveryModeBody({
         data-testid="research-delivery-loading"
         className="space-y-3"
         aria-busy
-        aria-live="polite"
       >
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="size-3.5 animate-spin text-brand" aria-hidden />

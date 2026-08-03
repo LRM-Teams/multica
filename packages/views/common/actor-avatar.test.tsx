@@ -212,6 +212,16 @@ describe("AgentPresenceOverlay", () => {
     expect(box).toHaveClass("relative");
   });
 
+  it("LRM-1119: presence box opts out of overflow clipping so the corner dot can paint", () => {
+    render(
+      <AgentPresenceOverlay agentId="agent-1" size={40}>
+        <div />
+      </AgentPresenceOverlay>,
+    );
+    const box = screen.getByLabelText(/^Status:/).closest('[data-slot="agent-presence"]');
+    expect(box).toHaveClass("overflow-visible");
+  });
+
 });
 
 describe("AgentStatusDot", () => {
@@ -246,6 +256,13 @@ describe("AgentStatusDot", () => {
     const dot = screen.getByLabelText(/^Status:/);
     expect(dot).toHaveClass("ring-2");
     expect(dot).toHaveClass("ring-background");
+  });
+
+  it("LRM-1119: insets the corner anchor by ring width so fill+ring stay inside the box", () => {
+    render(<AgentStatusDot agentId="agent-1" size={40} />);
+    const anchor = screen.getByLabelText(/^Status:/).parentElement;
+    expect(anchor).toHaveClass("bottom-0.5");
+    expect(anchor).toHaveClass("right-0.5");
   });
 
   it("uses the success color when online but never fakes green when offline", () => {

@@ -379,7 +379,10 @@ function DmHeader({
     isAgentPeer && openAgentPanel ? (
       <button
         type="button"
-        className="inline-flex min-w-0 max-w-full items-center overflow-hidden rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        // overflow-visible on the avatar axis: presence corner dot must not be
+        // shaved by this header hit target (LRM-1119). Truncation stays on the
+        // name span (`min-w-0 truncate`), not the whole row.
+        className="inline-flex min-w-0 max-w-full items-center overflow-visible rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={() => openAgentPanel(peerId)}
       >
         {child}

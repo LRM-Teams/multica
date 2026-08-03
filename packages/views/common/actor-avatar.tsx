@@ -19,9 +19,7 @@ import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { useMemberPanelStore } from "@multica/core/workspace";
 import { resolveHealthDotClass } from "../agents/health";
-import { AgentProfileCard } from "../agents/components/agent-profile-card";
-import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
-import { MemberProfileCard } from "../members/member-profile-card";
+import { ActorProfileContent } from "./actor-profile-popover";
 import { availabilityConfig, toLiveAvailability } from "../agents/presence";
 import { useNavigation } from "../navigation";
 import { useOpenAgentPanel } from "./agent-panel-context";
@@ -33,19 +31,6 @@ import {
   mentionTypeFromActorType,
   useResolvedActorIdentity,
 } from "./use-resolved-actor-identity";
-
-/**
- * Selects which agent hover-card payload to render when `enableHoverCard` is
- * on. Two surfaces, two intents:
- * - `"profile"` (default) — static identity (description, runtime, skills,
- *   owner). Used by 20+ "who is this agent?" surfaces (comment authors,
- *   pickers, list rows).
- * - `"live"` — live activity peek (workload, current issue, last activity).
- *   Used where the user already knows the identity and wants the live state.
- *
- * Has no effect for non-agent actors (members always render the member card).
- */
-export type AgentHoverCardVariant = "profile" | "live";
 
 interface ActorAvatarProps {
   actorType: string;
@@ -66,7 +51,8 @@ interface ActorAvatarProps {
   /**
    * Wrap the avatar in a hover-card preview on dwell. Use for "who is this?"
    * surfaces — comment authors, list rows, subscriber chips. Independent of
-   * `showStatusDot`: a surface can have one, both, or neither.
+   * `showStatusDot`: a surface can have one, both, or neither. Payload is
+   * always `ActorProfileContent` (task #25 — one sitewide identity hover).
    */
   enableHoverCard?: boolean;
   /**
@@ -76,12 +62,6 @@ interface ActorAvatarProps {
    * popover inside the dropdown.
    */
   showStatusDot?: boolean;
-  /**
-   * When `enableHoverCard` is on for an agent, choose which payload to
-   * render. See {@link AgentHoverCardVariant}. Defaults to `"profile"` so
-   * existing call sites keep their identity-card behaviour.
-   */
-  hoverCardVariant?: AgentHoverCardVariant;
   /**
    * Make the avatar click through to the actor page. Defaults on for members
    * and agents, while picker/menu controls keep their own click behavior.
@@ -122,7 +102,6 @@ export function ActorAvatar({
   avatarUrlHint,
   enableHoverCard,
   showStatusDot,
-  hoverCardVariant = "profile",
   profileLink,
   showXpBurst = false,
   fleetRank,
@@ -215,9 +194,7 @@ export function ActorAvatar({
   }
   if (actorType === "agent") {
     return (
-      <AgentAvatarHoverCard agentId={actorId} variant={hoverCardVariant}>
-        {content}
-      </AgentAvatarHoverCard>
+      <AgentAvatarHoverCard agentId={actorId}>{content}</AgentAvatarHoverCard>
     );
   }
   if (actorType === "member") {
@@ -537,24 +514,21 @@ export function MemberStatusDot({ userId, size }: { userId: string; size?: numbe
  * only when no focusable ancestor (link/button) already provides a tab stop —
  * this prevents nested tabbable descendants and keyboard-nav bloat at sites
  * where the avatar lives inside a row link or click target.
+ *
+ * Same `ActorProfileContent` as group/DM `ActorProfileTrigger` — task #25:
+ * one hover card sitewide (human + agent).
  */
 function AgentAvatarHoverCard({
   agentId,
-  variant,
   children,
 }: {
   agentId: string;
-  variant: AgentHoverCardVariant;
   children: React.ReactNode;
 }) {
-  const content =
-    variant === "live" ? (
-      <AgentLivePeekCard agentId={agentId} />
-    ) : (
-      <AgentProfileCard agentId={agentId} />
-    );
   return (
-    <ActorAvatarHoverCardShell content={content}>
+    <ActorAvatarHoverCardShell
+      content={<ActorProfileContent memberType="agent" memberId={agentId} />}
+    >
       {children}
     </ActorAvatarHoverCardShell>
   );
@@ -568,15 +542,16 @@ function MemberAvatarHoverCard({
   children: React.ReactNode;
 }) {
   return (
-    <ActorAvatarHoverCardShell content={<MemberProfileCard userId={userId} />}>
+    <ActorAvatarHoverCardShell
+      content={<ActorProfileContent memberType="user" memberId={userId} />}
+    >
       {children}
     </ActorAvatarHoverCardShell>
   );
 }
 
 // Common chrome shared between agent and member hover cards. Keeps focus
-// behaviour and width consistent so the two surfaces feel structurally
-// parallel — content varies, frame doesn't.
+// behaviour and width consistent with `ActorProfileTrigger` (task #25).
 function ActorAvatarHoverCardShell({
   content,
   children,
@@ -607,7 +582,7 @@ function ActorAvatarHoverCardShell({
       >
         {children}
       </HoverCardTrigger>
-      <HoverCardContent align="start" className="w-72">
+      <HoverCardContent align="start" className="w-[300px] p-0">
         {content}
       </HoverCardContent>
     </HoverCard>

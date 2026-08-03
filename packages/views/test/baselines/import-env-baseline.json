@@ -39,14 +39,6 @@
       "tests_ms": 267.95184100000006
     },
     {
-      "file": "agents/components/agent-live-peek-card.test.tsx",
-      "import_ms": 663.9391810000002,
-      "environment_ms": 988.754531,
-      "setup_ms": 191.08021699999995,
-      "prepare_ms": 15.591541000000007,
-      "tests_ms": 253.34327199999984
-    },
-    {
       "file": "agents/components/agent-overview-pane.test.tsx",
       "import_ms": 4237.643238,
       "environment_ms": 936.271132,
@@ -77,14 +69,6 @@
       "setup_ms": 171.34515699999986,
       "prepare_ms": 12.793569000000048,
       "tests_ms": 221.9817280000002
-    },
-    {
-      "file": "agents/components/agent-profile-card.test.tsx",
-      "import_ms": 1155.3646939999999,
-      "environment_ms": 933.7849329999999,
-      "setup_ms": 201.39098200000012,
-      "prepare_ms": 11.68815699999982,
-      "tests_ms": 430.4538090000001
     },
     {
       "file": "agents/components/agent-profile-message-button.test.tsx",

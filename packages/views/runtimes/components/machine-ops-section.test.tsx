@@ -119,8 +119,10 @@ function wrap(ui: ReactElement) {
 }
 
 describe("MachineHeaderOps (LRM-1071 / v5)", () => {
+  const now = Date.parse("2026-08-01T00:00:05Z");
+
   it("shows Restart outline + ⋯; no Upgrade or Delete in header", () => {
-    wrap(<MachineHeaderOps machine={makeMachine()} now={Date.now()} />);
+    wrap(<MachineHeaderOps machine={makeMachine()} now={now} />);
     expect(screen.getByTestId("machine-header-ops")).toBeInTheDocument();
     expect(screen.getByTestId("machine-header-restart")).toBeInTheDocument();
     expect(screen.getByTestId("machine-actions-menu-trigger")).toBeInTheDocument();
@@ -135,7 +137,7 @@ describe("MachineHeaderOps (LRM-1071 / v5)", () => {
         machine={makeMachine({
           runtimes: [makeRuntime({ metadata: { launched_by: "desktop" } })],
         })}
-        now={Date.now()}
+        now={now}
       />,
     );
     await user.click(screen.getByTestId("machine-actions-menu-trigger"));

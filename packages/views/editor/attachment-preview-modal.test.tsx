@@ -741,6 +741,77 @@ describe("useAttachmentPreview — tryOpen gate", () => {
   });
 });
 
+// LRM-1180 — a URL-only source could not declare its MIME type, so `normalize`
+// hardcoded `contentType: ""` and `getPreviewKind` had only the filename
+// extension to go on. A pasted screenshot (composer tray: `blob:…` +
+// "image.png"-less filename) therefore resolved to kind `null` and the modal
+// rendered "can't be previewed" + Download for an ordinary PNG. The fix is
+// additive: the field is optional, so every pre-existing caller keeps the
+// extension-only behaviour.
+describe("PreviewSource url variant — optional contentType (LRM-1180)", () => {
+  it("previews an extension-less image when the caller supplies the real MIME", () => {
+    render(
+      <AttachmentPreviewModal
+        source={{
+          kind: "url",
+          url: "blob:pasted-screenshot",
+          filename: "pasted-screenshot",
+          contentType: "image/png",
+        }}
+        open
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByAltText("pasted-screenshot")).toHaveAttribute(
+      "src",
+      "blob:pasted-screenshot",
+    );
+    expect(
+      screen.queryByText("This file type can't be previewed."),
+    ).toBeNull();
+  });
+
+  it("keeps the extension-only fallback when contentType is omitted (zero regression for existing callers)", () => {
+    render(
+      <AttachmentPreviewModal
+        source={{
+          kind: "url",
+          url: "https://cdn.example.test/photo.png",
+          filename: "photo.png",
+        }}
+        open
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByAltText("photo.png")).toBeInTheDocument();
+  });
+
+  it("tryOpen resolves the kind from contentType, not just the extension", () => {
+    const { result } = renderHook(() => useAttachmentPreview());
+    let opened = false;
+    hookAct(() => {
+      opened = result.current.tryOpen({
+        kind: "url",
+        url: "blob:pasted",
+        filename: "pasted",
+        contentType: "image/png",
+      });
+    });
+    expect(opened).toBe(true);
+
+    let withoutMime = true;
+    hookAct(() => {
+      withoutMime = result.current.tryOpen({
+        kind: "url",
+        url: "blob:pasted",
+        filename: "pasted",
+      });
+    });
+    expect(withoutMime).toBe(false);
+  });
+});
+
 // #831 — the second defect: AttachmentCard re-listed the URL-previewable kinds
 // and omitted `image`, so a URL-only image was rendered with no preview
 // affordance even though the modal renders images from a URL fine. The card

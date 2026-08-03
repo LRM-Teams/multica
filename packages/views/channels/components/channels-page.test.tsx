@@ -398,7 +398,6 @@ vi.mock("../../common/project-picker-button", () => ({
 }));
 vi.mock("./dm-conversation", () => ({ DmConversation: () => <div data-testid="dm-conversation" /> }));
 vi.mock("./channel-files-panel", () => ({ ChannelFilesPanel: () => <div /> }));
-vi.mock("./channel-stats-panel", () => ({ ChannelStatsPanel: () => <div /> }));
 // #832 role-failure suite: chrome-only details panel (renders the page-built
 // membersBody directly) + presence cluster reduced to an "open-members"
 // button. Every other suite needs the REAL details panel and the REAL presence

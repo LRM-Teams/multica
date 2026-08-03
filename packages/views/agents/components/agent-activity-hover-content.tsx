@@ -29,7 +29,7 @@ interface AgentActivityHoverContentProps {
  *   - running                       → brand (text-brand)
  *   - queued, runtime online        → muted gray (transient race)
  *   - queued, runtime offline/etc.  → warning amber (genuine stuck)
- * — same rule as agent-presence-indicator.tsx so users see a single,
+ * — same rule as prior presence indicator so users see a single,
  * consistent language for "agent is in trouble" vs "just enqueued".
  */
 export function AgentActivityHoverContent({
@@ -75,7 +75,7 @@ export function AgentActivityHoverContent({
           const wl = isRunning ? workloadConfig.working : workloadConfig.queued;
           // queued + online → muted gray (transient race, no warning);
           // queued + offline/unstable → keep warning amber from
-          // workloadConfig. Mirrors agent-presence-indicator.tsx.
+          // workloadConfig. Mirrors prior presence indicator.
           const dotClass = isRunning
             ? "bg-brand"
             : availability === "online"

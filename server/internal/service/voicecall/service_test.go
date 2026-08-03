@@ -703,6 +703,9 @@ func TestServiceActivateDuplexSkipsProviderConnectAndStop(t *testing.T) {
 	if activation.WelcomeMessage != "你好，我是贝克汉姆。" {
 		t.Fatalf("welcome message = %q", activation.WelcomeMessage)
 	}
+	if !reflect.DeepEqual(activation.SystemMessages, []string{"You are Beckham.", "Use the current DM context."}) {
+		t.Fatalf("system messages = %#v", activation.SystemMessages)
+	}
 	if !reflect.DeepEqual(deps.order, []string{
 		"authorize",
 		"create",

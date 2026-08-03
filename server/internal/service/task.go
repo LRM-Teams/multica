@@ -440,12 +440,8 @@ func (s *TaskService) taskAnalyticsContext(ctx context.Context, task db.AgentInb
 			if issue.OriginType.Valid {
 				switch issue.OriginType.String {
 				case "autopilot":
+					// Autopilot tables dropped (LRM-1051); keep analytics source stamp only.
 					tc.Source = analytics.SourceAutopilot
-					if ap, err := s.Queries.GetAutopilot(ctx, issue.OriginID); err == nil {
-						if ap.CreatedByType == "member" {
-							tc.UserID = util.UUIDToString(ap.CreatedByID)
-						}
-					}
 				case "quick_create":
 					tc.Source = analytics.SourceManual
 				}
@@ -458,16 +454,7 @@ func (s *TaskService) taskAnalyticsContext(ctx context.Context, task db.AgentInb
 			tc.UserID = util.UUIDToString(cs.CreatorID)
 		}
 	}
-	if task.AutopilotRunID.Valid {
-		if run, err := s.Queries.GetAutopilotRun(ctx, task.AutopilotRunID); err == nil {
-			if ap, err := s.Queries.GetAutopilot(ctx, run.AutopilotID); err == nil {
-				tc.WorkspaceID = util.UUIDToString(ap.WorkspaceID)
-				if ap.CreatedByType == "member" {
-					tc.UserID = util.UUIDToString(ap.CreatedByID)
-				}
-			}
-		}
-	}
+	// Autopilot tables dropped (LRM-1051); historical AutopilotRunID is orphan UUID only.
 	if qc, ok := s.parseQuickCreateContext(task); ok {
 		tc.WorkspaceID = qc.WorkspaceID
 		tc.UserID = qc.RequesterID
@@ -3077,7 +3064,7 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 
 // ResolveTaskWorkspaceID determines the workspace ID for a task.
 // For issue tasks, it comes from the issue. For chat tasks, from the chat session.
-// For autopilot tasks, from the autopilot via its run.
+// Legacy autopilot_run_id tasks use agent_inbox_event.workspace_id (tables dropped LRM-1051).
 // Returns "" when none of the links resolve — callers treat that as "not found".
 func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentInboxEvent) string {
 	canonicalWorkspaceID := util.UUIDToString(task.WorkspaceID)
@@ -3099,17 +3086,7 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentI
 			return sourceWorkspaceID
 		}
 	}
-	if task.AutopilotRunID.Valid {
-		if run, err := s.Queries.GetAutopilotRun(ctx, task.AutopilotRunID); err == nil {
-			if ap, err := s.Queries.GetAutopilot(ctx, run.AutopilotID); err == nil {
-				sourceWorkspaceID := util.UUIDToString(ap.WorkspaceID)
-				if canonicalWorkspaceID != "" && sourceWorkspaceID != canonicalWorkspaceID {
-					return ""
-				}
-				return sourceWorkspaceID
-			}
-		}
-	}
+	// Autopilot tables dropped (LRM-1051); do not resolve workspace via run.
 	// Quick-create tasks have no issue / chat / autopilot link — workspace
 	// lives in the context JSONB. Returning "" here is what blocked
 	// requireDaemonTaskAccess (404 on /start, /progress, /complete, /fail

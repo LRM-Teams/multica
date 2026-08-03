@@ -132,7 +132,6 @@ func runAgentDeleteCascadeFKIndexesHook(ctx context.Context, pool *pgxpool.Pool)
 		{"idx_agent_session_last_acked_event", `CREATE INDEX CONCURRENTLY idx_agent_session_last_acked_event ON agent_session (last_acked_event_id) WHERE last_acked_event_id IS NOT NULL`},
 		{"idx_agent_transport_draft_inbox_event", `CREATE INDEX CONCURRENTLY idx_agent_transport_draft_inbox_event ON agent_transport_draft (inbox_event_id) WHERE inbox_event_id IS NOT NULL`},
 		{"idx_agent_transport_draft_task", `CREATE INDEX CONCURRENTLY idx_agent_transport_draft_task ON agent_transport_draft (task_id) WHERE task_id IS NOT NULL`},
-		{"idx_autopilot_run_task", `CREATE INDEX CONCURRENTLY idx_autopilot_run_task ON autopilot_run (task_id) WHERE task_id IS NOT NULL`},
 		{"idx_channel_ambient_pending_wake_chat_session", `CREATE INDEX CONCURRENTLY idx_channel_ambient_pending_wake_chat_session ON channel_ambient_pending_wake (chat_session_id) WHERE chat_session_id IS NOT NULL`},
 		{"idx_channel_decision_audit_inbox_event", `CREATE INDEX CONCURRENTLY idx_channel_decision_audit_inbox_event ON channel_decision_audit (inbox_event_id) WHERE inbox_event_id IS NOT NULL`},
 		{"idx_channel_message_attachment_workspace_attachment", `CREATE INDEX CONCURRENTLY idx_channel_message_attachment_workspace_attachment ON channel_message_attachment (workspace_id, attachment_id) WHERE attachment_id IS NOT NULL`},

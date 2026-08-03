@@ -1353,10 +1353,6 @@ func (h *Handler) ArchiveAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.R
 		return
 	}
 	if len(allArchivedIDs) > 0 {
-		if err := qtx.PauseAutopilotsByAgentAssignees(r.Context(), allArchivedIDs); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to pause autopilots")
-			return
-		}
 		if err := teardownArchivedAgentDependents(r.Context(), qtx, allArchivedIDs); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to clean up archived agent dependencies")
 			return

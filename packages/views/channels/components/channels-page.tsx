@@ -179,6 +179,10 @@ import { PropRow } from "../../common/prop-row";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
 import { useComposerSend } from "../hooks/use-composer-send";
 import {
+  buildGroupMentionAllowedActorIds,
+  inviteableUndeliveredMentions,
+} from "../mention-scope";
+import {
   ComposerSendErrorBar,
   type ComposerSendErrorState,
 } from "./composer-send-error-bar";
@@ -1400,25 +1404,48 @@ export function ChannelsPage({
         )
       : channelMembers;
   }, [channelMembers, membersQuery, t]);
-  // Scope the composer's @ picker to this channel's members only.
+  // Channel-member id set (DM / narrow scope).
   const channelMemberIds = useMemo(
     () => new Set(channelMembers.map((m) => m.member_id)),
     [channelMembers],
   );
-  // Channel-member agents to surface in the @ picker even when they aren't in
-  // the member's personal agent list (e.g. a teammate's private Wendy). Channel
-  // membership — not assignability — authorizes the mention.
+  // Group @ picker: workspace members + agents (Alice #1984 / Raft undelivered).
+  // DM stays channel-member only (fail-closed).
+  const mentionAllowedActorIds = useMemo(() => {
+    if (!active || active.kind !== "group") return channelMemberIds;
+    return buildGroupMentionAllowedActorIds({
+      workspaceUserIds: workspaceMembers.map((m) => m.user_id),
+      workspaceAgentIds: agents.map((a) => a.id),
+      channelMemberIds: channelMembers.map((m) => m.member_id),
+    });
+  }, [active, agents, channelMemberIds, channelMembers, workspaceMembers]);
+  // Channel-member agents + (on group) workspace agents so picker can inject
+  // ids not already in the personal agent list.
   const channelAgentCandidates = useMemo<ContentEditorProps["scopedMentionAgents"]>(
     () => {
       const out: Array<{ id: string; name: string; display_name?: string | null }> = [];
+      const seen = new Set<string>();
       for (const m of channelMembers) {
-        if (m.member_type === "agent") {
+        if (m.member_type === "agent" && !seen.has(m.member_id)) {
+          seen.add(m.member_id);
           out.push({ id: m.member_id, name: m.name, display_name: m.display_name });
+        }
+      }
+      if (active?.kind === "group") {
+        for (const a of agents) {
+          if (a.id && !seen.has(a.id) && !a.archived_at) {
+            seen.add(a.id);
+            out.push({
+              id: a.id,
+              name: a.name,
+              display_name: a.display_name,
+            });
+          }
         }
       }
       return out;
     },
-    [channelMembers],
+    [active?.kind, agents, channelMembers],
   );
   // Agents surface their lifecycle stage via the query-driven working indicator
   // (which shows "Thinking"/"Starting up" rather than a premature "typing"), so
@@ -2181,6 +2208,54 @@ export function ChannelsPage({
     threadPending.addFiles(Array.from(files));
   };
 
+  // Alice #1984: after group send, invite undelivered @ targets (Raft-shaped).
+  const promptInviteUndelivered = useCallback(
+    (
+      channelId: string,
+      msg: {
+        undelivered_mentions?: Array<{
+          type: string;
+          id: string;
+          handle?: string;
+          label?: string;
+          actions?: string[];
+        }>;
+      },
+    ) => {
+      const undelivered = msg.undelivered_mentions;
+      const members = inviteableUndeliveredMentions(undelivered);
+      if (members.length === 0) return;
+      const names = (undelivered ?? [])
+        .filter((u) => u.actions?.includes("invite"))
+        .map((u) => u.label || u.handle || u.id)
+        .filter(Boolean);
+      const who =
+        names.length === 0
+          ? String(members.length)
+          : names.length <= 3
+            ? names.join(", ")
+            : `${names.slice(0, 3).join(", ")}…`;
+      toast.message(t(($) => $.composer.undelivered_mentions_title), {
+        description: t(($) => $.composer.undelivered_mentions_body, { who }),
+        action: {
+          label: t(($) => $.composer.undelivered_invite),
+          onClick: () => {
+            addMembers.mutate(
+              { channelId, members },
+              {
+                onSuccess: () =>
+                  toast.success(t(($) => $.composer.undelivered_invite_done)),
+                onError: () => showErrorToast(t(($) => $.members.invite_failed)),
+              },
+            );
+          },
+        },
+        duration: 12_000,
+      });
+    },
+    [addMembers, t],
+  );
+
   const handleSend = () => {
     // Empty-payload early-return runs BEFORE the in-flight guard: after a send
     // succeeds, onSuccess clears the editor/tray and onSettled releases the guard —
@@ -2196,18 +2271,27 @@ export function ChannelsPage({
     // fire async, so a channel switch mid-flight must not clear/restore the wrong
     // channel's draft.
     const draftKey = activeDraftKey;
+    const channelIdForSend = active.id;
     // Send lock (N held/auto-repeat Enter → 1 request) + payload-bound
     // client_message_id + the 3-way outcome, all owned by useComposerSend.
     const dispatched = channelSend.send({
       payloadKey: composePayloadKey(content, attachmentIds, quoteTarget?.id ?? ""),
       buildVars: (clientMessageId) => ({
-        channelId: active.id,
+        channelId: channelIdForSend,
         content,
         parts,
         quoteMessageId: quoteTarget?.id ?? undefined,
         clientMessageId,
       }),
-      mutate: sendMessage.mutate,
+      mutate: (vars, cbs) => {
+        sendMessage.mutate(vars, {
+          ...cbs,
+          onSuccess: (msg) => {
+            promptInviteUndelivered(channelIdForSend, msg);
+            cbs.onSuccess();
+          },
+        });
+      },
       // #1276 INV-1: the input is cleared on optimistic dispatch (below), but the
       // PERSISTED draft is cleared ONLY here, on confirmed success — never on
       // dispatch. Optimistic UI may DISPLAY optimistically (empty composer +
@@ -2350,7 +2434,15 @@ export function ChannelsPage({
         quoteMessageId: threadQuoteTarget?.id ?? undefined,
         clientMessageId,
       }),
-      mutate: sendThreadMessage.mutate,
+      mutate: (vars, cbs) => {
+        sendThreadMessage.mutate(vars, {
+          ...cbs,
+          onSuccess: (msg) => {
+            promptInviteUndelivered(active.id, msg);
+            cbs.onSuccess();
+          },
+        });
+      },
       onCommitted: () => setChannelThreadSendError(null),
       onVisibleError: () => {
         // #772 (channel thread): restore failed text into the thread composer
@@ -2365,7 +2457,7 @@ export function ChannelsPage({
         setChannelThreadSendError({ conflicted });
       },
     });
-    if (dispatched) {
+       if (dispatched) {
       setChannelThreadSendError(null);
       setChannelThreadRestoreText("");
       prepareVoicePlayback(voicePlaybackScope(active.id, threadRoot.id));
@@ -3552,7 +3644,7 @@ export function ChannelsPage({
             onExternalFiles={threadPending.addFiles}
             submitOnEnter
             showBubbleMenu={false}
-            mentionAllowedActorIds={channelMemberIds}
+            mentionAllowedActorIds={mentionAllowedActorIds}
             scopedMentionAgents={channelAgentCandidates}
           />
         }
@@ -4283,7 +4375,7 @@ export function ChannelsPage({
                         submitOnEnter
                         showBubbleMenu={false}
                         enableChannelReferences
-                        mentionAllowedActorIds={channelMemberIds}
+                        mentionAllowedActorIds={mentionAllowedActorIds}
                         scopedMentionAgents={channelAgentCandidates}
                       />
                     }

@@ -296,14 +296,9 @@ function AgentsBlockingBody({
                 avatarSize={20}
                 className="px-3 py-2.5 text-xs hover:bg-muted/40"
                 onClick={() => navigation.push(agentHref(agent.id))}
-                trailing={
-                  <span className="shrink-0 text-primary">
-                    {t(
-                      ($) =>
-                        $.detail.delete_dialog.blocked_by_agents.view_agent,
-                    )}
-                  </span>
-                }
+                trailingLabel={t(
+                  ($) => $.detail.delete_dialog.blocked_by_agents.view_agent,
+                )}
               />
             );
           })}

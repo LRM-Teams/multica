@@ -575,11 +575,9 @@ function AgentList({
             avatarSize={20}
             className="px-3 py-2.5 text-xs hover:bg-muted/40"
             onClick={() => navigation.push(agentHref(agent.id))}
-            trailing={
-              <span className="shrink-0 text-primary">
-                {t(($) => $.machine.delete_computer.blocked_by_agents.view_agent)}
-              </span>
-            }
+            trailingLabel={t(
+              ($) => $.machine.delete_computer.blocked_by_agents.view_agent,
+            )}
           />
         );
       })}

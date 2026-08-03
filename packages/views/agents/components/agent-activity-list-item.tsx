@@ -1,6 +1,5 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { ChevronRight, Clock, Loader2 } from "lucide-react";
 import type { AgentPresenceDetail } from "@multica/core/agents";
 import { cn } from "@multica/ui/lib/utils";
@@ -97,7 +96,7 @@ export function AgentActivityListItem({
   avatarSize,
   selectionMode = false,
   selected = false,
-  trailing,
+  trailingLabel,
 }: {
   agentId: string;
   displayName: string;
@@ -114,10 +113,13 @@ export function AgentActivityListItem({
   /** Multi-select mode (Computer Agents section Select). */
   selectionMode?: boolean;
   selected?: boolean;
-  /** Optional trailing control (e.g. "View agent" in delete dialogs). */
-  trailing?: ReactNode;
+  /** Optional trailing text (e.g. "View agent" in delete dialogs). */
+  trailingLabel?: string;
 }) {
   const size = avatarSize ?? (layout === "stacked" ? 28 : 22);
+  const trailing = trailingLabel ? (
+    <span className="shrink-0 text-primary">{trailingLabel}</span>
+  ) : null;
 
   const activity = (
     <AgentActivityStatus

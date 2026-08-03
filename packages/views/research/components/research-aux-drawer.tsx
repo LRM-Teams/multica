@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import {
   Sheet,
   SheetContent,
@@ -13,12 +13,17 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { X } from "lucide-react";
 import { useT } from "../../i18n/use-t";
+import { useOverlayPanelA11y } from "../hooks/use-overlay-panel-a11y";
 import type { ResearchAuxPanelId } from "./research-module-rail";
 
 /**
  * LRM-1061 / LRM-1056 v2 — single right aux drawer (trajectory | sources | detail).
  * Desktop: overlay that does not shrink the canvas flex row.
  * Narrow: full-height sheet from the right.
+ *
+ * LRM-1100: the desktop overlay is a bare <aside>, so Escape-to-close, the
+ * accessible name and focus move-in/restore are wired explicitly here — the
+ * narrow Sheet branch already gets all three from Radix.
  */
 export function ResearchAuxDrawer({
   panel,
@@ -32,6 +37,11 @@ export function ResearchAuxDrawer({
   const { t } = useT("research");
   const isMobile = useIsMobile();
   const open = panel != null;
+  const titleId = useId();
+  const { bindPanel } = useOverlayPanelA11y({
+    active: open && !isMobile,
+    onClose,
+  });
 
   const title =
     panel === "trajectory"
@@ -73,13 +83,16 @@ export function ResearchAuxDrawer({
 
   return (
     <aside
+      ref={bindPanel}
+      tabIndex={-1}
+      aria-labelledby={titleId}
       data-testid="research-aux-drawer"
       data-panel={panel ?? undefined}
       className={cn(
-        "pointer-events-auto absolute inset-y-0 right-0 z-40 flex w-[min(100%,360px)] flex-col border-l border-border/55 bg-card/95 shadow-xl backdrop-blur-md",
+        "pointer-events-auto absolute inset-y-0 right-0 z-40 flex w-[min(100%,360px)] flex-col border-l border-border/55 bg-card/95 shadow-xl backdrop-blur-md outline-none",
       )}
     >
-      <DrawerChrome title={title} onClose={onClose}>
+      <DrawerChrome title={title} titleId={titleId} onClose={onClose}>
         {children}
       </DrawerChrome>
     </aside>
@@ -88,10 +101,13 @@ export function ResearchAuxDrawer({
 
 function DrawerChrome({
   title,
+  titleId,
   onClose,
   children,
 }: {
   title: string;
+  /** Set on the desktop branch so the <aside> can point aria-labelledby here. */
+  titleId?: string;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -102,7 +118,10 @@ function DrawerChrome({
         className="flex items-center justify-between gap-2 border-b px-3 py-2.5"
         data-testid="research-aux-drawer-header"
       >
-        <div className="truncate text-sm font-semibold text-foreground">
+        <div
+          id={titleId}
+          className="truncate text-sm font-semibold text-foreground"
+        >
           {title}
         </div>
         <Button
@@ -111,6 +130,7 @@ function DrawerChrome({
           variant="ghost"
           aria-label={t(($) => $.panel.aux_close)}
           data-testid="research-aux-drawer-close"
+          data-autofocus="true"
           onClick={onClose}
         >
           <X className="size-4" />

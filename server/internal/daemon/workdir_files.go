@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -177,26 +176,20 @@ func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayl
 	// check did exactly that) would have blocked that recovery path too.
 	// Only refuse a write that would make the workspace bigger.
 	if isAgentWorkspaceRelPath(req.RelPath) {
-		// quota <= 0 = unlimited (default). Only enforce when a positive cap is set.
-		if quota := d.cfg.AgentWorkspaceQuotaBytes; quota > 0 {
-			if used := dirSize(root); used >= quota {
-				var oldSize int64
-				if info, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(req.FilePath))); statErr == nil {
-					oldSize = info.Size()
-				}
-				newSize := int64(len(req.Content))
-				if newSize > oldSize {
-					resp := protocol.WriteWorkdirFileResponsePayload{
-						RequestID: req.RequestID,
-						Error: fmt.Sprintf(
-							"agent workspace over capacity: cannot write (workspace uses %d bytes, cap is %d bytes) — a write that shrinks or keeps the same size is still allowed",
-							used, quota,
-						),
-					}
-					d.sendDaemonFrame(protocol.EventDaemonWriteFileResponse, resp, req.RequestID, writes)
-					return
-				}
+		// Shared quota gate with seed path (task #111) — growth refused when
+		// already over cap; shrink/same-size still allowed for recovery.
+		var oldSize int64
+		if info, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(req.FilePath))); statErr == nil {
+			oldSize = info.Size()
+		}
+		newSize := int64(len(req.Content))
+		if msg := agentWorkspaceWriteQuotaError(root, d.cfg.AgentWorkspaceQuotaBytes, oldSize, newSize); msg != "" {
+			resp := protocol.WriteWorkdirFileResponsePayload{
+				RequestID: req.RequestID,
+				Error:     msg,
 			}
+			d.sendDaemonFrame(protocol.EventDaemonWriteFileResponse, resp, req.RequestID, writes)
+			return
 		}
 	}
 	resp := writeWorkdirTextFile(root, req.FilePath, req.Content, req.ExpectedContentHash, req.MaxBytes)
@@ -411,6 +404,15 @@ func (d *Daemon) handleSeedAgentContextRequest(req protocol.SeedAgentContextRequ
 	if maxBytes <= 0 || maxBytes > defaultWriteFileMaxBytes {
 		maxBytes = defaultWriteFileMaxBytes
 	}
+	// task #111: seed appends always grow agent workspace files — refuse the
+	// whole seed when already over capacity (same helper as write RPC).
+	if seedWouldGrow(req.InitialNotes, req.InitialMemory) {
+		if msg := agentWorkspaceWriteQuotaError(root, d.cfg.AgentWorkspaceQuotaBytes, 0, 1); msg != "" {
+			resp.Error = msg
+			d.sendDaemonFrame(protocol.EventDaemonSeedAgentContextResponse, resp, req.RequestID, writes)
+			return
+		}
+	}
 	written, seedErr := seedAgentContextFiles(root, req.InitialNotes, req.InitialMemory, maxBytes)
 	resp.Written = written
 	if seedErr != nil {
@@ -421,6 +423,24 @@ func (d *Daemon) handleSeedAgentContextRequest(req protocol.SeedAgentContextRequ
 		}
 	}
 	d.sendDaemonFrame(protocol.EventDaemonSeedAgentContextResponse, resp, req.RequestID, writes)
+}
+
+// seedWouldGrow reports whether any non-empty whitelisted seed payload would
+// append bytes under the agent workspace.
+func seedWouldGrow(notes, memory map[string]string) bool {
+	for rel, content := range notes {
+		path := filepath.ToSlash(filepath.Clean(rel))
+		if allowedInitialNotePath(path) && strings.TrimSpace(content) != "" {
+			return true
+		}
+	}
+	for rel, content := range memory {
+		path := filepath.ToSlash(filepath.Clean(rel))
+		if allowedInitialMemoryPath(path) && strings.TrimSpace(content) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 var errSeedContextTooLarge = errors.New("seed context too large")

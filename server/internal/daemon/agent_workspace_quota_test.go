@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -284,5 +285,117 @@ func TestHandleWriteFileRequest_AllowsShrinkingEditWhenAgentWorkspaceOverCapacit
 	}
 	if postEditTotal := dirSize(agentRoot); postEditTotal < cfg.AgentWorkspaceQuotaBytes {
 		t.Fatalf("test setup bug: post-edit total %d dropped under the %d cap — this no longer exercises the still-over-cap case", postEditTotal, cfg.AgentWorkspaceQuotaBytes)
+	}
+}
+
+func seedAgentContextRequestResult(t *testing.T, d *Daemon, req protocol.SeedAgentContextRequestPayload) protocol.SeedAgentContextResponsePayload {
+	t.Helper()
+	writes := make(chan []byte, 1)
+	d.handleSeedAgentContextRequest(req, writes)
+	var msg protocol.Message
+	select {
+	case frame := <-writes:
+		if err := json.Unmarshal(frame, &msg); err != nil {
+			t.Fatalf("unmarshal frame: %v", err)
+		}
+	default:
+		t.Fatal("handleSeedAgentContextRequest sent no response frame")
+	}
+	var resp protocol.SeedAgentContextResponsePayload
+	if err := json.Unmarshal(msg.Payload, &resp); err != nil {
+		t.Fatalf("unmarshal response payload: %v", err)
+	}
+	return resp
+}
+
+// TestHandleSeedAgentContextRequest_RefusesWhenAgentWorkspaceOverCapacity
+// locks task #111: seed append always grows; when already over cap it must
+// share the write-path quota helper and refuse.
+func TestHandleSeedAgentContextRequest_RefusesWhenAgentWorkspaceOverCapacity(t *testing.T) {
+	t.Parallel()
+
+	workspacesRoot := t.TempDir()
+	cfg := Config{WorkspacesRoot: workspacesRoot, AgentWorkspaceQuotaBytes: 10}
+
+	const workspaceID = "ws-seed-quota"
+	const agentID = "agent-seed-quota"
+	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
+		t.Fatalf("ensure root: %v", err)
+	}
+	// Fill over the 10-byte cap.
+	if err := os.WriteFile(filepath.Join(agentRoot, "notes", "work-log.md"), []byte("already-over-ten"), 0o644); err != nil {
+		t.Fatalf("seed oversized file: %v", err)
+	}
+
+	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	resp := seedAgentContextRequestResult(t, d, protocol.SeedAgentContextRequestPayload{
+		RequestID: "req-seed-over",
+		RelPath:   filepath.ToSlash(filepath.Join(workspaceID, ".multica", "agents", agentID)),
+		InitialNotes: map[string]string{
+			"notes/work-log.md": "more context that would grow the workspace",
+		},
+	})
+	if resp.Error == "" {
+		t.Fatalf("resp = %+v, want Error refusing seed while over capacity", resp)
+	}
+	if !strings.Contains(resp.Error, "over capacity") {
+		t.Fatalf("error = %q, want over capacity wording", resp.Error)
+	}
+}
+
+// TestHandleSeedAgentContextRequest_AllowsWhenUnderCapacity ensures seed still
+// works under the shared gate when usage is below the cap.
+func TestHandleSeedAgentContextRequest_AllowsWhenUnderCapacity(t *testing.T) {
+	t.Parallel()
+
+	workspacesRoot := t.TempDir()
+	cfg := Config{WorkspacesRoot: workspacesRoot, AgentWorkspaceQuotaBytes: 2 << 20} // 2MiB
+
+	const workspaceID = "ws-seed-ok"
+	const agentID = "agent-seed-ok"
+	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
+		t.Fatalf("ensure root: %v", err)
+	}
+	// Whitelisted seed files must already exist for appendSeedContextFile.
+	notePath := filepath.Join(agentRoot, "notes", "work-log.md")
+	if err := os.WriteFile(notePath, []byte("# log\n"), 0o644); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	resp := seedAgentContextRequestResult(t, d, protocol.SeedAgentContextRequestPayload{
+		RequestID: "req-seed-ok",
+		RelPath:   filepath.ToSlash(filepath.Join(workspaceID, ".multica", "agents", agentID)),
+		InitialNotes: map[string]string{
+			"notes/work-log.md": "hello seed",
+		},
+	})
+	if resp.Error != "" {
+		t.Fatalf("resp = %+v, want success under capacity", resp)
+	}
+	if len(resp.Written) == 0 {
+		t.Fatalf("resp.Written empty, want notes/work-log.md")
+	}
+}
+
+func TestAgentWorkspaceWriteQuotaErrorSharedPredicate(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "f"), []byte("0123456789abcdef"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// used=16, quota=10, growth refused
+	if got := agentWorkspaceWriteQuotaError(root, 10, 5, 6); got == "" {
+		t.Fatal("want refuse on growth when over cap")
+	}
+	// shrink allowed
+	if got := agentWorkspaceWriteQuotaError(root, 10, 10, 5); got != "" {
+		t.Fatalf("want allow shrink, got %q", got)
+	}
+	// unlimited
+	if got := agentWorkspaceWriteQuotaError(root, 0, 0, 100); got != "" {
+		t.Fatalf("want unlimited, got %q", got)
 	}
 }

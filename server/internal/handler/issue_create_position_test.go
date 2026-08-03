@@ -1,16 +1,10 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // TestCreateIssuePositionTopOfColumn verifies that a newly created issue is

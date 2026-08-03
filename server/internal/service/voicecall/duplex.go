@@ -30,7 +30,21 @@ func (service *Service) ActivateDuplex(ctx context.Context, input AnswerInput) (
 		if session.ConnectedAt != nil && session.Status == StatusActive {
 			return session, nil
 		}
-	case StatusStarting, StatusConnecting:
+	case StatusStarting:
+		// Duplex does not start Volcengine VoiceChat, but it still follows the
+		// durable call state machine before recording the audible answer.
+		// BeginProviderStart owns only the starting -> connecting transition;
+		// the caller of Provider.Connect remains the regular RTC path.
+		connecting, err := service.store.BeginProviderStart(
+			ctx,
+			input.WorkspaceID,
+			input.CallID,
+		)
+		if err != nil {
+			return Session{}, fmt.Errorf("begin duplex voice call connection: %w", err)
+		}
+		session = connecting.Session
+	case StatusConnecting:
 	default:
 		return Session{}, ErrScopeUnavailable
 	}

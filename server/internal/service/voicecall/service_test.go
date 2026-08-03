@@ -578,13 +578,15 @@ func (store *fakeStore) ApplyClientAnswered(
 		return Session{}, ErrCallNotFound
 	}
 	switch store.session.Status {
-	case StatusStarting, StatusConnecting, StatusReconnecting, StatusActive:
+	case StatusConnecting, StatusReconnecting, StatusActive:
 		store.session.Status = StatusActive
 		if store.session.ConnectedAt == nil {
 			now := time.Date(2026, time.August, 1, 0, 12, 0, 0, time.UTC)
 			store.session.ConnectedAt = &now
 		}
 		return store.session, nil
+	case StatusStarting:
+		return Session{}, errors.New("invalid voice call status transition: starting -> active")
 	default:
 		return Session{}, ErrCallNotFound
 	}
@@ -697,6 +699,17 @@ func TestServiceActivateDuplexSkipsProviderConnectAndStop(t *testing.T) {
 	}
 	if session.Status != StatusActive || session.ConnectedAt == nil {
 		t.Fatalf("session = %+v, want active with connected_at", session)
+	}
+	if !reflect.DeepEqual(deps.order, []string{
+		"authorize",
+		"create",
+		"provider_prepare",
+		"get",
+		"authorize",
+		"provider_start_claim",
+		"client_answer",
+	}) {
+		t.Fatalf("order = %v", deps.order)
 	}
 	if deps.provider.connectCalls != 0 {
 		t.Fatalf("provider connect calls = %d, want 0", deps.provider.connectCalls)

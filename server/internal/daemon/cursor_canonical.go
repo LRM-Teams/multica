@@ -21,7 +21,7 @@ func usesCanonicalResidentChatRuntime(provider string, task Task) bool {
 		return usesPersistentGrokChatRuntime(provider, task)
 	case "pi":
 		return usesPersistentPiChatRuntime(provider, task)
-	case "cursor", "opencode":
+	case "cursor", "opencode", "kiro":
 		profile, err := taskExecutionProfile(task)
 		return err == nil && profile == executionProfileFull && task.ChatSessionID != ""
 	default:
@@ -35,5 +35,13 @@ func usesCanonicalResidentChatRuntime(provider string, task Task) bool {
 // release, matching Grok/Pi's resident adapters.
 func newCanonicalCursorResidentBackend(cfg agent.Config) (agent.Backend, func(), error) {
 	backend := agent.NewCursorACPBackend(cfg)
+	return backend, backend.Close, nil
+}
+
+// newCanonicalKiroResidentBackend builds the resident Kiro ACP adapter for the
+// agent×runtime pool. Uses session/load (not session/resume). Close is
+// mandatory on eviction and unhealthy release.
+func newCanonicalKiroResidentBackend(cfg agent.Config) (agent.Backend, func(), error) {
+	backend := agent.NewKiroACPBackend(cfg)
 	return backend, backend.Close, nil
 }

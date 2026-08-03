@@ -383,7 +383,10 @@ describe("ComposerAttachmentTray — LRM-1180 v2 frozen design", () => {
     expect(remove.className).toMatch(/\bopacity-100\b/);
   });
 
-  it("non-image chip keeps its in-chip remove button (no overflow corner)", () => {
+  // LRM-1228 reverses the "file chips are untouched" half of this design: the
+  // corner treatment is now the single remove rule for every chip kind. What
+  // survives from LRM-1180 is that a file chip is not a zoom entry point.
+  it("non-image chip is not a zoom entry point", () => {
     render(
       <ComposerAttachmentTray
         pending={[
@@ -399,11 +402,6 @@ describe("ComposerAttachmentTray — LRM-1180 v2 frozen design", () => {
         onRetry={vi.fn()}
       />,
     );
-    const remove = screen.getByRole("button", { name: "Remove notes.pdf" });
-    const holder = remove.parentElement as HTMLElement;
-    expect(holder.className).not.toMatch(/-right-2\b/);
-    expect(remove.className).not.toMatch(/\bsize-5\b/);
-    // A file chip is not a zoom entry point.
     expect(screen.queryByRole("button", { name: /^Preview/ })).toBeNull();
   });
 
@@ -505,5 +503,186 @@ describe("ComposerAttachmentTray — LRM-1180 v2 frozen design", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: /^Preview/ })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LRM-1228 — the other half of Frank's "手机端 button 太大": LRM-1180/#2047 only
+// shrank the remove button on *image* thumbs, so non-image / stale chips were
+// still carrying a 36px (`size-9`) in-chip button on mobile web. This block
+// freezes the corner treatment as the single remove rule for every chip kind:
+// 20px visual + `after:-inset-0.5` → 24px pointer target (SC 2.5.8), parked in
+// the `-right-2 -top-2` overflow corner, with the chip reserving `pr-3` (12px)
+// so the outdented button never lands on the filename.
+// ---------------------------------------------------------------------------
+describe("ComposerAttachmentTray — LRM-1228 file/stale chip remove button", () => {
+  function fileItem(
+    overrides: Partial<PendingAttachment> = {},
+  ): PendingAttachment {
+    return item({
+      localId: "file-1",
+      status: "ready",
+      filename: "notes.pdf",
+      contentType: "application/pdf",
+      previewUrl: undefined,
+      attachmentId: "a2",
+      ...overrides,
+    });
+  }
+
+  for (const isMobile of [false, true]) {
+    const label = isMobile ? "mobile web" : "desktop";
+
+    it(`${label}: file chip remove is 20px in the overflow corner with a 24px hit area`, () => {
+      render(
+        <ComposerAttachmentTray
+          isMobile={isMobile}
+          pending={[fileItem()]}
+          onRemove={vi.fn()}
+          onRetry={vi.fn()}
+        />,
+      );
+      const remove = screen.getByRole("button", { name: "Remove notes.pdf" });
+      expect(remove.className).toMatch(/\bsize-5\b/); // 20px visual
+      // The two live sizes this slice retires.
+      expect(remove.className).not.toMatch(/\bsize-9\b/); // 36px mobile
+      expect(remove.className).not.toMatch(/\bsize-6\b/); // 24px desktop
+      expect(remove.className).toMatch(/\brounded-full\b/);
+      // after:-inset-0.5 lifts the 20px visual back to a 24px pointer target.
+      expect(remove.className).toMatch(/\brelative\b/);
+      expect(remove.className).toMatch(/after:-inset-0\.5\b/);
+
+      const corner = remove.parentElement as HTMLElement;
+      expect(corner.className).toMatch(/-right-2\b/);
+      expect(corner.className).toMatch(/-top-2\b/);
+      // Sitting half outside the chip, it needs its own surface to read.
+      expect(remove.className).toMatch(/border-border/);
+      expect(remove.className).toMatch(/bg-background/);
+    });
+  }
+
+  it("file chip reserves pr-3 so the outdented button never covers the filename", () => {
+    render(
+      <ComposerAttachmentTray
+        pending={[fileItem()]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+    const chip = screen.getByTestId("composer-tray-item-file-1");
+    // The button's inner half is 12px wide; pr-3 == 12px clears the text.
+    expect(chip.className).toMatch(/\bpr-3\b/);
+    expect(chip.className).toMatch(/\bpl-2\b/);
+    // px-2 (8px right) would let `truncate` text run under the corner button.
+    expect(chip.className).not.toMatch(/\bpx-2\b/);
+  });
+
+  it("remove stays visible on a file chip without hover (no image to protect)", () => {
+    render(
+      <ComposerAttachmentTray
+        isMobile
+        pending={[fileItem({ filename: "phone.pdf" })]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+    const remove = screen.getByRole("button", { name: "Remove phone.pdf" });
+    expect(remove.className).toMatch(/\bopacity-100\b/);
+    expect(remove.className).not.toMatch(/\bopacity-0\b/);
+  });
+
+  it("stale draft chip gets the same 20px corner remove and still no retry", async () => {
+    const user = userEvent.setup();
+    const onRemove = vi.fn();
+    render(
+      <ComposerAttachmentTray
+        isMobile
+        pending={[
+          fileItem({
+            localId: "stale-1",
+            status: "stale",
+            filename: "gone.png",
+            contentType: "image/png",
+            previewUrl: undefined,
+            attachmentId: undefined,
+          }),
+        ]}
+        onRemove={onRemove}
+        onRetry={vi.fn()}
+      />,
+    );
+    const remove = screen.getByRole("button", { name: "Remove gone.png" });
+    expect(remove.className).toMatch(/\bsize-5\b/);
+    expect(remove.className).not.toMatch(/\bsize-9\b/);
+    expect((remove.parentElement as HTMLElement).className).toMatch(/-right-2\b/);
+    expect(screen.queryByRole("button", { name: /Retry upload/ })).toBeNull();
+    await user.click(remove);
+    expect(onRemove).toHaveBeenCalledWith("stale-1");
+  });
+
+  it("error file chip keeps retry inline and moves only remove to the corner", async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    render(
+      <ComposerAttachmentTray
+        isMobile
+        pending={[
+          fileItem({
+            localId: "err-f",
+            status: "error",
+            filename: "broken.pdf",
+            errorMessage: "network",
+          }),
+        ]}
+        onRemove={vi.fn()}
+        onRetry={onRetry}
+      />,
+    );
+    const retry = screen.getByRole("button", {
+      name: "Retry upload of broken.pdf",
+    });
+    // Out of scope for this slice (AC covers the remove button only): retry is
+    // the primary recovery action and covers no image, so it stays inline.
+    expect(retry.className).toMatch(/\bsize-9\b/);
+    expect((retry.parentElement as HTMLElement).className).not.toMatch(
+      /-right-2\b/,
+    );
+
+    const remove = screen.getByRole("button", { name: "Remove broken.pdf" });
+    expect(remove.className).toMatch(/\bsize-5\b/);
+    expect((remove.parentElement as HTMLElement).className).toMatch(
+      /-right-2\b/,
+    );
+    await user.click(retry);
+    expect(onRetry).toHaveBeenCalledWith("err-f");
+  });
+
+  it("does not regress the #2047 image thumb surface", () => {
+    render(
+      <ComposerAttachmentTray
+        isMobile
+        pending={[
+          item({
+            localId: "img-1",
+            status: "ready",
+            filename: "shot.png",
+            previewUrl: "blob:shot",
+            attachmentId: "a1",
+          }),
+        ]}
+        onRemove={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+    const remove = screen.getByRole("button", { name: "Remove shot.png" });
+    expect(remove.className).toMatch(/\bsize-5\b/);
+    expect((remove.parentElement as HTMLElement).className).toMatch(
+      /-right-2\b/,
+    );
+    // Thumb keeps p-0 / max-w-none — the chip padding change must not leak here.
+    const chip = screen.getByTestId("composer-tray-item-img-1");
+    expect(chip.className).toMatch(/\bp-0\b/);
+    expect(chip.className).not.toMatch(/\bpr-3\b/);
+    expect(screen.getByRole("button", { name: "Preview shot.png" })).toBeInTheDocument();
   });
 });

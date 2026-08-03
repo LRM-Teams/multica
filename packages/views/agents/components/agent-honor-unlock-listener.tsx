@@ -15,6 +15,7 @@ import {
   honorUnlockToastOptions,
 } from "../../honor/honor-unlock-toast";
 import { useT } from "../../i18n";
+import { AgentHonorAchievementIcon } from "./agent-honor-achievement-icon";
 
 export function AgentHonorUnlockListener() {
   const queryClient = useQueryClient();
@@ -35,6 +36,14 @@ export function AgentHonorUnlockListener() {
           title={event.achievement.title}
           meta={`+${event.achievement.xp_reward} XP`}
           svgKey={event.achievement.svg_key}
+          icon={
+            <AgentHonorAchievementIcon
+              rarity={event.achievement.rarity}
+              title={event.achievement.title}
+              featured
+              className="size-9"
+            />
+          }
           rare={event.achievement.rarity >= 75}
           dismissLabel={t(($) => $.honor_agent.dismiss_unlock)}
           onDismiss={() => toast.dismiss(toastId)}

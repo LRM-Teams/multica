@@ -16,6 +16,7 @@ export function HonorUnlockToast({
   title,
   meta,
   svgKey,
+  icon,
   rare = false,
   dismissLabel,
   onDismiss,
@@ -24,6 +25,7 @@ export function HonorUnlockToast({
   title: string;
   meta?: ReactNode;
   svgKey: string;
+  icon?: ReactNode;
   rare?: boolean;
   dismissLabel: string;
   onDismiss: () => void;
@@ -42,12 +44,14 @@ export function HonorUnlockToast({
             "border-amber-400/45 bg-amber-500/10 shadow-[0_0_18px_-8px_rgba(245,158,11,0.75)]",
         )}
       >
-        <HonorBadgeIcon
-          svgKey={svgKey}
-          title={title}
-          medal
-          className="size-9"
-        />
+        {icon ?? (
+          <HonorBadgeIcon
+            svgKey={svgKey}
+            title={title}
+            medal
+            className="size-9"
+          />
+        )}
       </span>
 
       <span className="min-w-0 flex-1">

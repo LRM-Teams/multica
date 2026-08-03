@@ -33,7 +33,6 @@ import {
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
-import { HonorBadgeCrest } from "@multica/ui/components/honor/honor-badge";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -48,6 +47,7 @@ import { Switch } from "@multica/ui/components/ui/switch";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { cn } from "@multica/ui/lib/utils";
 import { useT, useTimeAgo } from "../../../i18n";
+import { AgentHonorAchievementIcon } from "../agent-honor-achievement-icon";
 import {
   AgentHonorLevelIcon,
   MAX_AGENT_HONOR_LEVEL,
@@ -154,7 +154,7 @@ function PanelTitle({
   );
 }
 
-function AchievementCard({
+export function AchievementCard({
   achievement,
   selected,
   equipped,
@@ -188,12 +188,11 @@ function AchievementCard({
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <HonorBadgeCrest
-          svgKey={achievement.svg_key}
+        <AgentHonorAchievementIcon
+          rarity={achievement.rarity}
           title={achievement.title}
           locked={!achievement.unlocked}
-          rare={achievement.rarity >= 75}
-          animated={equipped || selected}
+          featured={equipped || selected}
           className="size-14"
         />
         <div className="flex flex-col items-end gap-1">
@@ -431,11 +430,10 @@ export function AgentHonorTab({
               </p>
               <div className="mt-3 flex items-center gap-2.5">
                 {equipped ? (
-                  <HonorBadgeCrest
-                    svgKey={equipped.svg_key}
+                  <AgentHonorAchievementIcon
+                    rarity={equipped.rarity}
                     title={equipped.title}
-                    animated
-                    rare={equipped.rarity >= 75}
+                    featured
                     className="size-10"
                   />
                 ) : (
@@ -506,8 +504,8 @@ export function AgentHonorTab({
               nextTargets.map((item) => (
                 <div key={item.id} className="rounded-xl border border-border/60 bg-muted/20 p-3">
                   <div className="flex items-center gap-2">
-                    <HonorBadgeCrest
-                      svgKey={item.svg_key}
+                    <AgentHonorAchievementIcon
+                      rarity={item.rarity}
                       title={item.title}
                       locked
                       className="size-10"
@@ -585,11 +583,10 @@ export function AgentHonorTab({
               >
                 {achievement ? (
                   <>
-                    <HonorBadgeCrest
-                      svgKey={achievement.svg_key}
+                    <AgentHonorAchievementIcon
+                      rarity={achievement.rarity}
                       title={achievement.title}
-                      animated
-                      rare={achievement.rarity >= 75}
+                      featured
                       className="size-14"
                     />
                     <div>

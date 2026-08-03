@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { MoreHorizontal } from "lucide-react";
@@ -54,15 +54,23 @@ export function ResearchGitList({
     [laid.nodes],
   );
   const segments = laid.nodes.find((n) => n.type === "gitGutter")?.data.gutterSegments ?? [];
-  const [focusId, setFocusId] = useState<string | null>(researchNodes[0]?.id ?? null);
+  // Local keyboard focus; selectedId from parent wins when still present in the list.
+  const [navFocusId, setNavFocusId] = useState<string | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
 
+  const focusId =
+    (navFocusId && researchNodes.some((n) => n.id === navFocusId) ? navFocusId : null) ??
+    (selectedId && researchNodes.some((n) => n.id === selectedId) ? selectedId : null) ??
+    researchNodes[0]?.id ??
+    null;
+
   const focusCard = useCallback(
     (id: string) => {
-      setFocusId(id);
+      setNavFocusId(id);
       const n = researchNodes.find((x) => x.id === id)?.data.research;
       if (n) {
+        onSelect?.(n);
         liveMessage?.(
           t(($) => $.a11y.focus_node, {
             title: n.title,
@@ -74,14 +82,8 @@ export function ResearchGitList({
       el?.focus();
       el?.scrollIntoView({ block: "nearest" });
     },
-    [researchNodes, topology, liveMessage, t],
+    [researchNodes, topology, liveMessage, onSelect, t],
   );
-
-  useEffect(() => {
-    if (selectedId && researchNodes.some((n) => n.id === selectedId)) {
-      setFocusId(selectedId);
-    }
-  }, [selectedId, researchNodes]);
 
   const openNode = (node: ResearchGraphNode) => {
     if (isLogicEndNode(node) || node.id === LOGIC_END_NODE_ID) {
@@ -96,7 +98,9 @@ export function ResearchGitList({
   return (
     <div
       ref={listRef}
-      className="relative h-full min-h-0 overflow-y-auto bg-canvas-bg"
+      role="application"
+      tabIndex={-1}
+      className="relative h-full min-h-0 overflow-y-auto bg-canvas-bg outline-none"
       data-testid="research-git-list"
       aria-label={t(($) => $.logic.git_list_label)}
       onKeyDown={(e) => {
@@ -117,10 +121,6 @@ export function ResearchGitList({
             e.key === "ArrowRight" ? 1 : -1,
           );
           if (next) focusCard(next);
-        } else if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          const n = researchNodes.find((x) => x.id === focusId)?.data.research;
-          if (n) openNode(n);
         } else if (e.key === "Escape") {
           setMenuId(null);
         } else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
@@ -176,34 +176,51 @@ export function ResearchGitList({
                 }}
                 aria-hidden
               />
-              <div
-                role="button"
-                tabIndex={focusId === n.id || (!focusId && index === 0) ? 0 : -1}
-                data-node-id={n.id}
-                data-testid="research-git-list-card"
-                aria-label={`${n.title}, ${t(($) => $.logic.status[status.key])}, ${rf.data.branchId ?? "main"}`}
-                className={cn(
-                  "relative grid w-full max-w-[320px] grid-cols-[1fr_auto] gap-x-2 gap-y-1 rounded-[10px] border bg-card px-3 py-2.5",
-                  "min-h-[68px] max-h-[88px] outline-none",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand)]",
-                  selected &&
-                    "border-[var(--brand)] shadow-[0_0_0_2px_color-mix(in_oklch,var(--brand)_18%,transparent)]",
-                  status.tone === "run" &&
-                    "border-[color-mix(in_oklch,var(--brand)_45%,var(--border))]",
-                  status.tone === "fail" &&
-                    "border-[color-mix(in_oklch,var(--destructive)_40%,var(--border))]",
-                )}
-                onClick={() => openNode(n)}
-                onFocus={() => setFocusId(n.id)}
-              >
-                <div className="col-start-1 line-clamp-2 text-[13px] font-semibold leading-snug">
-                  {n.id === LOGIC_END_NODE_ID
-                    ? t(($) => $.logic.end_title)
-                    : n.title}
-                </div>
+              <div className="relative grid w-full max-w-[320px] grid-cols-[1fr_auto] gap-x-2">
                 <button
                   type="button"
-                  className="col-start-2 row-span-2 self-start inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
+                  tabIndex={focusId === n.id || (!focusId && index === 0) ? 0 : -1}
+                  data-node-id={n.id}
+                  data-testid="research-git-list-card"
+                  aria-label={`${n.title}, ${t(($) => $.logic.status[status.key])}, ${rf.data.branchId ?? "main"}`}
+                  className={cn(
+                    "col-start-1 row-span-2 grid w-full grid-cols-1 gap-y-1 rounded-[10px] border bg-card px-3 py-2.5 pr-12 text-left",
+                    "min-h-[68px] max-h-[88px] outline-none",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand)]",
+                    selected &&
+                      "border-[var(--brand)] shadow-[0_0_0_2px_color-mix(in_oklch,var(--brand)_18%,transparent)]",
+                    status.tone === "run" &&
+                      "border-[color-mix(in_oklch,var(--brand)_45%,var(--border))]",
+                    status.tone === "fail" &&
+                      "border-[color-mix(in_oklch,var(--destructive)_40%,var(--border))]",
+                  )}
+                  onClick={() => openNode(n)}
+                  onFocus={() => setNavFocusId(n.id)}
+                >
+                  <div className="line-clamp-2 text-[13px] font-semibold leading-snug">
+                    {n.id === LOGIC_END_NODE_ID
+                      ? t(($) => $.logic.end_title)
+                      : n.title}
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                    <span
+                      className={cn(
+                        "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                        status.tone === "ok" && "bg-success/15 text-success",
+                        status.tone === "run" && "bg-brand/15 text-brand",
+                        status.tone === "fail" && "bg-destructive/15 text-destructive",
+                        status.tone === "wait" && "bg-warning/15 text-warning",
+                        status.tone === "mute" && "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      {t(($) => $.logic.status[status.key])}
+                    </span>
+                    <span className="truncate">{rf.data.branchId}</span>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className="absolute top-2.5 right-2 z-10 inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
                   aria-label={t(($) => $.card_menu.open)}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -212,21 +229,6 @@ export function ResearchGitList({
                 >
                   <MoreHorizontal className="size-4" aria-hidden />
                 </button>
-                <div className="col-start-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span
-                    className={cn(
-                      "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
-                      status.tone === "ok" && "bg-success/15 text-success",
-                      status.tone === "run" && "bg-brand/15 text-brand",
-                      status.tone === "fail" && "bg-destructive/15 text-destructive",
-                      status.tone === "wait" && "bg-warning/15 text-warning",
-                      status.tone === "mute" && "bg-muted text-muted-foreground",
-                    )}
-                  >
-                    {t(($) => $.logic.status[status.key])}
-                  </span>
-                  <span className="truncate">{rf.data.branchId}</span>
-                </div>
                 {menuId === n.id ? (
                   <ResearchCardMenu
                     node={n}

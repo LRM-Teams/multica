@@ -84,8 +84,9 @@ export function ResearchCardMenu({
     <div
       ref={ref}
       role="menu"
+      tabIndex={-1}
       data-testid="research-card-menu"
-      className="nodrag nopan absolute top-8 right-1 z-30 min-w-[180px] rounded-lg border bg-card p-1 shadow-lg"
+      className="nodrag nopan absolute top-8 right-1 z-30 min-w-[180px] rounded-lg border bg-card p-1 shadow-lg outline-none"
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >

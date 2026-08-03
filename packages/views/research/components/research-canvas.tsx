@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -66,6 +66,41 @@ function prefersReducedMotion(): boolean {
 
 type FlowNode = Node<ResearchFlowNodeData>;
 
+type CanvasUiState = {
+  detailPinned: boolean;
+  pinnedNodeId: string | null;
+  zoomPct: number;
+  liveText: string;
+};
+
+type CanvasUiAction =
+  | { type: "pin"; nodeId: string }
+  | { type: "clearDetail" }
+  | { type: "setZoom"; pct: number }
+  | { type: "setLive"; text: string };
+
+const initialCanvasUi: CanvasUiState = {
+  detailPinned: false,
+  pinnedNodeId: null,
+  zoomPct: 100,
+  liveText: "",
+};
+
+function canvasUiReducer(state: CanvasUiState, action: CanvasUiAction): CanvasUiState {
+  switch (action.type) {
+    case "pin":
+      return { ...state, pinnedNodeId: action.nodeId, detailPinned: true };
+    case "clearDetail":
+      return { ...state, detailPinned: false, pinnedNodeId: null };
+    case "setZoom":
+      return state.zoomPct === action.pct ? state : { ...state, zoomPct: action.pct };
+    case "setLive":
+      return { ...state, liveText: action.text };
+    default:
+      return state;
+  }
+}
+
 function ResearchCanvasInner({
   nodes,
   edges,
@@ -105,11 +140,10 @@ function ResearchCanvasInner({
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState(laid.edges);
   const { fitView, zoomIn, zoomOut, getZoom, setCenter, getNode } = useReactFlow();
   const isMobile = useIsMobile();
-  const [detailPinned, setDetailPinned] = useState(false);
-  const [pinnedNodeId, setPinnedNodeId] = useState<string | null>(null);
-  const [zoomPct, setZoomPct] = useState(100);
-  const [liveText, setLiveText] = useState("");
-  const [focusId, setFocusId] = useState<string | null>(null);
+  const [ui, dispatch] = useReducer(canvasUiReducer, initialCanvasUi);
+  const { detailPinned, pinnedNodeId, zoomPct, liveText } = ui;
+  // Keyboard focus is handler-only (announce + setCenter); keep off the render path.
+  const focusIdRef = useRef<string | null>(null);
   const enterClassById = useRef<Map<string, string> | null>(null);
   if (enterClassById.current === null) {
     enterClassById.current = new Map();
@@ -117,9 +151,9 @@ function ResearchCanvasInner({
   const laidIdsKey = useMemo(() => laid.nodes.map((n) => n.id).join("|"), [laid.nodes]);
 
   const announce = useCallback((text: string) => {
-    setLiveText("");
+    dispatch({ type: "setLive", text: "" });
     // Retrigger polite live region for identical strings.
-    requestAnimationFrame(() => setLiveText(text));
+    requestAnimationFrame(() => dispatch({ type: "setLive", text }));
   }, []);
 
   useEffect(() => {
@@ -179,7 +213,7 @@ function ResearchCanvasInner({
         padding: 0.18,
         duration: prefersReducedMotion() ? 0 : 320,
       });
-      setZoomPct(Math.round(getZoom() * 100));
+      dispatch({ type: "setZoom", pct: Math.round(getZoom() * 100) });
     }, 80);
     return () => window.clearTimeout(id);
   }, [laidIdsKey, fitView, getZoom]);
@@ -204,26 +238,23 @@ function ResearchCanvasInner({
       );
       if (detailPlacement === "drawer") {
         onOpenDetail?.(node);
-        setDetailPinned(false);
-        setPinnedNodeId(null);
+        dispatch({ type: "clearDetail" });
         return;
       }
-      setPinnedNodeId(node.id);
-      setDetailPinned(true);
+      dispatch({ type: "pin", nodeId: node.id });
     },
     [detailPlacement, onOpenDetail, onSelect, announce, t],
   );
 
   const clearDetail = useCallback(() => {
-    setDetailPinned(false);
-    setPinnedNodeId(null);
+    dispatch({ type: "clearDetail" });
     onSelect?.(null);
     announce(t(($) => $.a11y.closed_detail));
   }, [onSelect, announce, t]);
 
   const focusNode = useCallback(
     (id: string) => {
-      setFocusId(id);
+      focusIdRef.current = id;
       const topo = laid.topology.get(id);
       const research = nodes.find((n) => n.id === id);
       if (research) {
@@ -272,10 +303,7 @@ function ResearchCanvasInner({
           onRetry={onRetry}
           onOpenDetail={(node) => {
             if (detailPlacement === "drawer") onOpenDetail?.(node);
-            else {
-              setPinnedNodeId(node.id);
-              setDetailPinned(true);
-            }
+            else dispatch({ type: "pin", nodeId: node.id });
           }}
           liveMessage={announce}
         />
@@ -300,11 +328,14 @@ function ResearchCanvasInner({
 
   return (
     <div
-      className="relative h-full w-full bg-canvas-bg text-foreground"
+      role="application"
+      tabIndex={-1}
+      aria-label={t(($) => $.logic.label)}
+      className="relative h-full w-full bg-canvas-bg text-foreground outline-none"
       data-testid="research-canvas-overlay-grid"
       data-overlay="desktop"
       onKeyDown={(e) => {
-        const current = focusId ?? selectedId;
+        const current = focusIdRef.current ?? selectedId;
         if (!current) return;
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault();
@@ -364,7 +395,7 @@ function ResearchCanvasInner({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onMoveEnd={() => {
-          setZoomPct(Math.round(getZoom() * 100));
+          dispatch({ type: "setZoom", pct: Math.round(getZoom() * 100) });
         }}
         nodeTypes={nodeTypes}
         fitView
@@ -376,7 +407,7 @@ function ResearchCanvasInner({
           if (node.type === "gitGutter") return;
           const research = node.data?.research as ResearchGraphNode | undefined;
           if (!research) return;
-          setFocusId(research.id);
+          focusIdRef.current = research.id;
           if (isLogicEndNode(research)) {
             onOpenDelivery?.();
             return;
@@ -425,15 +456,15 @@ function ResearchCanvasInner({
           className="!mb-0"
           onZoomIn={() => {
             void zoomIn({ duration: 160 });
-            setZoomPct(Math.round(getZoom() * 100));
+            dispatch({ type: "setZoom", pct: Math.round(getZoom() * 100) });
           }}
           onZoomOut={() => {
             void zoomOut({ duration: 160 });
-            setZoomPct(Math.round(getZoom() * 100));
+            dispatch({ type: "setZoom", pct: Math.round(getZoom() * 100) });
           }}
           onFit={() => {
             void fitView({ padding: 0.18, duration: 240 });
-            setZoomPct(Math.round(getZoom() * 100));
+            dispatch({ type: "setZoom", pct: Math.round(getZoom() * 100) });
           }}
           detailOpen={showOverlayDetail}
           onToggleDetail={() => {

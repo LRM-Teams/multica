@@ -104,7 +104,6 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
             ? "research-logic-end"
             : "research-logic-card"
       }
-      role="button"
       aria-label={ariaLabel}
     >
       {/* Port dot — visual only; edges live in gutter */}

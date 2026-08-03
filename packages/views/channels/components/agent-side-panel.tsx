@@ -179,7 +179,9 @@ export function AgentSidePanel({
       <div
         className={cn(
           "flex shrink-0 items-center gap-3 pb-3 pl-4 pr-10 pt-3.5",
-          variant === "page" && "pl-0 pr-10",
+          // LRM-1185: the page floating close is now a real 44×44 hit target,
+          // so the identity row must reserve 44 + inset instead of 40.
+          variant === "page" && "pl-0 pr-14",
           stackedBack && "pr-4 pt-2",
         )}
         data-testid="agent-profile-identity"

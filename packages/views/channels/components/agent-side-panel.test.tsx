@@ -683,7 +683,12 @@ describe("AgentSidePanel", () => {
     activityPermission.allowed = true;
     const { container } = renderPanel("user-owner", "page");
 
-    expect(screen.queryByRole("button", { name: "Close panel" })).not.toBeInTheDocument();
+    // LRM-1185 (父 LRM-974 冻 A1): the page variant used to render an EMPTY
+    // dismiss slot — that is the bug Frank reported ("详情卡没有关闭按钮"), so the
+    // floating close must now exist with a 44×44 hit target even on `page`.
+    const pageClose = screen.getByTestId("side-panel-page-close");
+    expect(pageClose).toHaveClass("size-11");
+    expect(pageClose).toHaveAccessibleName("Close panel");
     expect(container.querySelector("aside")).toHaveClass("min-w-0", "w-full");
     expect(container.querySelector(".overflow-y-auto")).toHaveClass("min-w-0");
     for (const tab of ["Profile", "Activity", "Files"]) {

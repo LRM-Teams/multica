@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { ChevronRight, Clock, Loader2 } from "lucide-react";
 import type { AgentPresenceDetail } from "@multica/core/agents";
 import { cn } from "@multica/ui/lib/utils";
@@ -9,6 +10,71 @@ import {
   presentAgentActivityBand,
   resolveAgentActivityBand,
 } from "../resolve-agent-live-status";
+
+/**
+ * Shared Activity mark for agent list surfaces (Idle / Working / Disconnected…).
+ * Same vocabulary as `AgentActivityListItem` — do not hand-roll another path.
+ */
+export function AgentActivityStatus({
+  presence,
+  className,
+  alignEnd = false,
+  unknownLabel,
+  testId = "agent-activity-status",
+}: {
+  presence?: AgentPresenceDetail | null;
+  className?: string;
+  /** Raft desktop list: push mark to the trailing edge. */
+  alignEnd?: boolean;
+  /** When presence is missing — callers that need a localized unknown string. */
+  unknownLabel?: string;
+  testId?: string;
+}) {
+  const band = resolveAgentActivityBand(presence ?? null);
+  if (!band) {
+    return (
+      <span
+        className={cn(
+          "inline-flex min-w-0 items-center gap-1.5 text-muted-foreground/60",
+          alignEnd && "ml-auto shrink-0",
+          className,
+        )}
+        data-testid={testId}
+      >
+        {unknownLabel ?? "—"}
+      </span>
+    );
+  }
+  const view = presentAgentActivityBand(band, true);
+  const isWorking = band === "working" && presence?.workload !== "queued";
+  const isQueued = presence?.workload === "queued";
+
+  return (
+    <span
+      className={cn(
+        "inline-flex min-w-0 max-w-[50%] items-center gap-1.5 text-muted-foreground",
+        alignEnd && "ml-auto shrink-0",
+        className,
+      )}
+      data-testid={testId}
+      data-activity-band={band}
+    >
+      {isWorking ? (
+        <Loader2 className="h-3 w-3 shrink-0 animate-spin text-running" />
+      ) : null}
+      {isQueued ? (
+        <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
+      ) : null}
+      {!isWorking && !isQueued ? (
+        <span
+          className={cn("size-1.5 shrink-0 rounded-full", view.dotClass)}
+          aria-hidden
+        />
+      ) : null}
+      <span className="truncate text-[13px]">{view.label}</span>
+    </span>
+  );
+}
 
 /**
  * Canonical agent list row (Frank / Parker 2026-08-03 task #30):
@@ -31,6 +97,7 @@ export function AgentActivityListItem({
   avatarSize,
   selectionMode = false,
   selected = false,
+  trailing,
 }: {
   agentId: string;
   displayName: string;
@@ -47,37 +114,18 @@ export function AgentActivityListItem({
   /** Multi-select mode (Computer Agents section Select). */
   selectionMode?: boolean;
   selected?: boolean;
+  /** Optional trailing control (e.g. "View agent" in delete dialogs). */
+  trailing?: ReactNode;
 }) {
-  const band = resolveAgentActivityBand(presence ?? null);
-  const view = band
-    ? presentAgentActivityBand(band, true)
-    : { label: "—", dotClass: "bg-muted-foreground/40" };
-  const isWorking = band === "working" && presence?.workload !== "queued";
-  const isQueued = presence?.workload === "queued";
   const size = avatarSize ?? (layout === "stacked" ? 28 : 22);
 
   const activity = (
-    <span
-      className={cn(
-        "inline-flex min-w-0 max-w-[50%] items-center gap-1.5 text-muted-foreground",
-        layout === "inline" && "ml-auto shrink-0",
-      )}
-      data-testid="agent-activity-list-item-activity"
-    >
-      {isWorking ? (
-        <Loader2 className="h-3 w-3 shrink-0 animate-spin text-running" />
-      ) : null}
-      {isQueued ? (
-        <Clock className="h-3 w-3 shrink-0 text-muted-foreground" />
-      ) : null}
-      {!isWorking && !isQueued ? (
-        <span
-          className={cn("size-1.5 shrink-0 rounded-full", view.dotClass)}
-          aria-hidden
-        />
-      ) : null}
-      <span className="truncate text-[13px]">{view.label}</span>
-    </span>
+    <AgentActivityStatus
+      presence={presence}
+      alignEnd={layout === "inline"}
+      className={layout === "inline" ? undefined : "max-w-none"}
+      testId="agent-activity-list-item-activity"
+    />
   );
 
   const runtime = (
@@ -112,9 +160,7 @@ export function AgentActivityListItem({
           className,
         )}
       >
-        {selectionMode ? (
-          <SelectionCheck selected={selected} />
-        ) : null}
+        {selectionMode ? <SelectionCheck selected={selected} /> : null}
         <ActorAvatar
           actorType="agent"
           actorId={agentId}
@@ -130,6 +176,7 @@ export function AgentActivityListItem({
             {activity}
           </span>
         </span>
+        {trailing}
         {showChevron && !selectionMode ? (
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/45" />
         ) : null}
@@ -137,7 +184,7 @@ export function AgentActivityListItem({
     );
   }
 
-  // Raft desktop: [avatar] [name · runtime] ………… [activity]
+  // Raft desktop: [avatar] [name · runtime] ………… [activity] [trailing?]
   return (
     <button
       type="button"
@@ -165,6 +212,7 @@ export function AgentActivityListItem({
         {(provider || runtimeLabel) && runtime}
       </span>
       {activity}
+      {trailing}
       {showChevron && !selectionMode ? (
         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/45" />
       ) : null}

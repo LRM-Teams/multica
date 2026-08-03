@@ -18,7 +18,7 @@ const TEST_RESOURCES = {
 // mocked api throws. vi.hoisted is required because vi.mock is hoisted above
 // imports — a top-level class declaration would not be visible to the mock
 // factory at hoist time.
-const { ApiError, apiDeleteRuntime } = vi.hoisted(() => {
+const { ApiError, apiDeleteRuntime, navPush } = vi.hoisted(() => {
   class ApiError extends Error {
     status: number;
     body: unknown;
@@ -31,6 +31,7 @@ const { ApiError, apiDeleteRuntime } = vi.hoisted(() => {
   return {
     ApiError,
     apiDeleteRuntime: vi.fn(),
+    navPush: vi.fn(),
   };
 });
 
@@ -93,7 +94,15 @@ vi.mock("../../navigation/app-link", () => ({
   ),
 }));
 
+vi.mock("../../navigation", () => ({
+  useNavigation: () => ({ push: navPush, replace: vi.fn() }),
+}));
+
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));
+vi.mock("./provider-logo", () => ({
+  ProviderLogo: () => null,
+  knownProviderLabel: (p: string) => p,
+}));
 vi.mock("../../agents/presence", () => ({
   availabilityConfig: {
     online: { dotClass: "", textClass: "" },
@@ -262,14 +271,18 @@ describe("DeleteRuntimeDialog", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Alpha")).toBeInTheDocument();
     expect(screen.getByText("Beta")).toBeInTheDocument();
-    // Never offers to archive/cascade — only a way out (Close) and a link
-    // per agent to go handle it there.
+    // Never offers to archive/cascade — only a way out (Close) and a row
+    // per agent (AgentActivityListItem) that navigates to handle it there.
     expect(
       screen.queryByRole("button", { name: /archive/i }),
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
-    const alphaLink = screen.getByText("Alpha").closest("a");
-    expect(alphaLink).toHaveAttribute("href", "/agents/a-1");
+    const alphaRow = screen
+      .getAllByTestId("agent-activity-list-item")
+      .find((el) => el.getAttribute("data-agent-id") === "a-1");
+    expect(alphaRow).toBeTruthy();
+    fireEvent.click(alphaRow!);
+    expect(navPush).toHaveBeenCalledWith("/agents/a-1");
     expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
   });
 

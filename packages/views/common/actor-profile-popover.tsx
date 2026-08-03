@@ -372,10 +372,10 @@ function AgentHonorSummary({ agentId }: { agentId: string }) {
   );
   return (
     <div
-      className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground"
+      className="mt-2 flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/25 px-2 py-1.5 text-xs leading-4 text-muted-foreground"
       data-testid="agent-honor-showcase"
     >
-      <AgentHonorLevelIcon level={honor.level} className="size-5" />
+      <AgentHonorLevelIcon level={honor.level} className="size-10 drop-shadow-sm" />
       <span className="shrink-0 font-medium tabular-nums text-foreground/80">
         {t(($) => $.profile_popover.honor.level_value, { level: honor.level })}
       </span>

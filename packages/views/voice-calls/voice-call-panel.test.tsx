@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -9,25 +8,6 @@ import {
   VoiceCallPanel,
   type VoiceCallPanelProps,
 } from "./voice-call-panel";
-
-vi.mock("@multica/ui/components/ui/dialog", () => ({
-  Dialog: ({
-    children,
-    open,
-  }: {
-    children: ReactNode;
-    open: boolean;
-  }) => open ? <div>{children}</div> : null,
-  DialogContent: ({ children }: { children: ReactNode }) => (
-    <div>{children}</div>
-  ),
-  DialogTitle: ({ children }: { children: ReactNode }) => (
-    <h1>{children}</h1>
-  ),
-  DialogDescription: ({ children }: { children: ReactNode }) => (
-    <p>{children}</p>
-  ),
-}));
 
 vi.mock("../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => (
@@ -52,6 +32,8 @@ function renderPanel(overrides: Partial<VoiceCallPanelProps> = {}) {
     toolStatus: null,
     speakerphone: false,
     onRequestClose: vi.fn(),
+    onMinimize: vi.fn(),
+    onExpand: vi.fn(),
     onToggleMute: vi.fn(),
     onToggleSpeakerphone: vi.fn(),
     onHangUp: vi.fn(),
@@ -82,30 +64,63 @@ describe("formatVoiceCallDuration", () => {
 });
 
 describe("VoiceCallPanel", () => {
-  it("renders the connected call and invokes mute and hang-up actions", async () => {
+  it("renders WeChat-style fullscreen shell with mute, speakerphone, hang-up", async () => {
     const user = userEvent.setup();
     const props = renderPanel();
 
-    expect(screen.getByRole("heading", {
-      name: "Voice call with Beckham",
-    })).toBeInTheDocument();
-    expect(screen.getByText("Connected · 1:05")).toBeInTheDocument();
+    expect(screen.getByTestId("voice-call-fullscreen")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Beckham" })).toBeInTheDocument();
+    expect(screen.getByText("In call")).toBeInTheDocument();
+    expect(screen.getByText("1:05")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Mute" }));
+    await user.click(screen.getByRole("button", { name: "Speaker" }));
     await user.click(screen.getByRole("button", { name: "Hang up" }));
 
     expect(props.onToggleMute).toHaveBeenCalledOnce();
+    expect(props.onToggleSpeakerphone).toHaveBeenCalledOnce();
     expect(props.onHangUp).toHaveBeenCalledOnce();
+  });
+
+  it("shows speakerphone for rtc mode (not duplex-only)", () => {
+    renderPanel({ mode: "rtc", speakerphone: true });
+    const speaker = screen.getByRole("button", { name: "Speaker" });
+    expect(speaker).toHaveAttribute("aria-pressed", "true");
   });
 
   it("offers unmute when the local microphone is muted", async () => {
     const user = userEvent.setup();
     const props = renderPanel({ phase: "muted" });
 
-    expect(screen.getByText("Microphone off · 1:05")).toBeInTheDocument();
+    expect(screen.getByText("In call")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Unmute" }));
 
     expect(props.onToggleMute).toHaveBeenCalledOnce();
+  });
+
+  it("minimizes to a floating pip without hanging up", async () => {
+    const user = userEvent.setup();
+    const props = renderPanel();
+
+    await user.click(screen.getByTestId("voice-call-minimize"));
+    expect(props.onMinimize).toHaveBeenCalledOnce();
+    expect(props.onHangUp).not.toHaveBeenCalled();
+  });
+
+  it("expands from the floating pip", async () => {
+    const user = userEvent.setup();
+    const props = renderPanel({ minimized: true });
+
+    expect(screen.getByTestId("voice-call-pip")).toBeInTheDocument();
+    expect(screen.queryByTestId("voice-call-fullscreen")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("voice-call-pip"));
+    expect(props.onExpand).toHaveBeenCalledOnce();
+  });
+
+  it("shows invite status while connecting", () => {
+    renderPanel({ phase: "joining" });
+    expect(screen.getByText("Inviting you to a voice call…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Hang up" })).toBeInTheDocument();
   });
 
   it("keeps a failed server call visible so hang-up can be retried", async () => {
@@ -216,7 +231,7 @@ describe("VoiceCallPanel", () => {
     expect(props.onResumeAudio).toHaveBeenCalledOnce();
   });
 
-  it("shows duplex tool progress and speakerphone toggle", async () => {
+  it("shows duplex tool progress alongside speakerphone", async () => {
     const user = userEvent.setup();
     const props = renderPanel({
       mode: "duplex",

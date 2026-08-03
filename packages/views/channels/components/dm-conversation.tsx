@@ -6,6 +6,7 @@ import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-quer
 import {
   channelMessageThreadOptions,
   channelMessagesPageOptions,
+  channelKeys,
   flattenChannelMessagePages,
   enrichChannelMessagesPreservingAvatars,
   channelMessagesFirstItemIndex,
@@ -497,6 +498,9 @@ function DmChannelConversation({
   }, dispatch] = useReducer(dmChannelReducer, initialDmChannelState);
   const appliedDeepLinkMessageRef = useRef<string | null>(null);
   const appliedThreadDeepLinkRef = useRef<string | null>(null);
+  // LRM-1063: once per deep-link target, drop mid-history cache so jump can
+  // walk latest → older.
+  const deepLinkMessagesResetKeyRef = useRef<string | null>(null);
   // #349 / LRM-877 — Dock Stack in one state object (react-doctor prefer-useReducer).
   // Agent + optional returnToMember share the thread-panel slot with member Profile.
   type DmDockStack = {
@@ -630,16 +634,21 @@ function DmChannelConversation({
     dm.last_read_seq,
     dm.real_unread ?? dm.unread,
   );
+  // LRM-1063: Reminder / notification deep-links must load from latest so
+  // ensure-message-loaded can page older toward the target (no newer cursor).
+  const hasConversationDeepLink = !!(deepLinkMessageId || threadDeepLinkId);
+  const deepLinkAroundSeq = hasConversationDeepLink ? null : entryAnchor.aroundSeq;
   const {
     data: messagePages,
     isLoading: messagesLoading,
+    isPending: messagesPending,
     isError: messagesError,
     refetch: refetchMessages,
     fetchNextPage: fetchOlderMessages,
     hasNextPage: hasOlderMessages,
     isFetchingNextPage: isFetchingOlderMessages,
   } = useInfiniteQuery(
-    channelMessagesPageOptions(channelId, { aroundSeq: entryAnchor.aroundSeq }),
+    channelMessagesPageOptions(channelId, { aroundSeq: deepLinkAroundSeq }),
   );
   const messages = useMemo(() => flattenChannelMessagePages(messagePages), [messagePages]);
   const messagesFirstItemIndex = useMemo(
@@ -828,6 +837,8 @@ function DmChannelConversation({
     hasOlder: !!hasOlderMessages,
     isFetchingOlder: isFetchingOlderMessages,
     fetchOlder: fetchOlderMessages,
+    // LRM-1063: don't false-exhaust while the first page is pending.
+    isPending: !channelId || messagesPending,
   });
   // LRM-736 AC — toast + keep the inline notice (#835 durable record).
   useJumpNotFoundToast({
@@ -923,6 +934,16 @@ function DmChannelConversation({
       });
     }
   }, [threadDeepLinkId, deepLinkMessageId, channelId, wsId]);
+
+  // LRM-1063: reset mid-history message cache for this deep-link target.
+  useEffect(() => {
+    const target = deepLinkMessageId || threadDeepLinkId;
+    if (!target || !channelId) return;
+    const key = `${channelId}:${target}`;
+    if (deepLinkMessagesResetKeyRef.current === key) return;
+    deepLinkMessagesResetKeyRef.current = key;
+    qc.removeQueries({ queryKey: channelKeys.messagesPage(channelId) });
+  }, [deepLinkMessageId, threadDeepLinkId, channelId, qc]);
 
   useEffect(() => {
     if (!threadRoot) return;

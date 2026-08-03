@@ -105,4 +105,63 @@ describe("useEnsureMessageLoaded", () => {
     expect(result.current).toBe("searching");
     expect(fetchOlder).toHaveBeenCalledTimes(1);
   });
+
+  // LRM-1063: cold open / disabled query must not false-exhaust (toast + block
+  // later older-page fetches via concludedForRef).
+  it("stays searching while isPending even when hasOlder is false", () => {
+    const fetchOlder = vi.fn();
+    const { result, rerender } = renderHook(
+      (props: {
+        isPending: boolean;
+        hasOlder: boolean;
+        targetLoaded: boolean;
+      }) =>
+        useEnsureMessageLoaded({
+          targetId: "m-deep",
+          isFetchingOlder: false,
+          fetchOlder,
+          ...props,
+        }),
+      {
+        initialProps: {
+          isPending: true,
+          hasOlder: false,
+          targetLoaded: false,
+        },
+      },
+    );
+
+    expect(result.current).toBe("searching");
+    expect(fetchOlder).not.toHaveBeenCalled();
+
+    // First page arrives without the target, but older pages exist → fetch.
+    rerender({ isPending: false, hasOlder: true, targetLoaded: false });
+    expect(result.current).toBe("searching");
+    expect(fetchOlder).toHaveBeenCalledTimes(1);
+
+    rerender({ isPending: false, hasOlder: true, targetLoaded: true });
+    expect(result.current).toBe("found");
+  });
+
+  it("does not lock exhausted across a pending→ready transition (LRM-1063)", () => {
+    const fetchOlder = vi.fn();
+    const { result, rerender } = renderHook(
+      (props: { isPending: boolean; hasOlder: boolean }) =>
+        useEnsureMessageLoaded({
+          targetId: "old-msg",
+          targetLoaded: false,
+          isFetchingOlder: false,
+          fetchOlder,
+          ...props,
+        }),
+      { initialProps: { isPending: true, hasOlder: false } },
+    );
+    expect(result.current).toBe("searching");
+
+    // Without isPending, this frame would have concluded exhausted and blocked
+    // the subsequent hasOlder=true fetch forever.
+    rerender({ isPending: false, hasOlder: true });
+    expect(result.current).toBe("searching");
+    expect(fetchOlder).toHaveBeenCalledTimes(1);
+  });
 });

@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 /**
  * Drives an infinite-query message list to load older pages until a jump
- * target (search hit / quote back-reference) is present in the loaded pages,
- * or history is exhausted.
+ * target (search hit / quote back-reference / notification deep-link) is
+ * present in the loaded pages, or history is exhausted.
  *
  * The channel/DM message viewport can only scroll to and highlight a message
  * it has actually loaded (`highlightIndex < 0` is a no-op). When a search
@@ -16,6 +16,11 @@ import { useEffect, useRef, useState } from "react";
  *
  * It concludes at most once per target id (found or exhausted) so a target
  * that can't be located does not re-trigger an endless fetch loop.
+ *
+ * LRM-1063: must NOT conclude `exhausted` while the first page is still
+ * pending (query disabled / cold fetch). A premature exhaust toasts
+ * 「找不到消息」and, via `concludedForRef`, blocks later older-page fetches
+ * even after the conversation finishes loading.
  */
 export type EnsureMessageLoadedStatus = "idle" | "searching" | "found" | "exhausted";
 
@@ -30,8 +35,21 @@ export function useEnsureMessageLoaded(params: {
   isFetchingOlder: boolean;
   /** Fetch the next older page (`fetchNextPage`). */
   fetchOlder: () => void;
+  /**
+   * True while the conversation's first message page is not ready yet
+   * (channel id unresolved, query disabled, or initial fetch in flight).
+   * While pending, status stays `searching` and we never conclude exhausted.
+   */
+  isPending?: boolean;
 }): EnsureMessageLoadedStatus {
-  const { targetId, targetLoaded, hasOlder, isFetchingOlder, fetchOlder } = params;
+  const {
+    targetId,
+    targetLoaded,
+    hasOlder,
+    isFetchingOlder,
+    fetchOlder,
+    isPending = false,
+  } = params;
   const [status, setStatus] = useState<EnsureMessageLoadedStatus>("idle");
   // The target id we've already reached a terminal conclusion for (found or
   // exhausted). Prevents re-driving the fetch loop for a target we can't find.
@@ -53,6 +71,11 @@ export function useEnsureMessageLoaded(params: {
       // Already exhausted history for this target — don't loop.
       return;
     }
+    // Cold open / route reconcile: no pages yet. Stay searching; do not toast.
+    if (isPending) {
+      setStatus("searching");
+      return;
+    }
     if (hasOlder) {
       setStatus("searching");
       if (!isFetchingOlder) fetchOlder();
@@ -63,7 +86,7 @@ export function useEnsureMessageLoaded(params: {
     // No older pages left and the target never appeared.
     setStatus("exhausted");
     concludedForRef.current = targetId;
-  }, [targetId, targetLoaded, hasOlder, isFetchingOlder, fetchOlder]);
+  }, [targetId, targetLoaded, hasOlder, isFetchingOlder, fetchOlder, isPending]);
 
   return status;
 }

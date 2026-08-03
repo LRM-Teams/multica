@@ -19,7 +19,6 @@ import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { useMemberPanelStore } from "@multica/core/workspace";
 import { resolveHealthDotClass } from "../agents/health";
-import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
 import { ActorProfileContent } from "./actor-profile-popover";
 import { availabilityConfig, toLiveAvailability } from "../agents/presence";
 import { useNavigation } from "../navigation";
@@ -32,16 +31,6 @@ import {
   mentionTypeFromActorType,
   useResolvedActorIdentity,
 } from "./use-resolved-actor-identity";
-
-/**
- * Selects which agent hover-card payload to render when `enableHoverCard` is
- * on (task #25):
- * - `"profile"` (default) — shared identity peek (`ActorProfileContent`), same
- *   card as group/DM `ActorProfileTrigger`. Sitewide one card.
- * - `"live"` — live activity peek (workload / current issue). Not an identity
- *   card; out of #25's "one identity hover" scope, kept as a separate surface.
- */
-export type AgentHoverCardVariant = "profile" | "live";
 
 interface ActorAvatarProps {
   actorType: string;
@@ -62,7 +51,8 @@ interface ActorAvatarProps {
   /**
    * Wrap the avatar in a hover-card preview on dwell. Use for "who is this?"
    * surfaces — comment authors, list rows, subscriber chips. Independent of
-   * `showStatusDot`: a surface can have one, both, or neither.
+   * `showStatusDot`: a surface can have one, both, or neither. Payload is
+   * always `ActorProfileContent` (task #25 — one sitewide identity hover).
    */
   enableHoverCard?: boolean;
   /**
@@ -72,12 +62,6 @@ interface ActorAvatarProps {
    * popover inside the dropdown.
    */
   showStatusDot?: boolean;
-  /**
-   * When `enableHoverCard` is on for an agent, choose which payload to
-   * render. See {@link AgentHoverCardVariant}. Defaults to `"profile"` so
-   * existing call sites keep their identity-card behaviour.
-   */
-  hoverCardVariant?: AgentHoverCardVariant;
   /**
    * Make the avatar click through to the actor page. Defaults on for members
    * and agents, while picker/menu controls keep their own click behavior.
@@ -118,7 +102,6 @@ export function ActorAvatar({
   avatarUrlHint,
   enableHoverCard,
   showStatusDot,
-  hoverCardVariant = "profile",
   profileLink,
   showXpBurst = false,
   fleetRank,
@@ -211,9 +194,7 @@ export function ActorAvatar({
   }
   if (actorType === "agent") {
     return (
-      <AgentAvatarHoverCard agentId={actorId} variant={hoverCardVariant}>
-        {content}
-      </AgentAvatarHoverCard>
+      <AgentAvatarHoverCard agentId={actorId}>{content}</AgentAvatarHoverCard>
     );
   }
   if (actorType === "member") {
@@ -534,27 +515,20 @@ export function MemberStatusDot({ userId, size }: { userId: string; size?: numbe
  * this prevents nested tabbable descendants and keyboard-nav bloat at sites
  * where the avatar lives inside a row link or click target.
  *
- * Identity peeks (default) use the same `ActorProfileContent` as group/DM
- * `ActorProfileTrigger` — task #25: one hover card sitewide. Live peek stays
- * on `AgentLivePeekCard` (not an identity card).
+ * Same `ActorProfileContent` as group/DM `ActorProfileTrigger` — task #25:
+ * one hover card sitewide (human + agent).
  */
 function AgentAvatarHoverCard({
   agentId,
-  variant,
   children,
 }: {
   agentId: string;
-  variant: AgentHoverCardVariant;
   children: React.ReactNode;
 }) {
-  const content =
-    variant === "live" ? (
-      <AgentLivePeekCard agentId={agentId} />
-    ) : (
-      <ActorProfileContent memberType="agent" memberId={agentId} />
-    );
   return (
-    <ActorAvatarHoverCardShell content={content}>
+    <ActorAvatarHoverCardShell
+      content={<ActorProfileContent memberType="agent" memberId={agentId} />}
+    >
       {children}
     </ActorAvatarHoverCardShell>
   );

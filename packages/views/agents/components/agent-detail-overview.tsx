@@ -26,6 +26,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT, useTimeAgo } from "../../i18n";
 import { AgentRestartModal } from "./agent-restart-modal";
+import { AgentOpenDmButton } from "./agent-open-dm-button";
 import { useAgentFleetClassName } from "../hooks/use-agent-fleet-class-name";
 
 export interface AgentMetric {
@@ -212,6 +213,9 @@ export function AgentDetailOverview({
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {!isArchived ? (
+            <AgentOpenDmButton agentId={agent.id} variant="labeled" />
+          ) : null}
           <Button variant="outline" size="sm" onClick={onHonor}>
             <Medal className="size-3.5" />
             {t(($) => $.tabs.honor)}

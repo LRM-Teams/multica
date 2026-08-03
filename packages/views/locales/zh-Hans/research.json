@@ -41,9 +41,11 @@
     "goal_dialog_title": "调研目标",
     "goal_dialog_close": "关闭",
     "goal_dialog_open": "打开会话",
-    "who_working": "{{name}} 进行中",
+    "who_working": "{{name}}",
     "output_line": "产出 · {{summary}}",
-    "no_output": "产出 · 暂无产出"
+    "no_output": "产出 · 暂无产出",
+    "recent_heading": "最近调研",
+    "recent_count": "{{count}}"
   },
   "filter": {
     "search_label": "搜索会话标题",
@@ -54,7 +56,12 @@
     "status_failed": "失败",
     "clear": "清除筛选",
     "no_results": "没有匹配的会话",
-    "no_results_hint": "试试别的关键词，或清除筛选查看全部"
+    "no_results_hint": "试试别的关键词，或清除筛选查看全部",
+    "status_all": "全部",
+    "count_aria": "{{label}} {{count}} 个",
+    "scope_line": "{{scope}} · {{count}} 个会话",
+    "scope_query": "「{{query}}」",
+    "no_results_scope": "当前口径：{{scope}}"
   },
   "actions": {
     "menu": "调研操作",
@@ -65,7 +72,8 @@
     "delete_desc": "画布、对话和来源都会被永久删除，无法恢复。",
     "delete_confirm": "删除",
     "delete_done": "调研已删除",
-    "cancel": "取消"
+    "cancel": "取消",
+    "view_goal": "查看目标"
   },
   "goal_card": {
     "label": "GOAL",

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type { ResearchSession } from "@multica/core/types";
 import enResearch from "../../locales/en/research.json";
 
@@ -18,8 +18,12 @@ vi.mock("../../i18n/use-t", () => ({
   }),
 }));
 
-vi.mock("../../i18n/use-time-ago", () => ({
-  useTimeAgo: () => (dateStr: string) => `ago:${dateStr}`,
+vi.mock("../../i18n/time", () => ({
+  Time: ({ value, className }: { value: string; className?: string }) => (
+    <time data-testid="list-time" className={className}>
+      list:{value}
+    </time>
+  ),
 }));
 
 vi.mock("../../navigation/app-link", () => ({
@@ -60,20 +64,6 @@ vi.mock("./research-session-row-actions", () => ({
   ResearchSessionRowActions: () => <span data-testid="row-actions" />,
 }));
 
-vi.mock("@multica/ui/components/ui/dialog", () => ({
-  Dialog: ({
-    open,
-    children,
-  }: {
-    open: boolean;
-    children: React.ReactNode;
-  }) => (open ? <div data-testid="goal-dialog">{children}</div> : null),
-  DialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
-  DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
-
 import { ResearchSessionRow } from "./research-session-row";
 
 function session(partial: Partial<ResearchSession> = {}): ResearchSession {
@@ -99,7 +89,7 @@ function session(partial: Partial<ResearchSession> = {}): ResearchSession {
   };
 }
 
-describe("ResearchSessionRow (LRM-790 narrow + dark tokens)", () => {
+describe("ResearchSessionRow (LRM-1106 / LRM-1099)", () => {
   it("running status paints a brand dot with motion-safe pulse", () => {
     const { container } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
     const dot = container.querySelector("span.rounded-full.size-2");
@@ -126,7 +116,7 @@ describe("ResearchSessionRow (LRM-790 narrow + dark tokens)", () => {
     }
   });
 
-  it("shows a short title without dual-writing the full goal as a subtitle", () => {
+  it("shows title without dual-writing the full goal as a subtitle", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
     expect(screen.getByText("Alpha market map")).toBeTruthy();
     expect(
@@ -134,35 +124,25 @@ describe("ResearchSessionRow (LRM-790 narrow + dark tokens)", () => {
     ).toBeNull();
   });
 
-  it("goal chip uses brand semantic tokens (no hard-coded violet)", () => {
+  it("LRM-1106 D2: never renders an inline goal chip", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
-    const chip = screen.getByTestId("research-session-goal-chip");
-    expect(chip.className).toContain("bg-brand/10");
-    expect(chip.className).toContain("text-brand");
-    expect(chip.className).not.toContain("violet");
-    expect(chip.className).toContain("hidden");
-    expect(chip.className).toContain("sm:inline-flex");
+    expect(screen.queryByTestId("research-session-goal-chip")).toBeNull();
   });
 
-  it("opens a goal dialog from the colored chip", () => {
+  it("keeps stage · list Time; avatars yield below md; lead name without 进行中 suffix", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
-    expect(screen.queryByTestId("goal-dialog")).toBeNull();
-    fireEvent.click(screen.getByTestId("research-session-goal-chip"));
-    expect(screen.getByTestId("goal-dialog")).toBeTruthy();
-    expect(screen.getByText(enResearch.list.goal_dialog_title)).toBeTruthy();
-  });
-
-  it("keeps stage · relative time in meta; avatars yield below sm", () => {
-    render(<ResearchSessionRow session={session()} href="/research/s1" />);
-    expect(screen.getByText(enResearch.stage.s2_sources)).toBeTruthy();
-    expect(screen.getByText("ago:2026-07-30T03:00:00Z")).toBeTruthy();
-    expect(screen.getByText("Ronaldo working")).toBeTruthy();
+    expect(screen.getAllByText(enResearch.stage.s2_sources).length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId("list-time")[0]?.textContent).toContain(
+      "list:2026-07-30T03:00:00Z",
+    );
+    expect(screen.getByText("Ronaldo")).toBeTruthy();
+    expect(screen.queryByText(/Ronaldo working/)).toBeNull();
     expect(screen.getByTestId("avatar-stack").className).toContain("hidden");
-    expect(screen.getByTestId("avatar-stack").className).toContain("sm:flex");
+    expect(screen.getByTestId("avatar-stack").className).toContain("md:flex");
     expect(avatarStackRef.agentIds).toEqual(["agent-1", "agent-2"]);
   });
 
-  it("falls back to a truncated goal as the title when title is empty", () => {
+  it("uses CSS truncate for long empty-title goals (no hard char ellipsis)", () => {
     const longGoal =
       "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员，开发环境要求。目前我们的设备是几台 linux 服务器";
     const { container } = render(
@@ -171,44 +151,24 @@ describe("ResearchSessionRow (LRM-790 narrow + dark tokens)", () => {
     const titleEl = container.querySelector(
       '[data-testid="research-session-row"] .font-medium.tracking-tight',
     );
-    expect(titleEl?.textContent?.includes("…")).toBe(true);
-    expect(titleEl?.textContent?.length ?? 0).toBeLessThan(longGoal.length);
+    expect(titleEl?.textContent).toBe(longGoal);
+    expect(titleEl?.className).toMatch(/line-clamp-2|truncate/);
   });
 
-  it("LRM-1104: omits goal chip when title falls back to goal (duplicate)", () => {
-    const longGoal =
-      "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员，开发环境要求。目前我们的设备是几台 linux 服务器";
-    render(
-      <ResearchSessionRow session={session({ title: "", goal: longGoal })} href="/research/s1" />,
-    );
-    expect(screen.queryByTestId("research-session-goal-chip")).toBeNull();
-  });
-
-  it("LRM-1104: omits goal chip when title and goal are mutual prefixes", () => {
-    render(
-      <ResearchSessionRow
-        session={session({
-          title: "LRM-904 live联调：动态编制",
-          goal: "LRM-904 live联调：动态编制 hire/archive 证据（可删）",
-        })}
-        href="/research/s1"
-      />,
-    );
-    expect(screen.queryByTestId("research-session-goal-chip")).toBeNull();
-  });
-
-  it("LRM-1104: keeps goal chip + dialog when goal adds distinct info", () => {
-    render(<ResearchSessionRow session={session()} href="/research/s1" />);
-    expect(screen.getByTestId("research-session-goal-chip")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("research-session-goal-chip"));
-    expect(screen.getByTestId("goal-dialog")).toBeTruthy();
+  it("exposes focus-within visibility for row actions", () => {
+    const { container } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    const actionsWrap = screen.getByTestId("row-actions").parentElement;
+    expect(actionsWrap?.className).toContain("md:group-focus-within:opacity-100");
+    expect(
+      container.querySelector('[data-testid="research-session-row"]')?.className,
+    ).toContain("focus-within:bg-accent/70");
   });
 
   it("renders the localized stage and falls back to the raw stage key", () => {
     const { rerender } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
-    expect(screen.getByText(enResearch.stage.s2_sources)).toBeTruthy();
+    expect(screen.getAllByText(enResearch.stage.s2_sources).length).toBeGreaterThan(0);
     rerender(<ResearchSessionRow session={session({ current_stage: "s9_unknown" })} href="/research/s1" />);
-    expect(screen.getByText("s9_unknown")).toBeTruthy();
+    expect(screen.getAllByText("s9_unknown").length).toBeGreaterThan(0);
   });
 
   it("renders no avatar stack when the fleet preview is empty", () => {
@@ -225,13 +185,21 @@ describe("ResearchSessionRow (LRM-790 narrow + dark tokens)", () => {
     ).toContain("opacity-55");
   });
 
-  it("links title/meta to the session, with the actions menu outside the links", () => {
+  it("links title to the session with a single primary tab stop; actions stay outside", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
     const links = screen.getAllByRole("link");
-    expect(links.some((a) => a.getAttribute("href") === "/research/s1")).toBe(true);
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe("/research/s1");
     const actions = screen.getByTestId("row-actions");
-    for (const link of links) {
-      expect(link.contains(actions)).toBe(false);
-    }
+    expect(links[0]?.contains(actions)).toBe(false);
+  });
+
+  it("calls onNavigate before leaving for detail (D-IX persist hook)", () => {
+    const onNavigate = vi.fn();
+    render(
+      <ResearchSessionRow session={session()} href="/research/s1" onNavigate={onNavigate} />,
+    );
+    screen.getByRole("link").click();
+    expect(onNavigate).toHaveBeenCalledTimes(1);
   });
 });

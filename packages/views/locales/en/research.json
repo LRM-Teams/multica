@@ -41,9 +41,11 @@
     "goal_dialog_title": "Research goal",
     "goal_dialog_close": "Close",
     "goal_dialog_open": "Open session",
-    "who_working": "{{name}} working",
+    "who_working": "{{name}}",
     "output_line": "Output · {{summary}}",
-    "no_output": "Output · none yet"
+    "no_output": "Output · none yet",
+    "recent_heading": "Recent research",
+    "recent_count": "{{count}}"
   },
   "filter": {
     "search_label": "Search session titles",
@@ -54,7 +56,12 @@
     "status_failed": "Failed",
     "clear": "Clear filters",
     "no_results": "No matching sessions",
-    "no_results_hint": "Try another keyword, or clear filters to see all"
+    "no_results_hint": "Try another keyword, or clear filters to see all",
+    "status_all": "All",
+    "count_aria": "{{label}} {{count}}",
+    "scope_line": "{{scope}} · {{count}} sessions",
+    "scope_query": "“{{query}}”",
+    "no_results_scope": "Current filter: {{scope}}"
   },
   "actions": {
     "menu": "Research actions",
@@ -65,7 +72,8 @@
     "delete_desc": "The canvas, chat, and sources will be permanently removed.",
     "delete_confirm": "Delete",
     "delete_done": "Research deleted",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "view_goal": "View goal"
   },
   "goal_card": {
     "label": "GOAL",

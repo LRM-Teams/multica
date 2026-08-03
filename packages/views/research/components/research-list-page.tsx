@@ -622,13 +622,16 @@ export function ResearchListPage() {
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() =>
-                        setComposer((prev) => ({ ...prev, paramsOpen: true }))
-                      }
-                      disabled={create.isPending}
+                      // LRM-1236 — pending must stay focusable (same root cause as LRM-1213).
+                      aria-disabled={create.isPending || undefined}
+                      onClick={() => {
+                        if (create.isPending) return;
+                        setComposer((prev) => ({ ...prev, paramsOpen: true }));
+                      }}
                       className={cn(
                         "h-10 w-full shrink-0 rounded-full px-3.5 text-sm font-medium md:h-9 md:w-auto",
                         HERO_CTA_SECONDARY_CLASS,
+                        create.isPending && "opacity-50 cursor-not-allowed",
                       )}
                       data-testid="research-create-params-open"
                       aria-label={t(($) => $.create_params.open_aria)}
@@ -638,11 +641,13 @@ export function ResearchListPage() {
                     </Button>
                     <Button
                       onClick={submitCreate}
-                      disabled={create.isPending}
+                      // LRM-1236 — keep the activated CTA in tab order while mutate is pending.
+                      aria-disabled={create.isPending || undefined}
                       data-testid="research-create-submit"
                       className={cn(
                         "h-10 w-full shrink-0 rounded-full bg-brand px-4 text-sm font-medium text-brand-foreground md:h-9 md:w-auto",
                         HERO_CTA_PRIMARY_CLASS,
+                        create.isPending && "opacity-50 cursor-not-allowed",
                       )}
                     >
                       {create.isPending ? (

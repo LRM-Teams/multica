@@ -454,11 +454,46 @@ describe("ResearchListPage composer hero (LRM-783 / LRM-784 / LRM-906)", () => {
     expect(mutate).toHaveBeenCalledTimes(1);
   });
 
-  it("shows creating state while pending", () => {
+  it("shows creating state while pending (LRM-1236: aria-disabled, not native disabled)", () => {
     mutationRef.current = { ...mutationRef.current, isPending: true };
     render(<ResearchListPage />);
     expect(screen.getByText(enResearch.home.creating)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: new RegExp(enResearch.home.creating) })).toBeDisabled();
+    const submit = screen.getByTestId("research-create-submit") as HTMLButtonElement;
+    const params = screen.getByTestId("research-create-params-open") as HTMLButtonElement;
+    expect(submit.hasAttribute("disabled")).toBe(false);
+    expect(submit.disabled).toBe(false);
+    expect(submit.getAttribute("aria-disabled")).toBe("true");
+    expect(params.hasAttribute("disabled")).toBe(false);
+    expect(params.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("LRM-1236: swallows repeat create / params-open while pending; keeps focus target", () => {
+    const mutate = vi.fn();
+    mutationRef.current = { ...mutationRef.current, mutate, isPending: false };
+    const { rerender } = render(<ResearchListPage />);
+    fireEvent.change(screen.getByPlaceholderText(enResearch.goal_placeholder), {
+      target: { value: "Vector DB comparison" },
+    });
+    const submit = screen.getByTestId("research-create-submit");
+    submit.focus();
+    fireEvent.click(submit);
+    expect(mutate).toHaveBeenCalledTimes(1);
+
+    mutationRef.current = { ...mutationRef.current, mutate, isPending: true };
+    rerender(<ResearchListPage />);
+    const pendingSubmit = screen.getByTestId("research-create-submit") as HTMLButtonElement;
+    const pendingParams = screen.getByTestId("research-create-params-open") as HTMLButtonElement;
+    expect(pendingSubmit.getAttribute("aria-disabled")).toBe("true");
+    expect(pendingSubmit.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(pendingSubmit);
+    fireEvent.keyDown(pendingSubmit, { key: "Enter" });
+    expect(mutate).toHaveBeenCalledTimes(1);
+
+    // Params opener must not open the sheet while pending.
+    expect(screen.queryByTestId("research-create-params-panel")).toBeNull();
+    fireEvent.click(pendingParams);
+    expect(screen.queryByTestId("research-create-params-panel")).toBeNull();
+    expect(pendingParams.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("creation failure shows an inline error row with retry and keeps the draft", () => {

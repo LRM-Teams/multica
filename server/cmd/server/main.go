@@ -395,7 +395,6 @@ func main() {
 
 	// Start background workers.
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
-	autopilotCtx, autopilotCancel := context.WithCancel(context.Background())
 	taskSvc := h.TaskService
 	taskSvc.Wakeup = daemonWakeup
 	taskSvc.Analytics = analyticsClient
@@ -406,8 +405,8 @@ func main() {
 	} else {
 		slog.Info("training bridge not configured (AREAL_BRIDGE_STUB_URL unset) — training hooks disabled")
 	}
-	autopilotSvc := service.NewAutopilotService(queries, pool, bus, taskSvc)
-	registerAutopilotListeners(bus, autopilotSvc)
+	// LRM-1049: Autopilot scheduler/listeners/failure-monitor are retired.
+	// Reminder owns agent self-wake; API paths return 410.
 
 	// Construct a LivenessStore that mirrors the one wired into the HTTP
 	// handler. Both the heartbeat write path (handler) and the sweeper read
@@ -423,8 +422,6 @@ func main() {
 	go runCollaborationTurnWorkers(sweepCtx, h)
 	go runChannelOnboardingPublisher(sweepCtx, h)
 	go heartbeatScheduler.Run(sweepCtx)
-	go runAutopilotScheduler(autopilotCtx, queries, autopilotSvc)
-	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())
 	go runDBStatsLogger(sweepCtx, pool)
 
 	// Lark inbound supervisor: holds the §4.4 WS lease per installation
@@ -506,7 +503,6 @@ func main() {
 	<-quit
 
 	slog.Info("shutting down server")
-	autopilotCancel()
 
 	// Order matters: drain in-flight HTTP first so any heartbeat handlers
 	// finish calling Schedule() before we stop the scheduler. Otherwise a

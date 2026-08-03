@@ -25,9 +25,10 @@ function SectionTitle({ children }: { children: ReactNode }) {
 }
 
 /**
- * LRM-922 / LRM-863 / LRM-960 / LRM-1071 — Code agents inventory:
- * section title + count + provider grid. Visibility toggle on installed
- * cards (Make public / Make private) replaces the separate Sharing list.
+ * LRM-922 / LRM-863 / LRM-960 / LRM-1071 / LRM-1108 — Code agents inventory:
+ * section title + provider grid. Installed status is a green dot + muted
+ * version (A2); visibility toggle on the same footer row. A2.1 drops the
+ * section-header installed/supported count.
  */
 export function MachineCodeAgentsSection({
   machine,
@@ -52,23 +53,14 @@ export function MachineCodeAgentsSection({
   );
   const rows = [...installed, ...notInstalled];
   const installedCount = installed.length;
-  const supportedMore = notInstalled.length;
 
   const canEditRuntime = (ownerId: string | null | undefined) =>
     !!user && (!!ownerId && (ownerId === user.id || isAdmin));
 
   return (
     <section data-testid="machine-runtimes-section">
-      <div className="mb-2 flex items-baseline justify-between gap-3 px-1">
+      <div className="mb-2 px-1">
         <SectionTitle>{t(($) => $.machine.code_agents_section)}</SectionTitle>
-        {rows.length > 0 ? (
-          <span className="shrink-0 text-[11px] text-muted-foreground">
-            {t(($) => $.machine.code_agents_help, {
-              installed: installedCount,
-              supported: installedCount + supportedMore,
-            })}
-          </span>
-        ) : null}
       </div>
       <div className="overflow-hidden rounded-xl border bg-card">
         {rows.length === 0 ? (
@@ -76,7 +68,7 @@ export function MachineCodeAgentsSection({
             {t(($) => $.machine.code_agents_installed_empty)}
           </p>
         ) : (
-          <div className="grid grid-cols-2 divide-x divide-y md:grid-cols-4">
+          <div className="grid grid-cols-2 divide-x divide-y md:grid-cols-3">
             {rows.map((row, idx) => {
               const isInstalled = idx < installedCount;
               const runtime = row.runtimeId
@@ -108,6 +100,12 @@ export function MachineCodeAgentsSection({
                 );
               };
 
+              const versionLabel = row.version
+                ? t(($) => $.machine.code_agents_status_installed_ver, {
+                    version: row.version,
+                  })
+                : null;
+
               return (
                 <article
                   key={row.id}
@@ -116,6 +114,23 @@ export function MachineCodeAgentsSection({
                     isInstalled
                       ? `machine-runtime-card-${row.id}`
                       : `machine-runtime-card-missing-${row.id}`
+                  }
+                  aria-label={
+                    isInstalled
+                      ? [
+                          row.label,
+                          t(($) => $.machine.code_agents_status_installed),
+                          versionLabel,
+                          visibility
+                            ? t(($) => $.detail.visibility_label[visibility])
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(", ")
+                      : [
+                          row.label,
+                          t(($) => $.machine.code_agents_not_installed),
+                        ].join(", ")
                   }
                 >
                   <div className="flex items-center gap-2 text-sm font-semibold">
@@ -133,68 +148,45 @@ export function MachineCodeAgentsSection({
                     <span className="min-w-0 truncate">{row.label}</span>
                   </div>
                   {isInstalled ? (
-                    <>
-                      <p className="mt-2 text-[11px] text-emerald-700 dark:text-emerald-400">
-                        <span className="inline-flex items-center gap-1.5">
-                          <span
-                            className="inline-block h-1.5 w-1.5 rounded-full bg-current"
-                            aria-hidden
-                          />
-                          {row.version
-                            ? t(($) => $.machine.code_agents_status_installed_ver, {
-                                version: row.version,
-                              })
-                            : t(($) => $.machine.code_agents_status_installed)}
-                          {visibility ? (
-                            <>
-                              <span aria-hidden>·</span>
-                              <span className="text-muted-foreground">
-                                {t(($) => $.detail.visibility_label[visibility])}
-                              </span>
-                            </>
-                          ) : null}
-                        </span>
-                      </p>
+                    <div className="mt-auto flex flex-col items-start gap-2 pt-3 md:flex-row md:items-center md:justify-between md:gap-2">
+                      <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <span
+                          className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-online"
+                          aria-hidden
+                        />
+                        {versionLabel ? (
+                          <span className="tabular-nums">{versionLabel}</span>
+                        ) : null}
+                      </span>
                       {runtime && visibility ? (
-                        <div className="mt-auto pt-3">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="xs"
-                            className="h-6 gap-1 px-2 text-[11px]"
-                            onClick={flip}
-                            disabled={!canEdit || updateRuntime.isPending}
-                            data-testid={`machine-sharing-toggle-${runtime.id}`}
-                          >
-                            {visibility === "public" ? (
-                              <Lock className="h-3 w-3" />
-                            ) : (
-                              <Globe className="h-3 w-3" />
-                            )}
-                            {canEdit
-                              ? t(($) => $.machine.sharing.switch_to[next])
-                              : t(($) => $.machine.sharing.switch_locked)}
-                          </Button>
-                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          className="h-6 shrink-0 gap-1 px-2 text-[11px]"
+                          onClick={flip}
+                          disabled={!canEdit || updateRuntime.isPending}
+                          data-testid={`machine-sharing-toggle-${runtime.id}`}
+                        >
+                          {visibility === "public" ? (
+                            <Lock className="h-3 w-3" />
+                          ) : (
+                            <Globe className="h-3 w-3" />
+                          )}
+                          {canEdit
+                            ? t(($) => $.machine.sharing.switch_to[next])
+                            : t(($) => $.machine.sharing.switch_locked)}
+                        </Button>
                       ) : null}
-                    </>
+                    </div>
                   ) : (
-                    <div className="mt-2">
-                      <p className="text-[11px] text-muted-foreground">
-                        <span className="inline-flex items-center gap-1.5">
-                          <span
-                            className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/55"
-                            aria-hidden
-                          />
-                          {t(($) => $.machine.code_agents_status_supported)}
-                        </span>
-                      </p>
+                    <div className="mt-auto pt-3">
                       {row.docsUrl ? (
                         <a
                           href={row.docsUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-brand underline-offset-2 hover:underline"
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand underline-offset-2 hover:underline"
                         >
                           {t(($) => $.machine.code_agents_docs)}
                           <ExternalLink className="h-3 w-3" aria-hidden />

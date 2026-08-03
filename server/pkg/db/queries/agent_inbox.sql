@@ -367,19 +367,12 @@ WITH original AS (
 guarded AS (
   SELECT original.*
   FROM original
-  WHERE (
-      EXISTS (
-        SELECT 1
-        FROM chat_message prompt
-        WHERE prompt.task_id = original.id
-          AND prompt.role = 'user'
-      )
-      OR (
-        original.chat_session_id IS NULL
-        AND COALESCE(original.context->>'type', '') = 'channel_wake'
-        AND COALESCE(original.context->>'prompt', '') <> ''
-      )
-    )
+  WHERE EXISTS (
+    SELECT 1
+    FROM chat_message prompt
+    WHERE prompt.task_id = original.id
+      AND prompt.role = 'user'
+  )
     AND NOT EXISTS (
     SELECT 1
     FROM agent_inbox_event newer
@@ -420,9 +413,7 @@ retried_event AS (
     status,
     priority,
     seq_from,
-    seq_to,
-    context,
-    initiator_user_id
+    seq_to
   )
   SELECT
     guarded.workspace_id,
@@ -443,9 +434,7 @@ retried_event AS (
     'pending',
     guarded.priority,
     guarded.seq_from,
-    guarded.seq_to,
-    guarded.context,
-    guarded.initiator_user_id
+    guarded.seq_to
   FROM guarded
   JOIN agent a ON a.id = guarded.agent_id
   JOIN refreshed_session ON refreshed_session.id = guarded.agent_session_id
@@ -475,19 +464,11 @@ copied_prompt AS (
   JOIN original ON prompt.task_id = original.id
   CROSS JOIN retried_event
   WHERE prompt.role = 'user'
-    AND original.chat_session_id IS NOT NULL
   RETURNING id
 )
 SELECT retried_event.*
 FROM retried_event
-WHERE EXISTS (SELECT 1 FROM copied_prompt)
-   OR EXISTS (
-     SELECT 1
-     FROM original
-     WHERE original.chat_session_id IS NULL
-       AND COALESCE(original.context->>'type', '') = 'channel_wake'
-       AND COALESCE(original.context->>'prompt', '') <> ''
-   );
+WHERE EXISTS (SELECT 1 FROM copied_prompt);
 
 -- name: FailAgentInboxDelivery :one
 WITH active_delivery AS (

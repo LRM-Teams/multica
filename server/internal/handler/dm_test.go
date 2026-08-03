@@ -990,8 +990,8 @@ func listedDMItemForTest(t *testing.T, channelID string) *DMItem {
 }
 
 // TestSendChannelMessageDM_DispatchesAgent: a user message in an agent DM
-// auto-dispatches to the agent without any @-mention (LRM-1079: channel-only
-// inbox wake, no forced chat_session).
+// auto-dispatches to the agent without any @-mention (a channel_agent_session
+// is ensured as the first step of the dispatch chain).
 func TestSendChannelMessageDM_DispatchesAgent(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -1010,18 +1010,9 @@ func TestSendChannelMessageDM_DispatchesAgent(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("send: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var eventID string
-	var chatSessionID pgtype.UUID
-	if err := testPool.QueryRow(ctx, `
-		SELECT id::text, chat_session_id
-		FROM agent_inbox_event
-		WHERE channel_id = $1 AND agent_id = $2 AND requires_wake = true
-		ORDER BY created_at DESC
-		LIMIT 1`, channelID, agentID).Scan(&eventID, &chatSessionID); err != nil {
-		t.Fatalf("DM did not auto-dispatch to the agent: %v", err)
-	}
-	if chatSessionID.Valid {
-		t.Fatalf("DM wake must be channel-only; got chat_session_id=%s event=%s", uuidToString(chatSessionID), eventID)
+	var sessionID string
+	if err := testPool.QueryRow(ctx, `SELECT chat_session_id FROM channel_agent_session WHERE channel_id=$1 AND agent_id=$2`, channelID, agentID).Scan(&sessionID); err != nil {
+		t.Fatalf("DM did not auto-dispatch to the agent (no channel_agent_session): %v", err)
 	}
 }
 

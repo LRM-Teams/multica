@@ -82,12 +82,11 @@
 - **物**：`buildChatPrompt` + `renderChatRuntimeBrief` 按 `channel_id` 分流；`multica-stickers` 同步两种路径；`TestBuildChatPromptStandaloneDeliveryContract`、`TestStandaloneChatRuntimeBriefUsesAutomaticCompletionDelivery`、`TestBuiltinStickerSkillSeparatesStandaloneAndChannelDelivery` 与 sticker unwrap 回归。
 - **已见红**：修复前 standalone prompt/runtime brief 均缺自动回传合同且继续注入 CLI-only 规则，sticker skill 只教无 target 的 `message send`；四个回归分别按这些缺口失败，channel-bound 对照仍保留 transport 合同。
 
-### 1.5.1 产品表面只认 `channel_id`；禁止新增 `chat_session` 硬门 — `可执行`（⑤；owner: @阿泰；LRM-1079 / LRM-1080 / LRM-1081）
+### 1.5.1 产品表面只认 `channel_id`；禁止新增 `chat_session` 硬门 — `可执行`（⑤；owner: @阿泰；LRM-1079 / LRM-1080）
 - **产品口径**（Frank #LRM2.0）：业务只记 `channel_id`（钉句再加 `message_id`）。`chat_session_id` 是底层消息流内部号，**不是** Agent/提醒/发言 API 的必填业务概念。Agent 自己的 runtime/agent session（恢复上下文）是第三条线，与本条无关。
 - **冻结**：新代码路径不得再以「缺 `chat_session_id` → 403/拒」作为频道级发言、reminder、inbox drain、ambient gate、completion 归一化的硬条件；已有 `channel_id`（+ 成员表面权限）时必须可纯 channel 运行。#1909 / LRM-1055 已开先例。
-- **P2 已迁**：ordinary mention / DM / reminder / ambient enqueue 为 channel-only（`agent_inbox_event.context` 存 `channel_wake` prompt）；claim 与 complete 不依赖 `chat_message` prompt。可见回复仍只走 task-scoped transport。`channel_agent_session` / `chat_session` **仅**留给 env-dispatch / onboarding / standalone Agent Chat 等遗留桥。
-- **P3 废弃（未 DROP）**：表与列标记 deprecated；env-dispatch / onboarding / standalone chat 仍读它们时禁止 hard-drop。完整 DROP 另开单，须先迁完遗留读者。
-- **物**：`chatOutputOriginForTask` channel 回退；`isChannelAgentTask` / ambient gate stats / `channelInitiatorForTask`（LRM-1080）；`enqueueChannelAgentPrompt*` / reminder / ambient channel-only（LRM-1081）；`lrm_1080_channel_session_fallback_test.go`；`lrm_1081_channel_only_wake_test.go`。
+- **迁移中**：`channel_agent_session` / `chat_session` 可暂作内部可选桥；完成回写 / mention·DM 桥 / enqueue 仍可能写 session，属 P2 迁路径，不得反向把新硬依赖加回来。
+- **物**：`chatOutputOriginForTask` channel 回退；`isChannelAgentTask` / ambient gate stats / `channelInitiatorForTask`（LRM-1080）；`TestAgentCredentialTransportAllowsChannelBoundWakeWithoutChatSession`；`lrm_1080_channel_session_fallback_test.go`。
 - **已见红**：缺 session 的 ambient/GM 运输 403（#1909）；channel-only wake 被 `isChannelAgentTask` 误判为非频道任务、ambient gate 漏计仅带 `channel_id` 的 priority-1 行。
 
 ### 1.6 Agent-to-agent DM 是受 owner 监督的有界协议 — `可执行`（①持久状态 + ⑤并发/权限回归；owner: @Barry ✅ 已签）

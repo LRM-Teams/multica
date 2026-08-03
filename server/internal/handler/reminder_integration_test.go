@@ -319,9 +319,9 @@ func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT occurrence.receipt_message_id IS NULL, occurrence.fired_task_id IS NOT NULL,
 		       occurrence.anchor_available, occurrence.id::text, occurrence.title_snapshot,
-		       COALESCE(event.context->>'prompt', '')
+		       prompt.content
 		FROM agent_reminder_occurrence occurrence
-		JOIN agent_inbox_event event ON event.id = occurrence.fired_task_id
+		JOIN chat_message prompt ON prompt.task_id = occurrence.fired_task_id
 		WHERE occurrence.reminder_id = $1`,
 		reminderID).Scan(&receiptNull, &taskPresent, &anchorAvailable, &occurrenceID, &title, &prompt); err != nil {
 		t.Fatal(err)
@@ -469,9 +469,9 @@ func TestManagedPatrolWakesForMessageOpenLoopWithoutIssue(t *testing.T) {
 	}
 	var prompt string
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT COALESCE(event.context->>'prompt', '')
+		SELECT prompt.content
 		FROM agent_reminder_occurrence occurrence
-		JOIN agent_inbox_event event ON event.id = occurrence.fired_task_id
+		JOIN chat_message prompt ON prompt.task_id = occurrence.fired_task_id
 		WHERE occurrence.reminder_id = $1
 	`, reminderID).Scan(&prompt); err != nil {
 		t.Fatal(err)
@@ -890,9 +890,9 @@ func TestManagedPatrolWakePromptUsesOpenLoopEvidenceAndControlledReminderDial(t 
 	}
 	var prompt string
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT COALESCE(event.context->>'prompt', '')
+		SELECT prompt.content
 		FROM agent_reminder_occurrence occurrence
-		JOIN agent_inbox_event event ON event.id = occurrence.fired_task_id
+		JOIN chat_message prompt ON prompt.task_id = occurrence.fired_task_id
 		WHERE occurrence.reminder_id = $1`, reminderID).Scan(&prompt); err != nil {
 		t.Fatal(err)
 	}
@@ -1802,9 +1802,9 @@ func TestDeletedReminderAnchorFiresWithUnavailableMarker(t *testing.T) {
 	var occurrenceID, title, prompt string
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT occurrence.anchor_available, occurrence.receipt_message_id IS NULL,
-		       occurrence.id::text, occurrence.title_snapshot, COALESCE(event.context->>'prompt', '')
+		       occurrence.id::text, occurrence.title_snapshot, prompt.content
 		FROM agent_reminder_occurrence occurrence
-		JOIN agent_inbox_event event ON event.id = occurrence.fired_task_id
+		JOIN chat_message prompt ON prompt.task_id = occurrence.fired_task_id
 		WHERE occurrence.reminder_id = $1`,
 		reminderID).Scan(&available, &receiptNull, &occurrenceID, &title, &prompt); err != nil {
 		t.Fatal(err)
@@ -1866,9 +1866,9 @@ func TestDeletedReminderThreadRootHidesAnchorEverywhere(t *testing.T) {
 	var available, receiptNull bool
 	var prompt string
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT occurrence.anchor_available, occurrence.receipt_message_id IS NULL, COALESCE(event.context->>'prompt', '')
+		SELECT occurrence.anchor_available, occurrence.receipt_message_id IS NULL, prompt.content
 		FROM agent_reminder_occurrence occurrence
-		JOIN agent_inbox_event event ON event.id = occurrence.fired_task_id
+		JOIN chat_message prompt ON prompt.task_id = occurrence.fired_task_id
 		WHERE occurrence.reminder_id = $1`, reminderID).Scan(&available, &receiptNull, &prompt); err != nil {
 		t.Fatal(err)
 	}
@@ -1929,20 +1929,17 @@ func TestReminderFireFallsBackToCurrentAgentOwnerWhenInitiatorIsGone(t *testing.
 			if occurrences != 1 || receipts != 0 || tasks != 1 || firedEvents != 1 {
 				t.Fatalf("fire counts = occurrence:%d receipt:%d task:%d event:%d, want 1/0/1/1", occurrences, receipts, tasks, firedEvents)
 			}
-			var taskInitiatorID string
-			var chatSessionID pgtype.UUID
+			var taskInitiatorID, sessionCreatorID string
 			if err := testPool.QueryRow(context.Background(), `
-				SELECT task.initiator_user_id, task.chat_session_id
+				SELECT task.initiator_user_id, session.creator_id
 				FROM agent_reminder_occurrence occurrence
 				JOIN agent_inbox_event task ON task.id = occurrence.fired_task_id
-				WHERE occurrence.reminder_id = $1`, reminderID).Scan(&taskInitiatorID, &chatSessionID); err != nil {
+				JOIN chat_session session ON session.id = task.chat_session_id
+				WHERE occurrence.reminder_id = $1`, reminderID).Scan(&taskInitiatorID, &sessionCreatorID); err != nil {
 				t.Fatal(err)
 			}
-			if taskInitiatorID != testUserID {
-				t.Fatalf("fallback task initiator = %s, want current agent owner %s", taskInitiatorID, testUserID)
-			}
-			if chatSessionID.Valid {
-				t.Fatalf("reminder wake must stay channel-only; got chat_session_id=%s", uuidToString(chatSessionID))
+			if taskInitiatorID != testUserID || sessionCreatorID != testUserID {
+				t.Fatalf("fallback task/session creator = %s/%s, want current agent owner %s", taskInitiatorID, sessionCreatorID, testUserID)
 			}
 			if err := fireReminderAttempt(fixture.handler, reminderID); err != nil {
 				t.Fatalf("idempotent retry after initiator removal: %v", err)

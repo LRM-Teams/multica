@@ -184,24 +184,32 @@ func (h *Handler) createChannelAmbientPromptTaskTx(ctx context.Context, tx pgx.T
 	return task, true
 }
 
-// createChannelAmbientPromptTaskRowTx remains for tests that exercise the
-// ambient enqueue path in isolation. Production ambient wakes go through
-// createOrCoalesceChannelAmbientWakeTx (channel-only, LRM-1079).
 func (h *Handler) createChannelAmbientPromptTaskRowTx(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, initiatorUserID pgtype.UUID, prompt string) (db.ChatSession, db.AgentInboxEvent, bool) {
 	if h.TaskService == nil {
 		slog.Warn("channel ambient observation: task service missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
 		return db.ChatSession{}, db.AgentInboxEvent{}, false
 	}
 	txQueries := h.Queries.WithTx(tx)
-	promptResult, err := h.enqueueChannelAgentPromptRangeWithTx(
-		ctx, txQueries, tx, ch, agent, trigger, initiatorUserID, prompt,
-		channelMessageWakeReason, channelMessageWakePriority, trigger.Seq, trigger.Seq,
-	)
+	session, err := h.ensureChannelAgentSessionWithDB(ctx, txQueries, tx, ch, agent.ID, initiatorUserID)
 	if err != nil {
-		slog.Warn("channel ambient observation: enqueue channel-only wake failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		slog.Warn("channel ambient observation: ensure chat session failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
 		return db.ChatSession{}, db.AgentInboxEvent{}, false
 	}
-	return db.ChatSession{ID: promptResult.Event.ChatSessionID}, promptResult.Event, true
+	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, trigger)
+	if err != nil {
+		slog.Warn("channel ambient observation: create chat message failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return db.ChatSession{}, db.AgentInboxEvent{}, false
+	}
+	task, err := h.TaskService.CreateAmbientChatTaskRow(ctx, txQueries, session, initiatorUserID)
+	if err != nil {
+		slog.Warn("channel ambient observation: enqueue chat task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
+		return db.ChatSession{}, db.AgentInboxEvent{}, false
+	}
+	if _, err := tx.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
+		slog.Warn("channel ambient observation: tag prompt with task failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "task", uuidToString(task.ID), "error", err)
+		return db.ChatSession{}, db.AgentInboxEvent{}, false
+	}
+	return session, task, true
 }
 
 func (h *Handler) lockChannelAmbientGate(ctx context.Context, tx pgx.Tx, ch ChannelResponse, agent db.Agent) error {

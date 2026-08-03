@@ -414,6 +414,12 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 				details["tool_target"] = target
 				details["summary_kind"] = summaryKind
 			}
+			// Cursor (and similar) launch nested agents as Task/subagent tools —
+			// same classification as packages/views/chat/lib/bubble-cursor-activity.
+			rawTool := strings.TrimSpace(msg.Tool)
+			if isCursorLikeSubagentTool(rawTool, msg.Input) {
+				h.maybeRecordCursorSubagentStarted(r.Context(), event, runtimeID, deliveryID, msg, details)
+			}
 		}
 		// Cursor often emits tool args only on completed (tool_result). The
 		// daemon already carries that Input (runtime_tool_event.go); merge it
@@ -2229,6 +2235,155 @@ SELECT EXISTS (
 `, workspaceID, agentID, activityKindCustom, "subagent_started", uuidToString(inboxEventID), lineage).Scan(&exists)
 	if err != nil {
 		slog.Warn("provider subagent activity: duplicate lookup failed",
+			"agent_id", uuidToString(agentID),
+			"inbox_event_id", uuidToString(inboxEventID),
+			"error", err)
+		return false
+	}
+	return exists
+}
+
+// isCursorLikeSubagentTool mirrors packages/views/chat/lib/bubble-cursor-activity
+// classifyBubbleToolKind === "task": Task / subagent / best-of-n / launch-agent
+// tools, or any tool whose input carries subagent_type.
+func isCursorLikeSubagentTool(tool string, input map[string]any) bool {
+	if input != nil {
+		if st, ok := input["subagent_type"].(string); ok && strings.TrimSpace(st) != "" {
+			return true
+		}
+	}
+	n := normalizeActivityToolSlug(tool)
+	if n == "" {
+		return false
+	}
+	if n == "task" || strings.HasPrefix(n, "task") {
+		return true
+	}
+	if strings.Contains(n, "subagent") || strings.Contains(n, "bestofn") || strings.Contains(n, "launchagent") {
+		return true
+	}
+	return false
+}
+
+func normalizeActivityToolSlug(tool string) string {
+	tool = strings.ToLower(strings.TrimSpace(tool))
+	if tool == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(tool))
+	for _, r := range tool {
+		switch r {
+		case '-', '_', ' ', '	':
+			continue
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// cursorSubagentStartedMessage matches bubble title preference: description /
+// name / subagent_type / short prompt / tool name.
+func cursorSubagentStartedMessage(tool string, input map[string]any) string {
+	title := ""
+	if input != nil {
+		for _, key := range []string{"description", "name", "subagent_type"} {
+			if v, ok := input[key].(string); ok && strings.TrimSpace(v) != "" {
+				title = strings.TrimSpace(v)
+				break
+			}
+		}
+		if title == "" {
+			if v, ok := input["prompt"].(string); ok && strings.TrimSpace(v) != "" {
+				p := strings.TrimSpace(v)
+				if len(p) > 80 {
+					p = p[:80]
+				}
+				title = p
+			}
+		}
+	}
+	if title == "" {
+		title = strings.TrimSpace(tool)
+	}
+	if title == "" {
+		return "Subagent started"
+	}
+	return "Subagent started: " + title
+}
+
+func (h *Handler) maybeRecordCursorSubagentStarted(
+	ctx context.Context,
+	event db.AgentInboxEvent,
+	runtimeID, deliveryID pgtype.UUID,
+	msg TaskMessageRequest,
+	baseDetails map[string]any,
+) {
+	if h == nil || h.DB == nil {
+		return
+	}
+	tool := strings.TrimSpace(msg.Tool)
+	callID := strings.TrimSpace(msg.CallID)
+	dedupeKey := callID
+	if dedupeKey == "" {
+		dedupeKey = fmt.Sprintf("seq:%d:%s", msg.Seq, tool)
+	}
+	if h.cursorSubagentStartedExists(ctx, event.WorkspaceID, event.AgentID, event.ID, dedupeKey) {
+		return
+	}
+	targetKind, targetID := agentInboxActivityTarget(event)
+	details := map[string]any{
+		"inbox_event_id":    uuidToString(event.ID),
+		"source_message_id": uuidToString(event.SourceMessageID),
+		"tool":              tool,
+		"cursor_subagent":   true,
+		"dedupe_key":        dedupeKey,
+	}
+	if deliveryID.Valid {
+		details["delivery_id"] = uuidToString(deliveryID)
+	}
+	if callID != "" {
+		details["call_id"] = callID
+	}
+	if baseDetails != nil {
+		if seq, ok := baseDetails["seq"]; ok {
+			details["seq"] = seq
+		}
+	}
+	if msg.Input != nil {
+		if st, ok := msg.Input["subagent_type"].(string); ok && strings.TrimSpace(st) != "" {
+			details["subagent_type"] = strings.TrimSpace(st)
+		}
+	}
+	h.recordAgentActivityEvent(ctx, h.DB,
+		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
+		activityKindCustom, "subagent_started", "info",
+		targetKind, targetID, "",
+		"cursor_tool", cursorSubagentStartedMessage(tool, msg.Input),
+		details,
+	)
+}
+
+func (h *Handler) cursorSubagentStartedExists(ctx context.Context, workspaceID, agentID, inboxEventID pgtype.UUID, dedupeKey string) bool {
+	if h == nil || h.DB == nil {
+		return false
+	}
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM agent_activity_event
+  WHERE workspace_id = $1
+    AND agent_id = $2
+    AND event_kind = $3
+    AND event_type = $4
+    AND details->>'inbox_event_id' = $5
+    AND COALESCE(details->>'dedupe_key', '') = $6
+)
+`, workspaceID, agentID, activityKindCustom, "subagent_started", uuidToString(inboxEventID), dedupeKey).Scan(&exists)
+	if err != nil {
+		slog.Warn("cursor subagent activity: duplicate lookup failed",
 			"agent_id", uuidToString(agentID),
 			"inbox_event_id", uuidToString(inboxEventID),
 			"error", err)

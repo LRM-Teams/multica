@@ -50,7 +50,7 @@ func TestBuildReminderPromptCarriesAnchorAndNoNoiseBoundary(t *testing.T) {
 	for _, want := range []string{
 		"self-scheduled reminder is due",
 		"回来看讨论是否已收敛",
-		"msgid: 22222222-2222-2222-2222-222222222222",
+		"msg-id: 22222222-2222-2222-2222-222222222222",
 		"Anchor excerpt: 请给项目起一个名字",
 		"Target channel id: ch-1 (#产品讨论)",
 		"33333333-3333-3333-3333-333333333333",

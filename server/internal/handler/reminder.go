@@ -1951,14 +1951,14 @@ func buildReminderPrompt(ch ChannelResponse, reminder agentReminder, occurrenceI
 	fmt.Fprintf(&b, "Reminder id: %s\n", uuidToString(reminder.ID))
 	fmt.Fprintf(&b, "Occurrence id: %s\n", uuidToString(occurrenceID))
 	fmt.Fprintf(&b, "Reminder title: %s\n", reminder.Title)
-	// msgid + readable context first (Frank/Parker: Raft-style, not empty channel pin)
+	// msg-id + readable context first (Frank/Parker: Raft-style, not empty channel pin)
 	if anchorAvailable && reminder.AnchorMessageID.Valid {
-		fmt.Fprintf(&b, "msgid: %s\n", uuidToString(reminder.AnchorMessageID))
+		fmt.Fprintf(&b, "msg-id: %s\n", uuidToString(reminder.AnchorMessageID))
 		if strings.TrimSpace(anchorExcerpt) != "" {
 			fmt.Fprintf(&b, "Anchor excerpt: %s\n", truncateForActivity(anchorExcerpt, 500))
 		}
 	} else {
-		b.WriteString("msgid: unavailable (deleted).\n")
+		b.WriteString("msg-id: unavailable (deleted).\n")
 	}
 	// One channel line only — no ManagerChannels list.
 	if ch.Kind == "dm" {

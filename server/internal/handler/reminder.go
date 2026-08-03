@@ -1745,22 +1745,19 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	if err != nil {
 		return err
 	}
-	session, err := h.ensureChannelAgentSessionWithDB(ctx, txQueries, tx, ch, reminder.AgentID, creatorID)
+	agent, err := txQueries.GetAgent(ctx, reminder.AgentID)
 	if err != nil {
 		return err
 	}
 	prompt := buildReminderPrompt(ch, reminder, occurrenceID, anchorExcerpt, anchorAvailable)
-	promptMsg, err := h.createChannelAgentPromptMessageWithDB(ctx, tx, session.ID, prompt, trigger)
+	// LRM-1079: reminder fires are channel-only wakes (no chat_session).
+	promptResult, err := h.enqueueChannelAgentPromptWithTx(
+		ctx, txQueries, tx, ch, agent, trigger, creatorID, prompt, "dm", channelDirectedWakePriority,
+	)
 	if err != nil {
 		return err
 	}
-	task, err := h.TaskService.CreateFreshChatTaskRow(ctx, txQueries, session, creatorID)
-	if err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE chat_message SET task_id = $1 WHERE id = $2`, task.ID, promptMsg.ID); err != nil {
-		return err
-	}
+	task := promptResult.Event
 	if _, err := tx.Exec(ctx, `
 		UPDATE agent_reminder_occurrence
 		SET status = 'fired', fired_task_id = $2, anchor_available = $3,

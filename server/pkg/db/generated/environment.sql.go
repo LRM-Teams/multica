@@ -252,3 +252,87 @@ func (q *Queries) ListOwnedEnvDispatchResources(ctx context.Context, arg ListOwn
 	)
 	return i, err
 }
+
+const createEnvDispatchRunWithSource = `-- name: CreateEnvDispatchRunWithSource :one
+INSERT INTO env_dispatch_run (project_id, workspace_id, training_mode, source_task_id, sample_index)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING project_id, workspace_id, training_mode, root_task_id, created_at,
+          run_id, source_task_id, sample_index, local_issue_id, local_channel_id
+`
+
+type CreateEnvDispatchRunWithSourceParams struct {
+	ProjectID    pgtype.UUID `json:"project_id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	TrainingMode bool        `json:"training_mode"`
+	SourceTaskID pgtype.UUID `json:"source_task_id"`
+	SampleIndex  int32       `json:"sample_index"`
+}
+
+func (q *Queries) CreateEnvDispatchRunWithSource(ctx context.Context, arg CreateEnvDispatchRunWithSourceParams) (EnvDispatchRun, error) {
+	row := q.db.QueryRow(ctx, createEnvDispatchRunWithSource,
+		arg.ProjectID,
+		arg.WorkspaceID,
+		arg.TrainingMode,
+		arg.SourceTaskID,
+		arg.SampleIndex,
+	)
+	return scanEnvDispatchRun(row)
+}
+
+const setEnvDispatchRunLocalTargets = `-- name: SetEnvDispatchRunLocalTargets :exec
+UPDATE env_dispatch_run
+SET local_issue_id = $3,
+    local_channel_id = $4
+WHERE project_id = $1 AND workspace_id = $2
+`
+
+type SetEnvDispatchRunLocalTargetsParams struct {
+	ProjectID      pgtype.UUID `json:"project_id"`
+	WorkspaceID    pgtype.UUID `json:"workspace_id"`
+	LocalIssueID   pgtype.UUID `json:"local_issue_id"`
+	LocalChannelID pgtype.UUID `json:"local_channel_id"`
+}
+
+func (q *Queries) SetEnvDispatchRunLocalTargets(ctx context.Context, arg SetEnvDispatchRunLocalTargetsParams) error {
+	_, err := q.db.Exec(ctx, setEnvDispatchRunLocalTargets,
+		arg.ProjectID,
+		arg.WorkspaceID,
+		arg.LocalIssueID,
+		arg.LocalChannelID,
+	)
+	return err
+}
+
+const getEnvDispatchRunSourceTask = `-- name: GetEnvDispatchRunSourceTask :one
+SELECT st.id, st.workspace_id, st.type, st.payload, st.content_hash, st.created_at
+FROM env_dispatch_run edr
+JOIN source_task st ON st.id = edr.source_task_id
+WHERE edr.project_id = $1 AND edr.workspace_id = $2
+`
+
+type GetEnvDispatchRunSourceTaskParams struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetEnvDispatchRunSourceTask(ctx context.Context, arg GetEnvDispatchRunSourceTaskParams) (SourceTask, error) {
+	row := q.db.QueryRow(ctx, getEnvDispatchRunSourceTask, arg.ProjectID, arg.WorkspaceID)
+	return scanSourceTask(row)
+}
+
+func scanEnvDispatchRun(row interface{ Scan(...interface{}) error }) (EnvDispatchRun, error) {
+	var item EnvDispatchRun
+	err := row.Scan(
+		&item.ProjectID,
+		&item.WorkspaceID,
+		&item.TrainingMode,
+		&item.RootTaskID,
+		&item.CreatedAt,
+		&item.RunID,
+		&item.SourceTaskID,
+		&item.SampleIndex,
+		&item.LocalIssueID,
+		&item.LocalChannelID,
+	)
+	return item, err
+}

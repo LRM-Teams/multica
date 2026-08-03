@@ -8,7 +8,7 @@
 -- channel-only (LRM-1081). Full DROP requires a follow-up after those leftover
 -- readers migrate.
 --
--- Rollback: see 274_deprecate_channel_chat_session_bridge.down.sql
+-- Rollback: see 275_deprecate_channel_chat_session_bridge.down.sql
 -- (clears COMMENTs only; no data restore).
 
 COMMENT ON TABLE chat_session IS

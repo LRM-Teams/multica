@@ -7,7 +7,7 @@
 -- Rollback procedure:
 --   1. Deploy a build that still expects the deprecate comments OR is
 --      indifferent to them (comments are documentation-only).
---   2. Run this down migration (or re-apply migrate down for version 274).
+--   2. Run this down migration (or re-apply migrate down for version 275).
 --   3. No data restore needed.
 --
 -- If a later DROP migration is added after leftover readers (env-dispatch /

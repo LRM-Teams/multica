@@ -58,6 +58,7 @@ var businessMetricLabels = map[string][]string{
 	"multica_channel_full_execution_amplification_ratio": {},
 	"multica_channel_trigger_depth":                      {},
 	"multica_freshness_hold_resolution_seconds":          {labelOutcome},
+	"multica_agent_delete_duration_seconds":              {labelResult},
 
 	// PR3 funnel / community / commercial.
 	"multica_signup_total":                             {labelSignupSource},

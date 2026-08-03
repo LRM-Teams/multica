@@ -10,6 +10,7 @@ import (
 
 var taskDurationBuckets = []float64{1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1200, 3600, 7200}
 var freshnessHoldResolutionBuckets = []float64{0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300}
+var agentDeleteDurationBuckets = []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 10}
 
 type activeTaskLabels struct {
 	source      string
@@ -41,6 +42,7 @@ type BusinessMetrics struct {
 	channelFullExecutionAmplificationRatio *prometheus.GaugeVec
 	channelTriggerDepth                    prometheus.Histogram
 	freshnessHoldResolution                *prometheus.HistogramVec
+	agentDeleteDuration                    *prometheus.HistogramVec
 
 	activeMu    sync.Mutex
 	activeTasks map[string]activeTaskLabels
@@ -189,6 +191,11 @@ func NewBusinessMetrics() *BusinessMetrics {
 			Help:    "Time from a freshness decision fact to its decisive same-target resolution.",
 			Buckets: freshnessHoldResolutionBuckets,
 		}, metricLabels("multica_freshness_hold_resolution_seconds")),
+		agentDeleteDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "multica_agent_delete_duration_seconds",
+			Help:    "End-to-end server duration of user-facing Agent delete (archive) requests.",
+			Buckets: agentDeleteDurationBuckets,
+		}, metricLabels("multica_agent_delete_duration_seconds")),
 		activeTasks: map[string]activeTaskLabels{},
 		events:      newBusinessEventMetrics(),
 	}
@@ -220,7 +227,18 @@ func (m *BusinessMetrics) Collectors() []prometheus.Collector {
 		m.channelFullExecutionAmplificationRatio,
 		m.channelTriggerDepth,
 		m.freshnessHoldResolution,
+		m.agentDeleteDuration,
 	}, m.events.collectors()...)
+}
+
+func (m *BusinessMetrics) ObserveAgentDelete(result string, seconds float64) {
+	if m == nil || seconds < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
+		return
+	}
+	switch result {
+	case "success", "error":
+		m.agentDeleteDuration.WithLabelValues(result).Observe(seconds)
+	}
 }
 
 func (m *BusinessMetrics) RecordTaskEnqueued(source, runtimeMode string) {

@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"sort"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -80,10 +82,18 @@ type AgentFleetRankChange struct {
 type AgentFleetRankService struct {
 	Queries        *db.Queries
 	workspaceLocks sync.Map
+
+	archiveRefreshMu      sync.Mutex
+	archiveRefreshQueued  map[string]bool
+	archiveRefreshPending map[string]bool
 }
 
 func NewAgentFleetRankService(queries *db.Queries) *AgentFleetRankService {
-	return &AgentFleetRankService{Queries: queries}
+	return &AgentFleetRankService{
+		Queries:               queries,
+		archiveRefreshQueued:  make(map[string]bool),
+		archiveRefreshPending: make(map[string]bool),
+	}
 }
 
 func BuildFleetRulesDocument() FleetRulesDocument {
@@ -491,14 +501,59 @@ func (s *AgentFleetRankService) FreezeAgentOnArchive(ctx context.Context, worksp
 	if s == nil || s.Queries == nil {
 		return nil
 	}
-	if err := s.Queries.FreezeAgentFleetSnapshot(ctx, db.FreezeAgentFleetSnapshotParams{
+	return s.Queries.FreezeAgentFleetSnapshot(ctx, db.FreezeAgentFleetSnapshotParams{
 		WorkspaceID: workspaceID,
 		AgentID:     agentID,
-	}); err != nil {
-		return err
+	})
+}
+
+// RefreshWorkspaceAfterArchiveAsync recomputes ranks outside the archive request
+// path. Repeated archives for one workspace coalesce, but a refresh requested
+// while one is running triggers one final pass so the snapshot converges.
+func (s *AgentFleetRankService) RefreshWorkspaceAfterArchiveAsync(workspaceID pgtype.UUID) {
+	if s == nil || s.Queries == nil {
+		return
 	}
-	_, err := s.RefreshWorkspace(ctx, workspaceID, "agent_archived")
-	return err
+	workspaceKey := util.UUIDToString(workspaceID)
+	if workspaceKey == "" {
+		return
+	}
+
+	s.archiveRefreshMu.Lock()
+	if s.archiveRefreshQueued == nil {
+		s.archiveRefreshQueued = make(map[string]bool)
+		s.archiveRefreshPending = make(map[string]bool)
+	}
+	if s.archiveRefreshQueued[workspaceKey] {
+		s.archiveRefreshPending[workspaceKey] = true
+		s.archiveRefreshMu.Unlock()
+		return
+	}
+	s.archiveRefreshQueued[workspaceKey] = true
+	s.archiveRefreshMu.Unlock()
+
+	go s.runArchiveRefresh(workspaceID, workspaceKey)
+}
+
+func (s *AgentFleetRankService) runArchiveRefresh(workspaceID pgtype.UUID, workspaceKey string) {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_, err := s.RefreshWorkspace(ctx, workspaceID, "agent_archived")
+		cancel()
+		if err != nil {
+			slog.Warn("refresh agent fleet ranks after archive failed", "workspace_id", workspaceKey, "error", err)
+		}
+
+		s.archiveRefreshMu.Lock()
+		if s.archiveRefreshPending[workspaceKey] {
+			delete(s.archiveRefreshPending, workspaceKey)
+			s.archiveRefreshMu.Unlock()
+			continue
+		}
+		delete(s.archiveRefreshQueued, workspaceKey)
+		s.archiveRefreshMu.Unlock()
+		return
+	}
 }
 
 func (s *AgentFleetRankService) RestoreAgent(

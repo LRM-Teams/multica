@@ -79,6 +79,7 @@ export function ResearchOfflineBanner({
   );
 
   // LRM-1192: failed reconnect is an alert; offline/reconnecting stay polite status via <output>.
+  // LRM-1232: reconnecting declares aria-busy so AT can distinguish “offline notice” vs “in progress”.
   if (failed) {
     return (
       <div
@@ -97,6 +98,7 @@ export function ResearchOfflineBanner({
     <output
       data-testid="research-offline-banner"
       data-mode={mode}
+      aria-busy={reconnecting || undefined}
       className={shellClass}
     >
       {body}

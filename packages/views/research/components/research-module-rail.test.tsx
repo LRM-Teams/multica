@@ -3,10 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ResearchModuleRail } from "./research-module-rail";
-
-vi.mock("@multica/ui/hooks/use-mobile", () => ({
-  useIsMobile: () => false,
-}));
+import { ResearchCanvasDock } from "./research-canvas-dock";
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
@@ -20,11 +17,18 @@ vi.mock("../../i18n/use-t", () => ({
           module_sources_ico: "Src",
           module_detail_ico: "Detail",
         },
+        dock: {
+          label: "Research canvas tools",
+          zoom_in: "Zoom in",
+          zoom_out: "Zoom out",
+          fit: "Fit view",
+          toggle_detail: "Toggle detail panel",
+        },
       }),
   }),
 }));
 
-describe("ResearchModuleRail (LRM-1061)", () => {
+describe("ResearchModuleRail (LRM-1151 Dock)", () => {
   it("toggles one module at a time via the parent", () => {
     const onSelect = vi.fn();
     render(<ResearchModuleRail active="trajectory" onSelect={onSelect} />);
@@ -33,5 +37,65 @@ describe("ResearchModuleRail (LRM-1061)", () => {
     ).toBe("true");
     fireEvent.click(screen.getByTestId("research-module-sources"));
     expect(onSelect).toHaveBeenCalledWith("sources");
+  });
+
+  it("renders bar layout as a full-width three-equal group", () => {
+    render(
+      <ResearchModuleRail layout="bar" active={null} onSelect={vi.fn()} />,
+    );
+    expect(screen.getByTestId("research-module-rail").getAttribute("data-layout")).toBe(
+      "bar",
+    );
+  });
+});
+
+describe("ResearchCanvasDock (LRM-1151)", () => {
+  it("hosts module group + zoom + detail with mutual aria-pressed", () => {
+    const onSelectModule = vi.fn();
+    render(
+      <ResearchCanvasDock
+        zoomPct={100}
+        onZoomIn={vi.fn()}
+        onZoomOut={vi.fn()}
+        onFit={vi.fn()}
+        detailOpen={false}
+        onToggleDetail={vi.fn()}
+        activeModule="sources"
+        onSelectModule={onSelectModule}
+      />,
+    );
+    expect(screen.getByTestId("research-canvas-dock").getAttribute("data-layout")).toBe(
+      "desktop",
+    );
+    expect(
+      screen.getByTestId("research-module-sources").getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      screen.getByTestId("research-module-trajectory").getAttribute("aria-pressed"),
+    ).toBe("false");
+    fireEvent.click(screen.getByTestId("research-module-detail"));
+    expect(onSelectModule).toHaveBeenCalledWith("detail");
+  });
+
+  it("hides zoom on mobile layout", () => {
+    render(
+      <ResearchCanvasDock
+        layout="mobile"
+        zoomPct={100}
+        onZoomIn={vi.fn()}
+        onZoomOut={vi.fn()}
+        onFit={vi.fn()}
+        showZoom={false}
+        showDetailToggle={false}
+        detailOpen={false}
+        onToggleDetail={vi.fn()}
+        activeModule={null}
+        onSelectModule={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("research-canvas-dock").getAttribute("data-layout")).toBe(
+      "mobile",
+    );
+    expect(screen.queryByLabelText("Zoom in")).toBeNull();
   });
 });

@@ -90,7 +90,7 @@ describe("AgentRestartModal (#633)", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the after-current-run hint when a tier is scheduled", () => {
+  it("does not show after-current-run / busy-wait copy (Raft: all tiers force; #1900)", () => {
     lifecycleState.current.preflight = {
       actions: {
         restart: { supported: true, execution_mode: "after_current_run" },
@@ -99,9 +99,32 @@ describe("AgentRestartModal (#633)", () => {
       },
     };
     renderModal();
+    expect(screen.queryByText(/after the current task/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/wait until idle/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/强制重启|force/i)).not.toBeInTheDocument();
+  });
+
+  it("task #26: scheduled op is non-blocking — Done (not infinite spinner / locked cancel)", () => {
+    lifecycleState.current.operation = {
+      id: "op-sched",
+      agent_id: "a-1",
+      runtime_id: "rt-1",
+      action_kind: "reset_session_restart",
+      status: "scheduled",
+      execution_mode: "after_current_run",
+      created_at: "2026-07-28T00:00:00Z",
+    };
+    renderModal();
     expect(
-      screen.getByText("Runs after the current task finishes."),
+      screen.getByText(
+        /queued but may not run automatically/i,
+      ),
     ).toBeInTheDocument();
+    // Done is offered so the user can leave; Cancel/spinner lock is gone.
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    // No spinner for scheduled (only hard-running blocks).
+    expect(document.querySelector(".animate-spin")).toBeNull();
   });
 
   it("full reset requires typing the @handle before it can be submitted", () => {

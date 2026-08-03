@@ -11,9 +11,18 @@ import type {
  * unit-testable without React — mirrors `runtimes/update-status.ts` (#687).
  */
 
-/** Statuses at which a lifecycle operation is finished and polling must stop. */
+/**
+ * Statuses at which a lifecycle operation is finished and polling must stop.
+ *
+ * Includes `scheduled` (task #26 / Parker 2026-08-03): the server can mint a
+ * scheduled op for reset_session while the agent is busy, but nothing ever
+ * promotes it to running once created — so treating it as poll-stop prevents
+ * the restart modal from spinning forever on "after current task".
+ * When BE later force-interrupts all three tiers (no scheduled path), this
+ * remains correct: a terminal-looking status still ends the poll.
+ */
 export const AGENT_LIFECYCLE_TERMINAL_STATUSES: ReadonlySet<AgentLifecycleOperationStatus> =
-  new Set<AgentLifecycleOperationStatus>(["succeeded", "failed"]);
+  new Set<AgentLifecycleOperationStatus>(["succeeded", "failed", "scheduled"]);
 
 export function isTerminalAgentLifecycleStatus(
   status: AgentLifecycleOperationStatus | null | undefined,

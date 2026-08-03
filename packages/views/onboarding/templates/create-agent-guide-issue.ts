@@ -87,7 +87,7 @@ Now create an issue (or reassign an existing one) → set assignee = Multica Hel
 ## Where to go next
 
 - **Skills** — reusable instruction packs you can attach to any agent.
-- **Docs** — https://multica.ai/docs.`;
+- **Docs** — https://leagent.me/docs.`;
 }
 
 function zhBody(installRuntimeMention: string, lang: HelperInstructionsLang): string {
@@ -127,7 +127,7 @@ ${HELPER_INSTRUCTIONS[lang]}
 ## 接下来去哪
 
 - **Skills** —— 可复用的指令包，可挂到任何 agent 上。
-- **文档** —— https://multica.ai/docs。`;
+- **文档** —— https://leagent.me/docs。`;
 }
 
 function koBody(installRuntimeMention: string, lang: HelperInstructionsLang): string {
@@ -167,7 +167,7 @@ ${HELPER_INSTRUCTIONS[lang]}
 ## 다음에 볼 곳
 
 - **Skills** — 어떤 agent에도 붙일 수 있는 재사용 instruction pack입니다.
-- **Docs** — https://multica.ai/docs.`;
+- **Docs** — https://leagent.me/docs.`;
 }
 
 function jaBody(installRuntimeMention: string, lang: HelperInstructionsLang): string {
@@ -207,5 +207,5 @@ ${HELPER_INSTRUCTIONS[lang]}
 ## 次に見る場所
 
 - **Skills** — どの agent にも付けられる、再利用可能な instruction パックです。
-- **Docs** — https://multica.ai/docs。`;
+- **Docs** — https://leagent.me/docs。`;
 }

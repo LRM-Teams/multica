@@ -9,6 +9,7 @@ import {
 } from "./git-topology";
 import {
   LOGIC_END_NODE_ID,
+  LOGIC_LANE_IDS,
   isLogicStartNode,
   laneForNode,
   type LogicLaneId,
@@ -288,6 +289,59 @@ function sortByLane(
     if (la !== lb) return la - lb;
     return a.localeCompare(b);
   });
+}
+
+/** Topological layer index along graph edges (keyboard rank / parallel groups). */
+function layerIndex(
+  nodes: ResearchGraphNode[],
+  edges: ResearchGraphEdge[],
+): Map<string, number> {
+  const ids = new Set(nodes.map((n) => n.id));
+  const indeg = new Map<string, number>();
+  const outs = new Map<string, string[]>();
+  for (const n of nodes) {
+    indeg.set(n.id, 0);
+    outs.set(n.id, []);
+  }
+  for (const e of edges) {
+    if (!ids.has(e.from_node_id) || !ids.has(e.to_node_id)) continue;
+    outs.get(e.from_node_id)!.push(e.to_node_id);
+    indeg.set(e.to_node_id, (indeg.get(e.to_node_id) ?? 0) + 1);
+  }
+
+  const layer = new Map<string, number>();
+  const queue: string[] = [];
+  for (const n of nodes) {
+    if ((indeg.get(n.id) ?? 0) === 0) {
+      queue.push(n.id);
+      layer.set(n.id, 0);
+    }
+  }
+  for (const n of nodes) {
+    if (n.node_type === "goal") layer.set(n.id, 0);
+  }
+
+  while (queue.length) {
+    const id = queue.shift()!;
+    const base = layer.get(id) ?? 0;
+    for (const next of outs.get(id) ?? []) {
+      const nextLayer = Math.max(layer.get(next) ?? 0, base + 1);
+      layer.set(next, nextLayer);
+      const left = (indeg.get(next) ?? 1) - 1;
+      indeg.set(next, left);
+      if (left === 0) queue.push(next);
+    }
+  }
+
+  let max = 0;
+  for (const v of layer.values()) max = Math.max(max, v);
+  for (const n of nodes) {
+    if (!layer.has(n.id)) {
+      max += 1;
+      layer.set(n.id, max);
+    }
+  }
+  return layer;
 }
 
 /** Rank / layer index used by layout (leads_to spine). Exported for ←→↑↓. */

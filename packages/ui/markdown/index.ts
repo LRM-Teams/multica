@@ -3,6 +3,7 @@ export {
   MemoizedMarkdown,
   highlightSearchText,
   normalizeHighlightQuery,
+  markdownRichReady,
   type MarkdownProps,
   type RenderMode,
 } from './Markdown'

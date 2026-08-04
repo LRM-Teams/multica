@@ -329,7 +329,11 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	initiatorUserID, ok := h.agentTransportInitiatorUserID(r, source)
+	// Schedule initiator is bound to the *anchor message*, not the wake human
+	// (product lock 2026-08-04 long-term): human anchor author → agent.owner →
+	// workspace owner. Wake source may be agent/reminder self-fire; that is not
+	// a hard schedule precondition.
+	initiatorUserID, ok := h.agentReminderScheduleInitiatorUserID(r.Context(), origin.workspaceID, task.AgentID, anchorMessageID)
 	if !ok {
 		writeError(w, http.StatusForbidden, "reminder initiator is not available")
 		return
@@ -723,7 +727,8 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 				initiatorUserID := previous.InitiatorUserID
 				if !initiatorUserID.Valid {
 					var initiatorOK bool
-					initiatorUserID, initiatorOK = h.agentTransportInitiatorUserID(r, source)
+					initiatorUserID, initiatorOK = h.agentReminderScheduleInitiatorUserID(
+						r.Context(), previous.WorkspaceID, previous.AgentID, previous.AnchorMessageID)
 					if !initiatorOK {
 						writeError(w, http.StatusForbidden, "reminder initiator is not available")
 						return
@@ -861,6 +866,53 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 	h.projectReminderCancel(r.Context(), cancelled)
 	h.recordReminderActivity(r.Context(), source, cancelled, "reminder_cancelled", "Agent cancelled a reminder")
 	writeJSON(w, http.StatusOK, reminderResponse(cancelled))
+}
+
+// agentReminderScheduleInitiatorUserID resolves initiator_user_id for schedule
+// (and calendar-update timezone fallback) only. Product lock (Frank/Parker
+// 2026-08-04 long-term):
+//
+//  1. anchor message author is human (user|member) and still a workspace member
+//  2. else agent.owner (if member)
+//  3. else workspace owner (oldest)
+//
+// Does not require the wake source / inbox event to have a human author —
+// reminder re-anchor and agent-authored anchors fall through to owner.
+func (h *Handler) agentReminderScheduleInitiatorUserID(ctx context.Context, workspaceID, agentID, anchorMessageID pgtype.UUID) (pgtype.UUID, bool) {
+	var empty pgtype.UUID
+	if h == nil || h.DB == nil || !workspaceID.Valid || !agentID.Valid {
+		return empty, false
+	}
+	var target pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+		SELECT c.user_id
+		FROM (
+			SELECT 1 AS ord, msg.author_id AS user_id
+			FROM channel_message msg
+			WHERE msg.id = $3
+			  AND msg.workspace_id = $1
+			  AND msg.deleted_at IS NULL
+			  AND msg.author_type IN ('user', 'member')
+			UNION ALL
+			SELECT 2, a.owner_id
+			FROM agent a
+			WHERE a.id = $2
+			  AND a.workspace_id = $1
+			  AND a.archived_at IS NULL
+			UNION ALL
+			SELECT 3, (
+				SELECT m.user_id
+				FROM member m
+				WHERE m.workspace_id = $1 AND m.role = 'owner'
+				ORDER BY m.created_at ASC NULLS LAST, m.user_id ASC
+				LIMIT 1
+			)
+		) c
+		JOIN member mem ON mem.workspace_id = $1 AND mem.user_id = c.user_id
+		WHERE c.user_id IS NOT NULL
+		ORDER BY c.ord ASC
+		LIMIT 1`, workspaceID, agentID, anchorMessageID).Scan(&target)
+	return target, err == nil && target.Valid
 }
 
 // resolveReminderAnchor locates the anchor message by id in the workspace and

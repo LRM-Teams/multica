@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
 import { channelKeys } from "../channels/queries";
+import { researchKeys } from "../research/queries";
 import { voiceCallKeys } from "../voice-calls/queries";
 import type { ChannelMessage, ChannelMessagesPage, ChannelThreadMessagesPage } from "../types";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
@@ -447,6 +448,39 @@ describe("useRealtimeSync — ws instance change", () => {
         channelKeys.messagesPage("channel-never-opened"),
       ),
     ).toBeUndefined();
+  });
+
+  it("subscribes product-round events and cleans up the handler", () => {
+    const productRoundUnsubscribe = vi.fn();
+    const ws = {
+      on: vi.fn((eventName: string) =>
+        eventName === "research_session:product_round"
+          ? productRoundUnsubscribe
+          : () => {},
+      ),
+      onAny: vi.fn(() => () => {}),
+      onReconnect: vi.fn(() => () => {}),
+    } as unknown as WSClient;
+    const { unmount } = renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+
+    const productRoundHandler = (ws.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([eventName]) => eventName === "research_session:product_round",
+    )?.[1] as ((payload: unknown) => void) | undefined;
+    expect(productRoundHandler).toBeDefined();
+
+    productRoundHandler?.({
+      session_id: "session-1",
+      card: { id: "round-1", round_number: 1, decision: "continue" },
+    });
+
+    expect(qc.getQueryData(researchKeys.productRounds("ws-1", "session-1"))).toEqual({
+      rounds: [expect.objectContaining({ id: "round-1", session_id: "session-1" })],
+    });
+
+    unmount();
+    expect(productRoundUnsubscribe).toHaveBeenCalledTimes(1);
   });
 });
 

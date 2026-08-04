@@ -84,7 +84,6 @@ export function ResearchStageTimeline({
               className={cn(
                 "relative flex min-w-[6.5rem] flex-1 snap-start items-center md:min-w-0",
                 index < RESEARCH_STAGE_ORDER.length - 1 && "pr-2",
-                state === "upcoming" && "opacity-75",
               )}
             >
               {index < RESEARCH_STAGE_ORDER.length - 1 ? (
@@ -119,7 +118,7 @@ export function ResearchStageTimeline({
                       state === "current" && "text-xs font-semibold text-foreground",
                       state === "done" && "font-mono text-[11px] text-foreground/75",
                       state === "upcoming" &&
-                        "font-mono text-[11px] text-muted-foreground/80",
+                        "font-mono text-[11px] text-muted-foreground",
                     )}
                   >
                     {label}

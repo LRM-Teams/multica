@@ -762,4 +762,55 @@ describe("createMentionSuggestion", () => {
     expect(items.find((i) => i.id === "u-out")?.group).toBe("not_in_channel");
     expect(items.find((i) => i.id === "a-out")?.group).toBe("not_in_channel");
   });
+
+  it("#2115: selecting a regrouped in-channel row inserts that actor, not displayItems[index]", () => {
+    // Candidate order puts NOT-in-channel first; groupItems renders InChannel first.
+    // Pre-fix selectItem used displayItems[index], so clicking visual row 0 inserted
+    // the wrong person (wrong agent woken in group chat).
+    const command = vi.fn();
+    const ref = createRef<MentionListRef>();
+    render(
+      <I18nWrapper>
+        <MentionList
+          ref={ref}
+          items={[
+            {
+              id: "a-out",
+              label: "Not In Channel Agent",
+              type: "agent",
+              handle: "agent_out",
+              secondaryLabel: "@agent_out",
+              group: "not_in_channel",
+            },
+            {
+              id: "a-in",
+              label: "In Channel Agent",
+              type: "agent",
+              handle: "agent_in",
+              secondaryLabel: "@agent_in",
+              group: "in_channel",
+            },
+          ]}
+          query=""
+          command={command}
+        />
+      </I18nWrapper>,
+    );
+
+    expect(screen.getByText("In this channel")).toBeInTheDocument();
+    expect(screen.getByText("Not in this channel")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("In Channel Agent").closest("button")!);
+    expect(command).toHaveBeenCalledTimes(1);
+    expect(command).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "a-in", group: "in_channel" }),
+    );
+
+    command.mockClear();
+    // Enter selects the highlighted row (index 0 = first visible = in-channel)
+    ref.current?.onKeyDown({ event: new KeyboardEvent("keydown", { key: "Enter" }) });
+    expect(command).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "a-in", group: "in_channel" }),
+    );
+  });
 });

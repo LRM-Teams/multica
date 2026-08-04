@@ -17,6 +17,7 @@ export const agentFleetRankSchema = z.object({
   fleet_rank: z.number(),
   fleet_size: z.number(),
   sample_tasks: z.number(),
+  min_sample_tasks: z.number().int().positive().default(5),
   sample_sufficient: z.boolean(),
   frozen: z.boolean(),
   pillars: agentFleetPillarSchema,

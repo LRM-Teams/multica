@@ -29,6 +29,7 @@ const mockHonor = {
     fleet_rank: 4,
     fleet_size: 12,
     sample_tasks: 12,
+    min_sample_tasks: 5,
     sample_sufficient: true,
     frozen: false,
     pillars: {

@@ -700,6 +700,7 @@ func (s *AgentHonorService) currentFleet(
 	if s.Fleet == nil {
 		return AgentFleetRankView{
 			AgentID: util.UUIDToString(agentID), ClassID: "reserve", ClassLabel: "Reserve",
+			MinSampleTasks: FleetMinSampleTasks,
 		}, nil
 	}
 	return s.Fleet.GetAgentRank(ctx, workspaceID, agentID)

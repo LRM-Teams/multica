@@ -166,7 +166,7 @@ func DiagnosisRunAPIBaseURL(publicURL, runID string) string {
 // *DiagnosisStateStore satisfies it in production; tests substitute a fake.
 type DiagnosisRunState interface {
 	GetRun(ctx context.Context, runID string) (DiagnosisRunCheckpoint, error)
-	SetRunSandbox(ctx context.Context, runID, sandboxInstanceID, capabilityTokenHash, executionMode string) error
+	SetRunSandbox(ctx context.Context, runID, sandboxInstanceID, capabilityTokenHash, executionMode, sandboxMode string) error
 	MarkRunProvisioning(ctx context.Context, runID string) error
 	ActivateRun(ctx context.Context, runID string) error
 	FailRun(ctx context.Context, runID string, cause error) error
@@ -236,7 +236,18 @@ type DiagnosisWorkItem struct {
 	Env map[string]string
 }
 
-// DiagnosisProvisionRequest drives one ProvisionRun call.
+// DiagnosisSharedSandboxRef identifies the ready shared sandbox/runtime
+// binding owned by an env-dispatch. Diagnosis borrows this binding and must
+// never create or reclaim any of its resources.
+type DiagnosisSharedSandboxRef struct {
+	InstanceID string
+	RuntimeID  string
+	DaemonID   string
+}
+
+// DiagnosisProvisionRequest drives one ProvisionRun call. SharedSandbox is
+// nil for the existing dedicated-per-run path; when present all three IDs are
+// required and diagnosis runs on the supplied shared runtime.
 type DiagnosisProvisionRequest struct {
 	RunID           string
 	WorkspaceID     string
@@ -245,6 +256,26 @@ type DiagnosisProvisionRequest struct {
 	BootstrapPrompt string
 	SystemPrompt    string
 	Model           string
+	SharedSandbox   *DiagnosisSharedSandboxRef
+}
+
+func (req DiagnosisProvisionRequest) validateIdentity() error {
+	if strings.TrimSpace(req.RunID) == "" || strings.TrimSpace(req.WorkspaceID) == "" || strings.TrimSpace(req.ActorUserID) == "" {
+		return fmt.Errorf("diagnosis sandbox: run_id, workspace_id and actor_user_id are required")
+	}
+	return nil
+}
+
+func (req DiagnosisProvisionRequest) validateSharedSandbox() error {
+	if req.SharedSandbox == nil {
+		return nil
+	}
+	if strings.TrimSpace(req.SharedSandbox.InstanceID) == "" ||
+		strings.TrimSpace(req.SharedSandbox.RuntimeID) == "" ||
+		strings.TrimSpace(req.SharedSandbox.DaemonID) == "" {
+		return fmt.Errorf("provisioning_binding: shared sandbox instance_id, runtime_id and daemon_id are required")
+	}
+	return nil
 }
 
 // DiagnosisSandboxOrchestratorConfig wires the orchestrator's dependencies.
@@ -304,17 +335,12 @@ func NewDiagnosisSandboxOrchestrator(cfg DiagnosisSandboxOrchestratorConfig) (*D
 	}, nil
 }
 
-// ProvisionRun creates-or-reattaches the dedicated sandbox for a run and
-// enqueues the diagnosis work. It is safe to call for both fresh runs and
-// resume (T016): a run with a recorded sandbox reattaches when the sandbox is
-// still alive, otherwise a replacement is provisioned with a re-minted token
-// (re-minting invalidates in-flight HMAC cursors keyed by the old token hash —
-// the intended safe behavior). Every failure marks the run failed with a
-// classified cause ("provisioning: ...", "extension: ...", "enqueue: ...") and
-// reclaims any sandbox the attempt created; reclaim is best-effort.
+// ProvisionRun provisions dedicated diagnosis resources when no shared binding is
+// supplied, or borrows the supplied shared binding. Dedicated runs retain
+// create/reattach behavior; shared runs never fall back to dedicated resources.
 func (o *DiagnosisSandboxOrchestrator) ProvisionRun(ctx context.Context, req DiagnosisProvisionRequest) error {
-	if strings.TrimSpace(req.RunID) == "" || strings.TrimSpace(req.WorkspaceID) == "" || strings.TrimSpace(req.ActorUserID) == "" {
-		return fmt.Errorf("diagnosis sandbox: run_id, workspace_id and actor_user_id are required")
+	if err := req.validateIdentity(); err != nil {
+		return err
 	}
 	run, err := o.state.GetRun(ctx, req.RunID)
 	if err != nil {
@@ -324,13 +350,27 @@ func (o *DiagnosisSandboxOrchestrator) ProvisionRun(ctx context.Context, req Dia
 		// Terminal run: nothing to provision (idempotent trigger replay).
 		return nil
 	}
+	if req.SharedSandbox != nil {
+		if err := req.validateSharedSandbox(); err != nil {
+			return o.failRun(ctx, req, "", DiagnosisSandboxModeShared, err)
+		}
+		return o.provisionShared(ctx, req, run)
+	}
+	if run.SandboxMode == DiagnosisSandboxModeShared {
+		return o.failRun(ctx, req, "", DiagnosisSandboxModeShared,
+			fmt.Errorf("provisioning_binding: shared diagnosis run requires a shared sandbox binding"))
+	}
+	return o.provisionDedicated(ctx, req, run)
+}
+
+func (o *DiagnosisSandboxOrchestrator) provisionDedicated(ctx context.Context, req DiagnosisProvisionRequest, run DiagnosisRunCheckpoint) error {
 	publicURL, err := o.resolvePublicURL()
 	if err != nil {
-		return o.failRun(ctx, req, "", fmt.Errorf("provisioning: %w", err))
+		return o.failRun(ctx, req, "", DiagnosisSandboxModeDedicated, fmt.Errorf("provisioning: %w", err))
 	}
 	if run.SandboxInstanceID != "" {
 		if rt, ok := o.tryReattach(ctx, req, run.SandboxInstanceID); ok {
-			return o.activateAndEnqueue(ctx, req, run, rt, nil)
+			return o.activateAndEnqueue(ctx, req, run, rt, nil, DiagnosisSandboxModeDedicated)
 		}
 		slog.Info("diagnosis sandbox: recorded sandbox unusable, re-provisioning",
 			"run_id", req.RunID, "sandbox_instance_id", run.SandboxInstanceID)
@@ -338,10 +378,47 @@ func (o *DiagnosisSandboxOrchestrator) ProvisionRun(ctx context.Context, req Dia
 	return o.provisionFresh(ctx, req, run, publicURL)
 }
 
-// tryReattach checks whether the run's recorded sandbox is still usable: the
-// instance must still exist and its daemon-registered pi runtime must come
-// online. A dead instance is simply re-provisioned; a live instance whose
-// runtime never registers is reclaimed before re-provisioning.
+func (o *DiagnosisSandboxOrchestrator) provisionShared(ctx context.Context, req DiagnosisProvisionRequest, run DiagnosisRunCheckpoint) error {
+	shared := req.SharedSandbox
+	if run.SandboxMode == DiagnosisSandboxModeShared && run.SandboxInstanceID != "" && run.SandboxInstanceID != shared.InstanceID {
+		return o.failRun(ctx, req, "", DiagnosisSandboxModeShared,
+			fmt.Errorf("provisioning_binding: recorded shared sandbox does not match supplied binding"))
+	}
+	publicURL, err := o.resolvePublicURL()
+	if err != nil {
+		return o.failRun(ctx, req, "", DiagnosisSandboxModeShared, fmt.Errorf("provisioning: %w", err))
+	}
+	token, err := MintDiagnosisCapabilityToken()
+	if err != nil {
+		return o.failRun(ctx, req, "", DiagnosisSandboxModeShared,
+			fmt.Errorf("provisioning: mint capability token: %w", err))
+	}
+	if err := o.state.SetRunSandbox(ctx, req.RunID, shared.InstanceID, HashDiagnosisCapabilityToken(token), DiagnosisExecutionModeSandbox, DiagnosisSandboxModeShared); err != nil {
+		return o.failRun(ctx, req, "", DiagnosisSandboxModeShared,
+			fmt.Errorf("provisioning: persist sandbox binding: %w", err))
+	}
+	if err := o.state.MarkRunProvisioning(ctx, req.RunID); err != nil {
+		return o.failRun(ctx, req, "", DiagnosisSandboxModeShared,
+			fmt.Errorf("provisioning: mark run provisioning: %w", err))
+	}
+	rt := RuntimeRef{
+		ID:                shared.RuntimeID,
+		WorkspaceID:       req.WorkspaceID,
+		DaemonID:          shared.DaemonID,
+		SandboxInstanceID: shared.InstanceID,
+		Status:            "online",
+	}
+	env := map[string]string{
+		"MULTICA_DIAGNOSIS_API_URL":          DiagnosisRunAPIBaseURL(publicURL, req.RunID),
+		"MULTICA_DIAGNOSIS_CAPABILITY_TOKEN": token,
+	}
+	return o.activateAndEnqueue(ctx, req, run, rt, env, DiagnosisSandboxModeShared)
+}
+
+// tryReattach checks whether the run's recorded dedicated sandbox is still
+// usable: the instance must still exist and its daemon-registered pi runtime
+// must come online. A dead instance is simply re-provisioned; a live instance
+// whose runtime never registers is reclaimed before re-provisioning.
 func (o *DiagnosisSandboxOrchestrator) tryReattach(ctx context.Context, req DiagnosisProvisionRequest, sandboxInstanceID string) (RuntimeRef, bool) {
 	ref, err := o.sandboxes.GetSandboxInstanceRef(ctx, req.WorkspaceID, sandboxInstanceID)
 	if err != nil {
@@ -362,7 +439,7 @@ func (o *DiagnosisSandboxOrchestrator) tryReattach(ctx context.Context, req Diag
 func (o *DiagnosisSandboxOrchestrator) provisionFresh(ctx context.Context, req DiagnosisProvisionRequest, run DiagnosisRunCheckpoint, publicURL string) error {
 	token, err := MintDiagnosisCapabilityToken()
 	if err != nil {
-		return o.failRun(ctx, req, "", fmt.Errorf("provisioning: mint capability token: %w", err))
+		return o.failRun(ctx, req, "", DiagnosisSandboxModeDedicated, fmt.Errorf("provisioning: mint capability token: %w", err))
 	}
 	ref, err := o.sandboxes.Create(ctx, CreateSandboxInstanceInput{
 		WorkspaceID:   req.WorkspaceID,
@@ -373,12 +450,12 @@ func (o *DiagnosisSandboxOrchestrator) provisionFresh(ctx context.Context, req D
 	if err != nil {
 		// Create compensates its own partially created instance, so there is
 		// nothing to reclaim here.
-		return o.failRun(ctx, req, "", fmt.Errorf("provisioning: create sandbox: %w", err))
+		return o.failRun(ctx, req, "", DiagnosisSandboxModeDedicated, fmt.Errorf("provisioning: create sandbox: %w", err))
 	}
 	fail := func(cause error) error {
-		return o.failRun(ctx, req, ref.InstanceID, cause)
+		return o.failRun(ctx, req, ref.InstanceID, DiagnosisSandboxModeDedicated, cause)
 	}
-	if err := o.state.SetRunSandbox(ctx, req.RunID, ref.InstanceID, HashDiagnosisCapabilityToken(token), DiagnosisExecutionModeSandbox); err != nil {
+	if err := o.state.SetRunSandbox(ctx, req.RunID, ref.InstanceID, HashDiagnosisCapabilityToken(token), DiagnosisExecutionModeSandbox, DiagnosisSandboxModeDedicated); err != nil {
 		return fail(fmt.Errorf("provisioning: persist sandbox binding: %w", err))
 	}
 	if err := o.state.MarkRunProvisioning(ctx, req.RunID); err != nil {
@@ -392,19 +469,19 @@ func (o *DiagnosisSandboxOrchestrator) provisionFresh(ctx context.Context, req D
 		"MULTICA_DIAGNOSIS_API_URL":          DiagnosisRunAPIBaseURL(publicURL, req.RunID),
 		"MULTICA_DIAGNOSIS_CAPABILITY_TOKEN": token,
 	}
-	return o.activateAndEnqueue(ctx, req, run, rt, env)
+	return o.activateAndEnqueue(ctx, req, run, rt, env, DiagnosisSandboxModeDedicated)
 }
 
-// activateAndEnqueue is the shared tail of reattach and fresh provisioning:
-// activate the run, deliver the extension, then enqueue the work. env is nil
-// on reattach (the per-run agent keeps its original credentials).
-func (o *DiagnosisSandboxOrchestrator) activateAndEnqueue(ctx context.Context, req DiagnosisProvisionRequest, run DiagnosisRunCheckpoint, rt RuntimeRef, env map[string]string) error {
+// activateAndEnqueue activates the run, delivers the extension, then enqueues
+// work. The sandbox mode determines whether a subsequent failure may reclaim
+// the sandbox: only dedicated sandboxes belong to this run.
+func (o *DiagnosisSandboxOrchestrator) activateAndEnqueue(ctx context.Context, req DiagnosisProvisionRequest, run DiagnosisRunCheckpoint, rt RuntimeRef, env map[string]string, sandboxMode string) error {
 	sandboxInstanceID := rt.SandboxInstanceID
 	if sandboxInstanceID == "" {
 		sandboxInstanceID = run.SandboxInstanceID
 	}
 	fail := func(cause error) error {
-		return o.failRun(ctx, req, sandboxInstanceID, cause)
+		return o.failRun(ctx, req, sandboxInstanceID, sandboxMode, cause)
 	}
 	if err := o.state.ActivateRun(ctx, req.RunID); err != nil {
 		return fail(fmt.Errorf("provisioning: activate run: %w", err))
@@ -439,11 +516,11 @@ func (o *DiagnosisSandboxOrchestrator) activateAndEnqueue(ctx context.Context, r
 	return nil
 }
 
-// failRun marks the run failed with a bounded classified cause and reclaims
-// the sandbox when one is bound to the attempt. Reclaim and FailRun failures
-// are logged, never silently dropped.
-func (o *DiagnosisSandboxOrchestrator) failRun(ctx context.Context, req DiagnosisProvisionRequest, sandboxInstanceID string, cause error) error {
-	if sandboxInstanceID != "" {
+// failRun marks the run failed with a bounded classified cause. Only a
+// dedicated per-run sandbox is reclaimed; shared dispatch resources remain
+// owned by dispatch/channel cleanup.
+func (o *DiagnosisSandboxOrchestrator) failRun(ctx context.Context, req DiagnosisProvisionRequest, sandboxInstanceID, sandboxMode string, cause error) error {
+	if sandboxMode == DiagnosisSandboxModeDedicated && sandboxInstanceID != "" {
 		o.reclaimBestEffort(ctx, req.RunID, req.WorkspaceID, sandboxInstanceID)
 	}
 	if err := o.state.FailRun(ctx, req.RunID, cause); err != nil {

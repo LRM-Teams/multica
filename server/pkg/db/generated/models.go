@@ -207,8 +207,6 @@ type AgentMemoryWriteEvent struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
-
-
 type AgentRuntime struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
@@ -753,6 +751,7 @@ type InteractionDagDiagnosisRun struct {
 	SandboxInstanceID     pgtype.Text        `json:"sandbox_instance_id"`
 	CapabilityTokenHash   pgtype.Text        `json:"capability_token_hash"`
 	ExecutionMode         pgtype.Text        `json:"execution_mode"`
+	SandboxMode           pgtype.Text        `json:"sandbox_mode"`
 }
 
 type InteractionDagDiagnosisSegment struct {
@@ -1667,7 +1666,7 @@ type ResearchSession struct {
 	HandoffSummary      pgtype.Text        `json:"handoff_summary"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-	DepthTier            string             `json:"depth_tier"`
+	DepthTier           string             `json:"depth_tier"`
 	ProductRound        int32              `json:"product_round"`
 	ProductRoundBudget  int32              `json:"product_round_budget"`
 	UnattendedEnabled   bool               `json:"unattended_enabled"`

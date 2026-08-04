@@ -235,7 +235,8 @@ func (h *Handler) backfillAgentInboxToolCallFromResult(
 func activityVisibilityFor(eventKind, eventType, severity, reasonCode string) string {
 	visibility := "user_facing"
 	switch eventKind {
-	case activityKindToolOutput,
+	case activityKindThinking,
+		activityKindToolOutput,
 		activityKindTelemetry,
 		activityKindTransport,
 		activityKindCustom:

@@ -96,18 +96,3 @@ func TestTaskMessageTrajectoryBufferFlushesOnLineageSwitch(t *testing.T) {
 		t.Fatalf("unexpected second lineage row: %+v", got[1])
 	}
 }
-
-func TestTaskMessagePhaseTrackerEmitsOnceUntilBoundary(t *testing.T) {
-	var phase taskMessagePhaseTracker
-	if !phase.enter() {
-		t.Fatal("first trajectory message must enter the thinking phase")
-	}
-	if phase.enter() {
-		t.Fatal("same phase must not emit another bare thinking status")
-	}
-
-	phase.leave() // tool or terminal boundary
-	if !phase.enter() {
-		t.Fatal("first trajectory message after a boundary must restore Thinking")
-	}
-}

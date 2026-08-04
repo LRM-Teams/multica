@@ -767,6 +767,8 @@
     "no_equipped": "장착한 업적 없음",
     "dismiss_unlock": "업적 알림 닫기",
     "unlock_toast_title": "에이전트 업적 해제",
+    "achievement_unlocked": "{{agentName}}: 「{{achievementName}}」 업적 해제",
+    "level_promoted": "{{agentName}}: 명예 레벨 {{level}} 승급",
     "secret_achievement": "비밀 업적",
     "secret_achievement_description": "기여를 계속하면 잠금 해제 후 내용이 공개됩니다.",
     "secret_achievement_category": "미공개",

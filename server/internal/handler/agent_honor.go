@@ -236,7 +236,7 @@ func (h *Handler) wireAgentHonorEvents() {
 		return agentHonorAudience(agent, err)
 	}
 	h.AgentHonorService.OnAchievementUnlocked = func(ctx context.Context, evt service.AgentHonorUnlockEvent) {
-		recipients, _, ok := audience(ctx, evt.AgentID)
+		recipients, agentName, ok := audience(ctx, evt.AgentID)
 		if !ok {
 			slog.Warn("skip agent honor achievement event without a named owner audience", "agent_id", util.UUIDToString(evt.AgentID))
 			return
@@ -247,10 +247,22 @@ func (h *Handler) wireAgentHonorEvents() {
 			"system",
 			"",
 			recipients,
-			map[string]any{
-				"agent_id":    util.UUIDToString(evt.AgentID),
-				"achievement": evt.Achievement,
-			},
+			agentHonorUnlockedPayload(evt, agentName),
+		)
+	}
+	h.AgentHonorService.OnLevelChanged = func(ctx context.Context, evt service.AgentHonorLevelEvent) {
+		recipients, agentName, ok := audience(ctx, evt.AgentID)
+		if !ok {
+			slog.Warn("skip agent honor level event without a named owner audience", "agent_id", util.UUIDToString(evt.AgentID))
+			return
+		}
+		h.publishToUsers(
+			protocol.EventAgentHonorLevelChanged,
+			util.UUIDToString(evt.WorkspaceID),
+			"system",
+			"",
+			recipients,
+			agentHonorLevelChangedPayload(evt, agentName),
 		)
 	}
 	h.AgentHonorService.OnFleetClassChanged = func(ctx context.Context, evt service.AgentFleetClassEvent) {
@@ -288,6 +300,23 @@ func agentFleetClassChangedPayload(evt service.AgentFleetClassEvent, agentName s
 		"previous_class_id": evt.Previous,
 		"class_id":          evt.Current,
 		"fleet_score":       evt.FleetScore,
+	}
+}
+
+func agentHonorUnlockedPayload(evt service.AgentHonorUnlockEvent, agentName string) map[string]any {
+	return map[string]any{
+		"agent_id":    util.UUIDToString(evt.AgentID),
+		"agent_name":  agentName,
+		"achievement": evt.Achievement,
+	}
+}
+
+func agentHonorLevelChangedPayload(evt service.AgentHonorLevelEvent, agentName string) map[string]any {
+	return map[string]any{
+		"agent_id":       util.UUIDToString(evt.AgentID),
+		"agent_name":     agentName,
+		"previous_level": evt.Previous,
+		"level":          evt.Current,
 	}
 }
 

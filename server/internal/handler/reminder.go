@@ -325,7 +325,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "title must be between 1 and 500 characters")
 		return
 	}
-	anchorMessageID, threadRootID, ok := h.resolveReminderAnchor(w, r.Context(), origin, req.MessageID)
+	anchorMessageID, anchorChannelID, threadRootID, ok := h.resolveReminderAnchor(w, r.Context(), origin, req.MessageID)
 	if !ok {
 		return
 	}
@@ -374,6 +374,9 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 			scheduleTimezone = schedule.Timezone
 		}
 	}
+	// Anchor channel is the message's channel (may differ from wake origin —
+	// product lock B / 贝克汉姆 cross-channel patrol). Membership already
+	// checked in resolveReminderAnchor.
 	row := tx.QueryRow(r.Context(), `
 		INSERT INTO agent_reminder (
 			workspace_id, agent_id, initiator_user_id, title, anchor_channel_id, anchor_message_id,
@@ -381,7 +384,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING `+reminderSelectColumns(),
-		origin.workspaceID, task.AgentID, initiatorUserID, title, origin.channelID,
+		origin.workspaceID, task.AgentID, initiatorUserID, title, anchorChannelID,
 		anchorMessageID, nullableUUID(threadRootID), schedule.FireAt, cadence, scheduleTimezone, cadenceNextAt)
 	created, err := scanAgentReminder(row)
 	if err != nil {
@@ -860,27 +863,39 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, reminderResponse(cancelled))
 }
 
-func (h *Handler) resolveReminderAnchor(w http.ResponseWriter, ctx context.Context, origin chatOutputOrigin, rawMessageID string) (pgtype.UUID, pgtype.UUID, bool) {
+// resolveReminderAnchor locates the anchor message by id in the workspace and
+// returns (messageID, channelID, threadRootID, ok).
+//
+// Product lock B (2026-08-04): schedule may cross channels — msg-id is the
+// source of truth for the anchor channel. The agent must currently be a
+// member/manager of that channel (agentHasSurfaceAccess). Wake origin.channel
+// is NOT required to match (贝克汉姆 LRM2.0 patrol → pr-frontend schedule).
+func (h *Handler) resolveReminderAnchor(w http.ResponseWriter, ctx context.Context, origin chatOutputOrigin, rawMessageID string) (pgtype.UUID, pgtype.UUID, pgtype.UUID, bool) {
 	rawMessageID = strings.TrimSpace(rawMessageID)
 	if rawMessageID == "" {
 		writeError(w, http.StatusBadRequest, "message_id is required")
-		return pgtype.UUID{}, pgtype.UUID{}, false
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false
 	}
 	messageID, ok := parseUUIDOrBadRequest(w, rawMessageID, "message_id")
 	if !ok {
-		return pgtype.UUID{}, pgtype.UUID{}, false
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false
 	}
-	var threadRootID pgtype.UUID
-	var exists bool
+	var channelID, threadRootID pgtype.UUID
 	if err := h.DB.QueryRow(ctx, `
-		SELECT true, thread_root_message_id
+		SELECT channel_id, thread_root_message_id
 		FROM channel_message
-		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND deleted_at IS NULL`,
-		messageID, origin.channelID, origin.workspaceID).Scan(&exists, &threadRootID); err != nil || !exists {
+		WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
+		messageID, origin.workspaceID).Scan(&channelID, &threadRootID); err != nil {
 		writeError(w, http.StatusNotFound, "anchor message not found")
-		return pgtype.UUID{}, pgtype.UUID{}, false
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false
 	}
-	return messageID, threadRootID, true
+	// Member or manager on the anchor channel (surface access = current
+	// channel_member agent row). Not a member → 403, not 404 (message exists).
+	if !h.agentHasSurfaceAccess(ctx, origin.workspaceID, origin.agentID, channelID) {
+		writeError(w, http.StatusForbidden, "agent is not a member of the anchor channel")
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false
+	}
+	return messageID, channelID, threadRootID, true
 }
 
 func (h *Handler) resolveReminderID(w http.ResponseWriter, ctx context.Context, workspaceID, agentID pgtype.UUID, raw string) (pgtype.UUID, bool) {

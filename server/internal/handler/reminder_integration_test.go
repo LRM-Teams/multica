@@ -2864,7 +2864,10 @@ func TestAgentReminderModernTransportSourcesRemainFailClosed(t *testing.T) {
 			t.Fatalf("cross agent event status=%d body=%s", rec.Code, rec.Body.String())
 		}
 	})
-	t.Run("cross origin anchor", func(t *testing.T) {
+	t.Run("cross origin anchor without membership", func(t *testing.T) {
+		// Product lock B: message may live outside wake origin, but agent
+		// must be a member of the *anchor* channel. No membership → 403
+		// (message exists; access denied), not 404.
 		fixture := seedReminderModernTransportFixture(t, "agent_credential")
 		foreignChannelID := seedChannelForTest(t, "reminder-foreign-origin-"+uuid.NewString(), fixture.initiatorUserID)
 		foreignMessage, err := testHandler.insertChannelMessage(context.Background(), parseUUID(foreignChannelID), parseUUID(testWorkspaceID),
@@ -2876,8 +2879,45 @@ func TestAgentReminderModernTransportSourcesRemainFailClosed(t *testing.T) {
 		rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
 			"title": "must fail", "delay_seconds": 300, "message_id": foreignMessage.ID,
 		})
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("cross origin status=%d body=%s", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "not a member of the anchor channel") {
+			t.Fatalf("cross origin without membership status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("cross origin anchor with membership", func(t *testing.T) {
+		// 贝克汉姆 shape: wake on channel A, schedule against msg-id on channel B
+		// where the agent is already a member → 201 and anchor_channel_id = B.
+		fixture := seedReminderModernTransportFixture(t, "agent_credential")
+		otherChannelID := seedChannelForTest(t, "reminder-cross-member-"+uuid.NewString(), fixture.initiatorUserID)
+		if _, err := testPool.Exec(context.Background(), `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role, join_source, added_by_type)
+			VALUES ($1, $2, 'agent', $3, 'manager', 'manual', 'system')
+			ON CONFLICT DO NOTHING`, otherChannelID, testWorkspaceID, fixture.agentID); err != nil {
+			t.Fatal(err)
+		}
+		otherMessage, err := testHandler.insertChannelMessage(context.Background(), parseUUID(otherChannelID), parseUUID(testWorkspaceID),
+			"user", parseUUID(fixture.initiatorUserID), "Reminder Initiator", "cross channel patrol anchor",
+			"multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+			"title": "cross channel patrol", "delay_seconds": 300, "message_id": otherMessage.ID,
+		})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("cross origin with membership status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var scheduled agentReminderResponse
+		if err := json.NewDecoder(rec.Body).Decode(&scheduled); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+		})
+		if scheduled.AnchorChannelID != otherChannelID {
+			t.Fatalf("anchor_channel_id=%q want other channel %s", scheduled.AnchorChannelID, otherChannelID)
+		}
+		if scheduled.AnchorMessageID == nil || *scheduled.AnchorMessageID != otherMessage.ID {
+			t.Fatalf("anchor_message_id=%v want %s", scheduled.AnchorMessageID, otherMessage.ID)
 		}
 	})
 	t.Run("cross workspace", func(t *testing.T) {

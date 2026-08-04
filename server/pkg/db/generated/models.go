@@ -367,20 +367,29 @@ type ChannelMember struct {
 }
 
 type ChannelMessage struct {
-	ID                pgtype.UUID        `json:"id"`
-	ChannelID         pgtype.UUID        `json:"channel_id"`
-	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
-	AuthorType        string             `json:"author_type"`
-	AuthorID          pgtype.UUID        `json:"author_id"`
-	AuthorName        string             `json:"author_name"`
-	Content           string             `json:"content"`
-	Source            string             `json:"source"`
-	ExternalMessageID pgtype.Text        `json:"external_message_id"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	QuoteMessageID    pgtype.UUID        `json:"quote_message_id"`
-	QuoteSnapshot     []byte             `json:"quote_snapshot"`
-	ThreadID          pgtype.Text        `json:"thread_id"`
-	TriggerDepth      int32              `json:"trigger_depth"`
+	ID                     pgtype.UUID        `json:"id"`
+	ChannelID              pgtype.UUID        `json:"channel_id"`
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	AuthorType             string             `json:"author_type"`
+	AuthorID               pgtype.UUID        `json:"author_id"`
+	AuthorName             string             `json:"author_name"`
+	Content                string             `json:"content"`
+	Source                 string             `json:"source"`
+	ExternalMessageID      pgtype.Text        `json:"external_message_id"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	ThreadID               pgtype.Text        `json:"thread_id"`
+	TriggerDepth           int32              `json:"trigger_depth"`
+	ReplyToMessageID       pgtype.UUID        `json:"reply_to_message_id"`
+	ThreadRootMessageID    pgtype.UUID        `json:"thread_root_message_id"`
+	Parts                  []byte             `json:"parts"`
+	ConversationID         pgtype.UUID        `json:"conversation_id"`
+	Seq                    int64              `json:"seq"`
+	ClientMessageID        pgtype.Text        `json:"client_message_id"`
+	EditedAt               pgtype.Timestamptz `json:"edited_at"`
+	DeletedAt              pgtype.Timestamptz `json:"deleted_at"`
+	QuoteMessageID         pgtype.UUID        `json:"quote_message_id"`
+	QuoteSnapshot          []byte             `json:"quote_snapshot"`
+	MembershipGenerationID pgtype.UUID        `json:"membership_generation_id"`
 }
 
 type ChannelRead struct {

@@ -36,6 +36,7 @@ import {
 import { MemoryGrowthField } from "../agents/components/memory-growth-field";
 import { AgentHonorLevelIcon } from "../agents/components/agent-honor-level-icon";
 import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
+import { useHonorBadgeCopy } from "../honor/use-honor-badge-copy";
 import { useAgentAchievementCopy } from "../agents/hooks/use-agent-achievement-copy";
 import { useAgentFleetClassName } from "../agents/hooks/use-agent-fleet-class-name";
 import { AgentPresenceOverlay } from "./actor-avatar";
@@ -396,6 +397,7 @@ function AgentHonorSummary({ agentId }: { agentId: string }) {
 // react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 function MemberHonorSummary({ userId }: { userId: string }) {
   const { t } = useT("channels");
+  const honorBadgeCopy = useHonorBadgeCopy();
   const { data: honor, isPending, isError } = useQuery({
     queryKey: ["honor", "wall", userId],
     queryFn: () => api.getUserHonor(userId),
@@ -414,6 +416,7 @@ function MemberHonorSummary({ userId }: { userId: string }) {
   }
 
   const equipped = honor.equipped_badge;
+  const equippedTitle = equipped ? honorBadgeCopy(equipped).title : "";
 
   return (
     <div
@@ -430,7 +433,7 @@ function MemberHonorSummary({ userId }: { userId: string }) {
       </span>
       <span aria-hidden>·</span>
       <span className="truncate">
-        {equipped?.title ?? t(($) => $.profile_popover.honor.no_badge)}
+        {equippedTitle || t(($) => $.profile_popover.honor.no_badge)}
       </span>
     </div>
   );

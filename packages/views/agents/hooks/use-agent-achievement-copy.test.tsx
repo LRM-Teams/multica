@@ -89,4 +89,23 @@ describe("useAgentAchievementCopy", () => {
       category: "future",
     });
   });
+
+  it("does not reveal a locked secret achievement through its stable id", () => {
+    const { result } = renderHook(() => useAgentAchievementCopy());
+
+    expect(
+      result.current({
+        id: "dreadnought_command",
+        title: "Secret achievement",
+        description: "Keep developing to reveal this achievement.",
+        category: "fleet",
+        secret: true,
+        unlocked: false,
+      }),
+    ).toEqual({
+      title: "秘密成就",
+      description: "继续积累贡献，解锁后即可揭晓。",
+      category: "尚未揭晓",
+    });
+  });
 });

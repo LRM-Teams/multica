@@ -754,8 +754,12 @@
     "no_equipped": "No achievement equipped",
     "dismiss_unlock": "Dismiss achievement notification",
     "unlock_toast_title": "Agent achievement unlocked",
+    "secret_achievement": "Secret achievement",
+    "secret_achievement_description": "Keep contributing to reveal this achievement after it unlocks.",
+    "secret_achievement_category": "Unrevealed",
+    "accepted_delivery": "Accepted delivery",
+    "update_error": "Agent honor could not be updated.",
     "fleet_upgraded": "{{agentName}} promoted to {{className}}",
-    "agent_fallback": "Agent",
     "fleet_classes": {
       "reserve": "Reserve",
       "corvette": "Corvette",
@@ -771,6 +775,21 @@
       "evolution": "Evolution",
       "mastery": "Mastery",
       "fleet": "Fleet"
+    },
+    "metric_names": {
+      "completed": "Completed tasks",
+      "success_streak": "Success streak",
+      "memory_writes": "Valid memory updates",
+      "evolution_promotions": "Evolution-unit promotions",
+      "distinct_projects": "Projects delivered",
+      "recoveries": "Failure recoveries",
+      "fleet_class": "Fleet class"
+    },
+    "audit_actions": {
+      "rules_update": "Updated honor rules",
+      "xp_grant": "Granted XP",
+      "achievement_grant": "Granted achievement",
+      "achievement_revoke": "Revoked achievement"
     },
     "achievements": {
       "first_launch": {

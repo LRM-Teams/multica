@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -230,15 +231,16 @@ func (h *Handler) wireAgentHonorEvents() {
 	if h.AgentHonorService == nil {
 		return
 	}
-	audience := func(ctx context.Context, agentID pgtype.UUID) ([]string, string) {
+	audience := func(ctx context.Context, agentID pgtype.UUID) ([]string, string, bool) {
 		agent, err := h.Queries.GetAgent(ctx, agentID)
-		if err != nil || !agent.OwnerID.Valid {
-			return nil, ""
-		}
-		return []string{util.UUIDToString(agent.OwnerID)}, agentDisplayName(agent)
+		return agentHonorAudience(agent, err)
 	}
 	h.AgentHonorService.OnAchievementUnlocked = func(ctx context.Context, evt service.AgentHonorUnlockEvent) {
-		recipients, _ := audience(ctx, evt.AgentID)
+		recipients, _, ok := audience(ctx, evt.AgentID)
+		if !ok {
+			slog.Warn("skip agent honor achievement event without a named owner audience", "agent_id", util.UUIDToString(evt.AgentID))
+			return
+		}
 		h.publishToUsers(
 			protocol.EventAgentHonorUnlocked,
 			util.UUIDToString(evt.WorkspaceID),
@@ -252,7 +254,11 @@ func (h *Handler) wireAgentHonorEvents() {
 		)
 	}
 	h.AgentHonorService.OnFleetClassChanged = func(ctx context.Context, evt service.AgentFleetClassEvent) {
-		recipients, agentName := audience(ctx, evt.AgentID)
+		recipients, agentName, ok := audience(ctx, evt.AgentID)
+		if !ok {
+			slog.Warn("skip agent fleet promotion event without a named owner audience", "agent_id", util.UUIDToString(evt.AgentID))
+			return
+		}
 		h.publishToUsers(
 			protocol.EventAgentFleetClassChanged,
 			util.UUIDToString(evt.WorkspaceID),
@@ -262,6 +268,17 @@ func (h *Handler) wireAgentHonorEvents() {
 			agentFleetClassChangedPayload(evt, agentName),
 		)
 	}
+}
+
+func agentHonorAudience(agent db.Agent, queryErr error) ([]string, string, bool) {
+	if queryErr != nil || !agent.OwnerID.Valid {
+		return nil, "", false
+	}
+	agentName := firstNonEmpty(agent.DisplayName, agent.Name)
+	if agentName == "" {
+		return nil, "", false
+	}
+	return []string{util.UUIDToString(agent.OwnerID)}, agentName, true
 }
 
 func agentFleetClassChangedPayload(evt service.AgentFleetClassEvent, agentName string) map[string]any {

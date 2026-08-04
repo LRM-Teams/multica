@@ -125,6 +125,18 @@ describe("research schemas", () => {
           method_rationale: "Compare equivalent observations and test material failure assumptions.",
           analysis_methods: ["Constraint-based comparison"],
           evidence_requirements: ["Comparable measurements"],
+          evidence_standards: [
+            {
+              client_key: "measurement",
+              purpose: "Establish a value from a direct measurement.",
+              minimum_independent_sources: 1,
+              required_source_traits: ["direct_measurement"],
+              minimum_strength: 0.8,
+              minimum_directness: 0.9,
+              minimum_method_fit: 0.9,
+              counterevidence_required: false,
+            },
+          ],
           inclusion_criteria: ["Same operating boundary"],
           exclusion_criteria: ["Unverifiable anecdotes"],
           source_strategy: ["Operational records and direct measurements"],
@@ -139,6 +151,48 @@ describe("research schemas", () => {
         questions: [],
         tasks: [],
         attempts: [],
+        sources: [
+          {
+            id: "source-1",
+            canonical_url: "https://example.com/measurement",
+            title: "Measurement",
+            publisher: "Lab",
+            source_class: "measurement",
+            evidence_traits: ["direct_measurement"],
+            independence_key: "lab",
+            retrieved_at: "2026-08-03T00:00:00Z",
+            content_hash: "hash",
+            snapshot_excerpt: "42",
+            metadata: {},
+            verification_status: "verified",
+            created_at: "2026-08-03T00:00:00Z",
+          },
+        ],
+        claims: [
+          {
+            id: "claim-1",
+            client_key: "measured-value",
+            evidence_standard_key: "measurement",
+            text: "The measured value is 42.",
+            significance: "high",
+            confidence: 0.9,
+            status: "supported",
+            goal_version: 2,
+            plan_version: 3,
+            evidence: [
+              {
+                observation_id: "observation-1",
+                relation: "supports",
+                strength: 0.9,
+                directness: 1,
+                method_fit: 1,
+                verification_status: "verified",
+              },
+            ],
+            created_at: "2026-08-03T00:00:00Z",
+            updated_at: "2026-08-03T00:00:00Z",
+          },
+        ],
         gate: { passed: false, findings: [] },
       },
     };
@@ -147,6 +201,9 @@ describe("research schemas", () => {
     });
     expect(parsed.run?.run.goal_version).toBe(2);
     expect(parsed.run?.method?.analysis_methods).toEqual(["Constraint-based comparison"]);
+    expect(parsed.run?.method?.evidence_standards?.[0]?.client_key).toBe("measurement");
+    expect(parsed.run?.sources[0]?.evidence_traits).toEqual(["direct_measurement"]);
+    expect(parsed.run?.claims[0]?.evidence[0]?.method_fit).toBe(1);
   });
 
   it("drops the optional run projection when that projection is malformed", () => {

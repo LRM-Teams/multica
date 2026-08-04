@@ -27,17 +27,17 @@ The snapshot's `run.contract`, `run.method`, `run.sources`,
 `run.observations`, and `run.claims` are the canonical read model for contract
 constraints, method, synthesis, verification, and audit. Source text is
 represented by a bounded excerpt plus content hash; exact Observation quotes
-were already checked against the immutable full snapshot at ingestion. V3
-non-plan tasks inherit the accepted Method for the current goal/plan version.
+were already checked against the immutable full snapshot at ingestion. V3 and
+V4 non-plan tasks inherit the accepted Method for the current goal/plan
+version. V4 also exposes the accepted Claim-level evidence standards.
 
 2. Perform the assigned investigation according to `run.method`. Explore
-beyond the first plausible answer. Select evidence that is fit for the Claim:
-first-party material can establish a party's own specification or statement,
-while comparative performance, impact, risk, and disputed facts require
-independent or directly observed evidence. Preserve retrieved source text in
+beyond the first plausible answer. For V4, each Claim references an accepted
+`evidence_standard_key`; every Source Snapshot records evidence traits and every
+Evidence Link records directness and method fit. Evaluate those fields against
+the Claim, not a universal source hierarchy. Preserve retrieved source text in
 each source snapshot. Every quoted observation must be an exact substring of
-that snapshot. Execute the accepted counterevidence strategy and record
-uncertainty.
+that snapshot. Execute required counter-search and record uncertainty.
 
 3. Write one JSON result with the fields permitted by the assignment prompt.
 Use stable client keys and a globally unique `client_request_id`. Submit once:
@@ -61,31 +61,36 @@ chat before `task-result` succeeds.
 - `plan` / `replan`: required questions, an explicit decision question and
   method rationale, analysis methods, evidence requirements, inclusion and
   exclusion criteria, source and counterevidence strategies, stopping
-  conditions, uncertainties, risks, and an acyclic dependency graph. Choose a
+  conditions, uncertainties, risks, and an acyclic dependency graph. V4 plans
+  also define machine-checkable evidence standards for the planned Claim
+  types: stable key, purpose, source traits, minimum independent sources,
+  strength, directness, method fit, and counter-search requirement. Choose a
   method that fits the question; academic publication protocols apply only
   when the Research Contract requires them.
 - `discover` / `deep_read`: source snapshots, exact observations, supported or
-  disputed claims, and evidence-producing follow-up tasks where needed. A v2
-  or v3 question-scoped result that increases coverage sets `answer_claim_key` to a
-  Claim included in that result.
+  disputed claims, and evidence-producing follow-up tasks where needed. A V4
+  source declares evidence traits and each Claim declares its accepted evidence
+  standard. A question-scoped result that increases coverage sets
+  `answer_claim_key` to a Claim included in that result.
 - `verify` / `counter_search`: independent corroboration, contradictory
   evidence, and explicit claim resolutions. Agreement without source evidence
   is not verification. Include the source, observation, claim, and evidence
   objects being verified in the result; stable content deduplicates against the
-  ledger and upgrades verification state transactionally.
-- `synthesize`: only the `reporter` role. A v2 or v3 report uses the full existing
+  ledger and upgrades verification state transactionally. V4 links score
+  strength, directness, and method fit against the referenced standard.
+- `synthesize`: only the `reporter` role. A structured report uses the full existing
   reader structure (outline, sections, citations, sources, gaps, conclusion),
   repeats every section and conclusion exactly in `content_md`, and links
   normalized Claim keys to section IDs with exact `anchor_quote` prose. Each
   linked section cites a stored source that verifiably supports that Claim. A
-  v3 report explains the applied Method, counterevidence, limitations,
+  V3/V4 report explains the applied Method, counterevidence, limitations,
   unresolved gaps, and decision consequence.
 - `quality_gate` / `citation_audit`: independent evaluation of the latest report
-  revision by a `validator` Agent other than the report author. V2/v3 evaluations
+  revision by a `validator` Agent other than the report author. Structured evaluations
   provide substantive findings for all seven score dimensions and enumerate
   every reviewed report Claim and section. Fail when any material claim is
   unsupported, stale, misquoted, omitted, hides unresolved contradiction, or
-  departs from the accepted v3 Method.
+  departs from the accepted Method or, in V4, its evidence standards.
 
 The server decides readiness, retries, timeouts, concurrency, replans,
 diminishing information gain, and final delivery. Never manufacture a passing

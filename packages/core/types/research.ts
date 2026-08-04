@@ -446,6 +446,7 @@ export interface ResearchRunMethod {
   method_rationale: string;
   analysis_methods: string[];
   evidence_requirements: string[];
+  evidence_standards?: ResearchEvidenceStandard[];
   inclusion_criteria: string[];
   exclusion_criteria: string[];
   source_strategy: string[];
@@ -456,6 +457,17 @@ export interface ResearchRunMethod {
   created_by_task_id: string;
   created_by_agent_id: string;
   created_at: string;
+}
+
+export interface ResearchEvidenceStandard {
+  client_key: string;
+  purpose: string;
+  minimum_independent_sources: number;
+  required_source_traits: string[];
+  minimum_strength: number;
+  minimum_directness: number;
+  minimum_method_fit: number;
+  counterevidence_required: boolean;
 }
 
 export interface ResearchRunQuestion {
@@ -522,6 +534,7 @@ export interface ResearchRunSourceSnapshot {
   title: string;
   publisher: string;
   source_class: string;
+  evidence_traits?: string[];
   independence_key: string;
   retrieved_at: string;
   content_hash: string;
@@ -547,6 +560,8 @@ export interface ResearchRunClaimEvidence {
   observation_id: string;
   relation: string;
   strength: number;
+  directness?: number;
+  method_fit?: number;
   verification_status: string;
   verified_by_task_id?: string;
   rationale?: string;
@@ -556,6 +571,7 @@ export interface ResearchRunClaim {
   id: string;
   produced_by_task_id?: string;
   client_key: string;
+  evidence_standard_key?: string;
   text: string;
   significance: string;
   confidence: number;

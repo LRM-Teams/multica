@@ -226,6 +226,41 @@ func TestTaskPromptV3CarriesAcceptedGeneralResearchMethod(t *testing.T) {
 	}
 }
 
+func TestTaskPromptV4CarriesClaimLevelEvidenceStandards(t *testing.T) {
+	run := Run{SessionID: "session-4", Goal: "Verify a registered operating limit", GoalVersion: 1, PlanVersion: 1, DepthTier: "standard", OrchestratorVersion: OrchestratorVersionV4}
+	task := Task{ID: "task-4", Kind: TaskKindVerify, Objective: "Verify the controlling record", RequiredCapability: "validator", ExpectedResult: "research_evidence_v4", GoalVersion: 1, PlanVersion: 1}
+	attempt := Attempt{ID: "attempt-4", DispatchKey: "dispatch-4"}
+	method := &ResearchMethod{
+		GoalVersion: 1, PlanVersion: 1, DecisionQuestion: "What limit is legally registered?",
+		MethodRationale: "Read the controlling record directly.", AnalysisMethods: []string{"Record verification"},
+		EvidenceRequirements: []string{"Traceable controlling record"},
+		EvidenceStandards: []EvidenceStandard{{
+			ClientKey: "controlling-record", Purpose: "Establish the registered value", MinimumIndependentSources: 1,
+			RequiredSourceTraits: []string{"official_record"}, MinimumStrength: 0.8, MinimumDirectness: 0.9, MinimumMethodFit: 0.9,
+		}},
+	}
+	prompt, err := buildTaskPrompt(run, task, attempt, RunSnapshot{Contract: ResearchContract{Language: "zh"}, Method: method}, []FleetMember{{Role: "validator", Status: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"schema_version=4",
+		"method.evidence_standards",
+		"minimum_independent_sources (1..8)",
+		"A single authoritative record may legitimately require one source",
+		"source supplies evidence_traits",
+		"Every Claim supplies evidence_standard_key",
+		"directness and method_fit",
+		"Source class is descriptive and has no global credibility score",
+		"verify/counter_search=research_evidence_v4",
+		"source count, source class, or depth tier alone never establishes sufficiency",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("prompt missing %q:\n%s", required, prompt)
+		}
+	}
+}
+
 func TestTaskPromptRejectsUnsupportedOrchestratorVersion(t *testing.T) {
 	_, err := buildTaskPrompt(Run{OrchestratorVersion: "research-run-v999"}, Task{}, Attempt{}, RunSnapshot{}, nil)
 	if !errors.Is(err, ErrUnsupportedVersion) {

@@ -200,6 +200,87 @@ func TestResearchRunV3RejectsV2TaskResultKinds(t *testing.T) {
 	}
 }
 
+func TestResearchRunV4RequiresClaimLevelEvidenceFitness(t *testing.T) {
+	result := validV4PlanResult(t)
+	raw, _ := json.Marshal(result)
+	decoded, _, err := DecodeAndValidateResultForVersion(OrchestratorVersionV4, raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v4",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("v4 method rejected: %v", err)
+	}
+	if len(decoded.Plan.Method.EvidenceStandards) != 1 || decoded.Plan.Method.EvidenceStandards[0].MinimumIndependentSources != 1 {
+		t.Fatalf("standards=%+v", decoded.Plan.Method.EvidenceStandards)
+	}
+
+	result.Plan.Method.EvidenceStandards[0].RequiredSourceTraits = nil
+	raw, _ = json.Marshal(result)
+	_, _, err = DecodeAndValidateResultForVersion(OrchestratorVersionV4, raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v4",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "evidence_traits") {
+		t.Fatalf("error=%v, want missing traits rejection", err)
+	}
+
+	result = validV4PlanResult(t)
+	result.Plan.Method.EvidenceStandards[0].CounterevidenceRequired = true
+	raw, _ = json.Marshal(result)
+	_, _, err = DecodeAndValidateResultForVersion(OrchestratorVersionV4, raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v4",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "counter_search") {
+		t.Fatalf("error=%v, want counter-search task rejection", err)
+	}
+}
+
+func TestResearchRunV4ValidatesEvidenceAgainstDeclaredStandards(t *testing.T) {
+	now := time.Now().UTC()
+	result := ResultEnvelope{
+		SchemaVersion: 4, ClientRequestID: "v4-evidence", Summary: "verified operating record", Confidence: 0.9,
+		Sources: []SourceProposal{{
+			ClientKey: "official-record", URL: "https://example.com/record", Title: "Record", Publisher: "Registry",
+			SourceClass: "official", EvidenceTraits: []string{"official_record"}, IndependenceKey: "registry", RetrievedAt: now,
+			SnapshotText: "The registered value is 42.",
+		}},
+		Observations: []ObservationProposal{{ClientKey: "record-value", SourceKey: "official-record", Quote: "The registered value is 42."}},
+		Claims: []ClaimProposal{{
+			ClientKey: "registered-value", EvidenceStandardKey: "authoritative-record", Text: "The registered value is 42.",
+			Significance: "high", Confidence: 0.9, Evidence: []EvidenceProposal{{
+				ObservationKey: "record-value", Relation: "supports", Strength: 0.95, Directness: 1, MethodFit: 1, Rationale: "Direct registry record.",
+			}},
+		}},
+		AnswerClaimKey: "registered-value", CoverageDelta: 0.8,
+	}
+	raw, _ := json.Marshal(result)
+	_, _, err := DecodeAndValidateResultForVersion(OrchestratorVersionV4, raw, Task{
+		Kind: TaskKindVerify, QuestionID: "question-1", RequiredCapability: "validator", ExpectedResult: "research_evidence_v4",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("v4 evidence rejected: %v", err)
+	}
+
+	result.Claims[0].Evidence[0].MethodFit = 0
+	raw, _ = json.Marshal(result)
+	_, _, err = DecodeAndValidateResultForVersion(OrchestratorVersionV4, raw, Task{
+		Kind: TaskKindVerify, QuestionID: "question-1", RequiredCapability: "validator", ExpectedResult: "research_evidence_v4",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "method_fit") {
+		t.Fatalf("error=%v, want method_fit rejection", err)
+	}
+}
+
+func TestResearchRunV3RejectsV4EvidenceFitnessFields(t *testing.T) {
+	result := validV3PlanResult(t)
+	result.Plan.Method.EvidenceStandards = validV4PlanResult(t).Plan.Method.EvidenceStandards
+	raw, _ := json.Marshal(result)
+	_, _, err := DecodeAndValidateResultForVersion(OrchestratorVersionV3, raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v3",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "schema_version 4") {
+		t.Fatalf("v3 accepted v4 fields: %v", err)
+	}
+}
+
 func TestCanonicalURLNormalizesWithoutLosingQuery(t *testing.T) {
 	got, err := CanonicalURL("HTTPS://Example.COM:443/path?q=1#fragment")
 	if err != nil {
@@ -264,5 +345,20 @@ func validV3PlanResult(t *testing.T) ResultEnvelope {
 		TaskProposal{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Review report", RequiredCapability: "validator", ExpectedResult: "research_quality_evaluation_v3", Priority: 0.6, DependsOn: []string{"synthesize"}},
 		TaskProposal{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit evidence links", RequiredCapability: "validator", ExpectedResult: "research_citation_audit_v3", Priority: 0.6, DependsOn: []string{"synthesize"}},
 	)
+	return result
+}
+
+func validV4PlanResult(t *testing.T) ResultEnvelope {
+	t.Helper()
+	result := validV3PlanResult(t)
+	result.SchemaVersion = 4
+	result.Plan.Method.EvidenceStandards = []EvidenceStandard{{
+		ClientKey: "authoritative-record", Purpose: "Establish a registered fact from its controlling record.",
+		MinimumIndependentSources: 1, RequiredSourceTraits: []string{"official_record"},
+		MinimumStrength: 0.8, MinimumDirectness: 0.9, MinimumMethodFit: 0.9,
+	}}
+	for i := range result.Plan.Tasks {
+		result.Plan.Tasks[i].ExpectedResult = translateResultKind(result.Plan.Tasks[i].ExpectedResult, "_v3", "_v4")
+	}
 	return result
 }

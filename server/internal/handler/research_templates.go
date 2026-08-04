@@ -2,147 +2,138 @@ package handler
 
 func researchDomainPlaybooks() map[string]string {
 	return map[string]string{
-		"tech": `# Tech research playbook (coarse seed)
+		"general": `# General research adaptation profile
 
-## Entry points
-- Official docs, RFCs, standards bodies, canonical repos, release notes
-- Secondary: reputable engineering blogs, conference talks, issue trackers
+## Frame
+- Identify the decision, unit of analysis, scope, time boundary, audience, and what would change the answer.
+- Decompose by decision-relevant uncertainty. Do not manufacture a fixed number of branches.
 
-## Evidence bar
-- Prefer primary sources; mark vendor marketing lower weight
-- Capture version/date of APIs and SDKs
-- Dead-end probes that prove a path is obsolete stay on the graph
+## Method candidates
+- Choice: constraint comparison, trade-off analysis, sensitivity tests, and failure cases.
+- Measurement: define numerator, denominator, population, time, and uncertainty before collecting values.
+- Explanation: compare mechanisms, chronology, process evidence, and negative cases.
+- Exploration: map the space, record unknowns, then replan with narrower questions.
 
-## Stage hints
-- S1: decompose into architecture / API / ops / risk subquestions
-- S2: ≥3 sources across ≥2 classes; ≥1 high-credibility (≥0.7)
-- S3: adjudicate conflicts (version skew, vendor claims vs independent tests)
-- S4: report must include recommendations, risks, source weights, and human↔AI boundary
+## Evidence fitness
+- Define a Claim-specific evidence standard before collection: required traits, independence, directness, method fit, and counter-search need.
+- A controlling record may be sufficient for a registered fact. Causal, comparative, impact, or disputed Claims usually need a different standard.
+- Stop when the accepted method is satisfied and another bounded probe has low expected information gain; preserve contrary evidence and unresolved limits.
 `,
-		"market": `# Market research playbook (coarse seed)
+		"tech": `# Technology research adaptation profile
 
-## Entry points
-- Company filings, product pages, pricing pages, reputable analyst notes
-- Secondary: reviews, forums, job postings (hiring signal), app store rankings
+## Decision patterns
+- Pin version, platform, workload, configuration, date, operating boundary, and acceptance threshold.
+- Separate documented support, observed behavior, inferred mechanism, comparative result, and recommendation.
 
-## Evidence bar
-- Separate claim vs evidence; label stance (pro/con/neutral)
-- Prefer dated sources; stale market numbers need a dead_end or pivot
-- Never complete on a single SERP summary
+## Method candidates
+- Capability: specification or canonical implementation inspection plus a version-matched probe when behavior matters.
+- Selection: representative workload, reproducible benchmark, failure recovery, security boundary, migration cost, and sensitivity analysis.
+- Incident or defect: chronology, reproduction, competing causes, disconfirming tests, and residual risk.
 
-## Stage hints
-- S1: segment customers, competitors, pricing, GTM, risks
-- S2: multi-source; mix primary (vendor) + independent
-- S3: resolve conflicting market-size / feature claims
-- S4: opportunity, risks, open questions, weighted sources, human↔AI boundary when delivery-like
+## Evidence traits and failure tests
+- Possible traits include official_specification, canonical_code, reproducible_artifact, direct_measurement, incident_record, and independent_operation.
+- Test version skew, hidden configuration, warm-up/cache effects, unsupported environments, resource ceilings, and cases where the preferred option loses.
 `,
-		"academic": `# Academic research playbook (coarse seed)
+		"market": `# Market research adaptation profile
 
-## Entry points
-- Peer-reviewed papers, preprints with citations, survey papers, datasets
-- Secondary: lab blogs, conference proceedings, reproducibility reports
+## Decision patterns
+- Define product, customer, geography, channel, currency, time, unit, and denominator before comparing price, share, growth, or demand.
+- Separate what a company reports from observed customer behavior and inferred market impact.
 
-## Evidence bar
-- Prefer DOI / arXiv / venue; record methods limitations
-- Note sample size, recency, conflicts of interest when available
-- Quotes and excerpts must be faithful; flag contradictions for 交叉验证
+## Method candidates
+- Market size: reconcile definitions and calculations; never average incompatible estimates.
+- Competition: comparable capability matrix, price conditions, target segment, switching cost, and observed adoption evidence.
+- Customer need: sampling frame, interview or behavioral method, selection bias, negative cases, and willingness-to-pay limits.
 
-## Stage hints
-- S1: research questions + inclusion criteria
-- S2: ≥3 sources, diverse venues/methods when possible
-- S3: conflict / replication gaps as first-class graph nodes
-- S4: synthesis with confidence levels and open questions
+## Evidence traits and failure tests
+- Possible traits include audited_filing, official_price, transaction_observation, independent_estimate, customer_interview, and usage_signal.
+- Search for churn, failed launches, hidden price conditions, non-adoption, channel conflict, regulation, and stale definitions.
 `,
-		// Fine domains (LRM-883/888) — strategy schema, not fixed question checklists.
-		"game": `# Game / interactive entertainment playbook
+		"academic": `# Academic research adaptation profile
 
-## Probe order
-Genre/core loop → engine & pipeline → art/audio supply → networking/backend → publishing/compliance → human↔AI production boundary → precedents → cost/schedule
+## Decision patterns
+- Define population or corpus, intervention/exposure, comparator, outcome, time, and intended inference where applicable.
+- Distinguish evidence mapping, systematic completeness, effect estimation, causal inference, theory comparison, and replication assessment.
 
-## Dimension emphasis (required on delivery-like goals)
-resources, human_ai_boundary, precedents, cost_schedule
+## Method candidates
+- Declare databases, query families, screening rules, date bounds, and appraisal criteria only when completeness is claimed.
+- Inspect study design, sample, uncertainty, limitations, conflicts, corrections, retractions, and reproducibility.
+- Apply PRISMA, CONSORT, STROBE, IRB, citation style, or journal workflow only when the contract and study design require it.
 
-## Source layer
-- General: web search, X indie/devs, GitHub examples
-- Domain: engine docs/store/templates, Steam/competitor pages, engine forums/Discord, asset marketplaces & outsourcing price signals
-
-## Methods
-Split pipeline stages for evidence; precedents need runnable demos or production diaries; asset paths = make / buy / AI-generate
-
-## Human↔AI
-Modeling/animation/level feel/ops campaigns often need humans; batch variants/drafts may be AI-assisted
+## Evidence traits and failure tests
+- Possible traits include peer_reviewed_study, dataset, preregistration, replication, systematic_review, and reproducible_artifact.
+- Search for publication bias, incompatible populations or outcomes, null results, failed replications, and alternative mechanisms.
 `,
-		"ai_engineering": `# AI / ML / engineering product playbook
+		"game": `# Game and interactive entertainment adaptation profile
 
-## Probe order
-ML-feasibility → data availability/labeling → model/train/infer path → eval/benchmarks → human-in-the-loop → open-source/vendor comps → cost/latency
+## Decision patterns
+- Define player, platform, core loop, session shape, content cadence, commercial model, and quality threshold.
+- Investigate only the dimensions that can change feasibility or product choice: engine/runtime, content pipeline, networking, distribution, operations, rights, or economics.
 
-## Dimension emphasis
-feasibility, resources (data), precedents (eval), human_ai_boundary, cost_schedule
+## Method candidates
+- Feasibility: runnable prototype or production-equivalent precedent with version and platform constraints.
+- Content supply: compare make, license, commission, procedural generation, and AI-assisted production under quality and rights constraints.
+- Product viability: comparable retention or demand evidence with explicit cohort and selection limits.
 
-## Source layer
-- General: GitHub, X researchers/engineers, web
-- Domain: Hugging Face, arXiv, vendor docs, benchmark boards, engineering blogs
-
-## Methods
-Prove data path first; compare reproducible repos; cost as order-of-magnitude ranges
-
-## Human↔AI
-Labeling design, eval protocol, safety red lines, product calls → human; retrieval/drafting → AI-capable
+## Failure tests
+- Test device ceilings, network degradation, content throughput, moderation, licensing, platform policy, live-ops burden, and cases where the proposed loop fails to retain users.
 `,
-		"academic_papers": `# Academic / papers playbook
+		"ai_engineering": `# AI and ML engineering adaptation profile
 
-## Probe order
-Research question & inclusion → surveys/milestones → methods & limits → reproduction/data → controversies → open questions
+## Decision patterns
+- Define task, data distribution, evaluation set, baseline, quality threshold, latency, throughput, cost, privacy, and failure consequence.
+- Separate model capability, system behavior, benchmark performance, production performance, and product recommendation.
 
-## Dimension emphasis
-problem_definition, precedents (literature), risks (limits); cost de-emphasized unless reproduction engineering is in-scope
+## Method candidates
+- Feasibility: prove the data and evaluation path before model selection.
+- Comparison: reproducible baseline, representative workload, variance, ablation, error slices, and operational constraints.
+- Build versus buy: capability coverage, lock-in, privacy, customization, reliability, and full serving cost.
 
-## Source layer
-- General: GitHub official code (secondary)
-- Domain: arXiv/venues/DOI, datasets, reproduction reports, lab blogs
-
-## Methods
-Citation chains + method-family clusters; conflicts as first-class graph nodes; record venue/date
-
-## Human↔AI
-Literature search highly automatable; problem framing / experiment design / ethics → human-leaning
+## Failure tests
+- Test leakage, benchmark contamination, distribution shift, unsafe outputs, evaluator bias, latency tails, rate limits, and cases where a non-ML baseline wins.
 `,
-		"finance": `# Finance / research-compliance playbook
+		"academic_papers": `# Academic literature adaptation profile
 
-## Probe order
-Regulatory/license constraints → data/market feed availability → risk/audit requirements → product comps → landing architecture → cost & compliance headcount
+Use the academic profile, then choose a protocol that matches the requested inference. A narrative map, systematic review, meta-analysis, replication assessment, and original study design are different methods.
 
-## Dimension emphasis
-risks/compliance, resources (data), cost_schedule, human_ai_boundary
+## Decision patterns
+- State whether the goal is coverage, comparison, effect estimation, explanation, replication, or identifying an open problem; each implies different evidence and stopping rules.
 
-## Source layer
-- General: GitHub only as tooling (down-weighted)
-- Domain: regulator/exchange notices, IR/filings, research notes, compliance blogs, specialty news
+## Method candidates
+- Map concepts and method families before following citation chains.
+- Preserve inclusion decisions, study context, effect or result definition, uncertainty, limitations, and review status.
+- Treat datasets, code, preregistrations, corrections, retractions, and replication reports as evidence with distinct roles.
 
-## Methods
-Separate claim vs evidence; date every number; conflicting regulatory readings as distinct nodes
-
-## Human↔AI
-Signed recommendations, suitability, compliance interpretation → must-have-human; intake/screening → AI-capable
+## Failure tests
+- Look for missing negative results, incompatible measures, duplicated cohorts, weak external validity, failed replications, and conclusions stronger than the design permits.
 `,
-		"design_visual": `# Design / visual (incl. illustration) playbook
+		"finance": `# Finance and regulated-decision adaptation profile
 
-## Probe order
-Audience & scenarios → style references → toolchain & delivery specs → assets & licensing → human↔AI creation boundary → collaboration flow → cost
+## Decision patterns
+- Define jurisdiction, date, actor, instrument, user class, data entitlement, recommendation boundary, and consequence of error.
+- Separate legal text, regulator interpretation, market data, issuer reporting, model output, and investment judgment.
 
-## Dimension emphasis
-precedents (portfolio), resources (licensing), human_ai_boundary, cost_schedule
+## Method candidates
+- Compliance: controlling rule, applicability, authoritative interpretation, operational control, and unresolved legal ambiguity.
+- Investment or market claim: time-stamped data definition, benchmark, scenario and sensitivity analysis, downside cases, and conflicts of interest.
+- Product feasibility: licensed data path, auditability, suitability controls, escalation, and operating cost.
 
-## Source layer
-- General: GitHub (design systems/plugins), X design voices
-- Domain: Behance/Dribbble-class portfolios, design-system docs, tool docs, font/asset license sites, case studies
+## Failure tests
+- Search for jurisdiction conflicts, stale rules, survivorship and look-ahead bias, missing fees/liquidity, adverse scenarios, and controls that fail under automation.
+`,
+		"design_visual": `# Design and visual communication adaptation profile
 
-## Methods
-Build a reference set before executable specs; licensing risks as their own branch
+## Decision patterns
+- Define audience, context, message, brand constraints, accessibility, delivery medium, production specification, rights, and approval authority.
+- Distinguish preference evidence, usability evidence, brand consistency, production feasibility, and legal clearance.
 
-## Human↔AI
-Brand tone final say & client communication → human; batch variants/first drafts → AI-capable
+## Method candidates
+- Direction choice: curated reference set, explicit criteria, contrastive options, and stakeholder or user evaluation.
+- System design: component or token audit, state coverage, accessibility tests, and implementation constraints.
+- Production plan: asset inventory, licensing provenance, toolchain, revision load, and quality review.
+
+## Failure tests
+- Test accessibility, edge states, reproduction across media, localization, asset rights, subjective sampling bias, and cases where visual novelty harms comprehension.
 `,
 	}
 }
@@ -158,10 +149,10 @@ const (
 	readerDescription = "调研团深读手：对入选源做摘录、结构化笔记与证据片段。"
 
 	validatorAgentName   = "交叉验证"
-	validatorDescription = "调研团交叉验证：多源比对、冲突检测与权重裁决建议。"
+	validatorDescription = "调研团交叉验证：按主张的证据标准检查来源独立性、直接性、方法适配和冲突。"
 
 	reporterAgentName   = "报告官"
-	reporterDescription = "调研团报告官：维护来源图谱与结构化调研报告修订。"
+	reporterDescription = "调研团报告官：把已验收主张、反证、限制和决策影响写入结构化报告。"
 )
 
 // ronaldoInstructions is the production SOP for the research fleet lead.
@@ -201,19 +192,24 @@ Research loop
 1. Plan: state the decision question, scope, method rationale, analysis
    methods, evidence requirements, inclusion/exclusion criteria, source and
    counterevidence strategies, stopping conditions, uncertainties, risks, and
-   an acyclic task graph. Academic protocols apply only to academic goals that
-   need them.
+   an acyclic task graph. Define machine-checkable evidence standards for each
+   planned Claim type: purpose, required source traits, independence,
+   strength, directness, method fit, and counter-search requirement. Academic
+   protocols apply only to academic goals that need them.
 2. Execute: let the server dispatch dependency-ready work. Match evidence to
-   the Claim it can establish; do not use a universal source hierarchy or a
-   fixed source count as a substitute for evidence fitness.
+   the Claim it can establish. Source Snapshots declare evidence traits; Claims
+   reference accepted evidence standards; Evidence Links score directness and
+   method fit. Do not use a universal source hierarchy or fixed global source
+   count as a substitute for evidence fitness.
 3. Observe and verify: preserve Source Snapshots, exact Observations, atomic
    Claims, supporting/contradicting Evidence Links, and explicit resolutions.
 4. Evaluate: synthesize against the accepted Method. Independent validators
    audit every report Claim and section. Failed evaluation creates explicit
    remediation; it never manufactures a passing score.
-5. Replan or stop: replan when the Method is invalidated or a high-value gap
-   remains. Stop only when required questions, evidence requirements,
-   counterevidence, deterministic gates, and information-gain conditions pass.
+5. Replan or stop: replan when observations invalidate the Method, its evidence
+   standards, or a high-value gap remains. Stop only when required questions,
+   Claim-level standards, counterevidence, deterministic gates, and
+   information-gain conditions pass.
 
 Roster authority (maximum within fleet)
 
@@ -255,11 +251,10 @@ You are 寻源手 in the sealed Research Fleet. You report only to 罗纳尔多 
 Job
 
 Execute only the assigned discover task. Read the current Contract and Method,
-then find sources fit for its Claims and evidence requirements. Preserve bounded
-retrieved text, provenance, date, independence family, and exact Observations.
-First-party material can establish first-party statements; disputed impact,
-quality, performance, and risk need independent or direct evidence. Record
-failed searches and counterevidence in the result summary or proposed work.
+then find sources fit for its Claims and accepted evidence standards. Preserve
+bounded retrieved text, provenance, date, independence family, evidence traits,
+and exact Observations. Record failed searches and counterevidence in the result
+summary or proposed work. Do not infer evidence fitness from source class alone.
 Submit the strict task result; do not mutate legacy graph/source endpoints.
 `
 
@@ -272,7 +267,9 @@ Job
 Execute only the assigned deep-read task. Read selected Source Snapshots in the
 context of the accepted Method. Produce exact Observations with locators,
 separate source statements from your interpretation, and create atomic Claims
-with supporting or contradicting Evidence Links. State scope and limitations.
+that reference an accepted evidence standard, with supporting or contradicting
+Evidence Links. Score link strength, directness, and method fit from the actual
+observation. State scope and limitations.
 Submit the strict task result; never invent quotes or patch legacy sources.
 `
 
@@ -284,8 +281,9 @@ Job
 
 Execute the assigned verification, counter-search, quality, or citation task.
 For evidence work, test the accepted falsification conditions, source
-independence, exact Observations, and Claim scope; agreement without evidence is
-not verification. Resolve contradictions only when evidence warrants it. For
+independence, evidence traits, exact Observations, Claim scope, directness, and
+method fit; agreement without evidence is not verification. Resolve
+contradictions only when evidence warrants it. For
 report audits, remain independent of the author and review every Claim and
 section against the accepted Method and ledger. Submit a failing evaluation
 when any material defect remains.
@@ -298,8 +296,8 @@ You are 报告官 in the sealed Research Fleet. You report only to 罗纳尔多 
 Job
 
 Execute only the assigned synthesis task. Build the report from current-version
-required answers and supported high-significance Claims. Explain the accepted
-Method, evidence, counterevidence, comparisons, uncertainty, limitations,
+required answers and Claims that satisfy their accepted evidence standards.
+Explain the accepted Method, evidence, counterevidence, comparisons, uncertainty, limitations,
 unresolved gaps, and decision consequences. Every material conclusion must link
 to normalized Claims and exact cited support. Do not patch the legacy report or
 claim completion before task-result succeeds.

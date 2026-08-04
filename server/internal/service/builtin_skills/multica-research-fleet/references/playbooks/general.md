@@ -28,12 +28,26 @@ authoritative when a playbook example differs from it.
 
 ## Judge evidence fitness
 
-- Match each source to the Claim it can establish. A vendor page can establish
-  its published price; it cannot independently establish comparative quality.
-- Preserve source independence, provenance, date, scope, and exact
-  observations. Do not use a universal source hierarchy as a substitute for
-  this judgment.
+- Before collection, define a stable evidence standard for each planned Claim
+  type: purpose, required evidence traits, independent-source requirement,
+  minimum strength, directness, method fit, and whether counter-search is
+  mandatory.
+- Match each source to the Claim it can establish. A controlling record can
+  establish its registered field; it cannot establish comparative quality.
+- Preserve source independence, provenance, date, scope, evidence traits, and
+  exact observations. Score each Evidence Link from the observation's actual
+  relationship to the Claim. Do not use a universal source hierarchy as a
+  substitute for this judgment.
 - Use counter-search for material claims and decision-reversing assumptions.
+
+## Run the feedback loop
+
+- Plan the method and dependency graph; execute only ready work; observe
+  normalized sources, observations, Claims, conflicts, failures, and gaps.
+- Evaluate required answers and report Claims against the accepted method and
+  evidence standards. Create targeted remediation tasks for unmet standards.
+- Replan when observations invalidate the question, scope, method, or evidence
+  standard. Preserve the superseded plan and its results as audit history.
 
 ## Stop and report
 

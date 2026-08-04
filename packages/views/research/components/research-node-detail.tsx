@@ -134,18 +134,23 @@ function expectedResultLabelFor(
   switch (expected) {
     case "research_plan_v2":
     case "research_plan_v3":
+    case "research_plan_v4":
       return t(($) => $.node.expected_results.plan);
     case "research_evidence_v2":
     case "research_evidence_v3":
+    case "research_evidence_v4":
       return t(($) => $.node.expected_results.evidence);
     case "research_report_v2":
     case "research_report_v3":
+    case "research_report_v4":
       return t(($) => $.node.expected_results.report);
     case "research_quality_evaluation_v2":
     case "research_quality_evaluation_v3":
+    case "research_quality_evaluation_v4":
       return t(($) => $.node.expected_results.quality_evaluation);
     case "research_citation_audit_v2":
     case "research_citation_audit_v3":
+    case "research_citation_audit_v4":
       return t(($) => $.node.expected_results.citation_audit);
     default:
       return expected || null;

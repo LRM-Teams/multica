@@ -207,7 +207,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		return GateResult{}, err
 	}
 	methodCount := 0
-	if run.OrchestratorVersion == OrchestratorVersionV3 {
+	if usesResearchMethodContract(run.OrchestratorVersion) {
 		if err = s.pool.QueryRow(ctx, `
 			SELECT count(*)::int
 			FROM research_decision
@@ -240,7 +240,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	if counts.planSucceeded == 0 {
 		add("plan_incomplete", "The current plan has not been accepted.", nil)
 	}
-	if run.OrchestratorVersion == OrchestratorVersionV3 && methodCount == 0 {
+	if usesResearchMethodContract(run.OrchestratorVersion) && methodCount == 0 {
 		add("research_method_missing", "The current plan has no accepted research method.", nil)
 	}
 	if counts.unfinishedTasks > 0 {
@@ -254,7 +254,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	} else if counts.unansweredRequired > 0 {
 		add("required_questions_unanswered", "Required questions lack an accepted answer and sufficient coverage.", map[string]any{"count": counts.unansweredRequired})
 	}
-	if counts.independentSources < minimumIndependentSources {
+	if run.OrchestratorVersion != OrchestratorVersionV4 && counts.independentSources < minimumIndependentSources {
 		add("independent_sources_insufficient", "Verified evidence does not span enough independent sources.", map[string]any{"actual": counts.independentSources, "required": minimumIndependentSources})
 	}
 	if counts.reportCount == 0 {
@@ -275,10 +275,10 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		if counts.wrongVersionClaims > 0 {
 			add("report_claims_stale", "The latest report cites claims from an earlier goal or plan version.", map[string]any{"count": counts.wrongVersionClaims})
 		}
-		if counts.unsupportedClaims > 0 {
+		if run.OrchestratorVersion != OrchestratorVersionV4 && counts.unsupportedClaims > 0 {
 			add("report_claims_unsupported", "Report claims lack verified supporting evidence.", map[string]any{"count": counts.unsupportedClaims})
 		}
-		if counts.weakMajorClaims > 0 {
+		if run.OrchestratorVersion != OrchestratorVersionV4 && counts.weakMajorClaims > 0 {
 			add("major_claim_sources_insufficient", "High-significance report claims lack enough independent verified source families.", map[string]any{"count": counts.weakMajorClaims, "required_per_claim": minimumMajorClaimSources})
 		}
 		if counts.unresolvedConflicts > 0 {
@@ -287,6 +287,13 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		if counts.unlinkedMajorClaims > 0 {
 			add("major_claims_unlinked", "Supported high-significance claims are absent from the latest report.", map[string]any{"count": counts.unlinkedMajorClaims})
 		}
+	}
+	if run.OrchestratorVersion == OrchestratorVersionV4 && methodCount > 0 {
+		fitnessFindings, fitnessErr := s.evaluateEvidenceFitnessV4(ctx, sessionID, run.GoalVersion, run.PlanVersion)
+		if fitnessErr != nil {
+			return GateResult{}, fitnessErr
+		}
+		findings = append(findings, fitnessFindings...)
 	}
 	if counts.qualityEvaluations == 0 {
 		add("quality_evaluation_missing", "The latest report has not passed an independent quality evaluation.", nil)

@@ -9,6 +9,9 @@ func (r *ResultEnvelope) validateV3(task Task, cfg RunConfig) error {
 	if r.SchemaVersion != 3 {
 		return fmt.Errorf("%w: research-run-v3 requires schema_version 3", ErrInvalidResult)
 	}
+	if hasEvidenceFitnessFields(*r) {
+		return fmt.Errorf("%w: evidence fitness fields require schema_version 4", ErrInvalidResult)
+	}
 	if err := validateV3TaskContract(task); err != nil {
 		return err
 	}

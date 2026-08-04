@@ -256,6 +256,32 @@ export const ResearchRunSchema = z
   })
   .passthrough();
 
+const ResearchEvidenceStandardSchema = z
+  .object({
+    client_key: z.string(),
+    purpose: z.string(),
+    minimum_independent_sources: z.number(),
+    required_source_traits: z.array(z.string()).optional().default([]),
+    minimum_strength: z.number(),
+    minimum_directness: z.number(),
+    minimum_method_fit: z.number(),
+    counterevidence_required: z.boolean().optional().default(false),
+  })
+  .passthrough();
+
+const ResearchClaimEvidenceSchema = z
+  .object({
+    observation_id: z.string(),
+    relation: z.string(),
+    strength: z.number(),
+    directness: z.number().optional(),
+    method_fit: z.number().optional(),
+    verification_status: z.string(),
+    verified_by_task_id: z.string().optional(),
+    rationale: z.string().optional(),
+  })
+  .passthrough();
+
 const ResearchRunSnapshotSchema = z
   .object({
     run: ResearchRunSchema,
@@ -281,6 +307,10 @@ const ResearchRunSnapshotSchema = z
         method_rationale: z.string(),
         analysis_methods: z.array(z.string()),
         evidence_requirements: z.array(z.string()),
+        evidence_standards: z
+          .array(ResearchEvidenceStandardSchema)
+          .optional()
+          .default([]),
         inclusion_criteria: z.array(z.string()),
         exclusion_criteria: z.array(z.string()),
         source_strategy: z.array(z.string()),
@@ -339,6 +369,7 @@ const ResearchRunSnapshotSchema = z
             title: z.string(),
             publisher: z.string(),
             source_class: z.string(),
+            evidence_traits: z.array(z.string()).optional().default([]),
             independence_key: z.string(),
             retrieved_at: z.string(),
             content_hash: z.string(),
@@ -369,13 +400,14 @@ const ResearchRunSnapshotSchema = z
           .object({
             id: z.string(),
             client_key: z.string(),
+            evidence_standard_key: z.string().optional(),
             text: z.string(),
             significance: z.string(),
             confidence: z.number(),
             status: z.string(),
             goal_version: z.number(),
             plan_version: z.number(),
-            evidence: z.array(z.record(z.string(), z.unknown())).default([]),
+            evidence: z.array(ResearchClaimEvidenceSchema).default([]),
             created_at: z.string(),
             updated_at: z.string(),
           })

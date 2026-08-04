@@ -23,6 +23,7 @@
  *
  * Temporary tooling: delete after the shots are attached to LRM-1291/1271.
  */
+import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +39,7 @@ const outDir = resolve(root, "e2e/artifacts/lrm1291");
 mkdirSync(outDir, { recursive: true });
 
 const base = process.env.HARNESS_URL ?? "http://localhost:5291/";
+const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 const MIN_TEXT = 4.5;
 /** WCAG 1.4.11 — meaningful graphics (the 9px band) need 3:1, not 4.5:1. */
 const MIN_GRAPHIC = 3;
@@ -206,6 +208,10 @@ function collect() {
         ringSize: r ? [Number(r.width.toFixed(1)), Number(r.height.toFixed(1))] : null,
         hasCheck: Boolean(check),
         stateText: li.querySelector("[data-stage-state-text]")?.textContent ?? null,
+        visibleStateText: [...li.querySelectorAll("[data-stage-state-text]")]
+          .filter((el) => el.offsetParent !== null)
+          .map((el) => (el.textContent || "").trim())
+          .join(" ") || null,
         accessibleName: li.querySelector("button")?.getAttribute("aria-label") ?? null,
         ariaCurrent: li.querySelector("button")?.getAttribute("aria-current") ?? null,
         disabled: li.querySelector("button")?.disabled ?? null,
@@ -293,7 +299,9 @@ function assertAfter(data, theme, width, reducedMotion) {
           fail(`${at} ${g.stage}: ring ${g.ringSize[0]}px, want 28`);
         }
       }
-      if (width >= 768 && !g.stateText) {
+      // State wording is visually rendered at every width, not hidden in
+      // aria-label/tooltip on narrow layouts.
+      if (!g.visibleStateText) {
         fail(`${at} ${g.stage}: no visible state text at ${width}`);
       }
       // Narrow shows S1–S4; the full name must still be the accessible name.
@@ -372,7 +380,7 @@ function assertBefore(data, theme) {
 }
 
 const VIEWPORTS = [1440, 768, 767, 700, 360];
-const measurements = { label, generatedAt: new Date().toISOString(), runs: [] };
+const measurements = { label, revision, generatedAt: new Date().toISOString(), runs: [] };
 
 for (const theme of ["light", "dark"]) {
   for (const width of VIEWPORTS) {

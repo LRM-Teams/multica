@@ -39,7 +39,8 @@ import {
   type CanvasKeyboardAction,
   type CanvasOverlayLayer,
 } from "../lib/canvas-keyboard-nav";
-import { layoutResearchGraph, type ResearchFlowNodeData } from "../lib/layout-graph";
+import type { ResearchFlowNodeData } from "../lib/layout-graph";
+import { layoutResearchCanvas } from "../lib/research-canvas-layout";
 import { LOGIC_END_NODE_ID, isLogicEndNode } from "../lib/logic-lanes";
 import {
   NODE_ENTER_CLASS,
@@ -155,7 +156,9 @@ function ResearchCanvasInner({
   onAuxPanelSelect?: (id: ResearchAuxPanelId) => void;
 }) {
   const { t } = useT("research");
-  const laid = useMemo(() => layoutResearchGraph(nodes, edges), [nodes, edges]);
+  const canvasLayout = useMemo(() => layoutResearchCanvas(nodes, edges), [nodes, edges]);
+  const laid = canvasLayout.layout;
+  const topology = canvasLayout.topology;
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState(laid.nodes);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState(laid.edges);
   const { fitView, zoomIn, zoomOut, getZoom, setCenter, getNode } = useReactFlow();
@@ -302,7 +305,7 @@ function ResearchCanvasInner({
   const focusNode = useCallback(
     (id: string) => {
       focusIdRef.current = id;
-      const topo = laid.topology.get(id);
+      const topo = topology.get(id);
       const research = nodes.find((n) => n.id === id);
       if (research) {
         announce(
@@ -322,7 +325,7 @@ function ResearchCanvasInner({
         });
       }
     },
-    [laid.topology, nodes, announce, t, getNode, setCenter, getZoom],
+    [topology, nodes, announce, t, getNode, setCenter, getZoom],
   );
 
   /** LRM-1105: apply pure keyboard actions (semantics A) — no neighborByLane B. */
@@ -404,7 +407,7 @@ function ResearchCanvasInner({
           nodes,
           edges,
           activeBranchId: current
-            ? (laid.topology.get(current)?.branchId ?? null)
+            ? (topology.get(current)?.branchId ?? null)
             : null,
           overlay,
         },
@@ -420,7 +423,7 @@ function ResearchCanvasInner({
       detailPinned,
       nodes,
       edges,
-      laid.topology,
+      topology,
       applyKeyboardAction,
     ],
   );

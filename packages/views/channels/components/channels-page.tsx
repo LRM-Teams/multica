@@ -1768,23 +1768,40 @@ export function ChannelsPage({
   // Debounced in-conversation search. Empty query clears are handled where
   // the query is written (input onChange / channel switch) — not here — so
   // this effect only owns the async fetch.
+  //
+  // LRM-1296 — clearing the debounce timer cannot stop a request that already
+  // left, so a superseded response used to land last and overwrite the newer
+  // results (count, jump target, and index reset to 0) while the input already
+  // showed the newer query; a request fired just before a channel switch could
+  // likewise repopulate search state belonging to the previous channel. The
+  // per-run `cancelled` flag drops any response whose run is no longer current
+  // — query change, panel close, and channel switch all re-run this effect
+  // (`active` is a dep). The DM surface already drops stale hits in its reducer
+  // (`dm-conversation.tsx` `setSearchResults` compares `action.query`); this is
+  // the group-channel equivalent.
   useEffect(() => {
     if (!convSearchOpen || !active) return;
     const q = convSearchQuery.trim();
     if (!q) return;
+    let cancelled = false;
     const timer = setTimeout(async () => {
       try {
         const res = await api.searchChannelMessages(active.id, q);
-        // LRM-753 — newest-first so index 0 is「最近命中」; list scroll follows
-        // effectiveHighlightId via ChannelMessageList.
-        setConvSearchResults(orderConvSearchResultsNewestFirst(res.results));
-        setConvSearchTotal(res.total);
-        setConvSearchIndex(0);
+        if (!cancelled) {
+          // LRM-753 — newest-first so index 0 is「最近命中」; list scroll follows
+          // effectiveHighlightId via ChannelMessageList.
+          setConvSearchResults(orderConvSearchResultsNewestFirst(res.results));
+          setConvSearchTotal(res.total);
+          setConvSearchIndex(0);
+        }
       } catch {
-        showErrorToast(t(($) => $.conv_search.error));
+        if (!cancelled) showErrorToast(t(($) => $.conv_search.error));
       }
     }, 300);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [convSearchQuery, active, convSearchOpen, t]);
 
   // Mark the conversation read when it becomes active (select / deep link /
@@ -4179,7 +4196,10 @@ export function ChannelsPage({
                     className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                   />
                   {convSearchQuery.trim() && (
-                    <span className="shrink-0 text-xs text-muted-foreground">
+                    <span
+                      data-testid="conv-search-count"
+                      className="shrink-0 text-xs text-muted-foreground"
+                    >
                       {convSearchTotal === 0
                         ? t(($) => $.conv_search.no_results)
                         : t(($) => $.conv_search.result_count, {

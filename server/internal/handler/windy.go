@@ -114,8 +114,8 @@ Success is not a long onboarding conversation. Success means the user gets a use
 const windyInstructionsCapabilityMarker = "current channel membership role is the only source"
 
 // windyInstructionsAvatarDraftMarker detects Wendy personas that still teach
-// retired agent draft create hire path instead of agent:create action prepare.
-const windyInstructionsAvatarDraftMarker = "POST /api/agent/actions/prepare"
+// retired agent draft create hire path instead of multica action prepare CLI.
+const windyInstructionsAvatarDraftMarker = "multica action prepare"
 
 type WindyResponse struct {
 	Agent AgentResponse `json:"agent"`

@@ -1,6 +1,6 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, afterEach, beforeAll } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { Markdown } from "@multica/ui/markdown";
+import { Markdown, markdownRichReady } from "@multica/ui/markdown";
 
 /**
  * #836 — a link in message content must keep working when nothing takes it over.
@@ -27,17 +27,25 @@ import { Markdown } from "@multica/ui/markdown";
  * HOW TO FLIP-VERIFY: put `e.preventDefault()` back at the top of `handleClick`
  * in `packages/ui/markdown/Markdown.tsx` → the first case goes red. Restore the
  * `window.open` fallback → the second goes red.
+ *
+ * LRM-1372: link markdown is not plain prose (LRM-1264 R4), so `<Markdown>`
+ * Suspense-lazy-loads `MarkdownRich`. Await the chunk + `findByRole` so
+ * assertions see the real `<a>` instead of the `aria-busy` empty fallback.
  */
 describe("Markdown links — the browser's own behaviour is left alone (#836)", () => {
+  beforeAll(async () => {
+    await markdownRichReady;
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   const ATTACHMENT = "/api/attachments/019fa86b-0eef-7ded-9717-c4e311f993b8/download";
 
-  it("does NOT cancel the click when no handler is taking over", () => {
+  it("does NOT cancel the click when no handler is taking over", async () => {
     render(<Markdown>{`[fixture](${ATTACHMENT})`}</Markdown>);
-    const anchor = screen.getByRole("link", { name: "fixture" });
+    const anchor = await screen.findByRole("link", { name: "fixture" });
 
     // fireEvent.click returns false when the event was canceled.
     const notCanceled = fireEvent.click(anchor);
@@ -46,18 +54,18 @@ describe("Markdown links — the browser's own behaviour is left alone (#836)", 
     expect(anchor).toHaveAttribute("href", ATTACHMENT);
   });
 
-  it("does NOT reach for window.open — that is the mechanism that failed silently", () => {
+  it("does NOT reach for window.open — that is the mechanism that failed silently", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     render(<Markdown>{`[fixture](${ATTACHMENT})`}</Markdown>);
 
-    fireEvent.click(screen.getByRole("link", { name: "fixture" }));
+    fireEvent.click(await screen.findByRole("link", { name: "fixture" }));
 
     expect(open).not.toHaveBeenCalled();
   });
 
-  it("still opens in a new tab, via the anchor rather than a popup", () => {
+  it("still opens in a new tab, via the anchor rather than a popup", async () => {
     render(<Markdown>{`[fixture](${ATTACHMENT})`}</Markdown>);
-    const anchor = screen.getByRole("link", { name: "fixture" });
+    const anchor = await screen.findByRole("link", { name: "fixture" });
 
     // A user-initiated target=_blank navigation is not a popup, so no permission
     // is involved. On desktop Electron routes it through the same
@@ -67,13 +75,13 @@ describe("Markdown links — the browser's own behaviour is left alone (#836)", 
     expect(anchor).toHaveAttribute("rel", "noopener noreferrer");
   });
 
-  it("STILL cancels the click when a handler genuinely takes over", () => {
+  it("STILL cancels the click when a handler genuinely takes over", async () => {
     // The fix must not turn `onUrlClick` into a no-op that also navigates: when
     // a consumer handles the URL, the browser must not ALSO follow the link.
     const onUrlClick = vi.fn();
     render(<Markdown onUrlClick={onUrlClick}>{`[fixture](${ATTACHMENT})`}</Markdown>);
 
-    const notCanceled = fireEvent.click(screen.getByRole("link", { name: "fixture" }));
+    const notCanceled = fireEvent.click(await screen.findByRole("link", { name: "fixture" }));
 
     expect(onUrlClick).toHaveBeenCalledWith(ATTACHMENT);
     expect(notCanceled).toBe(false);

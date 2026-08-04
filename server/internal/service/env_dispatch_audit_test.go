@@ -194,7 +194,12 @@ func auditedMessageInput(baseEnv string, groupSize int) EnvDispatchInput {
 		GroupSize:    groupSize,
 		AgentID:      "leader",
 		Message:      &MessageInput{Content: "audit-safe message"},
+		Audit:        enabledEnvDispatchAuditRequest(),
 	}
+}
+
+func enabledEnvDispatchAuditRequest() *EnvDispatchAuditRequest {
+	return &EnvDispatchAuditRequest{Enabled: true, ReclamationWindow: 10 * time.Minute}
 }
 
 // T011 has not yet added Audit.Enabled to EnvDispatchInput. Until that wire
@@ -210,8 +215,10 @@ func newAuditedDispatchService(deps EnvDispatchDeps) (*EnvDispatchService, *reco
 func TestDispatchAudit_StorageInjectionAloneDoesNotOptIn(t *testing.T) {
 	deps := newFakeEnvDispatchDeps()
 	svc, storage := newAuditedDispatchService(deps)
+	input := auditedMessageInput(deps.seedBaseEnv(), 1)
+	input.Audit = nil
 
-	_, err := svc.Dispatch(context.Background(), auditedMessageInput(deps.seedBaseEnv(), 1))
+	_, err := svc.Dispatch(context.Background(), input)
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
@@ -292,6 +299,7 @@ func TestDispatchAudit_PartialResetFailureRecordsRollbackEvidence(t *testing.T) 
 		WorkspaceID: "workspace-audit", UserID: "initiator-audit", Mode: EnvModeScratch,
 		EnvID: deps.seedBaseEnv(), Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue,
 		GroupSize: 2, AgentID: "agent", Issue: &IssueInput{Title: "audit-safe title"},
+		Audit: enabledEnvDispatchAuditRequest(),
 	})
 	if err == nil {
 		t.Fatal("Dispatch() error = nil, want reset failure")
@@ -345,6 +353,7 @@ func TestDispatchAudit_DistinguishesAbsentResourceFromUnavailableObservation(t *
 				WorkspaceID: "workspace-audit", UserID: "initiator-audit", Mode: EnvModeScratch,
 				EnvID: tc.fixture.seedBaseEnv(), Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue,
 				GroupSize: 2, AgentID: "agent", Issue: &IssueInput{Title: "audit-safe title"},
+				Audit: enabledEnvDispatchAuditRequest(),
 			})
 			if err == nil {
 				t.Fatal("Dispatch() error = nil, want reset failure that triggers rollback")

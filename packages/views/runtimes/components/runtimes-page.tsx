@@ -266,7 +266,7 @@ export function RuntimesPage({
   const userPickValid =
     !!userPickId && machines.some((m) => m.id === userPickId);
 
-  // LRM-1094: desktop default = isCurrent → Mine[0]; never Team public machines[0].
+  // LRM-1094: desktop default = isCurrent → Mine[0]; never Team machines[0].
   const selectedMachineId = isMobile
     ? userPickId
     : userPickValid
@@ -586,7 +586,7 @@ export function MachineListView({
                   render={
                     <button
                       type="button"
-                      aria-label={t(($) => $.machine.section_team_public, {
+                      aria-label={t(($) => $.machine.section_team, {
                         count: teamMachines.length,
                       })}
                       className="group/team-toggle mt-2 flex w-full items-center gap-1 rounded-md px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:bg-accent/50"
@@ -594,7 +594,7 @@ export function MachineListView({
                   }
                 >
                   <ChevronRight className="h-3 w-3 stroke-[2.5] transition-transform duration-200 group-data-[panel-open]/team-toggle:rotate-90" />
-                  {t(($) => $.machine.section_team_public, {
+                  {t(($) => $.machine.section_team, {
                     count: teamMachines.length,
                   })}
                 </CollapsibleTrigger>

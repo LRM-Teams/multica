@@ -63,7 +63,6 @@ function makeRuntime(
     update_state: "idle",
     runtime_health: "ok",
     owner_id: "user-1",
-    visibility: "private",
     last_seen_at: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
@@ -137,22 +136,18 @@ describe("MachineCodeAgentsSection", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("puts Make public / Make private on installed runtime cards (LRM-1071)", () => {
+  it("does not render retired runtime sharing controls", () => {
     renderSection(
       makeMachine([
         makeRuntime({
           provider: "cursor",
           metadata: { version: "1.4.2" },
-          visibility: "private",
         }),
       ]),
     );
-    expect(screen.getByTestId("machine-sharing-toggle-rt-cursor")).toHaveTextContent(
-      /Make public/i,
-    );
-    // No inline Private/Public next to the version (A2).
+    expect(screen.queryByTestId("machine-sharing-toggle-rt-cursor")).toBeNull();
     const card = screen.getByTestId("machine-runtime-card-cursor");
-    expect(card.textContent).not.toMatch(/·\s*Private|·\s*Public/);
+    expect(card.textContent).not.toMatch(/Make public|Make private|Private|Public/i);
   });
 
   it("renders an off-catalog installed provider with its raw id as the label", () => {

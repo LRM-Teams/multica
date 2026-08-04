@@ -69,6 +69,10 @@ export function MachineDaemonUpgrade({
 
   useEffect(() => () => cleanup(), [cleanup]);
 
+  // Do NOT useEffect-clear local poll status when version catches up —
+  // react-doctor flags that. isApplying / isActive already gate chrome on
+  // versionsCaughtUp below (Frank stuck 「正在重启并切换版本…」).
+
   const refreshRuntimes = useCallback(() => {
     qc.invalidateQueries({
       predicate: (query) => query.queryKey[0] === "runtimes",
@@ -134,10 +138,17 @@ export function MachineDaemonUpgrade({
     runtimeHealth === "update_available" &&
     !!targetVersion &&
     isNewerCliVersion(targetVersion, currentVersion);
-  // ready_to_apply / completed mid-restart still need progress chrome
-  const isApplying =
-    derivedStatus === "ready_to_apply" || derivedStatus === "completed";
   const displayTarget = targetVersion ?? lastAttemptTarget;
+  // Poll leaves local status at "completed" after stop — keep applying chrome
+  // only while the live version is still behind the target. Once caught up
+  // (incl. `0.4.2` vs `v0.4.2`), drop the spinner (Frank 2026-08-04 stuck UX).
+  const versionsCaughtUp =
+    !!displayTarget &&
+    !!currentVersion &&
+    !isNewerCliVersion(displayTarget, currentVersion);
+  const isApplying =
+    derivedStatus === "ready_to_apply" ||
+    (derivedStatus === "completed" && !versionsCaughtUp);
   const isActive =
     updating ||
     derivedStatus === "pending" ||

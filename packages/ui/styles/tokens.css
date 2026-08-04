@@ -28,6 +28,9 @@
     --color-input: var(--input);
     --color-border: var(--border);
     --color-destructive: var(--destructive);
+    /* LRM-1328 — text on destructive wash (confirm buttons); deeper than
+       --destructive so wash+text clears WCAG 4.5 without dropping the wash. */
+    --color-destructive-strong: var(--destructive-strong);
     --color-success: var(--success);
     --color-warning: var(--warning);
     /* LRM-560 — Activity command / running-command node */
@@ -93,6 +96,8 @@
     --brand-solid-foreground: var(--brand-foreground);
     --ok: #007a5a;
     --danger: #e01e5a;
+    /* LRM-1328 D1 — deepen text on wash; keep --danger for wash/bg tint. */
+    --destructive-strong: #a01040;
     --online: #2bac76;
     --busy: #e8912d;
 
@@ -216,6 +221,8 @@
     --page-bg: oklch(0.18 0.005 285.823);
     --ok: oklch(0.65 0.15 145);
     --danger: oklch(0.704 0.191 22.216);
+    /* LRM-1328 D1 — lighten wash-label text on dark destructive/20 wash. */
+    --destructive-strong: oklch(0.78 0.18 22.216);
     --online: #2bac76;
     --busy: #e8912d;
     --success: var(--ok);

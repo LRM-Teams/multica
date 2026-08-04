@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -52,6 +53,15 @@ type EnvDispatchRequest struct {
 	Issue       *IssueDispatchInput           `json:"issue,omitempty"`
 	Message     *MessageDispatchInput         `json:"message,omitempty"`
 	PerAgentEnv map[string]PerAgentEnvRequest `json:"per_agent_env,omitempty"`
+	Audit       *EnvDispatchAuditRequest      `json:"audit,omitempty"`
+}
+
+// EnvDispatchAuditRequest is the opt-in audit correlation request. The
+// server owns the correlation ID and deadline; callers may only enable audit
+// recording and select its reclamation window.
+type EnvDispatchAuditRequest struct {
+	Enabled                  bool `json:"enabled"`
+	ReclamationWindowSeconds int  `json:"reclamation_window_seconds"`
 }
 
 // ExternalModelRuntimeRequest carries a caller-supplied external model provider
@@ -89,10 +99,30 @@ type MessageDispatchInput struct {
 // failed) it is reused with Message set and each rollout carrying its Error +
 // Traceback (origin goroutine stack from the failing adapter call).
 type EnvDispatchResponse struct {
-	ChannelID string               `json:"channel_id,omitempty"`
-	ProjectID string               `json:"project_id"`
-	Rollouts  []EnvRolloutResponse `json:"rollouts"`
-	Message   string               `json:"message,omitempty"`
+	ChannelID string                    `json:"channel_id,omitempty"`
+	ProjectID string                    `json:"project_id"`
+	Rollouts  []EnvRolloutResponse      `json:"rollouts"`
+	Message   string                    `json:"message,omitempty"`
+	Audit     *EnvDispatchAuditResponse `json:"audit,omitempty"`
+}
+
+// EnvDispatchAuditResponse is the public locator for a server-owned audit
+// report. It deliberately does not echo audit request fields or accept caller
+// controlled identifiers.
+type EnvDispatchAuditResponse struct {
+	AuditID             string    `json:"audit_id"`
+	ReportURL           string    `json:"report_url"`
+	ReclamationDeadline time.Time `json:"reclamation_deadline"`
+}
+
+// envDispatchAuditResponseFromReport projects the response locator from the
+// stored server record. T012 attaches this only when an audit run exists.
+func envDispatchAuditResponseFromReport(report service.EnvDispatchAuditReport) *EnvDispatchAuditResponse {
+	return &EnvDispatchAuditResponse{
+		AuditID:             report.AuditID,
+		ReportURL:           "/api/v1/env-dispatch/audits/" + report.AuditID,
+		ReclamationDeadline: report.ReclamationDeadline,
+	}
 }
 
 type EnvRolloutResponse struct {

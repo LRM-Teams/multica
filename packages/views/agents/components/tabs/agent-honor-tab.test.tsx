@@ -1,14 +1,35 @@
 // @vitest-environment jsdom
 
-import { render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import enAgents from "../../../locales/en/agents.json";
-import { AchievementCard } from "./agent-honor-tab";
+import { AchievementCard, AgentHonorAdminContent } from "./agent-honor-tab";
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "workspace-1",
+}));
+
+vi.mock("@tanstack/react-query", () => ({
+  useMutation: () => ({ mutate: vi.fn(), isPending: false }),
+  useQuery: vi.fn(),
+  useQueryClient: () => ({
+    invalidateQueries: vi.fn(),
+    setQueryData: vi.fn(),
+  }),
+}));
 
 vi.mock("../../../i18n", () => ({
   useT: () => ({
-    t: (selector: (bundle: typeof enAgents) => unknown) =>
-      String(selector(enAgents) ?? ""),
+    t: (
+      selector: (bundle: typeof enAgents) => unknown,
+      options?: Record<string, string | number>,
+    ) => {
+      const template = selector(enAgents);
+      if (typeof template !== "string") return String(template ?? "");
+      return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) =>
+        String(options?.[key] ?? `{{${key}}}`),
+      );
+    },
   }),
   useTimeAgo: () => () => "just now",
 }));
@@ -39,5 +60,67 @@ describe("AchievementCard", () => {
 
     expect(container.querySelector('[data-agent-honor-level="1"]')).toBeInTheDocument();
     expect(container.querySelector("svg[aria-label='First Launch']")).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentHonorAdminContent", () => {
+  it("gives every achievement and manual correction control an accessible name", () => {
+    render(
+      <AgentHonorAdminContent
+        agent={{ id: "agent-1" }}
+        rulesView={{
+          revision: 1,
+          rules: {
+            version: "test",
+            completion_xp: 25,
+            fleet_window_days: 30,
+            fleet_min_sample_tasks: 3,
+            fleet_weights: {
+              delivery: 0.25,
+              evolution: 0.25,
+              growth: 0.25,
+              efficiency: 0.25,
+            },
+            fleet_classes: [],
+            achievement_targets: { first_launch: 1 },
+            achievement_enabled: { first_launch: true },
+            changelog: [],
+          },
+          achievements: [
+            {
+              id: "first_launch",
+              title: "First Launch",
+              description: "Complete the first accepted task.",
+              svg_key: "agent_armor_first_launch",
+              category: "delivery",
+              metric: "completed",
+              target: 1,
+              xp_reward: 25,
+              rarity: 10,
+              secret: false,
+            },
+          ],
+        }}
+        audit={[]}
+      />,
+    );
+
+    expect(screen.getByRole("switch", { name: "Enable First Launch" })).toBeVisible();
+    expect(
+      screen.getByRole("spinbutton", { name: "First Launch target" }),
+    ).toBeVisible();
+    const correctionType = screen.getByRole("combobox", {
+      name: "Correction type",
+    });
+    expect(correctionType).toBeVisible();
+    expect(
+      screen.getByRole("spinbutton", { name: "Experience adjustment" }),
+    ).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Audit reason" })).toBeVisible();
+
+    fireEvent.change(correctionType, { target: { value: "achievement" } });
+    expect(
+      screen.getByRole("combobox", { name: "Select achievement" }),
+    ).toBeVisible();
   });
 });

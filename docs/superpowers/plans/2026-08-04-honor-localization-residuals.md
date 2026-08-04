@@ -27,3 +27,8 @@
 
 - `memory_growth` 中的 `Next` / `writes` 属于记忆成长模块，不混入荣誉系统 PR；后续作为独立汉化项处理。
 - 不修改服务端字段名、API 的 `xp` 标识或代码变量名；只处理用户可见文案。
+
+## 提交
+
+- [x] 非草稿 PR：[#2148](https://github.com/LRM-Teams/multica/pull/2148)，目标分支 `dev`。
+- [x] PR 提交后不代替用户合并，继续处理下一项问题。

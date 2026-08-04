@@ -38,3 +38,4 @@ Replace every compact Agent honor badge that still renders the legacy fleet-clas
 - [x] `@multica/ui` and `@multica/views` TypeScript checks passed.
 - [x] UI and views lint passed with zero errors; 11 warnings are pre-existing files outside this change.
 - [x] React Doctor scanned 18 changed React files and reported 0 issues.
+- [x] First full test run exposed four failures in one DM test file: its complete `useActorName` mock omitted the newly consumed `getAgentHonorLevel` method. Production always provides the method, so only the test contract was corrected; no production fallback was added.

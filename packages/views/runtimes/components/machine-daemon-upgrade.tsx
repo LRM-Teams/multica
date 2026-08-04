@@ -69,18 +69,9 @@ export function MachineDaemonUpgrade({
 
   useEffect(() => () => cleanup(), [cleanup]);
 
-  // Local poll status sticks at "completed" after the interval stops. Clear it
-  // once the refreshed runtime version has caught the target so we don't pin
-  // 「正在重启并切换版本…」 forever.
-  useEffect(() => {
-    if (status !== "completed") return;
-    const aim = targetVersion ?? lastAttemptTarget;
-    if (!aim || !currentVersion) return;
-    if (!isNewerCliVersion(aim, currentVersion)) {
-      setStatus(null);
-      setLastAttemptTarget(null);
-    }
-  }, [status, targetVersion, lastAttemptTarget, currentVersion]);
+  // Do NOT useEffect-clear local poll status when version catches up —
+  // react-doctor flags that. isApplying / isActive already gate chrome on
+  // versionsCaughtUp below (Frank stuck 「正在重启并切换版本…」).
 
   const refreshRuntimes = useCallback(() => {
     qc.invalidateQueries({

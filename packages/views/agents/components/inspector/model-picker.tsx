@@ -163,7 +163,7 @@ export function ModelPicker({
           </PickerItem>
         ))}
 
-      {!modelsQuery.isLoading && filtered.length === 0 && (
+      {modelsQuery.isSuccess && filtered.length === 0 && (
         <p className="px-3 py-3 text-center text-xs text-muted-foreground">
           {customModelIdSupported
             ? t(($) => $.pickers.model_empty_custom_hint)
@@ -171,7 +171,7 @@ export function ModelPicker({
         </p>
       )}
 
-      {!modelsQuery.isLoading && customModelIdSupported && (
+      {modelsQuery.isSuccess && customModelIdSupported && (
         <CustomModelIdRow dense onSubmit={(id) => void select(id)} />
       )}
 

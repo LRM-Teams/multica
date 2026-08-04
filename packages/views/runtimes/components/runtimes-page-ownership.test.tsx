@@ -32,7 +32,10 @@ vi.mock("../../common/actor-avatar", () => ({
   ),
 }));
 
-import { MachineListView } from "./runtimes-page";
+import {
+  attentionMachineIdFromRuntime,
+  MachineListView,
+} from "./runtimes-page";
 import {
   defaultDesktopSelectedMachineId,
   isMineMachine,
@@ -205,6 +208,36 @@ describe("defaultDesktopSelectedMachineId — LRM-1094", () => {
   it("returns null when there is no Mine machine (no Team public fallback)", () => {
     const machines = [makeMachine("team", "Team box", "user-other")];
     expect(defaultDesktopSelectedMachineId(machines, "user-mine")).toBeNull();
+  });
+});
+
+describe("attentionMachineIdFromRuntime — LRM-1396", () => {
+  it("selects the current user's attention machine", () => {
+    const mine = makeMachine("mine", "Mine", "user-mine");
+    mine.runtimes[0]!.runtime_health = "update_available";
+    mine.runtimes[0]!.target_version = "1.1.0";
+
+    expect(
+      attentionMachineIdFromRuntime(
+        [mine],
+        mine.runtimes[0]!.id,
+        "user-mine",
+      ),
+    ).toBe("mine");
+  });
+
+  it("rejects another owner's runtime even when its update is visible", () => {
+    const theirs = makeMachine("theirs", "Theirs", "user-other");
+    theirs.runtimes[0]!.runtime_health = "update_available";
+    theirs.runtimes[0]!.target_version = "1.1.0";
+
+    expect(
+      attentionMachineIdFromRuntime(
+        [theirs],
+        theirs.runtimes[0]!.id,
+        "user-mine",
+      ),
+    ).toBeNull();
   });
 });
 

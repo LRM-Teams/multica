@@ -1,39 +1,44 @@
 ---
 name: multica-creating-agents
-description: "Use when creating, inspecting, or debugging a Multica agent through the `multica agent` CLI or `POST /api/agents` — what each field is, its persisted shape, whether it is metadata-only or consumed by the daemon at claim time, which inputs are validated/rejected, how custom_env secrets are gated, and how skill binding behaves. Not for assigning issues to existing agents or for runtime task prompts."
+description: "Use when creating, inspecting, or debugging Multica agents via Web UI / HTTP (`POST /api/agents`) — field contracts, env gating, skill binding. There is no multica agent management CLI; list with workspace info --agents."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
 
 # Creating Multica agents
 
-This is the contract for Multica's agent-creation path: what the create entry
-points accept, what the server validates and rejects, how each field is
-persisted, and which fields the daemon actually reads at claim time. It is
-not a parameter manual — it states source-traced facts, and every claim is
-backed by `file:line` in `references/creating-agents-source-map.md`.
+This is the contract for Multica's agent-creation path: what create entry points
+accept, what the server validates and rejects, how each field is persisted, and
+which fields the daemon reads at claim time. It is not a parameter manual — it
+states source-traced facts, and every claim is backed by `file:line` in
+`references/creating-agents-source-map.md`.
 
-## Quick start (read-only inspection)
+## Surface (current)
 
-These commands read state and have no side effects:
+**There is no `multica agent *` management CLI** (get/create/update/archive/skills/env
+removed). Use real replacements:
+
+| Need | Surface |
+|---|---|
+| List agents | `multica workspace info --agents` / `--output json` |
+| Create / edit / archive | Multica **Web UI** → `POST/PUT/DELETE /api/agents` |
+| Hire (agent → human) | **agent:create action card** (product path in flight) → human opens CreateAgentDialog |
+| Skill binding | Web UI agent settings → `POST/PUT /api/agents/{id}/skills…` |
+| Env secrets (owner/admin) | Web UI → `GET/PUT /api/agents/{id}/env` (agent actors denied plaintext) |
+
+Read-only list (no side effects):
 
 ```bash
-multica agent get <agent-id> --output json      # full persisted agent record
-multica agent skills list <agent-id> --output json   # current skill bindings
-multica agent env get <agent-id> --output json  # plaintext env (owner/admin only, agents denied)
+multica workspace info --agents --output json
 ```
-
-`agent get` returns the persisted agent including `runtime_id`, `model`,
-`thinking_level`, `avatar_url`, `avatar_source`, `custom_args`,
-`has_custom_env`, `custom_env_key_count`, and `skills`. It never returns
-plaintext `custom_env`.
 
 ## Core model
 
 An agent is a workspace-scoped row (table `agent`). Creation is a single
-`POST /api/agents` (`multica agent create`). At task claim time the daemon
-re-reads the agent row and assembles the runtime payload — so the persisted
-fields, not the create-time output, are what the agent runs on.
+`POST /api/agents` from the Web UI (or a human-confirmed action card that opens
+the same dialog). At task claim time the daemon re-reads the agent row and
+assembles the runtime payload — so the **persisted** fields, not create-time
+CLI output, are what the agent runs on.
 
 Two distinct text fields, often confused:
 
@@ -45,201 +50,131 @@ Two distinct text fields, often confused:
   Persona, responsibilities, boundaries, output and escalation rules go here,
   not in `description`.
 
-## CLI / API entry points
+## Create entry points
 
-Minimum CLI create call (`--name` and `--runtime-id` are both required):
-
-```bash
-multica agent create --name <name> --runtime-id <runtime-id> \
-  --description "<short catalog summary>" \
-  --instructions "<runtime behavior contract>" \
-  --output json
-```
+Human create goes through Web UI Create Agent (or agent:create card → same
+dialog). The dialog posts to `POST /api/agents`.
 
 On current servers, `name` is the stable handle (`@handle`) in persisted API
-responses. The CLI's `--name` flag is legacy input: the server treats it as a
-display seed, writes that human-facing value to `display_name`, and derives a
-unique workspace-scoped handle in `agent.name`. New HTTP clients may send
-`display_name` explicitly; old clients that rename with `name` update
-`display_name`, not the handle.
+responses. Create accepts legacy `name` or new `display_name` as display seed;
+the server derives a unique workspace-scoped handle in `agent.name`.
 
-`runAgentCreate` builds a JSON body and posts it to `/api/agents`. It only
-adds a key when its flag was provided — `description`/`instructions` on a
-non-empty value, the rest (`runtime-config`, `custom-args`, `model`,
-`visibility`, …) on the flag being `Changed` — so omitted flags fall through
-to server defaults rather than sending empty strings.
-
-The HTTP body (`CreateAgentRequest`) accepts: `name`, `description`,
-`display_name`, `description`, `instructions`, `runtime_id`, `runtime_config`,
-`avatar_selection`, `custom_env`, `custom_args`, `model`, `thinking_level`, `visibility`,
-`max_concurrent_tasks`, `mcp_config`.
+The HTTP body (`CreateAgentRequest`) accepts: `name`, `display_name`,
+`description`, `instructions`, `runtime_id`, `runtime_config`,
+`avatar_selection`, `custom_env`, `custom_args`, `model`, `thinking_level`,
+`visibility`, `max_concurrent_tasks`, `mcp_config`.
 
 ## Field contracts
 
 | Field | Persisted as | Validated? | Consumed by |
 |---|---|---|---|
-| `name` | `agent.name` (derived handle) + `agent.display_name` (legacy display seed) | create requires either `name` or `display_name`; generated handle is unique per workspace | handle routing / bare @handle fallback |
+| `name` | `agent.name` (derived handle) + display seed | create requires either `name` or `display_name`; handle unique per workspace | handle routing / bare @handle fallback |
 | `display_name` | `agent.display_name` | create requires either `name` or `display_name`; update rejects empty | listings, runtime payload labels |
 | `description` | `agent.description` | 400 if > 255 code points | catalog/listing only — NOT the runtime prompt |
 | `instructions` | `agent.instructions` | none | daemon → provider at claim time |
-| `avatar_selection` | server-derived `agent.avatar_url`, `agent.avatar_source`, and optional `agent.avatar_attachment_id` | omit on create → one concrete `assigned` preset; omit on update → no change; `picked` accepts only a canonical 24-preset path; `uploaded` accepts only an owned, workspace-local, unbound image attachment id | durable member identity on every surface; reads use the persisted URL/source and never infer provenance from URL shape |
-| `runtime_id` | `agent.runtime_id` | required (400) + must resolve to a runtime in this workspace | selects runtime/provider |
+| `avatar_selection` | server-derived `avatar_url` / `avatar_source` / optional attachment | omit create → assigned preset; omit update → no change; picked/uploaded verified | durable member identity |
+| `runtime_id` | `agent.runtime_id` | required (400) + must resolve in workspace | selects runtime/provider |
 | `model` | `agent.model` (nullable) | none beyond runtime support | daemon reads; empty = runtime default |
-| `thinking_level` | `agent.thinking_level` (nullable) | provider-level enum; unknown literal → 400 | daemon; empty = runtime default |
-| `custom_args` | `agent.custom_args` (JSON array) | JSON shape checked CLI-side; server stores as-is | daemon (extra CLI switches); defaults to `[]` |
-| `runtime_config` | `agent.runtime_config` (JSON) | JSON shape checked CLI-side; server stores as-is | runtime-specific config; defaults to `{}` |
-| `custom_env` | `agent.custom_env` (JSON object) | — | daemon (process env); see Env & secrets |
-| `mcp_config` | `agent.mcp_config` (raw JSON) | CLI checks it is a JSON object or `null`; server stores as-is. At create, literal `null` is dropped (no-op); at update, `null` clears the column | daemon → provider (MCP servers) — **runtime-consumed**; redacted on read |
-| `visibility` | `agent.visibility` | — | access control; defaults to `private`; gates who can read/route a private agent (e.g. a private squad leader) — NOT the runtime prompt |
-| `max_concurrent_tasks` | `agent.max_concurrent_tasks` | — | scheduler task cap; defaults to `6` |
+| `thinking_level` | `agent.thinking_level` (nullable) | provider-level enum; unknown → 400 | daemon; empty = runtime default |
+| `custom_args` | JSON array | shape checked client-side; server stores as-is | daemon (extra CLI switches); defaults `[]` |
+| `runtime_config` | JSON | shape checked client-side; server stores as-is | runtime-specific; defaults `{}` |
+| `custom_env` | JSON object | — | daemon process env; see Env & secrets |
+| `mcp_config` | raw JSON | object or `null`; create drops literal `null` | daemon MCP; redacted on read |
+| `visibility` | string | — | access control; default `private` |
+| `max_concurrent_tasks` | int | — | scheduler cap; default `6` |
 
-Defaults when omitted: `display_name` falls back to the legacy `name` seed,
-`runtime_config` → `{}`, `custom_env` → `{}`, `custom_args` → `[]`,
-`visibility` → `private`, `max_concurrent_tasks` → `6`; omitted
-`avatar_selection` receives one concrete persisted preset at the database
-write boundary with `avatar_source=assigned`. Raw `avatar_url` is rejected on
-create and update. `custom_args`/`runtime_config` are typed
-`[]string`/`any` and marshaled as-is — the JSON-shape rejection happens in the
-CLI, not the create handler.
+Defaults when omitted: `display_name` from legacy `name` seed, `runtime_config`
+→ `{}`, `custom_env` → `{}`, `custom_args` → `[]`, `visibility` → `private`,
+`max_concurrent_tasks` → `6`; omitted `avatar_selection` gets one concrete
+preset with `avatar_source=assigned`. Raw `avatar_url` is rejected.
 
-`thinking_level` is validated only at the provider level: an unrecognized
-literal returns 400, but a value that is valid for the provider yet
-unsupported for the chosen model is NOT rejected here — that gap surfaces as a
-daemon-side task error at execution time.
+`thinking_level` is validated only at the provider level: unrecognized literal
+→ 400; a value valid for the provider but unsupported for the chosen model is
+NOT rejected at create — that surfaces as a daemon task error at run time.
 
 ### model vs custom_args
 
 `model` is a first-class persisted column the daemon reads directly.
-`custom_args` are raw provider CLI args. The CLI help notes that some providers
-(codex app-server, openclaw) reject `--model` inside `custom_args` — but that is
-documented CLI guidance, not a server-enforced invariant; nothing in the create
-handler inspects `custom_args` for a model flag.
+`custom_args` are raw provider CLI args. Some providers reject `--model` inside
+`custom_args` — that is client guidance, not a server-enforced invariant.
 
 ## Env & secrets
 
-`custom_env` is secret material. The CLI offers three input channels; two keep
-secrets out of shell history and the process list:
+`custom_env` is secret material. Humans set it in Web UI agent settings (or
+owner/admin HTTP). Never put secrets in shell history or process lists.
 
-```bash
-multica agent create --name <name> --runtime-id <runtime-id> --custom-env-stdin --output json
-multica agent create --name <name> --runtime-id <runtime-id> --custom-env-file <0600-json> --output json
-```
+Read-side facts:
 
-`--custom-env-stdin` reads the JSON object from stdin; `--custom-env-file`
-reads it from a file (suggested mode 0600). The third channel,
-`--custom-env <json>`, puts the value on the command line where shell history
-and `ps` can see it — avoid it for real secrets.
-
-Read-side facts (these are the wrong assumptions to avoid):
-
-- Agent resources never expose plaintext `custom_env`. `agent
-  list/get/create/update` and WS events return only `has_custom_env` (bool) and
-  `custom_env_key_count` (int).
-- Reading plaintext values requires the dedicated `GET /api/agents/{id}/env`
-  endpoint (`multica agent env get`). It is gated to workspace **owner/admin**
-  members, and **agent actors are denied** regardless of the backing member's
-  role — a running agent cannot read another agent's secrets.
-- Writing values after creation does NOT go through `agent update`. The generic
-  update handler rejects any `custom_env` field with a 400 ("use PUT
-  /api/agents/{id}/env"). Plaintext env writes are handled by
-  `PUT /api/agents/{id}/env` (`multica agent env set`), which is owner/admin-only
-  and writes an audit row.
+- Agent resources never expose plaintext `custom_env`. List/get/create/update
+  and WS events return only `has_custom_env` (bool) and `custom_env_key_count`
+  (int).
+- Reading plaintext requires `GET /api/agents/{id}/env`. Gated to workspace
+  **owner/admin**; **agent actors are denied** regardless of member role.
+- Writing after create does NOT go through generic agent update. That handler
+  rejects `custom_env` with 400 ("use PUT /api/agents/{id}/env"). Writes go to
+  `PUT /api/agents/{id}/env` (owner/admin, audited).
 
 ### mcp_config
 
-`mcp_config` is the agent's MCP server configuration (a JSON object such as
-`{"mcpServers": {…}}`). It is also secret material — MCP entries routinely embed
-API tokens — and offers the same three input channels as `custom_env`, on BOTH
-`agent create` and `agent update`:
+`mcp_config` is MCP server configuration (JSON object such as
+`{"mcpServers": {…}}`). Also secret-ish (tokens). Differs from `custom_env`:
 
-```bash
-multica agent create --name <name> --runtime-id <runtime-id> --mcp-config-file <0600-json> --output json
-multica agent update <agent-id> --mcp-config-stdin --output json
-multica agent update <agent-id> --mcp-config 'null'   # clears the config
-```
-
-`--mcp-config-stdin` / `--mcp-config-file` keep the value out of shell history
-and `ps`; the inline `--mcp-config <json>` does not. The CLI requires a JSON
-**object** or the literal `null`; a top-level array or primitive is rejected
-client-side, and empty stdin/file input errors rather than silently clearing.
-
-Two ways `mcp_config` differs from `custom_env`:
-
-- **It IS settable through `agent update`.** Unlike `custom_env`, `mcp_config`
-  has no dedicated audited endpoint — the generic `PUT /api/agents/{id}` accepts
-  it. Tri-state per the raw request body: field omitted → no change; `null` →
-  clear; object → replace.
-- **It is serialized on read, but redacted.** `agent get`/`list` return
-  `mcp_config` only to callers allowed to view agent secrets; otherwise the
-  field is `null` and `mcp_config_redacted` is `true`. Agent actors never see
-  it, and a workspace may force redaction for everyone.
+- **It IS settable through generic agent update** (`PUT /api/agents/{id}`):
+  omit → no change; `null` → clear; object → replace. No dedicated env endpoint.
+- **Serialized on read but redacted** for callers not allowed to view secrets;
+  agent actors never see plaintext MCP config.
 
 ## Skill binding
 
 Creating an agent does NOT bind any workspace skill — binding is a separate
-call after the agent exists. Two distinct verbs:
+operation after the agent exists (Web UI settings or human HTTP):
 
-- `add` is additive — it merges the given ids with existing bindings
+- **add** is additive — merges given ids with existing bindings
   (`POST /api/agents/{id}/skills/add`).
-- `set` is replace-all — it overwrites the entire binding list with exactly
-  the given ids (`PUT /api/agents/{id}/skills`); `--skill-ids ''` clears all.
+- **set** is replace-all — overwrites the entire binding list
+  (`PUT /api/agents/{id}/skills`); empty list clears all. `set` is the
+  replacement path.
 
-```bash
-multica agent skills add <agent-id> --skill-ids <skill-id> --output json
-multica agent skills list <agent-id> --output json
+```text
+POST /api/agents/{id}/skills/add   body: { "skill_ids": ["..."] }
+PUT  /api/agents/{id}/skills       body: { "skill_ids": ["..."] }
+GET  /api/agents/{id}/skills       list current bindings
 ```
 
-At claim time the daemon assembles the agent's skills as workspace-bound skills
-FIRST, then appends the platform built-in skills. `LoadAgentSkills` loads each
-bound skill's content plus its supporting files; built-in skills are embedded
-at compile time and loaded from `SKILL.md` + sibling files. Both reach the
-provider as skill content — which is why capability belongs in a bound skill,
-not pasted into `instructions`.
+At claim time the daemon assembles workspace-bound skills first, then appends
+platform built-in skills. Capability belongs in a bound skill, not pasted into
+`instructions`.
 
 ## Side effects needing approval
 
-Read-only (safe): `agent get`, `agent skills list`, `agent env get`.
+Read-only (safe): `workspace info --agents`, Web UI agent detail, list skill
+bindings.
 
-State-changing (require an explicit instruction — do not run speculatively):
+State-changing (require explicit human instruction — do not run speculatively):
 
-- `multica agent create` — inserts a new agent row.
-- `multica agent skills add` / `set` — mutate bindings (`set` is destructive:
-  it drops bindings not in the new list).
-- `multica agent env set` — overwrites the full `custom_env` map and writes an
-  audit row.
+- Web UI / agent:create action card → inserts a new agent row.
+- Skill add / set → mutate bindings (`set` is destructive).
+- Env set → overwrites full `custom_env` and writes an audit row.
+
+Agents do **not** create other agents via CLI. Hire path = action card for a
+human. Research fleet hire is a separate specialty path.
 
 ## Common wrong assumptions
 
 - "`description` is the prompt." It is not — only `instructions` reaches the
-  runtime. A rich description with empty instructions yields a named shell with
-  no operating contract.
-- "`agent.name` is the display label." Not anymore. `agent.name` is the stable
-  handle. Render `display_name` when present and use `name` for routing /
-  bare-mention fallback.
-- "Create binds the agent's skills." It does not; bind explicitly afterward.
-- "`agent update` can rotate env." It cannot — it 400s on `custom_env`; use the
+  runtime.
+- "`agent.name` is the display label." `agent.name` is the stable handle;
+  render `display_name` when present.
+- "Create binds the agent's skills." It does not; bind afterward.
+- "Generic update can rotate env." It cannot — 400 on `custom_env`; use the
   env endpoint.
-- "`mcp_config` behaves like `custom_env` on update." It does not — `mcp_config`
-  IS settable via `agent update` (`--mcp-config`), with `--mcp-config null` to
-  clear; only `custom_env` is gated behind the dedicated env endpoint.
-- "`agent get` shows env values." It shows only `has_custom_env` and
-  `custom_env_key_count`.
-- "The default agent avatar is recomputed from the current pool on every
-  render." Current servers persist one concrete `avatar_url`; `avatar_source`
-  is exactly `assigned`, `picked`, or `uploaded`. Pool changes affect future
-  assignments only.
-- "Clients can classify an avatar by sending a URL." They cannot. Send
-  `avatar_selection={kind:"uploaded",attachment_id:"..."}` or
-  `{kind:"picked",preset_url:"/agent-avatars/human-NN.jpg"}`. The server
-  verifies the referenced fact and derives URL/source atomically; raw
-  `avatar_url` is a 400.
-- "An invalid `thinking_level`/`model` combo is caught at create." Only an
-  unknown provider-level literal is — model-specific gaps fail at run time.
-- "`set` and `add` are interchangeable for skills." `set` replaces all
-  bindings; using it when you meant `add` silently removes capabilities.
+- "`mcp_config` behaves like `custom_env` on update." It does not — mcp is
+  settable via generic update; only custom_env is gated behind `/env`.
+- "Agent list/get CLI still exists." It does not — use `workspace info --agents`
+  and Web UI / HTTP.
+- "`set` and `add` are interchangeable for skills." `set` replaces all bindings.
 
 ## References
 
-`references/creating-agents-source-map.md` maps every contract above to its
-`file:line` on the current tree, the runtime effect, and a safe read-only
-verification command.
+`references/creating-agents-source-map.md` maps contracts to `file:line` on the
+current tree (HTTP/handler focus after CLI removal).

@@ -105,10 +105,13 @@ describe("research fleet/live a11y static contract (LRM-1203)", () => {
     expect(src).toMatch(/<Users\b[\s\S]{0,80}aria-hidden/);
   });
 
-  it("source: live-stream article announces only while generating", () => {
+  it("source: live-stream article uses aria-busy while generating; no aria-live (LRM-1341)", () => {
     const src = readSrc("research-live-stream.tsx");
     expect(src).toMatch(/data-testid=["']research-live-stream["']/);
-    expect(src).toMatch(/aria-live=\{isGenerating\s*\?\s*["']polite["']\s*:\s*undefined\}/);
+    // Drawer already hosts the persistent live region (LRM-1225); this card must not
+    // re-announce stream tokens. Busy flag only while generating.
+    expect(src).toMatch(/aria-busy=\{isGenerating\s*\|\|\s*undefined\}/);
+    expect(src).not.toMatch(/aria-live/);
     expect(src).toMatch(/animate-pulse[\s\S]{0,40}aria-hidden/);
     expect(src).toMatch(/streaming_from/);
   });

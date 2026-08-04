@@ -73,7 +73,8 @@ vi.mock("@multica/core/workspace/hooks", () => ({
 
 // LRM-1264 R3 — panel imports preview/download leaf modules (not the TipTap barrel).
 vi.mock("../../editor/attachment-preview-modal", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../editor/attachment-preview-modal")>();
+  const actual =
+    await importOriginal<typeof import("../../editor/attachment-preview-modal")>();
   return {
     ...actual,
     useAttachmentPreview: () => ({
@@ -83,6 +84,10 @@ vi.mock("../../editor/attachment-preview-modal", async (importOriginal) => {
     }),
   };
 });
+vi.mock("../../editor/use-download-attachment", () => ({
+  useDownloadAttachment: () => download,
+}));
+
 vi.mock("../../editor/use-download-attachment", () => ({
   useDownloadAttachment: () => download,
 }));

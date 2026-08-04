@@ -711,5 +711,16 @@
     "retrying": "再試行中…",
     "waiting_network": "ネットワーク待機中",
     "waiting_network_hint": "復帰後に自動で読み込みます。白紙にはしません。"
+  },
+  "content_faces": {
+    "goal": "目標",
+    "operation_approach": "操作方針",
+    "research_approach": "調査方針",
+    "result": "調査結果",
+    "missing": "未提供",
+    "result_pending": "結果整理中",
+    "result_pending_detail": "整理中のため、表示可能な結果はまだありません。",
+    "result_failed": "今回は表示可能な結果なし",
+    "result_failed_detail": "今回は表示可能な結果がありませんでした。"
   }
 }

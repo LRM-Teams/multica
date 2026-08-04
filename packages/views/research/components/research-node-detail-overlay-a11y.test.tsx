@@ -26,6 +26,17 @@ vi.mock("../../i18n/use-t", () => ({
         },
         panel: { weight: "权重" },
         overlay: { detail_close: "关闭详情" },
+        content_faces: {
+          goal: "目标",
+          operation_approach: "操作思路",
+          research_approach: "调研思路",
+          result: "调研结果",
+          missing: "未提供",
+          result_pending: "结果整理中",
+          result_pending_detail: "正在整理，暂未形成可展示结果。",
+          result_failed: "本轮未产出可展示结果",
+          result_failed_detail: "本轮未产出可展示结果。",
+        },
       };
       return picker(keys as never);
     },

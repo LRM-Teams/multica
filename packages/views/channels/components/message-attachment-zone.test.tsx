@@ -36,6 +36,7 @@ vi.mock("../../editor/attachment", () => ({
     return null;
   },
 }));
+
 vi.mock("../../editor/attachment-download-context", () => ({
   AttachmentDownloadProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));

@@ -1,6 +1,6 @@
 ---
 name: multica-skill-importing
-description: "Use when a user provides a skill URL, slug, or clear intent to import/install a specific skill into the current Multica workspace. Teaches the workspace import API/CLI path (POST /api/skills/import), the supported URL source families, --on-conflict fail|overwrite|rename|skip behavior and structured import results, additive agent binding vs replace-all, and the reserved SKILL.md supporting-file rule. Do not use it to decide which skill the user needs, and never treat an external local installer like npx skills add as the final Multica install."
+description: "Use when a user provides a skill URL, slug, or clear intent to import/install a specific skill into the current Multica workspace. Teaches the workspace import API/CLI path (POST /api/skills/import), the supported URL source families, --on-conflict fail|overwrite|rename|skip behavior and structured import results, additive agent skill binding (HTTP/Web UI) vs replace-all, and the reserved SKILL.md supporting-file rule. Do not use it to decide which skill the user needs, and never treat an external local installer like npx skills add as the final Multica install."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -94,23 +94,24 @@ the relevant fields:
 Because the response is structured, read these returned fields instead of guessing
 whether the import succeeded.
 
-3. Agent-skill binding is a separate mutable operation. `add` preserves existing
+3. Agent-skill binding is a separate mutable operation (Web UI agent settings
+or human HTTP — agent skills CLI removed). `add` preserves existing
 assignments and appends the new id:
 
-```bash
-multica agent skills add <agent-id> --skill-ids <skill-id> --output json
-multica agent skills list <agent-id> --output json
+```text
+POST /api/agents/{id}/skills/add   body: { "skill_ids": ["<skill-id>"] }
+GET  /api/agents/{id}/skills       # list current bindings (verify after bind)
 ```
 
-After the final `multica agent skills list <agent-id> --output json`, verify the
-target skill id is present before claiming the skill is available to that agent.
+After the final list of bindings for that agent, verify the target skill id is
+present before claiming the skill is available to that agent.
 
 ## Additive add vs replace-all set
 
-`multica agent skills add` is additive: the server inserts the assignments without
-clearing existing ones (`AddAgentSkills`).
+`POST /api/agents/{id}/skills/add` is additive: the server inserts the assignments
+without clearing existing ones (`AddAgentSkills`).
 
-`multica agent skills set` is replace-all: the server clears every current
+`PUT /api/agents/{id}/skills` is replace-all: the server clears every current
 assignment, then re-adds exactly the ids you pass (`SetAgentSkills`).
 `set` is the replacement path. Passing only one id to `set` leaves the agent with
 only that one skill and drops every previous assignment.
@@ -216,8 +217,8 @@ The skill may exist locally, but Multica cannot manage it as a workspace skill.
 
 Incorrect agent binding for a normal add (replaces every existing assignment):
 
-Using `set` with only the new skill id wipes the agent's other skills. For an add,
-use `add`.
+Using `set` (`PUT /api/agents/{id}/skills`) with only the new skill id wipes the
+agent's other skills. For an add, use `POST .../skills/add`.
 
 Correct import:
 
@@ -226,11 +227,11 @@ multica skill import --url https://skills.sh/owner/repo/skill --output json
 ```
 
 Agent binding after import, when the caller intentionally wants to mutate that
-agent's skill assignments:
+agent's skill assignments: Web UI agent settings, or:
 
-```bash
-multica agent skills add <agent-id> --skill-ids <skill-id> --output json
-multica agent skills list <agent-id> --output json
+```text
+POST /api/agents/{id}/skills/add   body: { "skill_ids": ["<skill-id>"] }
+GET  /api/agents/{id}/skills
 ```
 
 ## References

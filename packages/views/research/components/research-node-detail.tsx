@@ -23,6 +23,7 @@ import { useMemo } from "react";
 import { useT } from "../../i18n/use-t";
 import { useOverlayPanelA11y } from "../hooks/use-overlay-panel-a11y";
 import { normalizeNodeStatusKey, visualForNodeType } from "../lib/node-visuals";
+import { ResearchNodeContentFaces } from "./research-node-content-faces";
 
 const EMPTY_SOURCES: ResearchSource[] = [];
 const EMPTY_MEMBERS: ResearchFleetMember[] = [];
@@ -422,6 +423,9 @@ function DetailBody({
       </header>
 
       <div className="space-y-4 p-4">
+        {/* LRM-1332: four content faces before run Objective/Method/Outcome. */}
+        <ResearchNodeContentFaces node={node} density="detail" />
+
         {runContext.objective ? (
           <section>
             <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">

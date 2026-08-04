@@ -1,31 +1,25 @@
 import { cn } from "../../lib/utils";
-import { fleetClassTone, fleetRankPennantClass } from "../../lib/fleet-class";
-import { FleetClassIcon } from "./fleet-class-icons";
+import { fleetRankPennantClass } from "../../lib/fleet-class";
 
 export function FleetRankBadge({
-  classId,
   classLabel,
   fleetRank,
   frozen = false,
-  compact = false,
 }: {
-  classId: string;
   classLabel: string;
   fleetRank?: number;
   frozen?: boolean;
-  compact?: boolean;
 }) {
   return (
     <span
+      data-testid="fleet-rank-badge"
       className={cn(
-        "inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[11px] font-medium",
+        "inline-flex items-center gap-1 rounded-full border border-border/60 bg-background/65 px-2.5 py-1 text-xs font-medium text-foreground backdrop-blur-sm",
         frozen && "opacity-60 grayscale",
-        compact && "px-1 py-0",
       )}
       title={classLabel}
     >
-      <FleetClassIcon classId={classId} className={cn("size-4", fleetClassTone(classId))} title={classLabel} />
-      {!compact ? <span className={fleetClassTone(classId)}>{classLabel}</span> : null}
+      <span>{classLabel}</span>
       {fleetRank && fleetRank > 0 && fleetRank <= 3 ? (
         <span className="rounded px-1 text-[10px] font-semibold tabular-nums">#{fleetRank}</span>
       ) : null}

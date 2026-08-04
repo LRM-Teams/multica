@@ -430,7 +430,6 @@ export function AgentHonorTab({
                 {t(($) => $.honor_agent.level_value, { level: dashboard.level })}
               </span>
               <FleetRankBadge
-                classId={dashboard.fleet.class_id}
                 classLabel={fleetClassName(
                   dashboard.fleet.class_id,
                   dashboard.fleet.class_label,

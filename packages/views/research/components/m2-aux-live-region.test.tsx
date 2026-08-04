@@ -41,30 +41,42 @@ const M2 = {
   rail_summary_pending: "Summary pending",
   required: "Required",
   status: { open: "Open", covered: "Covered", gap: "Gap", dead: "Dead" },
+  strategy_title: "Which sources informed this research",
   strategy_label: "Source strategy",
-  strategy_hint: "General / domain layers",
-  strategy_empty_title: "No source strategy yet",
+  strategy_hint: "See what the conclusions drew on.",
+  strategy_empty_title: "No research evidence to show yet",
   strategy_empty_body: "Fleet will write sources.",
-  strategy_loading: "Summarising source layers…",
-  strategy_ready_live: "Source strategy ready",
-  strategy_error: "Source strategy failed to load",
+  strategy_loading: "Gathering research evidence",
+  strategy_partial: "Some evidence is in; research is still filling gaps",
+  strategy_ready_status: "Research evidence is ready",
+  strategy_ready_live: "Research evidence is ready",
+  strategy_error: "Could not load research evidence",
+  strategy_expect_1: "Source layers",
+  strategy_expect_2: "Adoption reasons",
+  strategy_expect_3: "Sample links",
   strategy_sample_count: "samples",
   strategy_summary_pending: "Summary pending",
-  layer_general: "General",
-  layer_domain: "Domain",
+  layer_general: "General reference",
+  layer_domain: "Domain evidence",
   why_label: "Why here:",
+  boundary_primary_title: "What humans and Agents each own",
   boundary_title: "Human / AI boundary",
-  boundary_hint: "Roles and constraints",
-  boundary_chip: "Coexists with report",
-  boundary_empty_title: "No boundary conclusion yet",
+  boundary_hint: "Clarify Agent assist vs human confirmation.",
+  boundary_chip: "Confirm before delivery",
+  boundary_empty_title: "No collaboration split to show yet",
   boundary_empty_body: "Delivery stage fills this in.",
-  boundary_loading: "Assembling the boundary…",
-  boundary_ready_live: "Human / AI boundary ready",
-  boundary_error: "Boundary failed to load",
+  boundary_loading: "Clarifying roles and constraints",
+  boundary_partial: "Some evidence is in; research is still filling gaps",
+  boundary_ready_status: "Collaboration split is clear",
+  boundary_ready_live: "Collaboration split is clear",
+  boundary_error: "Could not load the collaboration split",
+  boundary_expect_1: "Agent limits",
+  boundary_expect_2: "Human confirmation",
+  boundary_expect_3: "How they collaborate",
   boundary_summary_pending: "Pending",
-  boundary_matrix_label: "Human vs AI",
-  ai_ceiling: "AI ceiling",
-  must_human: "Must be human",
+  boundary_matrix_label: "How humans and Agents collaborate",
+  ai_ceiling: "Agent limits",
+  must_human: "Needs human confirmation",
   col_human: "Human",
   col_ai: "AI",
 };
@@ -139,7 +151,7 @@ const CASES: Case[] = [
       render(<HumanBoundaryCard model={EMPTY_BOUNDARY} sessionStatus="running" />),
     rerenderReady: (r) =>
       r.rerender(
-        <HumanBoundaryCard model={READY_BOUNDARY} sessionStatus="running" />,
+        <HumanBoundaryCard model={READY_BOUNDARY} sessionStatus="done" />,
       ),
     rerenderEmpty: (r) =>
       r.rerender(<HumanBoundaryCard model={EMPTY_BOUNDARY} sessionStatus="done" />),
@@ -155,7 +167,7 @@ const CASES: Case[] = [
       render(<SourceStrategyStrip model={EMPTY_STRATEGY} sessionStatus="running" />),
     rerenderReady: (r) =>
       r.rerender(
-        <SourceStrategyStrip model={READY_STRATEGY} sessionStatus="running" />,
+        <SourceStrategyStrip model={READY_STRATEGY} sessionStatus="done" />,
       ),
     rerenderEmpty: (r) =>
       r.rerender(<SourceStrategyStrip model={EMPTY_STRATEGY} sessionStatus="done" />),
@@ -217,6 +229,44 @@ describe("M2 aux cards keep a persistent live region (LRM-1201)", () => {
         "false",
       );
 
+      r.unmount();
+    });
+
+    it(`${c.name}: loading → partial → ready keeps the same live node (LRM-1282)`, () => {
+      if (c.rootTestId === "exploration-rail") return;
+
+      const r = c.renderLoading();
+      const liveBefore = screen.getByTestId(c.liveTestId);
+      expect(liveBefore.textContent).toBe(c.loadingText);
+
+      if (c.rootTestId === "human-boundary-card") {
+        r.rerender(
+          <HumanBoundaryCard model={READY_BOUNDARY} sessionStatus="running" />,
+        );
+        expect(screen.getByTestId(c.liveTestId)).toBe(liveBefore);
+        expect(liveBefore.textContent).toBe(M2.boundary_partial);
+        expect(screen.getByTestId(c.rootTestId).getAttribute("aria-busy")).toBe(
+          "false",
+        );
+        r.rerender(
+          <HumanBoundaryCard model={READY_BOUNDARY} sessionStatus="done" />,
+        );
+      } else {
+        r.rerender(
+          <SourceStrategyStrip model={READY_STRATEGY} sessionStatus="running" />,
+        );
+        expect(screen.getByTestId(c.liveTestId)).toBe(liveBefore);
+        expect(liveBefore.textContent).toBe(M2.strategy_partial);
+        expect(screen.getByTestId(c.rootTestId).getAttribute("aria-busy")).toBe(
+          "false",
+        );
+        r.rerender(
+          <SourceStrategyStrip model={READY_STRATEGY} sessionStatus="done" />,
+        );
+      }
+
+      expect(screen.getByTestId(c.liveTestId)).toBe(liveBefore);
+      expect(liveBefore.textContent).toBe(c.readyText);
       r.unmount();
     });
 

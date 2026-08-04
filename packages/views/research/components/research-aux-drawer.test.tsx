@@ -16,7 +16,7 @@ vi.mock("../../i18n/use-t", () => ({
       const keys = {
         panel: {
           module_trajectory: "搜索轨迹",
-          module_sources: "信源策略",
+          module_sources: "调研依据与协作分工",
           module_detail: "节点详情",
           aux_close: "关闭面板",
         },
@@ -95,8 +95,8 @@ describe("ResearchAuxDrawer desktop a11y (LRM-1100)", () => {
     expect(labelId).toBeTruthy();
     const label = document.getElementById(labelId as string);
     expect(label).not.toBeNull();
-    expect(label).toHaveTextContent("信源策略");
-    expect(screen.getByRole("complementary", { name: "信源策略" })).toBe(panel);
+    expect(label).toHaveTextContent("调研依据与协作分工");
+    expect(screen.getByRole("complementary", { name: "调研依据与协作分工" })).toBe(panel);
   });
 
   it("moves focus into the panel on open and restores it on close", async () => {

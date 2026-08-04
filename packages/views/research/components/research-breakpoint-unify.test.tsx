@@ -335,7 +335,7 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
       },
     );
 
-    it("source strategy strip grids at md (no sm:grid beside logic-strip)", () => {
+    it("source strategy strip uses auto-fit cards (360 drawer → one col; no sm:grid)", () => {
       setViewport(700);
       render(
         <SourceStrategyStrip
@@ -356,8 +356,9 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
         />,
       );
       const cards = screen.getByTestId("source-strategy-cards");
-      expect(cards.className).toMatch(/md:grid-cols-2/);
+      expect(cards.className).toMatch(/minmax\(15rem,1fr\)/);
       expect(cards.className).not.toMatch(/\bsm:grid-cols/);
+      expect(cards.className).not.toMatch(/md:grid-cols-3/);
     });
   });
 });

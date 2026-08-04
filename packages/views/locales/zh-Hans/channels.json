@@ -263,6 +263,7 @@
     "remove_confirm_title": "移除「{{name}}」？",
     "remove_confirm_description": "将立即失去本频道读写权限。",
     "remove_confirm": "确认移除",
+    "remove_confirming": "移除中…",
     "remove_cancel": "取消",
     "remove_failed": "移出失败，请重试。",
     "remove_retry": "重试",

@@ -263,6 +263,7 @@
     "remove_confirm_title": "「{{name}}」を削除しますか？",
     "remove_confirm_description": "このチャンネルの読み書き権限をすぐに失います。",
     "remove_confirm": "削除を確認",
+    "remove_confirming": "削除中…",
     "remove_cancel": "キャンセル",
     "remove_failed": "メンバーを削除できませんでした。もう一度お試しください。",
     "remove_retry": "再試行",

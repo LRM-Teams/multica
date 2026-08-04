@@ -1174,7 +1174,11 @@ function AgentPickerItem({
         enableHoverCard
         showStatusDot
       />
-      <ActorIdentityRow identity={agent} primaryClassName="truncate" />
+      <ActorIdentityRow
+        identity={agent}
+        agentHonorLevel={agent.honor_level}
+        primaryClassName="truncate"
+      />
     </PickerItem>
   );
 }

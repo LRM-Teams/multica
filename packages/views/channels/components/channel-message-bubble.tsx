@@ -593,7 +593,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     <ActorStyledName
       displayName={displayName}
       honor={authorHonor}
-      fleet={authorFleet}
       agentHonorLevel={authorHonorLevel}
       className="shrink-0 text-[13.5px] font-semibold text-foreground"
       nameClassName="whitespace-nowrap"

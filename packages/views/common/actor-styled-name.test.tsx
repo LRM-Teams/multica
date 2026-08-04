@@ -1,10 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ActorStyledName } from "./actor-styled-name";
-
-vi.mock("../agents/hooks/use-agent-fleet-class-name", () => ({
-  useAgentFleetClassName: () => (_classId: string, label: string) => label,
-}));
 
 describe("ActorStyledName", () => {
   it("uses the user's level crest instead of an equipped achievement on identity surfaces", () => {
@@ -36,5 +32,12 @@ describe("ActorStyledName", () => {
 
     expect(container.querySelector('[data-agent-honor-level="8"]')).not.toBeNull();
     expect(container.querySelector("[data-user-honor-level]")).toBeNull();
+  });
+
+  it("does not substitute another badge when the Agent honor level is unavailable", () => {
+    const { container } = render(<ActorStyledName displayName="Aegis" />);
+
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("Aegis")).toBeInTheDocument();
   });
 });

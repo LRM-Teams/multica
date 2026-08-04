@@ -195,6 +195,7 @@ export function AgentDetailOverview({
             <div className="flex items-center gap-2">
               <ActorIdentityRow
                 identity={agent}
+                agentHonorLevel={agent.honor_level}
                 primaryClassName={cn(
                   "truncate text-base font-semibold",
                   isArchived && "text-muted-foreground",

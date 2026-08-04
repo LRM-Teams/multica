@@ -365,6 +365,7 @@ function NameAndDescription({
       <div className="flex flex-col gap-1">
         <ActorIdentityRow
           identity={agent}
+          agentHonorLevel={agent.honor_level}
           primaryClassName="text-base font-semibold leading-tight"
           className="min-w-0"
         />
@@ -411,5 +412,4 @@ function NameAndDescription({
     </div>
   );
 }
-
 

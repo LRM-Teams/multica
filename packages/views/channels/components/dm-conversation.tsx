@@ -283,7 +283,7 @@ function DmHeader({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const openAgentPanel = useOpenAgentPanel();
-  const { getMemberHonor, getAgentFleetRank } = useActorName();
+  const { getMemberHonor, getAgentHonorLevel } = useActorName();
   const peerId = dm.peer.id;
   const peerType = dm.peer.type;
   const isMuted = isConversationMuted(dm);
@@ -333,7 +333,8 @@ function DmHeader({
     [isAgentPair, mutedBadge, t],
   );
   const peerHonor = !agentPair && peerType === "user" ? getMemberHonor(peerId) : undefined;
-  const peerFleet = !agentPair && peerType === "agent" ? getAgentFleetRank(peerId) : undefined;
+  const peerHonorLevel =
+    !agentPair && peerType === "agent" ? getAgentHonorLevel(peerId) : undefined;
   // LRM-749/LRM-710: header mirrors the DM list row — weak gray @handle next
   // to the peer name only while the display name collides in this workspace.
   const wsId = useWorkspaceId();
@@ -349,7 +350,7 @@ function DmHeader({
       <ActorStyledName
         displayName={dm.peer.name}
         honor={peerHonor}
-        fleet={peerFleet}
+        agentHonorLevel={peerHonorLevel}
         className="truncate text-sm font-semibold text-foreground"
       />
       {dupHandleLabel && (

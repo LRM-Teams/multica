@@ -18,7 +18,6 @@
     "./hooks/*": "./hooks/*.ts",
     "./lib/utils": "./lib/utils.ts",
     "./lib/fleet-class": "./lib/fleet-class.ts",
-    "./lib/fleet-badge-tone": "./lib/fleet-badge-tone.ts",
     "./components/fleet/*": "./components/fleet/*.tsx",
     "./lib/honor-glow": "./lib/honor-glow.ts",
     "./lib/honor-name-display": "./lib/honor-name-display.ts",

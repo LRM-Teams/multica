@@ -7,7 +7,6 @@ import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
 import { deriveRuntimeHealth, deriveRuntimeHealthPresentation, runtimeListOptions } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
-import { useActorName } from "@multica/core/workspace/hooks";
 import {
   formatActorHandleLabel,
   resolveActorDisplayName,
@@ -94,8 +93,6 @@ export function AgentSidePanel({
   // it is "who is this agent", which everyone may see now that agent
   // visibility is retired.
   const { canEdit, canViewSensitiveTabs } = useAgentPermissions(agent, agent.workspace_id);
-  const { getAgentFleetRank } = useActorName();
-  const fleetRank = getAgentFleetRank(agent.id);
   const canViewSensitive = canViewSensitiveTabs.allowed;
   const availableTabs: OwnerTab[] = ["profile"];
   if (canViewSensitive) availableTabs.push("activity");
@@ -194,7 +191,7 @@ export function AgentSidePanel({
         <div className="min-w-0 flex-1">
           <ActorStyledName
             displayName={displayName}
-            fleet={fleetRank}
+            agentHonorLevel={agent.honor_level}
             honorSurface="profile"
             className="text-base font-bold leading-tight text-foreground"
           />

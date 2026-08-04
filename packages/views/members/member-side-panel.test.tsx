@@ -175,6 +175,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
           model: "Claude Code",
           runtime_mode: "local",
           runtime_name: null,
+          honor_level: 8,
         },
         {
           id: "a2",
@@ -201,6 +202,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
     expect(screen.getByTestId("member-role-soft-pill").textContent).toContain("Owner");
     expect(screen.getByText("me@example.com")).toBeTruthy();
     expect(screen.getAllByTestId("member-created-agent-row")).toHaveLength(2);
+    expect(document.querySelector('[data-agent-honor-level="8"]')).toBeInTheDocument();
   });
 
   it("hides Message for self and shows (you)", () => {

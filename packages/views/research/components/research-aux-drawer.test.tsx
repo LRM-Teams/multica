@@ -165,6 +165,32 @@ describe("ResearchAuxDrawer desktop a11y (LRM-1100)", () => {
     expect(document.activeElement).toBe(remounted);
   });
 
+  it("keeps focusable controls inside the open desktop drawer (LRM-1290)", () => {
+    render(
+      <ResearchAuxDrawer panel="detail" onClose={() => {}}>
+        <button type="button">inside</button>
+      </ResearchAuxDrawer>,
+    );
+    const drawer = screen.getByTestId("research-aux-drawer");
+    expect(drawer.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
+    const focusables = drawer.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    expect(focusables.length).toBeGreaterThan(0);
+  });
+
+  it("marks the close lucide decorative under the labeled button (LRM-1290)", () => {
+    render(
+      <ResearchAuxDrawer panel="trajectory" onClose={() => {}}>
+        <span>body</span>
+      </ResearchAuxDrawer>,
+    );
+    const close = screen.getByRole("button", { name: "关闭面板" });
+    const icon = close.querySelector("svg");
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+  });
+
   it("keeps focus put when an unmounted aux trigger has no relocatable key (LRM-1177)", async () => {
     function Harness() {
       const [panel, setPanel] = useState<"sources" | null>(null);

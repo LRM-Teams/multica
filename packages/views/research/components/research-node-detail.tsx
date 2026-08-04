@@ -13,6 +13,7 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { X } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
+import { useOverlayPanelA11y } from "../hooks/use-overlay-panel-a11y";
 import { normalizeNodeStatusKey, visualForNodeType } from "../lib/node-visuals";
 
 const EMPTY_SOURCES: ResearchSource[] = [];
@@ -114,8 +115,9 @@ function DetailBody({
             onClick={onClose}
             className="absolute top-3 right-3 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
             aria-label={t(($) => $.overlay.detail_close)}
+            data-autofocus="true"
           >
-            <X className="size-4" />
+            <X className="size-4" aria-hidden />
           </button>
         ) : null}
         <div className={cn("mb-1 flex flex-wrap items-center gap-2", showClose && "pr-8")}>
@@ -225,6 +227,10 @@ function DetailBody({
  * LRM-797 / LRM-826:
  * - Desktop overlay-card: substantial detail card above Controls (not a tiny chip).
  * - Narrow: full-width bottom sheet.
+ *
+ * LRM-1290: overlay-card uses non-modal `<dialog open>` (not showModal), so it
+ * lacks native Escape/focus — reuse `useOverlayPanelA11y` like desktop asides.
+ * Narrow Sheet keeps Radix Esc/focus.
  */
 export function ResearchNodeDetail({
   node,
@@ -243,16 +249,22 @@ export function ResearchNodeDetail({
   const { t } = useT("research");
   const isMobile = useIsMobile();
   const mode = placement ?? (isMobile ? "sheet" : "overlay-card");
+  const { bindPanel } = useOverlayPanelA11y({
+    active: Boolean(open && mode === "overlay-card" && onClose),
+    onClose: onClose ?? (() => {}),
+  });
 
   if (!open) return null;
 
   if (mode === "overlay-card") {
     return (
       <dialog
+        ref={bindPanel}
         open
+        tabIndex={-1}
         data-testid="research-node-detail"
         data-placement="overlay-card"
-        className="relative m-0 flex max-h-[min(52vh,420px)] w-[min(100%,320px)] translate-none flex-col overflow-hidden rounded-xl border bg-card/95 p-0 shadow-lg backdrop-blur-md open:flex"
+        className="relative m-0 flex max-h-[min(52vh,420px)] w-[min(100%,320px)] translate-none flex-col overflow-hidden rounded-xl border bg-card/95 p-0 shadow-lg backdrop-blur-md outline-none open:flex"
         aria-label={t(($) => $.node.detail_hint)}
       >
         <div className="min-h-0 flex-1 overflow-y-auto">

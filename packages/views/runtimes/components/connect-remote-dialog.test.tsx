@@ -74,25 +74,24 @@ describe("ConnectRemoteDialog", () => {
     wsHandlers.clear();
   });
 
-  it("uses cloud setup commands by default", () => {
+  it("uses the current workspace in the cloud setup command", () => {
     const { baseElement } = renderDialog();
 
     expect(baseElement).toHaveTextContent(
       "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash",
     );
-    expect(baseElement).toHaveTextContent("multica setup");
+    expect(baseElement).toHaveTextContent("multica setup /workspace-test");
     expect(baseElement).not.toHaveTextContent("multica setup self-host");
   });
 
-  it("uses self-host daemon URLs from runtime config", () => {
+  it("does not expose the legacy self-host setup form", () => {
     const { baseElement } = renderDialog({
       daemonServerUrl: "https://api.example.com/",
       daemonAppUrl: "https://app.example.com/",
     });
 
-    expect(baseElement).toHaveTextContent(
-      "multica setup self-host --server-url https://api.example.com --app-url https://app.example.com",
-    );
+    expect(baseElement).toHaveTextContent("multica setup /workspace-test");
+    expect(baseElement).not.toHaveTextContent("multica setup self-host");
   });
 
   it("does not render the legacy Windows + WSL mode", () => {

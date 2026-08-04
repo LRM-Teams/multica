@@ -7,7 +7,6 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { runtimeKeys } from "@multica/core/runtimes/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
-import { useConfigStore } from "@multica/core/config";
 import {
   Dialog,
   DialogContent,
@@ -166,12 +165,9 @@ function CommandStep({
 function InstructionsStep({ onClose }: { onClose: () => void }) {
   const { t } = useT("runtimes");
   const [mode, setMode] = useState<DaemonSetupMode>(() => defaultDaemonSetupMode());
-  const daemonServerUrl = useConfigStore((s) => s.daemonServerUrl);
-  const daemonAppUrl = useConfigStore((s) => s.daemonAppUrl);
   const { installCmd, setupCmd } = daemonSetupCommands(
-    daemonServerUrl,
-    daemonAppUrl,
     mode,
+    useWorkspaceSlug(),
   );
   return (
     <>

@@ -20,13 +20,16 @@ import (
 var researchNodeCommandGraphNamespace = uuid.MustParse("6b1f0c2e-9a47-4d8f-b3e1-2f5a8c7d9041")
 
 type researchNodeCommandRequest struct {
-	Action                string          `json:"action"`
-	ClientRequestID       string          `json:"client_request_id"`
-	ExpectedStateVersion  *int64          `json:"expected_state_version"`
-	Objective             string          `json:"objective"`
-	GoalPatch             string          `json:"goal_patch"`
-	Strategy              string          `json:"strategy"`
-	SourceConstraints     json.RawMessage `json:"source_constraints"`
+	Action               string          `json:"action"`
+	ClientRequestID      string          `json:"client_request_id"`
+	ExpectedStateVersion *int64          `json:"expected_state_version"`
+	Objective            string          `json:"objective"`
+	GoalPatch            string          `json:"goal_patch"`
+	Strategy             string          `json:"strategy"`
+	StrategyPatch        string          `json:"strategy_patch"`
+	SourceConstraints    json.RawMessage `json:"source_constraints"`
+	SourcePatch          json.RawMessage `json:"source_patch"`
+	TargetAgentID        string          `json:"target_agent_id"`
 }
 
 func (h *Handler) PostResearchNodeCommand(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +120,10 @@ func (h *Handler) postResearchNodeCommand(w http.ResponseWriter, r *http.Request
 		Objective:            strings.TrimSpace(req.Objective),
 		GoalPatch:            strings.TrimSpace(req.GoalPatch),
 		Strategy:             strings.TrimSpace(req.Strategy),
+		StrategyPatch:        strings.TrimSpace(req.StrategyPatch),
 		SourceConstraints:    req.SourceConstraints,
+		SourcePatch:          req.SourcePatch,
+		TargetAgentID:        strings.TrimSpace(req.TargetAgentID),
 		AnchorKind:           anchor.Kind,
 		AnchorQuestionID:     anchor.QuestionID,
 		AnchorTaskID:         anchor.TaskID,
@@ -180,7 +186,10 @@ func (h *Handler) postResearchNodeCommand(w http.ResponseWriter, r *http.Request
 		"state_version":      outcome.StateVersion,
 		"question":           outcome.Question,
 		"task":               outcome.Task,
+		"attempt":            outcome.Attempt,
 		"parent_lineage":     outcome.ParentLineage,
+		"retry_lineage":      outcome.RetryLineage,
+		"reassign":           outcome.Reassign,
 		"assigned":           outcome.Assigned,
 		"queued":             outcome.Queued,
 	})
@@ -359,10 +368,16 @@ func optionalTaskID(t *researchrun.Task) string {
 }
 
 func nodeCommandTitle(action string, outcome researchrun.NodeCommandOutcome) string {
-	if action == researchrun.NodeActionFork {
+	switch action {
+	case researchrun.NodeActionFork:
 		return "从此分叉"
+	case researchrun.NodeActionRetry:
+		return "重试任务"
+	case researchrun.NodeActionReassign:
+		return "改派执行者"
+	default:
+		return "继续调研"
 	}
-	return "继续调研"
 }
 
 func nodeCommandBody(action string, outcome researchrun.NodeCommandOutcome) string {
@@ -373,16 +388,36 @@ func nodeCommandBody(action string, outcome researchrun.NodeCommandOutcome) stri
 	if obj == "" && outcome.Question != nil {
 		obj = strings.TrimSpace(outcome.Question.Question)
 	}
-	if action == researchrun.NodeActionFork {
+	switch action {
+	case researchrun.NodeActionFork:
 		if obj == "" {
 			return "已创建分叉问题并排队新任务"
 		}
 		return "已分叉：" + truncateForCard(obj, 80)
+	case researchrun.NodeActionRetry:
+		prev := ""
+		if outcome.RetryLineage != nil && outcome.RetryLineage.PreviousAttemptID != "" {
+			prev = "（保留原尝试）"
+		}
+		if obj == "" {
+			return "已重新排队失败任务" + prev
+		}
+		return "已重试：" + truncateForCard(obj, 80) + prev
+	case researchrun.NodeActionReassign:
+		to := ""
+		if outcome.Reassign != nil {
+			to = outcome.Reassign.ToAgentID
+		}
+		if to == "" {
+			return "已改派并重新排队"
+		}
+		return "已改派至 " + truncateForCard(to, 36)
+	default:
+		if obj == "" {
+			return "已沿当前问题追加任务并排队"
+		}
+		return "已续研：" + truncateForCard(obj, 80)
 	}
-	if obj == "" {
-		return "已沿当前问题追加任务并排队"
-	}
-	return "已续研：" + truncateForCard(obj, 80)
 }
 
 func truncateForCard(s string, max int) string {

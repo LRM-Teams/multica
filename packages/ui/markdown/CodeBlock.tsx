@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { codeToHtml, bundledLanguages, type BundledLanguage } from 'shiki'
+import type { BundledLanguage } from 'shiki'
 import { Copy, Check } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@multica/ui/components/ui/button"
@@ -39,17 +39,12 @@ const LANGUAGE_ALIASES: Record<string, BundledLanguage> = {
   objc: 'objc'
 }
 
-// Simple LRU cache for highlighted code
+// Simple LRU cache for highlighted code (LRM-1264: tighter cap).
 const highlightCache = new Map<string, string>()
-const CACHE_MAX_SIZE = 200
+const CACHE_MAX_SIZE = 50
 
 function getCacheKey(code: string, lang: string): string {
   return `${lang}:${code}`
-}
-
-function isValidLanguage(lang: string): lang is BundledLanguage {
-  const normalized = LANGUAGE_ALIASES[lang] || lang
-  return normalized in bundledLanguages
 }
 
 /**
@@ -92,8 +87,11 @@ export function CodeBlock({
       }
 
       try {
-        // Use valid language or fallback to plaintext
-        const lang = isValidLanguage(resolvedLang) ? resolvedLang : 'text'
+        // LRM-1264: dynamic import so the home shell does not pay for shiki
+        // until a code fence actually needs highlighting.
+        const { codeToHtml, bundledLanguages } = await import('shiki')
+        const normalized = (LANGUAGE_ALIASES[resolvedLang] || resolvedLang) as BundledLanguage
+        const lang = normalized in bundledLanguages ? normalized : 'text'
 
         // Dual themes: Shiki outputs CSS variables for both themes in one pass.
         // CSS handles switching via .dark selector (see globals.css).

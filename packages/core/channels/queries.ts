@@ -2,6 +2,7 @@ import { infiniteQueryOptions, queryOptions, type InfiniteData, type QueryClient
 import { api } from "../api";
 import type { ChannelMessage, ChannelMessagesPage, ChannelThreadMessagesPage, ListIssuesParams } from "../types";
 import { preferAuthorAvatarUrl } from "../workspace/avatar-url";
+import { CHANNEL_MESSAGE_GC_TIME_MS } from "./evict-inactive-caches";
 
 /**
  * Query params for the group-local Tasks projection (#562). Mirrors the API
@@ -77,6 +78,8 @@ export function channelMessagesOptions(channelId: string) {
       return preserveLocalSendMessages(previous, incoming);
     },
     enabled: !!channelId,
+    // LRM-1264: leave the heap sooner once the channel is inactive.
+    gcTime: CHANNEL_MESSAGE_GC_TIME_MS,
   });
 }
 
@@ -138,6 +141,8 @@ export function channelMessagesPageOptions(
       lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
     enabled: !!channelId,
     staleTime: Infinity,
+    // LRM-1264: leave the heap sooner once the channel is inactive.
+    gcTime: CHANNEL_MESSAGE_GC_TIME_MS,
   });
 }
 
@@ -450,6 +455,8 @@ export function channelMessageThreadOptions(
       };
     },
     enabled: !!channelId && !!messageId,
+    // LRM-1264: leave the heap sooner once the thread is inactive.
+    gcTime: CHANNEL_MESSAGE_GC_TIME_MS,
   });
 }
 
@@ -458,6 +465,7 @@ export function channelMessageSearchOptions(channelId: string, query: string, li
     queryKey: channelKeys.messageSearch(channelId, query, limit),
     queryFn: () => api.searchChannelMessages(channelId, query, limit),
     enabled: !!channelId && query.trim().length > 0,
+    gcTime: CHANNEL_MESSAGE_GC_TIME_MS,
   });
 }
 

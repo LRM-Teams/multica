@@ -154,13 +154,32 @@ func (h *Handler) latestRuntimeUpdate(ctx context.Context, rt db.AgentRuntime) *
 	return nil
 }
 
+// runtimeUpdateBatchStore is intentionally optional so custom/test stores that
+// only implement UpdateStore retain the single-runtime fallback.
+type runtimeUpdateBatchStore interface {
+	LatestForRuntimes(ctx context.Context, runtimeIDs []string) (map[string]*UpdateRequest, error)
+}
+
 func (h *Handler) runtimeUpdatesForList(ctx context.Context, runtimes []db.AgentRuntime) map[string]*UpdateRequest {
 	updates := make(map[string]*UpdateRequest, len(runtimes))
-	if h == nil || h.UpdateStore == nil {
+	if h == nil || h.UpdateStore == nil || len(runtimes) == 0 {
 		return updates
 	}
+
+	runtimeIDs := make([]string, 0, len(runtimes))
 	for _, rt := range runtimes {
-		runtimeID := uuidToString(rt.ID)
+		runtimeIDs = append(runtimeIDs, uuidToString(rt.ID))
+	}
+	if batchStore, ok := h.UpdateStore.(runtimeUpdateBatchStore); ok {
+		batch, err := batchStore.LatestForRuntimes(ctx, runtimeIDs)
+		if err != nil {
+			slog.Warn("failed to load runtime update states", "error", err)
+			return coalesceRuntimeUpdatesByDaemon(runtimes, updates)
+		}
+		return coalesceRuntimeUpdatesByDaemon(runtimes, batch)
+	}
+
+	for _, runtimeID := range runtimeIDs {
 		update, err := h.UpdateStore.LatestForRuntime(ctx, runtimeID)
 		if err != nil {
 			slog.Warn("failed to load runtime update state", "error", err, "runtime_id", runtimeID)

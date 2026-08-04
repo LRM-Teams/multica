@@ -1658,20 +1658,24 @@ func TestListTaskMessagesByUser_InboxEventProjectsActivityMessages(t *testing.T)
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(resp) != 3 {
-		t.Fatalf("expected phase status plus user-facing non-thinking messages, got %d: %+v", len(resp), resp)
+	// Task #121: thinking with content is projected alongside empty phase.
+	if len(resp) != 4 {
+		t.Fatalf("expected phase + thinking body + tool + text, got %d: %+v", len(resp), resp)
 	}
 	if resp[0].TaskID != eventID || resp[0].Seq != 1 || resp[0].Type != "thinking" || resp[0].Content != "" {
-		t.Fatalf("unexpected first message: %+v", resp[0])
+		t.Fatalf("unexpected phase message: %+v", resp[0])
 	}
-	if resp[1].TaskID != eventID || resp[1].Seq != 3 || resp[1].Type != "tool_use" || resp[1].Tool != "bash" {
-		t.Fatalf("unexpected tool projection: %+v", resp[1])
+	if resp[1].TaskID != eventID || resp[1].Seq != 2 || resp[1].Type != "thinking" || resp[1].Content != "Planning" {
+		t.Fatalf("unexpected thinking content: %+v", resp[1])
 	}
-	if got := fmt.Sprint(resp[1].Input["cmd"]); got != "raft message send --send-draft" {
+	if resp[2].TaskID != eventID || resp[2].Seq != 3 || resp[2].Type != "tool_use" || resp[2].Tool != "bash" {
+		t.Fatalf("unexpected tool projection: %+v", resp[2])
+	}
+	if got := fmt.Sprint(resp[2].Input["cmd"]); got != "raft message send --send-draft" {
 		t.Fatalf("projected tool input cmd = %q", got)
 	}
-	if resp[2].Seq != 4 || resp[2].Type != "text" || resp[2].Content != "Done" {
-		t.Fatalf("unexpected text projection: %+v", resp[2])
+	if resp[3].Seq != 4 || resp[3].Type != "text" || resp[3].Content != "Done" {
+		t.Fatalf("unexpected text projection: %+v", resp[3])
 	}
 
 	req = withURLParam(newRequest(http.MethodGet, "/api/tasks/"+eventID+"/messages?since=1", nil), "taskId", eventID)
@@ -1685,7 +1689,7 @@ func TestListTaskMessagesByUser_InboxEventProjectsActivityMessages(t *testing.T)
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode since response: %v", err)
 	}
-	if len(resp) != 2 || resp[0].Seq != 3 || resp[1].Seq != 4 {
+	if len(resp) != 3 || resp[0].Seq != 2 || resp[1].Seq != 3 || resp[2].Seq != 4 {
 		t.Fatalf("unexpected since projection: %+v", resp)
 	}
 }

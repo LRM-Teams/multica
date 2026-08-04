@@ -711,5 +711,16 @@
     "retrying": "재시도 중…",
     "waiting_network": "네트워크 대기 중",
     "waiting_network_hint": "연결되면 자동으로 불러옵니다. 빈 화면으로 두지 않습니다."
+  },
+  "content_faces": {
+    "goal": "목표",
+    "operation_approach": "운영 접근",
+    "research_approach": "조사 접근",
+    "result": "조사 결과",
+    "missing": "미제공",
+    "result_pending": "결과 정리 중",
+    "result_pending_detail": "정리 중이라 표시 가능한 결과가 아직 없습니다.",
+    "result_failed": "이번 라운드 표시 결과 없음",
+    "result_failed_detail": "이번 라운드에서 표시 가능한 결과가 없습니다."
   }
 }

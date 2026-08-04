@@ -216,7 +216,9 @@ describe("accessible name + live region merge", () => {
       status: "done",
       payload: { logic_lane: "source", low_confidence: true },
     });
-    expect(buildNodeAccessibleName(n)).toBe("探源，已完成，寻源轨，低置信");
+    expect(buildNodeAccessibleName(n)).toBe(
+      "探源，已完成，寻源轨，低置信，目标 未提供，操作思路 未提供，调研思路 未提供，调研结果 未提供",
+    );
   });
 
   it("mergeStatusAnnouncements collapses same-tick bursts", () => {

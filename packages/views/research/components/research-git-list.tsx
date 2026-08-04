@@ -11,11 +11,20 @@ import {
   GIT_LANE_LINE_GAP,
   GIT_MARGIN_TOP,
   GIT_PORT_BASE_X,
-  GIT_ROW_GAP,
   layoutResearchGraph,
 } from "../lib/layout-graph";
 import { LOGIC_END_NODE_ID, isLogicEndNode, resolveLogicStatus } from "../lib/logic-lanes";
 import { ResearchCardMenu } from "./research-card-menu";
+import { ResearchNodeContentFacesStack } from "./research-node-content-faces";
+import {
+  CONTENT_FACE_A11Y_ZH,
+  CONTENT_FACE_COPY_ZH,
+  CONTENT_FACE_KEYS,
+  resolveContentFaceValues,
+} from "../lib/research-node-content-faces";
+
+/** LRM-1332 narrow content-face cards; layout-graph GIT_ROW_GAP stays for 1295. */
+const CONTENT_FACE_GIT_ROW_MIN = 156;
 
 /**
  * LRM-1116 narrow (<768): vertical Git list — left colored lines + cards.
@@ -132,7 +141,7 @@ export function ResearchGitList({
       <svg
         className="pointer-events-none absolute top-0 left-0"
         width={GIT_GUTTER_WIDTH}
-        height={GIT_MARGIN_TOP + researchNodes.length * GIT_ROW_GAP + 48}
+        height={GIT_MARGIN_TOP + researchNodes.length * CONTENT_FACE_GIT_ROW_MIN + 48}
         aria-hidden
       >
         {segments.map((seg) => (
@@ -160,8 +169,8 @@ export function ResearchGitList({
           return (
             <div
               key={n.id}
-              className="relative flex items-center"
-              style={{ height: GIT_ROW_GAP }}
+              className="relative flex items-center py-1"
+              style={{ minHeight: CONTENT_FACE_GIT_ROW_MIN }}
             >
               <span
                 className="absolute size-3 rounded-full border-2 bg-card"
@@ -182,10 +191,24 @@ export function ResearchGitList({
                   tabIndex={focusId === n.id || (!focusId && index === 0) ? 0 : -1}
                   data-node-id={n.id}
                   data-testid="research-git-list-card"
-                  aria-label={`${n.title}, ${t(($) => $.logic.status[status.key])}, ${rf.data.branchId ?? "main"}`}
+                  aria-label={(() => {
+                    const title =
+                      n.id === LOGIC_END_NODE_ID
+                        ? t(($) => $.logic.end_title)
+                        : n.title;
+                    const faces = resolveContentFaceValues(
+                      n,
+                      "surface",
+                      CONTENT_FACE_COPY_ZH,
+                    );
+                    const faceParts = CONTENT_FACE_KEYS.map(
+                      (key) => `${CONTENT_FACE_A11Y_ZH[key]} ${faces[key]}`,
+                    ).join("，");
+                    return `${title}，${t(($) => $.logic.status[status.key])}，${rf.data.branchId ?? "main"}，${faceParts}`;
+                  })()}
                   className={cn(
                     "col-start-1 row-span-2 grid w-full grid-cols-1 gap-y-1 rounded-lg border bg-card px-3 py-2.5 pr-12 text-left",
-                    "min-h-[68px] max-h-[88px] outline-none",
+                    "min-h-[148px] outline-none",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand)]",
                     selected &&
                       "border-[var(--brand)] ring-2 ring-[color-mix(in_oklch,var(--brand)_18%,transparent)]",
@@ -197,11 +220,14 @@ export function ResearchGitList({
                   onClick={() => openNode(n)}
                   onFocus={() => setNavFocusId(n.id)}
                 >
-                  <div className="line-clamp-2 text-sm font-medium leading-snug">
+                  <div className="line-clamp-1 text-sm font-semibold leading-5">
                     {n.id === LOGIC_END_NODE_ID
                       ? t(($) => $.logic.end_title)
                       : n.title}
                   </div>
+                  {n.id !== LOGIC_END_NODE_ID ? (
+                    <ResearchNodeContentFacesStack node={n} />
+                  ) : null}
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span
                       className={cn(

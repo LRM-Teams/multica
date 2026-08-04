@@ -18,6 +18,7 @@ import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { isCompactActivityLabel } from "../../channels/components/is-compact-activity-label";
 import { useT } from "../../i18n/use-t";
 import { ResearchCardMenu } from "./research-card-menu";
+import { ResearchNodeContentFaces } from "./research-node-content-faces";
 
 export type ResearchFlowNode = Node<ResearchFlowNodeData, "research">;
 
@@ -83,7 +84,8 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
     <div
       className={cn(
         "research-graph-node-shell relative grid w-full grid-cols-[1fr_auto] gap-x-2 gap-y-1 overflow-hidden rounded-lg border bg-card px-3 py-2.5 text-left transition-colors duration-150",
-        aggregateSize ? "min-h-0 max-h-none" : "min-h-[68px] max-h-[88px]",
+        // LRM-1332 content face height (112–124); global row gap remains LRM-1295.
+        aggregateSize ? "min-h-0 max-h-none" : "min-h-[112px] max-h-[124px]",
         "hover:border-muted-foreground/40",
         selected &&
           "border-[var(--brand)] ring-2 ring-[color-mix(in_oklch,var(--brand)_18%,transparent)]",
@@ -134,9 +136,12 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
         )}
         onClick={() => data.onViewDetail?.(n)}
       >
-        <span className="line-clamp-2 text-sm font-medium leading-snug text-foreground">
+        <span className="line-clamp-1 text-sm font-semibold leading-5 text-foreground">
           {title}
         </span>
+        {logicRole === "step" ? (
+          <ResearchNodeContentFaces node={n} density="surface" />
+        ) : null}
         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <span
             data-status-dot

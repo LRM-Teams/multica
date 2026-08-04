@@ -7,8 +7,10 @@ import { isCompactActivityLabel } from "./is-compact-activity-label";
 
 /**
  * LRM-650 / LRM-647 — Compact Activity under an agent name.
- * EN state type only (Thinking / Running command…); never "Working", never
- * command/path/log detail. Idle → null (presence stays on the avatar dot).
+ * EN state type only from real activity/phase projection (Thinking /
+ * Running command…); never invent Thinking from activeTask alone
+ * (LRM-1288 / LRM-238). Never "Working", never command/path/log detail.
+ * Idle / no signal → null (presence stays on the avatar dot).
  */
 export function AgentCompactActivity({
   agentId,

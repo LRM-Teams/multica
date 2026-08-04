@@ -100,6 +100,10 @@ export function resolveAgentLiveStatus(args: {
  *
  * Connection down (offline) suppresses activity verbs so a stale task cannot
  * paint "Running command" on an unreachable agent.
+ *
+ * LRM-1288 / LRM-238: never invent Thinking from `activeTask` alone. Thinking
+ * only appears when a real activity/phase row is present (`latestActivity`).
+ * Running/queued with no signal → Waiting (Frank product lock).
  */
 export function resolveAgentActivityProjection(args: {
   presence: AgentPresenceDetail | "loading" | null | undefined;
@@ -130,9 +134,9 @@ export function resolveAgentActivityProjection(args: {
     };
   }
 
-  // Task on the plate but nothing streamed yet → Thinking (timeline opener).
+  // Task on the plate but no activity/phase yet → Waiting (not Thinking).
   return {
-    label: ACTIVITY_LABEL_EN.thinking,
+    label: ACTIVITY_LABEL_EN.waiting,
     textClass: ACTIVITY_LABEL_TEXT,
     dotClass: TONE_DOT_CLASS.neutral,
   };

@@ -28,18 +28,16 @@ interface IssueAgentActivityIndicatorProps {
  * in the top-right of board cards and right after the identifier in list
  * rows. Derives state from the workspace-wide agent task snapshot:
  *
- *   - has ≥1 running task  → tiny avatar stack + shimmering "Thinking"
+ *   - has ≥1 running task  → tiny avatar stack + shimmering "Waiting"
+ *     (LRM-1288 / LRM-238: no invented Thinking; this surface has no
+ *     activity subscription, so running without a phase signal → Waiting)
  *   - 0 running, ≥1 queued → half-opacity stack + muted "Waiting"
  *   - nothing               → return null (no chrome, no placeholder)
  *
  * Labels stay on EN Activity SoT (LRM-650) — never i18n Working/Queued.
  *
  * The shimmer reuses chat's `animate-chat-text-shimmer` utility (defined
- * in packages/ui/styles/base.css). Earlier iterations layered a brand
- * ring + opacity pulse around the avatars; both read as nervous on a
- * dense board. Moving the "alive" signal onto the label keeps the
- * avatars themselves still and lets the cue ride a piece of text the
- * user can already read.
+ * in packages/ui/styles/base.css).
  *
  * Hover opens AgentActivityHoverContent which lists every active task
  * with status dot + duration. No link rows — the card itself is the
@@ -111,8 +109,9 @@ export const IssueAgentActivityIndicator = memo(function IssueAgentActivityIndic
               : "text-muted-foreground",
           )}
         >
-          {/* LRM-650: EN Activity projection words — not i18n Working/Queued. */}
-          {isRunning ? ACTIVITY_LABEL_EN.thinking : ACTIVITY_LABEL_EN.waiting}
+          {/* LRM-1288: Waiting for running+queued without activity signal —
+              never invent Thinking (no activity subscription on this cue). */}
+          {ACTIVITY_LABEL_EN.waiting}
         </span>
       </HoverCardTrigger>
       <HoverCardContent align="end" className="w-72">

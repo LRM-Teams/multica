@@ -85,8 +85,6 @@ func runAgentDeleteFKIndexesHook(ctx context.Context, pool *pgxpool.Pool) error 
 		{"idx_squad_leader", `CREATE INDEX CONCURRENTLY idx_squad_leader ON squad (leader_id)`},
 		{"idx_agent_creation_draft_used_agent", `CREATE INDEX CONCURRENTLY idx_agent_creation_draft_used_agent ON agent_creation_draft (used_agent_id)`},
 		{"idx_agent_workspace_source_agent", `CREATE INDEX CONCURRENTLY idx_agent_workspace_source_agent ON agent (workspace_id, source_agent_id) WHERE source_agent_id IS NOT NULL`},
-		{"idx_agent_action_card_prepared_by", `CREATE INDEX CONCURRENTLY idx_agent_action_card_prepared_by ON agent_action_card (prepared_by_agent_id) WHERE prepared_by_agent_id IS NOT NULL`},
-		{"idx_agent_action_card_committed_agent", `CREATE INDEX CONCURRENTLY idx_agent_action_card_committed_agent ON agent_action_card (committed_agent_id) WHERE committed_agent_id IS NOT NULL`},
 	}
 
 	return ensureConcurrentIndexes(ctx, pool, indexes)

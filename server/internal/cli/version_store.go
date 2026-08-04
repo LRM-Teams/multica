@@ -607,10 +607,18 @@ type PruneResult struct {
 	RemovedVersions []string
 }
 
-// PruneInactiveVersions removes every version directory under versions/ that
-// is not the currently active version. It is safe to call after a successful
-// activation: the old "previous" version and any leftover staged-but-never-
-// activated directories are reclaimed.
+// PruneInactiveVersions removes version directories under versions/ that are
+// neither the currently active version nor the recorded previous version.
+// It is safe to call after a successful activation: leftover staged-but-
+// never-activated directories and older-than-previous releases are reclaimed.
+//
+// PreviousVersion is retained on purpose (s144 2026-08-04): OS service units
+// (systemd ExecStart, LaunchAgent ProgramArguments, etc.) may still point at
+// the just-superseded version path for one restart cycle after Active flips.
+// Deleting that path immediately produces status=203/EXEC crash-loops when
+// the unit was not rewritten before prune (e.g. upgrading across a binary
+// that lacks handoff unit sync). Keep previous until the next activation
+// advances it away.
 //
 // The active version — the one activation.json points at — is never touched.
 // If activation.json does not exist or has no active version, nothing is
@@ -625,11 +633,26 @@ func (s *VersionStore) PruneInactiveVersions(ctx context.Context) (PruneResult, 
 		return PruneResult{}, nil
 	}
 
-	activeDir := filepath.Join(s.VersionsRoot(), state.ActiveVersion)
+	keep := map[string]struct{}{state.ActiveVersion: {}}
+	if state.PreviousVersion != "" && state.PreviousVersion != state.ActiveVersion {
+		keep[state.PreviousVersion] = struct{}{}
+	}
 
 	entries, err := os.ReadDir(s.VersionsRoot())
 	if err != nil {
 		return PruneResult{}, fmt.Errorf("list versions root: %w", err)
+	}
+
+	// Resolve keep dirs once for symlink-safe comparison.
+	keepReal := make(map[string]struct{}, len(keep))
+	for tag := range keep {
+		dir := filepath.Join(s.VersionsRoot(), tag)
+		real, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			// Unresolvable keep tag — still skip by name below.
+			continue
+		}
+		keepReal[real] = struct{}{}
 	}
 
 	var removed []string
@@ -638,8 +661,8 @@ func (s *VersionStore) PruneInactiveVersions(ctx context.Context) (PruneResult, 
 			continue
 		}
 		name := entry.Name()
-		// Skip the active version at all costs.
-		if name == state.ActiveVersion {
+		// Skip Active and Previous by tag name.
+		if _, ok := keep[name]; ok {
 			continue
 		}
 		// Skip hidden temp directories (stage leftovers like .stage-vX.Y.Z-*).
@@ -649,21 +672,15 @@ func (s *VersionStore) PruneInactiveVersions(ctx context.Context) (PruneResult, 
 
 		dirPath := filepath.Join(s.VersionsRoot(), name)
 
-		// Belt-and-suspenders: resolve the real path and compare it to the
-		// active directory. This catches symlinks, case-insensitive filesystems,
-		// and any other path trickery that would make name != ActiveVersion
-		// but still resolve to the same directory.
+		// Belt-and-suspenders: resolve the real path and compare it to keep
+		// dirs. Catches symlinks / case-insensitive filesystems where name
+		// is not in keep but still resolves to Active or Previous.
 		realPath, err := filepath.EvalSymlinks(dirPath)
 		if err != nil {
 			// Can't resolve — skip rather than risk deleting the wrong thing.
 			continue
 		}
-		realActive, err := filepath.EvalSymlinks(activeDir)
-		if err != nil {
-			// Active dir can't be resolved — be conservative and skip.
-			continue
-		}
-		if realPath == realActive {
+		if _, ok := keepReal[realPath]; ok {
 			continue
 		}
 

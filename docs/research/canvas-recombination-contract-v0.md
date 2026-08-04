@@ -175,6 +175,6 @@ Do **not** ship a fake empty `match_decisions: []` on every snapshot as if match
 ## Out of scope
 
 - FE/UI visual specs (LRM-1309 / 1315 / 1311)
-- Side panel 1306
+- Side panel 1306 → see [thought-strategy-panel-contract-v0.md](./thought-strategy-panel-contract-v0.md) (LRM-1318)
 - Aggregate tree / assessment (LRM-1278) — unchanged
 - Auth / permissions

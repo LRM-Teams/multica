@@ -192,6 +192,19 @@ const ResearchMessageSchema = z
   })
   .passthrough();
 
+/** LRM-1318 thought/strategy panel row (LRM-1306). */
+const ResearchThoughtStrategySchema = z
+  .object({
+    node_id: z.string(),
+    rationale: z.string().optional().default(""),
+    expected_outcome: z.string().optional().default(""),
+    strategy_label: z.string().nullable().optional(),
+    strategy_revision: z.string().nullable().optional(),
+    state: z.string().optional().default("active"),
+    updated_at: z.string().optional(),
+  })
+  .passthrough();
+
 export const ResearchRunSchema = z
   .object({
     session_id: z.string(),
@@ -399,6 +412,7 @@ export const ResearchSessionSnapshotSchema = z
     report: ResearchReportSchema.nullable().optional().default(null),
     evals: z.array(ResearchStageEvalSchema).optional().default([]),
     messages: z.array(ResearchMessageSchema).optional().default([]),
+    thought_strategies: z.array(ResearchThoughtStrategySchema).optional().default([]),
     run: ResearchRunSnapshotSchema.optional(),
   })
   .passthrough();
@@ -439,4 +453,5 @@ export const EMPTY_RESEARCH_SNAPSHOT: ResearchSessionSnapshot = {
   report: null,
   evals: [],
   messages: [],
+  thought_strategies: [],
 };

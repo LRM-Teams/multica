@@ -3,10 +3,11 @@
  * session list row + row skeleton so Playwright can capture the 700 / 767 / 768
  * tiers with live Tailwind media queries (jsdom cannot evaluate `md:`).
  *
- * `?case=report` → ReportReader (outline drawer vs 220px aside)
- * `?case=list`   → ResearchSessionRow ×2 + ResearchSessionRowSkeleton ×2
+ * `?case=report`     → ReportReader (outline drawer vs 220px aside)
+ * `?case=list`       → ResearchSessionRow ×2 + ResearchSessionRowSkeleton ×2
+ * `?case=completion` → ResearchCompletionCard (LRM-1244 focus gate shots)
  *
- * Temporary tooling: delete after the shots are attached to LRM-1164.
+ * Temporary tooling: delete after the shots are attached to LRM-1164 / LRM-1244.
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -27,6 +28,7 @@ import type {
 import type { Workspace } from "../../packages/core/types/workspace";
 import { NavigationProvider } from "../../packages/views/navigation/context";
 import { ReportReader } from "../../packages/views/research/report/report-reader";
+import { ResearchCompletionCard } from "../../packages/views/research/components/research-completion-card";
 import { ResearchSessionRow } from "../../packages/views/research/components/research-session-row";
 import {
   ResearchSessionRowSkeleton,
@@ -209,8 +211,29 @@ function ReportCase() {
   );
 }
 
+function CompletionCase() {
+  return (
+    <div data-case="completion" className="p-4 text-xs text-muted-foreground">
+      完成引导卡（下方 dialog 覆盖全屏）
+      <ResearchCompletionCard
+        kind="done"
+        onViewReport={() => {}}
+        onNewResearch={() => {}}
+        onHome={() => {}}
+        onDismiss={() => {}}
+      />
+    </div>
+  );
+}
+
 const params = new URLSearchParams(window.location.search);
-const which = params.get("case") === "report" ? "report" : "list";
+// Keep `params.get("case") === "report"` literal — LRM-1212 source lock asserts it.
+const which =
+  params.get("case") === "report"
+    ? "report"
+    : params.get("case") === "completion"
+      ? "completion"
+      : "list";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -218,7 +241,13 @@ createRoot(document.getElementById("root")!).render(
       <WorkspaceSlugProvider slug="demo">
         <NavigationProvider value={navigation}>
           <I18nextProvider i18n={i18n}>
-            {which === "report" ? <ReportCase /> : <ListCase />}
+            {which === "report" ? (
+              <ReportCase />
+            ) : which === "completion" ? (
+              <CompletionCase />
+            ) : (
+              <ListCase />
+            )}
           </I18nextProvider>
         </NavigationProvider>
       </WorkspaceSlugProvider>

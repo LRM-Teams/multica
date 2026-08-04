@@ -238,6 +238,9 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
 
     fireEvent.click(chip);
     expect(screen.getByTestId("channel-agents-working-list")).toBeInTheDocument();
+    // LRM-1288: projection mock is null — running/queued show Waiting, never Thinking.
+    expect(screen.queryByText(/Thinking/)).toBeNull();
+    expect(screen.getAllByText(/Waiting/).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByTestId("channel-agents-working-stop-all"));
     expect(onStopAll).toHaveBeenCalledTimes(1);
   });

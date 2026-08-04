@@ -154,11 +154,20 @@ describe("resolveAgentActivityProjection (composer strip — non-live verbs)", (
     ).toBeNull();
   });
 
-  it("shows Thinking for a running task with no activity row yet", () => {
+  it("LRM-1288: shows Waiting for a running task with no activity/phase row", () => {
     const view = resolveAgentActivityProjection({
       presence: online,
       activeTask: task({ id: "task-1", status: "running" }),
       latestActivity: null,
+    });
+    expect(view?.label).toBe("Waiting");
+  });
+
+  it("projects a real thinking activity row as Thinking", () => {
+    const view = resolveAgentActivityProjection({
+      presence: online,
+      activeTask: task({ id: "task-1", status: "running" }),
+      latestActivity: evt({ activity_kind: "thinking" }),
     });
     expect(view?.label).toBe("Thinking");
   });
@@ -172,14 +181,14 @@ describe("resolveAgentActivityProjection (composer strip — non-live verbs)", (
     expect(view?.label).toContain("Running command");
   });
 
-  it("never invents Queued / Unstable / Reconnecting", () => {
+  it("never invents Thinking / Queued / Unstable / Reconnecting without activity", () => {
     const view = resolveAgentActivityProjection({
       presence: presence({ availability: "unstable", workload: "queued", queuedCount: 1 }),
       activeTask: task({ id: "task-1", status: "queued" }),
       latestActivity: null,
     });
-    expect(view?.label).toBe("Thinking");
-    expect(view?.label).not.toMatch(/Queued|Unstable|Reconnecting/i);
+    expect(view?.label).toBe("Waiting");
+    expect(view?.label).not.toMatch(/Thinking|Queued|Unstable|Reconnecting/i);
   });
 });
 

@@ -434,7 +434,7 @@ export function ResearchListPage() {
           <section>
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.groups.in_progress)}
-              <span className="ml-1.5 tabular-nums font-medium opacity-80">
+              <span className="ml-1.5 tabular-nums font-medium">
                 {inProgress.length}
               </span>
             </h2>
@@ -445,7 +445,7 @@ export function ResearchListPage() {
           <section>
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.groups.completed)}
-              <span className="ml-1.5 tabular-nums font-medium opacity-80">
+              <span className="ml-1.5 tabular-nums font-medium">
                 {completed.length}
               </span>
             </h2>
@@ -456,7 +456,7 @@ export function ResearchListPage() {
           <section>
             <h2 className="px-3 text-xs font-medium text-muted-foreground">
               {t(($) => $.filter.status_failed)}
-              <span className="ml-1.5 tabular-nums font-medium opacity-80">
+              <span className="ml-1.5 tabular-nums font-medium">
                 {failed.length}
               </span>
             </h2>

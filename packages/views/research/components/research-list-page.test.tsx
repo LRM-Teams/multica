@@ -252,6 +252,41 @@ describe("ResearchListPage list states (LRM-789)", () => {
     expect(order & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("LRM-1359: visible group and selected/unselected filter counts use opaque semantic text", () => {
+    setQuery({
+      data: {
+        sessions: [
+          session({ id: "s-run", status: "running", title: "Alpha" }),
+          session({ id: "s-done", status: "completed", title: "Beta" }),
+          session({ id: "s-fail", status: "failed", title: "Gamma" }),
+        ],
+      },
+    });
+    render(<ResearchListPage />);
+
+    for (const header of [
+      screen.getByRole("heading", { name: new RegExp(enResearch.groups.in_progress) }),
+      screen.getByRole("heading", { name: new RegExp(enResearch.groups.completed) }),
+      screen.getByRole("heading", { name: new RegExp(enResearch.filter.status_failed) }),
+    ]) {
+      const count = header.querySelector("span");
+      expect(count).toBeTruthy();
+      expect(count?.className).toContain("tabular-nums");
+      expect(count?.className).not.toMatch(/(?:^|\s)opacity-/);
+      expect(count?.className).not.toMatch(/text-[^\s]+\/[0-9]/);
+    }
+
+    for (const name of ["All 3", "In progress 1"]) {
+      const count = screen
+        .getByRole("radio", { name })
+        .querySelector("span[aria-hidden] > span");
+      expect(count).toBeTruthy();
+      expect(count?.className).toContain("tabular-nums");
+      expect(count?.className).not.toMatch(/(?:^|\s)opacity-/);
+      expect(count?.className).not.toMatch(/text-[^\s]+\/[0-9]/);
+    }
+  });
+
   it("LRM-1106: single nonempty bucket on All has no group header", () => {
     setQuery({
       data: { sessions: [session({ id: "s-run", status: "running", title: "Alpha" })] },

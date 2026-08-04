@@ -122,7 +122,10 @@
     --input: var(--line-strong);
     --ring: var(--ink-3);
     --success: var(--ok);
-    --warning: #b35c00;
+    /* LRM-1353 — deepen warning so text-warning on bg-warning/5..15 clears
+       WCAG 4.5 site-wide (was #b35c00 → 4.12 on /10). Same wash+text pair as
+       LRM-1328 destructive; one token change, no per-surface orange hacks. */
+    --warning: #8f4a00;
     /* LRM-890 M2 visibility — low-sat source / role chips */
     --source-general: #3d6f9c;
     --source-domain: #2a8f7a;
@@ -226,7 +229,9 @@
     --online: #2bac76;
     --busy: #e8912d;
     --success: var(--ok);
-    --warning: oklch(0.70 0.16 85);
+    /* LRM-1353 — lighten wash-label text on dark warning/10..15 (mirror
+       destructive-strong dark lift; keep hue ≈85). */
+    --warning: oklch(0.78 0.16 85);
     /* LRM-890 M2 visibility */
     --source-general: oklch(0.72 0.08 240);
     --source-domain: oklch(0.70 0.09 170);

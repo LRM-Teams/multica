@@ -120,8 +120,16 @@ const MESSAGE_SHELL_CLASS = "px-1";
  * LRM-1331 — hover action bar + geometry reserves only on fine pointer AND
  * ≥640px. Narrow fine windows fall back to the coarse long-press / context
  * menu path (360px + 162px reserve left ~9 CJK chars — not worth it).
+ *
+ * LRM-1360: the gate MUST be written as a literal class on every candidate —
+ * `[@media(pointer:fine)_and_(min-width:640px)]:…`. Tailwind v4 extracts
+ * candidates by statically scanning source text, so a template-interpolated
+ * variant (gate constant + ":group-hover:opacity-100") yields no CSS at all and
+ * the bar stays `opacity-0 pointer-events-none` forever — that is exactly how the
+ * thread entry became invisible on desktop. `className` unit assertions cannot
+ * catch it (the class string is still on the node); the guard test
+ * `channel-message-bubble-static-gate.test.ts` does.
  */
-const FINE_DESKTOP_MQ = "[@media(pointer:fine)_and_(min-width:640px)]";
 
 /**
  * LRM-1227/G drew a joined group as three bordered segments (head `border-x
@@ -920,7 +928,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             className={cn(
               "mb-0.5 flex min-w-0 select-none items-center gap-1.5 text-[13.5px]",
               // LRM-1331 §2: reserve only on the author line (162 = 154 bar + 8).
-              `${FINE_DESKTOP_MQ}:pr-[162px]`,
+              // LRM-1360: literal gate class — see the note on the gate above.
+              "[@media(pointer:fine)_and_(min-width:640px)]:pr-[162px]",
             )}
           >
             {profileActorType && profileActorId ? (
@@ -968,12 +977,15 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               // text. Overlay — not a document-flow gutter (LRM-1331).
               // LRM-1227/D2 chrome kept; bar measured ~154×34 with 5 keys.
               // LRM-1331: gate on fine+≥640 — narrow fine uses long-press menu.
+              // LRM-1360: literal gate classes — interpolated variants produce no
+              // CSS, which left the bar (and the thread entry) permanently
+              // `opacity-0 pointer-events-none` on desktop.
               "pointer-events-none absolute right-2 z-10 hidden items-center gap-0.5 rounded-lg border border-line-strong bg-popover p-0.5 text-muted-foreground opacity-0 shadow-sm transition-opacity",
-              `${FINE_DESKTOP_MQ}:flex`,
-              `${FINE_DESKTOP_MQ}:group-hover:pointer-events-auto`,
-              `${FINE_DESKTOP_MQ}:group-hover:opacity-100`,
-              `${FINE_DESKTOP_MQ}:group-focus-within:pointer-events-auto`,
-              `${FINE_DESKTOP_MQ}:group-focus-within:opacity-100`,
+              "[@media(pointer:fine)_and_(min-width:640px)]:flex",
+              "[@media(pointer:fine)_and_(min-width:640px)]:group-hover:pointer-events-auto",
+              "[@media(pointer:fine)_and_(min-width:640px)]:group-hover:opacity-100",
+              "[@media(pointer:fine)_and_(min-width:640px)]:group-focus-within:pointer-events-auto",
+              "[@media(pointer:fine)_and_(min-width:640px)]:group-focus-within:opacity-100",
               // Lead row: ride the shell's top edge (bar mid-line == shell top
               // line). D2 froze `top-0 -translate-y-1/2` measured from the shell;
               // the bar is positioned against the row, whose `py-1` offsets the
@@ -1063,7 +1075,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               // its own inset (§4); block boxes slide under floats.
               compact &&
                 !(message.quote || message.quote_message_id) &&
-                `${FINE_DESKTOP_MQ}:before:float-right ${FINE_DESKTOP_MQ}:before:h-[36px] ${FINE_DESKTOP_MQ}:before:w-[158px] ${FINE_DESKTOP_MQ}:before:content-['']`,
+                "[@media(pointer:fine)_and_(min-width:640px)]:before:float-right [@media(pointer:fine)_and_(min-width:640px)]:before:h-[36px] [@media(pointer:fine)_and_(min-width:640px)]:before:w-[158px] [@media(pointer:fine)_and_(min-width:640px)]:before:content-['']",
             )}
             data-testid="message-body"
             data-collapsed={isContentCollapsed ? "true" : undefined}
@@ -1079,7 +1091,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 // LRM-1331 §4: leading card inset on compact rows (bar overlays body).
                 className={
                   compact
-                    ? `${FINE_DESKTOP_MQ}:pr-[158px]`
+                    ? "[@media(pointer:fine)_and_(min-width:640px)]:pr-[158px]"
                     : undefined
                 }
               />

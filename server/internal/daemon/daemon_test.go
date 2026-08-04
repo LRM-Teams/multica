@@ -3214,6 +3214,89 @@ func (b statusStreamBackend) Execute(_ context.Context, _ string, _ agent.ExecOp
 // has processed the buffered MessageStatus at all. So this test cannot just
 // check the call count immediately after executeAndDrain returns; it must
 // wait (bounded) for the HTTP call to actually land.
+
+// messageStreamBackend streams arbitrary runtime messages before completion.
+type messageStreamBackend struct {
+	messages []agent.Message
+}
+
+func (b messageStreamBackend) Execute(_ context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+	msgCh := make(chan agent.Message)
+	resCh := make(chan agent.Result, 1)
+	go func() {
+		for _, msg := range b.messages {
+			msgCh <- msg
+		}
+		close(msgCh)
+		resCh <- agent.Result{Status: "completed"}
+	}()
+	return &agent.Session{Messages: msgCh, Result: resCh}, nil
+}
+
+func TestExecuteAndDrain_DoesNotEmitEmptyThinkingPhase(t *testing.T) {
+	var mu sync.Mutex
+	var reported []TaskMessageData
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/daemon/agent-inbox/events/task-thinking/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			Messages []TaskMessageData `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode task messages: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		reported = append(reported, body.Messages...)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
+	backend := messageStreamBackend{messages: []agent.Message{
+		{Type: agent.MessageThinking, Content: "internal plan"},
+		{Type: agent.MessageToolUse, Tool: "read_file", CallID: "call-1"},
+		{Type: agent.MessageToolResult, Tool: "read_file", CallID: "call-1", Output: "contents"},
+		{Type: agent.MessageText, Content: "final response"},
+	}}
+	result, tools, err := d.executeAndDrain(context.Background(), backend, "prompt", agent.ExecOptions{}, slog.Default(), "task-thinking")
+	if err != nil {
+		t.Fatalf("executeAndDrain: %v", err)
+	}
+	if result.Status != "completed" || tools != 1 {
+		t.Fatalf("result=%+v tools=%d, want completed with one tool", result, tools)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		got := append([]TaskMessageData(nil), reported...)
+		mu.Unlock()
+		if len(got) == 4 {
+			if got[0].Type != "thinking" || got[0].Content != "internal plan" {
+				t.Fatalf("contentful thinking = %+v", got[0])
+			}
+			if got[1].Type != "tool_use" || got[1].Tool != "read_file" || got[2].Type != "tool_result" || got[2].Tool != "read_file" {
+				t.Fatalf("tool activity changed: %+v", got)
+			}
+			for _, msg := range got {
+				if msg.Type == "thinking" && strings.TrimSpace(msg.Content) == "" {
+					t.Fatalf("empty thinking phase was emitted: %+v", got)
+				}
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("reported messages = %+v, want contentful thinking + tool use/result + text", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestExecuteAndDrain_PinsTaskSessionOnStatusMessage(t *testing.T) {
 	t.Parallel()
 

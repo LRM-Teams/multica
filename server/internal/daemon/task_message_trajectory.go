@@ -13,25 +13,6 @@ type taskMessageTrajectoryBuffer struct {
 	updatedAt time.Time
 }
 
-// taskMessagePhaseTracker mirrors Raft's bare thinking activity: one status
-// wire when execution enters a trajectory phase, then no repeats until a tool
-// or terminal boundary closes that phase.
-type taskMessagePhaseTracker struct {
-	active bool
-}
-
-func (p *taskMessagePhaseTracker) enter() bool {
-	if p.active {
-		return false
-	}
-	p.active = true
-	return true
-}
-
-func (p *taskMessagePhaseTracker) leave() {
-	p.active = false
-}
-
 func (b *taskMessageTrajectoryBuffer) append(kind, text, lineage string, now time.Time, emit func(kind, text, lineage string)) {
 	if text == "" {
 		return

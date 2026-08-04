@@ -31,6 +31,55 @@ func TestXPToNextLevelStopsAtMaximumLevel(t *testing.T) {
 	}
 }
 
+func TestHonorLevelCurveUsesReachableNonDemotingBands(t *testing.T) {
+	t.Parallel()
+
+	wantThresholds := map[int]int64{
+		20: 874,
+		40: 7_474,
+		60: 31_774,
+		70: 68_024,
+		80: 140_524,
+	}
+	for level, want := range wantThresholds {
+		if got := honorLevelThresholdXP(level); got != want {
+			t.Errorf("level %d threshold = %d, want %d", level, got, want)
+		}
+		if got := LevelFromTotalXP(want - 1); got != level-1 {
+			t.Errorf("level before %d threshold = %d, want %d", level, got, level-1)
+		}
+		if got := LevelFromTotalXP(want); got != level {
+			t.Errorf("level at %d threshold = %d, want %d", level, got, level)
+		}
+	}
+
+	var legacyThreshold int64
+	for level := 2; level <= MaxHonorLevel; level++ {
+		legacyThreshold += int64(10 * pow115(level-2))
+		if current := honorLevelThresholdXP(level); current > legacyThreshold {
+			t.Errorf(
+				"level %d threshold %d exceeds legacy threshold %d and would demote users",
+				level,
+				current,
+				legacyThreshold,
+			)
+		}
+	}
+}
+
+func TestHonorLevel80RequiresSixToTwelveMonthsAtAbsoluteDailyCap(t *testing.T) {
+	t.Parallel()
+
+	maxDailyXP := int64(0)
+	for _, rule := range honorActionRules {
+		maxDailyXP += int64(rule.DailyCap)
+	}
+	minimumDays := (honorLevelThresholdXP(MaxHonorLevel) + maxDailyXP - 1) / maxDailyXP
+	if minimumDays < 180 || minimumDays > 365 {
+		t.Fatalf("level 80 requires %d days at the absolute daily cap, want 180-365", minimumDays)
+	}
+}
+
 func TestIsFoundingMember_BeforeCutoff(t *testing.T) {
 	created := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	if !IsFoundingMember(created) {

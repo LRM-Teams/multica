@@ -130,7 +130,6 @@ export function ThreadRootPreview({
     <ActorStyledName
       displayName={displayName}
       honor={authorHonor}
-      fleet={authorFleet}
       agentHonorLevel={authorHonorLevel}
       className="text-sm font-medium text-foreground"
     />

@@ -247,9 +247,9 @@ export function AccountTab() {
                 )}
                 <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
                   {uploading ? (
-                    <Loader2 className="h-5 w-5 animate-spin text-white" />
+                    <Loader2 className="h-5 w-5 animate-spin text-white" aria-hidden />
                   ) : (
-                    <Camera className="h-5 w-5 text-white" />
+                    <Camera className="h-5 w-5 text-white" aria-hidden />
                   )}
                 </div>
               </button>
@@ -322,7 +322,7 @@ export function AccountTab() {
                 onClick={handleProfileSave}
                 disabled={profileSaving || !profileDisplayName.trim() || descriptionTooLong}
               >
-                <Save className="h-3 w-3" />
+                <Save className="h-3 w-3" aria-hidden />
                 {profileSaving ? t(($) => $.account.saving) : t(($) => $.account.save)}
               </Button>
             </div>

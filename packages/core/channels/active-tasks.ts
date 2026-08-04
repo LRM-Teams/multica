@@ -15,8 +15,8 @@ export const activeChannelTasksKeys = {
 export function activeChannelTasksOptions(channelId: string) {
   return queryOptions({
     queryKey: activeChannelTasksKeys.all(channelId),
-    queryFn: async (): Promise<ChannelActiveTask[]> => {
-      const res = await api.listChannelActiveTasks(channelId);
+    queryFn: async ({ signal }): Promise<ChannelActiveTask[]> => {
+      const res = await api.listChannelActiveTasks(channelId, { signal });
       return res.tasks ?? [];
     },
     enabled: !!channelId,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import zhAgents from "../../locales/zh-Hans/agents.json";
 import { AgentHonorUnlockListener } from "./agent-honor-unlock-listener";
@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getQueryData: vi.fn(),
   ensureQueryData: vi.fn(),
   toastSuccess: vi.fn(),
+  toastCustom: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -55,7 +56,7 @@ vi.mock("@multica/core/workspace/queries", () => ({
 vi.mock("sonner", () => ({
   toast: {
     success: mocks.toastSuccess,
-    custom: vi.fn(),
+    custom: mocks.toastCustom,
     dismiss: vi.fn(),
   },
 }));
@@ -82,6 +83,34 @@ describe("AgentHonorUnlockListener", () => {
     mocks.getQueryData.mockReset();
     mocks.ensureQueryData.mockReset();
     mocks.toastSuccess.mockReset();
+    mocks.toastCustom.mockReset();
+  });
+
+  it("shows achievement experience in Chinese", () => {
+    render(<AgentHonorUnlockListener />);
+
+    act(() => {
+      mocks.eventHandlers.get("agent_honor:achievement_unlocked")?.({
+        agent_id: "agent-1",
+        achievement: {
+          id: "first_launch",
+          title: "First Launch",
+          description: "Complete the first accepted task.",
+          svg_key: "agent_armor_first_launch",
+          category: "delivery",
+          xp_reward: 25,
+          rarity: 10,
+          secret: false,
+          unlocked: true,
+        },
+      });
+    });
+
+    const renderToast = mocks.toastCustom.mock.calls[0]?.[0];
+    expect(renderToast).toBeTypeOf("function");
+    render(renderToast("toast-1"));
+    expect(screen.getByText("+25 经验")).toBeInTheDocument();
+    expect(screen.queryByText(/XP/)).not.toBeInTheDocument();
   });
 
   it("names the promoted agent and localizes the fleet class", () => {

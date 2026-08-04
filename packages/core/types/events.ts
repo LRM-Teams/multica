@@ -105,7 +105,8 @@ export type WSEventType =
   | "research_session:report_updated"
   | "research_session:message"
   | "research_session:stage_eval"
-  | "research_session:status_changed";
+  | "research_session:status_changed"
+  | "research_session:product_round";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;

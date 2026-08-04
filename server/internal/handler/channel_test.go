@@ -1720,21 +1720,14 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if messagesRec.Code != http.StatusOK {
 		t.Fatalf("report inbox messages: status=%d body=%s", messagesRec.Code, messagesRec.Body.String())
 	}
-	// Task #121: thinking with content is also streamed live.
-	if len(liveTaskMessages) != 5 {
-		t.Fatalf("live task messages = %+v, want thinking body + mapped tools + phase status", liveTaskMessages)
+	if len(liveTaskMessages) != 3 {
+		t.Fatalf("live task messages = %+v, want mapped tools only", liveTaskMessages)
 	}
-	if liveTaskMessages[0].Seq != 1 || liveTaskMessages[0].Type != "thinking" || liveTaskMessages[0].Content != "I should create the requested file." {
-		t.Fatalf("live thinking content = %+v", liveTaskMessages[0])
+	if liveTaskMessages[0].Seq != 2 || liveTaskMessages[0].Type != "tool_use" || liveTaskMessages[0].Tool != "bash" {
+		t.Fatalf("live terminal payload = %+v, want canonical bash tool_use", liveTaskMessages[0])
 	}
-	if liveTaskMessages[1].Seq != 2 || liveTaskMessages[1].Type != "tool_use" || liveTaskMessages[1].Tool != "bash" {
-		t.Fatalf("live terminal payload = %+v, want canonical bash tool_use", liveTaskMessages[1])
-	}
-	if liveTaskMessages[2].Seq != 7 || liveTaskMessages[2].Tool != "write_file" || liveTaskMessages[3].Seq != 8 || liveTaskMessages[3].Tool != "read_file" {
-		t.Fatalf("live file tool payloads = %+v, want write/read file without unmapped status tool", liveTaskMessages)
-	}
-	if liveTaskMessages[4].Seq != 9 || liveTaskMessages[4].Type != "thinking" || liveTaskMessages[4].Content != "" {
-		t.Fatalf("live phase status = %+v, want bare thinking wire", liveTaskMessages[4])
+	if liveTaskMessages[1].Seq != 7 || liveTaskMessages[1].Tool != "write_file" || liveTaskMessages[2].Seq != 8 || liveTaskMessages[2].Tool != "read_file" {
+		t.Fatalf("live file tool payloads = %+v, want write/read file without thinking or unmapped status", liveTaskMessages)
 	}
 
 	rows, err := testPool.Query(ctx, `
@@ -1776,8 +1769,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if len(activity) != 9 {
 		t.Fatalf("activity rows = %+v, want 9", activity)
 	}
-	if activity[0].kind != activityKindThinking || activity[0].eventType != "runtime_thinking" || activity[0].visibility != "user_facing" {
-		t.Fatalf("thinking row = %+v, want user_facing thinking/runtime_thinking (task #121)", activity[0])
+	if activity[0].kind != activityKindThinking || activity[0].eventType != "runtime_thinking" || activity[0].visibility != "diagnostic_only" {
+		t.Fatalf("thinking row = %+v, want diagnostic thinking/runtime_thinking", activity[0])
 	}
 	if activity[1].kind != activityKindToolCall || activity[1].eventType != "tool_use" || activity[1].visibility != "user_facing" {
 		t.Fatalf("tool row = %+v, want user-facing tool_use", activity[1])
@@ -1819,8 +1812,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if activity[7].details["tool"] != "read_file" || activity[7].details["raw_tool"] != "read" || activity[7].details["tool_target"] != "/tmp/test.go" || activity[7].details["summary_kind"] != "file_path" || activity[7].details["command"] != nil || activity[7].details["path"] != "/tmp/test.go" || activity[7].details["scope"] != "/repo" {
 		t.Fatalf("read file details = %+v, want read source facts without invented command", activity[7].details)
 	}
-	if activity[8].kind != activityKindThinking || activity[8].eventType != "runtime_phase" || activity[8].visibility != "user_facing" || activity[8].message != "" || activity[8].details["phase_status"] != true {
-		t.Fatalf("phase status row = %+v, want bare user-facing phase transition", activity[8])
+	if activity[8].kind != activityKindThinking || activity[8].eventType != "runtime_phase" || activity[8].visibility != "diagnostic_only" || activity[8].message != "" || activity[8].details["phase_status"] != true {
+		t.Fatalf("legacy phase row = %+v, want diagnostic-only", activity[8])
 	}
 }
 
@@ -8567,7 +8560,6 @@ func TestImportLarkChannelMessageRequiresChannelMember(t *testing.T) {
 		t.Fatalf("non-member lark import persisted %d message(s)", count)
 	}
 }
-
 
 // ensureLegacyChannelChatBridgeForTest seeds channel_agent_session + optional
 // prompt chat_message so legacy ChatDone bridge tests still exercise that path

@@ -134,7 +134,7 @@ func (q *Queries) CreateInteractionDAGDiagnosisSegment(ctx context.Context, arg 
 const failInteractionDAGDiagnosisRun = `-- name: FailInteractionDAGDiagnosisRun :execrows
 UPDATE interaction_dag_diagnosis_run
 SET status = 'failed', last_error = $2, updated_at = now()
-WHERE run_id = $1 AND status IN ('running', 'compacting')
+WHERE run_id = $1 AND status IN ('provisioning', 'running', 'compacting')
 `
 
 type FailInteractionDAGDiagnosisRunParams struct {
@@ -152,7 +152,7 @@ func (q *Queries) FailInteractionDAGDiagnosisRun(ctx context.Context, arg FailIn
 }
 
 const getInteractionDAGDiagnosisRun = `-- name: GetInteractionDAGDiagnosisRun :one
-SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
 FROM interaction_dag_diagnosis_run
 WHERE run_id = $1
 `
@@ -173,6 +173,9 @@ func (q *Queries) GetInteractionDAGDiagnosisRun(ctx context.Context, runID strin
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.SandboxInstanceID,
+		&i.CapabilityTokenHash,
+		&i.ExecutionMode,
 	)
 	return i, err
 }
@@ -367,7 +370,7 @@ func (q *Queries) GetLastEndSeqForAgentRun(ctx context.Context, agentRunID strin
 }
 
 const getLatestCompletedInteractionDAGDiagnosisRun = `-- name: GetLatestCompletedInteractionDAGDiagnosisRun :one
-SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
 FROM interaction_dag_diagnosis_run
 WHERE project_id = $1 AND task_id = $2 AND status = 'completed'
 ORDER BY completed_at DESC, updated_at DESC
@@ -397,14 +400,50 @@ func (q *Queries) GetLatestCompletedInteractionDAGDiagnosisRun(ctx context.Conte
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.SandboxInstanceID,
+		&i.CapabilityTokenHash,
+		&i.ExecutionMode,
+	)
+	return i, err
+}
+
+const getLatestInteractionDAGDiagnosisRunForProject = `-- name: GetLatestInteractionDAGDiagnosisRunForProject :one
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
+FROM interaction_dag_diagnosis_run
+WHERE project_id = $1
+ORDER BY updated_at DESC
+LIMIT 1
+`
+
+// Latest diagnosis run of any status for a project; backs the human-facing
+// /diagnosis/latest polling endpoint.
+func (q *Queries) GetLatestInteractionDAGDiagnosisRunForProject(ctx context.Context, projectID string) (InteractionDagDiagnosisRun, error) {
+	row := q.db.QueryRow(ctx, getLatestInteractionDAGDiagnosisRunForProject, projectID)
+	var i InteractionDagDiagnosisRun
+	err := row.Scan(
+		&i.RunID,
+		&i.ProjectID,
+		&i.TaskID,
+		&i.TopologyHash,
+		&i.OrderedSegmentIds,
+		&i.Status,
+		&i.CurrentSegmentOrdinal,
+		&i.PiSessionID,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+		&i.SandboxInstanceID,
+		&i.CapabilityTokenHash,
+		&i.ExecutionMode,
 	)
 	return i, err
 }
 
 const getResumableInteractionDAGDiagnosisRun = `-- name: GetResumableInteractionDAGDiagnosisRun :one
-SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
 FROM interaction_dag_diagnosis_run
-WHERE project_id = $1 AND task_id = $2 AND status IN ('running', 'compacting')
+WHERE project_id = $1 AND task_id = $2 AND status IN ('provisioning', 'running', 'compacting')
 ORDER BY updated_at DESC
 LIMIT 1
 `
@@ -414,8 +453,10 @@ type GetResumableInteractionDAGDiagnosisRunParams struct {
 	TaskID    string `json:"task_id"`
 }
 
-// Latest still-active (running/compacting) run for a (project, task); used to
-// resume an interrupted diagnosis instead of starting over.
+// Latest still-active (provisioning/running/compacting) run for a
+// (project, task); used to resume an interrupted diagnosis instead of
+// starting over. 'provisioning' is included so a sandbox-mode run whose
+// server crashed mid-provisioning can be resumed or re-provisioned.
 func (q *Queries) GetResumableInteractionDAGDiagnosisRun(ctx context.Context, arg GetResumableInteractionDAGDiagnosisRunParams) (InteractionDagDiagnosisRun, error) {
 	row := q.db.QueryRow(ctx, getResumableInteractionDAGDiagnosisRun, arg.ProjectID, arg.TaskID)
 	var i InteractionDagDiagnosisRun
@@ -432,6 +473,9 @@ func (q *Queries) GetResumableInteractionDAGDiagnosisRun(ctx context.Context, ar
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CompletedAt,
+		&i.SandboxInstanceID,
+		&i.CapabilityTokenHash,
+		&i.ExecutionMode,
 	)
 	return i, err
 }
@@ -857,6 +901,53 @@ func (q *Queries) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ct
 		return nil, err
 	}
 	return items, nil
+}
+
+const setInteractionDAGDiagnosisRunSandbox = `-- name: SetInteractionDAGDiagnosisRunSandbox :exec
+UPDATE interaction_dag_diagnosis_run
+SET sandbox_instance_id = $2, capability_token_hash = $3, execution_mode = $4, updated_at = now()
+WHERE run_id = $1
+`
+
+type SetInteractionDAGDiagnosisRunSandboxParams struct {
+	RunID               string      `json:"run_id"`
+	SandboxInstanceID   pgtype.Text `json:"sandbox_instance_id"`
+	CapabilityTokenHash pgtype.Text `json:"capability_token_hash"`
+	ExecutionMode       pgtype.Text `json:"execution_mode"`
+}
+
+// Records the dedicated sandbox, per-run capability token hash, and execution
+// mode for a sandbox-mode diagnosis run (migration 278).
+func (q *Queries) SetInteractionDAGDiagnosisRunSandbox(ctx context.Context, arg SetInteractionDAGDiagnosisRunSandboxParams) error {
+	_, err := q.db.Exec(ctx, setInteractionDAGDiagnosisRunSandbox,
+		arg.RunID,
+		arg.SandboxInstanceID,
+		arg.CapabilityTokenHash,
+		arg.ExecutionMode,
+	)
+	return err
+}
+
+const setInteractionDAGDiagnosisRunStatus = `-- name: SetInteractionDAGDiagnosisRunStatus :execrows
+UPDATE interaction_dag_diagnosis_run
+SET status = $2, updated_at = now()
+WHERE run_id = $1 AND status = $3
+`
+
+type SetInteractionDAGDiagnosisRunStatusParams struct {
+	RunID    string `json:"run_id"`
+	Status   string `json:"status"`
+	Status_2 string `json:"status_2"`
+}
+
+// CAS: transition a run between non-terminal statuses (e.g. provisioning ->
+// running once the sandbox runtime is online).
+func (q *Queries) SetInteractionDAGDiagnosisRunStatus(ctx context.Context, arg SetInteractionDAGDiagnosisRunStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setInteractionDAGDiagnosisRunStatus, arg.RunID, arg.Status, arg.Status_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setInteractionDAGDiagnosisSegmentRewardCount = `-- name: SetInteractionDAGDiagnosisSegmentRewardCount :execrows

@@ -1,7 +1,13 @@
 import type { ReactNode } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { markdownRichReady } from "@multica/ui/markdown";
 import { Markdown } from "./markdown";
+
+beforeAll(async () => {
+  // LRM-1264 R4 — rich pipeline is lazy; wait so sync assertions see real output.
+  await markdownRichReady;
+});
 
 vi.mock("@multica/core/config", () => ({
   useConfigStore: (selector: (state: { cdnDomain: string }) => unknown) =>
@@ -147,42 +153,44 @@ const ligatureClasses = [
 ];
 
 describe("Markdown", () => {
-  it("disables ligatures inside raw code tags", () => {
+  it("disables ligatures inside raw code tags", async () => {
     render(<Markdown>{"<code>uv run --extra dev pytest -q</code>"}</Markdown>);
 
-    expect(screen.getByText("uv run --extra dev pytest -q")).toHaveClass(...ligatureClasses);
+    expect(await screen.findByText("uv run --extra dev pytest -q")).toHaveClass(...ligatureClasses);
   });
 
-  it("disables ligatures inside fenced code blocks", () => {
+  it("disables ligatures inside fenced code blocks", async () => {
     render(<Markdown>{"```sh\nuv run --extra dev pytest -q\n```"}</Markdown>);
 
-    expect(screen.getByText("uv run --extra dev pytest -q")).toHaveClass(...ligatureClasses);
+    expect(await screen.findByText("uv run --extra dev pytest -q")).toHaveClass(...ligatureClasses);
   });
 
-  it("disables ligatures in terminal-mode code", () => {
+  it("disables ligatures in terminal-mode code", async () => {
     render(<Markdown mode="terminal">{"<code>uv run --extra dev pytest -q</code>"}</Markdown>);
 
-    expect(screen.getByText("uv run --extra dev pytest -q")).toHaveClass(...ligatureClasses);
+    expect(await screen.findByText("uv run --extra dev pytest -q")).toHaveClass(...ligatureClasses);
   });
 
-  it("renders slash skill links as slash command pills", () => {
+  it("renders slash skill links as slash command pills", async () => {
     const { container } = render(
       <Markdown>[/deploy](slash://skill/abc-123)</Markdown>,
     );
 
+    expect(await screen.findByText("/deploy")).toBeTruthy();
     const pill = container.querySelector(".slash-command");
     expect(pill).not.toBeNull();
     expect(pill?.textContent).toBe("/deploy");
   });
 
-  it("renders project mention links as project chips", () => {
+  it("renders project mention links as project chips", async () => {
     render(<Markdown>{"[Roadmap](mention://project/project-123)"}</Markdown>);
 
-    expect(screen.getByTestId("project-chip")).toHaveTextContent("project-123");
+    // LRM-1264 R3 — ProjectChip is lazy-loaded behind Suspense.
+    expect(await screen.findByTestId("project-chip")).toHaveTextContent("project-123");
     expect(screen.getByRole("link")).toHaveAttribute("href", "/projects/project-123");
   });
 
-  it("forwards issue mention link text as fallbackLabel (LRM-493)", () => {
+  it("forwards issue mention link text as fallbackLabel (LRM-493)", async () => {
     // `[LRM-487](mention://issue/<uuid>)` must not drop the author label — that
     // is what made mobile paint a truncated bare UUID.
     render(
@@ -191,7 +199,8 @@ describe("Markdown", () => {
       </Markdown>,
     );
 
-    const card = screen.getByTestId("issue-mention-card");
+    // LRM-1264 R3 — IssueMentionCard is lazy-loaded behind Suspense.
+    const card = await screen.findByTestId("issue-mention-card");
     expect(card).toHaveAttribute("data-fallback-label", "LRM-487");
     expect(card).toHaveTextContent("LRM-487");
   });

@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -1114,9 +1115,41 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		mc = append([]byte(nil), rawMcpConfig...)
 	}
 
+	// Hire hard-cut: agent:create cards use action_card_id (no draft_id bridge).
+	actionCardID, hasActionCardID, err := extractActionCardID(rawFields)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if hasActionCardID {
+		card, code := h.loadActionCard(r, workspaceID, actionCardID)
+		switch code {
+		case agentActionLookupOK:
+			if card.Status != agentActionStatusPrepared {
+				writeCodedError(w, http.StatusConflict, agentActionLookupNotPrepared, "action card is not prepared")
+				return
+			}
+			if card.ActionType != agentActionTypeCreate {
+				writeError(w, http.StatusBadRequest, "action_card_id is not an agent:create card")
+				return
+			}
+		case agentActionLookupNotFound:
+			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
+			return
+		default:
+			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
+			return
+		}
+	}
+	// Research / legacy seed only: draft_id still loads initial notes/memory when
+	// present. Agent hire must not use drafts (agent draft create is 410).
 	draftID, hasDraftID, err := extractDraftID(rawFields)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if hasDraftID && hasActionCardID {
+		writeError(w, http.StatusBadRequest, "action_card_id and draft_id are mutually exclusive")
 		return
 	}
 	initialNotes := cleanInitialContextMap(req.InitialNotes, allowedInitialNoteSeedPath)
@@ -1201,6 +1234,19 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
+	if hasActionCardID {
+		code, markErr := h.markActionCardDone(r, workspaceID, actionCardID, parseUUID(ownerID), created.ID)
+		if markErr != nil {
+			slog.Warn("mark action card done failed", append(logger.RequestAttrs(r), "error", markErr, "action_card_id", uuidToString(actionCardID))...)
+		} else if code == agentActionLookupNotPrepared {
+			// Card raced to non-prepared; agent row already created — report conflict.
+			writeCodedError(w, http.StatusConflict, agentActionLookupNotPrepared, "action card is not prepared")
+			return
+		} else if code == agentActionLookupNotFound {
+			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
+			return
+		}
+	}
 	if hasDraftID {
 		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
 	}
@@ -1396,6 +1442,15 @@ func redactAgentResponseForActor(resp *AgentResponse, actorType string) {
 // agent owner or workspace owner/admin can do that, regardless of whether the
 // agent is public or private.
 func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent db.Agent) bool {
+	// Agent principal (Raft align / task #125): may only manage self.
+	// Human owner/admin workspace management is unchanged.
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		if p.AgentID != uuidToString(agent.ID) {
+			writeError(w, http.StatusForbidden, "agents may only manage themselves")
+			return false
+		}
+		return true
+	}
 	wsID := uuidToString(agent.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
 	if !ok {
@@ -1410,8 +1465,16 @@ func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent d
 	return true
 }
 
-// canUpdateAgent permits the normal owner/admin update path.
+// canUpdateAgent permits the normal owner/admin update path for humans,
+// and self-only updates for AgentPrincipal (task #125 / Raft align).
 func (h *Handler) canUpdateAgent(w http.ResponseWriter, r *http.Request, agent db.Agent, rawFields map[string]json.RawMessage) bool {
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		if p.AgentID != uuidToString(agent.ID) {
+			writeError(w, http.StatusForbidden, "agents may only update themselves")
+			return false
+		}
+		return true
+	}
 	wsID := uuidToString(agent.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
 	if !ok {

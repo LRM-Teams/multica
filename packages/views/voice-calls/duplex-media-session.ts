@@ -172,6 +172,10 @@ export function createDuplexMediaSession(
   let muted = false;
   let speakerphone = false;
   let closed = false;
+  // A disconnect can race an awaited browser permission prompt. Incrementing
+  // this generation invalidates every in-flight setup continuation, even if a
+  // later connect has already reset `closed`.
+  let connectionGeneration = 0;
   let pcmBuffer: number[] = [];
   let silenceMs = 0;
   let playbackTime = 0;
@@ -367,6 +371,7 @@ export function createDuplexMediaSession(
         );
       }
 
+      const setupGeneration = ++connectionGeneration;
       closed = false;
       ws = new WebSocketImpl(wsUrl);
 
@@ -387,6 +392,8 @@ export function createDuplexMediaSession(
         ws?.addEventListener("open", onOpen);
         ws?.addEventListener("error", onError);
       });
+
+      if (closed || setupGeneration !== connectionGeneration) return;
 
       ws.addEventListener("message", (raw) => {
         const message = raw as MessageEvent<string>;
@@ -411,12 +418,22 @@ export function createDuplexMediaSession(
       playbackTime = playbackContext.currentTime;
       await applySpeakerphone();
 
-      mediaStream = await getUserMedia({
+      const grantedStream = await getUserMedia({
         audio: deviceId ? { deviceId: { exact: deviceId } } : true,
         video: false,
       });
+      if (closed || setupGeneration !== connectionGeneration) {
+        for (const track of grantedStream.getTracks()) track.stop();
+        return;
+      }
+      mediaStream = grantedStream;
       // Permission grant is a fresh user-activation window on mobile — resume again.
       await ensureAudioContextsRunning();
+      if (closed || setupGeneration !== connectionGeneration) {
+        await teardownCapture();
+        await teardownPlayback();
+        return;
+      }
       sourceNode = captureContext.createMediaStreamSource(mediaStream);
       processor = captureContext.createScriptProcessor(4096, 1, 1);
       processor.onaudioprocess = (audioEvent) => {
@@ -484,6 +501,7 @@ export function createDuplexMediaSession(
     async disconnect(): Promise<void> {
       if (closed) return;
       closed = true;
+      connectionGeneration += 1;
       flushPcmFrame(false);
       sendJson({ type: "client.close" });
       ws?.close();

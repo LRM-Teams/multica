@@ -11,6 +11,12 @@
 
 import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
 import { LOGIC_LANE_IDS, laneForNode, type LogicLaneId } from "./logic-lanes";
+import {
+  CONTENT_FACE_A11Y_ZH,
+  CONTENT_FACE_COPY_ZH,
+  CONTENT_FACE_KEYS,
+  resolveContentFaceValues,
+} from "./research-node-content-faces";
 
 export type GraphEdgeLike = {
   from_node_id: string;
@@ -208,7 +214,7 @@ const STATUS_LABEL_ZH: Record<string, string> = {
   conflict: "冲突",
   refuted: "已否定",
   dead_end: "死胡同",
-  abandoned: "已放弃",
+  abandoned: "已废弃",
   cancelled: "已取消",
   active: "运行中",
   running: "运行中",
@@ -252,6 +258,11 @@ export function buildNodeAccessibleName(node: ResearchGraphNode): string {
   const lane = LANE_LABEL_ZH[laneForNode(node)];
   const parts = [title, status, lane];
   if (isLowConfidence(node)) parts.push("低置信");
+  // LRM-1332: four content-face labels must not rely on visual position alone.
+  const faces = resolveContentFaceValues(node, "surface", CONTENT_FACE_COPY_ZH);
+  for (const key of CONTENT_FACE_KEYS) {
+    parts.push(`${CONTENT_FACE_A11Y_ZH[key]} ${faces[key]}`);
+  }
   return parts.join("，");
 }
 

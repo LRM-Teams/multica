@@ -3,7 +3,8 @@
 import * as React from "react";
 import type { Attachment, MessagePart } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
-import { Attachment as AttachmentRenderer, AttachmentDownloadProvider } from "../../editor";
+import { Attachment as AttachmentRenderer } from "../../editor/attachment";
+import { AttachmentDownloadProvider } from "../../editor/attachment-download-context";
 import { useT } from "../../i18n/use-t";
 import {
   resolveGalleryLayout,

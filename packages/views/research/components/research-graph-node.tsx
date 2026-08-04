@@ -13,11 +13,13 @@ import {
   resolveLogicStatus,
   type LogicLaneId,
 } from "../lib/logic-lanes";
+import { isAbandonedStatus } from "../lib/abandon-reason";
 import { nodeIsVisuallyBusy } from "../lib/node-visuals";
 import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { isCompactActivityLabel } from "../../channels/components/is-compact-activity-label";
 import { useT } from "../../i18n/use-t";
 import { ResearchCardMenu } from "./research-card-menu";
+import { ResearchNodeContentFaces } from "./research-node-content-faces";
 
 export type ResearchFlowNode = Node<ResearchFlowNodeData, "research">;
 
@@ -78,18 +80,24 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
     : undefined;
 
   const menuOpen = !!data.menuOpen;
+  const abandoned = isAbandonedStatus(n.status);
 
   return (
     <div
       className={cn(
         "research-graph-node-shell relative grid w-full grid-cols-[1fr_auto] gap-x-2 gap-y-1 overflow-hidden rounded-lg border bg-card px-3 py-2.5 text-left transition-colors duration-150",
-        aggregateSize ? "min-h-0 max-h-none" : "min-h-[68px] max-h-[88px]",
+        // LRM-1332 content face height (112–124); global row gap remains LRM-1295.
+        aggregateSize ? "min-h-0 max-h-none" : "min-h-[112px] max-h-[124px]",
         "hover:border-muted-foreground/40",
+        // LRM-1333: abandoned = dashed + muted wash (not destructive / strikethrough).
+        abandoned && "border-dashed border-muted-foreground/40 bg-muted text-muted-foreground",
         selected &&
           "border-[var(--brand)] ring-2 ring-[color-mix(in_oklch,var(--brand)_18%,transparent)]",
-        status.tone === "run" &&
+        !abandoned &&
+          status.tone === "run" &&
           "border-[color-mix(in_oklch,var(--brand)_45%,var(--border))]",
-        status.tone === "fail" &&
+        !abandoned &&
+          status.tone === "fail" &&
           "border-[color-mix(in_oklch,var(--destructive)_40%,var(--border))]",
         pulse && "motion-safe:[&_[data-status-dot]]:animate-pulse",
       )}
@@ -100,6 +108,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
       data-git-lane={data.gitLane ?? 0}
       data-branch={data.branchId}
       data-node-type={n.node_type}
+      data-abandoned={abandoned || undefined}
       data-testid={
         logicRole === "start"
           ? "research-logic-start"
@@ -134,22 +143,29 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
         )}
         onClick={() => data.onViewDetail?.(n)}
       >
-        <span className="line-clamp-2 text-sm font-medium leading-snug text-foreground">
+        <span className="line-clamp-1 text-sm font-semibold leading-5 text-foreground">
           {title}
         </span>
+        {logicRole === "step" ? (
+          <ResearchNodeContentFaces node={n} density="surface" />
+        ) : null}
         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <span
             data-status-dot
+            data-testid={abandoned ? "research-node-abandoned-pill" : undefined}
+            aria-hidden={abandoned || undefined}
             className={cn(
               "inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-xs font-medium",
-              status.tone === "ok" && "bg-success/15 text-success",
-              status.tone === "run" && "bg-brand/15 text-brand",
-              status.tone === "wait" && "bg-warning/15 text-warning",
-              status.tone === "fail" && "bg-destructive/15 text-destructive",
-              status.tone === "mute" && "bg-muted text-muted-foreground",
+              !abandoned && status.tone === "ok" && "bg-success/15 text-success-strong",
+              !abandoned && status.tone === "run" && "bg-brand/15 text-brand",
+              !abandoned && status.tone === "wait" && "bg-warning/15 text-warning",
+              !abandoned && status.tone === "fail" && "bg-destructive/15 text-destructive",
+              (abandoned || status.tone === "mute") && "bg-muted text-muted-foreground",
             )}
           >
-            {t(($) => $.logic.status[status.key])}
+            {abandoned
+              ? t(($) => $.logic.status.abandoned)
+              : t(($) => $.logic.status[status.key])}
           </span>
           <span className="truncate">{ownerLabel}</span>
           <span className="shrink-0 truncate">

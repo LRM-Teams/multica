@@ -32,7 +32,7 @@ func TestGenerateDiagnosisPiExtension_CreatesFileUnderRoot(t *testing.T) {
 	}
 }
 
-func TestGenerateDiagnosisPiExtension_RegistersFiveTools(t *testing.T) {
+func TestGenerateDiagnosisPiExtension_RegistersSixTools(t *testing.T) {
 	root := t.TempDir()
 	path, err := GenerateDiagnosisPiExtension(root, 0o600)
 	require.NoError(t, err)
@@ -47,6 +47,7 @@ func TestGenerateDiagnosisPiExtension_RegistersFiveTools(t *testing.T) {
 		"multica_get_diagnosis_progress",
 		"multica_finish_segment",
 		"multica_complete_diagnosis",
+		"multica_get_task_context",
 	}
 	for _, name := range toolNames {
 		assert.Contains(t, source, `name: "`+name+`"`, "extension must register tool %q", name)
@@ -66,7 +67,7 @@ func TestGenerateDiagnosisPiExtension_CredentialsNotEmbedded(t *testing.T) {
 	assert.Contains(t, source, "MULTICA_DIAGNOSIS_API_URL")
 	assert.Contains(t, source, "MULTICA_DIAGNOSIS_CAPABILITY_TOKEN")
 	assert.NotContains(t, source, "http://127.0.0.1") // no hardcoded URL
-	assert.NotContains(t, source, "sk-")              // no embedded token pattern
+	assert.NotContains(t, source, `"sk-`)             // no embedded token literal ("task-context" contains "sk-" legitimately)
 }
 
 func TestGenerateDiagnosisPiExtension_SchemasRejectUnknownProperties(t *testing.T) {

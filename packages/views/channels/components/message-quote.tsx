@@ -239,12 +239,14 @@ function AvailableMessageQuoteCard({
   currentUserId,
   ownName,
   onJump,
+  className,
 }: {
   message: QuoteMessage;
   quoteMessageId: string;
   currentUserId: string | null;
   ownName?: string;
   onJump?: (messageId: string) => void;
+  className?: string;
 }) {
   const { t } = useT("channels");
   const presentation = useQuotePresentation(message, currentUserId, ownName);
@@ -262,6 +264,7 @@ function AvailableMessageQuoteCard({
       className={cn(
         "mb-1 w-full text-left transition-opacity",
         canJump ? "cursor-pointer hover:opacity-80" : "cursor-default",
+        className,
       )}
       aria-label={t(($) => $.quote.jump_to)}
     >
@@ -281,12 +284,14 @@ export function MessageQuoteCard({
   currentUserId,
   ownName,
   onJump,
+  className,
 }: {
   quote?: ChannelMessageQuote | null;
   quoteMessageId?: string | null;
   currentUserId: string | null;
   ownName?: string;
   onJump?: (messageId: string) => void;
+  className?: string;
 }) {
   const { t } = useT("channels");
   const message = quote ? messageFromSnapshot(quote) : null;
@@ -298,7 +303,7 @@ export function MessageQuoteCard({
       <div
         data-testid="message-quote-card"
         data-quote-status={quote?.status ?? "inaccessible"}
-        className="mb-1 w-full text-left"
+        className={cn("mb-1 w-full text-left", className)}
       >
         <p className="truncate text-[12px] leading-5 text-muted-foreground">
           <span className="select-none text-muted-foreground/80">{"> "}</span>
@@ -319,6 +324,7 @@ export function MessageQuoteCard({
       currentUserId={currentUserId}
       ownName={ownName}
       onJump={onJump}
+      className={className}
     />
   );
 }

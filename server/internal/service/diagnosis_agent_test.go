@@ -94,6 +94,31 @@ func TestLoadExistingCompletedDiagnosis_ReturnsMatchingTopology(t *testing.T) {
 	assert.Equal(t, DiagnosisReport{RunID: "run-1", CompletedSegments: 1, TotalSegments: 1, Status: DiagnosisRunCompleted}, report)
 }
 
+// Quickstart Scenario 5.2: re-triggering a completed dispatch with unchanged
+// topology replays the existing completed run (done=true), so the caller
+// returns it without provisioning a new sandbox.
+func TestCreateOrResumeDiagnosisRun_CompletedTopologyReplayReturnsDone(t *testing.T) {
+	store, _ := newTestDiagnosisStore(t)
+	segmentIDs := []string{"seg-a"}
+	_, err := store.CreateRun(context.Background(), DiagnosisRunCheckpoint{
+		RunID:             "run-1",
+		ProjectID:         "project-1",
+		TaskID:            "task-1",
+		TopologyHash:      topologyHashFromIDs(segmentIDs),
+		OrderedSegmentIDs: segmentIDs,
+	})
+	require.NoError(t, err)
+	_, err = store.StartSegment(context.Background(), "run-1", "seg-a", 0, 0)
+	require.NoError(t, err)
+	require.NoError(t, store.CompleteSegment(context.Background(), "run-1", "seg-a"))
+	require.NoError(t, store.CompleteRun(context.Background(), "run-1", topologyHashFromIDs(segmentIDs)))
+
+	_, report, done, err := CreateOrResumeDiagnosisRun(context.Background(), store, "project-1", "task-1", segmentIDs)
+	require.NoError(t, err)
+	assert.True(t, done, "completed run with unchanged topology must replay, not re-provision")
+	assert.Equal(t, DiagnosisReport{RunID: "run-1", CompletedSegments: 1, TotalSegments: 1, Status: DiagnosisRunCompleted}, report)
+}
+
 func TestParseStepRewards_ClampsAndSkips(t *testing.T) {
 	in := `[{"segment_id":"s1","seq":1,"score":99},{"segment_id":"s1","seq":-1,"score":5}]`
 	got, _ := parseStepRewards(in, 10) // 99 clamps to 10; seq=-1 skipped
@@ -413,6 +438,7 @@ func TestOnDemandSystemPrompt_ContainsToolNames(t *testing.T) {
 
 	prompt := r.onDemandSystemPrompt()
 	toolNames := []string{
+		"multica_get_task_context",
 		"multica_get_segment_messages",
 		"multica_record_step_rewards",
 		"multica_get_diagnosis_progress",
@@ -422,6 +448,92 @@ func TestOnDemandSystemPrompt_ContainsToolNames(t *testing.T) {
 	for _, name := range toolNames {
 		assert.Contains(t, prompt, name)
 	}
+}
+
+// TestPrepareSandboxBootstrap_ParallelAssemblyMatchesServerPath is the spec 005
+// T019 parity guard: the sandbox path must deliver the same bootstrap prompt
+// content (project ID, score max, ordered topology, per-segment expectations)
+// and the same on-demand system prompt the server-mode session uses.
+func TestPrepareSandboxBootstrap_ParallelAssemblyMatchesServerPath(t *testing.T) {
+	ctx := context.Background()
+
+	stores := new(MockDiagnosisStores)
+	r, err := NewDiagnosisAgentRunner(DiagnosisAgentConfig{
+		ScoreMax:     10,
+		Backend:      &fakeBackend{},
+		DAGStore:     stores,
+		MessageStore: stores,
+	})
+	require.NoError(t, err)
+
+	state := NewDiagnosisStateStore(newFakeDiagnosisStateQueries())
+	ordered := []string{"seg-1", "seg-2"}
+	run, err := state.CreateRun(ctx, DiagnosisRunCheckpoint{
+		RunID:             "run-parity",
+		ProjectID:         diagProjectID,
+		TaskID:            "task-parity",
+		TopologyHash:      topologyHashFromIDs(ordered),
+		OrderedSegmentIDs: ordered,
+	})
+	require.NoError(t, err)
+
+	seg1 := db.GetInteractionDAGSegmentByIDRow{SegmentID: "seg-1", ProjectID: diagProjectID, AgentRunID: "task-1", StartSeq: 1, EndSeq: 4}
+	seg2 := db.GetInteractionDAGSegmentByIDRow{SegmentID: "seg-2", ProjectID: diagProjectID, AgentRunID: "task-2", StartSeq: 1, EndSeq: 2}
+	stores.On("GetInteractionDAGSegmentByID", ctx, "seg-1").Return(seg1, nil)
+	stores.On("GetInteractionDAGSegmentByID", ctx, "seg-2").Return(seg2, nil)
+	msgs1 := []db.TaskMessage{
+		{Seq: 1, Type: "user", Content: pgtype.Text{String: "u1", Valid: true}},
+		{Seq: 2, Type: "assistant", Content: pgtype.Text{String: "a2", Valid: true}},
+		{Seq: 3, Type: "assistant", Content: pgtype.Text{String: "a3", Valid: true}},
+		{Seq: 4, Type: "tool", Content: pgtype.Text{String: "t4", Valid: true}},
+	}
+	msgs2 := []db.TaskMessage{
+		{Seq: 1, Type: "assistant", Content: pgtype.Text{String: "b1", Valid: true}},
+		{Seq: 2, Type: "user", Content: pgtype.Text{String: "b2", Valid: true}},
+	}
+	stores.On("MessagesForTaskInRange", ctx, "task-1", int32(1), int32(4)).Return(msgs1, nil)
+	stores.On("MessagesForTaskInRange", ctx, "task-2", int32(1), int32(2)).Return(msgs2, nil)
+
+	dagWriter := newFakeDiagnosisDAGWriter()
+	bootstrap, err := r.PrepareSandboxBootstrap(ctx, state, dagWriter, diagProjectID, run, ordered)
+	require.NoError(t, err)
+
+	// Independently re-assemble exactly what the server-mode DiagnoseOnDemand
+	// path builds (diagnosis_agent.go: segInfos loop + shared builders).
+	segments, err := state.ListSegments(ctx, run.RunID)
+	require.NoError(t, err)
+	segInfos := make([]segmentDiagnosisInfo, 0, len(segments))
+	completedCount := 0
+	for _, seg := range segments {
+		if seg.Status == SegmentDiagnosisCompleted {
+			completedCount++
+			continue
+		}
+		totalRewards, _ := dagWriter.CountDiagnosisStepRewards(ctx, diagProjectID, seg.SegmentID)
+		segInfos = append(segInfos, segmentDiagnosisInfo{
+			SegmentID:        seg.SegmentID,
+			ExpectedMessages: seg.ExpectedMessageCount,
+			ExpectedRewards:  seg.ExpectedRewardCount,
+			RecordedRewards:  totalRewards,
+		})
+	}
+	expectedPrompt := r.buildTopologyBootstrapPrompt(diagProjectID, ordered, segInfos, segments)
+
+	assert.Equal(t, expectedPrompt, bootstrap.BootstrapPrompt, "sandbox bootstrap prompt must equal the server-path prompt byte-for-byte")
+	assert.Equal(t, r.onDemandSystemPrompt(), bootstrap.SystemPrompt, "sandbox system prompt must equal the server-path system prompt")
+	assert.Equal(t, completedCount, bootstrap.CompletedSegments)
+	assert.Equal(t, len(segments), bootstrap.TotalSegments)
+
+	// Content parity: project ID, score max, ordered topology, per-segment
+	// expectations; goal/gold omitted by design (fetched via the API).
+	assert.Contains(t, bootstrap.BootstrapPrompt, "Project: "+diagProjectID)
+	assert.Contains(t, bootstrap.BootstrapPrompt, "Score max: 10")
+	assert.Contains(t, bootstrap.BootstrapPrompt, "SEGMENT TOPOLOGY (ordered):")
+	assert.Contains(t, bootstrap.BootstrapPrompt, "1. segment_id=seg-1")
+	assert.Contains(t, bootstrap.BootstrapPrompt, "2. segment_id=seg-2")
+	assert.Contains(t, bootstrap.BootstrapPrompt, "segment_id=seg-1 expected_messages=4 expected_rewards=2")
+	assert.Contains(t, bootstrap.BootstrapPrompt, "segment_id=seg-2 expected_messages=2 expected_rewards=1")
+	assert.NotContains(t, bootstrap.BootstrapPrompt, "goal", "bootstrap prompt must not embed task context")
 }
 
 func TestTopologyHashFromIDs_Deterministic(t *testing.T) {

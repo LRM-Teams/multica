@@ -157,6 +157,34 @@ describe("ResearchSessionRow (LRM-1106 / LRM-1099)", () => {
     expect(badge).toBeTruthy();
   });
 
+  it("LRM-1285 Gate FAIL: desktop stage-energy slot is fixed w-28 sibling of flex-1 title", () => {
+    const longTitle =
+      "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员，开发环境要求";
+    const { container } = render(
+      <>
+        <ResearchSessionRow session={session({ title: "行业调研" })} href="/research/a" />
+        <ResearchSessionRow
+          session={session({ id: "s2", title: longTitle, current_stage: "s4_delivery" })}
+          href="/research/b"
+        />
+      </>,
+    );
+    const rows = [...container.querySelectorAll('[data-testid="research-session-row"]')];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      const titleCol = row.querySelector(":scope > .min-w-0.flex-1");
+      const slot = row.querySelector('[data-testid="research-session-stage-energy-slot"]');
+      expect(titleCol).toBeTruthy();
+      expect(slot).toBeTruthy();
+      expect(slot?.className).toMatch(/\bw-28\b/);
+      expect(slot?.className).toMatch(/\bshrink-0\b/);
+      expect(slot?.className).toMatch(/\bmd:block\b/);
+      // Slot is a direct flex child — not nested under the title column.
+      expect(slot?.parentElement).toBe(row);
+      expect(titleCol?.contains(slot!)).toBe(false);
+    }
+  });
+
   it("uses CSS truncate for long empty-title goals (no hard char ellipsis)", () => {
     const longGoal =
       "如何开发一个网页游戏。对标游戏传奇网页版。告诉我需要的各种人员，开发环境要求。目前我们的设备是几台 linux 服务器";
@@ -191,13 +219,25 @@ describe("ResearchSessionRow (LRM-1106 / LRM-1099)", () => {
     expect(screen.queryByTestId("avatar-stack")).toBeNull();
   });
 
-  it("dims archived rows", () => {
+  it("softens archived rows with solid muted title — no row opacity-* (LRM-1368)", () => {
     const { container } = render(
       <ResearchSessionRow session={session({ status: "archived" })} href="/research/s1" />,
     );
-    expect(
-      container.querySelector('[data-testid="research-session-row"]')?.className,
-    ).toContain("opacity-55");
+    const row = container.querySelector('[data-testid="research-session-row"]');
+    expect(row?.className).not.toMatch(/\bopacity-\d/);
+    const title = row?.querySelector("a .text-sm.font-medium");
+    expect(title?.className).toContain("text-muted-foreground");
+    expect(title?.className).not.toMatch(/\btext-foreground\b/);
+    expect(title?.className).not.toMatch(/\bopacity-\d/);
+  });
+
+  it("keeps non-archived titles on solid foreground (LRM-1368)", () => {
+    const { container } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    const title = container.querySelector(
+      '[data-testid="research-session-row"] a .text-sm.font-medium',
+    );
+    expect(title?.className).toContain("text-foreground");
+    expect(title?.className).not.toContain("text-muted-foreground");
   });
 
   it("links title to the session with a single primary tab stop; actions stay outside", () => {

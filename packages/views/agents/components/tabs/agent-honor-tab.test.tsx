@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import enAgents from "../../../locales/en/agents.json";
+import zhAgents from "../../../locales/zh-Hans/agents.json";
 import { AchievementCard, AgentHonorAdminContent } from "./agent-honor-tab";
 
 vi.mock("@multica/core/hooks", () => ({
@@ -21,10 +21,10 @@ vi.mock("@tanstack/react-query", () => ({
 vi.mock("../../../i18n", () => ({
   useT: () => ({
     t: (
-      selector: (bundle: typeof enAgents) => unknown,
+      selector: (bundle: typeof zhAgents) => unknown,
       options?: Record<string, string | number>,
     ) => {
-      const template = selector(enAgents);
+      const template = selector(zhAgents);
       if (typeof template !== "string") return String(template ?? "");
       return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) =>
         String(options?.[key] ?? `{{${key}}}`),
@@ -59,7 +59,9 @@ describe("AchievementCard", () => {
     );
 
     expect(container.querySelector('[data-agent-honor-level="1"]')).toBeInTheDocument();
-    expect(container.querySelector("svg[aria-label='First Launch']")).not.toBeInTheDocument();
+    expect(container.querySelector("svg[aria-label='星海首航']")).not.toBeInTheDocument();
+    expect(container).toHaveTextContent("+25 经验");
+    expect(container).not.toHaveTextContent("XP");
   });
 });
 
@@ -105,22 +107,22 @@ describe("AgentHonorAdminContent", () => {
       />,
     );
 
-    expect(screen.getByRole("switch", { name: "Enable First Launch" })).toBeVisible();
+    expect(screen.getByRole("switch", { name: "启用星海首航" })).toBeVisible();
     expect(
-      screen.getByRole("spinbutton", { name: "First Launch target" }),
+      screen.getByRole("spinbutton", { name: "星海首航目标值" }),
     ).toBeVisible();
     const correctionType = screen.getByRole("combobox", {
-      name: "Correction type",
+      name: "修正类型",
     });
     expect(correctionType).toBeVisible();
     expect(
-      screen.getByRole("spinbutton", { name: "Experience adjustment" }),
+      screen.getByRole("spinbutton", { name: "经验调整值" }),
     ).toBeVisible();
-    expect(screen.getByRole("textbox", { name: "Audit reason" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "修正原因" })).toBeVisible();
 
     fireEvent.change(correctionType, { target: { value: "achievement" } });
     expect(
-      screen.getByRole("combobox", { name: "Select achievement" }),
+      screen.getByRole("combobox", { name: "选择成就" }),
     ).toBeVisible();
   });
 });

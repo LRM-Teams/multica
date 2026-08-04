@@ -19,8 +19,8 @@ export const channelProjectKeys = {
 export function channelProjectOptions(wsId: string, channelId: string) {
   return queryOptions({
     queryKey: channelProjectKeys.detail(wsId, channelId),
-    queryFn: async () => {
-      const res = await api.getChannelProject(channelId);
+    queryFn: async ({ signal }) => {
+      const res = await api.getChannelProject(channelId, { signal });
       return res.project_id;
     },
     enabled: !!wsId && !!channelId,

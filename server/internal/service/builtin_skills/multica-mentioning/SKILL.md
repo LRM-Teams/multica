@@ -37,7 +37,7 @@ goes.
 A name is not a UUID. Look the UUID up first, from the matching list command:
 
 - a person → `multica workspace member list --output json` → use `user_id`
-- an agent → `multica agent list --output json` → use `id`
+- an agent → `multica workspace info --agents --output json` → use `id`
 
 For a person the mention id is the `user_id`, NOT the membership-row id — the
 backend's own roster formatter uses `user_id` for member mentions. Match by

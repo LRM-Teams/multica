@@ -48,7 +48,7 @@ function decisionTone(decision: string): string {
     case "continue":
       return "border-brand/30 bg-brand/5 text-brand";
     case "stop_enough":
-      return "border-success/30 bg-success/5 text-success";
+      return "border-success/30 bg-success/5 text-success-strong";
     case "stop_budget":
       return "border-warning/40 bg-warning/10 text-warning";
     default:
@@ -133,9 +133,14 @@ export function ResearchProductRoundCardView({
     interactedRef.current = true;
   };
 
+  // LRM-1339 — summary 行的层级只靠字号/字重/等宽，不靠 alpha 压文字。
+  // 这些 span 继承 `decisionTone` 的语义色（brand/success/warning/muted-foreground），
+  // 再乘 opacity 会把 11px/10px 小字压到 WCAG AA 以下（同 LRM-1252 缺陷类）。
   const summary = (
     <button
       type="button"
+      data-testid="research-round-summary"
+      data-round-decision={card.decision}
       className={cn(
         "flex w-full items-start gap-2 rounded-lg border px-2.5 py-2 text-left text-xs transition-colors hover:bg-muted/40",
         decisionTone(card.decision),
@@ -145,15 +150,24 @@ export function ResearchProductRoundCardView({
       <span className="font-semibold">
         {t(($) => $.round.round_n, { n: card.round_number })} · {decisionLabel}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[11px] opacity-80">
+      <span
+        data-testid="research-round-summary-note"
+        className="min-w-0 flex-1 truncate text-[11px] font-normal"
+      >
         {card.confidence_note || t(($) => $.round.open_detail)}
       </span>
       {!autoAdopted && secondsLeft > 0 ? (
-        <span className="shrink-0 font-mono text-[10px] tabular-nums opacity-70">
+        <span
+          data-testid="research-round-summary-countdown"
+          className="shrink-0 font-mono text-[10px] tabular-nums"
+        >
           {t(($) => $.round.auto_adopt_countdown, { s: secondsLeft })}
         </span>
       ) : null}
-      <span className="shrink-0 font-mono text-[10px] opacity-70">
+      <span
+        data-testid="research-round-summary-budget"
+        className="shrink-0 font-mono text-[10px] tabular-nums"
+      >
         {card.budget_used}/{card.budget_used + card.budget_remaining}
       </span>
     </button>
@@ -181,7 +195,10 @@ export function ResearchProductRoundCardView({
             >
               {decisionLabel}
               {card.decision === "stop_budget" ? (
-                <span className="ml-2 font-normal opacity-80">
+                <span
+                  data-testid="research-round-budget-capped"
+                  className="ml-2 font-normal"
+                >
                   {t(($) => $.round.budget_capped)}
                 </span>
               ) : null}
@@ -250,7 +267,10 @@ export function ResearchProductRoundCardView({
                   {t(($) => $.round.goal_patch)}
                 </h3>
                 {currentGoal ? (
-                  <p className="mb-1 text-[11px] text-muted-foreground line-through opacity-70">
+                  <p
+                    data-testid="research-round-goal-current"
+                    className="mb-1 text-[11px] text-muted-foreground line-through"
+                  >
                     {currentGoal}
                   </p>
                 ) : null}

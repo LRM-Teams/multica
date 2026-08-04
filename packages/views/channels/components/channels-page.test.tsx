@@ -1035,6 +1035,142 @@ describe("voice send failure leaves a durable record (#838)", () => {
     // goes away) must not remove the record.
     expect(screen.getByTestId("composer-pending-voice")).toBeInTheDocument();
   });
+
+  // LRM-1356 — the in-flight state the record shows must be THIS record's own
+  // retry, not the surface's send mutation.
+  //
+  // `sendMessage` is one mutation for the whole channel composer and it outlives
+  // a channel switch, so `isPending` is true for any send in flight anywhere on
+  // the page. Wired to that, an unrelated send dimmed the unsent recording and
+  // — because both actions guard on the same flag (LRM-1354) — took away Delete
+  // too: the user could not even discard a recording that had nothing to do with
+  // the send that was running. Delete is the record's only exit besides a
+  // committed retry, so this is a real dead end, not just a cosmetic dim.
+  describe("in-flight state is scoped to this record's own retry (LRM-1356)", () => {
+    /** A send that never settles — leaves `sendMessage.isPending` true. */
+    function hangNextSend() {
+      sendSpy().mockReturnValueOnce(new Promise<never>(() => {}));
+    }
+
+    /** Fail a voice send in `random`, then leave an unrelated send hanging in `general`. */
+    async function recordInAThenHangSendInB() {
+      sendSpy().mockRejectedValueOnce(new Error("boom-a"));
+      const fire = await openChannel();
+      fireEvent.click(fire);
+      await screen.findByTestId("composer-pending-voice");
+
+      switchTo("general");
+      await waitFor(() => {
+        expect(screen.getByTestId("active-title")).toHaveTextContent("general");
+      });
+      // B has no record of its own, so this send is unrelated to A's.
+      expect(screen.queryByTestId("composer-pending-voice")).toBeNull();
+      hangNextSend();
+      fireEvent.click(screen.getByTestId("fire-voice"));
+      await waitFor(() => {
+        expect(sendSpy().mock.calls.length).toBeGreaterThan(1);
+      });
+
+      switchTo("random");
+      await waitFor(() => {
+        expect(screen.getByTestId("active-title")).toHaveTextContent("random");
+      });
+      return await screen.findByTestId("composer-pending-voice");
+    }
+
+    it("an unrelated send in flight does not mark the record as retrying", async () => {
+      await recordInAThenHangSendInB();
+
+      expect(screen.getByTestId("composer-pending-voice-retry")).not.toHaveAttribute(
+        "aria-disabled",
+      );
+      expect(screen.getByTestId("composer-pending-voice-delete")).not.toHaveAttribute(
+        "aria-disabled",
+      );
+      const status = screen.getByTestId("composer-pending-voice-status");
+      expect(status).not.toHaveAttribute("aria-busy");
+      expect(status).toHaveTextContent("not sent");
+    });
+
+    it("an unrelated send in flight still lets the user discard the recording", async () => {
+      await recordInAThenHangSendInB();
+
+      fireEvent.click(screen.getByTestId("composer-pending-voice-delete"));
+      await waitFor(() => {
+        expect(screen.queryByTestId("composer-pending-voice")).toBeNull();
+      });
+    });
+
+    // The other half of the contract: the record's OWN retry must still show the
+    // in-flight state (LRM-1354), so scoping the flag cannot silently disable it.
+    it("this record's own retry in flight is still reported as retrying", async () => {
+      sendSpy().mockRejectedValueOnce(new Error("boom-a"));
+      const fire = await openChannel();
+      fireEvent.click(fire);
+      await screen.findByTestId("composer-pending-voice");
+
+      hangNextSend();
+      fireEvent.click(screen.getByTestId("composer-pending-voice-retry"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("composer-pending-voice-retry")).toHaveAttribute(
+          "aria-disabled",
+          "true",
+        );
+      });
+      expect(screen.getByTestId("composer-pending-voice-delete")).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      const status = screen.getByTestId("composer-pending-voice-status");
+      expect(status).toHaveAttribute("aria-busy", "true");
+      expect(status).toHaveTextContent("Resending");
+    });
+
+
+    // Same over-broad flag on the thread surface: a hanging thread send in
+    // thread B must not freeze thread A's record.
+    it("thread: a send in flight in another thread does not mark this record as retrying", async () => {
+      navState.search = new URLSearchParams();
+      const view = renderPage("chan-random");
+      await screen.findByTestId("composer");
+      // Open thread A through the same helper the other thread cases use: it
+      // waits on the pinned root text, which is the only per-thread evidence in
+      // the DOM (the thread composer mounts a tick later than the channel one).
+      const fireA = await openThread(view, "root-1", "THREADROOTONE");
+      threadSendSpy().mockRejectedValueOnce(new Error("boom-thread-a"));
+      fireEvent.click(fireA);
+      await waitFor(() => {
+        expect(
+          within(screen.getByTestId("prefix-thread")).queryByTestId("composer-pending-voice"),
+        ).not.toBeNull();
+      });
+
+      const fireB = await openThread(view, "root-2", "THREADROOTTWO");
+      threadSendSpy().mockReturnValueOnce(new Promise<never>(() => {}));
+      fireEvent.click(fireB);
+      await waitFor(() => {
+        expect(threadSendSpy().mock.calls.length).toBeGreaterThan(1);
+      });
+
+      await openThread(view, "root-1", "THREADROOTONE");
+      const prefix = within(screen.getByTestId("prefix-thread"));
+      expect(prefix.getByTestId("composer-pending-voice-retry")).not.toHaveAttribute(
+        "aria-disabled",
+      );
+      expect(prefix.getByTestId("composer-pending-voice-delete")).not.toHaveAttribute(
+        "aria-disabled",
+      );
+
+      // …and the exit really works.
+      fireEvent.click(prefix.getByTestId("composer-pending-voice-delete"));
+      await waitFor(() => {
+        expect(
+          within(screen.getByTestId("prefix-thread")).queryByTestId("composer-pending-voice"),
+        ).toBeNull();
+      });
+    });
+  });
 });
 
 describe("ChannelsPage — system #general channel (#642)", () => {
@@ -1496,7 +1632,9 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
   // #839 — the toast is the announcement, NOT the record. Dismissing it (or its
   // 4s default lifetime expiring) must not erase the fact that the removal
   // failed, so the failure also lands in the target's own row.
-  it("a failed removal leaves a durable in-row notice — surviving the toast", async () => {
+  // LRM-1327 / LRM-1300 §5: failure keeps the dialog open — dismiss Cancel
+  // first so the row notice is not under aria-hidden.
+  async function failRemoveAndDismissConfirm() {
     (
       apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
     ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
@@ -1504,9 +1642,16 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     const removeItem = await openOwnerMemberMenu();
     fireEvent.click(removeItem);
     fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalled();
+    });
+    // Dialog stays open on failure; Cancel reveals the in-row record.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    return screen.findByTestId("channel-members-row-remove-failed");
+  }
 
-    // The row itself records it — this is what remains after the toast is gone.
-    const notice = await screen.findByTestId("channel-members-row-remove-failed");
+  it("a failed removal leaves a durable in-row notice — surviving the toast", async () => {
+    const notice = await failRemoveAndDismissConfirm();
     expect(notice).toHaveTextContent("Couldn't remove this member");
     expect(screen.getByTestId("channel-members-row-remove-retry")).toBeInTheDocument();
     // Scoped to the failed member's row, not a global banner.
@@ -1516,14 +1661,7 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
   });
 
   it("retry re-opens the confirmation — it never removes on one click (#839)", async () => {
-    (
-      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
-    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
-
-    const removeItem = await openOwnerMemberMenu();
-    fireEvent.click(removeItem);
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
-    await screen.findByTestId("channel-members-row-remove-failed");
+    await failRemoveAndDismissConfirm();
 
     const callsAfterFailure = (
       apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>
@@ -1541,14 +1679,7 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
 
   it("a successful retry clears the notice — the row (and its state) go together (#839)", async () => {
     const remove = apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>;
-    (
-      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
-    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
-
-    const removeItem = await openOwnerMemberMenu();
-    fireEvent.click(removeItem);
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
-    await screen.findByTestId("channel-members-row-remove-failed");
+    await failRemoveAndDismissConfirm();
 
     // Retry → confirm again, this time the request succeeds.
     remove.mockResolvedValueOnce(undefined);
@@ -1561,14 +1692,7 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
   });
 
   it("the in-row notice clears only when the user dismisses it (#839)", async () => {
-    (
-      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
-    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
-
-    const removeItem = await openOwnerMemberMenu();
-    fireEvent.click(removeItem);
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
-    await screen.findByTestId("channel-members-row-remove-failed");
+    await failRemoveAndDismissConfirm();
 
     fireEvent.click(screen.getByTestId("channel-members-row-remove-dismiss"));
     await waitFor(() => {

@@ -44,7 +44,7 @@ Inspect before acting:
 ```bash
 multica channel list --output json
 multica channel members --target '#source' --output json
-multica agent list --output json
+multica workspace info --agents --output json
 ```
 
 Create an idempotent temporary group:

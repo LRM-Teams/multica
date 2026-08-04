@@ -22,7 +22,9 @@ import { cn } from "@multica/ui/lib/utils";
 import { useMemo } from "react";
 import { useT } from "../../i18n/use-t";
 import { useOverlayPanelA11y } from "../hooks/use-overlay-panel-a11y";
+import { isAbandonedStatus, readAbandonReason } from "../lib/abandon-reason";
 import { normalizeNodeStatusKey, visualForNodeType } from "../lib/node-visuals";
+import { ResearchNodeContentFaces } from "./research-node-content-faces";
 
 const EMPTY_SOURCES: ResearchSource[] = [];
 const EMPTY_MEMBERS: ResearchFleetMember[] = [];
@@ -349,6 +351,8 @@ function DetailBody({
     payloadString(node.payload, "reason") ||
     payloadString(node.payload, "dead_end_reason") ||
     (node.node_type === "dead_end" ? node.summary : null);
+  const abandoned = isAbandonedStatus(node.status);
+  const abandonReason = abandoned ? readAbandonReason(node) : null;
   const metricLabels = useMemo(
     () => ({
       sources: t(($) => $.node.source_count),
@@ -422,6 +426,9 @@ function DetailBody({
       </header>
 
       <div className="space-y-4 p-4">
+        {/* LRM-1332: four content faces before run Objective/Method/Outcome. */}
+        <ResearchNodeContentFaces node={node} density="detail" />
+
         {runContext.objective ? (
           <section>
             <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
@@ -513,6 +520,20 @@ function DetailBody({
                 </Badge>
               ) : null}
             </div>
+          </section>
+        ) : null}
+
+        {abandoned ? (
+          <section
+            className="rounded-md border border-dashed border-muted-foreground/40 bg-muted/40 px-3 py-2"
+            data-testid="research-node-abandon-reason"
+          >
+            <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {t(($) => $.node.abandon_reason)}
+            </h3>
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+              {abandonReason ?? t(($) => $.node.abandon_reason_pending)}
+            </p>
           </section>
         ) : null}
 

@@ -65,10 +65,11 @@ export function ResearchSessionRow({
       data-testid="research-session-row"
       data-session-id={session.id}
       className={cn(
+        // LRM-1368: archived softening is solid muted title text — never row
+        // opacity-* (alpha multiplies through title/meta/Time → WCAG FAIL).
         "group relative flex min-h-[58px] items-center gap-3 rounded-[10px] px-3 py-1.5 transition-colors",
         "hover:bg-accent/70 focus-within:bg-accent/70",
         "has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring has-[a:focus-visible]:ring-offset-1",
-        archived && "opacity-55",
       )}
     >
       <span
@@ -93,7 +94,8 @@ export function ResearchSessionRow({
         >
           <div
             className={cn(
-              "relative z-[1] text-sm font-medium tracking-tight text-foreground",
+              "relative z-[1] text-sm font-medium tracking-tight",
+              archived ? "text-muted-foreground" : "text-foreground",
               "line-clamp-2 md:truncate md:whitespace-nowrap",
             )}
           >
@@ -128,14 +130,20 @@ export function ResearchSessionRow({
         </AppLink>
       </div>
 
-      {/* Desktop columns: stage energy | time | people */}
-      <span className="relative z-[1] hidden shrink-0 md:inline">
+      {/* Desktop columns: fixed stage energy slot (w-28) | time | people.
+          Slot must carry w-28 itself (match skeleton) — md:inline alone lets
+          the column shrink-to-fit and drift with title length (Gate FAIL). */}
+      <span
+        data-testid="research-session-stage-energy-slot"
+        className="relative z-[1] hidden w-28 shrink-0 md:block"
+      >
         <ResearchSessionStageEnergy
           currentStage={session.current_stage}
           sessionStatus={status}
+          className="w-full"
         />
       </span>
-      <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground md:inline" aria-hidden>
+      <span className="hidden w-10 shrink-0 text-xs tabular-nums text-muted-foreground md:block" aria-hidden>
         <Time kind="list" value={session.updated_at} />
       </span>
 

@@ -190,6 +190,10 @@ export function useCreateIssue() {
       for (const [key, data] of qc.getQueriesData<ListIssuesCache>({ queryKey: issueKeys.list(wsId) })) {
         if (data) qc.setQueryData<ListIssuesCache>(key, addIssueToBuckets(data, newIssue));
       }
+      // Seed detail with the create response so Properties "Associated group"
+      // keeps top-level `channel` from BE (LRM-1122/1123) without waiting on
+      // a second GET — list payloads omit channel.
+      qc.setQueryData<Issue>(issueKeys.detail(wsId, newIssue.id), newIssue);
       // Surface the just-created issue in cmd+k's Recent list without
       // requiring the user to open it first.
       useRecentIssuesStore.getState().recordVisit(wsId, newIssue.id);

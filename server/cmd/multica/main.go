@@ -47,7 +47,6 @@ func init() {
 	issueCmd.GroupID = groupCore
 	projectCmd.GroupID = groupCore
 	labelCmd.GroupID = groupCore
-	agentCmd.GroupID = groupCore
 	workspaceCmd.GroupID = groupCore
 	repoCmd.GroupID = groupCore
 	skillCmd.GroupID = groupCore
@@ -58,6 +57,7 @@ func init() {
 	goalCmd.GroupID = groupCore
 	threadCmd.GroupID = groupCore
 	reminderCmd.GroupID = groupCore
+	actionCmd.GroupID = groupCore
 
 	// Runtime commands
 	daemonCmd.GroupID = groupRuntime
@@ -77,7 +77,6 @@ func init() {
 	rootCmd.AddCommand(projectCmd)
 	rootCmd.AddCommand(researchCmd)
 	rootCmd.AddCommand(labelCmd)
-	rootCmd.AddCommand(agentCmd)
 	rootCmd.AddCommand(workspaceCmd)
 	rootCmd.AddCommand(repoCmd)
 	rootCmd.AddCommand(skillCmd)
@@ -98,6 +97,7 @@ func init() {
 	rootCmd.AddCommand(goalCmd)
 	rootCmd.AddCommand(threadCmd)
 	rootCmd.AddCommand(reminderCmd)
+	rootCmd.AddCommand(actionCmd)
 	rootCmd.AddCommand(stickerCmd)
 	rootCmd.AddCommand(sandboxdCmd)
 

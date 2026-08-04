@@ -252,7 +252,10 @@ export function HonorTab() {
     rules?.level_thresholds ?? [],
     dashboard.xp_to_next_level,
   );
-  const displayName = resolveActorDisplayName(user, user?.name || "Builder");
+  const displayName = resolveActorDisplayName(
+    user,
+    user?.name || t(($) => $.honor.anonymous_builder),
+  );
   const activity = [
     ...recentUnlocks.map((item) => ({
       kind: "unlock" as const,
@@ -341,7 +344,7 @@ export function HonorTab() {
               <p className="mt-1 font-mono text-4xl font-semibold tracking-[-0.05em] text-white">
                 {numberFormatter.format(dashboard.total_xp)}
                 <span className="ml-2 text-sm tracking-normal text-cyan-300">
-                  XP
+                  {t(($) => $.honor.xp_label)}
                 </span>
               </p>
             </div>
@@ -495,7 +498,9 @@ export function HonorTab() {
                     </p>
                     <p className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                       <span className="font-mono text-sm font-semibold text-cyan-700 dark:text-cyan-300">
-                        +{numberFormatter.format(rule.xp_delta)} XP
+                        {t(($) => $.honor.xp_value, {
+                          value: `+${numberFormatter.format(rule.xp_delta)}`,
+                        })}
                       </span>
                       <span className="text-[10px] text-muted-foreground">
                         {t(($) => $.honor.daily_cap, {
@@ -712,7 +717,9 @@ export function HonorTab() {
                     </div>
                     {item.kind === "xp" ? (
                       <span className="font-mono text-xs font-semibold text-cyan-700 dark:text-cyan-300">
-                        +{numberFormatter.format(item.xp)} XP
+                        {t(($) => $.honor.xp_value, {
+                          value: `${item.xp > 0 ? "+" : ""}${numberFormatter.format(item.xp)}`,
+                        })}
                       </span>
                     ) : (
                       <Gem

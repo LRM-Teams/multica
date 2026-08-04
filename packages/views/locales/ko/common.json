@@ -4,6 +4,7 @@
   "delete": "삭제",
   "confirm": "확인",
   "loading": "로딩 중...",
+  "honor_level_value": "레벨 {{level}}",
   "time": {
     "just_now": "방금 전",
     "minutes_ago": "{{count}}분 전",

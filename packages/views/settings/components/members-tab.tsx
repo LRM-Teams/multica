@@ -96,6 +96,9 @@ function MemberRow({
   const canEditRole = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
   const canRemove = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
   const showMenu = canEditRole || canRemove;
+  const rowMenuAria = [canEditRole && t(($) => $.members.change_role), canRemove && t(($) => $.members.remove_action)]
+    .filter(Boolean)
+    .join(" / ");
   return (
     <div className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0 hover:bg-hover">
       <ActorAvatar actorType="member" actorId={member.user_id} size={32} showStatusDot />
@@ -110,22 +113,28 @@ function MemberRow({
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <Button variant="ghost" size="icon-sm" disabled={busy}>
-                <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                disabled={busy}
+                aria-label={rowMenuAria}
+                data-testid="members-tab-row-menu"
+              >
+                <MoreHorizontal className="h-4 w-4 text-muted-foreground" aria-hidden />
               </Button>
             }
           />
           <DropdownMenuContent align="end" className="w-auto">
             {canEditRole && (
               <DropdownMenuItem onClick={onChangeRole}>
-                <Shield className="h-3.5 w-3.5" />
+                <Shield className="h-3.5 w-3.5" aria-hidden />
                 {t(($) => $.members.change_role)}
               </DropdownMenuItem>
             )}
             {canEditRole && canRemove && <DropdownMenuSeparator />}
             {canRemove && (
               <DropdownMenuItem variant="destructive" onClick={onRemove}>
-                <UserMinus className="h-3.5 w-3.5" />
+                <UserMinus className="h-3.5 w-3.5" aria-hidden />
                 {t(($) => $.members.remove_action)}
               </DropdownMenuItem>
             )}
@@ -133,7 +142,7 @@ function MemberRow({
         </DropdownMenu>
       )}
       <Badge variant="secondary">
-        <RoleIcon className="h-3 w-3" />
+        <RoleIcon className="h-3 w-3" aria-hidden />
         {rc.label}
       </Badge>
     </div>
@@ -158,12 +167,12 @@ function InvitationRow({
   return (
     <div className="flex items-center gap-3 px-4 py-3">
       <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted">
-        <Mail className="h-4 w-4 text-muted-foreground" />
+        <Mail className="h-4 w-4 text-muted-foreground" aria-hidden />
       </div>
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium truncate">{invitation.invitee_email}</div>
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <Clock className="h-3 w-3" />
+          <Clock className="h-3 w-3" aria-hidden />
           <span>{t(($) => $.members.pending_status)}</span>
         </div>
       </div>
@@ -173,9 +182,11 @@ function InvitationRow({
           size="icon-sm"
           disabled={busy}
           onClick={onRevoke}
+          aria-label={t(($) => $.members.revoke_invitation_tooltip)}
           title={t(($) => $.members.revoke_invitation_tooltip)}
+          data-testid="members-tab-revoke-invitation"
         >
-          <X className="h-4 w-4 text-muted-foreground" />
+          <X className="h-4 w-4 text-muted-foreground" aria-hidden />
         </Button>
       )}
       <Badge variant="outline">
@@ -313,7 +324,7 @@ export function MembersTab() {
     <div className="space-y-8">
       <section className="space-y-4">
         <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-muted-foreground" />
+          <Users className="h-4 w-4 text-muted-foreground" aria-hidden />
           <h2 className="text-sm font-semibold">{t(($) => $.members.section_title, { count: members.length })}</h2>
           <Button
             type="button"
@@ -330,7 +341,7 @@ export function MembersTab() {
           <Card>
             <CardContent className="space-y-3">
               <div className="flex items-center gap-2">
-                <Plus className="h-4 w-4 text-muted-foreground" />
+                <Plus className="h-4 w-4 text-muted-foreground" aria-hidden />
                 <h3 className="text-sm font-medium">{t(($) => $.members.invite_title)}</h3>
               </div>
               <div className="grid gap-3 sm:grid-cols-[1fr_120px_auto]">
@@ -387,7 +398,7 @@ export function MembersTab() {
       {invitations.length > 0 && (
         <section className="space-y-4">
           <div className="flex items-center gap-2">
-            <Clock className="h-4 w-4 text-muted-foreground" />
+            <Clock className="h-4 w-4 text-muted-foreground" aria-hidden />
             <h2 className="text-sm font-semibold">{t(($) => $.members.pending_title, { count: invitations.length })}</h2>
           </div>
           <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">

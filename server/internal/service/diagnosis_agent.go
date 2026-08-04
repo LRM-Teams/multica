@@ -434,6 +434,41 @@ func (r *DiagnosisAgentRunner) freezeDiagnosisSegmentTargets(
 	return targets, nil
 }
 
+// CreateOrResumeDiagnosisRun is the idempotent create/resume prelude shared by
+// the server-mode and sandbox-mode diagnosis paths: an active run is resumed,
+// a completed run with matching topology is returned as-is (done=true), and
+// otherwise a fresh run is created. The returned checkpoint is the run to
+// execute when done is false.
+func CreateOrResumeDiagnosisRun(ctx context.Context, state *DiagnosisStateStore, projectID, taskID string, orderedSegmentIDs []string) (DiagnosisRunCheckpoint, DiagnosisReport, bool, error) {
+	topoHash := topologyHashFromIDs(orderedSegmentIDs)
+	runCkpt, _, err := state.LoadResumableRun(ctx, projectID, taskID)
+	if err != nil && !errors.Is(err, ErrDiagnosisRunNotFound) {
+		return DiagnosisRunCheckpoint{}, DiagnosisReport{}, false, fmt.Errorf("diagnosis on-demand: load run: %w", err)
+	}
+	if errors.Is(err, ErrDiagnosisRunNotFound) {
+		report, found, completedErr := loadExistingCompletedDiagnosis(ctx, state, projectID, taskID, topoHash)
+		if completedErr != nil {
+			return DiagnosisRunCheckpoint{}, DiagnosisReport{}, false, completedErr
+		}
+		if found {
+			return DiagnosisRunCheckpoint{}, report, true, nil
+		}
+		// New run.
+		runID := fmt.Sprintf("diag-%s-%d", taskID[:min(8, len(taskID))], time.Now().UnixMilli())
+		runCkpt, err = state.CreateRun(ctx, DiagnosisRunCheckpoint{
+			RunID:             runID,
+			ProjectID:         projectID,
+			TaskID:            taskID,
+			TopologyHash:      topoHash,
+			OrderedSegmentIDs: orderedSegmentIDs,
+		})
+		if err != nil {
+			return DiagnosisRunCheckpoint{}, DiagnosisReport{}, false, fmt.Errorf("diagnosis on-demand: create run: %w", err)
+		}
+	}
+	return runCkpt, DiagnosisReport{}, false, nil
+}
+
 // DiagnoseOnDemand runs the persistent per-segment diagnosis flow. It creates or
 // resumes a diagnosis run, starts the loopback tool server, launches a single
 // persistent Pi RPC session with the trusted extension, and processes one
@@ -442,37 +477,18 @@ func (r *DiagnosisAgentRunner) DiagnoseOnDemand(ctx context.Context, projectID, 
 	topoHash := topologyHashFromIDs(orderedSegmentIDs)
 
 	// Create or resume a diagnosis run.
-	runCkpt, segments, err := cfg.StateStore.LoadResumableRun(ctx, projectID, taskID)
-	if err != nil && !errors.Is(err, ErrDiagnosisRunNotFound) {
-		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: load run: %w", err)
+	runCkpt, completedReport, completed, err := CreateOrResumeDiagnosisRun(ctx, cfg.StateStore, projectID, taskID, orderedSegmentIDs)
+	if err != nil {
+		return DiagnosisReport{}, err
 	}
-	if errors.Is(err, ErrDiagnosisRunNotFound) {
-		report, found, completedErr := loadExistingCompletedDiagnosis(ctx, cfg.StateStore, projectID, taskID, topoHash)
-		if completedErr != nil {
-			return DiagnosisReport{}, completedErr
-		}
-		if found {
-			return report, nil
-		}
-		// New run.
-		runID := fmt.Sprintf("diag-%s-%d", taskID[:min(8, len(taskID))], time.Now().UnixMilli())
-		runCkpt, err = cfg.StateStore.CreateRun(ctx, DiagnosisRunCheckpoint{
-			RunID:             runID,
-			ProjectID:         projectID,
-			TaskID:            taskID,
-			TopologyHash:      topoHash,
-			OrderedSegmentIDs: orderedSegmentIDs,
-		})
-		if err != nil {
-			return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: create run: %w", err)
-		}
-		segments, _ = cfg.StateStore.ListSegments(ctx, runCkpt.RunID)
+	if completed {
+		return completedReport, nil
 	}
 	targets, err := r.freezeDiagnosisSegmentTargets(ctx, cfg.StateStore, runCkpt, orderedSegmentIDs)
 	if err != nil {
 		return DiagnosisReport{}, err
 	}
-	segments, err = cfg.StateStore.ListSegments(ctx, runCkpt.RunID)
+	segments, err := cfg.StateStore.ListSegments(ctx, runCkpt.RunID)
 	if err != nil {
 		return DiagnosisReport{}, fmt.Errorf("diagnosis on-demand: list frozen segments: %w", err)
 	}
@@ -599,18 +615,36 @@ func topologyHashFromIDs(ids []string) string {
 }
 
 // onDemandSystemPrompt builds the system prompt for the on-demand diagnosis
-// agent: it instructs Pi to use only the five diagnosis tools, process one
+// agent: it instructs Pi to use only the six diagnosis tools, fetch the task
+// context first (the bootstrap prompt omits goal/gold by design), process one
 // segment at a time, page messages, record rewards incrementally, and finish
-// each segment before moving to the next.
+// each segment before moving to the next. The same prompt is used by the
+// server-mode loopback session and the sandbox-mode run (bootstrap parity,
+// spec 005 T019); on the deprecated loopback transport the task-context
+// endpoint does not exist, so that single call fails soft (404) exactly like
+// the pre-sandbox behavior where no goal/gold was delivered at all.
+//
+// TODO(agent): KNOWN GAP (spec 005) — in sandbox mode this prompt is the ONLY
+// tool restriction: the daemon task path carries no DisableTools /
+// TrustedExtensionPaths options, so the sandboxed pi process keeps full
+// built-in tool access. The server-mode session sets DisableTools via
+// agentpkg.ExecOptions. Do not plumb ExecOptions through the daemon here;
+// the fix belongs in the daemon task protocol.
 func (r *DiagnosisAgentRunner) onDemandSystemPrompt() string {
 	return fmt.Sprintf(`You are a diagnosis agent that evaluates each LLM output (assistant turn) within a collaborative task DAG.
 
 CAPABILITIES — use ONLY these tools:
+- multica_get_task_context — fetch the root task goal and gold/acceptance criteria
 - multica_get_segment_messages — fetch one page of messages for a segment
 - multica_record_step_rewards — persist step scores (0–%d) incrementally
 - multica_get_diagnosis_progress — read authoritative server state
 - multica_finish_segment — mark a segment complete (server validates coverage)
 - multica_complete_diagnosis — finalize after all segments are done
+
+FIRST call multica_get_task_context once to ground your scoring: the bootstrap
+prompt deliberately omits the task goal and gold context, so you must pull them
+via this tool before scoring any turn. (On the deprecated loopback transport
+this endpoint is unavailable; a failed call is not fatal — continue without it.)
 
 PROCESS each segment:
 1. Call multica_get_segment_messages for the segment. Page through ALL messages until Complete=true.
@@ -648,4 +682,52 @@ func (r *DiagnosisAgentRunner) buildTopologyBootstrapPrompt(projectID string, or
 	}
 	sb.WriteString("\nStart with the first incomplete segment. Use multica_get_segment_messages to read its messages page by page.\n")
 	return sb.String()
+}
+
+// DiagnosisSandboxBootstrap is the prompt material the sandbox orchestrator
+// delivers to the in-sandbox diagnosis agent: the same topology bootstrap
+// prompt and on-demand system prompt the server-mode session uses, plus the
+// segment counters for the trigger's prompt DiagnosisReport.
+type DiagnosisSandboxBootstrap struct {
+	BootstrapPrompt   string
+	SystemPrompt      string
+	CompletedSegments int
+	TotalSegments     int
+}
+
+// PrepareSandboxBootstrap freezes the per-segment message targets (idempotent
+// across resume) and builds the bootstrap/system prompts for a sandbox-mode
+// run. Unlike DiagnoseOnDemand it starts no loopback server, spawns no
+// process, and never touches process-wide environment — the per-run
+// credentials reach the sandbox exclusively through the enqueue payload.
+func (r *DiagnosisAgentRunner) PrepareSandboxBootstrap(ctx context.Context, state *DiagnosisStateStore, dagWriter DiagnosisDAGWriter, projectID string, run DiagnosisRunCheckpoint, orderedSegmentIDs []string) (DiagnosisSandboxBootstrap, error) {
+	if _, err := r.freezeDiagnosisSegmentTargets(ctx, state, run, orderedSegmentIDs); err != nil {
+		return DiagnosisSandboxBootstrap{}, err
+	}
+	segments, err := state.ListSegments(ctx, run.RunID)
+	if err != nil {
+		return DiagnosisSandboxBootstrap{}, fmt.Errorf("diagnosis sandbox: list frozen segments: %w", err)
+	}
+	segInfos := make([]segmentDiagnosisInfo, 0, len(segments))
+	completedCount := 0
+	for _, seg := range segments {
+		if seg.Status == SegmentDiagnosisCompleted {
+			completedCount++
+			continue
+		}
+		// Query expected reward count from DAG.
+		totalRewards, _ := dagWriter.CountDiagnosisStepRewards(ctx, projectID, seg.SegmentID)
+		segInfos = append(segInfos, segmentDiagnosisInfo{
+			SegmentID:        seg.SegmentID,
+			ExpectedMessages: seg.ExpectedMessageCount,
+			ExpectedRewards:  seg.ExpectedRewardCount,
+			RecordedRewards:  totalRewards,
+		})
+	}
+	return DiagnosisSandboxBootstrap{
+		BootstrapPrompt:   r.buildTopologyBootstrapPrompt(projectID, orderedSegmentIDs, segInfos, segments),
+		SystemPrompt:      r.onDemandSystemPrompt(),
+		CompletedSegments: completedCount,
+		TotalSegments:     len(segments),
+	}, nil
 }

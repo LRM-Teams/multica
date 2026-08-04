@@ -64,6 +64,9 @@ import {
   buildHumanBoundary,
   buildSourceStrategy,
   dimensionFamilyOf,
+  evidenceRevisionKey,
+  readErrorStatus,
+  resolveEvidenceOverviewMode,
 } from "../lib/m2-visibility";
 import { isResearchSessionStoppable } from "../lib/research-stream";
 import {
@@ -83,6 +86,7 @@ import { useBrowserOnline } from "../lib/use-browser-online";
 import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchAuxDrawer } from "./research-aux-drawer";
+import { ResearchEvidencePulse } from "./research-evidence-pulse";
 import { ResearchCanvas } from "./research-canvas";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
@@ -442,6 +446,20 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const selectedNode = ui.selected
     ? data.nodes.find((node) => node.id === ui.selected?.id) ?? ui.selected
     : null;
+  // LRM-1329 — drawer overview owns error/permission; cards stay fact-only.
+  // Signal error with a non-empty token only — never pass raw API strings into
+  // the drawer (safe copy lives in EvidencePulse i18n / role=alert).
+  const evidenceFetchFailed = Boolean(isError && data);
+  const evidenceOverview = resolveEvidenceOverviewMode({
+    sourceModel: sourceStrategy,
+    boundaryModel: humanBoundary,
+    sessionStatus: session.status,
+    error: evidenceFetchFailed ? "evidence_unavailable" : null,
+    errorStatus: evidenceFetchFailed ? readErrorStatus(error) : null,
+  });
+  const evidenceRevision = evidenceRevisionKey(sourceStrategy, humanBoundary);
+  const hideEvidenceCards =
+    evidenceOverview === "error" || evidenceOverview === "permission";
   const canvasMode = resolveCanvasBodyMode(data.nodes.length, session.status);
   const canConfirm = session.status === "awaiting_user_confirm" || session.status === "running";
   const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
@@ -661,44 +679,30 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             ) : null}
             {auxPanel === "sources" ? (
               <div className="space-y-3">
-                <SourceStrategyStrip
-                  model={sourceStrategy}
-                  sessionStatus={session.status}
-                  error={
-                    isError
-                      ? error instanceof Error && error.message
-                        ? error.message
-                        : t(($) => $.session_page.load_failed)
-                      : null
-                  }
+                <ResearchEvidencePulse
+                  mode={evidenceOverview}
+                  revisionKey={evidenceRevision}
                   onRetry={
-                    isError
+                    evidenceOverview === "error"
                       ? () => {
                           void refetch();
                         }
                       : undefined
                   }
-                  retryPending={isError && isFetching}
+                  retryPending={evidenceFetchFailed && isFetching}
                 />
-                <HumanBoundaryCard
-                  model={humanBoundary}
-                  sessionStatus={session.status}
-                  error={
-                    isError
-                      ? error instanceof Error && error.message
-                        ? error.message
-                        : t(($) => $.session_page.load_failed)
-                      : null
-                  }
-                  onRetry={
-                    isError
-                      ? () => {
-                          void refetch();
-                        }
-                      : undefined
-                  }
-                  retryPending={isError && isFetching}
-                />
+                {hideEvidenceCards ? null : (
+                  <>
+                    <SourceStrategyStrip
+                      model={sourceStrategy}
+                      sessionStatus={session.status}
+                    />
+                    <HumanBoundaryCard
+                      model={humanBoundary}
+                      sessionStatus={session.status}
+                    />
+                  </>
+                )}
               </div>
             ) : null}
             {auxPanel === "detail" ? (

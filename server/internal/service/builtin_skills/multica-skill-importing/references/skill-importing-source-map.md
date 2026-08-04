@@ -93,11 +93,11 @@ that omit `on_conflict` still receive a bare `SkillWithFilesResponse`.
 | Route `POST /api/agents/{id}/skills/add` | `server/cmd/server/router.go:851` |
 | `SetAgentSkills` (replace-all: RemoveAllAgentSkills then re-add) | `server/internal/handler/skill.go:2106`; `RemoveAllAgentSkills` `:2138`; re-add `:2143-2151` |
 | Route `PUT /api/agents/{id}/skills` | `server/cmd/server/router.go:850` |
-| CLI `agent skills add` def ("without replacing existing assignments") | `server/cmd/multica/cmd_agent.go:125-130` |
+| HTTP `POST /api/agents/{id}/skills/add` additive (`AddAgentSkills`) | `server/internal/handler/skill.go` (`AddAgentSkills`) |
 | `runAgentSkillsAdd` → `POST .../skills/add` | `server/cmd/multica/cmd_agent.go:797`; POST `:818` |
-| CLI `agent skills set` def ("replaces all current assignments") | `server/cmd/multica/cmd_agent.go:118-123` |
+| HTTP `PUT /api/agents/{id}/skills` replace-all (`SetAgentSkills`) | `server/internal/handler/skill.go` (`SetAgentSkills`) |
 | `runAgentSkillsSet` → `PUT .../skills` | `server/cmd/multica/cmd_agent.go:772`; PUT `:790` |
-| CLI `agent skills list` | `server/cmd/multica/cmd_agent.go:740`; GET `:750` |
+| HTTP `GET /api/agents/{id}/skills` list bindings | `server/internal/handler/skill.go` (`ListAgentSkills`) |
 
 ## Reserved primary-content filename (`SKILL.md`)
 

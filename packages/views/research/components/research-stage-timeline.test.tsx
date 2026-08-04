@@ -128,10 +128,10 @@ describe("ResearchStageTimeline text contrast (LRM-1252)", () => {
       container.querySelector(
         `[data-stage-state="${state}"] span.truncate.md\\:block`,
       )?.className ?? "";
-    expect(labelOf("current")).toContain("font-semibold");
+    expect(labelOf("current")).toContain("font-medium");
     expect(labelOf("current")).toContain("text-foreground");
     expect(labelOf("done")).toContain("font-mono");
-    expect(labelOf("done")).toContain("text-foreground/75");
+    expect(labelOf("done")).toContain("text-foreground");
     expect(labelOf("upcoming")).toContain("font-mono");
     expect(labelOf("upcoming")).toContain("text-muted-foreground");
     expect(labelOf("upcoming")).not.toBe(labelOf("done"));
@@ -259,10 +259,20 @@ describe("ResearchStageTimeline energy track (LRM-1291)", () => {
     const full = first.querySelector<HTMLElement>("span.truncate.md\\:block")!;
     expect(full.textContent).toBe("S1 · Plan");
     expect(full.className).toContain("hidden");
+    // 状态文字不能只留在 aria-label 或 tooltip：360–767 也始终实际渲染。
+    const stateText = first.querySelector<HTMLElement>("[data-stage-state-text]")!;
+    expect(stateText.textContent).toBe("Done");
+    expect(stateText.className).toContain("block");
+    expect(stateText.className).not.toMatch(/\bhidden\b|md:block/);
     // 无障碍名在任何宽度都是完整名 + 状态
     expect(
       screen.getByRole("button", { name: "S1 · Plan — Done" }),
     ).toBeInTheDocument();
+  });
+
+  it("uses only design-system text sizes and weights", () => {
+    expect(componentSrc).not.toMatch(/\bfont-(?:semibold|bold)\b/);
+    expect(componentSrc).not.toMatch(/\btext-\[\d+(?:\.\d+)?px\]/);
   });
 
   it("preserves nav / button / aria-current and the existing click boundary", () => {

@@ -12,7 +12,7 @@ allowed-tools: Bash(multica *)
 For "agent did not run" or "repo checkout failed", read the chain before changing anything:
 
 ```bash
-multica agent get <agent-id> --output json
+multica workspace info --agents --output json  # find agent ids/names
 multica runtime list --output json
 multica repo checkout <repo-url>
 ```

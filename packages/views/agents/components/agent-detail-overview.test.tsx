@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
-import type { Agent, AgentTask } from "@multica/core/types";
+import type { Agent, AgentFleetRank, AgentTask } from "@multica/core/types";
 import enAgents from "../../locales/en/agents.json";
 import enCommon from "../../locales/en/common.json";
 
@@ -63,6 +63,24 @@ const agent: Agent = {
   archived_by: null,
 };
 
+const fleet: AgentFleetRank = {
+  agent_id: agent.id,
+  fleet_score: 68.4,
+  class_id: "cruiser",
+  class_label: "Cruiser",
+  fleet_rank: 3,
+  fleet_size: 12,
+  sample_tasks: 24,
+  sample_sufficient: true,
+  frozen: false,
+  pillars: {
+    delivery: 0.82,
+    evolution: 0.48,
+    growth: 0.61,
+    efficiency: 0.73,
+  },
+};
+
 function makeTask(status: AgentTask["status"]): AgentTask {
   return {
     id: `task-${status}`,
@@ -82,7 +100,11 @@ function makeTask(status: AgentTask["status"]): AgentTask {
   };
 }
 
-function renderOverview(task: AgentTask, onHonor = vi.fn()) {
+function renderOverview(
+  task: AgentTask,
+  onHonor = vi.fn(),
+  fleetRank?: AgentFleetRank,
+) {
   mockTasks.current = [task];
   return render(
     <I18nProvider
@@ -93,6 +115,7 @@ function renderOverview(task: AgentTask, onHonor = vi.fn()) {
         agent={agent}
         runtime={null}
         metric={{ runCount: 1, successRate: null, cost: null }}
+        fleet={fleetRank}
         canManage={false}
         onHonor={onHonor}
         onEdit={vi.fn()}
@@ -113,6 +136,20 @@ describe("AgentDetailOverview", () => {
     renderOverview(makeTask("queued"), onHonor);
 
     fireEvent.click(screen.getByRole("button", { name: "Honor" }));
+
+    expect(onHonor).toHaveBeenCalledOnce();
+  });
+
+  it("focuses and opens Honor from the fleet card surface", () => {
+    const onHonor = vi.fn();
+    renderOverview(makeTask("queued"), onHonor, fleet);
+
+    const fleetCard = screen.getByRole("button", { name: "Fleet rank · Honor" });
+    fleetCard.focus();
+
+    expect(fleetCard).toHaveFocus();
+
+    fireEvent.click(fleetCard);
 
     expect(onHonor).toHaveBeenCalledOnce();
   });

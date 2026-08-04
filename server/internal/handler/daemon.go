@@ -2318,9 +2318,6 @@ func taskMessageVisibility(msgType string) string {
 }
 
 func taskMessageRequestVisibility(msg TaskMessageRequest) string {
-	if taskMessageIsPhaseStatus(msg.Type, msg.Content) {
-		return "user_facing"
-	}
 	return taskMessageVisibilityForMessage(msg.Type, msg.Tool, msg.Input)
 }
 
@@ -2329,10 +2326,6 @@ func taskMessageIsPhaseStatus(messageType, content string) bool {
 }
 
 func taskMessageVisibleToUser(messageType, content, visibility string) bool {
-	// Frank 2026-08-04 / task #121: user_facing rows are returned to the
-	// client as-is, including thinking with body text. Empty-phase thinking
-	// remains user_facing for status pills; FE skips empty content in the
-	// transcript timeline.
 	_ = messageType
 	_ = content
 	return strings.TrimSpace(visibility) == "user_facing"
@@ -2344,14 +2337,10 @@ func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any)
 		// transcript. ReportTaskMessages persists a dedicated Activity row.
 		return "diagnostic_only"
 	}
-	// Thinking content is user-facing (task #121). Empty phase is also
-	// user_facing via taskMessageRequestVisibility. tool_result / log stay
-	// diagnostic-only (T4: do not open other diagnostics).
-	if msgType == "tool_result" || msgType == "log" {
+	// Provider thinking and tool_result / log are diagnostic-only. Tool-use
+	// activities retain their established mapped visibility below.
+	if msgType == "thinking" || msgType == "tool_result" || msgType == "log" {
 		return "diagnostic_only"
-	}
-	if msgType == "thinking" {
-		return "user_facing"
 	}
 	if !taskMessageToolIsMapped(msgType, tool, input) {
 		return "diagnostic_only"
@@ -2652,8 +2641,6 @@ func (h *Handler) projectInboxEventTaskMessages(ctx context.Context, eventID pgt
 			  AND aae.details->>'inbox_event_id' = $1::text
 			  AND aae.event_kind IN ('thinking', 'text', 'tool_call', 'error')
 			  AND COALESCE(NULLIF(aae.visibility, ''), 'user_facing') = 'user_facing'
-			  -- Empty phase and thinking-with-content are both user_facing
-			  -- (task #121). FE skips empty thinking content in the timeline.
 		),
 		numbered AS (
 			SELECT

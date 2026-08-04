@@ -9,6 +9,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { MemoizedMarkdown } from "../../common/markdown";
 import { useT } from "../../i18n/use-t";
 import { ChoiceCard, ChoiceReplyPart } from "./choice-card";
+import { AgentCreateActionCard } from "../../common/windy-create-agent-links";
 
 const SAFE_STICKER_ID = /^[a-z0-9-]+$/;
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -61,6 +62,20 @@ export function MessagePartsRenderer({
           return <ChoiceReplyPart key={key} part={part} />;
         }
         if (part.type === "reference") {
+          // Block hire card (contract A) — not an inline token like issue-ref.
+          if (
+            part.ref_type === "action_card" &&
+            part.ref_subtype === "agent:create" &&
+            part.ref_id
+          ) {
+            return (
+              <AgentCreateActionCard
+                key={key}
+                cardId={part.ref_id}
+                label={part.label}
+              />
+            );
+          }
           return null;
         }
         return null;

@@ -1369,6 +1369,7 @@ export function useRealtimeSync(
     const unsubResearchMessage = ws.on("research_session:message", onResearchEvent("research_session:message"));
     const unsubResearchStageEval = ws.on("research_session:stage_eval", onResearchEvent("research_session:stage_eval"));
     const unsubResearchStatus = ws.on("research_session:status_changed", onResearchEvent("research_session:status_changed"));
+    const unsubResearchProductRound = ws.on("research_session:product_round", onResearchEvent("research_session:product_round"));
 
     return () => {
       unsubAny();
@@ -1425,6 +1426,7 @@ export function useRealtimeSync(
       unsubResearchMessage();
       unsubResearchStageEval();
       unsubResearchStatus();
+      unsubResearchProductRound();
       timers.forEach(clearTimeout);
       timers.clear();
     };

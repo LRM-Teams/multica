@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { FileIcon, Loader2, RotateCcw, X, ZoomIn } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
-import { useAttachmentPreview } from "../../editor";
+import { useAttachmentPreview } from "../../editor/attachment-preview-modal";
 import { useT } from "../../i18n/use-t";
 import type { PendingAttachment } from "../hooks/use-composer-pending-attachments";
 

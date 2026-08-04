@@ -85,8 +85,6 @@
     "working_verb_with_duration": "{{verb}} · {{duration}}",
     "working_failed": "无法回复 · 可再 @",
     "working_no_reply": "未回复 · 可再 @",
-    "working_dismiss": "关闭",
-    "working_dismiss_aria": "关闭 {{name}} 的状态",
     "settings_aria": "群设置"
   },
   "group_manager_hint": {
@@ -263,6 +261,7 @@
     "remove_confirm_title": "移除「{{name}}」？",
     "remove_confirm_description": "将立即失去本频道读写权限。",
     "remove_confirm": "确认移除",
+    "remove_confirming": "移除中…",
     "remove_cancel": "取消",
     "remove_failed": "移出失败，请重试。",
     "remove_retry": "重试",
@@ -312,7 +311,7 @@
       "keep_building": "继续开发以解锁荣誉",
       "collection": "已收集 {{unlocked}} / {{total}}",
       "agent_collection": "已解锁 {{unlocked}} 项",
-      "level_value": "LV.{{level}}"
+      "level_value": "第 {{level}} 级"
     },
     "restricted": {
       "runtime": "Runtime",
@@ -579,6 +578,7 @@
     "tray_uploading": "上传中",
     "tray_upload_failed": "上传失败",
     "voice_unsent": "语音未发送（{{duration}}）",
+    "voice_unsent_retrying": "正在重试发送（{{duration}}）",
     "voice_unsent_retry": "重试发送",
     "voice_unsent_delete": "删除",
     "tray_reselect": "需重新选择",

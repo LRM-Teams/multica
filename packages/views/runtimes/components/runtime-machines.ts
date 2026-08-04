@@ -382,6 +382,39 @@ export function runtimeMachineKey(runtime: AgentRuntime): string {
   return `${runtime.runtime_mode}:runtime:${runtime.id}`;
 }
 
+/**
+ * Authorization-side "same computer" check (LRM-1365 / Frank 2026-08-02).
+ * Mirrors server `runtimesShareMachine`: only non-empty `daemon_id` + matching
+ * `runtime_mode` count. Do **not** fall back to hostname parsed from
+ * `name`/`device_info` — free text is display-only and can wrongly merge two
+ * physical machines (or keep a cross-machine option visible in the picker).
+ * A runtime with no daemon_id never shares a machine with anything else.
+ */
+export function runtimesShareMachine(
+  a: AgentRuntime,
+  b: AgentRuntime,
+): boolean {
+  if (a.runtime_mode !== b.runtime_mode) return false;
+  const aDaemon = a.daemon_id?.trim() ?? "";
+  const bDaemon = b.daemon_id?.trim() ?? "";
+  if (!aDaemon || !bDaemon) return false;
+  return aDaemon === bDaemon;
+}
+
+/**
+ * Runtimes the agent may switch to while its computer stays fixed.
+ * Always includes `bound` itself (even when it has no daemon_id). Peers must
+ * share a machine via {@link runtimesShareMachine}.
+ */
+export function filterRuntimesOnBoundComputer(
+  bound: AgentRuntime,
+  runtimes: readonly AgentRuntime[],
+): AgentRuntime[] {
+  return runtimes.filter(
+    (r) => r.id === bound.id || runtimesShareMachine(bound, r),
+  );
+}
+
 // `name` is the daemon-reported raw hostname (e.g. "Cursor (ubuntu)");
 // `display_name` is the user-editable label set on the machine detail page.
 // Runtime pickers were showing the raw name unconditionally — renaming a

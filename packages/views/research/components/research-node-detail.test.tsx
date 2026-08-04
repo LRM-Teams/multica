@@ -34,6 +34,8 @@ vi.mock("../../i18n/use-t", () => ({
           doing: "In progress",
           summary_empty: "No summary",
           dead_end_reason: "Why blocked",
+          abandon_reason: "Abandon reason",
+          abandon_reason_pending: "Reason pending sync",
           evidence: "Evidence",
           evidence_empty: "No evidence",
           objective: "Objective",
@@ -80,6 +82,17 @@ vi.mock("../../i18n/use-t", () => ({
             pending: "Pending",
             unknown: "Unknown",
           },
+        },
+        content_faces: {
+          goal: "Goal",
+          operation_approach: "Operation approach",
+          research_approach: "Research approach",
+          result: "Result",
+          missing: "Not provided",
+          result_pending: "Result in progress",
+          result_pending_detail: "Still organizing — no displayable result yet.",
+          result_failed: "No displayable result this round",
+          result_failed_detail: "No displayable result was produced this round.",
         },
       }),
   }),
@@ -173,6 +186,49 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     render(<ResearchNodeDetail node={dead} sources={[]} open />);
     expect(screen.getByText("Why blocked")).toBeInTheDocument();
     expect(screen.getByText("权威源不可达")).toBeInTheDocument();
+  });
+
+  it("LRM-1333: abandoned detail shows abandon_reason; never reason/dead_end_reason", () => {
+    const abandoned: ResearchGraphNode = {
+      ...node,
+      status: "abandoned",
+      title: "定价支",
+      assessment: "detour",
+      reason: "弯路质量原因",
+      abandon_reason: "用户改成监管合规",
+      payload: { reason: "质量原因", dead_end_reason: "死胡同" },
+    };
+    render(<ResearchNodeDetail node={abandoned} sources={[]} open />);
+    const block = screen.getByTestId("research-node-abandon-reason");
+    expect(block).toHaveTextContent("Abandon reason");
+    expect(block).toHaveTextContent("用户改成监管合规");
+    expect(block).not.toHaveTextContent("弯路质量原因");
+    expect(block).not.toHaveTextContent("质量原因");
+    expect(block).not.toHaveTextContent("死胡同");
+  });
+
+  it("LRM-1333: abandoned without reason shows pending sync copy", () => {
+    const abandoned: ResearchGraphNode = {
+      ...node,
+      status: "abandoned",
+      payload: { reason: "不得回退" },
+    };
+    render(<ResearchNodeDetail node={abandoned} sources={[]} open />);
+    expect(screen.getByTestId("research-node-abandon-reason")).toHaveTextContent(
+      "Reason pending sync",
+    );
+    expect(screen.queryByText("不得回退")).toBeNull();
+  });
+
+  it("LRM-1333: non-abandoned nodes omit abandon reason block", () => {
+    const detour: ResearchGraphNode = {
+      ...node,
+      status: "done",
+      assessment: "detour",
+      abandon_reason: "不应展示",
+    };
+    render(<ResearchNodeDetail node={detour} sources={[]} open />);
+    expect(screen.queryByTestId("research-node-abandon-reason")).toBeNull();
   });
 
   it("does not fall back to session sources when node has no source association", () => {

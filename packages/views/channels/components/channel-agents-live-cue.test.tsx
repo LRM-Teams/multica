@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -79,8 +79,6 @@ vi.mock("../../i18n", () => ({
         working_verb_with_duration: `{{verb}} · {{duration}}`,
         working_failed: `Couldn't reply · try @ again`,
         working_no_reply: `No reply · try @ again`,
-        working_dismiss: `Dismiss`,
-        working_dismiss_aria: `Dismiss {{name}}'s status`,
         view_members_aria: `View members`,
       };
       const agent_status = {
@@ -408,6 +406,38 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     expect(screen.queryByText("Unknown Agent")).toBeNull();
   });
 
+  it("LRM-1350: Stop passes Working-list resolved name, not Unknown Agent sentinel", () => {
+    mobileState.isMobile = true;
+    const onStopTask = vi.fn();
+    const stopped = task({
+      agent_id: "a-roster",
+      agent_name: "Unknown Agent",
+      task_id: "t-stop",
+      inbox_event_id: "i-stop",
+      status: "running",
+    });
+    renderWithQuery(
+      <ChannelPresenceCluster
+        members={members(["u1", "a-roster"], {
+          "a-roster": {
+            display_name: "群内Agent",
+            avatar_url: "/agent-avatars/roster.png",
+          },
+        })}
+        memberCount={2}
+        agentCount={2}
+        tasks={[stopped]}
+        canStop
+        onStopTask={onStopTask}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("channel-header-members-chip"));
+    expect(screen.getAllByText("群内Agent").length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getByTestId("channel-agents-working-stop"));
+    expect(onStopTask).toHaveBeenCalledTimes(1);
+    expect(onStopTask).toHaveBeenCalledWith(stopped, "群内Agent");
+  });
+
   it("LRM-391 AC#5: channel roster name+avatar keeps Working face (no over-omit)", () => {
     mobileState.isMobile = true;
     renderWithQuery(
@@ -523,5 +553,222 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
             el.getAttribute("data-avatar-hint") === "/agent-avatars/snap.png",
         ),
     ).toBe(true);
+  });
+});
+
+/**
+ * LRM-1348 (parent design gate LRM-1347) — Working list Stop / Stop all must
+ * express pending with `aria-disabled` + a guarded handler, never native
+ * `disabled`. These buttons live inside a Portal overlay (desktop Base UI
+ * PreviewCard / narrow Popover): dropping focus to <body> lets the overlay
+ * dismiss its whole subtree, so Stop all and every other row's Stop leave the
+ * DOM mid-interaction (LRM-1347 case B, measured in real Chromium).
+ */
+describe("ChannelPresenceCluster Working Stop pending (LRM-1348)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mobileState.isMobile = true;
+  });
+
+  type ClusterProps = ComponentProps<typeof ChannelPresenceCluster>;
+
+  function renderCluster(props: ClusterProps) {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const utils = render(<ChannelPresenceCluster {...props} />, { wrapper });
+    return {
+      ...utils,
+      rerenderCluster: (next: ClusterProps) =>
+        utils.rerender(<ChannelPresenceCluster {...next} />),
+    };
+  }
+
+  const twoRunning = [
+    task({ task_id: "t1", inbox_event_id: "i1", status: "running" }),
+    task({
+      agent_id: "a2",
+      agent_name: "Wendy",
+      task_id: "t2",
+      inbox_event_id: "i2",
+      status: "running",
+    }),
+  ];
+
+  function baseProps(over?: Partial<ClusterProps>): ClusterProps {
+    return {
+      members: members(["u1", "a1", "a2"]),
+      memberCount: 4,
+      agentCount: 8,
+      tasks: twoRunning,
+      onStopTask: vi.fn(),
+      onStopAll: vi.fn(),
+      ...over,
+    };
+  }
+
+  function openList() {
+    fireEvent.click(screen.getByTestId("channel-header-members-chip"));
+    expect(screen.getByTestId("channel-agents-working-list")).toBeInTheDocument();
+  }
+
+  /** Indexed access under noUncheckedIndexedAccess — fail loudly, never `!`. */
+  function stopAt(index: number): HTMLButtonElement {
+    const buttons = screen.getAllByTestId("channel-agents-working-stop");
+    const btn = buttons[index];
+    if (!btn) {
+      throw new Error(
+        `expected a Working Stop button at index ${index}, got ${buttons.length}`,
+      );
+    }
+    return btn as HTMLButtonElement;
+  }
+
+  function stopAllButton(): HTMLButtonElement {
+    return screen.getByTestId(
+      "channel-agents-working-stop-all",
+    ) as HTMLButtonElement;
+  }
+
+  it("idle: Stop and Stop all carry no native disabled and no aria-disabled", () => {
+    renderCluster(baseProps({ stoppingTaskId: null }));
+    openList();
+    const stops = screen.getAllByTestId(
+      "channel-agents-working-stop",
+    ) as HTMLButtonElement[];
+    for (const btn of [...stops, stopAllButton()]) {
+      expect(btn.disabled).toBe(false);
+      expect(btn).not.toHaveAttribute("aria-disabled");
+    }
+  });
+
+  it("pending row: aria-disabled=true with zero native disabled", () => {
+    renderCluster(baseProps({ stoppingTaskId: "t1" }));
+    openList();
+    const stop = stopAt(0);
+    expect(stop.disabled).toBe(false);
+    expect(stop).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("pending Stop click does not call onStopTask; idle click calls once with the same task", () => {
+    const onStopTask = vi.fn();
+    const { rerenderCluster } = renderCluster(
+      baseProps({ stoppingTaskId: "t1", onStopTask }),
+    );
+    openList();
+    fireEvent.click(stopAt(0));
+    expect(onStopTask).not.toHaveBeenCalled();
+
+    rerenderCluster(baseProps({ stoppingTaskId: null, onStopTask }));
+    fireEvent.click(stopAt(0));
+    expect(onStopTask).toHaveBeenCalledTimes(1);
+    // AC: same object reference, not a structural clone.
+    expect(onStopTask.mock.calls[0]?.[0]).toBe(twoRunning[0]);
+  });
+
+  it("pending Stop all click does not call onStopAll; idle click calls once", () => {
+    const onStopAll = vi.fn();
+    const { rerenderCluster } = renderCluster(
+      baseProps({ stoppingTaskId: "__all__", onStopAll }),
+    );
+    openList();
+    fireEvent.click(screen.getByTestId("channel-agents-working-stop-all"));
+    expect(onStopAll).not.toHaveBeenCalled();
+
+    rerenderCluster(baseProps({ stoppingTaskId: null, onStopAll }));
+    fireEvent.click(screen.getByTestId("channel-agents-working-stop-all"));
+    expect(onStopAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("focus stays on the very same Stop node when the row enters pending", () => {
+    // jsdom does not emulate Chromium's "blur on becoming disabled", so the
+    // BEFORE red here is the native `disabled` assertion; the activeElement
+    // identity check guards against a future remount/key change, and the real
+    // focus-drop is proven by the Chromium probe attached to LRM-1348.
+    const { rerenderCluster } = renderCluster(baseProps({ stoppingTaskId: null }));
+    openList();
+    const stop = stopAt(0);
+    stop.focus();
+    expect(document.activeElement).toBe(stop);
+
+    rerenderCluster(baseProps({ stoppingTaskId: "t1" }));
+    expect(document.activeElement).toBe(stop);
+    expect(stop.disabled).toBe(false);
+  });
+
+  it("focus stays on Stop all when Stop all enters pending", () => {
+    const { rerenderCluster } = renderCluster(baseProps({ stoppingTaskId: null }));
+    openList();
+    const stopAll = stopAllButton();
+    stopAll.focus();
+    expect(document.activeElement).toBe(stopAll);
+
+    rerenderCluster(baseProps({ stoppingTaskId: "__all__" }));
+    expect(document.activeElement).toBe(stopAll);
+    expect(stopAll.disabled).toBe(false);
+  });
+
+  it("stopping one row leaves the other row's Stop fully interactive (phase semantics unchanged)", () => {
+    // The frozen constraint is "pending semantics verbatim": only `__all__`
+    // pends every row. A single in-flight task_id must not spread pending to
+    // its siblings, otherwise this slice would silently change the stop phase
+    // machine instead of only fixing focus.
+    const onStopTask = vi.fn();
+    renderCluster(baseProps({ stoppingTaskId: "t1", onStopTask }));
+    openList();
+    const second = stopAt(1);
+    expect(second.disabled).toBe(false);
+    expect(second).not.toHaveAttribute("aria-disabled");
+    second.focus();
+    expect(document.activeElement).toBe(second);
+    fireEvent.click(second);
+    expect(onStopTask).toHaveBeenCalledTimes(1);
+    // AC: same object reference, not a structural clone.
+    expect(onStopTask.mock.calls[0]?.[0]).toBe(twoRunning[1]);
+  });
+
+  it("__all__ marks every Stop and Stop all aria-disabled while all stay focusable", () => {
+    renderCluster(baseProps({ stoppingTaskId: "__all__" }));
+    openList();
+    const all: HTMLButtonElement[] = [
+      ...(screen.getAllByTestId(
+        "channel-agents-working-stop",
+      ) as HTMLButtonElement[]),
+      stopAllButton(),
+    ];
+    for (const btn of all) {
+      expect(btn.disabled).toBe(false);
+      expect(btn).toHaveAttribute("aria-disabled", "true");
+      btn.focus();
+      expect(document.activeElement).toBe(btn);
+    }
+  });
+
+  it("pending buttons keep a single dim level (LRM-1170)", () => {
+    renderCluster(baseProps({ stoppingTaskId: "__all__" }));
+    openList();
+    const all: HTMLButtonElement[] = [
+      ...(screen.getAllByTestId(
+        "channel-agents-working-stop",
+      ) as HTMLButtonElement[]),
+      stopAllButton(),
+    ];
+    for (const btn of all) {
+      // Only unprefixed utilities can actually apply. The Button base keeps an
+      // inert `disabled:opacity-50` variant, which never matches because these
+      // buttons are never natively disabled.
+      const applied = btn.className
+        .split(/\s+/)
+        .filter((cls) => /^opacity-/.test(cls));
+      expect(applied).toEqual(["opacity-50"]);
+      expect(btn.className).toContain("cursor-not-allowed");
+      // The `ghost` variant's own `hover:*` tokens stay — identical to the
+      // already-merged LRM-1213 pattern (research-session-interrupt-banner).
+      // Neutralising them would mean touching packages/ui, which this slice
+      // must not do; raised on LRM-1348 for the design owner to decide.
+    }
   });
 });

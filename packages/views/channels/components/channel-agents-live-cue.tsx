@@ -75,7 +75,11 @@ export interface ChannelPresenceClusterProps {
   tasks: readonly ChannelActiveTask[];
   stoppingTaskId?: string | null;
   canStop?: boolean;
-  onStopTask?: (task: ChannelActiveTask) => void;
+  /**
+   * LRM-1350: second arg is the Working-list resolved label (never the
+   * directory-miss / Unknown Agent sentinel). Toast must reuse this name.
+   */
+  onStopTask?: (task: ChannelActiveTask, displayName: string) => void;
   /** Opens the existing Stop-all confirm dialog (LRM-405); only from card footer. */
   onStopAll?: () => void;
   /** Click opens Members (idle always; desktop also when working). */
@@ -101,30 +105,13 @@ function useWorkingRowActivityVerb(
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
   const projection = useAgentActivityProjection(wsId, agentId);
-  const isTerminal = isTerminalChannelActiveTask(task);
-  const outcome = task.outcome?.trim();
 
-  if (outcome === "failed") {
-    return {
-      verb: t(($) => $.header.working_failed),
-      verbClass: "text-destructive",
-      dotClass: "bg-destructive",
-      ping: false,
-    };
-  }
-  if (outcome === "no_reply") {
-    return {
-      verb: t(($) => $.header.working_no_reply),
-      verbClass: "text-destructive",
-      dotClass: "bg-destructive",
-      ping: false,
-    };
-  }
-
-  const duration =
-    !isTerminal && firstSeen
-      ? formatDuration(new Date(firstSeen).toISOString(), now)
-      : "";
+  // LRM-1349: Working list only receives non-terminal tasks (`listTasks` /
+  // `liveTasks` already drop `outcome` rows), so failed/no_reply + terminal
+  // duration gates here were unreachable dead code.
+  const duration = firstSeen
+    ? formatDuration(new Date(firstSeen).toISOString(), now)
+    : "";
 
   // LRM-650: Compact verbs stay EN Activity SoT — never i18n Working/Queued.
   if (projection && isCompactActivityLabel(projection.label)) {
@@ -164,7 +151,6 @@ function WorkingListRow({
   canStop,
   stoppingTaskId,
   onStopTask,
-  onDismiss,
 }: {
   task: ChannelActiveTask;
   /** Resolved live label — never "Unknown Agent" (LRM-391). */
@@ -175,26 +161,25 @@ function WorkingListRow({
   firstSeen: number | undefined;
   canStop: boolean;
   stoppingTaskId: string | null;
-  onStopTask?: (task: ChannelActiveTask) => void;
-  onDismiss: (task: ChannelActiveTask) => void;
+  onStopTask?: (task: ChannelActiveTask, displayName: string) => void;
 }) {
   const { t } = useT("channels");
-  const isTerminal = isTerminalChannelActiveTask(task);
   const { verb, verbClass, dotClass, ping } = useWorkingRowActivityVerb(
     task.agent_id,
     task,
     now,
     firstSeen,
   );
-  const actionLabel = isTerminal
-    ? t(($) => $.header.working_dismiss)
-    : t(($) => $.agent_status.stop);
+  const actionLabel = t(($) => $.agent_status.stop);
+  // LRM-1348: pending phase semantics are unchanged — only how it is expressed.
+  const isStopPending =
+    stoppingTaskId === task.task_id ||
+    stoppingTaskId === STOPPING_ALL_TASKS_ID;
 
   return (
     <div
       className="flex min-h-8 items-center gap-2 rounded-md px-1 py-1 text-xs hover:bg-muted/60"
       data-testid="channel-agents-working-row"
-      data-terminal={isTerminal ? "true" : "false"}
     >
       <ActorAvatar
         actorType="agent"
@@ -221,38 +206,33 @@ function WorkingListRow({
         <div className="truncate font-semibold text-foreground">{displayName}</div>
         <div className={cn("truncate", verbClass)}>{verb}</div>
       </div>
-      {isTerminal ? (
+      {canStop && onStopTask ? (
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          className="h-8 shrink-0 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+          // LRM-1348 (design gate LRM-1347) — pending must not be a native
+          // `disabled`. This button lives inside a Portal overlay (desktop Base
+          // UI PreviewCard / narrow Popover): Chromium drops focus to <body>,
+          // the overlay treats that as a dismiss and unmounts its whole
+          // subtree, so Stop all and the other rows' Stop leave the DOM
+          // mid-interaction. Same frozen pattern as LRM-1213 / LRM-1169:
+          // stay focusable, guard the handler.
+          aria-disabled={isStopPending || undefined}
+          className={cn(
+            "h-8 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground",
+            isStopPending
+              ? "cursor-not-allowed opacity-50"
+              : "hover:text-foreground",
+          )}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            onDismiss(task);
-          }}
-          aria-label={t(($) => $.header.working_dismiss_aria, {
-            name: displayName,
-          })}
-          data-testid="channel-agents-working-dismiss"
-        >
-          {actionLabel}
-        </Button>
-      ) : canStop && onStopTask ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-8 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-          disabled={
-            stoppingTaskId === task.task_id ||
-            stoppingTaskId === STOPPING_ALL_TASKS_ID
-          }
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onStopTask(task);
+            // aria-disabled does not block clicks — the guard does.
+            if (isStopPending) return;
+            // LRM-1350: pass the same resolved label the row paints — do not
+            // let the toast fall back to raw `task.agent_name` sentinels.
+            onStopTask(task, displayName);
           }}
           aria-label={t(($) => $.agent_status.stop_aria, {
             name: displayName,
@@ -520,6 +500,8 @@ export function ChannelPresenceCluster({
   const isLive = allowWorkingChrome && listTasks.length > 0;
   const hasStoppable = stoppable.length > 0;
   const workingCount = stoppable.length;
+  // LRM-1348: pending semantics verbatim — only the expression changes.
+  const isStopAllPending = stoppingTaskId === STOPPING_ALL_TASKS_ID;
 
   const stackedMembers = useMemo(() => {
     if (!isLive || workingAgentIds.size === 0) {
@@ -593,9 +575,6 @@ export function ChannelPresenceCluster({
             canStop={canStop}
             stoppingTaskId={stoppingTaskId}
             onStopTask={onStopTask}
-            onDismiss={() => {
-              /* live rows use Stop; terminal outcomes are not listed (Activity SoT) */
-            }}
           />
         ))}
       </div>
@@ -605,11 +584,20 @@ export function ChannelPresenceCluster({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-8 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-            disabled={stoppingTaskId === STOPPING_ALL_TASKS_ID}
+            // LRM-1348 — same frozen pattern as the row Stop above: a native
+            // `disabled` here drops focus to <body> and the Portal overlay
+            // dismisses the entire Working list (LRM-1347 case B).
+            aria-disabled={isStopAllPending || undefined}
+            className={cn(
+              "h-8 gap-1 px-2 text-[11px] text-muted-foreground",
+              isStopAllPending
+                ? "cursor-not-allowed opacity-50"
+                : "hover:text-foreground",
+            )}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (isStopAllPending) return;
               onStopAll();
             }}
             aria-label={t(($) => $.agent_status.stop_all_aria, {

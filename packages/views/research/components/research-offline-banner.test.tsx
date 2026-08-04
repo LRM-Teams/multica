@@ -39,10 +39,35 @@ describe("ResearchOfflineBanner (LRM-833)", () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it("disables retry while reconnecting", () => {
-    render(<ResearchOfflineBanner mode="reconnecting" onRetry={() => {}} />);
+  // LRM-1345 A-2 — contract change (not a relaxation): the reconnecting Retry must
+  // stay focusable, so a native `disabled` is now forbidden. Previous assertion:
+  //   expect((btn as HTMLButtonElement).disabled).toBe(true);
+  it("marks retry aria-disabled while reconnecting without native disabled", () => {
+    const onRetry = vi.fn();
+    render(<ResearchOfflineBanner mode="reconnecting" onRetry={onRetry} />);
     const btn = screen.getByTestId("research-offline-banner-retry");
-    expect((btn as HTMLButtonElement).disabled).toBe(true);
+    expect((btn as HTMLButtonElement).disabled).toBe(false);
+    expect(btn.hasAttribute("disabled")).toBe(false);
+    expect(btn.getAttribute("aria-disabled")).toBe("true");
     expect(btn.textContent).toContain("Retrying");
+    fireEvent.click(btn);
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  // LRM-1345 A-1 — the shell keeps one element identity across modes, so the focused
+  // Retry button survives the failed → reconnecting transition instead of being
+  // unmounted (old code swapped <div role="alert"> ⇄ <output>, dropping focus to body).
+  it("keeps the focused retry node across failed → reconnecting", () => {
+    const { rerender } = render(
+      <ResearchOfflineBanner mode="failed" onRetry={() => {}} />,
+    );
+    const before = screen.getByTestId("research-offline-banner-retry");
+    before.focus();
+    expect(document.activeElement).toBe(before);
+
+    rerender(<ResearchOfflineBanner mode="reconnecting" onRetry={() => {}} />);
+    const after = screen.getByTestId("research-offline-banner-retry");
+    expect(after).toBe(before);
+    expect(document.activeElement).toBe(before);
   });
 });

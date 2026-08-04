@@ -72,19 +72,29 @@ func parseReminderSchedule(now time.Time, delaySeconds *int64, rawFireAt, rawRep
 	return reminderSchedule{FireAt: next, Cadence: &cadence, Timezone: lockedTimezone, CadenceSlot: &next}, nil
 }
 
-func reminderInitiatorTimezone(ctx context.Context, exec db.DBTX, userID pgtype.UUID) string {
-	if !userID.Valid {
+// reminderScheduleTimezone resolves IANA for calendar cadence rules.
+// Product (Frank/Parker 2026-08-04 P0): never read user.timezone (viewing
+// preference). Prefer an explicit valid IANA string; otherwise UTC.
+// Interval rules (every:*) do not use this path for wall-clock conversion.
+func reminderScheduleTimezone(explicit string) string {
+	explicit = strings.TrimSpace(explicit)
+	if explicit == "" {
 		return "UTC"
 	}
-	var timezone pgtype.Text
-	if err := exec.QueryRow(ctx, `SELECT timezone FROM "user" WHERE id = $1`, userID).Scan(&timezone); err != nil || !timezone.Valid || strings.TrimSpace(timezone.String) == "" {
-		return "UTC"
-	}
-	location, err := time.LoadLocation(strings.TrimSpace(timezone.String))
+	location, err := time.LoadLocation(explicit)
 	if err != nil || location.String() == "Local" {
 		return "UTC"
 	}
 	return location.String()
+}
+
+// Deprecated name kept as thin wrapper for any residual call sites during
+// the P0 cutover; always returns UTC (never user viewing timezone).
+func reminderInitiatorTimezone(ctx context.Context, exec db.DBTX, userID pgtype.UUID) string {
+	_ = ctx
+	_ = exec
+	_ = userID
+	return "UTC"
 }
 
 var reminderWeekdayByName = map[string]time.Weekday{

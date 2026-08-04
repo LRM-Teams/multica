@@ -101,10 +101,16 @@ describe("research F-state a11y static contract (LRM-1192)", () => {
     expect(src).toMatch(/aria-live=["']polite["']/);
   });
 
-  it("source: offline banner keeps <output> for non-failed; failed uses role=alert", () => {
+  it("source: offline banner keeps a single <output> shell; failed adds role=alert", () => {
     const src = readSrc("research-offline-banner.tsx");
-    expect(src).toMatch(/if\s*\(\s*failed\s*\)/);
-    expect(src).toMatch(/role=["']alert["']/);
+    // LRM-1345 A-1 — contract change (not a relaxation). Previous assertions:
+    //   expect(src).toMatch(/if\s*\(\s*failed\s*\)/);
+    //   expect(src).toMatch(/role=["']alert["']/);
+    // The `if (failed)` early return is now banned: two different shell tags made
+    // React remount the subtree on every mode change and drop Retry focus to body.
+    expect(src).not.toMatch(/if\s*\(\s*failed\s*\)/);
+    expect(src.match(/return \(/g)?.length).toBe(1);
+    expect(src).toMatch(/role=\{failed \? ["']alert["'] : undefined\}/);
     expect(src).toMatch(/<output\b/);
   });
 
@@ -151,7 +157,11 @@ describe("research F-state a11y static contract (LRM-1192)", () => {
     render(<ResearchOfflineBanner mode="failed" onRetry={() => {}} />);
     const failed = screen.getByTestId("research-offline-banner");
     expect(failed.getAttribute("role")).toBe("alert");
-    expect(failed.tagName.toLowerCase()).not.toBe("output");
+    // LRM-1345 A-1 — contract change (not a relaxation). Previous assertion:
+    //   expect(failed.tagName.toLowerCase()).not.toBe("output");
+    // failed now rides the same <output> shell with role="alert" so the focused
+    // Retry node survives the failed ⇄ reconnecting transition.
+    expect(failed.tagName.toLowerCase()).toBe("output");
   });
 
   it("render: canvas forming announces busy politely", () => {

@@ -17,18 +17,28 @@ import { useMemberPanelStore } from "@multica/core/workspace";
 import { ActorProfileTrigger } from "./actor-profile-popover";
 import { useOpenAgentPanel } from "./agent-panel-context";
 import { useOpenMemberPanel } from "./member-panel-context";
-import { IssueMentionCard } from "../issues/components/issue-mention-card";
-import { ProjectChip } from "../projects/components/project-chip";
 import { AppLink } from "../navigation/app-link";
 import { Attachment as AttachmentRenderer } from "../editor/attachment";
 import { AttachmentDownloadProvider } from "../editor/attachment-download-context";
-import { WindyCreateAgentLink } from "./windy-create-agent-links";
-import { isWindyCreateAgentLink } from "./windy-create-agent-link-utils";
+
 import { useActorMentionChipLabel } from "./actor-mention-chip-label";
 import {
   mentionTokenClassName,
   resolveMentionTokenKind,
 } from "./mention-token";
+
+// LRM-1264 R3 — issue/project chips are rare in ordinary chat; keep their
+// module graphs out of the resting channel shell until a mention renders.
+const IssueMentionCard = React.lazy(() =>
+  import("../issues/components/issue-mention-card").then((m) => ({
+    default: m.IssueMentionCard,
+  })),
+);
+const ProjectChip = React.lazy(() =>
+  import("../projects/components/project-chip").then((m) => ({
+    default: m.ProjectChip,
+  })),
+);
 
 export type { RenderMode };
 
@@ -58,10 +68,12 @@ function ProjectMentionCard({ projectId }: { projectId: string }): React.ReactNo
   const p = useWorkspacePaths();
   return (
     <AppLink href={p.projectDetail(projectId)} className="project-mention not-prose inline-flex">
-      <ProjectChip
-        projectId={projectId}
-        className="cursor-pointer hover:bg-accent transition-colors"
-      />
+      <React.Suspense fallback={<span className="text-muted-foreground">…</span>}>
+        <ProjectChip
+          projectId={projectId}
+          className="cursor-pointer hover:bg-accent transition-colors"
+        />
+      </React.Suspense>
     </AppLink>
   );
 }
@@ -169,11 +181,13 @@ function defaultRenderMention(
     // Dropping it forced IssueMentionCard to paint the raw UUID — on mobile that
     // truncates to `fe57cec6-…` (LRM-493). Pass it through as fallbackLabel.
     return (
-      <IssueMentionCard
-        issueId={id}
-        fallbackLabel={label}
-        sourceMessageId={sourceMessageId}
-      />
+      <React.Suspense fallback={<span className="text-muted-foreground">{label ?? "…"}</span>}>
+        <IssueMentionCard
+          issueId={id}
+          fallbackLabel={label}
+          sourceMessageId={sourceMessageId}
+        />
+      </React.Suspense>
     );
   }
   if (type === "project") {
@@ -287,20 +301,10 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
       defaultRenderMention(mention, highlightQuery, sourceMessageId),
     [highlightQuery, sourceMessageId],
   );
-  const RenderAppLink = React.useCallback(
-    ({ href, children }: { href: string; children: React.ReactNode }) => {
-      if (isWindyCreateAgentLink(href)) {
-        return <WindyCreateAgentLink href={href}>{children}</WindyCreateAgentLink>;
-      }
-      return null;
-    },
-    [],
-  );
   return (
     <AttachmentDownloadProvider attachments={attachments}>
       <MarkdownBase
         renderMention={renderMention}
-        renderAppLink={RenderAppLink}
         renderCitation={renderCitation}
         renderImage={renderAppImage}
         renderFileCard={renderFileCard}

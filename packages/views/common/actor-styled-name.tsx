@@ -5,6 +5,7 @@ import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 import { cn } from "@multica/ui/lib/utils";
 import { AgentHonorLevelIcon } from "../agents/components/agent-honor-level-icon";
 import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
+import { useT } from "../i18n";
 
 export interface ActorStyledNameProps {
   displayName: string;
@@ -27,6 +28,7 @@ export function ActorStyledName({
   className,
   nameClassName = "truncate",
 }: ActorStyledNameProps) {
+  const { t } = useT("common");
   const nameDisplay = honor
     ? honorNameDisplayProps({
         nameStyle: honor.name_style,
@@ -48,14 +50,14 @@ export function ActorStyledName({
       {showBadges && honor ? (
         <UserHonorLevelIcon
           level={honor.level}
-          title={`LV.${honor.level}`}
+          title={t(($) => $.honor_level_value, { level: honor.level })}
           className="size-6 drop-shadow-sm"
         />
       ) : null}
       {showBadges && agentHonorLevel ? (
         <AgentHonorLevelIcon
           level={agentHonorLevel}
-          title={`LV.${agentHonorLevel}`}
+          title={t(($) => $.honor_level_value, { level: agentHonorLevel })}
           className="size-6 drop-shadow-sm"
         />
       ) : null}

@@ -21,6 +21,7 @@ import type {
   ResearchSessionSnapshot,
   ResearchSource,
   ResearchStageEval,
+  ResearchThoughtStrategy,
 } from "../types/research";
 
 const now = () => new Date("2026-07-30T12:00:00.000Z").toISOString();
@@ -72,7 +73,14 @@ const mockNodes: ResearchGraphNode[] = [
     summary: "p95 latency at 10k QPS",
     status: "active",
     actor_agent_id: null,
-    payload: {},
+    // LRM-1318 fixture: complete thought/strategy faces for side panel.
+    payload: {
+      rationale: "先比同负载 p95，再看召回代价",
+      expected_outcome: "10k QPS 下可对比的延迟/召回表",
+      strategy_label: "负载切片",
+      strategy_revision: "v1",
+      state: "active",
+    },
     created_at: now(),
     updated_at: now(),
   },
@@ -137,6 +145,19 @@ const mockNodes: ResearchGraphNode[] = [
     actor_agent_id: "agent-mock-scout",
     payload: {},
     created_at: now(),
+    updated_at: now(),
+  },
+];
+
+/** LRM-1318 — complete side-panel fixture aligned to mockNodes.subq1. */
+const mockThoughtStrategies: ResearchThoughtStrategy[] = [
+  {
+    node_id: nodeIds.subq1,
+    rationale: "先比同负载 p95，再看召回代价",
+    expected_outcome: "10k QPS 下可对比的延迟/召回表",
+    strategy_label: "负载切片",
+    strategy_revision: "v1",
+    state: "active",
     updated_at: now(),
   },
 ];
@@ -480,6 +501,7 @@ export const mockResearchSnapshotDefault: ResearchSessionSnapshot = {
   report: mockReport,
   evals: mockEvals,
   messages: mockMessages,
+  thought_strategies: mockThoughtStrategies,
 };
 
 /** Empty snapshot — first-visit / no sessions yet. */
@@ -492,6 +514,7 @@ export const mockResearchSnapshotEmpty: ResearchSessionSnapshot = {
   report: null,
   evals: [],
   messages: [],
+  thought_strategies: [],
 };
 
 /** Loading placeholder — snapshot shape with empty collections (skeleton state). */
@@ -504,6 +527,7 @@ export const mockResearchSnapshotLoading: ResearchSessionSnapshot = {
   report: null,
   evals: [],
   messages: [],
+  thought_strategies: [],
 };
 
 /** Error snapshot — session row plus wake_failed process card (LRM-823/828). */
@@ -516,6 +540,7 @@ export const mockResearchSnapshotError: ResearchSessionSnapshot = {
   report: mockReport,
   evals: mockEvals,
   messages: [mockMessageWakeFailed],
+  thought_strategies: mockThoughtStrategies,
 };
 
 /** Clarification snapshot — list + form controls for LRM-822 Gate Shots / harness. */
@@ -532,6 +557,7 @@ export const mockResearchSnapshotClarification: ResearchSessionSnapshot = {
     mockMessageClarificationList,
     mockMessageClarificationForm,
   ],
+  thought_strategies: mockThoughtStrategies,
 };
 
 /** LRM-840 — stage gate awaiting human approve/reject (status visible, not frozen). */
@@ -549,6 +575,7 @@ export const mockResearchSnapshotAwaitingConfirm: ResearchSessionSnapshot = {
   report: mockReport,
   evals: mockEvals,
   messages: [mockMessageUser],
+  thought_strategies: mockThoughtStrategies,
 };
 
 export const mockResearchSessionsList: ListResearchSessionsResponse = {

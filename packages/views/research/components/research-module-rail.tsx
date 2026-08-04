@@ -33,6 +33,9 @@ const MODULES: {
  * Desktop: compact horizontal pills inside the canvas Dock.
  * Narrow: full-width three-equal strip under Logic Strip.
  * Content still opens the single ResearchAuxDrawer / Sheet.
+ *
+ * LRM-1329 — sources: desktop shows full title (no ellipsis); narrow bar keeps
+ * short「源」glyph with aria-label = full title.
  */
 export function ResearchModuleRail({
   active,
@@ -63,6 +66,12 @@ export function ResearchModuleRail({
     >
       {MODULES.map((mod) => {
         const on = active === mod.id;
+        const fullLabel = t(($) => $.panel[mod.labelKey]);
+        const ico = t(($) => $.panel[mod.icoKey]);
+        const isSources = mod.id === "sources";
+        // Narrow sources: glyph only + full accessible name (LRM-1329).
+        const ariaLabel = isSources && isBar ? fullLabel : undefined;
+
         return (
           <button
             key={mod.id}
@@ -70,6 +79,7 @@ export function ResearchModuleRail({
             data-testid={`research-module-${mod.id}`}
             data-active={on ? "true" : "false"}
             aria-pressed={on}
+            aria-label={ariaLabel}
             disabled={disabled}
             onClick={() => onSelect(mod.id)}
             className={cn(
@@ -77,23 +87,35 @@ export function ResearchModuleRail({
               isBar
                 ? "min-h-11 min-w-0 flex-1 flex-col rounded-lg px-1.5 py-1.5 text-[11px]"
                 : "h-9 rounded-full px-2.5 text-[11px]",
+              // Sources dock: allow full title width (no 4.5rem clip).
+              isSources && !isBar && "max-w-none px-3",
               on
                 ? "bg-brand/12 text-brand"
                 : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
               disabled && "pointer-events-none opacity-50",
             )}
           >
-            <span className="font-semibold tracking-wide" aria-hidden={isBar}>
-              {t(($) => $.panel[mod.icoKey])}
-            </span>
             <span
-              className={cn(
-                "truncate",
-                isBar ? "max-w-full text-[9px] font-medium" : "max-w-[4.5rem]",
-              )}
+              className="font-semibold tracking-wide"
+              aria-hidden={isBar || undefined}
             >
-              {t(($) => $.panel[mod.labelKey])}
+              {ico}
             </span>
+            {isSources && isBar ? (
+              <span className="sr-only">{fullLabel}</span>
+            ) : (
+              <span
+                className={cn(
+                  isSources && !isBar
+                    ? "min-w-0 break-words whitespace-normal text-left leading-tight"
+                    : "truncate",
+                  !isSources && isBar && "max-w-full text-[9px] font-medium",
+                  !isSources && !isBar && "max-w-[4.5rem]",
+                )}
+              >
+                {fullLabel}
+              </span>
+            )}
           </button>
         );
       })}

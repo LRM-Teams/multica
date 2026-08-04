@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -32,7 +40,6 @@ import {
   channelMessagesFirstItemIndex,
   flattenChannelMessagePages,
   enrichChannelMessagesPreservingAvatars,
-  evictInactiveChannelMessageCaches,
   useEnsureMessageLoaded,
   channelsOptions,
   archivedChannelsOptions,
@@ -77,7 +84,6 @@ import {
   type GroupMemberActionKind,
   type ComposerDraftKey,
 } from "@multica/core/channels";
-import { ChannelGoalCard } from "./channel-goal-card";
 import { useAuthStore } from "@multica/core/auth";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
@@ -214,20 +220,15 @@ import {
 } from "../lib/conv-search-navigation";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
-import {
-  ChannelDetailsPanel,
-  type ChannelDetailsTab,
-} from "./channel-details-panel";
+import type { ChannelDetailsTab } from "./channel-details-panel";
 import { DeleteChannelDialog } from "./delete-channel-dialog";
+import { RemoveMemberConfirmDialog } from "./remove-member-confirm-dialog";
 import { ChannelNotifyPrefsDialog } from "./channel-notify-prefs";
 import {
   channelNotifyLevelLabel,
   resolveChannelNotifyLevel,
 } from "./channel-notify-level";
-import { ChannelTasksBoard } from "./channel-tasks-board";
-import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelHashLandmark } from "./channel-hash-landmark";
-import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
@@ -242,7 +243,6 @@ import {
   listStoppableChannelTasks,
 } from "./conversation-activity-tasks";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
-import { DmConversation } from "./dm-conversation";
 import {
   dmAgentBubbleActivity,
   useAgentBubbleActivityByAgent,
@@ -267,11 +267,9 @@ import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { useSidebarSectionCollapsed } from "../hooks/use-sidebar-section-collapsed";
 import { useJumpNotFoundToast } from "../hooks/use-jump-not-found-toast";
-import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { MemberPanelProvider } from "../../common/member-panel-context";
 import { MotionContent } from "../../common/motion-content";
-import { MemberSidePanel } from "../../members/member-side-panel";
 import {
   CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
   useProfilePanelWidth,
@@ -282,6 +280,48 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
 import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
 import { ChannelPresenceCluster } from "./channel-agents-live-cue";
+
+// LRM-1264 R3 — defer Tasks/Files/details/thread/agent/member graphs until
+// those surfaces open. Base UI Tabs keep inactive panels mounted (hidden);
+// children must also be conditional so hooks/queries do not retain on Chat.
+const ChannelDetailsPanel = lazy(() =>
+  import("./channel-details-panel").then((m) => ({ default: m.ChannelDetailsPanel })),
+);
+const ChannelTasksBoard = lazy(() =>
+  import("./channel-tasks-board").then((m) => ({ default: m.ChannelTasksBoard })),
+);
+const ChannelFilesPanel = lazy(() =>
+  import("./channel-files-panel").then((m) => ({ default: m.ChannelFilesPanel })),
+);
+const ThreadPanel = lazy(() =>
+  import("./thread-panel").then((m) => ({ default: m.ThreadPanel })),
+);
+const ResolvedAgentSidePanel = lazy(() =>
+  import("../../common/resolved-agent-side-panel").then((m) => ({
+    default: m.ResolvedAgentSidePanel,
+  })),
+);
+const MemberSidePanel = lazy(() =>
+  import("../../members/member-side-panel").then((m) => ({
+    default: m.MemberSidePanel,
+  })),
+);
+const ChannelGoalCard = lazy(() =>
+  import("./channel-goal-card").then((m) => ({ default: m.ChannelGoalCard })),
+);
+const DmConversation = lazy(() =>
+  import("./dm-conversation").then((m) => ({ default: m.DmConversation })),
+);
+
+function ChannelLazyPanelFallback({ className }: { className?: string }) {
+  return (
+    <div className={className ?? "flex flex-1 min-h-0 flex-col gap-2 p-4"}>
+      <Skeleton className="h-8 w-1/3" />
+      <Skeleton className="h-24 w-full" />
+      <Skeleton className="h-24 w-full" />
+    </div>
+  );
+}
 
 export interface TypingActor {
   key: string;
@@ -644,6 +684,25 @@ export function ChannelsPage({
       delete next[targetId];
       return next;
     });
+  }, []);
+  // LRM-1356 — WHICH record has a retry actually in flight, keyed by the same
+  // immutable target id as `pendingVoices`.
+  //
+  // This used to be read straight off `sendMessage.isPending` /
+  // `sendThreadMessage.isPending`, but those are one mutation for the whole
+  // surface and they outlive a channel/thread switch: any send in flight
+  // anywhere on the page dimmed the unsent recording. Since both of its actions
+  // guard on that flag (LRM-1354), it took Delete away too — and a committed
+  // retry or an explicit delete are this record's ONLY two exits, so an
+  // unrelated send left the user unable to resolve it at all. Scope the flag to
+  // the record whose own retry was dispatched.
+  const [retryingVoiceTargetId, setRetryingVoiceTargetId] = useState<string | null>(null);
+  /**
+   * Release the in-flight mark, but only if it is still THIS target's — a send
+   * settling for another surface must not clear someone else's retry.
+   */
+  const settlePendingVoiceRetry = useCallback((targetId: string) => {
+    setRetryingVoiceTargetId((current) => (current === targetId ? null : current));
   }, []);
   // #839 — durable in-row record of a failed removal, keyed by member identity.
   // The toast is the immediate announcement; it is NOT storage — it can be
@@ -1134,11 +1193,6 @@ export function ChannelsPage({
     }),
   );
   const activeChannelId = active?.id ?? "";
-  // LRM-1264: unload other channels' message/thread caches when switching.
-  useEffect(() => {
-    if (!activeChannelId) return;
-    evictInactiveChannelMessageCaches(qc, activeChannelId);
-  }, [activeChannelId, qc]);
   useEffect(() => {
     const target = urlDeepLinkMessage || urlDeepLinkThread;
     if (!target || !activeChannelId) return;
@@ -1768,23 +1822,40 @@ export function ChannelsPage({
   // Debounced in-conversation search. Empty query clears are handled where
   // the query is written (input onChange / channel switch) — not here — so
   // this effect only owns the async fetch.
+  //
+  // LRM-1296 — clearing the debounce timer cannot stop a request that already
+  // left, so a superseded response used to land last and overwrite the newer
+  // results (count, jump target, and index reset to 0) while the input already
+  // showed the newer query; a request fired just before a channel switch could
+  // likewise repopulate search state belonging to the previous channel. The
+  // per-run `cancelled` flag drops any response whose run is no longer current
+  // — query change, panel close, and channel switch all re-run this effect
+  // (`active` is a dep). The DM surface already drops stale hits in its reducer
+  // (`dm-conversation.tsx` `setSearchResults` compares `action.query`); this is
+  // the group-channel equivalent.
   useEffect(() => {
     if (!convSearchOpen || !active) return;
     const q = convSearchQuery.trim();
     if (!q) return;
+    let cancelled = false;
     const timer = setTimeout(async () => {
       try {
         const res = await api.searchChannelMessages(active.id, q);
-        // LRM-753 — newest-first so index 0 is「最近命中」; list scroll follows
-        // effectiveHighlightId via ChannelMessageList.
-        setConvSearchResults(orderConvSearchResultsNewestFirst(res.results));
-        setConvSearchTotal(res.total);
-        setConvSearchIndex(0);
+        if (!cancelled) {
+          // LRM-753 — newest-first so index 0 is「最近命中」; list scroll follows
+          // effectiveHighlightId via ChannelMessageList.
+          setConvSearchResults(orderConvSearchResultsNewestFirst(res.results));
+          setConvSearchTotal(res.total);
+          setConvSearchIndex(0);
+        }
       } catch {
-        showErrorToast(t(($) => $.conv_search.error));
+        if (!cancelled) showErrorToast(t(($) => $.conv_search.error));
       }
     }, 300);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [convSearchQuery, active, convSearchOpen, t]);
 
   // Mark the conversation read when it becomes active (select / deep link /
@@ -2065,7 +2136,12 @@ export function ChannelsPage({
     });
   };
 
-  const handleStopChannelTask = useCallback(async (task: ChannelActiveTask) => {
+  const handleStopChannelTask = useCallback(async (
+    task: ChannelActiveTask,
+    // LRM-1350: Working-list resolved label (same cascade as live cue). Never
+    // toast raw `task.agent_name` — that may be the Unknown Agent sentinel.
+    displayName: string,
+  ) => {
     if (!active?.id) return;
     // Terminal failed/no_reply rows are dismissed client-side in the live cue
     // (LRM-581) — cancel is only for in-flight wakes.
@@ -2077,11 +2153,16 @@ export function ChannelsPage({
       showErrorToast(t(($) => $.agent_status.stop_failed));
       return;
     }
+    const toastName = displayName.trim();
+    if (!toastName) {
+      showErrorToast(t(($) => $.agent_status.stop_failed));
+      return;
+    }
     setStoppingChannelTaskId(task.task_id);
     try {
       await api.cancelChannelInboxEvent(active.id, inboxEventId);
       toast.success(
-        t(($) => $.agent_status.stop_success, { name: task.agent_name }),
+        t(($) => $.agent_status.stop_success, { name: toastName }),
       );
       qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
@@ -2366,8 +2447,13 @@ export function ChannelsPage({
       }),
       mutate: sendMessage.mutate,
       // Only a send that actually committed clears the record.
-      onCommitted: () => forgetPendingVoice(voiceTargetId(channelId)),
+      onCommitted: () => {
+        settlePendingVoiceRetry(voiceTargetId(channelId));
+        forgetPendingVoice(voiceTargetId(channelId));
+      },
       onVisibleError: (kind) => {
+        // The retry (if this was one) has settled — failed, but settled.
+        settlePendingVoiceRetry(voiceTargetId(channelId));
         // EVERY failure kind lands here now. Previously only `conflict` said
         // anything, so a retry/timeout/too-long voice send — the common cases —
         // produced no feedback at all: the recording vanished silently.
@@ -2418,11 +2504,18 @@ export function ChannelsPage({
   // Re-sends to the recording's OWN channel, not whatever is on screen now.
   const retryChannelVoice = () => {
     if (!channelPendingVoiceHere) return;
-    submitChannelVoice(
+    // Mark BEFORE dispatching: the send can settle synchronously (a mocked or
+    // already-cached mutation), and settling before the mark would leave the
+    // record stuck in the in-flight state forever.
+    setRetryingVoiceTargetId(channelPendingVoiceHere.targetId);
+    const dispatched = submitChannelVoice(
       channelPendingVoiceHere.channelId,
       channelPendingVoiceHere.durationMs,
       channelPendingVoiceHere.attachment,
     );
+    // The send lock can refuse the dispatch (held / auto-repeat trigger). No
+    // request means nothing will settle it, so don't leave the mark behind.
+    if (!dispatched) settlePendingVoiceRetry(channelPendingVoiceHere.targetId);
   };
 
   const handleThreadSend = () => {
@@ -2505,8 +2598,12 @@ export function ChannelsPage({
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
-      onCommitted: () => forgetPendingVoice(voiceTargetId(channelId, threadRootId)),
+      onCommitted: () => {
+        settlePendingVoiceRetry(voiceTargetId(channelId, threadRootId));
+        forgetPendingVoice(voiceTargetId(channelId, threadRootId));
+      },
       onVisibleError: (kind) => {
+        settlePendingVoiceRetry(voiceTargetId(channelId, threadRootId));
         // #838 — same gap as the channel path: only `conflict` used to speak,
         // so retry/timeout/too-long failures lost the recording in silence.
         showErrorToast(
@@ -2543,12 +2640,15 @@ export function ChannelsPage({
   // Re-sends to the recording's OWN channel + thread root.
   const retryThreadVoice = () => {
     if (!threadPendingVoiceHere) return;
-    submitThreadVoice(
+    // Same ordering rule as the channel retry (see retryChannelVoice).
+    setRetryingVoiceTargetId(threadPendingVoiceHere.targetId);
+    const dispatched = submitThreadVoice(
       threadPendingVoiceHere.channelId,
       threadPendingVoiceHere.threadRootId ?? "",
       threadPendingVoiceHere.durationMs,
       threadPendingVoiceHere.attachment,
     );
+    if (!dispatched) settlePendingVoiceRetry(threadPendingVoiceHere.targetId);
   };
 
   // #772 restore-previous (conflicted case: composer held new text).
@@ -3593,6 +3693,7 @@ export function ChannelsPage({
   // passed — the panel then hides the checkbox entirely.
   const threadPanel =
     active && threadSurfaceRoot ? (
+      <Suspense fallback={<ChannelLazyPanelFallback />}>
       <ThreadPanel
         root={threadSurfaceRoot}
         replies={threadReplies}
@@ -3615,6 +3716,7 @@ export function ChannelsPage({
         onFollowChange={handleThreadFollowChange}
         parentContext="channel"
         parentChannelName={active.name}
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- thread surface keyed on root; parent jump closure is not memo-sensitive
         onViewParent={() => {
           if (embedded) {
             if (!onOpenInChannels) {
@@ -3648,6 +3750,7 @@ export function ChannelsPage({
         quoteTarget={threadQuoteTarget}
         onClearQuote={() => setThreadQuoteTarget(null)}
         sendError={channelThreadSendError}
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- thread send helpers recreate with surface state; panel remounts with root
         onRestorePrevious={handleRestoreChannelThreadPrevious}
         editor={
           <ContentEditor
@@ -3670,19 +3773,25 @@ export function ChannelsPage({
             }
           />
         }
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- same thread send helper as onRestorePrevious
         onSend={handleThreadSend}
         voicePlaybackScope={voicePlaybackScope(active.id, threadSurfaceRoot.id)}
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-object-as-prop -- voice gate flags; ThreadPanel is not memoized on this object
         voiceBlock={{
           pendingVoice: !!threadPendingVoiceHere,
           hasTextDraft: !threadDraftEmpty,
           hasAttachmentDraft: threadPending.pending.length > 0,
         }}
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- thread voice send recreates with draft/pending
         onVoiceSend={handleThreadVoiceSend}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
         composerPrefixExtra={
           <ComposerPendingVoice
             pending={threadPendingVoiceHere}
-            retrying={sendThreadMessage.isPending}
+            retrying={
+              threadPendingVoiceHere !== null &&
+              retryingVoiceTargetId === threadPendingVoiceHere.targetId
+            }
             onRetry={retryThreadVoice}
             onDelete={() =>
               threadPendingVoiceHere && forgetPendingVoice(threadPendingVoiceHere.targetId)
@@ -3734,6 +3843,7 @@ export function ChannelsPage({
           </>
         }
       />
+      </Suspense>
     ) : null;
   const agentPanelBackLabel = selectedAgentReturnToMemberId
     ? resolveActorDisplayName(
@@ -3744,6 +3854,7 @@ export function ChannelsPage({
     : undefined;
   const agentPanel =
     active && selectedAgentPanelId ? (
+      <Suspense fallback={<ChannelLazyPanelFallback />}>
       <ResolvedAgentSidePanel
         agentId={selectedAgentPanelId}
         identitySnapshot={selectedAgentPanelSnapshot}
@@ -3756,14 +3867,17 @@ export function ChannelsPage({
         }
         backLabel={agentPanelBackLabel}
       />
+      </Suspense>
     ) : null;
   const memberPanel =
     active && selectedMemberPanelId ? (
+      <Suspense fallback={<ChannelLazyPanelFallback />}>
       <MemberSidePanel
         userId={selectedMemberPanelId}
         onClose={() => setSelectedMemberPanelId(null)}
         variant={isMobile ? "page" : "panel"}
         doneLabel={isMobile ? tAgents(($) => $.side_panel.back_to_messages) : undefined}
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- member→DM handoff; panel unmounts on navigate
         onMessage={(userId) => {
           createOrFindDm.mutate(
             { peer_type: "user", peer_id: userId },
@@ -3778,6 +3892,7 @@ export function ChannelsPage({
           );
         }}
       />
+      </Suspense>
     ) : null;
   // LRM-210 — Channel details panel (About|Members|Files|Settings). System
   // #general still opens About/Members/Files (read-only roster) but hides
@@ -3896,12 +4011,14 @@ export function ChannelsPage({
     : null;
   const detailsPanel =
     channelDetailsOpen && detailsPanelProps ? (
+      <Suspense fallback={<ChannelLazyPanelFallback />}>
       <ChannelDetailsPanel
         key={`${active!.id}:${channelDetailsTab}`}
         {...detailsPanelProps}
         initialTab={channelDetailsTab}
         variant="panel"
       />
+      </Suspense>
     ) : null;
   // LRM-748 frozen v2 — desktop notify prefs live in this dialog (never a
   // page push); mobile drills into the details panel's internal sub-view.
@@ -4089,12 +4206,14 @@ export function ChannelsPage({
               </div>
             }
           />
-          <ChannelGoalCard
-            key={active.id}
-            channelId={active.id}
-            canManage={canArchive(active)}
-            archived={isActiveArchived}
-          />
+          <Suspense fallback={null}>
+            <ChannelGoalCard
+              key={active.id}
+              channelId={active.id}
+              canManage={canArchive(active)}
+              archived={isActiveArchived}
+            />
+          </Suspense>
               {/* #562 — channel main-content tab switch: Chat (message list),
                   Tasks (channel-scoped board), and LRM-675 Files (channel
                   attachments), full-width in the main area. Uses the shared
@@ -4124,11 +4243,21 @@ export function ChannelsPage({
                 <TabsContent value="files" className="flex flex-1 min-h-0 flex-col text-base">
                   {/* LRM-675 — the single Files entry (settings Files block and
                       duplicate entries removed); same attachment source as the
-                      legacy details panel. */}
-                  <ChannelFilesPanel channelId={active.id} wide />
+                      legacy details panel.
+                      LRM-1264 R3: mount only while active — inactive TabsContent
+                      stays hidden but would otherwise keep queries/DOM. */}
+                  {channelView === "files" ? (
+                    <Suspense fallback={<ChannelLazyPanelFallback />}>
+                      <ChannelFilesPanel channelId={active.id} wide />
+                    </Suspense>
+                  ) : null}
                 </TabsContent>
                 <TabsContent value="tasks" className="flex flex-1 min-h-0 flex-col text-base">
-                  <ChannelTasksBoard channelId={active.id} />
+                  {channelView === "tasks" ? (
+                    <Suspense fallback={<ChannelLazyPanelFallback />}>
+                      <ChannelTasksBoard channelId={active.id} />
+                    </Suspense>
+                  ) : null}
                 </TabsContent>
                 <TabsContent value="chat" className="flex flex-1 min-h-0 flex-col text-base">
               {convSearchOpen && (
@@ -4179,7 +4308,10 @@ export function ChannelsPage({
                     className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                   />
                   {convSearchQuery.trim() && (
-                    <span className="shrink-0 text-xs text-muted-foreground">
+                    <span
+                      data-testid="conv-search-count"
+                      className="shrink-0 text-xs text-muted-foreground"
+                    >
                       {convSearchTotal === 0
                         ? t(($) => $.conv_search.no_results)
                         : t(($) => $.conv_search.result_count, {
@@ -4349,7 +4481,10 @@ export function ChannelsPage({
                         />
                         <ComposerPendingVoice
                           pending={channelPendingVoiceHere}
-                          retrying={sendMessage.isPending}
+                          retrying={
+                            channelPendingVoiceHere !== null &&
+                            retryingVoiceTargetId === channelPendingVoiceHere.targetId
+                          }
                           onRetry={retryChannelVoice}
                           onDelete={() =>
                             channelPendingVoiceHere &&
@@ -4508,25 +4643,27 @@ export function ChannelsPage({
   // dropping to a blank pane during that window.
   const dmDraftKey = activeDm ? (`dm:${activeDm.id}` as const) : null;
   const dmDetailPane = activeDm ? (
-    <DmConversation
-      key={`${activeDm.source}:${activeDm.id}`}
-      dm={activeDm}
-      onBack={mobileBackToList}
-      draft={dmDraftKey ? (composerDrafts[dmDraftKey]?.content ?? "") : ""}
-      onDraftChange={(value) => {
-        if (dmDraftKey) setConversationDraft(dmDraftKey, value);
-      }}
-      onDraftClear={() => {
-        if (dmDraftKey) storeClearComposerDraft(dmDraftKey);
-      }}
-      // Same Reminder-anchor deep-link values the group-channel path above
-      // consumes — mutually exclusive in practice (a resolved route is
-      // either activeChannelId or activeDmId, never both), so it's safe to
-      // pass through unconditionally; DmConversation owns its own one-shot
-      // consumption guard.
-      threadDeepLinkId={threadDeepLinkId}
-      deepLinkMessageId={highlightMessageId}
-    />
+    <Suspense fallback={<ChannelLazyPanelFallback />}>
+      <DmConversation
+        key={`${activeDm.source}:${activeDm.id}`}
+        dm={activeDm}
+        onBack={mobileBackToList}
+        draft={dmDraftKey ? (composerDrafts[dmDraftKey]?.content ?? "") : ""}
+        onDraftChange={(value) => {
+          if (dmDraftKey) setConversationDraft(dmDraftKey, value);
+        }}
+        onDraftClear={() => {
+          if (dmDraftKey) storeClearComposerDraft(dmDraftKey);
+        }}
+        // Same Reminder-anchor deep-link values the group-channel path above
+        // consumes — mutually exclusive in practice (a resolved route is
+        // either activeChannelId or activeDmId, never both), so it's safe to
+        // pass through unconditionally; DmConversation owns its own one-shot
+        // consumption guard.
+        threadDeepLinkId={threadDeepLinkId}
+        deepLinkMessageId={highlightMessageId}
+      />
+    </Suspense>
   ) : dmResolveTimedOut ? (
     <DmOpenFailedState
       onRetry={() => {
@@ -4650,6 +4787,7 @@ export function ChannelsPage({
             data-testid="channel-details-page-drawer"
           >
             {mobilePanel ? (
+              <Suspense fallback={<ChannelLazyPanelFallback className="flex flex-1 min-h-0 flex-col gap-2 p-4" />}>
               <ChannelDetailsPanel
                 key={`${active.id}:${mobilePanel}`}
                 {...detailsPanelProps}
@@ -4658,6 +4796,7 @@ export function ChannelsPage({
                 onClose={() => setMobilePanel(null)}
                 portalContainer={mobileSettingsDrawerBodyRef}
               />
+              </Suspense>
             ) : null}
           </DrawerContent>
         </Drawer>
@@ -4749,81 +4888,55 @@ export function ChannelsPage({
         </SheetContent>
       </Sheet>
 
-      {/* LRM-1289 — remove confirm was a full-bleed bottom Sheet (`inset-x-0`),
-          so the pink primary stretched nearly viewport-wide. Use AlertDialog
-          (max-w-xs / sm:max-w-sm) like archive/delete — same mutate semantics. */}
-      <AlertDialog
+      {/* LRM-1289 width fix + LRM-1327 pending/focus (LRM-1300 A/D3). */}
+      <RemoveMemberConfirmDialog
         open={removeMemberTarget !== null}
+        displayName={
+          removeMemberTarget
+            ? resolveActorDisplayName(
+                removeMemberTarget,
+                removeMemberTarget.member_type === "agent"
+                  ? t(($) => $.message.agent_badge)
+                  : t(($) => $.members.title),
+              )
+            : ""
+        }
+        pending={removeMember.isPending}
         onOpenChange={(open) => {
           if (!open) setRemoveMemberTarget(null);
         }}
-      >
-        <AlertDialogContent data-testid="group-member-remove-confirm">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {t(($) => $.members.remove_confirm_title, {
-                name: removeMemberTarget
-                  ? resolveActorDisplayName(
-                      removeMemberTarget,
-                      removeMemberTarget.member_type === "agent"
-                        ? t(($) => $.message.agent_badge)
-                        : t(($) => $.members.title),
-                    )
-                  : "",
-              })}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(($) => $.members.remove_confirm_description)}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={removeMember.isPending}>
-              {t(($) => $.members.remove_cancel)}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={removeMember.isPending}
-              onClick={() => {
-                if (!active || !removeMemberTarget) return;
-                // Capture: `removeMemberTarget` is cleared in onSettled, so the
-                // callbacks must not read it back.
-                const target = removeMemberTarget;
-                removeMember.mutate(
-                  {
-                    channelId: active.id,
-                    memberType: removeMemberTarget.member_type,
-                    memberId: removeMemberTarget.member_id,
-                  },
-                  {
-                    // #833 — same reasoning as the desktop path: closing the
-                    // dialog on a failed removal would look exactly like a
-                    // successful one.
-                    onError: () => {
-                      showErrorToast(t(($) => $.members.remove_failed));
-                      // #839 — also record it on the row so the failure survives
-                      // the toast being dismissed or expiring.
-                      setRemoveFailedKeys((prev) =>
-                        new Set(prev).add(memberFailureKey(active.id, target)),
-                      );
-                    },
-                    // A successful removal drops the row; clear any stale mark so
-                    // a later re-add can't inherit it.
-                    onSuccess: () =>
-                      setRemoveFailedKeys((prev) => {
-                        const next = new Set(prev);
-                        next.delete(memberFailureKey(active.id, target));
-                        return next;
-                      }),
-                    onSettled: () => setRemoveMemberTarget(null),
-                  },
+        onConfirm={() => {
+          if (!active || !removeMemberTarget) return;
+          // Capture: success clears the target; failure keeps the dialog open
+          // (#833 / LRM-1300 §5) so callbacks must not read state back.
+          const target = removeMemberTarget;
+          const channelId = active.id;
+          removeMember.mutate(
+            {
+              channelId,
+              memberType: target.member_type,
+              memberId: target.member_id,
+            },
+            {
+              onError: () => {
+                showErrorToast(t(($) => $.members.remove_failed));
+                // #839 — row mark survives toast dismiss/expiry.
+                setRemoveFailedKeys((prev) =>
+                  new Set(prev).add(memberFailureKey(channelId, target)),
                 );
-              }}
-            >
-              {t(($) => $.members.remove_confirm)}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              },
+              onSuccess: () => {
+                setRemoveFailedKeys((prev) => {
+                  const next = new Set(prev);
+                  next.delete(memberFailureKey(channelId, target));
+                  return next;
+                });
+                setRemoveMemberTarget(null);
+              },
+            },
+          );
+        }}
+      />
 
       <DeleteChannelDialog
         open={deleteTarget !== null}

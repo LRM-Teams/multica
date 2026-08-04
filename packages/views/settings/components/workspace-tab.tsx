@@ -287,9 +287,9 @@ export function WorkspaceTab() {
                 {canManageWorkspace && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
                     {uploading ? (
-                      <Loader2 className="h-5 w-5 animate-spin text-white" />
+                      <Loader2 className="h-5 w-5 animate-spin text-white" aria-hidden />
                     ) : (
-                      <Camera className="h-5 w-5 text-white" />
+                      <Camera className="h-5 w-5 text-white" aria-hidden />
                     )}
                   </div>
                 )}
@@ -366,7 +366,7 @@ export function WorkspaceTab() {
                 onClick={handleSave}
                 disabled={saving || !name.trim() || prefixInvalid || !canManageWorkspace}
               >
-                <Save className="h-3 w-3" />
+                <Save className="h-3 w-3" aria-hidden />
                 {saving ? t(($) => $.workspace.saving) : t(($) => $.workspace.save)}
               </Button>
             </div>
@@ -385,7 +385,7 @@ export function WorkspaceTab() {
       {membersFetched && (
       <section className="space-y-4">
         <div className="flex items-center gap-2">
-          <LogOut className="h-4 w-4 text-muted-foreground" />
+          <LogOut className="h-4 w-4 text-muted-foreground" aria-hidden />
           <h2 className="text-sm font-semibold">{t(($) => $.workspace.danger_zone)}</h2>
         </div>
 

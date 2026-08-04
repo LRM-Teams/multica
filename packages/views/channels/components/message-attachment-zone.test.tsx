@@ -11,7 +11,8 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: (_t: string, _i: string, fb?: string) => fb ?? "Alice" }),
 }));
 
-vi.mock("../../editor", () => ({
+// LRM-1264 R3 — zone imports editor leaf modules (not the TipTap barrel).
+vi.mock("../../editor/attachment", () => ({
   Attachment: ({
     attachment,
     inlineHtmlPreview,
@@ -34,6 +35,9 @@ vi.mock("../../editor", () => ({
     }
     return null;
   },
+}));
+
+vi.mock("../../editor/attachment-download-context", () => ({
   AttachmentDownloadProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 

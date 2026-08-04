@@ -178,6 +178,7 @@ function MemberSidePanelReady({
   closeAriaLabel: string;
 }) {
   const { t } = useT("members");
+  const { t: tChannels } = useT("channels");
   const wsId = useWorkspaceId();
   const currentUserId = useAuthStore((s) => s.user?.id ?? null);
   const paths = useWorkspacePaths();
@@ -303,7 +304,7 @@ function MemberSidePanelReady({
           aria-label={messageAriaLabel}
           data-testid="member-side-panel-message"
         >
-          <MessageSquare className="size-4" />
+          <MessageSquare className="size-4" aria-hidden />
         </Button>
       ) : isSelf ? (
         // LRM-751 — own card keeps a settings-page escape hatch (design gate
@@ -316,7 +317,7 @@ function MemberSidePanelReady({
             className="h-7 gap-1 px-2 text-xs"
             data-testid="member-side-panel-edit-profile"
           >
-            <Pencil className="size-3" />
+            <Pencil className="size-3" aria-hidden />
             {t(($) => $.panel.edit_profile)}
           </Button>
         </AppLink>
@@ -412,7 +413,9 @@ function MemberSidePanelReady({
                     {selfHonor ? (
                       <UserHonorLevelIcon
                         level={selfHonor.level}
-                        title={`LV.${selfHonor.level}`}
+                        title={tChannels(($) => $.profile_popover.honor.level_value, {
+                          level: selfHonor.level,
+                        })}
                         className="size-6 drop-shadow-sm"
                       />
                     ) : null}
@@ -610,6 +613,7 @@ function CreatedAgentRow({
   href: string;
   onOpenPanel?: () => void;
 }) {
+  const { t } = useT("channels");
   const displayName = resolveActorDisplayName(agent, agent.id);
   const roleHint = agent.description?.trim().split("\n")[0]?.trim() ?? "";
   const title =
@@ -640,7 +644,9 @@ function CreatedAgentRow({
           {agent.honor_level ? (
             <AgentHonorLevelIcon
               level={agent.honor_level}
-              title={`LV.${agent.honor_level}`}
+              title={t(($) => $.profile_popover.honor.level_value, {
+                level: agent.honor_level,
+              })}
               className="size-6 drop-shadow-sm"
             />
           ) : null}

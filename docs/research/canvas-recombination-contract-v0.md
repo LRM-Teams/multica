@@ -52,7 +52,10 @@ Additive projection on top of [aggregate-tree-contract-v0.md](./aggregate-tree-c
 Product trigger: **human** research-session utterance only (not agent finding).
 Output is a list FE can animate from — do not recompute matching client-side.
 
-### Envelope (proposed; storage = **GAP**)
+### Envelope (storage = `research_message.meta.match_decision`; LRM-1330)
+
+Also projected top-level on `messages[]` as `match_decision` when present.
+**Omit** the key when absent — never ship a fake empty list as if matching ran.
 
 ```json
 {
@@ -74,6 +77,9 @@ Output is a list FE can animate from — do not recompute matching client-side.
   ]
 }
 ```
+
+Writer (agent / fleet): `PUT /api/agent/research/sessions/{id}/messages/{messageId}/match-decision`
+with body `{ "match_decision": { ... } }` on a **human** utterance row.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -154,14 +160,14 @@ No `abandon_reason` key. FE shows empty/neutral placeholders; must not invent co
 | `content` four faces projected on `nodes[]` | **Implemented** (read-time from payload; no migration) |
 | `abandon_reason` projected when present | **Implemented** (payload; no migration) |
 | Writers populate `payload.content` / reasons | **GAP** — fleet / matcher not yet writing faces |
-| Persist + return `match_decision` per human utterance | **GAP** — no table/API yet (see below) |
-| Matcher that emits continue/branch_after/deprecate | **GAP** — algorithm + mutation path |
+| Persist + return `match_decision` per human utterance | **Implemented** (meta + top-level projection; PUT writer) |
+| Matcher that emits continue/branch_after/deprecate | **GAP** — algorithm + tree mutation path |
 | First-class columns for faces / reason | Optional follow-up if payload provenance insufficient |
 
-### Match-decision storage options (product/BE confirm before migration)
+### Match-decision storage (v0 landed)
 
-1. **Preferred v0:** `research_message.meta.match_decision` on the human utterance row; snapshot/WS expose latest or by `utterance_id`.
-2. New `research_match_decision` table keyed by `(session_id, utterance_id)`.
+1. **v0:** `research_message.meta.match_decision` on the human utterance row; snapshot/WS project via `messages[].match_decision`.
+2. New `research_match_decision` table — deferred unless meta provenance proves insufficient.
 3. Session-level ring buffer on `research_session` — discouraged (harder to audit).
 
 Do **not** ship a fake empty `match_decisions: []` on every snapshot as if matching ran.
@@ -169,6 +175,6 @@ Do **not** ship a fake empty `match_decisions: []` on every snapshot as if match
 ## Out of scope
 
 - FE/UI visual specs (LRM-1309 / 1315 / 1311)
-- Side panel 1306
+- Side panel 1306 → see [thought-strategy-panel-contract-v0.md](./thought-strategy-panel-contract-v0.md) (LRM-1318)
 - Aggregate tree / assessment (LRM-1278) — unchanged
 - Auth / permissions

@@ -70,15 +70,15 @@ export function archivedChannelsOptions(wsId: string) {
 export function channelMessagesOptions(channelId: string) {
   return queryOptions({
     queryKey: channelKeys.messages(channelId),
-    queryFn: async ({ client, queryKey }) => {
-      const incoming = await api.listChannelMessages(channelId);
+    queryFn: async ({ client, queryKey, signal }) => {
+      const incoming = await api.listChannelMessages(channelId, { signal });
       // Refetch must not wipe in-flight / failed optimistic bubbles (LRM-280).
       if (!client) return incoming;
       const previous = client.getQueryData<ChannelMessage[]>(queryKey);
       return preserveLocalSendMessages(previous, incoming);
     },
     enabled: !!channelId,
-    // LRM-1264: leave the heap sooner once the channel is inactive.
+    // LRM-1363: retain inactive channel message caches for the session.
     gcTime: CHANNEL_MESSAGE_GC_TIME_MS,
   });
 }
@@ -108,12 +108,12 @@ export function channelMessagesPageOptions(
   const aroundSeq = options.aroundSeq ?? null;
   return infiniteQueryOptions({
     queryKey: channelKeys.messagesPage(channelId),
-    queryFn: async ({ pageParam, client, queryKey }) => {
+    queryFn: async ({ pageParam, client, queryKey, signal }) => {
       const page = await api.listChannelMessagesPage(
         channelId,
         isAroundPageParam(pageParam)
-          ? { around: pageParam.around, limit }
-          : { before: pageParam, limit },
+          ? { around: pageParam.around, limit, signal }
+          : { before: pageParam, limit, signal },
       );
       // Optimistic sends live on the latest window (page 0). Older-history pages
       // must not re-attach them (LRM-280).
@@ -141,7 +141,7 @@ export function channelMessagesPageOptions(
       lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
     enabled: !!channelId,
     staleTime: Infinity,
-    // LRM-1264: leave the heap sooner once the channel is inactive.
+    // LRM-1363: retain inactive channel message caches for the session.
     gcTime: CHANNEL_MESSAGE_GC_TIME_MS,
   });
 }
@@ -445,8 +445,8 @@ export function channelMessageThreadOptions(
       options?.before,
       options?.beforeId,
     ] as const,
-    queryFn: async ({ client, queryKey }) => {
-      const page = await api.listChannelMessageThread(channelId, messageId, options);
+    queryFn: async ({ client, queryKey, signal }) => {
+      const page = await api.listChannelMessageThread(channelId, messageId, { ...options, signal });
       if (!client) return page;
       const previous = client.getQueryData<ChannelThreadMessagesPage>(queryKey);
       return {
@@ -455,7 +455,7 @@ export function channelMessageThreadOptions(
       };
     },
     enabled: !!channelId && !!messageId,
-    // LRM-1264: leave the heap sooner once the thread is inactive.
+    // LRM-1363: retain inactive thread caches for the session.
     gcTime: CHANNEL_MESSAGE_GC_TIME_MS,
   });
 }
@@ -472,7 +472,7 @@ export function channelMessageSearchOptions(channelId: string, query: string, li
 export function channelMembersOptions(channelId: string) {
   return queryOptions({
     queryKey: channelKeys.members(channelId),
-    queryFn: () => api.listChannelMembers(channelId),
+    queryFn: ({ signal }) => api.listChannelMembers(channelId, { signal }),
     enabled: !!channelId,
   });
 }
@@ -484,7 +484,8 @@ export function channelMemberManagementCapabilitiesOptions(
 ) {
   return queryOptions({
     queryKey: channelKeys.memberManagementCapabilities(channelId),
-    queryFn: () => api.getChannelMemberManagementCapabilities(channelId),
+    queryFn: ({ signal }) =>
+      api.getChannelMemberManagementCapabilities(channelId, { signal }),
     enabled: !!channelId && enabled,
   });
 }

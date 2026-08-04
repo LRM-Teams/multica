@@ -3,8 +3,8 @@ import { QueryClient } from "@tanstack/react-query";
 import { channelKeys } from "./queries";
 import { evictInactiveChannelMessageCaches } from "./evict-inactive-caches";
 
-describe("evictInactiveChannelMessageCaches (LRM-1264)", () => {
-  it("removes message/thread/search caches for other channels, keeps active + non-message keys", () => {
+describe("evictInactiveChannelMessageCaches (LRM-1363)", () => {
+  it("is a no-op: keeps other channels' message/thread/search caches", () => {
     const qc = new QueryClient();
     qc.setQueryData(channelKeys.messagesPage("active"), { pages: [], pageParams: [] });
     qc.setQueryData(channelKeys.messagesPage("other"), { pages: [], pageParams: [] });
@@ -15,22 +15,26 @@ describe("evictInactiveChannelMessageCaches (LRM-1264)", () => {
     qc.setQueryData(channelKeys.list("ws"), []);
 
     const removed = evictInactiveChannelMessageCaches(qc, "active");
-    expect(removed).toBe(4);
+    expect(removed).toBe(0);
     expect(qc.getQueryData(channelKeys.messagesPage("active"))).toBeTruthy();
-    expect(qc.getQueryData(channelKeys.messagesPage("other"))).toBeUndefined();
-    expect(qc.getQueryData(channelKeys.messages("other"))).toBeUndefined();
-    expect(qc.getQueryData(channelKeys.messageThread("other", "m1"))).toBeUndefined();
-    expect(qc.getQueryData(channelKeys.messageSearch("other", "hi"))).toBeUndefined();
+    expect(qc.getQueryData(channelKeys.messagesPage("other"))).toBeTruthy();
+    expect(qc.getQueryData(channelKeys.messages("other"))).toEqual([]);
+    expect(qc.getQueryData(channelKeys.messageThread("other", "m1"))).toEqual({
+      messages: [],
+    });
+    expect(qc.getQueryData(channelKeys.messageSearch("other", "hi"))).toEqual({
+      messages: [],
+    });
     expect(qc.getQueryData(channelKeys.members("other"))).toEqual([]);
     expect(qc.getQueryData(channelKeys.list("ws"))).toEqual([]);
   });
 
-  it("with no active channel, drops every channel message-family cache", () => {
+  it("with no active channel still keeps message-family caches", () => {
     const qc = new QueryClient();
     qc.setQueryData(channelKeys.messagesPage("a"), { pages: [], pageParams: [] });
     qc.setQueryData(channelKeys.messagesPage("b"), { pages: [], pageParams: [] });
-    expect(evictInactiveChannelMessageCaches(qc, null)).toBe(2);
-    expect(qc.getQueryData(channelKeys.messagesPage("a"))).toBeUndefined();
-    expect(qc.getQueryData(channelKeys.messagesPage("b"))).toBeUndefined();
+    expect(evictInactiveChannelMessageCaches(qc, null)).toBe(0);
+    expect(qc.getQueryData(channelKeys.messagesPage("a"))).toBeTruthy();
+    expect(qc.getQueryData(channelKeys.messagesPage("b"))).toBeTruthy();
   });
 });

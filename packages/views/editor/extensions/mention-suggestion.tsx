@@ -287,9 +287,19 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       return mergeMentionItems(items, currentServerItems).slice(0, MAX_ITEMS);
     }, [items, normalizedQuery, searchedQuery, serverItems]);
 
+    // Selection / keyboard indices must follow the *rendered* group order
+    // (InChannel before NotInChannel, etc.), not the raw candidate array order.
+    // #2115 regrouped for display but left selectItem(displayItems[index]) —
+    // clicking row N could insert a different person.
+    const groups = useMemo(() => groupItems(displayItems), [displayItems]);
+    const visibleItems = useMemo(
+      () => groups.flatMap((group) => group.items),
+      [groups],
+    );
+
     useEffect(() => {
       setSelectedIndex(0);
-    }, [displayItems]);
+    }, [visibleItems]);
 
     useEffect(() => {
       itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
@@ -297,13 +307,13 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
     const selectItem = useCallback(
       (index: number) => {
-        const item = displayItems[index];
+        const item = visibleItems[index];
         if (!item) return;
         const wsId = getCurrentWsId();
         if (wsId) recordMentionUsage(wsId, item);
         command(item);
       },
-      [displayItems, command],
+      [visibleItems, command],
     );
 
     useImperativeHandle(ref, () => ({
@@ -312,19 +322,19 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
         // those keys belong to the IME (Enter commits composition, etc).
         if (isImeComposing(event)) return false;
         if (event.key === "ArrowUp") {
-          if (displayItems.length === 0) return true;
+          if (visibleItems.length === 0) return true;
           setSelectedIndex(
-            (i) => (i + displayItems.length - 1) % displayItems.length,
+            (i) => (i + visibleItems.length - 1) % visibleItems.length,
           );
           return true;
         }
         if (event.key === "ArrowDown") {
-          if (displayItems.length === 0) return true;
-          setSelectedIndex((i) => (i + 1) % displayItems.length);
+          if (visibleItems.length === 0) return true;
+          setSelectedIndex((i) => (i + 1) % visibleItems.length);
           return true;
         }
         if (event.key === "Enter") {
-          if (displayItems.length === 0) return true;
+          if (visibleItems.length === 0) return true;
           selectItem(selectedIndex);
           return true;
         }
@@ -332,7 +342,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       },
     }));
 
-    if (displayItems.length === 0) {
+    if (visibleItems.length === 0) {
       const isWaitingForServer =
         normalizedQuery !== "" &&
         (isSearching || searchedQuery !== normalizedQuery);
@@ -346,8 +356,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       );
     }
 
-    const groups = groupItems(displayItems);
-    const hasContextGroups = displayItems.some((item) => item.group === "current" || item.group === "recent");
+    const hasContextGroups = visibleItems.some((item) => item.group === "current" || item.group === "recent");
     const contextLayout = hasContextGroups;
     const groupLabel = (label: MentionGroup["label"]): string => {
       if (label === "Broadcast") return "";
@@ -362,11 +371,11 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       return label;
     };
 
-    // Build a flat index mapping: globalIndex → item
+    // Build a flat index mapping aligned with visibleItems (grouped order)
     let globalIndex = 0;
     const duplicateActorLabels = new Set(
       Object.entries(
-        displayItems.reduce<Record<string, number>>((acc, item) => {
+        visibleItems.reduce<Record<string, number>>((acc, item) => {
           if (item.type === "member" || item.type === "agent") {
             const key = item.label.trim().toLowerCase();
             if (key) acc[key] = (acc[key] ?? 0) + 1;

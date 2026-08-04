@@ -35,9 +35,25 @@ vi.mock("../../i18n/use-t", () => ({
             completed: "已完成",
             failed: "失败",
             blocked: "阻塞",
+            abandoned: "已废弃",
+            done: "完成",
+            waiting: "等待",
+            kickoff: "开题",
+            pending_delivery: "待交付",
           },
         },
         card_menu: { open: "打开菜单" },
+        content_faces: {
+          goal: "目标",
+          operation_approach: "操作思路",
+          research_approach: "调研思路",
+          result: "调研结果",
+          missing: "未提供",
+          result_pending: "结果整理中",
+          result_pending_detail: "正在整理，暂未形成可展示结果。",
+          result_failed: "本轮未产出可展示结果",
+          result_failed_detail: "本轮未产出可展示结果。",
+        },
       };
       return picker(keys as never);
     },
@@ -83,6 +99,47 @@ describe("ResearchGraphNode a11y (LRM-1105 slice3)", () => {
     const card = screen.getByRole("button", { name: /探源/ });
     expect(card).toHaveAttribute("tabindex", "0");
     expect(card.getAttribute("aria-label")).toContain("低置信");
+    expect(card.getAttribute("aria-label")).toContain("目标");
+    expect(card.getAttribute("aria-label")).toContain("操作思路");
+    expect(screen.getByTestId("research-node-content-faces-surface")).toBeTruthy();
+  });
+
+  it("renders projected content faces without summary fallback", () => {
+    const withContent = {
+      ...node,
+      summary: "SUMMARY_LEAK",
+      content: {
+        goal: "达成定价决策",
+        operation_approach: "官网交叉",
+        research_approach: "先横向",
+        result: "三条结论",
+      },
+    } as ResearchGraphNode;
+    render(
+      <ResearchGraphNodeView
+        id="n1"
+        type="research"
+        data={{
+          research: withContent,
+          laneId: "source",
+          branchId: "main",
+          logicRole: "step",
+        }}
+        selected
+        dragging={false}
+        zIndex={1}
+        selectable
+        deletable={false}
+        draggable={false}
+        isConnectable={false}
+        positionAbsoluteX={0}
+        positionAbsoluteY={0}
+      />,
+    );
+    const surface = screen.getByTestId("research-node-content-faces-surface");
+    expect(surface.textContent).toContain("达成定价决策");
+    expect(surface.textContent).toContain("官网交叉");
+    expect(surface.textContent).not.toContain("SUMMARY_LEAK");
   });
 
   it("keeps unselected nodes in tab order as tabindex=-1", () => {
@@ -138,5 +195,75 @@ describe("ResearchGraphNode a11y (LRM-1105 slice3)", () => {
     const shell = screen.getByTestId("research-logic-card");
     expect(shell).toHaveAttribute("data-aggregate-tier", "parent");
     expect(shell).toHaveStyle({ width: "282px", height: "242px" });
+  });
+
+  it("LRM-1333: abandoned surface uses dashed muted wash + pill; name includes 已废弃", () => {
+    const abandoned = {
+      ...node,
+      status: "abandoned",
+      title: "定价支",
+      assessment: "detour",
+    } as ResearchGraphNode;
+    render(
+      <ResearchGraphNodeView
+        id="n1"
+        type="research"
+        data={{
+          research: abandoned,
+          laneId: "source",
+          branchId: "main",
+          logicRole: "step",
+        }}
+        selected
+        dragging={false}
+        zIndex={1}
+        selectable
+        deletable={false}
+        draggable={false}
+        isConnectable={false}
+        positionAbsoluteX={0}
+        positionAbsoluteY={0}
+      />,
+    );
+    const shell = screen.getByTestId("research-logic-card");
+    expect(shell).toHaveAttribute("data-abandoned", "true");
+    expect(shell.className).toContain("border-dashed");
+    expect(shell.className).toContain("bg-muted");
+    expect(shell.className).not.toContain("destructive");
+    expect(screen.getByTestId("research-node-abandoned-pill").textContent).toBe("已废弃");
+    const card = screen.getByRole("button", { name: /定价支/ });
+    expect(card.getAttribute("aria-label")).toContain("已废弃");
+    expect(card).not.toBeDisabled();
+  });
+
+  it("LRM-1333: detour-only node does not show abandoned surface", () => {
+    const detour = {
+      ...node,
+      status: "done",
+      assessment: "detour",
+    } as ResearchGraphNode;
+    render(
+      <ResearchGraphNodeView
+        id="n1"
+        type="research"
+        data={{
+          research: detour,
+          laneId: "source",
+          branchId: "main",
+          logicRole: "step",
+        }}
+        selected
+        dragging={false}
+        zIndex={1}
+        selectable
+        deletable={false}
+        draggable={false}
+        isConnectable={false}
+        positionAbsoluteX={0}
+        positionAbsoluteY={0}
+      />,
+    );
+    expect(screen.getByTestId("research-logic-card")).not.toHaveAttribute("data-abandoned");
+    expect(screen.queryByTestId("research-node-abandoned-pill")).toBeNull();
   });
 });

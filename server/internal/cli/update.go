@@ -27,16 +27,12 @@ const DefaultUpdateDownloadTimeout = 120 * time.Second
 // unauthenticated GitHub Releases API/asset request from a bare install
 // always 404s.
 //
-// Temporarily pointed at the OSS mirror instead of cdn.leagent.me/computer
-// (2026-07-31): the Aliyun host serving that domain sits behind a network
-// path that blocks curl-class clients for reasons still under investigation
-// (#prj-daemon) — exactly the client this default exists to serve. OSS
-// doesn't require mainland China ICP filing and isn't behind that path.
-// Revert to cdn.leagent.me/computer once the block is root-caused/fixed or
-// a proper custom domain is in front of the OSS bucket — one-line change,
-// see release.yml's publish-downloads-feed-oss job for how the OSS mirror
-// is kept in sync with the primary feed.
-const DefaultReleaseManifestBaseURL = "https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases"
+// Primary release feed on the filed custom domain (cdn.leagent.me).
+// OSS mirror remains available via MULTICA_RELEASE_MANIFEST_BASE_URL for
+// emergency redirect; see release.yml publish-downloads-feed-oss.
+// 2026-08-04: ICP/备案 cleared — verified leagent.me + cdn.leagent.me/computer
+// from s144 (CN) and desktop; no Aliyun block page.
+const DefaultReleaseManifestBaseURL = "https://cdn.leagent.me/computer"
 
 // ReleaseManifestBaseURLEnv overrides DefaultReleaseManifestBaseURL when set,
 // with no rebuild/release required. Exists because the default address is a

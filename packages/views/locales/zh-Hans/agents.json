@@ -225,7 +225,8 @@
     "managed_by_runtime_title": "模型选择由该运行时管理。",
     "managed_by_runtime_hint": "请在运行时主机上配置模型（例如 Hermes 会从自身配置文件读取）。",
     "discovery_failed": "发现失败",
-    "clear_full": "清除选择（使用提供方默认）"
+    "clear_full": "清除选择（使用提供方默认）",
+    "catalog_unavailable_hint": "目录暂不可用，可手填模型 ID"
   },
   "tabs": {
     "activity": "动态",
@@ -525,12 +526,22 @@
     "username_taken": "该 @handle 已被占用"
   },
   "memory_growth": {
-    "label": "Memory growth",
-    "next_tier": "Next · {{tier}}",
-    "writes_progress": "{{current}} / {{required}} writes"
+    "label": "记忆成长",
+    "next_tier": "下一阶段 · {{tier}}",
+    "writes_progress": "{{current}} / {{required}} 次记忆更新",
+    "tiers": {
+      "bronze": "青铜",
+      "silver": "白银",
+      "gold": "黄金",
+      "platinum": "铂金"
+    }
   },
   "execution_config": {
-    "applies_next_run": "保存运行时 / 模型 / 思考等级后会在可用时自动重启 agent，使配置立即生效。"
+    "applies_next_run": "点击打开弹窗可批量编辑运行时 / 模型 / 思考等级；保存后在可用时自动重启 agent（至多一次），使配置立即生效。",
+    "dialog_title": "运行配置",
+    "dialog_description": "编辑仅保存在本地草稿；点保存才落库。取消 / Esc / 点遮罩会丢弃草稿且不重启。",
+    "dialog_saving": "保存中…",
+    "edit_trigger_aria": "编辑运行时、模型与思考等级"
   },
   "side_panel": {
     "close_aria": "关闭 agent 面板",
@@ -561,9 +572,9 @@
     "info_section": "信息",
     "honor_title": "荣誉",
     "honor_view_all": "查看全部",
-    "honor_stats": "{{xp}} XP · 已解锁 {{unlocked}}/{{total}} 项成就",
+    "honor_stats": "{{xp}} 经验 · 已解锁 {{unlocked}}/{{total}} 项成就",
     "honor_level_progress": "等级进度",
-    "honor_xp_to_next": "距下一级还需 {{xp}} XP",
+    "honor_xp_to_next": "距下一级还需 {{xp}} 经验",
     "actions_section": "操作",
     "actions_copy_diagnostic": "复制诊断信息",
     "actions_copy_success": "已复制诊断信息",
@@ -734,6 +745,8 @@
     "eyebrow": "Multica 智能体荣誉",
     "title": "荣誉核心",
     "subtitle": "永久经验、成就收藏、舰队晋级，以及每次有效交付留下的可追溯记录。",
+    "xp_label": "经验",
+    "xp_value": "{{value}} 经验",
     "unlocked": "已解锁",
     "remove_showcase": "移除",
     "add_showcase": "陈列",
@@ -846,7 +859,7 @@
       }
     },
     "achievements_unlocked": "项成就已解锁",
-    "level_value": "LV.{{level}}",
+    "level_value": "第 {{level}} 级",
     "next_level": "下一等级",
     "max_level": "已达最高等级",
     "admin": "管理",
@@ -934,9 +947,13 @@
     "cancel": "取消",
     "create_agent": "创建 Agent",
     "created_toast": "已创建 {{name}}",
-    "hiring_card_badge": "Wendy 招聘卡",
+    "hiring_card_badge": "招聘",
     "generated_hint": "由 Wendy 根据当前对话生成。",
     "avatar_from_draft_hint": "已带上 Wendy 草稿头像——可更换；清除后创建时用随机预设。",
-    "avatar_random_hint": "未指定头像——创建时随机分配，也可在此上传。"
+    "avatar_random_hint": "未指定头像——创建时随机分配，也可在此上传。",
+    "loading_card": "正在加载招聘卡…",
+    "load_card_failed": "加载招聘卡失败",
+    "card_created": "已创建：{{name}}",
+    "card_dismissed": "已忽略"
   }
 }

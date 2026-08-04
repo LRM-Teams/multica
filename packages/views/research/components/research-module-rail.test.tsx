@@ -47,6 +47,22 @@ describe("ResearchModuleRail (LRM-1151 Dock)", () => {
       "bar",
     );
   });
+
+  it("sources dock shows full title; bar keeps short glyph + full aria-label (LRM-1329)", () => {
+    const { rerender } = render(
+      <ResearchModuleRail layout="dock" active={null} onSelect={vi.fn()} />,
+    );
+    const dockBtn = screen.getByTestId("research-module-sources");
+    expect(dockBtn.textContent).toMatch(/Source strategy/);
+    expect(dockBtn.className).not.toMatch(/max-w-\[4\.5rem\]/);
+
+    rerender(
+      <ResearchModuleRail layout="bar" active={null} onSelect={vi.fn()} />,
+    );
+    const barBtn = screen.getByTestId("research-module-sources");
+    expect(barBtn.getAttribute("aria-label")).toBe("Source strategy");
+    expect(barBtn.textContent).toMatch(/Src/);
+  });
 });
 
 describe("ResearchCanvasDock (LRM-1151)", () => {

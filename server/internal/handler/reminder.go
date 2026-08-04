@@ -329,16 +329,12 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	// Schedule initiator is bound to the *anchor message*, not the wake human
-	// (product lock 2026-08-04 long-term): human anchor author → agent.owner →
-	// workspace owner. Wake source may be agent/reminder self-fire; that is not
-	// a hard schedule precondition.
-	initiatorUserID, ok := h.agentReminderScheduleInitiatorUserID(r.Context(), origin.workspaceID, task.AgentID, anchorMessageID)
-	if !ok {
-		writeError(w, http.StatusForbidden, "reminder initiator is not available")
-		return
-	}
-	timezone := reminderInitiatorTimezone(r.Context(), h.DB, initiatorUserID)
+	// P0+P1 (Frank/Parker 2026-08-04): timezone never from user viewing
+	// preference; default UTC. initiator_user_id is optional audit fill
+	// (anchor human → owner → ws owner when available) and is NOT required
+	// for 201 — agent self-schedule without a human member still succeeds.
+	initiatorUserID, _ := h.agentReminderScheduleInitiatorUserID(r.Context(), origin.workspaceID, task.AgentID, anchorMessageID)
+	timezone := reminderScheduleTimezone("") // explicit API field can be wired later
 	schedule, err := parseReminderSchedule(time.Now().UTC(), req.DelaySeconds, req.FireAt, req.Repeat, timezone)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -722,19 +718,10 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 		timezone := ""
 		if calendarRule {
 			if previous.ScheduleTimezone.Valid {
-				timezone = previous.ScheduleTimezone.String
+				timezone = reminderScheduleTimezone(previous.ScheduleTimezone.String)
 			} else {
-				initiatorUserID := previous.InitiatorUserID
-				if !initiatorUserID.Valid {
-					var initiatorOK bool
-					initiatorUserID, initiatorOK = h.agentReminderScheduleInitiatorUserID(
-						r.Context(), previous.WorkspaceID, previous.AgentID, previous.AnchorMessageID)
-					if !initiatorOK {
-						writeError(w, http.StatusForbidden, "reminder initiator is not available")
-						return
-					}
-				}
-				timezone = reminderInitiatorTimezone(r.Context(), tx, initiatorUserID)
+				// P0: never fall back to user viewing timezone.
+				timezone = reminderScheduleTimezone("")
 			}
 		}
 		cadence, parseErr := parseReminderCadence(rawCadence, timezone)
@@ -1938,7 +1925,19 @@ func loadReminderAnchorSnapshot(ctx context.Context, q reminderQueryRower, remin
 }
 
 func reminderFireCreatorID(ctx context.Context, exec db.DBTX, workspaceID, initiatorUserID, agentOwnerID pgtype.UUID) (pgtype.UUID, error) {
-	for _, candidate := range []pgtype.UUID{initiatorUserID, agentOwnerID} {
+	// Prefer optional audit initiator, then agent owner, then oldest workspace
+	// owner. P1: fire must not fail solely because initiator_user_id is NULL.
+	candidates := []pgtype.UUID{initiatorUserID, agentOwnerID}
+	var wsOwner pgtype.UUID
+	_ = exec.QueryRow(ctx, `
+		SELECT m.user_id FROM member m
+		WHERE m.workspace_id = $1 AND m.role = 'owner'
+		ORDER BY m.created_at ASC NULLS LAST, m.user_id ASC
+		LIMIT 1`, workspaceID).Scan(&wsOwner)
+	if wsOwner.Valid {
+		candidates = append(candidates, wsOwner)
+	}
+	for _, candidate := range candidates {
 		if !candidate.Valid {
 			continue
 		}

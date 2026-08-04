@@ -1,3 +1,4 @@
+import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import type { VoiceRecordingAttachment } from "../lib/voice-audio";
 
@@ -57,7 +58,11 @@ export function ComposerPendingVoice({
   onDelete,
 }: {
   pending: PendingVoiceState | null;
-  /** A retry is in flight — both actions disable so the item can't be double-sent or dropped mid-send. */
+  /**
+   * A retry is in flight — both actions refuse to fire so the item can't be
+   * double-sent or dropped mid-send. They stay focusable (LRM-1354): the block
+   * is a handler guard plus `aria-disabled`, never a native `disabled`.
+   */
   retrying: boolean;
   /** Re-submit THIS recording through the real voice send path. */
   onRetry: () => void;
@@ -67,30 +72,78 @@ export function ComposerPendingVoice({
   const { t } = useT("channels");
   if (!pending) return null;
 
+  const duration = formatDuration(pending.durationMs);
+
   return (
     <div
       data-testid="composer-pending-voice"
       className="mx-1 mb-1 flex items-center gap-2 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive"
     >
-      {/* A live region so the failure is announced, not only drawn. */}
-      <output className="min-w-0 flex-1 truncate">
-        {t(($) => $.composer.voice_unsent, { duration: formatDuration(pending.durationMs) })}
+      {/*
+       * A live region so the failure is announced, not only drawn.
+       *
+       * LRM-1354 — the copy has to CHANGE when a retry goes in flight. Holding
+       * "not sent" while resending, with only a visual dim to signal the
+       * difference, is the SC 4.1.3 failure: a screen reader user presses Retry
+       * and hears nothing at all. `aria-busy` marks the region as unsettled so
+       * the eventual outcome (success unmount / failure toast) reads as a
+       * resolution instead of an unexplained change.
+       */}
+      <output
+        className="min-w-0 flex-1 truncate"
+        aria-busy={retrying || undefined}
+        data-testid="composer-pending-voice-status"
+      >
+        {retrying
+          ? t(($) => $.composer.voice_unsent_retrying, { duration })
+          : t(($) => $.composer.voice_unsent, { duration })}
       </output>
+      {/*
+       * LRM-1213/1169 frozen pattern (see research-session-interrupt-banner):
+       * the pending control must stay a real focus target. A native `disabled`
+       * on the button the user just activated drops focus to <body> in Chromium
+       * and never gives it back, so keyboard / screen reader users lose their
+       * place and never hear the retry outcome. Keep it focusable, guard the
+       * handler.
+       *
+       * Consequence worth spelling out: `disabled:` Tailwind variants compile to
+       * the `:disabled` pseudo-class, so they stop matching the moment the
+       * native attribute is gone. The dim state therefore has to come from a
+       * condition — otherwise the pending affordance silently disappears.
+       */}
       <button
         type="button"
-        disabled={retrying}
-        onClick={onRetry}
+        aria-disabled={retrying || undefined}
+        onClick={() => {
+          if (retrying) return;
+          onRetry();
+        }}
         data-testid="composer-pending-voice-retry"
-        className="shrink-0 font-medium underline underline-offset-2 hover:no-underline disabled:opacity-50"
+        className={cn(
+          "shrink-0 font-medium underline underline-offset-2",
+          retrying ? "cursor-not-allowed opacity-50" : "hover:no-underline",
+        )}
       >
         {t(($) => $.composer.voice_unsent_retry)}
       </button>
+      {/*
+       * Delete stays reachable while the retry is in flight on purpose. This
+       * record only clears on a committed retry or an explicit abandon, so
+       * taking the abandon route away mid-send would leave a keyboard user with
+       * no exit at all — the guard blocks the ACTION, not the focus target.
+       */}
       <button
         type="button"
-        disabled={retrying}
-        onClick={onDelete}
+        aria-disabled={retrying || undefined}
+        onClick={() => {
+          if (retrying) return;
+          onDelete();
+        }}
         data-testid="composer-pending-voice-delete"
-        className="shrink-0 underline underline-offset-2 hover:no-underline disabled:opacity-50"
+        className={cn(
+          "shrink-0 underline underline-offset-2",
+          retrying ? "cursor-not-allowed opacity-50" : "hover:no-underline",
+        )}
       >
         {t(($) => $.composer.voice_unsent_delete)}
       </button>

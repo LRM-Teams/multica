@@ -28,7 +28,13 @@
     --color-input: var(--input);
     --color-border: var(--border);
     --color-destructive: var(--destructive);
+    /* LRM-1328 — text on destructive wash (confirm buttons); deeper than
+       --destructive so wash+text clears WCAG 4.5 without dropping the wash. */
+    --color-destructive-strong: var(--destructive-strong);
     --color-success: var(--success);
+    /* LRM-1369 — text on success wash (chips/pills); deeper than --success so
+       wash+text clears WCAG 4.5 while --success keeps serving presence dots. */
+    --color-success-strong: var(--success-strong);
     --color-warning: var(--warning);
     /* LRM-560 — Activity command / running-command node */
     --color-running: var(--running);
@@ -93,6 +99,8 @@
     --brand-solid-foreground: var(--brand-foreground);
     --ok: #007a5a;
     --danger: #e01e5a;
+    /* LRM-1328 D1 — deepen text on wash; keep --danger for wash/bg tint. */
+    --destructive-strong: #a01040;
     --online: #2bac76;
     --busy: #e8912d;
 
@@ -117,7 +125,14 @@
     --input: var(--line-strong);
     --ring: var(--ink-3);
     --success: var(--ok);
-    --warning: #b35c00;
+    /* LRM-1369 — deepen only the wash LABEL; --success/--ok keep the frozen
+       #007a5a for presence dots, solid fills and dividers. text-success on
+       bg-success/10..15 measured 4.31/4.02 on the muted base (AA FAIL). */
+    --success-strong: #026a4f;
+    /* LRM-1353 — deepen warning so text-warning on bg-warning/5..15 clears
+       WCAG 4.5 site-wide (was #b35c00 → 4.12 on /10). Same wash+text pair as
+       LRM-1328 destructive; one token change, no per-surface orange hacks. */
+    --warning: #8f4a00;
     /* LRM-890 M2 visibility — low-sat source / role chips */
     --source-general: #3d6f9c;
     --source-domain: #2a8f7a;
@@ -216,10 +231,17 @@
     --page-bg: oklch(0.18 0.005 285.823);
     --ok: oklch(0.65 0.15 145);
     --danger: oklch(0.704 0.191 22.216);
+    /* LRM-1328 D1 — lighten wash-label text on dark destructive/20 wash. */
+    --destructive-strong: oklch(0.78 0.18 22.216);
     --online: #2bac76;
     --busy: #e8912d;
     --success: var(--ok);
-    --warning: oklch(0.70 0.16 85);
+    /* LRM-1369 — mirror the destructive-strong/warning dark lift (same L=0.78)
+       so wash labels clear 4.5 on card AND muted bases. */
+    --success-strong: oklch(0.78 0.15 150);
+    /* LRM-1353 — lighten wash-label text on dark warning/10..15 (mirror
+       destructive-strong dark lift; keep hue ≈85). */
+    --warning: oklch(0.78 0.16 85);
     /* LRM-890 M2 visibility */
     --source-general: oklch(0.72 0.08 240);
     --source-domain: oklch(0.70 0.09 170);

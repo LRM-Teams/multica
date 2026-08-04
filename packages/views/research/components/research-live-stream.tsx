@@ -69,8 +69,9 @@ export function ResearchLiveStream({ sessionId }: { sessionId: string }) {
   return (
     <article
       data-testid="research-live-stream"
-      // LRM-1203: announce only while tokens stream; settled transcript stays quiet.
-      aria-live={isGenerating ? "polite" : undefined}
+      // LRM-1341: busy flag only — drawer already has one persistent live region
+      // (research-chat-mode-live / LRM-1225). Do not re-announce stream tokens here.
+      aria-busy={isGenerating || undefined}
       className={cn(
         "mr-1 rounded-xl border border-primary/20 bg-card px-3 py-2.5 text-sm shadow-sm",
         isGenerating && "ring-1 ring-primary/15",
@@ -85,9 +86,12 @@ export function ResearchLiveStream({ sessionId }: { sessionId: string }) {
             {t(($) => $.chat.streaming_from)}
           </div>
           <div className="truncate text-[10px] text-muted-foreground">
-            {isGenerating
-              ? t(($) => $.chat.streaming)
-              : t(($) => $.chat.stream_settled)}
+            {/* Shimmer on plain status text only — never wrap StreamingMarkdown (SC 1.4.1). */}
+            <span className={cn(isGenerating && "animate-chat-text-shimmer")}>
+              {isGenerating
+                ? t(($) => $.chat.streaming)
+                : t(($) => $.chat.stream_settled)}
+            </span>
           </div>
         </div>
         {isGenerating ? (
@@ -98,12 +102,7 @@ export function ResearchLiveStream({ sessionId }: { sessionId: string }) {
         ) : null}
       </header>
       {streamText ? (
-        <div
-          className={cn(
-            "text-[13px] leading-relaxed text-foreground/90",
-            isGenerating && "animate-chat-text-shimmer",
-          )}
-        >
+        <div className="text-[13px] leading-relaxed text-foreground/90">
           <StreamingMarkdown content={streamText} isStreaming={isGenerating} />
         </div>
       ) : (

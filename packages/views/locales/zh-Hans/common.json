@@ -4,6 +4,7 @@
   "delete": "删除",
   "confirm": "确认",
   "loading": "加载中...",
+  "honor_level_value": "第 {{level}} 级",
   "time": {
     "just_now": "刚刚",
     "minutes_ago": "{{count}} 分钟前",

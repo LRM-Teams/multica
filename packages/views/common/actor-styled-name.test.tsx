@@ -1,6 +1,22 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import zhCommon from "../locales/zh-Hans/common.json";
 import { ActorStyledName } from "./actor-styled-name";
+
+vi.mock("../i18n", () => ({
+  useT: () => ({
+    t: (
+      selector: (bundle: typeof zhCommon) => unknown,
+      options?: Record<string, string | number>,
+    ) => {
+      const template = selector(zhCommon);
+      if (typeof template !== "string") return String(template ?? "");
+      return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) =>
+        String(options?.[key] ?? `{{${key}}}`),
+      );
+    },
+  }),
+}));
 
 describe("ActorStyledName", () => {
   it("uses the user's level crest instead of an equipped achievement on identity surfaces", () => {
@@ -22,6 +38,7 @@ describe("ActorStyledName", () => {
 
     expect(screen.getByText("Frank")).toBeInTheDocument();
     expect(container.querySelector('[data-user-honor-level="42"]')).not.toBeNull();
+    expect(screen.getByAltText("第 42 级")).toBeInTheDocument();
     expect(screen.queryByTitle("Prism Core")).toBeNull();
   });
 
@@ -31,6 +48,7 @@ describe("ActorStyledName", () => {
     );
 
     expect(container.querySelector('[data-agent-honor-level="8"]')).not.toBeNull();
+    expect(screen.getByAltText("第 8 级")).toBeInTheDocument();
     expect(container.querySelector("[data-user-honor-level]")).toBeNull();
   });
 

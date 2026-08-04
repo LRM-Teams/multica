@@ -27,9 +27,9 @@ export function channelGoalOptions(channelId: string) {
     // Some embedded/test hosts inject a deliberately partial API adapter.
     // A missing optional surface must render as "no goal", never poison the
     // shared Query cache with undefined.
-    queryFn: async () =>
+    queryFn: async ({ signal }) =>
       typeof api.getChannelGoal === "function"
-        ? (await api.getChannelGoal(channelId)) ?? { goal: null }
+        ? (await api.getChannelGoal(channelId, { signal })) ?? { goal: null }
         : { goal: null },
     enabled: !!channelId,
   });

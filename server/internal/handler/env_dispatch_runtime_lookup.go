@@ -26,6 +26,7 @@ import (
 // callers. Matching uses workspace + daemon_id + sandbox_instance_id + provider
 // 'pi' + status 'online'; runtime display names are never used as a binding key.
 func findOnlineSandboxRuntime(ctx context.Context, exec db.DBTX, workspaceID, daemonID, sandboxInstanceID string) (service.RuntimeRef, error) {
+	// Task #123 L2: heartbeat freshness, same threshold as runtimeConnectivity.
 	const q = `
 SELECT id::text, workspace_id::text, daemon_id::text, provider, status,
        metadata->>'sandbox_instance_id' AS sandbox_instance_id
@@ -34,10 +35,12 @@ WHERE workspace_id = $1
   AND provider = 'pi'
   AND daemon_id = $2
   AND status = 'online'
+  AND last_seen_at IS NOT NULL
+  AND last_seen_at >= now() - make_interval(secs => $4::double precision)
   AND metadata->>'sandbox_instance_id' = $3
 LIMIT 1`
 	var rt service.RuntimeRef
-	err := exec.QueryRow(ctx, q, workspaceID, daemonID, sandboxInstanceID).Scan(
+	err := exec.QueryRow(ctx, q, workspaceID, daemonID, sandboxInstanceID, service.AgentHealthStaleThreshold.Seconds()).Scan(
 		&rt.ID, &rt.WorkspaceID, &rt.DaemonID, &rt.Provider, &rt.Status, &rt.SandboxInstanceID,
 	)
 	if err != nil {

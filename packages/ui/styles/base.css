@@ -161,6 +161,18 @@
   animation: chat-text-shimmer 2.5s linear infinite;
 }
 
+/* LRM-1337 — reduced-motion must drop the infinite shimmer AND restore readable
+ * solid text. Clearing animation alone leaves `color: transparent` /
+ * `-webkit-text-fill-color: transparent` (frozen wash or invisible glyphs). */
+@media (prefers-reduced-motion: reduce) {
+  .animate-chat-text-shimmer {
+    animation: none;
+    background-image: none;
+    color: inherit;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
 /* LRM-1271/1291 Research stage energy track — sheen on the CURRENT segment
  * only. Deliberately one moving thing on the whole header: no particles, no
  * bounce, no full-track marquee (UI Designer 2026-08-04 frozen spec).
@@ -198,6 +210,42 @@
   .animate-research-stage-sheen {
     animation: none;
     background-image: none;
+  }
+}
+
+/* LRM-1329 EvidencePulse — one-shot aurora sweep on ready/revision (420ms).
+ * Decorative only; prefers-reduced-motion keeps a static brand edge, no transform. */
+@keyframes evidence-sweep {
+  0% {
+    background-position: 0% 50%;
+    opacity: 0.35;
+  }
+  45% {
+    opacity: 0.85;
+  }
+  100% {
+    background-position: 100% 50%;
+    opacity: 0.2;
+  }
+}
+
+.animate-evidence-sweep {
+  background-image: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in oklab, var(--brand) 45%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: evidence-sweep 420ms ease-out 1 both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-evidence-sweep {
+    animation: none;
+    background-image: none;
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--brand) 35%, transparent);
   }
 }
 

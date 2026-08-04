@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { Markdown, type RenderMode } from './Markdown'
+import { Markdown } from './Markdown'
+import type { RenderMode } from './markdown-rich'
 
 export interface StreamingMarkdownProps {
   content: string

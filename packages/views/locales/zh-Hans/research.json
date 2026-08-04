@@ -200,7 +200,9 @@
       "loading": "加载中",
       "running": "进行中",
       "error": "错误"
-    }
+    },
+    "module_sources_desc": "依据从哪里来 · 谁负责什么 · 现在齐了没有",
+    "aux_close_sources": "关闭调研依据与协作分工"
   },
   "chat": {
     "you": "你",
@@ -286,6 +288,8 @@
     "doing": "正在做",
     "summary_empty": "暂无摘要。",
     "dead_end_reason": "死胡同原因",
+    "abandon_reason": "废弃原因",
+    "abandon_reason_pending": "原因待同步",
     "retry_cta": "重试 / 换路",
     "evidence": "证据 / 来源",
     "evidence_empty": "暂无关联来源。",
@@ -346,7 +350,7 @@
       "done": "完成",
       "running": "运行中",
       "waiting": "等待",
-      "abandoned": "已放弃",
+      "abandoned": "已废弃",
       "failed": "失败",
       "completed": "已完成",
       "resolved": "已解决",
@@ -357,6 +361,7 @@
   "logic": {
     "label": "调研逻辑",
     "lr_hint": "左→右 · 非 Git",
+    "aggregate_hint": "左→右 · 聚合树",
     "git_hint": "上→下 · Git 分支线",
     "git_list_label": "调研 Git 列表",
     "strip_label": "逻辑结构",
@@ -379,7 +384,7 @@
       "waiting": "等待",
       "pending_delivery": "待交付",
       "failed": "失败",
-      "abandoned": "已放弃"
+      "abandoned": "已废弃"
     }
   },
   "card_menu": {
@@ -395,7 +400,9 @@
   "a11y": {
     "focus_node": "焦点 {{title}}，分支 {{branch}}",
     "opened_detail": "已打开 {{title}} 详情",
-    "closed_detail": "已关闭详情"
+    "closed_detail": "已关闭详情",
+    "reorg_start": "正在按新需求重排画布…",
+    "reorg_done": "重排完成，{{count}} 处更新，{{paths}} 条新路径"
   },
   "home": {
     "composer_label": "创建调研会话",
@@ -601,7 +608,18 @@
     "rail_next_expand_covered": "{{count}} 个问题 · 展开查看支撑这一结论的线索",
     "rail_next_expand_gap": "{{count}} 个问题 · 展开查看缺少哪类证据",
     "rail_next_expand_dead": "{{count}} 个问题 · 可收起此分支",
-    "rail_collapse": "收起"
+    "rail_collapse": "收起",
+    "evidence_loading": "正在准备你的依据地图",
+    "evidence_partial": "依据正在补齐",
+    "evidence_ready": "依据已整理",
+    "evidence_empty_title": "还没有可展示的依据",
+    "evidence_empty_body": "结果出现后会在这里按真实字段展示",
+    "evidence_error": "暂时无法读取依据",
+    "evidence_permission": "你没有查看调研依据的权限",
+    "evidence_verification_unavailable": "核验信息未提供",
+    "evidence_expect_1": "来源用途：这次用了哪些信源",
+    "evidence_expect_2": "人机边界：人和 Agent 各自负责什么",
+    "evidence_expect_3": "就绪进度：依据是否已齐"
   },
   "completion_guide": {
     "done_title": "调研已完成",
@@ -698,5 +716,19 @@
     "retrying": "重试中…",
     "waiting_network": "等待网络恢复",
     "waiting_network_hint": "联网后将自动加载调研；页面不会白屏。"
+  },
+  "content_faces": {
+    "goal": "目标",
+    "operation_approach": "操作思路",
+    "research_approach": "调研思路",
+    "result": "调研结果",
+    "missing": "未提供",
+    "result_pending": "结果整理中",
+    "result_pending_detail": "正在整理，暂未形成可展示结果。",
+    "result_failed": "本轮未产出可展示结果",
+    "result_failed_detail": "本轮未产出可展示结果。"
+  },
+  "canvas": {
+    "reorg_badge": "已按新需求重排 · {{count}} 处更新 · {{paths}} 条新路径"
   }
 }

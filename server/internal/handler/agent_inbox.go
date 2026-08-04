@@ -352,9 +352,8 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			h.maybeRecordProviderSubagentStarted(r.Context(), event, runtimeID, deliveryID, lineage, details)
 		}
 		if taskMessageIsPhaseStatus(msg.Type, msg.Content) {
-			// Match Raft's bare thinking phase entry. It is a user-facing task
-			// status wire only; do not publish it as an Activity event because
-			// the main timeline deliberately has no Thinking line.
+			// Legacy daemons may still report an empty thinking phase. Retain it
+			// as diagnostic data only; current daemons no longer emit this wire.
 			details["phase_status"] = true
 			insertAgentActivityEvent(r.Context(), h.DB,
 				event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
@@ -837,6 +836,9 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	if terminalOutcome == "completed" {
 		h.refreshAgentHonor(r.Context(), event.WorkspaceID, event.AgentID, "task_completed")
 	}
+	// T022: a terminal sandboxed diagnosis task maps onto its diagnosis run
+	// (no-op for non-diagnosis tasks).
+	h.mapDiagnosisInboxCompletion(r.Context(), event)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
 		"acked_seq":        ackedSeq,
@@ -1276,9 +1278,14 @@ func (h *Handler) finishFailedAgentInboxEvent(
 		h.TaskService.RecordEvolutionSkillOutcome(r.Context(), event.ID, "success", "success")
 		h.TaskService.RecordEvolutionUnitUsed(r.Context(), event.ID)
 		h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, runtimeID, "completed")
+		// T022: a replied diagnosis task is a completion-equivalent terminal.
+		h.mapDiagnosisInboxCompletion(r.Context(), event)
 	} else {
 		h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, runtimeID, "failed")
 		h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
+		// T022: a terminal sandboxed diagnosis task failure maps onto its run
+		// with a classified cause (no-op for non-diagnosis tasks).
+		h.mapDiagnosisInboxFailure(r.Context(), event, errText, failureReason, reasonCode)
 	}
 	h.recordAgentInboxStatusActivity(r.Context(), event, runtimeID, deliveryID, agentInboxStatusActivityIdle)
 	terminalOutcome := "failed"
@@ -2139,12 +2146,10 @@ func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageReque
 		Visibility: "user_facing",
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	// Empty phase and thinking-with-content both stream as thinking task
-	// messages (task #121). Empty content is status-only; body text is shown.
+	// Thinking is retained as diagnostic activity only and is never forwarded
+	// to a user client, regardless of whether it carries provider text.
 	if msg.Type == "thinking" {
-		payload.Type = "thinking"
-		payload.Content = strings.TrimSpace(msg.Content)
-		return payload, true
+		return protocol.TaskMessagePayload{}, false
 	}
 	switch kind {
 	case activityKindToolCall:
@@ -2423,9 +2428,8 @@ func agentInboxActivityMessageKind(messageType string) (kind, eventType, severit
 	}
 	switch messageType {
 	case "thinking":
-		// Task #121: thinking with body is user-facing transcript material.
-		// Empty phase is handled earlier (runtime_phase + phase_status).
-		// Use event_kind=thinking so chat timeline projection includes it.
+		// Provider reasoning remains diagnostic-only. Empty thinking is handled
+		// earlier as a legacy phase row, but current daemons do not send it.
 		return activityKindThinking, "runtime_thinking", "info"
 	case "tool_use":
 		return activityKindToolCall, "tool_use", "info"

@@ -1,10 +1,10 @@
 # Multica installer for Windows — one command to get started.
 #
 # Install CLI (default): connects to multica.ai
-#   irm https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.ps1 | iex
+#   irm https://cdn.leagent.me/computer/install.ps1 | iex
 #
 # Self-host: starts a local Multica server + installs CLI + configures
-#   $env:MULTICA_MODE="local"; irm https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.ps1 | iex
+#   $env:MULTICA_MODE="local"; irm https://cdn.leagent.me/computer/install.ps1 | iex
 #
 
 $ErrorActionPreference = "Stop"
@@ -19,10 +19,8 @@ $RepoWebUrl    = "https://github.com/LRM-Teams/multica"
 # API/asset host always 404s. See server/internal/cli/update.go
 # ReleaseManifestBaseURL.
 #
-# Temporarily pointed at the OSS mirror instead of cdn.leagent.me/computer
-# (2026-07-31) — see the comment on DefaultReleaseManifestBaseURL in
-# server/internal/cli/update.go for why. Revert both together.
-$ReleaseManifestBaseUrl = if ($env:MULTICA_RELEASE_MANIFEST_BASE_URL) { $env:MULTICA_RELEASE_MANIFEST_BASE_URL } else { "https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases" }
+# # Primary feed: filed custom domain. OSS via MULTICA_RELEASE_MANIFEST_BASE_URL.
+$ReleaseManifestBaseUrl = if ($env:MULTICA_RELEASE_MANIFEST_BASE_URL) { $env:MULTICA_RELEASE_MANIFEST_BASE_URL } else { "https://cdn.leagent.me/computer" }
 $InstallScriptUrl = "$ReleaseManifestBaseUrl/install.ps1"
 $DefaultInstallDir = Join-Path $env:USERPROFILE ".multica\server"
 $InstallDir    = if ($env:MULTICA_INSTALL_DIR) { $env:MULTICA_INSTALL_DIR } else { $DefaultInstallDir }

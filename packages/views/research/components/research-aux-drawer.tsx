@@ -24,6 +24,9 @@ import type { ResearchAuxPanelId } from "./research-module-rail";
  * LRM-1100: the desktop overlay is a bare <aside>, so Escape-to-close, the
  * accessible name and focus move-in/restore are wired explicitly here — the
  * narrow Sheet branch already gets all three from Radix.
+ *
+ * LRM-1329: sources panel keeps full title + three-question description; close
+ * accessible name is panel-specific (no truncate on sources title).
  */
 export function ResearchAuxDrawer({
   panel,
@@ -38,11 +41,13 @@ export function ResearchAuxDrawer({
   const isMobile = useIsMobile();
   const open = panel != null;
   const titleId = useId();
+  const descId = useId();
   const { bindPanel } = useOverlayPanelA11y({
     active: open && !isMobile,
     onClose,
   });
 
+  const isSources = panel === "sources";
   const title =
     panel === "trajectory"
       ? t(($) => $.panel.module_trajectory)
@@ -51,6 +56,12 @@ export function ResearchAuxDrawer({
         : panel === "detail"
           ? t(($) => $.panel.module_detail)
           : t(($) => $.panel.module_detail);
+  const description = isSources
+    ? t(($) => $.panel.module_sources_desc)
+    : title;
+  const closeLabel = isSources
+    ? t(($) => $.panel.aux_close_sources)
+    : t(($) => $.panel.aux_close);
 
   if (isMobile) {
     return (
@@ -71,9 +82,14 @@ export function ResearchAuxDrawer({
         >
           <SheetHeader className="sr-only">
             <SheetTitle>{title}</SheetTitle>
-            <SheetDescription>{title}</SheetDescription>
+            <SheetDescription>{description}</SheetDescription>
           </SheetHeader>
-          <DrawerChrome title={title} onClose={onClose}>
+          <DrawerChrome
+            title={title}
+            description={isSources ? description : undefined}
+            closeLabel={closeLabel}
+            onClose={onClose}
+          >
             {children}
           </DrawerChrome>
         </SheetContent>
@@ -88,13 +104,21 @@ export function ResearchAuxDrawer({
       ref={bindPanel}
       tabIndex={-1}
       aria-labelledby={titleId}
+      aria-describedby={isSources ? descId : undefined}
       data-testid="research-aux-drawer"
       data-panel={panel ?? undefined}
       className={cn(
         "pointer-events-auto absolute inset-y-0 right-0 z-40 flex w-[min(100%,360px)] flex-col border-l border-border/55 bg-card/95 shadow-xl backdrop-blur-md outline-none",
       )}
     >
-      <DrawerChrome title={title} titleId={titleId} onClose={onClose}>
+      <DrawerChrome
+        title={title}
+        titleId={titleId}
+        description={isSources ? description : undefined}
+        descriptionId={isSources ? descId : undefined}
+        closeLabel={closeLabel}
+        onClose={onClose}
+      >
         {children}
       </DrawerChrome>
     </aside>
@@ -104,33 +128,49 @@ export function ResearchAuxDrawer({
 function DrawerChrome({
   title,
   titleId,
+  description,
+  descriptionId,
+  closeLabel,
   onClose,
   children,
 }: {
   title: string;
   /** Set on the desktop branch so the <aside> can point aria-labelledby here. */
   titleId?: string;
+  description?: string;
+  descriptionId?: string;
+  closeLabel: string;
   onClose: () => void;
   children: ReactNode;
 }) {
-  const { t } = useT("research");
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div
-        className="flex items-center justify-between gap-2 border-b px-3 py-2.5"
+        className="flex items-start justify-between gap-2 border-b px-3 py-2.5"
         data-testid="research-aux-drawer-header"
       >
-        <div
-          id={titleId}
-          className="truncate text-sm font-semibold text-foreground"
-        >
-          {title}
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <div
+            id={titleId}
+            className="break-words text-sm font-semibold text-foreground"
+          >
+            {title}
+          </div>
+          {description ? (
+            <p
+              id={descriptionId}
+              data-testid="research-aux-drawer-desc"
+              className="break-words text-[11px] leading-snug text-muted-foreground"
+            >
+              {description}
+            </p>
+          ) : null}
         </div>
         <Button
           type="button"
           size="icon-sm"
           variant="ghost"
-          aria-label={t(($) => $.panel.aux_close)}
+          aria-label={closeLabel}
           data-testid="research-aux-drawer-close"
           data-autofocus="true"
           onClick={onClose}

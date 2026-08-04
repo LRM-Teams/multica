@@ -146,6 +146,11 @@ export interface ResearchGraphNode {
   assessment?: "trusted" | "pending_review" | "detour" | string;
   reason?: string | null;
   evidence_summary?: string | null;
+  /**
+   * LRM-1317 / LRM-1333: projected abandon reason (payload.abandon_reason or
+   * deprecate_reason). Omitted when empty — never invent from assessment/edges.
+   */
+  abandon_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -299,6 +304,27 @@ export interface ResearchClarificationQuestion {
   created_at: string;
 }
 
+/** LRM-1310/1330 utterance match decision (omit when absent — never invent). */
+export type ResearchMatchDecisionAction =
+  | "continue"
+  | "branch_after"
+  | "deprecate"
+  | "pending_confirm";
+
+export interface ResearchMatchDecisionItem {
+  node_id: string;
+  action: ResearchMatchDecisionAction;
+  reason?: string;
+}
+
+export interface ResearchMatchDecision {
+  utterance_id: string;
+  confidence?: number;
+  primary_anchor_node_id?: string;
+  matched_node_ids: string[];
+  decisions: ResearchMatchDecisionItem[];
+}
+
 export interface ResearchMessage {
   id: string;
   session_id: string;
@@ -308,7 +334,22 @@ export interface ResearchMessage {
   body: string;
   card_kind?: ResearchMessageCardKind;
   meta?: Record<string, unknown> | unknown;
+  /** Projected from meta.match_decision when present (LRM-1330). */
+  match_decision?: ResearchMatchDecision;
   created_at: string;
+}
+
+/** LRM-1318 / LRM-1306 side-panel row. Never invent from title/summary. */
+export type ResearchThoughtStrategyState = "drafting" | "active" | "settled";
+
+export interface ResearchThoughtStrategy {
+  node_id: string;
+  rationale: string;
+  expected_outcome: string;
+  strategy_label?: string | null;
+  strategy_revision?: string | null;
+  state: ResearchThoughtStrategyState | string;
+  updated_at?: string;
 }
 
 /** Create-session response includes a kickoff snapshot so the canvas paints immediately. */
@@ -330,6 +371,8 @@ export interface ResearchSessionSnapshot {
   report: ResearchReport | null;
   evals: ResearchStageEval[];
   messages: ResearchMessage[];
+  /** LRM-1318 side-panel rows (LRM-1306). Always an array; may be empty. */
+  thought_strategies?: ResearchThoughtStrategy[];
   /** Durable execution state. */
   run?: ResearchRunSnapshot;
 }

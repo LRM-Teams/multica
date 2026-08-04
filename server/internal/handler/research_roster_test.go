@@ -122,11 +122,20 @@ func TestValidateResearchArchiveAntiChurn(t *testing.T) {
 }
 
 func TestResearchRosterGraphStatus(t *testing.T) {
-	if got := researchRosterGraphStatus("archive"); got != "archived" {
-		t.Fatalf("archive status = %q", got)
+	tests := []struct {
+		action string
+		want   string
+	}{
+		{action: "archive", want: "abandoned"},
+		{action: "hire", want: "active"},
+		{action: "optimize", want: "active"},
 	}
-	if got := researchRosterGraphStatus("hire"); got != "pending" {
-		t.Fatalf("hire status = %q", got)
+	for _, tt := range tests {
+		t.Run(tt.action, func(t *testing.T) {
+			if got := researchRosterGraphStatus(tt.action); got != tt.want {
+				t.Fatalf("researchRosterGraphStatus(%q) = %q, want %q", tt.action, got, tt.want)
+			}
+		})
 	}
 }
 

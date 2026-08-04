@@ -20,11 +20,6 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
-import {
-  countHanChars,
-  isTemplatePromptAboveMin,
-  RESEARCH_TEMPLATE_MIN_HAN,
-} from "../lib/research-templates";
 
 type ResearchTemplatePromptEditorProps = {
   open: boolean;
@@ -53,37 +48,21 @@ function PromptEditorForm({
   onApply,
   onClose,
 }: EditorFormProps) {
-  const { t, i18n } = useT("research");
+  const { t } = useT("research");
   const errorId = useId();
   // Remounted by parent `key` when the dialog opens — no prop→state effect.
   const [draft, setDraft] = useState(initialDraft);
   const [attempted, setAttempted] = useState(false);
-  const isZh = (i18n?.language ?? "en").toLowerCase().startsWith("zh");
 
-  const han = countHanChars(draft);
   const len = draft.trim().length;
-  const tooShort = !isTemplatePromptAboveMin(draft, i18n?.language);
   const empty = len === 0;
-  const showError = attempted && (empty || tooShort);
-  const errorMessage = empty
-    ? t(($) => $.home.template_prompt_empty)
-    : tooShort
-      ? isZh
-        ? t(($) => $.home.template_prompt_too_short, {
-            min: RESEARCH_TEMPLATE_MIN_HAN,
-            count: han,
-          })
-        : t(($) => $.home.template_prompt_too_short_en, {
-            min: 800,
-            count: len,
-          })
-      : null;
+  const showError = attempted && empty;
 
   const handleApply = () => {
     // LRM-1245 — pending stays focusable via aria-disabled; guard mutate.
     if (pending) return;
     setAttempted(true);
-    if (empty || tooShort) return;
+    if (empty) return;
     onApply(draft);
     onClose();
   };
@@ -116,24 +95,16 @@ function PromptEditorForm({
             showError && "text-destructive",
           )}
         >
-          {isZh
-            ? t(($) => $.home.template_prompt_count, {
-                count: han,
-                min: RESEARCH_TEMPLATE_MIN_HAN,
-              })
-            : t(($) => $.home.template_prompt_count_en, {
-                count: len,
-                min: 800,
-              })}
+          {t(($) => $.home.template_prompt_count, { count: len })}
         </span>
-        {showError && errorMessage ? (
+        {showError ? (
           <p
             id={errorId}
             role="alert"
             data-testid="research-template-prompt-error"
             className="text-destructive"
           >
-            {errorMessage}
+            {t(($) => $.home.template_prompt_empty)}
           </p>
         ) : null}
       </div>

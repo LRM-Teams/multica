@@ -21,7 +21,7 @@ function readSrc() {
   return fs.readFileSync(path.join(here, SRC), "utf8");
 }
 
-/** Long enough for EN min (800 chars) so Apply is not blocked by validation. */
+/** Representative editable research method. */
 const LONG_PROMPT = `${"Industry research baseline. ".repeat(40)}\n`;
 
 vi.mock("../../i18n/use-t", () => ({
@@ -153,5 +153,46 @@ describe("research-template-prompt-editor a11y (LRM-1245)", () => {
     fireEvent.click(apply);
     expect(onApply).toHaveBeenCalledTimes(1);
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("accepts a concise user-authored method instead of enforcing prompt padding", () => {
+    const onApply = vi.fn();
+    const onOpenChange = vi.fn();
+    const conciseMethod = "Test the strongest competing explanation before concluding.";
+    render(
+      <ResearchTemplatePromptEditor
+        open
+        onOpenChange={onOpenChange}
+        defaultPrompt={LONG_PROMPT}
+        value={conciseMethod}
+        onApply={onApply}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("research-template-prompt-apply"));
+
+    expect(onApply).toHaveBeenCalledWith(conciseMethod);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("rejects an empty method", () => {
+    const onApply = vi.fn();
+    render(
+      <ResearchTemplatePromptEditor
+        open
+        onOpenChange={vi.fn()}
+        defaultPrompt={LONG_PROMPT}
+        value="   "
+        onApply={onApply}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("research-template-prompt-apply"));
+
+    expect(onApply).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      enResearch.home.template_prompt_empty,
+    );
   });
 });

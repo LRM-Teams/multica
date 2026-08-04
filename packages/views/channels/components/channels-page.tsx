@@ -3661,6 +3661,9 @@ export function ChannelsPage({
             showBubbleMenu={false}
             mentionAllowedActorIds={mentionAllowedActorIds}
             scopedMentionAgents={channelAgentCandidates}
+            mentionChannelMemberIds={
+              active?.kind === "group" ? channelMemberIds : null
+            }
           />
         }
         onSend={handleThreadSend}
@@ -4392,6 +4395,9 @@ export function ChannelsPage({
                         enableChannelReferences
                         mentionAllowedActorIds={mentionAllowedActorIds}
                         scopedMentionAgents={channelAgentCandidates}
+                        mentionChannelMemberIds={
+                          active?.kind === "group" ? channelMemberIds : null
+                        }
                       />
                     }
                     leadingActions={

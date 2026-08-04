@@ -83,6 +83,8 @@
     "group_issues": "Issues",
     "group_channels": "频道",
     "group_members": "成员",
+    "group_in_channel": "本频道",
+    "group_not_in_channel": "不在本频道",
     "all_members": "所有成员",
     "all_members_hint": "通知此会话中的所有成员",
     "searching": "搜索中...",

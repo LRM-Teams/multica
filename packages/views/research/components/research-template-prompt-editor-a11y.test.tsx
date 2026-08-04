@@ -52,7 +52,6 @@ vi.mock("@multica/ui/components/ui/dialog", () => ({
     className?: string;
   }) => (
     <div
-      role="dialog"
       data-testid={rest["data-testid"] ?? "dialog-content"}
       className={rest.className}
     >

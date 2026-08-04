@@ -1,4 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchProductRoundCard } from "@multica/core/types";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
@@ -160,5 +163,111 @@ describe("ResearchProductRoundCardView", () => {
     });
     const adopted = screen.getByText("Timed out — adopted");
     expect(adopted.tagName).toBe("OUTPUT");
+  });
+});
+
+/**
+ * LRM-1339 — 同 LRM-1252 缺陷类的另一个文件面。
+ *
+ * summary 行的小字曾是 `text-[11px] opacity-80`（摘要）与 `text-[10px] opacity-70`
+ * （倒计时 / 预算），而这些 span 的前景色是 `decisionTone` 给的语义色
+ * （`text-brand` / `text-success` / `text-warning` / `text-muted-foreground`），
+ * 且落在同色低透明度 wash（`bg-brand/5` 等）上 —— alpha 一乘就掉到 WCAG AA 4.5:1 以下。
+ * `goal_patch` 的旧目标行 `text-muted-foreground × opacity-70` 与 LRM-1252 那条
+ * 实测 2.6:1 完全同型。
+ *
+ * 层级只允许靠字号 / 字重 / 等宽 / `line-through` 表达，不允许靠 alpha 压文字。
+ * 真 `disabled` 态的 `opacity-50` 属 WCAG 1.4.3 豁免，故白名单保留。
+ *
+ * jsdom 不解析 token、也不合成祖先 opacity，所以单测只能守类名；真实 WCAG 数值
+ * 由 `scripts/lrm1339-gate-shots.mjs` 在真 Chromium 里活 DOM 实测。
+ */
+describe("ResearchProductRoundCardView text contrast (LRM-1339)", () => {
+  const decisions: ResearchProductRoundCard["decision"][] = [
+    "continue",
+    "stop_enough",
+    "stop_budget",
+  ];
+
+  it("keeps every summary-row text node free of opacity-*", () => {
+    for (const decision of decisions) {
+      const { container, unmount } = render(
+        <ResearchProductRoundCardView
+          card={{ ...card, decision }}
+          compact
+          autoAdoptSeconds={5}
+        />,
+      );
+      const summary = container.querySelector('[data-testid="research-round-summary"]');
+      expect(summary).not.toBeNull();
+      expect(summary!.getAttribute("data-round-decision")).toBe(decision);
+      expect(summary!.className).not.toMatch(/\bopacity-\d/);
+      for (const span of summary!.querySelectorAll("span")) {
+        expect(span.className).not.toMatch(/\bopacity-\d/);
+        expect(span.className).not.toMatch(/text-[a-z-]+\/\d/);
+      }
+      unmount();
+    }
+  });
+
+  it("keeps summary hierarchy via weight/size/mono instead of alpha", () => {
+    const { container } = render(
+      <ResearchProductRoundCardView card={card} compact autoAdoptSeconds={5} />,
+    );
+    const cls = (id: string) =>
+      container.querySelector(`[data-testid="${id}"]`)?.className ?? "";
+
+    expect(cls("research-round-summary-note")).toContain("text-[11px]");
+    expect(cls("research-round-summary-note")).toContain("font-normal");
+    expect(cls("research-round-summary-note")).toContain("truncate");
+
+    for (const id of [
+      "research-round-summary-countdown",
+      "research-round-summary-budget",
+    ]) {
+      expect(cls(id)).toContain("font-mono");
+      expect(cls(id)).toContain("text-[10px]");
+      expect(cls(id)).toContain("tabular-nums");
+    }
+  });
+
+  it("keeps goal_patch old-goal + budget-capped notes solid (line-through / font-normal only)", () => {
+    const { container } = render(
+      <ResearchProductRoundCardView
+        card={{ ...card, decision: "stop_budget" }}
+        currentGoal="旧目标"
+        autoAdoptSeconds={0}
+      />,
+    );
+    // DialogContent 走 portal，不在 render container 里，故查 document。
+    expect(container).toBeTruthy();
+    const oldGoal = document.querySelector('[data-testid="research-round-goal-current"]');
+    expect(oldGoal).not.toBeNull();
+    expect(oldGoal!.className).toContain("text-muted-foreground");
+    expect(oldGoal!.className).toContain("line-through");
+    expect(oldGoal!.className).not.toMatch(/\bopacity-\d/);
+    expect(oldGoal!.className).not.toMatch(/text-muted-foreground\/\d/);
+
+    const capped = document.querySelector(
+      '[data-testid="research-round-budget-capped"]',
+    );
+    expect(capped).not.toBeNull();
+    expect(capped!.className).toContain("font-normal");
+    expect(capped!.className).not.toMatch(/\bopacity-\d/);
+  });
+
+  it("regression guard: only disabled/pending affordances may carry opacity-*", () => {
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "research-product-round-card.tsx"),
+      "utf8",
+    );
+    // 文字色禁 alpha 变体（`text-*-foreground/70` 之类）。
+    expect(source).not.toMatch(/text-[a-z-]*foreground\/[5-8]\d/);
+    // 每一处残留 opacity-* 必须由真 disabled/pending 语义把守。
+    for (const line of source.split("\n")) {
+      const hit = line.match(/\bopacity-\d+/);
+      if (!hit) continue;
+      expect(line).toMatch(/cursor-not-allowed|disabled|pending|gateBusy|isPending/);
+    }
   });
 });

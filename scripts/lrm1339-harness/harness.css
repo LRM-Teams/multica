@@ -1,0 +1,27 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "../../packages/ui/styles/tokens.css";
+@import "../../packages/ui/styles/base.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@source "../../packages/ui/**/*.{ts,tsx}";
+@source "../../packages/views/**/*.{ts,tsx}";
+
+html,
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+}
+
+/*
+ * The app injects `--font-sans` / `--font-mono` through next/font; tokens.css
+ * only aliases them. Pin a real stack here so the harness renders the same
+ * sans/mono split the product does — the mono weakening of the 10px countdown
+ * and budget spans is part of what replaces the removed alpha.
+ */
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

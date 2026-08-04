@@ -179,16 +179,21 @@ describe("MachineDaemonUpgrade (#29)", () => {
 
   it("poll completed + version caught up clears applying spinner (v-prefix OK)", async () => {
     getUpdateResult.mockResolvedValue({ status: "completed" });
-    vi.spyOn(globalThis, "setInterval").mockImplementation(((fn: TimerHandler) => {
+    vi.spyOn(globalThis, "setInterval").mockImplementation(((
+      fn: TimerHandler,
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      _timeout?: number,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ..._args: any[]
+    ) => {
       if (typeof fn === "function") {
         queueMicrotask(() => {
           (fn as () => void)();
         });
       }
       return 1 as unknown as ReturnType<typeof setInterval>;
-    }) as typeof setInterval);
+    }) as unknown as typeof setInterval);
     vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
-
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const tree = (node: React.ReactElement) => (
       <QueryClientProvider client={qc}>

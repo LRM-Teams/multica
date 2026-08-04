@@ -580,6 +580,7 @@
     "tray_uploading": "上传中",
     "tray_upload_failed": "上传失败",
     "voice_unsent": "语音未发送（{{duration}}）",
+    "voice_unsent_retrying": "正在重试发送（{{duration}}）",
     "voice_unsent_retry": "重试发送",
     "voice_unsent_delete": "删除",
     "tray_reselect": "需重新选择",

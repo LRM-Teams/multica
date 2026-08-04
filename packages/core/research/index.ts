@@ -4,5 +4,7 @@ export * from "./queries";
 export * from "./report-structured";
 export * from "./semantic-aggregation";
 export * from "./schemas";
+export * from "./trajectory-fixture";
+export * from "./trajectory-graph";
 export * from "./ui-store";
 export * from "./ws-updaters";

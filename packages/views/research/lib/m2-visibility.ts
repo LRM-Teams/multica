@@ -120,6 +120,67 @@ export function resolveHumanBoundaryMode(
   return "empty";
 }
 
+/**
+ * Drawer-level evidence overview (LRM-1325 / LRM-1329).
+ * Unique resolver — source/boundary cards must not invent a second overview.
+ *
+ * Priority: permission → error → ready → partial → loading → empty.
+ */
+export type EvidenceOverviewMode =
+  | "ready"
+  | "partial"
+  | "loading"
+  | "empty"
+  | "error"
+  | "permission";
+
+export function sourceStrategyHasFacts(model: SourceStrategyModel): boolean {
+  return !model.empty && model.chips.length > 0;
+}
+
+export function humanBoundaryHasFacts(model: HumanBoundaryModel): boolean {
+  return !model.empty;
+}
+
+export function resolveEvidenceOverviewMode(input: {
+  sourceModel: SourceStrategyModel;
+  boundaryModel: HumanBoundaryModel;
+  sessionStatus?: string | null;
+  error?: string | null;
+  /** HTTP status when known; 403 maps to permission (no data leak). */
+  errorStatus?: number | null;
+}): EvidenceOverviewMode {
+  if (input.errorStatus === 403) return "permission";
+  if (input.error) return "error";
+  const hasSource = sourceStrategyHasFacts(input.sourceModel);
+  const hasBoundary = humanBoundaryHasFacts(input.boundaryModel);
+  const inFlight = isSessionInFlight(input.sessionStatus);
+  if (hasSource && hasBoundary && !inFlight) return "ready";
+  if (hasSource || hasBoundary) return "partial";
+  if (inFlight) return "loading";
+  return "empty";
+}
+
+/** Stable revision token for one-shot ready/update sweep (LRM-1329). */
+export function evidenceRevisionKey(
+  sourceModel: SourceStrategyModel,
+  boundaryModel: HumanBoundaryModel,
+): string {
+  return [
+    sourceModel.chips.map((c) => `${c.id}:${c.samples.length}`).join(","),
+    boundaryModel.aiCeiling,
+    boundaryModel.mustHuman,
+    String(boundaryModel.matrix.length),
+  ].join("|");
+}
+
+/** Duck-typed HTTP status from API/query errors (no ApiError import). */
+export function readErrorStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
 const GENERAL_SOURCE_CLASSES = new Set([
   "web",
   "x",

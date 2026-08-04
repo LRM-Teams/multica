@@ -200,7 +200,9 @@
       "loading": "Loading",
       "running": "In progress",
       "error": "Error"
-    }
+    },
+    "module_sources_desc": "Where evidence comes from · who owns what · whether it is ready",
+    "aux_close_sources": "Close evidence & collaboration"
   },
   "chat": {
     "you": "You",
@@ -601,7 +603,18 @@
     "rail_next_expand_covered": "{{count}} questions · expand to review supporting leads",
     "rail_next_expand_gap": "{{count}} questions · expand to see what evidence is missing",
     "rail_next_expand_dead": "{{count}} questions · can collapse this branch",
-    "rail_collapse": "Collapse"
+    "rail_collapse": "Collapse",
+    "evidence_loading": "Preparing your evidence map",
+    "evidence_partial": "Evidence is still filling in",
+    "evidence_ready": "Evidence is organized",
+    "evidence_empty_title": "No evidence to show yet",
+    "evidence_empty_body": "When results arrive, real fields will appear here",
+    "evidence_error": "Could not read evidence right now",
+    "evidence_permission": "You do not have permission to view research evidence",
+    "evidence_verification_unavailable": "Verification not provided",
+    "evidence_expect_1": "Source use: which sources informed this research",
+    "evidence_expect_2": "Human / Agent split: who owns what",
+    "evidence_expect_3": "Readiness: whether evidence is complete"
   },
   "completion_guide": {
     "done_title": "Research complete",

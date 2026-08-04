@@ -200,7 +200,9 @@
       "loading": "로딩",
       "running": "진행 중",
       "error": "오류"
-    }
+    },
+    "module_sources_desc": "근거가 어디서 왔는지 · 누가 무엇을 하는지 · 준비됐는지",
+    "aux_close_sources": "조사 근거와 협업 분담 닫기"
   },
   "chat": {
     "you": "You",
@@ -601,7 +603,18 @@
     "rail_next_expand_covered": "질문 {{count}}개 · 펼쳐 근거 확인",
     "rail_next_expand_gap": "질문 {{count}}개 · 펼쳐 부족한 증거 확인",
     "rail_next_expand_dead": "질문 {{count}}개 · 이 분기를 접을 수 있음",
-    "rail_collapse": "접기"
+    "rail_collapse": "접기",
+    "evidence_loading": "근거 지도를 준비하는 중",
+    "evidence_partial": "근거를 보완하는 중",
+    "evidence_ready": "근거가 정리됨",
+    "evidence_empty_title": "아직 표시할 근거가 없습니다",
+    "evidence_empty_body": "결과가 나오면 실제 필드가 여기에 표시됩니다",
+    "evidence_error": "근거를 읽을 수 없습니다",
+    "evidence_permission": "조사 근거를 볼 권한이 없습니다",
+    "evidence_verification_unavailable": "검증 정보 미제공",
+    "evidence_expect_1": "출처 용도: 어떤 소스를 썼는지",
+    "evidence_expect_2": "사람과 Agent 분담: 누가 무엇을 하는지",
+    "evidence_expect_3": "준비 상태: 근거가 갖춰졌는지"
   },
   "completion_guide": {
     "done_title": "리서치 완료",

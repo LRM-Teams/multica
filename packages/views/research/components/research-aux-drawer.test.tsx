@@ -17,8 +17,10 @@ vi.mock("../../i18n/use-t", () => ({
         panel: {
           module_trajectory: "搜索轨迹",
           module_sources: "调研依据与协作分工",
+          module_sources_desc: "依据从哪里来 · 谁负责什么 · 现在齐了没有",
           module_detail: "节点详情",
           aux_close: "关闭面板",
+          aux_close_sources: "关闭调研依据与协作分工",
         },
       };
       return picker(keys as never);
@@ -189,6 +191,20 @@ describe("ResearchAuxDrawer desktop a11y (LRM-1100)", () => {
     const close = screen.getByRole("button", { name: "关闭面板" });
     const icon = close.querySelector("svg");
     expect(icon).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("sources panel shows three-question desc + panel-specific close name (LRM-1329)", () => {
+    render(
+      <ResearchAuxDrawer panel="sources" onClose={() => {}}>
+        <span>body</span>
+      </ResearchAuxDrawer>,
+    );
+    expect(screen.getByTestId("research-aux-drawer-desc")).toHaveTextContent(
+      "依据从哪里来 · 谁负责什么 · 现在齐了没有",
+    );
+    expect(
+      screen.getByRole("button", { name: "关闭调研依据与协作分工" }),
+    ).toBeTruthy();
   });
 
   it("keeps focus put when an unmounted aux trigger has no relocatable key (LRM-1177)", async () => {

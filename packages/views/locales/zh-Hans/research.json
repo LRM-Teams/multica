@@ -200,7 +200,9 @@
       "loading": "加载中",
       "running": "进行中",
       "error": "错误"
-    }
+    },
+    "module_sources_desc": "依据从哪里来 · 谁负责什么 · 现在齐了没有",
+    "aux_close_sources": "关闭调研依据与协作分工"
   },
   "chat": {
     "you": "你",
@@ -601,7 +603,18 @@
     "rail_next_expand_covered": "{{count}} 个问题 · 展开查看支撑这一结论的线索",
     "rail_next_expand_gap": "{{count}} 个问题 · 展开查看缺少哪类证据",
     "rail_next_expand_dead": "{{count}} 个问题 · 可收起此分支",
-    "rail_collapse": "收起"
+    "rail_collapse": "收起",
+    "evidence_loading": "正在准备你的依据地图",
+    "evidence_partial": "依据正在补齐",
+    "evidence_ready": "依据已整理",
+    "evidence_empty_title": "还没有可展示的依据",
+    "evidence_empty_body": "结果出现后会在这里按真实字段展示",
+    "evidence_error": "暂时无法读取依据",
+    "evidence_permission": "你没有查看调研依据的权限",
+    "evidence_verification_unavailable": "核验信息未提供",
+    "evidence_expect_1": "来源用途：这次用了哪些信源",
+    "evidence_expect_2": "人机边界：人和 Agent 各自负责什么",
+    "evidence_expect_3": "就绪进度：依据是否已齐"
   },
   "completion_guide": {
     "done_title": "调研已完成",

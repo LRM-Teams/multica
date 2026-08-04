@@ -200,7 +200,9 @@
       "loading": "読込中",
       "running": "進行中",
       "error": "エラー"
-    }
+    },
+    "module_sources_desc": "根拠の出所 · 役割分担 · 準備状況",
+    "aux_close_sources": "調査根拠と協業分担を閉じる"
   },
   "chat": {
     "you": "You",
@@ -601,7 +603,18 @@
     "rail_next_expand_covered": "{{count}} 件の問い · 展開して裏付けを確認",
     "rail_next_expand_gap": "{{count}} 件の問い · 展開して不足証拠を確認",
     "rail_next_expand_dead": "{{count}} 件の問い · この分岐を折りたためます",
-    "rail_collapse": "折りたたむ"
+    "rail_collapse": "折りたたむ",
+    "evidence_loading": "根拠マップを準備しています",
+    "evidence_partial": "根拠を補完しています",
+    "evidence_ready": "根拠が整理されました",
+    "evidence_empty_title": "表示できる根拠はまだありません",
+    "evidence_empty_body": "結果が出ると、ここに実フィールドが表示されます",
+    "evidence_error": "根拠を読み取れませんでした",
+    "evidence_permission": "調査根拠を表示する権限がありません",
+    "evidence_verification_unavailable": "検証情報は未提供",
+    "evidence_expect_1": "出典の用途：どの情報源を使ったか",
+    "evidence_expect_2": "人と Agent の分担：誰が何を担当するか",
+    "evidence_expect_3": "準備状況：根拠が揃っているか"
   },
   "completion_guide": {
     "done_title": "リサーチ完了",

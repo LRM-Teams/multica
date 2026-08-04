@@ -161,6 +161,23 @@ type EnvDispatchAuditResource struct {
 	UpdatedAt       time.Time
 }
 
+// EnvDispatchAuditReclamationResource is the reconciliation snapshot of one
+// resource. It contains only the identity, ownership, and classification
+// fields projected by reconciliation; it is not a report resource and never
+// requires an adapter to fabricate observation timestamps.
+type EnvDispatchAuditReclamationResource struct {
+	AuditResourceID string
+	Kind            EnvDispatchAuditResourceKind
+	ResourceID      string
+	DaemonID        *string
+	EnvironmentID   *string
+	ProjectID       *string
+	ChannelID       *string
+	OwnershipMode   EnvDispatchAuditOwnershipMode
+	OwnerState      EnvDispatchAuditOwnerState
+	Classification  EnvDispatchAuditClassification
+}
+
 // EnvDispatchAuditEvent is an append-only, sequence-ordered observation. A
 // reason code must be sanitized by the storage adapter; no error detail,
 // transport payload, task content, or message content belongs here.
@@ -196,7 +213,7 @@ type EnvDispatchAuditObligation struct {
 // obligation and supplies LeaseAcquiredAt.
 type EnvDispatchAuditReclamationClaim struct {
 	Obligation          EnvDispatchAuditObligation
-	Resource            EnvDispatchAuditResource
+	Resource            EnvDispatchAuditReclamationResource
 	AuditID             string
 	WorkspaceID         string
 	InitiatorID         string

@@ -69,16 +69,6 @@ func HumanPrincipalFromContext(ctx context.Context) (HumanPrincipal, bool) {
 	return p, true
 }
 
-// IsAgentActorSource reports whether X-Actor-Source is a server-stamped agent token kind.
-func IsAgentActorSource(source string) bool {
-	switch strings.TrimSpace(source) {
-	case "task_token", "agent_inbox_token", "agent_credential":
-		return true
-	default:
-		return false
-	}
-}
-
 // AgentHumanRouteKnownSites is the exact seeded site set (exported for tests).
 // Scrapes must show every site at process start (value 0) — never NO_DATA.
 var AgentHumanRouteKnownSites = []string{

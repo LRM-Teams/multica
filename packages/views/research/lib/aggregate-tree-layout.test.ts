@@ -70,6 +70,9 @@ describe("layoutAggregateTreeShell (LRM-1295)", () => {
     );
     expect(parentBox.x).toBeLessThan(Math.min(...siblingBoxes.map((box) => box.x)));
     expect(parentBox.w).toBeGreaterThan(Math.max(...siblingBoxes.map((box) => box.w)));
+    expect(Math.min(...siblingBoxes.map((box) => box.w))).toBeGreaterThan(
+      Math.max(...childBoxes.map((box) => box.w)),
+    );
 
     for (let index = 0; index < boxes.length; index += 1) {
       for (let other = index + 1; other < boxes.length; other += 1) {

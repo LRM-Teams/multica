@@ -359,6 +359,7 @@
   "logic": {
     "label": "調査ロジック",
     "lr_hint": "左→右 · not Git",
+    "aggregate_hint": "左→右 · 集約ツリー",
     "git_hint": "上→下 · Git lanes",
     "git_list_label": "調査 Git リスト",
     "strip_label": "ロジック構造",

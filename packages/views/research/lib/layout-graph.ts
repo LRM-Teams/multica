@@ -94,7 +94,7 @@ export type AggregateTreeShellLayout = {
 /** Product-spec geometry for the three-column aggregate viewport. */
 export const AGGREGATE_PARENT_CARD: AggregateTreeCardSize = { width: 282, height: 242 };
 export const AGGREGATE_SIBLING_CARD: AggregateTreeCardSize = { width: 218, height: 142 };
-export const AGGREGATE_CHILD_CARD: AggregateTreeCardSize = { width: 336, height: 76 };
+export const AGGREGATE_CHILD_CARD: AggregateTreeCardSize = { width: 184, height: 76 };
 
 const AGGREGATE_BOARD_WIDTH = 1408;
 const AGGREGATE_BOARD_MIN_HEIGHT = 655;

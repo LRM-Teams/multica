@@ -596,7 +596,11 @@ function ResearchCanvasInner({
         >
           <span className="font-medium text-foreground">{t(($) => $.logic.label)}</span>
           <span aria-hidden>·</span>
-          <span>{t(($) => $.logic.git_hint)}</span>
+          <span>
+            {t(($) =>
+              canvasLayout.mode === "aggregate" ? $.logic.aggregate_hint : $.logic.git_hint,
+            )}
+          </span>
         </Panel>
         <MiniMap
           pannable

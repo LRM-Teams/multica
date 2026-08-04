@@ -359,6 +359,7 @@
   "logic": {
     "label": "Research logic",
     "lr_hint": "Left → right · not Git",
+    "aggregate_hint": "Left → right · Aggregate tree",
     "git_hint": "Top → bottom · Git lanes",
     "git_list_label": "Research Git list",
     "strip_label": "Logic structure",

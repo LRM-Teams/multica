@@ -359,6 +359,7 @@
   "logic": {
     "label": "리서치 로직",
     "lr_hint": "왼쪽→오른쪽 · not Git",
+    "aggregate_hint": "왼쪽→오른쪽 · 집계 트리",
     "git_hint": "위→아래 · Git 레인",
     "git_list_label": "리서치 Git 목록",
     "strip_label": "로직 구조",

@@ -359,6 +359,7 @@
   "logic": {
     "label": "调研逻辑",
     "lr_hint": "左→右 · 非 Git",
+    "aggregate_hint": "左→右 · 聚合树",
     "git_hint": "上→下 · Git 分支线",
     "git_list_label": "调研 Git 列表",
     "strip_label": "逻辑结构",

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -63,6 +64,8 @@ func (h *Handler) resolveProjectWorkdirRuntime(ctx context.Context, workspaceID,
 	}
 	wsID := parseUUID(workspaceID)
 
+	staleSecs := service.AgentHealthStaleThreshold.Seconds()
+
 	// Primary: the daemon that registered the project's managed workdir. This
 	// is where the files actually are — including a shared/public runtime.
 	var daemonID string
@@ -78,8 +81,10 @@ func (h *Handler) resolveProjectWorkdirRuntime(ctx context.Context, workspaceID,
 		if err := h.DB.QueryRow(ctx, `
 			SELECT id FROM agent_runtime
 			WHERE workspace_id = $1 AND daemon_id = $2 AND status = 'online'
+			  AND last_seen_at IS NOT NULL
+			  AND last_seen_at >= now() - make_interval(secs => $3::double precision)
 			ORDER BY last_seen_at DESC NULLS LAST
-			LIMIT 1`, wsID, daemonID).Scan(&runtimeID); err == nil && runtimeID.Valid {
+			LIMIT 1`, wsID, daemonID, staleSecs).Scan(&runtimeID); err == nil && runtimeID.Valid {
 			return runtimeID, true
 		}
 	}
@@ -89,8 +94,10 @@ func (h *Handler) resolveProjectWorkdirRuntime(ctx context.Context, workspaceID,
 	if err := h.DB.QueryRow(ctx, `
 		SELECT id FROM agent_runtime
 		WHERE workspace_id = $1 AND owner_id = $2 AND status = 'online'
+		  AND last_seen_at IS NOT NULL
+		  AND last_seen_at >= now() - make_interval(secs => $3::double precision)
 		ORDER BY last_seen_at DESC NULLS LAST
-		LIMIT 1`, wsID, parseUUID(userID)).Scan(&runtimeID); err == nil && runtimeID.Valid {
+		LIMIT 1`, wsID, parseUUID(userID), staleSecs).Scan(&runtimeID); err == nil && runtimeID.Valid {
 		return runtimeID, true
 	}
 	return runtimeID, false

@@ -79,8 +79,6 @@ vi.mock("../../i18n", () => ({
         working_verb_with_duration: `{{verb}} · {{duration}}`,
         working_failed: `Couldn't reply · try @ again`,
         working_no_reply: `No reply · try @ again`,
-        working_dismiss: `Dismiss`,
-        working_dismiss_aria: `Dismiss {{name}}'s status`,
         view_members_aria: `View members`,
       };
       const agent_status = {

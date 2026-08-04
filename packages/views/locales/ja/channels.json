@@ -81,8 +81,6 @@
     "working_list_title": "処理中 · {{count}}",
     "working_failed": "返信できませんでした · もう一度 @",
     "working_no_reply": "返信なし · もう一度 @",
-    "working_dismiss": "閉じる",
-    "working_dismiss_aria": "{{name}} の状態を閉じる",
     "settings_aria": "グループ設定",
     "presence_counts": "{{members}} · {{agents}}",
     "presence_working": "{{working}} 処理中",

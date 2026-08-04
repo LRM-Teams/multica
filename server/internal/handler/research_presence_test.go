@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -223,6 +224,162 @@ func TestBuildResearchPresenceRoster_StaleRunning(t *testing.T) {
 	}
 	if got.Activity != "长时间无更新的具体动作" {
 		t.Fatalf("stale should keep activity text, got %q", got.Activity)
+	}
+}
+
+func TestBuildResearchPresenceRosterWithRun_AttemptProjectionFiveFleet(t *testing.T) {
+	now := time.Date(2026, 8, 4, 10, 0, 0, 0, time.UTC)
+	sessionID := "d3cb52ae-bb85-4731-91d7-30c779063770"
+	ids := []string{
+		"11111111-1111-1111-1111-111111111111", // lead idle
+		"22222222-2222-2222-2222-222222222222", // scout running
+		"33333333-3333-3333-3333-333333333333", // domain queued
+		"44444444-4444-4444-4444-444444444444", // idle
+		"55555555-5555-5555-5555-555555555555", // idle
+	}
+	members := []researchPresenceMember{
+		{AgentID: ids[0], Role: "lead"},
+		{AgentID: ids[1], Role: "scout"},
+		{AgentID: ids[2], Role: "domain_a"},
+		{AgentID: ids[3], Role: "domain_b"},
+		{AgentID: ids[4], Role: "reporter"},
+	}
+	started := now.Add(-2 * time.Minute)
+	dispatched := now.Add(-1 * time.Minute)
+	tasks := []researchrun.Task{
+		{
+			ID: "task-scout", SessionID: sessionID, Objective: "深挖竞品定价证据",
+			Kind: researchrun.TaskKindDiscover, Status: researchrun.TaskStatusRunning,
+			AssignedAgentID: ids[1], TimeoutSeconds: 1800, StartedAt: &started,
+		},
+		{
+			ID: "task-domain", SessionID: sessionID, Objective: "校验供应链来源",
+			Kind: researchrun.TaskKindVerify, Status: researchrun.TaskStatusDispatching,
+			AssignedAgentID: ids[2], TimeoutSeconds: 900,
+		},
+	}
+	attempts := []researchrun.Attempt{
+		{
+			ID: "att-scout", SessionID: sessionID, TaskID: "task-scout", AttemptNumber: 1,
+			AssignedAgentID: ids[1], Status: researchrun.AttemptStatusRunning,
+			DispatchedAt: started, StartedAt: &started,
+		},
+		{
+			ID: "att-domain", SessionID: sessionID, TaskID: "task-domain", AttemptNumber: 1,
+			AssignedAgentID: ids[2], Status: researchrun.AttemptStatusDispatching,
+			DispatchedAt: dispatched,
+		},
+	}
+
+	// No agent_activity graph nodes — mirrors run-v2 sessions that only have ledger.
+	got := buildResearchPresenceRosterWithRun(
+		members, nil, tasks, attempts, sessionID, "s2_sources", now,
+	)
+	if len(got) != 5 {
+		t.Fatalf("presence size = %d, want 5", len(got))
+	}
+	if got[ids[0]].Phase != ResearchPresencePhaseIdle || got[ids[0]].TaskID != nil {
+		t.Fatalf("lead without attempt must stay idle: %+v", got[ids[0]])
+	}
+	scout := got[ids[1]]
+	if scout.Phase != ResearchPresencePhaseRunning {
+		t.Fatalf("scout phase=%q want running", scout.Phase)
+	}
+	if scout.Activity != "深挖竞品定价证据" {
+		t.Fatalf("scout activity=%q", scout.Activity)
+	}
+	if deref(scout.TaskID) != "task-scout" {
+		t.Fatalf("scout task_id=%v", scout.TaskID)
+	}
+	wantNode := runGraphNodeID(sessionID, runGraphKindTask, "task-scout")
+	if deref(scout.NodeID) != wantNode {
+		t.Fatalf("scout node_id=%v want %s", scout.NodeID, wantNode)
+	}
+	if deref(scout.Stage) != "s2_sources" {
+		t.Fatalf("scout stage=%v", scout.Stage)
+	}
+	if scout.ExpiresAt == nil || *scout.ExpiresAt != started.Add(1800*time.Second).UnixMilli() {
+		t.Fatalf("scout expires_at=%v", scout.ExpiresAt)
+	}
+
+	domain := got[ids[2]]
+	if domain.Phase != ResearchPresencePhaseQueued {
+		t.Fatalf("domain phase=%q want queued", domain.Phase)
+	}
+	if deref(domain.TaskID) != "task-domain" {
+		t.Fatalf("domain task_id=%v", domain.TaskID)
+	}
+}
+
+func TestBuildResearchPresenceRosterWithRun_AttemptPreferredOverGraphOnlyLifecycle(t *testing.T) {
+	now := time.Date(2026, 8, 4, 10, 0, 0, 0, time.UTC)
+	sessionID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	agent := uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	members := []researchPresenceMember{{AgentID: agent.String(), Role: "scout"}}
+	started := now.Add(-3 * time.Minute)
+	tasks := []researchrun.Task{{
+		ID: "task-1", Objective: "从 attempt 投影的目标", Kind: researchrun.TaskKindDeepRead,
+		Status: researchrun.TaskStatusRunning, AssignedAgentID: agent.String(),
+		TimeoutSeconds: 600, StartedAt: &started,
+	}}
+	attempts := []researchrun.Attempt{{
+		ID: "att-1", TaskID: "task-1", AttemptNumber: 2, AssignedAgentID: agent.String(),
+		Status: researchrun.AttemptStatusRunning, DispatchedAt: started, StartedAt: &started,
+	}}
+	// Stale generic graph event must not become the only SoT.
+	nodes := []db.ResearchGraphNode{
+		activityNode(agent, researchPresenceGenericStartedTitle, now.Add(-30*time.Second),
+			`{"event_type":"task_started","details":{"task_id":"stale-graph-task"}}`),
+	}
+	got := buildResearchPresenceRosterWithRun(
+		members, nodes, tasks, attempts, sessionID, "s3_validation", now,
+	)[agent.String()]
+	if got.Activity != "从 attempt 投影的目标" {
+		t.Fatalf("activity=%q want attempt objective", got.Activity)
+	}
+	if deref(got.TaskID) != "task-1" {
+		t.Fatalf("task_id=%v want task-1 from attempt SoT", got.TaskID)
+	}
+	if deref(got.Stage) != "s3_validation" {
+		t.Fatalf("stage=%v", got.Stage)
+	}
+}
+
+func TestBuildResearchPresenceRosterWithRun_AttemptExpired(t *testing.T) {
+	now := time.Date(2026, 8, 4, 10, 0, 0, 0, time.UTC)
+	sessionID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	agent := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	members := []researchPresenceMember{{AgentID: agent, Role: "scout"}}
+	started := now.Add(-20 * time.Minute)
+	tasks := []researchrun.Task{{
+		ID: "task-exp", Objective: "超时任务", Status: researchrun.TaskStatusRunning,
+		AssignedAgentID: agent, TimeoutSeconds: 600, StartedAt: &started,
+	}}
+	attempts := []researchrun.Attempt{{
+		ID: "att-exp", TaskID: "task-exp", AttemptNumber: 1, AssignedAgentID: agent,
+		Status: researchrun.AttemptStatusRunning, DispatchedAt: started, StartedAt: &started,
+	}}
+	got := buildResearchPresenceRosterWithRun(
+		members, nil, tasks, attempts, sessionID, "s2_sources", now,
+	)[agent]
+	if got.Phase != ResearchPresencePhaseStale {
+		t.Fatalf("phase=%q want stale", got.Phase)
+	}
+	if got.StaleReason == nil || *got.StaleReason != "attempt_expired" {
+		t.Fatalf("stale_reason=%v want attempt_expired", got.StaleReason)
+	}
+}
+
+func TestResearchPresenceMembersFromRunFleet_KeepsScoutRoles(t *testing.T) {
+	got := researchPresenceMembersFromRunFleet([]researchrun.FleetMember{
+		{AgentID: "a1", Role: "lead", Status: "active", IsLead: true},
+		{AgentID: "a2", Role: "scout", Status: "active"},
+		{AgentID: "a3", Role: "scout", Status: "archived"},
+		{AgentID: "a2", Role: "scout", Status: "active"}, // dup agent
+		{AgentID: "a4", Role: "reporter", Status: "active"},
+	})
+	if len(got) != 3 {
+		t.Fatalf("got %+v, want 3 active unique agents", got)
 	}
 }
 

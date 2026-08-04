@@ -82,3 +82,8 @@ Realtime:
   achievement, and showcase.
 - Global listener: custom achievement toast and fleet promotion toast with
   React Query invalidation.
+
+Fleet rank responses include `min_sample_tasks` alongside `sample_tasks` and
+`sample_sufficient`. Clients render the workspace-configured warm-up target
+from the response; older responses without the field parse to the historical
+default of five at the API boundary.

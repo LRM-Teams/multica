@@ -604,6 +604,7 @@ describe("ChannelMessageBubble", () => {
       fleet_rank: 0,
       fleet_size: 1,
       sample_tasks: 0,
+      min_sample_tasks: 5,
       sample_sufficient: false,
       frozen: false,
       pillars: { delivery: 0, evolution: 0, growth: 0, efficiency: 0 },

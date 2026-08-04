@@ -552,6 +552,62 @@ type EnvCheckpoint struct {
 	ResumeTrigger  []byte             `json:"resume_trigger"`
 }
 
+type EnvDispatchAuditEvent struct {
+	ID              pgtype.UUID        `json:"id"`
+	AuditID         pgtype.UUID        `json:"audit_id"`
+	AuditResourceID pgtype.UUID        `json:"audit_resource_id"`
+	Sequence        int64              `json:"sequence"`
+	EventType       string             `json:"event_type"`
+	ReasonCode      pgtype.Text        `json:"reason_code"`
+	OccurredAt      pgtype.Timestamptz `json:"occurred_at"`
+}
+
+type EnvDispatchAuditResource struct {
+	ID              pgtype.UUID        `json:"id"`
+	AuditID         pgtype.UUID        `json:"audit_id"`
+	ResourceKind    string             `json:"resource_kind"`
+	ResourceID      string             `json:"resource_id"`
+	DaemonID        pgtype.Text        `json:"daemon_id"`
+	EnvironmentID   pgtype.UUID        `json:"environment_id"`
+	ProjectID       pgtype.UUID        `json:"project_id"`
+	ChannelID       pgtype.UUID        `json:"channel_id"`
+	OwnershipMode   string             `json:"ownership_mode"`
+	OwnerState      string             `json:"owner_state"`
+	Classification  string             `json:"classification"`
+	FirstObservedAt pgtype.Timestamptz `json:"first_observed_at"`
+	LastObservedAt  pgtype.Timestamptz `json:"last_observed_at"`
+	ReclaimedAt     pgtype.Timestamptz `json:"reclaimed_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EnvDispatchAuditRun struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	InitiatorID         pgtype.UUID        `json:"initiator_id"`
+	DispatchType        string             `json:"dispatch_type"`
+	PrimaryScopeID      pgtype.UUID        `json:"primary_scope_id"`
+	Outcome             string             `json:"outcome"`
+	Verdict             string             `json:"verdict"`
+	ReclamationDeadline pgtype.Timestamptz `json:"reclamation_deadline"`
+	StartedAt           pgtype.Timestamptz `json:"started_at"`
+	CompletedAt         pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EnvDispatchReclamationObligation struct {
+	ID              pgtype.UUID        `json:"id"`
+	AuditResourceID pgtype.UUID        `json:"audit_resource_id"`
+	Trigger         string             `json:"trigger"`
+	State           string             `json:"state"`
+	AttemptCount    int32              `json:"attempt_count"`
+	LastErrorCode   pgtype.Text        `json:"last_error_code"`
+	NextAttemptAt   pgtype.Timestamptz `json:"next_attempt_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type EnvDispatchRequest struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
@@ -694,6 +750,9 @@ type InteractionDagDiagnosisRun struct {
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	CompletedAt           pgtype.Timestamptz `json:"completed_at"`
+	SandboxInstanceID     pgtype.Text        `json:"sandbox_instance_id"`
+	CapabilityTokenHash   pgtype.Text        `json:"capability_token_hash"`
+	ExecutionMode         pgtype.Text        `json:"execution_mode"`
 }
 
 type InteractionDagDiagnosisSegment struct {

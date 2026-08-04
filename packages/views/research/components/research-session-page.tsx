@@ -447,17 +447,15 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     ? data.nodes.find((node) => node.id === ui.selected?.id) ?? ui.selected
     : null;
   // LRM-1329 — drawer overview owns error/permission; cards stay fact-only.
-  const evidenceErrorMessage = isError
-    ? error instanceof Error && error.message
-      ? error.message
-      : t(($) => $.session_page.load_failed)
-    : null;
+  // Signal error with a non-empty token only — never pass raw API strings into
+  // the drawer (safe copy lives in EvidencePulse i18n / role=alert).
+  const evidenceFetchFailed = Boolean(isError && data);
   const evidenceOverview = resolveEvidenceOverviewMode({
     sourceModel: sourceStrategy,
     boundaryModel: humanBoundary,
     sessionStatus: session.status,
-    error: evidenceErrorMessage,
-    errorStatus: isError ? readErrorStatus(error) : null,
+    error: evidenceFetchFailed ? "evidence_unavailable" : null,
+    errorStatus: evidenceFetchFailed ? readErrorStatus(error) : null,
   });
   const evidenceRevision = evidenceRevisionKey(sourceStrategy, humanBoundary);
   const hideEvidenceCards =
@@ -684,9 +682,6 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 <ResearchEvidencePulse
                   mode={evidenceOverview}
                   revisionKey={evidenceRevision}
-                  errorSummary={
-                    evidenceOverview === "error" ? evidenceErrorMessage : null
-                  }
                   onRetry={
                     evidenceOverview === "error"
                       ? () => {
@@ -694,7 +689,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                         }
                       : undefined
                   }
-                  retryPending={isError && isFetching}
+                  retryPending={evidenceFetchFailed && isFetching}
                 />
                 {hideEvidenceCards ? null : (
                   <>

@@ -19,7 +19,6 @@ import {
   flattenChannelMessagePages,
   enrichChannelMessagesPreservingAvatars,
   channelMessagesFirstItemIndex,
-  evictInactiveChannelMessageCaches,
   useEnsureMessageLoaded,
   useMarkChannelThreadRead,
   useMarkChannelRead,
@@ -972,12 +971,6 @@ function DmChannelConversation({
       });
     }
   }, [threadDeepLinkId, deepLinkMessageId, channelId, wsId]);
-
-  // LRM-1264: unload other channels' message caches when switching DMs.
-  useEffect(() => {
-    if (!channelId) return;
-    evictInactiveChannelMessageCaches(qc, channelId);
-  }, [channelId, qc]);
 
   // LRM-1063: reset mid-history message cache for this deep-link target.
   useEffect(() => {

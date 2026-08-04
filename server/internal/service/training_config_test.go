@@ -226,6 +226,23 @@ func TestLoadTrainingConfig_DiagnosisInvalidTimeoutAndScoreMax(t *testing.T) {
 	assert.Equal(t, 10, cfg.DiagnosisAgentScoreMax, "invalid score max falls back to 10")
 }
 
+// Quickstart Scenario 6: sandbox is the default execution mode; "server" is
+// accepted as the deprecated fallback; anything else falls back to sandbox.
+func TestLoadTrainingConfig_DiagnosisExecutionMode(t *testing.T) {
+	clearTrainingEnv(t)
+
+	cfg := LoadTrainingConfig()
+	assert.Equal(t, "sandbox", cfg.DiagnosisExecutionMode, "default execution mode is sandbox")
+
+	t.Setenv("DIAGNOSIS_EXECUTION_MODE", "server")
+	cfg = LoadTrainingConfig()
+	assert.Equal(t, "server", cfg.DiagnosisExecutionMode, "deprecated server fallback remains selectable")
+
+	t.Setenv("DIAGNOSIS_EXECUTION_MODE", "bogus")
+	cfg = LoadTrainingConfig()
+	assert.Equal(t, "sandbox", cfg.DiagnosisExecutionMode, "invalid mode falls back to sandbox")
+}
+
 func TestTaskService_WithTraining(t *testing.T) {
 	svc := &TaskService{}
 	assert.Nil(t, svc.Training)
@@ -253,6 +270,7 @@ func clearTrainingEnv(t *testing.T) {
 		"DIAGNOSIS_AGENT_MODEL",
 		"DIAGNOSIS_AGENT_TIMEOUT_SECONDS",
 		"DIAGNOSIS_AGENT_SCORE_MAX",
+		"DIAGNOSIS_EXECUTION_MODE",
 	}
 	for _, env := range envVars {
 		if err := os.Unsetenv(env); err != nil {

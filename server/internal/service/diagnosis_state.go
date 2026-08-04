@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -22,10 +23,11 @@ const maxDiagnosisRunErrorBytes = 1024
 type DiagnosisRunStatus string
 
 const (
-	DiagnosisRunRunning    DiagnosisRunStatus = "running"
-	DiagnosisRunCompacting DiagnosisRunStatus = "compacting"
-	DiagnosisRunCompleted  DiagnosisRunStatus = "completed"
-	DiagnosisRunFailed     DiagnosisRunStatus = "failed"
+	DiagnosisRunProvisioning DiagnosisRunStatus = "provisioning"
+	DiagnosisRunRunning      DiagnosisRunStatus = "running"
+	DiagnosisRunCompacting   DiagnosisRunStatus = "compacting"
+	DiagnosisRunCompleted    DiagnosisRunStatus = "completed"
+	DiagnosisRunFailed       DiagnosisRunStatus = "failed"
 )
 
 // SegmentDiagnosisStatus is the lifecycle state of one segment checkpoint.
@@ -59,6 +61,10 @@ type DiagnosisRunCheckpoint struct {
 	Status                DiagnosisRunStatus
 	PiSessionID           string
 	LastError             string
+	// Sandbox-mode fields (migration 278); empty for server-mode runs.
+	SandboxInstanceID   string
+	CapabilityTokenHash string
+	ExecutionMode       string
 }
 
 // SegmentDiagnosisCheckpoint is the service-boundary view of one segment row.
@@ -83,8 +89,11 @@ type diagnosisStateQueries interface {
 	GetInteractionDAGDiagnosisRun(ctx context.Context, runID string) (db.InteractionDagDiagnosisRun, error)
 	GetResumableInteractionDAGDiagnosisRun(ctx context.Context, arg db.GetResumableInteractionDAGDiagnosisRunParams) (db.InteractionDagDiagnosisRun, error)
 	GetLatestCompletedInteractionDAGDiagnosisRun(ctx context.Context, arg db.GetLatestCompletedInteractionDAGDiagnosisRunParams) (db.InteractionDagDiagnosisRun, error)
+	GetLatestInteractionDAGDiagnosisRunForProject(ctx context.Context, projectID string) (db.InteractionDagDiagnosisRun, error)
 	FailInteractionDAGDiagnosisRun(ctx context.Context, arg db.FailInteractionDAGDiagnosisRunParams) (int64, error)
 	CompleteInteractionDAGDiagnosisRun(ctx context.Context, runID string) (int64, error)
+	SetInteractionDAGDiagnosisRunSandbox(ctx context.Context, arg db.SetInteractionDAGDiagnosisRunSandboxParams) error
+	SetInteractionDAGDiagnosisRunStatus(ctx context.Context, arg db.SetInteractionDAGDiagnosisRunStatusParams) (int64, error)
 	CreateInteractionDAGDiagnosisSegment(ctx context.Context, arg db.CreateInteractionDAGDiagnosisSegmentParams) error
 	GetInteractionDAGDiagnosisSegment(ctx context.Context, arg db.GetInteractionDAGDiagnosisSegmentParams) (db.GetInteractionDAGDiagnosisSegmentRow, error)
 	ListInteractionDAGDiagnosisSegments(ctx context.Context, runID string) ([]db.ListInteractionDAGDiagnosisSegmentsRow, error)
@@ -127,7 +136,18 @@ func diagnosisRunFromRow(row db.InteractionDagDiagnosisRun) (DiagnosisRunCheckpo
 		Status:                DiagnosisRunStatus(row.Status),
 		PiSessionID:           row.PiSessionID,
 		LastError:             row.LastError,
+		SandboxInstanceID:     textValue(row.SandboxInstanceID),
+		CapabilityTokenHash:   textValue(row.CapabilityTokenHash),
+		ExecutionMode:         textValue(row.ExecutionMode),
 	}, nil
+}
+
+// textValue flattens a nullable text column to its string value ("" when NULL).
+func textValue(t pgtype.Text) string {
+	if !t.Valid {
+		return ""
+	}
+	return t.String
 }
 
 func diagnosisSegmentFromRow(row db.InteractionDagDiagnosisSegment) SegmentDiagnosisCheckpoint {
@@ -357,7 +377,7 @@ func (s *DiagnosisStateStore) RecordSegmentPage(ctx context.Context, runID, segm
 		return fmt.Errorf("%w: fetched count regressed for segment %s", ErrDiagnosisInvalidTransition, segmentID)
 	}
 	applied, err := s.q.AdvanceInteractionDAGDiagnosisSegmentFetch(ctx, db.AdvanceInteractionDAGDiagnosisSegmentFetchParams{
-		RunID: runID,
+		RunID:     runID,
 		SegmentID: segmentID,
 		// sqlc numbers params by $-position, not by intent: $3 (WHERE
 		// next_cursor = $3, the CAS check against the currently-held
@@ -529,4 +549,91 @@ func (s *DiagnosisStateStore) FailRun(ctx context.Context, runID string, cause e
 		return err
 	}
 	return nil
+}
+
+// SetRunSandbox records the sandbox instance, per-run capability token hash,
+// and execution mode for a run (migration 278). Empty strings persist as NULL
+// so a re-provision can clear a stale sandbox binding.
+func (s *DiagnosisStateStore) SetRunSandbox(ctx context.Context, runID, sandboxInstanceID, capabilityTokenHash, executionMode string) error {
+	if strings.TrimSpace(runID) == "" {
+		return fmt.Errorf("%w: run_id is required", ErrDiagnosisInvalidTransition)
+	}
+	if _, err := s.GetRun(ctx, runID); err != nil {
+		return err
+	}
+	return s.q.SetInteractionDAGDiagnosisRunSandbox(ctx, db.SetInteractionDAGDiagnosisRunSandboxParams{
+		RunID:               runID,
+		SandboxInstanceID:   pgtype.Text{String: sandboxInstanceID, Valid: sandboxInstanceID != ""},
+		CapabilityTokenHash: pgtype.Text{String: capabilityTokenHash, Valid: capabilityTokenHash != ""},
+		ExecutionMode:       pgtype.Text{String: executionMode, Valid: executionMode != ""},
+	})
+}
+
+// MarkRunProvisioning transitions an active run (running/compacting) to
+// provisioning while its sandbox is being set up. The compare-and-set fails
+// for terminal or already-provisioning runs.
+func (s *DiagnosisStateStore) MarkRunProvisioning(ctx context.Context, runID string) error {
+	run, err := s.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if run.Status == DiagnosisRunProvisioning {
+		return nil
+	}
+	if run.Status != DiagnosisRunRunning && run.Status != DiagnosisRunCompacting {
+		return fmt.Errorf("%w: run %s is %s", ErrDiagnosisInvalidTransition, runID, run.Status)
+	}
+	applied, err := s.q.SetInteractionDAGDiagnosisRunStatus(ctx, db.SetInteractionDAGDiagnosisRunStatusParams{
+		RunID:    runID,
+		Status:   string(DiagnosisRunProvisioning),
+		Status_2: string(run.Status),
+	})
+	if err != nil {
+		return err
+	}
+	if applied == 0 {
+		return fmt.Errorf("%w: run %s changed during provisioning transition", ErrDiagnosisInvalidTransition, runID)
+	}
+	return nil
+}
+
+// ActivateRun transitions a provisioning run to running once its sandbox
+// runtime is online. The compare-and-set fails for any other status.
+func (s *DiagnosisStateStore) ActivateRun(ctx context.Context, runID string) error {
+	run, err := s.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if run.Status == DiagnosisRunRunning {
+		return nil
+	}
+	if run.Status != DiagnosisRunProvisioning {
+		return fmt.Errorf("%w: run %s is %s", ErrDiagnosisInvalidTransition, runID, run.Status)
+	}
+	applied, err := s.q.SetInteractionDAGDiagnosisRunStatus(ctx, db.SetInteractionDAGDiagnosisRunStatusParams{
+		RunID:    runID,
+		Status:   string(DiagnosisRunRunning),
+		Status_2: string(DiagnosisRunProvisioning),
+	})
+	if err != nil {
+		return err
+	}
+	if applied == 0 {
+		return fmt.Errorf("%w: run %s changed during activation", ErrDiagnosisInvalidTransition, runID)
+	}
+	return nil
+}
+
+// LoadLatestRunForProject returns the most recently updated run of any status
+// for a project; it backs the human-facing /diagnosis/latest polling endpoint.
+// Returns ErrDiagnosisRunNotFound when the project has no diagnosis run.
+func (s *DiagnosisStateStore) LoadLatestRunForProject(ctx context.Context, projectID string) (DiagnosisRunCheckpoint, error) {
+	row, err := s.q.GetLatestInteractionDAGDiagnosisRunForProject(ctx, projectID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DiagnosisRunCheckpoint{}, fmt.Errorf("%w: project %s", ErrDiagnosisRunNotFound, projectID)
+		}
+		return DiagnosisRunCheckpoint{}, err
+	}
+	return diagnosisRunFromRow(row)
 }

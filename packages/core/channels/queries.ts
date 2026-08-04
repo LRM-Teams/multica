@@ -78,7 +78,7 @@ export function channelMessagesOptions(channelId: string) {
       return preserveLocalSendMessages(previous, incoming);
     },
     enabled: !!channelId,
-    // LRM-1264: leave the heap sooner once the channel is inactive.
+    // LRM-1363: retain inactive channel message caches for the session.
     gcTime: CHANNEL_MESSAGE_GC_TIME_MS,
   });
 }
@@ -141,7 +141,7 @@ export function channelMessagesPageOptions(
       lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
     enabled: !!channelId,
     staleTime: Infinity,
-    // LRM-1264: leave the heap sooner once the channel is inactive.
+    // LRM-1363: retain inactive channel message caches for the session.
     gcTime: CHANNEL_MESSAGE_GC_TIME_MS,
   });
 }
@@ -455,7 +455,7 @@ export function channelMessageThreadOptions(
       };
     },
     enabled: !!channelId && !!messageId,
-    // LRM-1264: leave the heap sooner once the thread is inactive.
+    // LRM-1363: retain inactive thread caches for the session.
     gcTime: CHANNEL_MESSAGE_GC_TIME_MS,
   });
 }

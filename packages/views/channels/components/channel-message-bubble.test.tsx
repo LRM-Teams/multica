@@ -752,7 +752,11 @@ describe("ChannelMessageBubble", () => {
   });
 
   describe("LRM-1227 bubble shell (① + G + C2 + D2, frozen in LRM-1233)", () => {
-    it("paints a fully enclosed shell on a standalone message", () => {
+    /** Every utility LRM-1346 (Frank lock ①) forbids on the shell / its segments. */
+    const FORBIDDEN_SHELL_EDGE =
+      /\bborder(-line|-line-strong|-x|-y|-t|-b|-l|-r)?\b|\brounded(-[tbrl]{1,2})?-lg\b|\bring-1\b|\bdivide-y\b|\bshadow-/;
+
+    it("paints a borderless shell on a standalone message (LRM-1346 lock ①)", () => {
       render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
       const shell = screen.getByTestId("message-shell");
 
@@ -760,16 +764,14 @@ describe("ChannelMessageBubble", () => {
       expect(shell).toBe(screen.getByTestId("message-body").parentElement);
       expect(shell).toHaveAttribute("data-group-start", "true");
       expect(shell).toHaveAttribute("data-group-end", "true");
-      // Surface = message pane (`bg-background`); 1px --line on all four sides.
+      // Surface = message pane (`bg-background`); no grey slab, and — since
+      // LRM-1346 — no 1px frame or card corners on any of the four sides.
       expect(shell).toHaveClass("bg-background");
       expect(shell.className).not.toMatch(/\bbg-muted\b/);
-      expect(shell).toHaveClass("border-line");
-      expect(shell).toHaveClass("border-x");
-      expect(shell).toHaveClass("border-y");
-      expect(shell).toHaveClass("rounded-lg");
+      expect(shell.className).not.toMatch(FORBIDDEN_SHELL_EDGE);
     });
 
-    it("splits a joined group into head / middle / tail segments", () => {
+    it("keeps group boundaries as data attributes only — no head/middle/tail edges", () => {
       const { rerender } = render(
         <ChannelMessageBubble
           message={makeMessage()}
@@ -777,14 +779,13 @@ describe("ChannelMessageBubble", () => {
           groupEnd={false}
         />,
       );
-      // Group head: top edge + top corners only, no bottom edge.
+      // Group head: boundary is readable to tests / geometry, invisible to the eye.
       let shell = screen.getByTestId("message-shell");
-      expect(shell).toHaveClass("rounded-t-lg");
-      expect(shell).toHaveClass("border-t");
-      expect(shell.className).not.toMatch(/\bborder-b\b/);
-      expect(shell.className).not.toMatch(/\brounded-b-lg\b/);
+      expect(shell).toHaveAttribute("data-group-start", "true");
+      expect(shell).not.toHaveAttribute("data-group-end");
+      expect(shell.className).not.toMatch(FORBIDDEN_SHELL_EDGE);
 
-      // Middle continuation: side edges only — no top/bottom edge, no corners.
+      // Middle continuation.
       rerender(
         <ChannelMessageBubble
           message={makeMessage({ content: "middle" })}
@@ -794,12 +795,11 @@ describe("ChannelMessageBubble", () => {
         />,
       );
       shell = screen.getByTestId("message-shell");
-      expect(shell).toHaveClass("border-x");
-      expect(shell.className).not.toMatch(/\bborder-t\b/);
-      expect(shell.className).not.toMatch(/\bborder-b\b/);
-      expect(shell.className).not.toMatch(/rounded-[tb]?-?lg/);
+      expect(shell).not.toHaveAttribute("data-group-start");
+      expect(shell).not.toHaveAttribute("data-group-end");
+      expect(shell.className).not.toMatch(FORBIDDEN_SHELL_EDGE);
 
-      // Group tail: bottom edge + bottom corners only.
+      // Group tail.
       rerender(
         <ChannelMessageBubble
           message={makeMessage({ content: "last" })}
@@ -809,21 +809,23 @@ describe("ChannelMessageBubble", () => {
         />,
       );
       shell = screen.getByTestId("message-shell");
-      expect(shell).toHaveClass("rounded-b-lg");
-      expect(shell).toHaveClass("border-b");
-      expect(shell.className).not.toMatch(/\bborder-t\b/);
-      expect(shell.className).not.toMatch(/\brounded-t-lg\b/);
+      expect(shell).toHaveAttribute("data-group-end", "true");
+      expect(shell.className).not.toMatch(FORBIDDEN_SHELL_EDGE);
     });
 
-    it("moves the row hover signal onto the shell edge instead of a bg wash", () => {
+    it("keeps the row wash off and no longer strengthens a shell edge on hover", () => {
       render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
-      // The old 1.02:1 wash is unreadable once the shell is permanently filled.
+      // The old 1.02:1 wash stays gone (LRM-1227) …
       expect(screen.getByTestId("message-bubble").className).not.toMatch(
         /hover:bg-muted\/35|focus-within:bg-muted\/35/,
       );
+      // … and LRM-1346 removed the edge that replaced it, so nothing on the
+      // shell may re-add a hover / focus-within border. The floating action bar
+      // is the fine-pointer affordance.
       const shell = screen.getByTestId("message-shell");
-      expect(shell).toHaveClass("group-hover:border-line-strong");
-      expect(shell).toHaveClass("group-focus-within:border-line-strong");
+      expect(shell.className).not.toMatch(/group-hover:border/);
+      expect(shell.className).not.toMatch(/group-focus-within:border/);
+      expect(screen.getByTestId("message-shell").className).not.toMatch(FORBIDDEN_SHELL_EDGE);
     });
 
     it("lets the self-mention wash replace the shell fill, never stack under it", () => {
@@ -837,11 +839,11 @@ describe("ChannelMessageBubble", () => {
 
       expect(screen.getByTestId("message-bubble").className).toContain("bg-[#fef9e8]");
       const shell = screen.getByTestId("message-shell");
-      // Shell keeps the silhouette (edges) but drops its own surface, so the
-      // row's wash is what the viewer actually sees.
+      // Shell drops its own surface so the row's wash is what the viewer sees;
+      // since LRM-1346 it has no silhouette to keep either.
       expect(shell.className).not.toMatch(/\bbg-background\b/);
       expect(shell.className).not.toMatch(/\bbg-muted\b/);
-      expect(shell).toHaveClass("border-line");
+      expect(shell.className).not.toMatch(FORBIDDEN_SHELL_EDGE);
     });
 
     it("lets the deep-link highlight replace the shell fill too", () => {

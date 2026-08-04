@@ -39,27 +39,6 @@ const base = process.env.HARNESS_URL ?? "http://localhost:5339/";
 const MIN_CONTRAST = 4.5;
 const TONES = ["continue", "stop_enough", "stop_budget", "default"];
 
-/**
- * Known token-面 exception, NOT something this slice may patch locally.
- *
- * Light `--warning: #b35c00` composited on its own `bg-warning/10` wash measures
- * 4.12:1 even when the text is fully solid — i.e. the residual failure is the
- * token pair, not the alpha stack this slice removes. `bg-warning/10 text-warning`
- * is a site-wide pattern (research chrome/git-list/graph-node/report, runtimes,
- * agents health, billing, issues), the exact twin of the `destructive` wash pair
- * LRM-1300·D1 found, which is already owned by LRM-1328. Patching `--warning`
- * or hardcoding a darker orange here would split the token across the product.
- *
- * The value is pinned so a regression (or the eventual token fix) trips the gate.
- */
-const TOKEN_FACE_EXEMPT = {
-  theme: "light",
-  match: (site) => /^(stop_budget\.|detail\.budget_capped)/.test(site.name),
-  color: "rgb(179, 92, 0)",
-  expected: 4.12,
-  owner: "LRM-1328 (danger/warning wash token 面)",
-};
-
 const browser = await chromium.launch({
   executablePath: process.env.CHROME_BIN || undefined,
 });
@@ -283,20 +262,7 @@ for (const theme of ["light", "dark"]) {
   if (label === "after") {
     const violations = [];
     for (const site of sites) {
-      const exempt =
-        theme === TOKEN_FACE_EXEMPT.theme &&
-        TOKEN_FACE_EXEMPT.match(site) &&
-        site.computedColor === TOKEN_FACE_EXEMPT.color;
-
-      if (exempt) {
-        // Must be exactly at the solid-token ceiling: proves nothing is left
-        // dimmed here, and that the residual gap is purely the token pair.
-        if (Math.abs(site.contrast - TOKEN_FACE_EXEMPT.expected) > 0.05) {
-          violations.push(
-            `${site.name}: token-面 baseline drifted to ${site.contrast} (expected ${TOKEN_FACE_EXEMPT.expected}, owner ${TOKEN_FACE_EXEMPT.owner})`,
-          );
-        }
-      } else if (site.contrast < MIN_CONTRAST) {
+      if (site.contrast < MIN_CONTRAST) {
         violations.push(
           `${site.name}: contrast ${site.contrast} < ${MIN_CONTRAST} (${site.computedColor} @ alpha ${site.effectiveAlpha} on ${site.backdrop})`,
         );

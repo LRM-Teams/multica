@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   CheckCircle2,
+  ChevronRight,
   CircleSlash,
   Loader2,
   Medal,
@@ -16,11 +17,13 @@ import {
 } from "lucide-react";
 import type { Agent, AgentRuntime, AgentTask, AgentFleetRank } from "@multica/core/types";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
+import { FleetClassIcon } from "@multica/ui/components/fleet/fleet-class-icons";
 import { agentTasksOptions } from "@multica/core/agents";
 import { resolveActorDisplayName, resolveActorHandle } from "@multica/core/identity";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
+import { fleetClassTone } from "@multica/ui/lib/fleet-class";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
@@ -73,6 +76,165 @@ function SectionCard({
       </div>
       {children}
     </div>
+  );
+}
+
+function FleetHonorCard({
+  fleet,
+  isArchived,
+  classLabel,
+  onHonor,
+}: {
+  fleet: AgentFleetRank;
+  isArchived: boolean;
+  classLabel: string;
+  onHonor: () => void;
+}) {
+  const { t } = useT("agents");
+  const pillars = (
+    [
+      ["delivery", fleet.pillars.delivery],
+      ["evolution", fleet.pillars.evolution],
+      ["growth", fleet.pillars.growth],
+      ["efficiency", fleet.pillars.efficiency],
+    ] as const
+  ).map(([key, value]) => ({
+    key,
+    percent: Math.round(Math.max(0, Math.min(1, value)) * 100),
+  }));
+  const frozen = fleet.frozen || isArchived;
+
+  return (
+    <section
+      className={cn(
+        "group relative isolate w-full overflow-hidden rounded-2xl border border-primary/20",
+        "bg-gradient-to-br from-primary/[0.09] via-card to-chart-2/[0.08] p-4 text-left shadow-sm",
+        "transition-[transform,border-color,box-shadow] duration-300 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg",
+        "motion-reduce:transform-none motion-reduce:transition-none",
+        frozen && "opacity-80",
+      )}
+    >
+      <button
+        type="button"
+        data-testid="agent-fleet-honor-card"
+        onClick={onHonor}
+        className="absolute inset-0 z-20 cursor-pointer rounded-2xl bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        <span className="sr-only">
+          {t(($) => $.fleet.title)} · {t(($) => $.tabs.honor)}
+        </span>
+      </button>
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute -right-16 -top-20 -z-10 size-56 rounded-full bg-primary/15 blur-3xl transition-transform duration-500 group-hover:scale-110 motion-reduce:transition-none"
+      />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute -bottom-24 left-1/3 -z-10 size-52 rounded-full bg-chart-2/10 blur-3xl"
+      />
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute right-8 top-5 -z-10 size-24 rounded-full border border-primary/15"
+      />
+
+      <div className="relative flex flex-col gap-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="relative grid size-16 shrink-0 place-items-center rounded-2xl border border-primary/20 bg-background/75 shadow-sm backdrop-blur-sm">
+              <span
+                aria-hidden="true"
+                className="absolute inset-2 rounded-full border border-dashed border-primary/25 transition-transform duration-500 group-hover:rotate-45 motion-reduce:transition-none"
+              />
+              <FleetClassIcon
+                classId={fleet.class_id}
+                title={classLabel}
+                className={cn(
+                  "relative size-10 drop-shadow-sm transition-transform duration-300 group-hover:scale-110 motion-reduce:transition-none",
+                  fleetClassTone(fleet.class_id),
+                )}
+              />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                {t(($) => $.fleet.title)}
+              </span>
+              <span className="mt-1.5 flex flex-wrap items-center gap-2">
+                <FleetRankBadge
+                  classId={fleet.class_id}
+                  classLabel={classLabel}
+                  fleetRank={fleet.fleet_rank}
+                  frozen={frozen}
+                />
+                {!fleet.sample_sufficient ? (
+                  <span className="text-xs text-muted-foreground">
+                    {t(($) => $.fleet.warming_up, {
+                      current: fleet.sample_tasks,
+                      required: 5,
+                    })}
+                  </span>
+                ) : null}
+              </span>
+            </span>
+          </div>
+
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/20 bg-background/70 px-2.5 py-1 text-xs font-medium text-primary backdrop-blur-sm">
+            {t(($) => $.tabs.honor)}
+            <ChevronRight
+              aria-hidden="true"
+              className="size-3.5 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none"
+            />
+          </span>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-[minmax(150px,0.35fr)_minmax(0,1fr)] md:items-end">
+          <span className="rounded-xl border border-border/50 bg-background/55 px-3.5 py-3 backdrop-blur-sm">
+            <span className="block text-xs text-muted-foreground">
+              {t(($) => $.fleet.score_label)}
+            </span>
+            <span className="mt-1 flex items-baseline gap-2">
+              <span className="text-4xl font-semibold tabular-nums tracking-tight text-foreground">
+                {Math.round(fleet.fleet_score)}
+              </span>
+            </span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {frozen
+                ? t(($) => $.fleet.frozen_hint)
+                : t(($) => $.fleet.rank_of, {
+                    rank: fleet.fleet_rank,
+                    size: fleet.fleet_size,
+                  })}
+            </span>
+          </span>
+
+          <span className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {pillars.map(({ key, percent }) => (
+              <span
+                key={key}
+                className="rounded-xl border border-border/50 bg-background/55 px-3 py-2.5 backdrop-blur-sm"
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {t(($) => $.fleet.pillars[key])}
+                  </span>
+                  <span className="text-sm font-semibold tabular-nums text-foreground">
+                    {percent}
+                  </span>
+                </span>
+                <span
+                  aria-hidden="true"
+                  className="mt-2 block h-1.5 overflow-hidden rounded-full bg-muted"
+                >
+                  <span
+                    className="block h-full rounded-full bg-gradient-to-r from-primary to-chart-2 transition-[width] duration-500 motion-reduce:transition-none"
+                    style={{ width: `${percent}%` }}
+                  />
+                </span>
+              </span>
+            ))}
+          </span>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -274,39 +436,12 @@ export function AgentDetailOverview({
         </div>
 
         {fleet ? (
-          <SectionCard title={t(($) => $.fleet.title)}>
-            <div className="flex flex-wrap items-center gap-3">
-              <FleetRankBadge
-                classId={fleet.class_id}
-                classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
-                fleetRank={fleet.fleet_rank}
-                frozen={fleet.frozen || isArchived}
-              />
-              {!fleet.sample_sufficient ? (
-                <span className="text-xs text-muted-foreground">
-                  {t(($) => $.fleet.warming_up, {
-                    current: fleet.sample_tasks,
-                    required: 5,
-                  })}
-                </span>
-              ) : null}
-            </div>
-            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {(
-                [
-                  ["delivery", fleet.pillars.delivery],
-                  ["evolution", fleet.pillars.evolution],
-                  ["growth", fleet.pillars.growth],
-                  ["efficiency", fleet.pillars.efficiency],
-                ] as const
-              ).map(([key, value]) => (
-                <div key={key} className="rounded-lg border border-border/60 px-3 py-2">
-                  <div className="text-xs text-muted-foreground">{t(($) => $.fleet.pillars[key])}</div>
-                  <div className="text-sm font-semibold tabular-nums">{Math.round(value * 100)}</div>
-                </div>
-              ))}
-            </div>
-          </SectionCard>
+          <FleetHonorCard
+            fleet={fleet}
+            isArchived={isArchived}
+            classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
+            onHonor={onHonor}
+          />
         ) : null}
 
         {/* Role & capabilities + Prompt strategy */}

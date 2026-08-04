@@ -16,6 +16,7 @@ import {
   TooltipContent,
 } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n";
+import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion";
 import { excludeChannelShellSessions } from "../lib/exclude-channel-shell-sessions";
 import { ChatWindow } from "./chat-window";
 
@@ -56,6 +57,7 @@ export function DmAgentBubble({
   );
   const displayName = agentName ?? "agent";
   const wasRunningRef = useRef(isRunning);
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   // When a bubble task finishes while the bubble is closed, toast so the DM
   // shell is not silent (bubble replies do not land in dm_channel messages).
@@ -97,7 +99,13 @@ export function DmAgentBubble({
               // Sit above the DM composer send/attach cluster on both mobile
               // and desktop (composer is ~56–72px tall at the bottom).
               "absolute bottom-20 right-3 z-40 flex size-10 cursor-pointer items-center justify-center rounded-full ring-1 ring-foreground/10 bg-card text-muted-foreground shadow-sm transition-transform hover:scale-110 hover:text-accent-foreground active:scale-95",
-              isRunning && "animate-chat-impulse",
+              // LRM-1362 — reduced motion keeps the running state readable:
+              // static brand text + brand ring tint at the same ring width, so
+              // the unread `ring-2 ring-brand` below stays the heavier cue.
+              isRunning &&
+                (prefersReducedMotion
+                  ? "text-brand ring-brand/40"
+                  : "animate-chat-impulse"),
               unreadSessionCount > 0 &&
                 !isRunning &&
                 "ring-2 ring-brand text-foreground shadow-md",

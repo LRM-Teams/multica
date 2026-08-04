@@ -97,6 +97,40 @@ test.describe.serial("LRM-1295 aggregate tree route gate", () => {
     await page.goto(`/${slug}/research/${sessionId}`, { waitUntil: "commit", timeout: 60000 });
     await expect(page.getByText("Root strategy").first()).toBeVisible({ timeout: 60000 });
     await expect(page.getByText("Evidence leaf").first()).toBeVisible();
+    await expect(page.getByText("Left → right · Aggregate tree")).toBeVisible();
+    await expect(page.getByText("Top → bottom · Git lanes")).toHaveCount(0);
+    const desktopTiers = await page.locator("[data-aggregate-tier]").evaluateAll((elements) =>
+      elements.map((element) => {
+        const box = element.getBoundingClientRect();
+        return {
+          tier: element.getAttribute("data-aggregate-tier"),
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+        };
+      }),
+    );
+    const parent = desktopTiers.find((item) => item.tier === "parent")!;
+    const siblings = desktopTiers.filter((item) => item.tier === "sibling");
+    const children = desktopTiers.filter((item) => item.tier === "child");
+    expect(parent.width).toBeGreaterThan(Math.max(...siblings.map((item) => item.width)));
+    expect(Math.min(...siblings.map((item) => item.width))).toBeGreaterThan(
+      Math.max(...children.map((item) => item.width)),
+    );
+    expect(parent.x).toBeLessThan(Math.min(...siblings.map((item) => item.x)));
+    expect(Math.max(...siblings.map((item) => item.x))).toBeLessThan(
+      Math.min(...children.map((item) => item.x)),
+    );
+
+    const canvasBox = await page
+      .locator('[data-testid="research-canvas-overlay-grid"][data-overlay="desktop"]')
+      .boundingBox();
+    expect(canvasBox).not.toBeNull();
+    const treeTop = Math.min(...desktopTiers.map((item) => item.y));
+    const treeBottom = Math.max(...desktopTiers.map((item) => item.y + item.height));
+    expect((treeBottom - treeTop) / canvasBox!.height).toBeGreaterThanOrEqual(0.58);
+
     await page.screenshot({ path: "e2e/artifacts/lrm-1295-route-1440.png", fullPage: true });
 
     await page.setViewportSize({ width: 390, height: 844 });

@@ -63,6 +63,21 @@ export type MessagePart =
       content_end_utf16?: number;
     }
   | {
+      /**
+       * agent:create hire card (Frank/Parker 2026-08-04 hard-cut).
+       * Aligns with issue-ref: structured parts, no multica:// deep links.
+       * Details via GET /api/agents/action-cards/{ref_id}.
+       */
+      type: "reference";
+      ref_type: "action_card";
+      ref_subtype: "agent:create";
+      ref_id: string;
+      /** Display name from prepare payload (optional first-paint label). */
+      label?: string;
+      content_start_utf16?: number;
+      content_end_utf16?: number;
+    }
+  | {
       type: "system_event";
       event: string;
       event_params: Record<string, unknown>;

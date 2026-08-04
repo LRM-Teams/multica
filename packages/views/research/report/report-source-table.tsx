@@ -16,7 +16,7 @@ function WeightBadge({ weight }: { weight: number }) {
     <span
       className={cn(
         "inline-flex min-w-[2.75rem] justify-center rounded-full px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums",
-        tier === "hi" && "bg-success/15 text-success",
+        tier === "hi" && "bg-success/15 text-success-strong",
         tier === "mid" && "bg-warning/15 text-warning",
         tier === "lo" && "bg-muted text-muted-foreground",
       )}

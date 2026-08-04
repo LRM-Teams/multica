@@ -40,7 +40,7 @@ export interface HealthStateVisual {
 export const healthStateConfig: Record<AgentHealthState, HealthStateVisual> = {
   online: {
     dotClass: "bg-success",
-    chipClass: "bg-success/10 text-success",
+    chipClass: "bg-success/10 text-success-strong",
     textClass: "text-success",
     icon: CircleDot,
     labelKey: "online",
@@ -51,7 +51,7 @@ export const healthStateConfig: Record<AgentHealthState, HealthStateVisual> = {
   // "steady online".
   recovered: {
     dotClass: "bg-success",
-    chipClass: "bg-success/10 text-success",
+    chipClass: "bg-success/10 text-success-strong",
     textClass: "text-success",
     icon: CircleCheck,
     labelKey: "recovered",

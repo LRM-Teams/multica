@@ -288,6 +288,8 @@
     "doing": "進行中",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
+    "abandon_reason": "破棄理由",
+    "abandon_reason_pending": "理由は同期待ち",
     "retry_cta": "再試行 / 別経路",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources.",
@@ -359,6 +361,7 @@
   "logic": {
     "label": "調査ロジック",
     "lr_hint": "左→右 · not Git",
+    "aggregate_hint": "左→右 · 集約ツリー",
     "git_hint": "上→下 · Git lanes",
     "git_list_label": "調査 Git リスト",
     "strip_label": "ロジック構造",
@@ -397,7 +400,9 @@
   "a11y": {
     "focus_node": "フォーカス {{title}}、分岐 {{branch}}",
     "opened_detail": "{{title}} の詳細を開きました",
-    "closed_detail": "詳細を閉じました"
+    "closed_detail": "詳細を閉じました",
+    "reorg_start": "新しい要件に合わせてキャンバスを再配置中…",
+    "reorg_done": "再配置完了、{{count}} 件更新、{{paths}} 件の新パス"
   },
   "home": {
     "composer_label": "調査セッションを作成",
@@ -722,5 +727,8 @@
     "result_pending_detail": "整理中のため、表示可能な結果はまだありません。",
     "result_failed": "今回は表示可能な結果なし",
     "result_failed_detail": "今回は表示可能な結果がありませんでした。"
+  },
+  "canvas": {
+    "reorg_badge": "再配置済み · {{count}} 件更新 · {{paths}} 件の新パス"
   }
 }

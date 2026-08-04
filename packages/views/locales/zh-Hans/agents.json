@@ -537,7 +537,11 @@
     }
   },
   "execution_config": {
-    "applies_next_run": "保存运行时 / 模型 / 思考等级后会在可用时自动重启 agent，使配置立即生效。"
+    "applies_next_run": "点击打开弹窗可批量编辑运行时 / 模型 / 思考等级；保存后在可用时自动重启 agent（至多一次），使配置立即生效。",
+    "dialog_title": "运行配置",
+    "dialog_description": "编辑仅保存在本地草稿；点保存才落库。取消 / Esc / 点遮罩会丢弃草稿且不重启。",
+    "dialog_saving": "保存中…",
+    "edit_trigger_aria": "编辑运行时、模型与思考等级"
   },
   "side_panel": {
     "close_aria": "关闭 agent 面板",
@@ -895,6 +899,12 @@
     "manual_grant": "人工修正",
     "manual_grant_hint": "每次发放都会做幂等处理并写入后台审计。",
     "achievement": "成就",
+    "achievement_enabled_label": "启用{{achievement}}",
+    "achievement_target_label": "{{achievement}}目标值",
+    "grant_kind_label": "修正类型",
+    "xp_amount_label": "经验调整值",
+    "achievement_select_label": "选择成就",
+    "reason_label": "修正原因",
     "reason_placeholder": "必填：修正原因",
     "grant": "发放",
     "grant_saved": "智能体荣誉已更新",
@@ -937,9 +947,13 @@
     "cancel": "取消",
     "create_agent": "创建 Agent",
     "created_toast": "已创建 {{name}}",
-    "hiring_card_badge": "Wendy 招聘卡",
+    "hiring_card_badge": "招聘",
     "generated_hint": "由 Wendy 根据当前对话生成。",
     "avatar_from_draft_hint": "已带上 Wendy 草稿头像——可更换；清除后创建时用随机预设。",
-    "avatar_random_hint": "未指定头像——创建时随机分配，也可在此上传。"
+    "avatar_random_hint": "未指定头像——创建时随机分配，也可在此上传。",
+    "loading_card": "正在加载招聘卡…",
+    "load_card_failed": "加载招聘卡失败",
+    "card_created": "已创建：{{name}}",
+    "card_dismissed": "已忽略"
   }
 }

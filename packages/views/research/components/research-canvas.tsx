@@ -48,6 +48,15 @@ import {
   nodeEnterMotionCss,
   nodeEnterStaggerDelayMs,
 } from "../lib/node-enter-motion";
+import {
+  buildNodeSnapshotMap,
+  classifyCanvasDelta,
+  reorgBadgeCss,
+  reorgTransitionCss,
+  REORG_TOTAL_BUDGET_MS,
+  P2_DURATION_MS,
+  type CanvasNodeSnapshot,
+} from "../lib/canvas-reorg-motion";
 import { ResearchCanvasDock } from "./research-canvas-dock";
 import { ResearchChatFab } from "./research-chat-fab";
 import { ResearchFleetAvatarStack } from "./research-fleet-avatar-stack";
@@ -60,6 +69,8 @@ import { ResearchNodeDetail } from "./research-node-detail";
 import { useT } from "../../i18n/use-t";
 
 const NODE_ENTER_MOTION_CSS = nodeEnterMotionCss();
+const REORG_TRANSITION_CSS = reorgTransitionCss();
+const REORG_BADGE_CSS = reorgBadgeCss();
 
 const nodeTypes: NodeTypes = {
   research: ResearchGraphNodeView,
@@ -156,6 +167,7 @@ function ResearchCanvasInner({
   onAuxPanelSelect?: (id: ResearchAuxPanelId) => void;
 }) {
   const { t } = useT("research");
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- flags the layout effect below that classifies the node delta and starts the LRM-1335 reorg motion; it reacts to `nodes`/`edges` arriving from the session query/WS subscription, not a local user event this component can hook a handler into.
   const canvasLayout = useMemo(() => layoutResearchCanvas(nodes, edges), [nodes, edges]);
   const laid = canvasLayout.layout;
   const topology = canvasLayout.topology;
@@ -173,10 +185,61 @@ function ResearchCanvasInner({
   }
   const laidIdsKey = useMemo(() => laid.nodes.map((n) => n.id).join("|"), [laid.nodes]);
 
+  // LRM-1335: reorg animation state
+  const prevSnapshotRef = useRef<Map<string, CanvasNodeSnapshot> | null>(null);
+  if (prevSnapshotRef.current === null) {
+    prevSnapshotRef.current = new Map();
+  }
+  const reorgTimerRef = useRef<number | null>(null);
+  const reorgActiveRef = useRef(false);
+  const fitViewAbortedRef = useRef(false);
+  const canvasRootRef = useRef<HTMLDivElement | null>(null);
+
   const announce = useCallback((text: string) => {
     dispatch({ type: "setLive", text: "" });
     // Retrigger polite live region for identical strings.
     requestAnimationFrame(() => dispatch({ type: "setLive", text }));
+  }, []);
+
+  // LRM-1335: reorg orchestration — classify delta and set data-reorg attr
+  const startReorg = useCallback(
+    (movedCount: number, newPathCount: number) => {
+      const root = canvasRootRef.current;
+      if (!root) return;
+      reorgActiveRef.current = true;
+      fitViewAbortedRef.current = false;
+      root.setAttribute("data-reorg", "running");
+      // P0: immediate a11y broadcast
+      announce(t(($) => $.a11y.reorg_start));
+
+      // P5: cleanup at total budget
+      if (reorgTimerRef.current !== null) {
+        window.clearTimeout(reorgTimerRef.current);
+      }
+      reorgTimerRef.current = window.setTimeout(() => {
+        if (!reorgActiveRef.current) return;
+        reorgActiveRef.current = false;
+        root.setAttribute("data-reorg", "");
+        // P5 broadcast
+        announce(t(($) => $.a11y.reorg_done, { count: movedCount, paths: newPathCount }));
+        reorgTimerRef.current = null;
+      }, REORG_TOTAL_BUDGET_MS);
+    },
+    [announce, t],
+  );
+
+  /** AC #6: onMoveStart cancels reorg fitView, instant settle. */
+  const abortReorgOnMove = useCallback(() => {
+    if (!reorgActiveRef.current) return;
+    fitViewAbortedRef.current = true;
+    // Instant settle: clear reorg state immediately
+    reorgActiveRef.current = false;
+    const root = canvasRootRef.current;
+    if (root) root.setAttribute("data-reorg", "");
+    if (reorgTimerRef.current !== null) {
+      window.clearTimeout(reorgTimerRef.current);
+      reorgTimerRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
@@ -184,6 +247,17 @@ function ResearchCanvasInner({
     const classMap = enterClassById.current!;
     const delayById = new Map<string, number>();
     let newEnterIndex = 0;
+
+    // LRM-1335: classify delta before updating nodes
+    const nextSnapshot = buildNodeSnapshotMap(laid.nodes);
+    const delta = classifyCanvasDelta(prevSnapshotRef.current ?? new Map(), nextSnapshot);
+    prevSnapshotRef.current = nextSnapshot;
+
+    const isReorg = delta.kind === "reorg" && !reduceMotion;
+    if (isReorg) {
+      startReorg(delta.movedIds.length + delta.removedIds.length, delta.addedIds.length);
+    }
+
     for (const n of laid.nodes) {
       const research = n.data.research;
       const isChrome = n.type === "gitGutter" || !research;
@@ -254,14 +328,22 @@ function ResearchCanvasInner({
     onOpenDetail,
     onOpenDelivery,
     onSelect,
+    startReorg,
   ]);
 
   useEffect(() => {
     if (!laidIdsKey) return;
+    // LRM-1335: if reorg just aborted by user pan, skip fitView
+    if (fitViewAbortedRef.current) {
+      fitViewAbortedRef.current = false;
+      return;
+    }
+    const reduceMotion = prefersReducedMotion();
+    const duration = reduceMotion ? 0 : (reorgActiveRef.current ? P2_DURATION_MS : 320);
     const id = window.setTimeout(() => {
       void fitView({
         padding: 0.18,
-        duration: prefersReducedMotion() ? 0 : 320,
+        duration,
       });
       dispatch({ type: "setZoom", pct: Math.round(getZoom() * 100) });
     }, 80);
@@ -520,12 +602,14 @@ function ResearchCanvasInner({
 
   return (
     <div
+      ref={canvasRootRef}
       role="application"
       tabIndex={-1}
       aria-label={t(($) => $.logic.label)}
       className="relative h-full w-full bg-canvas-bg text-foreground outline-none"
       data-testid="research-canvas-overlay-grid"
       data-overlay="desktop"
+      data-reorg=""
       onKeyDown={handleDesktopKeyDown}
     >
       <div className="sr-only" aria-live="polite" data-testid="research-canvas-live">
@@ -533,6 +617,8 @@ function ResearchCanvasInner({
       </div>
       <style>{`
         ${NODE_ENTER_MOTION_CSS}
+        ${REORG_TRANSITION_CSS}
+        ${REORG_BADGE_CSS}
         .react-flow__node.selected .research-graph-node-shell {
           border-color: var(--brand);
           box-shadow: none;
@@ -557,6 +643,7 @@ function ResearchCanvasInner({
         edges={rfEdges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onMoveStart={abortReorgOnMove}
         onMoveEnd={() => {
           dispatch({ type: "setZoom", pct: Math.round(getZoom() * 100) });
         }}
@@ -596,7 +683,11 @@ function ResearchCanvasInner({
         >
           <span className="font-medium text-foreground">{t(($) => $.logic.label)}</span>
           <span aria-hidden>·</span>
-          <span>{t(($) => $.logic.git_hint)}</span>
+          <span>
+            {t(($) =>
+              canvasLayout.mode === "aggregate" ? $.logic.aggregate_hint : $.logic.git_hint,
+            )}
+          </span>
         </Panel>
         <MiniMap
           pannable

@@ -101,8 +101,9 @@ func TestRejectAgentOnHumanAPI_AdminSurfaces403(t *testing.T) {
 		// agent admin / lifecycle
 		{"agents list admin", http.MethodGet, "/api/agents"},
 		{"agents create", http.MethodPost, "/api/agents"},
-		{"agents update", http.MethodPut, "/api/agents/a1"},
-		{"agents archive", http.MethodPost, "/api/agents/a1/archive"},
+		// agents update/archive allowed through middleware only for UUID paths;
+		// canUpdateAgent/canManageAgent enforce self-only (task #125).
+		{"agents update non-uuid", http.MethodPut, "/api/agents/a1"},
 		{"agent skills set", http.MethodPut, "/api/agents/a1/skills"},
 		// autopilot
 		// PAT / me
@@ -151,6 +152,9 @@ func TestRejectAgentOnHumanAPI_DedicatedAgentPathsPass(t *testing.T) {
 		{"agent directory", http.MethodGet, "/api/agent/agents"},
 		{"agent workspace", http.MethodGet, "/api/agent/workspace"},
 		{"agent project resources RO", http.MethodGet, "/api/agent/projects/p1/resources"},
+		// task #125: self-manage human agent paths pass middleware (handler enforces id)
+		{"agents update uuid", http.MethodPut, "/api/agents/11111111-1111-1111-1111-111111111111"},
+		{"agents archive uuid", http.MethodPost, "/api/agents/11111111-1111-1111-1111-111111111111/archive"},
 	}
 	for _, tc := range allow {
 		t.Run(tc.name, func(t *testing.T) {
@@ -258,4 +262,26 @@ func humanRouteSiteFromGather(mfs []*dto.MetricFamily, site string) float64 {
 		}
 	}
 	return -1 // missing
+}
+
+func TestAgentPrincipalMayUseHumanAgentPath(t *testing.T) {
+	self := "/api/agents/11111111-1111-1111-1111-111111111111"
+	cases := []struct {
+		method, path string
+		want         bool
+	}{
+		{http.MethodPut, self, true},
+		{http.MethodPost, self + "/archive", true},
+		{http.MethodPost, self + "/restore", true},
+		{http.MethodGet, self, false},
+		{http.MethodPost, "/api/agents", false},
+		{http.MethodPut, "/api/agents/a1", false},
+		{http.MethodPut, self + "/skills", false},
+		{http.MethodPost, self + "/credentials", false},
+	}
+	for _, tc := range cases {
+		if got := agentPrincipalMayUseHumanAgentPath(tc.method, tc.path); got != tc.want {
+			t.Fatalf("%s %s: got %v want %v", tc.method, tc.path, got, tc.want)
+		}
+	}
 }

@@ -14,6 +14,7 @@ import {
   layoutResearchGraph,
 } from "../lib/layout-graph";
 import { LOGIC_END_NODE_ID, isLogicEndNode, resolveLogicStatus } from "../lib/logic-lanes";
+import { NODE_ENTER_CLASS } from "../lib/node-enter-motion";
 import { ResearchCardMenu } from "./research-card-menu";
 import { ResearchNodeContentFacesStack } from "./research-node-content-faces";
 import {
@@ -169,7 +170,14 @@ export function ResearchGitList({
           return (
             <div
               key={n.id}
-              className="relative flex items-center py-1"
+              className={cn(
+                "relative flex items-center py-1",
+                // LRM-1335: the row is keyed by node id, so a newly added node mounts a
+                // fresh element and the CSS enter animation plays exactly once. Rows that
+                // already exist keep their element and never re-animate — no id bookkeeping.
+                NODE_ENTER_CLASS,
+                "research-logic-strip-card-enter",
+              )}
               style={{ minHeight: CONTENT_FACE_GIT_ROW_MIN }}
             >
               <span
@@ -232,7 +240,7 @@ export function ResearchGitList({
                     <span
                       className={cn(
                         "rounded-full px-1.5 py-0.5 text-xs font-medium",
-                        status.tone === "ok" && "bg-success/15 text-success",
+                        status.tone === "ok" && "bg-success/15 text-success-strong",
                         status.tone === "run" && "bg-brand/15 text-brand",
                         status.tone === "fail" && "bg-destructive/15 text-destructive",
                         status.tone === "wait" && "bg-warning/15 text-warning",

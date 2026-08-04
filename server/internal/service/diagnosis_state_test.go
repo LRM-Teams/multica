@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -68,7 +69,7 @@ func (f *fakeDiagnosisStateQueries) GetResumableInteractionDAGDiagnosisRun(_ con
 	defer f.mu.Unlock()
 	for _, row := range f.runs {
 		if row.ProjectID == arg.ProjectID && row.TaskID == arg.TaskID &&
-			(row.Status == string(DiagnosisRunRunning) || row.Status == string(DiagnosisRunCompacting)) {
+			(row.Status == string(DiagnosisRunProvisioning) || row.Status == string(DiagnosisRunRunning) || row.Status == string(DiagnosisRunCompacting)) {
 			return row, nil
 		}
 	}
@@ -93,11 +94,61 @@ func (f *fakeDiagnosisStateQueries) FailInteractionDAGDiagnosisRun(_ context.Con
 	if !ok {
 		return 0, pgx.ErrNoRows
 	}
-	if row.Status != string(DiagnosisRunRunning) && row.Status != string(DiagnosisRunCompacting) {
+	if row.Status != string(DiagnosisRunProvisioning) && row.Status != string(DiagnosisRunRunning) && row.Status != string(DiagnosisRunCompacting) {
 		return 0, nil
 	}
 	row.Status = string(DiagnosisRunFailed)
 	row.LastError = arg.LastError
+	f.runs[arg.RunID] = row
+	return 1, nil
+}
+
+func (f *fakeDiagnosisStateQueries) GetLatestInteractionDAGDiagnosisRunForProject(_ context.Context, projectID string) (db.InteractionDagDiagnosisRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var latest db.InteractionDagDiagnosisRun
+	found := false
+	for _, row := range f.runs {
+		if row.ProjectID != projectID {
+			continue
+		}
+		if !found || row.UpdatedAt.Time.After(latest.UpdatedAt.Time) {
+			latest = row
+			found = true
+		}
+	}
+	if !found {
+		return db.InteractionDagDiagnosisRun{}, pgx.ErrNoRows
+	}
+	return latest, nil
+}
+
+func (f *fakeDiagnosisStateQueries) SetInteractionDAGDiagnosisRunSandbox(_ context.Context, arg db.SetInteractionDAGDiagnosisRunSandboxParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.runs[arg.RunID]
+	if !ok {
+		return pgx.ErrNoRows
+	}
+	row.SandboxInstanceID = arg.SandboxInstanceID
+	row.CapabilityTokenHash = arg.CapabilityTokenHash
+	row.ExecutionMode = arg.ExecutionMode
+	f.runs[arg.RunID] = row
+	return nil
+}
+
+func (f *fakeDiagnosisStateQueries) SetInteractionDAGDiagnosisRunStatus(_ context.Context, arg db.SetInteractionDAGDiagnosisRunStatusParams) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.runs[arg.RunID]
+	if !ok {
+		return 0, pgx.ErrNoRows
+	}
+	// CAS predicate mirrors the SQL: WHERE run_id = $1 AND status = $3.
+	if row.Status != arg.Status_2 {
+		return 0, nil
+	}
+	row.Status = arg.Status
 	f.runs[arg.RunID] = row
 	return 1, nil
 }
@@ -510,4 +561,87 @@ func TestDiagnosisStateFailRun_MarksFailedWithBoundedError(t *testing.T) {
 	// A failed run is no longer resumable.
 	_, _, err = store.LoadResumableRun(context.Background(), "project-1", "task-1")
 	require.ErrorIs(t, err, ErrDiagnosisRunNotFound)
+}
+
+func TestDiagnosisStateSetRunSandbox_PersistsFields(t *testing.T) {
+	store, _ := newTestDiagnosisStore(t)
+	createTestDiagnosisRun(t, store, "run-1", "seg-a")
+
+	require.NoError(t, store.SetRunSandbox(context.Background(), "run-1", "sbx-123", "hash-abc", "sandbox"))
+
+	run, err := store.GetRun(context.Background(), "run-1")
+	require.NoError(t, err)
+	assert.Equal(t, "sbx-123", run.SandboxInstanceID)
+	assert.Equal(t, "hash-abc", run.CapabilityTokenHash)
+	assert.Equal(t, "sandbox", run.ExecutionMode)
+
+	// Server-mode runs keep the fields empty.
+	createTestDiagnosisRun(t, store, "run-2", "seg-a")
+	run, err = store.GetRun(context.Background(), "run-2")
+	require.NoError(t, err)
+	assert.Empty(t, run.SandboxInstanceID)
+	assert.Empty(t, run.CapabilityTokenHash)
+	assert.Empty(t, run.ExecutionMode)
+}
+
+func TestDiagnosisStateSetRunSandbox_UnknownRun(t *testing.T) {
+	store, _ := newTestDiagnosisStore(t)
+	err := store.SetRunSandbox(context.Background(), "run-unknown", "sbx", "hash", "sandbox")
+	require.ErrorIs(t, err, ErrDiagnosisRunNotFound)
+}
+
+func TestDiagnosisStateProvisioningLifecycle(t *testing.T) {
+	store, _ := newTestDiagnosisStore(t)
+	createTestDiagnosisRun(t, store, "run-1", "seg-a")
+
+	// Activating a running (non-provisioning) run is a no-op-safe reject...
+	require.NoError(t, store.MarkRunProvisioning(context.Background(), "run-1"))
+	run, err := store.GetRun(context.Background(), "run-1")
+	require.NoError(t, err)
+	assert.Equal(t, DiagnosisRunProvisioning, run.Status)
+
+	// ...a provisioning run is resumable so a crashed provisioner can recover.
+	resumed, _, err := store.LoadResumableRun(context.Background(), "project-1", "task-1")
+	require.NoError(t, err)
+	assert.Equal(t, "run-1", resumed.RunID)
+
+	// Marking provisioning twice is idempotent.
+	require.NoError(t, store.MarkRunProvisioning(context.Background(), "run-1"))
+
+	require.NoError(t, store.ActivateRun(context.Background(), "run-1"))
+	run, err = store.GetRun(context.Background(), "run-1")
+	require.NoError(t, err)
+	assert.Equal(t, DiagnosisRunRunning, run.Status)
+
+	// Activating from running is a no-op; a terminal run cannot transition.
+	require.NoError(t, store.ActivateRun(context.Background(), "run-1"))
+	require.NoError(t, store.FailRun(context.Background(), "run-1", errors.New("boom")))
+	require.ErrorIs(t, store.MarkRunProvisioning(context.Background(), "run-1"), ErrDiagnosisInvalidTransition)
+	require.ErrorIs(t, store.ActivateRun(context.Background(), "run-1"), ErrDiagnosisInvalidTransition)
+}
+
+func TestDiagnosisStateLoadLatestRunForProject(t *testing.T) {
+	store, fake := newTestDiagnosisStore(t)
+	createTestDiagnosisRun(t, store, "run-1", "seg-a")
+
+	_, err := store.LoadLatestRunForProject(context.Background(), "project-unknown")
+	require.ErrorIs(t, err, ErrDiagnosisRunNotFound)
+
+	run, err := store.LoadLatestRunForProject(context.Background(), "project-1")
+	require.NoError(t, err)
+	assert.Equal(t, "run-1", run.RunID)
+
+	// Latest is chosen by updated_at regardless of status.
+	older := fake.runs["run-1"]
+	older.UpdatedAt = pgtype.Timestamptz{Valid: true}
+	fake.runs["run-1"] = older
+	createTestDiagnosisRun(t, store, "run-2", "seg-b")
+	newer := fake.runs["run-2"]
+	newer.UpdatedAt = pgtype.Timestamptz{Valid: true}
+	newer.UpdatedAt.Time = older.UpdatedAt.Time.Add(time.Second)
+	fake.runs["run-2"] = newer
+
+	run, err = store.LoadLatestRunForProject(context.Background(), "project-1")
+	require.NoError(t, err)
+	assert.Equal(t, "run-2", run.RunID)
 }

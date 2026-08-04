@@ -144,4 +144,48 @@ describe("applyResearchWSEvent", () => {
     >;
     expect(presence.a1).toBeUndefined();
   });
+
+  it("upserts product-round cards into the dedicated query cache", () => {
+    const store = new Map<string, unknown>();
+    const qc = {
+      setQueryData: (_key: unknown, updater: unknown) => {
+        const key = JSON.stringify(_key);
+        const prev = store.get(key);
+        const next =
+          typeof updater === "function"
+            ? (updater as (value: unknown) => unknown)(prev)
+            : updater;
+        store.set(key, next);
+        return next;
+      },
+      invalidateQueries: vi.fn(),
+    } as unknown as QueryClient;
+
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:product_round",
+      payload: {
+        session_id: "s1",
+        card: { id: "round-1", round_number: 1, decision: "continue" },
+      },
+    });
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:product_round",
+      payload: {
+        session_id: "s1",
+        card: { id: "round-1", round_number: 1, decision: "stop_enough" },
+      },
+    });
+
+    expect(store.get(JSON.stringify(researchKeys.productRounds("ws", "s1")))).toEqual({
+      rounds: [
+        expect.objectContaining({
+          id: "round-1",
+          session_id: "s1",
+          round_number: 1,
+          decision: "stop_enough",
+          coverage_gaps: [],
+        }),
+      ],
+    });
+  });
 });

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/arealrl"
@@ -31,6 +32,10 @@ type TrainingConfig struct {
 	DiagnosisAgentModel    string        // DIAGNOSIS_AGENT_MODEL
 	DiagnosisAgentTimeout  time.Duration // DIAGNOSIS_AGENT_TIMEOUT_SECONDS (default 60s)
 	DiagnosisAgentScoreMax int           // DIAGNOSIS_AGENT_SCORE_MAX (default 10)
+	// DiagnosisExecutionMode selects where the diagnosis agent runs:
+	// "sandbox" (default) provisions a dedicated sandbox per run; "server"
+	// keeps the deprecated in-process loopback path (spec 005, FR-010).
+	DiagnosisExecutionMode string // DIAGNOSIS_EXECUTION_MODE (default "sandbox")
 	// On-demand diagnosis uses a persistent Pi RPC session and per-segment
 	// paging.
 	DiagnosisAgentPageTurnLimit          int // DIAGNOSIS_AGENT_PAGE_TURN_LIMIT (default 20)
@@ -50,6 +55,7 @@ const (
 	diagnosisAgentModelEnv                  = "DIAGNOSIS_AGENT_MODEL"
 	diagnosisAgentTimeoutSecsEnv            = "DIAGNOSIS_AGENT_TIMEOUT_SECONDS"
 	diagnosisAgentScoreMaxEnv               = "DIAGNOSIS_AGENT_SCORE_MAX"
+	diagnosisExecutionModeEnv               = "DIAGNOSIS_EXECUTION_MODE"
 	diagnosisAgentPageTurnLimitEnv          = "DIAGNOSIS_AGENT_PAGE_TURN_LIMIT"
 	diagnosisAgentPageByteLimitEnv          = "DIAGNOSIS_AGENT_PAGE_BYTE_LIMIT"
 	diagnosisAgentEmergencyContextPctEnv    = "DIAGNOSIS_AGENT_HARD_CONTEXT_PERCENT"
@@ -117,6 +123,18 @@ func LoadTrainingConfig() TrainingConfig {
 			slog.Warn("invalid env var, using default", "name", diagnosisAgentScoreMaxEnv, "value", raw, "default", defaultDiagnosisAgentScoreMax, "error", err)
 		} else {
 			cfg.DiagnosisAgentScoreMax = v
+		}
+	}
+	cfg.DiagnosisExecutionMode = "sandbox"
+	if raw := os.Getenv(diagnosisExecutionModeEnv); raw != "" {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "sandbox":
+			cfg.DiagnosisExecutionMode = "sandbox"
+		case "server":
+			cfg.DiagnosisExecutionMode = "server"
+			slog.Warn("DIAGNOSIS_EXECUTION_MODE=server is deprecated: the in-process diagnosis path is retained only as a temporary fallback and will be removed once sandboxed diagnosis is proven")
+		default:
+			slog.Warn("invalid env var, using default", "name", diagnosisExecutionModeEnv, "value", raw, "default", "sandbox")
 		}
 	}
 	return cfg

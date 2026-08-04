@@ -288,6 +288,8 @@
     "doing": "正在做",
     "summary_empty": "暂无摘要。",
     "dead_end_reason": "死胡同原因",
+    "abandon_reason": "废弃原因",
+    "abandon_reason_pending": "原因待同步",
     "retry_cta": "重试 / 换路",
     "evidence": "证据 / 来源",
     "evidence_empty": "暂无关联来源。",
@@ -348,7 +350,7 @@
       "done": "完成",
       "running": "运行中",
       "waiting": "等待",
-      "abandoned": "已放弃",
+      "abandoned": "已废弃",
       "failed": "失败",
       "completed": "已完成",
       "resolved": "已解决",
@@ -359,6 +361,7 @@
   "logic": {
     "label": "调研逻辑",
     "lr_hint": "左→右 · 非 Git",
+    "aggregate_hint": "左→右 · 聚合树",
     "git_hint": "上→下 · Git 分支线",
     "git_list_label": "调研 Git 列表",
     "strip_label": "逻辑结构",
@@ -381,7 +384,7 @@
       "waiting": "等待",
       "pending_delivery": "待交付",
       "failed": "失败",
-      "abandoned": "已放弃"
+      "abandoned": "已废弃"
     }
   },
   "card_menu": {
@@ -397,7 +400,9 @@
   "a11y": {
     "focus_node": "焦点 {{title}}，分支 {{branch}}",
     "opened_detail": "已打开 {{title}} 详情",
-    "closed_detail": "已关闭详情"
+    "closed_detail": "已关闭详情",
+    "reorg_start": "正在按新需求重排画布…",
+    "reorg_done": "重排完成，{{count}} 处更新，{{paths}} 条新路径"
   },
   "home": {
     "composer_label": "创建调研会话",
@@ -722,5 +727,8 @@
     "result_pending_detail": "正在整理，暂未形成可展示结果。",
     "result_failed": "本轮未产出可展示结果",
     "result_failed_detail": "本轮未产出可展示结果。"
+  },
+  "canvas": {
+    "reorg_badge": "已按新需求重排 · {{count}} 处更新 · {{paths}} 条新路径"
   }
 }

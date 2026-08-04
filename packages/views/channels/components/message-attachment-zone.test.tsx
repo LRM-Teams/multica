@@ -11,8 +11,7 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: (_t: string, _i: string, fb?: string) => fb ?? "Alice" }),
 }));
 
-// LRM-1264 moved production imports to deep paths; mock those modules directly
-// (vi.mock("../../editor") no longer intercepts ../../editor/attachment).
+// LRM-1264 R3 — zone imports editor leaf modules (not the TipTap barrel).
 vi.mock("../../editor/attachment", () => ({
   Attachment: ({
     attachment,

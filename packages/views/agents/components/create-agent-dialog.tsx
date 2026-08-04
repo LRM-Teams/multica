@@ -24,6 +24,7 @@ import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type {
   Agent,
+  AgentActionCard,
   AgentAvatarSelection,
   RuntimeDevice,
   MemberWithUser,
@@ -55,6 +56,7 @@ export function CreateAgentDialog({
   currentUserId,
   template,
   draft,
+  actionCard,
   defaultMachineId = null,
   onClose,
   onCreate,
@@ -71,9 +73,10 @@ export function CreateAgentDialog({
   // Skills are copied separately by the caller after createAgent
   // succeeds — they're not part of CreateAgentRequest.
   template?: Agent | null;
-  // When provided by Wendy, the dialog opens with a generated role draft
-  // and marks that draft as used after the agent is created.
+  // Research / legacy seed only. Hire path uses actionCard (no draft bridge).
   draft?: AgentCreationDraft | null;
+  /** Hire hard-cut: prepared agent:create card — prefills name/desc, binds action_card_id. */
+  actionCard?: AgentActionCard | null;
   /** Prefer this group as home when opening on「仅本群」(channel context). */
   defaultHomeChannelId?: string | null;
   /** Prefill computer (machine id from buildRuntimeMachines). */
@@ -87,16 +90,20 @@ export function CreateAgentDialog({
 }) {
   const { t } = useT("agents");
   const isDuplicate = !!template;
-  const isDraft = !!draft && !isDuplicate;
+  const hireCard = actionCard && !isDuplicate ? actionCard : null;
+  const isHireCard = !!hireCard;
+  const isDraft = !!draft && !isDuplicate && !isHireCard;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
   // Display-name defaults: duplicate uses "<original> copy". Manual-create starts blank.
   const [name, setName] = useState(
     template
       ? `${resolveActorDisplayName(template, template.id)}${t(($) => $.create_dialog.duplicate_copy_suffix)}`
-      : draft?.name ?? "",
+      : hireCard?.payload.name ?? draft?.name ?? "",
   );
-  const [description, setDescription] = useState(template?.description ?? draft?.description ?? "");
+  const [description, setDescription] = useState(
+    template?.description ?? hireCard?.payload.description ?? draft?.description ?? "",
+  );
   const [model, setModel] = useState(template?.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
   const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
@@ -104,6 +111,7 @@ export function CreateAgentDialog({
   // present; create with draft_id lets the server apply it as assigned. User
   // uploads go through avatar_selection; clearing a draft preview sends a
   // random picked preset so create does not re-apply the draft face.
+  // Hire action cards have no avatar payload — server assigns preset.
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(
     () => (draft?.avatar_url?.trim() ? draft.avatar_url : null),
   );
@@ -220,7 +228,12 @@ export function CreateAgentDialog({
         thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,
         avatar_selection: avatarSelectionRef.current ?? undefined,
-        draft_id: draft?.id,
+        // Hire path: action_card_id only (mutually exclusive with draft_id on BE).
+        ...(hireCard
+          ? { action_card_id: hireCard.id }
+          : draft?.id
+            ? { draft_id: draft.id }
+            : {}),
       };
       if (template) {
         // Duplicate path: forward the hidden config fields the source
@@ -270,7 +283,7 @@ export function CreateAgentDialog({
 
   const headerTitle = isDuplicate
     ? t(($) => $.create_dialog.title_duplicate)
-    : isDraft
+    : isHireCard || isDraft
       ? t(($) => $.windy.create_agent)
       : t(($) => $.create_dialog.title_create);
 
@@ -284,12 +297,12 @@ export function CreateAgentDialog({
               {t(($) => $.create_dialog.description_duplicate, { name: resolveActorDisplayName(template, template.id) })}
             </DialogDescription>
           )}
-          {!isDuplicate && !isDraft && (
+          {!isDuplicate && !isDraft && !isHireCard && (
             <DialogDescription className="mt-1 text-xs">
               {t(($) => $.create_dialog.description_create)}
             </DialogDescription>
           )}
-          {isDraft && draft && (
+          {(isHireCard || isDraft) && (
             <DialogDescription className="mt-1 text-xs">
               {t(($) => $.windy.draft_description)}
             </DialogDescription>

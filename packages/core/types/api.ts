@@ -15,6 +15,8 @@ export interface CreateIssueRequest {
   start_date?: string;
   due_date?: string;
   attachment_ids?: string[];
+  /** Associate the new issue with a group channel (#574 / LRM-1122 / LRM-1123). */
+  channel_id?: string;
 }
 
 export interface UpdateIssueRequest {

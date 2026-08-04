@@ -338,60 +338,25 @@ func (s *DiagnosisToolServer) handleRecordStepRewards(w http.ResponseWriter, r *
 		return
 	}
 
-	segCkpt, err := s.stateStore.GetSegment(r.Context(), s.runCheckpoint.RunID, req.SegmentID)
+	entries := make([]DiagnosisStepRewardInput, 0, len(req.Rewards))
+	for _, entry := range req.Rewards {
+		entries = append(entries, DiagnosisStepRewardInput{Seq: entry.Seq, Score: entry.Score, Rationale: entry.Rationale})
+	}
+	outcome, err := RecordDiagnosisStepRewards(
+		r.Context(), s.stateStore, s.dagWriter, s.runCheckpoint.ProjectID, s.runCheckpoint.RunID, req.SegmentID, entries,
+	)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "SEGMENT_NOT_FOUND", "segment not found")
 		return
 	}
 
-	var persisted, missing []int
 	var rejected []rejectedReward
-	for _, entry := range req.Rewards {
-		if entry.Seq < 1 {
-			rejected = append(rejected, rejectedReward{Seq: entry.Seq, Reason: "seq must be positive"})
-			continue
-		}
-		// Clamp score.
-		score := entry.Score
-		if score < 0 {
-			score = 0
-		}
-		if !containsDiagnosisSeq(segCkpt.ExpectedRewardSeqs, int32(entry.Seq)) {
-			rejected = append(rejected, rejectedReward{Seq: entry.Seq, Reason: "seq is not an assistant target"})
-			continue
-		}
-		// Check for conflicting rewrite.
-		existingScore, _, exists, err := s.dagWriter.GetDiagnosisStepReward(r.Context(), s.runCheckpoint.ProjectID, req.SegmentID, int32(entry.Seq))
-		if err != nil {
-			slog.Warn("diagnosis tool server: step reward lookup failed", "segment_id", req.SegmentID, "seq", entry.Seq, "error", err)
-			missing = append(missing, entry.Seq)
-			continue
-		}
-		if exists && existingScore != score {
-			rejected = append(rejected, rejectedReward{Seq: entry.Seq, Reason: "conflicting rewrite: existing score differs"})
-			continue
-		}
-		if exists && existingScore == score {
-			// Idempotent replay.
-			persisted = append(persisted, entry.Seq)
-			continue
-		}
-		if err := s.dagWriter.UpsertDiagnosisStepReward(r.Context(), s.runCheckpoint.ProjectID, req.SegmentID, int32(entry.Seq), score, entry.Rationale); err != nil {
-			slog.Warn("diagnosis tool server: step reward upsert failed", "segment_id", req.SegmentID, "seq", entry.Seq, "error", err)
-			missing = append(missing, entry.Seq)
-			continue
-		}
-		persisted = append(persisted, entry.Seq)
+	for _, rej := range outcome.Rejected {
+		rejected = append(rejected, rejectedReward{Seq: rej.Seq, Reason: rej.Reason})
 	}
-
-	// Update reward count on segment checkpoint.
-	if totalRewards, err := s.dagWriter.CountDiagnosisStepRewards(r.Context(), s.runCheckpoint.ProjectID, req.SegmentID); err == nil {
-		_ = s.stateStore.RecordSegmentRewards(r.Context(), s.runCheckpoint.RunID, req.SegmentID, totalRewards)
-	}
-
 	writeJSON(w, http.StatusOK, recordStepRewardsResponse{
-		PersistedSeqs: persisted,
-		MissingSeqs:   missing,
+		PersistedSeqs: outcome.PersistedSeqs,
+		MissingSeqs:   outcome.MissingSeqs,
 		Rejected:      rejected,
 	})
 }
@@ -543,16 +508,8 @@ func (s *DiagnosisToolServer) handleCompleteDiagnosis(w http.ResponseWriter, r *
 			return
 		}
 		var missing []missingSegRef
-		for _, seg := range segments {
-			if seg.Status != SegmentDiagnosisCompleted {
-				reason := "incomplete"
-				if seg.FetchedMessageCount < seg.ExpectedMessageCount {
-					reason = "message coverage gap"
-				} else if seg.RewardCount < seg.ExpectedRewardCount {
-					reason = "reward coverage gap"
-				}
-				missing = append(missing, missingSegRef{SegmentID: seg.SegmentID, Reason: reason})
-			}
+		for _, seg := range ListIncompleteDiagnosisSegments(segments) {
+			missing = append(missing, missingSegRef{SegmentID: seg.SegmentID, Reason: seg.Reason})
 		}
 		writeJSON(w, http.StatusOK, completeDiagnosisResponse{Status: "incomplete", MissingSegs: missing})
 		return
@@ -563,10 +520,5 @@ func (s *DiagnosisToolServer) handleCompleteDiagnosis(w http.ResponseWriter, r *
 // ── Helpers ──
 
 func (s *DiagnosisToolServer) segmentInRun(segmentID string) bool {
-	for _, id := range s.runCheckpoint.OrderedSegmentIDs {
-		if id == segmentID {
-			return true
-		}
-	}
-	return false
+	return SegmentInRun(s.runCheckpoint, segmentID)
 }

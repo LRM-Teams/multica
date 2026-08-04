@@ -9,11 +9,13 @@ import (
 )
 
 // GenerateDiagnosisPiExtension writes a reviewed, fixed TypeScript source to a
-// file under the supplied root directory. The file registers exactly five tools
-// that call the local loopback diagnosis API. The caller supplies the root
-// (must be a directory) and the file permissions to apply. The API URL and
-// bearer token are read from the Pi process environment at runtime; they are
-// never embedded in the generated source.
+// file under the supplied root directory. The file registers exactly six tools
+// that call the diagnosis API — the local loopback tool server (deprecated
+// server mode) or the remote network diagnosis-run API (sandbox mode,
+// https). The caller supplies the root (must be a directory) and the file
+// permissions to apply. The API URL and bearer token are read from the Pi
+// process environment at runtime; they are never embedded in the generated
+// source.
 func GenerateDiagnosisPiExtension(root string, perm os.FileMode) (string, error) {
 	root = filepath.Clean(root)
 	info, err := os.Stat(root)
@@ -30,17 +32,52 @@ func GenerateDiagnosisPiExtension(root string, perm os.FileMode) (string, error)
 	return path, nil
 }
 
+// DiagnosisPiExtensionSource returns the reviewed extension TypeScript source
+// without writing it to the local filesystem. The sandbox orchestrator uses it
+// to push the extension into the sandbox workdir via the daemonws file-ops
+// channel instead of a host temp file.
+func DiagnosisPiExtensionSource() string {
+	return diagnosisExtensionSource
+}
+
 // diagnosisExtensionSource is the reviewed, fixed TypeScript for the diagnosis
-// Pi extension. It registers five capability-scoped tools that communicate
-// exclusively with the loopback diagnosis API. The extension never exposes
-// generic HTTP, file-system, or shell access. Credentials are read from the
-// process environment and never appear in source, prompts, or tool results.
+// Pi extension. It registers six capability-scoped tools that communicate
+// exclusively with the diagnosis API (loopback tool server or remote https
+// run API). The extension never exposes generic HTTP, file-system, or shell
+// access. Credentials are read from the process environment and never appear
+// in source, prompts, or tool results.
 const diagnosisExtensionSource = `// Multica Diagnosis Agent Tools — trusted Pi extension (generated).
-// Registers five capability-scoped tools that call the local loopback
-// diagnosis API. Credentials come from the process environment.
+// Registers six capability-scoped tools that call the diagnosis API: the
+// local loopback tool server (deprecated server mode) or the remote network
+// diagnosis-run API (sandbox mode, https). Credentials come from the process
+// environment.
+//
+// TODO(agent): KNOWN GAP (spec 005) — the sandboxed pi process currently runs
+// with FULL built-in tool access. The daemon task path (agent-inbox enqueue)
+// has no DisableTools/TrustedExtensionPaths plumbing, so unlike the
+// server-mode loopback session the sandbox agent is restricted to these tools
+// by system-prompt instruction only. Do NOT attempt daemon-side ExecOptions
+// plumbing from here; the fix belongs in the daemon task protocol.
 
 const API_URL = process.env.MULTICA_DIAGNOSIS_API_URL;
 const CAPABILITY_TOKEN = process.env.MULTICA_DIAGNOSIS_CAPABILITY_TOKEN;
+
+if (!API_URL) {
+  throw new Error("multica diagnosis extension: MULTICA_DIAGNOSIS_API_URL is not set");
+}
+if (!CAPABILITY_TOKEN) {
+  throw new Error("multica diagnosis extension: MULTICA_DIAGNOSIS_CAPABILITY_TOKEN is not set");
+}
+
+// The network run API mounts the tool endpoints directly under the run base
+// (https://<host>/api/v1/diagnosis-runs/{runID}/<endpoint>); the deprecated
+// loopback tool server mounts the same endpoints under /v1.
+const PATH_PREFIX = API_URL.indexOf("/diagnosis-runs/") >= 0 ? "" : "/v1";
+
+function redact(text: string): string {
+  // Never surface the capability token, even if a server error echoes it.
+  return text.split(CAPABILITY_TOKEN).join("[redacted]");
+}
 
 function authHeaders(): Record<string, string> {
   return {
@@ -50,7 +87,7 @@ function authHeaders(): Record<string, string> {
 }
 
 async function apiPost(path: string, body?: unknown): Promise<unknown> {
-  const url = API_URL + path;
+  const url = API_URL + PATH_PREFIX + path;
   const init: RequestInit = {
     method: body !== undefined ? "POST" : "GET",
     headers: authHeaders(),
@@ -58,13 +95,24 @@ async function apiPost(path: string, body?: unknown): Promise<unknown> {
   if (body !== undefined) {
     init.body = JSON.stringify(body);
   }
-  const resp = await fetch(url, init);
+  let resp: Response;
+  try {
+    resp = await fetch(url, init);
+  } catch (err) {
+    // Network/DNS/TLS failures (unreachable https host, certificate errors)
+    // reject before any response exists. Surface the underlying cause —
+    // undici carries TLS details on err.cause — never the token or full URL.
+    const detail = err instanceof Error ? err.message : String(err);
+    const causeObj = err instanceof Error ? (err as { cause?: { message?: string; code?: string } }).cause : undefined;
+    const cause = causeObj ? "; cause: " + (causeObj.code || causeObj.message || String(causeObj)) : "";
+    throw new Error(redact("diagnosis API request failed for " + path + ": " + detail + cause));
+  }
   // Do NOT surface the raw response or token in tool results.
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    // Redact the token from any error the server echoes.
-    const safe = text.length > 512 ? text.slice(0, 512) + "..." : text;
-    throw new Error("diagnosis API " + resp.status + ": " + safe);
+    // Cap and redact any error the server echoes.
+    const capped = text.length > 512 ? text.slice(0, 512) + "..." : text;
+    throw new Error(redact("diagnosis API " + resp.status + ": " + capped));
   }
   return resp.json();
 }
@@ -86,7 +134,7 @@ export default function (pi: any) {
       additionalProperties: false,
     },
     async handler(params: { segment_id: string; cursor?: string }) {
-      return apiPost("/v1/get-segment-messages", {
+      return apiPost("/get-segment-messages", {
         segment_id: params.segment_id,
         cursor: params.cursor || "",
       });
@@ -119,7 +167,7 @@ export default function (pi: any) {
       additionalProperties: false,
     },
     async handler(params: { segment_id: string; rewards: Array<{ seq: number; score: number; rationale: string }> }) {
-      return apiPost("/v1/record-step-rewards", params);
+      return apiPost("/record-step-rewards", params);
     },
   });
 
@@ -133,7 +181,7 @@ export default function (pi: any) {
       additionalProperties: false,
     },
     async handler() {
-      return apiPost("/v1/diagnosis-progress");
+      return apiPost("/diagnosis-progress");
     },
   });
 
@@ -150,7 +198,21 @@ export default function (pi: any) {
       additionalProperties: false,
     },
     async handler(params: { segment_id: string }) {
-      return apiPost("/v1/finish-segment", { segment_id: params.segment_id });
+      return apiPost("/finish-segment", { segment_id: params.segment_id });
+    },
+  });
+
+  pi.registerTool({
+    name: "multica_get_task_context",
+    description:
+      "Fetch the root task context (goal and gold/acceptance criteria) for this diagnosis run. Call this once at the start: the bootstrap prompt deliberately omits goal/gold, so scoring must be grounded in the context returned here. Only served by the network diagnosis-run API (sandbox mode).",
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    async handler() {
+      return apiPost("/task-context");
     },
   });
 
@@ -164,7 +226,7 @@ export default function (pi: any) {
       additionalProperties: false,
     },
     async handler() {
-      return apiPost("/v1/complete-diagnosis");
+      return apiPost("/complete-diagnosis");
     },
   });
 }

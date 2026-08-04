@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -53,6 +54,15 @@ type EnvDispatchRequest struct {
 	Issue       *IssueDispatchInput           `json:"issue,omitempty"`
 	Message     *MessageDispatchInput         `json:"message,omitempty"`
 	PerAgentEnv map[string]PerAgentEnvRequest `json:"per_agent_env,omitempty"`
+	Audit       *EnvDispatchAuditRequest      `json:"audit,omitempty"`
+}
+
+// EnvDispatchAuditRequest is the opt-in audit correlation request. The
+// server owns the correlation ID and deadline; callers may only enable audit
+// recording and select its reclamation window.
+type EnvDispatchAuditRequest struct {
+	Enabled                  bool `json:"enabled"`
+	ReclamationWindowSeconds int  `json:"reclamation_window_seconds"`
 }
 
 // ExternalModelRuntimeRequest carries a caller-supplied external model provider
@@ -90,10 +100,30 @@ type MessageDispatchInput struct {
 // failed) it is reused with Message set and each rollout carrying its Error +
 // Traceback (origin goroutine stack from the failing adapter call).
 type EnvDispatchResponse struct {
-	ChannelID string               `json:"channel_id,omitempty"`
-	ProjectID string               `json:"project_id"`
-	Rollouts  []EnvRolloutResponse `json:"rollouts"`
-	Message   string               `json:"message,omitempty"`
+	ChannelID string                    `json:"channel_id,omitempty"`
+	ProjectID string                    `json:"project_id"`
+	Rollouts  []EnvRolloutResponse      `json:"rollouts"`
+	Message   string                    `json:"message,omitempty"`
+	Audit     *EnvDispatchAuditResponse `json:"audit,omitempty"`
+}
+
+// EnvDispatchAuditResponse is the public locator for a server-owned audit
+// report. It deliberately does not echo audit request fields or accept caller
+// controlled identifiers.
+type EnvDispatchAuditResponse struct {
+	AuditID             string    `json:"audit_id"`
+	ReportURL           string    `json:"report_url"`
+	ReclamationDeadline time.Time `json:"reclamation_deadline"`
+}
+
+// envDispatchAuditResponseFromReport projects the response locator from the
+// stored server record. T012 attaches this only when an audit run exists.
+func envDispatchAuditResponseFromReport(report service.EnvDispatchAuditReport) *EnvDispatchAuditResponse {
+	return &EnvDispatchAuditResponse{
+		AuditID:             report.AuditID,
+		ReportURL:           "/api/v1/env-dispatch/audits/" + report.AuditID,
+		ReclamationDeadline: report.ReclamationDeadline,
+	}
 }
 
 type EnvRolloutResponse struct {
@@ -187,10 +217,7 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		template = h.cfg.DefaultSelfPlayTemplate
 	}
 
-	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), envDispatchConcurrency())
-	if lc := newEnvSandboxLifecycleService(h); lc != nil {
-		svc = svc.WithSandboxLifecycle(lc)
-	}
+	svc := newEnvDispatchService(h, envDispatchConcurrency())
 	res, err := svc.Dispatch(r.Context(), service.EnvDispatchInput{
 		WorkspaceID: workspaceID, UserID: userID,
 		Mode: service.EnvMode(req.Mode), EnvID: req.EnvID,
@@ -207,12 +234,13 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		Issue:               mapIssueInput(req.Issue),
 		Message:             mapMessageInput(req.Message),
 		PerAgentEnvSpecs:    mapPerAgentEnvSpecs(req.PerAgentEnv),
+		Audit:               mapEnvDispatchAuditRequest(req.Audit),
 	})
 	if err != nil {
 		writeEnvDispatchError(w, err, res)
 		return
 	}
-	writeJSON(w, http.StatusCreated, EnvDispatchResponse{ChannelID: res.ChannelID, ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts)})
+	writeJSON(w, http.StatusCreated, EnvDispatchResponse{ChannelID: res.ChannelID, ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts), Audit: envDispatchAuditResponseFromResult(res)})
 }
 
 // DeleteEnvDispatchProject handles DELETE /api/v1/env-dispatch/{projectID}.
@@ -229,7 +257,7 @@ func (h *Handler) DeleteEnvDispatchProject(w http.ResponseWriter, r *http.Reques
 	if _, ok := parseUUIDOrBadRequest(w, projectID, "projectID"); !ok {
 		return
 	}
-	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), 8)
+	svc := newEnvDispatchService(h, 8)
 	if err := svc.DeleteProject(r.Context(), projectID, workspaceID); err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -317,7 +345,7 @@ func (h *Handler) getEnvDispatchDagForProject(w http.ResponseWriter, r *http.Req
 	//     DagReadinessInProgress -> 202 {"status":"in_progress"} (keep polling).
 	//   - terminal root (completed/failed/cancelled) -> DagReadinessTerminal ->
 	//     proceed to DAG assembly below (200 failed or 200 assembled DAG).
-	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), envDispatchConcurrency())
+	svc := newEnvDispatchService(h, envDispatchConcurrency())
 	readiness, err := svc.GetDagReadiness(r.Context(), projectID, workspaceID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "lookup dispatch root: "+err.Error())
@@ -401,6 +429,7 @@ func writeEnvDispatchError(w http.ResponseWriter, err error, res service.EnvDisp
 			ProjectID: res.ProjectID,
 			Rollouts:  mapRollouts(res.Rollouts),
 			Message:   "all rollouts failed",
+			Audit:     envDispatchAuditResponseFromResult(res),
 		})
 	case strings.Contains(msg, "validation_failed"):
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "validation_failed", "message": msg, "traceback": tb})
@@ -440,6 +469,23 @@ func mapMessageInput(m *MessageDispatchInput) *service.MessageInput {
 		return nil
 	}
 	return &service.MessageInput{Content: m.Content}
+}
+
+func mapEnvDispatchAuditRequest(request *EnvDispatchAuditRequest) *service.EnvDispatchAuditRequest {
+	if request == nil || !request.Enabled {
+		return nil
+	}
+	return &service.EnvDispatchAuditRequest{
+		Enabled:           true,
+		ReclamationWindow: time.Duration(request.ReclamationWindowSeconds) * time.Second,
+	}
+}
+
+func envDispatchAuditResponseFromResult(result service.EnvDispatchResult) *EnvDispatchAuditResponse {
+	if result.Audit == nil || result.Audit.AuditID == "" {
+		return nil
+	}
+	return envDispatchAuditResponseFromReport(*result.Audit)
 }
 
 // mapPerAgentEnvSpecs converts the request's agent_id→spec map into the sorted
@@ -495,6 +541,27 @@ func mapRollouts(rs []service.EnvRollout) []EnvRolloutResponse {
 // envDispatchConcurrency reads ENV_DISPATCH_CONCURRENCY (default 8).
 func envDispatchConcurrency() int {
 	return 8
+}
+
+// newEnvDispatchService centralizes production dependency injection for every
+// env-dispatch entry point. Audit storage and lifecycle reclamation are both
+// optional: T012/T018 install their concrete implementations here, while a
+// nil dependency keeps ordinary dispatches fully unchanged.
+func newEnvDispatchService(h *Handler, concurrency int) *service.EnvDispatchService {
+	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), concurrency).
+		WithAuditStorage(newEnvDispatchAuditStorage(h)).
+		WithReclaimer(newEnvDispatchReclaimer(h))
+	if lc := newEnvSandboxLifecycleService(h); lc != nil {
+		svc = svc.WithSandboxLifecycle(lc)
+	}
+	return svc
+}
+
+// newEnvDispatchReclaimer is the handler-level injection point for the shared
+// cleanup implementation. T018 supplies the concrete reclaimer; keeping this
+// nil before then preserves current project/channel deletion semantics.
+func newEnvDispatchReclaimer(_ *Handler) service.EnvDispatchReclaimer {
+	return nil
 }
 
 // newEnvDispatchDepsAdapter returns the production Deps adapter wired to real

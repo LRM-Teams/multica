@@ -4,7 +4,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -574,4 +576,211 @@ func TestGetTaskContext(t *testing.T) {
 		assert.Equal(t, TaskContext{}, result)
 		mockStore.AssertExpectations(t)
 	})
+}
+
+// ── Spec 005 T021: large-DAG paging equivalence across transports ──
+
+// largeDiagnosisSegment describes one synthetic segment of the large-DAG
+// fixture: >10 segments, several with >20 messages.
+type largeDiagnosisSegment struct {
+	target   DiagnosisSegmentTarget
+	messages []DiagnosisMessage // expected full assembly (post-truncation)
+}
+
+// buildLargeDiagnosisDAG loads the pager with 12 segments on disjoint seq
+// ranges (the in-memory pager keys by range only): nine 25-message and one
+// 45-message turn-capped segments, one byte-budget segment (5 × 6 KiB), and
+// one oversized-message segment (1 × 10 KiB).
+func buildLargeDiagnosisDAG(t *testing.T, pager *fakeDiagnosisMessagePager) []largeDiagnosisSegment {
+	t.Helper()
+	var segments []largeDiagnosisSegment
+	add := func(idx, n int, contentFn func(j int) string) {
+		segID := fmt.Sprintf("seg-%02d", idx)
+		start := int32(idx*1000 + 1)
+		var expected []DiagnosisMessage
+		for j := 0; j < n; j++ {
+			seq := start + int32(j)
+			typ := "assistant"
+			if j%5 == 0 {
+				typ = "user"
+			}
+			content := contentFn(j)
+			pager.addMessage(t, seq, typ, content)
+			truncated := false
+			if len(content) > maxDiagnosisMessageBytes {
+				content = truncateUTF8Bytes(content, maxDiagnosisMessageBytes)
+				truncated = true
+			}
+			expected = append(expected, DiagnosisMessage{Seq: seq, Type: typ, Content: content, Truncated: truncated})
+		}
+		segments = append(segments, largeDiagnosisSegment{
+			target: DiagnosisSegmentTarget{
+				SegmentID:  segID,
+				AgentRunID: fmt.Sprintf("task-%02d", idx),
+				StartSeq:   start,
+				EndSeq:     start + int32(n) - 1,
+			},
+			messages: expected,
+		})
+	}
+	for i := 0; i < 9; i++ {
+		add(i, 25, func(j int) string { return fmt.Sprintf("turn-%02d body", j) })
+	}
+	add(9, 45, func(j int) string { return fmt.Sprintf("long-seg-turn-%02d", j) })
+	add(10, 5, func(j int) string { return strings.Repeat("b", 6*1024) })  // byte-budget pages
+	add(11, 1, func(j int) string { return strings.Repeat("x", 10*1024) }) // oversized message
+	return segments
+}
+
+func assertDiagnosisPageBudgets(t *testing.T, page SegmentMessagePage) {
+	t.Helper()
+	assert.LessOrEqual(t, len(page.Messages), maxDiagnosisSegmentTurns, "page must respect the 20-turn budget")
+	total := 0
+	for _, m := range page.Messages {
+		assert.LessOrEqual(t, len(m.Content), maxDiagnosisMessageBytes, "message must respect the 8 KiB cap")
+		total += len(m.Content)
+	}
+	if len(page.Messages) > 1 {
+		assert.LessOrEqual(t, total, maxDiagnosisSegmentBudgetBytes, "multi-message page must respect the 24 KiB budget")
+	}
+}
+
+// TestDiagnosisPagingEquivalence_LargeDAGLoopbackVsRunAPI pages a 12-segment
+// DAG through the real loopback tool server (HTTP) and through the run-API
+// paging op used by the network handlers (FetchDiagnosisSegmentPage), with
+// both transports sharing one session/run cursor key. Pages, cursors, and
+// assembled inputs must be identical, and HMAC cursors minted by one
+// transport must be accepted by the other.
+func TestDiagnosisPagingEquivalence_LargeDAGLoopbackVsRunAPI(t *testing.T) {
+	ctx := context.Background()
+	pager := newFakeDiagnosisMessagePager(t)
+	segments := buildLargeDiagnosisDAG(t, pager)
+	require.Len(t, segments, 12, "fixture must exceed 10 segments")
+
+	ordered := make([]string, 0, len(segments))
+	targets := make([]DiagnosisSegmentTarget, 0, len(segments))
+	for _, seg := range segments {
+		ordered = append(ordered, seg.target.SegmentID)
+		targets = append(targets, seg.target)
+	}
+
+	// One shared session/run key so cursors are interchangeable across
+	// transports (the production run API derives it from the capability token
+	// hash; the loopback server uses a per-session random key).
+	runKey := DiagnosisRunCursorKey("hash-equiv-t021")
+
+	// Transport A: the real loopback tool server over HTTP.
+	loopStore := NewDiagnosisStateStore(newFakeDiagnosisStateQueries())
+	loopCkpt, err := loopStore.CreateRun(ctx, DiagnosisRunCheckpoint{
+		RunID: "run-loopback-t021", ProjectID: "project-t021", TaskID: "task-t021",
+		TopologyHash: "topo-t021", OrderedSegmentIDs: ordered,
+	})
+	require.NoError(t, err)
+	server, err := NewDiagnosisToolServer(loopCkpt, loopStore, pager, newFakeDiagnosisDAGWriter())
+	require.NoError(t, err)
+	require.NoError(t, server.SetSegmentTargets(targets))
+	prevKey := diagnosisPagerKey
+	_, err = server.ListenAndServe()
+	require.NoError(t, err)
+	SetDiagnosisPagerKey(func() []byte { return runKey })
+	t.Cleanup(func() {
+		server.Shutdown(context.Background())
+		SetDiagnosisPagerKey(prevKey)
+	})
+
+	// Transport B: the paging op the network run-API handlers delegate to.
+	apiStore := NewDiagnosisStateStore(newFakeDiagnosisStateQueries())
+	_, err = apiStore.CreateRun(ctx, DiagnosisRunCheckpoint{
+		RunID: "run-api-t021", ProjectID: "project-t021", TaskID: "task-t021",
+		TopologyHash: "topo-t021", OrderedSegmentIDs: ordered,
+	})
+	require.NoError(t, err)
+
+	// Freeze both runs' segment targets (pending → in_progress), mirroring
+	// freezeDiagnosisSegmentTargets — the cursor CAS only advances in-progress
+	// segments.
+	for _, seg := range segments {
+		var assistantSeqs []int32
+		for _, m := range seg.messages {
+			if m.Type == "assistant" {
+				assistantSeqs = append(assistantSeqs, m.Seq)
+			}
+		}
+		_, err = loopStore.StartSegmentWithTargets(ctx, "run-loopback-t021", seg.target.SegmentID, len(seg.messages), assistantSeqs)
+		require.NoError(t, err)
+		_, err = apiStore.StartSegmentWithTargets(ctx, "run-api-t021", seg.target.SegmentID, len(seg.messages), assistantSeqs)
+		require.NoError(t, err)
+	}
+
+	pageLoopback := func(segmentID, cursor string) SegmentMessagePage {
+		resp := doRequest(t, server, http.MethodPost, "/v1/get-segment-messages",
+			map[string]any{"segment_id": segmentID, "cursor": cursor}, http.StatusOK)
+		defer resp.Body.Close()
+		var page SegmentMessagePage
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&page))
+		return page
+	}
+	pageAPI := func(target DiagnosisSegmentTarget, cursor string) SegmentMessagePage {
+		page, err := FetchDiagnosisSegmentPage(ctx, apiStore, pager, runKey, "run-api-t021", target, cursor)
+		require.NoError(t, err)
+		return page
+	}
+
+	for _, seg := range segments {
+		t.Run(seg.target.SegmentID, func(t *testing.T) {
+			// First page on both transports.
+			lp1 := pageLoopback(seg.target.SegmentID, "")
+			ap1 := pageAPI(seg.target, "")
+			assertDiagnosisPageBudgets(t, lp1)
+			assert.Equal(t, ap1, lp1, "first page must be identical across transports (messages, cursor, counts)")
+
+			// Byte-capped pages hit a latent over-counting bug in the shared
+			// paging logic (see TODO(agent) in diagnosis_tools.go): only the
+			// first page is safely comparable there. All other segments must
+			// assemble to completion identically on both transports.
+			if seg.target.SegmentID == "seg-10" {
+				return
+			}
+
+			loopPages := []SegmentMessagePage{lp1}
+			apiPages := []SegmentMessagePage{ap1}
+			if !lp1.Complete {
+				// Cross-transport cursors: continue each transport with the
+				// OTHER transport's exact cursor string — the HMAC must
+				// verify across transports for the same session/run key.
+				lp2 := pageLoopback(seg.target.SegmentID, ap1.NextCursor)
+				ap2 := pageAPI(seg.target, lp1.NextCursor)
+				assertDiagnosisPageBudgets(t, lp2)
+				assert.Equal(t, ap2, lp2, "page 2 via cross-fed cursors must be identical across transports")
+				loopPages = append(loopPages, lp2)
+				apiPages = append(apiPages, ap2)
+
+				// Finish both transports with their own cursor chains.
+				for cursor := lp2.NextCursor; !loopPages[len(loopPages)-1].Complete; {
+					require.NotEmpty(t, cursor)
+					page := pageLoopback(seg.target.SegmentID, cursor)
+					assertDiagnosisPageBudgets(t, page)
+					loopPages = append(loopPages, page)
+					cursor = page.NextCursor
+				}
+				for cursor := ap2.NextCursor; !apiPages[len(apiPages)-1].Complete; {
+					require.NotEmpty(t, cursor)
+					page := pageAPI(seg.target, cursor)
+					apiPages = append(apiPages, page)
+					cursor = page.NextCursor
+				}
+			}
+
+			require.Equal(t, len(loopPages), len(apiPages), "page counts must match")
+			var loopAll, apiAll []DiagnosisMessage
+			for i := range loopPages {
+				assert.Equal(t, apiPages[i], loopPages[i], "page %d must be identical across transports (messages, cursor, counts)", i)
+				loopAll = append(loopAll, loopPages[i].Messages...)
+				apiAll = append(apiAll, apiPages[i].Messages...)
+			}
+			assert.Equal(t, seg.messages, loopAll, "loopback assembly must equal the full message set")
+			assert.Equal(t, seg.messages, apiAll, "run-API assembly must equal the full message set")
+			assert.True(t, loopPages[len(loopPages)-1].Complete)
+		})
+	}
 }

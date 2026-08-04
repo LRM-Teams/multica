@@ -44,7 +44,7 @@ Hire path is name + short description only. Human picks runtime/model and writes
 
 Hire (required):
 
-`multica action prepare --target <channel> --name <name> [--description <short>] --output json`
+multica action prepare --target <channel> --name <name> [--description <short>] --output json
 
 Posts the hire card into the channel. Human confirms in Create Agent Dialog.
 

@@ -150,7 +150,11 @@
     "agent_archived_toast": "Agent archived",
     "archive_failed_toast": "Failed to archive agent",
     "agent_restored_toast": "Agent restored",
-    "restore_failed_toast": "Failed to restore agent"
+    "restore_failed_toast": "Failed to restore agent",
+    "agent_updated_restart_toast": "Saved. Restarting agent so the new runtime config applies…",
+    "restart_after_update_failed_toast": "Config saved, but restart failed — use Restart on the agent, or wait for the next run.",
+    "agent_updated_restart_scheduled_toast": "Saved. Agent will restart after the current task so the new config applies.",
+    "agent_updated_next_run_toast": "Saved. Changes take effect on the next run (restart unavailable right now)."
   },
   "inspector": {
     "section_properties": "Properties",
@@ -536,7 +540,7 @@
     "writes_progress": "{{current}} / {{required}} writes"
   },
   "execution_config": {
-    "applies_next_run": "Changes take effect on the next run — the current run is unaffected."
+    "applies_next_run": "Saving runtime, model, or thinking restarts the agent (when available) so changes apply immediately."
   },
   "side_panel": {
     "close_aria": "Close agent panel",

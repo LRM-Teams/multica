@@ -150,7 +150,11 @@
     "agent_archived_toast": "에이전트를 보관했습니다",
     "archive_failed_toast": "에이전트를 보관하지 못했습니다",
     "agent_restored_toast": "에이전트를 복원했습니다",
-    "restore_failed_toast": "에이전트를 복원하지 못했습니다"
+    "restore_failed_toast": "에이전트를 복원하지 못했습니다",
+    "agent_updated_restart_toast": "저장했습니다. 새 런타임 설정을 적용하기 위해 agent를 재시작합니다…",
+    "restart_after_update_failed_toast": "설정은 저장됐지만 재시작에 실패했습니다. Restart를 누르거나 다음 실행까지 기다리세요.",
+    "agent_updated_restart_scheduled_toast": "저장했습니다. 현재 작업이 끝난 뒤 agent를 재시작해 설정을 적용합니다.",
+    "agent_updated_next_run_toast": "저장했습니다. 지금은 재시작할 수 없어 다음 실행부터 적용됩니다."
   },
   "inspector": {
     "section_properties": "속성",
@@ -536,7 +540,7 @@
     "writes_progress": "{{current}} / {{required}} writes"
   },
   "execution_config": {
-    "applies_next_run": "변경 사항은 다음 실행부터 적용되며, 진행 중인 실행에는 영향을 주지 않습니다."
+    "applies_next_run": "런타임 / 모델 / 사고 수준을 저장하면 가능한 경우 agent가 자동 재시작되어 설정이 즉시 적용됩니다."
   },
   "side_panel": {
     "close_aria": "에이전트 패널 닫기",

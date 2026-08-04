@@ -3599,7 +3599,10 @@ export function ChannelsPage({
                             <button
                               type="button"
                               onClick={() => selectChannel(channel.id)}
-                              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left opacity-60 hover:opacity-100"
+                              data-testid="channel-sidebar-archived-row"
+                              // LRM-1374: archived softening is solid muted title —
+                              // never row opacity-* (alpha multiplies through name).
+                              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
                             >
                               <div className="min-w-0 flex-1">
                                 <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-muted-foreground">

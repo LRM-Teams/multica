@@ -88,6 +88,16 @@ func TestResearchSeedRolesIncludeLead(t *testing.T) {
 			if r.Instructions == "" || len(r.Instructions) < 200 {
 				t.Fatal("ronaldo instructions must be detailed")
 			}
+			for _, required := range []string{"accepted Method", "multica research task-result", "do not use a universal source hierarchy"} {
+				if !strings.Contains(r.Instructions, required) {
+					t.Fatalf("ronaldo instructions missing durable v3 rule %q", required)
+				}
+			}
+			for _, forbidden := range []string{"S1 Plan", "graph-append|source-upsert", "fixed; playbooks evolve"} {
+				if strings.Contains(r.Instructions, forbidden) {
+					t.Fatalf("ronaldo instructions retain legacy workflow %q", forbidden)
+				}
+			}
 		}
 	}
 	if !foundLead {

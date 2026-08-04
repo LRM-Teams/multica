@@ -118,6 +118,24 @@ describe("research schemas", () => {
           reason: "user_requested",
           created_at: "2026-08-03T00:00:00Z",
         },
+        method: {
+          goal_version: 2,
+          plan_version: 3,
+          decision_question: "Which option satisfies the operating constraints?",
+          method_rationale: "Compare equivalent observations and test material failure assumptions.",
+          analysis_methods: ["Constraint-based comparison"],
+          evidence_requirements: ["Comparable measurements"],
+          inclusion_criteria: ["Same operating boundary"],
+          exclusion_criteria: ["Unverifiable anecdotes"],
+          source_strategy: ["Operational records and direct measurements"],
+          counterevidence_strategy: ["Search for failure cases that reverse the result"],
+          stopping_conditions: ["Required questions and counterevidence are resolved"],
+          uncertainties: ["Future workload"],
+          planning_risks: ["Measurement mismatch"],
+          created_by_task_id: "task-plan",
+          created_by_agent_id: "agent-lead",
+          created_at: "2026-08-03T00:00:01Z",
+        },
         questions: [],
         tasks: [],
         attempts: [],
@@ -128,6 +146,7 @@ describe("research schemas", () => {
       endpoint: "test",
     });
     expect(parsed.run?.run.goal_version).toBe(2);
+    expect(parsed.run?.method?.analysis_methods).toEqual(["Constraint-based comparison"]);
   });
 
   it("drops the optional run projection when that projection is malformed", () => {

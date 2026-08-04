@@ -206,8 +206,19 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	if err != nil {
 		return GateResult{}, err
 	}
+	methodCount := 0
+	if run.OrchestratorVersion == OrchestratorVersionV3 {
+		if err = s.pool.QueryRow(ctx, `
+			SELECT count(*)::int
+			FROM research_decision
+			WHERE session_id = $1::uuid AND decision_kind = 'research_method'
+			  AND goal_version = $2 AND plan_version = $3
+		`, sessionID, run.GoalVersion, run.PlanVersion).Scan(&methodCount); err != nil {
+			return GateResult{}, err
+		}
+	}
 	var reportStructureErr error
-	if run.OrchestratorVersion == OrchestratorVersionV2 && counts.reportCount > 0 {
+	if usesStructuredResultContract(run.OrchestratorVersion) && counts.reportCount > 0 {
 		var report ReportProposal
 		report, reportStructureErr = s.loadLatestReportForGate(ctx, sessionID, run.GoalVersion, run.PlanVersion)
 		if reportStructureErr == nil {
@@ -229,6 +240,9 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	if counts.planSucceeded == 0 {
 		add("plan_incomplete", "The current plan has not been accepted.", nil)
 	}
+	if run.OrchestratorVersion == OrchestratorVersionV3 && methodCount == 0 {
+		add("research_method_missing", "The current plan has no accepted research method.", nil)
+	}
 	if counts.unfinishedTasks > 0 {
 		add("tasks_incomplete", "Current-plan research tasks are still active.", map[string]any{"count": counts.unfinishedTasks})
 	}
@@ -249,10 +263,10 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		if reportStructureErr != nil {
 			add("report_structure_incomplete", "The latest report does not satisfy the durable structure and prose-coverage contract.", map[string]any{"reason": reportStructureErr.Error()})
 		}
-		if run.OrchestratorVersion == OrchestratorVersionV2 && counts.reportAuthorCount == 0 {
+		if usesStructuredResultContract(run.OrchestratorVersion) && counts.reportAuthorCount == 0 {
 			add("report_author_missing", "The latest report has no durable author attribution.", nil)
 		}
-		if run.OrchestratorVersion == OrchestratorVersionV2 && counts.unreportedRequired > 0 {
+		if usesStructuredResultContract(run.OrchestratorVersion) && counts.unreportedRequired > 0 {
 			add("required_answers_unreported", "Required question answer claims are absent from the latest report.", map[string]any{"count": counts.unreportedRequired})
 		}
 		if counts.reportClaimCount == 0 {
@@ -278,14 +292,14 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		add("quality_evaluation_missing", "The latest report has not passed an independent quality evaluation.", nil)
 	} else if counts.qualityPassed == 0 {
 		add("quality_evaluation_failed", "The latest independent quality evaluation failed or fell below the depth-tier score floor.", map[string]any{"minimum_score": minimumEvaluationScore})
-	} else if run.OrchestratorVersion == OrchestratorVersionV2 && counts.qualityIndependent == 0 {
+	} else if usesStructuredResultContract(run.OrchestratorVersion) && counts.qualityIndependent == 0 {
 		add("quality_evaluation_not_independent", "The latest quality evaluation was submitted by the report author.", nil)
 	}
 	if counts.citationEvaluations == 0 {
 		add("citation_audit_missing", "The latest report has not passed a citation audit.", nil)
 	} else if counts.citationPassed == 0 {
 		add("citation_audit_failed", "The latest citation audit failed or fell below the depth-tier score floor.", map[string]any{"minimum_score": minimumEvaluationScore})
-	} else if run.OrchestratorVersion == OrchestratorVersionV2 && counts.citationIndependent == 0 {
+	} else if usesStructuredResultContract(run.OrchestratorVersion) && counts.citationIndependent == 0 {
 		add("citation_audit_not_independent", "The latest citation audit was submitted by the report author.", nil)
 	}
 	if counts.budgetExhausted == 0 && run.Stats.LowGainStreak < run.Config.MarginalGainRounds {

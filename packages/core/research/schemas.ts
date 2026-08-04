@@ -273,6 +273,27 @@ const ResearchRunSnapshotSchema = z
         created_at: z.string(),
       })
       .passthrough(),
+    method: z
+      .object({
+        goal_version: z.number(),
+        plan_version: z.number(),
+        decision_question: z.string(),
+        method_rationale: z.string(),
+        analysis_methods: z.array(z.string()),
+        evidence_requirements: z.array(z.string()),
+        inclusion_criteria: z.array(z.string()),
+        exclusion_criteria: z.array(z.string()),
+        source_strategy: z.array(z.string()),
+        counterevidence_strategy: z.array(z.string()),
+        stopping_conditions: z.array(z.string()),
+        uncertainties: z.array(z.string()),
+        planning_risks: z.array(z.string()),
+        created_by_task_id: z.string(),
+        created_by_agent_id: z.string(),
+        created_at: z.string(),
+      })
+      .passthrough()
+      .optional(),
     questions: z
       .array(
         z

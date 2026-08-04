@@ -3,6 +3,7 @@ export * from "./mocks";
 export * from "./queries";
 export * from "./report-structured";
 export * from "./semantic-aggregation";
+export * from "./semantic-aggregation-visible-window";
 export * from "./schemas";
 export * from "./ui-store";
 export * from "./ws-updaters";

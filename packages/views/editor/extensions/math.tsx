@@ -1,21 +1,43 @@
 "use client";
 
-import katex from "katex";
+import { useEffect, useState } from "react";
 import { Node, mergeAttributes, nodeInputRule } from "@tiptap/core";
 import { ReactNodeViewRenderer, NodeViewWrapper } from "@tiptap/react";
 import type { NodeViewProps } from "@tiptap/react";
 
-function renderMath(expression: string, displayMode: boolean): string {
-  return katex.renderToString(expression, {
-    displayMode,
-    output: "htmlAndMathml",
-    strict: "warn",
-    throwOnError: false,
-  });
+/**
+ * LRM-1264 R2 — KaTeX JS (+ CSS) loads on first math node paint, not with the
+ * editor module graph. Composer open without math never pays for KaTeX.
+ */
+
+function useKatexHtml(expression: string, displayMode: boolean): string {
+  const [html, setHtml] = useState("");
+  useEffect(() => {
+    let alive = true;
+    void Promise.all([
+      import("katex"),
+      import("@multica/ui/markdown/katex-style"),
+    ]).then(([katexMod]) => {
+      if (!alive) return;
+      setHtml(
+        katexMod.default.renderToString(expression, {
+          displayMode,
+          output: "htmlAndMathml",
+          strict: "warn",
+          throwOnError: false,
+        }),
+      );
+    });
+    return () => {
+      alive = false;
+    };
+  }, [expression, displayMode]);
+  return html;
 }
 
 function InlineMathView({ node }: NodeViewProps) {
   const expression = String(node.attrs.expression ?? "");
+  const html = useKatexHtml(expression, false);
   return (
     <NodeViewWrapper
       as="span"
@@ -24,13 +46,18 @@ function InlineMathView({ node }: NodeViewProps) {
       data-expression={expression}
       contentEditable={false}
     >
-      <span dangerouslySetInnerHTML={{ __html: renderMath(expression, false) }} />
+      {html ? (
+        <span dangerouslySetInnerHTML={{ __html: html }} />
+      ) : (
+        <span>{`$${expression}$`}</span>
+      )}
     </NodeViewWrapper>
   );
 }
 
 function BlockMathView({ node }: NodeViewProps) {
   const expression = String(node.attrs.expression ?? "");
+  const html = useKatexHtml(expression, true);
   return (
     <NodeViewWrapper
       as="div"
@@ -39,7 +66,11 @@ function BlockMathView({ node }: NodeViewProps) {
       data-expression={expression}
       contentEditable={false}
     >
-      <div dangerouslySetInnerHTML={{ __html: renderMath(expression, true) }} />
+      {html ? (
+        <div dangerouslySetInnerHTML={{ __html: html }} />
+      ) : (
+        <div>{expression}</div>
+      )}
     </NodeViewWrapper>
   );
 }

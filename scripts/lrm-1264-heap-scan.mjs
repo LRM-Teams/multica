@@ -51,12 +51,27 @@ async function safeEval(page, fn) {
 
 async function waitReady(page) {
   const deadline = Date.now() + READY_MS;
+  // Prefer an already-open channel; otherwise open the first sidebar channel.
   while (Date.now() < deadline) {
     const ok = await safeEval(
       page,
       () => !!document.querySelector('button[aria-label="Open channel details"]'),
     );
     if (ok) return true;
+    const clicked = await safeEval(page, () => {
+      const links = Array.from(
+        document.querySelectorAll('a[href*="/channels/"]'),
+      ).filter((a) => /\/channels\/[^/]+/.test(a.getAttribute("href") || ""));
+      if (links[0]) {
+        links[0].click();
+        return true;
+      }
+      return false;
+    });
+    if (clicked) {
+      await page.waitForTimeout(500);
+      continue;
+    }
     await page.waitForTimeout(250);
   }
   return false;

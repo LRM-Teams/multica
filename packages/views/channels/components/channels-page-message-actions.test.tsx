@@ -146,7 +146,7 @@ vi.mock("../../navigation/context", () => ({
 // Expose `plainUrls` so a test can assert the channel composer opts into
 // plain-text URLs (#542) — the miss-surface root cause was this prop never
 // reaching the web channel composer.
-vi.mock("../../editor/content-editor", () => ({
+vi.mock("../../editor/lazy-content-editor", () => ({
   ContentEditor: (props: { plainUrls?: boolean }) => (
     <div data-testid="content-editor" data-plain-urls={String(!!props.plainUrls)} />
   ),

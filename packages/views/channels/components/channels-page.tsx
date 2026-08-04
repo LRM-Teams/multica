@@ -171,7 +171,11 @@ import { cn } from "@multica/ui/lib/utils";
 import { SidebarTrigger, useSidebarSafe } from "@multica/ui/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
-import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
+import {
+  ContentEditor,
+  type ContentEditorRef,
+  type ContentEditorProps,
+} from "../../editor/lazy-content-editor";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";

@@ -1,11 +1,9 @@
 import * as React from 'react'
 import ReactMarkdown, { type Components, defaultUrlTransform } from 'react-markdown'
-import rehypeKatex from 'rehype-katex'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
-import remarkMath from 'remark-math'
 import { FileText, Download } from 'lucide-react'
 import { cn } from '@multica/ui/lib/utils'
 import { CODE_LIGATURE_CLASS } from '@multica/ui/lib/code-style'
@@ -14,7 +12,7 @@ import { isAllowedFileCardHref, preprocessFileCards } from './file-cards'
 import { preprocessLinks, preprocessIssueRefs } from './linkify'
 import { preprocessCitationTokens, preprocessMentionShortcodes } from './mentions'
 import { preprocessStickers } from './stickers'
-import 'katex/dist/katex.min.css'
+import { loadMathPlugins, looksLikeMathMarkdown, type MathPluginPair } from './math-plugins'
 import './markdown.css'
 
 type AppLinkRenderer = React.ComponentType<{ href: string; children: React.ReactNode }>
@@ -732,10 +730,45 @@ export function Markdown({
     [children, cdnDomain, enableStickerShortcodes, issueRefPrefix]
   )
 
+  // LRM-1264 R2 — KaTeX only when the body looks like math (most chat rows skip it).
+  const needsMath = React.useMemo(
+    () => looksLikeMathMarkdown(processedContent),
+    [processedContent],
+  )
+  const [mathPlugins, setMathPlugins] = React.useState<MathPluginPair | null>(null)
+  React.useEffect(() => {
+    if (!needsMath) return
+    let alive = true
+    void loadMathPlugins().then((plugins) => {
+      if (alive) setMathPlugins(plugins)
+    })
+    return () => {
+      alive = false
+    }
+  }, [needsMath])
+
+  const remarkPlugins = React.useMemo(() => {
+    const plugins: NonNullable<React.ComponentProps<typeof ReactMarkdown>['remarkPlugins']> = [
+      remarkBreaks,
+      [remarkGfm, { singleTilde: false }],
+    ]
+    if (mathPlugins) plugins.unshift(mathPlugins.remarkMath)
+    return plugins
+  }, [mathPlugins])
+
+  const rehypePlugins = React.useMemo(() => {
+    const plugins: NonNullable<React.ComponentProps<typeof ReactMarkdown>['rehypePlugins']> = [
+      rehypeRaw,
+      [rehypeSanitize, sanitizeSchema],
+    ]
+    if (mathPlugins) plugins.push(mathPlugins.rehypeKatex)
+    return plugins
+  }, [mathPlugins])
+
   const tree = (
     <ReactMarkdown
-      remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
-      rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={rehypePlugins}
       urlTransform={urlTransform}
       components={components}
     >

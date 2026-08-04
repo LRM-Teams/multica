@@ -17,3 +17,8 @@ export {
   isAllowedFileCardHref,
   FILE_CARD_URL_PATTERN,
 } from './file-cards'
+export {
+  loadMathPlugins,
+  looksLikeMathMarkdown,
+  type MathPluginPair,
+} from './math-plugins'

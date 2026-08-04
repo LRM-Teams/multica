@@ -56,7 +56,7 @@ describe("ResearchFleetAvatarStack (LRM-776)", () => {
     openAgentPanel.mockClear();
   });
 
-  it("keeps avatar profile entry on the expand control so clicks open the agent panel", () => {
+  it("keeps profile and expand controls separate so both actions remain valid", () => {
     render(
       <ResearchFleetAvatarStack
         members={[
@@ -74,9 +74,12 @@ describe("ResearchFleetAvatarStack (LRM-776)", () => {
     );
 
     const toggle = screen.getByTestId("research-fleet-avatar-stack-toggle");
-    expect(toggle).toHaveAttribute("data-avatar-profile-entry", "true");
+    expect(toggle).not.toContainElement(screen.getByTestId("avatar-agent-1"));
 
     fireEvent.click(screen.getByTestId("avatar-agent-1"));
     expect(openAgentPanel).toHaveBeenCalledWith("agent-1");
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
   });
 });

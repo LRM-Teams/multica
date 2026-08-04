@@ -253,6 +253,61 @@ func TestNonRetryableDispatchFailureStopsRunWithoutRemediationLoop(t *testing.T)
 	}
 }
 
+func TestExhaustedInitialPlanStopsRunWithoutCreatingReplan(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	_, _, err = store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Test exhausted planning",
+		Title: "Exhausted planning", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_task
+		SET status = 'blocked', terminal_reason = 'result_not_submitted', completed_at = now()
+		WHERE session_id = $1::uuid AND kind = 'plan'
+	`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := NewEngine(store, &recordingCancellationDispatcher{states: map[string]InboxTaskState{}}, nil)
+	if err = engine.ReconcileSession(ctx, fixture.sessionID); err == nil || !strings.Contains(err.Error(), "exhausted its attempts") {
+		t.Fatalf("ReconcileSession err=%v", err)
+	}
+	run, err := store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != RunStatusFailed || !strings.Contains(run.StopReason, "result_not_submitted") {
+		t.Fatalf("run=%+v", run)
+	}
+	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].Kind != TaskKindPlan {
+		t.Fatalf("tasks=%+v, want only initial plan", tasks)
+	}
+}
+
 func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {

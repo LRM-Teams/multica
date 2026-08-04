@@ -381,6 +381,8 @@ export interface ResearchRunContract {
 
 export interface ResearchRunQuestion {
   id: string;
+  parent_question_id?: string;
+  created_by_task_id?: string;
   client_key: string;
   kind: string;
   question: string;
@@ -394,15 +396,44 @@ export interface ResearchRunQuestion {
 
 export interface ResearchRunTask {
   id: string;
+  question_id?: string;
+  parent_task_id?: string;
   client_key: string;
   kind: string;
   objective: string;
   required_capability: string;
+  expected_result?: string;
+  acceptance_criteria?: Record<string, unknown> | unknown;
+  priority?: number;
   status: string;
   assigned_agent_id?: string;
   attempt_count: number;
   goal_version: number;
   plan_version: number;
+  max_attempts?: number;
+  timeout_seconds?: number;
+  ready_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  terminal_reason?: string;
+}
+
+export interface ResearchRunAttempt {
+  id: string;
+  task_id: string;
+  attempt_number: number;
+  assigned_agent_id: string;
+  inbox_task_id?: string;
+  dispatch_key?: string;
+  client_request_id?: string;
+  status: string;
+  result_hash?: string;
+  failure_class?: string;
+  diagnostics?: string;
+  dispatched_at?: string;
+  started_at?: string;
+  result_submitted_at?: string;
+  completed_at?: string;
 }
 
 export interface ResearchRunSourceSnapshot {
@@ -470,7 +501,7 @@ export interface ResearchRunSnapshot {
   contract: ResearchRunContract;
   questions: ResearchRunQuestion[];
   tasks: ResearchRunTask[];
-  attempts: Array<Record<string, unknown>>;
+  attempts: ResearchRunAttempt[];
   sources: ResearchRunSourceSnapshot[];
   observations: ResearchRunObservation[];
   claims: ResearchRunClaim[];

@@ -309,6 +309,7 @@ export type {
   ResearchRunContract,
   ResearchRunQuestion,
   ResearchRunTask,
+  ResearchRunAttempt,
   ResearchRunGateFinding,
   ResearchRunSnapshot,
   SteerResearchRunRequest,

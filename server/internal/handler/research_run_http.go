@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/researchrun"
 )
 
@@ -166,12 +167,8 @@ func (h *Handler) SubmitAgentResearchTaskResult(w http.ResponseWriter, r *http.R
 			return
 		}
 	}
-	inboxTaskID := strings.TrimSpace(principal.InboxEventID)
-	if inboxTaskID == "" {
-		inboxTaskID = strings.TrimSpace(principal.TaskID)
-	}
-	if inboxTaskID == "" {
-		writeError(w, http.StatusForbidden, "task-bound agent credential required")
+	inboxTaskID, allowed := h.resolveResearchResultInboxTaskID(w, r, principal, sessionID, taskID, attemptID)
+	if !allowed {
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, (2<<20)+1))
@@ -204,4 +201,45 @@ func (h *Handler) SubmitAgentResearchTaskResult(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": true, "outcome": outcome})
+}
+
+type researchInboxTaskContext struct {
+	Type      string `json:"type"`
+	SessionID string `json:"research_session_id"`
+	TaskID    string `json:"research_task_id"`
+	AttemptID string `json:"research_attempt_id"`
+}
+
+func (h *Handler) resolveResearchResultInboxTaskID(
+	w http.ResponseWriter,
+	r *http.Request,
+	principal middleware.AgentPrincipal,
+	sessionID, taskID, attemptID string,
+) (string, bool) {
+	if principal.ActorSource != "agent_credential" {
+		inboxTaskID := strings.TrimSpace(principal.InboxEventID)
+		if inboxTaskID == "" {
+			inboxTaskID = strings.TrimSpace(principal.TaskID)
+		}
+		if inboxTaskID == "" {
+			writeError(w, http.StatusForbidden, "task-bound agent credential required")
+			return "", false
+		}
+		return inboxTaskID, true
+	}
+
+	event, _, ok := h.requireAgentCredentialActiveInboxDelivery(w, r)
+	if !ok {
+		return "", false
+	}
+	var binding researchInboxTaskContext
+	if json.Unmarshal(event.Context, &binding) != nil ||
+		binding.Type != "research_run_task" ||
+		binding.SessionID != sessionID ||
+		binding.TaskID != taskID ||
+		binding.AttemptID != attemptID {
+		writeError(w, http.StatusForbidden, "active inbox delivery does not match this research attempt")
+		return "", false
+	}
+	return uuidToString(event.ID), true
 }

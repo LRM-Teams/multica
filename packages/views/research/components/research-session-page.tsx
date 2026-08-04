@@ -439,6 +439,9 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { session, messages, report, sources } = data;
   const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
   const fleet = { ...data.fleet, members: fleetMembers };
+  const selectedNode = ui.selected
+    ? data.nodes.find((node) => node.id === ui.selected?.id) ?? ui.selected
+    : null;
   const canvasMode = resolveCanvasBodyMode(data.nodes.length, session.status);
   const canConfirm = session.status === "awaiting_user_confirm" || session.status === "running";
   const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
@@ -600,9 +603,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             edges={data.edges}
             sources={sources}
             members={fleet.members}
+            run={data.run}
             sessionStatus={session.status}
             presence={presence}
-            selectedId={ui.selected?.id}
+            selectedId={selectedNode?.id}
             onSelect={(node) => dispatch({ type: "select", node })}
             onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
             onOpenChat={() => setChatOpen(true)}
@@ -644,7 +648,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 dimensions={explorationDims}
                 sessionStatus={session.status}
                 selectedFamily={ui.selectedFamily}
-                selectedQuestionId={ui.selected?.id}
+                selectedQuestionId={selectedNode?.id}
                 onSelectFamily={(family) =>
                   dispatch({ type: "setFamily", family })
                 }
@@ -668,10 +672,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
               </div>
             ) : null}
             {auxPanel === "detail" ? (
-              ui.selected ? (
+              selectedNode ? (
                 <ResearchNodeDetail
-                  node={ui.selected}
+                  node={selectedNode}
                   sources={sources}
+                  run={data.run}
+                  members={fleet.members}
                   open
                   placement="overlay-card"
                   onClose={() => {

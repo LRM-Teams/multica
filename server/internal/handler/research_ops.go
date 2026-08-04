@@ -90,6 +90,7 @@ func (h *Handler) AppendResearchGraphNode(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var edge *ResearchGraphEdgeResp
+	var dbEdge *db.ResearchGraphEdge
 	if req.FromID != "" {
 		fromID, ok := parseUUIDOrBadRequest(w, req.FromID, "from_node_id")
 		if !ok {
@@ -109,9 +110,10 @@ func (h *Handler) AppendResearchGraphNode(w http.ResponseWriter, r *http.Request
 		if err == nil {
 			er := mapEdges([]db.ResearchGraphEdge{e})[0]
 			edge = &er
+			dbEdge = &e
 		}
 	}
-	nodeResp := mapNodes([]db.ResearchGraphNode{node})[0]
+	nodeResp := mapGraphNodeWithEdge(node, dbEdge)
 	h.publish(protocol.EventResearchSessionGraphUpdated, workspaceID, "agent", uuidToString(member.AgentID), map[string]any{
 		"session_id": uuidToString(sessionID),
 		"node":       nodeResp,

@@ -82,8 +82,18 @@ type ResearchGraphNodeResp struct {
 	Payload      json.RawMessage `json:"payload"`
 	// Confidence is projected from payload.confidence when present (LRM-806).
 	Confidence *float64 `json:"confidence,omitempty"`
-	CreatedAt  string   `json:"created_at"`
-	UpdatedAt  string   `json:"updated_at"`
+	// LRM-1278 tree + quality projection (snapshot authoritative; WS may be partial).
+	ParentID        *string  `json:"parent_id"`
+	ChildIDs        []string `json:"child_ids"`
+	ChildCount      int      `json:"child_count"`
+	DescendantCount int      `json:"descendant_count"`
+	ThemeKey        string   `json:"theme_key"`
+	Phase           string   `json:"phase,omitempty"`
+	Assessment      string   `json:"assessment"`
+	Reason          *string  `json:"reason,omitempty"`
+	EvidenceSummary *string  `json:"evidence_summary,omitempty"`
+	CreatedAt       string   `json:"created_at"`
+	UpdatedAt       string   `json:"updated_at"`
 }
 
 type ResearchGraphEdgeResp struct {
@@ -327,7 +337,7 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 	response := map[string]any{
 		"session":  researchSessionToResponse(session),
 		"fleet":    h.researchFleetToResponse(r.Context(), fleet, members),
-		"nodes":    mapNodes(nodes),
+		"nodes":    mapGraphNodes(nodes, edges),
 		"edges":    mapEdges(edges),
 		"messages": mapMessages(messages),
 		"run":      runSnapshot,
@@ -422,7 +432,7 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, ResearchSessionSnapshot{
 		Session:       researchSessionToResponse(session),
 		Fleet:         h.researchFleetToResponse(r.Context(), fleet, members),
-		Nodes:         mapNodes(nodes),
+		Nodes:         mapGraphNodes(nodes, edges),
 		Edges:         mapEdges(edges),
 		Sources:       mapSources(sources),
 		Report:        report,
@@ -431,27 +441,6 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 		ProductRounds: mapProductRoundCards(productRounds),
 		Run:           loadedRun,
 	})
-}
-
-func mapNodes(rows []db.ResearchGraphNode) []ResearchGraphNodeResp {
-	out := make([]ResearchGraphNodeResp, 0, len(rows))
-	for _, n := range rows {
-		payload := json.RawMessage(n.Payload)
-		out = append(out, ResearchGraphNodeResp{
-			ID:           uuidToString(n.ID),
-			SessionID:    uuidToString(n.SessionID),
-			NodeType:     n.NodeType,
-			Title:        n.Title,
-			Summary:      n.Summary,
-			Status:       n.Status,
-			ActorAgentID: uuidToPtr(n.ActorAgentID),
-			Payload:      payload,
-			Confidence:   confidenceFromPayload(payload),
-			CreatedAt:    timestampToString(n.CreatedAt),
-			UpdatedAt:    timestampToString(n.UpdatedAt),
-		})
-	}
-	return out
 }
 
 func confidenceFromPayload(payload json.RawMessage) *float64 {

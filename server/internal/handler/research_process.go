@@ -26,7 +26,7 @@ func (h *Handler) publishResearchGraph(workspaceID string, actorType, actorID st
 	}
 	h.publish(protocol.EventResearchSessionGraphUpdated, workspaceID, actorType, actorID, map[string]any{
 		"session_id": uuidToString(sessionID),
-		"node":       mapNodes([]db.ResearchGraphNode{node})[0],
+		"node":       mapGraphNodeWithEdge(node, edge),
 		"edge":       edgeResp,
 	})
 }

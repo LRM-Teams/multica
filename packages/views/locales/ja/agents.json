@@ -517,9 +517,15 @@
     "username_taken": "その @handle はすでに使用されています"
   },
   "memory_growth": {
-    "label": "Memory growth",
-    "next_tier": "Next · {{tier}}",
-    "writes_progress": "{{current}} / {{required}} writes"
+    "label": "メモリ成長",
+    "next_tier": "次の段階 · {{tier}}",
+    "writes_progress": "{{current}} / {{required}} 回のメモリ更新",
+    "tiers": {
+      "bronze": "ブロンズ",
+      "silver": "シルバー",
+      "gold": "ゴールド",
+      "platinum": "プラチナ"
+    }
   },
   "execution_config": {
     "applies_next_run": "ランタイム / モデル / 思考レベルを保存すると、可能な場合 agent が自動再起動し設定がすぐ反映されます。"

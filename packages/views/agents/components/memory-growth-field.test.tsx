@@ -6,6 +6,8 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import type { AgentMemoryGrowth } from "@multica/core/types";
 import enCommon from "../../locales/en/common.json";
 import enAgents from "../../locales/en/agents.json";
+import zhCommon from "../../locales/zh-Hans/common.json";
+import zhAgents from "../../locales/zh-Hans/agents.json";
 import {
   MEMORY_GROWTH_PULSE_MS,
   MemoryGrowthField,
@@ -13,6 +15,7 @@ import {
 
 const TEST_RESOURCES = {
   en: { common: enCommon, agents: enAgents },
+  "zh-Hans": { common: zhCommon, agents: zhAgents },
 };
 
 function silverGrowth(overrides: Partial<AgentMemoryGrowth> = {}): AgentMemoryGrowth {
@@ -31,9 +34,12 @@ function silverGrowth(overrides: Partial<AgentMemoryGrowth> = {}): AgentMemoryGr
   };
 }
 
-function renderGrowth(growth: AgentMemoryGrowth | null | undefined) {
+function renderGrowth(
+  growth: AgentMemoryGrowth | null | undefined,
+  locale: "en" | "zh-Hans" = "en",
+) {
   return render(
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+    <I18nProvider locale={locale} resources={TEST_RESOURCES}>
       <MemoryGrowthField growth={growth} />
     </I18nProvider>,
   );
@@ -76,6 +82,23 @@ describe("MemoryGrowthField (LRM-304)", () => {
       "5 / 6 writes",
     );
     expect(screen.getByTestId("memory-growth-fine-bar")).toBeTruthy();
+  });
+
+  it("localizes labels and server-provided tier names in Simplified Chinese", () => {
+    const { container } = renderGrowth(silverGrowth(), "zh-Hans");
+
+    expect(screen.getByText("记忆成长")).toBeTruthy();
+    expect(screen.getByTestId("memory-growth-tier")).toHaveTextContent("白银");
+    expect(
+      screen.getByTestId("memory-growth-segments").querySelector('[title="青铜"]'),
+    ).toBeTruthy();
+    expect(screen.getByTestId("memory-growth-next-tier")).toHaveTextContent(
+      "下一阶段 · 黄金",
+    );
+    expect(screen.getByTestId("memory-growth-writes")).toHaveTextContent(
+      "5 / 6 次记忆更新",
+    );
+    expect(container).not.toHaveTextContent(/Memory growth|Next|Silver|Gold|writes/);
   });
 
   it("pulses ≤400ms when tier advances", () => {

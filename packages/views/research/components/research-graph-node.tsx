@@ -32,6 +32,15 @@ function formatPhaseTime(iso: string | undefined): string {
   return `${mm}-${dd}`;
 }
 
+ type ExecutionSummary = { agent?: string | null; status?: string | null; duration?: string | null; failure?: string | null };
+
+function executionSummary(payload: unknown): ExecutionSummary | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const execution = (payload as { execution?: unknown }).execution;
+  if (!execution || typeof execution !== "object" || Array.isArray(execution)) return null;
+  return execution as ExecutionSummary;
+}
+
 function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNode>) {
   const { t } = useT("research");
   const wsId = useWorkspaceId();
@@ -68,6 +77,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
       : null;
   const phaseLabel: string = payloadPhase || t(($) => $.logic.lane[laneId]);
   const updated = formatPhaseTime(n.updated_at);
+  const execution = executionSummary(n.payload);
 
   const title =
     logicRole === "end" ? t(($) => $.logic.end_title) : n.title || t(($) => $.logic.lane[laneId]);
@@ -173,6 +183,14 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
             {updated ? ` · ${updated}` : ""}
           </span>
         </span>
+        {execution ? (
+          <span className="flex min-w-0 gap-1.5 text-[11px] text-muted-foreground" data-testid="research-node-execution">
+            {execution.agent ? <span className="truncate font-medium text-foreground">{execution.agent}</span> : null}
+            {execution.status ? <span className="shrink-0">· {execution.status}</span> : null}
+            {execution.duration ? <span className="shrink-0">· {execution.duration}</span> : null}
+            {execution.failure ? <span className="truncate text-destructive">· {execution.failure}</span> : null}
+          </span>
+        ) : null}
       </button>
       <button
         type="button"

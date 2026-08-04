@@ -66,6 +66,8 @@ import { ResearchGitList } from "./research-git-list";
 import type { ResearchAuxPanelId } from "./research-module-rail";
 import { SYSTEM_NODE_TYPES } from "../lib/node-action-ring";
 import { ResearchNodeDetail } from "./research-node-detail";
+import { ResearchRunGateBlockers } from "./research-run-gate-blockers";
+import type { RunV2GateBlocker } from "../lib/run-v2-canvas-view-model";
 import { useT } from "../../i18n/use-t";
 
 const NODE_ENTER_MOTION_CSS = nodeEnterMotionCss();
@@ -78,6 +80,7 @@ const nodeTypes: NodeTypes = {
 };
 
 const EMPTY_FLEET_MEMBERS: ResearchFleetMember[] = [];
+const EMPTY_RUN_BLOCKERS: RunV2GateBlocker[] = [];
 
 function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) return false;
@@ -132,6 +135,8 @@ function ResearchCanvasInner({
   sources,
   members = EMPTY_FLEET_MEMBERS,
   run,
+  runBlockers = EMPTY_RUN_BLOCKERS,
+  runDegraded = false,
   sessionStatus,
   presence,
   selectedId,
@@ -151,6 +156,8 @@ function ResearchCanvasInner({
   sources?: ResearchSource[];
   members?: ResearchFleetMember[];
   run?: ResearchRunSnapshot;
+  runBlockers?: RunV2GateBlocker[];
+  runDegraded?: boolean;
   sessionStatus?: string | null;
   presence?: ResearchPresenceMap;
   selectedId?: string | null;
@@ -408,6 +415,16 @@ function ResearchCanvasInner({
       }
     },
     [topology, nodes, announce, t, getNode, setCenter, getZoom],
+  );
+
+  const locateNode = useCallback(
+    (id: string) => {
+      const node = nodes.find((candidate) => candidate.id === id);
+      if (!node) return;
+      focusNode(id);
+      onSelect?.(node);
+    },
+    [focusNode, nodes, onSelect],
   );
 
   /** LRM-1105: apply pure keyboard actions (semantics A) — no neighborByLane B. */
@@ -701,6 +718,7 @@ function ResearchCanvasInner({
           nodeColor={(n) => (n.type === "gitGutter" ? "transparent" : "var(--brand)")}
         />
       </ReactFlow>
+      <ResearchRunGateBlockers blockers={runBlockers} degraded={runDegraded} onLocate={locateNode} title={t(($) => $.run_v2.delivery_blocked)} degradedTitle={t(($) => $.run_v2.syncing_title)} degradedBody={t(($) => $.run_v2.syncing_body)} />
       {/* LRM-1151: Canvas Dock bottom-center; yield left when Aux Drawer open. */}
       <div
         className="pointer-events-none absolute z-20 flex justify-center"
@@ -766,6 +784,8 @@ export function ResearchCanvas(props: {
   sources?: ResearchSource[];
   members?: ResearchFleetMember[];
   run?: ResearchRunSnapshot;
+  runBlockers?: RunV2GateBlocker[];
+  runDegraded?: boolean;
   sessionStatus?: string | null;
   presence?: ResearchPresenceMap;
   selectedId?: string | null;

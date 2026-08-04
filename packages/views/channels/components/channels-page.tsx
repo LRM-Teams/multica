@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -178,16 +170,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { SidebarTrigger, useSidebarSafe } from "@multica/ui/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
-import type {
-  ContentEditorRef,
-  ContentEditorProps,
-} from "../../editor/content-editor";
-/** LRM-1263 — Tiptap graph off the channel-shell critical path. */
-const ContentEditor = lazy(() =>
-  import("../../editor/content-editor").then((m) => ({
-    default: m.ContentEditor,
-  })),
-);
+import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
@@ -236,41 +219,10 @@ import {
   channelNotifyLevelLabel,
   resolveChannelNotifyLevel,
 } from "./channel-notify-level";
+import { ChannelTasksBoard } from "./channel-tasks-board";
+import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelHashLandmark } from "./channel-hash-landmark";
-/** LRM-1263 — tab/panels deferred until selected / opened. */
-const ChannelTasksBoard = lazy(() =>
-  import("./channel-tasks-board").then((m) => ({
-    default: m.ChannelTasksBoard,
-  })),
-);
-const ChannelFilesPanel = lazy(() =>
-  import("./channel-files-panel").then((m) => ({
-    default: m.ChannelFilesPanel,
-  })),
-);
-const ThreadPanel = lazy(() =>
-  import("./thread-panel").then((m) => ({ default: m.ThreadPanel })),
-);
-
-function ChannelChunkFallback({
-  className,
-  testId,
-}: {
-  className?: string;
-  testId?: string;
-}) {
-  return (
-    <div
-      className={cn("flex min-h-0 flex-1 flex-col gap-2 p-3", className)}
-      aria-busy="true"
-      data-testid={testId ?? "channel-chunk-fallback"}
-    >
-      <Skeleton className="h-8 w-2/3" />
-      <Skeleton className="h-8 w-full" />
-      <Skeleton className="h-8 w-5/6" />
-    </div>
-  );
-}
+import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
@@ -3631,11 +3583,6 @@ export function ChannelsPage({
   // passed — the panel then hides the checkbox entirely.
   const threadPanel =
     active && threadSurfaceRoot ? (
-      <Suspense
-        fallback={
-          <ChannelChunkFallback testId="thread-panel-chunk-fallback" />
-        }
-      >
       <ThreadPanel
         root={threadSurfaceRoot}
         replies={threadReplies}
@@ -3693,11 +3640,6 @@ export function ChannelsPage({
         sendError={channelThreadSendError}
         onRestorePrevious={handleRestoreChannelThreadPrevious}
         editor={
-          <Suspense
-            fallback={
-              <Skeleton className="h-10 w-full" data-testid="composer-chunk-fallback" />
-            }
-          >
           <ContentEditor
             key={`thread-editor:${threadSurfaceRoot.id}:${channelThreadRestoreNonce}`}
             ref={threadEditorRef}
@@ -3714,7 +3656,6 @@ export function ChannelsPage({
             mentionAllowedActorIds={mentionAllowedActorIds}
             scopedMentionAgents={channelAgentCandidates}
           />
-          </Suspense>
         }
         onSend={handleThreadSend}
         voicePlaybackScope={voicePlaybackScope(active.id, threadSurfaceRoot.id)}
@@ -3780,7 +3721,6 @@ export function ChannelsPage({
           </>
         }
       />
-      </Suspense>
     ) : null;
   const agentPanelBackLabel = selectedAgentReturnToMemberId
     ? resolveActorDisplayName(
@@ -4172,22 +4112,10 @@ export function ChannelsPage({
                   {/* LRM-675 — the single Files entry (settings Files block and
                       duplicate entries removed); same attachment source as the
                       legacy details panel. */}
-                  <Suspense
-                    fallback={
-                      <ChannelChunkFallback testId="files-panel-chunk-fallback" />
-                    }
-                  >
-                    <ChannelFilesPanel channelId={active.id} wide />
-                  </Suspense>
+                  <ChannelFilesPanel channelId={active.id} wide />
                 </TabsContent>
                 <TabsContent value="tasks" className="flex flex-1 min-h-0 flex-col text-base">
-                  <Suspense
-                    fallback={
-                      <ChannelChunkFallback testId="tasks-board-chunk-fallback" />
-                    }
-                  >
-                    <ChannelTasksBoard channelId={active.id} />
-                  </Suspense>
+                  <ChannelTasksBoard channelId={active.id} />
                 </TabsContent>
                 <TabsContent value="chat" className="flex flex-1 min-h-0 flex-col text-base">
               {convSearchOpen && (
@@ -4434,40 +4362,31 @@ export function ChannelsPage({
                       />
                     }
                     editor={
-                      <Suspense
-                        fallback={
-                          <Skeleton
-                            className="h-10 w-full"
-                            data-testid="composer-chunk-fallback"
-                          />
-                        }
-                      >
-                        <ContentEditor
-                          key={`${active.id}:${channelRestoreNonce}`}
-                          ref={editorRef}
-                          // Chat composer: typed/loaded bare URLs stay plain text
-                          // (#531/#542) — made clickable on the read side, not here.
-                          plainUrls
-                          defaultValue={activeDraft}
-                          // LRM-491: Slack-style one-line "Message #channel" (no
-                          // @agent tutorial copy). Name is interpolated so the
-                          // empty state stays a single short line.
-                          placeholder={t(($) => $.composer.placeholder, {
-                            name: active.name,
-                          })}
-                          className={isMobile ? "text-[15px] leading-5" : undefined}
-                          onUpdate={handleEditorUpdate}
-                          debounceMs={0}
-                          onSubmit={handleSend}
-                          mediaMode="external"
-                          onExternalFiles={channelPending.addFiles}
-                          submitOnEnter
-                          showBubbleMenu={false}
-                          enableChannelReferences
-                          mentionAllowedActorIds={mentionAllowedActorIds}
-                          scopedMentionAgents={channelAgentCandidates}
-                        />
-                      </Suspense>
+                      <ContentEditor
+                        key={`${active.id}:${channelRestoreNonce}`}
+                        ref={editorRef}
+                        // Chat composer: typed/loaded bare URLs stay plain text
+                        // (#531/#542) — made clickable on the read side, not here.
+                        plainUrls
+                        defaultValue={activeDraft}
+                        // LRM-491: Slack-style one-line "Message #channel" (no
+                        // @agent tutorial copy). Name is interpolated so the
+                        // empty state stays a single short line.
+                        placeholder={t(($) => $.composer.placeholder, {
+                          name: active.name,
+                        })}
+                        className={isMobile ? "text-[15px] leading-5" : undefined}
+                        onUpdate={handleEditorUpdate}
+                        debounceMs={0}
+                        onSubmit={handleSend}
+                        mediaMode="external"
+                        onExternalFiles={channelPending.addFiles}
+                        submitOnEnter
+                        showBubbleMenu={false}
+                        enableChannelReferences
+                        mentionAllowedActorIds={mentionAllowedActorIds}
+                        scopedMentionAgents={channelAgentCandidates}
+                      />
                     }
                     leadingActions={
                       <>

@@ -39,12 +39,6 @@ type channelMentionOccurrence struct {
 // canonical set of parts.
 func (h *Handler) finalizeAgentChannelMessage(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, error) {
 	parts = markAgentVoiceSynthesisPending(parts)
-	if ch.Kind != "group" {
-		// Direct messages have no group-member resolver. Keep ordinary parts, but
-		// never persist a caller-supplied reference sidecar without a server
-		// verified source anchor.
-		return content, appendReferenceOccurrences(parts, nil), nil
-	}
 	return h.enrichChannelMessageMentions(ctx, ch, content, parts)
 }
 
@@ -71,16 +65,22 @@ func markAgentVoiceSynthesisPending(parts []protocol.MessagePart) []protocol.Mes
 }
 
 func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelResponse, content string, parts []protocol.MessagePart) (string, []protocol.MessagePart, error) {
-	if ch.Kind != "group" {
-		return content, parts, nil
+	if ch.Kind == "group" {
+		if containsLegacyChannelActorMention(content) || channelPartsContainLegacyActorMention(parts) {
+			return "", nil, fmt.Errorf("legacy actor mention syntax is unsupported; use @handle")
+		}
+		candidates := h.channelMentionCandidates(ctx, ch.WorkspaceID, ch.ID)
+		if len(candidates) > 0 {
+			mentions := h.resolveBareChannelMentions(content, parts, candidates)
+			parts = appendReferenceOccurrences(parts, mentions)
+		}
 	}
-	if containsLegacyChannelActorMention(content) || channelPartsContainLegacyActorMention(parts) {
-		return "", nil, fmt.Errorf("legacy actor mention syntax is unsupported; use @handle")
-	}
-	candidates := h.channelMentionCandidates(ctx, ch.WorkspaceID, ch.ID)
-	if len(candidates) > 0 {
-		mentions := h.resolveBareChannelMentions(content, parts, candidates)
-		parts = appendReferenceOccurrences(parts, mentions)
+	// Issue and channel references are workspace-scoped reading affordances, not
+	// group-membership delivery. Resolve them in DMs too so a structured
+	// channel link or a known bare #channel renders identically on both surfaces.
+	// appendReferenceOccurrences also strips unverified caller sidecars.
+	if strings.TrimSpace(ch.WorkspaceID) == "" {
+		return content, appendReferenceOccurrences(parts, nil), nil
 	}
 	parts = appendReferenceOccurrences(parts, h.resolveBareChannelIssueReferences(ctx, ch.WorkspaceID, content, parts))
 	parts = appendReferenceOccurrences(parts, h.resolveChannelReferenceLinks(ctx, ch.WorkspaceID, content))

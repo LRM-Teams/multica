@@ -917,6 +917,7 @@ func daemonRegistrationCapabilities(includeCredentialTransport bool) []string {
 		protocol.DaemonCapabilityChannelOutputActions,
 		protocol.DaemonCapabilityAgentCLITransport,
 		protocol.DaemonCapabilityMemoryCuration,
+		protocol.DaemonCapabilityMemoryCrossDeviceSync,
 		protocol.DaemonCapabilityRestrictedExecution,
 		protocol.DaemonCapabilityReminderVersionedCache,
 		protocol.DaemonCapabilityAgentLifecycleActions,

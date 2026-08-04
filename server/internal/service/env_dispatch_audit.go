@@ -2,8 +2,209 @@ package service
 
 import (
 	"context"
+	"sync"
 	"time"
 )
+
+const (
+	auditReasonResetFailed                  = "reset_failed"
+	auditReasonResetRollback                = "reset_rollback"
+	auditReasonDispatchFailed               = "dispatch_failed"
+	auditReasonRollbackDeleteRequested      = "rollback_delete_requested"
+	auditReasonRollbackDeleted              = "rollback_deleted"
+	auditReasonDeleteObservationUnavailable = "delete_observation_unavailable"
+)
+
+type envDispatchAuditContextKey struct{}
+
+// envDispatchAuditRecorder is deliberately best-effort. Dispatch lifecycle
+// correctness must never depend on audit persistence, while a recorder that
+// has not been explicitly enabled must perform no storage calls at all.
+type envDispatchAuditRecorder struct {
+	storage            EnvDispatchAuditStorage
+	auditID            string
+	resources          map[envDispatchAuditResourceKey]EnvDispatchAuditResource
+	fallbackResourceID string
+	mu                 sync.Mutex
+}
+
+type envDispatchAuditResourceKey struct {
+	kind       EnvDispatchAuditResourceKind
+	resourceID string
+}
+
+func startEnvDispatchAudit(ctx context.Context, storage EnvDispatchAuditStorage, in EnvDispatchInput) (context.Context, *envDispatchAuditRecorder) {
+	if storage == nil || in.Audit == nil || !in.Audit.Enabled {
+		return ctx, nil
+	}
+	now := time.Now().UTC()
+	deadline := now.Add(in.Audit.ReclamationWindow)
+	report, err := storage.CreateAuditRun(ctx, EnvDispatchAuditReport{
+		WorkspaceID:         in.WorkspaceID,
+		InitiatorID:         in.UserID,
+		DispatchType:        auditDispatchType(in.DispatchType),
+		PrimaryScopeID:      in.EnvID,
+		Outcome:             EnvDispatchAuditOutcomeRunning,
+		Verdict:             EnvDispatchAuditVerdictPending,
+		ReclamationDeadline: deadline,
+		StartedAt:           now,
+	})
+	if err != nil || report.AuditID == "" {
+		return ctx, nil
+	}
+	recorder := &envDispatchAuditRecorder{
+		storage:   storage,
+		auditID:   report.AuditID,
+		resources: make(map[envDispatchAuditResourceKey]EnvDispatchAuditResource),
+	}
+	return context.WithValue(ctx, envDispatchAuditContextKey{}, recorder), recorder
+}
+
+func auditDispatchType(dispatchType EnvDispatchType) EnvDispatchAuditDispatchType {
+	if dispatchType == EnvDispatchIssue {
+		return EnvDispatchAuditDispatchIssue
+	}
+	return EnvDispatchAuditDispatchMessage
+}
+
+func envDispatchAuditFromContext(ctx context.Context) *envDispatchAuditRecorder {
+	recorder, _ := ctx.Value(envDispatchAuditContextKey{}).(*envDispatchAuditRecorder)
+	return recorder
+}
+
+func (r *envDispatchAuditRecorder) complete(ctx context.Context, outcome EnvDispatchAuditOutcome) {
+	if r == nil {
+		return
+	}
+	now := time.Now().UTC()
+	_, _ = r.storage.UpdateAuditOutcome(ctx, r.auditID, outcome, &now)
+	r.recordEvent(ctx, EnvDispatchAuditEventDispatchOutcome, "", string(outcome))
+}
+
+func (r *envDispatchAuditRecorder) recordResource(ctx context.Context, kind EnvDispatchAuditResourceKind, resourceID, environmentID, projectID, channelID, daemonID string) EnvDispatchAuditResource {
+	if r == nil || resourceID == "" {
+		return EnvDispatchAuditResource{}
+	}
+	key := envDispatchAuditResourceKey{kind: kind, resourceID: resourceID}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if resource, ok := r.resources[key]; ok {
+		return resource
+	}
+	now := time.Now().UTC()
+	resource, err := r.storage.UpsertAuditResource(ctx, EnvDispatchAuditResource{
+		AuditID:         r.auditID,
+		Kind:            kind,
+		ResourceID:      resourceID,
+		DaemonID:        auditOptionalString(daemonID),
+		EnvironmentID:   auditOptionalString(environmentID),
+		ProjectID:       auditOptionalString(projectID),
+		ChannelID:       auditOptionalString(channelID),
+		OwnershipMode:   EnvDispatchAuditOwnershipExclusive,
+		OwnerState:      EnvDispatchAuditOwnerActive,
+		Classification:  EnvDispatchAuditClassificationPending,
+		FirstObservedAt: now,
+	})
+	if err != nil {
+		return EnvDispatchAuditResource{}
+	}
+	r.resources[key] = resource
+	if r.fallbackResourceID == "" {
+		r.fallbackResourceID = resource.ID
+	}
+	return resource
+}
+
+func (r *envDispatchAuditRecorder) recordEvent(ctx context.Context, eventType EnvDispatchAuditEventType, auditResourceID, reasonCode string) {
+	if r == nil {
+		return
+	}
+	if auditResourceID == "" {
+		r.mu.Lock()
+		auditResourceID = r.fallbackResourceID
+		r.mu.Unlock()
+	}
+	// Audit events have a non-null audit_resource_id FK. When dispatch fails
+	// before any resource exists, the terminal run outcome is still durable but
+	// there is no lifecycle resource to which an event can truthfully attach.
+	if auditResourceID == "" {
+		return
+	}
+	_, _ = r.storage.AppendAuditEvent(ctx, EnvDispatchAuditEvent{
+		AuditID:         r.auditID,
+		AuditResourceID: auditResourceID,
+		Type:            eventType,
+		ReasonCode:      auditOptionalString(reasonCode),
+		OccurredAt:      time.Now().UTC(),
+	})
+}
+
+func (r *envDispatchAuditRecorder) recordEventForResource(ctx context.Context, eventType EnvDispatchAuditEventType, kind EnvDispatchAuditResourceKind, resourceID, reasonCode string) {
+	resource := r.recordResource(ctx, kind, resourceID, "", "", "", "")
+	r.recordEvent(ctx, eventType, resource.ID, reasonCode)
+}
+
+func (r *envDispatchAuditRecorder) classifyResource(ctx context.Context, kind EnvDispatchAuditResourceKind, resourceID string, ownerState EnvDispatchAuditOwnerState, classification EnvDispatchAuditClassification, eventType EnvDispatchAuditEventType, reasonCode string) {
+	if r == nil {
+		return
+	}
+	resource := r.recordResource(ctx, kind, resourceID, "", "", "", "")
+	if resource.ID == "" {
+		return
+	}
+	now := time.Now().UTC()
+	updated, err := r.storage.UpdateAuditResourceClassification(ctx, r.auditID, resource.ID, ownerState, classification, now)
+	if err == nil {
+		r.mu.Lock()
+		r.resources[envDispatchAuditResourceKey{kind: kind, resourceID: resourceID}] = updated
+		r.mu.Unlock()
+	}
+	r.recordEvent(ctx, eventType, resource.ID, reasonCode)
+}
+
+func (r *envDispatchAuditRecorder) recordSandboxRef(ctx context.Context, ref SandboxInstanceRef, environmentID, projectID string) {
+	if r == nil {
+		return
+	}
+	r.recordResource(ctx, EnvDispatchAuditResourceSandbox, ref.InstanceID, environmentID, projectID, "", ref.DaemonID)
+	if ref.RuntimeID != "" {
+		r.recordResource(ctx, EnvDispatchAuditResourceRuntime, ref.RuntimeID, environmentID, projectID, "", ref.DaemonID)
+	}
+}
+
+func (r *envDispatchAuditRecorder) recordChannelBindings(ctx context.Context, channelID, projectID, environmentID string, roster MessageRoster) {
+	if r == nil {
+		return
+	}
+	for _, agentID := range roster.AgentIDs {
+		resource := r.recordResource(ctx, EnvDispatchAuditResourceBinding, channelID+":"+agentID, environmentID, projectID, channelID, "")
+		r.recordEvent(ctx, EnvDispatchAuditEventBindingObserved, resource.ID, "binding_declared")
+	}
+}
+
+func (r *envDispatchAuditRecorder) recordProvisionedBinding(ctx context.Context, provisioned EnvDispatchAgentProvisionResult, environmentID, projectID, channelID string) {
+	if r == nil {
+		return
+	}
+	r.recordResource(ctx, EnvDispatchAuditResourceSandbox, provisioned.SandboxInstanceID, environmentID, projectID, channelID, provisioned.DaemonID)
+	r.recordResource(ctx, EnvDispatchAuditResourceRuntime, provisioned.RuntimeID, environmentID, projectID, channelID, provisioned.DaemonID)
+	r.recordResource(ctx, EnvDispatchAuditResourceSession, provisioned.ChatSessionID, environmentID, projectID, channelID, "")
+}
+
+func (r *envDispatchAuditRecorder) recordSession(ctx context.Context, sessionID, environmentID, projectID, channelID string) {
+	r.recordResource(ctx, EnvDispatchAuditResourceSession, sessionID, environmentID, projectID, channelID, "")
+}
+
+func (r *envDispatchAuditRecorder) recordTask(ctx context.Context, taskID, environmentID, projectID, channelID string) {
+	r.recordResource(ctx, EnvDispatchAuditResourceTask, taskID, environmentID, projectID, channelID, "")
+}
+
+func auditOptionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
 
 // EnvDispatchAuditRequest enables correlation-scoped daemon reclamation
 // auditing for a dispatch. It deliberately contains no client-provided audit

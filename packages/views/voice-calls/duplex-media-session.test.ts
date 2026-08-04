@@ -1,6 +1,7 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  createDuplexMediaSession,
   decodeBase64ToPcmS16le,
   downsampleFloat32To16k,
   encodePcmS16leToBase64,
@@ -45,6 +46,75 @@ describe("duplex-media-session helpers", () => {
     });
     expect(parseDuplexServerEvent(null)).toBeNull();
     expect(parseDuplexServerEvent({ nope: true })).toBeNull();
+  });
+
+  it("stops a microphone stream granted after disconnect", async () => {
+    type Listener = (event: Event | MessageEvent<string>) => void;
+    let openSocket: (() => void) | undefined;
+    class FakeWebSocket {
+      readyState = 0;
+      readonly send = vi.fn();
+      readonly close = vi.fn(() => {
+        this.readyState = 3;
+      });
+      private readonly listeners = new Map<string, Listener>();
+
+      constructor(_url: string) {
+        openSocket = () => {
+          this.readyState = 1;
+          this.listeners.get("open")?.(new Event("open"));
+        };
+      }
+
+      addEventListener(
+        type: "open" | "message" | "error" | "close",
+        listener: Listener,
+      ) {
+        this.listeners.set(type, listener);
+      }
+
+      removeEventListener(
+        type: "open" | "message" | "error" | "close",
+        listener: Listener,
+      ) {
+        if (this.listeners.get(type) === listener) this.listeners.delete(type);
+      }
+    }
+    class FakeAudioContext {
+      state: AudioContextState = "running";
+      currentTime = 0;
+      readonly resume = vi.fn().mockResolvedValue(undefined);
+      readonly close = vi.fn(async () => {
+        this.state = "closed";
+      });
+    }
+
+    let resolveStream: ((stream: MediaStream) => void) | undefined;
+    const getUserMedia = vi.fn(() => new Promise<MediaStream>((resolve) => {
+      resolveStream = resolve;
+    }));
+    const track = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const stream = {
+      getTracks: () => [track],
+    } as unknown as MediaStream;
+    const session = createDuplexMediaSession({}, {
+      WebSocket: FakeWebSocket as unknown as typeof WebSocket,
+      getUserMedia: getUserMedia as typeof navigator.mediaDevices.getUserMedia,
+      AudioContext: FakeAudioContext as unknown as typeof AudioContext,
+    });
+
+    const connecting = session.connect("wss://voice.example.test/duplex");
+    if (!openSocket) throw new Error("Duplex WebSocket was not created");
+    openSocket();
+    await vi.waitFor(() => {
+      expect(getUserMedia).toHaveBeenCalledOnce();
+    });
+
+    await session.disconnect();
+    resolveStream?.(stream);
+    await expect(connecting).resolves.toBeUndefined();
+
+    expect(track.stop).toHaveBeenCalledOnce();
   });
 
   it("exposes a higher barge-in threshold for speakerphone echo", async () => {

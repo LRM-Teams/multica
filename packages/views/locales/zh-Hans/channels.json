@@ -601,6 +601,7 @@
     "sticker_loading": "正在加载表情包",
     "sticker_failed": "表情包加载失败",
     "sticker_unavailable": "表情包暂不可用",
+    "sticker_motion_reduced": "动画已按你的「减弱动态」设置静态显示",
     "attachment_unavailable": "附件不可用",
     "send_failed": "发送失败",
     "retry_send": "重试",

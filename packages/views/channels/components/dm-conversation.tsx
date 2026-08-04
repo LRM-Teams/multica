@@ -84,6 +84,7 @@ import { useComposerDraftHydrateSignal } from "../hooks/use-composer-draft-hydra
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import { useJumpNotFoundToast } from "../hooks/use-jump-not-found-toast";
+import { usePrefetchThreadPreviews } from "../hooks/use-prefetch-thread-previews";
 import {
   buildRecordedVoiceMessageParts,
   type VoiceRecordingAttachment,
@@ -688,6 +689,7 @@ function DmChannelConversation({
     channelMessagesPageOptions(channelId, { aroundSeq: deepLinkAroundSeq }),
   );
   const messages = useMemo(() => flattenChannelMessagePages(messagePages), [messagePages]);
+  usePrefetchThreadPreviews(messages);
   const messagesFirstItemIndex = useMemo(
     () => channelMessagesFirstItemIndex(messagePages, messages.length > 0),
     [messagePages, messages.length],

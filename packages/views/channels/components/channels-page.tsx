@@ -267,6 +267,7 @@ import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { useSidebarSectionCollapsed } from "../hooks/use-sidebar-section-collapsed";
 import { useJumpNotFoundToast } from "../hooks/use-jump-not-found-toast";
+import { usePrefetchThreadPreviews } from "../hooks/use-prefetch-thread-previews";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { MemberPanelProvider } from "../../common/member-panel-context";
 import { MotionContent } from "../../common/motion-content";
@@ -1210,6 +1211,7 @@ export function ChannelsPage({
     setChannelView("chat");
   }
   const messages = useMemo(() => flattenChannelMessagePages(activeChannelId ? messagePages : undefined), [activeChannelId, messagePages]);
+  usePrefetchThreadPreviews(messages);
   const messagesFirstItemIndex = useMemo(
     () => channelMessagesFirstItemIndex(activeChannelId ? messagePages : undefined, messages.length > 0),
     [activeChannelId, messagePages, messages.length],

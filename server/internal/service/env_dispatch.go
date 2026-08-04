@@ -113,6 +113,12 @@ type EnvDispatchInput struct {
 	MessageRoster       MessageRoster
 	BranchMessageSource *ValidatedBranchMessageSource
 	SourceTask          *SourceTask
+
+	// Audit is an explicit, per-request opt-in for the identifier- and
+	// state-only dispatch lifecycle ledger. Nil and Enabled=false preserve the
+	// ordinary zero-write dispatch path even when an audit storage dependency is
+	// installed.
+	Audit *EnvDispatchAuditRequest
 }
 
 // PerAgentEnvSpec assigns one squad agent to a sandbox template or base
@@ -268,6 +274,9 @@ type EnvDispatchResult struct {
 	ChannelID string
 	ProjectID string // single project for the dispatch (group_size=1: the rollout's project)
 	Rollouts  []EnvRollout
+	// Audit is set only when the configured audit storage created a real run.
+	// It is never derived from caller input.
+	Audit *EnvDispatchAuditReport
 }
 
 // EnvDispatchDeps is the seam between the service and the DB + cloud runtime.
@@ -519,6 +528,31 @@ type EnvDispatchService struct {
 	deps        EnvDispatchDeps
 	concurrency int
 	lifecycle   SandboxInstanceCreator // optional; nil ⇒ existing Fleet fork path
+	// auditStorage is deliberately optional: ordinary env-dispatch requests do
+	// not opt into audit correlation and must not incur audit persistence.
+	auditStorage EnvDispatchAuditStorage
+	// reclaimer is installed by the handler once the shared lifecycle cleanup
+	// implementation is available. Keeping the dependency optional preserves
+	// the current project-delete behavior until T020 delegates to it.
+	reclaimer EnvDispatchReclaimer
+}
+
+// EnvDispatchReclamationRequest identifies one env-dispatch-owned scope for
+// shared lifecycle cleanup. Exactly one of ProjectID and ChannelID is set by
+// the caller. The Trigger is retained as a typed value so the reclaimer can
+// create a matching audit obligation without inferring the delete path.
+type EnvDispatchReclamationRequest struct {
+	WorkspaceID string
+	ProjectID   string
+	ChannelID   string
+	Trigger     EnvDispatchAuditObligationTrigger
+}
+
+// EnvDispatchReclaimer is the shared cleanup seam consumed by env-dispatch
+// deletion entry points. Its implementation is intentionally deferred to the
+// reclaimer task; a nil dependency leaves existing dispatch behavior intact.
+type EnvDispatchReclaimer interface {
+	Reclaim(ctx context.Context, request EnvDispatchReclamationRequest) error
 }
 
 // SandboxInstanceCreator creates a sandbox_instance-backed environment
@@ -550,6 +584,21 @@ func NewEnvDispatchService(deps EnvDispatchDeps, concurrency int) *EnvDispatchSe
 // Fleet fork path. Returns the service for chaining.
 func (s *EnvDispatchService) WithSandboxLifecycle(lc SandboxInstanceCreator) *EnvDispatchService {
 	s.lifecycle = lc
+	return s
+}
+
+// WithAuditStorage injects the opt-in audit ledger. A nil storage disables
+// audit recording, which is the default for ordinary dispatch construction.
+func (s *EnvDispatchService) WithAuditStorage(storage EnvDispatchAuditStorage) *EnvDispatchService {
+	s.auditStorage = storage
+	return s
+}
+
+// WithReclaimer injects the shared env-dispatch lifecycle cleanup seam. A nil
+// reclaimer preserves the current delete behavior until a caller explicitly
+// provides the T018 implementation.
+func (s *EnvDispatchService) WithReclaimer(reclaimer EnvDispatchReclaimer) *EnvDispatchService {
+	s.reclaimer = reclaimer
 	return s
 }
 
@@ -686,6 +735,11 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		}
 	}
 
+	// Audit is intentionally started only after validation and source
+	// resolution. This gives the run a trusted request scope while keeping
+	// rejected inputs and ordinary (non-opted-in) dispatches write-free.
+	ctx, audit := startEnvDispatchAudit(ctx, s.auditStorage, in)
+
 	rollouts := make([]EnvRollout, in.GroupSize)
 	sem := make(chan struct{}, s.concurrency)
 	var wg sync.WaitGroup
@@ -712,6 +766,8 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	wg.Wait()
 
 	if len(resetErrs) > 0 {
+		audit.recordEvent(ctx, EnvDispatchAuditEventCreationFailed, "", auditReasonResetFailed)
+		audit.recordEvent(ctx, EnvDispatchAuditEventRollbackStarted, "", auditReasonResetRollback)
 		// Reset failed for >=1 rollout -> roll back every rollout and return a
 		// reset_failed error (handler -> 503). Reset is all-or-nothing. %w (not %v)
 		// so the adapter-origin StackError survives Unwrap and the handler can render
@@ -726,6 +782,7 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 			}
 			rollouts[i] = EnvRollout{}
 		}
+		audit.complete(ctx, EnvDispatchAuditOutcomeFailed)
 		return EnvDispatchResult{}, fmt.Errorf("reset_failed: %w", resetErrs[0])
 	}
 
@@ -786,6 +843,13 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		}(i)
 	}
 	dispatchWG.Wait()
+	for _, rollout := range rollouts {
+		if rollout.Error != "" {
+			// Keep error contents out of the ledger: the stable reason code is
+			// enough to establish that dispatch creation did not complete.
+			audit.recordEvent(ctx, EnvDispatchAuditEventCreationFailed, "", auditReasonDispatchFailed)
+		}
+	}
 
 	// Local targets are per-rollout materialization provenance, not reusable
 	// sampling identities. Persist them only for source-aware runs after the
@@ -846,8 +910,12 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		}
 	}
 	if succeeded == 0 {
+		audit.complete(ctx, EnvDispatchAuditOutcomeFailed)
+		result.Audit = audit.reportResult()
 		return result, ErrAllDispatchFailed
 	}
+	audit.complete(ctx, EnvDispatchAuditOutcomeSucceeded)
+	result.Audit = audit.reportResult()
 	return result, nil
 }
 
@@ -1146,6 +1214,9 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 			return EnvRollout{}, fmt.Errorf("fork sandbox: %w", err)
 		}
 		forked = f
+		for _, sandboxID := range forked {
+			envDispatchAuditFromContext(ctx).recordResource(ctx, EnvDispatchAuditResourceSandbox, sandboxID, "", "", "", "")
+		}
 	}
 	mode := EnvModeScratch
 	if in.Mode == EnvModeBranch {
@@ -1157,7 +1228,13 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		s.reclaimSharedRuntimes(ctx, in, sandboxRefs)
 		return EnvRollout{}, fmt.Errorf("create env: %w", err)
 	}
-
+	audit := envDispatchAuditFromContext(ctx)
+	for _, sandboxID := range forked {
+		audit.recordResource(ctx, EnvDispatchAuditResourceSandbox, sandboxID, envID, "", "", "")
+	}
+	for _, ref := range sandboxRefs {
+		audit.recordSandboxRef(ctx, ref, envID, "")
+	}
 	// Project
 	var projectID string
 	var issueIDMap, chatSessionIDMap map[string]string
@@ -1185,6 +1262,12 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	}
 
 	r := EnvRollout{EnvID: envID, ProjectID: projectID, SandboxRefs: sandboxRefs, AgentSandboxRefs: agentSandboxRefs}
+	for _, sandboxID := range forked {
+		audit.recordResource(ctx, EnvDispatchAuditResourceSandbox, sandboxID, envID, projectID, "", "")
+	}
+	for _, ref := range sandboxRefs {
+		audit.recordSandboxRef(ctx, ref, envID, projectID)
+	}
 	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeBranch {
 		if in.BranchMessageSource == nil {
 			s.rollbackRollout(ctx, in.WorkspaceID, r)
@@ -1198,6 +1281,7 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 			return EnvRollout{}, fmt.Errorf("copy env-dispatch channel: %w", err)
 		}
 		r.ChannelID = copyMap.ChannelID
+		envDispatchAuditFromContext(ctx).recordChannelBindings(ctx, copyMap.ChannelID, projectID, envID, roster)
 		r.channelMessageIDs = copyMap.MessageIDs
 		if sessionID := chatSessionIDMap[in.BranchMessageSource.Trigger.ChatSessionID]; sessionID != "" {
 			r.ChatSessionID = sessionID
@@ -1237,6 +1321,7 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 			return EnvRollout{}, fmt.Errorf("create env-dispatch channel: %w", err)
 		}
 		r.ChannelID = channelID
+		envDispatchAuditFromContext(ctx).recordChannelBindings(ctx, channelID, projectID, envID, roster)
 	}
 	// Stash the single copied entity for dispatchOne (spec §7.4: exactly one).
 	if in.Mode == EnvModeBranch {
@@ -1366,6 +1451,7 @@ func (s *EnvDispatchService) createSandboxInstanceRefs(ctx context.Context, in E
 	}
 	ref.RuntimeID = runtimeID
 	ref.DaemonID = daemonID
+	envDispatchAuditFromContext(ctx).recordSandboxRef(ctx, ref, "", "")
 	return []SandboxInstanceRef{ref}, nil, nil
 }
 
@@ -1428,6 +1514,7 @@ func (s *EnvDispatchService) createSharedSandboxInstanceRefs(ctx context.Context
 	}
 	ref.RuntimeID = runtimeID
 	ref.DaemonID = daemonID
+	envDispatchAuditFromContext(ctx).recordSandboxRef(ctx, ref, "", "")
 	var agentRefs map[string]SandboxInstanceRef
 	if len(in.PerAgentEnvSpecs) > 0 {
 		agentRefs = make(map[string]SandboxInstanceRef, len(in.PerAgentEnvSpecs))
@@ -1541,6 +1628,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 			return
 		}
 		r.AgentRunID = runID
+		envDispatchAuditFromContext(ctx).recordTask(ctx, runID, r.EnvID, r.ProjectID, "")
 		return
 	}
 	// message (self_play)
@@ -1555,6 +1643,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 		}
 		sessionID = newID
 		r.ChatSessionID = newID
+		envDispatchAuditFromContext(ctx).recordSession(ctx, newID, r.EnvID, r.ProjectID, "")
 	}
 	// branch continues the copied conversation by appending; scratch starts fresh (spec §7.3).
 	if _, err := s.deps.CreateChatMessage(ctx, sessionID, "user", in.Message.Content); err != nil {
@@ -1569,6 +1658,7 @@ func (s *EnvDispatchService) dispatchOne(ctx context.Context, in EnvDispatchInpu
 		return
 	}
 	r.AgentRunID = runID
+	envDispatchAuditFromContext(ctx).recordTask(ctx, runID, r.EnvID, r.ProjectID, "")
 }
 
 // dispatchScratchChannelMessage starts only the canonical roster leader. The
@@ -1605,6 +1695,7 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 		return
 	}
 	r.ChatSessionID = provisioned.ChatSessionID
+	envDispatchAuditFromContext(ctx).recordProvisionedBinding(ctx, provisioned, r.EnvID, r.ProjectID, r.ChannelID)
 	r.AgentSandboxes = make(map[string]AgentSandboxStatus, len(in.MessageRoster.AgentIDs))
 	for _, agentID := range in.MessageRoster.AgentIDs {
 		status := AgentSandboxStatus{Status: "pending"}
@@ -1661,6 +1752,7 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 	}
 	r.LeaderRunID = runID
 	r.AgentRunID = runID
+	envDispatchAuditFromContext(ctx).recordTask(ctx, runID, r.EnvID, r.ProjectID, r.ChannelID)
 	// AC-4: link the binding's persisted training session (if any) to the real
 	// task so DAG assembly maps session->agent_run. Best-effort; non-training
 	// bindings no-op inside the dep, and link failure never fails the dispatch.
@@ -1767,8 +1859,10 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 		return
 	}
 	r.ChatSessionID = provisioned.ChatSessionID
+	envDispatchAuditFromContext(ctx).recordProvisionedBinding(ctx, provisioned, r.EnvID, r.ProjectID, r.ChannelID)
 	r.LeaderRunID = runID
 	r.AgentRunID = runID
+	envDispatchAuditFromContext(ctx).recordTask(ctx, runID, r.EnvID, r.ProjectID, r.ChannelID)
 	r.AgentSandboxes = make(map[string]AgentSandboxStatus, len(in.MessageRoster.AgentIDs))
 	for _, agentID := range in.MessageRoster.AgentIDs {
 		status := AgentSandboxStatus{Status: "pending"}
@@ -1803,7 +1897,9 @@ func sharedWorkdirAnchor(in EnvDispatchInput, r EnvRollout) string {
 // references env_id), then the env row, then its sandboxes. Every rollout
 // forks its own sandboxes, so this never touches a shared/source sandbox.
 func (s *EnvDispatchService) rollbackRollout(ctx context.Context, workspaceID string, r EnvRollout) {
+	audit := envDispatchAuditFromContext(ctx)
 	if r.ChannelID != "" {
+		audit.recordResource(ctx, EnvDispatchAuditResourceBinding, r.ChannelID, r.EnvID, r.ProjectID, r.ChannelID, "")
 		_ = s.deps.DeleteChannel(ctx, workspaceID, r.ChannelID)
 	}
 	if r.ProjectID != "" {
@@ -1813,7 +1909,15 @@ func (s *EnvDispatchService) rollbackRollout(ctx context.Context, workspaceID st
 		env, err := s.deps.GetEnv(ctx, r.EnvID, workspaceID)
 		_ = s.deps.DeleteEnv(ctx, r.EnvID, workspaceID)
 		if err == nil {
-			s.deleteSandboxes(ctx, env.SandboxIDs)
+			for _, sandboxID := range env.SandboxIDs {
+				audit.recordResource(ctx, EnvDispatchAuditResourceSandbox, sandboxID, r.EnvID, r.ProjectID, r.ChannelID, "")
+				audit.recordEventForResource(ctx, EnvDispatchAuditEventSandboxDeletionRequested, EnvDispatchAuditResourceSandbox, sandboxID, auditReasonRollbackDeleteRequested)
+				if deleteErr := s.deps.DeleteSandbox(ctx, sandboxID); deleteErr != nil {
+					audit.classifyResource(ctx, EnvDispatchAuditResourceSandbox, sandboxID, EnvDispatchAuditOwnerUnknown, EnvDispatchAuditClassificationInconclusive, EnvDispatchAuditEventObservationUnavailable, auditReasonDeleteObservationUnavailable)
+					continue
+				}
+				audit.classifyResource(ctx, EnvDispatchAuditResourceSandbox, sandboxID, EnvDispatchAuditOwnerDeleted, EnvDispatchAuditClassificationReclaimed, EnvDispatchAuditEventReclaimed, auditReasonRollbackDeleted)
+			}
 		}
 	}
 }
@@ -1837,8 +1941,15 @@ func (s *EnvDispatchService) forkAll(ctx context.Context, src []string, idx int)
 // deleteSandboxes best-effort deletes every sandbox id; errors are ignored
 // (rollback is best-effort and the runtime GC is the backstop, spec §7.6).
 func (s *EnvDispatchService) deleteSandboxes(ctx context.Context, ids []string) {
+	audit := envDispatchAuditFromContext(ctx)
 	for _, sid := range ids {
-		_ = s.deps.DeleteSandbox(ctx, sid)
+		audit.recordResource(ctx, EnvDispatchAuditResourceSandbox, sid, "", "", "", "")
+		audit.recordEventForResource(ctx, EnvDispatchAuditEventSandboxDeletionRequested, EnvDispatchAuditResourceSandbox, sid, auditReasonRollbackDeleteRequested)
+		if err := s.deps.DeleteSandbox(ctx, sid); err != nil {
+			audit.classifyResource(ctx, EnvDispatchAuditResourceSandbox, sid, EnvDispatchAuditOwnerUnknown, EnvDispatchAuditClassificationInconclusive, EnvDispatchAuditEventObservationUnavailable, auditReasonDeleteObservationUnavailable)
+			continue
+		}
+		audit.classifyResource(ctx, EnvDispatchAuditResourceSandbox, sid, EnvDispatchAuditOwnerDeleted, EnvDispatchAuditClassificationReclaimed, EnvDispatchAuditEventReclaimed, auditReasonRollbackDeleted)
 	}
 }
 

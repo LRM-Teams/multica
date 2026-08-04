@@ -30,7 +30,7 @@ No bespoke illustration, hard-coded brand color, or new asset is introduced. Exi
 
 ## Interaction and accessibility
 
-The card is one native `button`, not a clickable `div`. The whole surface triggers `onHonor`; it has a localized accessible name, visible focus treatment, and a minimum practical hit area. Decorative layers are `aria-hidden` and do not intercept pointer events. The existing header Honor button remains available.
+The card keeps its information in a semantic `section`, with one native `button` positioned over the full surface. The button triggers `onHonor`, has a localized accessible name and an inset focus-visible treatment, while the fleet score, rank, and pillar data remain sibling content in the accessibility tree instead of becoming presentational button descendants. Decorative layers are `aria-hidden` and do not intercept pointer events. The existing header Honor button remains available.
 
 ## Data and architecture
 

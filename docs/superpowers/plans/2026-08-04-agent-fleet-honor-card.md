@@ -54,12 +54,15 @@ function renderOverview(task: AgentTask, onHonor = vi.fn(), fleetRank?: AgentFle
 - [ ] **Step 2: Add the failing whole-card interaction test**
 
 ```tsx
-it("opens Honor when the fleet card surface is clicked", () => {
+it("focuses and opens Honor from the fleet card surface", () => {
   const onHonor = vi.fn();
   renderOverview(makeTask("queued"), onHonor, fleet);
 
-  fireEvent.click(screen.getByRole("button", { name: "Fleet rank · Honor" }));
+  const fleetCard = screen.getByRole("button", { name: "Fleet rank · Honor" });
+  fleetCard.focus();
+  expect(fleetCard).toHaveFocus();
 
+  fireEvent.click(fleetCard);
   expect(onHonor).toHaveBeenCalledOnce();
 });
 ```
@@ -102,16 +105,21 @@ function FleetHonorCard({
   ] as const;
 
   return (
-    <button
-      type="button"
-      aria-label={`${t(($) => $.fleet.title)} · ${t(($) => $.tabs.honor)}`}
-      data-testid="agent-fleet-honor-card"
-      onClick={onHonor}
-      className="group relative isolate w-full overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/[0.08] via-card to-chart-2/[0.08] p-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg motion-reduce:transform-none motion-reduce:transition-none"
-    >
+    <section className="group relative isolate w-full overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/[0.08] via-card to-chart-2/[0.08] p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg motion-reduce:transform-none motion-reduce:transition-none">
+      <button
+        type="button"
+        data-testid="agent-fleet-honor-card"
+        onClick={onHonor}
+        className="absolute inset-0 z-20 cursor-pointer rounded-2xl bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      >
+        <span className="sr-only">
+          {t(($) => $.fleet.title)} · {t(($) => $.tabs.honor)}
+        </span>
+      </button>
       {/* Semantic-token atmosphere, fleet emblem, score/rank hierarchy,
-          localized Honor affordance, and four compact energy meters. */}
-    </button>
+          localized Honor affordance, and four compact energy meters remain
+          outside the button so assistive technology can read the data. */}
+    </section>
   );
 }
 ```

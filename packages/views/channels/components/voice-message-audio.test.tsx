@@ -301,7 +301,7 @@ describe("VoiceMessageAudio", () => {
     playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
     render(<VoiceMessageAudio message={humanRecordingMessage("pending")} />);
 
-    expect(screen.getByRole("status")).toHaveTextContent("Transcribing");
+    expect(screen.getByTestId("voice-side-status")).toHaveTextContent("Transcribing");
     expect(screen.getByRole("button", { name: "Play voice reply" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Show transcript" })).not.toBeInTheDocument();
   });
@@ -310,7 +310,7 @@ describe("VoiceMessageAudio", () => {
     playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
     render(<VoiceMessageAudio message={humanRecordingMessage("failed")} />);
 
-    expect(screen.getByRole("status")).toHaveTextContent("Transcript unavailable");
+    expect(screen.getByTestId("voice-side-status")).toHaveTextContent("Transcript unavailable");
     expect(screen.getByRole("button", { name: "Play voice reply" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Show transcript" })).not.toBeInTheDocument();
   });
@@ -319,7 +319,7 @@ describe("VoiceMessageAudio", () => {
     playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
     render(<VoiceMessageAudio message={humanRecordingMessage("completed")} />);
 
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("voice-side-status")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show transcript" })).toBeEnabled();
   });
 
@@ -327,7 +327,7 @@ describe("VoiceMessageAudio", () => {
     render(<VoiceMessageAudio message={agentSynthesisMessage("pending")} />);
 
     expect(screen.getByRole("button", { name: "Generating voice" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("Generating voice");
+    expect(screen.getByTestId("voice-side-status")).toHaveTextContent("Generating voice");
     expect(screen.getByRole("button", { name: "Show transcript" })).toBeEnabled();
     expect(playbackMocks.prepareVoiceAudio).not.toHaveBeenCalled();
     expect(playbackMocks.claimVoiceAutoplay).not.toHaveBeenCalled();
@@ -337,7 +337,7 @@ describe("VoiceMessageAudio", () => {
     render(<VoiceMessageAudio message={agentSynthesisMessage("failed")} />);
 
     expect(screen.getByRole("button", { name: "Voice unavailable" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("Voice unavailable");
+    expect(screen.getByTestId("voice-side-status")).toHaveTextContent("Voice unavailable");
     expect(screen.getByRole("button", { name: "Show transcript" })).toBeEnabled();
     expect(playbackMocks.prepareVoiceAudio).not.toHaveBeenCalled();
     expect(playbackMocks.claimVoiceAutoplay).not.toHaveBeenCalled();
@@ -446,5 +446,100 @@ describe("VoiceMessageAudio", () => {
     expect(await screen.findByRole("button", {
       name: "Voice playback failed · Retry",
     })).toBeInTheDocument();
+  });
+
+  describe("preparing state a11y (LRM-1266)", () => {
+    /** Hold `loading` open so the in-flight frame can be inspected. */
+    function stallPreparation() {
+      let release: () => void = () => {};
+      playbackMocks.prepareVoiceAudio.mockReset().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ audio: new ArrayBuffer(4), durationMs: 3200 });
+          }),
+      );
+      return () => release();
+    }
+
+    it("keeps the keyboard focus it was given while playback is preparing", async () => {
+      playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
+      const release = stallPreparation();
+      render(<VoiceMessageAudio message={agentVoiceMessage()} />);
+
+      const control = screen.getByTestId("voice-reply-control");
+      control.focus();
+      expect(document.activeElement).toBe(control);
+
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(control).toHaveAttribute("aria-busy", "true"));
+
+      // A native `disabled` here drops focus to BODY: this bubble owns no other
+      // focusable node while the transcript toggle is absent, so the keyboard
+      // user loses their place in the message list (LRM-1213/1251 family).
+      expect(control).not.toHaveAttribute("disabled");
+      expect(control).toHaveAttribute("aria-disabled", "true");
+      expect(document.activeElement).toBe(control);
+      expect(document.activeElement).not.toBe(document.body);
+
+      release();
+    });
+
+    it("refuses a second activation while preparing instead of double-starting", async () => {
+      playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
+      const release = stallPreparation();
+      render(<VoiceMessageAudio message={agentVoiceMessage()} />);
+
+      const control = screen.getByTestId("voice-reply-control");
+      await userEvent.click(control);
+      await waitFor(() => expect(control).toHaveAttribute("aria-busy", "true"));
+      // The bubble also pre-warms duration on mount, so compare against the
+      // count taken right after the first real activation.
+      const callsAfterFirst = playbackMocks.prepareVoiceAudio.mock.calls.length;
+
+      await userEvent.click(control);
+      control.focus();
+      await userEvent.keyboard("{Enter}");
+
+      expect(playbackMocks.prepareVoiceAudio.mock.calls.length).toBe(callsAfterFirst);
+      expect(playbackMocks.startPreparedVoicePlayback).not.toHaveBeenCalled();
+
+      release();
+    });
+
+    it("announces playback state in a standing live region, not on the control", async () => {
+      playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
+      const release = stallPreparation();
+      render(<VoiceMessageAudio message={agentVoiceMessage()} />);
+
+      const control = screen.getByTestId("voice-reply-control");
+      // Every child of the control is aria-hidden and its name comes from
+      // `aria-label`, so a live region on the control itself has nothing to
+      // announce and makes some readers re-read the whole button per flip.
+      expect(control).not.toHaveAttribute("aria-live");
+
+      const live = screen.getByTestId("voice-playback-status");
+      expect(live).toHaveAttribute("aria-live", "polite");
+      // Standing region (LRM-1225): mounted empty BEFORE the state change, so
+      // the change is what gets announced.
+      expect(live).toBeEmptyDOMElement();
+
+      await userEvent.click(control);
+      await waitFor(() => expect(live).toHaveTextContent("Preparing voice reply…"));
+
+      release();
+    });
+
+    it("announces a terminal playback failure in the same live region", async () => {
+      playbackMocks.claimVoiceAutoplay.mockReturnValue(false);
+      playbackMocks.prepareVoiceAudio.mockReset().mockRejectedValue(new Error("nope"));
+      render(<VoiceMessageAudio message={agentVoiceMessage()} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("voice-playback-status")).toHaveTextContent(
+          "Voice playback failed · Retry",
+        ),
+      );
+      expect(screen.getByTestId("voice-reply-control")).not.toHaveAttribute("aria-disabled");
+    });
   });
 });

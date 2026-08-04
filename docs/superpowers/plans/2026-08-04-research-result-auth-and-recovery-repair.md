@@ -35,6 +35,7 @@
 - [x] 整个 Go 测试集通过。首次与前端测试并行执行时 `pkg/agent` 的时序测试失败；该包无缓存单独重跑通过，随后 `go test -p 1 ./...` 整体重跑通过，未发现与调研改动相关的失败。
 - [x] 合并最新 `origin/dev`（`86de3d724`），无冲突。
 - [x] 合并 `dev` 后重新验证：后端 `handler`、`researchrun`、`daemon`、`taskfailure` 通过；调研前端 87 个文件、515 个测试通过、2 个既有预期失败；全仓类型检查和修改文件 lint 通过。
+- [x] PR 首轮 frontend CI 在 React Doctor 阶段发现节点指标使用 `.filter().map()` 两次遍历；改为单次遍历后 React Doctor 为 0 issues，节点详情测试、类型检查和 ESLint 通过。
 - [ ] 提交非草稿 PR、合并到 `dev`、确认部署。
 
 ## 非目标

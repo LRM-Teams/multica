@@ -238,6 +238,10 @@ function buildNodeRunContext(
     ["tasks", labels.tasks, firstNumber(records, "tasks_created") ?? 0],
     ["questions", labels.questions, firstNumber(records, "questions_created") ?? 0],
   ] as const;
+  const metrics: NodeRunContext["metrics"] = [];
+  for (const [key, label, value] of metricInputs) {
+    if (value > 0) metrics.push({ key, label, value });
+  }
 
   return {
     task,
@@ -248,9 +252,7 @@ function buildNodeRunContext(
       task?.objective || firstString(records, ["objective", "goal", "question", "small_goal"]),
     genericMethod: firstString(records, ["method", "approach", "strategy", "plan"]),
     result: firstString(records, ["result", "outcome", "conclusion"]) || node.summary || null,
-    metrics: metricInputs
-      .filter(([, , value]) => value > 0)
-      .map(([key, label, value]) => ({ key, label, value })),
+    metrics,
     reportCreated: Boolean(firstString(records, ["report_id"])),
     producedSources,
     producedObservations,

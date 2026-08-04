@@ -9,19 +9,19 @@ import {
   PropertyPicker,
 } from "../../../issues/components/pickers";
 import { ProviderLogo } from "../../../runtimes/components/provider-logo";
-import { filterRuntimesOnBoundComputer } from "../../../runtimes/components/runtime-machines";
 import { CHIP_CLASS } from "./chip";
 import { useT } from "../../../i18n";
 import {
   runtimePickerBrandLabel,
   runtimePickerHostSubtitle,
 } from "../runtime-picker-labels";
+import { runtimePickerOptions } from "./runtime-picker-options";
 
 /**
  * Inline runtime/code-agent picker for the agent inspector.
- * Computer is bound at create time and shown as a separate read-only row —
- * this picker only lists code agents on the same computer, so changing it
- * cannot move the agent to another machine.
+ * The selected runtime also determines the agent's computer. Durable memory is
+ * synchronized before each turn, so eligible runtimes on other computers are
+ * valid move targets; server capability gates reject outdated target daemons.
  */
 export function RuntimePicker({
   value,
@@ -29,12 +29,6 @@ export function RuntimePicker({
   members,
   currentUserId,
   canEdit = true,
-  /**
-   * Agent's saved runtime id — locks the option list to that computer even
-   * while the draft `value` changes inside RuntimeConfigDialog (LRM-1365).
-   * Defaults to `value` when omitted (read-only summary / single-shot edit).
-   */
-  boundRuntimeId,
   onChange,
 }: {
   value: string;
@@ -43,6 +37,7 @@ export function RuntimePicker({
   currentUserId: string | null;
   /** When false, render a static read-only display and skip the popover. */
   canEdit?: boolean;
+  /** Retained for RuntimeConfigDialog compatibility; cross-machine moves no longer lock to it. */
   boundRuntimeId?: string;
   onChange: (runtimeId: string) => Promise<void> | void;
 }) {
@@ -51,37 +46,13 @@ export function RuntimePicker({
 
   const selected = runtimes.find((r) => r.id === value) ?? null;
   const Icon = selected?.runtime_mode === "cloud" ? Cloud : Monitor;
-  // Lock to the agent's bound computer (saved runtime), not the draft
-  // selection — otherwise picking a mis-grouped option could expand the
-  // list onto another machine. Prefer explicit boundRuntimeId from the
-  // dialog; fall back to value. When that runtime is missing from
-  // `runtimes` (deleted / not loaded), fall back to the full list so the
-  // user can re-bind (orphan recovery) — not a cross-machine move of a
-  // still-present binding.
-  const lockId = boundRuntimeId || value;
-  const sameComputerRuntimes = useMemo(() => {
-    const boundRuntime = runtimes.find((r) => r.id === lockId) ?? null;
-    if (!boundRuntime) return runtimes;
-    return filterRuntimesOnBoundComputer(boundRuntime, runtimes);
-  }, [runtimes, lockId]);
-
   // Others' private runtimes are excluded outright, not shown-disabled — a
   // private runtime that isn't mine and isn't public has nothing for me to
   // do with it.
-  const filtered = useMemo(() => {
-    const isUsable = (r: AgentRuntime): boolean => {
-      if (!currentUserId) return true;
-      if (r.owner_id === currentUserId) return true;
-      return r.visibility === "public";
-    };
-    return sameComputerRuntimes.filter(isUsable).toSorted((a, b) => {
-      const aMine = a.owner_id === currentUserId;
-      const bMine = b.owner_id === currentUserId;
-      if (aMine && !bMine) return -1;
-      if (!aMine && bMine) return 1;
-      return 0;
-    });
-  }, [sameComputerRuntimes, currentUserId]);
+  const filtered = useMemo(
+    () => runtimePickerOptions(runtimes, currentUserId),
+    [runtimes, currentUserId],
+  );
 
   const brandLabel = selected
     ? runtimePickerBrandLabel(selected)

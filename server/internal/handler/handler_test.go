@@ -473,12 +473,7 @@ func createHandlerTestAgent(t *testing.T, displayName string, mcpConfig []byte) 
 }
 
 // createHandlerTestAgentOnRuntime is createHandlerTestAgent with an explicit
-// starting runtime instead of the shared handlerTestRuntimeID(t) fixture —
-// needed by tests that then move the agent to a *different* runtime on the
-// same daemon: handlerTestRuntimeID's daemon_id is NULL, which
-// runtimesShareMachine treats as its own unshareable machine, so a fixture
-// starting there can never legally move anywhere under the machine-lock rule
-// (Frank's rule, 2026-08-02).
+// starting runtime instead of the shared handlerTestRuntimeID(t) fixture.
 func createHandlerTestAgentOnRuntime(t *testing.T, displayName, runtimeID string) string {
 	t.Helper()
 	return createHandlerTestAgentOnRuntimeWithMcpConfig(t, displayName, runtimeID, nil)
@@ -505,9 +500,8 @@ func createHandlerTestAgentOnRuntimeWithMcpConfig(t *testing.T, displayName, run
 	return agentID
 }
 
-// seedMachineLockedRuntime creates a `local` runtime with the given
-// daemon_id — two runtimes sharing a daemonID pass runtimesShareMachine, so
-// tests can construct a "move to a different runtime, same computer" case.
+// seedMachineLockedRuntime creates a `local` runtime with the given daemon_id,
+// allowing tests to model same- and cross-computer runtime moves.
 // visibility 'public' so any workspace member can bind an agent to it.
 func seedMachineLockedRuntime(t *testing.T, daemonID, name string) string {
 	t.Helper()

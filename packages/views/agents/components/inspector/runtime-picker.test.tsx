@@ -75,7 +75,7 @@ function renderPicker(
   );
 }
 
-describe("RuntimePicker computer lock (LRM-1365)", () => {
+describe("RuntimePicker cross-computer moves", () => {
   beforeEach(() => {
     cleanup();
   });
@@ -83,7 +83,7 @@ describe("RuntimePicker computer lock (LRM-1365)", () => {
     cleanup();
   });
 
-  it("excludes other computers even when hostname text overlaps", () => {
+  it("includes eligible runtimes from other computers even when hostname text overlaps", () => {
     const onUbuntu = makeRuntime({
       id: "rt-ubuntu-kiro",
       daemon_id: "daemon-ubuntu",
@@ -117,10 +117,10 @@ describe("RuntimePicker computer lock (LRM-1365)", () => {
     // Trigger + list row both show the selected brand.
     expect(screen.getAllByText("Kiro").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Cursor")).toBeInTheDocument();
-    expect(screen.queryByText("Codex CLI")).toBeNull();
+    expect(screen.getByText("Codex CLI")).toBeInTheDocument();
   });
 
-  it("keeps the bound computer filter when draft value points elsewhere", () => {
+  it("does not let boundRuntimeId hide a cross-computer draft selection", () => {
     const onUbuntu = makeRuntime({
       id: "rt-ubuntu",
       daemon_id: "daemon-ubuntu",
@@ -142,11 +142,13 @@ describe("RuntimePicker computer lock (LRM-1365)", () => {
     });
 
     fireEvent.click(screen.getByRole("button"));
-    // Trigger may still render the draft brand (Kiro); options must only
-    // list the bound computer's peers (Cursor).
+    // Trigger renders the draft brand and both computers remain selectable.
     const optionLabels = screen
       .getAllByText(/^(Cursor|Kiro)$/)
       .filter((el) => el.className.includes("text-sm"));
-    expect(optionLabels.map((el) => el.textContent)).toEqual(["Cursor"]);
+    expect(optionLabels.map((el) => el.textContent)).toEqual([
+      "Cursor",
+      "Kiro",
+    ]);
   });
 });

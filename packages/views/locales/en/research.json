@@ -45,7 +45,8 @@
     "output_line": "Output · {{summary}}",
     "no_output": "Output · none yet",
     "recent_heading": "Recent research",
-    "recent_count": "{{count}}"
+    "recent_count": "{{count}}",
+    "stage_energy_aria": "{{stage}} · {{status}}, {{done}}/4 stages complete"
   },
   "filter": {
     "search_label": "Search session titles",

@@ -8,6 +8,7 @@ import { AppLink } from "../../navigation/app-link";
 import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
 import { sessionDisplayTitle } from "../lib/session-list-filter";
 import { ResearchSessionRowActions } from "./research-session-row-actions";
+import { ResearchSessionStageEnergy } from "./research-session-stage-energy";
 
 type StatusTone = { text: string; dot: string };
 
@@ -39,9 +40,9 @@ function leadName(session: ResearchSession): string | null {
 }
 
 /**
- * LRM-1106 row — status · title+meta · stage · time · people · ⋯
+ * LRM-1106 row — status · title+meta · stage energy · time · people · ⋯
  * No inline goal chip (D2 → ⋯「查看目标」). Time uses `<Time kind="list">` (D3).
- * Breakpoint: md / 768 only.
+ * Stage energy: LRM-1285 / LRM-1279. Breakpoint: md / 768 only.
  */
 export function ResearchSessionRow({
   session,
@@ -53,9 +54,6 @@ export function ResearchSessionRow({
   const status = session.status;
   const tone = STATUS_TONES[status] ?? DEFAULT_TONE;
   const statusLabel = t(($) => $.status[status as keyof typeof $.status] ?? status);
-  const stageLabel = t(
-    ($) => $.stage[session.current_stage as keyof typeof $.stage] ?? session.current_stage,
-  );
   const fleetIds = (session.fleet_preview ?? []).map((m) => m.agent_id);
   const title = sessionDisplayTitle(session);
   const who = leadName(session);
@@ -115,14 +113,12 @@ export function ResearchSessionRow({
                 {t(($) => $.list.who_working, { name: who })}
               </span>
             ) : null}
-            {/* Narrow: fold stage · time into the secondary line. */}
-            <span className="inline-flex min-w-0 items-center gap-1.5 md:hidden">
-              {(awaiting || who) && stageLabel ? (
-                <span aria-hidden className="text-muted-foreground/50">
-                  ·
-                </span>
-              ) : null}
-              <span className="shrink-0 font-medium text-foreground/80">{stageLabel}</span>
+            {/* Narrow: fold stage energy · time into the secondary line. */}
+            <span className="flex basis-full min-w-0 items-center gap-1.5 md:hidden">
+              <ResearchSessionStageEnergy
+                currentStage={session.current_stage}
+                sessionStatus={status}
+              />
               <span aria-hidden className="text-muted-foreground/50">
                 ·
               </span>
@@ -132,13 +128,12 @@ export function ResearchSessionRow({
         </AppLink>
       </div>
 
-      {/* Desktop columns: stage | time | people */}
-      <span
-        className="hidden shrink-0 text-xs font-medium text-foreground/80 md:inline"
-        aria-hidden
-      >
-        {stageLabel}
-      </span>
+      {/* Desktop columns: stage energy | time | people */}
+      <ResearchSessionStageEnergy
+        currentStage={session.current_stage}
+        sessionStatus={status}
+        className="relative z-[1] hidden md:inline-flex"
+      />
       <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground md:inline" aria-hidden>
         <Time kind="list" value={session.updated_at} />
       </span>

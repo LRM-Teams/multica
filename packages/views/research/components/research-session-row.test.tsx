@@ -129,8 +129,9 @@ describe("ResearchSessionRow (LRM-1106 / LRM-1099)", () => {
     expect(screen.queryByTestId("research-session-goal-chip")).toBeNull();
   });
 
-  it("keeps stage · list Time; avatars yield below md; lead name without 进行中 suffix", () => {
+  it("keeps stage energy · list Time; avatars yield below md; lead name without 进行中 suffix", () => {
     render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    expect(screen.getAllByTestId("research-session-stage-energy").length).toBeGreaterThan(0);
     expect(screen.getAllByText(enResearch.stage.s2_sources).length).toBeGreaterThan(0);
     expect(screen.getAllByTestId("list-time")[0]?.textContent).toContain(
       "list:2026-07-30T03:00:00Z",
@@ -140,6 +141,20 @@ describe("ResearchSessionRow (LRM-1106 / LRM-1099)", () => {
     expect(screen.getByTestId("avatar-stack").className).toContain("hidden");
     expect(screen.getByTestId("avatar-stack").className).toContain("md:flex");
     expect(avatarStackRef.agentIds).toEqual(["agent-1", "agent-2"]);
+  });
+
+  it("LRM-1285: energy badge uses resolveStageStepState for running S2", () => {
+    const { container } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    const badge = container.querySelector(
+      '[data-testid="research-session-stage-energy"].hidden.md\\:inline-flex, [data-testid="research-session-stage-energy"]',
+    );
+    // Prefer desktop instance when both exist; assert segment states on first badge.
+    const first = screen.getAllByTestId("research-session-stage-energy")[0];
+    const states = [...(first?.querySelectorAll("[data-stage-state]") ?? [])].map((el) =>
+      el.getAttribute("data-stage-state"),
+    );
+    expect(states).toEqual(["done", "current", "upcoming", "upcoming"]);
+    expect(badge).toBeTruthy();
   });
 
   it("uses CSS truncate for long empty-title goals (no hard char ellipsis)", () => {

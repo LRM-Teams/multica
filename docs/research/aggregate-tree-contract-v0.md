@@ -12,8 +12,9 @@ edge colors.
 | `supports` / `contradicts` / `supersedes` / `abandons` | Semantic only. Never used for `parent_id` / counts. |
 
 Invariant: at most one tree parent. If multiple inbound `leads_to` exist, the
-earliest by `created_at` wins for `parent_id`; others remain visible on `edges`
-for diagnostics.
+earliest by `created_at` wins for `parent_id` **and** for the winner's
+`child_ids` / counts; losing parents must not list that child. Losing edges
+remain visible on `edges` for diagnostics only.
 
 ## Node fields (snapshot `GET …/sessions/{id}` → `nodes[]`)
 

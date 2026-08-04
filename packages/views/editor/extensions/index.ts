@@ -160,6 +160,8 @@ export interface EditorExtensionsOptions {
    *  can @mention a channel co-member agent they couldn't assign (e.g. a
    *  teammate's private Wendy). Ignored outside channel scope. */
   getMentionScopedAgents?: () => readonly MentionAgentCandidate[] | null | undefined;
+  /** #35: channel membership ids for IN / NOT IN section headers (not a filter). */
+  getMentionChannelMemberIds?: () => ReadonlySet<string> | null | undefined;
   /** When true, attach the `/` picker. Default false. */
   enableSlashCommands?: boolean;
   /**
@@ -240,7 +242,7 @@ export function createEditorExtensions(
       ...(options.disableMentions
         ? { suggestion: { allow: () => false } }
         : options.queryClient
-          ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems, getAllowedActorIds: options.getMentionAllowedActorIds, getScopedAgents: options.getMentionScopedAgents }) }
+          ? { suggestion: createMentionSuggestion(options.queryClient, { mode: options.mentionMode, getContextItems: options.getMentionContextItems, getAllowedActorIds: options.getMentionAllowedActorIds, getScopedAgents: options.getMentionScopedAgents, getChannelMemberIds: options.getMentionChannelMemberIds }) }
           : {}),
     }),
     // Bare, unconfigured — parsing-only, see enableChannelReferences above.

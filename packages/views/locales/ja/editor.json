@@ -83,6 +83,8 @@
     "group_issues": "イシュー",
     "group_channels": "チャンネル",
     "group_members": "メンバー",
+    "group_in_channel": "このチャンネル",
+    "group_not_in_channel": "このチャンネル外",
     "all_members": "すべてのメンバー",
     "all_members_hint": "この会話の全員に通知",
     "searching": "検索中...",

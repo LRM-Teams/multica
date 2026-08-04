@@ -272,8 +272,8 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
         /data-testid="research-report-outline-aside"\s+className="[^"]*\bmd:block"/,
       );
       expect(listPage).toMatch(/className="hidden text-xs text-muted-foreground md:block"/);
-      // LRM-1285: desktop stage energy is a fixed w-28 md:block slot (not md:inline —
-      // md:inline alone shrink-to-fits and drifts with title length).
+      // LRM-1106: no goal chip; LRM-1285: desktop stage/time use fixed md:block slots
+      // (md:inline alone shrink-to-fits and drifts with title length).
       expect(row).toMatch(/data-testid="research-session-stage-energy-slot"/);
       expect(row).toMatch(
         /className="relative z-\[1\] hidden w-28 shrink-0 md:block"/,
@@ -318,8 +318,9 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
         const desktopStage = screen.getByTestId(
           "research-session-stage-energy-slot",
         );
-        expect(desktopStage.className).toMatch(/\bmd:block\b/);
+        expect(desktopStage.className).toMatch(/\bhidden\b/);
         expect(desktopStage.className).toMatch(/\bw-28\b/);
+        expect(desktopStage.className).toMatch(/\bmd:block\b/);
         expect(desktopStage.className).not.toMatch(FORBIDDEN_STRUCTURAL_SM);
         expect(screen.getByTestId("avatar-stack").className).toMatch(/\bhidden\b/);
         expect(screen.getByTestId("avatar-stack").className).toMatch(/\bmd:flex\b/);

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -241,6 +242,12 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 			writeError(w, http.StatusBadRequest, "invalid runtime_id")
 			return db.AgentRuntime{}, false
 		}
+		// Task #123 L1: explicit runtime_id still must be heartbeat-fresh.
+		// Otherwise a client can bind Wendy to a dead "online" row for ~150s.
+		if !runtimeIsPickableOnline(runtime, time.Now()) {
+			writeError(w, http.StatusUnprocessableEntity, "runtime is offline or heartbeat is stale")
+			return db.AgentRuntime{}, false
+		}
 		return runtime, true
 	}
 
@@ -253,17 +260,20 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 		writeError(w, http.StatusBadRequest, "connect a runtime before creating Wendy")
 		return db.AgentRuntime{}, false
 	}
+	now := time.Now()
 	for _, rt := range runtimes {
-		if rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(userID) && rt.Status == "online" {
+		if rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(userID) && runtimeIsPickableOnline(rt, now) {
 			return rt, true
 		}
 	}
 	for _, rt := range runtimes {
-		if rt.Status == "online" {
+		if runtimeIsPickableOnline(rt, now) {
 			return rt, true
 		}
 	}
-	return runtimes[0], true
+	// Fail closed: do not fall back to a ghost first-visible row.
+	writeError(w, http.StatusUnprocessableEntity, "no online runtime with a fresh heartbeat; start or reconnect a machine first")
+	return db.AgentRuntime{}, false
 }
 
 // ensureWindyAgent resolves the workspace's single onboarding agent via

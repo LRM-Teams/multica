@@ -140,7 +140,7 @@ describe("ReadonlyContent memoization", () => {
 });
 
 describe("ReadonlyContent math rendering", () => {
-  it("renders inline and block LaTeX with KaTeX markup", () => {
+  it("renders inline and block LaTeX after the lazy KaTeX plugins load", async () => {
     const { container } = render(
       <ReadonlyContent
         content={[
@@ -153,9 +153,12 @@ describe("ReadonlyContent math rendering", () => {
       />,
     );
 
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(2);
+      expect(container.querySelector(".katex-display")).not.toBeNull();
+    });
+
     const text = container.textContent?.replace(/\s+/g, " ") ?? "";
-    expect(container.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(2);
-    expect(container.querySelector(".katex-display")).not.toBeNull();
     expect(text).toContain("E = mc^2");
     expect(text).toContain("\\int_0^1 x^2 \\, dx");
   });

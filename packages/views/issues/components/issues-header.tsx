@@ -568,7 +568,7 @@ export function IssuesHeader({
   const scopeLabel = t(($) => $.scope[SCOPE_LABEL_KEY[scope]]);
 
   return (
-    <div className="h-12 shrink-0 overflow-x-auto px-4 [-webkit-overflow-scrolling:touch]">
+    <div className="h-12 shrink-0 overflow-x-auto px-4 momentum-scroll">
       <div className="flex h-full w-max min-w-full items-center justify-between gap-2">
         {/* Left: filter label + scope pills */}
         <div className="hidden shrink-0 items-center gap-1.5 md:flex">

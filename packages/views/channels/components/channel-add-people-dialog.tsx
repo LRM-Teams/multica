@@ -166,7 +166,7 @@ export function ChannelAddPeopleDialog({
           {t(($) => $.members.suggestions)}
         </p>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch] pb-2">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain momentum-scroll pb-2">
           {showError ? (
             <div
               className="mx-5 my-6 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-6 text-center text-sm text-destructive"

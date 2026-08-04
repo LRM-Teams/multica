@@ -283,6 +283,27 @@
     "syncing_body": "The run ledger is available, but its canvas projection has not arrived yet. Existing canvas data remains visible."
   },
   "node": {
+    "decision_question": "Decision question",
+    "phase": "Phase",
+    "started_at": "Started",
+    "updated_at": "Updated",
+    "duration": "Duration",
+    "duration_minutes": "{{count}} min",
+    "input": "Input",
+    "input_empty": "No displayable input yet.",
+    "output": "Output",
+    "output_empty": "No displayable output yet.",
+    "gate_blocker": "Gate blocker",
+    "next_step": "Next step",
+    "expand_content": "Show full text",
+    "collapse_content": "Collapse text",
+    "next_steps": {
+      "queued": "Wait for an executor to claim this task.",
+      "running": "Wait for this attempt to return a structured result.",
+      "retry": "Retry this task or assign another executor.",
+      "review_gate": "Resolve the quality-gate findings, then run the gate again.",
+      "review_result": "Review the linked evidence and resulting claims."
+    },
     "goal": "Goal",
     "subquestion": "Sub-question",
     "probe": "Probe",

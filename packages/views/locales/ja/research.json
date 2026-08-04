@@ -283,6 +283,27 @@
     "syncing_body": "The run ledger is available, but its canvas projection has not arrived yet. Existing canvas data remains visible."
   },
   "node": {
+    "decision_question": "判断する問い",
+    "phase": "フェーズ",
+    "started_at": "開始",
+    "updated_at": "更新",
+    "duration": "所要時間",
+    "duration_minutes": "{{count}} 分",
+    "input": "入力",
+    "input_empty": "表示できる入力はまだありません。",
+    "output": "出力",
+    "output_empty": "表示できる出力はまだありません。",
+    "gate_blocker": "ゲートの阻害要因",
+    "next_step": "次のステップ",
+    "expand_content": "全文を表示",
+    "collapse_content": "全文を閉じる",
+    "next_steps": {
+      "queued": "実行者がこのタスクを取得するのを待ちます。",
+      "running": "今回の実行が構造化された結果を返すのを待ちます。",
+      "retry": "このタスクを再試行するか、別の実行者に割り当てます。",
+      "review_gate": "品質ゲートの指摘を解消してから再実行します。",
+      "review_result": "関連する根拠と生成された主張を確認します。"
+    },
     "goal": "Goal",
     "subquestion": "Sub-question",
     "probe": "Probe",

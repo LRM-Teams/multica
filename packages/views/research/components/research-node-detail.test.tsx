@@ -61,6 +61,27 @@ vi.mock("../../i18n/use-t", () => ({
           task_count: "New tasks",
           question_count: "New questions",
           report_created: "Report produced",
+          decision_question: "Decision question",
+          phase: "Phase",
+          started_at: "Started",
+          updated_at: "Updated",
+          duration: "Duration",
+          duration_minutes: "{{count}} min",
+          input: "Input",
+          input_empty: "No input",
+          output: "Output",
+          output_empty: "No output",
+          gate_blocker: "Gate blocker",
+          next_step: "Next step",
+          expand_content: "Show full text",
+          collapse_content: "Collapse text",
+          next_steps: {
+            queued: "Wait for claim.",
+            running: "Wait for structured result.",
+            retry: "Retry or reassign.",
+            review_gate: "Resolve gate findings.",
+            review_result: "Review evidence and claims.",
+          },
           task_kinds: {
             discover: "Discover and select sources",
           },
@@ -96,6 +117,10 @@ vi.mock("../../i18n/use-t", () => ({
         },
       }),
   }),
+}));
+
+vi.mock("../../i18n/time", () => ({
+  Time: ({ value }: { value: string }) => <time dateTime={value}>{value}</time>,
 }));
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
@@ -160,7 +185,6 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     expect(el).toBeInTheDocument();
     expect(el).toHaveAttribute("data-placement", "overlay-card");
     expect(screen.getByText("价格区间已交叉验证")).toBeInTheDocument();
-    expect(screen.getByText("挂牌中位价与成交价差约 8%。")).toBeInTheDocument();
     expect(screen.getByText("成交样本")).toBeInTheDocument();
     expect(screen.getByText("Done")).toBeInTheDocument();
     expect(screen.queryByText("done")).toBeNull();
@@ -310,6 +334,7 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
         event_type: "task_result_accepted",
         details: {
           task_id: "task-1",
+          question_id: "question-1",
           attempt_id: "attempt-1",
           agent_id: "agent-1",
           task_kind: "discover",
@@ -326,6 +351,7 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
       tasks: [
         {
           id: "task-1",
+          question_id: "question-1",
           client_key: "market-prices",
           kind: "discover",
           objective: "Collect two independent primary sources for transaction prices.",
@@ -442,18 +468,19 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
       />,
     );
 
-    expect(screen.getByText("Objective")).toBeInTheDocument();
-    expect(
-      screen.getByText("Collect two independent primary sources for transaction prices."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Decision question")).toBeInTheDocument();
+    expect(screen.queryByText("Collect two independent primary sources for transaction prices.")).toBeNull();
+    expect(screen.getAllByText("Why does the listing-to-transaction price gap persist?").length).toBeGreaterThan(0);
+    expect(screen.getByText("Input")).toBeInTheDocument();
+    expect(screen.getByText("Output")).toBeInTheDocument();
     expect(screen.getByText("Method")).toBeInTheDocument();
     expect(
       screen.getByText("Search candidate sources and create evidence snapshots"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Scout Ada")).toBeInTheDocument();
+    expect(screen.getAllByText("Scout Ada").length).toBeGreaterThan(0);
     expect(screen.getByText("Discover and select sources")).toBeInTheDocument();
     expect(screen.getByText("Required role:")).toBeInTheDocument();
-    expect(screen.getByText("Reviewable evidence package")).toBeInTheDocument();
+    expect(screen.getAllByText("Reviewable evidence package").length).toBeGreaterThan(0);
     expect(screen.getByText("Completed")).toBeInTheDocument();
     expect(screen.getByText("Sources 2")).toBeInTheDocument();
     expect(screen.getByText("Observations 3")).toBeInTheDocument();
@@ -461,19 +488,13 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
     expect(screen.getByText("New tasks 4")).toBeInTheDocument();
     expect(screen.getByText("New questions 2")).toBeInTheDocument();
     expect(screen.getByText("Report produced")).toBeInTheDocument();
-    expect(screen.getByText("Primary transaction register")).toBeInTheDocument();
-    expect(
-      screen.getByText("Registry row 8 reports a 920,000 median transaction price."),
-    ).toBeInTheDocument();
     expect(screen.getByText("The median transaction price is 920,000.")).toBeInTheDocument();
     expect(
-      screen.getByText("Verify the price range against the public registry."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Why does the listing-to-transaction price gap persist?"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Pricing evidence now has independent corroboration."),
-    ).toBeInTheDocument();
+      screen.queryByText("Verify the price range against the public registry."),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText("Why does the listing-to-transaction price gap persist?").length).toBeGreaterThan(0);
+    expect(screen.getByText("Next step")).toBeInTheDocument();
+    expect(screen.getByText("Review evidence and claims.")).toBeInTheDocument();
+    expect(screen.getByText("No evidence")).toBeInTheDocument();
   });
 });

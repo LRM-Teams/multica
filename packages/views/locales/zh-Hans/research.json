@@ -283,6 +283,27 @@
     "syncing_body": "运行账本已可用，但画布投影尚未到达；现有画布内容会继续显示。"
   },
   "node": {
+    "decision_question": "决策问题",
+    "phase": "阶段",
+    "started_at": "开始",
+    "updated_at": "更新",
+    "duration": "时长",
+    "duration_minutes": "{{count}} 分钟",
+    "input": "输入",
+    "input_empty": "暂无可展示输入。",
+    "output": "输出",
+    "output_empty": "暂无可展示输出。",
+    "gate_blocker": "门槛阻塞",
+    "next_step": "下一步",
+    "expand_content": "展开全文",
+    "collapse_content": "收起全文",
+    "next_steps": {
+      "queued": "等待执行者领取此任务。",
+      "running": "等待本次执行返回结构化结果。",
+      "retry": "重试此任务，或改派其他执行者。",
+      "review_gate": "处理质量门槛问题后，重新执行检查。",
+      "review_result": "复核关联证据与产出的研究主张。"
+    },
     "goal": "目标",
     "subquestion": "子问题",
     "probe": "探查",

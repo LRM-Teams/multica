@@ -20,6 +20,7 @@ import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { X } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useMemo } from "react";
+import { Time } from "../../i18n/time";
 import { useT } from "../../i18n/use-t";
 import { useOverlayPanelA11y } from "../hooks/use-overlay-panel-a11y";
 import { isAbandonedStatus, readAbandonReason } from "../lib/abandon-reason";
@@ -55,6 +56,14 @@ function firstString(records: Record<string, unknown>[], keys: string[]): string
     }
   }
   return null;
+}
+
+function elapsedMinutes(start: string | undefined, end: string | undefined): number | null {
+  if (!start || !end) return null;
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return null;
+  return Math.max(1, Math.round((endMs - startMs) / 60_000));
 }
 
 function firstNumber(records: Record<string, unknown>[], key: string): number | null {
@@ -184,16 +193,19 @@ type NodeRunContext = {
   attempt: ResearchRunAttempt | undefined;
   actorID: string | null;
   actor: ResearchFleetMember | undefined;
-  objective: string | null;
   genericMethod: string | null;
-  result: string | null;
   metrics: Array<{ key: string; label: string; value: number }>;
   reportCreated: boolean;
   producedSources: ResearchRunSnapshot["sources"];
   producedObservations: ResearchRunSnapshot["observations"];
   producedClaims: ResearchRunSnapshot["claims"];
-  createdTasks: ResearchRunSnapshot["tasks"];
   createdQuestions: ResearchRunSnapshot["questions"];
+  decisionQuestion: string | null;
+  phase: string | null;
+  startedAt: string | undefined;
+  completedAt: string | undefined;
+  gateBlockers: string[];
+  nextStep: "queued" | "running" | "retry" | "review_gate" | "review_result" | null;
 };
 
 function buildNodeRunContext(
@@ -212,6 +224,7 @@ function buildNodeRunContext(
   const details = payloadRecord(payload.details);
   const records = [details, payload];
   const taskID = firstString(records, ["task_id"]);
+  const questionID = firstString(records, ["question_id"]);
   const attemptID = firstString(records, ["attempt_id"]);
   const task = taskID ? run?.tasks.find((item) => item.id === taskID) : undefined;
   const attempts = taskID ? (run?.attempts ?? []).filter((item) => item.task_id === taskID) : [];
@@ -234,12 +247,33 @@ function buildNodeRunContext(
   const producedClaims = taskID
     ? (run?.claims ?? []).filter((item) => item.produced_by_task_id === taskID)
     : [];
-  const createdTasks = taskID
-    ? (run?.tasks ?? []).filter((item) => item.parent_task_id === taskID)
-    : [];
   const createdQuestions = taskID
     ? (run?.questions ?? []).filter((item) => item.created_by_task_id === taskID)
     : [];
+  const question = (questionID || task?.question_id)
+    ? run?.questions.find((item) => item.id === (questionID || task?.question_id))
+    : undefined;
+  const gateBlockers =
+    node.node_type === "stage_gate" && run?.gate.passed !== true
+      ? run?.gate.findings.flatMap((finding) => {
+          const message = finding.message.trim();
+          return message ? [message] : [];
+        }) ?? []
+      : [];
+  const taskStatus = task?.status.toLowerCase();
+  const attemptStatus = attempt?.status.toLowerCase();
+  const nextStep: NodeRunContext["nextStep"] =
+    node.node_type === "stage_gate" && gateBlockers.length > 0
+      ? "review_gate"
+      : attemptStatus === "retryable_failed" || attemptStatus === "terminal_failed" || taskStatus === "failed"
+        ? "retry"
+        : attemptStatus === "claimed" || attemptStatus === "in_flight" || taskStatus === "in_flight"
+          ? "running"
+          : taskStatus === "queued" || taskStatus === "ready" || taskStatus === "pending"
+            ? "queued"
+            : taskStatus === "succeeded" || (Boolean(run) && node.node_type === "finding")
+              ? "review_result"
+              : null;
   const metricInputs = [
     ["sources", labels.sources, firstNumber(records, "sources_created") ?? producedSources.length],
     [
@@ -261,36 +295,21 @@ function buildNodeRunContext(
     attempt,
     actorID,
     actor,
-    objective:
-      task?.objective || firstString(records, ["objective", "goal", "question", "small_goal"]),
     genericMethod: firstString(records, ["method", "approach", "strategy", "plan"]),
-    result: firstString(records, ["result", "outcome", "conclusion"]) || node.summary || null,
     metrics,
     reportCreated: Boolean(firstString(records, ["report_id"])),
     producedSources,
     producedObservations,
     producedClaims,
-    createdTasks,
     createdQuestions,
+    decisionQuestion: question?.question?.trim() || null,
+    phase: node.phase?.trim() || firstString(records, ["phase"]),
+    startedAt: attempt?.started_at || task?.started_at || node.created_at,
+    completedAt:
+      attempt?.completed_at || attempt?.result_submitted_at || task?.completed_at || node.updated_at,
+    gateBlockers,
+    nextStep,
   };
-}
-
-function observationText(
-  observation: ResearchRunSnapshot["observations"][number],
-): string | null {
-  if (observation.quote?.trim()) return observation.quote.trim();
-  if (observation.interpretation?.trim()) return observation.interpretation.trim();
-  if (typeof observation.datum === "string" && observation.datum.trim()) {
-    return observation.datum.trim();
-  }
-  if (observation.datum && typeof observation.datum === "object") {
-    try {
-      return JSON.stringify(observation.datum);
-    } catch {
-      return null;
-    }
-  }
-  return null;
 }
 
 function typeLabelFor(
@@ -350,7 +369,6 @@ function DetailBody({
 
   const sourceId = payloadString(node.payload, "source_id");
   const linked = sourceId ? sources.find((s) => s.id === sourceId) : undefined;
-  const url = linked?.url || payloadString(node.payload, "url");
   const weight =
     linked?.credibility_weight ?? payloadNumber(node.payload, "credibility_weight");
   const sourceClass = linked?.source_class || payloadString(node.payload, "source_class");
@@ -380,6 +398,7 @@ function DetailBody({
   const method = taskMethodFor(runContext.task?.kind, t) || runContext.genericMethod;
   const executor = actorLabel(runContext.actor, runContext.actorID);
   const expectedResult = expectedResultLabelFor(runContext.task?.expected_result, t);
+  const durationMinutes = elapsedMinutes(runContext.startedAt, runContext.completedAt);
 
   // Only explicitly associated sources (source_id / source_ids). Never fall
   // back to session-wide sources — that would attribute other nodes' evidence
@@ -424,6 +443,16 @@ function DetailBody({
               {t(($) => $.panel.weight)} {weight.toFixed(2)}
             </Badge>
           ) : null}
+          {runContext.phase ? (
+            <Badge variant="outline" className="text-[10px]">
+              {t(($) => $.node.phase)} {runContext.phase}
+            </Badge>
+          ) : null}
+          {executor ? (
+            <Badge variant="outline" className="text-[10px]">
+              {executor}
+            </Badge>
+          ) : null}
           {typeof confidence === "number" ? (
             <Badge variant="secondary" className="text-[10px]">
               {t(($) => $.node.confidence)}{" "}
@@ -432,6 +461,25 @@ function DetailBody({
           ) : null}
         </div>
         <h2 className="text-base leading-snug font-semibold">{node.title}</h2>
+        {runContext.decisionQuestion ? (
+          <div className="mt-2">
+            <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {t(($) => $.node.decision_question)}
+            </p>
+            <p className="mt-0.5 text-sm leading-relaxed">{runContext.decisionQuestion}</p>
+          </div>
+        ) : null}
+        <dl className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+          {runContext.startedAt ? (
+            <div className="flex gap-1"><dt>{t(($) => $.node.started_at)}</dt><dd><Time kind="full" value={runContext.startedAt} /></dd></div>
+          ) : null}
+          {node.updated_at ? (
+            <div className="flex gap-1"><dt>{t(($) => $.node.updated_at)}</dt><dd><Time kind="full" value={node.updated_at} /></dd></div>
+          ) : null}
+          {durationMinutes ? (
+            <div className="flex gap-1"><dt>{t(($) => $.node.duration)}</dt><dd>{t(($) => $.node.duration_minutes, { count: durationMinutes })}</dd></div>
+          ) : null}
+        </dl>
         <p className="sr-only">{t(($) => $.node.detail_hint)}</p>
       </header>
 
@@ -439,14 +487,24 @@ function DetailBody({
         {/* LRM-1332: four content faces before run Objective/Method/Outcome. */}
         <ResearchNodeContentFaces node={node} density="detail" />
 
-        {runContext.objective ? (
-          <section>
-            <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-              {t(($) => $.node.objective)}
-            </h3>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-              {runContext.objective}
-            </p>
+        {runContext.task ? (
+          <section className="grid gap-3 rounded-lg border bg-muted/15 p-3 sm:grid-cols-2">
+            <div>
+              <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                {t(($) => $.node.input)}
+              </h3>
+              <p className="text-sm leading-relaxed">
+                {runContext.decisionQuestion ?? t(($) => $.node.input_empty)}
+              </p>
+            </div>
+            <div>
+              <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                {t(($) => $.node.output)}
+              </h3>
+              <p className="text-sm leading-relaxed">
+                {expectedResult ?? t(($) => $.node.output_empty)}
+              </p>
+            </div>
           </section>
         ) : null}
 
@@ -547,21 +605,6 @@ function DetailBody({
           </section>
         ) : null}
 
-        {runContext.result ? (
-          <section>
-            <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-              {node.status === "active" || node.status === "running"
-                ? t(($) => $.node.doing)
-                : t(($) => $.node.outcome)}
-            </h3>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-              {runContext.result}
-            </p>
-          </section>
-        ) : (
-          <p className="text-sm text-muted-foreground">{t(($) => $.node.summary_empty)}</p>
-        )}
-
         {node.node_type === "dead_end" && deadEndReason ? (
           <section className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
             <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-destructive uppercase">
@@ -582,55 +625,33 @@ function DetailBody({
           </section>
         ) : null}
 
-        {runContext.producedSources.length > 0 ||
-        runContext.producedObservations.length > 0 ||
-        runContext.producedClaims.length > 0 ||
-        runContext.createdTasks.length > 0 ||
+        {runContext.gateBlockers.length > 0 ? (
+          <section className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
+            <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-destructive uppercase">
+              {t(($) => $.node.gate_blocker)}
+            </h3>
+            <ul className="space-y-1 text-sm leading-relaxed">
+              {runContext.gateBlockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
+            </ul>
+          </section>
+        ) : null}
+
+        {runContext.nextStep ? (
+          <section>
+            <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {t(($) => $.node.next_step)}
+            </h3>
+            <p className="text-sm leading-relaxed">{t(($) => $.node.next_steps[runContext.nextStep])}</p>
+          </section>
+        ) : null}
+
+        {runContext.producedClaims.length > 0 ||
         runContext.createdQuestions.length > 0 ? (
           <section>
             <h3 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
               {t(($) => $.node.artifacts)}
             </h3>
             <ul className="space-y-2">
-              {runContext.producedSources.slice(0, 6).map((source) => (
-                <li key={source.id} className="rounded-md border bg-muted/20 px-2.5 py-2">
-                  <Badge variant="outline" className="mb-1 text-[10px]">
-                    {t(($) => $.node.artifact_source)}
-                  </Badge>
-                  <a
-                    href={source.canonical_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block truncate text-xs font-medium text-primary underline-offset-2 hover:underline"
-                  >
-                    {source.title || source.canonical_url}
-                  </a>
-                  {source.snapshot_excerpt ? (
-                    <p className="mt-1 line-clamp-3 text-[11px] text-muted-foreground">
-                      {source.snapshot_excerpt}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-              {runContext.producedObservations.slice(0, 6).map((observation) => {
-                const text = observationText(observation);
-                return (
-                  <li
-                    key={observation.id}
-                    className="rounded-md border bg-muted/20 px-2.5 py-2"
-                  >
-                    <Badge variant="outline" className="mb-1 text-[10px]">
-                      {t(($) => $.node.artifact_observation)}
-                    </Badge>
-                    {text ? <p className="text-xs font-medium">{text}</p> : null}
-                    {observation.locator ? (
-                      <p className="mt-1 text-[10px] text-muted-foreground">
-                        {observation.locator}
-                      </p>
-                    ) : null}
-                  </li>
-                );
-              })}
               {runContext.producedClaims.slice(0, 6).map((claim) => (
                 <li key={claim.id} className="rounded-md border bg-muted/20 px-2.5 py-2">
                   <Badge variant="outline" className="mb-1 text-[10px]">
@@ -642,14 +663,7 @@ function DetailBody({
                   </p>
                 </li>
               ))}
-              {runContext.createdTasks.slice(0, 6).map((task) => (
-                <li key={task.id} className="rounded-md border bg-muted/20 px-2.5 py-2">
-                  <Badge variant="outline" className="mb-1 text-[10px]">
-                    {t(($) => $.node.artifact_task)}
-                  </Badge>
-                  <p className="text-xs font-medium">{task.objective}</p>
-                </li>
-              ))}
+
               {runContext.createdQuestions.slice(0, 6).map((question) => (
                 <li key={question.id} className="rounded-md border bg-muted/20 px-2.5 py-2">
                   <Badge variant="outline" className="mb-1 text-[10px]">
@@ -696,16 +710,6 @@ function DetailBody({
           )}
         </section>
 
-        {url && !evidenceList.some((s) => s.url === url) ? (
-          <a
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            className="block truncate text-[11px] text-primary underline-offset-2 hover:underline"
-          >
-            {linked?.title || url}
-          </a>
-        ) : null}
       </div>
     </>
   );

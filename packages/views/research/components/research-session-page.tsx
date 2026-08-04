@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
@@ -214,6 +214,46 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   } = useQuery(researchPresenceOptions(wsId, sessionId));
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
+  const ignoredDeepLinkRef = useRef<string | null>(null);
+  const nodeDeepLink = nav.searchParams.get("node")?.trim() || null;
+
+  useEffect(() => {
+    if (!nodeDeepLink) {
+      ignoredDeepLinkRef.current = null;
+      return;
+    }
+    if (
+      !data ||
+      ignoredDeepLinkRef.current === nodeDeepLink ||
+      ui.selected?.id === nodeDeepLink
+    ) return;
+    const node = data.nodes.find((item) => item.id === nodeDeepLink);
+    if (!node) return;
+    dispatch({ type: "select", node });
+    // react-doctor-disable-next-line react-doctor/no-adjust-state-on-prop-change -- URL-driven hard-link selection after async data resolves.
+    setAuxPanel("detail");
+  }, [data, nodeDeepLink, ui.selected?.id]);
+
+  const openNodeDetail = useCallback((node: ResearchGraphNode) => {
+    ignoredDeepLinkRef.current = null;
+    dispatch({ type: "select", node });
+    setAuxPanel("detail");
+    const params = new URLSearchParams(nav.searchParams);
+    params.set("node", node.id);
+    nav.replace(`${nav.pathname}?${params.toString()}`);
+  }, [nav]);
+
+
+  const closeNodeDetail = useCallback(() => {
+    ignoredDeepLinkRef.current = nodeDeepLink;
+    dispatch({ type: "select", node: null });
+    setAuxPanel(null);
+    const params = new URLSearchParams(nav.searchParams);
+    params.delete("node");
+    const query = params.toString();
+    nav.replace(query ? `${nav.pathname}?${query}` : nav.pathname);
+  }, [nav, nodeDeepLink]);
+
   // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
   const [agentDock, setAgentDock] = useState<{
     agentId: string;
@@ -669,10 +709,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             onAuxPanelSelect={(id) =>
               setAuxPanel((prev) => (prev === id ? null : id))
             }
-            onOpenDetail={(node) => {
-              dispatch({ type: "select", node });
-              setAuxPanel("detail");
-            }}
+            onOpenDetail={openNodeDetail}
             onNodeCommand={async (node, action) => {
               await api.postResearchNodeCommand(sessionId, node.id, {
                 action,
@@ -762,10 +799,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   members={fleet.members}
                   open
                   placement="overlay-card"
-                  onClose={() => {
-                    dispatch({ type: "select", node: null });
-                    setAuxPanel(null);
-                  }}
+                  onClose={closeNodeDetail}
                 />
               ) : (
                 <p className="text-sm text-muted-foreground">

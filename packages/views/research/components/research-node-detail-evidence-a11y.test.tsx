@@ -78,6 +78,10 @@ vi.mock("../../i18n/use-t", () => ({
   }),
 }));
 
+vi.mock("../../i18n/time", () => ({
+  Time: ({ value }: { value: string }) => <time dateTime={value}>{value}</time>,
+}));
+
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => false,
 }));

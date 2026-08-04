@@ -283,6 +283,27 @@
     "syncing_body": "The run ledger is available, but its canvas projection has not arrived yet. Existing canvas data remains visible."
   },
   "node": {
+    "decision_question": "결정 질문",
+    "phase": "단계",
+    "started_at": "시작",
+    "updated_at": "업데이트",
+    "duration": "소요 시간",
+    "duration_minutes": "{{count}}분",
+    "input": "입력",
+    "input_empty": "표시할 입력이 아직 없습니다.",
+    "output": "출력",
+    "output_empty": "표시할 출력이 아직 없습니다.",
+    "gate_blocker": "게이트 차단 요인",
+    "next_step": "다음 단계",
+    "expand_content": "전체 텍스트 보기",
+    "collapse_content": "텍스트 접기",
+    "next_steps": {
+      "queued": "실행자가 이 작업을 가져갈 때까지 기다립니다.",
+      "running": "이번 실행이 구조화된 결과를 반환할 때까지 기다립니다.",
+      "retry": "이 작업을 다시 시도하거나 다른 실행자에게 할당합니다.",
+      "review_gate": "품질 게이트 문제를 해결한 뒤 다시 실행합니다.",
+      "review_result": "연결된 근거와 생성된 주장을 검토합니다."
+    },
     "goal": "Goal",
     "subquestion": "Sub-question",
     "probe": "Probe",

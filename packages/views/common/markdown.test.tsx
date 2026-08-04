@@ -175,14 +175,15 @@ describe("Markdown", () => {
     expect(pill?.textContent).toBe("/deploy");
   });
 
-  it("renders project mention links as project chips", () => {
+  it("renders project mention links as project chips", async () => {
     render(<Markdown>{"[Roadmap](mention://project/project-123)"}</Markdown>);
 
-    expect(screen.getByTestId("project-chip")).toHaveTextContent("project-123");
+    // LRM-1264 R3 — ProjectChip is lazy-loaded behind Suspense.
+    expect(await screen.findByTestId("project-chip")).toHaveTextContent("project-123");
     expect(screen.getByRole("link")).toHaveAttribute("href", "/projects/project-123");
   });
 
-  it("forwards issue mention link text as fallbackLabel (LRM-493)", () => {
+  it("forwards issue mention link text as fallbackLabel (LRM-493)", async () => {
     // `[LRM-487](mention://issue/<uuid>)` must not drop the author label — that
     // is what made mobile paint a truncated bare UUID.
     render(
@@ -191,7 +192,8 @@ describe("Markdown", () => {
       </Markdown>,
     );
 
-    const card = screen.getByTestId("issue-mention-card");
+    // LRM-1264 R3 — IssueMentionCard is lazy-loaded behind Suspense.
+    const card = await screen.findByTestId("issue-mention-card");
     expect(card).toHaveAttribute("data-fallback-label", "LRM-487");
     expect(card).toHaveTextContent("LRM-487");
   });

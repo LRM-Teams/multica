@@ -141,7 +141,13 @@ export function applyResearchWSEvent(
             delete next[agentId];
             return next;
           }
-          next[agentId] = { activity, updatedAt };
+          next[agentId] = {
+            ...(next[agentId] ?? {
+              phase: "idle", role: "", fleetMemberId: null, taskId: null,
+              nodeId: null, branchId: null, stage: null, expiresAt: null, staleReason: null,
+            }),
+            activity, updatedAt,
+          };
           return next;
         },
       );

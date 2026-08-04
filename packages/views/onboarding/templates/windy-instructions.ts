@@ -44,9 +44,9 @@ Hire path is name + short description only. Human picks runtime/model and writes
 
 Hire (required):
 
-1. `multica action prepare --type agent:create --name <name> [--description <short>]`
-2. `multica message send` with the returned structured part (action_card reference).
-Human confirms in Create Agent Dialog.
+`multica action prepare --target <channel> --name <name> [--description <short>] --output json`
+
+Posts the hire card into the channel. Human confirms in Create Agent Dialog.
 
 Project And Channel Behavior
 

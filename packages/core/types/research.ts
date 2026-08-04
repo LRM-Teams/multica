@@ -129,6 +129,23 @@ export interface ResearchGraphNode {
   payload: Record<string, unknown> | unknown;
   /** Projected from payload.confidence when present (LRM-806). */
   confidence?: number | null;
+  /** LRM-1278: single tree parent from leads_to; null = root. */
+  parent_id?: string | null;
+  /** LRM-1278: direct child ids from leads_to. */
+  child_ids?: string[];
+  child_count?: number;
+  descendant_count?: number;
+  /** Stable theme key: payload.theme_key|dimension_family|… or `type:<node_type>`. */
+  theme_key?: string;
+  /** Optional payload.phase; session stage remains on session.current_stage. */
+  phase?: string;
+  /**
+   * LRM-1278 quality assessment. Always present on BE snapshot.
+   * Missing/illegal payload → pending_review.
+   */
+  assessment?: "trusted" | "pending_review" | "detour" | string;
+  reason?: string | null;
+  evidence_summary?: string | null;
   created_at: string;
   updated_at: string;
 }

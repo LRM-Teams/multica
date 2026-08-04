@@ -10,7 +10,11 @@ import type { Attachment } from "@multica/core/types";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
-import { useAttachmentPreview, useDownloadAttachment, isPreviewable } from "../../editor";
+import {
+  useAttachmentPreview,
+  isPreviewable,
+} from "../../editor/attachment-preview-modal";
+import { useDownloadAttachment } from "../../editor/use-download-attachment";
 import { formatFileSize, getFileExtension } from "../../editor/utils/file-meta";
 import { getPreviewKind } from "../../editor/utils/preview";
 import { useT } from "../../i18n";

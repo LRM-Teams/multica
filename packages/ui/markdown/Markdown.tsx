@@ -682,6 +682,27 @@ function createComponents(
  * - Memoization for streaming performance
  * - Pluggable mention rendering via renderMention prop
  */
+/**
+ * LRM-1264 R3 — skip react-markdown/remark/rehype for ordinary chat rows that
+ * are pure prose (no markdown, links, mentions, stickers, issue refs, math).
+ * Conservative: any structured token falls through to the full pipeline.
+ */
+function isPlainChatProse(text: string, issueRefPrefix?: string): boolean {
+  if (!text) return true
+  if (/[`*_~\[\]#>|\\]/.test(text)) return false
+  if (/https?:\/\//i.test(text) || /mention:\/\//i.test(text) || /cit:\/\//i.test(text)) {
+    return false
+  }
+  if (/@[\w.-]/.test(text)) return false
+  if (/:\w+:/.test(text)) return false
+  if (/\$\$|\\\(|\\\[/.test(text)) return false
+  if (issueRefPrefix) {
+    const escaped = issueRefPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (new RegExp(`\\b${escaped}-\\d+\\b`, 'i').test(text)) return false
+  }
+  return true
+}
+
 export function Markdown({
   children,
   mode = 'minimal',
@@ -699,6 +720,11 @@ export function Markdown({
   enableStickerShortcodes = true
 }: MarkdownProps): React.JSX.Element {
   const normalizedHighlightQuery = normalizeHighlightQuery(highlightQuery)
+  const usePlainProse =
+    (mode === 'minimal' || mode === 'full' || mode === 'inline') &&
+    !cdnDomain &&
+    isPlainChatProse(children, issueRefPrefix)
+
   const components = React.useMemo(
     () =>
       createComponents(
@@ -719,6 +745,7 @@ export function Markdown({
   // identifiers, raw URLs, and file cards to renderable content
   const processedContent = React.useMemo(
     () => {
+      if (usePlainProse) return children
       let result = preprocessMentionShortcodes(children)
       result = preprocessCitationTokens(result)
       if (enableStickerShortcodes) result = preprocessStickers(result)
@@ -727,13 +754,13 @@ export function Markdown({
       result = preprocessFileCards(result, cdnDomain ?? '')
       return result
     },
-    [children, cdnDomain, enableStickerShortcodes, issueRefPrefix]
+    [children, cdnDomain, enableStickerShortcodes, issueRefPrefix, usePlainProse]
   )
 
   // LRM-1264 R2 — KaTeX only when the body looks like math (most chat rows skip it).
   const needsMath = React.useMemo(
-    () => looksLikeMathMarkdown(processedContent),
-    [processedContent],
+    () => !usePlainProse && looksLikeMathMarkdown(processedContent),
+    [processedContent, usePlainProse],
   )
   const [mathPlugins, setMathPlugins] = React.useState<MathPluginPair | null>(null)
   React.useEffect(() => {
@@ -764,6 +791,28 @@ export function Markdown({
     if (mathPlugins) plugins.push(mathPlugins.rehypeKatex)
     return plugins
   }, [mathPlugins])
+
+  // Plain-prose fast path (chat soft-budget). Preserve newlines like remark-breaks.
+  if (usePlainProse) {
+    const body = highlightSearchText(children, normalizedHighlightQuery)
+    if (mode === 'inline') {
+      return (
+        <span
+          className={cn(
+            'markdown-content markdown-content-inline break-words whitespace-pre-wrap',
+            className,
+          )}
+        >
+          {body}
+        </span>
+      )
+    }
+    return (
+      <div className={cn('markdown-content break-words whitespace-pre-wrap', className)}>
+        {body}
+      </div>
+    )
+  }
 
   const tree = (
     <ReactMarkdown

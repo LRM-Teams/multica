@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -77,7 +85,6 @@ import {
   type GroupMemberActionKind,
   type ComposerDraftKey,
 } from "@multica/core/channels";
-import { ChannelGoalCard } from "./channel-goal-card";
 import { useAuthStore } from "@multica/core/auth";
 import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
@@ -214,20 +221,14 @@ import {
 } from "../lib/conv-search-navigation";
 import { isChannelNameTakenError } from "../channel-create-error";
 import { ChannelMessageList } from "./channel-message-list";
-import {
-  ChannelDetailsPanel,
-  type ChannelDetailsTab,
-} from "./channel-details-panel";
+import type { ChannelDetailsTab } from "./channel-details-panel";
 import { DeleteChannelDialog } from "./delete-channel-dialog";
 import { ChannelNotifyPrefsDialog } from "./channel-notify-prefs";
 import {
   channelNotifyLevelLabel,
   resolveChannelNotifyLevel,
 } from "./channel-notify-level";
-import { ChannelTasksBoard } from "./channel-tasks-board";
-import { ChannelFilesPanel } from "./channel-files-panel";
 import { ChannelHashLandmark } from "./channel-hash-landmark";
-import { ThreadPanel } from "./thread-panel";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ComposerQuotePreview } from "./message-quote";
 import type { QuoteTarget } from "./message-quote-types";
@@ -242,7 +243,6 @@ import {
   listStoppableChannelTasks,
 } from "./conversation-activity-tasks";
 import { DmConversationRow, DmList, useDmRowActions } from "./dm-list";
-import { DmConversation } from "./dm-conversation";
 import {
   dmAgentBubbleActivity,
   useAgentBubbleActivityByAgent,
@@ -267,11 +267,9 @@ import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { useSidebarSectionCollapsed } from "../hooks/use-sidebar-section-collapsed";
 import { useJumpNotFoundToast } from "../hooks/use-jump-not-found-toast";
-import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { MemberPanelProvider } from "../../common/member-panel-context";
 import { MotionContent } from "../../common/motion-content";
-import { MemberSidePanel } from "../../members/member-side-panel";
 import {
   CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
   useProfilePanelWidth,
@@ -282,6 +280,48 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
 import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
 import { ChannelPresenceCluster } from "./channel-agents-live-cue";
+
+// LRM-1264 R3 — defer Tasks/Files/details/thread/agent/member graphs until
+// those surfaces open. Base UI Tabs keep inactive panels mounted (hidden);
+// children must also be conditional so hooks/queries do not retain on Chat.
+const ChannelDetailsPanel = lazy(() =>
+  import("./channel-details-panel").then((m) => ({ default: m.ChannelDetailsPanel })),
+);
+const ChannelTasksBoard = lazy(() =>
+  import("./channel-tasks-board").then((m) => ({ default: m.ChannelTasksBoard })),
+);
+const ChannelFilesPanel = lazy(() =>
+  import("./channel-files-panel").then((m) => ({ default: m.ChannelFilesPanel })),
+);
+const ThreadPanel = lazy(() =>
+  import("./thread-panel").then((m) => ({ default: m.ThreadPanel })),
+);
+const ResolvedAgentSidePanel = lazy(() =>
+  import("../../common/resolved-agent-side-panel").then((m) => ({
+    default: m.ResolvedAgentSidePanel,
+  })),
+);
+const MemberSidePanel = lazy(() =>
+  import("../../members/member-side-panel").then((m) => ({
+    default: m.MemberSidePanel,
+  })),
+);
+const ChannelGoalCard = lazy(() =>
+  import("./channel-goal-card").then((m) => ({ default: m.ChannelGoalCard })),
+);
+const DmConversation = lazy(() =>
+  import("./dm-conversation").then((m) => ({ default: m.DmConversation })),
+);
+
+function ChannelLazyPanelFallback({ className }: { className?: string }) {
+  return (
+    <div className={className ?? "flex flex-1 min-h-0 flex-col gap-2 p-4"}>
+      <Skeleton className="h-8 w-1/3" />
+      <Skeleton className="h-24 w-full" />
+      <Skeleton className="h-24 w-full" />
+    </div>
+  );
+}
 
 export interface TypingActor {
   key: string;
@@ -3610,6 +3650,7 @@ export function ChannelsPage({
   // passed — the panel then hides the checkbox entirely.
   const threadPanel =
     active && threadSurfaceRoot ? (
+      <Suspense fallback={<ChannelLazyPanelFallback />}>
       <ThreadPanel
         root={threadSurfaceRoot}
         replies={threadReplies}
@@ -3751,6 +3792,7 @@ export function ChannelsPage({
           </>
         }
       />
+      </Suspense>
     ) : null;
   const agentPanelBackLabel = selectedAgentReturnToMemberId
     ? resolveActorDisplayName(
@@ -3761,6 +3803,7 @@ export function ChannelsPage({
     : undefined;
   const agentPanel =
     active && selectedAgentPanelId ? (
+      <Suspense fallback={<ChannelLazyPanelFallback />}>
       <ResolvedAgentSidePanel
         agentId={selectedAgentPanelId}
         identitySnapshot={selectedAgentPanelSnapshot}
@@ -3773,9 +3816,11 @@ export function ChannelsPage({
         }
         backLabel={agentPanelBackLabel}
       />
+      </Suspense>
     ) : null;
   const memberPanel =
     active && selectedMemberPanelId ? (
+      <Suspense fallback={<ChannelLazyPanelFallback />}>
       <MemberSidePanel
         userId={selectedMemberPanelId}
         onClose={() => setSelectedMemberPanelId(null)}
@@ -3795,6 +3840,7 @@ export function ChannelsPage({
           );
         }}
       />
+      </Suspense>
     ) : null;
   // LRM-210 — Channel details panel (About|Members|Files|Settings). System
   // #general still opens About/Members/Files (read-only roster) but hides
@@ -3913,12 +3959,14 @@ export function ChannelsPage({
     : null;
   const detailsPanel =
     channelDetailsOpen && detailsPanelProps ? (
+      <Suspense fallback={<ChannelLazyPanelFallback />}>
       <ChannelDetailsPanel
         key={`${active!.id}:${channelDetailsTab}`}
         {...detailsPanelProps}
         initialTab={channelDetailsTab}
         variant="panel"
       />
+      </Suspense>
     ) : null;
   // LRM-748 frozen v2 — desktop notify prefs live in this dialog (never a
   // page push); mobile drills into the details panel's internal sub-view.
@@ -4106,12 +4154,14 @@ export function ChannelsPage({
               </div>
             }
           />
-          <ChannelGoalCard
-            key={active.id}
-            channelId={active.id}
-            canManage={canArchive(active)}
-            archived={isActiveArchived}
-          />
+          <Suspense fallback={null}>
+            <ChannelGoalCard
+              key={active.id}
+              channelId={active.id}
+              canManage={canArchive(active)}
+              archived={isActiveArchived}
+            />
+          </Suspense>
               {/* #562 — channel main-content tab switch: Chat (message list),
                   Tasks (channel-scoped board), and LRM-675 Files (channel
                   attachments), full-width in the main area. Uses the shared
@@ -4141,11 +4191,21 @@ export function ChannelsPage({
                 <TabsContent value="files" className="flex flex-1 min-h-0 flex-col text-base">
                   {/* LRM-675 — the single Files entry (settings Files block and
                       duplicate entries removed); same attachment source as the
-                      legacy details panel. */}
-                  <ChannelFilesPanel channelId={active.id} wide />
+                      legacy details panel.
+                      LRM-1264 R3: mount only while active — inactive TabsContent
+                      stays hidden but would otherwise keep queries/DOM. */}
+                  {channelView === "files" ? (
+                    <Suspense fallback={<ChannelLazyPanelFallback />}>
+                      <ChannelFilesPanel channelId={active.id} wide />
+                    </Suspense>
+                  ) : null}
                 </TabsContent>
                 <TabsContent value="tasks" className="flex flex-1 min-h-0 flex-col text-base">
-                  <ChannelTasksBoard channelId={active.id} />
+                  {channelView === "tasks" ? (
+                    <Suspense fallback={<ChannelLazyPanelFallback />}>
+                      <ChannelTasksBoard channelId={active.id} />
+                    </Suspense>
+                  ) : null}
                 </TabsContent>
                 <TabsContent value="chat" className="flex flex-1 min-h-0 flex-col text-base">
               {convSearchOpen && (
@@ -4528,25 +4588,27 @@ export function ChannelsPage({
   // dropping to a blank pane during that window.
   const dmDraftKey = activeDm ? (`dm:${activeDm.id}` as const) : null;
   const dmDetailPane = activeDm ? (
-    <DmConversation
-      key={`${activeDm.source}:${activeDm.id}`}
-      dm={activeDm}
-      onBack={mobileBackToList}
-      draft={dmDraftKey ? (composerDrafts[dmDraftKey]?.content ?? "") : ""}
-      onDraftChange={(value) => {
-        if (dmDraftKey) setConversationDraft(dmDraftKey, value);
-      }}
-      onDraftClear={() => {
-        if (dmDraftKey) storeClearComposerDraft(dmDraftKey);
-      }}
-      // Same Reminder-anchor deep-link values the group-channel path above
-      // consumes — mutually exclusive in practice (a resolved route is
-      // either activeChannelId or activeDmId, never both), so it's safe to
-      // pass through unconditionally; DmConversation owns its own one-shot
-      // consumption guard.
-      threadDeepLinkId={threadDeepLinkId}
-      deepLinkMessageId={highlightMessageId}
-    />
+    <Suspense fallback={<ChannelLazyPanelFallback />}>
+      <DmConversation
+        key={`${activeDm.source}:${activeDm.id}`}
+        dm={activeDm}
+        onBack={mobileBackToList}
+        draft={dmDraftKey ? (composerDrafts[dmDraftKey]?.content ?? "") : ""}
+        onDraftChange={(value) => {
+          if (dmDraftKey) setConversationDraft(dmDraftKey, value);
+        }}
+        onDraftClear={() => {
+          if (dmDraftKey) storeClearComposerDraft(dmDraftKey);
+        }}
+        // Same Reminder-anchor deep-link values the group-channel path above
+        // consumes — mutually exclusive in practice (a resolved route is
+        // either activeChannelId or activeDmId, never both), so it's safe to
+        // pass through unconditionally; DmConversation owns its own one-shot
+        // consumption guard.
+        threadDeepLinkId={threadDeepLinkId}
+        deepLinkMessageId={highlightMessageId}
+      />
+    </Suspense>
   ) : dmResolveTimedOut ? (
     <DmOpenFailedState
       onRetry={() => {
@@ -4670,6 +4732,7 @@ export function ChannelsPage({
             data-testid="channel-details-page-drawer"
           >
             {mobilePanel ? (
+              <Suspense fallback={<ChannelLazyPanelFallback className="flex flex-1 min-h-0 flex-col gap-2 p-4" />}>
               <ChannelDetailsPanel
                 key={`${active.id}:${mobilePanel}`}
                 {...detailsPanelProps}
@@ -4678,6 +4741,7 @@ export function ChannelsPage({
                 onClose={() => setMobilePanel(null)}
                 portalContainer={mobileSettingsDrawerBodyRef}
               />
+              </Suspense>
             ) : null}
           </DrawerContent>
         </Drawer>

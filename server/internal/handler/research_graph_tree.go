@@ -89,9 +89,11 @@ func buildResearchTreeIndex(edges []db.ResearchGraphEdge) (parentOf map[string]s
 			continue
 		}
 		// First leads_to into a node wins (edges are listed created_at ASC).
-		if _, exists := parentOf[to]; !exists {
-			parentOf[to] = from
+		// Losing parents must not receive the child in childrenOf / counts.
+		if _, exists := parentOf[to]; exists {
+			continue
 		}
+		parentOf[to] = from
 		childrenOf[from] = append(childrenOf[from], to)
 	}
 	return parentOf, childrenOf

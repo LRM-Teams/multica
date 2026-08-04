@@ -75,7 +75,11 @@ export interface ChannelPresenceClusterProps {
   tasks: readonly ChannelActiveTask[];
   stoppingTaskId?: string | null;
   canStop?: boolean;
-  onStopTask?: (task: ChannelActiveTask) => void;
+  /**
+   * LRM-1350: second arg is the Working-list resolved label (never the
+   * directory-miss / Unknown Agent sentinel). Toast must reuse this name.
+   */
+  onStopTask?: (task: ChannelActiveTask, displayName: string) => void;
   /** Opens the existing Stop-all confirm dialog (LRM-405); only from card footer. */
   onStopAll?: () => void;
   /** Click opens Members (idle always; desktop also when working). */
@@ -175,7 +179,7 @@ function WorkingListRow({
   firstSeen: number | undefined;
   canStop: boolean;
   stoppingTaskId: string | null;
-  onStopTask?: (task: ChannelActiveTask) => void;
+  onStopTask?: (task: ChannelActiveTask, displayName: string) => void;
   onDismiss: (task: ChannelActiveTask) => void;
 }) {
   const { t } = useT("channels");
@@ -252,7 +256,9 @@ function WorkingListRow({
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            onStopTask(task);
+            // LRM-1350: pass the same resolved label the row paints — do not
+            // let the toast fall back to raw `task.agent_name` sentinels.
+            onStopTask(task, displayName);
           }}
           aria-label={t(($) => $.agent_status.stop_aria, {
             name: displayName,

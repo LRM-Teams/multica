@@ -20,6 +20,27 @@ const SEGMENT_TRACK = "#e8e6e1";
 const FINE_BAR_TRACK = "#eeeeee";
 const FINE_BAR_FILL = "#c4a35a";
 
+type AgentsTranslationFunction = ReturnType<typeof useT<"agents">>["t"];
+
+function memoryGrowthTierLabel(
+  tier: string,
+  fallback: string,
+  t: AgentsTranslationFunction,
+): string {
+  switch (tier.toLowerCase()) {
+    case "bronze":
+      return t(($) => $.memory_growth.tiers.bronze);
+    case "silver":
+      return t(($) => $.memory_growth.tiers.silver);
+    case "gold":
+      return t(($) => $.memory_growth.tiers.gold);
+    case "platinum":
+      return t(($) => $.memory_growth.tiers.platinum);
+    default:
+      return fallback;
+  }
+}
+
 /**
  * LRM-304 · Slack-style Memory growth field (v3 scheme A).
  *
@@ -107,7 +128,7 @@ export function MemoryGrowthField({
             className="inline-block size-2.5 shrink-0 rounded-full shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)]"
             style={{ backgroundColor: dotColor }}
           />
-          {growth.tier_label}
+          {memoryGrowthTierLabel(growth.tier, growth.tier_label, t)}
         </span>
       </div>
 
@@ -126,7 +147,7 @@ export function MemoryGrowthField({
           return (
             <div
               key={segment.tier}
-              title={segment.tier_label}
+              title={memoryGrowthTierLabel(segment.tier, segment.tier_label, t)}
               data-status={status}
               className={cn(
                 "h-1 flex-1 rounded-sm",
@@ -144,7 +165,9 @@ export function MemoryGrowthField({
         <>
           <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
             <span data-testid="memory-growth-next-tier">
-              {t(($) => $.memory_growth.next_tier, { tier: next.tier_label })}
+              {t(($) => $.memory_growth.next_tier, {
+                tier: memoryGrowthTierLabel(next.tier, next.tier_label, t),
+              })}
             </span>
             <span
               data-testid="memory-growth-writes"

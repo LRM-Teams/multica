@@ -525,9 +525,15 @@
     "username_taken": "该 @handle 已被占用"
   },
   "memory_growth": {
-    "label": "Memory growth",
-    "next_tier": "Next · {{tier}}",
-    "writes_progress": "{{current}} / {{required}} writes"
+    "label": "记忆成长",
+    "next_tier": "下一阶段 · {{tier}}",
+    "writes_progress": "{{current}} / {{required}} 次记忆更新",
+    "tiers": {
+      "bronze": "青铜",
+      "silver": "白银",
+      "gold": "黄金",
+      "platinum": "铂金"
+    }
   },
   "execution_config": {
     "applies_next_run": "保存运行时 / 模型 / 思考等级后会在可用时自动重启 agent，使配置立即生效。"

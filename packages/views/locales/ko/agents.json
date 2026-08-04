@@ -535,9 +535,15 @@
     "username_taken": "이미 사용 중인 @handle입니다"
   },
   "memory_growth": {
-    "label": "Memory growth",
-    "next_tier": "Next · {{tier}}",
-    "writes_progress": "{{current}} / {{required}} writes"
+    "label": "메모리 성장",
+    "next_tier": "다음 단계 · {{tier}}",
+    "writes_progress": "{{current}} / {{required}}회 메모리 업데이트",
+    "tiers": {
+      "bronze": "브론즈",
+      "silver": "실버",
+      "gold": "골드",
+      "platinum": "플래티넘"
+    }
   },
   "execution_config": {
     "applies_next_run": "런타임 / 모델 / 사고 수준을 저장하면 가능한 경우 agent가 자동 재시작되어 설정이 즉시 적용됩니다."

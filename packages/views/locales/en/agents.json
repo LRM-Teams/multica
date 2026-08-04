@@ -537,7 +537,13 @@
   "memory_growth": {
     "label": "Memory growth",
     "next_tier": "Next · {{tier}}",
-    "writes_progress": "{{current}} / {{required}} writes"
+    "writes_progress": "{{current}} / {{required}} writes",
+    "tiers": {
+      "bronze": "Bronze",
+      "silver": "Silver",
+      "gold": "Gold",
+      "platinum": "Platinum"
+    }
   },
   "execution_config": {
     "applies_next_run": "Saving runtime, model, or thinking restarts the agent (when available) so changes apply immediately."

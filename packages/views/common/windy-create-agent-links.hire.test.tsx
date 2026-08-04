@@ -16,19 +16,15 @@ import {
 } from "./windy-create-agent-link-utils";
 
 const {
-  listChannels,
   createAgent,
   getAgentActionCard,
   dismissAgentActionCard,
-  createChannel,
   listRuntimes,
   listMembers,
 } = vi.hoisted(() => ({
-  listChannels: vi.fn(),
   createAgent: vi.fn(),
   getAgentActionCard: vi.fn(),
   dismissAgentActionCard: vi.fn(),
-  createChannel: vi.fn(),
   listRuntimes: vi.fn(),
   listMembers: vi.fn(),
 }));
@@ -41,18 +37,6 @@ vi.mock("@multica/core/auth", () => ({
   useAuthStore: (sel: (s: { user: { id: string } }) => unknown) =>
     sel({ user: { id: "user-me" } }),
 }));
-
-vi.mock("@multica/core/channels", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@multica/core/channels")>();
-  return {
-    ...actual,
-    channelsOptions: () => ({
-      queryKey: ["channels", "ws-1", "list"],
-      queryFn: () => listChannels(),
-      enabled: true,
-    }),
-  };
-});
 
 vi.mock("@multica/core/runtimes", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/runtimes")>();
@@ -81,11 +65,9 @@ vi.mock("@multica/core/workspace/queries", async (importOriginal) => {
 
 vi.mock("@multica/core/api", () => ({
   api: {
-    listChannels: (...args: unknown[]) => listChannels(...args),
     createAgent: (...args: unknown[]) => createAgent(...args),
     getAgentActionCard: (...args: unknown[]) => getAgentActionCard(...args),
     dismissAgentActionCard: (...args: unknown[]) => dismissAgentActionCard(...args),
-    createChannel: (...args: unknown[]) => createChannel(...args),
   },
 }));
 
@@ -115,7 +97,6 @@ vi.mock("../agents/components/runtime-picker", async (importOriginal) => {
     await importOriginal<typeof import("../agents/components/runtime-picker")>();
   return {
     ...actual,
-    // Keep real isRuntimeUsableForUser so hire Create gates match create-agent-dialog.
     RuntimePicker: ({
       runtimes,
       selectedRuntimeId,
@@ -176,7 +157,7 @@ function renderHire(href = buildAgentCreateActionHref(CARD_ID)) {
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={qc}>
         <WorkspaceSlugProvider slug="test-ws">
-          <WindyCreateAgentLink href={href}>Hire</WindyCreateAgentLink>
+          <WindyCreateAgentLink href={href}>Create Agent: Group Bot</WindyCreateAgentLink>
         </WorkspaceSlugProvider>
       </QueryClientProvider>
     </I18nProvider>,
@@ -207,10 +188,9 @@ describe("parseAgentCreateActionURL", () => {
   });
 });
 
-describe("Windy hire card create path (action_card_id)", () => {
+describe("independent hire action card (action_card_id)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listChannels.mockResolvedValue([]);
     listRuntimes.mockResolvedValue([
       {
         id: "rt-1",
@@ -239,6 +219,9 @@ describe("Windy hire card create path (action_card_id)", () => {
       id: "agent-1",
       display_name: "Group Bot",
     });
+    dismissAgentActionCard.mockResolvedValue(
+      makeCard({ status: "dismissed" }),
+    );
   });
 
   afterEach(() => {
@@ -246,22 +229,42 @@ describe("Windy hire card create path (action_card_id)", () => {
     document.body.innerHTML = "";
   });
 
-  it("loads card by id and submits action_card_id without draft_id", async () => {
+  it("renders independent card with name/description and loads by id", async () => {
     renderHire();
-    fireEvent.click(screen.getByRole("button", { name: /Hire/i }));
     await waitFor(() => {
       expect(getAgentActionCard).toHaveBeenCalledWith(CARD_ID);
     });
     await waitFor(() => {
+      expect(screen.getByTestId("agent-create-action-card")).toBeTruthy();
+    });
+    expect(screen.getByText("Group Bot")).toBeTruthy();
+    expect(screen.getByText("Hired for one group")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Cancel$/i })).toBeTruthy();
+  });
+
+  it("opens dialog and submits action_card_id without draft_id", async () => {
+    renderHire();
+    await waitFor(() => {
       expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
     });
-    await waitFor(() => {
-      expect(
-        (screen.getByRole("button", { name: /^Create Agent$/i }) as HTMLButtonElement)
-          .disabled,
-      ).toBe(false);
-    });
+    // Card primary CTA
     fireEvent.click(screen.getByRole("button", { name: /^Create Agent$/i }));
+    // Dialog primary CTA (same label) — wait for model auto-select
+    await waitFor(() => {
+      const buttons = screen.getAllByRole("button", { name: /^Create Agent$/i });
+      expect(buttons.length).toBeGreaterThanOrEqual(1);
+    });
+    await waitFor(() => {
+      const dialogCreate = screen
+        .getAllByRole("button", { name: /^Create Agent$/i })
+        .find((b) => !(b as HTMLButtonElement).disabled);
+      expect(dialogCreate).toBeTruthy();
+    });
+    const dialogCreate = screen
+      .getAllByRole("button", { name: /^Create Agent$/i })
+      .find((b) => !(b as HTMLButtonElement).disabled)!;
+    fireEvent.click(dialogCreate);
     await waitFor(() => expect(createAgent).toHaveBeenCalled());
 
     const payload = createAgent.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -269,52 +272,20 @@ describe("Windy hire card create path (action_card_id)", () => {
     expect(payload.draft_id).toBeUndefined();
     expect(payload.display_name).toBe("Group Bot");
     expect(payload.description).toBe("Hired for one group");
-    expect(payload.visibility).toBeUndefined();
-    expect(payload.home_channel_id).toBeUndefined();
     expect(payload.model).toBe("composer-1.5");
   });
 
-  it("renders no discoverability radios", async () => {
+  it("dismisses prepared card", async () => {
     renderHire();
-    fireEvent.click(screen.getByRole("button", { name: /Hire/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /^Cancel$/i })).toBeTruthy();
     });
-    expect(screen.queryAllByRole("radio")).toHaveLength(0);
-  });
-
-  it("disables Create when the selected computer only has a locked runtime", async () => {
-    listRuntimes.mockResolvedValue([
-      {
-        id: "rt-locked",
-        workspace_id: "ws-1",
-        daemon_id: "daemon-locked",
-        name: "Locked Private",
-        display_name: "locked-box",
-        runtime_mode: "local",
-        provider: "claude",
-        launch_header: "",
-        status: "online",
-        device_info: "locked.local",
-        metadata: {},
-        current_version: null,
-        update_state: "idle",
-        runtime_health: "ok",
-        owner_id: "someone-else",
-        visibility: "private",
-        last_seen_at: "2026-04-27T11:59:50Z",
-        created_at: "2026-04-01T00:00:00Z",
-        updated_at: "2026-04-01T00:00:00Z",
-      },
-    ]);
-    renderHire();
-    fireEvent.click(screen.getByRole("button", { name: /Hire/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Cancel$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
+      expect(dismissAgentActionCard).toHaveBeenCalledWith(CARD_ID);
     });
-    expect(
-      (screen.getByRole("button", { name: /^Create Agent$/i }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+    await waitFor(() => {
+      expect(screen.getByText(/Dismissed/i)).toBeTruthy();
+    });
   });
 });

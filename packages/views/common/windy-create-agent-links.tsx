@@ -42,10 +42,10 @@ import { useT } from "../i18n";
 import { parseAgentCreateActionURL } from "./windy-create-agent-link-utils";
 
 /**
- * Chat-bubble hire CTA for agent:create action cards.
+ * Chat-bubble hire Action Card for agent:create (Frank/Parker B: independent card).
  * Link shape: multica://action-card/agent:create?id=<card-id>
- * Loads card via GET, opens Create dialog prefilled with name/desc,
- * submits POST /api/agents with action_card_id (server marks card done).
+ * Loads card on mount via GET; renders name + description + Create / Dismiss.
+ * Create opens CreateAgentDialog; submit POSTs action_card_id (server marks done).
  * No draft_id / multica://create-agent?draft_id bridge.
  */
 export function WindyCreateAgentLink({
@@ -57,68 +57,174 @@ export function WindyCreateAgentLink({
   children: React.ReactNode;
   className?: string;
 }) {
-  const [loading, setLoading] = React.useState(false);
-  const [card, setCard] = React.useState<AgentActionCard | null>(null);
-  const [createdAgentName, setCreatedAgentName] = React.useState<string | null>(null);
+  const { t } = useT("agents");
+  const parsed = React.useMemo(() => parseAgentCreateActionURL(href), [href]);
+  const cardId = parsed?.cardId ?? "";
 
-  const handleClick = async () => {
-    const parsed = parseAgentCreateActionURL(href);
-    if (loading || createdAgentName) return;
-    if (!parsed) {
-      showErrorToast("Invalid Create Agent card link");
+  const {
+    data: card,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ["agent-action-card", cardId],
+    queryFn: () => api.getAgentActionCard(cardId),
+    enabled: !!cardId,
+    staleTime: 30_000,
+  });
+
+  const [dialogOpen, setDialogOpen] = React.useState(false);
+  const [localStatus, setLocalStatus] = React.useState<
+    "prepared" | "done" | "dismissed" | null
+  >(null);
+  const [createdName, setCreatedName] = React.useState<string | null>(null);
+  const [dismissing, setDismissing] = React.useState(false);
+
+  const status = localStatus ?? card?.status ?? "prepared";
+  const cardName =
+    card?.payload.name?.trim() ||
+    (typeof children === "string" ? children.replace(/^Create Agent:\s*/i, "").trim() : "") ||
+    "New Agent";
+  const cardDescription = card?.payload.description?.trim() || "";
+
+  const handleCreateClick = () => {
+    if (!card || status !== "prepared") return;
+    if (card.action_type !== "agent:create") {
+      showErrorToast("Unsupported action card type");
       return;
     }
-    setLoading(true);
+    setDialogOpen(true);
+  };
+
+  const handleDismiss = async () => {
+    if (!card || status !== "prepared" || dismissing) return;
+    setDismissing(true);
     try {
-      const loaded = await api.getAgentActionCard(parsed.cardId);
-      if (loaded.status === "done") {
-        setCreatedAgentName(loaded.payload.name || "Agent");
-        return;
-      }
-      if (loaded.status === "dismissed") {
-        showErrorToast("This hire card was dismissed");
-        return;
-      }
-      if (loaded.action_type !== "agent:create") {
-        showErrorToast("Unsupported action card type");
-        return;
-      }
-      setCard(loaded);
+      await api.dismissAgentActionCard(card.id);
+      setLocalStatus("dismissed");
+      void refetch();
     } catch (err) {
-      showErrorToast(err instanceof Error ? err.message : "Failed to load hire card");
+      showErrorToast(err instanceof Error ? err.message : "Failed to dismiss hire card");
     } finally {
-      setLoading(false);
+      setDismissing(false);
     }
   };
 
-  return (
-    <>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={loading || !!createdAgentName}
-        onClick={handleClick}
+  if (!parsed) {
+    return null;
+  }
+
+  if (isLoading) {
+    return (
+      <div
         className={cn(
-          "not-prose my-1 inline-flex max-w-full gap-2 transition-all",
-          createdAgentName && "border-muted bg-muted/60 text-muted-foreground shadow-none opacity-80",
+          "not-prose my-2 w-full max-w-md rounded-xl border bg-card p-4 shadow-sm",
           className,
         )}
       >
-        {loading ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : createdAgentName ? (
-          <CheckCircle2 className="size-3.5 text-success" />
-        ) : (
-          <Bot className="size-3.5" />
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" />
+          <span>{t(($) => $.windy.loading_card)}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (isError || !card) {
+    return (
+      <div
+        className={cn(
+          "not-prose my-2 w-full max-w-md rounded-xl border border-destructive/30 bg-card p-4 shadow-sm",
+          className,
         )}
-        <span className="truncate">{createdAgentName ? `Created: ${createdAgentName}` : children}</span>
-      </Button>
-      {card && (
+      >
+        <p className="text-sm text-destructive">
+          {error instanceof Error ? error.message : t(($) => $.windy.load_card_failed)}
+        </p>
+      </div>
+    );
+  }
+
+  const isDone = status === "done";
+  const isDismissed = status === "dismissed";
+  const isPrepared = status === "prepared";
+
+  return (
+    <>
+      <div
+        className={cn(
+          "not-prose my-2 w-full max-w-md overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm",
+          (isDone || isDismissed) && "opacity-80",
+          className,
+        )}
+        data-testid="agent-create-action-card"
+        data-status={status}
+      >
+        <div className="border-b bg-muted/30 px-4 py-3">
+          <div className="flex items-start gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-background text-muted-foreground">
+              {isDone ? (
+                <CheckCircle2 className="size-4 text-success" />
+              ) : (
+                <Bot className="size-4" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-muted-foreground">
+                {t(($) => $.windy.hiring_card_badge)}
+              </p>
+              <p className="mt-0.5 break-words text-sm font-semibold leading-snug">
+                {isDone && createdName ? createdName : cardName}
+              </p>
+              {cardDescription ? (
+                <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">
+                  {cardDescription}
+                </p>
+              ) : null}
+              {isDone ? (
+                <p className="mt-1.5 text-xs text-success">
+                  {t(($) => $.windy.card_created, {
+                    name: createdName || cardName,
+                  })}
+                </p>
+              ) : null}
+              {isDismissed ? (
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  {t(($) => $.windy.card_dismissed)}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+        {isPrepared ? (
+          <div className="flex flex-wrap items-center justify-end gap-2 px-4 py-3">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={dismissing}
+              onClick={() => void handleDismiss()}
+            >
+              {dismissing ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              {t(($) => $.windy.cancel)}
+            </Button>
+            <Button type="button" size="sm" onClick={handleCreateClick}>
+              {t(($) => $.windy.create_agent)}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+      {dialogOpen && card && (
         <InlineCreateAgentDialog
           card={card}
-          onCreated={(name) => setCreatedAgentName(name)}
-          onClose={() => setCard(null)}
+          onCreated={(name) => {
+            setCreatedName(name);
+            setLocalStatus("done");
+            setDialogOpen(false);
+            void refetch();
+          }}
+          onClose={() => setDialogOpen(false)}
         />
       )}
     </>
@@ -226,23 +332,11 @@ function InlineCreateAgentDialog({
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
       toast.success(t(($) => $.windy.created_toast, { name: cardName }));
       onCreated(created.display_name || cardName);
-      onClose();
     } catch (err) {
       showErrorToast(err instanceof Error ? err.message : "Failed to create agent");
     } finally {
       setCreating(false);
     }
-  };
-
-  const handleCancel = async () => {
-    if (creating) return;
-    try {
-      // Best-effort dismiss so the card leaves prepared state; ignore failures.
-      await api.dismissAgentActionCard(card.id);
-    } catch {
-      // non-fatal — user still closes the dialog
-    }
-    onClose();
   };
 
   return (
@@ -273,7 +367,9 @@ function InlineCreateAgentDialog({
               <p className="mb-1 text-xs font-medium text-muted-foreground">
                 {t(($) => $.windy.hiring_card_badge)}
               </p>
-              <DialogTitle className="break-words text-lg font-semibold tracking-tight sm:text-xl">{t(($) => $.windy.create_title, { name: cardName })}</DialogTitle>
+              <DialogTitle className="break-words text-lg font-semibold tracking-tight sm:text-xl">
+                {t(($) => $.windy.create_title, { name: cardName })}
+              </DialogTitle>
               <DialogDescription className="mt-1.5 max-w-2xl text-sm leading-6 text-muted-foreground">
                 {t(($) => $.windy.create_description)}
               </DialogDescription>
@@ -345,7 +441,7 @@ function InlineCreateAgentDialog({
           )}
         </div>
         <DialogFooter className="mx-0 mb-0 shrink-0 border-t bg-muted/25 px-4 py-3 sm:px-6 sm:py-4">
-          <Button type="button" variant="outline" onClick={handleCancel} disabled={creating} className="w-full sm:w-auto">
+          <Button type="button" variant="outline" onClick={onClose} disabled={creating} className="w-full sm:w-auto">
             {t(($) => $.windy.cancel)}
           </Button>
           <Button

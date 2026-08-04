@@ -2936,6 +2936,51 @@ func TestAgentReminderModernTransportSourcesRemainFailClosed(t *testing.T) {
 	})
 }
 
+func TestAgentReminderScheduleFallsBackToAgentOwnerWithoutHumanWakeAuthor(t *testing.T) {
+	// Beckham 2026-08-04: cancel old patrol + re-schedule during a wake whose
+	// source message is agent-authored (or no human initiator) must not 403
+	// "reminder initiator is not available".
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	fixture := seedReminderModernTransportFixture(t, "agent_inbox_token")
+
+	// Agent-authored source message → no human author on the wake.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE channel_message
+		SET author_type = 'agent', author_id = $2, author_name = 'patrol agent'
+		WHERE id = $1`, fixture.anchorMessageID, fixture.agentID); err != nil {
+		t.Fatalf("agent-author source message: %v", err)
+	}
+	// Ensure agent owner is a current workspace member (testUserID is runtime owner).
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent SET owner_id = $2 WHERE id = $1`, fixture.agentID, testUserID); err != nil {
+		t.Fatalf("set agent owner: %v", err)
+	}
+
+	rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+		"title": "patrol re-anchor every hour", "message_id": fixture.anchorMessageID, "repeat": "every:1h",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("schedule without human wake author status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var scheduled agentReminderResponse
+	if err := json.NewDecoder(rec.Body).Decode(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+	})
+	var initiator string
+	if err := testPool.QueryRow(ctx, `SELECT initiator_user_id::text FROM agent_reminder WHERE id = $1`, scheduled.ID).Scan(&initiator); err != nil {
+		t.Fatal(err)
+	}
+	if initiator != testUserID {
+		t.Fatalf("initiator_user_id=%s want agent owner %s", initiator, testUserID)
+	}
+}
+
 func TestAgentReminderTransportLocksTimezoneAndLogsLifecycle(t *testing.T) {
 	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", []string{
 		protocol.DaemonCapabilityChannelOutputActions,

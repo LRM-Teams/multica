@@ -105,9 +105,9 @@ export function ResearchCompletionCard({
             aria-hidden
           >
             {done ? (
-              <CheckCircle2 className="size-5" strokeWidth={2} />
+              <CheckCircle2 className="size-5" strokeWidth={2} aria-hidden />
             ) : (
-              <AlertCircle className="size-5" strokeWidth={2} />
+              <AlertCircle className="size-5" strokeWidth={2} aria-hidden />
             )}
           </span>
           <div className="min-w-0 flex-1">
@@ -146,7 +146,7 @@ export function ResearchCompletionCard({
             aria-label={t(($) => $.completion_guide.dismiss)}
             onClick={() => closeThen(onDismiss)}
           >
-            <X className="size-4" />
+            <X className="size-4" aria-hidden />
           </Button>
         </div>
 

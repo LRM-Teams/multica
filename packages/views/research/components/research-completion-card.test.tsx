@@ -1,6 +1,16 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { ResearchCompletionCard } from "./research-completion-card";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const SRC = "research-completion-card.tsx";
+
+function readSrc() {
+  return fs.readFileSync(path.join(here, SRC), "utf8");
+}
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
@@ -100,5 +110,51 @@ describe("ResearchCompletionCard (LRM-832)", () => {
     expect(card).toBeTruthy();
     fireEvent.click(card!);
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  // LRM-1301 — labeled close + action icons must not dual-announce; status glyphs too.
+  it("source: dismiss/action/status lucide icons declare aria-hidden", () => {
+    const src = readSrc();
+    expect(src).toMatch(/<X\b[\s\S]{0,60}aria-hidden/);
+    expect(src).toMatch(/<FileText\b[\s\S]{0,60}aria-hidden/);
+    expect(src).toMatch(/<Plus\b[\s\S]{0,60}aria-hidden/);
+    expect(src).toMatch(/<Home\b[\s\S]{0,60}aria-hidden/);
+    expect(src).toMatch(/<CheckCircle2\b[\s\S]{0,60}aria-hidden/);
+    expect(src).toMatch(/<AlertCircle\b[\s\S]{0,60}aria-hidden/);
+  });
+
+  it("render: named buttons keep accessible names; icons are aria-hidden", () => {
+    render(
+      <ResearchCompletionCard
+        kind="done"
+        onViewReport={() => {}}
+        onNewResearch={() => {}}
+        onHome={() => {}}
+        onDismiss={() => {}}
+      />,
+    );
+    const dialog = screen.getByTestId("research-completion-card");
+
+    const dismiss = within(dialog).getByRole("button", { name: "Dismiss" });
+    expect(dismiss.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+
+    const viewReport = within(dialog).getByRole("button", {
+      name: "View report",
+    });
+    expect(viewReport.querySelector("svg")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+
+    const newResearch = within(dialog).getByRole("button", {
+      name: "New research",
+    });
+    expect(newResearch.querySelector("svg")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+
+    const home = within(dialog).getByRole("button", { name: "Home" });
+    expect(home.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 });

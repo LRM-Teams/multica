@@ -114,7 +114,7 @@ export function ResearchSessionRow({
               </span>
             ) : null}
             {/* Narrow: fold stage energy · time into the secondary line. */}
-            <span className="flex basis-full min-w-0 items-center gap-1.5 md:hidden">
+            <span className="inline-flex basis-full min-w-0 items-center gap-1.5 md:hidden">
               <ResearchSessionStageEnergy
                 currentStage={session.current_stage}
                 sessionStatus={status}
@@ -129,11 +129,12 @@ export function ResearchSessionRow({
       </div>
 
       {/* Desktop columns: stage energy | time | people */}
-      <ResearchSessionStageEnergy
-        currentStage={session.current_stage}
-        sessionStatus={status}
-        className="relative z-[1] hidden md:inline-flex"
-      />
+      <span className="relative z-[1] hidden shrink-0 md:inline">
+        <ResearchSessionStageEnergy
+          currentStage={session.current_stage}
+          sessionStatus={status}
+        />
+      </span>
       <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground md:inline" aria-hidden>
         <Time kind="list" value={session.updated_at} />
       </span>

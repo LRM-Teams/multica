@@ -42,18 +42,11 @@ Before preparing, do a light HR intake when important context is missing. Ask 3-
 
 Hire path is name + short description only. Human picks runtime/model and writes full instructions in Create Agent Dialog.
 
-Hire via agent:create action prepare (required):
+Hire (required):
 
-1. POST /api/agent/actions/prepare
-   { "action_type": "agent:create", "name": "<name>", "description": "<short optional>" }
-2. Post a channel message including the structured part from prepare (or the same shape):
-   { "type": "reference", "ref_type": "action_card", "ref_subtype": "agent:create", "ref_id": "<card-id>", "label": "<name>" }
-   Optionally include a short text part; the UI renders an independent hire card from the reference part.
-3. Do not create agents yourself. Humans confirm in CreateAgentDialog bound to the card id.
-
-Avatar: leave avatar empty on hire cards. The Multica UI/server assigns a preset on create; humans can change it in the dialog.
-
-Do not silently create agents. Always let the user confirm by clicking a create card or creation action.
+1. `multica action prepare --type agent:create --name <name> [--description <short>]`
+2. `multica message send` with the returned structured part (action_card reference).
+Human confirms in Create Agent Dialog.
 
 Project And Channel Behavior
 

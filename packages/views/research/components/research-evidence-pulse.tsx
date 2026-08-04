@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
@@ -13,6 +12,8 @@ import type { EvidenceOverviewMode } from "../lib/m2-visibility";
  * Left: coverage/readiness only. Right: verification slot — without a BE
  * verification_status contract this is always the neutral
  * 「核验信息未提供」 string (never inferred from chips/count/session).
+ *
+ * Ready/revision sweep is a remount-keyed CSS class (no prop→state effect).
  */
 export function ResearchEvidencePulse({
   mode,
@@ -23,7 +24,7 @@ export function ResearchEvidencePulse({
   className,
 }: {
   mode: EvidenceOverviewMode;
-  /** Changes when real evidence facts revise — triggers one-shot sweep. */
+  /** Changes when real evidence facts revise — remounts one-shot sweep. */
   revisionKey: string;
   errorSummary?: string | null;
   onRetry?: () => void;
@@ -31,28 +32,6 @@ export function ResearchEvidencePulse({
   className?: string;
 }) {
   const { t } = useT("research");
-  const [sweep, setSweep] = useState(false);
-  const prevRevision = useRef<string | null>(null);
-  const prevMode = useRef<EvidenceOverviewMode | null>(null);
-
-  useEffect(() => {
-    const modeChangedToReady =
-      mode === "ready" && prevMode.current !== "ready";
-    const revisionChanged =
-      prevRevision.current != null && prevRevision.current !== revisionKey;
-    const shouldSweep =
-      mode === "ready" &&
-      (modeChangedToReady || revisionChanged) &&
-      revisionKey.length > 0;
-
-    prevMode.current = mode;
-    prevRevision.current = revisionKey;
-
-    if (!shouldSweep) return;
-    setSweep(true);
-    const id = window.setTimeout(() => setSweep(false), 420);
-    return () => window.clearTimeout(id);
-  }, [mode, revisionKey]);
 
   const statusText =
     mode === "loading"
@@ -76,11 +55,17 @@ export function ResearchEvidencePulse({
     t(($) => $.m2.evidence_expect_3),
   ];
 
+  // Remount when ready revision changes → CSS one-shot 420ms sweep.
+  const sweepMountKey =
+    mode === "ready" && revisionKey.length > 0
+      ? `ready:${revisionKey}`
+      : "idle";
+
   return (
     <section
       data-testid="research-evidence-pulse"
       data-mode={mode}
-      data-sweep={sweep ? "true" : "false"}
+      data-sweep-key={sweepMountKey}
       role={mode === "error" || mode === "permission" ? "alert" : undefined}
       aria-busy={mode === "loading" || undefined}
       className={cn(
@@ -94,12 +79,13 @@ export function ResearchEvidencePulse({
       )}
     >
       <div
+        key={sweepMountKey}
         aria-hidden
+        data-testid="research-evidence-pulse-sweep"
         className={cn(
           "pointer-events-none absolute inset-0",
-          sweep && "animate-evidence-sweep",
-          !sweep &&
-            mode === "ready" &&
+          mode === "ready" && "animate-evidence-sweep",
+          mode === "ready" &&
             "shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--brand)_22%,transparent)]",
         )}
       />

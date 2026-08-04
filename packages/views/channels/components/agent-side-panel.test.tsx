@@ -145,6 +145,10 @@ vi.mock("../../agents/components/inspector/thinking-prop-row", () => ({
     <div data-testid="thinking-picker" data-can-edit={String(!!p.canEdit)} />
   ),
 }));
+vi.mock("../../agents/components/runtime-config-dialog", () => ({
+  RuntimeConfigDialog: (p: { open: boolean }) =>
+    p.open ? <div data-testid="agent-runtime-config-dialog" /> : null,
+}));
 vi.mock("../../common/prop-row", () => ({
   PropRow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
@@ -265,6 +269,10 @@ const RESOURCES = {
   },
   execution_config: {
     applies_next_run: "Changes take effect on the next run",
+    dialog_title: "Runtime config",
+    dialog_description: "Edits stay local until you save.",
+    dialog_saving: "Saving…",
+    edit_trigger_aria: "Edit runtime, model, and thinking",
   },
   row: {
     archived: "Archived",
@@ -773,13 +781,18 @@ describe("AgentSidePanel", () => {
     expect(screen.queryByTestId("concurrency-picker")).not.toBeInTheDocument();
   });
 
-  it("renders EDITABLE runtime pickers when canEdit allows", () => {
+  it("LRM-1351: summary pickers stay read-only; edit opens Dialog when canEdit", () => {
     permission.allowed = true;
     renderPanel("user-other");
 
     for (const id of ["runtime-picker", "model-picker", "thinking-picker"]) {
-      expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "true");
+      expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "false");
     }
+    expect(screen.queryByTestId("agent-runtime-config-dialog")).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit runtime, model, and thinking" }),
+    );
+    expect(screen.getByTestId("agent-runtime-config-dialog")).toBeInTheDocument();
   });
 
   it("renders READ-ONLY runtime pickers in Profile for a non-owner, non-group-manager", () => {
@@ -789,13 +802,19 @@ describe("AgentSidePanel", () => {
     for (const id of ["runtime-picker", "model-picker", "thinking-picker"]) {
       expect(screen.getByTestId(id)).toHaveAttribute("data-can-edit", "false");
     }
+    expect(
+      screen.queryByRole("button", { name: "Edit runtime, model, and thinking" }),
+    ).not.toBeInTheDocument();
   });
 
-  it("threads the owner/admin permission decision into the runtime pickers", () => {
+  it("threads the owner/admin permission decision into the runtime edit affordance", () => {
     // For an ordinary agent, editability comes straight from useAgentPermissions.
     permission.allowed = true;
     renderPanel("user-owner");
 
-    expect(screen.getByTestId("runtime-picker")).toHaveAttribute("data-can-edit", "true");
+    expect(
+      screen.getByRole("button", { name: "Edit runtime, model, and thinking" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("runtime-picker")).toHaveAttribute("data-can-edit", "false");
   });
 });

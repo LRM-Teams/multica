@@ -23,6 +23,7 @@ import { ModelPicker } from "../../agents/components/inspector/model-picker";
 import { RuntimePicker } from "../../agents/components/inspector/runtime-picker";
 import { ComputerInfoRow } from "../../agents/components/inspector/computer-info-row";
 import { ThinkingPropRow } from "../../agents/components/inspector/thinking-prop-row";
+import { RuntimeConfigDialog } from "../../agents/components/runtime-config-dialog";
 import { MemoryGrowthField } from "../../agents/components/memory-growth-field";
 import { AgentProfileActions } from "../../agents/components/agent-profile-actions";
 import { AgentLifecycleStatusLine } from "../../agents/components/agent-lifecycle-status-line";
@@ -353,6 +354,7 @@ function AgentProfileTabContent({
 
   const update = (data: Record<string, unknown>) => handleUpdate(agent.id, data);
   const displayName = resolveActorDisplayName(agent, agent.id);
+  const [runtimeDialogOpen, setRuntimeDialogOpen] = useState(false);
 
   return (
     <div className="flex min-w-0 flex-col" data-testid="agent-profile-tab-content">
@@ -424,7 +426,9 @@ function AgentProfileTabContent({
           </div>
         </div>
 
-        {/* LRM-470 — Runtime Config is its own section (not Info misc rows). */}
+        {/* LRM-470 — Runtime Config is its own section (not Info misc rows).
+            LRM-1351 — summary always shows effective config; edits go through
+            a centered Dialog so multi-field changes restart at most once. */}
         <section
           className="border-t border-border pt-3"
           aria-label={t(($) => $.side_panel.runtime_section)}
@@ -433,48 +437,50 @@ function AgentProfileTabContent({
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             {t(($) => $.side_panel.runtime_section)}
           </h3>
-          <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
-            <span className="pt-0.5 text-muted-foreground">
-              {t(($) => $.inspector.prop_runtime)}
-            </span>
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <RuntimePicker
-                value={agent.runtime_id}
+          {canEditRuntime ? (
+            <button
+              type="button"
+              className="w-full rounded-md text-left transition-colors hover:bg-accent/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => setRuntimeDialogOpen(true)}
+              aria-label={t(($) => $.execution_config.edit_trigger_aria)}
+              data-testid="agent-runtime-config-edit"
+            >
+              <RuntimeConfigSummary
+                agent={agent}
                 runtimes={runtimes}
-                members={[...members]}
+                members={members}
                 currentUserId={currentUserId}
-                canEdit={canEditRuntime}
-                onChange={(id) => update({ runtime_id: id })}
+                isOnline={isOnline}
+                runtimeUpdateHealth={runtimeUpdateHealth}
+                runtimeHealthLabel={runtimeHealthLabel}
               />
-              {runtimeUpdateHealth !== "ok" && (
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                  {runtimeHealthLabel(runtimeUpdateHealth)}
-                </span>
-              )}
-              <ModelPicker
-                runtimeId={agent.runtime_id}
-                runtimeOnline={!!isOnline}
-                value={agent.model ?? ""}
-                canEdit={canEditRuntime}
-                onChange={(m) => update({ model: m })}
-              />
-            </div>
-          </div>
-          <div className="mt-2 grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
-            <ThinkingPropRow
-              runtimeId={agent.runtime_id}
-              runtimeOnline={!!isOnline}
-              model={agent.model ?? ""}
-              value={agent.thinking_level ?? ""}
-              canEdit={canEditRuntime}
-              onChange={(v) => update({ thinking_level: v })}
+            </button>
+          ) : (
+            <RuntimeConfigSummary
+              agent={agent}
+              runtimes={runtimes}
+              members={members}
+              currentUserId={currentUserId}
+              isOnline={isOnline}
+              runtimeUpdateHealth={runtimeUpdateHealth}
+              runtimeHealthLabel={runtimeHealthLabel}
             />
-          </div>
+          )}
           {canEditRuntime ? (
             <p className="mt-2 text-[10px] leading-tight text-muted-foreground">
               {t(($) => $.execution_config.applies_next_run)}
             </p>
           ) : null}
+          <RuntimeConfigDialog
+            agent={agent}
+            open={runtimeDialogOpen}
+            onOpenChange={setRuntimeDialogOpen}
+            runtimes={runtimes}
+            members={[...members]}
+            currentUserId={currentUserId}
+            runtimeOnline={isOnline}
+            onSave={update}
+          />
         </section>
 
         {agent.memory_growth ? <MemoryGrowthField growth={agent.memory_growth} /> : null}
@@ -488,6 +494,67 @@ function AgentProfileTabContent({
         </div>
       </div>
     </div>
+  );
+}
+
+function RuntimeConfigSummary({
+  agent,
+  runtimes,
+  members,
+  currentUserId,
+  isOnline,
+  runtimeUpdateHealth,
+  runtimeHealthLabel,
+}: {
+  agent: Agent;
+  runtimes: import("@multica/core/types").AgentRuntime[];
+  members: readonly MemberWithUser[];
+  currentUserId: string | null;
+  isOnline: boolean;
+  runtimeUpdateHealth: ReturnType<typeof deriveRuntimeHealthPresentation> | "ok";
+  runtimeHealthLabel: (state: string) => string;
+}) {
+  const { t } = useT("agents");
+  return (
+    <>
+      <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
+        <span className="pt-0.5 text-muted-foreground">
+          {t(($) => $.inspector.prop_runtime)}
+        </span>
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <RuntimePicker
+            value={agent.runtime_id}
+            runtimes={runtimes}
+            members={[...members]}
+            currentUserId={currentUserId}
+            canEdit={false}
+            onChange={() => {}}
+          />
+          {runtimeUpdateHealth !== "ok" && (
+            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {runtimeHealthLabel(runtimeUpdateHealth)}
+            </span>
+          )}
+          <ModelPicker
+            runtimeId={agent.runtime_id}
+            runtimeOnline={!!isOnline}
+            value={agent.model ?? ""}
+            canEdit={false}
+            onChange={() => {}}
+          />
+        </div>
+      </div>
+      <div className="mt-2 grid min-w-0 grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+        <ThinkingPropRow
+          runtimeId={agent.runtime_id}
+          runtimeOnline={!!isOnline}
+          model={agent.model ?? ""}
+          value={agent.thinking_level ?? ""}
+          canEdit={false}
+          onChange={() => {}}
+        />
+      </div>
+    </>
   );
 }
 

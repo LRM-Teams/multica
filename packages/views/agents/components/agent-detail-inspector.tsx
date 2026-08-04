@@ -2,6 +2,7 @@
 
 import {
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import { Camera, Loader2 } from "lucide-react";
@@ -36,6 +37,7 @@ import { ModelPicker } from "./inspector/model-picker";
 import { RuntimePicker } from "./inspector/runtime-picker";
 import { SkillAttach } from "./inspector/skill-attach";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
+import { RuntimeConfigDialog } from "./runtime-config-dialog";
 import { LarkAgentBindButton } from "../../settings/components/lark-tab";
 import { AgentLifecycleStatusLine } from "./agent-lifecycle-status-line";
 
@@ -98,6 +100,7 @@ export function AgentDetailInspector({
   // (#10 — "runtime online status" had two divergent sources across the
   // app).
   const isOnline = !!runtime && deriveRuntimeHealth(runtime, Date.now()) === "online";
+  const [runtimeDialogOpen, setRuntimeDialogOpen] = useState(false);
 
   return (
     <aside className="flex w-full flex-col rounded-lg border bg-background md:h-full md:min-h-0 md:overflow-y-auto">
@@ -126,32 +129,60 @@ export function AgentDetailInspector({
           permission, each picker self-renders a static read-only display so
           the value is visible but not interactive. */}
       <Section label={t(($) => $.inspector.section_properties)}>
-        <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
-          <RuntimePicker
-            value={agent.runtime_id}
-            runtimes={runtimes}
-            members={members}
-            currentUserId={currentUserId}
-            canEdit={canEdit}
-            onChange={(id) => update({ runtime_id: id })}
-          />
-        </PropRow>
-        <PropRow label={t(($) => $.inspector.prop_model)} interactive={false}>
-          <ModelPicker
-            runtimeId={agent.runtime_id}
-            runtimeOnline={!!isOnline}
-            value={agent.model ?? ""}
-            canEdit={canEdit}
-            onChange={(m) => update({ model: m })}
-          />
+        {/* LRM-1351: runtime/model/thinking open one Dialog; summary shows
+            effective values only (no per-field save → restart). */}
+        <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={canEdit}>
+          {canEdit ? (
+            <button
+              type="button"
+              className="flex min-w-0 flex-wrap items-center gap-1.5 text-left focus:outline-none"
+              onClick={() => setRuntimeDialogOpen(true)}
+              aria-label={t(($) => $.execution_config.edit_trigger_aria)}
+              data-testid="agent-inspector-runtime-config-edit"
+            >
+              <RuntimePicker
+                value={agent.runtime_id}
+                runtimes={runtimes}
+                members={members}
+                currentUserId={currentUserId}
+                canEdit={false}
+                onChange={() => {}}
+              />
+              <ModelPicker
+                runtimeId={agent.runtime_id}
+                runtimeOnline={!!isOnline}
+                value={agent.model ?? ""}
+                canEdit={false}
+                onChange={() => {}}
+              />
+            </button>
+          ) : (
+            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <RuntimePicker
+                value={agent.runtime_id}
+                runtimes={runtimes}
+                members={members}
+                currentUserId={currentUserId}
+                canEdit={false}
+                onChange={() => {}}
+              />
+              <ModelPicker
+                runtimeId={agent.runtime_id}
+                runtimeOnline={!!isOnline}
+                value={agent.model ?? ""}
+                canEdit={false}
+                onChange={() => {}}
+              />
+            </span>
+          )}
         </PropRow>
         <ThinkingPropRow
           runtimeId={agent.runtime_id}
           runtimeOnline={!!isOnline}
           model={agent.model ?? ""}
           value={agent.thinking_level ?? ""}
-          canEdit={canEdit}
-          onChange={(v) => update({ thinking_level: v })}
+          canEdit={false}
+          onChange={() => {}}
         />
         <PropRow label={t(($) => $.inspector.prop_concurrency)} interactive={false}>
           <ConcurrencyPicker
@@ -160,6 +191,18 @@ export function AgentDetailInspector({
             onChange={(n) => update({ max_concurrent_tasks: n })}
           />
         </PropRow>
+        {canEdit ? (
+          <RuntimeConfigDialog
+            agent={agent}
+            open={runtimeDialogOpen}
+            onOpenChange={setRuntimeDialogOpen}
+            runtimes={runtimes}
+            members={members}
+            currentUserId={currentUserId}
+            runtimeOnline={isOnline}
+            onSave={update}
+          />
+        ) : null}
       </Section>
 
       {/* Details — read-only (no hover, no chip styling — these aren't clickable) */}

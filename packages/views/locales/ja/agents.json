@@ -529,7 +529,11 @@
     }
   },
   "execution_config": {
-    "applies_next_run": "ランタイム / モデル / 思考レベルを保存すると、可能な場合 agent が自動再起動し設定がすぐ反映されます。"
+    "applies_next_run": "ダイアログでランタイム / モデル / 思考レベルをまとめて編集できます。保存すると可能な場合 agent が自動再起動し、設定がすぐ反映されます（最大1回）。",
+    "dialog_title": "ランタイム設定",
+    "dialog_description": "編集は下書きのままです。保存するまで反映されません。キャンセル / Esc / 背景クリックで破棄し、再起動しません。",
+    "dialog_saving": "保存中…",
+    "edit_trigger_aria": "ランタイム・モデル・思考レベルを編集"
   },
   "side_panel": {
     "close_aria": "エージェントパネルを閉じる",

@@ -19,6 +19,7 @@ import type {
   ResearchFleetMember,
   ResearchGraphEdge,
   ResearchGraphNode,
+  ResearchRunSnapshot,
   ResearchSource,
 } from "@multica/core/types";
 import type { ResearchPresenceMap } from "@multica/core/research";
@@ -118,6 +119,7 @@ function ResearchCanvasInner({
   edges,
   sources,
   members = EMPTY_FLEET_MEMBERS,
+  run,
   sessionStatus,
   presence,
   selectedId,
@@ -136,6 +138,7 @@ function ResearchCanvasInner({
   edges: ResearchGraphEdge[];
   sources?: ResearchSource[];
   members?: ResearchFleetMember[];
+  run?: ResearchRunSnapshot;
   sessionStatus?: string | null;
   presence?: ResearchPresenceMap;
   selectedId?: string | null;
@@ -484,6 +487,8 @@ function ResearchCanvasInner({
             <ResearchNodeDetail
               node={detailNode}
               sources={sourceList}
+              run={run}
+              members={members}
               open={showOverlayDetail}
               placement="sheet"
               onClose={clearDetail}
@@ -642,6 +647,8 @@ function ResearchCanvasInner({
           <ResearchNodeDetail
             node={detailNode}
             sources={sourceList}
+            run={run}
+            members={members}
             open={showOverlayDetail}
             placement="overlay-card"
             onClose={clearDetail}
@@ -658,6 +665,7 @@ export function ResearchCanvas(props: {
   edges: ResearchGraphEdge[];
   sources?: ResearchSource[];
   members?: ResearchFleetMember[];
+  run?: ResearchRunSnapshot;
   sessionStatus?: string | null;
   presence?: ResearchPresenceMap;
   selectedId?: string | null;

@@ -171,7 +171,11 @@ import { cn } from "@multica/ui/lib/utils";
 import { SidebarTrigger, useSidebarSafe } from "@multica/ui/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { MobileListDetailLayout } from "../../common/mobile-list-detail-layout";
-import { ContentEditor, type ContentEditorRef, type ContentEditorProps } from "../../editor/content-editor";
+import {
+  ContentEditor,
+  type ContentEditorRef,
+  type ContentEditorProps,
+} from "../../editor/lazy-content-editor";
 import { useNavigation } from "../../navigation/context";
 import { useT } from "../../i18n/use-t";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
@@ -3661,6 +3665,9 @@ export function ChannelsPage({
             showBubbleMenu={false}
             mentionAllowedActorIds={mentionAllowedActorIds}
             scopedMentionAgents={channelAgentCandidates}
+            mentionChannelMemberIds={
+              active?.kind === "group" ? channelMemberIds : null
+            }
           />
         }
         onSend={handleThreadSend}
@@ -4392,6 +4399,9 @@ export function ChannelsPage({
                         enableChannelReferences
                         mentionAllowedActorIds={mentionAllowedActorIds}
                         scopedMentionAgents={channelAgentCandidates}
+                        mentionChannelMemberIds={
+                          active?.kind === "group" ? channelMemberIds : null
+                        }
                       />
                     }
                     leadingActions={
@@ -4739,15 +4749,18 @@ export function ChannelsPage({
         </SheetContent>
       </Sheet>
 
-      <Sheet
+      {/* LRM-1289 — remove confirm was a full-bleed bottom Sheet (`inset-x-0`),
+          so the pink primary stretched nearly viewport-wide. Use AlertDialog
+          (max-w-xs / sm:max-w-sm) like archive/delete — same mutate semantics. */}
+      <AlertDialog
         open={removeMemberTarget !== null}
         onOpenChange={(open) => {
           if (!open) setRemoveMemberTarget(null);
         }}
       >
-        <SheetContent side="bottom" showCloseButton={false} className="gap-0 rounded-t-2xl p-0">
-          <SheetHeader className="space-y-1 p-4 pb-2 text-left">
-            <SheetTitle>
+        <AlertDialogContent data-testid="group-member-remove-confirm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
               {t(($) => $.members.remove_confirm_title, {
                 name: removeMemberTarget
                   ? resolveActorDisplayName(
@@ -4758,16 +4771,17 @@ export function ChannelsPage({
                     )
                   : "",
               })}
-            </SheetTitle>
-            <SheetDescription>
+            </AlertDialogTitle>
+            <AlertDialogDescription>
               {t(($) => $.members.remove_confirm_description)}
-            </SheetDescription>
-          </SheetHeader>
-          <SheetFooter className="gap-2 p-4 pt-2">
-            <Button
-              type="button"
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removeMember.isPending}>
+              {t(($) => $.members.remove_cancel)}
+            </AlertDialogCancel>
+            <AlertDialogAction
               variant="destructive"
-              className="min-h-11 w-full"
               disabled={removeMember.isPending}
               onClick={() => {
                 if (!active || !removeMemberTarget) return;
@@ -4782,7 +4796,7 @@ export function ChannelsPage({
                   },
                   {
                     // #833 — same reasoning as the desktop path: closing the
-                    // sheet on a failed removal would look exactly like a
+                    // dialog on a failed removal would look exactly like a
                     // successful one.
                     onError: () => {
                       showErrorToast(t(($) => $.members.remove_failed));
@@ -4806,18 +4820,10 @@ export function ChannelsPage({
               }}
             >
               {t(($) => $.members.remove_confirm)}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              className="min-h-10 w-full"
-              onClick={() => setRemoveMemberTarget(null)}
-            >
-              {t(($) => $.members.remove_cancel)}
-            </Button>
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <DeleteChannelDialog
         open={deleteTarget !== null}

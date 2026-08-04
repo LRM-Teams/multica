@@ -1,18 +1,14 @@
 "use client";
 
-import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
 import type { HonorSnapshot } from "@multica/core/types/honor";
-import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 import { cn } from "@multica/ui/lib/utils";
-import { useAgentFleetClassName } from "../agents/hooks/use-agent-fleet-class-name";
 import { AgentHonorLevelIcon } from "../agents/components/agent-honor-level-icon";
 import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
 
 export interface ActorStyledNameProps {
   displayName: string;
   honor?: HonorSnapshot | null;
-  fleet?: AgentFleetRank | null;
   agentHonorLevel?: number | null;
   honorSurface?: "inline" | "profile";
   /** Dense lists can keep earned name styling while omitting space-consuming badges. */
@@ -21,18 +17,16 @@ export interface ActorStyledNameProps {
   nameClassName?: string;
 }
 
-/** Inline actor display name with platform honor styling and/or agent fleet badge. */
+/** Inline actor display name with the platform's human or Agent honor crest. */
 export function ActorStyledName({
   displayName,
   honor,
-  fleet,
   agentHonorLevel,
   honorSurface = "inline",
   showBadges = true,
   className,
   nameClassName = "truncate",
 }: ActorStyledNameProps) {
-  const fleetClassName = useAgentFleetClassName();
   const nameDisplay = honor
     ? honorNameDisplayProps({
         nameStyle: honor.name_style,
@@ -63,15 +57,6 @@ export function ActorStyledName({
           level={agentHonorLevel}
           title={`LV.${agentHonorLevel}`}
           className="size-6 drop-shadow-sm"
-        />
-      ) : null}
-      {showBadges && !agentHonorLevel && fleet ? (
-        <FleetRankBadge
-          classId={fleet.class_id}
-          classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
-          fleetRank={fleet.fleet_rank}
-          frozen={fleet.frozen}
-          medal
         />
       ) : null}
     </span>

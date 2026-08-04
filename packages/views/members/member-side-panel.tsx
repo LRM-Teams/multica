@@ -31,10 +31,9 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 import { cn } from "@multica/ui/lib/utils";
-import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
 import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
 import { InlineFieldEditor } from "../agents/components/inline-field-editor";
-import { useAgentFleetClassName } from "../agents/hooks/use-agent-fleet-class-name";
+import { AgentHonorLevelIcon } from "../agents/components/agent-honor-level-icon";
 import { MemberSelfAvatarEditor } from "./member-self-avatar-editor";
 import { useOpenAgentPanel } from "../common/agent-panel-context";
 import { ActorAvatar } from "../common/actor-avatar";
@@ -611,7 +610,6 @@ function CreatedAgentRow({
   href: string;
   onOpenPanel?: () => void;
 }) {
-  const fleetClassName = useAgentFleetClassName();
   const displayName = resolveActorDisplayName(agent, agent.id);
   const roleHint = agent.description?.trim().split("\n")[0]?.trim() ?? "";
   const title =
@@ -639,13 +637,11 @@ function CreatedAgentRow({
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1">
           <div className="truncate text-xs font-semibold text-foreground">{title}</div>
-          {fleet ? (
-            <FleetRankBadge
-              classId={fleet.class_id}
-              classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
-              fleetRank={fleet.fleet_rank}
-              frozen={fleet.frozen}
-              medal
+          {agent.honor_level ? (
+            <AgentHonorLevelIcon
+              level={agent.honor_level}
+              title={`LV.${agent.honor_level}`}
+              className="size-6 drop-shadow-sm"
             />
           ) : null}
         </div>

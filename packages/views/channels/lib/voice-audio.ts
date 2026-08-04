@@ -66,9 +66,25 @@ export function downmixAudioBuffer(buffer: AudioBuffer): Float32Array {
   return mono;
 }
 
+/** Yield to the event loop so long PCM encode does not freeze the UI (LRM-1215). */
+const PCM_ENCODE_YIELD_EVERY = 4_096;
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof globalThis.setTimeout === "function") {
+      globalThis.setTimeout(resolve, 0);
+      return;
+    }
+    resolve();
+  });
+}
+
 /**
  * Resample decoded browser audio and encode the backend's exact ASR contract:
  * signed 16-bit little-endian mono PCM at 16 kHz.
+ *
+ * Sync path kept for unit tests / tiny buffers. Prefer `encodeVoicePCMAsync`
+ * from the capture UI so mobile stays interactive during long recordings.
  */
 export function encodeVoicePCM(samples: Float32Array, sourceSampleRate: number): ArrayBuffer {
   if (!Number.isFinite(sourceSampleRate) || sourceSampleRate <= 0) {
@@ -94,6 +110,42 @@ export function encodeVoicePCM(samples: Float32Array, sourceSampleRate: number):
     const clamped = Math.max(-1, Math.min(1, interpolated));
     const sample = clamped < 0 ? Math.round(clamped * 0x8000) : Math.round(clamped * 0x7fff);
     view.setInt16(outputIndex * 2, sample, true);
+  }
+
+  return pcm;
+}
+
+/** Same contract as `encodeVoicePCM`, but yields every ~4k samples (LRM-1215). */
+export async function encodeVoicePCMAsync(
+  samples: Float32Array,
+  sourceSampleRate: number,
+): Promise<ArrayBuffer> {
+  if (!Number.isFinite(sourceSampleRate) || sourceSampleRate <= 0) {
+    throw new Error("invalid source sample rate");
+  }
+  if (samples.length === 0) return new ArrayBuffer(0);
+
+  const outputLength = Math.max(
+    1,
+    Math.round(samples.length * (VOICE_SAMPLE_RATE / sourceSampleRate)),
+  );
+  const pcm = new ArrayBuffer(outputLength * 2);
+  const view = new DataView(pcm);
+  const sourceStep = sourceSampleRate / VOICE_SAMPLE_RATE;
+
+  for (let outputIndex = 0; outputIndex < outputLength; outputIndex += 1) {
+    const sourcePosition = outputIndex * sourceStep;
+    const leftIndex = Math.min(samples.length - 1, Math.floor(sourcePosition));
+    const rightIndex = Math.min(samples.length - 1, leftIndex + 1);
+    const fraction = sourcePosition - leftIndex;
+    const interpolated =
+      (samples[leftIndex] ?? 0) * (1 - fraction) + (samples[rightIndex] ?? 0) * fraction;
+    const clamped = Math.max(-1, Math.min(1, interpolated));
+    const sample = clamped < 0 ? Math.round(clamped * 0x8000) : Math.round(clamped * 0x7fff);
+    view.setInt16(outputIndex * 2, sample, true);
+    if (outputIndex > 0 && outputIndex % PCM_ENCODE_YIELD_EVERY === 0) {
+      await yieldToMain();
+    }
   }
 
   return pcm;

@@ -48,7 +48,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
+import {
+  ContentEditor,
+  type ContentEditorRef,
+} from "../../editor/lazy-content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { ActorStyledName } from "../../common/actor-styled-name";
@@ -283,7 +286,7 @@ function DmHeader({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const openAgentPanel = useOpenAgentPanel();
-  const { getMemberHonor, getAgentFleetRank } = useActorName();
+  const { getMemberHonor, getAgentHonorLevel } = useActorName();
   const peerId = dm.peer.id;
   const peerType = dm.peer.type;
   const isMuted = isConversationMuted(dm);
@@ -333,7 +336,8 @@ function DmHeader({
     [isAgentPair, mutedBadge, t],
   );
   const peerHonor = !agentPair && peerType === "user" ? getMemberHonor(peerId) : undefined;
-  const peerFleet = !agentPair && peerType === "agent" ? getAgentFleetRank(peerId) : undefined;
+  const peerHonorLevel =
+    !agentPair && peerType === "agent" ? getAgentHonorLevel(peerId) : undefined;
   // LRM-749/LRM-710: header mirrors the DM list row — weak gray @handle next
   // to the peer name only while the display name collides in this workspace.
   const wsId = useWorkspaceId();
@@ -349,7 +353,7 @@ function DmHeader({
       <ActorStyledName
         displayName={dm.peer.name}
         honor={peerHonor}
-        fleet={peerFleet}
+        agentHonorLevel={peerHonorLevel}
         className="truncate text-sm font-semibold text-foreground"
       />
       {dupHandleLabel && (

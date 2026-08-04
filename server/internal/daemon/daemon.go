@@ -4421,6 +4421,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	switch result.Status {
 	case "completed":
+		if reason, ok := classifyFailedOutput(output); ok {
+			taskLog.Warn("agent emitted a provider failure as final output", "failure_reason", reason)
+			return TaskResult{
+				Status:        "blocked",
+				Comment:       output,
+				SessionID:     result.SessionID,
+				WorkDir:       env.WorkDir,
+				EnvRoot:       env.RootDir,
+				Usage:         usageEntries,
+				RuntimeStats:  runtimeStats,
+				FailureReason: reason,
+			}, nil
+		}
 		if isChannelOnboardingSkipReceipt(task, output) {
 			taskLog.Info("agent produced typed channel onboarding skip receipt")
 			return TaskResult{

@@ -279,7 +279,10 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
         /className="[^"]*shrink-0 opacity-100 md:opacity-0 md:transition-opacity/,
       );
       expect(row).toMatch(/className="inline-flex [^"]*\bmd:hidden"/);
+      // LRM-1285: stage energy desktop host is hidden md:inline; skeleton stage slot w-28 h-6.
+      expect(row).toMatch(/className="relative z-\[1\] hidden shrink-0 md:inline"/);
       expect(skeleton).toMatch(/className="hidden items-center md:flex"/);
+      expect(skeleton).toMatch(/className="hidden h-6 w-28 shrink-0 md:block"/);
       expect(skeleton).toMatch(/className="hidden h-3 w-10 shrink-0 md:block"/);
     });
 
@@ -290,7 +293,7 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
 
         const { unmount: unmountSkeleton } = render(<ResearchSessionRowSkeleton />);
         const skeleton = screen.getByTestId("research-session-row-skeleton");
-        expect(skeleton.querySelector(".hidden.h-3.w-14.shrink-0.md\\:block")).toBeTruthy();
+        expect(skeleton.querySelector(".hidden.h-6.w-28.shrink-0.md\\:block")).toBeTruthy();
         expect(skeleton.querySelector(".hidden.h-3.w-10.shrink-0.md\\:block")).toBeTruthy();
         expect(skeleton.querySelector(".hidden.items-center.md\\:flex")).toBeTruthy();
         expect(skeleton.className).not.toMatch(FORBIDDEN_STRUCTURAL_SM);
@@ -301,14 +304,15 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
           <ResearchSessionRow session={sampleSession()} href="/research/s1" />,
         );
         const narrowMeta = screen
-          .getAllByText(enResearch.stage.s2_sources)
-          .map((el) => el.closest("span.inline-flex"))
-          .find(Boolean);
+          .getAllByTestId("research-session-stage-energy")
+          .map((el) => el.parentElement)
+          .find((el) => el?.className.includes("md:hidden"));
         expect(narrowMeta?.className).toMatch(/\bmd:hidden\b/);
+        expect(narrowMeta?.className).toMatch(/\binline-flex\b/);
         expect(narrowMeta?.className).not.toMatch(FORBIDDEN_STRUCTURAL_SM);
         const desktopStage = screen
-          .getAllByText(enResearch.stage.s2_sources)
-          .map((el) => el.closest("span.hidden"))
+          .getAllByTestId("research-session-stage-energy")
+          .map((el) => el.parentElement)
           .find((el) => el?.className.includes("md:inline"));
         expect(desktopStage?.className).toMatch(/\bmd:inline\b/);
         expect(desktopStage?.className).not.toMatch(FORBIDDEN_STRUCTURAL_SM);

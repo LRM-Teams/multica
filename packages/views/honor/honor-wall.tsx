@@ -3,6 +3,7 @@
 import type { HonorCompareResult, HonorPublicWall } from "@multica/core/types/honor";
 import { HonorBadgeCrest, HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
 import { Progress } from "@multica/ui/components/ui/progress";
+import { useHonorBadgeCopy } from "./use-honor-badge-copy";
 
 export interface HonorWallProps {
   wall: HonorPublicWall;
@@ -29,6 +30,7 @@ export function HonorWall({
   youOnlyTitle,
   themOnlyTitle,
 }: HonorWallProps) {
+  const honorBadgeCopy = useHonorBadgeCopy();
   const unlocked = wall.badges_unlocked ?? wall.unlocked_badges.length;
   const total = wall.badges_total ?? wall.unlocked_badges.length;
   const pct = total > 0 ? Math.round((unlocked / total) * 100) : 0;
@@ -53,22 +55,25 @@ export function HonorWall({
             {showcaseTitle}
           </h4>
           <div className="grid grid-cols-3 gap-2">
-            {wall.showcase_badges.map((badge) => (
-              <div
-                key={badge.id}
-                className="flex min-h-28 flex-col items-center justify-center rounded-xl border border-white/10 bg-white/5 p-2 text-center"
-              >
-                <HonorBadgeCrest
-                  svgKey={badge.svg_key}
-                  title={badge.title}
-                  animated
-                  className="size-12"
-                />
-                <span className="mt-2 line-clamp-2 text-[10px] font-medium leading-4 text-slate-200">
-                  {badge.title}
-                </span>
-              </div>
-            ))}
+            {wall.showcase_badges.map((badge) => {
+              const copy = honorBadgeCopy(badge);
+              return (
+                <div
+                  key={badge.id}
+                  className="flex min-h-28 flex-col items-center justify-center rounded-xl border border-white/10 bg-white/5 p-2 text-center"
+                >
+                  <HonorBadgeCrest
+                    svgKey={badge.svg_key}
+                    title={copy.title}
+                    animated
+                    className="size-12"
+                  />
+                  <span className="mt-2 line-clamp-2 text-[10px] font-medium leading-4 text-slate-200">
+                    {copy.title}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </section>
       ) : null}
@@ -79,15 +84,18 @@ export function HonorWall({
             {recentTitle}
           </h4>
           <ul className="space-y-1">
-            {wall.recent_unlocks.map((item) => (
-              <li
-                key={`${item.id}-${item.unlocked_at}`}
-                className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted/50"
-              >
-                <HonorBadgeIcon svgKey={item.svg_key} title={item.title} medal />
-                <span className="font-medium">{item.title}</span>
-              </li>
-            ))}
+            {wall.recent_unlocks.map((item) => {
+              const copy = honorBadgeCopy({ ...item, unlocked: true });
+              return (
+                <li
+                  key={`${item.id}-${item.unlocked_at}`}
+                  className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-muted/50"
+                >
+                  <HonorBadgeIcon svgKey={item.svg_key} title={copy.title} medal />
+                  <span className="font-medium">{copy.title}</span>
+                </li>
+              );
+            })}
           </ul>
         </div>
       ) : null}
@@ -113,13 +121,18 @@ function CompareBadgeGroup({
   title: string;
   badges: HonorCompareResult["shared_badges"];
 }) {
+  const honorBadgeCopy = useHonorBadgeCopy();
   if (badges.length === 0) return null;
   return (
     <div>
       <p className="mb-1 text-[11px] text-muted-foreground">{title}</p>
       <div className="flex flex-wrap gap-1">
         {badges.map((badge) => (
-          <HonorBadgeIcon key={badge.id} svgKey={badge.svg_key} title={badge.title} />
+          <HonorBadgeIcon
+            key={badge.id}
+            svgKey={badge.svg_key}
+            title={honorBadgeCopy(badge).title}
+          />
         ))}
       </div>
     </div>

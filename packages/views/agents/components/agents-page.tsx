@@ -49,7 +49,6 @@ import {
 import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useNavigation } from "../../navigation";
-import { useAgentFleetClassName } from "../hooks/use-agent-fleet-class-name";
 import { PageHeader } from "../../layout/page-header";
 import {
   availabilityConfig,
@@ -67,7 +66,7 @@ import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { estimateCost } from "../../runtimes/utils";
 import { AgentOpenDmButton } from "./agent-open-dm-button";
-import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
+import { AgentHonorLevelIcon } from "./agent-honor-level-icon";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
@@ -1065,7 +1064,6 @@ function AgentRailRow({
   selected: boolean;
   onClick: () => void;
 }) {
-  const fleetClassName = useAgentFleetClassName();
   const displayName = resolveActorDisplayName(agent, agent.name);
   const isArchived = !!agent.archived_at;
   return (
@@ -1104,13 +1102,14 @@ function AgentRailRow({
             >
               {displayName}
             </p>
-            {fleet ? (
-              <FleetRankBadge
-                classId={fleet.class_id}
-                classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
-                fleetRank={fleet.fleet_rank}
-                frozen={fleet.frozen || isArchived}
-                medal
+            {agent.honor_level ? (
+              <AgentHonorLevelIcon
+                level={agent.honor_level}
+                title={`LV.${agent.honor_level}`}
+                className={cn(
+                  "size-6 drop-shadow-sm",
+                  isArchived && "opacity-50 grayscale",
+                )}
               />
             ) : null}
           </div>

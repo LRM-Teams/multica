@@ -853,22 +853,32 @@ func (h *Handler) agentTaskInitiatorUserID(r *http.Request, workspaceID pgtype.U
 		return empty, false
 	}
 	var target pgtype.UUID
+	// Prefer turn/human initiator; if the wake has no human author (reminder
+	// re-fire, agent-authored anchor, channel-only), fall back to the agent
+	// owner so managers can re-schedule patrols (Beckham 2026-08-04 403).
 	err = h.DB.QueryRow(r.Context(), `
 		WITH task AS (
-			SELECT t.initiator_user_id, c.author_type AS comment_author_type, c.author_id AS comment_author_id
+			SELECT t.initiator_user_id,
+			       c.author_type AS comment_author_type,
+			       c.author_id AS comment_author_id,
+			       a.owner_id AS agent_owner_id
 			FROM agent_inbox_event t
-			JOIN agent a ON a.id = t.agent_id AND a.workspace_id = $2
+			JOIN agent a ON a.id = t.agent_id AND a.workspace_id = $2 AND a.archived_at IS NULL
 			LEFT JOIN comment c ON c.id = t.trigger_comment_id AND c.workspace_id = $2
 			WHERE t.id = $1
 		)
 		SELECT candidate.user_id
 		FROM task
 		CROSS JOIN LATERAL (
-			SELECT CASE
-				WHEN task.initiator_user_id IS NOT NULL THEN task.initiator_user_id
-				WHEN task.comment_author_type = 'member' THEN task.comment_author_id
-				ELSE NULL
-			END AS user_id
+			SELECT COALESCE(
+				task.initiator_user_id,
+				CASE WHEN task.comment_author_type IN ('member', 'user') THEN task.comment_author_id END,
+				task.agent_owner_id,
+				(SELECT m.user_id FROM member m
+				 WHERE m.workspace_id = $2 AND m.role = 'owner'
+				 ORDER BY m.created_at ASC NULLS LAST, m.user_id ASC
+				 LIMIT 1)
+			) AS user_id
 		) candidate
 		JOIN member m ON m.workspace_id = $2 AND m.user_id = candidate.user_id
 		WHERE candidate.user_id IS NOT NULL
@@ -887,12 +897,17 @@ func (h *Handler) agentInboxInitiatorUserID(r *http.Request, workspaceID pgtype.
 		return empty, false
 	}
 	var target pgtype.UUID
+	// Prefer human source-message author / chat creator; fall back to agent
+	// owner so channel manager patrols can schedule without a human wake
+	// author (reminder re-anchor 403: "reminder initiator is not available").
 	err = h.DB.QueryRow(r.Context(), `
 		WITH inbox AS (
 			SELECT msg.author_type AS message_author_type,
 				msg.author_id AS message_author_id,
-				session.creator_id AS session_creator_id
+				session.creator_id AS session_creator_id,
+				a.owner_id AS agent_owner_id
 			FROM agent_inbox_event e
+			JOIN agent a ON a.id = e.agent_id AND a.workspace_id = e.workspace_id AND a.archived_at IS NULL
 			LEFT JOIN channel_message msg ON msg.id = e.source_message_id AND msg.workspace_id = e.workspace_id
 			LEFT JOIN chat_session session ON session.id = e.chat_session_id
 			WHERE e.id = $1 AND e.workspace_id = $2 AND e.agent_id = $3
@@ -901,8 +916,13 @@ func (h *Handler) agentInboxInitiatorUserID(r *http.Request, workspaceID pgtype.
 		FROM inbox
 		CROSS JOIN LATERAL (
 			SELECT COALESCE(
-				CASE WHEN inbox.message_author_type = 'user' THEN inbox.message_author_id END,
-				inbox.session_creator_id
+				CASE WHEN inbox.message_author_type IN ('user', 'member') THEN inbox.message_author_id END,
+				inbox.session_creator_id,
+				inbox.agent_owner_id,
+				(SELECT m.user_id FROM member m
+				 WHERE m.workspace_id = $2 AND m.role = 'owner'
+				 ORDER BY m.created_at ASC NULLS LAST, m.user_id ASC
+				 LIMIT 1)
 			) AS user_id
 		) candidate
 		JOIN member m ON m.workspace_id = $2 AND m.user_id = candidate.user_id

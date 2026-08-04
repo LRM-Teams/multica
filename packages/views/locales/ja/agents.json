@@ -742,8 +742,12 @@
     "no_equipped": "実績は未装備です",
     "dismiss_unlock": "実績通知を閉じる",
     "unlock_toast_title": "エージェント実績を解除",
+    "secret_achievement": "秘密の実績",
+    "secret_achievement_description": "貢献を重ねると、解除後に内容が明らかになります。",
+    "secret_achievement_category": "未公開",
+    "accepted_delivery": "承認済みの成果物",
+    "update_error": "エージェントの栄誉を更新できませんでした。",
     "fleet_upgraded": "{{agentName}}が {{className}} に昇格しました",
-    "agent_fallback": "エージェント",
     "fleet_classes": {
       "reserve": "予備艦",
       "corvette": "コルベット",
@@ -759,6 +763,21 @@
       "evolution": "進化",
       "mastery": "熟練",
       "fleet": "艦隊"
+    },
+    "metric_names": {
+      "completed": "完了したタスク",
+      "success_streak": "連続成功",
+      "memory_writes": "有効なメモリ更新",
+      "evolution_promotions": "進化ユニットの昇格",
+      "distinct_projects": "成果を届けたプロジェクト",
+      "recoveries": "失敗からの回復",
+      "fleet_class": "艦隊クラス"
+    },
+    "audit_actions": {
+      "rules_update": "栄誉ルールを更新",
+      "xp_grant": "XPを付与",
+      "achievement_grant": "実績を付与",
+      "achievement_revoke": "実績を取り消し"
     },
     "achievements": {
       "first_launch": {

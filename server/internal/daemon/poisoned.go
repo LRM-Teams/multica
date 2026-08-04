@@ -85,6 +85,22 @@ func classifyPoisonedOutput(output string) (string, bool) {
 	return "", false
 }
 
+// classifyFailedOutput catches a provider wrapper failure that was emitted as
+// the entire final answer while the wrapper process still exited successfully.
+// The exact prefix and short length keep normal answers that quote logs out of
+// this path. These failures are retryable according to the shared taskfailure
+// taxonomy and do not poison the resumable agent session.
+func classifyFailedOutput(output string) (string, bool) {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" || len(trimmed) > poisonedOutputMaxLen {
+		return "", false
+	}
+	if !strings.HasPrefix(strings.ToLower(trimmed), "error: retriableerror:") {
+		return "", false
+	}
+	return taskfailure.Classify(trimmed).String(), true
+}
+
 // classifyPoisonedError reports whether an agent error message indicates
 // the LLM API itself rejected the request body — i.e. the conversation
 // history contains content the API will not accept (oversized image,

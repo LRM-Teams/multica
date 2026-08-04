@@ -90,3 +90,45 @@ export function buildMessageGroupCompactMap(
 
   return map;
 }
+
+/**
+ * Maps each visible message id to whether it is the last row of its visual
+ * group.
+ *
+ * LRM-1227 (freeze from LRM-1233, shell granularity **G**): every message is its
+ * own virtual row, so a group has no wrapping DOM node to draw one bubble around.
+ * The joined shell is painted per row instead — lead row draws the top edge and
+ * top corners, middle rows only the side edges, last row the bottom edge and
+ * bottom corners. `groupEnd` is that last-row flag, and it is derived from the
+ * compact map so the two can never disagree: a row ends its group when the next
+ * visible row is not a compact continuation. System rows and tombstones are never
+ * compact, so they can neither be joined into a neighbouring group nor swallow
+ * the previous group's bottom edge.
+ */
+export function buildMessageGroupEndMap(
+  messages: readonly ChannelMessage[],
+  compactMap: ReadonlyMap<string, boolean>,
+  options: { foldedIds?: ReadonlySet<string> } = {},
+): Map<string, boolean> {
+  const foldedIds = options.foldedIds ?? new Set<string>();
+  const map = new Map<string, boolean>();
+  const visible: ChannelMessage[] = [];
+  for (const msg of messages) {
+    if (!msg || foldedIds.has(msg.id)) continue;
+    visible.push(msg);
+  }
+
+  for (let i = 0; i < visible.length; i += 1) {
+    const key = channelMessageListItemKey(visible[i]!);
+    const next = visible[i + 1];
+    if (!next) {
+      map.set(key, true);
+      continue;
+    }
+    const nextKey = channelMessageListItemKey(next);
+    const nextCompact = compactMap.get(nextKey) ?? compactMap.get(next.id) ?? false;
+    map.set(key, !nextCompact);
+  }
+
+  return map;
+}

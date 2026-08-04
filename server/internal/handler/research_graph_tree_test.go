@@ -120,6 +120,45 @@ func TestMapGraphNodeWithEdgeSetsParent(t *testing.T) {
 	}
 }
 
+// First inbound leads_to wins parent_id AND must be the only parent that lists the child.
+func TestMapGraphNodesLosingLeadsToDoesNotPolluteCounts(t *testing.T) {
+	winner := mustTestUUID("66666666-6666-6666-6666-666666666666")
+	loser := mustTestUUID("77777777-7777-7777-7777-777777777777")
+	child := mustTestUUID("88888888-8888-8888-8888-888888888888")
+	sessionID := mustTestUUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
+	nodes := []db.ResearchGraphNode{
+		{ID: winner, SessionID: sessionID, NodeType: "goal", Title: "W", Status: "active", Payload: []byte(`{}`)},
+		{ID: loser, SessionID: sessionID, NodeType: "goal", Title: "L", Status: "active", Payload: []byte(`{}`)},
+		{ID: child, SessionID: sessionID, NodeType: "finding", Title: "C", Status: "active", Payload: []byte(`{}`)},
+	}
+	edges := []db.ResearchGraphEdge{
+		{FromNodeID: winner, ToNodeID: child, EdgeType: "leads_to"}, // earliest → wins
+		{FromNodeID: loser, ToNodeID: child, EdgeType: "leads_to"},  // losing second parent
+	}
+
+	out := mapGraphNodes(nodes, edges)
+	byID := map[string]ResearchGraphNodeResp{}
+	for _, n := range out {
+		byID[n.ID] = n
+	}
+
+	c := byID[uuidToString(child)]
+	if c.ParentID == nil || *c.ParentID != uuidToString(winner) {
+		t.Fatalf("child parent=%v want winner", c.ParentID)
+	}
+
+	w := byID[uuidToString(winner)]
+	if w.ChildCount != 1 || w.DescendantCount != 1 || len(w.ChildIDs) != 1 || w.ChildIDs[0] != uuidToString(child) {
+		t.Fatalf("winner children=%v count=%d desc=%d", w.ChildIDs, w.ChildCount, w.DescendantCount)
+	}
+
+	l := byID[uuidToString(loser)]
+	if l.ChildCount != 0 || l.DescendantCount != 0 || len(l.ChildIDs) != 0 {
+		t.Fatalf("loser must not list child: children=%v count=%d desc=%d", l.ChildIDs, l.ChildCount, l.DescendantCount)
+	}
+}
+
 func mustTestUUID(s string) pgtype.UUID {
 	return parseUUID(s)
 }

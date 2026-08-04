@@ -178,34 +178,43 @@ func (d *researchRunDispatcher) Inspect(ctx context.Context, keys []string) (map
 			completed := completedAt.Time
 			state.CompletedAt = &completed
 		}
-		switch status {
-		case "pending":
-			state.Status = "queued"
-		case "draining":
-			state.Status = "running"
-		case "acked":
-			if outcome == "completed" {
-				state.Status = "completed"
-			} else {
-				state.Status = "failed"
-			}
-		case "suppressed":
-			state.Status = "cancelled"
-		case "failed":
-			if terminal || !retryable {
-				state.Status = "failed"
-			} else {
-				state.Status = "queued"
-			}
-		default:
-			state.Status = status
-		}
+		state.Status, state.Retryable, state.FailureReason = normalizeResearchInboxTaskState(status, outcome, retryable, terminal, failure)
 		out[id] = state
 		if dispatchKey != "" {
 			out[dispatchKey] = state
 		}
 	}
 	return out, rows.Err()
+}
+
+func normalizeResearchInboxTaskState(status, outcome string, retryable, terminal bool, failure string) (string, bool, string) {
+	switch status {
+	case "pending":
+		return "queued", retryable, failure
+	case "draining":
+		return "running", retryable, failure
+	case "acked":
+		switch outcome {
+		case "failed", "expired":
+			return "failed", retryable, failure
+		case "cancelled":
+			return "cancelled", false, failure
+		default:
+			// replied/no_reply/held/sent/skipped/completed all mean the agent
+			// execution ended. The research attempt decides separately whether a
+			// structured result was accepted; absent one, it retries the same task.
+			return "completed", retryable, failure
+		}
+	case "suppressed":
+		return "cancelled", false, failure
+	case "failed":
+		if terminal || !retryable {
+			return "failed", retryable, failure
+		}
+		return "queued", retryable, failure
+	default:
+		return status, retryable, failure
+	}
 }
 
 func (d *researchRunDispatcher) Cancel(ctx context.Context, inboxTaskIDs []string, _ string) error {
@@ -255,10 +264,7 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 	}
 	nodeType, title, summary, status := projectResearchEvent(event, session, payload)
 	if nodeType != "" {
-		actorAgentID := pgtype.UUID{}
-		if event.ActorType == "agent" && event.ActorID != "" {
-			actorAgentID = parseUUID(event.ActorID)
-		}
+		actorAgentID := projectedResearchActorAgentID(event, payload)
 		nodePayload := map[string]any{
 			"run_event_id": event.ID,
 			"event_type":   event.Type,
@@ -290,6 +296,16 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 	return nil
 }
 
+func projectedResearchActorAgentID(event researchrun.RunEvent, payload map[string]any) pgtype.UUID {
+	if event.ActorType == "agent" && strings.TrimSpace(event.ActorID) != "" {
+		return parseUUID(event.ActorID)
+	}
+	if agentID := valueString(payload, "agent_id"); agentID != "" {
+		return parseUUID(agentID)
+	}
+	return pgtype.UUID{}
+}
+
 func projectResearchEvent(event researchrun.RunEvent, session db.ResearchSession, payload map[string]any) (nodeType, title, summary, status string) {
 	status = "active"
 	switch event.Type {
@@ -302,7 +318,11 @@ func projectResearchEvent(event researchrun.RunEvent, session db.ResearchSession
 	case "task_result_accepted":
 		return "finding", "调研结果已入账", valueString(payload, "summary"), "done"
 	case "task_attempt_failed":
-		return "dead_end", "调研任务尝试失败", valueString(payload, "failure_class"), "done"
+		summary := valueString(payload, "diagnostics")
+		if summary == "" {
+			summary = valueString(payload, "failure_class")
+		}
+		return "dead_end", "调研任务尝试失败", summary, "done"
 	case "task_blocked":
 		return "dead_end", "调研任务因前置失败而阻塞", valueString(payload, "task_id"), "done"
 	case "control_task_created":

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { dedupeResearchFleetMembers } from "@multica/core/research";
 import type { ResearchFleetMember } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
@@ -56,7 +56,7 @@ export function ResearchFleetAvatarStack({
     );
   }
 
-  const visible = open ? active : active.slice(0, 3);
+  const visible = active.slice(0, 3);
   const extra = Math.max(0, active.length - 3);
 
   return (
@@ -106,19 +106,11 @@ export function ResearchFleetAvatarStack({
           </ul>
         </div>
       ) : null}
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
+      <div
         className={cn(
           "flex items-center rounded-full border bg-card/95 py-1 pr-2 pl-1 shadow-md backdrop-blur-sm",
           mode === "done" ? "border-success/35" : "border-border/55",
         )}
-        aria-expanded={open}
-        aria-label={open ? t(($) => $.overlay.fleet_collapse) : t(($) => $.overlay.fleet_expand)}
-        data-testid="research-fleet-avatar-stack-toggle"
-        // LRM-776: keep avatar → Agent panel entry inside this expand control
-        // (otherwise ActorAvatarPanelTrigger defers to the outer button).
-        data-avatar-profile-entry="true"
       >
         <span className="flex -space-x-2">
           {visible.map((m) => (
@@ -137,7 +129,21 @@ export function ResearchFleetAvatarStack({
         {!open && extra > 0 ? (
           <span className="ml-1.5 text-[11px] font-semibold text-muted-foreground">+{extra}</span>
         ) : null}
-      </button>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="ml-1.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-expanded={open}
+          aria-label={open ? t(($) => $.overlay.fleet_collapse) : t(($) => $.overlay.fleet_expand)}
+          data-testid="research-fleet-avatar-stack-toggle"
+        >
+          {open ? (
+            <ChevronUp className="size-3.5" aria-hidden />
+          ) : (
+            <ChevronDown className="size-3.5" aria-hidden />
+          )}
+        </button>
+      </div>
     </div>
   );
 }

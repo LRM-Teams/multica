@@ -83,6 +83,8 @@
     "group_issues": "이슈",
     "group_channels": "채널",
     "group_members": "멤버",
+    "group_in_channel": "이 채널",
+    "group_not_in_channel": "이 채널 외",
     "all_members": "모든 멤버",
     "all_members_hint": "이 대화의 모든 멤버에게 알림",
     "searching": "검색 중...",

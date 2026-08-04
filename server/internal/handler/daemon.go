@@ -2220,7 +2220,10 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 			if visibility == "user_facing" {
 				h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
 					taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
-				if !taskMessageIsPhaseStatus(created.Type, created.Content.String) {
+				// Thinking (empty phase or with body) is delivered on the task-message
+				// stream for transcript/status. Do not also fan out as Activity
+				// realtime — Activity has no "Thinking" line product surface.
+				if created.Type != "thinking" {
 					event := h.taskMessageActivityTimelineEvent(r.Context(), workspaceID, task, created)
 					h.publishAgentActivityRealtimeEvent(r.Context(), workspaceID, uuidToString(task.AgentID), uuidToString(created.ID), event, AgentActivityTargetRef{Kind: "none"})
 				}
@@ -2326,13 +2329,13 @@ func taskMessageIsPhaseStatus(messageType, content string) bool {
 }
 
 func taskMessageVisibleToUser(messageType, content, visibility string) bool {
-	if strings.TrimSpace(visibility) != "user_facing" {
-		return false
-	}
-	// Legacy raw thought rows were incorrectly marked user-facing. Keep the
-	// phase transition wire (an empty thinking row) while never returning raw
-	// thinking text to an authenticated user client.
-	return messageType != "thinking" || taskMessageIsPhaseStatus(messageType, content)
+	// Frank 2026-08-04 / task #121: user_facing rows are returned to the
+	// client as-is, including thinking with body text. Empty-phase thinking
+	// remains user_facing for status pills; FE skips empty content in the
+	// transcript timeline.
+	_ = messageType
+	_ = content
+	return strings.TrimSpace(visibility) == "user_facing"
 }
 
 func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any) string {
@@ -2341,8 +2344,14 @@ func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any)
 		// transcript. ReportTaskMessages persists a dedicated Activity row.
 		return "diagnostic_only"
 	}
-	if msgType == "thinking" || msgType == "tool_result" || msgType == "log" {
+	// Thinking content is user-facing (task #121). Empty phase is also
+	// user_facing via taskMessageRequestVisibility. tool_result / log stay
+	// diagnostic-only (T4: do not open other diagnostics).
+	if msgType == "tool_result" || msgType == "log" {
 		return "diagnostic_only"
+	}
+	if msgType == "thinking" {
+		return "user_facing"
 	}
 	if !taskMessageToolIsMapped(msgType, tool, input) {
 		return "diagnostic_only"
@@ -2643,10 +2652,8 @@ func (h *Handler) projectInboxEventTaskMessages(ctx context.Context, eventID pgt
 			  AND aae.details->>'inbox_event_id' = $1::text
 			  AND aae.event_kind IN ('thinking', 'text', 'tool_call', 'error')
 			  AND COALESCE(NULLIF(aae.visibility, ''), 'user_facing') = 'user_facing'
-			  AND (
-					aae.event_kind <> 'thinking'
-					OR COALESCE(aae.message, '') = ''
-			  )
+			  -- Empty phase and thinking-with-content are both user_facing
+			  -- (task #121). FE skips empty thinking content in the timeline.
 		),
 		numbered AS (
 			SELECT

@@ -135,7 +135,7 @@ function DrawerChrome({
           data-autofocus="true"
           onClick={onClose}
         >
-          <X className="size-4" />
+          <X className="size-4" aria-hidden />
         </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">{children}</div>

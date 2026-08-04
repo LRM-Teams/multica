@@ -61,8 +61,8 @@ export interface MentionItem {
   type: "member" | "agent" | "squad" | "issue" | "project" | "channel" | "all";
   /** Stable handle for actor mentions. Shown only as weak identity help. */
   handle?: string;
-  /** Optional grouping hint for injected context items. */
-  group?: "current" | "recent" | "search";
+  /** Optional grouping hint for injected context items / channel membership. */
+  group?: "current" | "recent" | "search" | "in_channel" | "not_in_channel";
   /** Secondary text shown beside the label (e.g. issue title) */
   description?: string;
   /** Secondary row for actor identity, e.g. @backend-engineer. */
@@ -95,7 +95,16 @@ export interface MentionListRef {
 // ---------------------------------------------------------------------------
 
 interface MentionGroup {
-  label: "Broadcast" | "Current" | "Recent" | "Search" | "Members" | "Issues" | "Channels";
+  label:
+    | "Broadcast"
+    | "Current"
+    | "Recent"
+    | "Search"
+    | "InChannel"
+    | "NotInChannel"
+    | "Members"
+    | "Issues"
+    | "Channels";
   items: MentionItem[];
 }
 
@@ -104,6 +113,8 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
   const current: MentionItem[] = [];
   const recent: MentionItem[] = [];
   const search: MentionItem[] = [];
+  const inChannel: MentionItem[] = [];
+  const notInChannel: MentionItem[] = [];
   const members: MentionItem[] = [];
   const issues: MentionItem[] = [];
   const channels: MentionItem[] = [];
@@ -117,6 +128,10 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
       recent.push(item);
     } else if (item.group === "search") {
       search.push(item);
+    } else if (item.group === "in_channel") {
+      inChannel.push(item);
+    } else if (item.group === "not_in_channel") {
+      notInChannel.push(item);
     } else if (item.type === "issue" || item.type === "project") {
       issues.push(item);
     } else if (item.type === "channel") {
@@ -126,11 +141,14 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
     }
   }
 
+  // M5: empty sections are omitted (no bare headers).
   const groups: MentionGroup[] = [];
   if (broadcast.length > 0) groups.push({ label: "Broadcast", items: broadcast });
   if (current.length > 0) groups.push({ label: "Current", items: current });
   if (recent.length > 0) groups.push({ label: "Recent", items: recent });
   if (search.length > 0) groups.push({ label: "Search", items: search });
+  if (inChannel.length > 0) groups.push({ label: "InChannel", items: inChannel });
+  if (notInChannel.length > 0) groups.push({ label: "NotInChannel", items: notInChannel });
   if (members.length > 0) groups.push({ label: "Members", items: members });
   if (issues.length > 0) groups.push({ label: "Issues", items: issues });
   if (channels.length > 0) groups.push({ label: "Channels", items: channels });
@@ -336,6 +354,8 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       if (label === "Current") return t(($) => $.mention.group_current);
       if (label === "Recent") return t(($) => $.mention.group_recent);
       if (label === "Search") return t(($) => $.mention.group_search);
+      if (label === "InChannel") return t(($) => $.mention.group_in_channel);
+      if (label === "NotInChannel") return t(($) => $.mention.group_not_in_channel);
       if (label === "Members") return t(($) => $.mention.group_members);
       if (label === "Issues") return t(($) => $.mention.group_issues);
       if (label === "Channels") return t(($) => $.mention.group_channels);
@@ -644,6 +664,12 @@ interface MentionSuggestionOptions {
    *  a channel co-member agent they couldn't assign (e.g. a teammate's private
    *  Wendy). Ignored outside channel scope. */
   getScopedAgents?: () => readonly MentionAgentCandidate[] | null | undefined;
+  /**
+   * #35 / Raft: when set, actor rows are tagged `in_channel` / `not_in_channel`
+   * for section headers. Does **not** filter the pool — `getAllowedActorIds`
+   * still owns who is mentionable (group = workspace; DM/private = members).
+   */
+  getChannelMemberIds?: () => ReadonlySet<string> | null | undefined;
 }
 
 export function createMentionSuggestion(
@@ -682,6 +708,14 @@ export function createMentionSuggestion(
     const q = normalizeActorSearchQuery(query);
     // When set (e.g. a channel's members), candidates are scoped to these ids.
     const allow = options.getAllowedActorIds?.();
+    // #35: membership set for IN / NOT IN sections only — does not filter the pool.
+    const channelMemberIds = options.getChannelMemberIds?.() ?? null;
+    const membershipGroup = (
+      actorId: string,
+    ): "in_channel" | "not_in_channel" | undefined => {
+      if (!channelMemberIds) return undefined;
+      return channelMemberIds.has(actorId) ? "in_channel" : "not_in_channel";
+    };
 
     // @all is no longer offered: the bare-mention cutover (#600/#446) dropped
     // the broadcast token — the server neither parses nor triggers `@all`, so
@@ -707,6 +741,7 @@ export function createMentionSuggestion(
           handle: presentation.handle,
           secondaryLabel: presentation.handleLabel ?? undefined,
           type: "member" as const,
+          group: membershipGroup(m.user_id),
         };
       });
 
@@ -756,6 +791,7 @@ export function createMentionSuggestion(
           handle: presentation.handle,
           secondaryLabel: presentation.handleLabel ?? undefined,
           type: "agent" as const,
+          group: membershipGroup(a.id),
         });
       }
       return items;

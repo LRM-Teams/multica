@@ -30,7 +30,7 @@ import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
 import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
 import { useBottomSettleScroll } from "../hooks/use-bottom-settle-scroll";
-import { buildMessageGroupCompactMap } from "./message-group-compact";
+import { buildMessageGroupCompactMap, buildMessageGroupEndMap } from "./message-group-compact";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
 // day boundary. Pill is OK for *dates*; system event rows must not reuse this
@@ -270,6 +270,14 @@ function MessageViewport({
       }),
     [messages, foldedIssueIds, dayDividers, tz],
   );
+  // LRM-1227 / LRM-1233 G: the joined bubble shell has no wrapping DOM node
+  // (each message is its own Virtuoso row), so the last row of a group has to
+  // know it owns the shell's bottom edge. Derived from the compact map above so
+  // the two can never disagree.
+  const messageGroupEnd = useMemo(
+    () => buildMessageGroupEndMap(messages, messageGroupCompact, { foldedIds: foldedIssueIds }),
+    [messages, messageGroupCompact, foldedIssueIds],
+  );
   const newMessagesDivider = useNewMessagesDivider(
     channelId,
     messages,
@@ -485,6 +493,7 @@ function MessageViewport({
     const dividerLabel = dayDividers.get(msg.id);
     const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;
     const compact = messageGroupCompact.get(rowKey) ?? messageGroupCompact.get(msg.id) ?? false;
+    const groupEnd = messageGroupEnd.get(rowKey) ?? messageGroupEnd.get(msg.id) ?? true;
     return (
       <Fragment key={rowKey}>
         {dividerLabel && <DateDivider label={dividerLabel} />}
@@ -504,7 +513,9 @@ function MessageViewport({
               if (rowKey !== msg.id) messageRefMap.delete(msg.id);
             }
           }}
-          className={cn("px-5", compact ? "pt-px" : "pt-1.5")}
+          // LRM-1227: inside a joined group the rows must touch, otherwise the
+          // shell's side edges show a 1px break between continuations.
+          className={cn("px-5", compact ? "pt-0" : "pt-1.5")}
           data-testid="message-row"
           data-message-group={compact ? "compact" : "lead"}
         >
@@ -524,6 +535,7 @@ function MessageViewport({
             searchHighlighted={searchHighlighted}
             searchQuery={searchHighlighted ? searchQuery : undefined}
             compact={compact}
+            groupEnd={groupEnd}
           />
         </div>
       </Fragment>

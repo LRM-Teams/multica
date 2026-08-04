@@ -9,7 +9,7 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useT } from "../../i18n/use-t";
 import {
   downmixAudioBuffer,
-  encodeVoicePCM,
+  encodeVoicePCMAsync,
   MAX_VOICE_RECORDING_MS,
   type VoiceRecordingAttachment,
 } from "../lib/voice-audio";
@@ -67,7 +67,9 @@ async function decodeRecording(blob: Blob): Promise<ArrayBuffer> {
   const context = new AudioContext();
   try {
     const decoded = await context.decodeAudioData(await blob.arrayBuffer());
-    return encodeVoicePCM(downmixAudioBuffer(decoded), decoded.sampleRate);
+    // LRM-1215 — PCM resample/encode can take hundreds of ms for a long clip;
+    // use the yielding encoder so the uploading spinner stays painted.
+    return encodeVoicePCMAsync(downmixAudioBuffer(decoded), decoded.sampleRate);
   } finally {
     await context.close();
   }
@@ -193,7 +195,9 @@ export function VoiceInputButton({
         recorderRef.current = null;
         void processRecording(blob, durationMs);
       };
-      recorder.start(250);
+      // LRM-1215 — no timeslice: one ondataavailable on stop avoids 250ms
+      // Blob churn + GC on mobile while the UI must stay responsive.
+      recorder.start();
       setElapsedSeconds(0);
       setState("recording");
       maxTimerRef.current = setTimeout(finishCapture, MAX_VOICE_RECORDING_MS);
@@ -215,9 +219,10 @@ export function VoiceInputButton({
 
   useEffect(() => {
     if (state !== "recording") return;
+    // Display is whole seconds — 1s tick is enough (was 250ms → 4× re-renders).
     const interval = window.setInterval(() => {
       setElapsedSeconds(Math.min(60, Math.floor((Date.now() - startedAtRef.current) / 1000)));
-    }, 250);
+    }, 1000);
     return () => window.clearInterval(interval);
   }, [state]);
 

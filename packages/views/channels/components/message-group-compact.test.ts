@@ -4,6 +4,7 @@ import type { ChannelMessage } from "@multica/core/types";
 import {
   MESSAGE_GROUP_MAX_GAP_MS,
   buildMessageGroupCompactMap,
+  buildMessageGroupEndMap,
   isGroupableChannelMessage,
   shouldStartMessageGroup,
 } from "./message-group-compact";
@@ -121,6 +122,89 @@ describe("buildMessageGroupCompactMap", () => {
     expect(map.get("m1")).toBe(false);
     expect(map.get("m2")).toBe(true);
     expect(map.get("m3")).toBe(false);
+    expect(map.has("folded")).toBe(false);
+  });
+});
+
+describe("buildMessageGroupEndMap (LRM-1227 joined shell tail)", () => {
+  const tz = "UTC";
+
+  function endMapFor(messages: ChannelMessage[], foldedIds?: Set<string>) {
+    const compact = buildMessageGroupCompactMap(messages, { foldedIds, tz });
+    return buildMessageGroupEndMap(messages, compact, { foldedIds });
+  }
+
+  it("marks only the last row of a group, and always the final row", () => {
+    const messages = [
+      makeMessage({ id: "m1", created_at: "2026-07-22T03:28:00.000Z" }),
+      makeMessage({ id: "m2", created_at: "2026-07-22T03:28:30.000Z" }),
+      makeMessage({ id: "m3", created_at: "2026-07-22T03:29:00.000Z" }),
+      makeMessage({ id: "m4", author_id: "user-b", created_at: "2026-07-22T03:29:30.000Z" }),
+    ];
+    const map = endMapFor(messages);
+
+    expect(map.get("m1")).toBe(false);
+    expect(map.get("m2")).toBe(false);
+    // Last continuation of Alice's group draws the bottom edge.
+    expect(map.get("m3")).toBe(true);
+    // Bob leads a new group and is the final row overall.
+    expect(map.get("m4")).toBe(true);
+  });
+
+  it("closes the group before a system row, and never joins the system row itself", () => {
+    const messages = [
+      makeMessage({ id: "m1", created_at: "2026-07-22T03:28:00.000Z" }),
+      makeMessage({ id: "m2", created_at: "2026-07-22T03:28:30.000Z" }),
+      makeMessage({
+        id: "sys",
+        type: "system",
+        author_id: null,
+        created_at: "2026-07-22T03:28:40.000Z",
+      }),
+      makeMessage({ id: "m3", created_at: "2026-07-22T03:28:50.000Z" }),
+    ];
+    const compact = buildMessageGroupCompactMap(messages, { tz });
+    const map = buildMessageGroupEndMap(messages, compact);
+
+    expect(map.get("m2")).toBe(true);
+    // System row is a standalone fully enclosed segment: lead and tail at once.
+    expect(compact.get("sys")).toBe(false);
+    expect(map.get("sys")).toBe(true);
+    // The row after a system break leads its own group.
+    expect(compact.get("m3")).toBe(false);
+    expect(map.get("m3")).toBe(true);
+  });
+
+  it("closes the group before a tombstone", () => {
+    const messages = [
+      makeMessage({ id: "m1", created_at: "2026-07-22T03:28:00.000Z" }),
+      makeMessage({
+        id: "gone",
+        deleted_at: "2026-07-22T03:28:20.000Z",
+        created_at: "2026-07-22T03:28:10.000Z",
+      }),
+    ];
+    const map = endMapFor(messages);
+
+    expect(map.get("m1")).toBe(true);
+    expect(map.get("gone")).toBe(true);
+  });
+
+  it("looks through folded rows so a folded row cannot split a group", () => {
+    const messages = [
+      makeMessage({ id: "m1", created_at: "2026-07-22T03:28:00.000Z" }),
+      makeMessage({
+        id: "folded",
+        type: "system",
+        author_id: null,
+        created_at: "2026-07-22T03:28:10.000Z",
+      }),
+      makeMessage({ id: "m2", created_at: "2026-07-22T03:28:20.000Z" }),
+    ];
+    const map = endMapFor(messages, new Set(["folded"]));
+
+    expect(map.get("m1")).toBe(false);
+    expect(map.get("m2")).toBe(true);
     expect(map.has("folded")).toBe(false);
   });
 });

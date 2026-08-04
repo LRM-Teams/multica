@@ -12,6 +12,7 @@ import {
   HonorUnlockToast,
   honorUnlockToastOptions,
 } from "./honor-unlock-toast";
+import { useHonorBadgeCopy } from "./use-honor-badge-copy";
 
 const rareUnlockPercentage = 9;
 
@@ -19,6 +20,7 @@ const rareUnlockPercentage = 9;
 export function HonorUnlockListener() {
   const qc = useQueryClient();
   const { t, i18n } = useT("settings");
+  const honorBadgeCopy = useHonorBadgeCopy();
   const percentFormatter = useMemo(
     () =>
       new Intl.NumberFormat(i18n.resolvedLanguage || i18n.language, {
@@ -39,6 +41,7 @@ export function HonorUnlockListener() {
       event.unlock_pct != null &&
       event.unlock_pct > 0 &&
       event.unlock_pct <= rareUnlockPercentage;
+    const badgeCopy = honorBadgeCopy({ ...event.badge, unlocked: true });
     toast.custom(
       (toastId) => (
         <HonorUnlockToast
@@ -47,14 +50,14 @@ export function HonorUnlockListener() {
               ? t(($) => $.honor.unlock_toast_rare_title)
               : t(($) => $.honor.unlock_toast_title)
           }
-          title={event.badge.title}
+          title={badgeCopy.title}
           meta={
             event.unlock_pct != null && event.unlock_pct > 0
               ? t(($) => $.honor.rarity_pct, {
                   pct: percentFormatter.format(event.unlock_pct),
                 })
               : t(($) => $.honor.unlock_toast_description, {
-                  title: event.badge.title,
+                  title: badgeCopy.title,
                 })
           }
           svgKey={event.badge.svg_key}

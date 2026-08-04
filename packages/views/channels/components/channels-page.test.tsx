@@ -367,7 +367,7 @@ vi.mock("../../navigation/context", () => ({
   }),
 }));
 
-vi.mock("../../editor/content-editor", () => ({
+vi.mock("../../editor/lazy-content-editor", () => ({
   ContentEditor: () => <div data-testid="content-editor" />,
 }));
 // The #576 SETTINGS tests need the dumb labeled button (enabled/disabled is

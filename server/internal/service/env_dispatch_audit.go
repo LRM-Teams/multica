@@ -179,7 +179,6 @@ type EnvDispatchAuditEvent struct {
 // in-progress obligation.
 type EnvDispatchAuditObligation struct {
 	ID              string
-	AuditID         string
 	AuditResourceID string
 	Trigger         EnvDispatchAuditObligationTrigger
 	State           EnvDispatchAuditObligationState
@@ -189,6 +188,19 @@ type EnvDispatchAuditObligation struct {
 	LeaseAcquiredAt *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+}
+
+// EnvDispatchAuditReclamationClaim is an eligible reclamation obligation plus
+// the scoped resource and audit context needed to process it safely. It is
+// returned only by reconciliation, whose storage query atomically leases the
+// obligation and supplies LeaseAcquiredAt.
+type EnvDispatchAuditReclamationClaim struct {
+	Obligation          EnvDispatchAuditObligation
+	Resource            EnvDispatchAuditResource
+	AuditID             string
+	WorkspaceID         string
+	InitiatorID         string
+	ReclamationDeadline time.Time
 }
 
 // EnvDispatchAuditReport is the correlation-scoped audit view. AsOf records
@@ -226,7 +238,7 @@ type EnvDispatchAuditStorage interface {
 	EnsureReclamationObligation(ctx context.Context, obligation EnvDispatchAuditObligation) (EnvDispatchAuditObligation, error)
 	UpdateAuditOutcome(ctx context.Context, auditID string, outcome EnvDispatchAuditOutcome, completedAt *time.Time) (EnvDispatchAuditReport, error)
 	UpdateAuditVerdict(ctx context.Context, auditID string, verdict EnvDispatchAuditVerdict, completedAt *time.Time) (EnvDispatchAuditReport, error)
-	ReconcileEligibleReclamationObligations(ctx context.Context, eligibleAt, staleBefore time.Time, limit int32) ([]EnvDispatchAuditObligation, error)
+	ReconcileEligibleReclamationObligations(ctx context.Context, eligibleAt, staleBefore time.Time, limit int32) ([]EnvDispatchAuditReclamationClaim, error)
 	MarkReclamationObligationSucceeded(ctx context.Context, obligationID string, leaseAcquiredAt *time.Time) (EnvDispatchAuditObligation, error)
 	MarkReclamationObligationNotRequired(ctx context.Context, obligationID string, leaseAcquiredAt *time.Time) (EnvDispatchAuditObligation, error)
 	RescheduleReclamationObligation(ctx context.Context, obligationID string, leaseAcquiredAt time.Time, reasonCode *string, nextAttemptAt time.Time) (EnvDispatchAuditObligation, error)

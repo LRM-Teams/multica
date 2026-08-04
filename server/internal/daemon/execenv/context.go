@@ -651,9 +651,8 @@ func renderAutopilotContext(ctx TaskContextForEnv) string {
 
 	b.WriteString("## Quick Start\n\n")
 	b.WriteString("This is a run-only autopilot task with no assigned issue. Do not run `multica issue get` unless the autopilot instructions explicitly ask you to create or update an issue.\n\n")
-	if ctx.AutopilotID != "" {
-		fmt.Fprintf(&b, "Run `multica autopilot get %s --output json` if you need the full autopilot configuration.\n\n", ctx.AutopilotID)
-	}
+	// Autopilot CLI retired (task #40): configuration is only what is already in this brief.
+	b.WriteString("The Autopilot product is retired — there is no `multica autopilot` CLI. Use the instructions and payload in this brief only.\n\n")
 	if strings.TrimSpace(ctx.AutopilotDescription) != "" {
 		b.WriteString("## Autopilot Instructions\n\n")
 		b.WriteString(ctx.AutopilotDescription)

@@ -1523,12 +1523,15 @@ func TestBuildPromptAutopilotRunOnly(t *testing.T) {
 		"Autopilot run ID: run-1",
 		"Daily dependency check",
 		"Check dependencies and report outdated packages.",
-		"multica autopilot get autopilot-1 --output json",
+		"Complete the instructions above",
 		"Do not run `multica issue get`",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("autopilot prompt missing %q\n---\n%s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "multica autopilot get") {
+		t.Fatalf("autopilot CLI is retired; prompt must not suggest multica autopilot get\n---\n%s", prompt)
 	}
 
 	if strings.Contains(prompt, "Your assigned issue ID is:") {

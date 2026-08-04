@@ -403,67 +403,12 @@ Skill 是 Multica 区别于"每次都要写长 prompt"的关键机制。它让�
 
 ---
 
-### 3.7 Autopilot 自动驾驶
+### 3.7 Autopilot 自动驾驶（已下线）
 
-> **角色**：让 agent 在没人触发的时候也能自己开工的调度器。
+> **状态**：产品已硬切下线（LRM-1049 / LRM-1051 / task #40）。API、CLI、scheduler、UI 入口均已移除。
 
-Autopilot 解决的问题：很多工作是**周期性**的——每天早上的 bug triage、每周的依赖审计、每月的安全扫描。人手动触发太烦，Autopilot 是规则化自动触发。
-
-#### 数据形态
-
-```
-autopilot
-  ├─ title, description
-  ├─ assignee:        <agent_id>          # 指定哪个 agent 跑
-  ├─ execution_mode:  create_issue | run_only
-  ├─ issue_title_template:  "Daily triage - {{date}}"
-  ├─ concurrency_policy:    skip | queue | replace
-  └─ triggers (多个):
-       ├─ kind:  schedule | webhook | api
-       ├─ cron_expression
-       ├─ timezone
-       └─ webhook_token
-```
-
-#### 两种执行模式
-
-- **`create_issue`（默认）**：触发时先创建一个新 issue（标题用 `issue_title_template` 渲染），再把 issue 分配给 agent，走正常 agent 任务流程
-- **`run_only`**：直接创建 task，不关联 issue（适合"只执行不留下 ticket"的场景，比如每小时检查某状态）
-
-#### 三种触发方式
-
-- **Schedule（cron）**：server 后台每 30 秒扫一次 `autopilot_trigger`，到点的触发出去
-- **Webhook**：给出一个带 `webhook_token` 的 URL，外部 POST 即可触发
-- **API / Manual**：UI 上点"立即运行"按钮，或用 CLI `multica autopilot trigger <id>`
-
-#### 并发策略
-
-- `skip`：同一个 autopilot 上一次还没跑完，跳过这次（去重）
-- `queue`：排队等上一次跑完
-- `replace`：中止上一次，换成这次
-
-#### 运行记录
-
-每次触发都在 `autopilot_run` 里留一条记录：`pending → issue_created → running → completed/failed/skipped`。在 UI 的 autopilot 详情页可以看全部历史。
-
-#### 内置模板
-
-产品提供一些现成的 autopilot 模板，一键创建：
-
-- Daily news digest（每天 9:00）
-- PR review reminder（工作日 10:00）
-- Bug triage（工作日 9:00）
-- Weekly progress report（每周 17:00）
-- Dependency audit（每周 10:00）
-- Security scan（每周 02:00）
-
-#### 产品里的位置
-
-Autopilot 让 Multica 从"你分配 → agent 做"升级到"agent 自己发起工作"。配合 `run_only` 模式，甚至可以在没有 issue 的前提下跑定时任务。Issue 上的 `origin_type=autopilot` + `origin_id` 字段留下了"这个 issue 是哪个 autopilot run 创建的"的追溯链。
-
-#### 对应表
-
-`autopilot`, `autopilot_trigger`, `autopilot_run`
+周期性 agent 工作请用 **agent reminder**（`multica reminder schedule`，消息锚点 + cadence）。  
+历史数据：issue/task 上可能仍见 `origin_type=autopilot` / `autopilot_run_id`（只读审计字段，无运行时行为）。运行时表 `autopilot` / `autopilot_trigger` / `autopilot_run` 已 drop。
 
 ---
 
@@ -701,13 +646,12 @@ multica issue runs <id>                 # 查看任务执行历史
 multica issue run-messages <task-id>    # 查看某次执行的消息
 ```
 
-#### Agent / Skill / Autopilot / Project / Repo
+#### Agent / Skill / Reminder / Project / Repo
 
 ```bash
 multica agent list | get | create | update | archive
 multica skill list | get | create | update | delete | import | files upsert
-multica autopilot list | get | create | update | trigger
-multica autopilot trigger-add --cron "0 9 * * 1-5"
+multica reminder list | get | schedule | update | cancel
 multica project list | get | create | update
 multica repo list | add | update | delete
 ```

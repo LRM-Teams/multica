@@ -420,43 +420,6 @@ func TestAutopilotsSkillRetired(t *testing.T) {
 	}
 }
 
-func TestAutopilotsSkillCoversDispatchAndSideEffectsRemoved(t *testing.T) {
-	t.Skip("LRM-1049: multica-autopilots skill retired")
-	skill, ok := findSkill(t, "multica-autopilots")
-	if !ok {
-		return
-	}
-	fm, body, _ := splitFrontmatter(skill.Content)
-
-	if got := strings.TrimSpace(fm["user-invocable"]); got != "false" {
-		t.Errorf("user-invocable = %q, want false", got)
-	}
-	if got := strings.TrimSpace(fm["allowed-tools"]); !strings.Contains(got, "Bash(multica *)") {
-		t.Errorf("allowed-tools = %q, want access to the Multica CLI", got)
-	}
-
-	mustContain := []string{
-		"An autopilot is not an agent",
-		"create_issue",
-		"run_only",
-		"multica autopilot trigger-add <autopilot-id> --kind schedule",
-		"multica autopilot trigger <autopilot-id> --output json",
-		"Do not run `trigger`",
-		"webhook tokens",
-		"{{date}}",
-		"squad's leader agent",
-		"references/autopilots-source-map.md",
-	}
-	for _, want := range mustContain {
-		if !strings.Contains(body, want) {
-			t.Errorf("autopilots skill missing %q", want)
-		}
-	}
-	if !skillHasFile(skill, "references/autopilots-source-map.md") {
-		t.Errorf("autopilots skill missing supporting file references/autopilots-source-map.md")
-	}
-}
-
 func TestRuntimesAndReposSkillCoversClaimAndCheckoutChain(t *testing.T) {
 	skill, ok := findSkill(t, "multica-runtimes-and-repos")
 	if !ok {

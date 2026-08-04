@@ -2937,21 +2937,20 @@ func TestAgentReminderModernTransportSourcesRemainFailClosed(t *testing.T) {
 }
 
 func TestAgentReminderScheduleFallsBackToAgentOwnerWithoutHumanWakeAuthor(t *testing.T) {
-	// Beckham 2026-08-04: cancel old patrol + re-schedule during a wake whose
-	// source message is agent-authored (or no human initiator) must not 403
-	// "reminder initiator is not available".
+	// L1/L3 long-term: schedule initiator binds to *anchor* message, not wake
+	// human. Agent-authored anchor → agent.owner (member); no 403.
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
 	fixture := seedReminderModernTransportFixture(t, "agent_inbox_token")
 
-	// Agent-authored source message → no human author on the wake.
+	// Agent-authored *anchor* message (patrol re-anchor on own prior post).
 	if _, err := testPool.Exec(ctx, `
 		UPDATE channel_message
 		SET author_type = 'agent', author_id = $2, author_name = 'patrol agent'
 		WHERE id = $1`, fixture.anchorMessageID, fixture.agentID); err != nil {
-		t.Fatalf("agent-author source message: %v", err)
+		t.Fatalf("agent-author anchor message: %v", err)
 	}
 	// Ensure agent owner is a current workspace member (testUserID is runtime owner).
 	if _, err := testPool.Exec(ctx, `
@@ -2978,6 +2977,46 @@ func TestAgentReminderScheduleFallsBackToAgentOwnerWithoutHumanWakeAuthor(t *tes
 	}
 	if initiator != testUserID {
 		t.Fatalf("initiator_user_id=%s want agent owner %s", initiator, testUserID)
+	}
+}
+
+func TestAgentReminderScheduleInitiatorFromHumanAnchorMessage(t *testing.T) {
+	// L2 long-term: human-authored anchor → initiator = that human, not agent.owner.
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	fixture := seedReminderModernTransportFixture(t, "agent_inbox_token")
+
+	// Force owner ≠ anchor human so the assertion is not accidental equality.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent SET owner_id = $2 WHERE id = $1`, fixture.agentID, testUserID); err != nil {
+		t.Fatalf("set agent owner: %v", err)
+	}
+	// Anchor remains the fixture human trigger (author_type=user, author_id=initiatorUserID).
+	if fixture.initiatorUserID == testUserID {
+		t.Fatal("fixture initiator must differ from runtime owner for this test")
+	}
+
+	rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+		"title": "human anchored patrol", "message_id": fixture.anchorMessageID, "repeat": "every:1h",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("schedule with human anchor status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var scheduled agentReminderResponse
+	if err := json.NewDecoder(rec.Body).Decode(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+	})
+	var initiator string
+	if err := testPool.QueryRow(ctx, `SELECT initiator_user_id::text FROM agent_reminder WHERE id = $1`, scheduled.ID).Scan(&initiator); err != nil {
+		t.Fatal(err)
+	}
+	if initiator != fixture.initiatorUserID {
+		t.Fatalf("initiator_user_id=%s want anchor human %s (not owner %s)", initiator, fixture.initiatorUserID, testUserID)
 	}
 }
 

@@ -5,7 +5,7 @@ import { Activity, ArrowLeft, BarChart3, Bell, FileText, User } from "lucide-rea
 import { useQuery } from "@tanstack/react-query";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
-import { deriveRuntimeHealth, deriveRuntimeHealthPresentation, runtimeListOptions } from "@multica/core/runtimes";
+import { deriveRuntimeHealth, deriveRuntimeHealthPresentation, runtimeListOptions, type RuntimeHealthPresentation } from "@multica/core/runtimes";
 import { useAgentPermissions } from "@multica/core/permissions";
 import {
   formatActorHandleLabel,
@@ -512,7 +512,7 @@ function RuntimeConfigSummary({
   currentUserId: string | null;
   isOnline: boolean;
   runtimeUpdateHealth: ReturnType<typeof deriveRuntimeHealthPresentation> | "ok";
-  runtimeHealthLabel: (state: string) => string;
+  runtimeHealthLabel: (health: RuntimeHealthPresentation) => string;
 }) {
   const { t } = useT("agents");
   return (

@@ -3562,7 +3562,7 @@ export function ChannelsPage({
                   <ChannelListSkeleton rows={8} />
                 ) : shouldVirtualizeChannels ? (
                   <Virtuoso
-                    customScrollParent={sidebarScrollElement}
+                    customScrollParent={sidebarScrollElement ?? undefined}
                     data={filteredChannels}
                     computeItemKey={(_index, channel) => channel.id}
                     increaseViewportBy={{ top: 500, bottom: 800 }}

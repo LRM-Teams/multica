@@ -69,6 +69,19 @@ export function MachineDaemonUpgrade({
 
   useEffect(() => () => cleanup(), [cleanup]);
 
+  // Local poll status sticks at "completed" after the interval stops. Clear it
+  // once the refreshed runtime version has caught the target so we don't pin
+  // 「正在重启并切换版本…」 forever.
+  useEffect(() => {
+    if (status !== "completed") return;
+    const aim = targetVersion ?? lastAttemptTarget;
+    if (!aim || !currentVersion) return;
+    if (!isNewerCliVersion(aim, currentVersion)) {
+      setStatus(null);
+      setLastAttemptTarget(null);
+    }
+  }, [status, targetVersion, lastAttemptTarget, currentVersion]);
+
   const refreshRuntimes = useCallback(() => {
     qc.invalidateQueries({
       predicate: (query) => query.queryKey[0] === "runtimes",
@@ -134,10 +147,17 @@ export function MachineDaemonUpgrade({
     runtimeHealth === "update_available" &&
     !!targetVersion &&
     isNewerCliVersion(targetVersion, currentVersion);
-  // ready_to_apply / completed mid-restart still need progress chrome
-  const isApplying =
-    derivedStatus === "ready_to_apply" || derivedStatus === "completed";
   const displayTarget = targetVersion ?? lastAttemptTarget;
+  // Poll leaves local status at "completed" after stop — keep applying chrome
+  // only while the live version is still behind the target. Once caught up
+  // (incl. `0.4.2` vs `v0.4.2`), drop the spinner (Frank 2026-08-04 stuck UX).
+  const versionsCaughtUp =
+    !!displayTarget &&
+    !!currentVersion &&
+    !isNewerCliVersion(displayTarget, currentVersion);
+  const isApplying =
+    derivedStatus === "ready_to_apply" ||
+    (derivedStatus === "completed" && !versionsCaughtUp);
   const isActive =
     updating ||
     derivedStatus === "pending" ||

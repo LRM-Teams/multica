@@ -186,25 +186,53 @@ func mapEnvDispatchAuditReportResponse(report service.EnvDispatchAuditReport) En
 	}
 }
 
-// sanitizedEnvDispatchAuditCode is a belt-and-suspenders boundary check for
-// storage adapters. The database permits only this lower-case code grammar;
-// malformed values are omitted instead of becoming raw error detail.
+// sanitizedEnvDispatchAuditCode is a defensive response-boundary check for
+// storage adapters. Unknown values are omitted rather than treating a
+// database-safe string as safe public error detail.
 func sanitizedEnvDispatchAuditCode(code *string) *string {
-	if code == nil || len(*code) == 0 || len(*code) > 128 {
+	if code == nil {
 		return nil
 	}
-	for index, character := range *code {
-		if index == 0 {
-			if !((character >= 'a' && character <= 'z') || (character >= '0' && character <= '9')) {
-				return nil
-			}
-			continue
-		}
-		if (character < 'a' || character > 'z') &&
-			(character < '0' || character > '9') &&
-			character != '.' && character != '_' && character != ':' && character != '/' && character != '-' {
-			return nil
-		}
+
+	// This is the closed public vocabulary for audit reason and error codes.
+	// Storage constraints only reject malformed strings; they do not establish
+	// that a well-formed value is safe to disclose. Additions must correspond to
+	// a documented audit transition or reclamation outcome.
+	switch *code {
+	case "already_reclaimed",
+		"binding_observed",
+		"classification_updated",
+		"cleanup_attempted",
+		"cleanup_exhausted",
+		"cleanup_failed",
+		"cleanup_requested",
+		"cleanup_retry_scheduled",
+		"creation_failed",
+		"dispatch_cancelled",
+		"dispatch_deleted",
+		"dispatch_failed",
+		"dispatch_outcome",
+		"dispatch_rejected",
+		"dispatch_timed_out",
+		"observation_unavailable",
+		"owner_active",
+		"owner_deleted",
+		"owner_terminal",
+		"owner_unknown",
+		"ownership_deferred",
+		"provisioned",
+		"reclaimed",
+		"reclamation_deadline_exceeded",
+		"reclamation_lease_expired",
+		"reclamation_retry_exhausted",
+		"resource_not_found",
+		"rollback_started",
+		"runtime_offlined",
+		"sandbox_deletion_failed",
+		"sandbox_deletion_requested",
+		"sandbox_deletion_unavailable":
+		return code
+	default:
+		return nil
 	}
-	return code
 }

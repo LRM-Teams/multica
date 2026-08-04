@@ -61,19 +61,19 @@ describe("ResearchEvidencePulse (LRM-1329)", () => {
 
   it("uses a single alert for error and silences the polite live region", () => {
     render(
-      <ResearchEvidencePulse
-        mode="error"
-        revisionKey="e"
-        errorSummary="timeout"
-        onRetry={() => {}}
-      />,
+      <ResearchEvidencePulse mode="error" revisionKey="e" onRetry={() => {}} />,
     );
     const root = screen.getByTestId("research-evidence-pulse");
     expect(root.getAttribute("role")).toBe("alert");
+    expect(screen.getByTestId("research-evidence-pulse-status").textContent).toMatch(
+      /Could not read evidence/,
+    );
     expect(screen.getByTestId("research-evidence-pulse-live").textContent).toBe(
       "",
     );
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    // Safe status only — no raw API summary required for the alert contract.
+    expect(screen.queryByText("timeout")).toBeNull();
   });
 
   it("permission mode alerts without retry or leaked facts", () => {

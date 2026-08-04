@@ -45,6 +45,16 @@ func systemdUserUnitPath(profile string) (string, error) {
 	return filepath.Join(home, ".config", "systemd", "user", systemdUnitName(profile)), nil
 }
 
+// systemdUserDropInDir is ~/.config/systemd/user/<unit>.d — drop-ins here
+// merge over the main unit and silently win for keys like ExecStart.
+func systemdUserDropInDir(profile string) (string, error) {
+	unitPath, err := systemdUserUnitPath(profile)
+	if err != nil {
+		return "", err
+	}
+	return unitPath + ".d", nil
+}
+
 const systemdUnitTemplate = `[Unit]
 Description=Multica daemon supervisor
 After=network-online.target
@@ -60,11 +70,74 @@ RestartSec=5
 WantedBy=default.target
 `
 
-func (linuxServiceInstaller) Install(profile, exePath string, args []string) error {
-	unitPath, err := systemdUserUnitPath(profile)
-	if err != nil {
-		return err
+// dropInOverridesExecStart reports whether a systemd drop-in fragment
+// redefines ExecStart. Systemd merges drop-ins over the main unit, so a
+// stale ExecStart= here (e.g. after a versioned binary path was deleted)
+// produces status=203/EXEC crash-loops even when the main unit was rewritten
+// by install-service. Matching is line-oriented and case-insensitive on the
+// key, matching systemd's unit parser for this assignment form.
+func dropInOverridesExecStart(content []byte) bool {
+	for _, line := range strings.Split(string(content), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") {
+			continue
+		}
+		key, _, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(key), "ExecStart") {
+			return true
+		}
 	}
+	return false
+}
+
+// clearSystemdExecStartDropIns removes any drop-in fragments under
+// <unit>.d that override ExecStart, preserving unrelated drop-ins
+// (Environment=, LimitNOFILE=, etc.). Empty .d dirs are removed.
+// homeRoot is the systemd user config root (.../systemd/user); when empty,
+// the live user path is resolved. Exposed for tests with a temp HOME tree.
+func clearSystemdExecStartDropIns(dropInDir string) (removed []string, err error) {
+	entries, err := os.ReadDir(dropInDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read drop-in dir %s: %w", dropInDir, err)
+	}
+	for _, ent := range entries {
+		if ent.IsDir() {
+			continue
+		}
+		// systemd only loads *.conf drop-ins.
+		if !strings.HasSuffix(ent.Name(), ".conf") {
+			continue
+		}
+		path := filepath.Join(dropInDir, ent.Name())
+		body, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return removed, fmt.Errorf("read drop-in %s: %w", path, readErr)
+		}
+		if !dropInOverridesExecStart(body) {
+			continue
+		}
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			return removed, fmt.Errorf("remove ExecStart drop-in %s: %w", path, rmErr)
+		}
+		removed = append(removed, path)
+	}
+	// Best-effort: drop empty .d so reinstalls don't leave a husk.
+	if remaining, _ := os.ReadDir(dropInDir); len(remaining) == 0 {
+		_ = os.Remove(dropInDir)
+	}
+	return removed, nil
+}
+
+func writeSystemdUnitFile(unitPath, exePath string, args []string) error {
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		return fmt.Errorf("create systemd user unit directory: %w", err)
 	}
@@ -85,14 +158,45 @@ func (linuxServiceInstaller) Install(profile, exePath string, args []string) err
 	if err := os.WriteFile(unitPath, buf.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("write unit %s: %w", unitPath, err)
 	}
+	return nil
+}
 
-	unit := systemdUnitName(profile)
-	// daemon-reload picks up the (possibly changed) unit file content before
-	// enable/restart act on it — required for idempotent reinstall to
-	// actually apply an updated ExecStart, not just restart the old one.
+// syncSystemdUnitFile rewrites the main unit to exePath and clears any
+// ExecStart-pinning drop-ins, then daemon-reloads. It does NOT restart the
+// unit — safe to call from a live supervised daemon before a version handoff
+// so the next systemd restart does not 203/EXEC on a deleted version path.
+func syncSystemdUnitFile(profile, exePath string, args []string) error {
+	unitPath, err := systemdUserUnitPath(profile)
+	if err != nil {
+		return err
+	}
+	// Only rewrite when a unit is already installed (or about to be by Install).
+	if err := writeSystemdUnitFile(unitPath, exePath, args); err != nil {
+		return err
+	}
+	dropInDir, err := systemdUserDropInDir(profile)
+	if err != nil {
+		return err
+	}
+	if _, err := clearSystemdExecStartDropIns(dropInDir); err != nil {
+		return err
+	}
 	if out, err := exec.Command("systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl --user daemon-reload failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
+	return nil
+}
+
+func (linuxServiceInstaller) Install(profile, exePath string, args []string) error {
+	// Idempotent reinstall must clear stale ExecStart drop-ins before (or
+	// with) rewriting the main unit. Observed production failure (s144):
+	// main unit pointed at v0.4.1 while override.conf still forced
+	// …/versions/v0.4.0/multica → 203/EXEC after the old path was deleted.
+	if err := syncSystemdUnitFile(profile, exePath, args); err != nil {
+		return err
+	}
+
+	unit := systemdUnitName(profile)
 	if out, err := exec.Command("systemctl", "--user", "enable", unit).CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl --user enable failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -120,6 +224,11 @@ func (linuxServiceInstaller) Uninstall(profile string) error {
 	if err := os.Remove(unitPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove unit file %s: %w", unitPath, err)
 	}
+	// Also remove ExecStart drop-ins (and empty .d) so a later reinstall
+	// cannot revive a ghost path from leftover fragments.
+	if dropInDir, dErr := systemdUserDropInDir(profile); dErr == nil {
+		_, _ = clearSystemdExecStartDropIns(dropInDir)
+	}
 	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
 	return nil
 }
@@ -140,4 +249,19 @@ func (linuxServiceInstaller) Status(profile string) (registered, running bool, d
 	enabled := strings.TrimSpace(string(enabledOut))
 
 	return true, active == "active", fmt.Sprintf("active=%s enabled=%s", active, enabled), nil
+}
+
+// SyncUnit rewrites the installed unit to exePath and clears ExecStart drop-ins
+// without restarting the service. Used after a CLI self-update so systemd's next
+// restart targets the staged Active binary instead of a deleted version path.
+// No-op when the unit is not installed.
+func (linuxServiceInstaller) SyncUnit(profile, exePath string, args []string) error {
+	unitPath, err := systemdUserUnitPath(profile)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(unitPath); os.IsNotExist(err) {
+		return nil
+	}
+	return syncSystemdUnitFile(profile, exePath, args)
 }

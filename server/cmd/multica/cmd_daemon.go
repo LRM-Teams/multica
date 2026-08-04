@@ -442,6 +442,14 @@ func runDaemonForeground(cmd *cobra.Command) error {
 
 	// Check if the daemon needs to restart after a CLI update.
 	if restartBin := d.RestartBinary(); restartBin != "" {
+		// Point the OS service unit at the staged Active binary before we exit
+		// (and before any later systemd restart). Without this, install-service
+		// may still have ExecStart=/…/versions/vOLD/… after vOLD is deleted,
+		// and systemd returns 203/EXEC in a crash-loop (s144 2026-08-04).
+		if err := bestEffortSyncInstalledServiceUnit(profile, restartBin); err != nil {
+			logger.Warn("could not rewrite OS service unit to staged binary; re-run `multica daemon install-service` if the next OS restart fails",
+				"path", restartBin, "error", err)
+		}
 		if runningUnderSupervision() {
 			logger.Info("restarting daemon with updated binary via supervisor handoff", "path", restartBin)
 			// Runtimes were already deregistered by triggerRestart() before

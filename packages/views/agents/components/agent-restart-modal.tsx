@@ -26,10 +26,14 @@ const TIERS: AgentLifecycleActionKind[] = [
 ];
 
 /**
- * Agent lifecycle restart modal (#633 / #26 / #27 / #28).
+ * Agent lifecycle restart modal (#633 / #26 / #27 / #28 / #34).
  * Three selectable blocks with short title + one-line scope (Frank: each
  * restart kind must be clear). Full reset: no type-to-confirm — select Full
  * and click CTA.
+ *
+ * #34 (Frank): on successful start, close immediately — progress lives on the
+ * agent (`runtime_display_status` / AgentLifecycleStatusLine), not in-modal
+ * running/succeeded chrome that trapped users on "Done".
  */
 export function AgentRestartModal({
   agentId,
@@ -51,24 +55,22 @@ export function AgentRestartModal({
   const [selected, setSelected] = useState<AgentLifecycleActionKind>("restart");
 
   const selectedState = agentLifecycleActionState(lifecycle.preflight, selected);
-  const op = lifecycle.operation;
-  const isBlocking =
-    op?.status === "running" || lifecycle.start.isPending;
-  const isScheduled = op?.status === "scheduled";
-  const isTerminalSuccess = op?.status === "succeeded";
-  const isTerminalFailed = op?.status === "failed";
+  const isSubmitting = lifecycle.start.isPending;
   const isFullReset = selected === "full_reset_restart";
-  const canSubmit =
-    selectedState.supported &&
-    !isBlocking &&
-    !isScheduled &&
-    !isTerminalSuccess;
+  const canSubmit = selectedState.supported && !isSubmitting;
 
   const reasonLabel = (reason: string | null | undefined): string =>
     t(($) => $.restart_modal.disabled_reason[resolveLifecycleDisabledReasonKey(reason)]);
 
   const close = () => {
-    if (op) lifecycle.refreshAfterTerminal();
+    lifecycle.reset();
+    setSelected("restart");
+    onOpenChange(false);
+  };
+
+  /** R1/R3/R5: start accepted → dismiss modal; agent surfaces show Starting. */
+  const dismissAfterStart = () => {
+    lifecycle.refreshAfterTerminal();
     lifecycle.reset();
     setSelected("restart");
     onOpenChange(false);
@@ -76,17 +78,16 @@ export function AgentRestartModal({
 
   const submit = () => {
     if (!canSubmit) return;
-    lifecycle.start.mutate(selected);
-  };
-
-  const retry = () => {
-    lifecycle.reset();
-    lifecycle.start.mutate(selected);
+    lifecycle.start.mutate(selected, {
+      onSuccess: () => {
+        dismissAfterStart();
+      },
+    });
   };
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && !isBlocking && close()}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-sm" showCloseButton={!isBlocking}>
+    <Dialog open={open} onOpenChange={(next) => !next && !isSubmitting && close()}>
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-sm" showCloseButton={!isSubmitting}>
         <DialogTitle>{t(($) => $.restart_modal.title)}</DialogTitle>
         <DialogDescription>
           {t(($) => $.restart_modal.description_short, { name: agentName })}
@@ -109,7 +110,7 @@ export function AgentRestartModal({
                 type="button"
                 role="radio"
                 aria-checked={isSelected}
-                disabled={!state.supported || isBlocking || isScheduled || isTerminalSuccess}
+                disabled={!state.supported || isSubmitting}
                 data-testid={`restart-tier-${kind}`}
                 data-selected={isSelected || undefined}
                 data-disabled={!state.supported || undefined}
@@ -145,50 +146,19 @@ export function AgentRestartModal({
           })}
         </div>
 
-        <output aria-live="polite" className="block text-xs leading-relaxed empty:hidden">
-          {isBlocking && (
-            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {t(($) => $.restart_modal.status.running)}
-            </span>
-          )}
-          {isScheduled && (
-            <span className="text-muted-foreground">
-              {t(($) => $.restart_modal.status.scheduled)}
-            </span>
-          )}
-          {isTerminalSuccess && (
-            <span className="text-success">{t(($) => $.restart_modal.status.succeeded)}</span>
-          )}
-          {isTerminalFailed && (
-            <span className="text-destructive">
-              {op?.reason_code
-                ? t(($) => $.restart_modal.status.failed_reason, { reason: op.reason_code ?? "" })
-                : t(($) => $.restart_modal.status.failed)}
-            </span>
-          )}
-        </output>
-
         <DialogFooter>
-          {isTerminalSuccess || isScheduled ? (
-            <Button onClick={close}>{t(($) => $.restart_modal.done)}</Button>
-          ) : (
-            <>
-              <Button variant="ghost" onClick={close} disabled={isBlocking}>
-                {t(($) => $.restart_modal.cancel)}
-              </Button>
-              <Button
-                variant={isFullReset ? "destructive" : "default"}
-                onClick={isTerminalFailed ? retry : submit}
-                disabled={!isTerminalFailed && !canSubmit}
-              >
-                {isBlocking && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                {isTerminalFailed
-                  ? t(($) => $.restart_modal.retry)
-                  : t(($) => $.restart_modal.cta[selected])}
-              </Button>
-            </>
-          )}
+          <Button variant="ghost" onClick={close} disabled={isSubmitting}>
+            {t(($) => $.restart_modal.cancel)}
+          </Button>
+          <Button
+            variant={isFullReset ? "destructive" : "default"}
+            onClick={submit}
+            disabled={!canSubmit}
+            data-testid="restart-modal-submit"
+          >
+            {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {t(($) => $.restart_modal.cta[selected])}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

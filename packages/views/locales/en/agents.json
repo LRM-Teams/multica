@@ -746,6 +746,8 @@
     "eyebrow": "Multica agent honor",
     "title": "Honor core",
     "subtitle": "Permanent XP, achievements, fleet progression, and a visible record of every accepted delivery.",
+    "xp_label": "XP",
+    "xp_value": "{{value}} XP",
     "unlocked": "Unlocked",
     "remove_showcase": "Remove",
     "add_showcase": "Showcase",

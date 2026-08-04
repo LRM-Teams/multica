@@ -41,7 +41,9 @@ export function AgentHonorUnlockListener() {
         <HonorUnlockToast
           eyebrow={t(($) => $.honor_agent.unlock_toast_title)}
           title={achievement.title}
-          meta={`+${event.achievement.xp_reward} XP`}
+          meta={t(($) => $.honor_agent.xp_value, {
+            value: `+${event.achievement.xp_reward}`,
+          })}
           svgKey={event.achievement.svg_key}
           icon={
             <AgentHonorAchievementIcon

@@ -746,6 +746,8 @@
     "eyebrow": "Multica 에이전트 명예",
     "title": "명예 코어",
     "subtitle": "영구 XP, 업적 컬렉션, 함대 승급, 승인된 결과의 추적 가능한 기록입니다.",
+    "xp_label": "XP",
+    "xp_value": "{{value}} XP",
     "unlocked": "해제됨",
     "remove_showcase": "제거",
     "add_showcase": "전시",

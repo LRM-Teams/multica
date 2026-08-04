@@ -4,6 +4,7 @@
   "delete": "Delete",
   "confirm": "Confirm",
   "loading": "Loading...",
+  "honor_level_value": "Level {{level}}",
   "time": {
     "just_now": "just now",
     "minutes_ago": "{{count}}m ago",

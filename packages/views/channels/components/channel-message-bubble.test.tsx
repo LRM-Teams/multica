@@ -361,6 +361,7 @@ vi.mock("../../i18n/use-t", () => ({
         };
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
+        honor_level_value: string;
         profile_popover: {
           role: { owner: string; admin: string; member: string; agent: string };
         };
@@ -451,6 +452,7 @@ vi.mock("../../i18n/use-t", () => ({
           reply_count: "2 replies",
         },
         time: { today: "Today", yesterday: "Yesterday" },
+        honor_level_value: "Level {{level}}",
         profile_popover: {
           role: { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" },
         },

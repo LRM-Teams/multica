@@ -53,10 +53,22 @@ export function ResearchOfflineBanner({
           type="button"
           size="sm"
           variant={failed ? "outline" : "default"}
-          disabled={reconnecting}
+          // LRM-1345 A-2 — the reconnecting control must stay a real focus target.
+          // A native `disabled` on the button the user just activated drops focus to
+          // <body> in Chromium and never gives it back, so keyboard / screen reader
+          // users lose their place and never hear the retry outcome. Same frozen
+          // pattern as LRM-1213 `research-session-interrupt-banner`: keep it
+          // focusable, guard the handler.
+          aria-disabled={reconnecting || undefined}
           data-testid="research-offline-banner-retry"
-          onClick={onRetry}
-          className="shrink-0 self-start sm:self-auto"
+          onClick={() => {
+            if (reconnecting) return;
+            onRetry?.();
+          }}
+          className={cn(
+            "shrink-0 self-start sm:self-auto",
+            reconnecting && "opacity-50 cursor-not-allowed",
+          )}
         >
           <RefreshCw
             className={cn("size-3.5", reconnecting && "animate-spin")}
@@ -78,24 +90,17 @@ export function ResearchOfflineBanner({
     className,
   );
 
-  // LRM-1192: failed reconnect is an alert; offline/reconnecting stay polite status via <output>.
+  // LRM-1192: failed reconnect is an alert; offline/reconnecting stay polite status.
   // LRM-1232: reconnecting declares aria-busy so AT can distinguish “offline notice” vs “in progress”.
-  if (failed) {
-    return (
-      <div
-        role="alert"
-        data-testid="research-offline-banner"
-        data-mode={mode}
-        className={shellClass}
-      >
-        {body}
-      </div>
-    );
-  }
-
+  // LRM-1345 A-1: one single return so the shell element identity is stable across
+  // mode changes. The old code returned a `<div role="alert">` for failed and an
+  // `<output>` otherwise; React sees a different tag, unmounts the whole subtree and
+  // the focused Retry button disappears, dropping focus to <body> exactly when the
+  // user retries. `<output>` maps to role="status" natively (react-doctor
+  // prefer-tag-over-role), and failed upgrades the same node to role="alert".
   return (
-    // `<output>` maps to role="status" — keep native tag (react-doctor prefer-tag-over-role).
     <output
+      role={failed ? "alert" : undefined}
       data-testid="research-offline-banner"
       data-mode={mode}
       aria-busy={reconnecting || undefined}

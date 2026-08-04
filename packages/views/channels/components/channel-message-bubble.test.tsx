@@ -667,14 +667,14 @@ describe("ChannelMessageBubble", () => {
     );
 
     const contentCol = screen.getByTestId("message-body").parentElement;
-    expect(contentCol).toHaveClass("[@media(pointer:fine)]:md:pr-[184px]");
+    expect(contentCol).toHaveClass("[@media(pointer:fine)]:pr-[136px]");
 
     const actionBar = screen.getByTestId("message-action-bar");
     expect(actionBar).toHaveClass("bg-popover");
-    expect(actionBar).toHaveClass("border-border/70");
+    expect(actionBar).toHaveClass("border-line-strong");
     expect(actionBar).toHaveClass("shadow-sm");
     expect(actionBar).toHaveClass("rounded-lg");
-    expect(actionBar).toHaveClass("top-1.5");
+    expect(actionBar).toHaveClass("top-1");
 
     // Author name: never wrap (role/time shrink first on narrow).
     expect(screen.getByText("Research Agent").className).toMatch(/whitespace-nowrap/);
@@ -690,6 +690,184 @@ describe("ChannelMessageBubble", () => {
       />,
     );
     expect(screen.getByTestId("message-action-bar")).toHaveClass("top-0.5");
+  });
+
+  describe("LRM-1227 bubble shell (① + G + C2 + D2, frozen in LRM-1233)", () => {
+    it("paints a fully enclosed D1 shell on a standalone message", () => {
+      render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+      const shell = screen.getByTestId("message-shell");
+
+      // Shell is the content column itself — no extra wrapper node.
+      expect(shell).toBe(screen.getByTestId("message-body").parentElement);
+      expect(shell).toHaveAttribute("data-group-start", "true");
+      expect(shell).toHaveAttribute("data-group-end", "true");
+      // D1 surface: bg-muted + 1px --line on all four sides, fully rounded.
+      expect(shell).toHaveClass("bg-muted");
+      expect(shell).toHaveClass("border-line");
+      expect(shell).toHaveClass("border-x");
+      expect(shell).toHaveClass("border-y");
+      expect(shell).toHaveClass("rounded-lg");
+    });
+
+    it("splits a joined group into head / middle / tail segments", () => {
+      const { rerender } = render(
+        <ChannelMessageBubble
+          message={makeMessage()}
+          currentUserId="user-1"
+          groupEnd={false}
+        />,
+      );
+      // Group head: top edge + top corners only, no bottom edge.
+      let shell = screen.getByTestId("message-shell");
+      expect(shell).toHaveClass("rounded-t-lg");
+      expect(shell).toHaveClass("border-t");
+      expect(shell.className).not.toMatch(/\bborder-b\b/);
+      expect(shell.className).not.toMatch(/\brounded-b-lg\b/);
+
+      // Middle continuation: side edges only — no top/bottom edge, no corners.
+      rerender(
+        <ChannelMessageBubble
+          message={makeMessage({ content: "middle" })}
+          currentUserId="user-1"
+          compact
+          groupEnd={false}
+        />,
+      );
+      shell = screen.getByTestId("message-shell");
+      expect(shell).toHaveClass("border-x");
+      expect(shell.className).not.toMatch(/\bborder-t\b/);
+      expect(shell.className).not.toMatch(/\bborder-b\b/);
+      expect(shell.className).not.toMatch(/rounded-[tb]?-?lg/);
+
+      // Group tail: bottom edge + bottom corners only.
+      rerender(
+        <ChannelMessageBubble
+          message={makeMessage({ content: "last" })}
+          currentUserId="user-1"
+          compact
+          groupEnd
+        />,
+      );
+      shell = screen.getByTestId("message-shell");
+      expect(shell).toHaveClass("rounded-b-lg");
+      expect(shell).toHaveClass("border-b");
+      expect(shell.className).not.toMatch(/\bborder-t\b/);
+      expect(shell.className).not.toMatch(/\brounded-t-lg\b/);
+    });
+
+    it("moves the row hover signal onto the shell edge instead of a bg wash", () => {
+      render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+      // The old 1.02:1 wash is unreadable once the shell is permanently filled.
+      expect(screen.getByTestId("message-bubble").className).not.toMatch(
+        /hover:bg-muted\/35|focus-within:bg-muted\/35/,
+      );
+      const shell = screen.getByTestId("message-shell");
+      expect(shell).toHaveClass("group-hover:border-line-strong");
+      expect(shell).toHaveClass("group-focus-within:border-line-strong");
+    });
+
+    it("lets the self-mention wash replace the shell fill, never stack under it", () => {
+      const msg = makeMessage({
+        type: "user",
+        author_id: "user-2",
+        author_name: "bob",
+        content: "hey [@Alice](mention://member/user-1) look",
+      });
+      render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+      expect(screen.getByTestId("message-bubble").className).toContain("bg-[#fef9e8]");
+      const shell = screen.getByTestId("message-shell");
+      // Shell keeps the silhouette (edges) but drops its own surface, so the
+      // row's wash is what the viewer actually sees.
+      expect(shell.className).not.toMatch(/\bbg-muted\b/);
+      expect(shell).toHaveClass("border-line");
+    });
+
+    it("lets the deep-link highlight replace the shell fill too", () => {
+      render(
+        <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" highlighted />,
+      );
+      expect(screen.getByTestId("message-bubble").className).toContain("bg-primary/10");
+      expect(screen.getByTestId("message-shell").className).not.toMatch(/\bbg-muted\b/);
+    });
+
+    it("D2: bar rides the shell top edge on a lead row and sits inside a compact row", () => {
+      const { rerender } = render(
+        <ChannelMessageBubble
+          message={makeMessage()}
+          currentUserId="user-1"
+          onReact={vi.fn()}
+        />,
+      );
+      const bar = screen.getByTestId("message-action-bar");
+      // right-2 == the row's own px-2, so bar right edge == shell right edge.
+      expect(bar).toHaveClass("right-2");
+      expect(bar).toHaveClass("top-1");
+      expect(bar).toHaveClass("-translate-y-1/2");
+
+      rerender(
+        <ChannelMessageBubble
+          message={makeMessage({ content: "follow-up" })}
+          currentUserId="user-1"
+          compact
+          onReact={vi.fn()}
+        />,
+      );
+      const compactBar = screen.getByTestId("message-action-bar");
+      expect(compactBar).toHaveClass("top-0.5");
+      expect(compactBar.className).not.toMatch(/-translate-y-1\/2/);
+    });
+
+    it("D2: 124x34 bar geometry — four size-7 controls, each with its own focus ring", () => {
+      render(
+        <ChannelMessageBubble
+          message={makeMessage()}
+          currentUserId="user-1"
+          onReact={vi.fn()}
+          onQuote={vi.fn()}
+          onOpenThread={vi.fn()}
+        />,
+      );
+      const bar = screen.getByTestId("message-action-bar");
+      const controls = Array.from(bar.querySelectorAll("button"));
+      // 4 × 28 + 3 × 2 (gap-0.5) + 2 × 2 (p-0.5) + 2 × 1 (edge) = 124; 28+4+2 = 34.
+      expect(controls).toHaveLength(4);
+      expect(bar).toHaveClass("gap-0.5");
+      expect(bar).toHaveClass("p-0.5");
+      for (const control of controls) {
+        expect(control.className).toMatch(/\bsize-7\b/);
+        expect(control.className).toMatch(/focus-visible:ring-1/);
+        expect(control.className).toMatch(/focus-visible:ring-ring/);
+      }
+    });
+
+    it("keeps the gutter on the same pointer gate as the bar (no fine + <768 text overlap)", () => {
+      render(
+        <ChannelMessageBubble
+          message={makeMessage()}
+          currentUserId="user-1"
+          onReact={vi.fn()}
+        />,
+      );
+      const shell = screen.getByTestId("message-shell");
+      const bar = screen.getByTestId("message-action-bar");
+      const gate = "[@media(pointer:fine)]";
+      expect(shell.className).toContain(`${gate}:pr-[136px]`);
+      // Regression: the gutter used to add `md:`, so a fine pointer under 768px
+      // rendered the bar with no reserved band and covered the body text.
+      expect(shell.className).not.toContain(`${gate}:md:`);
+      expect(bar.className).toContain(`${gate}:flex`);
+    });
+
+    it("a11y: the shell is decoration only — no role, no aria, no new tab stop", () => {
+      render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+      const shell = screen.getByTestId("message-shell");
+      expect(shell.getAttribute("role")).toBeNull();
+      expect(shell.getAttribute("tabindex")).toBeNull();
+      expect(
+        Array.from(shell.attributes).filter((attr) => attr.name.startsWith("aria-")),
+      ).toHaveLength(0);
+    });
   });
 
   it("renders compact continuations without author chrome but keeps body and gutter time (LRM-255)", () => {

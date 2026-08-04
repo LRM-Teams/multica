@@ -500,3 +500,40 @@ func TestUnwrapStructuredMessageSendLeavesExistingPartsAlone(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+func TestNormalizeActionCardReference(t *testing.T) {
+	id := "11111111-1111-1111-1111-111111111111"
+	_, parts, err := Normalize("hire", []protocol.MessagePart{{
+		Type:       protocol.MessagePartTypeReference,
+		RefType:    "action_card",
+		RefSubType: "agent:create",
+		RefID:      id,
+		Label:      "Hiree Bot",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 1 || parts[0].RefType != "action_card" || parts[0].RefSubType != "agent:create" || parts[0].RefID != id {
+		t.Fatalf("parts=%+v", parts)
+	}
+	// default subtype
+	_, parts, err = Normalize("", []protocol.MessagePart{{
+		Type:    protocol.MessagePartTypeReference,
+		RefType: "action_card",
+		RefID:   id,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parts[0].RefSubType != "agent:create" {
+		t.Fatalf("default subtype=%q", parts[0].RefSubType)
+	}
+	// reject bad uuid
+	if _, _, err := Normalize("", []protocol.MessagePart{{
+		Type:    protocol.MessagePartTypeReference,
+		RefType: "action_card",
+		RefID:   "not-a-uuid",
+	}}); err == nil {
+		t.Fatal("expected uuid error")
+	}
+}

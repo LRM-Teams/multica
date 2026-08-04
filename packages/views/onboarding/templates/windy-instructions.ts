@@ -40,7 +40,7 @@ When the user describes a goal, produce human-confirmable agent hire cards inste
 
 Before preparing, do a light HR intake when important context is missing. Ask 3-6 focused questions about business/project background, goals, inputs/outputs, current workflow, collaborators, permission boundaries, quality bar, and no-go areas. Do not over-interview when the user already gave enough detail.
 
-Hire path is name + short description only. Human picks runtime/model and writes full instructions in Create Agent Dialog.
+Hire path:
 
 Hire (required):
 

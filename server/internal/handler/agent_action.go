@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // agent:create action cards (Frank/Parker 2026-08-04 hire hard-cut, no draft bridge).
@@ -45,17 +46,19 @@ type agentActionCreatePayload struct {
 }
 
 type agentActionCardResponse struct {
-	ActionType        string                   `json:"action_type"`
-	ID                string                   `json:"id"`
-	Status            string                   `json:"status"`
-	Payload           agentActionCreatePayload `json:"payload"`
-	PreparedByAgentID *string                  `json:"prepared_by_agent_id,omitempty"`
-	ChannelID         *string                  `json:"channel_id,omitempty"`
-	CommittedByUserID *string                  `json:"committed_by_user_id,omitempty"`
-	CommittedAgentID  *string                  `json:"committed_agent_id,omitempty"`
-	CreatedAt         string                   `json:"created_at"`
-	UpdatedAt         string                   `json:"updated_at"`
-	DoneAt            *string                  `json:"done_at,omitempty"`
+	ActionType string                   `json:"action_type"`
+	ID         string                   `json:"id"`
+	Status     string                   `json:"status"`
+	Payload    agentActionCreatePayload `json:"payload"`
+	// Part is the structured message reference for send (issue-like, not multica://).
+	Part              *protocol.MessagePart `json:"part,omitempty"`
+	PreparedByAgentID *string               `json:"prepared_by_agent_id,omitempty"`
+	ChannelID         *string               `json:"channel_id,omitempty"`
+	CommittedByUserID *string               `json:"committed_by_user_id,omitempty"`
+	CommittedAgentID  *string               `json:"committed_agent_id,omitempty"`
+	CreatedAt         string                `json:"created_at"`
+	UpdatedAt         string                `json:"updated_at"`
+	DoneAt            *string               `json:"done_at,omitempty"`
 }
 
 // AgentTransportPrepareAction prepares a human-confirmable action card.
@@ -144,11 +147,14 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	cardID := uuidToString(id)
+	part := actionCardMessagePart(cardID, name)
 	resp := agentActionCardResponse{
 		ActionType:        actionType,
-		ID:                uuidToString(id),
+		ID:                cardID,
 		Status:            status,
 		Payload:           agentActionCreatePayload{Name: name, Description: description},
+		Part:              &part,
 		PreparedByAgentID: uuidToPtr(preparedBy),
 		ChannelID:         uuidToPtr(chID),
 		CreatedAt:         timestampToString(createdAt),
@@ -235,11 +241,14 @@ func (h *Handler) loadActionCard(r *http.Request, workspaceID string, cardID pgt
 	}
 	var payload agentActionCreatePayload
 	_ = json.Unmarshal(payloadRaw, &payload)
+	idStr := uuidToString(id)
+	part := actionCardMessagePart(idStr, payload.Name)
 	return agentActionCardResponse{
 		ActionType:        actionType,
-		ID:                uuidToString(id),
+		ID:                idStr,
 		Status:            status,
 		Payload:           payload,
+		Part:              &part,
 		PreparedByAgentID: uuidToPtr(preparedBy),
 		ChannelID:         uuidToPtr(chID),
 		CommittedByUserID: uuidToPtr(committedBy),
@@ -310,4 +319,14 @@ func (h *Handler) markActionCardDone(r *http.Request, workspaceID string, cardID
 		return agentActionLookupNotPrepared, nil
 	}
 	return agentActionLookupOK, nil
+}
+
+func actionCardMessagePart(cardID, name string) protocol.MessagePart {
+	return protocol.MessagePart{
+		Type:       protocol.MessagePartTypeReference,
+		RefType:    "action_card",
+		RefSubType: "agent:create",
+		RefID:      cardID,
+		Label:      name,
+	}
 }

@@ -542,6 +542,12 @@ function ResearchCanvasInner({
           outline-offset: 2px;
         }
         .react-flow__edge { display: none; }
+        .react-flow__edge.aggregate-tree-edge { display: block; }
+        .react-flow__edge.aggregate-tree-edge .react-flow__edge-path {
+          stroke: var(--brand);
+          stroke-width: 2;
+          stroke-opacity: 0.62;
+        }
       `}</style>
       <ReactFlow
         nodes={rfNodes}

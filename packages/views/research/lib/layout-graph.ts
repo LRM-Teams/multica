@@ -56,11 +56,55 @@ export type ResearchFlowNodeData = {
   gutterSegments?: GitLaneSegment[];
   gutterHeight?: number;
   gutterWidth?: number;
+  /** LRM-1295 presentational role supplied by the aggregate selector. */
+  aggregateTier?: AggregateTreeCardTier;
+  /** LRM-1295 card dimensions; old git-lane cards omit this. */
+  aggregateSize?: AggregateTreeCardSize;
 };
 
 export type ResearchFlowEdgeData = {
   edgeType: string;
 };
+
+/**
+ * LRM-1295 aggregate-tree viewport roles. The selector owns deriving these
+ * collections from the snapshot; this layout deliberately does not read or
+ * infer parent/child projection fields.
+ */
+export type AggregateTreeCardTier = "parent" | "sibling" | "child";
+
+export type AggregateTreeCardSize = {
+  width: number;
+  height: number;
+};
+
+export type AggregateTreeShellInput = {
+  parent: ResearchGraphNode;
+  siblings: ResearchGraphNode[];
+  children: ResearchGraphNode[];
+  edges: ResearchGraphEdge[];
+};
+
+export type AggregateTreeShellLayout = {
+  nodes: Node<ResearchFlowNodeData>[];
+  edges: Edge<ResearchFlowEdgeData>[];
+  board: { width: number; height: number };
+};
+
+/** Product-spec geometry for the three-column aggregate viewport. */
+export const AGGREGATE_PARENT_CARD: AggregateTreeCardSize = { width: 282, height: 242 };
+export const AGGREGATE_SIBLING_CARD: AggregateTreeCardSize = { width: 218, height: 142 };
+export const AGGREGATE_CHILD_CARD: AggregateTreeCardSize = { width: 336, height: 76 };
+
+const AGGREGATE_BOARD_WIDTH = 1408;
+const AGGREGATE_BOARD_MIN_HEIGHT = 655;
+const AGGREGATE_SIDE_INSET = 48;
+const AGGREGATE_SIBLING_X = 454;
+const AGGREGATE_SIBLING_COLUMN_GAP = 42;
+const AGGREGATE_SIBLING_ROW_GAP = 32;
+const AGGREGATE_CHILD_X = 1022;
+const AGGREGATE_CHILD_GAP = 16;
+const AGGREGATE_TOP_INSET = 56;
 
 function makeSyntheticEnd(sessionId: string): ResearchGraphNode {
   const ts = new Date().toISOString();
@@ -226,6 +270,131 @@ export function layoutResearchGraph(
     topology: topologyResult.byId,
     board: { width: boardWidth, height: boardHeight },
   };
+}
+
+function aggregateTreeNode(
+  research: ResearchGraphNode,
+  tier: AggregateTreeCardTier,
+  position: { x: number; y: number },
+  size: AggregateTreeCardSize,
+): Node<ResearchFlowNodeData> {
+  return {
+    id: research.id,
+    type: "research",
+    position,
+    data: {
+      research,
+      logicRole: isLogicStartNode(research) ? "start" : "step",
+      laneId: laneForNode(research),
+      branchId: research.theme_key ?? branchIdForLane(0),
+      branchColor: colorForLane(0),
+      aggregateTier: tier,
+      aggregateSize: size,
+    },
+    draggable: false,
+    zIndex: 2,
+    style: { width: size.width, height: size.height },
+  };
+}
+
+/**
+ * LRM-1295 presentational shell for the aggregate selector's three-column
+ * window. It intentionally trusts only the explicit collections it receives:
+ * contract reconciliation stays in FE A / the server, never in the canvas.
+ */
+export function layoutAggregateTreeShell({
+  parent,
+  siblings,
+  children,
+  edges,
+}: AggregateTreeShellInput): AggregateTreeShellLayout {
+  const siblingRows = Math.max(1, Math.ceil(siblings.length / 2));
+  const siblingHeight =
+    siblingRows * AGGREGATE_SIBLING_CARD.height +
+    (siblingRows - 1) * AGGREGATE_SIBLING_ROW_GAP;
+  const childHeight =
+    Math.max(1, children.length) * AGGREGATE_CHILD_CARD.height +
+    Math.max(0, children.length - 1) * AGGREGATE_CHILD_GAP;
+  const boardHeight = Math.max(
+    AGGREGATE_BOARD_MIN_HEIGHT,
+    siblingHeight + AGGREGATE_TOP_INSET * 2,
+    childHeight + AGGREGATE_TOP_INSET * 2,
+    AGGREGATE_PARENT_CARD.height + AGGREGATE_TOP_INSET * 2,
+  );
+  const siblingY = Math.round((boardHeight - siblingHeight) / 2);
+  const childY = Math.round((boardHeight - childHeight) / 2);
+  const parentY = Math.round((boardHeight - AGGREGATE_PARENT_CARD.height) / 2);
+
+  const laidNodes: Node<ResearchFlowNodeData>[] = [
+    aggregateTreeNode(
+      parent,
+      "parent",
+      { x: AGGREGATE_SIDE_INSET, y: parentY },
+      AGGREGATE_PARENT_CARD,
+    ),
+    ...siblings.map((sibling, index) => {
+      const column = index % 2;
+      const row = Math.floor(index / 2);
+      return aggregateTreeNode(
+        sibling,
+        "sibling",
+        {
+          x: AGGREGATE_SIBLING_X +
+            column * (AGGREGATE_SIBLING_CARD.width + AGGREGATE_SIBLING_COLUMN_GAP),
+          y: siblingY + row * (AGGREGATE_SIBLING_CARD.height + AGGREGATE_SIBLING_ROW_GAP),
+        },
+        AGGREGATE_SIBLING_CARD,
+      );
+    }),
+    ...children.map((child, index) =>
+      aggregateTreeNode(
+        child,
+        "child",
+        { x: AGGREGATE_CHILD_X, y: childY + index * (AGGREGATE_CHILD_CARD.height + AGGREGATE_CHILD_GAP) },
+        AGGREGATE_CHILD_CARD,
+      ),
+    ),
+  ];
+  const visibleIds = new Set(laidNodes.map((node) => node.id));
+  const shellEdges = edges
+    .filter(
+      (edge) =>
+        edge.edge_type === "leads_to" &&
+        visibleIds.has(edge.from_node_id) &&
+        visibleIds.has(edge.to_node_id),
+    )
+    .map((edge) => ({
+      id: edge.id,
+      source: edge.from_node_id,
+      target: edge.to_node_id,
+      type: "smoothstep",
+      className: "aggregate-tree-edge",
+      data: { edgeType: edge.edge_type },
+      zIndex: 0,
+    } satisfies Edge<ResearchFlowEdgeData>));
+
+  return {
+    nodes: laidNodes,
+    edges: shellEdges,
+    board: { width: AGGREGATE_BOARD_WIDTH, height: boardHeight },
+  };
+}
+
+/** Public AABB helpers for LRM-1295 aggregate-shell geometry regressions. */
+export function aggregateTreeCardBoxes(
+  laid: AggregateTreeShellLayout,
+): { id: string; tier: AggregateTreeCardTier; x: number; y: number; w: number; h: number }[] {
+  return laid.nodes.map((node) => {
+    const size = node.data.aggregateSize!;
+    return {
+      id: node.id,
+      tier: node.data.aggregateTier!,
+      x: node.position.x,
+      y: node.position.y,
+      w: size.width,
+      h: size.height,
+    };
+  });
 }
 
 /** Public AABB helpers for layout regression tests. */

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Virtuoso } from "react-virtuoso";
 import {
   ChevronLeft,
   ChevronRight,
@@ -86,6 +87,11 @@ interface RuntimesPageProps {
   cloudRuntimeEnabled?: boolean;
 }
 
+// Rendering one interactive row per runtime is fine for a handful of machines,
+// but a shared workspace can have hundreds. Keep the small-list path (which
+// preserves the existing grouped markup) and window the flat large-list path.
+const MACHINE_LIST_VIRTUALIZE_THRESHOLD = 100;
+
 function useNowTick(intervalMs = 30_000): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -140,6 +146,11 @@ function providerLabel(runtime: AgentRuntime | null): string {
 
 /** Mutually exclusive Computers overlays — one discriminant (prefer-useReducer). */
 type PageOverlay = null | "add-chooser" | "connect" | "cloud";
+
+type MachineListVirtualItem =
+  | { kind: "mine-heading" }
+  | { kind: "team-toggle" }
+  | { kind: "machine"; machine: RuntimeMachine; showOwnerBadge: boolean };
 
 /**
  * LRM-863 — Runtimes per **v8c** freeze (Frank 2026-07-31):
@@ -432,6 +443,36 @@ export function MachineListView({
   // workspace where the viewer owns everything they can see stays a flat
   // list, same as before.
   const showGroups = teamMachines.length > 0;
+  const shouldVirtualizeMachines = machines.length > MACHINE_LIST_VIRTUALIZE_THRESHOLD;
+  const [teamExpanded, setTeamExpanded] = useState(false);
+  const virtualItems: MachineListVirtualItem[] = showGroups
+    ? [
+        { kind: "mine-heading" },
+        ...mineMachines.map(
+          (machine): MachineListVirtualItem => ({
+            kind: "machine",
+            machine,
+            showOwnerBadge: false,
+          }),
+        ),
+        { kind: "team-toggle" },
+        ...(teamExpanded
+          ? teamMachines.map(
+              (machine): MachineListVirtualItem => ({
+                kind: "machine",
+                machine,
+                showOwnerBadge: true,
+              }),
+            )
+          : []),
+      ]
+    : machines.map(
+        (machine): MachineListVirtualItem => ({
+          kind: "machine",
+          machine,
+          showOwnerBadge: false,
+        }),
+      );
 
   const connectivityLabel = (machine: RuntimeMachine) =>
     machine.health === "online"
@@ -519,37 +560,76 @@ export function MachineListView({
       </PageHeader>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className={layout === "sidebar" ? "p-2" : undefined}>
-          {showGroups ? (
-            <>
-              <SectionTitle>{t(($) => $.machine.section_mine)}</SectionTitle>
-              {mineMachines.map((machine) => renderRow(machine, false))}
-              <Collapsible defaultOpen={false}>
-                <CollapsibleTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={t(($) => $.machine.section_team_public, {
-                        count: teamMachines.length,
-                      })}
-                      className="group/team-toggle mt-2 flex w-full items-center gap-1 rounded-md px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:bg-accent/50"
+        {shouldVirtualizeMachines ? (
+          <Virtuoso
+            className={layout === "sidebar" ? "h-full p-2" : "h-full"}
+            data={virtualItems}
+            computeItemKey={(_index, item) =>
+              item.kind === "machine" ? item.machine.id : item.kind
+            }
+            increaseViewportBy={{ top: 400, bottom: 600 }}
+            itemContent={(_index, item) => {
+              if (item.kind === "mine-heading") {
+                return <SectionTitle>{t(($) => $.machine.section_mine)}</SectionTitle>;
+              }
+              if (item.kind === "team-toggle") {
+                return (
+                  <button
+                    type="button"
+                    aria-label={t(($) => $.machine.section_team_public, {
+                      count: teamMachines.length,
+                    })}
+                    onClick={() => setTeamExpanded((expanded) => !expanded)}
+                    className="group/team-toggle mt-2 flex w-full items-center gap-1 rounded-md px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:bg-accent/50"
+                  >
+                    <ChevronRight
+                      className={cn(
+                        "h-3 w-3 stroke-[2.5] transition-transform duration-200",
+                        teamExpanded && "rotate-90",
+                      )}
                     />
-                  }
-                >
-                  <ChevronRight className="h-3 w-3 stroke-[2.5] transition-transform duration-200 group-data-[panel-open]/team-toggle:rotate-90" />
-                  {t(($) => $.machine.section_team_public, {
-                    count: teamMachines.length,
-                  })}
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  {teamMachines.map((machine) => renderRow(machine, true))}
-                </CollapsibleContent>
-              </Collapsible>
-            </>
-          ) : (
-            machines.map((machine) => renderRow(machine, false))
-          )}
-        </div>
+                    {t(($) => $.machine.section_team_public, {
+                      count: teamMachines.length,
+                    })}
+                  </button>
+                );
+              }
+              return renderRow(item.machine, item.showOwnerBadge);
+            }}
+          />
+        ) : (
+          <div className={layout === "sidebar" ? "p-2" : undefined}>
+            {showGroups ? (
+              <>
+                <SectionTitle>{t(($) => $.machine.section_mine)}</SectionTitle>
+                {mineMachines.map((machine) => renderRow(machine, false))}
+                <Collapsible defaultOpen={false}>
+                  <CollapsibleTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={t(($) => $.machine.section_team_public, {
+                          count: teamMachines.length,
+                        })}
+                        className="group/team-toggle mt-2 flex w-full items-center gap-1 rounded-md px-2.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:bg-accent/50"
+                      />
+                    }
+                  >
+                    <ChevronRight className="h-3 w-3 stroke-[2.5] transition-transform duration-200 group-data-[panel-open]/team-toggle:rotate-90" />
+                    {t(($) => $.machine.section_team_public, {
+                      count: teamMachines.length,
+                    })}
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    {teamMachines.map((machine) => renderRow(machine, true))}
+                  </CollapsibleContent>
+                </Collapsible>
+              </>
+            ) : (
+              machines.map((machine) => renderRow(machine, false))
+            )}
+          </div>
+        )}
       </div>
     </>
   );

@@ -32,6 +32,22 @@ vi.mock("../../common/actor-avatar", () => ({
   ),
 }));
 
+// jsdom has no layout, so a real Virtuoso would render a zero-height viewport.
+// This shim exposes the data passed to it while mounting only a small viewport.
+vi.mock("react-virtuoso", () => ({
+  Virtuoso: ({
+    data,
+    itemContent,
+  }: {
+    data: unknown[];
+    itemContent: (index: number, item: never) => React.ReactNode;
+  }) => (
+    <div data-testid="virtual-machine-list" data-count={data.length}>
+      {data.slice(0, 3).map((item, index) => itemContent(index, item as never))}
+    </div>
+  ),
+}));
+
 import { MachineListView } from "./runtimes-page";
 import {
   defaultDesktopSelectedMachineId,
@@ -132,6 +148,20 @@ describe("MachineListView — ownership grouping", () => {
     expect(screen.queryByText(/Team public/)).toBeNull();
     expect(screen.getByText("Box A")).toBeInTheDocument();
     expect(screen.getByText("Box B")).toBeInTheDocument();
+  });
+
+  it("windows a workspace-scale machine list instead of mounting all 736 rows", () => {
+    const machines = Array.from({ length: 736 }, (_, index) =>
+      makeMachine(`m-${index}`, `Box ${index}`, "user-mine"),
+    );
+    renderList(machines, "user-mine");
+
+    expect(screen.getByTestId("virtual-machine-list")).toHaveAttribute(
+      "data-count",
+      "736",
+    );
+    expect(screen.getByText("Box 0")).toBeInTheDocument();
+    expect(screen.queryByText("Box 735")).toBeNull();
   });
 
   it("splits into Mine (expanded, no owner badge) and Team public (collapsed, with owner badge)", () => {

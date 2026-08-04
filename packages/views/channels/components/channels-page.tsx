@@ -136,6 +136,7 @@ import {
   ResizableHandle,
 } from "@multica/ui/components/ui/resizable";
 import { useDefaultLayout } from "react-resizable-panels";
+import { Virtuoso } from "react-virtuoso";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -280,6 +281,12 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ChannelAddPeopleDialog } from "./channel-add-people-dialog";
 import { StopAllAgentsDialog } from "./stop-all-agents-dialog";
 import { ChannelPresenceCluster } from "./channel-agents-live-cue";
+
+// Above this size, mounting every interactive channel row (including both
+// dropdown and context-menu trees) blocks the main thread. Virtuoso keeps the
+// channel rail proportional to the viewport while preserving the complete
+// in-memory list for filtering and navigation.
+const CHANNEL_SIDEBAR_VIRTUALIZE_THRESHOLD = 100;
 
 // LRM-1264 R3 — defer Tasks/Files/details/thread/agent/member graphs until
 // those surfaces open. Base UI Tabs keep inactive panels mounted (hidden);
@@ -793,6 +800,9 @@ export function ChannelsPage({
     // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentionally keyed on the stable string form (searchParamsString), not searchParams/threadDeepLinkId directly; searchParams is a NEW object every render (see apps/web/platform/navigation.tsx) and threadDeepLinkId is read via a ref-equivalent comparison against the URL, not meant to re-run this effect on its own change.
   }, [searchParamsString]);
   const [search, setSearch] = useState("");
+  // The sidebar is the single scroll surface for pinned conversations, DMs and
+  // channels. Virtuoso must attach to it instead of creating a nested scroller.
+  const [sidebarScrollElement, setSidebarScrollElement] = useState<HTMLDivElement | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   // LRM-655: remount-safe collapse (pairs with DmList / PINNED).
   const [channelsCollapsed, setChannelsCollapsed] = useSidebarSectionCollapsed(
@@ -1562,6 +1572,8 @@ export function ChannelsPage({
     });
   }, [pinnedEntries, search]);
   const hasSidebarSearch = search.trim().length > 0;
+  const shouldVirtualizeChannels =
+    filteredChannels.length > CHANNEL_SIDEBAR_VIRTUALIZE_THRESHOLD;
   const dmActions = useDmRowActions();
   const currentUserRole = useMemo(
     () => workspaceMembers.find((m) => m.user_id === currentUserId)?.role ?? "member",
@@ -3402,7 +3414,7 @@ export function ChannelsPage({
               />
             </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+          <div ref={setSidebarScrollElement} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
             {/* Unified PINNED section (Slack Starred / 置顶分组) — DMs + channels */}
             <PinnedConversationsSection entries={filteredPinnedEntries}>
               {filteredPinnedEntries.map((entry) => {
@@ -3544,6 +3556,18 @@ export function ChannelsPage({
                   </div>
                 ) : channels.length === 0 ? (
                   <div className="p-3 text-sm text-muted-foreground">{t(($) => $.sidebar.empty)}</div>
+                ) : shouldVirtualizeChannels && !sidebarScrollElement ? (
+                  // The callback ref is populated immediately after this shell
+                  // commits. Avoid a one-frame full 9k-row mount while waiting.
+                  <ChannelListSkeleton rows={8} />
+                ) : shouldVirtualizeChannels ? (
+                  <Virtuoso
+                    customScrollParent={sidebarScrollElement}
+                    data={filteredChannels}
+                    computeItemKey={(_index, channel) => channel.id}
+                    increaseViewportBy={{ top: 500, bottom: 800 }}
+                    itemContent={(_index, channel) => renderChannelSidebarRow(channel)}
+                  />
                 ) : (
                   filteredChannels.map((channel) => renderChannelSidebarRow(channel))
                 )

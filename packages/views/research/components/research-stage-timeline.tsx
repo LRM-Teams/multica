@@ -193,7 +193,7 @@ export function ResearchStageTimeline({
                 disabled={!clickable}
                 onClick={() => onSelectStage?.(stage)}
                 className={cn(
-                  "relative z-[1] flex max-w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors",
+                  "relative z-[1] flex max-w-full flex-col items-center gap-0.5 rounded-md px-0.5 py-1 text-center transition-colors md:flex-row md:gap-2 md:px-1.5 md:text-left",
                   clickable &&
                     "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
                   !clickable && "cursor-default",
@@ -203,43 +203,43 @@ export function ResearchStageTimeline({
                 aria-current={state === "current" ? "step" : undefined}
                 aria-label={`${label} — ${stateLabel}`}
               >
-                <StepGlyph state={state} />
-                <span className="min-w-0">
-                  {/* Narrow shows S1–S4, but the short form is a real locale
-                      entry (`stage_short`) — never derived by truncating the
-                      full label — and it is aria-hidden, so the button's
-                      accessible name keeps the full stage name at every width
-                      (LRM-1271 AC3). */}
+                <span className="flex h-7 shrink-0 items-center justify-center">
+                  <StepGlyph state={state} />
+                </span>
+                <span className="min-w-0 text-center md:text-left">
+                  {/* Narrow shows the real localized S1–S4 abbreviation, while
+                      the accessible button name keeps the complete stage name.
+                      The state label remains visibly rendered at every width:
+                      it may not be hidden behind an aria-label or tooltip. */}
                   <span
                     aria-hidden
                     className={cn(
-                      "block truncate tracking-wide md:hidden",
-                      state === "current" && "text-xs font-semibold text-foreground",
-                      state === "done" && "font-mono text-[11px] text-foreground/75",
+                      "block truncate tracking-wide text-xs md:hidden",
+                      state === "current" && "font-medium text-foreground",
+                      state === "done" && "font-mono font-normal text-foreground",
                       state === "upcoming" &&
-                        "font-mono text-[11px] text-muted-foreground",
+                        "font-mono font-normal text-muted-foreground",
                     )}
                   >
                     {shortLabel}
                   </span>
                   <span
                     className={cn(
-                      "hidden truncate tracking-wide md:block",
-                      state === "current" && "text-xs font-semibold text-foreground",
-                      state === "done" && "font-mono text-[11px] text-foreground/75",
+                      "hidden truncate tracking-wide text-xs md:block",
+                      state === "current" && "font-medium text-foreground",
+                      state === "done" && "font-mono font-normal text-foreground",
                       state === "upcoming" &&
-                        "font-mono text-[11px] text-muted-foreground",
+                        "font-mono font-normal text-muted-foreground",
                     )}
                   >
                     {label}
                   </span>
-                  {/* Text redundancy for the band color: every state names
-                      itself at md+, so "done vs upcoming" never rests on hue.
-                      LRM-1252: solid tokens only — no alpha on these labels. */}
+                  {/* State redundancy stays visible in the 360–767 layout;
+                      glyph/pattern and text together distinguish every state. */}
                   <span
                     data-stage-state-text=""
                     className={cn(
-                      "mt-0.5 hidden text-[10px] font-medium md:block",
+                      "mt-0.5 block whitespace-nowrap text-xs leading-tight font-medium",
                       state === "current"
                         ? "text-[var(--stage)]"
                         : "text-muted-foreground",
@@ -274,7 +274,7 @@ export function ResearchStageChatMarker({
       data-research-stage={stage}
       className="-mx-1 border-y border-dashed bg-muted/30 px-2 py-1.5"
     >
-      <p className="font-mono text-[10px] tracking-wider text-muted-foreground uppercase">
+      <p className="font-mono text-xs tracking-wider text-muted-foreground uppercase">
         {label}
       </p>
     </div>

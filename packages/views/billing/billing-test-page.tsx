@@ -609,7 +609,7 @@ function TopupRow({ row }: { row: BillingTopup }) {
           <span
             className={`ml-1.5 rounded px-1.5 py-0.5 font-mono text-[10px] ${
               row.status === "credited"
-                ? "bg-success/10 text-success"
+                ? "bg-success/10 text-success-strong"
                 : row.status === "failed" || row.status === "canceled"
                   ? "bg-destructive/10 text-destructive"
                   : "bg-warning/10 text-warning"

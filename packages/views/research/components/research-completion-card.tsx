@@ -100,7 +100,7 @@ export function ResearchCompletionCard({
           <span
             className={cn(
               "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full",
-              done ? "bg-success/15 text-success" : "bg-destructive/12 text-destructive",
+              done ? "bg-success/15 text-success-strong" : "bg-destructive/12 text-destructive",
             )}
             aria-hidden
           >
@@ -124,7 +124,7 @@ export function ResearchCompletionCard({
                 className={cn(
                   "rounded-md border px-1.5 py-0.5 text-[10px] font-semibold",
                   done
-                    ? "border-success/35 bg-success/10 text-success"
+                    ? "border-success/35 bg-success/10 text-success-strong"
                     : "border-destructive/35 bg-destructive/10 text-destructive",
                 )}
               >

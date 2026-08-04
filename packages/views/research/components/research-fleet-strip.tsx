@@ -17,7 +17,7 @@ const modeChip: Record<
   empty: "border-border/70 bg-muted/40 text-muted-foreground",
   loading: "border-brand/35 bg-brand/10 text-brand",
   running: "border-brand/35 bg-brand/10 text-brand",
-  done: "border-success/35 bg-success/10 text-success",
+  done: "border-success/35 bg-success/10 text-success-strong",
 };
 
 export function ResearchFleetStrip({

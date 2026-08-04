@@ -48,7 +48,7 @@ const STATUS_TONES: Record<string, StatusTone> = {
   completed: {
     text: "text-success",
     dot: "bg-success",
-    pill: "border-success/35 bg-success/10 text-success",
+    pill: "border-success/35 bg-success/10 text-success-strong",
   },
 };
 const DEFAULT_TONE: StatusTone = {

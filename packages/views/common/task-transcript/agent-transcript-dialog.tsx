@@ -355,7 +355,7 @@ export function AgentTranscriptDialog({
       {t(($) => $.transcript.status_running)}
     </span>
   ) : task.status === "completed" ? (
-    <span className="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">
+    <span className="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success-strong">
       <CheckCircle2 className="h-3 w-3" />
       {t(($) => $.transcript.status_completed)}
     </span>

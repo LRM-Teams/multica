@@ -21,7 +21,7 @@ const statusDot: Record<DimensionStatus, string> = {
 
 const statusChip: Record<DimensionStatus, string> = {
   open: "border-brand/35 bg-brand/10 text-brand",
-  covered: "border-success/35 bg-success/10 text-success",
+  covered: "border-success/35 bg-success/10 text-success-strong",
   gap: "border-warning/40 bg-warning/10 text-foreground",
   dead: "border-destructive/35 bg-destructive/10 text-destructive",
 };

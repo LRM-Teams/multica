@@ -156,7 +156,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
             aria-hidden={abandoned || undefined}
             className={cn(
               "inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-xs font-medium",
-              !abandoned && status.tone === "ok" && "bg-success/15 text-success",
+              !abandoned && status.tone === "ok" && "bg-success/15 text-success-strong",
               !abandoned && status.tone === "run" && "bg-brand/15 text-brand",
               !abandoned && status.tone === "wait" && "bg-warning/15 text-warning",
               !abandoned && status.tone === "fail" && "bg-destructive/15 text-destructive",

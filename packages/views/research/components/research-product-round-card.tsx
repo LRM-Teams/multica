@@ -48,7 +48,7 @@ function decisionTone(decision: string): string {
     case "continue":
       return "border-brand/30 bg-brand/5 text-brand";
     case "stop_enough":
-      return "border-success/30 bg-success/5 text-success";
+      return "border-success/30 bg-success/5 text-success-strong";
     case "stop_budget":
       return "border-warning/40 bg-warning/10 text-warning";
     default:

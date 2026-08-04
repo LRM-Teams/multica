@@ -41,7 +41,7 @@ function WeightChip({ weight }: { weight: number }) {
     <span
       className={cn(
         "inline-flex min-w-[2.5rem] justify-center rounded-md px-1.5 py-0.5 font-mono text-[11px] font-semibold tabular-nums",
-        tier === "hi" && "bg-success/15 text-success",
+        tier === "hi" && "bg-success/15 text-success-strong",
         tier === "mid" && "bg-warning/15 text-warning",
         tier === "lo" && "bg-muted text-muted-foreground",
       )}

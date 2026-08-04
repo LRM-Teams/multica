@@ -195,7 +195,6 @@ function FleetHonorCard({
               <span className="text-4xl font-semibold tabular-nums tracking-tight text-foreground">
                 {Math.round(fleet.fleet_score)}
               </span>
-              <span className="text-xs font-medium text-primary">/ 100</span>
             </span>
             <span className="mt-1 block text-xs text-muted-foreground">
               {frozen

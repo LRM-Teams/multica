@@ -192,8 +192,20 @@
     max-width: 100%;
   }
 
+  /*
+   * LRM-1247 — narrow viewport: do not pair aspect-ratio:1/1 with max-height:9rem.
+   * Height cap otherwise forces cell width to 144px when the track > ~294px, leaving
+   * large inter-cell gaps / trailing empty space (same clamp class as pre-R1 desktop).
+   * Keep LRM-201's 144px height budget via explicit height; width fills the track.
+   */
   .message-attachment-gallery.gallery-layout-grid .gallery-cell {
-    max-height: 9rem;
+    aspect-ratio: auto;
+    height: 9rem;
+  }
+
+  /* R4 first cell stays 16/9 auto-height — must not inherit the narrow height clamp. */
+  .message-attachment-gallery.gallery-layout-grid[data-count="3"] .gallery-cell:first-child {
+    height: auto;
   }
 
   .message-attachment-gallery.gallery-layout-stack {

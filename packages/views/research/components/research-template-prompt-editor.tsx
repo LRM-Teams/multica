@@ -40,7 +40,8 @@ type ResearchTemplatePromptEditorProps = {
 type EditorFormProps = {
   initialDraft: string;
   defaultPrompt: string;
-  disabled: boolean;
+  /** Create mutate pending — keep controls focusable (LRM-1245). */
+  pending: boolean;
   onApply: (next: string) => void;
   onClose: () => void;
 };
@@ -48,7 +49,7 @@ type EditorFormProps = {
 function PromptEditorForm({
   initialDraft,
   defaultPrompt,
-  disabled,
+  pending,
   onApply,
   onClose,
 }: EditorFormProps) {
@@ -79,6 +80,8 @@ function PromptEditorForm({
       : null;
 
   const handleApply = () => {
+    // LRM-1245 — pending stays focusable via aria-disabled; guard mutate.
+    if (pending) return;
     setAttempted(true);
     if (empty || tooShort) return;
     onApply(draft);
@@ -89,13 +92,21 @@ function PromptEditorForm({
     <>
       <Textarea
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        disabled={disabled}
+        onChange={(e) => {
+          if (pending) return;
+          setDraft(e.target.value);
+        }}
+        // LRM-1245 — same root as LRM-1213/1236: keep tab stop while pending.
+        aria-disabled={pending || undefined}
+        readOnly={pending}
         rows={16}
         data-testid="research-template-prompt-editor"
         aria-invalid={showError ? true : undefined}
         aria-describedby={showError ? errorId : undefined}
-        className="min-h-[240px] flex-1 resize-y font-mono text-[12.5px] leading-relaxed"
+        className={cn(
+          "min-h-[240px] flex-1 resize-y font-mono text-[12.5px] leading-relaxed",
+          pending && "cursor-not-allowed opacity-50",
+        )}
       />
       <div className="flex flex-wrap items-center justify-between gap-2 text-[12px]">
         <span
@@ -130,8 +141,10 @@ function PromptEditorForm({
         <Button
           type="button"
           variant="outline"
-          disabled={disabled}
+          aria-disabled={pending || undefined}
+          className={cn(pending && "opacity-50 cursor-not-allowed")}
           onClick={() => {
+            if (pending) return;
             setDraft(defaultPrompt);
             setAttempted(false);
           }}
@@ -142,14 +155,20 @@ function PromptEditorForm({
         <Button
           type="button"
           variant="outline"
-          disabled={disabled}
-          onClick={onClose}
+          aria-disabled={pending || undefined}
+          className={cn(pending && "opacity-50 cursor-not-allowed")}
+          onClick={() => {
+            if (pending) return;
+            onClose();
+          }}
+          data-testid="research-template-prompt-cancel"
         >
           {t(($) => $.home.template_prompt_cancel)}
         </Button>
         <Button
           type="button"
-          disabled={disabled}
+          aria-disabled={pending || undefined}
+          className={cn(pending && "opacity-50 cursor-not-allowed")}
           onClick={handleApply}
           data-testid="research-template-prompt-apply"
         >
@@ -181,7 +200,7 @@ export function ResearchTemplatePromptEditor({
       key={value}
       initialDraft={value}
       defaultPrompt={defaultPrompt}
-      disabled={disabled}
+      pending={disabled}
       onApply={onApply}
       onClose={close}
     />

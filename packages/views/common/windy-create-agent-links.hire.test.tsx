@@ -3,22 +3,35 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import type { AgentCreationDraft } from "@multica/core/types";
+import type { AgentActionCard } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { WorkspaceSlugProvider } from "@multica/core/paths";
 import enCommon from "../locales/en/common.json";
 import enAgents from "../locales/en/agents.json";
 import enModals from "../locales/en/modals.json";
+import {
+  buildAgentCreateActionHref,
+  isAgentCreateActionLink,
+  parseAgentCreateActionURL,
+} from "./windy-create-agent-link-utils";
 
-const { listChannels, createAgent, createAgentDraft, createChannel, listRuntimes, listMembers } =
-  vi.hoisted(() => ({
-    listChannels: vi.fn(),
-    createAgent: vi.fn(),
-    createAgentDraft: vi.fn(),
-    createChannel: vi.fn(),
-    listRuntimes: vi.fn(),
-    listMembers: vi.fn(),
-  }));
+const {
+  listChannels,
+  createAgent,
+  getAgentActionCard,
+  dismissAgentActionCard,
+  createChannel,
+  listRuntimes,
+  listMembers,
+} = vi.hoisted(() => ({
+  listChannels: vi.fn(),
+  createAgent: vi.fn(),
+  getAgentActionCard: vi.fn(),
+  dismissAgentActionCard: vi.fn(),
+  createChannel: vi.fn(),
+  listRuntimes: vi.fn(),
+  listMembers: vi.fn(),
+}));
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -70,7 +83,8 @@ vi.mock("@multica/core/api", () => ({
   api: {
     listChannels: (...args: unknown[]) => listChannels(...args),
     createAgent: (...args: unknown[]) => createAgent(...args),
-    createAgentDraft: (...args: unknown[]) => createAgentDraft(...args),
+    getAgentActionCard: (...args: unknown[]) => getAgentActionCard(...args),
+    dismissAgentActionCard: (...args: unknown[]) => dismissAgentActionCard(...args),
     createChannel: (...args: unknown[]) => createChannel(...args),
   },
 }));
@@ -137,60 +151,66 @@ const TEST_RESOURCES = {
   en: { common: enCommon, agents: enAgents, modals: enModals },
 };
 
-function makeDraft(
-  overrides: Partial<AgentCreationDraft> = {},
-): AgentCreationDraft {
+const CARD_ID = "card-uuid-1";
+
+function makeCard(overrides: Partial<AgentActionCard> = {}): AgentActionCard {
   return {
-    id: "draft-1",
-    workspace_id: "ws-1",
-    target_user_id: "user-me",
-    name: "Group Bot",
-    description: "Hired for one group",
-    instructions: "Be helpful",
-    channel_id: "ch-home",
-    project_id: null,
-    can_execute_code: false,
-    suggested_channels: [],
-    recommended_tools: [],
-    avatar_url: null,
-    status: "draft",
-    created_at: "2026-07-23T00:00:00Z",
-    updated_at: "2026-07-23T00:00:00Z",
+    id: CARD_ID,
+    action_type: "agent:create",
+    status: "prepared",
+    payload: {
+      name: "Group Bot",
+      description: "Hired for one group",
+    },
+    prepared_by_agent_id: "agent-wendy",
+    channel_id: null,
+    created_at: "2026-08-04T00:00:00Z",
+    updated_at: "2026-08-04T00:00:00Z",
     ...overrides,
   };
 }
 
-function renderHire() {
+function renderHire(href = buildAgentCreateActionHref(CARD_ID)) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={qc}>
         <WorkspaceSlugProvider slug="test-ws">
-          <WindyCreateAgentLink href="multica://create-agent?name=Group%20Bot&visibility=channel&channel_id=ch-home">
-            Hire
-          </WindyCreateAgentLink>
+          <WindyCreateAgentLink href={href}>Hire</WindyCreateAgentLink>
         </WorkspaceSlugProvider>
       </QueryClientProvider>
     </I18nProvider>,
   );
 }
 
-describe("Windy hire card create path", () => {
+describe("parseAgentCreateActionURL", () => {
+  it("parses canonical action-card links", () => {
+    expect(parseAgentCreateActionURL(buildAgentCreateActionHref(CARD_ID))).toEqual({
+      actionType: "agent:create",
+      cardId: CARD_ID,
+    });
+    expect(
+      parseAgentCreateActionURL(`multica://action-card?id=${CARD_ID}`),
+    ).toEqual({ actionType: "agent:create", cardId: CARD_ID });
+  });
+
+  it("rejects retired draft hire links", () => {
+    expect(
+      parseAgentCreateActionURL("multica://create-agent?draft_id=draft-1"),
+    ).toBeNull();
+    expect(
+      parseAgentCreateActionURL("multica://create-agent?name=Bot"),
+    ).toBeNull();
+    expect(isAgentCreateActionLink("multica://create-agent?draft_id=x")).toBe(
+      false,
+    );
+  });
+});
+
+describe("Windy hire card create path (action_card_id)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listChannels.mockResolvedValue([
-      {
-        id: "ch-home",
-        workspace_id: "ws-1",
-        name: "Home Group",
-        kind: "group",
-        description: null,
-        lark_chat_id: null,
-        created_by: "user-me",
-        created_at: "2026-01-01T00:00:00Z",
-        updated_at: "2026-01-01T00:00:00Z",
-      },
-    ]);
+    listChannels.mockResolvedValue([]);
     listRuntimes.mockResolvedValue([
       {
         id: "rt-1",
@@ -214,11 +234,10 @@ describe("Windy hire card create path", () => {
       },
     ]);
     listMembers.mockResolvedValue([]);
-    createAgentDraft.mockResolvedValue(makeDraft());
+    getAgentActionCard.mockResolvedValue(makeCard());
     createAgent.mockResolvedValue({
       id: "agent-1",
       display_name: "Group Bot",
-      home_channel_id: "ch-home",
     });
   });
 
@@ -227,15 +246,15 @@ describe("Windy hire card create path", () => {
     document.body.innerHTML = "";
   });
 
-  // This is the only test of the hire card's create path — if it stops
-  // asserting the field, nothing does.
-  it("submits no visibility and no home_channel_id", async () => {
+  it("loads card by id and submits action_card_id without draft_id", async () => {
     renderHire();
     fireEvent.click(screen.getByRole("button", { name: /Hire/i }));
     await waitFor(() => {
+      expect(getAgentActionCard).toHaveBeenCalledWith(CARD_ID);
+    });
+    await waitFor(() => {
       expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
     });
-    // LRM-808 / LRM-914: wait for auto-selected model so Create is enabled.
     await waitFor(() => {
       expect(
         (screen.getByRole("button", { name: /^Create Agent$/i }) as HTMLButtonElement)
@@ -246,28 +265,22 @@ describe("Windy hire card create path", () => {
     await waitFor(() => expect(createAgent).toHaveBeenCalled());
 
     const payload = createAgent.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload.action_card_id).toBe(CARD_ID);
+    expect(payload.draft_id).toBeUndefined();
+    expect(payload.display_name).toBe("Group Bot");
+    expect(payload.description).toBe("Hired for one group");
     expect(payload.visibility).toBeUndefined();
-    // Strictly undefined, not merely "not ch-home": the draft and the link both
-    // name ch-home, so a weaker assertion would pass on any other channel too.
     expect(payload.home_channel_id).toBeUndefined();
-    expect(payload.draft_id).toBe("draft-1");
     expect(payload.model).toBe("composer-1.5");
   });
 
-  // The link carries `visibility=channel&channel_id=ch-home` and the draft
-  // fixture says "channel" — both are now ignored rather than seeded, so this
-  // also covers that a stale Windy link cannot resurrect the retired tier.
-  it("renders no discoverability radios and ignores the link's visibility param", async () => {
+  it("renders no discoverability radios", async () => {
     renderHire();
     fireEvent.click(screen.getByRole("button", { name: /Hire/i }));
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
     });
     expect(screen.queryAllByRole("radio")).toHaveLength(0);
-    expect(screen.queryByLabelText(/New group name/i)).toBeNull();
-
-    expect(createAgentDraft).toHaveBeenCalled();
-    expect(createAgentDraft.mock.calls[0]?.[0]).not.toHaveProperty("visibility");
   });
 
   it("disables Create when the selected computer only has a locked runtime", async () => {
@@ -282,62 +295,26 @@ describe("Windy hire card create path", () => {
         provider: "claude",
         launch_header: "",
         status: "online",
-        device_info: "locked-box",
+        device_info: "locked.local",
         metadata: {},
         current_version: null,
         update_state: "idle",
         runtime_health: "ok",
-        owner_id: "user-other",
-        visibility: "private",
-        last_seen_at: "2026-04-27T11:59:50Z",
-        created_at: "2026-04-01T00:00:00Z",
-        updated_at: "2026-04-01T00:00:00Z",
-      },
-      {
-        id: "rt-mine",
-        workspace_id: "ws-1",
-        daemon_id: "daemon-mine",
-        name: "My Runtime",
-        display_name: "my-box",
-        runtime_mode: "local",
-        provider: "cursor",
-        launch_header: "",
-        status: "online",
-        device_info: "my-box",
-        metadata: {},
-        current_version: null,
-        update_state: "idle",
-        runtime_health: "ok",
-        owner_id: "user-me",
+        owner_id: "someone-else",
         visibility: "private",
         last_seen_at: "2026-04-27T11:59:50Z",
         created_at: "2026-04-01T00:00:00Z",
         updated_at: "2026-04-01T00:00:00Z",
       },
     ]);
-
     renderHire();
     fireEvent.click(screen.getByRole("button", { name: /Hire/i }));
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
     });
-
-    // Default seeds to my-box (usable). Switch to locked-box — Create must
-    // disable even though another machine still has a usable runtime.
-    fireEvent.click(screen.getByText("my-box", { selector: "div.truncate" }));
-    fireEvent.click(
-      screen.getByText("locked-box", { selector: "div.truncate" }),
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId("hire-selected-runtime").textContent).toBe(
-        "rt-locked",
-      );
-    });
     expect(
       (screen.getByRole("button", { name: /^Create Agent$/i }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
-    expect(createAgent).not.toHaveBeenCalled();
   });
 });

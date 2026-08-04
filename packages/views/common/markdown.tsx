@@ -21,7 +21,7 @@ import { AppLink } from "../navigation/app-link";
 import { Attachment as AttachmentRenderer } from "../editor/attachment";
 import { AttachmentDownloadProvider } from "../editor/attachment-download-context";
 import { WindyCreateAgentLink } from "./windy-create-agent-links";
-import { isWindyCreateAgentLink } from "./windy-create-agent-link-utils";
+import { isAgentCreateActionLink } from "./windy-create-agent-link-utils";
 import { useActorMentionChipLabel } from "./actor-mention-chip-label";
 import {
   mentionTokenClassName,
@@ -304,7 +304,7 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
   );
   const RenderAppLink = React.useCallback(
     ({ href, children }: { href: string; children: React.ReactNode }) => {
-      if (isWindyCreateAgentLink(href)) {
+      if (isAgentCreateActionLink(href)) {
         return <WindyCreateAgentLink href={href}>{children}</WindyCreateAgentLink>;
       }
       return null;

@@ -12,8 +12,8 @@ import { memberListOptions, workspaceKeys } from "@multica/core/workspace/querie
 import { deriveRuntimeHealth, runtimeListOptions } from "@multica/core/runtimes";
 import type {
   Agent,
+  AgentActionCard,
   AgentAvatarSelection,
-  AgentCreationDraft,
   CreateAgentRequest,
 } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -36,12 +36,18 @@ import { RuntimePicker, isRuntimeUsableForUser } from "../agents/components/runt
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import { AvatarPicker, type AvatarPickerSelection } from "../agents/components/avatar-picker";
-import { randomPickedAvatarSelection } from "../agents/components/avatar-preset";
 import { buildRuntimeMachines } from "../runtimes/components/runtime-machines";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
-import { listParam, parseWindyCreateAgentURL } from "./windy-create-agent-link-utils";
+import { parseAgentCreateActionURL } from "./windy-create-agent-link-utils";
 
+/**
+ * Chat-bubble hire CTA for agent:create action cards.
+ * Link shape: multica://action-card/agent:create?id=<card-id>
+ * Loads card via GET, opens Create dialog prefilled with name/desc,
+ * submits POST /api/agents with action_card_id (server marks card done).
+ * No draft_id / multica://create-agent?draft_id bridge.
+ */
 export function WindyCreateAgentLink({
   href,
   children,
@@ -51,48 +57,37 @@ export function WindyCreateAgentLink({
   children: React.ReactNode;
   className?: string;
 }) {
-  const [creatingDraft, setCreatingDraft] = React.useState(false);
-  const [draft, setDraft] = React.useState<AgentCreationDraft | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [card, setCard] = React.useState<AgentActionCard | null>(null);
   const [createdAgentName, setCreatedAgentName] = React.useState<string | null>(null);
 
   const handleClick = async () => {
-    const url = parseWindyCreateAgentURL(href);
-    if (creatingDraft || createdAgentName) return;
-    if (!url) {
-      showErrorToast("Invalid Create Agent link");
+    const parsed = parseAgentCreateActionURL(href);
+    if (loading || createdAgentName) return;
+    if (!parsed) {
+      showErrorToast("Invalid Create Agent card link");
       return;
     }
-    const draftId = url.searchParams.get("draft_id")?.trim();
-    const name = url.searchParams.get("name")?.trim() || "New Agent";
-    setCreatingDraft(true);
+    setLoading(true);
     try {
-      const createdDraft = draftId
-        ? await api.getAgentDraft(draftId)
-        : await api.createAgentDraft({
-            name,
-            description: url.searchParams.get("description")?.trim() || "",
-            instructions: url.searchParams.get("instructions")?.trim() || "",
-            // #599: a link's `avatar_url` query param is fully client-
-            // controlled (anyone who can post a message can craft one) and
-            // was getting persisted onto the draft row, then promoted to a
-            // real agent as trusted `assigned` avatar via draft_id — a raw
-            // URL bypass of the avatar_selection contract. Never forward it;
-            // the created agent gets the server's concrete assigned default.
-            //
-            // No `visibility`: agent visibility was retired (#908), and a
-            // link's `visibility=` param is now ignored rather than seeded
-            // into the draft.
-            project_id: url.searchParams.get("project_id") || null,
-            channel_id: url.searchParams.get("channel_id") || null,
-            can_execute_code: url.searchParams.get("can_execute_code") === "true",
-            suggested_channels: listParam(url, "suggested_channel"),
-            recommended_tools: listParam(url, "tool"),
-          });
-      setDraft(createdDraft);
+      const loaded = await api.getAgentActionCard(parsed.cardId);
+      if (loaded.status === "done") {
+        setCreatedAgentName(loaded.payload.name || "Agent");
+        return;
+      }
+      if (loaded.status === "dismissed") {
+        showErrorToast("This hire card was dismissed");
+        return;
+      }
+      if (loaded.action_type !== "agent:create") {
+        showErrorToast("Unsupported action card type");
+        return;
+      }
+      setCard(loaded);
     } catch (err) {
-      showErrorToast(err instanceof Error ? err.message : "Failed to load agent draft");
+      showErrorToast(err instanceof Error ? err.message : "Failed to load hire card");
     } finally {
-      setCreatingDraft(false);
+      setLoading(false);
     }
   };
 
@@ -102,7 +97,7 @@ export function WindyCreateAgentLink({
         type="button"
         size="sm"
         variant="outline"
-        disabled={creatingDraft || !!createdAgentName}
+        disabled={loading || !!createdAgentName}
         onClick={handleClick}
         className={cn(
           "not-prose my-1 inline-flex max-w-full gap-2 transition-all",
@@ -110,7 +105,7 @@ export function WindyCreateAgentLink({
           className,
         )}
       >
-        {creatingDraft ? (
+        {loading ? (
           <Loader2 className="size-3.5 animate-spin" />
         ) : createdAgentName ? (
           <CheckCircle2 className="size-3.5 text-success" />
@@ -119,11 +114,11 @@ export function WindyCreateAgentLink({
         )}
         <span className="truncate">{createdAgentName ? `Created: ${createdAgentName}` : children}</span>
       </Button>
-      {draft && (
+      {card && (
         <InlineCreateAgentDialog
-          draft={draft}
+          card={card}
           onCreated={(name) => setCreatedAgentName(name)}
-          onClose={() => setDraft(null)}
+          onClose={() => setCard(null)}
         />
       )}
     </>
@@ -131,11 +126,11 @@ export function WindyCreateAgentLink({
 }
 
 function InlineCreateAgentDialog({
-  draft,
+  card,
   onCreated,
   onClose,
 }: {
-  draft: AgentCreationDraft;
+  card: AgentActionCard;
   onCreated: (name: string) => void;
   onClose: () => void;
   // Hire card fields are independent (avatar vs runtime/model/thinking); a
@@ -149,10 +144,7 @@ function InlineCreateAgentDialog({
   const qc = useQueryClient();
   const { data: runtimes = [], isLoading: runtimesLoading } = useQuery(runtimeListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const draftAvatarUrl = draft.avatar_url?.trim() || null;
-  const [avatarPreviewUrl, setAvatarPreviewUrl] = React.useState<string | null>(
-    () => draftAvatarUrl,
-  );
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = React.useState<string | null>(null);
   const avatarSelectionRef = React.useRef<AgentAvatarSelection | null>(null);
   const handleAvatarChange = (selection: AvatarPickerSelection | null) => {
     if (selection) {
@@ -161,9 +153,7 @@ function InlineCreateAgentDialog({
       return;
     }
     setAvatarPreviewUrl(null);
-    avatarSelectionRef.current = draftAvatarUrl
-      ? randomPickedAvatarSelection()
-      : null;
+    avatarSelectionRef.current = null;
   };
   const userId = currentUser?.id ?? null;
   const machines = React.useMemo(
@@ -175,6 +165,9 @@ function InlineCreateAgentDialog({
   const [model, setModel] = React.useState("");
   const [thinkingLevel, setThinkingLevel] = React.useState("");
   const [creating, setCreating] = React.useState(false);
+
+  const cardName = card.payload.name?.trim() || "New Agent";
+  const cardDescription = card.payload.description?.trim() || "";
 
   const handleOpenChange = (open: boolean) => {
     if (!open) onClose();
@@ -202,14 +195,8 @@ function InlineCreateAgentDialog({
     selectedRuntimeId ||
     firstUsableRuntimeIdOnMachine(selectedMachine, userId);
   const selectedRuntime = runtimes.find((r) => r.id === effectiveRuntimeId) ?? null;
-  // Derived, staleness-aware health instead of the raw `status` column
-  // (#10 — "runtime online status" had two divergent sources across the
-  // app). Computed once so both dropdowns below agree.
   const selectedRuntimeOnline =
     !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
-  // Workspace-level empty state (no usable runtime anywhere). Distinct from
-  // selectedRuntimeLocked below — a usable runtime on another machine must
-  // not keep Create enabled when the selected computer's runtime is locked.
   const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, userId));
   const selectedRuntimeLocked =
     selectedRuntime != null &&
@@ -225,31 +212,37 @@ function InlineCreateAgentDialog({
     setCreating(true);
     try {
       const payload: CreateAgentRequest = {
-        display_name: draft.name,
-        description: draft.description,
-        instructions: draft.instructions,
-        // #599: never resubmit draft.avatar_url as a raw URL. Prefer an
-        // explicit avatar_selection (user upload or clear→random picked);
-        // otherwise omit so draft_id applies the draft face, or the DB
-        // trigger assigns a random human preset when the draft has none.
+        display_name: cardName,
+        description: cardDescription,
         avatar_selection: avatarSelectionRef.current ?? undefined,
         runtime_id: selectedRuntime.id,
         model: trimmedModel,
         thinking_level: thinkingLevel || undefined,
         max_concurrent_tasks: 6,
-        draft_id: draft.id,
+        action_card_id: card.id,
       };
       const created = await api.createAgent(payload);
       qc.setQueryData<Agent[]>(workspaceKeys.agents(wsId), (current = []) => [...current, created]);
       qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
-      toast.success(t(($) => $.windy.created_toast, { name: draft.name }));
-      onCreated(created.display_name || draft.name);
+      toast.success(t(($) => $.windy.created_toast, { name: cardName }));
+      onCreated(created.display_name || cardName);
       onClose();
     } catch (err) {
       showErrorToast(err instanceof Error ? err.message : "Failed to create agent");
     } finally {
       setCreating(false);
     }
+  };
+
+  const handleCancel = async () => {
+    if (creating) return;
+    try {
+      // Best-effort dismiss so the card leaves prepared state; ignore failures.
+      await api.dismissAgentActionCard(card.id);
+    } catch {
+      // non-fatal — user still closes the dialog
+    }
+    onClose();
   };
 
   return (
@@ -280,7 +273,7 @@ function InlineCreateAgentDialog({
               <p className="mb-1 text-xs font-medium text-muted-foreground">
                 {t(($) => $.windy.hiring_card_badge)}
               </p>
-              <DialogTitle className="break-words text-lg font-semibold tracking-tight sm:text-xl">{t(($) => $.windy.create_title, { name: draft.name })}</DialogTitle>
+              <DialogTitle className="break-words text-lg font-semibold tracking-tight sm:text-xl">{t(($) => $.windy.create_title, { name: cardName })}</DialogTitle>
               <DialogDescription className="mt-1.5 max-w-2xl text-sm leading-6 text-muted-foreground">
                 {t(($) => $.windy.create_description)}
               </DialogDescription>
@@ -296,20 +289,13 @@ function InlineCreateAgentDialog({
                 size={64}
               />
               <div className="min-w-0 flex-1">
-                <p className="break-words text-sm font-semibold">{draft.description || draft.name}</p>
+                <p className="break-words text-sm font-semibold">{cardDescription || cardName}</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">{t(($) => $.windy.generated_hint)}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {draftAvatarUrl
-                    ? t(($) => $.windy.avatar_from_draft_hint)
-                    : t(($) => $.windy.avatar_random_hint)}
+                  {t(($) => $.windy.avatar_random_hint)}
                 </p>
               </div>
             </div>
-            {draft.instructions && (
-              <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-md border bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                {draft.instructions}
-              </p>
-            )}
           </div>
 
           {!hasUsableRuntime && !runtimesLoading ? (
@@ -359,7 +345,7 @@ function InlineCreateAgentDialog({
           )}
         </div>
         <DialogFooter className="mx-0 mb-0 shrink-0 border-t bg-muted/25 px-4 py-3 sm:px-6 sm:py-4">
-          <Button type="button" variant="outline" onClick={onClose} disabled={creating} className="w-full sm:w-auto">
+          <Button type="button" variant="outline" onClick={handleCancel} disabled={creating} className="w-full sm:w-auto">
             {t(($) => $.windy.cancel)}
           </Button>
           <Button

@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 
 import { screen } from "@testing-library/react";
+import { cloneElement, isValidElement } from "react";
+import {
+  SidebarMenuAction,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+} from "@multica/ui/components/ui/sidebar";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithI18n } from "../test/i18n";
@@ -38,12 +45,12 @@ vi.mock("@multica/ui/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   PopoverTrigger: ({
     children,
+    render,
     ...rest
-  }: { children: React.ReactNode } & Record<string, unknown>) => (
-    <button type="button" {...rest}>
-      {children}
-    </button>
-  ),
+  }: { children: React.ReactNode; render?: React.ReactElement } & Record<string, unknown>) =>
+    isValidElement(render)
+      ? cloneElement(render, rest, children)
+      : <button type="button" {...rest}>{children}</button>,
   PopoverContent: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="runtime-attention-content">{children}</div>
   ),
@@ -86,18 +93,32 @@ describe("RuntimeAttentionAlert", () => {
     expect(content.querySelector("button")).toBeNull();
   });
 
-  it("suppresses the sidebar row's own navigation when the icon itself is clicked (the row this renders inside is one big link)", async () => {
+  it("keeps the warning action outside the sidebar row link for mouse and keyboard activation", async () => {
     mockCount.current = 1;
     const outerClick = vi.fn((e: React.MouseEvent) => e.preventDefault());
-    // Reproduce the real nesting: SidebarMenuButton's `render={<AppLink/>}`
-    // makes the whole row an <a>, and this component renders inside it.
-    renderWithI18n(
-      <a href="/acme/computers" onClick={outerClick}>
-        <RuntimeAttentionAlert wsId="ws-1" />
-      </a>,
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { container } = renderWithI18n(
+      <div>
+        <SidebarProvider>
+          <SidebarMenuItem>
+            <SidebarMenuButton render={<a href="/acme/computers" onClick={outerClick} />}>
+              Computers
+            </SidebarMenuButton>
+            <RuntimeAttentionAlert
+              wsId="ws-1"
+              trigger={<SidebarMenuAction />}
+            />
+          </SidebarMenuItem>
+        </SidebarProvider>
+      </div>,
     );
+    expect(container.querySelector("a a, a button")).toBeNull();
+
     const trigger = screen.getByRole("button", { name: /1 machine needs an update/i });
     await userEvent.click(trigger);
+    await userEvent.keyboard("{Enter}");
     expect(outerClick).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 });

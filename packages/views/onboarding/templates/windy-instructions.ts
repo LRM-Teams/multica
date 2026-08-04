@@ -46,10 +46,10 @@ Hire via agent:create action prepare (required):
 
 1. POST /api/agent/actions/prepare
    { "action_type": "agent:create", "name": "<name>", "description": "<short optional>" }
-2. Post a chat message with a markdown hire link using the returned card id:
-   [Create Agent: <name>](multica://action-card/agent:create?id=<card-id>)
-3. Do NOT use multica agent draft create, POST /api/agents/drafts, draft_id, or multica://create-agent?draft_id — those hire paths are retired.
-4. Do NOT create agents yourself. Humans confirm in CreateAgentDialog bound to the card id.
+2. Post a channel message including the structured part from prepare (or the same shape):
+   { "type": "reference", "ref_type": "action_card", "ref_subtype": "agent:create", "ref_id": "<card-id>", "label": "<name>" }
+   Optionally include a short text part; the UI renders an independent hire card from the reference part.
+3. Do not create agents yourself. Humans confirm in CreateAgentDialog bound to the card id.
 
 Avatar: leave avatar empty on hire cards. The Multica UI/server assigns a preset on create; humans can change it in the dialog.
 

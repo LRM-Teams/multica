@@ -39,27 +39,25 @@ import { AvatarPicker, type AvatarPickerSelection } from "../agents/components/a
 import { buildRuntimeMachines } from "../runtimes/components/runtime-machines";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
-import { parseAgentCreateActionURL } from "./windy-create-agent-link-utils";
 
 /**
- * Chat-bubble hire Action Card for agent:create (Frank/Parker B: independent card).
- * Link shape: multica://action-card/agent:create?id=<card-id>
- * Loads card on mount via GET; renders name + description + Create / Dismiss.
- * Create opens CreateAgentDialog; submit POSTs action_card_id (server marks done).
- * No draft_id / multica://create-agent?draft_id bridge.
+ * Structured hire Action Card for agent:create (Frank/Parker contract A).
+ * Trigger: message.parts `reference` with ref_type=action_card, ref_subtype=agent:create.
+ * Loads card via GET /api/agents/action-cards/{id}; Create → Dialog + action_card_id.
+ * No multica:// markdown deep-link protocol.
  */
-export function WindyCreateAgentLink({
-  href,
-  children,
+export function AgentCreateActionCard({
+  cardId,
+  label,
   className,
 }: {
-  href: string;
-  children: React.ReactNode;
+  cardId: string;
+  /** Optional first-paint title from part.label before GET resolves. */
+  label?: string | null;
   className?: string;
 }) {
   const { t } = useT("agents");
-  const parsed = React.useMemo(() => parseAgentCreateActionURL(href), [href]);
-  const cardId = parsed?.cardId ?? "";
+  const id = cardId.trim();
 
   const {
     data: card,
@@ -68,9 +66,9 @@ export function WindyCreateAgentLink({
     error,
     refetch,
   } = useQuery({
-    queryKey: ["agent-action-card", cardId],
-    queryFn: () => api.getAgentActionCard(cardId),
-    enabled: !!cardId,
+    queryKey: ["agent-action-card", id],
+    queryFn: () => api.getAgentActionCard(id),
+    enabled: !!id,
     staleTime: 30_000,
   });
 
@@ -84,7 +82,7 @@ export function WindyCreateAgentLink({
   const status = localStatus ?? card?.status ?? "prepared";
   const cardName =
     card?.payload.name?.trim() ||
-    (typeof children === "string" ? children.replace(/^Create Agent:\s*/i, "").trim() : "") ||
+    label?.trim() ||
     "New Agent";
   const cardDescription = card?.payload.description?.trim() || "";
 
@@ -111,7 +109,7 @@ export function WindyCreateAgentLink({
     }
   };
 
-  if (!parsed) {
+  if (!id) {
     return null;
   }
 

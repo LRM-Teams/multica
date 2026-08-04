@@ -208,11 +208,19 @@ function renderReferenceToken({
     return <ChannelRefLink channelId={reference.ref_id} label={reference.label ?? text} />;
   }
 
+  // Block hire cards render in MessagePartsRenderer, not as inline tokens.
+  if (reference.ref_type === "action_card") {
+    return <span className="text-muted-foreground">{reference.label ?? text}</span>;
+  }
+
   // issue-ref (#469): raft-style lightweight inline link — uniform link color,
   // no inline status decoration; the status lives in the hover card.
   // Non-interactive surfaces (the excerpt) render the span substring as styled
   // text and must NOT resolve the issue — returning here keeps the live-issue
   // query out of those rows entirely.
+  if (reference.ref_type !== "issue-ref") {
+    return <span className="text-brand">{text}</span>;
+  }
   if (!interactive) {
     return <span className="text-brand">{text}</span>;
   }

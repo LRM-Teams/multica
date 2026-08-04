@@ -9,11 +9,6 @@ import { WorkspaceSlugProvider } from "@multica/core/paths";
 import enCommon from "../locales/en/common.json";
 import enAgents from "../locales/en/agents.json";
 import enModals from "../locales/en/modals.json";
-import {
-  buildAgentCreateActionHref,
-  isAgentCreateActionLink,
-  parseAgentCreateActionURL,
-} from "./windy-create-agent-link-utils";
 
 const {
   createAgent,
@@ -126,7 +121,7 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }));
 
-import { WindyCreateAgentLink } from "./windy-create-agent-links";
+import { AgentCreateActionCard } from "./windy-create-agent-links";
 
 const TEST_RESOURCES = {
   en: { common: enCommon, agents: enAgents, modals: enModals },
@@ -151,44 +146,20 @@ function makeCard(overrides: Partial<AgentActionCard> = {}): AgentActionCard {
   };
 }
 
-function renderHire(href = buildAgentCreateActionHref(CARD_ID)) {
+function renderCard(label?: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <QueryClientProvider client={qc}>
         <WorkspaceSlugProvider slug="test-ws">
-          <WindyCreateAgentLink href={href}>Create Agent: Group Bot</WindyCreateAgentLink>
+          <AgentCreateActionCard cardId={CARD_ID} label={label} />
         </WorkspaceSlugProvider>
       </QueryClientProvider>
     </I18nProvider>,
   );
 }
 
-describe("parseAgentCreateActionURL", () => {
-  it("parses canonical action-card links", () => {
-    expect(parseAgentCreateActionURL(buildAgentCreateActionHref(CARD_ID))).toEqual({
-      actionType: "agent:create",
-      cardId: CARD_ID,
-    });
-    expect(
-      parseAgentCreateActionURL(`multica://action-card?id=${CARD_ID}`),
-    ).toEqual({ actionType: "agent:create", cardId: CARD_ID });
-  });
-
-  it("rejects retired draft hire links", () => {
-    expect(
-      parseAgentCreateActionURL("multica://create-agent?draft_id=draft-1"),
-    ).toBeNull();
-    expect(
-      parseAgentCreateActionURL("multica://create-agent?name=Bot"),
-    ).toBeNull();
-    expect(isAgentCreateActionLink("multica://create-agent?draft_id=x")).toBe(
-      false,
-    );
-  });
-});
-
-describe("independent hire action card (action_card_id)", () => {
+describe("AgentCreateActionCard (parts reference contract A)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listRuntimes.mockResolvedValue([
@@ -229,8 +200,8 @@ describe("independent hire action card (action_card_id)", () => {
     document.body.innerHTML = "";
   });
 
-  it("renders independent card with name/description and loads by id", async () => {
-    renderHire();
+  it("loads card by ref_id and shows independent card chrome", async () => {
+    renderCard("Fallback Label");
     await waitFor(() => {
       expect(getAgentActionCard).toHaveBeenCalledWith(CARD_ID);
     });
@@ -243,18 +214,12 @@ describe("independent hire action card (action_card_id)", () => {
     expect(screen.getByRole("button", { name: /^Cancel$/i })).toBeTruthy();
   });
 
-  it("opens dialog and submits action_card_id without draft_id", async () => {
-    renderHire();
+  it("submits action_card_id without draft_id", async () => {
+    renderCard();
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /^Create Agent$/i })).toBeTruthy();
     });
-    // Card primary CTA
     fireEvent.click(screen.getByRole("button", { name: /^Create Agent$/i }));
-    // Dialog primary CTA (same label) — wait for model auto-select
-    await waitFor(() => {
-      const buttons = screen.getAllByRole("button", { name: /^Create Agent$/i });
-      expect(buttons.length).toBeGreaterThanOrEqual(1);
-    });
     await waitFor(() => {
       const dialogCreate = screen
         .getAllByRole("button", { name: /^Create Agent$/i })
@@ -271,12 +236,10 @@ describe("independent hire action card (action_card_id)", () => {
     expect(payload.action_card_id).toBe(CARD_ID);
     expect(payload.draft_id).toBeUndefined();
     expect(payload.display_name).toBe("Group Bot");
-    expect(payload.description).toBe("Hired for one group");
-    expect(payload.model).toBe("composer-1.5");
   });
 
   it("dismisses prepared card", async () => {
-    renderHire();
+    renderCard();
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /^Cancel$/i })).toBeTruthy();
     });

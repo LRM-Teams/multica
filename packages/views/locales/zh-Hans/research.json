@@ -358,6 +358,27 @@
       "unknown": "未知"
     }
   },
+  "trajectory": {
+    "status": {
+      "running": "进行中",
+      "success": "已得出结论",
+      "detour": "弯路",
+      "failed": "失败",
+      "merged": "已合并"
+    },
+    "by_agent": "由 {{agent}} 执行",
+    "evidence_count": "{{count}} 条证据",
+    "aggregate_count": "{{count}} 个提交",
+    "details": "提交详情",
+    "branch": "分支 {{branch}}",
+    "parents": "{{count}} 个父提交",
+    "view_node": "查看关联调研节点",
+    "view_evidence": "查看来源与证据",
+    "filter_branch": "仅看该分支",
+    "copy_link": "复制链接",
+    "no_node_ref": "没有关联的调研节点",
+    "no_evidence_ref": "没有关联的来源或证据"
+  },
   "logic": {
     "label": "调研逻辑",
     "lr_hint": "左→右 · 非 Git",

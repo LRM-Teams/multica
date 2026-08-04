@@ -358,6 +358,27 @@
       "unknown": "Unknown"
     }
   },
+  "trajectory": {
+    "status": {
+      "running": "Active",
+      "success": "Concluded",
+      "detour": "Detour",
+      "failed": "Failed",
+      "merged": "Merged"
+    },
+    "by_agent": "By {{agent}}",
+    "evidence_count": "{{count}} evidence",
+    "aggregate_count": "{{count}} commits",
+    "details": "Commit details",
+    "branch": "Branch {{branch}}",
+    "parents": "{{count}} parents",
+    "view_node": "View research node",
+    "view_evidence": "View sources and evidence",
+    "filter_branch": "Only this branch",
+    "copy_link": "Copy link",
+    "no_node_ref": "No linked research node",
+    "no_evidence_ref": "No linked source or evidence"
+  },
   "logic": {
     "label": "Research logic",
     "lr_hint": "Left → right · not Git",

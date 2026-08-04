@@ -358,6 +358,27 @@
       "unknown": "不明"
     }
   },
+  "trajectory": {
+    "status": {
+      "running": "進行中",
+      "success": "結論済み",
+      "detour": "迂回",
+      "failed": "失敗",
+      "merged": "マージ済み"
+    },
+    "by_agent": "{{agent}} が実行",
+    "evidence_count": "証拠 {{count}} 件",
+    "aggregate_count": "コミット {{count}} 件",
+    "details": "コミットの詳細",
+    "branch": "ブランチ {{branch}}",
+    "parents": "親 {{count}} 件",
+    "view_node": "関連する調査ノードを表示",
+    "view_evidence": "出典と証拠を表示",
+    "filter_branch": "このブランチのみ",
+    "copy_link": "リンクをコピー",
+    "no_node_ref": "関連する調査ノードがありません",
+    "no_evidence_ref": "関連する出典または証拠がありません"
+  },
   "logic": {
     "label": "調査ロジック",
     "lr_hint": "左→右 · not Git",

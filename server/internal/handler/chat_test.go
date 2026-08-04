@@ -765,7 +765,7 @@ func TestCancelChatAgentInboxEventCancelsPendingChatTask(t *testing.T) {
 	}
 }
 
-func TestListChatAgentInboxEventTimeline_HidesRawThinkingAndProjectsActivityMessages(t *testing.T) {
+func TestListChatAgentInboxEventTimeline_ProjectsThinkingAndActivityMessages(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -829,17 +829,20 @@ func TestListChatAgentInboxEventTimeline_HidesRawThinkingAndProjectsActivityMess
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(resp) != 2 {
-		t.Fatalf("expected 2 projected messages without raw thinking, got %d: %+v", len(resp), resp)
+	if len(resp) != 3 {
+		t.Fatalf("expected 3 projected messages including thinking content, got %d: %+v", len(resp), resp)
 	}
-	if resp[0].TaskID != eventID || resp[0].Seq != 2 || resp[0].Type != "tool_use" || resp[0].Tool != "bash" {
-		t.Fatalf("unexpected tool projection: %+v", resp[0])
+	if resp[0].TaskID != eventID || resp[0].Seq != 1 || resp[0].Type != "thinking" || resp[0].Content != "Planning" {
+		t.Fatalf("unexpected thinking projection: %+v", resp[0])
 	}
-	if got := resp[0].Input["cmd"]; got != "raft message send --send-draft" {
+	if resp[1].TaskID != eventID || resp[1].Seq != 2 || resp[1].Type != "tool_use" || resp[1].Tool != "bash" {
+		t.Fatalf("unexpected tool projection: %+v", resp[1])
+	}
+	if got := resp[1].Input["cmd"]; got != "raft message send --send-draft" {
 		t.Fatalf("projected tool input cmd = %q", got)
 	}
-	if resp[1].Seq != 3 || resp[1].Type != "text" || resp[1].Content != "Done" {
-		t.Fatalf("unexpected text projection: %+v", resp[1])
+	if resp[2].Seq != 3 || resp[2].Type != "text" || resp[2].Content != "Done" {
+		t.Fatalf("unexpected text projection: %+v", resp[2])
 	}
 
 	req = newRequest(http.MethodGet, "/api/chat/sessions/"+sessionID+"/agent-inbox-events/"+eventID+"/timeline?since=1", nil)

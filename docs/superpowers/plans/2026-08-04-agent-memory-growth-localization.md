@@ -23,3 +23,8 @@
 - `Next · Gold` → `下一阶段 · 黄金`
 - `5 / 6 writes` → `5 / 6 次记忆更新`
 - `Bronze / Silver / Gold / Platinum` → `青铜 / 白银 / 黄金 / 铂金`
+
+## 提交
+
+- [x] 非草稿 PR：[#2150](https://github.com/LRM-Teams/multica/pull/2150)，目标分支 `dev`。
+- [x] PR 提交后不代替用户合并，继续处理下一项问题。

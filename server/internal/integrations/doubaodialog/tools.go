@@ -9,6 +9,7 @@ import (
 // MulticaDelegateToolName matches the existing RTC VoiceChat tool so product
 // copy and agent prompts stay aligned across transports.
 const MulticaDelegateToolName = "delegate_work_to_multica_agent"
+const MulticaChannelContextToolName = "multica_channel_context"
 
 const (
 	multicaDelegateToolDescription = "" +
@@ -85,7 +86,16 @@ func WebFetchTool() Tool {
 
 // DefaultDialogTools is the production Duplex tool set: Multica delegate + web lookup.
 func DefaultDialogTools() []Tool {
-	return []Tool{MulticaDelegateTool(), WebSearchTool(), WebFetchTool()}
+	return []Tool{MulticaDelegateTool(), MulticaChannelContextTool(), WebSearchTool(), WebFetchTool()}
+}
+
+func MulticaChannelContextTool() Tool {
+	return Tool{
+		Type:        "function",
+		Name:        MulticaChannelContextToolName,
+		Description: "查询当前被叫 Agent 有权访问的群聊。用户询问相关群、群内讨论或历史消息时调用；服务端会重新校验成员权限。",
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","read","search"]},"channel_id":{"type":"string"},"query":{"type":"string"}},"required":["action"],"additionalProperties":false}`),
+	}
 }
 
 func jsonString(value string) string {
@@ -108,6 +118,8 @@ func DefaultDialogInstructions() string {
 		"只有用户明确要求创建 issue、开发任务、派活或需要真实 Multica 工具时，才调用 " +
 		MulticaDelegateToolName +
 		"。派活后立刻告诉用户已安排后台执行、可以继续聊天，不要假装卡住等待。" +
+		"当用户询问 Agent 参加的群聊、群内讨论或历史消息时，调用 " + MulticaChannelContextToolName +
+		"；不能仅凭启动上下文中的群名猜测群消息内容。" +
 		"不要使用 Markdown。工具结果返回后，用一两句口语向用户播报。"
 }
 

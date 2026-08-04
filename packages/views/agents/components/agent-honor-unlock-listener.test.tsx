@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, render } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import zhAgents from "../../locales/zh-Hans/agents.json";
 import { AgentHonorUnlockListener } from "./agent-honor-unlock-listener";
@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   eventHandlers: new Map<string, (payload: unknown) => void>(),
   invalidateQueries: vi.fn(),
   getQueryData: vi.fn(),
+  ensureQueryData: vi.fn(),
   toastSuccess: vi.fn(),
 }));
 
@@ -16,10 +17,15 @@ vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({
     invalidateQueries: mocks.invalidateQueries,
     getQueryData: mocks.getQueryData,
+    ensureQueryData: mocks.ensureQueryData,
   }),
 }));
 
 vi.mock("@multica/core/agents", () => ({
+  agentDetailOptions: (workspaceId: string, agentId: string) => ({
+    queryKey: ["agents", workspaceId, "detail", agentId],
+    queryFn: vi.fn(),
+  }),
   agentHonorKeys: {
     dashboard: (workspaceId: string, agentId: string) => [
       "agents",
@@ -74,6 +80,7 @@ describe("AgentHonorUnlockListener", () => {
     mocks.eventHandlers.clear();
     mocks.invalidateQueries.mockReset();
     mocks.getQueryData.mockReset();
+    mocks.ensureQueryData.mockReset();
     mocks.toastSuccess.mockReset();
   });
 
@@ -113,5 +120,49 @@ describe("AgentHonorUnlockListener", () => {
     });
 
     expect(mocks.toastSuccess).toHaveBeenCalledWith("前端工程师晋升至护卫舰");
+  });
+
+  it("loads the authoritative agent name when an older event arrives before the list cache", async () => {
+    mocks.getQueryData.mockReturnValue(undefined);
+    mocks.ensureQueryData.mockResolvedValue({
+      id: "agent-1",
+      name: "frontend-engineer",
+      display_name: "前端工程师",
+    });
+    render(<AgentHonorUnlockListener />);
+
+    act(() => {
+      mocks.eventHandlers.get("agent_honor:fleet_class_changed")?.({
+        agent_id: "agent-1",
+        previous_class_id: "corvette",
+        class_id: "frigate",
+        fleet_score: 42,
+      });
+    });
+
+    await waitFor(() => {
+      expect(mocks.toastSuccess).toHaveBeenCalledWith("前端工程师晋升至护卫舰");
+    });
+    expect(mocks.toastSuccess).not.toHaveBeenCalledWith("智能体晋升至护卫舰");
+  });
+
+  it("does not emit an anonymous promotion when the agent cannot be resolved", async () => {
+    mocks.getQueryData.mockReturnValue(undefined);
+    mocks.ensureQueryData.mockRejectedValue(new Error("agent unavailable"));
+    render(<AgentHonorUnlockListener />);
+
+    act(() => {
+      mocks.eventHandlers.get("agent_honor:fleet_class_changed")?.({
+        agent_id: "agent-1",
+        previous_class_id: "corvette",
+        class_id: "frigate",
+        fleet_score: 42,
+      });
+    });
+
+    await waitFor(() => {
+      expect(mocks.ensureQueryData).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 });

@@ -754,8 +754,12 @@
     "no_equipped": "장착한 업적 없음",
     "dismiss_unlock": "업적 알림 닫기",
     "unlock_toast_title": "에이전트 업적 해제",
+    "secret_achievement": "비밀 업적",
+    "secret_achievement_description": "기여를 계속하면 잠금 해제 후 내용이 공개됩니다.",
+    "secret_achievement_category": "미공개",
+    "accepted_delivery": "승인된 결과물",
+    "update_error": "에이전트 명예를 업데이트하지 못했습니다.",
     "fleet_upgraded": "{{agentName}}가 {{className}} 등급으로 승급했습니다",
-    "agent_fallback": "에이전트",
     "fleet_classes": {
       "reserve": "예비함",
       "corvette": "초계함",
@@ -771,6 +775,21 @@
       "evolution": "진화",
       "mastery": "숙련",
       "fleet": "함대"
+    },
+    "metric_names": {
+      "completed": "완료한 작업",
+      "success_streak": "연속 성공",
+      "memory_writes": "유효한 메모리 업데이트",
+      "evolution_promotions": "진화 유닛 승급",
+      "distinct_projects": "결과물을 전달한 프로젝트",
+      "recoveries": "실패 후 복구",
+      "fleet_class": "함대 등급"
+    },
+    "audit_actions": {
+      "rules_update": "명예 규칙 업데이트",
+      "xp_grant": "XP 부여",
+      "achievement_grant": "업적 부여",
+      "achievement_revoke": "업적 취소"
     },
     "achievements": {
       "first_launch": {

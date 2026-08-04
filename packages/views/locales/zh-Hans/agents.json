@@ -742,8 +742,12 @@
     "no_equipped": "尚未佩戴成就",
     "dismiss_unlock": "关闭成就通知",
     "unlock_toast_title": "智能体解锁新成就",
+    "secret_achievement": "秘密成就",
+    "secret_achievement_description": "继续积累贡献，解锁后即可揭晓。",
+    "secret_achievement_category": "尚未揭晓",
+    "accepted_delivery": "交付通过验收",
+    "update_error": "无法更新智能体荣誉。",
     "fleet_upgraded": "{{agentName}}晋升至{{className}}",
-    "agent_fallback": "智能体",
     "fleet_classes": {
       "reserve": "预备舰",
       "corvette": "轻型护卫舰",
@@ -759,6 +763,21 @@
       "evolution": "演化",
       "mastery": "精通",
       "fleet": "舰队"
+    },
+    "metric_names": {
+      "completed": "已完成任务",
+      "success_streak": "连续成功",
+      "memory_writes": "有效记忆更新",
+      "evolution_promotions": "演化单元晋升",
+      "distinct_projects": "已交付项目",
+      "recoveries": "失败后挽回",
+      "fleet_class": "舰队等级"
+    },
+    "audit_actions": {
+      "rules_update": "更新荣誉规则",
+      "xp_grant": "授予经验",
+      "achievement_grant": "授予成就",
+      "achievement_revoke": "撤销成就"
     },
     "achievements": {
       "first_launch": {

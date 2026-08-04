@@ -22,6 +22,7 @@ import { useT } from "../../i18n";
 import { ActorStyledName } from "../../common/actor-styled-name";
 import { UserHonorLevelIcon } from "../../honor/user-honor-level-icon";
 import { honorLevelProgress } from "../../honor/honor-progress";
+import { useHonorBadgeCopy } from "../../honor/use-honor-badge-copy";
 
 // Mirror server/internal/handler/auth.go:MaxProfileDescriptionLen. Counted in
 // JS String.length (UTF-16 code units) here while the server counts runes,
@@ -31,6 +32,7 @@ const MAX_PROFILE_DESCRIPTION_LEN = 2000;
 
 export function AccountTab() {
   const { t, i18n } = useT("settings");
+  const honorBadgeCopy = useHonorBadgeCopy();
   const navigation = useNavigation();
   const user = useAuthStore((s) => s.user);
   const { data: honor } = useQuery({
@@ -76,6 +78,7 @@ export function AccountTab() {
   const equippedBadge =
     honor?.badge_catalog?.find((badge) => badge.id === honor.equipped_badge_id) ??
     null;
+  const equippedBadgeCopy = equippedBadge ? honorBadgeCopy(equippedBadge) : null;
   const levelProgress = honor
     ? honorLevelProgress(
         honor.total_xp,
@@ -163,8 +166,9 @@ export function AccountTab() {
                     equipped_badge: equippedBadge
                       ? {
                           id: equippedBadge.id,
-                          title: equippedBadge.title,
-                          description: equippedBadge.description,
+                          title: equippedBadgeCopy?.title ?? equippedBadge.title,
+                          description:
+                            equippedBadgeCopy?.description ?? equippedBadge.description,
                           svg_key: equippedBadge.svg_key,
                         }
                       : undefined,

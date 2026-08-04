@@ -142,8 +142,9 @@ func (e auditHTTPStatusError) AuditHTTPStatus() int { return int(e) }
 
 // T011 must keep audit opt-in: audited requests preserve their correlation
 // request, while every audited result (including a partial failure) carries a
-// report locator. The assertions use JSON rather than future T011 types so
-// this contract compiles before those types exist.
+// report locator. envDispatchAuditResponseFromReport is deliberately a future
+// pure handler mapper: it must derive the public locator from the
+// server-generated record, not client input or a test-built JSON map.
 func TestEnvDispatchAudit_CreateWireContract(t *testing.T) {
 	t.Run("request preserves opt-in audit configuration", func(t *testing.T) {
 		contract := newAuditedCreateContract(t, false)
@@ -174,7 +175,9 @@ func TestEnvDispatchAudit_CreateWireContract(t *testing.T) {
 	t.Run("success and partial failure project audit report locator", func(t *testing.T) {
 		for _, partialFailure := range []bool{false, true} {
 			contract := newAuditedCreateContract(t, partialFailure)
-			body, err := json.Marshal(contract.createResponse)
+			response := contract.createResponse
+			response.Audit = envDispatchAuditResponseFromReport(contract.auditRecord)
+			body, err := json.Marshal(response)
 			if err != nil {
 				t.Fatalf("encode audited response: %v", err)
 			}

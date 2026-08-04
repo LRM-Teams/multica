@@ -23,11 +23,6 @@ var agentCmd = &cobra.Command{
 	Short: "Work with agents",
 }
 
-var agentListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List agents in the workspace",
-	RunE:  runAgentList,
-}
 
 var agentGetCmd = &cobra.Command{
 	Use:   "get <id>",
@@ -97,7 +92,7 @@ var agentSkillsCmd = &cobra.Command{
 
 // Agent env subcommands. Live behind a dedicated `agent env` group because
 // they're the ONLY post-creation path for reading or writing
-// custom_env values — `multica agent list / get / update` no longer
+// custom_env values — `multica agent get / update` no longer
 // expose env on the wire. Each call hits the audited
 // `/api/agents/{id}/env` endpoint. See MUL-2600.
 
@@ -142,7 +137,6 @@ var agentSkillsAddCmd = &cobra.Command{
 }
 
 func init() {
-	agentCmd.AddCommand(agentListCmd)
 	agentCmd.AddCommand(agentGetCmd)
 	agentCmd.AddCommand(agentCreateCmd)
 	agentCmd.AddCommand(agentDraftCmd)
@@ -161,10 +155,6 @@ func init() {
 	agentEnvCmd.AddCommand(agentEnvGetCmd)
 	agentEnvCmd.AddCommand(agentEnvSetCmd)
 	agentDraftCmd.AddCommand(agentDraftCreateCmd)
-
-	// agent list
-	agentListCmd.Flags().String("output", "table", "Output format: table or json")
-	agentListCmd.Flags().Bool("include-archived", false, "Include archived agents")
 
 	// agent get
 	agentGetCmd.Flags().String("output", "json", "Output format: table or json")
@@ -357,58 +347,6 @@ func requireWorkspaceID(cmd *cobra.Command) (string, error) {
 // ---------------------------------------------------------------------------
 // Agent commands
 // ---------------------------------------------------------------------------
-
-func runAgentList(cmd *cobra.Command, _ []string) error {
-	client, err := newAPIClient(cmd)
-	if err != nil {
-		return err
-	}
-	if client.WorkspaceID == "" {
-		if _, err := requireWorkspaceID(cmd); err != nil {
-			return err
-		}
-	}
-
-	ctx, cancel := cli.APIContext(context.Background())
-	defer cancel()
-
-	var agents []map[string]any
-	params := url.Values{}
-	params.Set("workspace_id", client.WorkspaceID)
-	if v, _ := cmd.Flags().GetBool("include-archived"); v {
-		params.Set("include_archived", "true")
-	}
-	path := "/api/agents"
-	if len(params) > 0 {
-		path += "?" + params.Encode()
-	}
-	if err := client.GetJSON(ctx, path, &agents); err != nil {
-		return fmt.Errorf("list agents: %w", err)
-	}
-
-	output, _ := cmd.Flags().GetString("output")
-	if output == "json" {
-		return cli.PrintJSON(os.Stdout, agents)
-	}
-
-	headers := []string{"ID", "NAME", "STATUS", "RUNTIME", "ARCHIVED"}
-	rows := make([][]string, 0, len(agents))
-	for _, a := range agents {
-		archived := ""
-		if v := strVal(a, "archived_at"); v != "" {
-			archived = "yes"
-		}
-		rows = append(rows, []string{
-			strVal(a, "id"),
-			strVal(a, "name"),
-			strVal(a, "status"),
-			strVal(a, "runtime_mode"),
-			archived,
-		})
-	}
-	cli.PrintTable(os.Stdout, headers, rows)
-	return nil
-}
 
 func runAgentGet(cmd *cobra.Command, args []string) error {
 	client, err := newAPIClient(cmd)

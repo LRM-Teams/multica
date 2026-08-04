@@ -40,6 +40,7 @@ import {
   honorLevelProgress,
   isRareHonorBadge,
 } from "../../honor/honor-progress";
+import { useHonorBadgeCopy } from "../../honor/use-honor-badge-copy";
 import { useT } from "../../i18n";
 import honorHeroImage from "./assets/honor-center-orbit.webp";
 
@@ -74,6 +75,7 @@ const honorHeroImageSrc =
 
 export function HonorTab() {
   const { t, i18n } = useT("settings");
+  const honorBadgeCopy = useHonorBadgeCopy();
   const qc = useQueryClient();
   const user = useAuthStore((state) => state.user);
   const {
@@ -89,6 +91,39 @@ export function HonorTab() {
     queryKey: honorKeys.rules,
     queryFn: () => api.getHonorRules(),
   });
+
+  const catalog = useMemo(
+    () =>
+      (dashboard?.badge_catalog ?? []).map((badge) => {
+        const copy = honorBadgeCopy(badge);
+        return {
+          ...badge,
+          title: copy.title,
+          description: copy.description,
+          unlock_rule: copy.unlockRule,
+          progress: badge.progress
+            ? { ...badge.progress, label: copy.progressLabel }
+            : undefined,
+        };
+      }),
+    [dashboard?.badge_catalog, honorBadgeCopy],
+  );
+  const unlockedBadges = useMemo(
+    () =>
+      (dashboard?.unlocked_badges ?? []).map((badge) => {
+        const copy = honorBadgeCopy(badge);
+        return { ...badge, title: copy.title, description: copy.description };
+      }),
+    [dashboard?.unlocked_badges, honorBadgeCopy],
+  );
+  const recentUnlocks = useMemo(
+    () =>
+      (dashboard?.recent_unlocks ?? []).map((badge) => {
+        const copy = honorBadgeCopy({ ...badge, unlocked: true });
+        return { ...badge, title: copy.title, description: copy.description };
+      }),
+    [dashboard?.recent_unlocks, honorBadgeCopy],
+  );
 
   const locale = i18n.resolvedLanguage || i18n.language;
   const numberFormatter = useMemo(
@@ -192,7 +227,6 @@ export function HonorTab() {
     );
   }
 
-  const catalog = dashboard.badge_catalog ?? [];
   const showcaseIds = dashboard.showcase_badge_ids ?? [];
   const showcasedBadges = getHonorShowcaseBadges(
     catalog,
@@ -202,7 +236,7 @@ export function HonorTab() {
   const visibleShowcaseIds = showcasedBadges.map((badge) => badge.id);
   const equippedBadge =
     catalog.find((item) => item.id === dashboard.equipped_badge_id) ??
-    dashboard.unlocked_badges.find(
+    unlockedBadges.find(
       (item) => item.id === dashboard.equipped_badge_id,
     );
   const nameStyleRules = [...(rules?.name_style_unlocks ?? [])]
@@ -220,7 +254,7 @@ export function HonorTab() {
   );
   const displayName = resolveActorDisplayName(user, user?.name || "Builder");
   const activity = [
-    ...(dashboard.recent_unlocks ?? []).map((item) => ({
+    ...recentUnlocks.map((item) => ({
       kind: "unlock" as const,
       id: `${item.id}-${item.unlocked_at}`,
       title: item.title,

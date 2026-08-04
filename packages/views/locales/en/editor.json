@@ -83,6 +83,8 @@
     "group_issues": "Issues",
     "group_channels": "Channels",
     "group_members": "Members",
+    "group_in_channel": "In this channel",
+    "group_not_in_channel": "Not in this channel",
     "all_members": "All members",
     "all_members_hint": "Notify everyone in this conversation",
     "searching": "Searching...",

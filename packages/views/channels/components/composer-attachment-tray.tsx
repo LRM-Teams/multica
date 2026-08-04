@@ -129,7 +129,7 @@ export function ComposerAttachmentTray({
           // box) and hand the reserved top space back with a negative margin.
           "-mt-2 pr-2 pt-2",
           // Touch: allow horizontal pan without fighting vertical page scroll.
-          "touch-pan-x [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]",
+          "touch-pan-x momentum-scroll [scrollbar-width:thin]",
           className,
         )}
         data-slot="composer-attachment-tray"

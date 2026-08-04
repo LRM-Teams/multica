@@ -722,4 +722,44 @@ describe("createMentionSuggestion", () => {
     }) as MentionItem[];
     expect(byHandle.some((i) => i.type === "agent" && i.id === "a1")).toBe(true);
   });
+
+  it("#35: tags actors in_channel vs not_in_channel when membership set is provided", () => {
+    const qc = fakeQc({
+      members: [
+        { user_id: "u-in", name: "in-channel", role: "member" },
+        { user_id: "u-out", name: "not-in-channel", role: "member" },
+      ],
+      agents: [
+        {
+          id: "a-in",
+          name: "agent-in",
+          display_name: "Agent In",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+        {
+          id: "a-out",
+          name: "agent-out",
+          display_name: "Agent Out",
+          archived_at: null,
+          visibility: "workspace",
+          owner_id: null,
+        },
+      ],
+    });
+    searchIssuesMock.mockReturnValue(new Promise(() => {}));
+
+    // Group channel: full workspace allowed + membership for sections.
+    const config = createMentionSuggestion(qc, {
+      getAllowedActorIds: () => new Set(["u-in", "u-out", "a-in", "a-out"]),
+      getChannelMemberIds: () => new Set(["u-in", "a-in"]),
+    });
+    const items = config.items!({ query: "", editor: {} as never }) as MentionItem[];
+
+    expect(items.find((i) => i.id === "u-in")?.group).toBe("in_channel");
+    expect(items.find((i) => i.id === "a-in")?.group).toBe("in_channel");
+    expect(items.find((i) => i.id === "u-out")?.group).toBe("not_in_channel");
+    expect(items.find((i) => i.id === "a-out")?.group).toBe("not_in_channel");
+  });
 });

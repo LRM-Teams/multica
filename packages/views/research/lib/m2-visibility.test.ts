@@ -78,46 +78,46 @@ describe("m2-visibility", () => {
     ).toBe("ready");
   });
 
-  it("resolves source strip empty vs loading vs ready (LRM-977)", () => {
+  it("resolves source strip five-state matrix (LRM-977 / LRM-1282)", () => {
     const empty = { chips: [], whyLine: "", empty: true };
+    const ready = {
+      empty: false,
+      whyLine: "why",
+      chips: [
+        {
+          id: "docs",
+          label: "docs",
+          layer: "general" as const,
+          samples: [],
+        },
+      ],
+    };
     expect(resolveSourceStrategyMode(empty, "drafting")).toBe("empty");
     expect(resolveSourceStrategyMode(empty, "running")).toBe("loading");
+    expect(resolveSourceStrategyMode(empty, "paused")).toBe("loading");
     expect(resolveSourceStrategyMode(empty, "running", "boom")).toBe("error");
-    expect(
-      resolveSourceStrategyMode(
-        {
-          empty: false,
-          whyLine: "why",
-          chips: [
-            {
-              id: "docs",
-              label: "docs",
-              layer: "general",
-              samples: [],
-            },
-          ],
-        },
-        "running",
-      ),
-    ).toBe("ready");
+    expect(resolveSourceStrategyMode(ready, "running")).toBe("partial");
+    expect(resolveSourceStrategyMode(ready, "paused")).toBe("partial");
+    expect(resolveSourceStrategyMode(ready, "done")).toBe("ready");
+    expect(resolveSourceStrategyMode(ready, "drafting")).toBe("ready");
   });
 
-  it("resolves boundary empty vs loading vs ready (LRM-978)", () => {
+  it("resolves boundary five-state matrix (LRM-978 / LRM-1282)", () => {
     const empty = { aiCeiling: "", mustHuman: "", matrix: [], empty: true };
+    const ready = {
+      empty: false,
+      aiCeiling: "no licensed advice",
+      mustHuman: "compliance review",
+      matrix: [] as { human: string; ai: string }[],
+    };
     expect(resolveHumanBoundaryMode(empty, "drafting")).toBe("empty");
     expect(resolveHumanBoundaryMode(empty, "running")).toBe("loading");
+    expect(resolveHumanBoundaryMode(empty, "paused")).toBe("loading");
     expect(resolveHumanBoundaryMode(empty, "running", "boom")).toBe("error");
-    expect(
-      resolveHumanBoundaryMode(
-        {
-          empty: false,
-          aiCeiling: "no licensed advice",
-          mustHuman: "compliance review",
-          matrix: [],
-        },
-        "running",
-      ),
-    ).toBe("ready");
+    expect(resolveHumanBoundaryMode(ready, "running")).toBe("partial");
+    expect(resolveHumanBoundaryMode(ready, "paused")).toBe("partial");
+    expect(resolveHumanBoundaryMode(ready, "done")).toBe("ready");
+    expect(resolveHumanBoundaryMode(ready, "drafting")).toBe("ready");
   });
 
   it("splits general vs domain source chips and keeps why", () => {

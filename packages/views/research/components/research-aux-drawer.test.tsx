@@ -16,7 +16,7 @@ vi.mock("../../i18n/use-t", () => ({
       const keys = {
         panel: {
           module_trajectory: "搜索轨迹",
-          module_sources: "信源策略",
+          module_sources: "调研依据与协作分工",
           module_detail: "节点详情",
           aux_close: "关闭面板",
         },
@@ -95,8 +95,8 @@ describe("ResearchAuxDrawer desktop a11y (LRM-1100)", () => {
     expect(labelId).toBeTruthy();
     const label = document.getElementById(labelId as string);
     expect(label).not.toBeNull();
-    expect(label).toHaveTextContent("信源策略");
-    expect(screen.getByRole("complementary", { name: "信源策略" })).toBe(panel);
+    expect(label).toHaveTextContent("调研依据与协作分工");
+    expect(screen.getByRole("complementary", { name: "调研依据与协作分工" })).toBe(panel);
   });
 
   it("moves focus into the panel on open and restores it on close", async () => {
@@ -163,6 +163,32 @@ describe("ResearchAuxDrawer desktop a11y (LRM-1100)", () => {
     const remounted = screen.getByTestId("research-module-trajectory");
     expect(remounted).not.toBe(opener);
     expect(document.activeElement).toBe(remounted);
+  });
+
+  it("keeps focusable controls inside the open desktop drawer (LRM-1290)", () => {
+    render(
+      <ResearchAuxDrawer panel="detail" onClose={() => {}}>
+        <button type="button">inside</button>
+      </ResearchAuxDrawer>,
+    );
+    const drawer = screen.getByTestId("research-aux-drawer");
+    expect(drawer.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
+    const focusables = drawer.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    expect(focusables.length).toBeGreaterThan(0);
+  });
+
+  it("marks the close lucide decorative under the labeled button (LRM-1290)", () => {
+    render(
+      <ResearchAuxDrawer panel="trajectory" onClose={() => {}}>
+        <span>body</span>
+      </ResearchAuxDrawer>,
+    );
+    const close = screen.getByRole("button", { name: "关闭面板" });
+    const icon = close.querySelector("svg");
+    expect(icon).toHaveAttribute("aria-hidden", "true");
   });
 
   it("keeps focus put when an unmounted aux trigger has no relocatable key (LRM-1177)", async () => {

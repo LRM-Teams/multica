@@ -1,0 +1,19 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "../../packages/ui/styles/tokens.css";
+@import "../../packages/ui/styles/base.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@source "../../packages/ui/**/*.{ts,tsx}";
+@source "../../packages/views/**/*.{ts,tsx}";
+/* The BEFORE arbitrary-property strings no longer exist in any component, so
+   Tailwind must scan this harness to still emit them for the comparison gate. */
+@source "./main.tsx";
+
+html,
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+}

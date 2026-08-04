@@ -117,6 +117,11 @@ interface ContentEditorProps {
    *  the member's personal agent list (e.g. a teammate's private Wendy). Only
    *  used when `mentionAllowedActorIds` is active (channel scope). */
   scopedMentionAgents?: readonly MentionAgentCandidate[] | null;
+  /**
+   * #35: membership ids for IN THIS CHANNEL / NOT IN THIS CHANNEL section
+   * headers. Does not filter the pool (that is `mentionAllowedActorIds`).
+   */
+  mentionChannelMemberIds?: ReadonlySet<string> | null;
   /** Enable the `/` command picker. Defaults false. */
   enableSlashCommands?: boolean;
   /**
@@ -204,6 +209,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       enableChannelReferences = false,
       mentionAllowedActorIds,
       scopedMentionAgents,
+      mentionChannelMemberIds,
       enableSlashCommands = false,
       slashCommandMode = "skill",
       attachments,
@@ -227,6 +233,9 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     const mentionContextItemsRef = useRef<MentionItem[]>(mentionContextItems ?? []);
     const mentionAllowedActorIdsRef = useRef<ReadonlySet<string> | null>(mentionAllowedActorIds ?? null);
     const scopedMentionAgentsRef = useRef<readonly MentionAgentCandidate[] | null>(scopedMentionAgents ?? null);
+    const mentionChannelMemberIdsRef = useRef<ReadonlySet<string> | null>(
+      mentionChannelMemberIds ?? null,
+    );
     const lastEmittedRef = useRef<string | null>(null);
 
     // In-session record of attachments freshly uploaded through this editor.
@@ -300,6 +309,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     mentionContextItemsRef.current = mentionContextItems ?? [];
     mentionAllowedActorIdsRef.current = mentionAllowedActorIds ?? null;
     scopedMentionAgentsRef.current = scopedMentionAgents ?? null;
+    mentionChannelMemberIdsRef.current = mentionChannelMemberIds ?? null;
 
     const queryClient = useQueryClient();
 
@@ -355,6 +365,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           getMentionContextItems: () => mentionContextItemsRef.current,
           getMentionAllowedActorIds: () => mentionAllowedActorIdsRef.current,
           getMentionScopedAgents: () => scopedMentionAgentsRef.current,
+          getMentionChannelMemberIds: () => mentionChannelMemberIdsRef.current,
           enableChannelReferences,
           enableSlashCommands,
         slashCommandMode,

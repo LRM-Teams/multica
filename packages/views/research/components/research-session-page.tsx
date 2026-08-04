@@ -664,10 +664,40 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 <SourceStrategyStrip
                   model={sourceStrategy}
                   sessionStatus={session.status}
+                  error={
+                    isError
+                      ? error instanceof Error && error.message
+                        ? error.message
+                        : t(($) => $.session_page.load_failed)
+                      : null
+                  }
+                  onRetry={
+                    isError
+                      ? () => {
+                          void refetch();
+                        }
+                      : undefined
+                  }
+                  retryPending={isError && isFetching}
                 />
                 <HumanBoundaryCard
                   model={humanBoundary}
                   sessionStatus={session.status}
+                  error={
+                    isError
+                      ? error instanceof Error && error.message
+                        ? error.message
+                        : t(($) => $.session_page.load_failed)
+                      : null
+                  }
+                  onRetry={
+                    isError
+                      ? () => {
+                          void refetch();
+                        }
+                      : undefined
+                  }
+                  retryPending={isError && isFetching}
                 />
               </div>
             ) : null}

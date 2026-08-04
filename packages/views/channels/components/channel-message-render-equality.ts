@@ -46,6 +46,7 @@ export type ChannelMessageBubbleMemoProps = {
   searchQuery?: string;
   collapseLongContent?: boolean;
   compact?: boolean;
+  groupEnd?: boolean;
   onOpenThread?: unknown;
   onScrollTo?: unknown;
   onReact?: unknown;
@@ -70,6 +71,9 @@ export function areChannelMessageBubblePropsEqual(
   if (prev.searchQuery !== next.searchQuery) return false;
   if (prev.collapseLongContent !== next.collapseLongContent) return false;
   if (prev.compact !== next.compact) return false;
+  // LRM-1227: the joined shell's bottom edge flips when a later message extends
+  // or ends the group, so this must invalidate the memo like `compact` does.
+  if (prev.groupEnd !== next.groupEnd) return false;
   if (prev.onOpenThread !== next.onOpenThread) return false;
   if (prev.onScrollTo !== next.onScrollTo) return false;
   if (prev.onReact !== next.onReact) return false;

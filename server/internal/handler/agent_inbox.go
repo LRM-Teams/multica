@@ -2139,8 +2139,11 @@ func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageReque
 		Visibility: "user_facing",
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	if taskMessageIsPhaseStatus(msg.Type, msg.Content) {
+	// Empty phase and thinking-with-content both stream as thinking task
+	// messages (task #121). Empty content is status-only; body text is shown.
+	if msg.Type == "thinking" {
 		payload.Type = "thinking"
+		payload.Content = strings.TrimSpace(msg.Content)
 		return payload, true
 	}
 	switch kind {
@@ -2420,11 +2423,10 @@ func agentInboxActivityMessageKind(messageType string) (kind, eventType, severit
 	}
 	switch messageType {
 	case "thinking":
-		// Raft's thought stream is useful for diagnostics, but it is not a
-		// user-facing Activity narrative. Keeping it custom also prevents a
-		// future timeline consumer from mistaking each coalesced chunk for a
-		// phase transition.
-		return activityKindCustom, "runtime_thinking", "info"
+		// Task #121: thinking with body is user-facing transcript material.
+		// Empty phase is handled earlier (runtime_phase + phase_status).
+		// Use event_kind=thinking so chat timeline projection includes it.
+		return activityKindThinking, "runtime_thinking", "info"
 	case "tool_use":
 		return activityKindToolCall, "tool_use", "info"
 	case "tool_result":

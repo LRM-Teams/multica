@@ -253,6 +253,25 @@
 }
 
 /* =============================================================================
+ * LRM-1276 — momentum scroll: single source for `-webkit-overflow-scrolling`.
+ *
+ * The declaration used to be hand-copied as a Tailwind arbitrary property
+ * (`[-webkit-overflow-scrolling:touch]`) in six places across five view files.
+ * With no reusable name, new scroll containers were written by grepping an
+ * existing one, so adoption stayed partial.
+ *
+ * The prefix is deprecated: since iOS 13 momentum scrolling is the default in
+ * Safari, and it has never had any effect in other engines. It is kept only as
+ * a floor for legacy iOS WebViews. When that floor is dropped, delete THIS rule
+ * and the class usages — not six inline copies.
+ *
+ * Behaviour-neutral by construction: it carries this one declaration and no
+ * overflow / overscroll / touch-action / sizing rules, so it neither creates a
+ * scroll container nor fixes one. Mobile scroll defects belong to LRM-1222.
+ * ============================================================================= */
+.momentum-scroll { -webkit-overflow-scrolling: touch; }
+
+/* =============================================================================
  * Motion contract (#820) — shared timing tokens + content fade for view/tab/
  * panel/menu swaps. Principles (enforced by the MotionContent primitive):
  *   1. Semantics / focus / actionable state switch INSTANTLY; motion only

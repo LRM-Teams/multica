@@ -1,15 +1,9 @@
 /**
- * LRM-817 / LRM-906 / LRM-1139: homepage quick-start templates.
- * Long professional prompts (zh ≥3000 汉字) live in research-template-prompts.ts.
- * A2: short intent in composer; full prompt editable via expand; submit merges both.
+ * Homepage quick-start templates.
+ * Decision-oriented methods live in research-template-prompts.ts.
+ * The composer holds the concrete intent; submit merges it with the editable method.
  */
-import {
-  countHanChars,
-  RESEARCH_TEMPLATE_MIN_HAN,
-  RESEARCH_TEMPLATE_PROMPTS,
-} from "./research-template-prompts";
-
-export { countHanChars, RESEARCH_TEMPLATE_MIN_HAN };
+import { RESEARCH_TEMPLATE_PROMPTS } from "./research-template-prompts";
 
 export type ResearchTemplate = {
   id: string;
@@ -29,34 +23,43 @@ export const RESEARCH_TEMPLATES: readonly ResearchTemplate[] = [
   {
     id: "industry",
     title: { zh: "行业调研", en: "Industry research" },
-    blurb: { zh: "市场规模、格局与趋势", en: "Market size, landscape, trends" },
+    blurb: {
+      zh: "边界、运行机制与变化",
+      en: "Boundaries, mechanisms, and change",
+    },
     sessionTitle: { zh: "行业调研", en: "Industry research" },
     goal: RESEARCH_TEMPLATE_PROMPTS.industry,
     params: {
-      zh: ["市场规模", "竞争格局", "增长驱动", "风险与不确定因素"],
-      en: ["Market size", "Competitive landscape", "Growth drivers", "Risks & unknowns"],
+      zh: ["研究边界", "驱动机制", "证据与反证", "决策含义"],
+      en: ["Research scope", "Causal mechanisms", "Evidence and counterevidence", "Decision implications"],
     },
   },
   {
     id: "competitor",
     title: { zh: "竞品分析", en: "Competitor analysis" },
-    blurb: { zh: "对手对比、差异与机会", en: "Compare rivals, gaps, opportunities" },
+    blurb: {
+      zh: "用户选择、替代方案与差异",
+      en: "User choice, alternatives, and differentiation",
+    },
     sessionTitle: { zh: "竞品分析", en: "Competitor analysis" },
     goal: RESEARCH_TEMPLATE_PROMPTS.competitor,
     params: {
-      zh: ["功能对比", "定价策略", "获客渠道", "口碑与评价"],
-      en: ["Feature comparison", "Pricing", "Go-to-market", "Sentiment"],
+      zh: ["替代集合", "用户任务", "可比证据", "差异化验证"],
+      en: ["Alternative set", "User jobs", "Comparable evidence", "Differentiation tests"],
     },
   },
   {
     id: "tech_selection",
     title: { zh: "技术选型", en: "Tech selection" },
-    blurb: { zh: "方案对比与落地建议", en: "Options, trade-offs, recommendation" },
+    blurb: {
+      zh: "约束、场景验证与可逆决策",
+      en: "Constraints, scenario tests, and reversibility",
+    },
     sessionTitle: { zh: "技术选型", en: "Tech selection" },
     goal: RESEARCH_TEMPLATE_PROMPTS.tech_selection,
     params: {
-      zh: ["能力边界", "成本与性能", "生态成熟度", "迁移风险"],
-      en: ["Capability fit", "Cost & performance", "Ecosystem maturity", "Migration risk"],
+      zh: ["真实工作负载", "硬约束", "失败模式", "迁移与可逆性"],
+      en: ["Real workloads", "Hard constraints", "Failure modes", "Migration and reversibility"],
     },
   },
 ] as const;
@@ -115,22 +118,7 @@ export function buildCreateGoal(
   const prompt = (promptOverride ?? composeTemplateGoal(template, language)).trim();
   if (!user) return prompt;
   const label = (language ?? "en").toLowerCase().startsWith("zh")
-    ? "用户补充目标"
-    : "User goal";
+    ? "用户具体目标"
+    : "User-specific goal";
   return `${prompt}\n\n${label}：\n${user}`;
-}
-
-/** Locale-aware gate for expand-editor apply (zh: ≥3000 汉字; else length ≥800). */
-export function isTemplatePromptAboveMin(
-  text: string,
-  language: string | undefined,
-): boolean {
-  const isZh = (language ?? "en").toLowerCase().startsWith("zh");
-  if (isZh) return countHanChars(text) >= RESEARCH_TEMPLATE_MIN_HAN;
-  return text.trim().length >= 800;
-}
-
-/** @deprecated use isTemplatePromptAboveMin — kept for zh-only call sites/tests */
-export function isTemplatePromptAboveMinHan(text: string): boolean {
-  return countHanChars(text) >= RESEARCH_TEMPLATE_MIN_HAN;
 }

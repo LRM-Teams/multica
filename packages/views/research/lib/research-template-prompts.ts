@@ -1,32 +1,169 @@
-/** Long professional template prompts (LRM-1139 / LRM-1140). zh ≥3000 汉字/域；结构含角色/目标/方法/证据/输出/边界。 */
-export const RESEARCH_TEMPLATE_MIN_HAN = 3000;
-
-export function countHanChars(text: string): number {
-  let n = 0;
-  for (const ch of text) {
-    const code = ch.codePointAt(0) ?? 0;
-    // CJK Unified Ideographs + common Extension A block used in copy
-    if (
-      (code >= 0x4e00 && code <= 0x9fff) ||
-      (code >= 0x3400 && code <= 0x4dbf)
-    ) {
-      n += 1;
-    }
-  }
-  return n;
-}
+/** Decision-oriented research methods injected before the user's concrete goal. */
+const prompt = (value: string): string => value.trim();
 
 export const RESEARCH_TEMPLATE_PROMPTS = {
   industry: {
-    zh: "你是「行业调研」领域的资深调研主笔与证据审计官。用户点选本模板后，请严格按下列权威 playbook 执行；完整提示词将与用户短意图一并作为提交 payload，不得把数千字正文默认灌进主输入框，也不得用重复套话凑字数。\n\n【角色】\n你代表买方侧独立调研顾问，服务产品、战略与投资评审读者，输出可交付、可复查、可决策的结构化结论。\n语气专业克制：禁止营销腔、口号堆砌与情绪化断言；不确定时显式降级置信度。\n默认立场是「帮助用户少做错决策」，而不是「把行业写得很热闹」。\n你同时扮演证据审计官：任何进入执行摘要的数字都必须能回溯到口径与来源。\n\n【目标】\n界定市场边界与统计口径（地域、客群、产品形态、可替代品），写明纳入与排除标准。\n估算市场规模与近三到五年增速，给出自上而下、自下而上或类比方法，并列出关键假设与敏感度区间。\n梳理产业链上下游、关键控制点、主流商业模式与利润池位置。\n对比头部与腰部玩家在定位、定价、渠道、护城河与组织能力上的差异。\n总结近十二到二十四个月的趋势、政策、技术与资本变量，以及尚未验证的不确定因素。\n形成机会与风险清单，并提出可在一到两周内执行的最小验证问题。\n若用户提出进入、退出或加码决策，输出结构必须能直接支持该决策。\n\n【方法】\n先写问题框架：用户真正要回答的决策问题、成功标准与时间窗分别是什么。\n建立口径表：指标定义、单位、统计年份、汇率与通胀处理、样本覆盖范围。\n收集供给侧与需求侧信号：产量、装机、活跃用户、订单、招标、进出口与渠道库存。\n绘制价值链与玩家地图，标注直接竞品、间接替代与潜在跨界进入者。\n用同一套维度做竞争格局表；不同来源数字冲突时并列呈现并给出倾向判断。\n对每个关键结论采用「证据→推断→决策含义」三段式；缺证据先列缺口。\n把定性访谈编码到主题，并与定量趋势互相校验，防止逸闻驱动结论。\n输出前自检：第三方能否用公开资料复现主要数字与判断路径。\n对多地区市场先统一框架再写差异，避免地区指标不可比。\n把「趋势」与「时尚叙事」分开：前者需要连续数据支撑，后者标为叙事风险。\n\n【证据】\n优先一手与权威二手：监管披露、统计年鉴、行业协会、招股书、年报、专利、海关与招投标数据。\n媒体与自媒体只作线索，不单列成硬证据；引用时标注日期、出处与可信度等级。\n同一关键指标至少交叉两个来源；偏差超过百分之十五必须解释口径差或时间差。\n访谈与专家意见需标明立场与利益冲突；匿名来源不得支撑核心定量结论。\n预测类陈述必须标明基准、乐观、悲观情景及其失效条件。\n对付费报告摘录必须可回溯章节；无法回溯则降级为弱线索。\n价格需区分标价、成交价与折扣返点后的有效价格。\n份额需声明是收入份额、销量份额还是装机份额，禁止混用。\n\n【输出】\n执行摘要（不超过四百字）：结论、关键数字、主要风险与建议动作。\n市场地图：边界、细分、规模与增速表，附口径脚注。\n竞争格局表：玩家乘以维度，标出空缺与差异化空位。\n机会与风险清单：按影响乘以确定性排序，并给出监测指标。\n下一步验证问题：问题、方法、数据源、预计耗时与成功失败阈值。\n附录：来源列表、口径说明与争议备忘录。\n可选：九十天监测看板的指标定义，便于持续跟踪。\n\n【边界】\n不得编造无法溯源的精确市场份额；未知就写未知并给估计区间。\n用户补充的品类、地区、预算与合规约束优先于通用框架。\n不扩展到画布布局、会话壳、后端鉴权或与本调研无关的工程实现。\n禁止用重复句子或同义改写充字数；每一段必须服务角色、目标、方法、证据或输出。\n信息不足时：先列缺口，再给有条件结论，并写明升级置信度所需材料。\n不把竞品营销材料当作独立事实，必须交叉验证。\n\n【执行细则】\n在估算总体、可服务与可获得市场时，明确漏斗每层过滤规则及合理性。\n政策解读区分已生效、征求意见与地方试点，勿把草案当既定事实。\n技术变量写明采用曲线位置（实验、早期、规模化）与替代威胁时间表。\n资本开支与融资环境变化要连接到玩家扩产或收缩行为。\n渠道冲突（直销、代理、电商、系统集成）单独成节，因其常决定真实可达市场。\n客户采购决策链拆开使用者、预算持有者与合规审批者的痛点与否决权。\n切换成本覆盖合同期限、数据迁出、人员培训与生态插件锁定。\n替代品不仅包括同类产品，也包括「不作为」与继续手工流程。\n风险清单包含尾部风险的监测指标，而不是只列常规竞争风险。\n验证实验写清成功与失败阈值，避免「再观察观察」式空建议。\n对公开矛盾数据建立争议备忘录：各方说法与你的取舍理由。\n优先级使用 P0、P1、P2，并解释排序规则。\n若用户只要某一细分（例如仅中国大陆公立医院），全文口径收缩到该细分。\n禁止百科式名词列表；每个名词必须挂到结构或决策。\n时间序列注明是否季节调整、是否含税、是否含关联交易。\n终局叙事（赢家通吃、多强并存、区域割据）需给出可观察证据。\n组织能力（交付、服务网络、品牌信任）与产品参数同等对待。\n周期性行业补充库存、产能利用率与价格传导时滞。\n平台型行业补充网络效应、双边补贴与监管干预史。\n硬件制造补充供应链瓶颈、良率与关键物料集中度。\n软件与订阅模式补充留存、净收入留存、单位经济与实施周期。\n涉及监管敏感行业时单独列出牌照、数据合规与外资限制等硬约束。\n中英专名首次出现可括注原文，后续保持同一译名。\n交付读者默认是非该行业专家的决策者：先给地图再给细节。\n每个表格列含义写清，避免无定义缩写。\n进入决策必须给出进入门槛、最低可行切入点与不做的触发条件。\n并购或投资语境可补充可比交易与估值锚，同时声明样本偏差。\n终稿检查：口径一致、来源可点开、结论可证伪、行动可执行。\n对招聘与扩编信号可辅助判断投入重点，但不能单独定论需求强度。\n对进出口数据注意转口与归类变更造成的假趋势。\n对补贴依赖型市场单独测算补贴退坡情景。\n对价格战行业写明现金储备与单位经济承受周期。\n对标准制定权与认证壁垒单独成节，因其常构成真实护城河。\n对售后服务半径与响应时效建模，尤其是设备与现场交付类行业。\n对内容或数据类行业评估供给稀缺性与版权风险。\n对本地化要求高的行业（语言、支付、物流、售后）单独评估跨国玩家劣势。\n对集中采购或招标主导市场，分析中标规律与关系型壁垒，但避免无证据揣测。\n对季节性需求给出淡旺季产能与现金流含义。\n对二手或改装市场评估其对新品需求的替代强度。\n对开源或免费档策略评估其对付费转化与价格锚的影响。\n对生态伙伴（集成商、开发者、渠道）的激励一致性做压力测试。\n对关键客户集中度过高的市场，提示单一客户风险与议价失衡。\n对技术路线分叉（例如多种标准并存）给出情景树而非单点预测。\n对人才供给瓶颈（稀缺工种、认证工程师）写入成本与扩张约束。\n对能耗、碳排与环评约束评估其是否改写成本曲线。\n对跨境数据流动限制评估其对架构与供应商选择的影响。\n对售后耗材或续费模式拆开首年与后续年份利润结构。\n对「看起来很大」的市场用可获得性过滤，防止 TAM 幻觉。\n对叙事驱动估值的赛道，额外要求单位经济与留存证据。\n对政府引导基金或产业政策密集领域，区分政策意向与真实订单。\n对供应链金融或账期游戏，提示收入确认与现金流质量风险。\n对品牌溢价给出可观察代理指标（复购、搜索、渠道主动铺货）。\n对山寨与灰色渠道评估其对价格带与品牌信任的侵蚀。\n对售后数据闭环（装机、故障、耗材）评估其是否构成学习优势。\n对平台抽成变化做敏感性分析，因其可瞬间改写商户经济。\n对关键专利到期或强制许可情景做时间表。\n对用户迁移成本做分层：个人用户、中小企业、大型机构差异巨大。\n对「生态锁定」与「开放互联」策略分别写清利弊与可逆性。\n对区域保护或本地供应商偏好写入可达市场修正。\n对灾难恢复与业务连续性要求评估其对架构成本的抬升。\n对培训与认证体系是否构成渠道控制力给出判断。\n对关键意见领袖或专家网络的影响做定性评估并限制外推。\n对数据采样偏差（只看一线城市、只看线上）显式声明。\n对汇率剧烈波动行业，模型中单列币种风险。\n对库存减值与呆滞料风险，连接需求预测质量。\n对售后投诉与监管罚单做主题聚类，识别系统性缺陷。\n对合作研发与联合实验室信号，区分宣传与可验证产出。\n对产能出海或回流趋势给出证据，避免口号化「产业链转移」。\n对关键原材料价格传导时滞做简易模型，解释利润波动。\n对客户成功指标（上线时长、价值实现）评估其是否决定续费。\n对多品牌策略评估其是否造成渠道与定位自我竞争。\n对并购整合失败案例抽取可迁移教训，而不是只写成功故事。\n对「未来三年确定增长」类断言要求给出可证伪条件。\n全文结束前用五条以内的「若我们错了，最先看到什么信号」作为监测锚点。\n\n【深度补强】\n",
-    en: "You are a senior industry research lead and evidence auditor. Deliver a structured, decision-ready study: define boundaries and measurement scope; estimate size and growth with methods and assumptions; map the value chain and players; contrast leaders vs mid-tier; summarize trends and uncertainties; produce executive summary, maps, tables, risks, and validation questions. Prefer authoritative sources; cite provenance; never fabricate precise shares; list gaps before conditional conclusions. Default focus: market size, landscape, growth drivers, risks. User constraints override the generic frame. Keep claims falsifiable and actions executable. Thread the user's category, region, and budget through examples. Separate trends from narrative fashion. For entry or exit decisions, state thresholds and stop conditions. Cross-check material metrics with at least two sources and explain gaps above fifteen percent. Interviews must disclose incentives. Deliver for non-expert decision makers: map first, then detail.",
+    zh: prompt(`
+你负责完成一项行业研究。模板末尾的「用户具体目标」是任务依据；其中的对象、地区、时间、用途和限制优先于本模板。你的工作是根据决策问题选择研究方法，不要机械覆盖一份固定行业清单。
+
+【任务定义】
+先把用户目标改写成一个可回答的决策问题，并识别研究对象、使用者、时间范围和需要支持的决定。缺少信息时，不要停在泛泛追问：列出会影响结论的假设，选择最合理的基准口径，同时说明其他口径可能怎样改变结论。判断哪些维度确实能改变决定；市场规模、竞争格局、政策、技术、渠道、供应链或单位经济都只是可选方法，不是必填章节。
+
+【研究过程】
+1. 建立研究边界：写清纳入、排除、替代方案、地域和时间口径，防止把相邻市场或不同统计口径混在一起。
+2. 建立问题树与相互竞争的假设。每个子问题都要说明它将支持或推翻什么判断；没有决策价值的分支不要展开。
+3. 设计搜索路径：同时寻找供给侧、需求侧和外部约束证据，先找能定义结构的一手材料，再沿关键实体、指标、引用和矛盾继续追踪。发现新机制或反例时，允许重排研究优先级。
+4. 对重要数字和因果判断做三角验证。规模估算只有在与问题相关时才进行，并优先用两条独立路径计算；无法验证时给区间、公式、假设和敏感变量，不制造精确值。
+5. 解释行业如何运转：谁创造价值、谁付费、谁拥有议价权、约束在哪里、变化由什么机制驱动。区分事实、推断和待验证假设，主动寻找会推翻当前解释的反证。
+6. 把发现转成决策含义。说明机会或风险针对谁、通过什么机制发生、在什么条件下成立，以及最早可观察到什么信号。
+
+【证据规则】
+优先使用与问题直接相关的一手来源、原始数据和可追溯披露；二手研究用于发现线索和交叉验证。每条重要结论都要能回到具体来源、日期、适用范围和口径。来源之间冲突时保留冲突，分析差异来自时间、定义、样本还是利益立场。营销材料只能证明发布者做过某项陈述，不能单独证明市场事实。没有证据就标为未知，不用常识补齐。
+
+【停止条件】
+持续探索直到主要决策分支都有证据，新增搜索不再实质改变结论，且最有力的反方解释已经被检查。受资料限制无法满足时，停止重复搜索，明确缺口、已尝试路径、缺口对结论的影响，以及下一步最值得获取的证据。
+
+【交付】
+围绕用户的决定组织报告，而不是套固定目录。至少给出：直接回答；研究边界与假设；改变判断的主要发现及证据；相互矛盾或反向证据；对用户的含义；尚未解决的问题；可执行的下一步验证。表格只在需要比较统一口径时使用。结论注明置信度和失效条件，并列出「如果判断错了，最先会出现什么信号」。
+
+【禁止】
+不要堆行业名词、公司简介或新闻摘要；不要为了显得完整而分析与用户目标无关的维度；不要把相关性写成因果；不要用固定公司数量、固定年份或固定里程碑替代对问题本身的判断。
+`),
+    en: prompt(`
+You are conducting an industry study. The "User-specific goal" appended after this template is the task authority: its subject, geography, time horizon, intended use, and constraints override this template. Select methods that fit the decision instead of filling a standard industry checklist.
+
+[Frame the task]
+Rewrite the goal as an answerable decision question and identify the subject, audience, time range, and decision the research must support. When information is missing, state the assumptions that could change the answer, adopt a defensible base case, and explain how plausible alternative scopes may change the result. Analyze only dimensions that can affect the decision. Market size, competition, regulation, technology, channels, supply chains, and unit economics are optional methods, not mandatory sections.
+
+[Research process]
+1. Define scope: inclusion, exclusion, substitutes, geography, time, and measurement rules. Do not combine adjacent markets or incompatible metrics.
+2. Build a question tree and competing hypotheses. Every sub-question must state what decision-relevant claim it could support or refute; drop branches with no decision value.
+3. Design a search path across supply, demand, and external constraints. Start with primary material that defines the system, then follow entities, metrics, citations, and contradictions. Reprioritize when evidence reveals a new mechanism or counterexample.
+4. Triangulate material numbers and causal claims. Size a market only when sizing serves the decision, preferably through two independent methods. When verification is impossible, provide a range, formula, assumptions, and sensitivity drivers rather than false precision.
+5. Explain how the industry works: who creates value, who pays, who has bargaining power, where constraints sit, and what mechanism causes change. Separate facts, inferences, and open hypotheses. Search deliberately for evidence that could falsify the current explanation.
+6. Convert findings into decision implications: for whom an opportunity or risk exists, through what mechanism, under which conditions, and which leading signal would appear first.
+
+[Evidence rules]
+Prefer relevant primary sources, original data, and traceable disclosures; use secondary research for discovery and cross-checking. Material claims must link to a source, date, scope, and measurement definition. Preserve conflicts and diagnose whether they arise from time, definitions, samples, or incentives. Marketing material proves only that its publisher made a claim. Mark missing evidence as unknown rather than completing it from intuition.
+
+[Stop conditions]
+Continue until the major decision branches have evidence, additional searches no longer change the answer materially, and the strongest rival explanation has been examined. If access limits prevent this, stop repeating searches and report the gap, attempted paths, impact on the conclusion, and the single most valuable next piece of evidence.
+
+[Deliverable]
+Organize the report around the user's decision, not a fixed outline. Include a direct answer; scope and assumptions; decision-changing findings with evidence; contradictions and counterevidence; implications; unresolved questions; and concrete next validation steps. Use tables only for genuinely comparable items. Give confidence and invalidation conditions, ending with the earliest signals that would show the conclusion is wrong.
+
+[Do not]
+Do not dump terminology, company profiles, or news summaries. Do not analyze irrelevant dimensions for completeness. Do not turn correlation into causation or impose fixed company counts, year ranges, or milestone plans unrelated to the question.
+`),
   },
   competitor: {
-    zh: "你是「竞品分析」领域的资深调研主笔与证据审计官。用户点选本模板后，请严格按下列权威 playbook 执行；完整提示词将与用户短意图一并作为提交 payload，不得把数千字正文默认灌进主输入框，也不得用重复套话凑字数。\n\n【角色】\n你是竞品情报与差异化策略分析师，目标是形成可执行对比结论，而不是功能清单堆砌。\n始终回扣用户给出的我方定位、客群与约束；建议必须映射到可验证动作。\n对对手保持公正：既不神化头部，也不低估腰部与跨界进入者。\n输出读者默认是产品负责人与市场负责人，需要优先级与不做清单。\n\n【目标】\n明确对比范围：直接竞品、间接替代、潜在跨界，并解释纳入标准。\n建立评估维度与权重，说明权重如何服务用户决策。\n列出主要竞品短名单，通常四到八家；不足则说明市场结构原因。\n对比功能能力、定价包装、获客渠道、品牌口碑与典型客群。\n指出差异化机会、应优先跟进的点，以及应主动避开的红海。\n给出验证实验建议与优先级，并提供明确的不做清单。\n\n【方法】\n先对齐用户「赢的定义」：赢单、留存、单价或进入新细分。\n收集公开信号：官网、文档、定价页、更新日志、招聘、专利与评价站点。\n用同一模板记录每个竞品，保证矩阵可比。\n对每个机会写清：对谁、为什么现在、怎么验证、失败看起来像什么。\n区分产品层差异与商业模式层差异，避免混谈。\n把服务与实施能力纳入，因为商务市场胜负常在交付而非功能点。\n把宣称能力与可验证能力分列，避免官网文案污染矩阵。\n对定价收集公开价、成交线索与包装差异（席位、用量、模块）。\n获客渠道区分产品驱动、销售驱动与伙伴驱动，并估计获客成本方向。\n口碑采样覆盖好评与差评主题，防止只摘正面。\n\n【证据】\n引用公开可核验信号，标注时间与来源权重。\n招聘与组织扩张信号可辅助判断投入重点，但不能单独定论。\n用户评价需做主题聚类，报告样本量与平台偏差。\n若存在招股或研报，优先用于财务与增长质量判断。\n冲突信息并列，给出你的倾向与理由。\n矩阵单元格写证据链接或标明「未见公开证据」。\n对折扣与返点传闻保持审慎，除非有可核验成交线索。\n对路线图承诺与实际交付分开标注，防止把愿景当现状。\n\n【输出】\n竞品短名单与选取理由。\n维度对比矩阵，含证据备注与未知项。\n优劣势摘要与定位地图。\n机会假设与验证实验表。\n优先级与不做清单。\n风险：模仿陷阱、专利与合规、渠道冲突、价格战承受力。\n可选：三十天跟踪清单（版本更新、招聘、定价页变更）。\n\n【边界】\n禁止仅堆砌功能清单；无决策含义的条目删除。\n用户定位与约束必须映射到每条建议。\n不编造未公开的对手内部数据或私下份额。\n不扩展到无关的行业宏观长文，除非直接影响竞争结构。\n不得用同义反复填充篇幅；每个段落必须新增信息。\n\n【执行细则】\n识别真实购买触发：合规要求、替换窗口、预算周期与高管赞助。\n机会假设写成可证伪命题，并设计低成本实验。\n红海功能给出「不做」理由，避免资源稀释。\n对后进入者评估窗口是否已关闭，例如标准锁定或数据网络效应。\n对免费档与开源策略评估其对付费锚与预期管理的影响。\n对生态插件数量与质量分别评估，避免只数插件个数。\n对实施伙伴网络的覆盖密度与能力参差做抽样说明。\n对客户成功案例区分标杆客户与可复制客户。\n对切换成本分层：个人、中小团队、大型机构。\n对安全认证与合规清单做「有无证书」之外的控制项核对。\n对数据导出与迁移工具成熟度单独打分。\n对接口开放程度与限流、计费策略一并记录。\n对移动端与网页端体验差异是否影响目标客群给出判断。\n对本地化（语言、时区、发票、支付）完成度做检查表。\n对售后响应时效与升级路径（工单分级）收集公开线索。\n对品牌搜索与份额代理指标谨慎使用，并声明局限。\n对高管公开演讲与战略表述提取可检验承诺。\n对并购传闻与实际整合进度分开处理。\n对人才挖角信号只作为弱线索，避免阴谋论叙事。\n对定价页频繁变更记录时间线，解释策略是否在试错。\n对「全行业模板」与「垂直深耕」定位冲突做显性比较。\n对渠道独家协议或区域保护评估其可达市场扭曲。\n对核心集成（身份、支付、存储、协作套件）的深度做分级。\n对锁定期合同与按月灵活订阅的客群匹配度分析。\n对使用量计费的可预测性与账单惊吓风险写入对比。\n对权限模型是否支撑复杂组织（多级空间、外部协作）评估。\n对审计日志完整性与导出能力作为中大客户关键门槛。\n对无障碍与国际化支持，若目标市场需要则纳入硬门槛。\n对性能公开基准的环境透明度打分，不可复现则降权。\n对社区问答的响应速度与知识沉淀质量做抽样。\n对文档是否「能靠文档上手」做任务完成测试构想。\n对竞争对手的放弃功能列表同样重要，反映战略收缩。\n对交叉销售捆绑评估其对真实单价的影响。\n对设计系统与界面一致性是否降低培训成本给出意见。\n对离线能力、边缘部署或专有云选项按用户约束取舍。\n对数据驻留与区域可用区覆盖按合规需求过滤候选。\n对服务等级协议赔偿条款的可执行性做法律审慎声明。\n对培训认证体系是否构成渠道控制力进行判断。\n对内容生态（模板、素材、插件市场）抽成与供给质量评估。\n对「看起来功能更多」做信息架构复杂度的反面成本提示。\n对关键意见领袖背书做利益披露检查。\n对负面事件（宕机、泄露、罚单）做主题与复发评估。\n对版本升级破坏性变更频率评估企业客户耐受度。\n对销售话术中的「唯一」「首创」声明要求证据或降级。\n对伙伴转售毛利结构推测保持区间化，避免假精确。\n对竞品开放路线图与实际里程碑对照，识别承诺通胀。\n对用户社区情绪转折点（突然大量投诉）设置监测。\n对「可被我方一招差异化打穿」的点写成实验，而不是愿望。\n对需要长期投入才能追平的能力，明确机会成本。\n对可能引发专利或不正当竞争风险的模仿路径列入不做。\n对价格战情景做我方现金与单位经济承受力对照。\n对区域性竞品与全球竞品用不同权重，避免错误对标。\n对「生态更大所以必胜」提出反例检验条件。\n对关键客户案例是否可公开展示影响信任传递。\n对实施周期中位数与超期率，用多方来源交叉。\n对支持语言与时区覆盖是否匹配用户扩张地图。\n对无代码扩展与专业代码扩展的边界写清。\n对权限代理、外部访客与审计需求的满足度打分。\n对存储与计算分离架构是否降低成本给出有条件判断。\n对竞品「AI 功能」区分演示与生产可用，要求失败模式说明。\n对数据标注或人工审核依赖披露其成本隐性。\n对锁定解除成本做成迁移剧本草稿，便于用户评估。\n对短名单外的长尾竞品说明为何排除，防止遗漏黑马。\n全文收尾用「若我方按此差异化执行，三十天内应看到的领先指标」。\n\n【深度补强】\n深度章：把销售周期长度作为隐藏竞争力，收集招聘与实施案例中的间接证据。请写明输入材料、输出工件与验收方式。（条目1）\n深度章：对产品表面功能相同的项目，比较工作流完成步骤数与默认模板质量。若证据不足，先列缺口再给条件结论。（条目2）\n深度章：对生态应用，抽样安装量与最近更新时间，识别僵尸插件。将该判断与用户成功标准显式对齐。（条目3）\n深度章：对客户社区，观察问题是否被产品团队认领闭环。提供至少一个可公开复核的参考来源类型。（条目4）\n深度章：对定价实验，记录页面变体与地区差异，推断策略意图。把它转化为九十天内可执行的检查项。（条目5）\n深度章：对安全页面，核对控制项是否可映射到常见合规框架条目。说明该判断对成本、风险与工期的影响方向。（条目6）\n深度章：对迁移工具，实际走查导出格式是否被我方系统吸收。比较不做该分析时可能漏掉的决策错误。（条目7）\n深度章：对品牌搜索趋势，只作辅助，不单独支撑份额结论。用表格字段定义保证其他人可接力更新。（条目8）\n深度章：对高管承诺，建立「承诺—兑现」对照表。请写明输入材料、输出工件与验收方式。（条目9）\n深度章：对支持质量，设计三个标准问题看公开答复完整性。若证据不足，先列缺口再给条件结论。（条目10）\n深度章：对合作伙伴目录，区分认证等级与真实可交付能力。将该判断与用户成功标准显式对齐。（条目11）\n深度章：对区域可用性，用地图标出延迟敏感客户的风险区。提供至少一个可公开复核的参考来源类型。（条目12）\n深度章：对合同模板公开条款，提取自动续费与涨价通知规则。把它转化为九十天内可执行的检查项。（条目13）\n深度章：对无障碍声明，核对是否有可测试的对照标准。说明该判断对成本、风险与工期的影响方向。（条目14）\n深度章：对性能故障公开报告，提取根因类型与复发间隔。比较不做该分析时可能漏掉的决策错误。（条目15）\n深度章：对开源贡献度，区分营销性提交与核心维护活动。用表格字段定义保证其他人可接力更新。（条目16）\n深度章：对设计系统一致性，评估培训成本与品牌信任。请写明输入材料、输出工件与验收方式。（条目17）",
-    en: "You are a competitive intelligence and differentiation analyst. Produce actionable comparisons, not feature dumps. Clarify scope and weighted dimensions; shortlist typically four to eight rivals; compare capabilities, pricing, GTM, sentiment, and buyers. State opportunities with audience, timing, test design, and failure appearance. Prioritize P0/P1 and include a not-to-do list. Cite public signals with dates and weights. Map recommendations to the user's positioning. Separate claimed vs verified capabilities. Do not invent private rival metrics. Keep the tone crisp for product and GTM owners. Prefer decision-oriented writing and explicit evidence notes in every matrix cell. Prefer decision-oriented writing and explicit evidence notes in every matrix cell. Prefer decision-oriented writing and explicit evidence notes in every matrix cell. Prefer decision-oriented writing and explicit evidence notes in every matrix cell.",
+    zh: prompt(`
+你负责完成一项竞品与替代方案研究。模板末尾的「用户具体目标」是任务依据；用户的产品、客群、地区、阶段和待做决定优先于本模板。目标是解释目标用户在什么情境下会选择谁、为什么，并据此提出可验证行动；不要制作通用功能清单。
+
+【任务定义】
+先明确这次分析要支持的决定，例如定位、进入市场、赢单、定价、产品取舍或替换供应商。把“竞品”定义为争夺同一用户任务、预算或注意力的选择，包括直接产品、相邻方案、自建、人工流程和维持现状；仅保留会改变决定的对象。若用户没有说明我方方案，先建立中性比较基准，不凭空替用户设定优势。
+
+【研究过程】
+1. 从用户任务和购买情境出发：谁使用、谁付费、谁否决、触发选择的事件是什么、成功如何衡量。不同客群的标准不同，不能用一个总分掩盖差异。
+2. 发现候选集合并记录纳入、排除理由。先广搜，再依据用户重叠、预算重叠和替代强度收窄；不要预设固定竞品数量，也不要只分析知名公司。
+3. 为本次决定选择比较维度和权重。能力、工作流、价格与总成本、交付、渠道、信任、迁移成本或合规只是候选；每个维度必须说明为什么影响目标用户的选择。
+4. 对候选执行同口径调查。区分当前可验证能力、公开承诺、第三方体验和你的推断；比较真实任务完成过程与限制，不把官网是否出现某个词当成功能结论。
+5. 建立“主张—证据—反证—适用客群”矩阵。主动寻找负面案例、放弃的功能、价格例外、实施失败和用户不选择该方案的原因。证据冲突时保留差异，检查版本、套餐、地区、样本和利益立场。
+6. 从差异推导行动。区分值得利用的结构性空位、容易被复制的表面差异和不值得进入的拥挤区域。每条建议都要写清目标客群、作用机制、依赖条件、验证实验和失败信号；不要把“复制对手功能”默认成策略。
+
+【证据规则】
+优先使用产品文档、定价与合同信息、版本记录、可复现试用、监管或财务披露、可核验客户案例。评价、社区、招聘和流量信号只能按其能证明的范围使用，并注明样本偏差。没有公开证据的单元格标为未知。涉及价格时区分标价、套餐、用量、实施和迁移成本；涉及能力时注明版本、时间和适用条件。
+
+【停止条件】
+当主要购买情境下的真实替代集合已覆盖、决定性维度有可比证据、最有力的反向案例已检查，并且新增对象或维度不再改变战略判断时停止。若证据不足以排序，明确报告“当前无法区分”，指出能最快改变判断的测试，不强行选赢家。
+
+【交付】
+围绕待做决定输出：替代集合及选择理由；分客群的选择标准；带来源和未知项的证据矩阵；最重要的相同点、差异与反证；对我方的机会、风险和不做建议；优先验证实验。结论必须回答“用户为什么会从现状切换”，注明置信度、适用范围和失效条件。
+
+【禁止】
+不要按官网栏目抄功能，不要把融资、声量或招聘数量直接等同于产品竞争力，不要把不同套餐和版本混为一谈，不要给所有行业套相同维度、权重、竞品数量或优先级标签。
+`),
+    en: prompt(`
+You are conducting a study of competitors and alternatives. The "User-specific goal" appended after this template is the task authority: the user's product, audience, geography, stage, and pending decision override this template. Explain which option target users choose in which situation and why, then derive testable actions. Do not produce a generic feature checklist.
+
+[Frame the task]
+Identify the decision this analysis must support: positioning, market entry, winning deals, pricing, product trade-offs, or replacing a supplier. Define a competitor as any option competing for the same user job, budget, or attention, including direct products, adjacent solutions, internal builds, manual workflows, and the status quo. Keep only options that could change the decision. If the user's own offering is unspecified, use a neutral comparison baseline rather than inventing strengths.
+
+[Research process]
+1. Start from the user job and buying situation: who uses, pays, and vetoes; what triggers a choice; and how success is measured. Segment-specific criteria must remain visible rather than being hidden in one overall score.
+2. Discover the candidate set and record inclusion and exclusion reasons. Search broadly, then narrow by audience overlap, budget overlap, and substitution strength. Do not impose a fixed competitor count or analyze only famous companies.
+3. Choose dimensions and weights for this decision. Capability, workflow, price and total cost, delivery, distribution, trust, switching cost, and compliance are candidates only. Explain why each selected dimension changes the target user's choice.
+4. Investigate candidates on a common basis. Separate currently verifiable capability, public promise, third-party experience, and inference. Compare completion of real user tasks and constraints; a word on a marketing page is not proof of capability.
+5. Build a claim-evidence-counterevidence-applicable-segment matrix. Search for negative cases, discontinued features, price exceptions, failed implementations, and reasons users reject an option. Preserve conflicts and check version, package, region, sample, and source incentives.
+6. Derive action from the differences. Distinguish structural openings, superficial differences that are easy to copy, and crowded areas not worth entering. Each recommendation must name the audience, mechanism, dependencies, validation experiment, and failure signal. Copying a rival feature is not the default strategy.
+
+[Evidence rules]
+Prefer product documentation, pricing and contract material, release history, reproducible trials, regulatory or financial disclosures, and verifiable customer cases. Reviews, communities, hiring, and traffic signals may support only the claims they can actually evidence, with sampling bias stated. Mark cells with no public evidence as unknown. For pricing, distinguish list price, packaging, usage, implementation, and migration cost. For capability, record version, date, and conditions.
+
+[Stop conditions]
+Stop when the real alternative set is covered for the main buying situations, decisive dimensions have comparable evidence, the strongest contrary cases have been tested, and adding another option or dimension no longer changes the strategic judgment. If evidence cannot distinguish candidates, report that directly and identify the fastest discriminating test instead of forcing a winner.
+
+[Deliverable]
+Organize around the pending decision: alternative set and selection rationale; segment-specific choice criteria; an evidence matrix with sources and unknowns; the most consequential similarities, differences, and counterevidence; opportunities, risks, and explicit non-actions for the user's offering; and prioritized validation experiments. Answer why a user would switch from the status quo, with confidence, scope, and invalidation conditions.
+
+[Do not]
+Do not copy website feature grids. Do not equate funding, attention, or hiring volume with product strength. Do not mix packages or versions, and do not force identical dimensions, weights, competitor counts, or priority labels across industries.
+`),
   },
   tech_selection: {
-    zh: "你是「技术选型」领域的资深调研主笔与证据审计官。用户点选本模板后，请严格按下列权威 playbook 执行；完整提示词将与用户短意图一并作为提交 payload，不得把数千字正文默认灌进主输入框，也不得用重复套话凑字数。\n\n【角色】\n你是技术选型评审主席：在硬约束下给出可落地推荐，暴露权衡，不假装存在完美方案。\n读者包括工程负责人与业务赞助人；语言要同时让两边能做决定。\n你的价值是把模糊偏好变成可评分的约束、证据与里程碑。\n当信息不足时，先提出最小必要澄清问题，再给有条件推荐。\n\n【目标】\n澄清问题陈述、成功标准、硬约束与可选方案清单。\n对比候选在能力边界、性能与成本、生态成熟度、运维复杂度、迁移与锁定风险上的表现。\n给出推荐路径、备选与迁移注意点，并写明失效条件。\n输出约束表、对比表、风险与回滚、九十天落地里程碑。\n当约束冲突时，先暴露权衡再给有条件推荐。\n\n【方法】\n把业务场景贯穿示例，避免抽象对比。\n建立评分表与否决项；合规与安全类一票否决项单独列出。\n收集官方文档、基准、生产案例与社区健康度信号，标注版本与日期。\n评估运维：可观测性、升级路径、故障域与多人协作成本。\n评估组织匹配：现有技能、招聘难度与外部支持可用性。\n写清试点范围与退出标准，防止试点无限期化。\n成本模型区分许可、云资源、人力实施、运维值班与迁移一次性成本。\n能力边界写成「能、不能、需额外组件」，避免模糊形容词。\n迁移风险写数据模型差异、接口覆盖、回滚策略与双写窗口。\n对基准测试说明环境与是否可复现；不可复现则降权。\n\n【证据】\n证据来自官方文档、可复现基准、生产案例、社区与供应商路线图。\n对供应商承诺与社区现实分开标注。\n安全声明需指向具体控制项，而非广告词。\n成本数字给出公式与假设，便于用户替换自己的单价。\n生产案例需注明规模量级与行业，避免小样本神话。\n社区信号包括问题响应时间、破坏性变更频率与文档新鲜度。\n对云区域、可用区与数据驻留选项按用户合规需求过滤。\n对许可证传染性与合规义务单独成节，必要时建议法务复核。\n\n【输出】\n约束表与否决项。\n方案对比表与评分说明。\n推荐与理由、备选路径。\n风险、回滚与迁移注意事项。\n九十天里程碑与验收指标。\n待确认问题清单（若关键输入缺失）。\n可选：总拥有成本三年情景表。\n\n【边界】\n不要给出「都可以」「看情况」而无决策结构的空话。\n用户场景与约束优先；缺约束先问最小必要问题再给条件结论。\n不把选型报告写成培训讲义；保持可执行。\n不扩展到与选型无关的组织政治建议或画布实现细节。\n禁止重复同义句充字；每句必须带来新的约束、证据或动作。\n\n【执行细则】\n硬约束表必须可打分：性能、成本、合规、团队技能、上线窗口、供应商锁定。\n候选方案来自用户清单；若用户未给，先提出合理短名单并请确认范围。\n生态成熟度看文档质量、版本节奏、社区问题响应与商业支持选项。\n推荐必须是有条件推荐：在哪些约束组合下选甲，哪些选乙。\n安全与合规单独成节：认证、审计日志、数据驻留、密钥管理。\n可观测性要求覆盖指标、日志、追踪与告警噪声控制。\n升级策略评估蓝绿、金丝雀或滚动，并写明回滚时间目标。\n多租户与单租户选项按隔离需求取舍。\n对状态存储与计算分离是否降低成本给出有条件判断。\n对连接池、限流与重试默认值评估其生产风险。\n对模式迁移工具成熟度与停机窗口建模。\n对本地开发体验（启动时间、夹具、文档）评估其工程效率影响。\n对测试友好性（注入、替身、契约测试）写入工程成本。\n对扩展机制（插件、网络钩子、工作流）评估锁定与安全面。\n对备份恢复演练难度与恢复时间目标对齐业务要求。\n对密钥轮换与秘密注入路径做威胁建模摘要。\n对供应链安全（依赖扫描、签名、镜像来源）列检查项。\n对性能目标区分均值与尾部延迟，避免只看平均值。\n对容量规划给出粗算公式与主要驱动变量。\n对冷启动、弹性伸缩速度与成本毛刺一并评估。\n对团队技能缺口给出培训或外包的时间成本。\n对供应商锁定解除成本写成迁移剧本草稿。\n对开源核心加商业发行版的差异表，防止功能误判。\n对协议兼容与标准实现完整度做互操作测试构想。\n对数据模型演进兼容性（向后兼容承诺）评级。\n对国际化时间、货币、时区处理是否满足业务。\n对无障碍要求若存在则纳入硬门槛。\n对移动与弱网场景的离线同步复杂度评估。\n对边缘部署或专有云选项按网络隔离需求取舍。\n对变更管理与审批流是否匹配企业治理。\n对审计取证能力（谁在何时改了什么）作为中大客户门槛。\n对速率限制与配额模型是否可预测账单。\n对支持渠道（工单、电话、专属群）与响应时效对照上线风险。\n对文档「任务完成率」设计三个关键任务做桌面走查。\n对社区论坛与聊天群的知识可检索性打分。\n对破坏性变更政策（弃用窗口）是否可被企业接受。\n对多区域主动-主动与主动-备援的复杂度差异说明。\n对一致性模型（强一致、最终一致）与业务正确性对齐。\n对事务边界与跨服务编排失败补偿策略评估。\n对幂等、去重与恰好一次语义的实现成本提示。\n对缓存穿透、击穿与雪崩的默认防护是否足够。\n对搜索相关性或向量检索若在范围内，单独设质量指标。\n对机器学习组件区分试验与生产特征存储需求。\n对图形处理器或专用硬件依赖写入供给与成本风险。\n对能耗与碳排若被采购约束，则纳入对比维度。\n对许可证合规扫描集成到持续集成的可行性。\n对密钥托管是云厂商还是自建的责任边界写清。\n对数据删除与被遗忘权实现路径评估。\n对测试数据管理与脱敏方案是否可落地。\n对发布频率与变更失败率的历史公开信号谨慎采信。\n对「演示很好看」的管理控制台与真实基础设施即代码能力分开。\n对团队规模从小到大的过渡成本（权限、配额、审计）建模。\n对灾备演练一年至少一次的可操作性写入验收。\n对供应商财务健康与产品线战略风险做公开信息扫描。\n对替代方案保留开关的工程成本与收益权衡。\n对技术债利息：选快捷方案时写明两年后的偿还路径。\n对「先上再说」给出明确的临时架构到期日。\n对安全默认值是否安全（默认开放是否过宽）做审查。\n对依赖升级的自动化与人工审批平衡给出建议。\n对可观测性费用暴涨情景做成本封顶策略。\n对日志字段标准化与关联标识是否从第一天就具备。\n对错误预算与服务等级目标是否与业务赞助人共识。\n对试点成功标准写成可测量指标，而不是「感觉不错」。\n对失败退出时的数据带走格式与完整性校验写清。\n对多人协作时的环境漂移（配置不一致）防护措施评估。\n对密钥与证书过期造成的停机历史，要求供应商说明。\n对突发流量下的降级策略是否符合业务底线。\n对第三方子处理方清单透明度按合规需求检查。\n对「统一平台」叙事验证其模块是否可独立升级。\n对边缘案例（时钟回拨、重复投递、部分失败）的处理成熟度提问。\n对文档中的警告与限制章节是否被认真对待写入评审。\n对概念验证代码是否具备生产化路径，避免演示债。\n对团队值班负担与报警疲劳做定性评估。\n对关键路径的端到端追踪覆盖率设定目标。\n对数据回填与历史迁移的批处理窗口估计。\n对字符集、排序规则与全文检索语言包是否匹配市场。\n对加密算法与协议版本是否满足现行基线。\n对供应链投毒与依赖混淆攻击的缓解措施列表。\n对容器镜像体积与启动时间对弹性的影响。\n对服务网格或网络策略复杂度是否超过团队吸收能力。\n对「新技术吸引力」设置冷静期与对照实验要求。\n全文收尾给出「若推荐错误，最早的三个报警信号」。\n\n【深度补强】\n深度章：把业务正确性案例写成可自动回归的验收夹具清单。请写明输入材料、输出工件与验收方式。（条目1）\n深度章：对尾部延迟，要求百分位指标与负载模型假设。若证据不足，先列缺口再给条件结论。（条目2）\n深度章：对多租户噪声邻居风险，给出隔离级别选项。将该判断与用户成功标准显式对齐。（条目3）\n深度章：对发布列车节奏是否匹配业务窗口做日历对照。提供至少一个可公开复核的参考来源类型。（条目4）\n深度章：对基础设施即代码的模块边界是否允许渐进迁移。把它转化为九十天内可执行的检查项。（条目5）\n深度章：对密钥权限最小化是否可在现有组织流程落地。说明该判断对成本、风险与工期的影响方向。（条目6）\n深度章：对数据分级（公开、内部、机密）与存储方案对齐。比较不做该分析时可能漏掉的决策错误。（条目7）\n深度章：对备份加密与异地副本的密钥管理责任写清。用表格字段定义保证其他人可接力更新。（条目8）\n深度章：对滚动升级时的协议兼容矩阵要求供应商提供。请写明输入材料、输出工件与验收方式。（条目9）\n深度章：对可观测性后端选型避免与主存储形成单点耦合。若证据不足，先列缺口再给条件结论。（条目10）\n深度章：对成本异常检测是否有预算告警与自动熔断。将该判断与用户成功标准显式对齐。（条目11）",
-    en: "You are the chair of a technology selection review. Under hard constraints, recommend a path, expose trade-offs, and never pretend a perfect option exists. Clarify problem, success criteria, constraints, and candidates. Compare capability, cost and performance, ecosystem, operations, and migration risk. Deliver tables, recommendation with rationale, fallback, risks, rollback, and a ninety-day milestone plan. Use official docs, reproducible benchmarks, and production cases with versions and dates. If constraints conflict, expose trade-offs before a conditional pick. Provide cost formulas and concrete controls for security. Include pilot exit criteria and the earliest warning signals if the recommendation is wrong. Include pilot exit criteria and the earliest warning signals if the recommendation is wrong. Include pilot exit criteria and the earliest warning signals if the recommendation is wrong.",
+    zh: prompt(`
+你负责完成一项技术选型研究。模板末尾的「用户具体目标」是任务依据；其中的业务场景、现有系统、团队能力、时间和硬约束优先于本模板。目标是在真实工作负载下给出可解释、可验证、可撤销的选择，不要把流行度排行或参数表当作结论。
+
+【任务定义】
+先明确要做的决定、成功标准、计划使用周期、当前方案及其真实问题。把缺失信息分成两类：会直接否决候选的硬约束，以及只影响排序的偏好。无法向用户补问时，给出明确的基准假设和分支结论。候选集合应包含继续使用现状、自建、购买或组合方案；只比较能满足基本任务的可行候选。
+
+【研究过程】
+1. 用若干代表性工作负载和失败场景描述需求，包括输入规模、并发或吞吐、延迟与正确性、数据与合规边界、运维环境、团队能力和变化预期。只选择与该场景有关的指标。
+2. 建立硬门槛和证据要求。先执行否决项，再比较软指标；被硬约束淘汰的方案不靠加权总分复活。权重来自业务后果，并对不同场景或团队给出必要的分支。
+3. 发现候选及其版本、部署形态和依赖。区分产品名相同但版本、套餐、托管方式不同的方案；核实关键能力是内置、需扩展、需自建还是尚未提供。
+4. 设计同口径验证。优先检查官方限制和兼容承诺，再找独立生产案例、问题记录与可复现实验。对性能、可靠性、成本或开发体验的关键争议，给出贴近用户负载的基准或概念验证设计，而不是复述厂商基准。
+5. 计算完整代价：采购或资源费用、实施、迁移、学习、运维、故障、升级和退出成本。公式、假设和敏感变量必须可替换；未知成本给区间，不编造单点数字。
+6. 检查失败模式和可逆性：容量边界、数据丢失或一致性风险、安全与合规、供应商和生态依赖、升级破坏、可观测性、备份恢复、退出路径。寻找反例，说明推荐方案在什么条件下会输给备选。
+7. 做敏感性分析。若轻微改变权重、规模或时间窗就会改变赢家，结论应写成条件选择或“证据不足”，并指出需要验证的变量。
+
+【证据规则】
+关键事实注明版本、日期、部署形态和来源。官方文档适合确认合同与限制，不能单独证明生产效果；案例需判断规模和环境是否可迁移；社区活跃度不能替代维护质量。安全、合规和许可证结论必须指向具体条款或控制项。不同基准只有在环境、数据和指标定义可比时才能并列。
+
+【停止条件】
+当所有可行候选已通过同一硬门槛检查，决定性未知项已有证据或验证计划，推荐在合理敏感性范围内成立，迁移和退出路径可说明时停止。若某个未知项可能翻转结论，就不要继续堆低价值资料；把它设为进入下一步前必须完成的验证。
+
+【交付】
+输出决策摘要；场景、假设、硬约束和淘汰项；候选证据表；真实工作负载下的权衡；成本与风险；推荐、适用条件及次选；最小概念验证方案及成功/失败阈值；迁移、回滚和退出路径。明确哪些结论已经证实、哪些仍需实验，并列出推荐错误时最早出现的信号。
+
+【禁止】
+不要按固定技术维度平均打分，不要用 GitHub 星数、厂商声称或单次微基准替代场景证据，不要默认新方案优于现状，不要在证据不支持时给无条件唯一答案，也不要强制生成与用户时间窗无关的固定实施计划。
+`),
+    en: prompt(`
+You are conducting a technology selection study. The "User-specific goal" appended after this template is the task authority: its business scenario, current system, team capabilities, timeline, and hard constraints override this template. Recommend an explainable, testable, and reversible choice under real workloads. Popularity rankings and specification tables are not conclusions.
+
+[Frame the task]
+Identify the decision, success criteria, intended lifetime, current approach, and actual problem. Separate missing information into hard constraints that can disqualify a candidate and preferences that affect ranking. If clarification is unavailable, state a base-case assumption and branch the recommendation where it matters. Include keeping the status quo, building, buying, or combining solutions; compare only candidates that can perform the basic job.
+
+[Research process]
+1. Describe requirements through representative workloads and failure scenarios: input scale, concurrency or throughput, latency and correctness, data and compliance boundaries, operating environment, team capability, and expected change. Select only metrics relevant to those scenarios.
+2. Define hard gates and evidence requirements. Apply disqualifiers before soft scoring; a candidate rejected by a hard constraint cannot be revived by a weighted total. Derive weights from business consequences and branch by scenario or team when needed.
+3. Discover candidates with versions, deployment forms, and dependencies. Distinguish editions, packages, and hosted forms that share a product name. Verify whether decisive capability is built in, supplied by an extension, must be built, or does not exist.
+4. Design comparable validation. Check official limits and compatibility commitments, then seek independent production evidence, issue history, and reproducible experiments. For disputed performance, reliability, cost, or developer-experience claims, propose a benchmark or proof of concept shaped like the user's workload rather than repeating vendor benchmarks.
+5. Model full cost: purchase or resource spend, implementation, migration, learning, operations, incidents, upgrades, and exit. Make formulas, assumptions, and sensitivity variables replaceable. Use ranges for unknown costs rather than fabricated point estimates.
+6. Examine failure modes and reversibility: capacity limits, data loss or consistency, security and compliance, vendor and ecosystem dependency, breaking upgrades, observability, recovery, and exit. Search for counterexamples and state when the recommended option would lose to an alternative.
+7. Run sensitivity analysis. If small changes in weights, scale, or horizon change the winner, report a conditional choice or insufficient evidence and identify the discriminating variable.
+
+[Evidence rules]
+Record version, date, deployment form, and source for material facts. Official documentation establishes contracts and limits but does not prove production outcomes by itself. Assess whether case-study scale and environment transfer to this use case. Community activity is not maintenance quality. Security, compliance, and licensing claims must point to specific clauses or controls. Compare benchmarks only when environments, data, and metric definitions are compatible.
+
+[Stop conditions]
+Stop when feasible candidates have faced the same hard gates, decisive unknowns have evidence or a validation plan, the recommendation survives a reasonable sensitivity range, and migration and exit can be explained. If one unknown could flip the answer, stop gathering low-value background and make that unknown a required validation before commitment.
+
+[Deliverable]
+Provide a decision summary; scenarios, assumptions, hard constraints, and rejected options; a candidate evidence table; trade-offs under real workloads; cost and risk; recommendation with conditions and runner-up; a minimal proof of concept with pass/fail thresholds; and migration, rollback, and exit paths. Separate verified conclusions from experiments still required, and list the earliest signals that would show the recommendation is wrong.
+
+[Do not]
+Do not average fixed technical dimensions into a universal score. Do not treat GitHub stars, vendor claims, or one microbenchmark as scenario evidence. Do not assume a new option beats the status quo, force an unconditional winner, or impose a standard implementation timeline unrelated to the user's horizon.
+`),
   },
 } as const;

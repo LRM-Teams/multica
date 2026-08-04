@@ -365,7 +365,7 @@ export function ReportReader({
               aria-controls="research-report-outline-drawer"
               aria-label={t(($) => $.reader.outline)}
             >
-              <List className="size-4" />
+              <List className="size-4" aria-hidden />
             </Button>
           ) : null}
           <div className="min-w-0 flex-1">
@@ -388,11 +388,11 @@ export function ReportReader({
                 variant="outline"
                 onClick={() => void copyMarkdown()}
               >
-                <Copy className="size-3.5" />
+                <Copy className="size-3.5" aria-hidden />
                 {copied ? t(($) => $.reader.copied) : t(($) => $.reader.copy_md)}
               </Button>
               <Button type="button" size="sm" onClick={exportMarkdown}>
-                <Download className="size-3.5" />
+                <Download className="size-3.5" aria-hidden />
                 {t(($) => $.reader.export)}
               </Button>
             </>
@@ -404,7 +404,7 @@ export function ReportReader({
             onClick={onClose}
             aria-label={t(($) => $.panel.hide_chat)}
           >
-            <X className="size-4" />
+            <X className="size-4" aria-hidden />
           </Button>
         </header>
 

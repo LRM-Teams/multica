@@ -57,6 +57,11 @@ func startEnvDispatchAudit(ctx context.Context, storage EnvDispatchAuditStorage,
 		auditID:   report.AuditID,
 		resources: make(map[envDispatchAuditResourceKey]EnvDispatchAuditResource),
 	}
+	// The storage schema requires every event to reference a resource. Create a
+	// server-generated, content-free correlation resource before any lifecycle
+	// work so first-operation failures can retain their creation/rollback and
+	// terminal events without inventing an ID from request content.
+	recorder.recordResource(ctx, EnvDispatchAuditResourceDerivedAgent, "dispatch:"+report.AuditID, in.EnvID, "", "", "")
 	return context.WithValue(ctx, envDispatchAuditContextKey{}, recorder), recorder
 }
 
@@ -88,7 +93,16 @@ func (r *envDispatchAuditRecorder) recordResource(ctx context.Context, kind EnvD
 	key := envDispatchAuditResourceKey{kind: kind, resourceID: resourceID}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if resource, ok := r.resources[key]; ok {
+	if existing, ok := r.resources[key]; ok {
+		merged := mergeEnvDispatchAuditResource(existing, environmentID, projectID, channelID, daemonID)
+		if merged == existing {
+			return existing
+		}
+		resource, err := r.storage.UpsertAuditResource(ctx, merged)
+		if err != nil {
+			return existing
+		}
+		r.resources[key] = resource
 		return resource
 	}
 	now := time.Now().UTC()
@@ -113,6 +127,22 @@ func (r *envDispatchAuditRecorder) recordResource(ctx context.Context, kind EnvD
 		r.fallbackResourceID = resource.ID
 	}
 	return resource
+}
+
+func mergeEnvDispatchAuditResource(existing EnvDispatchAuditResource, environmentID, projectID, channelID, daemonID string) EnvDispatchAuditResource {
+	merged := existing
+	merged.DaemonID = auditMergeOptionalString(existing.DaemonID, daemonID)
+	merged.EnvironmentID = auditMergeOptionalString(existing.EnvironmentID, environmentID)
+	merged.ProjectID = auditMergeOptionalString(existing.ProjectID, projectID)
+	merged.ChannelID = auditMergeOptionalString(existing.ChannelID, channelID)
+	return merged
+}
+
+func auditMergeOptionalString(existing *string, incoming string) *string {
+	if existing != nil || incoming == "" {
+		return existing
+	}
+	return auditOptionalString(incoming)
 }
 
 func (r *envDispatchAuditRecorder) recordEvent(ctx context.Context, eventType EnvDispatchAuditEventType, auditResourceID, reasonCode string) {

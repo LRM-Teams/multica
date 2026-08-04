@@ -1122,6 +1122,13 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 		s.reclaimSharedRuntimes(ctx, in, sandboxRefs)
 		return EnvRollout{}, fmt.Errorf("create env: %w", err)
 	}
+	audit := envDispatchAuditFromContext(ctx)
+	for _, sandboxID := range forked {
+		audit.recordResource(ctx, EnvDispatchAuditResourceSandbox, sandboxID, envID, "", "", "")
+	}
+	for _, ref := range sandboxRefs {
+		audit.recordSandboxRef(ctx, ref, envID, "")
+	}
 	// Project
 	var projectID string
 	var issueIDMap, chatSessionIDMap map[string]string
@@ -1149,6 +1156,12 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 	}
 
 	r := EnvRollout{EnvID: envID, ProjectID: projectID, SandboxRefs: sandboxRefs, AgentSandboxRefs: agentSandboxRefs}
+	for _, sandboxID := range forked {
+		audit.recordResource(ctx, EnvDispatchAuditResourceSandbox, sandboxID, envID, projectID, "", "")
+	}
+	for _, ref := range sandboxRefs {
+		audit.recordSandboxRef(ctx, ref, envID, projectID)
+	}
 	if in.DispatchType == EnvDispatchMessage && in.Mode == EnvModeBranch {
 		if in.BranchMessageSource == nil {
 			s.rollbackRollout(ctx, in.WorkspaceID, r)

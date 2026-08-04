@@ -4,58 +4,62 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/util"
 )
 
-// agent:create action cards (Frank/Parker 2026-08-04 hire hard-cut).
+// agent:create action cards (Frank/Parker 2026-08-04 hire hard-cut, no draft bridge).
 //
-// Agents prepare a slim hire card (name + optional description). Humans open
-// CreateAgentDialog (existing FE) via multica://create-agent?draft_id=… and
-// POST /api/agents with draft_id; CreateAgent marks the draft used.
-//
-// Storage reuses agent_creation_draft so existing FE draft_id wiring keeps
-// working until FE rewires to a first-class action-card type. Fat draft create
-// (instructions/tools/notes) is no longer the agent hire path.
+// Agents prepare a card (name + optional description). Humans open
+// CreateAgentDialog bound to card id, POST /api/agents with action_card_id,
+// and the card is marked done. No agent_creation_draft / draft_id hire path.
 
 const (
-	agentActionTypeCreate     = "agent:create"
-	agentActionStatusPrepared = "prepared"
+	agentActionTypeCreate      = "agent:create"
+	agentActionStatusPrepared  = "prepared"
+	agentActionStatusDone      = "done"
+	agentActionStatusDismissed = "dismissed"
+
+	agentActionLookupOK          = "ok"
+	agentActionLookupNotFound    = "agent_action_not_found"
+	agentActionLookupNotPrepared = "agent_action_not_prepared"
 )
 
 type agentActionPrepareRequest struct {
 	ActionType  string  `json:"action_type"`
 	Name        string  `json:"name"`
 	Description string  `json:"description"`
-	DraftHint   string  `json:"draft_hint"` // UI-only; not persisted
-	ChannelID   *string `json:"channel_id"` // optional group context for the draft row
+	DraftHint   string  `json:"draft_hint"` // UI-only; not stored
+	ChannelID   *string `json:"channel_id"`
 }
 
 type agentActionCreatePayload struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	DraftHint   string `json:"draft_hint,omitempty"`
 }
 
-type agentActionPrepareResponse struct {
-	ActionType string                   `json:"action_type"`
-	ID         string                   `json:"id"`
-	Status     string                   `json:"status"`
-	Payload    agentActionCreatePayload `json:"payload"`
-	CardURL    string                   `json:"card_url"`
-	Markdown   string                   `json:"markdown"`
-	DraftID    string                   `json:"draft_id"` // same as id; explicit for FE/create
-	TargetUser string                   `json:"target_user_id"`
-	ChannelID  *string                  `json:"channel_id,omitempty"`
-	PreparedBy string                   `json:"prepared_by_agent_id"`
-	CreatedAt  string                   `json:"created_at"`
+type agentActionCardResponse struct {
+	ActionType        string                   `json:"action_type"`
+	ID                string                   `json:"id"`
+	Status            string                   `json:"status"`
+	Payload           agentActionCreatePayload `json:"payload"`
+	PreparedByAgentID *string                  `json:"prepared_by_agent_id,omitempty"`
+	ChannelID         *string                  `json:"channel_id,omitempty"`
+	CommittedByUserID *string                  `json:"committed_by_user_id,omitempty"`
+	CommittedAgentID  *string                  `json:"committed_agent_id,omitempty"`
+	CreatedAt         string                   `json:"created_at"`
+	UpdatedAt         string                   `json:"updated_at"`
+	DoneAt            *string                  `json:"done_at,omitempty"`
 }
 
 // AgentTransportPrepareAction prepares a human-confirmable action card.
-// Currently only action_type=agent:create is supported.
+// Only action_type=agent:create is supported.
 func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Request) {
 	source, ok := h.requireAgentTransportSource(w, r)
 	if !ok {
@@ -80,7 +84,6 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 
 	name := strings.TrimSpace(req.Name)
 	description := strings.TrimSpace(req.Description)
-	draftHint := strings.TrimSpace(req.DraftHint)
 	if name == "" {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
@@ -93,7 +96,7 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("description must be %d characters or fewer", maxAgentDescriptionLength))
 		return
 	}
-	if utf8.RuneCountInString(draftHint) > windyMaxDraftTextLen {
+	if utf8.RuneCountInString(strings.TrimSpace(req.DraftHint)) > windyMaxDraftTextLen {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("draft_hint must be %d characters or fewer", windyMaxDraftTextLen))
 		return
 	}
@@ -116,41 +119,195 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 		channelID = parsed
 	}
 
-	// Human who will confirm: anchor human (none here) → agent owner → ws owner.
-	targetUserID, okTarget := h.agentReminderScheduleInitiatorUserID(r.Context(), origin.workspaceID, task.AgentID, pgtype.UUID{})
-	if !okTarget || !targetUserID.Valid {
-		writeError(w, http.StatusUnprocessableEntity, "no human target available for agent:create card")
-		return
-	}
-
-	// Slim draft: name + description only. Runtime/model/instructions chosen in Dialog.
-	draftReq := CreateAgentDraftRequest{
-		Name:        name,
-		Description: description,
-	}
-	draft, err := h.insertAgentDraft(r, origin.workspaceID, targetUserID, task.AgentID, pgtype.UUID{}, channelID, draftReq)
+	payloadBytes, err := json.Marshal(agentActionCreatePayload{Name: name, Description: description})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to prepare agent:create action")
 		return
 	}
 
-	cardURL := "multica://create-agent?draft_id=" + url.QueryEscape(draft.ID)
-	markdown := fmt.Sprintf("[Create Agent: %s](%s)", name, cardURL)
-	writeJSON(w, http.StatusCreated, agentActionPrepareResponse{
-		ActionType: agentActionTypeCreate,
-		ID:         draft.ID,
-		Status:     agentActionStatusPrepared,
-		Payload: agentActionCreatePayload{
-			Name:        name,
-			Description: description,
-			DraftHint:   draftHint,
-		},
-		CardURL:    cardURL,
-		Markdown:   markdown,
-		DraftID:    draft.ID,
-		TargetUser: draft.TargetUserID,
-		ChannelID:  draft.ChannelID,
-		PreparedBy: uuidToString(task.AgentID),
-		CreatedAt:  draft.CreatedAt,
-	})
+	var (
+		id, preparedBy, chID pgtype.UUID
+		status               string
+		payloadRaw           []byte
+		createdAt, updatedAt pgtype.Timestamptz
+	)
+	err = h.DB.QueryRow(r.Context(), `
+		INSERT INTO agent_action_card (
+			workspace_id, action_type, status, payload, prepared_by_agent_id, channel_id
+		) VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+		RETURNING id, action_type, status, payload, prepared_by_agent_id, channel_id, created_at, updated_at`,
+		origin.workspaceID, agentActionTypeCreate, agentActionStatusPrepared, payloadBytes,
+		task.AgentID, nullableUUID(channelID),
+	).Scan(&id, &actionType, &status, &payloadRaw, &preparedBy, &chID, &createdAt, &updatedAt)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to prepare agent:create action")
+		return
+	}
+
+	resp := agentActionCardResponse{
+		ActionType:        actionType,
+		ID:                uuidToString(id),
+		Status:            status,
+		Payload:           agentActionCreatePayload{Name: name, Description: description},
+		PreparedByAgentID: uuidToPtr(preparedBy),
+		ChannelID:         uuidToPtr(chID),
+		CreatedAt:         timestampToString(createdAt),
+		UpdatedAt:         timestampToString(updatedAt),
+	}
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+// GetActionCard loads a prepared/done/dismissed action card for workspace members (FE Dialog).
+func (h *Handler) GetActionCard(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireUserID(w, r); !ok {
+		return
+	}
+	workspaceID := h.resolveWorkspaceID(r)
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
+		return
+	}
+	cardID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "action card id")
+	if !ok {
+		return
+	}
+	card, code := h.loadActionCard(r, workspaceID, cardID)
+	if code != agentActionLookupOK {
+		writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, card)
+}
+
+// DismissActionCard marks a prepared card dismissed (human cancel).
+func (h *Handler) DismissActionCard(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireUserID(w, r); !ok {
+		return
+	}
+	workspaceID := h.resolveWorkspaceID(r)
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
+		return
+	}
+	cardID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "action card id")
+	if !ok {
+		return
+	}
+	tag, err := h.DB.Exec(r.Context(), `
+		UPDATE agent_action_card
+		SET status = $3, updated_at = now()
+		WHERE id = $1 AND workspace_id = $2 AND status = $4`,
+		cardID, parseUUID(workspaceID), agentActionStatusDismissed, agentActionStatusPrepared)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to dismiss action card")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeCodedError(w, http.StatusConflict, agentActionLookupNotPrepared, "action card is not prepared")
+		return
+	}
+	card, code := h.loadActionCard(r, workspaceID, cardID)
+	if code != agentActionLookupOK {
+		writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, card)
+}
+
+func (h *Handler) loadActionCard(r *http.Request, workspaceID string, cardID pgtype.UUID) (agentActionCardResponse, string) {
+	var empty agentActionCardResponse
+	if h == nil || h.DB == nil || !cardID.Valid {
+		return empty, agentActionLookupNotFound
+	}
+	var (
+		id, preparedBy, chID, committedBy, committedAgent pgtype.UUID
+		actionType, status                                string
+		payloadRaw                                        []byte
+		createdAt, updatedAt, doneAt                      pgtype.Timestamptz
+	)
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT id, action_type, status, payload, prepared_by_agent_id, channel_id,
+		       committed_by_user_id, committed_agent_id, created_at, updated_at, done_at
+		FROM agent_action_card
+		WHERE id = $1 AND workspace_id = $2`,
+		cardID, parseUUID(workspaceID),
+	).Scan(&id, &actionType, &status, &payloadRaw, &preparedBy, &chID, &committedBy, &committedAgent, &createdAt, &updatedAt, &doneAt)
+	if err != nil {
+		return empty, agentActionLookupNotFound
+	}
+	var payload agentActionCreatePayload
+	_ = json.Unmarshal(payloadRaw, &payload)
+	return agentActionCardResponse{
+		ActionType:        actionType,
+		ID:                uuidToString(id),
+		Status:            status,
+		Payload:           payload,
+		PreparedByAgentID: uuidToPtr(preparedBy),
+		ChannelID:         uuidToPtr(chID),
+		CommittedByUserID: uuidToPtr(committedBy),
+		CommittedAgentID:  uuidToPtr(committedAgent),
+		CreatedAt:         timestampToString(createdAt),
+		UpdatedAt:         timestampToString(updatedAt),
+		DoneAt:            timestampToPtr(doneAt),
+	}, agentActionLookupOK
+}
+
+// extractActionCardID reads optional action_card_id from CreateAgent raw JSON.
+func extractActionCardID(rawFields map[string]json.RawMessage) (pgtype.UUID, bool, error) {
+	var empty pgtype.UUID
+	raw, ok := rawFields["action_card_id"]
+	if !ok {
+		return empty, false, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return empty, true, fmt.Errorf("action_card_id must be a UUID")
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return empty, false, nil
+	}
+	id, err := util.ParseUUID(s)
+	if err != nil || !id.Valid {
+		return empty, true, fmt.Errorf("action_card_id must be a UUID")
+	}
+	return id, true, nil
+}
+
+// markActionCardDone transitions prepared → done after human CreateAgent.
+// Returns false when the card is missing or not in prepared state.
+func (h *Handler) markActionCardDone(r *http.Request, workspaceID string, cardID, userID, createdAgentID pgtype.UUID) (string, error) {
+	if h == nil || h.DB == nil || !cardID.Valid {
+		return agentActionLookupNotFound, nil
+	}
+	tag, err := h.DB.Exec(r.Context(), `
+		UPDATE agent_action_card
+		SET status = $4,
+		    committed_by_user_id = $5,
+		    committed_agent_id = $6,
+		    done_at = $7,
+		    updated_at = $7
+		WHERE id = $1
+		  AND workspace_id = $2
+		  AND action_type = $3
+		  AND status = $8`,
+		cardID, parseUUID(workspaceID), agentActionTypeCreate, agentActionStatusDone,
+		userID, createdAgentID, time.Now().UTC(), agentActionStatusPrepared,
+	)
+	if err != nil {
+		return "", err
+	}
+	if tag.RowsAffected() == 0 {
+		// Distinguish not found vs already used.
+		var status string
+		qerr := h.DB.QueryRow(r.Context(), `
+			SELECT status FROM agent_action_card WHERE id = $1 AND workspace_id = $2`,
+			cardID, parseUUID(workspaceID)).Scan(&status)
+		if qerr != nil {
+			if qerr == pgx.ErrNoRows {
+				return agentActionLookupNotFound, nil
+			}
+			return "", qerr
+		}
+		return agentActionLookupNotPrepared, nil
+	}
+	return agentActionLookupOK, nil
 }

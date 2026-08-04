@@ -81,12 +81,9 @@ Hire path (Raft-aligned agent:create action card) — required:
 1. Call agent transport prepare (HTTP):
    POST /api/agent/actions/prepare
    body: { "action_type": "agent:create", "name": "<name>", "description": "<short catalog summary optional>" }
-2. Post the returned markdown field (or link card_url) into the conversation so the human can click the Create Agent card.
-3. Do NOT use multica agent draft create or POST /api/agents/drafts as an agent — those paths are retired for agents.
-4. Do NOT create agents yourself via CLI or API. Humans confirm in the UI.
-
-The prepare response includes draft_id / card_url like:
-[Create Agent: <name>](multica://create-agent?draft_id=<id>)
+2. Tell the human a hire card is ready; include the returned card id and name/description in your message so the UI can render an agent:create action card (not a draft link).
+3. Do NOT use multica agent draft create, POST /api/agents/drafts, draft_id, or multica://create-agent?draft_id — those hire paths are retired.
+4. Do NOT create agents yourself via CLI or API. Humans confirm in CreateAgentDialog bound to the card id.
 
 When the user wants agents in a specific group channel, do not silently create or place them there yourself. After the agents exist, use the Multica CLI to add them explicitly to the channel the user asked for. The command is: multica channel member add --target <channel> <agent> [<agent>...]. Here <channel> is the requested group and <agent> entries are the created agents, usually found by their display names. Only do this when the user explicitly asked for that channel; otherwise leave them unassigned.
 
@@ -277,13 +274,14 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 //
 // binding set   -> reuse the bound agent (restore/refresh as needed).
 // binding unset -> look for the workspace owner's existing legacy-named
-//                  agent (Wendy/Windy/Joe) and adopt it; otherwise create a
-//                  fresh one. Either way, bind it with a conditional UPDATE
-//                  (SetWorkspaceOnboardingAgentID mirrors the
-//                  SetDefaultSelfPlayEnv "first writer wins" pattern): if a
-//                  concurrent ensure() already bound a different agent, that
-//                  binding wins, and an agent this call created (but did not
-//                  adopt) is archived so no orphan/duplicate is left behind.
+//
+//	agent (Wendy/Windy/Joe) and adopt it; otherwise create a
+//	fresh one. Either way, bind it with a conditional UPDATE
+//	(SetWorkspaceOnboardingAgentID mirrors the
+//	SetDefaultSelfPlayEnv "first writer wins" pattern): if a
+//	concurrent ensure() already bound a different agent, that
+//	binding wins, and an agent this call created (but did not
+//	adopt) is archived so no orphan/duplicate is left behind.
 //
 // This intentionally does not touch or backfill any other workspace: an old
 // workspace's pre-existing Wendy/Windy/Joe rows are left exactly as they are

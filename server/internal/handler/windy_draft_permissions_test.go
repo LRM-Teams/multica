@@ -65,11 +65,10 @@ func TestCreateAgentDraft_TaskTokenRetiredForAgents(t *testing.T) {
 	}
 }
 
-func TestAgentPrepareAction_TaskTokenTargetsOwnerFallback(t *testing.T) {
+func TestAgentPrepareAction_CreatesActionCard(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	// Prepare uses agent owner / workspace owner chain when no human anchor.
 	taskID, _ := createChannelCompletionTaskWithCapabilities(t, "group", nil)
 	agentID := agentIDForTask(t, taskID)
 	req := agentTransportRequest(t, http.MethodPost, "/api/agent/actions/prepare", taskID, agentID, map[string]any{
@@ -82,15 +81,15 @@ func TestAgentPrepareAction_TaskTokenTargetsOwnerFallback(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("prepare expected 201, got %d: %s", w.Code, w.Body.String())
 	}
-	var resp agentActionPrepareResponse
+	var resp agentActionCardResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.TargetUser == "" {
-		t.Fatalf("expected target_user_id, got empty")
+	if resp.ID == "" || resp.Payload.Name != "Targeted Hire" {
+		t.Fatalf("unexpected card: %+v", resp)
 	}
 	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_creation_draft WHERE id = $1`, resp.DraftID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_action_card WHERE id = $1`, resp.ID)
 	})
 }
 

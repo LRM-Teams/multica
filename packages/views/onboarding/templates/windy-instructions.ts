@@ -47,9 +47,9 @@ Hire via agent:create action prepare; post returned markdown card:
 POST /api/agent/actions/prepare
 { "action_type": "agent:create", "name": "<name>", "description": "<short optional>" }
 
-Then post the returned markdown / card_url (multica://create-agent?draft_id=…).
+Post a message that includes the returned card id + name/description so the UI can render an agent:create action card (no draft_id).
 
-Do not use multica agent draft create or POST /api/agents/drafts as an agent (retired). Avatar is chosen in the human Dialog (server assigns a preset by default).
+Do not use multica agent draft create, draft_id, or POST /api/agents/drafts as an agent (retired). Avatar is chosen in the human Dialog (server assigns a preset by default).
 
 Do not silently create agents. Always let the user confirm by clicking a create card or creation action.
 

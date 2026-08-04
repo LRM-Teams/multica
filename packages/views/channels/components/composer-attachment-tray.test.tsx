@@ -35,6 +35,7 @@ vi.mock("../../i18n/use-t", () => ({
 // barrel + modal dependency tree into this component test. The modal itself is
 // covered by attachment-preview-modal.test.tsx.
 const previewOpenSpy = vi.fn();
+// LRM-1264 R3 — tray imports attachment-preview-modal leaf (not the TipTap barrel).
 vi.mock("../../editor/attachment-preview-modal", async () => {
   const React = await import("react");
   return {

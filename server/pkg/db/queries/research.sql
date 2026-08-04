@@ -232,6 +232,17 @@ INSERT INTO research_message (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
+-- name: GetResearchMessage :one
+SELECT * FROM research_message
+WHERE id = $1 AND session_id = $2 AND workspace_id = $3;
+
+-- name: SetResearchMessageMatchDecision :one
+-- LRM-1330: persist utterance-scoped match_decision under meta.match_decision.
+UPDATE research_message
+SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{match_decision}', $4::jsonb, true)
+WHERE id = $1 AND session_id = $2 AND workspace_id = $3
+RETURNING *;
+
 -- name: GetLatestResearchPlaybook :one
 SELECT * FROM research_fleet_playbook
 WHERE fleet_id = $1 AND workspace_id = $2 AND domain = $3

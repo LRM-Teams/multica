@@ -1001,6 +1001,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/presence", h.GetResearchPresence)
 					r.Delete("/", h.DeleteResearchSession)
 					r.Post("/messages", h.PostResearchMessage)
+					r.Put("/messages/{messageId}/match-decision", h.PutResearchMessageMatchDecision)
 					r.Post("/steer", h.SteerResearchRun)
 					r.Post("/stop", h.StopResearchSession)
 					r.Post("/graph/nodes", h.AppendResearchGraphNode)
@@ -1327,6 +1328,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Route("/sessions/{id}", func(r chi.Router) {
 						r.Get("/", h.GetAgentResearchSessionSnapshot)
 						r.Post("/messages", h.PostAgentResearchMessage)
+						r.Put("/messages/{messageId}/match-decision", h.PutAgentResearchMessageMatchDecision)
 						r.Post("/graph/nodes", h.AppendAgentResearchGraphNode)
 						r.Post("/sources", h.UpsertAgentResearchSource)
 						r.Post("/report", h.PatchAgentResearchReport)

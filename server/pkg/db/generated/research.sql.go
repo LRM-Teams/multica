@@ -379,6 +379,72 @@ func (q *Queries) CreateResearchMessage(ctx context.Context, arg CreateResearchM
 	return i, err
 }
 
+const getResearchMessage = `-- name: GetResearchMessage :one
+SELECT id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta FROM research_message
+WHERE id = $1 AND session_id = $2 AND workspace_id = $3
+`
+
+type GetResearchMessageParams struct {
+	ID          pgtype.UUID `json:"id"`
+	SessionID   pgtype.UUID `json:"session_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetResearchMessage(ctx context.Context, arg GetResearchMessageParams) (ResearchMessage, error) {
+	row := q.db.QueryRow(ctx, getResearchMessage, arg.ID, arg.SessionID, arg.WorkspaceID)
+	var i ResearchMessage
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.SenderType,
+		&i.SenderID,
+		&i.TargetAgentID,
+		&i.Body,
+		&i.CreatedAt,
+		&i.CardKind,
+		&i.Meta,
+	)
+	return i, err
+}
+
+const setResearchMessageMatchDecision = `-- name: SetResearchMessageMatchDecision :one
+UPDATE research_message
+SET meta = jsonb_set(COALESCE(meta, '{}'::jsonb), '{match_decision}', $4::jsonb, true)
+WHERE id = $1 AND session_id = $2 AND workspace_id = $3
+RETURNING id, workspace_id, session_id, sender_type, sender_id, target_agent_id, body, created_at, card_kind, meta
+`
+
+type SetResearchMessageMatchDecisionParams struct {
+	ID            pgtype.UUID `json:"id"`
+	SessionID     pgtype.UUID `json:"session_id"`
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	MatchDecision []byte      `json:"match_decision"`
+}
+
+func (q *Queries) SetResearchMessageMatchDecision(ctx context.Context, arg SetResearchMessageMatchDecisionParams) (ResearchMessage, error) {
+	row := q.db.QueryRow(ctx, setResearchMessageMatchDecision,
+		arg.ID,
+		arg.SessionID,
+		arg.WorkspaceID,
+		arg.MatchDecision,
+	)
+	var i ResearchMessage
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SessionID,
+		&i.SenderType,
+		&i.SenderID,
+		&i.TargetAgentID,
+		&i.Body,
+		&i.CreatedAt,
+		&i.CardKind,
+		&i.Meta,
+	)
+	return i, err
+}
+
 const createResearchPlaybook = `-- name: CreateResearchPlaybook :one
 INSERT INTO research_fleet_playbook (
   workspace_id, fleet_id, domain, version, content_md, research_fleet_only

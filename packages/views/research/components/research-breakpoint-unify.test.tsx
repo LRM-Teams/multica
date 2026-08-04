@@ -272,16 +272,20 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
         /data-testid="research-report-outline-aside"\s+className="[^"]*\bmd:block"/,
       );
       expect(listPage).toMatch(/className="hidden text-xs text-muted-foreground md:block"/);
-      // LRM-1106: no goal chip; LRM-1285: desktop stage/time use fixed md:block slots.
-      expect(row).toMatch(/className="hidden w-10 shrink-0 [^"]*\bmd:block"/);
+      // LRM-1106: no goal chip; LRM-1285: desktop stage/time use fixed md:block slots
+      // (md:inline alone shrink-to-fits and drifts with title length).
+      expect(row).toMatch(/data-testid="research-session-stage-energy-slot"/);
+      expect(row).toMatch(
+        /className="relative z-\[1\] hidden w-28 shrink-0 md:block"/,
+      );
+      expect(row).toMatch(
+        /className="hidden w-10 shrink-0 text-xs tabular-nums text-muted-foreground md:block"/,
+      );
       expect(row).toMatch(/className="hidden shrink-0 md:flex"/);
       expect(row).toMatch(
         /className="[^"]*shrink-0 opacity-100 md:opacity-0 md:transition-opacity/,
       );
       expect(row).toMatch(/className="inline-flex [^"]*\bmd:hidden"/);
-      // LRM-1285: stage energy desktop slot is fixed w-28 + hidden md:block (not md:inline).
-      expect(row).toMatch(/data-testid="research-session-stage-energy-slot"/);
-      expect(row).toMatch(/className="relative z-\[1\] hidden w-28 shrink-0 md:block"/);
       expect(skeleton).toMatch(/className="hidden items-center md:flex"/);
       expect(skeleton).toMatch(/className="hidden h-6 w-28 shrink-0 md:block"/);
       expect(skeleton).toMatch(/className="hidden h-3 w-10 shrink-0 md:block"/);
@@ -311,7 +315,9 @@ describe("LRM-1109 research breakpoint unify (matchMedia 360/700/768)", () => {
         expect(narrowMeta?.className).toMatch(/\bmd:hidden\b/);
         expect(narrowMeta?.className).toMatch(/\binline-flex\b/);
         expect(narrowMeta?.className).not.toMatch(FORBIDDEN_STRUCTURAL_SM);
-        const desktopStage = screen.getByTestId("research-session-stage-energy-slot");
+        const desktopStage = screen.getByTestId(
+          "research-session-stage-energy-slot",
+        );
         expect(desktopStage.className).toMatch(/\bhidden\b/);
         expect(desktopStage.className).toMatch(/\bw-28\b/);
         expect(desktopStage.className).toMatch(/\bmd:block\b/);

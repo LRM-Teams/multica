@@ -5,6 +5,8 @@ import {
   buildExplorationDimensions,
   buildHumanBoundary,
   buildSourceStrategy,
+  evidenceRevisionKey,
+  resolveEvidenceOverviewMode,
   resolveExplorationRailMode,
   resolveHumanBoundaryMode,
   resolveSourceStrategyMode,
@@ -158,6 +160,91 @@ describe("m2-visibility", () => {
     expect(model.chips.find((c) => c.label === "docs")?.layer).toBe("general");
     expect(model.chips.find((c) => c.label === "marketplace")?.layer).toBe("domain");
     expect(model.whyLine).toMatch(/通用|领域/);
+  });
+
+  it("resolves evidence overview five-state + permission (LRM-1329)", () => {
+    const emptySource = { chips: [], whyLine: "", empty: true };
+    const readySource = {
+      empty: false,
+      whyLine: "why",
+      chips: [
+        {
+          id: "docs",
+          label: "docs",
+          layer: "general" as const,
+          samples: [],
+        },
+      ],
+    };
+    const emptyBoundary = {
+      aiCeiling: "",
+      mustHuman: "",
+      matrix: [] as { human: string; ai: string }[],
+      empty: true,
+    };
+    const readyBoundary = {
+      empty: false,
+      aiCeiling: "no licensed advice",
+      mustHuman: "compliance review",
+      matrix: [] as { human: string; ai: string }[],
+    };
+
+    expect(
+      resolveEvidenceOverviewMode({
+        sourceModel: emptySource,
+        boundaryModel: emptyBoundary,
+        sessionStatus: "drafting",
+      }),
+    ).toBe("empty");
+    expect(
+      resolveEvidenceOverviewMode({
+        sourceModel: emptySource,
+        boundaryModel: emptyBoundary,
+        sessionStatus: "running",
+      }),
+    ).toBe("loading");
+    expect(
+      resolveEvidenceOverviewMode({
+        sourceModel: readySource,
+        boundaryModel: emptyBoundary,
+        sessionStatus: "running",
+      }),
+    ).toBe("partial");
+    expect(
+      resolveEvidenceOverviewMode({
+        sourceModel: readySource,
+        boundaryModel: readyBoundary,
+        sessionStatus: "running",
+      }),
+    ).toBe("partial");
+    expect(
+      resolveEvidenceOverviewMode({
+        sourceModel: readySource,
+        boundaryModel: readyBoundary,
+        sessionStatus: "done",
+      }),
+    ).toBe("ready");
+    expect(
+      resolveEvidenceOverviewMode({
+        sourceModel: emptySource,
+        boundaryModel: emptyBoundary,
+        sessionStatus: "running",
+        error: "boom",
+      }),
+    ).toBe("error");
+    expect(
+      resolveEvidenceOverviewMode({
+        sourceModel: readySource,
+        boundaryModel: readyBoundary,
+        sessionStatus: "done",
+        error: "forbidden",
+        errorStatus: 403,
+      }),
+    ).toBe("permission");
+    // Revision key changes when facts change — never encodes trust.
+    expect(
+      evidenceRevisionKey(readySource, readyBoundary),
+    ).not.toEqual(evidenceRevisionKey(emptySource, emptyBoundary));
   });
 
   it("extracts human↔AI boundary from text", () => {

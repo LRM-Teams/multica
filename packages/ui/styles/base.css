@@ -201,6 +201,42 @@
   }
 }
 
+/* LRM-1329 EvidencePulse — one-shot aurora sweep on ready/revision (420ms).
+ * Decorative only; prefers-reduced-motion keeps a static brand edge, no transform. */
+@keyframes evidence-sweep {
+  0% {
+    background-position: 0% 50%;
+    opacity: 0.35;
+  }
+  45% {
+    opacity: 0.85;
+  }
+  100% {
+    background-position: 100% 50%;
+    opacity: 0.2;
+  }
+}
+
+.animate-evidence-sweep {
+  background-image: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in oklab, var(--brand) 45%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: evidence-sweep 420ms ease-out 1 both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-evidence-sweep {
+    animation: none;
+    background-image: none;
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--brand) 35%, transparent);
+  }
+}
+
 /* LRM-581 Presence Cluster — light brand breathing ring on Working faces only
  * (UI Designer 2026-07-25: thin / low-contrast; no thick ring or enter pop). */
 @keyframes presence-ring-pulse {

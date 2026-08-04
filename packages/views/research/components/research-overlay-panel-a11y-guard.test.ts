@@ -36,7 +36,9 @@ describe("LRM-1290 overlay panel a11y reuse guard", () => {
 
   it("aux drawer close lucide is decorative (aria-hidden) under a labeled button", () => {
     const src = read("research-aux-drawer.tsx");
-    expect(src).toMatch(/aria-label=\{t\(\(\$\) => \$\.panel\.aux_close\)\}/);
+    // LRM-1329: close label is panel-specific (sources → aux_close_sources).
+    expect(src).toMatch(/aria-label=\{closeLabel\}/);
+    expect(src).toMatch(/panel\.aux_close/);
     expect(src).toMatch(/<X className="size-4" aria-hidden/);
   });
 });

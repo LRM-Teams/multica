@@ -408,6 +408,39 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     expect(screen.queryByText("Unknown Agent")).toBeNull();
   });
 
+  it("LRM-1350: Stop passes Working-list resolved name, not Unknown Agent sentinel", () => {
+    mobileState.isMobile = true;
+    const onStopTask = vi.fn();
+    const stopped = task({
+      agent_id: "a-roster",
+      agent_name: "Unknown Agent",
+      task_id: "t-stop",
+      inbox_event_id: "i-stop",
+      status: "running",
+    });
+    renderWithQuery(
+      <ChannelPresenceCluster
+        members={members(["u1", "a-roster"], {
+          "a-roster": {
+            display_name: "群内Agent",
+            avatar_url: "/agent-avatars/roster.png",
+          },
+        })}
+        memberCount={2}
+        agentCount={2}
+        tasks={[stopped]}
+        canStop
+        onStopTask={onStopTask}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("channel-header-members-chip"));
+    expect(screen.getAllByText("群内Agent").length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getByTestId("channel-agents-working-stop"));
+    expect(onStopTask).toHaveBeenCalledTimes(1);
+    expect(onStopTask).toHaveBeenCalledWith(stopped, "群内Agent");
+    expect(onStopTask.mock.calls[0][1]).not.toBe("Unknown Agent");
+  });
+
   it("LRM-391 AC#5: channel roster name+avatar keeps Working face (no over-omit)", () => {
     mobileState.isMobile = true;
     renderWithQuery(

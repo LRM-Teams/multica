@@ -2123,7 +2123,12 @@ export function ChannelsPage({
     });
   };
 
-  const handleStopChannelTask = useCallback(async (task: ChannelActiveTask) => {
+  const handleStopChannelTask = useCallback(async (
+    task: ChannelActiveTask,
+    // LRM-1350: Working-list resolved label (same cascade as live cue). Never
+    // toast raw `task.agent_name` — that may be the Unknown Agent sentinel.
+    displayName: string,
+  ) => {
     if (!active?.id) return;
     // Terminal failed/no_reply rows are dismissed client-side in the live cue
     // (LRM-581) — cancel is only for in-flight wakes.
@@ -2135,11 +2140,16 @@ export function ChannelsPage({
       showErrorToast(t(($) => $.agent_status.stop_failed));
       return;
     }
+    const toastName = displayName.trim();
+    if (!toastName) {
+      showErrorToast(t(($) => $.agent_status.stop_failed));
+      return;
+    }
     setStoppingChannelTaskId(task.task_id);
     try {
       await api.cancelChannelInboxEvent(active.id, inboxEventId);
       toast.success(
-        t(($) => $.agent_status.stop_success, { name: task.agent_name }),
+        t(($) => $.agent_status.stop_success, { name: toastName }),
       );
       qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });

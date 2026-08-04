@@ -100,6 +100,7 @@ export function ResearchSessionStageEnergy({
   });
 
   return (
+    // react-doctor-disable-next-line react-doctor/prefer-tag-over-role -- LRM-1279 SoT: composite CSS rail uses role=img + aria-label; native <img> cannot host the four segment children
     <span
       data-testid="research-session-stage-energy"
       role="img"

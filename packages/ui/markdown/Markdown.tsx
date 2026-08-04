@@ -1,7 +1,8 @@
 import * as React from "react"
 import { lazy, Suspense } from "react"
 import { cn } from "@multica/ui/lib/utils"
-import type { MarkdownProps } from "./markdown-rich"
+import type { MarkdownProps, RenderMode } from "./markdown-rich"
+export type { MarkdownProps, RenderMode }
 import {
   highlightSearchText,
   isPlainChatProse,

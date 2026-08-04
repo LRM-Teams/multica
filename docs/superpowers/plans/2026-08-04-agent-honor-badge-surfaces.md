@@ -27,7 +27,7 @@ Replace every compact Agent honor badge that still renders the legacy fleet-clas
 
 ## Pull request and deployment
 
-- PR: pending
+- PR: [#2128](https://github.com/LRM-Teams/multica/pull/2128) (non-draft, base `dev`)
 - Merge commit: pending
 - Deployment: pending
 

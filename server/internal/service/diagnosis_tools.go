@@ -331,16 +331,37 @@ func SetDiagnosisPagerKey(getter func() []byte) { diagnosisPagerKey = getter }
 // split. Returns the page, the next opaque cursor, and whether all remaining
 // messages have been returned.
 func GetSegmentMessagePage(ctx context.Context, pager DiagnosisMessagePager, taskID, segmentID string, startSeq, endSeq int32, encodedCursor string) (SegmentMessagePage, error) {
+	var key []byte
+	if diagnosisPagerKey != nil {
+		key = diagnosisPagerKey()
+	}
+	return GetSegmentMessagePageWithKey(ctx, pager, key, taskID, segmentID, startSeq, endSeq, encodedCursor)
+}
+
+// DiagnosisRunCursorKey derives the cursor-signing key for the network run
+// API from the run's persisted capability token hash. Deriving (rather than
+// storing) keeps cursors verifiable by any API replica for the run's
+// lifetime without new secret material; an empty hash yields an unusable
+// key because such runs have no capability token at all.
+func DiagnosisRunCursorKey(capabilityTokenHash string) []byte {
+	sum := sha256.Sum256([]byte("multica-diagnosis-run-cursor-v1:" + capabilityTokenHash))
+	return sum[:]
+}
+
+// GetSegmentMessagePageWithKey is GetSegmentMessagePage with an explicit
+// cursor-signing key. A nil key fails cursor decode/encode exactly like an
+// uninitialised session key.
+func GetSegmentMessagePageWithKey(ctx context.Context, pager DiagnosisMessagePager, key []byte, taskID, segmentID string, startSeq, endSeq int32, encodedCursor string) (SegmentMessagePage, error) {
 	var lastSeq int32
 	var lastID pgtype.UUID
 	pageSeq := 0
 	accumulated := 0
 
 	if encodedCursor != "" {
-		if diagnosisPagerKey == nil {
+		if key == nil {
 			return SegmentMessagePage{}, fmt.Errorf("diagnosis cursor key not initialised")
 		}
-		payload, err := decodeDiagnosisCursor(encodedCursor, diagnosisPagerKey())
+		payload, err := decodeDiagnosisCursor(encodedCursor, key)
 		if err != nil {
 			return SegmentMessagePage{}, err
 		}
@@ -418,11 +439,19 @@ func GetSegmentMessagePage(ctx context.Context, pager DiagnosisMessagePager, tas
 	}
 
 	accumulated += fetched
+	// TODO(agent): latent bug (spec 005 T021 finding) — when the byte budget
+	// cuts a page short (fewer than maxDiagnosisSegmentTurns messages
+	// delivered), pageSeq*maxDiagnosisSegmentTurns over-counts prior pages, so
+	// accumulated/FetchedCount is inflated and `complete` (and downstream
+	// finish-segment coverage) can trigger before all messages are delivered.
+	// Also, a tail cut inside the final sub-limit query (len(rows) < limit)
+	// drops the remaining rows silently. Both transports share this behavior;
+	// fix in a follow-up (track fetched per page instead of deriving it).
 	complete := accumulated >= int(expected) || len(rows) < maxDiagnosisSegmentTurns
 
 	nextCursor := ""
 	if !complete {
-		if diagnosisPagerKey == nil {
+		if key == nil {
 			return SegmentMessagePage{}, fmt.Errorf("diagnosis cursor key not initialised")
 		}
 		lastIDStr := ""
@@ -435,7 +464,7 @@ func GetSegmentMessagePage(ctx context.Context, pager DiagnosisMessagePager, tas
 			LastSeq:   lastRowSeq,
 			LastID:    lastIDStr,
 			PageSeq:   pageSeq + 1,
-		}, diagnosisPagerKey())
+		}, key)
 		if err != nil {
 			return SegmentMessagePage{}, err
 		}

@@ -698,6 +698,9 @@ type InteractionDagDiagnosisRun struct {
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	CompletedAt           pgtype.Timestamptz `json:"completed_at"`
+	SandboxInstanceID     pgtype.Text        `json:"sandbox_instance_id"`
+	CapabilityTokenHash   pgtype.Text        `json:"capability_token_hash"`
+	ExecutionMode         pgtype.Text        `json:"execution_mode"`
 }
 
 type InteractionDagDiagnosisSegment struct {

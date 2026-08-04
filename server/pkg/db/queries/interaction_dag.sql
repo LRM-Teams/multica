@@ -131,33 +131,58 @@ INSERT INTO interaction_dag_diagnosis_run (run_id, project_id, task_id, topology
 VALUES ($1, $2, $3, $4, $5, 'running');
 
 -- name: GetInteractionDAGDiagnosisRun :one
-SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
 FROM interaction_dag_diagnosis_run
 WHERE run_id = $1;
 
 -- name: GetResumableInteractionDAGDiagnosisRun :one
--- Latest still-active (running/compacting) run for a (project, task); used to
--- resume an interrupted diagnosis instead of starting over.
-SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+-- Latest still-active (provisioning/running/compacting) run for a
+-- (project, task); used to resume an interrupted diagnosis instead of
+-- starting over. 'provisioning' is included so a sandbox-mode run whose
+-- server crashed mid-provisioning can be resumed or re-provisioned.
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
 FROM interaction_dag_diagnosis_run
-WHERE project_id = $1 AND task_id = $2 AND status IN ('running', 'compacting')
+WHERE project_id = $1 AND task_id = $2 AND status IN ('provisioning', 'running', 'compacting')
 ORDER BY updated_at DESC
 LIMIT 1;
 
 -- name: GetLatestCompletedInteractionDAGDiagnosisRun :one
 -- Used by idempotent on-demand requests: a completed diagnosis for the exact
 -- same terminal DAG is returned rather than launching another Pi session.
-SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
 FROM interaction_dag_diagnosis_run
 WHERE project_id = $1 AND task_id = $2 AND status = 'completed'
 ORDER BY completed_at DESC, updated_at DESC
+LIMIT 1;
+
+-- name: GetLatestInteractionDAGDiagnosisRunForProject :one
+-- Latest diagnosis run of any status for a project; backs the human-facing
+-- /diagnosis/latest polling endpoint.
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
+FROM interaction_dag_diagnosis_run
+WHERE project_id = $1
+ORDER BY updated_at DESC
 LIMIT 1;
 
 -- name: FailInteractionDAGDiagnosisRun :execrows
 -- CAS: only an active run can be failed; last_error is bounded by the caller.
 UPDATE interaction_dag_diagnosis_run
 SET status = 'failed', last_error = $2, updated_at = now()
-WHERE run_id = $1 AND status IN ('running', 'compacting');
+WHERE run_id = $1 AND status IN ('provisioning', 'running', 'compacting');
+
+-- name: SetInteractionDAGDiagnosisRunSandbox :exec
+-- Records the dedicated sandbox, per-run capability token hash, and execution
+-- mode for a sandbox-mode diagnosis run (migration 278).
+UPDATE interaction_dag_diagnosis_run
+SET sandbox_instance_id = $2, capability_token_hash = $3, execution_mode = $4, updated_at = now()
+WHERE run_id = $1;
+
+-- name: SetInteractionDAGDiagnosisRunStatus :execrows
+-- CAS: transition a run between non-terminal statuses (e.g. provisioning ->
+-- running once the sandbox runtime is online).
+UPDATE interaction_dag_diagnosis_run
+SET status = $2, updated_at = now()
+WHERE run_id = $1 AND status = $3;
 
 -- name: CompleteInteractionDAGDiagnosisRun :execrows
 -- CAS: completes only while active AND every segment checkpoint is completed,

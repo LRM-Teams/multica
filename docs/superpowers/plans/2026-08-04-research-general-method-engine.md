@@ -1,6 +1,6 @@
 # 通用调研方法引擎实施记录
 
-状态：已实现，待提交 PR
+状态：已提交非草稿 PR [#2245](https://github.com/LRM-Teams/multica/pull/2245)
 
 日期：2026-08-04
 
@@ -57,7 +57,7 @@
 - [x] v3 保留 v2 的报告结构、Claim 引用、独立审查和作者归属约束。
 - [x] 增加单元测试和 PostgreSQL 集成测试，覆盖版本兼容、持久化、重新规划版本和 Prompt 继承。
 - [x] 更新 Research Run 权威设计文档、共享响应 Schema、v3 节点结果名称和有界监控标签。
-- [ ] 提交非草稿 PR 到 `dev`。
+- [x] 提交非草稿 PR [#2245](https://github.com/LRM-Teams/multica/pull/2245) 到 `dev`。
 
 ## 验证记录
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildRecordedVoiceMessageParts,
   encodeVoicePCM,
+  encodeVoicePCMAsync,
   encodeVoiceWAV,
   VOICE_SAMPLE_RATE,
 } from "./voice-audio";
@@ -67,5 +68,20 @@ describe("encodeVoicePCM", () => {
 
   it("rejects an invalid source sample rate", () => {
     expect(() => encodeVoicePCM(new Float32Array([0]), 0)).toThrow("sample rate");
+  });
+});
+
+describe("encodeVoicePCMAsync", () => {
+  it("matches the sync encoder byte-for-byte on a short buffer", async () => {
+    const samples = new Float32Array([-0.5, 0, 0.5, 1]);
+    const sync = encodeVoicePCM(samples, VOICE_SAMPLE_RATE);
+    const asyncPcm = await encodeVoicePCMAsync(samples, VOICE_SAMPLE_RATE);
+    expect(new Uint8Array(asyncPcm)).toEqual(new Uint8Array(sync));
+  });
+
+  it("yields while resampling a long buffer without changing length", async () => {
+    const oneSecondAt48K = new Float32Array(48_000);
+    const pcm = await encodeVoicePCMAsync(oneSecondAt48K, 48_000);
+    expect(pcm.byteLength).toBe(VOICE_SAMPLE_RATE * 2);
   });
 });

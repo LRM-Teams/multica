@@ -20,8 +20,7 @@ import { useOpenMemberPanel } from "./member-panel-context";
 import { AppLink } from "../navigation/app-link";
 import { Attachment as AttachmentRenderer } from "../editor/attachment";
 import { AttachmentDownloadProvider } from "../editor/attachment-download-context";
-import { WindyCreateAgentLink } from "./windy-create-agent-links";
-import { isWindyCreateAgentLink } from "./windy-create-agent-link-utils";
+
 import { useActorMentionChipLabel } from "./actor-mention-chip-label";
 import {
   mentionTokenClassName,
@@ -302,20 +301,10 @@ export function Markdown(props: MarkdownProps): React.JSX.Element {
       defaultRenderMention(mention, highlightQuery, sourceMessageId),
     [highlightQuery, sourceMessageId],
   );
-  const RenderAppLink = React.useCallback(
-    ({ href, children }: { href: string; children: React.ReactNode }) => {
-      if (isWindyCreateAgentLink(href)) {
-        return <WindyCreateAgentLink href={href}>{children}</WindyCreateAgentLink>;
-      }
-      return null;
-    },
-    [],
-  );
   return (
     <AttachmentDownloadProvider attachments={attachments}>
       <MarkdownBase
         renderMention={renderMention}
-        renderAppLink={RenderAppLink}
         renderCitation={renderCitation}
         renderImage={renderAppImage}
         renderFileCard={renderFileCard}

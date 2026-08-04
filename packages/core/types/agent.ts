@@ -594,6 +594,32 @@ export interface AgentCreationDraft {
   used_at?: string | null;
 }
 
+/**
+ * Human-confirmable agent:create action card (hire hard-cut, no draft bridge).
+ * Prepared by agents via POST /api/agent/actions/prepare; humans open
+ * CreateAgentDialog bound to card id and POST /api/agents with action_card_id.
+ */
+export interface AgentActionCardPayload {
+  name: string;
+  description: string;
+}
+
+export type AgentActionCardStatus = "prepared" | "done" | "dismissed";
+
+export interface AgentActionCard {
+  id: string;
+  action_type: "agent:create";
+  status: AgentActionCardStatus;
+  payload: AgentActionCardPayload;
+  prepared_by_agent_id?: string | null;
+  channel_id?: string | null;
+  committed_by_user_id?: string | null;
+  committed_agent_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  done_at?: string | null;
+}
+
 export interface CreateAgentDraftRequest {
   name: string;
   description?: string;
@@ -642,14 +668,19 @@ export interface CreateAgentRequest {
   model?: string;
   /** Optional runtime-native reasoning/effort token. See `Agent.thinking_level`. */
   thinking_level?: string;
-  /** Optional non-URL seed context for new agent notes. Prefer draft_id for Wendy flows. */
+  /** Optional non-URL seed context for new agent notes (research / legacy seed). */
   initial_notes?: Record<string, string>;
-  /** Optional non-URL seed context for durable memory. Prefer draft_id for Wendy flows. */
+  /** Optional non-URL seed context for durable memory (research / legacy seed). */
   initial_memory?: Record<string, string>;
   /** Optional template slug used by the onboarding agent picker. Surfaced
    *  as the `template` property on the `agent_created` PostHog event. */
   template?: string;
-  /** Agent creation draft consumed by this create call, usually produced by Wendy. */
+  /**
+   * Hire path: prepared agent:create action card id. Mutually exclusive with
+   * draft_id. Server marks the card done after create.
+   */
+  action_card_id?: string;
+  /** Research / legacy seed only — not the hire path (agent drafts create is 410). */
   draft_id?: string;
 }
 

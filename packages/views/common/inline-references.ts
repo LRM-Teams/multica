@@ -105,6 +105,8 @@ export function projectInlineReferences(
   if (!content) return [];
   const anchored = (parts ?? [])
     .filter(hasSpan)
+    // action_card is a block MessagePartsRenderer card, never an inline token.
+    .filter((p) => p.ref_type !== "action_card")
     .filter(
       (p) =>
         p.content_start_utf16 >= 0 &&

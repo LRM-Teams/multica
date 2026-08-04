@@ -288,6 +288,8 @@
     "doing": "正在做",
     "summary_empty": "暂无摘要。",
     "dead_end_reason": "死胡同原因",
+    "abandon_reason": "废弃原因",
+    "abandon_reason_pending": "原因待同步",
     "retry_cta": "重试 / 换路",
     "evidence": "证据 / 来源",
     "evidence_empty": "暂无关联来源。",
@@ -348,7 +350,7 @@
       "done": "完成",
       "running": "运行中",
       "waiting": "等待",
-      "abandoned": "已放弃",
+      "abandoned": "已废弃",
       "failed": "失败",
       "completed": "已完成",
       "resolved": "已解决",
@@ -382,7 +384,7 @@
       "waiting": "等待",
       "pending_delivery": "待交付",
       "failed": "失败",
-      "abandoned": "已放弃"
+      "abandoned": "已废弃"
     }
   },
   "card_menu": {

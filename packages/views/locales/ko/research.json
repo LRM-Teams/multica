@@ -288,6 +288,8 @@
     "doing": "진행 중",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
+    "abandon_reason": "폐기 이유",
+    "abandon_reason_pending": "이유 동기화 대기",
     "retry_cta": "재시도 / 경로 변경",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources.",

@@ -214,7 +214,7 @@ const STATUS_LABEL_ZH: Record<string, string> = {
   conflict: "冲突",
   refuted: "已否定",
   dead_end: "死胡同",
-  abandoned: "已放弃",
+  abandoned: "已废弃",
   cancelled: "已取消",
   active: "运行中",
   running: "运行中",

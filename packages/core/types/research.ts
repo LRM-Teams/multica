@@ -146,6 +146,11 @@ export interface ResearchGraphNode {
   assessment?: "trusted" | "pending_review" | "detour" | string;
   reason?: string | null;
   evidence_summary?: string | null;
+  /**
+   * LRM-1317 / LRM-1333: projected abandon reason (payload.abandon_reason or
+   * deprecate_reason). Omitted when empty — never invent from assessment/edges.
+   */
+  abandon_reason?: string | null;
   created_at: string;
   updated_at: string;
 }

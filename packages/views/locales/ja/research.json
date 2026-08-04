@@ -288,6 +288,8 @@
     "doing": "進行中",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
+    "abandon_reason": "破棄理由",
+    "abandon_reason_pending": "理由は同期待ち",
     "retry_cta": "再試行 / 別経路",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources.",

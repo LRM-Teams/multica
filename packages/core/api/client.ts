@@ -3790,8 +3790,11 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/stats`);
   }
 
-  async getChannelGoal(channelId: string): Promise<ChannelGoalEnvelope> {
-    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal`);
+  async getChannelGoal(
+    channelId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ChannelGoalEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal`, abortInit(options));
     return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
       endpoint: "GET /api/channels/:id/goal",
     });

@@ -32,11 +32,13 @@ const apiMock = vi.hoisted(() => ({
   listChannelMessageThread: vi.fn(),
   listChannelActiveTasks: vi.fn(),
   getChannelProject: vi.fn(),
+  getChannelGoal: vi.fn(),
 }));
 
 vi.mock("../api", () => ({ api: apiMock }));
 
 import { activeChannelTasksOptions } from "./active-tasks";
+import { channelGoalOptions } from "./goal";
 import { channelProjectOptions } from "./project";
 import {
   channelMemberManagementCapabilitiesOptions,
@@ -58,6 +60,7 @@ describe("LRM-1296 — channel switch cancels stale reads", () => {
     apiMock.listChannelMessageThread.mockImplementation(hang("thread"));
     apiMock.listChannelActiveTasks.mockImplementation(hang("activeTasks"));
     apiMock.getChannelProject.mockImplementation(hang("project"));
+    apiMock.getChannelGoal.mockImplementation(hang("goal"));
   });
 
   it("aborts the abandoned channel's message-page fetch when the observer unmounts", async () => {
@@ -86,6 +89,7 @@ describe("LRM-1296 — channel switch cancels stale reads", () => {
     ["thread", () => channelMessageThreadOptions("channel-a", "root-1")],
     ["activeTasks", () => activeChannelTasksOptions("channel-a")],
     ["project", () => channelProjectOptions("ws-1", "channel-a")],
+    ["goal", () => channelGoalOptions("channel-a")],
   ];
 
   it.each(cases)(

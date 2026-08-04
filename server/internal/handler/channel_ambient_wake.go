@@ -173,6 +173,8 @@ func (h *Handler) buildChannelAmbientUnreadPromptWithDB(ctx context.Context, exe
 	b.WriteString("\n")
 	b.WriteString(channelAmbientGreetingReactionInstruction)
 	b.WriteString("\n")
+	b.WriteString(channelAmbientAlreadyDelegatedInstruction)
+	b.WriteString("\n")
 	b.WriteString("Decide whether your own role/profile makes a response useful. If it is not clearly relevant to you, finish without visible output; do not print no_reply or protocol text.\n")
 	b.WriteString("If the unread bundle directly addresses your agent name, role, description, instructions, or an unmistakable task for you, treat it as directed to you: write a visible reply or acknowledgement using the requested supported delivery modality, and do not return no_reply.\n")
 	b.WriteString("If a lightweight acknowledgement is enough outside an all-hands welcome/greeting request, use a reaction when the runtime brief supports reactions and a reaction is sufficient; otherwise send a short acknowledgement.\n")

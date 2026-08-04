@@ -45,6 +45,8 @@ class DispatchHandle:
     leader_sandbox_id: str | None
     rollout_error: str | None
     raw: dict[str, Any]
+    source_task_id: str | None = None
+    run_id: str | None = None
 
     @property
     def submit_ok(self) -> bool:
@@ -121,6 +123,8 @@ def parse_dispatch_response(body: dict[str, Any]) -> DispatchHandle:
         leader_sandbox_id=leader_sandbox_id,
         rollout_error=rollout_error,
         raw=body,
+        source_task_id=rollout.get("source_task_id") or None,
+        run_id=rollout.get("run_id") or None,
     )
 
 
@@ -210,20 +214,43 @@ class MulticaClient:
             )
         return parse_dispatch_response(body)
 
-    def dispatch_scratch(self, issue_spec: dict[str, Any]) -> DispatchHandle:
-        """Scratch stage: fork the base env and dispatch the issue to the squad."""
-        return self._dispatch(
-            {
-                "mode": "scratch",
-                "env_id": self.base_env_id,
-                "domain": _ISSUE_DOMAIN,
-                "dispatch_type": _DISPATCH_TYPE_ISSUE,
-                "group_size": 1,
-                "squad_id": self.squad_id,
-                "training_mode": False,
-                "issue": issue_spec,
-            }
+    def register_source_task(self, task_type: str, payload: dict[str, Any]) -> str:
+        status, body = self._request(
+            "POST", "/api/v1/source-tasks", {"type": task_type, "payload": payload}
         )
+        if status not in (200, 201) or not isinstance(body, dict):
+            raise MulticaAPIError(
+                f"source-task registration failed with status {status}",
+                status=status,
+                body=body,
+            )
+        source_task_id = body.get("source_task_id")
+        if not isinstance(source_task_id, str) or not source_task_id:
+            raise MulticaAPIError(
+                "source-task registration response missing source_task_id",
+                status=status,
+                body=body,
+            )
+        return source_task_id
+
+    def dispatch_scratch(
+        self, issue_spec: dict[str, Any], source_task_id: str | None = None
+    ) -> DispatchHandle:
+        """Scratch stage: fork the base env and dispatch a durable issue source."""
+        payload: dict[str, Any] = {
+            "mode": "scratch",
+            "env_id": self.base_env_id,
+            "domain": _ISSUE_DOMAIN,
+            "dispatch_type": _DISPATCH_TYPE_ISSUE,
+            "group_size": 1,
+            "squad_id": self.squad_id,
+            "training_mode": False,
+        }
+        if source_task_id:
+            payload["source_task_id"] = source_task_id
+        else:
+            payload["issue"] = issue_spec
+        return self._dispatch(payload)
 
     def dispatch_branch(self, env_id: str, mode: str) -> DispatchHandle:
         """Branch/resume stage: fork a prior rollout's env; issue is copied.

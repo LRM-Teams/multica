@@ -71,7 +71,13 @@ Endpoints:
 Realtime:
 
 - `agent_honor:achievement_unlocked`
+- `agent_honor:level_changed`
 - `agent_honor:fleet_class_changed`
+
+Every event includes the Agent display name. Level changes invalidate the
+Agent directory, detail, and honor queries so identity crests update on every
+surface without a page reload. Promotion notifications name the Agent; level
+decreases still invalidate cached identity data but do not show a promotion.
 
 ## UI surfaces
 

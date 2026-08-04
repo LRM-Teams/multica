@@ -767,6 +767,8 @@
     "no_equipped": "No achievement equipped",
     "dismiss_unlock": "Dismiss achievement notification",
     "unlock_toast_title": "Agent achievement unlocked",
+    "achievement_unlocked": "{{agentName}} unlocked “{{achievementName}}”",
+    "level_promoted": "{{agentName}} promoted to honor level {{level}}",
     "secret_achievement": "Secret achievement",
     "secret_achievement_description": "Keep contributing to reveal this achievement after it unlocks.",
     "secret_achievement_category": "Unrevealed",

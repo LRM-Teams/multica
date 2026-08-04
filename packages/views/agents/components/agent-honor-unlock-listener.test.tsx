@@ -92,6 +92,7 @@ describe("AgentHonorUnlockListener", () => {
     act(() => {
       mocks.eventHandlers.get("agent_honor:achievement_unlocked")?.({
         agent_id: "agent-1",
+        agent_name: "前端工程师",
         achievement: {
           id: "first_launch",
           title: "First Launch",
@@ -109,8 +110,33 @@ describe("AgentHonorUnlockListener", () => {
     const renderToast = mocks.toastCustom.mock.calls[0]?.[0];
     expect(renderToast).toBeTypeOf("function");
     render(renderToast("toast-1"));
+    expect(screen.getByText("前端工程师解锁「星海首航」")).toBeInTheDocument();
     expect(screen.getByText("+25 经验")).toBeInTheDocument();
     expect(screen.queryByText(/XP/)).not.toBeInTheDocument();
+  });
+
+  it("refreshes every agent identity surface and names a level promotion", () => {
+    render(<AgentHonorUnlockListener />);
+
+    act(() => {
+      mocks.eventHandlers.get("agent_honor:level_changed")?.({
+        agent_id: "agent-1",
+        agent_name: "前端工程师",
+        previous_level: 7,
+        level: 8,
+      });
+    });
+
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["agents", "workspace-1", "honor", "agent-1"],
+    });
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["agents", "workspace-1"],
+    });
+    expect(mocks.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["agents", "workspace-1", "detail", "agent-1"],
+    });
+    expect(mocks.toastSuccess).toHaveBeenCalledWith("前端工程师晋升至荣誉 8 级");
   });
 
   it("names the promoted agent and localizes the fleet class", () => {

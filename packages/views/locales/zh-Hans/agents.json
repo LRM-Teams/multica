@@ -755,6 +755,8 @@
     "no_equipped": "尚未佩戴成就",
     "dismiss_unlock": "关闭成就通知",
     "unlock_toast_title": "智能体解锁新成就",
+    "achievement_unlocked": "{{agentName}}解锁「{{achievementName}}」",
+    "level_promoted": "{{agentName}}晋升至荣誉 {{level}} 级",
     "secret_achievement": "秘密成就",
     "secret_achievement_description": "继续积累贡献，解锁后即可揭晓。",
     "secret_achievement_category": "尚未揭晓",

@@ -74,9 +74,42 @@ describe("ResearchStageTimeline", () => {
 /**
  * LRM-1252 — upcoming 阶段名曾是 `opacity-75` × `text-muted-foreground/80`
  * → 有效 alpha 0.60，亮色实测 ≈2.6:1（WCAG AA 4.5 FAIL）。
- * 弱化层级只允许靠字号/字重/等宽/glyph，不允许靠 alpha 压文字。
+ * LRM-1291 — 能量轨不得以低对比 alpha 或纯颜色承担状态语义。
  */
-describe("ResearchStageTimeline text contrast (LRM-1252)", () => {
+describe("ResearchStageTimeline energy rail (LRM-1252, LRM-1291)", () => {
+  it("renders one semantic four-segment rail with redundant state glyphs", () => {
+    const { container } = render(
+      <ResearchStageTimeline currentStage="s2_sources" sessionStatus="running" />,
+    );
+    const rail = container.querySelector('[data-testid="research-stage-energy-rail"]');
+    expect(rail).toBeTruthy();
+    expect(rail?.querySelectorAll("[data-stage-energy-segment]")).toHaveLength(4);
+    expect(rail?.querySelectorAll('[data-stage-energy-state="done"]')).toHaveLength(1);
+    expect(rail?.querySelectorAll('[data-stage-energy-state="current"]')).toHaveLength(1);
+    expect(rail?.querySelectorAll('[data-stage-energy-state="upcoming"]')).toHaveLength(2);
+    expect(rail?.querySelector('[data-stage-glyph="done"]')).toBeTruthy();
+    expect(rail?.querySelector('[data-stage-glyph="current"]')).toBeTruthy();
+    expect(rail?.querySelectorAll('[data-stage-glyph="upcoming"]')).toHaveLength(2);
+  });
+
+  it("animates only the current segment and disables that animation for reduced motion", () => {
+    const { container } = render(
+      <ResearchStageTimeline currentStage="s2_sources" sessionStatus="running" />,
+    );
+    const flow = container.querySelectorAll('[data-stage-flow="current"]');
+    expect(flow).toHaveLength(1);
+    expect(flow[0]!.className).toContain("animate-pulse");
+    expect(flow[0]!.className).toContain("motion-reduce:animate-none");
+    expect(container.querySelectorAll('[data-stage-flow="none"]')).toHaveLength(3);
+  });
+
+  it("keeps narrow visual labels compact without losing localized full accessible names", () => {
+    render(<ResearchStageTimeline currentStage="s2_sources" sessionStatus="running" />);
+    const current = screen.getByRole("button", { name: /S2 · Explore.*Current/i });
+    expect(current).toHaveAttribute("aria-current", "step");
+    expect(current.querySelector("[data-stage-short-label]")).toHaveTextContent("S2");
+  });
+
   it("keeps upcoming rows free of opacity-* and renders a solid muted label", () => {
     const { container } = render(
       <ResearchStageTimeline currentStage="s2_sources" sessionStatus="running" />,
@@ -85,31 +118,24 @@ describe("ResearchStageTimeline text contrast (LRM-1252)", () => {
     expect(upcoming.length).toBe(2);
     for (const li of upcoming) {
       expect(li.className).not.toMatch(/\bopacity-\d/);
-      const label = li.querySelector("span.font-mono");
+      const label = li.querySelector("[data-stage-label]");
       expect(label).not.toBeNull();
       expect(label!.className).toContain("text-muted-foreground");
       expect(label!.className).not.toMatch(/text-muted-foreground\/\d/);
     }
   });
 
-  it("keeps the three step states visually distinct without alpha on the label", () => {
+  it("keeps the three step states visually distinct without alpha on their labels", () => {
     const { container } = render(
       <ResearchStageTimeline currentStage="s2_sources" sessionStatus="running" />,
     );
     const labelOf = (state: string) =>
-      container
-        .querySelector(`[data-stage-state="${state}"] span.block.truncate`)
-        ?.className ?? "";
-    expect(labelOf("current")).toContain("font-semibold");
+      container.querySelector(`[data-stage-state="${state}"] [data-stage-label]`)?.className ?? "";
+    expect(labelOf("current")).toContain("font-medium");
     expect(labelOf("current")).toContain("text-foreground");
-    expect(labelOf("done")).toContain("font-mono");
-    expect(labelOf("done")).toContain("text-foreground/75");
-    expect(labelOf("upcoming")).toContain("font-mono");
+    expect(labelOf("done")).toContain("text-foreground");
     expect(labelOf("upcoming")).toContain("text-muted-foreground");
     expect(labelOf("upcoming")).not.toBe(labelOf("done"));
-    // 连线与 glyph 视觉不变（装饰仍可用 alpha）
-    expect(container.querySelector(".bg-border\\/80")).toBeTruthy();
-    expect(container.querySelector('[aria-hidden].opacity-70')).toBeTruthy();
   });
 
   it("guard: no text-bearing node uses alpha-dimmed muted text or an opacity ancestor", () => {
@@ -123,8 +149,7 @@ describe("ResearchStageTimeline text contrast (LRM-1252)", () => {
         .map((n) => n.textContent ?? "")
         .join("")
         .trim();
-      if (!ownText) continue;
-      if (el.closest('[aria-hidden="true"]')) continue;
+      if (!ownText || el.closest('[aria-hidden="true"]')) continue;
       const chain: string[] = [];
       let cur: HTMLElement | null = el;
       while (cur && cur !== container) {

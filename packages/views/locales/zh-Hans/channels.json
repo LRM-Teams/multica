@@ -85,8 +85,6 @@
     "working_verb_with_duration": "{{verb}} · {{duration}}",
     "working_failed": "无法回复 · 可再 @",
     "working_no_reply": "未回复 · 可再 @",
-    "working_dismiss": "关闭",
-    "working_dismiss_aria": "关闭 {{name}} 的状态",
     "settings_aria": "群设置"
   },
   "group_manager_hint": {

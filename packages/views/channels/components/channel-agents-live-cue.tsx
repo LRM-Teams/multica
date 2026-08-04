@@ -105,30 +105,13 @@ function useWorkingRowActivityVerb(
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
   const projection = useAgentActivityProjection(wsId, agentId);
-  const isTerminal = isTerminalChannelActiveTask(task);
-  const outcome = task.outcome?.trim();
 
-  if (outcome === "failed") {
-    return {
-      verb: t(($) => $.header.working_failed),
-      verbClass: "text-destructive",
-      dotClass: "bg-destructive",
-      ping: false,
-    };
-  }
-  if (outcome === "no_reply") {
-    return {
-      verb: t(($) => $.header.working_no_reply),
-      verbClass: "text-destructive",
-      dotClass: "bg-destructive",
-      ping: false,
-    };
-  }
-
-  const duration =
-    !isTerminal && firstSeen
-      ? formatDuration(new Date(firstSeen).toISOString(), now)
-      : "";
+  // LRM-1349: Working list only receives non-terminal tasks (`listTasks` /
+  // `liveTasks` already drop `outcome` rows), so failed/no_reply + terminal
+  // duration gates here were unreachable dead code.
+  const duration = firstSeen
+    ? formatDuration(new Date(firstSeen).toISOString(), now)
+    : "";
 
   // LRM-650: Compact verbs stay EN Activity SoT — never i18n Working/Queued.
   if (projection && isCompactActivityLabel(projection.label)) {
@@ -168,7 +151,6 @@ function WorkingListRow({
   canStop,
   stoppingTaskId,
   onStopTask,
-  onDismiss,
 }: {
   task: ChannelActiveTask;
   /** Resolved live label — never "Unknown Agent" (LRM-391). */
@@ -180,19 +162,15 @@ function WorkingListRow({
   canStop: boolean;
   stoppingTaskId: string | null;
   onStopTask?: (task: ChannelActiveTask, displayName: string) => void;
-  onDismiss: (task: ChannelActiveTask) => void;
 }) {
   const { t } = useT("channels");
-  const isTerminal = isTerminalChannelActiveTask(task);
   const { verb, verbClass, dotClass, ping } = useWorkingRowActivityVerb(
     task.agent_id,
     task,
     now,
     firstSeen,
   );
-  const actionLabel = isTerminal
-    ? t(($) => $.header.working_dismiss)
-    : t(($) => $.agent_status.stop);
+  const actionLabel = t(($) => $.agent_status.stop);
   // LRM-1348: pending phase semantics are unchanged — only how it is expressed.
   const isStopPending =
     stoppingTaskId === task.task_id ||
@@ -202,7 +180,6 @@ function WorkingListRow({
     <div
       className="flex min-h-8 items-center gap-2 rounded-md px-1 py-1 text-xs hover:bg-muted/60"
       data-testid="channel-agents-working-row"
-      data-terminal={isTerminal ? "true" : "false"}
     >
       <ActorAvatar
         actorType="agent"
@@ -229,25 +206,7 @@ function WorkingListRow({
         <div className="truncate font-semibold text-foreground">{displayName}</div>
         <div className={cn("truncate", verbClass)}>{verb}</div>
       </div>
-      {isTerminal ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-8 shrink-0 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onDismiss(task);
-          }}
-          aria-label={t(($) => $.header.working_dismiss_aria, {
-            name: displayName,
-          })}
-          data-testid="channel-agents-working-dismiss"
-        >
-          {actionLabel}
-        </Button>
-      ) : canStop && onStopTask ? (
+      {canStop && onStopTask ? (
         <Button
           type="button"
           variant="ghost"
@@ -616,9 +575,6 @@ export function ChannelPresenceCluster({
             canStop={canStop}
             stoppingTaskId={stoppingTaskId}
             onStopTask={onStopTask}
-            onDismiss={() => {
-              /* live rows use Stop; terminal outcomes are not listed (Activity SoT) */
-            }}
           />
         ))}
       </div>

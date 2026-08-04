@@ -81,8 +81,6 @@
     "working_list_title": "처리 중 · {{count}}",
     "working_failed": "응답 불가 · 다시 @",
     "working_no_reply": "응답 없음 · 다시 @",
-    "working_dismiss": "닫기",
-    "working_dismiss_aria": "{{name}} 상태 닫기",
     "settings_aria": "그룹 설정",
     "presence_counts": "{{members}} · {{agents}}",
     "presence_working": "{{working}} 처리 중",

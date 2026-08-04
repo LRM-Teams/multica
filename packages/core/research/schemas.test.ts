@@ -3,6 +3,8 @@ import {
   EMPTY_RESEARCH_SNAPSHOT,
   ListResearchSessionsResponseSchema,
   ResearchSessionSnapshotSchema,
+  ResearchNodeCommandResponseSchema,
+  EMPTY_RESEARCH_NODE_COMMAND,
   SteerResearchRunResponseSchema,
 } from "./schemas";
 import { parseWithFallback } from "../api/schema";
@@ -172,5 +174,15 @@ describe("research schemas", () => {
     });
     expect(parsed.messages[0]?.card_kind).toBe("process");
     expect((parsed.messages[0]?.meta as { op?: string })?.op).toBe("session_kickoff");
+  });
+
+  it("falls back when a node command response drifts", () => {
+    const parsed = parseWithFallback(
+      { command_id: null, action: "future_action" },
+      ResearchNodeCommandResponseSchema,
+      EMPTY_RESEARCH_NODE_COMMAND,
+      { endpoint: "test" },
+    );
+    expect(parsed).toBe(EMPTY_RESEARCH_NODE_COMMAND);
   });
 });

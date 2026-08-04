@@ -49,6 +49,7 @@ export type ResearchFlowNodeData = {
   row?: number;
   laneLabelKey?: LogicLaneId;
   onRetry?: (node: ResearchGraphNode) => void;
+  onNodeCommand?: (node: ResearchGraphNode, action: ResearchNodeCommandAction) => Promise<void>;
   onViewDetail?: (node: ResearchGraphNode) => void;
   menuOpen?: boolean;
   onMenuOpenChange?: (open: boolean) => void;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
@@ -186,7 +186,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
   // LRM-1061 — one aux drawer at a time (trajectory | sources | detail).
-  const [auxPanel, setAuxPanel] = useState<ResearchAuxPanelId | null>(null);
+  const linkedPanel = nav.searchParams.get("panel");
+  const [auxPanel, setAuxPanel] = useState<ResearchAuxPanelId | null>(
+    linkedPanel === "trajectory" || linkedPanel === "sources" || linkedPanel === "detail" ? linkedPanel : null,
+  );
   // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
   const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
   const completionDismissed =
@@ -443,9 +446,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { session, messages, report, sources } = data;
   const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
   const fleet = { ...data.fleet, members: fleetMembers };
+  const linkedNodeId = nav.searchParams.get("node");
   const selectedNode = ui.selected
     ? data.nodes.find((node) => node.id === ui.selected?.id) ?? ui.selected
-    : null;
+    : linkedNodeId
+      ? data.nodes.find((node) => node.id === linkedNodeId) ?? null
+      : null;
   // LRM-1329 — drawer overview owns error/permission; cards stay fact-only.
   // Signal error with a non-empty token only — never pass raw API strings into
   // the drawer (safe copy lives in EvidencePulse i18n / role=alert).
@@ -639,18 +645,14 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
               dispatch({ type: "select", node });
               setAuxPanel("detail");
             }}
-            onRetry={(node) => {
-              // LRM-848 entry → LRM-828 retry path. Until a dedicated BE API lands,
-              // ask the fleet lead to re-explore from this dead_end via chat.
-              const body = t(($) => $.ring.retry_message, {
-                title: node.title || node.node_type,
-                id: node.id,
+            onNodeCommand={async (node, action) => {
+              await api.postResearchNodeCommand(sessionId, node.id, {
+                action,
+                client_request_id: createSafeId(),
               });
-              void api
-                .postResearchMessage(sessionId, { body })
-                .then(() =>
-                  qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
-                );
+              await qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+              dispatch({ type: "select", node });
+              toast.success(t(($) => $.ring.success));
             }}
           />
           {canvasMode === "forming" ? <ResearchCanvasForming /> : null}

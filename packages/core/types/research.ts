@@ -317,6 +317,24 @@ export interface ResearchMatchDecisionItem {
   reason?: string;
 }
 
+export type ResearchNodeCommandAction = "continue" | "fork" | "retry" | "reassign";
+
+export interface ResearchNodeCommandRequest {
+  action: ResearchNodeCommandAction;
+  client_request_id: string;
+  target_agent_id?: string;
+}
+
+export interface ResearchNodeCommandResponse {
+  command_id: string;
+  action: ResearchNodeCommandAction;
+  client_request_id: string;
+  replayed: boolean;
+  state_version: number;
+  queued: boolean;
+  assigned?: string | null;
+}
+
 export interface ResearchMatchDecision {
   utterance_id: string;
   confidence?: number;

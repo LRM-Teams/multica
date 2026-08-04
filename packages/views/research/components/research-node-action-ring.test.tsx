@@ -42,10 +42,11 @@ describe("ringActionsForNode (LRM-848 / LRM-981)", () => {
     ).toMatchObject({ id: "retry", primary: true });
   });
 
-  it("makes detail primary on probe and disables retry", () => {
+  it("shows explore for an idle probe and hides recovery actions", () => {
     const actions = ringActionsForNode({ ...base, node_type: "probe" });
-    expect(actions[0]).toMatchObject({ id: "detail", primary: true });
-    expect(actions.find((a) => a.id === "retry")).toMatchObject({ disabled: true });
+    expect(actions[0]).toMatchObject({ id: "fork", group: "explore" });
+    expect(actions.some((a) => a.id === "retry")).toBe(false);
+    expect(actions.some((a) => a.id === "reassign")).toBe(false);
   });
 
   it("marks system node types that skip the ring", () => {
@@ -86,7 +87,7 @@ describe("ResearchNodeActionRing", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("keeps disabled ring items in tab order via aria-disabled (LRM-1105)", () => {
+  it("hides unavailable actions instead of leaking disabled engineering reasons", () => {
     render(
       <ResearchNodeActionRing
         node={{ ...base, node_type: "probe", status: "active" }}
@@ -95,12 +96,9 @@ describe("ResearchNodeActionRing", () => {
         onClose={vi.fn()}
       />,
     );
-    const retry = screen.getByRole("menuitem", { name: "Retry" });
-    expect(retry).toHaveAttribute("aria-disabled", "true");
-    expect(retry).not.toBeDisabled();
-    expect(retry.tabIndex).toBe(-1);
-    const detail = screen.getByRole("menuitem", { name: "Details" });
-    expect(detail.tabIndex).toBe(0);
+    expect(screen.queryByRole("menuitem", { name: "Retry" })).toBeNull();
+    expect(screen.queryByText(/API is not available yet|Retry is only/)).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Reassign" }).tabIndex).toBe(0);
   });
 
   it("arrows rove focus across ring items", () => {
@@ -115,9 +113,9 @@ describe("ResearchNodeActionRing", () => {
     const menu = screen.getByRole("menu", { name: "Node actions" });
     const retry = screen.getByRole("menuitem", { name: "Retry" });
     expect(retry.tabIndex).toBe(0);
-    fireEvent.keyDown(menu, { key: "ArrowRight" });
-    const source = screen.getByRole("menuitem", { name: "Source" });
-    expect(source.tabIndex).toBe(0);
+    fireEvent.keyDown(menu, { key: "End" });
+    const copy = screen.getByRole("menuitem", { name: "Copy" });
+    expect(copy.tabIndex).toBe(0);
     expect(retry.tabIndex).toBe(-1);
   });
 });

@@ -15,7 +15,8 @@ import {
 } from "../lib/layout-graph";
 import { LOGIC_END_NODE_ID, isLogicEndNode, resolveLogicStatus } from "../lib/logic-lanes";
 import { NODE_ENTER_CLASS } from "../lib/node-enter-motion";
-import { ResearchCardMenu } from "./research-card-menu";
+import { ResearchNodeActionRing } from "./research-node-action-ring";
+import type { NodeRingAction } from "../lib/node-action-ring";
 import { ResearchNodeContentFacesStack } from "./research-node-content-faces";
 import {
   CONTENT_FACE_A11Y_ZH,
@@ -38,6 +39,7 @@ export function ResearchGitList({
   onSelect,
   onOpenDelivery,
   onRetry,
+  onNodeCommand,
   onOpenDetail,
   liveMessage,
 }: {
@@ -47,6 +49,7 @@ export function ResearchGitList({
   onSelect?: (node: ResearchGraphNode | null) => void;
   onOpenDelivery?: () => void;
   onRetry?: (node: ResearchGraphNode) => void;
+  onNodeCommand?: (node: ResearchGraphNode, action: ResearchNodeCommandAction) => Promise<void>;
   onOpenDetail?: (node: ResearchGraphNode) => void;
   liveMessage?: (text: string) => void;
 }) {
@@ -67,6 +70,7 @@ export function ResearchGitList({
   // Local keyboard focus; selectedId from parent wins when still present in the list.
   const [navFocusId, setNavFocusId] = useState<string | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
+  const [commandState, setCommandState] = useState<{ pending: NodeRingAction | null; error: string | null }>({ pending: null, error: null });
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const focusId =
@@ -264,11 +268,23 @@ export function ResearchGitList({
                   <MoreHorizontal className="size-4" aria-hidden />
                 </button>
                 {menuId === n.id ? (
-                  <ResearchCardMenu
+                  <ResearchNodeActionRing
                     node={n}
+                    mode="sheet"
                     onClose={() => setMenuId(null)}
-                    onRetry={onRetry}
-                    onViewDetail={(node) => openNode(node)}
+                    pendingAction={commandState.pending}
+                    error={commandState.error}
+                    onAction={(action) => {
+                      if (action === "detail" || action === "locate_source") { openNode(n); setMenuId(null); return; }
+                      if (action === "copy_prompt") { void navigator.clipboard?.writeText(n.summary || n.title); setMenuId(null); return; }
+                      if (action === "reassign" && !window.confirm(t(($) => $.ring.reassign_confirm))) return;
+                      if (!onNodeCommand) return;
+                      setCommandState({ pending: action, error: null });
+                      void onNodeCommand(n, action).then(
+                        () => { setCommandState({ pending: null, error: null }); setMenuId(null); },
+                        (error: unknown) => setCommandState({ pending: null, error: error instanceof Error ? error.message : t(($) => $.ring.failure) }),
+                      );
+                    }}
                   />
                 ) : null}
               </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useState } from "react";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { MoreHorizontal } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
@@ -18,7 +18,8 @@ import { nodeIsVisuallyBusy } from "../lib/node-visuals";
 import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { isCompactActivityLabel } from "../../channels/components/is-compact-activity-label";
 import { useT } from "../../i18n/use-t";
-import { ResearchCardMenu } from "./research-card-menu";
+import { ResearchNodeActionRing } from "./research-node-action-ring";
+import type { NodeRingAction } from "../lib/node-action-ring";
 import { ResearchNodeContentFaces } from "./research-node-content-faces";
 
 export type ResearchFlowNode = Node<ResearchFlowNodeData, "research">;
@@ -36,6 +37,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
   const { t } = useT("research");
   const wsId = useWorkspaceId();
   const n = data.research;
+  const [commandState, setCommandState] = useState<{ pending: NodeRingAction | null; error: string | null }>({ pending: null, error: null });
   const actorId = n?.actor_agent_id ?? undefined;
   const projection = useAgentActivityProjection(wsId, actorId);
   if (!n) return null;
@@ -81,6 +83,25 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
 
   const menuOpen = !!data.menuOpen;
   const abandoned = isAbandonedStatus(n.status);
+  const runAction = (action: NodeRingAction) => {
+    if (action === "detail" || action === "locate_source") {
+      data.onViewDetail?.(n);
+      data.onMenuOpenChange?.(false);
+      return;
+    }
+    if (action === "copy_prompt") {
+      void navigator.clipboard?.writeText(n.summary || n.title);
+      data.onMenuOpenChange?.(false);
+      return;
+    }
+    if (action === "reassign" && !window.confirm(t(($) => $.ring.reassign_confirm))) return;
+    if (!data.onNodeCommand) return;
+    setCommandState({ pending: action, error: null });
+    void data.onNodeCommand(n, action).then(
+      () => { setCommandState({ pending: null, error: null }); data.onMenuOpenChange?.(false); },
+      (error: unknown) => setCommandState({ pending: null, error: error instanceof Error ? error.message : t(($) => $.ring.failure) }),
+    );
+  };
 
   return (
     <div
@@ -188,11 +209,13 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
         <MoreHorizontal className="size-4" aria-hidden />
       </button>
       {menuOpen ? (
-        <ResearchCardMenu
+        <ResearchNodeActionRing
           node={n}
+          mode="ring"
           onClose={() => data.onMenuOpenChange?.(false)}
-          onRetry={data.onRetry}
-          onViewDetail={data.onViewDetail}
+          onAction={runAction}
+          pendingAction={commandState.pending}
+          error={commandState.error}
         />
       ) : null}
       <Handle

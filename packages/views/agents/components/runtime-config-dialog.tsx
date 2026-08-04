@@ -94,11 +94,11 @@ export function RuntimeConfigDialog({
   const modelsOnline =
     draft.runtime_id === agent.runtime_id ? runtimeOnline || draftOnline : draftOnline;
 
-  const modelsQuery = useQuery(
+  const { data: modelsData } = useQuery(
     runtimeModelsOptions(modelsOnline ? draft.runtime_id : null),
   );
-  const models = modelsQuery.data?.models ?? [];
-  const thinkingDiscovery = modelsQuery.data?.thinkingDiscovery === true;
+  const models = modelsData?.models ?? [];
+  const thinkingDiscovery = modelsData?.thinkingDiscovery === true;
   const entry = pickModelEntry(models, draft.model);
   const levels = entry?.thinking?.supported_levels ?? [];
   const showThinking =

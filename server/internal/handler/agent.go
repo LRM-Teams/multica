@@ -1114,9 +1114,41 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		mc = append([]byte(nil), rawMcpConfig...)
 	}
 
+	// Hire hard-cut: agent:create cards use action_card_id (no draft_id bridge).
+	actionCardID, hasActionCardID, err := extractActionCardID(rawFields)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if hasActionCardID {
+		card, code := h.loadActionCard(r, workspaceID, actionCardID)
+		switch code {
+		case agentActionLookupOK:
+			if card.Status != agentActionStatusPrepared {
+				writeCodedError(w, http.StatusConflict, agentActionLookupNotPrepared, "action card is not prepared")
+				return
+			}
+			if card.ActionType != agentActionTypeCreate {
+				writeError(w, http.StatusBadRequest, "action_card_id is not an agent:create card")
+				return
+			}
+		case agentActionLookupNotFound:
+			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
+			return
+		default:
+			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
+			return
+		}
+	}
+	// Research / legacy seed only: draft_id still loads initial notes/memory when
+	// present. Agent hire must not use drafts (agent draft create is 410).
 	draftID, hasDraftID, err := extractDraftID(rawFields)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if hasDraftID && hasActionCardID {
+		writeError(w, http.StatusBadRequest, "action_card_id and draft_id are mutually exclusive")
 		return
 	}
 	initialNotes := cleanInitialContextMap(req.InitialNotes, allowedInitialNoteSeedPath)
@@ -1201,6 +1233,19 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
+	if hasActionCardID {
+		code, markErr := h.markActionCardDone(r, workspaceID, actionCardID, parseUUID(ownerID), created.ID)
+		if markErr != nil {
+			slog.Warn("mark action card done failed", append(logger.RequestAttrs(r), "error", markErr, "action_card_id", uuidToString(actionCardID))...)
+		} else if code == agentActionLookupNotPrepared {
+			// Card raced to non-prepared; agent row already created — report conflict.
+			writeCodedError(w, http.StatusConflict, agentActionLookupNotPrepared, "action card is not prepared")
+			return
+		} else if code == agentActionLookupNotFound {
+			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
+			return
+		}
+	}
 	if hasDraftID {
 		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
 	}

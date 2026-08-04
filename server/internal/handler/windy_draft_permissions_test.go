@@ -38,19 +38,15 @@ func createWindyDraftTestMember(t *testing.T, label string) string {
 	return userID
 }
 
-func TestCreateAgentDraft_TaskTokenTargetsTaskInitiator(t *testing.T) {
+func TestCreateAgentDraft_TaskTokenRetiredForAgents(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
 	initiatorID := createWindyDraftTestMember(t, "Wendy Draft Initiator")
+	_ = initiatorID
 	wendyID := createHandlerTestAgent(t, "wendy_draft_target_"+strings.ReplaceAll(uuid.NewString(), "-", "_"), nil)
 	taskID := createHandlerTestTaskForAgent(t, wendyID)
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent_inbox_event SET initiator_user_id = $2 WHERE id = $1
-	`, taskID, initiatorID); err != nil {
-		t.Fatalf("stamp task initiator: %v", err)
-	}
 
 	req := newRequest(http.MethodPost, "/api/agents/drafts", map[string]any{
 		"name":         "Conversation Researcher",
@@ -64,20 +60,40 @@ func TestCreateAgentDraft_TaskTokenTargetsTaskInitiator(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	testHandler.CreateAgentDraft(w, req)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("CreateAgentDraft with task token: expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp AgentCreationDraftResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode draft response: %v", err)
-	}
-	if resp.TargetUserID != initiatorID {
-		t.Fatalf("draft target_user_id = %q, want task initiator %q", resp.TargetUserID, initiatorID)
+	if w.Code != http.StatusGone {
+		t.Fatalf("CreateAgentDraft with task token: expected 410, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestCreateAgentDraft_AgentCredentialTargetsInboxInitiator(t *testing.T) {
+func TestAgentPrepareAction_CreatesActionCard(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	taskID, _ := createChannelCompletionTaskWithCapabilities(t, "group", nil)
+	agentID := agentIDForTask(t, taskID)
+	req := agentTransportRequest(t, http.MethodPost, "/api/agent/actions/prepare", taskID, agentID, map[string]any{
+		"action_type": "agent:create",
+		"name":        "Targeted Hire",
+		"description": "owner-targeted",
+	})
+	w := httptest.NewRecorder()
+	testHandler.AgentTransportPrepareAction(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("prepare expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp agentActionCardResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.ID == "" || resp.Payload.Name != "Targeted Hire" {
+		t.Fatalf("unexpected card: %+v", resp)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_action_card WHERE id = $1`, resp.ID)
+	})
+}
+
+func TestCreateAgentDraft_AgentCredentialRetiredForAgents(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -128,16 +144,8 @@ func TestCreateAgentDraft_AgentCredentialTargetsInboxInitiator(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	testHandler.CreateAgentDraft(w, req)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("CreateAgentDraft with agent credential: expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp AgentCreationDraftResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode draft response: %v", err)
-	}
-	if resp.TargetUserID != initiatorID {
-		t.Fatalf("draft target_user_id = %q, want inbox initiator %q", resp.TargetUserID, initiatorID)
+	if w.Code != http.StatusGone {
+		t.Fatalf("CreateAgentDraft with agent credential: expected 410, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

@@ -16,9 +16,10 @@ import (
 )
 
 // errAgentMessageHeld is returned after a successful HTTP freshness hold so the
-// process exits non-zero. Agents must treat held as "not delivered" and make
-// one explicit decision in the same turn; the JSON body is still printed first.
-var errAgentMessageHeld = errors.New("message held by freshness check (not delivered); review heldMessages, then execute one returned decisionCommands entry or choose not to send")
+// process exits non-zero. A hold is terminal for the current send attempt: the
+// saved draft must never be retried merely because a runtime recovered or
+// followed an instruction from the held response.
+var errAgentMessageHeld = errors.New("message held by freshness check (not delivered); saved as an unsent draft and requires an explicit new decision before sending")
 
 func newMessageSendCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -33,8 +34,9 @@ func newMessageSendCmd() *cobra.Command {
 			"human used voice input or explicitly requested spoken output, add --voice; " +
 			"the message text remains the accessible transcript. Do not generate or " +
 			"attach an audio file for a voice reply; Multica synthesizes the transcript. If the " +
-			"server holds a send because newer messages arrived, review the bounded " +
-			"context and use --send-draft to send the saved draft unchanged.",
+			"server holds a send because newer messages arrived, it remains an unsent " +
+			"draft. Do not automatically retry it; --send-draft is only for an explicit " +
+			"continue decision.",
 		RunE: runAgentMessageSend,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
@@ -320,7 +322,7 @@ func seenUpToSeqForMessageSend(cmd *cobra.Command, client *cli.APIClient) int64 
 func agentMessageSendTextFallback(out map[string]any) string {
 	if agentTransportOutputIsHeld(out) {
 		var b strings.Builder
-		b.WriteString("Message held by freshness check (not delivered; CLI exits non-zero). Review heldMessages in this same turn.")
+		b.WriteString("Message held by freshness check (not delivered; saved as an unsent draft and CLI exits non-zero). Do not automatically retry or send the draft.")
 		if window, ok := out["contextWindow"].(map[string]any); ok {
 			older := strings.TrimSpace(fmt.Sprint(window["olderBoundary"]))
 			newer := strings.TrimSpace(fmt.Sprint(window["newerBoundary"]))
@@ -336,26 +338,7 @@ func agentMessageSendTextFallback(out map[string]any) string {
 				}
 			}
 		}
-		if commands, ok := out["decisionCommands"].(map[string]any); ok {
-			b.WriteString("\nChoose exactly one decision:")
-			for _, option := range []struct {
-				label string
-				key   string
-			}{
-				{label: "Revise and send", key: "revisedSend"},
-				{label: "Send saved draft unchanged", key: "sendDraft"},
-			} {
-				command := strings.TrimSpace(fmt.Sprint(commands[option.key]))
-				if command == "" || command == "<nil>" {
-					continue
-				}
-				b.WriteString("\n- ")
-				b.WriteString(option.label)
-				b.WriteString(": ")
-				b.WriteString(command)
-			}
-			b.WriteString("\n- Do not send: choose not to send anything.")
-		}
+		b.WriteString("\nA human must explicitly continue or discard it. A later, independent agent decision may send a newly composed message after reviewing this context.")
 		return b.String()
 	}
 	return "Message sent."

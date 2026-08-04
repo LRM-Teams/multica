@@ -770,8 +770,8 @@ func TestAgentTransportSendFreshnessHoldSavesDraftAndDoesNotWriteMessage(t *test
 		held.ContextWindow.OldestSeq != newer.Seq || held.ContextWindow.NewestSeq != newer.Seq {
 		t.Fatalf("held bounded window mismatch: %+v", held.ContextWindow)
 	}
-	if held.DecisionCommands.RevisedSend == "" || held.DecisionCommands.SendDraft == "" {
-		t.Fatalf("held decision commands missing: %+v", held.DecisionCommands)
+	if got := strings.Join(held.AvailableActions, ","); got != "review_newer_messages,await_explicit_confirmation,discard_draft" {
+		t.Fatalf("held available actions=%q", got)
 	}
 	assertNoChannelMessageContent(t, channelID, draftContent)
 	assertAgentTransportDraftContent(t, agentID, target, draftContent)
@@ -1042,9 +1042,8 @@ func TestAgentTransportHeldResponseMakesBoundedWindowEdgesExplicit(t *testing.T)
 		body.ContextWindow.NewerBoundary != "No newer." {
 		t.Fatalf("bounded context edges=%+v", body.ContextWindow)
 	}
-	if body.DecisionCommands.RevisedSend != `multica message send --target "#multica" --message-stdin --seen-up-to-seq 9 --client-message-id "freshness-revised:bounded"` ||
-		body.DecisionCommands.SendDraft != `multica message send --send-draft --target "#multica"` {
-		t.Fatalf("bounded decision commands=%+v", body.DecisionCommands)
+	if got := strings.Join(body.AvailableActions, ","); got != "review_newer_messages,await_explicit_confirmation,discard_draft" {
+		t.Fatalf("bounded available actions=%q", got)
 	}
 }
 

@@ -45,7 +45,8 @@
     "output_line": "Output · {{summary}}",
     "no_output": "Output · none yet",
     "recent_heading": "최근 리서치",
-    "recent_count": "{{count}}"
+    "recent_count": "{{count}}",
+    "stage_energy_aria": "{{stage}} · {{status}}, {{done}}/4 단계 완료"
   },
   "filter": {
     "search_label": "세션 제목 검색",

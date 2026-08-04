@@ -45,7 +45,8 @@
     "output_line": "产出 · {{summary}}",
     "no_output": "产出 · 暂无产出",
     "recent_heading": "最近调研",
-    "recent_count": "{{count}}"
+    "recent_count": "{{count}}",
+    "stage_energy_aria": "{{stage}} · {{status}}，已完成 {{done}}/4 阶段"
   },
   "filter": {
     "search_label": "搜索会话标题",

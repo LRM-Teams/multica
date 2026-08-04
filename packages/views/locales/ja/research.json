@@ -45,7 +45,8 @@
     "output_line": "Output · {{summary}}",
     "no_output": "Output · none yet",
     "recent_heading": "最近の調査",
-    "recent_count": "{{count}}"
+    "recent_count": "{{count}}",
+    "stage_energy_aria": "{{stage}} · {{status}}、{{done}}/4 段階完了"
   },
   "filter": {
     "search_label": "セッションタイトルを検索",

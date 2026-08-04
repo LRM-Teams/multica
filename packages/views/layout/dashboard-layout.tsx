@@ -1,17 +1,41 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { SidebarProvider, SidebarInset } from "@multica/ui/components/ui/sidebar";
-import { ModalRegistry } from "../modals/registry";
-import { SourceBackfillModal } from "../onboarding";
 import { AppSidebar } from "./app-sidebar";
 import { DashboardGuard } from "./dashboard-guard";
 import { NavigationProgress } from "./navigation-progress";
 import { WorkspacePresencePrefetch } from "./workspace-presence-prefetch";
-import { GlobalAgentPanel } from "./global-agent-panel";
-import { GlobalMemberPanel } from "./global-member-panel";
-import { AgentMemoryXpListener } from "../agents/components/agent-memory-xp-listener";
-import { AgentHonorUnlockListener } from "../agents/components/agent-honor-unlock-listener";
+
+/**
+ * LRM-1263 — keep the channel/home shell interactive without waiting on
+ * profile panels, modal graphs, or honor/XP listeners. Those mount after the
+ * shell paints (Suspense fallback null = no layout shift).
+ */
+const ModalRegistry = lazy(() =>
+  import("../modals/registry").then((m) => ({ default: m.ModalRegistry })),
+);
+const SourceBackfillModal = lazy(() =>
+  import("../onboarding").then((m) => ({ default: m.SourceBackfillModal })),
+);
+const GlobalAgentPanel = lazy(() =>
+  import("./global-agent-panel").then((m) => ({ default: m.GlobalAgentPanel })),
+);
+const GlobalMemberPanel = lazy(() =>
+  import("./global-member-panel").then((m) => ({
+    default: m.GlobalMemberPanel,
+  })),
+);
+const AgentMemoryXpListener = lazy(() =>
+  import("../agents/components/agent-memory-xp-listener").then((m) => ({
+    default: m.AgentMemoryXpListener,
+  })),
+);
+const AgentHonorUnlockListener = lazy(() =>
+  import("../agents/components/agent-honor-unlock-listener").then((m) => ({
+    default: m.AgentHonorUnlockListener,
+  })),
+);
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -42,8 +66,10 @@ export function DashboardLayout({
     >
       <SidebarProvider className="h-svh">
         <WorkspacePresencePrefetch />
-        <AgentMemoryXpListener />
-        <AgentHonorUnlockListener />
+        <Suspense fallback={null}>
+          <AgentMemoryXpListener />
+          <AgentHonorUnlockListener />
+        </Suspense>
         <AppSidebar />
         <SidebarInset className="relative overflow-hidden">
           <NavigationProgress />
@@ -51,10 +77,12 @@ export function DashboardLayout({
           <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
             {children}
           </div>
-          <ModalRegistry />
-          <SourceBackfillModal />
-          <GlobalAgentPanel />
-          <GlobalMemberPanel />
+          <Suspense fallback={null}>
+            <ModalRegistry />
+            <SourceBackfillModal />
+            <GlobalAgentPanel />
+            <GlobalMemberPanel />
+          </Suspense>
           {extra}
         </SidebarInset>
       </SidebarProvider>

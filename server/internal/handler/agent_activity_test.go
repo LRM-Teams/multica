@@ -1792,3 +1792,9 @@ func createActivityEventWithDetails(t *testing.T, agentID, targetKind, targetID,
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_activity_event WHERE id = $1`, eventID) })
 	return eventID
 }
+
+func TestActivityVisibilityReminderOverdueIsUserFacing(t *testing.T) {
+	if got := activityVisibilityFor(activityKindCustom, "reminder_overdue", "warning", "reminder_overdue"); got != "user_facing" {
+		t.Fatalf("reminder_overdue visibility = %q, want user_facing", got)
+	}
+}

@@ -235,7 +235,8 @@ func (h *Handler) backfillAgentInboxToolCallFromResult(
 func activityVisibilityFor(eventKind, eventType, severity, reasonCode string) string {
 	visibility := "user_facing"
 	switch eventKind {
-	case activityKindToolOutput,
+	case activityKindThinking,
+		activityKindToolOutput,
 		activityKindTelemetry,
 		activityKindTransport,
 		activityKindCustom:
@@ -296,6 +297,7 @@ func customActivityEventIsNarrative(eventType, reasonCode string) bool {
 		"reminder_updated",
 		"reminder_cancelled",
 		"reminder_fired",
+		"reminder_overdue",
 		agentLifecycleSucceededActivityEventType:
 		return true
 	default:

@@ -16,19 +16,25 @@
  * - Rendering mentions with the same IssueMentionCard component and .mention class
  */
 
-import { isValidElement, memo, useMemo, useRef } from "react";
+import {
+  isValidElement,
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import ReactMarkdown, {
   defaultUrlTransform,
   type Components,
 } from "react-markdown";
-import rehypeKatex from "rehype-katex";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import { createLowlight, common } from "lowlight";
 import { toHtml } from "hast-util-to-html";
+import { sharedLowlight as lowlight } from "./lowlight";
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspacePaths, useWorkspaceSlug } from "@multica/core/paths";
 import type { Attachment } from "@multica/core/types";
@@ -48,20 +54,21 @@ import { useMemberPanelStore } from "@multica/core/workspace";
 import { useLinkHover, LinkHoverCard } from "./link-hover-card";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { isAllowedFileCardHref } from "@multica/ui/markdown";
+import {
+  loadMathPlugins,
+  looksLikeMathMarkdown,
+  type MathPluginPair,
+} from "@multica/ui/markdown/math-plugins";
 import { preprocessMarkdown } from "./utils/preprocess";
 import { highlightToHtml } from "./utils/highlight-markdown";
 import { MermaidDiagram } from "./mermaid-diagram";
 import { HtmlBlockPreview } from "./html-block-preview";
 import { AttachmentDownloadProvider } from "./attachment-download-context";
 import { Attachment as AttachmentRenderer } from "./attachment";
-import "katex/dist/katex.min.css";
 import "./styles/index.css";
 
-// ---------------------------------------------------------------------------
-// Lowlight — same engine + language set as Tiptap's CodeBlockLowlight
-// ---------------------------------------------------------------------------
-
-const lowlight = createLowlight(common);
+// Lowlight: shared singleton (LRM-1264) — same engine + language set as
+// Tiptap's CodeBlockLowlight via `./lowlight`.
 
 // Code fences that the `code` renderer returns as a non-<code> React element
 // (Mermaid diagram, HTML preview iframe). The `pre` renderer below unwraps
@@ -429,12 +436,44 @@ export const ReadonlyContent = memo(function ReadonlyContent({
   // <Attachment>, which reads the surrounding AttachmentDownloadProvider.
   const components = useMemo(() => buildComponents(), []);
 
+  // LRM-1264 R2 — defer KaTeX until the body looks like math.
+  const needsMath = useMemo(() => looksLikeMathMarkdown(processed), [processed]);
+  const [mathPlugins, setMathPlugins] = useState<MathPluginPair | null>(null);
+  useEffect(() => {
+    if (!needsMath) return;
+    let alive = true;
+    void loadMathPlugins().then((plugins) => {
+      if (alive) setMathPlugins(plugins);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [needsMath]);
+
+  const remarkPlugins = useMemo(() => {
+    const plugins: NonNullable<ComponentProps<typeof ReactMarkdown>["remarkPlugins"]> = [
+      remarkBreaks,
+      [remarkGfm, { singleTilde: false }],
+    ];
+    if (mathPlugins) plugins.unshift(mathPlugins.remarkMath);
+    return plugins;
+  }, [mathPlugins]);
+
+  const rehypePlugins = useMemo(() => {
+    const plugins: NonNullable<ComponentProps<typeof ReactMarkdown>["rehypePlugins"]> = [
+      rehypeRaw,
+      [rehypeSanitize, sanitizeSchema],
+    ];
+    if (mathPlugins) plugins.push(mathPlugins.rehypeKatex);
+    return plugins;
+  }, [mathPlugins]);
+
   return (
     <AttachmentDownloadProvider attachments={attachments}>
       <div ref={wrapperRef} className={cn("rich-text-editor readonly text-sm", className)}>
         <ReactMarkdown
-          remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
-          rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
           urlTransform={urlTransform}
           components={components}
         >

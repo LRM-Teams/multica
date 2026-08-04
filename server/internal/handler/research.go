@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -67,7 +68,19 @@ type ResearchSessionSnapshot struct {
 	Evals         []ResearchStageEvalResp        `json:"evals"`
 	Messages      []ResearchMessageResp          `json:"messages"`
 	ProductRounds []ResearchProductRoundCardResp `json:"product_rounds"`
-	Run           *researchrun.RunSnapshot       `json:"run,omitempty"`
+	// ThoughtStrategies powers the LRM-1306 side panel (LRM-1318). Omit-empty
+	// list is always present (possibly length 0); FE must not invent rows.
+	ThoughtStrategies []ResearchThoughtStrategyResp `json:"thought_strategies"`
+	Run               *researchrun.RunSnapshot      `json:"run,omitempty"`
+}
+
+// ResearchNodeContentFaces is the four content-face projection (LRM-1317 / LRM-1308).
+// Always present on nodes[]; empty strings are neutral — FE must not invent copy.
+type ResearchNodeContentFaces struct {
+	Goal               string `json:"goal"`
+	OperationApproach  string `json:"operation_approach"`
+	ResearchApproach   string `json:"research_approach"`
+	Result             string `json:"result"`
 }
 
 type ResearchGraphNodeResp struct {
@@ -81,8 +94,21 @@ type ResearchGraphNodeResp struct {
 	Payload      json.RawMessage `json:"payload"`
 	// Confidence is projected from payload.confidence when present (LRM-806).
 	Confidence *float64 `json:"confidence,omitempty"`
-	CreatedAt  string   `json:"created_at"`
-	UpdatedAt  string   `json:"updated_at"`
+	// LRM-1278 tree + quality projection (snapshot authoritative; WS may be partial).
+	ParentID        *string  `json:"parent_id"`
+	ChildIDs        []string `json:"child_ids"`
+	ChildCount      int      `json:"child_count"`
+	DescendantCount int      `json:"descendant_count"`
+	ThemeKey        string   `json:"theme_key"`
+	Phase           string   `json:"phase,omitempty"`
+	Assessment      string   `json:"assessment"`
+	Reason          *string  `json:"reason,omitempty"`
+	EvidenceSummary *string  `json:"evidence_summary,omitempty"`
+	// LRM-1317 content faces + abandon reason (payload projection; no migration).
+	Content       ResearchNodeContentFaces `json:"content"`
+	AbandonReason *string                  `json:"abandon_reason,omitempty"`
+	CreatedAt     string                   `json:"created_at"`
+	UpdatedAt     string                   `json:"updated_at"`
 }
 
 type ResearchGraphEdgeResp struct {
@@ -132,15 +158,16 @@ type ResearchStageEvalResp struct {
 }
 
 type ResearchMessageResp struct {
-	ID            string          `json:"id"`
-	SessionID     string          `json:"session_id"`
-	SenderType    string          `json:"sender_type"`
-	SenderID      *string         `json:"sender_id"`
-	TargetAgentID *string         `json:"target_agent_id"`
-	Body          string          `json:"body"`
-	CardKind      string          `json:"card_kind"`
-	Meta          json.RawMessage `json:"meta"`
-	CreatedAt     string          `json:"created_at"`
+	ID            string                 `json:"id"`
+	SessionID     string                 `json:"session_id"`
+	SenderType    string                 `json:"sender_type"`
+	SenderID      *string                `json:"sender_id"`
+	TargetAgentID *string                `json:"target_agent_id"`
+	Body          string                 `json:"body"`
+	CardKind      string                 `json:"card_kind"`
+	Meta          json.RawMessage        `json:"meta"`
+	MatchDecision *ResearchMatchDecision `json:"match_decision,omitempty"`
+	CreatedAt     string                 `json:"created_at"`
 }
 
 func researchSessionToResponse(s db.ResearchSession) ResearchSessionResponse {
@@ -305,7 +332,7 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if createErr != nil {
-		slog.Warn("research run start deferred to reconciler", "session_id", createdRun.SessionID, "error", createErr)
+		slog.Warn("research run initial dispatch failed", "session_id", createdRun.SessionID, "will_retry", researchRunStartWillRetry(createErr), "error", createErr)
 	}
 	sessionID := parseUUID(createdRun.SessionID)
 	session, err := h.Queries.GetResearchSession(r.Context(), db.GetResearchSessionParams{ID: sessionID, WorkspaceID: wsUUID})
@@ -326,15 +353,30 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 	response := map[string]any{
 		"session":  researchSessionToResponse(session),
 		"fleet":    h.researchFleetToResponse(r.Context(), fleet, members),
-		"nodes":    mapNodes(nodes),
+		"nodes":    mapGraphNodes(nodes, edges),
 		"edges":    mapEdges(edges),
 		"messages": mapMessages(messages),
 		"run":      runSnapshot,
 	}
 	if createErr != nil {
-		response["warning"] = "research run was persisted but immediate dispatch failed; the reconciler will retry"
+		if researchRunStartWillRetry(createErr) {
+			response["warning"] = "research run was persisted but immediate dispatch failed; the reconciler will retry"
+		} else {
+			response["warning"] = "research run was created but initial dispatch failed and will not be retried automatically; review run diagnostics before retrying"
+		}
 	}
 	writeJSON(w, http.StatusCreated, response)
+}
+
+func researchRunStartWillRetry(err error) bool {
+	if err == nil || errors.Is(err, researchrun.ErrCapabilityUnavailable) {
+		return false
+	}
+	var classified interface{ Retryable() bool }
+	if errors.As(err, &classified) {
+		return classified.Retryable()
+	}
+	return true
 }
 
 func truncateRunes(s string, n int) string {
@@ -404,38 +446,18 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, ResearchSessionSnapshot{
-		Session:       researchSessionToResponse(session),
-		Fleet:         h.researchFleetToResponse(r.Context(), fleet, members),
-		Nodes:         mapNodes(nodes),
-		Edges:         mapEdges(edges),
-		Sources:       mapSources(sources),
-		Report:        report,
-		Evals:         mapEvals(evals),
-		Messages:      mapMessages(messages),
-		ProductRounds: mapProductRoundCards(productRounds),
-		Run:           loadedRun,
+		Session:           researchSessionToResponse(session),
+		Fleet:             h.researchFleetToResponse(r.Context(), fleet, members),
+		Nodes:             mapGraphNodes(nodes, edges),
+		Edges:             mapEdges(edges),
+		Sources:           mapSources(sources),
+		Report:            report,
+		Evals:             mapEvals(evals),
+		Messages:          mapMessages(messages),
+		ProductRounds:     mapProductRoundCards(productRounds),
+		ThoughtStrategies: mapThoughtStrategies(nodes),
+		Run:               loadedRun,
 	})
-}
-
-func mapNodes(rows []db.ResearchGraphNode) []ResearchGraphNodeResp {
-	out := make([]ResearchGraphNodeResp, 0, len(rows))
-	for _, n := range rows {
-		payload := json.RawMessage(n.Payload)
-		out = append(out, ResearchGraphNodeResp{
-			ID:           uuidToString(n.ID),
-			SessionID:    uuidToString(n.SessionID),
-			NodeType:     n.NodeType,
-			Title:        n.Title,
-			Summary:      n.Summary,
-			Status:       n.Status,
-			ActorAgentID: uuidToPtr(n.ActorAgentID),
-			Payload:      payload,
-			Confidence:   confidenceFromPayload(payload),
-			CreatedAt:    timestampToString(n.CreatedAt),
-			UpdatedAt:    timestampToString(n.UpdatedAt),
-		})
-	}
-	return out
 }
 
 func confidenceFromPayload(payload json.RawMessage) *float64 {
@@ -569,8 +591,9 @@ func mapMessages(rows []db.ResearchMessage) []ResearchMessageResp {
 		if len(meta) == 0 {
 			meta = json.RawMessage(`{}`)
 		}
+		msgID := uuidToString(m.ID)
 		out = append(out, ResearchMessageResp{
-			ID:            uuidToString(m.ID),
+			ID:            msgID,
 			SessionID:     uuidToString(m.SessionID),
 			SenderType:    m.SenderType,
 			SenderID:      uuidToPtr(m.SenderID),
@@ -578,6 +601,7 @@ func mapMessages(rows []db.ResearchMessage) []ResearchMessageResp {
 			Body:          m.Body,
 			CardKind:      cardKind,
 			Meta:          meta,
+			MatchDecision: extractMatchDecisionFromMeta(meta, msgID),
 			CreatedAt:     timestampToString(m.CreatedAt),
 		})
 	}

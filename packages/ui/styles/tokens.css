@@ -28,6 +28,9 @@
     --color-input: var(--input);
     --color-border: var(--border);
     --color-destructive: var(--destructive);
+    /* LRM-1328 — text on destructive wash (confirm buttons); deeper than
+       --destructive so wash+text clears WCAG 4.5 without dropping the wash. */
+    --color-destructive-strong: var(--destructive-strong);
     --color-success: var(--success);
     --color-warning: var(--warning);
     /* LRM-560 — Activity command / running-command node */
@@ -93,6 +96,8 @@
     --brand-solid-foreground: var(--brand-foreground);
     --ok: #007a5a;
     --danger: #e01e5a;
+    /* LRM-1328 D1 — deepen text on wash; keep --danger for wash/bg tint. */
+    --destructive-strong: #a01040;
     --online: #2bac76;
     --busy: #e8912d;
 
@@ -117,11 +122,32 @@
     --input: var(--line-strong);
     --ring: var(--ink-3);
     --success: var(--ok);
-    --warning: #b35c00;
+    /* LRM-1353 — deepen warning so text-warning on bg-warning/5..15 clears
+       WCAG 4.5 site-wide (was #b35c00 → 4.12 on /10). Same wash+text pair as
+       LRM-1328 destructive; one token change, no per-surface orange hacks. */
+    --warning: #8f4a00;
     /* LRM-890 M2 visibility — low-sat source / role chips */
     --source-general: #3d6f9c;
     --source-domain: #2a8f7a;
     --role-human: #8a5a2b;
+    /* LRM-1208 — research Git topology branch lanes (replaces inline hex in
+       git-topology.ts; SVG stroke / style colors cannot carry `dark:`). */
+    --research-lane-1: #0f766e;
+    --research-lane-2: #c2410c;
+    --research-lane-3: #1d4ed8;
+    --research-lane-4: #7c3aed;
+    --research-lane-5: #b45309;
+    /* LRM-1271/1291 — research session stage energy track. One hue per stage
+       (define=cyan, explore=violet→fuchsia, verify=amber, deliver=emerald).
+       Tokens rather than JSX hex because the values land on gradient
+       `background-image` and inline custom properties, neither of which can
+       carry a Tailwind `dark:` variant. Light values are the 700 ramp so the
+       9px band clears WCAG 1.4.11's 3:1 non-text floor on `--surface`. */
+    --research-stage-define: #0e7490;
+    --research-stage-explore: #6d28d9;
+    --research-stage-explore-2: #a21caf;
+    --research-stage-verify: #b45309;
+    --research-stage-deliver: #047857;
     /* Activity timeline command node (LRM-560; replaces hardcoded #F5B301) */
     --running: #e5a00d;
     /* Charts stay brand-anchored (hue ≈ #1264a3) */
@@ -198,14 +224,36 @@
     --page-bg: oklch(0.18 0.005 285.823);
     --ok: oklch(0.65 0.15 145);
     --danger: oklch(0.704 0.191 22.216);
+    /* LRM-1328 D1 — lighten wash-label text on dark destructive/20 wash. */
+    --destructive-strong: oklch(0.78 0.18 22.216);
     --online: #2bac76;
     --busy: #e8912d;
     --success: var(--ok);
-    --warning: oklch(0.70 0.16 85);
+    /* LRM-1353 — lighten wash-label text on dark warning/10..15 (mirror
+       destructive-strong dark lift; keep hue ≈85). */
+    --warning: oklch(0.78 0.16 85);
     /* LRM-890 M2 visibility */
     --source-general: oklch(0.72 0.08 240);
     --source-domain: oklch(0.70 0.09 170);
     --role-human: oklch(0.72 0.08 70);
+    /* LRM-1208 — research Git topology branch lanes (dark).
+       Light hexes sit at 2.6–3.5:1 on the dark card and fail WCAG 1.4.11 for a
+       2px lane line; these lightened same-hue pairs measure 7.7–10.8:1 while
+       keeping ≥45° oklch hue separation between adjacent lanes. */
+    --research-lane-1: oklch(0.78 0.12 175);
+    --research-lane-2: oklch(0.78 0.13 50);
+    --research-lane-3: oklch(0.74 0.12 255);
+    --research-lane-4: oklch(0.76 0.13 300);
+    --research-lane-5: oklch(0.84 0.14 85);
+    /* LRM-1271/1291 — stage energy track (dark). The light 700 ramp sits at
+       2.1–3.0:1 on the dark chrome and would fail the non-text floor for a 9px
+       band; these same-hue lightened pairs measure ≥6:1 while keeping the four
+       stage hues ≥40° apart in oklch so the sequence stays readable. */
+    --research-stage-define: oklch(0.80 0.11 205);
+    --research-stage-explore: oklch(0.75 0.15 295);
+    --research-stage-explore-2: oklch(0.76 0.17 330);
+    --research-stage-verify: oklch(0.83 0.14 80);
+    --research-stage-deliver: oklch(0.80 0.13 160);
     /* Activity timeline command node (LRM-560) */
     --running: oklch(0.78 0.14 85);
     --scrollbar-thumb: oklch(1 0 0 / 8%);

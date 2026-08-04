@@ -8,10 +8,10 @@ const FoundingMemberCutoff = "2026-08-01T00:00:00Z"
 var foundingMemberCutoffTime = mustParseHonorTime(FoundingMemberCutoff)
 
 // HonorRulesVersion is bumped when public scoring tables change.
-const HonorRulesVersion = "2026-07-31.2"
+const HonorRulesVersion = "2026-08-03.1"
 
 // MaxHonorLevel is the highest level the progression curve can award.
-const MaxHonorLevel = 60
+const MaxHonorLevel = 80
 
 type HonorPillar string
 
@@ -179,6 +179,7 @@ func BuildHonorRulesDocument(badges []HonorBadgeCatalogEntry) HonorRulesDocument
 		NameStyleUnlocks: append([]HonorNameStyleRuleEntry(nil), honorNameStyleRules...),
 		BadgeCatalog:     badges,
 		Changelog: []string{
+			"2026-08-03: expand the human honor progression and level crest series to 80 levels",
 			"2026-07-31: expand to 24 visible name styles and 51 badges",
 			"2026-07-31: publish the complete level 1-60 progression table",
 			"2026-07-30: initial honor rules v1",

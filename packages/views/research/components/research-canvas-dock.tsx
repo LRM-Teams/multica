@@ -3,6 +3,10 @@
 import { PanelRight, Scan, ZoomIn, ZoomOut } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
+import {
+  ResearchModuleRail,
+  type ResearchAuxPanelId,
+} from "./research-module-rail";
 
 export function ResearchCanvasDock({
   zoomPct,
@@ -11,6 +15,12 @@ export function ResearchCanvasDock({
   onFit,
   detailOpen,
   onToggleDetail,
+  activeModule = null,
+  onSelectModule,
+  showZoom = true,
+  showDetailToggle = true,
+  layout = "desktop",
+  disabled = false,
   className,
 }: {
   zoomPct: number;
@@ -19,67 +29,124 @@ export function ResearchCanvasDock({
   onFit: () => void;
   detailOpen: boolean;
   onToggleDetail: () => void;
+  /** LRM-1151 — which aux module is pressed (轨/源/详). */
+  activeModule?: ResearchAuxPanelId | null;
+  onSelectModule?: (id: ResearchAuxPanelId) => void;
+  /** Narrow Logic Strip: hide zoom group per LRM-1143. */
+  showZoom?: boolean;
+  showDetailToggle?: boolean;
+  /** `desktop` = bottom-center pill; `mobile` = full-width strip. */
+  layout?: "desktop" | "mobile";
+  disabled?: boolean;
   className?: string;
 }) {
   const { t } = useT("research");
+  const isMobile = layout === "mobile";
+
+  if (isMobile) {
+    return (
+      <div
+        className={cn(
+          "pointer-events-auto z-10 flex w-full items-center border-t border-border bg-card px-2.5 py-1.5",
+          className,
+        )}
+        role="toolbar"
+        aria-label={t(($) => $.dock.label)}
+        aria-busy={disabled || undefined}
+        data-testid="research-canvas-dock"
+        data-layout="mobile"
+      >
+        {onSelectModule ? (
+          <ResearchModuleRail
+            layout="bar"
+            active={activeModule}
+            onSelect={onSelectModule}
+            disabled={disabled}
+          />
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div
       className={cn(
-        "pointer-events-auto z-10 mb-[18px] flex items-center gap-0.5 rounded-full border bg-card/90 px-2 py-1.5 shadow-lg backdrop-blur-md",
+        "pointer-events-auto z-10 flex min-h-12 items-center gap-0.5 rounded-full border border-border bg-card/90 px-1.5 py-1 shadow-lg backdrop-blur-md",
         className,
       )}
       role="toolbar"
       aria-label={t(($) => $.dock.label)}
+      aria-busy={disabled || undefined}
+      data-testid="research-canvas-dock"
+      data-layout="desktop"
     >
-      <div className="flex h-[38px] items-center gap-1.5 px-3 text-[12.5px] font-semibold text-foreground">
-        {/* eslint-disable-next-line i18next/no-literal-string -- decorative glyph, not copy */}
-        <span className="text-brand" aria-hidden>
-          ★
-        </span>
-        <span className="max-w-[120px] truncate">{t(($) => $.dock.north_star)}</span>
-      </div>
-      <div className="mx-1 h-[22px] w-px bg-border" />
-      <span className="min-w-9 text-center text-[11px] text-muted-foreground tabular-nums">
-        {zoomPct}%
-      </span>
-      <button
-        type="button"
-        className="flex size-[38px] items-center justify-center rounded-full text-foreground hover:bg-muted"
-        aria-label={t(($) => $.dock.zoom_out)}
-        onClick={onZoomOut}
-      >
-        <ZoomOut className="size-4" />
-      </button>
-      <button
-        type="button"
-        className="flex size-[38px] items-center justify-center rounded-full text-foreground hover:bg-muted"
-        aria-label={t(($) => $.dock.zoom_in)}
-        onClick={onZoomIn}
-      >
-        <ZoomIn className="size-4" />
-      </button>
-      <button
-        type="button"
-        className="flex size-[38px] items-center justify-center rounded-full text-foreground hover:bg-muted"
-        aria-label={t(($) => $.dock.fit)}
-        onClick={onFit}
-      >
-        <Scan className="size-4" />
-      </button>
-      <div className="mx-1 h-[22px] w-px bg-border" />
-      <button
-        type="button"
-        className={cn(
-          "flex size-[38px] items-center justify-center rounded-full bg-brand text-brand-foreground shadow-[0_0_14px_color-mix(in_oklch,var(--brand)_45%,transparent)]",
-          detailOpen && "ring-2 ring-brand/40",
-        )}
-        aria-label={t(($) => $.dock.toggle_detail)}
-        aria-pressed={detailOpen}
-        onClick={onToggleDetail}
-      >
-        <PanelRight className="size-4" />
-      </button>
+      {onSelectModule ? (
+        <>
+          <ResearchModuleRail
+            layout="dock"
+            active={activeModule}
+            onSelect={onSelectModule}
+            disabled={disabled}
+          />
+          <div className="mx-1 h-[22px] w-px bg-border" aria-hidden />
+        </>
+      ) : null}
+
+      {showZoom ? (
+        <>
+          <button
+            type="button"
+            className="flex size-9 items-center justify-center rounded-full text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50"
+            aria-label={t(($) => $.dock.zoom_out)}
+            disabled={disabled}
+            onClick={onZoomOut}
+          >
+            <ZoomOut className="size-4" aria-hidden />
+          </button>
+          <span className="min-w-9 text-center text-[11px] text-muted-foreground tabular-nums">
+            {zoomPct}%
+          </span>
+          <button
+            type="button"
+            className="flex size-9 items-center justify-center rounded-full text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50"
+            aria-label={t(($) => $.dock.zoom_in)}
+            disabled={disabled}
+            onClick={onZoomIn}
+          >
+            <ZoomIn className="size-4" aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="flex size-9 items-center justify-center rounded-full text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50"
+            aria-label={t(($) => $.dock.fit)}
+            disabled={disabled}
+            onClick={onFit}
+          >
+            <Scan className="size-4" aria-hidden />
+          </button>
+        </>
+      ) : null}
+
+      {showDetailToggle ? (
+        <>
+          {showZoom || onSelectModule ? (
+            <div className="mx-1 h-[22px] w-px bg-border" aria-hidden />
+          ) : null}
+          <button
+            type="button"
+            className={cn(
+              "flex size-9 items-center justify-center rounded-full bg-brand text-brand-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:opacity-50",
+              detailOpen && "ring-2 ring-brand/40",
+            )}
+            aria-label={t(($) => $.dock.toggle_detail)}
+            aria-pressed={detailOpen}
+            disabled={disabled}
+            onClick={onToggleDetail}
+          >
+            <PanelRight className="size-4" aria-hidden />
+          </button>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -367,7 +367,7 @@ vi.mock("../../navigation/context", () => ({
   }),
 }));
 
-vi.mock("../../editor/content-editor", () => ({
+vi.mock("../../editor/lazy-content-editor", () => ({
   ContentEditor: () => <div data-testid="content-editor" />,
 }));
 // The #576 SETTINGS tests need the dumb labeled button (enabled/disabled is
@@ -398,7 +398,6 @@ vi.mock("../../common/project-picker-button", () => ({
 }));
 vi.mock("./dm-conversation", () => ({ DmConversation: () => <div data-testid="dm-conversation" /> }));
 vi.mock("./channel-files-panel", () => ({ ChannelFilesPanel: () => <div /> }));
-vi.mock("./channel-stats-panel", () => ({ ChannelStatsPanel: () => <div /> }));
 // #832 role-failure suite: chrome-only details panel (renders the page-built
 // membersBody directly) + presence cluster reduced to an "open-members"
 // button. Every other suite needs the REAL details panel and the REAL presence
@@ -1497,7 +1496,9 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
   // #839 — the toast is the announcement, NOT the record. Dismissing it (or its
   // 4s default lifetime expiring) must not erase the fact that the removal
   // failed, so the failure also lands in the target's own row.
-  it("a failed removal leaves a durable in-row notice — surviving the toast", async () => {
+  // LRM-1327 / LRM-1300 §5: failure keeps the dialog open — dismiss Cancel
+  // first so the row notice is not under aria-hidden.
+  async function failRemoveAndDismissConfirm() {
     (
       apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
     ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
@@ -1505,9 +1506,16 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
     const removeItem = await openOwnerMemberMenu();
     fireEvent.click(removeItem);
     fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalled();
+    });
+    // Dialog stays open on failure; Cancel reveals the in-row record.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    return screen.findByTestId("channel-members-row-remove-failed");
+  }
 
-    // The row itself records it — this is what remains after the toast is gone.
-    const notice = await screen.findByTestId("channel-members-row-remove-failed");
+  it("a failed removal leaves a durable in-row notice — surviving the toast", async () => {
+    const notice = await failRemoveAndDismissConfirm();
     expect(notice).toHaveTextContent("Couldn't remove this member");
     expect(screen.getByTestId("channel-members-row-remove-retry")).toBeInTheDocument();
     // Scoped to the failed member's row, not a global banner.
@@ -1517,14 +1525,7 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
   });
 
   it("retry re-opens the confirmation — it never removes on one click (#839)", async () => {
-    (
-      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
-    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
-
-    const removeItem = await openOwnerMemberMenu();
-    fireEvent.click(removeItem);
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
-    await screen.findByTestId("channel-members-row-remove-failed");
+    await failRemoveAndDismissConfirm();
 
     const callsAfterFailure = (
       apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>
@@ -1542,14 +1543,7 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
 
   it("a successful retry clears the notice — the row (and its state) go together (#839)", async () => {
     const remove = apiMock.proxy.removeChannelMember as ReturnType<typeof vi.fn>;
-    (
-      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
-    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
-
-    const removeItem = await openOwnerMemberMenu();
-    fireEvent.click(removeItem);
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
-    await screen.findByTestId("channel-members-row-remove-failed");
+    await failRemoveAndDismissConfirm();
 
     // Retry → confirm again, this time the request succeeds.
     remove.mockResolvedValueOnce(undefined);
@@ -1562,14 +1556,7 @@ describe("ChannelsPage — group member removal is really wired (#833)", () => {
   });
 
   it("the in-row notice clears only when the user dismisses it (#839)", async () => {
-    (
-      apiMock.proxy as Record<string, { mockRejectedValueOnce: (e: unknown) => void } | undefined>
-    ).removeChannelMember?.mockRejectedValueOnce(new Error("boom"));
-
-    const removeItem = await openOwnerMemberMenu();
-    fireEvent.click(removeItem);
-    fireEvent.click(await screen.findByRole("button", { name: "Confirm remove" }));
-    await screen.findByTestId("channel-members-row-remove-failed");
+    await failRemoveAndDismissConfirm();
 
     fireEvent.click(screen.getByTestId("channel-members-row-remove-dismiss"));
     await waitFor(() => {

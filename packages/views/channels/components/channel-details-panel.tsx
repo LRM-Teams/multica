@@ -325,7 +325,7 @@ export function ChannelDetailsPanel({
           aria-label={t(($) => $.details.back_aria)}
           data-testid="channel-details-back"
         >
-          <ChevronLeft className="size-5" />
+          <ChevronLeft className="size-5" aria-hidden />
         </Button>
         <p className="truncate text-sm font-semibold">{subTitle}</p>
       </div>
@@ -520,7 +520,7 @@ export function ChannelDetailsPanel({
 
           <ChannelDetailsSectionCard title={t(($) => $.details.section_notifications)}>
             <ChannelDetailsDetailRow
-              icon={<Bell className="size-4" />}
+              icon={<Bell className="size-4" aria-hidden />}
               label={t(($) => $.details.row_notify_pref)}
               value={notifyPrefLabel}
               onClick={
@@ -536,7 +536,7 @@ export function ChannelDetailsPanel({
               testId="channel-details-notify-pref"
             />
             <ChannelDetailsDetailRow
-              icon={<VolumeX className="size-4" />}
+              icon={<VolumeX className="size-4" aria-hidden />}
               label={t(($) => $.details.row_mute)}
               // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Switch is the row control, not a memoized child tree
               trailing={
@@ -558,7 +558,7 @@ export function ChannelDetailsPanel({
 
           <ChannelDetailsSectionCard title={t(($) => $.details.section_content)}>
             <ChannelDetailsDetailRow
-              icon={<Search className="size-4" />}
+              icon={<Search className="size-4" aria-hidden />}
               label={t(($) => $.details.row_search)}
               onClick={() => {
                 onClose();
@@ -575,7 +575,7 @@ export function ChannelDetailsPanel({
           {!hideSettingsTab ? (
             <ChannelDetailsSectionCard title={t(($) => $.details.section_system)}>
               <ChannelDetailsDetailRow
-                icon={<Settings className="size-4" />}
+                icon={<Settings className="size-4" aria-hidden />}
                 label={t(($) => $.details.row_settings)}
                 onClick={() => dispatch({ type: "set_view", view: "settings" })}
                 testId="channel-details-settings"
@@ -586,7 +586,7 @@ export function ChannelDetailsPanel({
           <ChannelDetailsSectionCard>
             {onStopAllAgents ? (
               <ChannelDetailsDetailRow
-                icon={<Square className="size-3.5 fill-current" />}
+                icon={<Square className="size-3.5 fill-current" aria-hidden />}
                 label={t(($) => $.stop_all_agents.menu_label)}
                 onClick={() => {
                   if (stopAllDisabled) return;
@@ -600,7 +600,7 @@ export function ChannelDetailsPanel({
             ) : null}
             {onDelete ? (
               <ChannelDetailsDetailRow
-                icon={<Trash2 className="size-4" />}
+                icon={<Trash2 className="size-4" aria-hidden />}
                 label={t(($) => $.details.delete_group)}
                 onClick={() => {
                   onClose();

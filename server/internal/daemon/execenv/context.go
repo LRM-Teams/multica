@@ -487,6 +487,21 @@ func writeSkillFiles(skillsDir string, skills []SkillContextForEnv, manifest *si
 	return nil
 }
 
+// isChatLikeContext reports conversational wakes that should receive the chat
+// runtime brief / sidecar, not the issue-assignment package. After LRM-1079/1081,
+// ordinary channel/DM wakes carry ChannelID without ChatSessionID.
+// Single-track: never gate on ChatSessionID.
+func isChatLikeContext(ctx TaskContextForEnv) bool {
+	if strings.TrimSpace(ctx.IssueID) != "" {
+		return false
+	}
+	if strings.TrimSpace(ctx.AutopilotRunID) != "" || strings.TrimSpace(ctx.QuickCreatePrompt) != "" {
+		return false
+	}
+	// Single-track: ChannelID only — ChatSessionID is retired; ignore on wire.
+	return strings.TrimSpace(ctx.ChannelID) != ""
+}
+
 // renderIssueContext builds the markdown content for issue_context.md.
 func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 	if ctx.AutopilotRunID != "" {
@@ -494,6 +509,9 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 	}
 	if ctx.QuickCreatePrompt != "" {
 		return renderQuickCreateContext(ctx)
+	}
+	if isChatLikeContext(ctx) {
+		return renderChatWakeContext(ctx)
 	}
 
 	var b strings.Builder
@@ -517,6 +535,21 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 
 	writeAgentSkillsIndex(&b, ctx.AgentSkills)
 
+	return b.String()
+}
+
+// renderChatWakeContext is the sidecar for channel/DM conversational wakes that
+// have no assigned issue. It must never claim "New Assignment" with a blank ID.
+func renderChatWakeContext(ctx TaskContextForEnv) string {
+	var b strings.Builder
+	b.WriteString("# Chat / Channel Wake\n\n")
+	if id := strings.TrimSpace(ctx.ChannelID); id != "" {
+		fmt.Fprintf(&b, "**Channel ID:** %s\n\n", id)
+	}
+	// ChatSessionID is retired — never print it even if still present on wire.
+	b.WriteString("**Trigger:** Channel/DM message (not an issue assignment)\n\n")
+	b.WriteString("There is no assigned issue for this wake. Do not run `multica issue get` unless the user asks you to create or inspect an issue.\n\n")
+	writeAgentSkillsIndex(&b, ctx.AgentSkills)
 	return b.String()
 }
 
@@ -618,9 +651,8 @@ func renderAutopilotContext(ctx TaskContextForEnv) string {
 
 	b.WriteString("## Quick Start\n\n")
 	b.WriteString("This is a run-only autopilot task with no assigned issue. Do not run `multica issue get` unless the autopilot instructions explicitly ask you to create or update an issue.\n\n")
-	if ctx.AutopilotID != "" {
-		fmt.Fprintf(&b, "Run `multica autopilot get %s --output json` if you need the full autopilot configuration.\n\n", ctx.AutopilotID)
-	}
+	// Autopilot CLI retired (task #40): configuration is only what is already in this brief.
+	b.WriteString("The Autopilot product is retired — there is no `multica autopilot` CLI. Use the instructions and payload in this brief only.\n\n")
 	if strings.TrimSpace(ctx.AutopilotDescription) != "" {
 		b.WriteString("## Autopilot Instructions\n\n")
 		b.WriteString(ctx.AutopilotDescription)

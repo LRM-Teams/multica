@@ -2,7 +2,7 @@
 
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import enAgents from "../../locales/en/agents.json";
+import zhAgents from "../../locales/zh-Hans/agents.json";
 import { AgentHonorPanelSection } from "./agent-honor-panel-section";
 
 const mockHonor = {
@@ -72,10 +72,10 @@ const mockHonor = {
 vi.mock("../../i18n", () => ({
   useT: () => ({
     t: (
-      selector: (bundle: typeof enAgents) => unknown,
+      selector: (bundle: typeof zhAgents) => unknown,
       options?: Record<string, string | number>,
     ) => {
-      const template = selector(enAgents);
+      const template = selector(zhAgents);
       if (typeof template !== "string") return String(template ?? "");
       return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) =>
         String(options?.[key] ?? `{{${key}}}`),
@@ -125,8 +125,9 @@ describe("AgentHonorPanelSection", () => {
 
     expect(screen.getByTestId("agent-honor-panel-section")).toBeInTheDocument();
     expect(container.querySelector('[data-agent-honor-level="8"]')).toBeInTheDocument();
-    expect(screen.getByText("LV.8")).toBeInTheDocument();
-    expect(screen.getByText(/1250 XP/)).toBeInTheDocument();
+    expect(screen.getByText("第 8 级")).toBeInTheDocument();
+    expect(screen.getByText(/1250 经验/)).toBeInTheDocument();
+    expect(screen.queryByText(/XP|LV\./)).not.toBeInTheDocument();
 
     const viewAll = screen.getByTestId("agent-honor-view-all");
     expect(viewAll).toHaveAttribute("href", "/acme/agents/agent-1?tab=honor");

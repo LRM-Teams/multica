@@ -60,14 +60,14 @@ spec:
 
     - name: multica-http-request-slo
       rules:
-        # Frank SLO: every served API p95 < 1s. Quantile over 5m rate window.
+        # Frank report-only API p95 target: eligible served routes stay under 1s. Quantile over 5m rate window.
         # priority=hot_path for activity + agent-task-snapshot (accident paths).
         - alert: MulticaHTTPRequestP95High
           expr: |
             histogram_quantile(
               0.95,
               sum by (le, method, route) (
-                rate(multica_http_request_duration_seconds_bucket[5m])
+                rate(multica_http_slo_request_duration_seconds_bucket[5m])
               )
             ) > {{ .Values.monitoring.prometheusRule.httpP95Seconds | default 1 }}
           for: {{ .Values.monitoring.prometheusRule.httpP95For | default "2m" | quote }}
@@ -75,14 +75,14 @@ spec:
             severity: {{ .Values.monitoring.prometheusRule.severity | quote }}
             slo: http_request_p95
           annotations:
-            summary: "HTTP served p95 above SLO"
-            description: "served p95 for {{ "{{ $labels.method }}" }} {{ "{{ $labels.route }}" }} is above {{ .Values.monitoring.prometheusRule.httpP95Seconds | default 1 }}s (Frank gate: every API < 1s). Not SQL time — middleware wall clock."
+            summary: "HTTP served p95 above report-only target"
+            description: "served p95 for {{ "{{ $labels.method }}" }} {{ "{{ $labels.route }}" }} is above {{ .Values.monitoring.prometheusRule.httpP95Seconds | default 1 }}s (Frank report-only API target). Not SQL time — middleware wall clock."
         - alert: MulticaHTTPRequestP95HighHotPath
           expr: |
             histogram_quantile(
               0.95,
               sum by (le, method, route) (
-                rate(multica_http_request_duration_seconds_bucket{
+                rate(multica_http_slo_request_duration_seconds_bucket{
                   route=~"/api/agents/\\{id\\}/activity|/api/agent-task-snapshot"
                 }[5m])
               )

@@ -95,6 +95,7 @@ export function ChatContactList({
                 <div className="min-w-0 flex-1">
                   <ActorIdentityRow
                     identity={agent}
+                    agentHonorLevel={agent.honor_level}
                     primaryClassName={cn(
                       "truncate text-sm",
                       hasUnread ? "font-semibold" : "font-normal",

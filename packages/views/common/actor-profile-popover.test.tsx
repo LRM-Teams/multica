@@ -9,6 +9,7 @@ import type { MemberProfile } from "@multica/core/types";
 import type { AgentLiveStatusView } from "../agents/resolve-agent-live-status";
 import type { ActivityEvent } from "../agents/components/tabs/activity-event";
 import enAgents from "../locales/en/agents.json";
+import enSettings from "../locales/en/settings.json";
 import { ActorProfileContentLoaded } from "./actor-profile-popover";
 
 // Live status is resolved by useAgentLiveStatus (snapshot + task-messages +
@@ -112,7 +113,13 @@ vi.mock("../i18n/use-t", () => {
         selector: (r: any) => string,
         values?: Record<string, string | number>,
       ) => {
-        let value = selector(namespace === "agents" ? enAgents : CHANNELS_RES);
+        let value = selector(
+          namespace === "agents"
+            ? enAgents
+            : namespace === "settings"
+              ? enSettings
+              : CHANNELS_RES,
+        );
         for (const [key, replacement] of Object.entries(values ?? {})) {
           value = value.replaceAll(`{{${key}}}`, String(replacement));
         }
@@ -305,6 +312,7 @@ describe("ActorProfileContentLoaded", () => {
     const summary = await screen.findByTestId("member-honor-showcase");
     expect(summary).toHaveTextContent("LV.42");
     expect(summary).toHaveTextContent("Prism Core");
+    expect(summary.querySelector('[data-user-honor-level="42"]')).not.toBeNull();
     expect(summary.closest("section")).toBeNull();
     expect(summary).not.toHaveClass("honor-dark-surface");
     expect(screen.queryByText("Developer honor")).toBeNull();

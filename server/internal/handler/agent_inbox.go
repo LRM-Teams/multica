@@ -345,11 +345,15 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		}
 		if lineage := strings.TrimSpace(msg.Lineage); lineage != "" {
 			details["lineage"] = lineage
+			// P0: Claude stream-json (and any provider that stamps Message.Lineage)
+			// surfaces nested trajectories. Emit one user-facing Activity row the
+			// first time we see each lineage on this inbox event — FE already
+			// treats event_type containing "subagent" as Subagent activity.
+			h.maybeRecordProviderSubagentStarted(r.Context(), event, runtimeID, deliveryID, lineage, details)
 		}
 		if taskMessageIsPhaseStatus(msg.Type, msg.Content) {
-			// Match Raft's bare thinking phase entry. It is a user-facing task
-			// status wire only; do not publish it as an Activity event because
-			// the main timeline deliberately has no Thinking line.
+			// Legacy daemons may still report an empty thinking phase. Retain it
+			// as diagnostic data only; current daemons no longer emit this wire.
 			details["phase_status"] = true
 			insertAgentActivityEvent(r.Context(), h.DB,
 				event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
@@ -408,6 +412,12 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			if target, summaryKind := agentInboxActivityToolTarget(msg); target != "" && details["tool_target"] == nil {
 				details["tool_target"] = target
 				details["summary_kind"] = summaryKind
+			}
+			// Cursor (and similar) launch nested agents as Task/subagent tools —
+			// same classification as packages/views/chat/lib/bubble-cursor-activity.
+			rawTool := strings.TrimSpace(msg.Tool)
+			if isCursorLikeSubagentTool(rawTool, msg.Input) {
+				h.maybeRecordCursorSubagentStarted(r.Context(), event, runtimeID, deliveryID, msg, details)
 			}
 		}
 		// Cursor often emits tool args only on completed (tool_result). The
@@ -1734,11 +1744,18 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 			model = config.Model
 			thinkingLevel = config.ThinkingLevel
 		}
+		managerChannels := h.agentManagerChannels(ctx, event.WorkspaceID, agent.ID)
+		// Reminder fires are single-channel: listing every managed channel
+		// confuses the agent into posting the same patrol to all groups
+		// (Frank 2026-08-03: 3 reminders × 3 channels = 3× spam).
+		if strings.TrimSpace(event.Reason) == "reminder" && event.ChannelID.Valid {
+			managerChannels = filterManagerChannelsTo(managerChannels, uuidToString(event.ChannelID))
+		}
 		resp.Agent = &TaskAgentData{
 			ID:              uuidToString(agent.ID),
 			Name:            agentDisplayName(agent),
 			ManagedRole:     agent.ManagedRole.String,
-			ManagerChannels: h.agentManagerChannels(ctx, event.WorkspaceID, agent.ID),
+			ManagerChannels: managerChannels,
 			Instructions:    agent.Instructions,
 			Skills:          skills,
 			CustomEnv:       customEnv,
@@ -1905,6 +1922,21 @@ func (h *Handler) agentManagerChannels(
 		return nil
 	}
 	return channels
+}
+
+// filterManagerChannelsTo keeps only the channel matching id (reminder fires).
+func filterManagerChannelsTo(channels []ManagerChannelData, channelID string) []ManagerChannelData {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" || len(channels) == 0 {
+		return channels
+	}
+	out := make([]ManagerChannelData, 0, 1)
+	for _, ch := range channels {
+		if ch.ID == channelID {
+			out = append(out, ch)
+		}
+	}
+	return out
 }
 
 // attachCanonicalRuntimeState ensures the agent×runtime row exists and copies
@@ -2114,9 +2146,10 @@ func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageReque
 		Visibility: "user_facing",
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	if taskMessageIsPhaseStatus(msg.Type, msg.Content) {
-		payload.Type = "thinking"
-		return payload, true
+	// Thinking is retained as diagnostic activity only and is never forwarded
+	// to a user client, regardless of whether it carries provider text.
+	if msg.Type == "thinking" {
+		return protocol.TaskMessagePayload{}, false
 	}
 	switch kind {
 	case activityKindToolCall:
@@ -2135,17 +2168,269 @@ func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageReque
 	return payload, true
 }
 
+// parseProviderLineageSubagentType reads the Claude nativeLineage JSON shape
+// {"parent_tool_use_id":"...","subagent_type":"Explore"}. Empty lineage or
+// non-JSON returns ok=false. A non-empty parent without subagent_type still
+// counts as a nested trajectory (ok=true, type empty).
+func parseProviderLineageSubagentType(lineage string) (subagentType string, ok bool) {
+	lineage = strings.TrimSpace(lineage)
+	if lineage == "" {
+		return "", false
+	}
+	var payload struct {
+		ParentToolUseID string `json:"parent_tool_use_id"`
+		SubagentType    string `json:"subagent_type"`
+	}
+	if err := json.Unmarshal([]byte(lineage), &payload); err != nil {
+		// Non-JSON lineage still means a nested trajectory was stamped.
+		return "", true
+	}
+	if payload.ParentToolUseID == "" && payload.SubagentType == "" {
+		return "", false
+	}
+	return strings.TrimSpace(payload.SubagentType), true
+}
+
+func providerSubagentStartedMessage(subagentType string) string {
+	subagentType = strings.TrimSpace(subagentType)
+	if subagentType == "" {
+		return "Subagent started"
+	}
+	return "Subagent started: " + subagentType
+}
+
+// maybeRecordProviderSubagentStarted inserts one custom Activity event per
+// (inbox event, lineage) when a provider message carries Message.Lineage.
+// Fail-soft: duplicate lookup / insert errors never fail the message report.
+func (h *Handler) maybeRecordProviderSubagentStarted(
+	ctx context.Context,
+	event db.AgentInboxEvent,
+	runtimeID, deliveryID pgtype.UUID,
+	lineage string,
+	baseDetails map[string]any,
+) {
+	if h == nil || h.DB == nil {
+		return
+	}
+	subagentType, ok := parseProviderLineageSubagentType(lineage)
+	if !ok {
+		return
+	}
+	if h.providerSubagentStartedExists(ctx, event.WorkspaceID, event.AgentID, event.ID, lineage) {
+		return
+	}
+	targetKind, targetID := agentInboxActivityTarget(event)
+	details := map[string]any{
+		"lineage":           lineage,
+		"inbox_event_id":    uuidToString(event.ID),
+		"source_message_id": uuidToString(event.SourceMessageID),
+	}
+	if deliveryID.Valid {
+		details["delivery_id"] = uuidToString(deliveryID)
+	}
+	if subagentType != "" {
+		details["subagent_type"] = subagentType
+	}
+	// Preserve seq when the caller already had one on the message details.
+	if baseDetails != nil {
+		if seq, exists := baseDetails["seq"]; exists {
+			details["seq"] = seq
+		}
+	}
+	h.recordAgentActivityEvent(ctx, h.DB,
+		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
+		activityKindCustom, "subagent_started", "info",
+		targetKind, targetID, "",
+		"provider_lineage", providerSubagentStartedMessage(subagentType),
+		details,
+	)
+}
+
+func (h *Handler) providerSubagentStartedExists(ctx context.Context, workspaceID, agentID, inboxEventID pgtype.UUID, lineage string) bool {
+	if h == nil || h.DB == nil {
+		return false
+	}
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM agent_activity_event
+  WHERE workspace_id = $1
+    AND agent_id = $2
+    AND event_kind = $3
+    AND event_type = $4
+    AND details->>'inbox_event_id' = $5
+    AND COALESCE(details->>'lineage', '') = $6
+)
+`, workspaceID, agentID, activityKindCustom, "subagent_started", uuidToString(inboxEventID), lineage).Scan(&exists)
+	if err != nil {
+		slog.Warn("provider subagent activity: duplicate lookup failed",
+			"agent_id", uuidToString(agentID),
+			"inbox_event_id", uuidToString(inboxEventID),
+			"error", err)
+		return false
+	}
+	return exists
+}
+
+// isCursorLikeSubagentTool mirrors packages/views/chat/lib/bubble-cursor-activity
+// classifyBubbleToolKind === "task": Task / subagent / best-of-n / launch-agent
+// tools, or any tool whose input carries subagent_type.
+func isCursorLikeSubagentTool(tool string, input map[string]any) bool {
+	if input != nil {
+		if st, ok := input["subagent_type"].(string); ok && strings.TrimSpace(st) != "" {
+			return true
+		}
+	}
+	n := normalizeActivityToolSlug(tool)
+	if n == "" {
+		return false
+	}
+	if n == "task" || strings.HasPrefix(n, "task") {
+		return true
+	}
+	if strings.Contains(n, "subagent") || strings.Contains(n, "bestofn") || strings.Contains(n, "launchagent") {
+		return true
+	}
+	return false
+}
+
+func normalizeActivityToolSlug(tool string) string {
+	tool = strings.ToLower(strings.TrimSpace(tool))
+	if tool == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(tool))
+	for _, r := range tool {
+		switch r {
+		case '-', '_', ' ', '	':
+			continue
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// cursorSubagentStartedMessage matches bubble title preference: description /
+// name / subagent_type / short prompt / tool name.
+func cursorSubagentStartedMessage(tool string, input map[string]any) string {
+	title := ""
+	if input != nil {
+		for _, key := range []string{"description", "name", "subagent_type"} {
+			if v, ok := input[key].(string); ok && strings.TrimSpace(v) != "" {
+				title = strings.TrimSpace(v)
+				break
+			}
+		}
+		if title == "" {
+			if v, ok := input["prompt"].(string); ok && strings.TrimSpace(v) != "" {
+				p := strings.TrimSpace(v)
+				if len(p) > 80 {
+					p = p[:80]
+				}
+				title = p
+			}
+		}
+	}
+	if title == "" {
+		title = strings.TrimSpace(tool)
+	}
+	if title == "" {
+		return "Subagent started"
+	}
+	return "Subagent started: " + title
+}
+
+func (h *Handler) maybeRecordCursorSubagentStarted(
+	ctx context.Context,
+	event db.AgentInboxEvent,
+	runtimeID, deliveryID pgtype.UUID,
+	msg TaskMessageRequest,
+	baseDetails map[string]any,
+) {
+	if h == nil || h.DB == nil {
+		return
+	}
+	tool := strings.TrimSpace(msg.Tool)
+	callID := strings.TrimSpace(msg.CallID)
+	dedupeKey := callID
+	if dedupeKey == "" {
+		dedupeKey = fmt.Sprintf("seq:%d:%s", msg.Seq, tool)
+	}
+	if h.cursorSubagentStartedExists(ctx, event.WorkspaceID, event.AgentID, event.ID, dedupeKey) {
+		return
+	}
+	targetKind, targetID := agentInboxActivityTarget(event)
+	details := map[string]any{
+		"inbox_event_id":    uuidToString(event.ID),
+		"source_message_id": uuidToString(event.SourceMessageID),
+		"tool":              tool,
+		"cursor_subagent":   true,
+		"dedupe_key":        dedupeKey,
+	}
+	if deliveryID.Valid {
+		details["delivery_id"] = uuidToString(deliveryID)
+	}
+	if callID != "" {
+		details["call_id"] = callID
+	}
+	if baseDetails != nil {
+		if seq, ok := baseDetails["seq"]; ok {
+			details["seq"] = seq
+		}
+	}
+	if msg.Input != nil {
+		if st, ok := msg.Input["subagent_type"].(string); ok && strings.TrimSpace(st) != "" {
+			details["subagent_type"] = strings.TrimSpace(st)
+		}
+	}
+	h.recordAgentActivityEvent(ctx, h.DB,
+		event.WorkspaceID, event.AgentID, runtimeID, pgtype.UUID{},
+		activityKindCustom, "subagent_started", "info",
+		targetKind, targetID, "",
+		"cursor_tool", cursorSubagentStartedMessage(tool, msg.Input),
+		details,
+	)
+}
+
+func (h *Handler) cursorSubagentStartedExists(ctx context.Context, workspaceID, agentID, inboxEventID pgtype.UUID, dedupeKey string) bool {
+	if h == nil || h.DB == nil {
+		return false
+	}
+	var exists bool
+	err := h.DB.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM agent_activity_event
+  WHERE workspace_id = $1
+    AND agent_id = $2
+    AND event_kind = $3
+    AND event_type = $4
+    AND details->>'inbox_event_id' = $5
+    AND COALESCE(details->>'dedupe_key', '') = $6
+)
+`, workspaceID, agentID, activityKindCustom, "subagent_started", uuidToString(inboxEventID), dedupeKey).Scan(&exists)
+	if err != nil {
+		slog.Warn("cursor subagent activity: duplicate lookup failed",
+			"agent_id", uuidToString(agentID),
+			"inbox_event_id", uuidToString(inboxEventID),
+			"error", err)
+		return false
+	}
+	return exists
+}
+
 func agentInboxActivityMessageKind(messageType string) (kind, eventType, severity string) {
 	if kind, eventType, _, ok := taskMessageCompactionActivity(messageType); ok {
 		return kind, eventType, "info"
 	}
 	switch messageType {
 	case "thinking":
-		// Raft's thought stream is useful for diagnostics, but it is not a
-		// user-facing Activity narrative. Keeping it custom also prevents a
-		// future timeline consumer from mistaking each coalesced chunk for a
-		// phase transition.
-		return activityKindCustom, "runtime_thinking", "info"
+		// Provider reasoning remains diagnostic-only. Empty thinking is handled
+		// earlier as a legacy phase row, but current daemons do not send it.
+		return activityKindThinking, "runtime_thinking", "info"
 	case "tool_use":
 		return activityKindToolCall, "tool_use", "info"
 	case "tool_result":
@@ -2619,7 +2904,7 @@ func (h *Handler) populateAgentInboxChannelWakeContext(ctx context.Context, even
 // agent_inbox_event.context.channel_wake (no chat_session bridge).
 func channelOnlyWakeReason(reason string) bool {
 	switch strings.TrimSpace(reason) {
-	case "mention", "dm", "thread_reply", "handoff", "continuation", channelMessageWakeReason:
+	case "mention", "dm", "reminder", "thread_reply", "handoff", "continuation", channelMessageWakeReason:
 		return true
 	default:
 		return false

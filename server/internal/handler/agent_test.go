@@ -57,6 +57,7 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
+	resetAgentTaskSnapshotCacheForTest()
 
 	ctx := context.Background()
 	// Three agents so we can verify per-agent semantics independently.
@@ -297,6 +298,7 @@ func TestListWorkspaceAgentTaskSnapshotIncludesActorIdentity(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
+	resetAgentTaskSnapshotCacheForTest()
 
 	ctx := context.Background()
 	visibleAgentID := createHandlerTestAgent(t, "snapshot-identity-visible-"+uuid.NewString()[:8], []byte(`{}`))
@@ -1142,6 +1144,43 @@ func TestListAgents_ResponseHasNoCustomEnv(t *testing.T) {
 	if got, _ := found["has_custom_env"].(bool); !got {
 		t.Errorf("has_custom_env expected true")
 	}
+}
+
+func TestListAgents_IncludesAgentHonorLevel(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "honor-level-list-agent", nil)
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_honor_state (workspace_id, agent_id, total_xp, level)
+		VALUES ($1, $2, 1225, 8)
+		ON CONFLICT (workspace_id, agent_id) DO UPDATE
+		SET total_xp = EXCLUDED.total_xp, level = EXCLUDED.level
+	`, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("set agent honor level: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.ListAgents(w, newRequest(http.MethodGet, "/api/agents", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListAgents: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var agents []AgentResponse
+	if err := json.NewDecoder(w.Body).Decode(&agents); err != nil {
+		t.Fatalf("decode ListAgents response: %v", err)
+	}
+	for _, agent := range agents {
+		if agent.ID == agentID {
+			if agent.HonorLevel != 8 {
+				t.Fatalf("honor_level = %d, want 8", agent.HonorLevel)
+			}
+			return
+		}
+	}
+	t.Fatalf("agent %s missing from ListAgents response", agentID)
 }
 
 // TestListAgents_ExcludesResearchFleetMembers locks task #903's redirect:

@@ -491,6 +491,18 @@ Three distinct entry paths populate the workspace skill catalog:
 | Evolution promotion | `MaterializePromotedSkill` | set | `evolution` after user accepts suggestion |
 | Agent template | template create flow | NULL | `manual` today (template source planned) |
 
+### Cross-device skill boundary
+
+Published workspace skills are portable because `skill`, `skill_file`, and `agent_skill` are server-side facts. Every runtime claim reloads bound bundles from the database and hydrates the current provider environment; `<agent-root>/skills/enabled/` is a one-way, rebuildable DB mirror.
+
+The following remain device-local sources until explicitly imported or promoted:
+
+- `<agent-root>/skills/drafts/`
+- `<agent-root>/sync_queue/skill-candidates.jsonl`
+- provider-global roots such as `~/.pi/share/skills/`
+
+Moving to a new machine therefore restores published/bound skills, not unpublished drafts or provider-global folders. Skill bundle OS/architecture/command capability constraints require a separate typed manifest and runtime capability contract; they must not be inferred from absolute paths or silently added to this sync protocol.
+
 ### `agent_memory`
 
 Evolution memory candidates materialize into `agent_memory` for the submitting agent after hard gates pass. The separate runtime sync handler (`SyncAgentMemories`) still exists for direct runtime memory bundles, but the Pi evolution upload path documented here uses `sync_queue/memory-candidates.jsonl` → `evolution_unit_submission` → `agent_memory`.

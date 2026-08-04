@@ -7,6 +7,8 @@ type AgentAchievementCopySource = {
   title: string;
   description?: string;
   category?: string;
+  secret?: boolean;
+  unlocked?: boolean;
 };
 
 export type AgentAchievementCopy = {
@@ -43,6 +45,14 @@ export function useAgentAchievementCopy() {
   const categoryName = useAgentAchievementCategoryName();
 
   return (achievement: AgentAchievementCopySource): AgentAchievementCopy => {
+    if (achievement.secret && achievement.unlocked === false) {
+      return {
+        title: t(($) => $.honor_agent.secret_achievement),
+        description: t(($) => $.honor_agent.secret_achievement_description),
+        category: t(($) => $.honor_agent.secret_achievement_category),
+      };
+    }
+
     const fallback = {
       title: achievement.title,
       description: achievement.description?.trim() ?? "",

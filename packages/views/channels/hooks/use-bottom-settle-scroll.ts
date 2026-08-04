@@ -10,11 +10,33 @@ import { useActiveScrollGesture } from "./use-active-scroll-gesture";
 const BOTTOM_BAND_PX = 24;
 // Frame cap backstop, matching the anchor settle's default.
 const MAX_FRAMES = 180;
+// After the tail row first lands in the bottom band, keep the loop alive (reading
+// geometry, writing only when it drifts back out) for this many frames.
+//
+// LRM-1220 root cause: an attached bottom-band frame is NOT proof the list is
+// fully measured. On a cold mount Virtuoso — seeded with
+// `initialTopMostItemIndex = last` — renders ONLY the tail rows first, so the
+// scroller is still collapsed (`scrollHeight === clientHeight`, the pin write
+// clamps to a no-op) while the tail row's bottom edge sits exactly on the
+// container bottom: `hasReached()` is true on frame one and the settle used to
+// complete PERMANENTLY. A few hundred ms later the rows above the tail measure,
+// the content grows BELOW a scrollTop that is still 0, and with the loop gone
+// nothing re-pins — the open lands on the oldest loaded row (jianghp3: every
+// mobile open stuck on 「今天」+ 当日第一条 with 「加载更早消息」 at the top,
+// hours behind the newest message). The `pinnedThisFrame` gate does not cover
+// this: during a cold mount the handle IS attached.
+//
+// So arrival stops the *writes*, not the *loop*. The window must outlast the
+// measurement-evolution tail (real-device trace: ~440ms) with margin, while
+// staying well inside MAX_FRAMES' spirit as a bounded budget. A user gesture
+// still ends everything immediately and permanently — the re-pin never
+// out-ranks the user (see the gesture check in `tick`).
+const POST_REACH_WATCH_FRAMES = 90;
 
 /**
  * "Land at the bottom on cold open" settle for the DEFAULT case — no deep-link
- * highlight and no unread anchor, i.e. a normal channel/DM open that should show
- * the latest message.
+ * highlight and no unread anchor, i.e. a normal channel / DM / thread open that
+ * should show the latest message.
  *
  * Why direct scrollTop, not scrollToIndex (real-device P0, 2026-07-25): the
  * latest-message position was first seeded by the mount-once declarative
@@ -42,15 +64,18 @@ const MAX_FRAMES = 180;
  * FIRST real user gesture during the settle it hands ownership to the user and
  * PERMANENTLY exits for this visit (no resume, unlike the anchor path's
  * pause-resume) — a cold mount starts at the top, so `isNearBottom` can't be used
- * to detect a real scroll-up; the gesture epoch is the durable signal. After it
- * exits (reached / gesture / timeout), the existing `followOutput` handles later
- * new messages once the user is at the bottom.
+ * to detect a real scroll-up; the gesture epoch is the durable signal. Reaching
+ * the bottom band stops the per-frame writes but keeps the loop alive for a
+ * bounded watch window (LRM-1220), so late measurement growth that drops the
+ * viewport back to the top is corrected instead of stranded. After it exits
+ * (watch window elapsed / gesture / timeout), the existing `followOutput` handles
+ * later new messages once the user is at the bottom.
  */
 export function useBottomSettleScroll({
   channelId,
   messages,
   enabled,
-  handleAttached,
+  listReady,
   scrollContainerEl,
   messageRefMap,
 }: {
@@ -58,13 +83,25 @@ export function useBottomSettleScroll({
   messages: readonly ChannelMessage[];
   /**
    * True only when the default-bottom position owns the mount — no deep-link
-   * highlight and no unread anchor, and the list wants to open at the latest
-   * message (`initialScroll === "bottom"`).
+   * highlight and no unread anchor. Every chat surface (channel, DM, thread)
+   * wants the latest row on open (LRM-1156).
    */
   enabled: boolean;
-  /** True once Virtuoso's imperative handle has attached — a value-comparable
-   * readiness signal so the effect re-runs the instant the list is live. */
-  handleAttached: boolean;
+  /**
+   * True while the rows in the scroll container are a settled render we may pin
+   * against. Two ways the list can be live, and the settle must serve BOTH:
+   *  - the virtualized path: Virtuoso's imperative handle has attached (a
+   *    value-comparable readiness signal, so a mid-mount detach/reattach flap is
+   *    observable per frame instead of killing the settle);
+   *  - the non-virtualized direct-fallback path (LRM-1220): Virtuoso is not
+   *    rendered at all, so its handle is permanently null. Reading "no handle" as
+   *    "not ready" there meant the settle NEVER wrote a single scrollTop, timed
+   *    out after the frame cap, and left the open resting at scrollTop 0 — the
+   *    oldest loaded row. That is the mobile-web report ("每次进群都跳到今天第一条
+   *    消息"): the fallback renders plain divs with no landing logic of its own,
+   *    so this settle is the ONLY thing that can put the newest row on screen.
+   */
+  listReady: boolean;
   /** Virtuoso's `customScrollParent`, or null before it exists. We write its
    * `scrollTop` directly and measure its bottom edge. */
   scrollContainerEl: HTMLElement | null;
@@ -80,18 +117,18 @@ export function useBottomSettleScroll({
 
   const { activeGestureRef, gestureEpochRef } = useActiveScrollGesture(scrollContainerEl);
 
-  // Live `handleAttached` for the settle loop to read each frame. The loop must
+  // Live `listReady` for the settle loop to read each frame. The loop must
   // SURVIVE Virtuoso detaching/reattaching its imperative handle during the
   // cold-mount measurement window (real-device trace 2026-07-26): a mid-settle
   // detach cancelled the rAF chain, and the effect re-run that fired when the tail
-  // finally became measurable (~440ms later) happened to see `handleAttached=false`
+  // finally became measurable (~440ms later) happened to see `listReady=false`
   // and bailed on the guard → the settle never re-armed → stuck at the top. Reading
   // it via a ref (NOT as an effect dep) keeps ONE persistent loop alive across the
   // flaps instead of cancel-restarting; and because `messageRefMap` is a stable ref
   // (the tail row entering it never re-triggers the effect), only a live loop that
   // keeps checking geometry every frame can catch the tail the moment it mounts.
-  const handleAttachedRef = useRef(handleAttached);
-  handleAttachedRef.current = handleAttached;
+  const listReadyRef = useRef(listReady);
+  listReadyRef.current = listReady;
 
   // The gesture-handoff baseline is PER CHANNEL VISIT, not per effect run.
   // Captured once when the visit begins and preserved across every effect
@@ -116,7 +153,7 @@ export function useBottomSettleScroll({
   useEffect(() => {
     const lastId = messages[messages.length - 1]?.id ?? null;
 
-    // NOTE: `handleAttached` is deliberately NOT gated here (nor an effect dep) —
+    // NOTE: `listReady` is deliberately NOT gated here (nor an effect dep) —
     // the loop starts as soon as the container + data exist and reads the LIVE
     // attach state per frame, so a transient detach can't kill the settle.
     if (!scrollContainerEl || !enabled || messages.length === 0) return;
@@ -129,6 +166,11 @@ export function useBottomSettleScroll({
 
     let raf = 0;
     let frame = 0;
+    // Set the first time an attached, pinned frame confirms the tail row in the
+    // bottom band. From then on the loop stops writing unconditionally and only
+    // corrects drift (see POST_REACH_WATCH_FRAMES).
+    let reached = false;
+    let watchFrame = 0;
 
     // Arrived = the last row is rendered AND its BOTTOM edge is within the band
     // of the scroller's bottom edge — real geometry, mirroring the unread-anchor
@@ -162,27 +204,38 @@ export function useBottomSettleScroll({
       // measurable. As rows render and scrollHeight grows, this re-pins to the true
       // bottom each frame (measurement-evolution safe); the browser clamps to max.
       let pinnedThisFrame = false;
-      if (handleAttachedRef.current) {
-        scrollContainerEl.scrollTop = scrollContainerEl.scrollHeight;
+      if (listReadyRef.current) {
+        // Once arrived, write ONLY when the tail has drifted back out of the band
+        // (the measurement-evolution growth this window exists to catch). A
+        // read-only watch frame keeps the healthy path from re-writing scrollTop
+        // ~90 extra times per open.
+        if (!reached || !hasReached()) {
+          scrollContainerEl.scrollTop = scrollContainerEl.scrollHeight;
+        }
         pinnedThisFrame = true;
       }
       frame += 1;
-      // Complete ONLY in a frame where we actually pinned (the handle was attached
-      // this frame, so the direct write above ran) AND the tail row is confirmed
-      // within the bottom band. Gating on `pinnedThisFrame` is the successor
-      // contract's teeth: while the handle is DETACHED the settle must NEVER
-      // complete — a detach/remount can transiently put the tail in the ref map with
-      // a geometry that momentarily lands in the band (the untrustworthy
-      // measurement-evolution window), and settling there — on zero attached pin —
-      // would end the loop for good (reattach can't restart it, since
-      // `handleAttached` is no longer an effect dep). We do NOT require the pin to
-      // have MOVED scrollTop, so a warm mount already at the bottom (no-op write)
-      // still completes on frame one with no spurious ~3s write loop or timeout.
-      if (pinnedThisFrame && hasReached()) {
-        settledChannelRef.current = channelId ?? null;
-        return;
+      // Arrival ONLY counts in a frame where the handle was attached (so the
+      // direct write above was live). Gating on `pinnedThisFrame` is the
+      // successor contract's teeth: while the handle is DETACHED a
+      // detach/remount can transiently put the tail in the ref map with a
+      // geometry that momentarily lands in the band (the untrustworthy
+      // measurement-evolution window), and arriving there on zero attached pin
+      // would start the watch countdown against a list that has not moved at all.
+      // We do NOT require the pin to have MOVED scrollTop, so a warm mount
+      // already at the bottom (no-op write) still arrives on frame one.
+      if (!reached && pinnedThisFrame && hasReached()) {
+        reached = true;
       }
-      if (frame >= MAX_FRAMES) {
+      if (reached) {
+        watchFrame += 1;
+        // Bounded hand-back: after the watch window, Virtuoso's `followOutput`
+        // owns "stick to bottom for new messages" as before.
+        if (watchFrame >= POST_REACH_WATCH_FRAMES) {
+          settledChannelRef.current = channelId ?? null;
+          return;
+        }
+      } else if (frame >= MAX_FRAMES) {
         settledChannelRef.current = channelId ?? null;
         // eslint-disable-next-line no-console
         console.warn(
@@ -197,9 +250,9 @@ export function useBottomSettleScroll({
     return () => {
       if (raf) cancelAnimationFrame(raf);
     };
-    // `handleAttached` is intentionally excluded — the loop reads it live via
-    // `handleAttachedRef` so a detach/reattach flap doesn't cancel-restart (and
-    // potentially bail) the settle. See handleAttachedRef above.
+    // `listReady` is intentionally excluded — the loop reads it live via
+    // `listReadyRef` so a detach/reattach flap doesn't cancel-restart (and
+    // potentially bail) the settle. See listReadyRef above.
   }, [
     scrollContainerEl,
     enabled,

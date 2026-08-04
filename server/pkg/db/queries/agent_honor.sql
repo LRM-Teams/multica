@@ -11,6 +11,11 @@ RETURNING *;
 SELECT * FROM agent_honor_state
 WHERE workspace_id = $1 AND agent_id = $2;
 
+-- name: ListAgentHonorLevelsByWorkspace :many
+SELECT agent_id, level
+FROM agent_honor_state
+WHERE workspace_id = $1;
+
 -- name: SumAgentHonorXP :one
 SELECT GREATEST(0, COALESCE(SUM(xp_delta), 0))::bigint AS total_xp
 FROM agent_honor_event

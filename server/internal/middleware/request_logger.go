@@ -43,19 +43,21 @@ func webhookTriggerIDFromContext(ctx context.Context) string {
 	return v
 }
 
-// webhookIngressPathPrefix is the public webhook ingress path. The path
-// segment after this prefix IS a bearer credential, so the logger must
-// redact it — see redactWebhookPath.
+// webhookIngressPathPrefix is the retired Autopilot public webhook ingress
+// path (product hard-cut LRM-1049 / task #40). The route no longer dispatches
+// work, but historical clients may still POST here; the path segment after
+// this prefix is a bearer credential, so the logger must redact it — see
+// redactWebhookPath.
 const webhookIngressPathPrefix = "/api/webhooks/autopilots/"
 
-// redactWebhookPath returns a logger-safe version of a request path. For
-// the autopilot webhook ingress path the trailing token segment is replaced
-// with "[redacted]"; every other path passes through untouched.
+// redactWebhookPath returns a logger-safe version of a request path. For the
+// (retired) autopilot webhook ingress path the trailing token segment is
+// replaced with "[redacted]"; every other path passes through untouched.
 //
-// Why this exists: r.URL.Path for a successful webhook delivery is
-// "/api/webhooks/autopilots/awt_<32-byte-base64>", and the token is the
-// only credential gating the route. Without redaction, every successful
-// delivery prints a replayable URL into the structured log stream.
+// Why this still exists after Autopilot retirement: r.URL.Path for a hit on
+// "/api/webhooks/autopilots/awt_<32-byte-base64>" still embeds a credential.
+// Without redaction, probes or stale clients would print a replayable URL
+// into the structured log stream even on 404.
 func redactWebhookPath(path string) string {
 	if !strings.HasPrefix(path, webhookIngressPathPrefix) {
 		return path

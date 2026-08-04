@@ -53,6 +53,7 @@ import {
   useAgentAchievementCopy,
 } from "../../hooks/use-agent-achievement-copy";
 import { useAgentFleetClassName } from "../../hooks/use-agent-fleet-class-name";
+import { useAgentHonorCopy } from "../../hooks/use-agent-honor-copy";
 import {
   AgentHonorLevelIcon,
   MAX_AGENT_HONOR_LEVEL,
@@ -108,10 +109,6 @@ function agentHonorAdminReducer(
     case "set_reason":
       return { ...state, reason: action.value };
   }
-}
-
-function reportError(error: unknown) {
-  showErrorToast(error instanceof Error ? error.message : "Agent honor update failed");
 }
 
 function percent(value: number) {
@@ -227,7 +224,11 @@ export function AchievementCard({
               <span>
                 {achievement.progress.current}/{achievement.progress.target}
               </span>
-              <span>+{achievement.xp_reward} XP</span>
+              <span>
+                {t(($) => $.honor_agent.xp_value, {
+                  value: `+${achievement.xp_reward}`,
+                })}
+              </span>
             </div>
             <div className="h-1.5 overflow-hidden rounded-full bg-muted">
               <div
@@ -237,7 +238,11 @@ export function AchievementCard({
             </div>
           </>
         ) : (
-          <div className="text-[10px] text-muted-foreground">+{achievement.xp_reward} XP</div>
+          <div className="text-[10px] text-muted-foreground">
+            {t(($) => $.honor_agent.xp_value, {
+              value: `+${achievement.xp_reward}`,
+            })}
+          </div>
         )}
         {editable && achievement.unlocked ? (
           <div className="mt-2 flex gap-1.5">
@@ -279,6 +284,7 @@ export function AgentHonorTab({
   const achievementCopy = useAgentAchievementCopy();
   const achievementCategoryName = useAgentAchievementCategoryName();
   const fleetClassName = useAgentFleetClassName();
+  const honorCopy = useAgentHonorCopy();
   const timeAgo = useTimeAgo();
   const workspaceId = useWorkspaceId();
   const queryClient = useQueryClient();
@@ -306,7 +312,7 @@ export function AgentHonorTab({
     onSuccess: (dashboard) => {
       queryClient.setQueryData(agentHonorKeys.dashboard(workspaceId, agent.id), dashboard);
     },
-    onError: reportError,
+    onError: () => showErrorToast(t(($) => $.honor_agent.update_error)),
   });
 
   if (isHonorLoading || areRulesLoading) {
@@ -471,7 +477,9 @@ export function AgentHonorTab({
           <div>
             <div className="text-4xl font-semibold tabular-nums">
               {dashboard.total_xp}
-              <span className="ml-1 text-sm font-medium text-cyan-300">XP</span>
+              <span className="ml-1 text-sm font-medium text-cyan-300">
+                {t(($) => $.honor_agent.xp_label)}
+              </span>
             </div>
             <p className="mt-1 text-xs text-slate-400">
               {unlockedCount}/{dashboard.achievements.length}{" "}
@@ -483,7 +491,9 @@ export function AgentHonorTab({
               <span>{t(($) => $.honor_agent.next_level)}</span>
               <span>
                 {dashboard.xp_to_next_level > 0
-                  ? `+${dashboard.xp_to_next_level} XP`
+                  ? t(($) => $.honor_agent.xp_value, {
+                      value: `+${dashboard.xp_to_next_level}`,
+                    })
                   : t(($) => $.honor_agent.max_level)}
               </span>
             </div>
@@ -534,7 +544,9 @@ export function AgentHonorTab({
                           {copy.title}
                         </p>
                         <p className="text-[10px] text-muted-foreground">
-                          +{item.xp_reward} XP
+                          {t(($) => $.honor_agent.xp_value, {
+                            value: `+${item.xp_reward}`,
+                          })}
                         </p>
                       </div>
                     </div>
@@ -708,14 +720,17 @@ export function AgentHonorTab({
                     )}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium text-foreground">{event.reason}</p>
+                    <p className="truncate text-xs font-medium text-foreground">
+                      {honorCopy.eventReason(event)}
+                    </p>
                     <p className="text-[10px] text-muted-foreground">
                       {timeAgo(event.created_at)}
                     </p>
                   </div>
                   <span className="text-xs font-semibold tabular-nums">
-                    {event.xp_delta > 0 ? "+" : ""}
-                    {event.xp_delta} XP
+                    {t(($) => $.honor_agent.xp_value, {
+                      value: `${event.xp_delta > 0 ? "+" : ""}${event.xp_delta}`,
+                    })}
                   </span>
                 </div>
               ))
@@ -837,6 +852,7 @@ function AgentHonorAdminContent({
   const { t } = useT("agents");
   const achievementCopy = useAgentAchievementCopy();
   const fleetClassName = useAgentFleetClassName();
+  const honorCopy = useAgentHonorCopy();
   const timeAgo = useTimeAgo();
   const workspaceId = useWorkspaceId();
   const queryClient = useQueryClient();
@@ -852,7 +868,7 @@ function AgentHonorAdminContent({
       queryClient.setQueryData(agentHonorKeys.rules(workspaceId), next);
       toast.success(t(($) => $.honor_agent.rules_saved));
     },
-    onError: reportError,
+    onError: () => showErrorToast(t(($) => $.honor_agent.update_error)),
   });
   const grant = useMutation({
     mutationFn: () =>
@@ -869,7 +885,7 @@ function AgentHonorAdminContent({
       dispatch({ type: "set_reason", value: "" });
       toast.success(t(($) => $.honor_agent.grant_saved));
     },
-    onError: reportError,
+    onError: () => showErrorToast(t(($) => $.honor_agent.update_error)),
   });
 
   const weightsTotal = useMemo(
@@ -1023,7 +1039,9 @@ function AgentHonorAdminContent({
                   <p className="truncate text-xs font-medium">
                     {achievementCopy(achievement).title}
                   </p>
-                  <p className="text-[10px] text-muted-foreground">{achievement.metric}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {honorCopy.metricName(achievement.metric)}
+                  </p>
                 </div>
                 <Input
                   type="number"
@@ -1065,7 +1083,7 @@ function AgentHonorAdminContent({
             }
             className="h-9 rounded-md border border-input bg-background px-3 text-sm"
           >
-            <option value="xp">XP</option>
+            <option value="xp">{t(($) => $.honor_agent.xp_label)}</option>
             <option value="achievement">{t(($) => $.honor_agent.achievement)}</option>
           </select>
           {grantKind === "xp" ? (
@@ -1123,7 +1141,9 @@ function AgentHonorAdminContent({
             audit.slice(0, 10).map((entry) => (
               <div key={entry.id} className="flex items-center gap-3 py-2 text-xs">
                 <ShieldCheck className="size-4 text-muted-foreground" />
-                <span className="flex-1 font-medium">{entry.action}</span>
+                <span className="flex-1 font-medium">
+                  {honorCopy.auditActionName(entry.action)}
+                </span>
                 <span className="text-muted-foreground">{timeAgo(entry.created_at)}</span>
               </div>
             ))

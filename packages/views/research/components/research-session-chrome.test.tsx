@@ -273,6 +273,31 @@ describe("ResearchSessionChrome", () => {
     expect(onReject).toHaveBeenCalledWith("来源权重不够");
   });
 
+  it("LRM-1240: gateBusy keeps approve/reject focusable via aria-disabled (not native disabled)", () => {
+    const onConfirm = vi.fn();
+    const onReject = vi.fn();
+    renderChrome(makeSession({ status: "awaiting_user_confirm" }), {
+      onConfirm,
+      onReject,
+      confirmPending: true,
+    });
+
+    const approve = screen.getByTestId("research-session-primary");
+    const reject = screen.getByTestId("research-session-gate-reject");
+
+    expect(approve).toHaveProperty("disabled", false);
+    expect(approve.getAttribute("aria-disabled")).toBe("true");
+    expect(reject).toHaveProperty("disabled", false);
+    expect(reject.getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.click(approve);
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    fireEvent.click(reject);
+    expect(screen.queryByTestId("research-session-gate-reject-popover")).toBeNull();
+    expect(onReject).not.toHaveBeenCalled();
+  });
+
   it("completed shows handoff primary; checkboxes live inside the popover", () => {
     renderChrome(makeSession({ status: "completed" }));
     expect(screen.queryByText("Approve")).toBeNull();
@@ -300,6 +325,24 @@ describe("ResearchSessionChrome", () => {
     fireEvent.click(screen.getByText("Handoff delivery"));
     const confirm = screen.getByText("Handoff", { selector: "button" });
     expect(confirm).toHaveProperty("disabled", true);
+  });
+
+  it("LRM-1265: handoffPending keeps trigger focusable via aria-disabled (not native disabled)", () => {
+    const onHandoff = vi.fn();
+    renderChrome(makeSession({ status: "completed" }), {
+      onHandoff,
+      handoffPending: true,
+    });
+
+    const trigger = screen.getByTestId("research-session-primary");
+    expect(trigger).toHaveProperty("disabled", false);
+    expect(trigger.getAttribute("aria-disabled")).toBe("true");
+    expect(trigger.className).toMatch(/opacity-50/);
+    expect(trigger.className).toMatch(/cursor-not-allowed/);
+
+    fireEvent.click(trigger);
+    expect(screen.queryByText("Create development project")).toBeNull();
+    expect(onHandoff).not.toHaveBeenCalled();
   });
 
   it("LRM-1008: Goal Card shows session.goal (not selected node summary)", () => {

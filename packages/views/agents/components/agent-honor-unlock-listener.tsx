@@ -7,7 +7,7 @@ import type {
   AgentFleetClassChangedPayload,
   AgentHonorUnlockedPayload,
 } from "@multica/core/types/events";
-import { agentHonorKeys } from "@multica/core/agents";
+import { agentDetailOptions, agentHonorKeys } from "@multica/core/agents";
 import { getCurrentWsId } from "@multica/core/platform";
 import { useWSEvent } from "@multica/core/realtime";
 import { workspaceKeys } from "@multica/core/workspace/queries";
@@ -41,7 +41,9 @@ export function AgentHonorUnlockListener() {
         <HonorUnlockToast
           eyebrow={t(($) => $.honor_agent.unlock_toast_title)}
           title={achievement.title}
-          meta={`+${event.achievement.xp_reward} XP`}
+          meta={t(($) => $.honor_agent.xp_value, {
+            value: `+${event.achievement.xp_reward}`,
+          })}
           svgKey={event.achievement.svg_key}
           icon={
             <AgentHonorAchievementIcon
@@ -70,20 +72,37 @@ export function AgentHonorUnlockListener() {
     void queryClient.invalidateQueries({
       queryKey: [...workspaceKeys.agents(workspaceId), "fleet-rankings"],
     });
-    const cachedAgent = queryClient
-      .getQueryData<Agent[]>(workspaceKeys.agents(workspaceId))
-      ?.find((agent) => agent.id === event.agent_id);
-    const agentName =
-      event.agent_name?.trim() ||
-      (cachedAgent ? resolveActorDisplayName(cachedAgent, cachedAgent.name) : "") ||
-      t(($) => $.honor_agent.agent_fallback);
-    toast.success(
-      t(($) => $.honor_agent.fleet_upgraded, {
-        agentName,
-        className: fleetClassName(event.class_id),
-      }),
-    );
+    void (async () => {
+      const eventName = event.agent_name?.trim();
+      const cachedAgent = queryClient
+        .getQueryData<Agent[]>(workspaceKeys.agents(workspaceId))
+        ?.find((agent) => agent.id === event.agent_id);
+      let agentName = eventName || resolveAgentName(cachedAgent);
+
+      if (!agentName) {
+        try {
+          const agent = await queryClient.ensureQueryData(
+            agentDetailOptions(workspaceId, event.agent_id),
+          );
+          agentName = resolveAgentName(agent);
+        } catch {
+          return;
+        }
+      }
+
+      if (!agentName) return;
+      toast.success(
+        t(($) => $.honor_agent.fleet_upgraded, {
+          agentName,
+          className: fleetClassName(event.class_id),
+        }),
+      );
+    })();
   });
 
   return null;
+}
+
+function resolveAgentName(agent?: Agent): string {
+  return agent ? resolveActorDisplayName(agent, agent.name).trim() : "";
 }

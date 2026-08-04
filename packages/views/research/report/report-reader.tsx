@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { Copy, Download, List, X } from "lucide-react";
@@ -125,9 +132,25 @@ export function ReportReader({
   const { t } = useT("research");
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const outlineDrawerRef = useRef<HTMLDivElement | null>(null);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  /** LRM-1212 — restore focus to the narrow outline toggle after drawer closes. */
+  const focusOutlineToggle = useCallback(() => {
+    queueMicrotask(() => {
+      const toggle = document.querySelector<HTMLElement>(
+        '[data-testid="research-report-outline-toggle"]',
+      );
+      toggle?.focus();
+    });
+  }, []);
+
+  const closeOutlineDrawer = useCallback(() => {
+    setOutlineOpen(false);
+    focusOutlineToggle();
+  }, [focusOutlineToggle]);
 
   const contentCount = deliveryContentCount(report, sources.length);
   const mode = resolveDeliveryMode(contentCount, sessionStatus, {
@@ -211,17 +234,57 @@ export function ReportReader({
     return () => root.removeEventListener("scroll", syncActive);
   }, [open, showReaderChrome, outlineItems]);
 
-  const scrollTo = useCallback((id: string) => {
-    setActiveId(id);
-    setOutlineOpen(false);
-    const el = document.getElementById(outlineSectionDomId(id));
-    anchorTarget(el);
-  }, []);
+  // LRM-1212 — when the narrow outline drawer opens, move focus into it.
+  useEffect(() => {
+    if (!outlineOpen) return;
+    const drawer = outlineDrawerRef.current;
+    if (!drawer) return;
+    const focusable = drawer.querySelector<HTMLElement>(
+      'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    focusable?.focus();
+  }, [outlineOpen]);
 
-  const locateCitation = useCallback((citationId: string) => {
-    setOutlineOpen(false);
-    anchorTarget(document.getElementById(citationAnchorId(citationId)));
-  }, []);
+  /** LRM-1234 — click-outside close, attached imperatively so the modal gains
+   * no extra focusable node. The old implementation was a full-screen invisible
+   * `<button aria-label="close">`: the native dialog focusing steps parked
+   * initial focus on it, so the reader opened with focus on an invisible
+   * full-viewport control whose accessible name duplicated the header X, and the
+   * first Enter/Space closed the whole report. Clicks landing on the dialog box
+   * itself (the gutter around the card) are the "outside" clicks; anything
+   * inside the card arrives with a different target. */
+  const onGutterClose = useEffectEvent(() => {
+    onClose();
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const handle = (event: MouseEvent) => {
+      if (event.target === dialog) onGutterClose();
+    };
+    dialog.addEventListener("click", handle);
+    return () => dialog.removeEventListener("click", handle);
+  }, [open]);
+
+  const scrollTo = useCallback(
+    (id: string) => {
+      setActiveId(id);
+      closeOutlineDrawer();
+      const el = document.getElementById(outlineSectionDomId(id));
+      anchorTarget(el);
+    },
+    [closeOutlineDrawer],
+  );
+
+  const locateCitation = useCallback(
+    (citationId: string) => {
+      closeOutlineDrawer();
+      anchorTarget(document.getElementById(citationAnchorId(citationId)));
+    },
+    [closeOutlineDrawer],
+  );
 
   const copyMarkdown = async () => {
     const md = buildReportMarkdown(report);
@@ -265,6 +328,11 @@ export function ReportReader({
       aria-modal="true"
       onCancel={(event) => {
         event.preventDefault();
+        // LRM-1212 — Escape closes the outline drawer first, then the modal.
+        if (outlineOpen) {
+          closeOutlineDrawer();
+          return;
+        }
         const dialog = dialogRef.current;
         if (dialog?.open) {
           if (typeof dialog.close === "function") dialog.close();
@@ -274,12 +342,6 @@ export function ReportReader({
       }}
       onClose={onClose}
     >
-      <button
-        type="button"
-        className="absolute inset-0 z-0 cursor-default bg-transparent"
-        aria-label={t(($) => $.panel.hide_chat)}
-        onClick={onClose}
-      />
       <div
         role="document"
         data-testid="research-delivery-modal-card"
@@ -296,13 +358,14 @@ export function ReportReader({
               type="button"
               size="sm"
               variant="ghost"
-              className="sm:hidden"
+              className="md:hidden"
               data-testid="research-report-outline-toggle"
               onClick={() => setOutlineOpen((v) => !v)}
               aria-expanded={outlineOpen}
+              aria-controls="research-report-outline-drawer"
               aria-label={t(($) => $.reader.outline)}
             >
-              <List className="size-4" />
+              <List className="size-4" aria-hidden />
             </Button>
           ) : null}
           <div className="min-w-0 flex-1">
@@ -325,11 +388,11 @@ export function ReportReader({
                 variant="outline"
                 onClick={() => void copyMarkdown()}
               >
-                <Copy className="size-3.5" />
+                <Copy className="size-3.5" aria-hidden />
                 {copied ? t(($) => $.reader.copied) : t(($) => $.reader.copy_md)}
               </Button>
               <Button type="button" size="sm" onClick={exportMarkdown}>
-                <Download className="size-3.5" />
+                <Download className="size-3.5" aria-hidden />
                 {t(($) => $.reader.export)}
               </Button>
             </>
@@ -341,15 +404,17 @@ export function ReportReader({
             onClick={onClose}
             aria-label={t(($) => $.panel.hide_chat)}
           >
-            <X className="size-4" />
+            <X className="size-4" aria-hidden />
           </Button>
         </header>
 
         {/* LRM-829 — narrow: outline folds into a top drawer under the header. */}
         {showReaderChrome && outlineOpen ? (
           <div
+            ref={outlineDrawerRef}
+            id="research-report-outline-drawer"
             data-testid="research-report-outline-drawer"
-            className="max-h-[40vh] overflow-y-auto border-b bg-muted/20 px-2 py-2 sm:hidden"
+            className="max-h-[40vh] overflow-y-auto border-b bg-muted/20 px-2 py-2 md:hidden"
           >
             <OutlineNav items={outlineItems} activeId={activeId} onPick={scrollTo} />
           </div>
@@ -367,7 +432,7 @@ export function ReportReader({
           <div className="flex min-h-0 flex-1">
             <aside
               data-testid="research-report-outline-aside"
-              className="hidden w-[220px] shrink-0 overflow-y-auto border-r p-3 sm:block"
+              className="hidden w-[220px] shrink-0 overflow-y-auto border-r p-3 md:block"
             >
               <OutlineNav items={outlineItems} activeId={activeId} onPick={scrollTo} />
             </aside>

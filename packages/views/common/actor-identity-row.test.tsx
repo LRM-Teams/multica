@@ -26,6 +26,12 @@ describe("ActorIdentityRow", () => {
     expect(screen.getByText("@agent_aegis")).toBeInTheDocument();
   });
 
+  it("forwards the authoritative Agent honor level to identity surfaces", () => {
+    render(<ActorIdentityRow displayName="Aegis" agentHonorLevel={12} />);
+
+    expect(document.querySelector('[data-agent-honor-level="12"]')).toBeInTheDocument();
+  });
+
   it("keeps honor name color while hiding badges in dense lists", () => {
     render(
       <ActorIdentityRow
@@ -40,29 +46,14 @@ describe("ActorIdentityRow", () => {
             svg_key: "delivery",
           },
         }}
-        fleet={{
-          agent_id: "aurora",
-          fleet_score: 720,
-          class_id: "frigate",
-          class_label: "Frigate",
-          fleet_rank: 2,
-          fleet_size: 12,
-          sample_tasks: 8,
-          sample_sufficient: true,
-          frozen: false,
-          pillars: {
-            delivery: 80,
-            evolution: 72,
-            growth: 68,
-            efficiency: 74,
-          },
-        }}
+        agentHonorLevel={8}
         showBadges={false}
       />,
     );
 
     expect(screen.getByText("Aurora")).toHaveClass("honor-name--gold");
     expect(screen.queryByTitle("First delivery")).not.toBeInTheDocument();
-    expect(screen.queryByTitle("Frigate")).not.toBeInTheDocument();
+    expect(document.querySelector("[data-user-honor-level]")).toBeNull();
+    expect(document.querySelector("[data-agent-honor-level]")).toBeNull();
   });
 });

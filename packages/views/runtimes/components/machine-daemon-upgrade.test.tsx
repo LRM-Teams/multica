@@ -76,6 +76,27 @@ describe("MachineDaemonUpgrade (#29)", () => {
     expect(screen.queryByTestId("machine-daemon-upgrade-progress")).toBeNull();
   });
 
+  it("equal target does not show upgrade CTA (P0 IsNewer gate)", () => {
+    const rt = makeRuntime({
+      runtime_health: "update_available",
+      target_version: "0.4.0",
+    });
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={rt}
+        cliVersion="0.4.0"
+        updateTargetVersion="0.4.0"
+        updateError={null}
+        isOnline
+        canUpdate
+      />,
+    );
+    expect(screen.getByTestId("machine-basics-daemon-version")).toHaveTextContent(
+      "0.4.0",
+    );
+    expect(screen.queryByTestId("machine-daemon-upgrade-btn")).toBeNull();
+  });
+
   it("click upgrade: shows current → target + progress, no grey CTA", async () => {
     const rt = makeRuntime();
     wrap(
@@ -154,5 +175,82 @@ describe("MachineDaemonUpgrade (#29)", () => {
       /Upgrade failed/i,
     );
     expect(screen.getByTestId("machine-daemon-upgrade-fail")).toBeEnabled();
+  });
+
+  it("poll completed + version caught up clears applying spinner (v-prefix OK)", async () => {
+    getUpdateResult.mockResolvedValue({ status: "completed" });
+    vi.spyOn(globalThis, "setInterval").mockImplementation(((
+      fn: TimerHandler,
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      _timeout?: number,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ..._args: any[]
+    ) => {
+      if (typeof fn === "function") {
+        queueMicrotask(() => {
+          (fn as () => void)();
+        });
+      }
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    }) as unknown as typeof setInterval);
+    vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (node: React.ReactElement) => (
+      <QueryClientProvider client={qc}>
+        <I18nProvider locale="en" resources={{ en: { runtimes: enRuntimes } }}>
+          {node}
+        </I18nProvider>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(
+      tree(
+        <MachineDaemonUpgrade
+          runtime={makeRuntime({
+            current_version: "0.4.1",
+            target_version: "v0.4.2",
+          })}
+          cliVersion="0.4.1"
+          updateTargetVersion="v0.4.2"
+          updateError={null}
+          isOnline
+          canUpdate
+        />,
+      ),
+    );
+    fireEvent.click(screen.getByTestId("machine-daemon-upgrade-btn"));
+    await waitFor(() => {
+      expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent(
+        /Restarting|switching/i,
+      );
+    });
+
+    // Daemon back with equal semver (prefix mismatch like Frank's 0.4.2 → v0.4.2).
+    rerender(
+      tree(
+        <MachineDaemonUpgrade
+          runtime={makeRuntime({
+            runtime_health: "ok",
+            update_state: "completed",
+            current_version: "0.4.2",
+            target_version: "v0.4.2",
+          })}
+          cliVersion="0.4.2"
+          updateTargetVersion="v0.4.2"
+          updateError={null}
+          isOnline
+          canUpdate
+        />,
+      ),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("machine-daemon-upgrade-progress")).toBeNull();
+    });
+    expect(screen.getByTestId("machine-basics-daemon-version")).toHaveTextContent(
+      "0.4.2",
+    );
+    expect(screen.getByTestId("machine-daemon-upgrade")).not.toHaveAttribute(
+      "data-state",
+      "active",
+    );
   });
 });

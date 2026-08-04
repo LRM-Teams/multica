@@ -1,6 +1,13 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
 import {
+  branchIdForLane,
+  colorForLane,
+  computeGitTopology,
+  type GitLaneSegment,
+  type GitTopologyNode,
+} from "./git-topology";
+import {
   LOGIC_END_NODE_ID,
   LOGIC_LANE_IDS,
   isLogicStartNode,
@@ -8,91 +15,96 @@ import {
   type LogicLaneId,
 } from "./logic-lanes";
 
-export const RESEARCH_NODE_WIDTH = 200;
-/** Approximate rendered card height (title + status + 2-line summary). */
-/** Includes LRM-981 on-card retry CTA clearance. */
-export const RESEARCH_NODE_HEIGHT = 118;
+/** LRM-1116 card size band: 220–260 × 68–88 (prototype 240×76). */
+export const RESEARCH_NODE_WIDTH = 240;
+export const RESEARCH_NODE_HEIGHT = 76;
 
-export const LOGIC_LANE_HEIGHT = 148;
-export const LOGIC_LAYER_GAP = 236;
-export const LOGIC_MARGIN_X = 28;
-export const LOGIC_MARGIN_Y = 20;
+/** Vertical row pitch — one topology node per row, planar (no stack). */
+export const GIT_ROW_GAP = 96;
+export const GIT_GUTTER_WIDTH = 72;
+export const GIT_LANE_CARD_OFFSET = 56;
+export const GIT_LANE_LINE_GAP = 18;
+export const GIT_MARGIN_TOP = 24;
+export const GIT_MARGIN_RIGHT = 48;
+export const GIT_PORT_BASE_X = 34;
+
+/** @deprecated LRM-1091 — kept for any stray imports; planar layout ignores bands. */
+export const LOGIC_LANE_HEIGHT = GIT_ROW_GAP;
+/** @deprecated horizontal layer gap from LRM-908. */
+export const LOGIC_LAYER_GAP = GIT_ROW_GAP;
+export const LOGIC_MARGIN_X = GIT_GUTTER_WIDTH + 16;
+export const LOGIC_MARGIN_Y = GIT_MARGIN_TOP;
 
 export type ResearchFlowNodeData = {
-  /** Present on research cards; omitted on lane-band chrome nodes. */
   research?: ResearchGraphNode;
-  /** Live presence caption from research presence map (optional overlay). */
   presenceLabel?: string;
-  /** Count of high-weight sources feeding a finding (optional badge). */
   sourceBadgeCount?: number;
-  /** LRM-908 logic role for start/end visual weight. */
   logicRole?: "start" | "end" | "step";
-  /** Assigned swimlane (C2). */
+  /** Role swimlane (legacy C2) — still set for strip/status helpers. */
   laneId?: LogicLaneId;
-  /** Lane band chrome (non-interactive). */
+  /** Git branch lane index (0=main). */
+  gitLane?: number;
+  branchId?: string;
+  branchColor?: string;
+  row?: number;
   laneLabelKey?: LogicLaneId;
-  /** LRM-981 — scannable retry/reroute from the card surface. */
   onRetry?: (node: ResearchGraphNode) => void;
+  onViewDetail?: (node: ResearchGraphNode) => void;
+  menuOpen?: boolean;
+  onMenuOpenChange?: (open: boolean) => void;
+  /** Gutter chrome only. */
+  gutterSegments?: GitLaneSegment[];
+  gutterHeight?: number;
+  gutterWidth?: number;
+  /** LRM-1295 presentational role supplied by the aggregate selector. */
+  aggregateTier?: AggregateTreeCardTier;
+  /** LRM-1295 card dimensions; old git-lane cards omit this. */
+  aggregateSize?: AggregateTreeCardSize;
 };
 
 export type ResearchFlowEdgeData = {
   edgeType: string;
 };
 
-function layerIndex(
-  nodes: ResearchGraphNode[],
-  edges: ResearchGraphEdge[],
-): Map<string, number> {
-  const ids = new Set(nodes.map((n) => n.id));
-  const indeg = new Map<string, number>();
-  const outs = new Map<string, string[]>();
-  for (const n of nodes) {
-    indeg.set(n.id, 0);
-    outs.set(n.id, []);
-  }
-  for (const e of edges) {
-    if (!ids.has(e.from_node_id) || !ids.has(e.to_node_id)) continue;
-    // Prefer leads_to for spine layering; other edges still constrain lightly.
-    outs.get(e.from_node_id)!.push(e.to_node_id);
-    indeg.set(e.to_node_id, (indeg.get(e.to_node_id) ?? 0) + 1);
-  }
+/**
+ * LRM-1295 aggregate-tree viewport roles. The selector owns deriving these
+ * collections from the snapshot; this layout deliberately does not read or
+ * infer parent/child projection fields.
+ */
+export type AggregateTreeCardTier = "parent" | "sibling" | "child";
 
-  const layer = new Map<string, number>();
-  const queue: string[] = [];
-  for (const n of nodes) {
-    if ((indeg.get(n.id) ?? 0) === 0) {
-      queue.push(n.id);
-      layer.set(n.id, isLogicStartNode(n) ? 0 : 0);
-    }
-  }
-  // Prefer goal roots at layer 0.
-  for (const n of nodes) {
-    if (n.node_type === "goal") layer.set(n.id, 0);
-  }
+export type AggregateTreeCardSize = {
+  width: number;
+  height: number;
+};
 
-  while (queue.length) {
-    const id = queue.shift()!;
-    const base = layer.get(id) ?? 0;
-    for (const next of outs.get(id) ?? []) {
-      const nextLayer = Math.max(layer.get(next) ?? 0, base + 1);
-      layer.set(next, nextLayer);
-      const left = (indeg.get(next) ?? 1) - 1;
-      indeg.set(next, left);
-      if (left === 0) queue.push(next);
-    }
-  }
+export type AggregateTreeShellInput = {
+  parent: ResearchGraphNode;
+  siblings: ResearchGraphNode[];
+  children: ResearchGraphNode[];
+  edges: ResearchGraphEdge[];
+};
 
-  // Orphans / cycles: place after max known layer by created order.
-  let max = 0;
-  for (const v of layer.values()) max = Math.max(max, v);
-  for (const n of nodes) {
-    if (!layer.has(n.id)) {
-      max += 1;
-      layer.set(n.id, max);
-    }
-  }
-  return layer;
-}
+export type AggregateTreeShellLayout = {
+  nodes: Node<ResearchFlowNodeData>[];
+  edges: Edge<ResearchFlowEdgeData>[];
+  board: { width: number; height: number };
+};
+
+/** Product-spec geometry for the three-column aggregate viewport. */
+export const AGGREGATE_PARENT_CARD: AggregateTreeCardSize = { width: 282, height: 242 };
+export const AGGREGATE_SIBLING_CARD: AggregateTreeCardSize = { width: 218, height: 142 };
+export const AGGREGATE_CHILD_CARD: AggregateTreeCardSize = { width: 184, height: 76 };
+
+const AGGREGATE_BOARD_WIDTH = 1408;
+const AGGREGATE_BOARD_MIN_HEIGHT = 655;
+const AGGREGATE_SIDE_INSET = 48;
+const AGGREGATE_SIBLING_X = 454;
+const AGGREGATE_SIBLING_COLUMN_GAP = 42;
+const AGGREGATE_SIBLING_ROW_GAP = 32;
+const AGGREGATE_CHILD_X = 1022;
+const AGGREGATE_CHILD_GAP = 16;
+const AGGREGATE_TOP_INSET = 56;
 
 function makeSyntheticEnd(sessionId: string): ResearchGraphNode {
   const ts = new Date().toISOString();
@@ -110,36 +122,54 @@ function makeSyntheticEnd(sessionId: string): ResearchGraphNode {
   };
 }
 
+function portX(lane: number): number {
+  return GIT_PORT_BASE_X + lane * GIT_LANE_LINE_GAP;
+}
+
+function rowCenterY(row: number): number {
+  return GIT_MARGIN_TOP + row * GIT_ROW_GAP + GIT_ROW_GAP / 2;
+}
+
+function cardPosition(topo: GitTopologyNode): { x: number; y: number } {
+  return {
+    x: GIT_GUTTER_WIDTH + 16 + topo.lane * GIT_LANE_CARD_OFFSET,
+    y: GIT_MARGIN_TOP + topo.row * GIT_ROW_GAP + (GIT_ROW_GAP - RESEARCH_NODE_HEIGHT) / 2,
+  };
+}
+
 /**
- * LRM-908: left→right main path + horizontal role swimlanes (C1–C3).
- * Positions are client-only (not persisted). Injects a synthetic END card (C4).
+ * LRM-1091 / LRM-1116: planar Git graph — topology rows top→bottom,
+ * left lane gutter, card nodes. No perspective / stackOffset / lane bands.
  */
 export function layoutResearchGraph(
   nodes: ResearchGraphNode[],
   edges: ResearchGraphEdge[],
   options?: { includeEnd?: boolean },
-): { nodes: Node<ResearchFlowNodeData>[]; edges: Edge<ResearchFlowEdgeData>[] } {
+): {
+  nodes: Node<ResearchFlowNodeData>[];
+  edges: Edge<ResearchFlowEdgeData>[];
+  topology: Map<string, GitTopologyNode>;
+  board: { width: number; height: number };
+} {
   const includeEnd = options?.includeEnd !== false;
   const sessionId = nodes[0]?.session_id ?? "session";
   const workingNodes = [...nodes];
   const workingEdges = [...edges];
 
-  if (includeEnd && workingNodes.length > 0 && !workingNodes.some((n) => n.id === LOGIC_END_NODE_ID)) {
+  if (
+    includeEnd &&
+    workingNodes.length > 0 &&
+    !workingNodes.some((n) => n.id === LOGIC_END_NODE_ID)
+  ) {
     const end = makeSyntheticEnd(sessionId);
     workingNodes.push(end);
-    // Link rightmost layer roots / sinks into END via leads_to for spine readability.
-    const layers = layerIndex(nodes, edges);
-    let maxLayer = 0;
-    for (const v of layers.values()) maxLayer = Math.max(maxLayer, v);
-    const sinks = nodes.filter((n) => {
-      const hasOut = edges.some(
-        (e) => e.from_node_id === n.id && nodes.some((x) => x.id === e.to_node_id),
-      );
-      return !hasOut || (layers.get(n.id) ?? 0) === maxLayer;
+    const topoPreview = computeGitTopology(nodes, edges, {
+      portX,
+      rowCenterY,
     });
+    const lastId = topoPreview.order[topoPreview.order.length - 1];
     const attachFrom =
-      sinks.find((n) => n.node_type === "stage_gate" || n.node_type === "finding") ??
-      sinks[sinks.length - 1] ??
+      (lastId && nodes.find((n) => n.id === lastId)) ||
       nodes[nodes.length - 1];
     if (attachFrom) {
       workingEdges.push({
@@ -153,35 +183,27 @@ export function layoutResearchGraph(
     }
   }
 
-  const layers = layerIndex(workingNodes, workingEdges);
-  let maxLayer = 0;
-  for (const v of layers.values()) maxLayer = Math.max(maxLayer, v);
-  // Pin END to the far right on the orchestrate lane.
-  if (workingNodes.some((n) => n.id === LOGIC_END_NODE_ID)) {
-    layers.set(LOGIC_END_NODE_ID, maxLayer + 1);
-    maxLayer += 1;
-  }
-
-  const laneBuckets = new Map<string, ResearchGraphNode[]>();
-  for (const n of workingNodes) {
-    const lane = laneForNode(n);
-    const key = `${layers.get(n.id) ?? 0}:${lane}`;
-    const list = laneBuckets.get(key) ?? [];
-    list.push(n);
-    laneBuckets.set(key, list);
-  }
-
+  const topologyResult = computeGitTopology(workingNodes, workingEdges, {
+    portX,
+    rowCenterY,
+  });
+  const rowCount = Math.max(1, topologyResult.order.length);
+  const boardHeight = GIT_MARGIN_TOP + rowCount * GIT_ROW_GAP + 48;
   const boardWidth =
-    LOGIC_MARGIN_X + (maxLayer + 1) * LOGIC_LAYER_GAP + RESEARCH_NODE_WIDTH + 48;
-  const boardHeight = LOGIC_MARGIN_Y + LOGIC_LANE_IDS.length * LOGIC_LANE_HEIGHT + 24;
+    GIT_GUTTER_WIDTH +
+    16 +
+    topologyResult.maxLane * GIT_LANE_CARD_OFFSET +
+    RESEARCH_NODE_WIDTH +
+    GIT_MARGIN_RIGHT;
 
-  const bandNodes: Node<ResearchFlowNodeData>[] = LOGIC_LANE_IDS.map((laneId, index) => ({
-    id: `lane-band-${laneId}`,
-    type: "laneBand",
-    position: { x: 0, y: LOGIC_MARGIN_Y + index * LOGIC_LANE_HEIGHT },
+  const gutterNode: Node<ResearchFlowNodeData> = {
+    id: "git-gutter",
+    type: "gitGutter",
+    position: { x: 0, y: 0 },
     data: {
-      laneId,
-      laneLabelKey: laneId,
+      gutterSegments: topologyResult.segments,
+      gutterHeight: boardHeight,
+      gutterWidth: GIT_GUTTER_WIDTH,
       logicRole: "step",
     },
     draggable: false,
@@ -189,44 +211,43 @@ export function layoutResearchGraph(
     focusable: false,
     connectable: false,
     zIndex: -2,
-    style: { width: boardWidth, height: LOGIC_LANE_HEIGHT, pointerEvents: "none" },
-  }));
+    style: {
+      width: boardWidth,
+      height: boardHeight,
+      pointerEvents: "none",
+    },
+  };
 
   const rfNodes: Node<ResearchFlowNodeData>[] = workingNodes.map((n) => {
-    const laneId = laneForNode(n);
-    const laneIndex = LOGIC_LANE_IDS.indexOf(laneId);
-    const layer = layers.get(n.id) ?? 0;
-    const bucketKey = `${layer}:${laneId}`;
-    const bucket = laneBuckets.get(bucketKey) ?? [n];
-    const stackIndex = Math.max(
-      0,
-      bucket.findIndex((x) => x.id === n.id),
-    );
-    const stackOffset = stackIndex * 10;
+    const topo = topologyResult.byId.get(n.id)!;
     const logicRole =
-      n.id === LOGIC_END_NODE_ID ? "end" : isLogicStartNode(n) ? "start" : "step";
-    const width =
-      logicRole === "start" || logicRole === "end"
-        ? RESEARCH_NODE_WIDTH + 16
-        : RESEARCH_NODE_WIDTH;
-    const x = LOGIC_MARGIN_X + layer * LOGIC_LAYER_GAP + stackOffset;
-    const y =
-      LOGIC_MARGIN_Y +
-      laneIndex * LOGIC_LANE_HEIGHT +
-      (LOGIC_LANE_HEIGHT - RESEARCH_NODE_HEIGHT) / 2 +
-      stackOffset * 0.4;
-
+      n.id === LOGIC_END_NODE_ID
+        ? "end"
+        : isLogicStartNode(n)
+          ? "start"
+          : "step";
+    const pos = cardPosition(topo);
     return {
       id: n.id,
       type: "research",
-      position: { x, y },
-      data: { research: n, logicRole, laneId },
-      draggable: true,
+      position: pos,
+      data: {
+        research: n,
+        logicRole,
+        laneId: laneForNode(n),
+        gitLane: topo.lane,
+        branchId: topo.branchId || branchIdForLane(topo.lane),
+        branchColor: colorForLane(topo.lane),
+        row: topo.row,
+      },
+      draggable: false,
       zIndex: 2,
-      style: { width },
+      style: { width: RESEARCH_NODE_WIDTH },
     };
   });
 
+  // Edges stay in the data model for selection/path helpers but are not drawn
+  // through cards — gutter SVG owns branch visuals (no edge-through-card).
   const rfEdges: Edge<ResearchFlowEdgeData>[] = workingEdges
     .filter(
       (e) =>
@@ -237,15 +258,158 @@ export function layoutResearchGraph(
       id: e.id,
       source: e.from_node_id,
       target: e.to_node_id,
-      type: "smoothstep",
+      type: "default",
+      hidden: true,
       data: { edgeType: e.edge_type },
-      zIndex: 1,
+      zIndex: 0,
     }));
 
-  // Keep boardHeight referenced for future viewport padding helpers.
-  void boardHeight;
+  return {
+    nodes: [gutterNode, ...rfNodes],
+    edges: rfEdges,
+    topology: topologyResult.byId,
+    board: { width: boardWidth, height: boardHeight },
+  };
+}
 
-  return { nodes: [...bandNodes, ...rfNodes], edges: rfEdges };
+function aggregateTreeNode(
+  research: ResearchGraphNode,
+  tier: AggregateTreeCardTier,
+  position: { x: number; y: number },
+  size: AggregateTreeCardSize,
+): Node<ResearchFlowNodeData> {
+  return {
+    id: research.id,
+    type: "research",
+    position,
+    data: {
+      research,
+      logicRole: isLogicStartNode(research) ? "start" : "step",
+      laneId: laneForNode(research),
+      branchId: research.theme_key ?? branchIdForLane(0),
+      branchColor: colorForLane(0),
+      aggregateTier: tier,
+      aggregateSize: size,
+    },
+    draggable: false,
+    zIndex: 2,
+    style: { width: size.width, height: size.height },
+  };
+}
+
+/**
+ * LRM-1295 presentational shell for the aggregate selector's three-column
+ * window. It intentionally trusts only the explicit collections it receives:
+ * contract reconciliation stays in FE A / the server, never in the canvas.
+ */
+export function layoutAggregateTreeShell({
+  parent,
+  siblings,
+  children,
+  edges,
+}: AggregateTreeShellInput): AggregateTreeShellLayout {
+  const siblingRows = Math.max(1, Math.ceil(siblings.length / 2));
+  const siblingHeight =
+    siblingRows * AGGREGATE_SIBLING_CARD.height +
+    (siblingRows - 1) * AGGREGATE_SIBLING_ROW_GAP;
+  const childHeight =
+    Math.max(1, children.length) * AGGREGATE_CHILD_CARD.height +
+    Math.max(0, children.length - 1) * AGGREGATE_CHILD_GAP;
+  const boardHeight = Math.max(
+    AGGREGATE_BOARD_MIN_HEIGHT,
+    siblingHeight + AGGREGATE_TOP_INSET * 2,
+    childHeight + AGGREGATE_TOP_INSET * 2,
+    AGGREGATE_PARENT_CARD.height + AGGREGATE_TOP_INSET * 2,
+  );
+  const siblingY = Math.round((boardHeight - siblingHeight) / 2);
+  const childY = Math.round((boardHeight - childHeight) / 2);
+  const parentY = Math.round((boardHeight - AGGREGATE_PARENT_CARD.height) / 2);
+
+  const laidNodes: Node<ResearchFlowNodeData>[] = [
+    aggregateTreeNode(
+      parent,
+      "parent",
+      { x: AGGREGATE_SIDE_INSET, y: parentY },
+      AGGREGATE_PARENT_CARD,
+    ),
+    ...siblings.map((sibling, index) => {
+      const column = index % 2;
+      const row = Math.floor(index / 2);
+      return aggregateTreeNode(
+        sibling,
+        "sibling",
+        {
+          x: AGGREGATE_SIBLING_X +
+            column * (AGGREGATE_SIBLING_CARD.width + AGGREGATE_SIBLING_COLUMN_GAP),
+          y: siblingY + row * (AGGREGATE_SIBLING_CARD.height + AGGREGATE_SIBLING_ROW_GAP),
+        },
+        AGGREGATE_SIBLING_CARD,
+      );
+    }),
+    ...children.map((child, index) =>
+      aggregateTreeNode(
+        child,
+        "child",
+        { x: AGGREGATE_CHILD_X, y: childY + index * (AGGREGATE_CHILD_CARD.height + AGGREGATE_CHILD_GAP) },
+        AGGREGATE_CHILD_CARD,
+      ),
+    ),
+  ];
+  const visibleIds = new Set(laidNodes.map((node) => node.id));
+  const shellEdges = edges
+    .filter(
+      (edge) =>
+        edge.edge_type === "leads_to" &&
+        visibleIds.has(edge.from_node_id) &&
+        visibleIds.has(edge.to_node_id),
+    )
+    .map((edge) => ({
+      id: edge.id,
+      source: edge.from_node_id,
+      target: edge.to_node_id,
+      type: "smoothstep",
+      className: "aggregate-tree-edge",
+      data: { edgeType: edge.edge_type },
+      zIndex: 0,
+    } satisfies Edge<ResearchFlowEdgeData>));
+
+  return {
+    nodes: laidNodes,
+    edges: shellEdges,
+    board: { width: AGGREGATE_BOARD_WIDTH, height: boardHeight },
+  };
+}
+
+/** Public AABB helpers for LRM-1295 aggregate-shell geometry regressions. */
+export function aggregateTreeCardBoxes(
+  laid: AggregateTreeShellLayout,
+): { id: string; tier: AggregateTreeCardTier; x: number; y: number; w: number; h: number }[] {
+  return laid.nodes.map((node) => {
+    const size = node.data.aggregateSize!;
+    return {
+      id: node.id,
+      tier: node.data.aggregateTier!,
+      x: node.position.x,
+      y: node.position.y,
+      w: size.width,
+      h: size.height,
+    };
+  });
+}
+
+/** Public AABB helpers for layout regression tests. */
+export function layoutCardBoxes(
+  laid: ReturnType<typeof layoutResearchGraph>,
+): { id: string; x: number; y: number; w: number; h: number }[] {
+  return laid.nodes
+    .filter((n) => n.type === "research")
+    .map((n) => ({
+      id: n.id,
+      x: n.position.x,
+      y: n.position.y,
+      w: RESEARCH_NODE_WIDTH,
+      h: RESEARCH_NODE_HEIGHT,
+    }));
 }
 
 type GraphEdgeLike = {
@@ -294,6 +458,59 @@ function sortByLane(
     if (la !== lb) return la - lb;
     return a.localeCompare(b);
   });
+}
+
+/** Topological layer index along graph edges (keyboard rank / parallel groups). */
+function layerIndex(
+  nodes: ResearchGraphNode[],
+  edges: ResearchGraphEdge[],
+): Map<string, number> {
+  const ids = new Set(nodes.map((n) => n.id));
+  const indeg = new Map<string, number>();
+  const outs = new Map<string, string[]>();
+  for (const n of nodes) {
+    indeg.set(n.id, 0);
+    outs.set(n.id, []);
+  }
+  for (const e of edges) {
+    if (!ids.has(e.from_node_id) || !ids.has(e.to_node_id)) continue;
+    outs.get(e.from_node_id)!.push(e.to_node_id);
+    indeg.set(e.to_node_id, (indeg.get(e.to_node_id) ?? 0) + 1);
+  }
+
+  const layer = new Map<string, number>();
+  const queue: string[] = [];
+  for (const n of nodes) {
+    if ((indeg.get(n.id) ?? 0) === 0) {
+      queue.push(n.id);
+      layer.set(n.id, 0);
+    }
+  }
+  for (const n of nodes) {
+    if (n.node_type === "goal") layer.set(n.id, 0);
+  }
+
+  while (queue.length) {
+    const id = queue.shift()!;
+    const base = layer.get(id) ?? 0;
+    for (const next of outs.get(id) ?? []) {
+      const nextLayer = Math.max(layer.get(next) ?? 0, base + 1);
+      layer.set(next, nextLayer);
+      const left = (indeg.get(next) ?? 1) - 1;
+      indeg.set(next, left);
+      if (left === 0) queue.push(next);
+    }
+  }
+
+  let max = 0;
+  for (const v of layer.values()) max = Math.max(max, v);
+  for (const n of nodes) {
+    if (!layer.has(n.id)) {
+      max += 1;
+      layer.set(n.id, max);
+    }
+  }
+  return layer;
 }
 
 /** Rank / layer index used by layout (leads_to spine). Exported for ←→↑↓. */

@@ -34,6 +34,17 @@ func (bridge *VoiceCallAgentBridge) Reply(
 	return VoiceCallLLMReply{Content: content}, nil
 }
 
+// EnqueueAgentWork dispatches Multica work for a voice call without waiting for
+// the agent turn to finish. Duplex uses this so the call stays conversational
+// while daemon/agent work continues in the DM.
+func (bridge *VoiceCallAgentBridge) EnqueueAgentWork(
+	ctx context.Context,
+	input VoiceCallLLMInput,
+) error {
+	_, err := bridge.dispatch(ctx, input)
+	return err
+}
+
 func (bridge *VoiceCallAgentBridge) waitForCompletion(
 	ctx context.Context,
 	dispatch voiceCallAgentDispatchResult,

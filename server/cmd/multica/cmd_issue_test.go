@@ -895,10 +895,8 @@ func TestFormatAssignee(t *testing.T) {
 		state: &actorDisplayLookupState{
 			members:       map[string]string{"abcdefgh-1234": "Alice"},
 			agents:        map[string]string{"xyz": "CodeBot"},
-			squads:        map[string]string{"sq-1": "Super Human"},
 			membersLoaded: true,
 			agentsLoaded:  true,
-			squadsLoaded:  true,
 		},
 	}
 	tests := []struct {

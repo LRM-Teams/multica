@@ -430,6 +430,61 @@ func (q *Queries) CreateVoiceCallSession(ctx context.Context, arg CreateVoiceCal
 	return i, err
 }
 
+const failVoiceCallSessionsStartedBefore = `-- name: FailVoiceCallSessionsStartedBefore :many
+UPDATE voice_call_session
+SET
+  status = 'failed',
+  ended_at = now(),
+  end_reason = 'backend_restart_recovery',
+  error_code = 'backend_restart_recovery',
+  updated_at = now()
+WHERE status IN ('starting', 'connecting', 'active', 'reconnecting', 'ending')
+  AND started_at < $1
+RETURNING id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at
+`
+
+// A backend restart cannot safely resume provider work that this process no
+// longer owns. Mark only sessions created before this boot as terminal so they
+// cannot permanently hold the active member/agent uniqueness key.
+func (q *Queries) FailVoiceCallSessionsStartedBefore(ctx context.Context, startedBefore pgtype.Timestamptz) ([]VoiceCallSession, error) {
+	rows, err := q.db.Query(ctx, failVoiceCallSessionsStartedBefore, startedBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []VoiceCallSession{}
+	for rows.Next() {
+		var i VoiceCallSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ChannelID,
+			&i.AgentID,
+			&i.UserID,
+			&i.Provider,
+			&i.ProviderTaskID,
+			&i.RoomID,
+			&i.Status,
+			&i.StartedAt,
+			&i.ConnectedAt,
+			&i.EndedAt,
+			&i.EndReason,
+			&i.ErrorCode,
+			&i.InputAudioMs,
+			&i.OutputAudioMs,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getVoiceCallSessionForMember = `-- name: GetVoiceCallSessionForMember :one
 SELECT id, workspace_id, channel_id, agent_id, user_id, provider, provider_task_id, room_id, status, started_at, connected_at, ended_at, end_reason, error_code, input_audio_ms, output_audio_ms, created_at, updated_at
 FROM voice_call_session

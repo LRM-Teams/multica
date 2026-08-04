@@ -34,6 +34,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -81,9 +82,23 @@ import { CodeBlockStatic } from "./code-block-static";
 // pasted URL instead of silently degrading to a download. Without an id, text
 // kinds remain ungated-out because the proxy is unaddressable.
 
+// LRM-1180: a URL-only source MAY also carry the real `contentType`. Without
+// it `normalize()` hardcodes `""` and `getPreviewKind` can only fall back to
+// the filename extension — a pasted screenshot usually has no extension, so
+// the kind resolves to null and the modal degrades to
+// "preview unsupported" + Download for a plain PNG. Callers that already hold
+// the MIME (e.g. the composer tray) pass it; the 10 existing `kind: "url"`
+// call sites omit it and keep the previous behaviour exactly.
+
 export type PreviewSource =
   | { kind: "full"; attachment: Attachment }
-  | { kind: "url"; url: string; filename: string; attachmentId?: string };
+  | {
+      kind: "url";
+      url: string;
+      filename: string;
+      contentType?: string;
+      attachmentId?: string;
+    };
 
 // Normalized view used everywhere downstream of `useAttachmentPreview`.
 // `attachmentId === null` signals URL-only mode (download falls back to
@@ -117,7 +132,9 @@ function normalize(source: PreviewSource): PreviewState {
   }
   return {
     filename: source.filename,
-    contentType: "",
+    // LRM-1180: prefer the caller's real MIME; `""` keeps the pre-existing
+    // filename-extension fallback for the callers that don't have one.
+    contentType: source.contentType ?? "",
     mediaUrl: resolvePublicFileUrl(source.url) ?? source.url,
     // #831: keep the id when the caller could recover one from the URL — it
     // unlocks the text `/content` proxy and the re-signing download path.
@@ -214,6 +231,187 @@ export function useAttachmentPreview(): AttachmentPreviewHandle {
 }
 
 // ---------------------------------------------------------------------------
+// LRM-1298 — focus contract for this hand-rolled modal
+// ---------------------------------------------------------------------------
+//
+// The overlay below is a raw `createPortal` div that declares
+// `role="dialog"` + `aria-modal="true"`, but it shipped without any focus
+// management: opening left focus on whatever the trigger was (or on <body>
+// when the trigger unmounted), Tab walked straight out of the "modal" into the
+// page behind it, and closing never gave focus back. Escape / backdrop close
+// already worked and are left untouched.
+//
+// Deliberately local to this file rather than reusing
+// research/hooks/use-overlay-panel-a11y: that hook serves a *non-modal*
+// desktop side panel and explicitly does not trap focus, which is the one
+// thing an `aria-modal="true"` dialog must do. Lifting a shared modal-focus
+// hook into a common package is worth doing separately; it is not this fix.
+//
+// The restore strategy follows LRM-1177: remember a stable re-locator (`id`,
+// else `data-testid`) next to the node, because a trigger is often rendered
+// conditionally (`!open ? <Button/> : null`) and returns as a *different* DOM
+// node, so restoring by node identity alone silently no-ops.
+
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "area[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "iframe",
+  "audio[controls]",
+  "video[controls]",
+  '[contenteditable]:not([contenteditable="false"])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(", ");
+
+type RestoreKey =
+  | { kind: "id"; value: string }
+  | { kind: "testId"; value: string };
+
+function restoreKeyFor(element: HTMLElement): RestoreKey | null {
+  if (element.id) return { kind: "id", value: element.id };
+  const testId = element.dataset.testid;
+  if (testId) return { kind: "testId", value: testId };
+  return null;
+}
+
+// Resolved without building a selector string so arbitrary ids / test ids
+// cannot produce an invalid or injected selector.
+function resolveRestoreKey(
+  doc: Document,
+  key: RestoreKey | null,
+): HTMLElement | null {
+  if (!key) return null;
+  if (key.kind === "id") return doc.getElementById(key.value);
+  for (const candidate of doc.querySelectorAll<HTMLElement>("[data-testid]")) {
+    if (candidate.dataset.testid === key.value) return candidate;
+  }
+  return null;
+}
+
+function focusablesWithin(container: HTMLElement): HTMLElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+  ).filter(
+    (node) =>
+      node.getAttribute("aria-hidden") !== "true" &&
+      node.tabIndex !== -1 &&
+      !node.hasAttribute("disabled"),
+  );
+}
+
+function useModalFocusContract(active: boolean) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const restoreRef = useRef<HTMLElement | null>(null);
+  const restoreKeyRef = useRef<RestoreKey | null>(null);
+
+  // Track the last control focused while the modal is closed. Capturing only
+  // at open time is too late when the trigger is removed in the same commit
+  // that opens the modal — by then `document.activeElement` is already
+  // <body> and there is nothing left to remember.
+  useEffect(() => {
+    if (active) return;
+    const doc = dialogRef.current?.ownerDocument ?? globalThis.document;
+    if (!doc) return;
+    const remember = () => {
+      const el = doc.activeElement;
+      if (!(el instanceof HTMLElement) || el === doc.body) return;
+      restoreRef.current = el;
+      restoreKeyRef.current = restoreKeyFor(el);
+    };
+    remember();
+    doc.addEventListener("focusin", remember);
+    return () => doc.removeEventListener("focusin", remember);
+  }, [active]);
+
+  // Initial focus in, restore out.
+  useEffect(() => {
+    if (!active) return;
+    const dialog = dialogRef.current;
+    const doc = dialog?.ownerDocument ?? globalThis.document;
+    const previous = doc.activeElement;
+    // Only overwrite when there is still a live focused control; otherwise
+    // keep whatever the tracker above captured before the trigger was removed.
+    if (previous instanceof HTMLElement && previous !== doc.body) {
+      restoreRef.current = previous;
+      restoreKeyRef.current = restoreKeyFor(previous);
+    }
+
+    // Focus the labelled `role="dialog"` node itself (tabIndex -1) so screen
+    // readers announce the filename label on open, and Tab from there lands on
+    // the first control inside the frame.
+    if (dialog && !dialog.contains(doc.activeElement)) {
+      dialog.focus({ preventScroll: true });
+    }
+
+    return () => {
+      const target = restoreRef.current;
+      const key = restoreKeyRef.current;
+      restoreRef.current = null;
+      restoreKeyRef.current = null;
+      const resolved = target?.isConnected
+        ? target
+        : resolveRestoreKey(doc, key);
+      // No re-locator and the original node is gone: leave focus where it is
+      // rather than grabbing an unrelated control.
+      resolved?.focus({ preventScroll: true });
+    };
+  }, [active]);
+
+  // Trap: `aria-modal="true"` promises the rest of the page is inert, so Tab
+  // must cycle inside the frame. Focusables are re-read on every keystroke
+  // because the content area mounts asynchronously (text/markdown/html
+  // previews) and the new-tab button appears only for some kinds.
+  useEffect(() => {
+    if (!active) return;
+    const doc = dialogRef.current?.ownerDocument ?? globalThis.document;
+    if (!doc) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || event.defaultPrevented) return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+
+      const focusables = focusablesWithin(dialog);
+      const activeEl = doc.activeElement;
+      const inside = activeEl instanceof HTMLElement && dialog.contains(activeEl);
+
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      // Nothing focusable inside (e.g. a content area that renders no
+      // controls): keep focus parked on the dialog rather than letting Tab
+      // walk out of an `aria-modal` surface.
+      if (!first || !last) {
+        event.preventDefault();
+        dialog.focus({ preventScroll: true });
+        return;
+      }
+
+      // Focus escaped (or never entered) the dialog — pull it back in.
+      if (!inside) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus({ preventScroll: true });
+        return;
+      }
+      if (event.shiftKey && (activeEl === first || activeEl === dialog)) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
+        return;
+      }
+      if (!event.shiftKey && (activeEl === last || activeEl === dialog)) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      }
+    };
+    doc.addEventListener("keydown", onKeyDown, true);
+    return () => doc.removeEventListener("keydown", onKeyDown, true);
+  }, [active]);
+
+  return dialogRef;
+}
+
+// ---------------------------------------------------------------------------
 // Modal — frame + dispatch
 // ---------------------------------------------------------------------------
 
@@ -240,6 +438,9 @@ export function AttachmentPreviewModal({
   }, [open, onClose]);
 
   const kind = getPreviewKind(state.contentType, state.filename);
+
+  // LRM-1298: initial focus + trap + restore for this hand-rolled dialog.
+  const dialogRef = useModalFocusContract(open);
 
   // Download dispatcher: re-sign through `getAttachment` when an id is
   // available; otherwise fall back to opening the (possibly stale) URL
@@ -286,6 +487,10 @@ export function AttachmentPreviewModal({
       role="dialog"
       aria-modal="true"
       aria-label={state.filename}
+      ref={dialogRef}
+      // Programmatically focusable only — the dialog takes focus on open so
+      // the label is announced, but it never joins the Tab order itself.
+      tabIndex={-1}
     >
       {/* Larger than the create-issue dialog (max-w-4xl, manualDialogContentClass)
           because PDF / video previews want more room. Capped to viewport

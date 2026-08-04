@@ -38,6 +38,13 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* Tailwind v4 utilities animate by default; preserve the static element and
+     its semantics while removing vestibular motion across both apps. */
+  .animate-pulse,
+  .animate-spin {
+    animation: none;
+  }
+
   .research-anchor-flash {
     animation: none;
     outline: 2px solid var(--brand);
@@ -154,6 +161,82 @@
   animation: chat-text-shimmer 2.5s linear infinite;
 }
 
+/* LRM-1271/1291 Research stage energy track — sheen on the CURRENT segment
+ * only. Deliberately one moving thing on the whole header: no particles, no
+ * bounce, no full-track marquee (UI Designer 2026-08-04 frozen spec).
+ *
+ * The stage gradient lives on the element's own `background-image`; this class
+ * is applied to an absolutely positioned overlay so the sheen slides without
+ * touching the segment's own color stops. `background-position` only — no
+ * transform — so it cannot shift layout or trip the 1222 scroll work.
+ *
+ * Reduced motion drops the sheen entirely; the static gradient band, the ring/
+ * dot glyph and the visible stage-state text all survive, so `current` stays
+ * distinguishable with zero animation. */
+@keyframes research-stage-sheen {
+  0% {
+    background-position: -150% 0;
+  }
+  100% {
+    background-position: 250% 0;
+  }
+}
+
+.animate-research-stage-sheen {
+  background-image: linear-gradient(
+    100deg,
+    rgb(255 255 255 / 0%) 35%,
+    rgb(255 255 255 / 55%) 50%,
+    rgb(255 255 255 / 0%) 65%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: research-stage-sheen 2.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-research-stage-sheen {
+    animation: none;
+    background-image: none;
+  }
+}
+
+/* LRM-1329 EvidencePulse — one-shot aurora sweep on ready/revision (420ms).
+ * Decorative only; prefers-reduced-motion keeps a static brand edge, no transform. */
+@keyframes evidence-sweep {
+  0% {
+    background-position: 0% 50%;
+    opacity: 0.35;
+  }
+  45% {
+    opacity: 0.85;
+  }
+  100% {
+    background-position: 100% 50%;
+    opacity: 0.2;
+  }
+}
+
+.animate-evidence-sweep {
+  background-image: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in oklab, var(--brand) 45%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: evidence-sweep 420ms ease-out 1 both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-evidence-sweep {
+    animation: none;
+    background-image: none;
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--brand) 35%, transparent);
+  }
+}
+
 /* LRM-581 Presence Cluster — light brand breathing ring on Working faces only
  * (UI Designer 2026-07-25: thin / low-contrast; no thick ring or enter pop). */
 @keyframes presence-ring-pulse {
@@ -244,6 +327,25 @@
     );
   }
 }
+
+/* =============================================================================
+ * LRM-1276 — momentum scroll: single source for `-webkit-overflow-scrolling`.
+ *
+ * The declaration used to be hand-copied as a Tailwind arbitrary property
+ * (`[-webkit-overflow-scrolling:touch]`) in six places across five view files.
+ * With no reusable name, new scroll containers were written by grepping an
+ * existing one, so adoption stayed partial.
+ *
+ * The prefix is deprecated: since iOS 13 momentum scrolling is the default in
+ * Safari, and it has never had any effect in other engines. It is kept only as
+ * a floor for legacy iOS WebViews. When that floor is dropped, delete THIS rule
+ * and the class usages — not six inline copies.
+ *
+ * Behaviour-neutral by construction: it carries this one declaration and no
+ * overflow / overscroll / touch-action / sizing rules, so it neither creates a
+ * scroll container nor fixes one. Mobile scroll defects belong to LRM-1222.
+ * ============================================================================= */
+.momentum-scroll { -webkit-overflow-scrolling: touch; }
 
 /* =============================================================================
  * Motion contract (#820) — shared timing tokens + content fade for view/tab/

@@ -23,6 +23,12 @@ type ResearchTemplateChipRowProps = {
 
 /**
  * LRM-1092 / LRM-1072: template pills inside the home composer (replaces external cards).
+ *
+ * LRM-1189: selected/hover reuse the frozen template blue triple from
+ * `research-template-inject-tag.tsx`; light values unchanged; no raw hex halo.
+ *
+ * LRM-1218: bottom divider uses solid/subtle border vocabulary (dashed
+ * borders stay reserved for drop/placeholder surfaces).
  */
 export function ResearchTemplateChipRow({
   selectedId,
@@ -38,7 +44,7 @@ export function ResearchTemplateChipRow({
       aria-label={t(($) => $.home.templates_label)}
       data-testid="research-template-chip-row"
       className={cn(
-        "flex gap-1.5 overflow-x-auto border-b border-dashed border-border/80 px-3 pb-2.5 pt-2.5 sm:flex-wrap sm:overflow-visible sm:px-3.5",
+        "flex gap-1.5 overflow-x-auto border-b border-border/60 px-3 pb-2.5 pt-2.5 md:flex-wrap md:overflow-visible md:px-3.5",
         className,
       )}
     >
@@ -60,8 +66,8 @@ export function ResearchTemplateChipRow({
               "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium whitespace-nowrap transition-colors",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
               selected
-                ? "border-blue-400 bg-blue-50 text-blue-700 shadow-[0_0_0_2px_#dbeafe]"
-                : "border-border bg-muted/40 text-foreground/80 hover:border-blue-300 hover:bg-blue-50/60 hover:text-blue-700",
+                ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-400/45 dark:bg-blue-400/[0.14] dark:text-blue-200"
+                : "border-border bg-muted/40 text-foreground/80 hover:border-blue-300 hover:bg-blue-50/60 hover:text-blue-700 dark:hover:border-blue-400/45 dark:hover:bg-blue-400/[0.10] dark:hover:text-blue-200",
             )}
           >
             <Icon className="size-3 opacity-70" aria-hidden />

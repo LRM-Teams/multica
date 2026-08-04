@@ -16,9 +16,11 @@ vi.mock("../../i18n/use-t", () => ({
       const keys = {
         panel: {
           module_trajectory: "搜索轨迹",
-          module_sources: "信源策略",
+          module_sources: "调研依据与协作分工",
+          module_sources_desc: "依据从哪里来 · 谁负责什么 · 现在齐了没有",
           module_detail: "节点详情",
           aux_close: "关闭面板",
+          aux_close_sources: "关闭调研依据与协作分工",
         },
       };
       return picker(keys as never);
@@ -95,8 +97,8 @@ describe("ResearchAuxDrawer desktop a11y (LRM-1100)", () => {
     expect(labelId).toBeTruthy();
     const label = document.getElementById(labelId as string);
     expect(label).not.toBeNull();
-    expect(label).toHaveTextContent("信源策略");
-    expect(screen.getByRole("complementary", { name: "信源策略" })).toBe(panel);
+    expect(label).toHaveTextContent("调研依据与协作分工");
+    expect(screen.getByRole("complementary", { name: "调研依据与协作分工" })).toBe(panel);
   });
 
   it("moves focus into the panel on open and restores it on close", async () => {
@@ -124,5 +126,112 @@ describe("ResearchAuxDrawer desktop a11y (LRM-1100)", () => {
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByTestId("research-aux-drawer")).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("restores focus to a trigger that unmounts while the drawer is open (LRM-1177)", async () => {
+    // Shared useOverlayPanelA11y contract: opener may unmount for the whole
+    // open window (chat FAB path). Aux drawer uses the same hook — cover the
+    // remount+testid re-locate path here so chat-only coverage cannot regress
+    // the aux consumer silently.
+    function Harness() {
+      const [panel, setPanel] = useState<"trajectory" | null>(null);
+      return (
+        <div>
+          {panel ? null : (
+            <button
+              type="button"
+              data-testid="research-module-trajectory"
+              onClick={() => setPanel("trajectory")}
+            >
+              open trajectory
+            </button>
+          )}
+          <ResearchAuxDrawer panel={panel} onClose={() => setPanel(null)}>
+            <span>body</span>
+          </ResearchAuxDrawer>
+        </div>
+      );
+    }
+    render(<Harness />);
+    const opener = screen.getByTestId("research-module-trajectory");
+    opener.focus();
+    await userEvent.click(opener);
+
+    const drawer = screen.getByTestId("research-aux-drawer");
+    expect(drawer.contains(document.activeElement)).toBe(true);
+    expect(opener.isConnected).toBe(false);
+
+    await userEvent.keyboard("{Escape}");
+    const remounted = screen.getByTestId("research-module-trajectory");
+    expect(remounted).not.toBe(opener);
+    expect(document.activeElement).toBe(remounted);
+  });
+
+  it("keeps focusable controls inside the open desktop drawer (LRM-1290)", () => {
+    render(
+      <ResearchAuxDrawer panel="detail" onClose={() => {}}>
+        <button type="button">inside</button>
+      </ResearchAuxDrawer>,
+    );
+    const drawer = screen.getByTestId("research-aux-drawer");
+    expect(drawer.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
+    const focusables = drawer.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    expect(focusables.length).toBeGreaterThan(0);
+  });
+
+  it("marks the close lucide decorative under the labeled button (LRM-1290)", () => {
+    render(
+      <ResearchAuxDrawer panel="trajectory" onClose={() => {}}>
+        <span>body</span>
+      </ResearchAuxDrawer>,
+    );
+    const close = screen.getByRole("button", { name: "关闭面板" });
+    const icon = close.querySelector("svg");
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("sources panel shows three-question desc + panel-specific close name (LRM-1329)", () => {
+    render(
+      <ResearchAuxDrawer panel="sources" onClose={() => {}}>
+        <span>body</span>
+      </ResearchAuxDrawer>,
+    );
+    expect(screen.getByTestId("research-aux-drawer-desc")).toHaveTextContent(
+      "依据从哪里来 · 谁负责什么 · 现在齐了没有",
+    );
+    expect(
+      screen.getByRole("button", { name: "关闭调研依据与协作分工" }),
+    ).toBeTruthy();
+  });
+
+  it("keeps focus put when an unmounted aux trigger has no relocatable key (LRM-1177)", async () => {
+    function Harness() {
+      const [panel, setPanel] = useState<"sources" | null>(null);
+      return (
+        <div>
+          {panel ? null : (
+            <button type="button" onClick={() => setPanel("sources")}>
+              open sources
+            </button>
+          )}
+          <ResearchAuxDrawer panel={panel} onClose={() => setPanel(null)}>
+            <span>body</span>
+          </ResearchAuxDrawer>
+        </div>
+      );
+    }
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "open sources" });
+    trigger.focus();
+    await userEvent.click(trigger);
+    expect(
+      screen.getByTestId("research-aux-drawer").contains(document.activeElement),
+    ).toBe(true);
+
+    await userEvent.keyboard("{Escape}");
+    expect(document.activeElement).toBe(document.body);
   });
 });

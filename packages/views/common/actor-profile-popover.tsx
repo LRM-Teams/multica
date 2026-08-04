@@ -9,9 +9,7 @@
 // carries a react-doctor-disable-next-line for react-doctor/no-multi-comp.
 
 import { useQuery } from "@tanstack/react-query";
-import { Sparkles } from "lucide-react";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
-import { HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
 import {
   HoverCard,
   HoverCardContent,
@@ -37,6 +35,8 @@ import {
 } from "@multica/core/identity";
 import { MemoryGrowthField } from "../agents/components/memory-growth-field";
 import { AgentHonorLevelIcon } from "../agents/components/agent-honor-level-icon";
+import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
+import { useHonorBadgeCopy } from "../honor/use-honor-badge-copy";
 import { useAgentAchievementCopy } from "../agents/hooks/use-agent-achievement-copy";
 import { useAgentFleetClassName } from "../agents/hooks/use-agent-fleet-class-name";
 import { AgentPresenceOverlay } from "./actor-avatar";
@@ -397,6 +397,7 @@ function AgentHonorSummary({ agentId }: { agentId: string }) {
 // react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive actor-profile cluster (see file header)
 function MemberHonorSummary({ userId }: { userId: string }) {
   const { t } = useT("channels");
+  const honorBadgeCopy = useHonorBadgeCopy();
   const { data: honor, isPending, isError } = useQuery({
     queryKey: ["honor", "wall", userId],
     queryFn: () => api.getUserHonor(userId),
@@ -415,29 +416,24 @@ function MemberHonorSummary({ userId }: { userId: string }) {
   }
 
   const equipped = honor.equipped_badge;
+  const equippedTitle = equipped ? honorBadgeCopy(equipped).title : "";
 
   return (
     <div
-      className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground"
+      className="mt-2 flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/25 px-2 py-1.5 text-xs leading-4 text-muted-foreground"
       data-testid="member-honor-showcase"
     >
-      <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border/60 bg-muted/60">
-        {equipped ? (
-          <HonorBadgeIcon
-            svgKey={equipped.svg_key}
-            title={equipped.title}
-            className="size-3.5"
-          />
-        ) : (
-          <Sparkles className="size-3" aria-hidden />
-        )}
-      </span>
+      <UserHonorLevelIcon
+        level={honor.level}
+        title={t(($) => $.profile_popover.honor.level_value, { level: honor.level })}
+        className="size-10 drop-shadow-sm"
+      />
       <span className="shrink-0 font-medium tabular-nums text-foreground/80">
         {t(($) => $.profile_popover.honor.level_value, { level: honor.level })}
       </span>
       <span aria-hidden>·</span>
       <span className="truncate">
-        {equipped?.title ?? t(($) => $.profile_popover.honor.no_badge)}
+        {equippedTitle || t(($) => $.profile_popover.honor.no_badge)}
       </span>
     </div>
   );

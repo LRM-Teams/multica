@@ -177,6 +177,7 @@ vi.mock("@multica/core/workspace/hooks", () => ({
     getMemberRole: () => null,
     getMemberHonor: () => undefined,
     getAgentFleetRank: () => undefined,
+    getAgentHonorLevel: () => undefined,
   }),
 }));
 vi.mock("@multica/core/agents", () => ({ useAgentPresenceDetail: () => "loading" }));
@@ -208,7 +209,7 @@ vi.mock("./dm-agent-working-cue", () => ({ DmAgentWorkingCue: () => null }));
 
 // Expose `plainUrls` so a test can assert the DM composer opts into plain-text
 // URLs (#542) — same miss-surface regression guard as the channel composer.
-vi.mock("../../editor/content-editor", () => ({
+vi.mock("../../editor/lazy-content-editor", () => ({
   ContentEditor: (props: { plainUrls?: boolean }) => (
     <div data-testid="content-editor" data-plain-urls={String(!!props.plainUrls)} />
   ),

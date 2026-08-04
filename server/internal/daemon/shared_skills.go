@@ -243,6 +243,28 @@ func legacyPiAgentRoot(cfg Config, workspaceID, agentID string) string {
 	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".pi", "agents", agentID)
 }
 
+func deviceMemoryRoot(agentRoot, daemonID string) string {
+	daemonID = strings.TrimSpace(daemonID)
+	if daemonID == "" || daemonID == "." || daemonID == ".." || filepath.Base(daemonID) != daemonID {
+		return ""
+	}
+	return filepath.Join(agentRoot, "devices", daemonID)
+}
+
+func ensureDeviceMemoryRoot(agentRoot, daemonID string) (string, error) {
+	root := deviceMemoryRoot(agentRoot, daemonID)
+	if root == "" {
+		return "", nil
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", err
+	}
+	if err := ensureFile(filepath.Join(root, "STATE.md"), "# Device-local State\n\nAbsolute paths, installed tools, loopback endpoints, and other facts that apply only to this daemon device. This file is never replicated as portable center memory.\n"); err != nil {
+		return "", err
+	}
+	return root, nil
+}
+
 func agentSyncQueueDir(agentRoot string) string { return filepath.Join(agentRoot, "sync_queue") }
 func agentSkillDraftsDir(agentRoot string) string {
 	return filepath.Join(agentRoot, "skills", "drafts")
@@ -279,6 +301,7 @@ func ensureMulticaAgentRoot(root string) error {
 		filepath.Join(root, "runtime", "openclaw"),
 		filepath.Join(root, "runtime", "codex"),
 		filepath.Join(root, "runtime", "claude"),
+		filepath.Join(root, "devices"),
 		filepath.Join(root, "skills", "drafts"),
 		filepath.Join(root, "skills", "generated"),
 		filepath.Join(root, "skills", "enabled"),

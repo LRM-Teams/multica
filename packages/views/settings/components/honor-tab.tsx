@@ -32,6 +32,7 @@ import {
   Zap,
 } from "lucide-react";
 import { ActorStyledName } from "../../common/actor-styled-name";
+import { UserHonorLevelIcon } from "../../honor/user-honor-level-icon";
 import { HonorBadgeCatalog } from "../../honor/honor-badge-catalog";
 import { HonorNextTargets } from "../../honor/honor-next-targets";
 import {
@@ -39,6 +40,7 @@ import {
   honorLevelProgress,
   isRareHonorBadge,
 } from "../../honor/honor-progress";
+import { useHonorBadgeCopy } from "../../honor/use-honor-badge-copy";
 import { useT } from "../../i18n";
 import honorHeroImage from "./assets/honor-center-orbit.webp";
 
@@ -73,6 +75,7 @@ const honorHeroImageSrc =
 
 export function HonorTab() {
   const { t, i18n } = useT("settings");
+  const honorBadgeCopy = useHonorBadgeCopy();
   const qc = useQueryClient();
   const user = useAuthStore((state) => state.user);
   const {
@@ -88,6 +91,39 @@ export function HonorTab() {
     queryKey: honorKeys.rules,
     queryFn: () => api.getHonorRules(),
   });
+
+  const catalog = useMemo(
+    () =>
+      (dashboard?.badge_catalog ?? []).map((badge) => {
+        const copy = honorBadgeCopy(badge);
+        return {
+          ...badge,
+          title: copy.title,
+          description: copy.description,
+          unlock_rule: copy.unlockRule,
+          progress: badge.progress
+            ? { ...badge.progress, label: copy.progressLabel }
+            : undefined,
+        };
+      }),
+    [dashboard?.badge_catalog, honorBadgeCopy],
+  );
+  const unlockedBadges = useMemo(
+    () =>
+      (dashboard?.unlocked_badges ?? []).map((badge) => {
+        const copy = honorBadgeCopy(badge);
+        return { ...badge, title: copy.title, description: copy.description };
+      }),
+    [dashboard?.unlocked_badges, honorBadgeCopy],
+  );
+  const recentUnlocks = useMemo(
+    () =>
+      (dashboard?.recent_unlocks ?? []).map((badge) => {
+        const copy = honorBadgeCopy({ ...badge, unlocked: true });
+        return { ...badge, title: copy.title, description: copy.description };
+      }),
+    [dashboard?.recent_unlocks, honorBadgeCopy],
+  );
 
   const locale = i18n.resolvedLanguage || i18n.language;
   const numberFormatter = useMemo(
@@ -191,7 +227,6 @@ export function HonorTab() {
     );
   }
 
-  const catalog = dashboard.badge_catalog ?? [];
   const showcaseIds = dashboard.showcase_badge_ids ?? [];
   const showcasedBadges = getHonorShowcaseBadges(
     catalog,
@@ -201,7 +236,7 @@ export function HonorTab() {
   const visibleShowcaseIds = showcasedBadges.map((badge) => badge.id);
   const equippedBadge =
     catalog.find((item) => item.id === dashboard.equipped_badge_id) ??
-    dashboard.unlocked_badges.find(
+    unlockedBadges.find(
       (item) => item.id === dashboard.equipped_badge_id,
     );
   const nameStyleRules = [...(rules?.name_style_unlocks ?? [])]
@@ -217,9 +252,12 @@ export function HonorTab() {
     rules?.level_thresholds ?? [],
     dashboard.xp_to_next_level,
   );
-  const displayName = resolveActorDisplayName(user, user?.name || "Builder");
+  const displayName = resolveActorDisplayName(
+    user,
+    user?.name || t(($) => $.honor.anonymous_builder),
+  );
   const activity = [
-    ...(dashboard.recent_unlocks ?? []).map((item) => ({
+    ...recentUnlocks.map((item) => ({
       kind: "unlock" as const,
       id: `${item.id}-${item.unlocked_at}`,
       title: item.title,
@@ -261,6 +299,12 @@ export function HonorTab() {
           aria-hidden="true"
           className="absolute inset-0 bg-[linear-gradient(0deg,rgba(2,6,23,0.9),transparent_54%)]"
         />
+        <UserHonorLevelIcon
+          level={dashboard.level}
+          title={t(($) => $.honor.level_value, { level: dashboard.level })}
+          className="absolute right-8 top-1/2 z-10 hidden size-44 -translate-y-1/2 drop-shadow-[0_0_30px_rgba(99,102,241,0.4)] lg:block"
+          priority
+        />
         <div className="relative flex min-h-[340px] max-w-2xl flex-col justify-between p-6 sm:p-8">
           <div>
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-cyan-200">
@@ -300,7 +344,7 @@ export function HonorTab() {
               <p className="mt-1 font-mono text-4xl font-semibold tracking-[-0.05em] text-white">
                 {numberFormatter.format(dashboard.total_xp)}
                 <span className="ml-2 text-sm tracking-normal text-cyan-300">
-                  XP
+                  {t(($) => $.honor.xp_label)}
                 </span>
               </p>
             </div>
@@ -454,7 +498,9 @@ export function HonorTab() {
                     </p>
                     <p className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                       <span className="font-mono text-sm font-semibold text-cyan-700 dark:text-cyan-300">
-                        +{numberFormatter.format(rule.xp_delta)} XP
+                        {t(($) => $.honor.xp_value, {
+                          value: `+${numberFormatter.format(rule.xp_delta)}`,
+                        })}
                       </span>
                       <span className="text-[10px] text-muted-foreground">
                         {t(($) => $.honor.daily_cap, {
@@ -671,7 +717,9 @@ export function HonorTab() {
                     </div>
                     {item.kind === "xp" ? (
                       <span className="font-mono text-xs font-semibold text-cyan-700 dark:text-cyan-300">
-                        +{numberFormatter.format(item.xp)} XP
+                        {t(($) => $.honor.xp_value, {
+                          value: `${item.xp > 0 ? "+" : ""}${numberFormatter.format(item.xp)}`,
+                        })}
                       </span>
                     ) : (
                       <Gem

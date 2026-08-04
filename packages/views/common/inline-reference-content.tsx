@@ -193,19 +193,24 @@ function renderReferenceToken({
   }
 
   if (reference.ref_type === "channel-ref") {
-    // Non-interactive surfaces (the excerpt) render styled text only, no live
-    // query — same discipline as issue-ref below. Unlike issue-ref, a
-    // channel-ref's `text` (span substring) is NEVER a bare identifier — the
-    // composer always authors the full `[Label](mention://channel/<uuid>)`
-    // markdown link, so `text` here is that whole string. Rendering it
-    // verbatim (Wren, PR review) would leak the raw markdown + internal UUID
-    // the moment any future caller passes `interactive={false}` — same class
-    // of bug as message-preview.ts's channel-ref branch above. Use the
-    // resolved label instead, matching the interactive branch below.
+    // A channel-ref span is one of two shapes: the composer's whole
+    // `[Label](mention://channel/<uuid>)` markdown link, or (LRM-1153) the bare
+    // `#name` an agent or a hand-typed message wrote, which the server now
+    // anchors too. Neither may be rendered verbatim: the link form would leak
+    // raw markdown + the internal UUID (Wren, PR review — same class of bug as
+    // message-preview.ts's channel-ref branch), and only the resolved label is
+    // guaranteed to be the live channel name. Both branches therefore render
+    // from `label`, normalized to exactly one leading `#` so the author's hash
+    // survives on the non-interactive surface (the chip draws its own).
     if (!interactive) {
-      return <span className="text-brand">{reference.label ?? reference.ref_id}</span>;
+      return <span className="text-brand">{`#${stripLeadingHash(reference.label ?? reference.ref_id)}`}</span>;
     }
     return <ChannelRefLink channelId={reference.ref_id} label={reference.label ?? text} />;
+  }
+
+  // Block hire cards render in MessagePartsRenderer, not as inline tokens.
+  if (reference.ref_type === "action_card") {
+    return <span className="text-muted-foreground">{reference.label ?? text}</span>;
   }
 
   // issue-ref (#469): raft-style lightweight inline link — uniform link color,
@@ -213,6 +218,9 @@ function renderReferenceToken({
   // Non-interactive surfaces (the excerpt) render the span substring as styled
   // text and must NOT resolve the issue — returning here keeps the live-issue
   // query out of those rows entirely.
+  if (reference.ref_type !== "issue-ref") {
+    return <span className="text-brand">{text}</span>;
+  }
   if (!interactive) {
     return <span className="text-brand">{text}</span>;
   }
@@ -227,6 +235,16 @@ function renderReferenceToken({
 }
 
 type IssueRefPart = Extract<ReferencePart, { ref_type: "issue-ref" }>;
+
+/**
+ * Normalize a channel label to its bare name so callers can add exactly one
+ * `#`. The server sends the bare channel name, but a composer-authored label
+ * may carry the author's own hash — double-prefixing it ("##ops") is the bug
+ * this guards, and it mirrors ChannelChip's identical tolerance.
+ */
+function stripLeadingHash(label: string): string {
+  return label.startsWith("#") ? label.slice(1) : label;
+}
 
 /** Non-clickable mention chip with LRM-515 display_name primary ink. */
 function NonInteractiveActorMention({

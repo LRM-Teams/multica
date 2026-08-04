@@ -220,6 +220,33 @@ func (s *InMemoryUpdateStore) LatestForRuntime(_ context.Context, runtimeID stri
 	return latest, nil
 }
 
+// LatestForRuntimes returns the newest request per requested runtime in one
+// locked scan. ListAgentRuntimes uses it through its optional batch-store
+// contract; single-runtime lifecycle callers keep using LatestForRuntime.
+func (s *InMemoryUpdateStore) LatestForRuntimes(_ context.Context, runtimeIDs []string) (map[string]*UpdateRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	requested := make(map[string]struct{}, len(runtimeIDs))
+	for _, runtimeID := range runtimeIDs {
+		if runtimeID != "" {
+			requested[runtimeID] = struct{}{}
+		}
+	}
+	latest := make(map[string]*UpdateRequest, len(requested))
+	now := time.Now()
+	for _, req := range s.requests {
+		if _, ok := requested[req.RuntimeID]; !ok {
+			continue
+		}
+		applyUpdateTimeout(req, now)
+		if current := latest[req.RuntimeID]; current == nil || req.UpdatedAt.After(current.UpdatedAt) {
+			latest[req.RuntimeID] = req
+		}
+	}
+	return latest, nil
+}
+
 func (s *InMemoryUpdateStore) HasPending(_ context.Context, runtimeID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -362,8 +389,8 @@ func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canEditRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the runtime owner or a workspace admin can update this runtime")
+	if !canOwnRuntime(member, rt) {
+		writeError(w, http.StatusForbidden, "only the computer owner can update this runtime")
 		return
 	}
 
@@ -422,8 +449,8 @@ func (h *Handler) CancelUpdateIntent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canEditRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the runtime owner or a workspace admin can cancel this update")
+	if !canOwnRuntime(member, rt) {
+		writeError(w, http.StatusForbidden, "only the computer owner can cancel this update")
 		return
 	}
 
@@ -454,8 +481,8 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canEditRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the runtime owner or a workspace admin can inspect this update")
+	if !canOwnRuntime(member, rt) {
+		writeError(w, http.StatusForbidden, "only the computer owner can inspect this update")
 		return
 	}
 

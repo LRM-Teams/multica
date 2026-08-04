@@ -1,6 +1,5 @@
 "use client";
 
-import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
 import type { HonorSnapshot } from "@multica/core/types/honor";
 import {
   formatActorHandleLabel,
@@ -22,11 +21,11 @@ export interface ActorIdentityRowProps {
   showHandle?: boolean;
   /** Platform honor styling for human users. */
   honor?: HonorSnapshot | null;
-  /** Agent fleet rank badge for agents. */
-  fleet?: AgentFleetRank | null;
+  /** Authoritative Agent honor level used by compact identity surfaces. */
+  agentHonorLevel?: number | null;
   /** Inline surfaces cap glow at tier III; profile allows full VII. */
   honorSurface?: "inline" | "profile";
-  /** Keep earned name styling but omit honor and fleet badges in dense lists. */
+  /** Keep earned name styling but omit honor badges in dense lists. */
   showBadges?: boolean;
   primaryClassName?: string;
   secondaryClassName?: string;
@@ -43,7 +42,7 @@ export function ActorIdentityRow({
   handle: handleProp,
   showHandle,
   honor,
-  fleet,
+  agentHonorLevel,
   honorSurface = "inline",
   showBadges = true,
   primaryClassName = "truncate",
@@ -62,7 +61,7 @@ export function ActorIdentityRow({
       <ActorStyledName
         displayName={displayName}
         honor={honor}
-        fleet={fleet}
+        agentHonorLevel={agentHonorLevel}
         honorSurface={honorSurface}
         showBadges={showBadges}
         className={primaryClassName}

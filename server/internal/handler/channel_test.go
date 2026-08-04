@@ -1720,17 +1720,14 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if messagesRec.Code != http.StatusOK {
 		t.Fatalf("report inbox messages: status=%d body=%s", messagesRec.Code, messagesRec.Body.String())
 	}
-	if len(liveTaskMessages) != 4 {
-		t.Fatalf("live task messages = %+v, want mapped messages plus one phase status", liveTaskMessages)
+	if len(liveTaskMessages) != 3 {
+		t.Fatalf("live task messages = %+v, want mapped tools only", liveTaskMessages)
 	}
 	if liveTaskMessages[0].Seq != 2 || liveTaskMessages[0].Type != "tool_use" || liveTaskMessages[0].Tool != "bash" {
 		t.Fatalf("live terminal payload = %+v, want canonical bash tool_use", liveTaskMessages[0])
 	}
 	if liveTaskMessages[1].Seq != 7 || liveTaskMessages[1].Tool != "write_file" || liveTaskMessages[2].Seq != 8 || liveTaskMessages[2].Tool != "read_file" {
-		t.Fatalf("live file tool payloads = %+v, want write/read file without unmapped status tool", liveTaskMessages)
-	}
-	if liveTaskMessages[3].Seq != 9 || liveTaskMessages[3].Type != "thinking" || liveTaskMessages[3].Content != "" {
-		t.Fatalf("live phase status = %+v, want bare thinking wire", liveTaskMessages[3])
+		t.Fatalf("live file tool payloads = %+v, want write/read file without thinking or unmapped status", liveTaskMessages)
 	}
 
 	rows, err := testPool.Query(ctx, `
@@ -1772,8 +1769,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if len(activity) != 9 {
 		t.Fatalf("activity rows = %+v, want 9", activity)
 	}
-	if activity[0].kind != activityKindCustom || activity[0].eventType != "runtime_thinking" || activity[0].visibility != "diagnostic_only" {
-		t.Fatalf("thinking row = %+v, want diagnostic runtime_thinking", activity[0])
+	if activity[0].kind != activityKindThinking || activity[0].eventType != "runtime_thinking" || activity[0].visibility != "diagnostic_only" {
+		t.Fatalf("thinking row = %+v, want diagnostic thinking/runtime_thinking", activity[0])
 	}
 	if activity[1].kind != activityKindToolCall || activity[1].eventType != "tool_use" || activity[1].visibility != "user_facing" {
 		t.Fatalf("tool row = %+v, want user-facing tool_use", activity[1])
@@ -1815,8 +1812,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if activity[7].details["tool"] != "read_file" || activity[7].details["raw_tool"] != "read" || activity[7].details["tool_target"] != "/tmp/test.go" || activity[7].details["summary_kind"] != "file_path" || activity[7].details["command"] != nil || activity[7].details["path"] != "/tmp/test.go" || activity[7].details["scope"] != "/repo" {
 		t.Fatalf("read file details = %+v, want read source facts without invented command", activity[7].details)
 	}
-	if activity[8].kind != activityKindThinking || activity[8].eventType != "runtime_phase" || activity[8].visibility != "user_facing" || activity[8].message != "" || activity[8].details["phase_status"] != true {
-		t.Fatalf("phase status row = %+v, want bare user-facing phase transition", activity[8])
+	if activity[8].kind != activityKindThinking || activity[8].eventType != "runtime_phase" || activity[8].visibility != "diagnostic_only" || activity[8].message != "" || activity[8].details["phase_status"] != true {
+		t.Fatalf("legacy phase row = %+v, want diagnostic-only", activity[8])
 	}
 }
 
@@ -3672,6 +3669,109 @@ func TestChannelReferenceLinksBecomeStructuredMessageParts(t *testing.T) {
 	for _, part := range dmParts {
 		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
 			t.Fatalf("dm channel id unexpectedly produced a channel-ref: %+v", part)
+		}
+	}
+}
+
+// TestChannelBareChannelReferencesBecomeStructuredMessageParts is LRM-1153:
+// agents (and humans typing without the composer's picker) write a plain
+// `#channel-name` in prose. Before this resolver only the composer's
+// [Label](mention://channel/<id>) link produced a channel-ref, so those bare
+// occurrences shipped with no parts at all and the FE — which already renders
+// channel-ref as a ChannelChip — had nothing to render, leaving raw `#name`
+// text next to correctly chipped @mentions and issue refs in the same message.
+func TestChannelBareChannelReferencesBecomeStructuredMessageParts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	suffix := uuid.NewString()[:8]
+	targetName := "pr-frontend-" + suffix
+	targetChannelID := seedChannelForTest(t, targetName, testUserID)
+	sourceChannelID := seedChannelForTest(t, "bare-channel-ref-source-"+suffix, testUserID)
+	ch, found := testHandler.getChannel(ctx, testWorkspaceID, parseUUID(sourceChannelID))
+	if !found {
+		t.Fatal("source channel not found after seed")
+	}
+
+	content := "巡检增量 #" + targetName + " 新反馈 → 详见 #" + targetName + "。"
+	gotContent, gotParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, content, nil)
+	if err != nil {
+		t.Fatalf("enrich bare channel references: %v", err)
+	}
+	if gotContent != content {
+		t.Fatalf("content = %q, want bare channel text unchanged %q", gotContent, content)
+	}
+
+	var refs []protocol.MessagePart
+	for _, part := range gotParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			refs = append(refs, part)
+		}
+	}
+	if len(refs) != 2 {
+		t.Fatalf("channel references = %+v, want one anchored typed ref per visible #name occurrence", refs)
+	}
+	// The anchored span must cover the whole `#name` token (including the hash)
+	// so the FE replaces the raw text with the chip instead of rendering a
+	// stray leading `#`. The label stays the bare channel name, matching the
+	// composer-authored link path (ChannelChip strips a leading `#` itself and
+	// message-preview re-adds exactly one).
+	token := "#" + targetName
+	searchFrom := 0
+	for i, ref := range refs {
+		if ref.RefID != targetChannelID || ref.Label != targetName {
+			t.Fatalf("channel reference[%d] = %+v, want ref_id=%s label=%q", i, ref, targetChannelID, targetName)
+		}
+		if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 >= *ref.ContentEndUTF16 {
+			t.Fatalf("channel reference[%d] is missing a content UTF-16 span: %+v", i, ref)
+		}
+		byteOffset := strings.Index(content[searchFrom:], token)
+		if byteOffset < 0 {
+			t.Fatalf("could not find visible #name occurrence %d in %q", i, content)
+		}
+		byteStart := searchFrom + byteOffset
+		wantStart, wantEnd := contentUTF16Span(content, byteStart, byteStart+len(token))
+		if *ref.ContentStartUTF16 != wantStart || *ref.ContentEndUTF16 != wantEnd {
+			t.Fatalf("channel reference[%d] span = [%d,%d), want exact #name occurrence [%d,%d)", i, *ref.ContentStartUTF16, *ref.ContentEndUTF16, wantStart, wantEnd)
+		}
+		searchFrom = byteStart + len(token)
+	}
+
+	// The composer-authored link must still resolve to exactly one ref — the
+	// bare matcher must not double-anchor the label inside the markdown link.
+	linked := "see [" + targetName + "](mention://channel/" + targetChannelID + ") plus `#" + targetName + "` in code"
+	_, linkedParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, linked, nil)
+	if err != nil {
+		t.Fatalf("enrich linked channel reference: %v", err)
+	}
+	var linkedRefs []protocol.MessagePart
+	for _, part := range linkedParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			linkedRefs = append(linkedRefs, part)
+		}
+	}
+	if len(linkedRefs) != 1 {
+		t.Fatalf("channel references = %+v, want only the composer link anchored (no code span, no nested label match)", linkedRefs)
+	}
+
+	// A DM channel is never a shareable bare target, and an unknown #token is
+	// left as plain prose rather than guessed at.
+	dmAgentID := createHandlerTestAgent(t, "Bare Channel Ref DM Peer "+uuid.NewString(), []byte("[]"))
+	dmChannelID := seedAgentDMChannel(t, dmAgentID)
+	var dmName string
+	if err := testPool.QueryRow(ctx, `SELECT name FROM channel WHERE id = $1`, parseUUID(dmChannelID)).Scan(&dmName); err != nil {
+		t.Fatalf("load dm channel name: %v", err)
+	}
+	noise := "#" + dmName + " and #definitely-not-a-channel-" + suffix + " and #1973"
+	_, noiseParts, err := testHandler.enrichChannelMessageMentions(ctx, ch, noise, nil)
+	if err != nil {
+		t.Fatalf("enrich non-channel tokens: %v", err)
+	}
+	for _, part := range noiseParts {
+		if part.Type == protocol.MessagePartTypeReference && part.RefType == "channel-ref" {
+			t.Fatalf("dm/unknown #token unexpectedly produced a channel-ref: %+v", part)
 		}
 	}
 }
@@ -8460,7 +8560,6 @@ func TestImportLarkChannelMessageRequiresChannelMember(t *testing.T) {
 		t.Fatalf("non-member lark import persisted %d message(s)", count)
 	}
 }
-
 
 // ensureLegacyChannelChatBridgeForTest seeds channel_agent_session + optional
 // prompt chat_message so legacy ChatDone bridge tests still exercise that path

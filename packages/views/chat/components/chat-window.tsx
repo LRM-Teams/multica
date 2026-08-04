@@ -48,7 +48,7 @@ import {
   useSetChatSessionStatus,
   useUpdateChatSession,
 } from "@multica/core/chat/mutations";
-import { useChatStore } from "@multica/core/chat";
+import { evictInactiveChatMessageCaches, useChatStore } from "@multica/core/chat";
 import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
 import { ChatInput } from "./chat-input";
 import { ChatContactList } from "./chat-contact-list";
@@ -310,6 +310,17 @@ export function ChatWindow({ lockedAgentId, layout = "floating" }: ChatWindowPro
   const isSessionArchived = currentSession?.status === "archived";
 
   const qc = useQueryClient();
+  // LRM-1264: unload other session message caches. Only the floating window
+  // runs eviction so a DM bubble doesn't wipe a sibling bubble's cache; keep
+  // every open bubble session + the floating active session.
+  useEffect(() => {
+    if (isDmBubble) return;
+    const keep = [
+      activeSessionId,
+      ...Object.values(dmBubbleActiveSessionByAgent),
+    ];
+    evictInactiveChatMessageCaches(qc, keep);
+  }, [isDmBubble, activeSessionId, dmBubbleActiveSessionByAgent, qc]);
   const createSession = useCreateChatSession();
   const markRead = useMarkChatSessionRead();
 
@@ -1163,7 +1174,11 @@ function AgentPickerItem({
         enableHoverCard
         showStatusDot
       />
-      <ActorIdentityRow identity={agent} primaryClassName="truncate" />
+      <ActorIdentityRow
+        identity={agent}
+        agentHonorLevel={agent.honor_level}
+        primaryClassName="truncate"
+      />
     </PickerItem>
   );
 }

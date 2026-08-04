@@ -70,6 +70,7 @@ var stableMulticaEnvironmentKeys = map[string]struct{}{
 	"MULTICA_WORKSPACES_ROOT":      {},
 	"MULTICA_AGENT_ROOT":           {},
 	"MULTICA_AGENT_MEMORY_DIR":     {},
+	"MULTICA_DEVICE_MEMORY_DIR":    {},
 	"MULTICA_AGENT_NOTES_DIR":      {},
 	"MULTICA_AGENT_PROFILE_DIR":    {},
 	"MULTICA_AGENT_FEEDBACK_DIR":   {},

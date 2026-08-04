@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -71,29 +72,22 @@ Decision Principles
 
 Agent Recruiting Behavior
 
-When the user describes a goal, produce agent draft cards instead of asking them to manually write prompts. Each draft should include name, role summary, why it is useful, suggested channels, optional project binding, generated system instructions, recommended tools/capabilities, and whether it can execute code.
+When the user describes a goal, prepare human-confirmable agent hire cards instead of asking them to manually write prompts. Each hire is name + short description only; the human picks computer/runtime/model and edits instructions in Create Agent Dialog.
 
-Before drafting, do a light HR intake when important context is missing. Ask 3-6 focused questions about business/project background, goals, inputs/outputs, current workflow, collaborators, permission boundaries, quality bar, and no-go areas. Do not over-interview when the user already gave enough detail.
+Before preparing, do a light HR intake when important context is missing. Ask 3-6 focused questions about business/project background, goals, inputs/outputs, current workflow, collaborators, permission boundaries, quality bar, and no-go areas. Do not over-interview when the user already gave enough detail.
 
-Generated system instructions should be an executable SOP, not a one-line summary. Keep description short and put mission, responsibilities, inputs/outputs, workflow, collaboration rules, escalation/approval rules, memory/project context, quality standards, boundaries, and example tasks in instructions.
+Hire path (Raft-aligned agent:create action card) — required:
 
-Use create-agent links for stable identity and creation parameters only:
-
-[Create Agent: <agent name>](multica://create-agent?name=<urlencoded name>&description=<urlencoded short description>&instructions=<urlencoded generated instructions>&can_execute_code=<true-or-false>)
+1. Call agent transport prepare (HTTP):
+   POST /api/agent/actions/prepare
+   body: { "action_type": "agent:create", "name": "<name>", "description": "<short catalog summary optional>" }
+2. Tell the human a hire card is ready; include the returned card id and name/description in your message so the UI can render an agent:create action card (not a draft link).
+3. Do NOT use multica agent draft create, POST /api/agents/drafts, draft_id, or multica://create-agent?draft_id — those hire paths are retired.
+4. Do NOT create agents yourself via CLI or API. Humans confirm in CreateAgentDialog bound to the card id.
 
 When the user wants agents in a specific group channel, do not silently create or place them there yourself. After the agents exist, use the Multica CLI to add them explicitly to the channel the user asked for. The command is: multica channel member add --target <channel> <agent> [<agent>...]. Here <channel> is the requested group and <agent> entries are the created agents, usually found by their display names. Only do this when the user explicitly asked for that channel; otherwise leave them unassigned.
 
-If you need to seed multi-agent relationships, channel routing, project context, or role playbooks into the new agent's notes/memory, do NOT put that content in the URL. Instead create a server-side draft with the Multica CLI, including initial_notes and only small initial_memory when needed, then show the returned draft link:
-
-multica agent draft create --file <draft.json> --output link
-
-Allowed initial_notes keys: notes/agents.md, notes/channels.md, notes/project-map.md, notes/relationship-map.md, notes/role-playbook.md, notes/work-log.md, notes/decisions.md. Allowed initial_memory keys: memory/MEMORY.md and memory/STATE.md only. If there is no useful seed context, omit initial_notes and initial_memory.
-
-Avatar-in-draft (one-shot hire):
-
-- When the user asks for a specific look / character / searched image as the agent avatar: find or generate that image, prefer a square close-up face crop around 512x512 (avoid tiny icons and huge full-body posters), upload or obtain a durable image URL, and put that URL in the draft JSON as avatar_url when calling: multica agent draft create --file <draft.json> --output link. The Create Agent card applies it on confirm — do NOT ask the user to download/re-upload, and do NOT require a second "设头像" step after create.
-- When the user does not ask for an avatar: leave avatar_url empty. The Multica UI/server assigns a random human preset on create.
-- Never put a custom avatar in the multica://create-agent URL query string; only server-side drafts may carry avatar_url.
+Avatar: leave avatar empty on hire cards unless product later adds avatar to the action payload. The Multica UI/server assigns a preset on create; humans can change it in the dialog.
 
 Do not silently create agents. Always let the user confirm by clicking a create card or creation action.
 
@@ -123,10 +117,9 @@ Success is not a long onboarding conversation. Success means the user gets a use
 // channel-member role based manager duties and need a one-shot refresh.
 const windyInstructionsCapabilityMarker = "current channel membership role is the only source"
 
-// windyInstructionsAvatarDraftMarker detects Wendy personas that still tell
-// humans to re-upload / "设头像" after create instead of writing avatar_url
-// into the hire draft for one-shot creation.
-const windyInstructionsAvatarDraftMarker = "Avatar-in-draft (one-shot hire)"
+// windyInstructionsAvatarDraftMarker detects Wendy personas that still teach
+// retired agent draft create hire path instead of agent:create action prepare.
+const windyInstructionsAvatarDraftMarker = "POST /api/agent/actions/prepare"
 
 type WindyResponse struct {
 	Agent AgentResponse `json:"agent"`
@@ -241,6 +234,12 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 			writeError(w, http.StatusBadRequest, "invalid runtime_id")
 			return db.AgentRuntime{}, false
 		}
+		// Task #123 L1: explicit runtime_id still must be heartbeat-fresh.
+		// Otherwise a client can bind Wendy to a dead "online" row for ~150s.
+		if !runtimeIsPickableOnline(runtime, time.Now()) {
+			writeError(w, http.StatusUnprocessableEntity, "runtime is offline or heartbeat is stale")
+			return db.AgentRuntime{}, false
+		}
 		return runtime, true
 	}
 
@@ -253,17 +252,20 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 		writeError(w, http.StatusBadRequest, "connect a runtime before creating Wendy")
 		return db.AgentRuntime{}, false
 	}
+	now := time.Now()
 	for _, rt := range runtimes {
-		if rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(userID) && rt.Status == "online" {
+		if rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(userID) && runtimeIsPickableOnline(rt, now) {
 			return rt, true
 		}
 	}
 	for _, rt := range runtimes {
-		if rt.Status == "online" {
+		if runtimeIsPickableOnline(rt, now) {
 			return rt, true
 		}
 	}
-	return runtimes[0], true
+	// Fail closed: do not fall back to a ghost first-visible row.
+	writeError(w, http.StatusUnprocessableEntity, "no online runtime with a fresh heartbeat; start or reconnect a machine first")
+	return db.AgentRuntime{}, false
 }
 
 // ensureWindyAgent resolves the workspace's single onboarding agent via
@@ -272,13 +274,14 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 //
 // binding set   -> reuse the bound agent (restore/refresh as needed).
 // binding unset -> look for the workspace owner's existing legacy-named
-//                  agent (Wendy/Windy/Joe) and adopt it; otherwise create a
-//                  fresh one. Either way, bind it with a conditional UPDATE
-//                  (SetWorkspaceOnboardingAgentID mirrors the
-//                  SetDefaultSelfPlayEnv "first writer wins" pattern): if a
-//                  concurrent ensure() already bound a different agent, that
-//                  binding wins, and an agent this call created (but did not
-//                  adopt) is archived so no orphan/duplicate is left behind.
+//
+//	agent (Wendy/Windy/Joe) and adopt it; otherwise create a
+//	fresh one. Either way, bind it with a conditional UPDATE
+//	(SetWorkspaceOnboardingAgentID mirrors the
+//	SetDefaultSelfPlayEnv "first writer wins" pattern): if a
+//	concurrent ensure() already bound a different agent, that
+//	binding wins, and an agent this call created (but did not
+//	adopt) is archived so no orphan/duplicate is left behind.
 //
 // This intentionally does not touch or backfill any other workspace: an old
 // workspace's pre-existing Wendy/Windy/Joe rows are left exactly as they are
@@ -571,6 +574,13 @@ func (h *Handler) CreateAgentDraft(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Hire hard-cut (Frank/Parker): agents must use agent:create action prepare.
+	// Human FE may still create drafts temporarily for URL-only multica:// links.
+	if strings.TrimSpace(r.Header.Get("X-Agent-ID")) != "" {
+		writeCodedError(w, http.StatusGone, "agent_draft_create_retired",
+			"agent draft create is retired; use POST /api/agent/actions/prepare with action_type=agent:create")
+		return
+	}
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
@@ -853,22 +863,32 @@ func (h *Handler) agentTaskInitiatorUserID(r *http.Request, workspaceID pgtype.U
 		return empty, false
 	}
 	var target pgtype.UUID
+	// Prefer turn/human initiator; if the wake has no human author (reminder
+	// re-fire, agent-authored anchor, channel-only), fall back to the agent
+	// owner so managers can re-schedule patrols (Beckham 2026-08-04 403).
 	err = h.DB.QueryRow(r.Context(), `
 		WITH task AS (
-			SELECT t.initiator_user_id, c.author_type AS comment_author_type, c.author_id AS comment_author_id
+			SELECT t.initiator_user_id,
+			       c.author_type AS comment_author_type,
+			       c.author_id AS comment_author_id,
+			       a.owner_id AS agent_owner_id
 			FROM agent_inbox_event t
-			JOIN agent a ON a.id = t.agent_id AND a.workspace_id = $2
+			JOIN agent a ON a.id = t.agent_id AND a.workspace_id = $2 AND a.archived_at IS NULL
 			LEFT JOIN comment c ON c.id = t.trigger_comment_id AND c.workspace_id = $2
 			WHERE t.id = $1
 		)
 		SELECT candidate.user_id
 		FROM task
 		CROSS JOIN LATERAL (
-			SELECT CASE
-				WHEN task.initiator_user_id IS NOT NULL THEN task.initiator_user_id
-				WHEN task.comment_author_type = 'member' THEN task.comment_author_id
-				ELSE NULL
-			END AS user_id
+			SELECT COALESCE(
+				task.initiator_user_id,
+				CASE WHEN task.comment_author_type IN ('member', 'user') THEN task.comment_author_id END,
+				task.agent_owner_id,
+				(SELECT m.user_id FROM member m
+				 WHERE m.workspace_id = $2 AND m.role = 'owner'
+				 ORDER BY m.created_at ASC NULLS LAST, m.user_id ASC
+				 LIMIT 1)
+			) AS user_id
 		) candidate
 		JOIN member m ON m.workspace_id = $2 AND m.user_id = candidate.user_id
 		WHERE candidate.user_id IS NOT NULL
@@ -887,12 +907,17 @@ func (h *Handler) agentInboxInitiatorUserID(r *http.Request, workspaceID pgtype.
 		return empty, false
 	}
 	var target pgtype.UUID
+	// Prefer human source-message author / chat creator; fall back to agent
+	// owner so channel manager patrols can schedule without a human wake
+	// author (reminder re-anchor 403: "reminder initiator is not available").
 	err = h.DB.QueryRow(r.Context(), `
 		WITH inbox AS (
 			SELECT msg.author_type AS message_author_type,
 				msg.author_id AS message_author_id,
-				session.creator_id AS session_creator_id
+				session.creator_id AS session_creator_id,
+				a.owner_id AS agent_owner_id
 			FROM agent_inbox_event e
+			JOIN agent a ON a.id = e.agent_id AND a.workspace_id = e.workspace_id AND a.archived_at IS NULL
 			LEFT JOIN channel_message msg ON msg.id = e.source_message_id AND msg.workspace_id = e.workspace_id
 			LEFT JOIN chat_session session ON session.id = e.chat_session_id
 			WHERE e.id = $1 AND e.workspace_id = $2 AND e.agent_id = $3
@@ -901,8 +926,13 @@ func (h *Handler) agentInboxInitiatorUserID(r *http.Request, workspaceID pgtype.
 		FROM inbox
 		CROSS JOIN LATERAL (
 			SELECT COALESCE(
-				CASE WHEN inbox.message_author_type = 'user' THEN inbox.message_author_id END,
-				inbox.session_creator_id
+				CASE WHEN inbox.message_author_type IN ('user', 'member') THEN inbox.message_author_id END,
+				inbox.session_creator_id,
+				inbox.agent_owner_id,
+				(SELECT m.user_id FROM member m
+				 WHERE m.workspace_id = $2 AND m.role = 'owner'
+				 ORDER BY m.created_at ASC NULLS LAST, m.user_id ASC
+				 LIMIT 1)
 			) AS user_id
 		) candidate
 		JOIN member m ON m.workspace_id = $2 AND m.user_id = candidate.user_id

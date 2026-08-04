@@ -316,8 +316,9 @@ func TestSkillImportingSkillCoversWorkspaceImportContracts(t *testing.T) {
 		"legacy",
 		"multica skill list --output json",
 		"npx skills add",
-		"multica agent skills add <agent-id> --skill-ids <skill-id> --output json",
-		"multica agent skills list <agent-id> --output json",
+		"POST /api/agents/{id}/skills/add",
+		"GET  /api/agents/{id}/skills",
+		"PUT /api/agents/{id}/skills",
 		"replace-all",
 		"`set` is the replacement path",
 		"references/skill-importing-source-map.md",
@@ -329,12 +330,14 @@ func TestSkillImportingSkillCoversWorkspaceImportContracts(t *testing.T) {
 	}
 
 	mustNotContain := []string{
-		"multica agent skills set <agent-id> --skill-ids <skill-id>",
+		"multica agent skills add",
+		"multica agent skills set",
+		"multica agent skills list",
 		"merge the new skill id with the existing ids",
 	}
 	for _, forbidden := range mustNotContain {
 		if strings.Contains(body, forbidden) {
-			t.Errorf("skill-importing skill should not teach stale or destructive binding command %q", forbidden)
+			t.Errorf("skill-importing skill should not teach stale or removed agent CLI %q", forbidden)
 		}
 	}
 
@@ -361,14 +364,15 @@ func TestCreatingAgentsSkillCoversAgentCreationContracts(t *testing.T) {
 		"not a parameter manual",
 		"`description` is a catalog summary",
 		"`instructions` is the runtime behavior contract",
-		"multica agent create --name <name> --runtime-id <runtime-id>",
+		"POST /api/agents",
+		"multica workspace info --agents",
 		"`model` is a first-class persisted column",
 		"custom_env",
-		"--custom-env-stdin",
-		"--custom-env-file",
-		"multica agent skills add <agent-id> --skill-ids <skill-id> --output json",
-		"multica agent skills list <agent-id> --output json",
-		"multica agent get <agent-id> --output json",
+		"GET /api/agents/{id}/env",
+		"PUT /api/agents/{id}/env",
+		"POST /api/agents/{id}/skills/add",
+		"PUT /api/agents/{id}/skills",
+		"GET  /api/agents/{id}/skills",
 		"255",
 		"references/creating-agents-source-map.md",
 	}
@@ -384,6 +388,9 @@ func TestCreatingAgentsSkillCoversAgentCreationContracts(t *testing.T) {
 		"template_slug",
 		"curated template",
 		"copy this parameter list",
+		"multica agent get",
+		"multica agent create",
+		"multica agent skills",
 		// De-coaching: this skill states source-backed contracts, it does not
 		// teach a generic how-to methodology.
 		"Define the job first",
@@ -417,43 +424,6 @@ func TestAutopilotsSkillRetired(t *testing.T) {
 		if s.Name == "multica-autopilots" {
 			t.Fatal("multica-autopilots skill must be removed from builtin_skills")
 		}
-	}
-}
-
-func TestAutopilotsSkillCoversDispatchAndSideEffectsRemoved(t *testing.T) {
-	t.Skip("LRM-1049: multica-autopilots skill retired")
-	skill, ok := findSkill(t, "multica-autopilots")
-	if !ok {
-		return
-	}
-	fm, body, _ := splitFrontmatter(skill.Content)
-
-	if got := strings.TrimSpace(fm["user-invocable"]); got != "false" {
-		t.Errorf("user-invocable = %q, want false", got)
-	}
-	if got := strings.TrimSpace(fm["allowed-tools"]); !strings.Contains(got, "Bash(multica *)") {
-		t.Errorf("allowed-tools = %q, want access to the Multica CLI", got)
-	}
-
-	mustContain := []string{
-		"An autopilot is not an agent",
-		"create_issue",
-		"run_only",
-		"multica autopilot trigger-add <autopilot-id> --kind schedule",
-		"multica autopilot trigger <autopilot-id> --output json",
-		"Do not run `trigger`",
-		"webhook tokens",
-		"{{date}}",
-		"squad's leader agent",
-		"references/autopilots-source-map.md",
-	}
-	for _, want := range mustContain {
-		if !strings.Contains(body, want) {
-			t.Errorf("autopilots skill missing %q", want)
-		}
-	}
-	if !skillHasFile(skill, "references/autopilots-source-map.md") {
-		t.Errorf("autopilots skill missing supporting file references/autopilots-source-map.md")
 	}
 }
 

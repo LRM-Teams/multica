@@ -11,7 +11,8 @@ vi.mock("@multica/core/workspace/hooks", () => ({
   useActorName: () => ({ getActorName: (_t: string, _i: string, fb?: string) => fb ?? "Alice" }),
 }));
 
-vi.mock("../../editor", () => ({
+// LRM-1264 R3 — zone imports editor leaf modules (not the TipTap barrel).
+vi.mock("../../editor/attachment", () => ({
   Attachment: ({
     attachment,
     inlineHtmlPreview,
@@ -34,6 +35,9 @@ vi.mock("../../editor", () => ({
     }
     return null;
   },
+}));
+
+vi.mock("../../editor/attachment-download-context", () => ({
   AttachmentDownloadProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
@@ -113,12 +117,34 @@ describe("MessageAttachmentZone", () => {
     const zone = screen.getByTestId("message-attachment-zone");
     const gallery = within(zone).getByTestId("message-attachment-gallery");
     expect(gallery).toHaveAttribute("data-layout", "grid");
+    expect(gallery).toHaveAttribute("data-count", "2");
     expect(within(gallery).getAllByTestId("gallery-cell")).toHaveLength(2);
     const images = within(zone).getAllByTestId("attachment-image");
     expect(images).toHaveLength(2);
     expect(images[0]).toHaveAttribute("data-attachment-id", "img-a");
     expect(images[1]).toHaveAttribute("data-attachment-id", "img-b");
     expect(within(zone).queryByText("check these")).not.toBeInTheDocument();
+  });
+
+  // LRM-1242 R4 — data-count drives CSS first-cell span for count=3.
+  it("exposes data-count=3 on a three-image gallery for span-2 CSS", () => {
+    const parts: MessagePart[] = [
+      { type: "attachment", attachment_id: "img-a" },
+      { type: "attachment", attachment_id: "img-b" },
+      { type: "attachment", attachment_id: "img-c" },
+    ];
+    const attachments = [
+      makeAttachment({ id: "img-a", filename: "a.png", content_type: "image/png" }),
+      makeAttachment({ id: "img-b", filename: "b.png", content_type: "image/png" }),
+      makeAttachment({ id: "img-c", filename: "c.png", content_type: "image/png" }),
+    ];
+
+    render(<MessageAttachmentZone parts={parts} attachments={attachments} />);
+
+    const gallery = screen.getByTestId("message-attachment-gallery");
+    expect(gallery).toHaveAttribute("data-layout", "grid");
+    expect(gallery).toHaveAttribute("data-count", "3");
+    expect(within(gallery).getAllByTestId("gallery-cell")).toHaveLength(3);
   });
 
   it("keeps a single image outside the multi-image gallery", () => {

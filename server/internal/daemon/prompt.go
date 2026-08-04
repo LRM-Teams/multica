@@ -43,7 +43,7 @@ func BuildPrompt(task Task, provider string, agentRoot string) string {
 		if task.AssignmentSnapshot != nil {
 			return withCurrentStateOverlay(buildAssignmentPrompt(task))
 		}
-	} else if task.ChatSessionID != "" {
+	} else if isChatLikeTask(task) {
 		if provider == "pi" {
 			if command, ok := piNativeSlashChatCommand(task.ChatMessage); ok {
 				// Native slash commands are handled by Pi's command router rather
@@ -223,6 +223,20 @@ func buildAssignmentPrompt(task Task) string {
 	return b.String()
 }
 
+// isChatLikeTask reports conversational wakes that must not fall through to the
+// empty-issue assignment prompt. After LRM-1079/1081, ordinary channel/DM wakes
+// carry ChatMessage (and usually ChannelID). Single-track: ChatMessage/attachments
+// only — never ChatSessionID (retired; ignore on wire).
+func isChatLikeTask(task Task) bool {
+	if strings.TrimSpace(task.IssueID) != "" {
+		return false
+	}
+	if strings.TrimSpace(task.ChatMessage) != "" {
+		return true
+	}
+	return len(task.ChatMessageAttachments) > 0
+}
+
 func buildProtocolTurnPrompt(task Task) string {
 	var b strings.Builder
 	b.WriteString("Execute one bounded collaboration protocol turn from the supplied state. Do not call tools and do not perform unrelated work.\n\n")
@@ -301,7 +315,7 @@ func buildQuickCreatePrompt(task Task) string {
 
 	// assignee
 	b.WriteString("- **assignee**:\n")
-	b.WriteString("    - When the user names someone (\"assign to X\" / \"@X\"), call `multica workspace member list --output json` and `multica agent list --output json` and find the matching entity by display name. Assignees are members or agents only (squads are retired). On a clean unambiguous match, prefer `--assignee-id <uuid>` using the `user_id` (member) or `id` (agent) from that JSON — UUID matching is exact and robust to name collisions in workspaces with overlapping names. `--assignee <name>` (fuzzy) is acceptable as a fallback when names are unambiguous. On no match or ambiguous match, do NOT pass either flag — instead append a final line to the description: `Unrecognized assignee: X`.\n")
+	b.WriteString("    - When the user names someone (\"assign to X\" / \"@X\"), call `multica workspace member list --output json` and `multica workspace info --agents --output json` and find the matching entity by display name. Assignees are members or agents only (squads are retired). On a clean unambiguous match, prefer `--assignee-id <uuid>` using the `user_id` (member) or `id` (agent) from that JSON — UUID matching is exact and robust to name collisions in workspaces with overlapping names. `--assignee <name>` (fuzzy) is acceptable as a fallback when names are unambiguous. On no match or ambiguous match, do NOT pass either flag — instead append a final line to the description: `Unrecognized assignee: X`.\n")
 	b.WriteString("    - Treat bare @-routing as an assignee directive even when the user did not write the English word \"assign\". This includes Chinese imperatives like `让 @X review 这个 PR`, `给 @X 处理`, or `交给 @X`; strip the leading `@`/`＠` before matching display names. Do not keep that routing wrapper or `@Name` in the description unless it is a true CC-style notification rather than ownership.\n")
 	agentID := ""
 	agentName := ""
@@ -602,13 +616,11 @@ func buildAutopilotPrompt(task Task) string {
 	} else if task.AutopilotTitle != "" {
 		fmt.Fprintf(&b, "%s\n\n", task.AutopilotTitle)
 	} else {
-		b.WriteString("No additional autopilot instructions were provided. Inspect the autopilot configuration before proceeding.\n\n")
+		b.WriteString("No additional autopilot instructions were provided. Use only the task context above — the Autopilot product is retired (no `multica autopilot` CLI).\n\n")
 	}
-	if task.AutopilotID != "" {
-		fmt.Fprintf(&b, "Start by running `multica autopilot get %s --output json` if you need the full autopilot configuration, then complete the instructions above.\n", task.AutopilotID)
-	} else {
-		b.WriteString("Complete the instructions above.\n")
-	}
+	// Autopilot CLI/API retired (task #40 / LRM-1049). Do not instruct agents
+	// to run multica autopilot get — that command no longer exists.
+	b.WriteString("Complete the instructions above.\n")
 	b.WriteString("Do not run `multica issue get`; this run does not have an issue ID.\n")
 	return b.String()
 }

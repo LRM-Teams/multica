@@ -76,15 +76,40 @@ export function DeleteChannelDialog({
           <span className="leading-5">{t(($) => $.delete_dialog.confirm_checkbox)}</span>
         </label>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>{t(($) => $.delete_dialog.cancel)}</AlertDialogCancel>
+          {/*
+            LRM-1251 — `busy` must NOT put a native `disabled` on these two.
+            The DELETE is in flight, so the button the user just pressed would
+            lose focus to BODY, and with Cancel disabled too the `aria-modal`
+            popup would hold zero focusable nodes (same root cause as
+            LRM-1213/1236/1239/1241). Both stay focusable via `aria-disabled`
+            and refuse to act instead.
+
+            The unchecked gate (LRM-239) keeps its native `disabled`: the user
+            has not pressed that button yet, so there is no focus to lose.
+          */}
+          <AlertDialogCancel
+            aria-disabled={busy || undefined}
+            // Same pending affordance as LRM-1236/1241: `disabled:opacity-50`
+            // only fires for a NATIVE disabled, which is exactly what we drop.
+            className={busy ? "opacity-50 cursor-not-allowed" : undefined}
+            onClick={(event) => {
+              // A landed DELETE cannot be taken back, so Cancel must not close
+              // mid-flight. Esc / backdrop dismiss are untouched.
+              if (busy) event.preventBaseUIHandler();
+            }}
+          >
+            {t(($) => $.delete_dialog.cancel)}
+          </AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
             onClick={() => {
-              if (!confirmed || lockedRef.current || pending) return;
+              if (!confirmed || busy) return;
               lockedRef.current = true;
               onConfirm();
             }}
-            disabled={!confirmed || busy}
+            disabled={!confirmed}
+            aria-disabled={busy || undefined}
+            className={busy ? "opacity-50 cursor-not-allowed" : undefined}
           >
             {t(($) => $.delete_dialog.confirm)}
           </AlertDialogAction>

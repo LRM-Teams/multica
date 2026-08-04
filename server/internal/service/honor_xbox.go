@@ -118,7 +118,7 @@ var honorBadgeRequirements = map[string]badgeUnlockRequirement{
 	"celestial_crown":       {minLevel: 54},
 	"event_horizon":         {minLevel: 56},
 	"cosmic_tree":           {minLevel: 58},
-	"infinity_engine":       {minLevel: 60},
+	"infinity_engine":       {minLevel: 80},
 	"signal_architect":      {pillar: HonorPillarUsage, minTier: 3},
 	"chronicle_engine":      {pillar: HonorPillarUsage, minTier: 6},
 	"steady_light":          {pillar: HonorPillarPresence, minTier: 4},

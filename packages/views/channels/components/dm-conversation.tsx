@@ -1,6 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { Archive, ArrowLeft, ChevronDown, ChevronUp, Eye, Paperclip, Search, X } from "lucide-react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -10,6 +19,7 @@ import {
   flattenChannelMessagePages,
   enrichChannelMessagesPreservingAvatars,
   channelMessagesFirstItemIndex,
+  evictInactiveChannelMessageCaches,
   useEnsureMessageLoaded,
   useMarkChannelThreadRead,
   useMarkChannelRead,
@@ -43,18 +53,20 @@ import type {
   ChannelMessageSearchResult,
 } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
+import {
+  ContentEditor,
+  type ContentEditorRef,
+} from "../../editor/lazy-content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { ActorStyledName } from "../../common/actor-styled-name";
 import { AgentPanelProvider, useOpenAgentPanel } from "../../common/agent-panel-context";
 import { MemberPanelProvider } from "../../common/member-panel-context";
-import { MemberSidePanel } from "../../members/member-side-panel";
-import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import {
   CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
   useProfilePanelWidth,
@@ -83,7 +95,30 @@ import {
   orderConvSearchResultsNewestFirst,
 } from "../lib/conv-search-navigation";
 import { ChannelMessageList } from "./channel-message-list";
-import { ChannelFilesPanel } from "./channel-files-panel";
+
+const ChannelFilesPanel = lazy(() =>
+  import("./channel-files-panel").then((m) => ({ default: m.ChannelFilesPanel })),
+);
+const ResolvedAgentSidePanel = lazy(() =>
+  import("../../common/resolved-agent-side-panel").then((m) => ({
+    default: m.ResolvedAgentSidePanel,
+  })),
+);
+const MemberSidePanel = lazy(() =>
+  import("../../members/member-side-panel").then((m) => ({
+    default: m.MemberSidePanel,
+  })),
+);
+
+function DmLazyPanelFallback() {
+  return (
+    <div className="flex flex-1 min-h-0 flex-col gap-2 p-4">
+      <Skeleton className="h-8 w-1/3" />
+      <Skeleton className="h-24 w-full" />
+      <Skeleton className="h-24 w-full" />
+    </div>
+  );
+}
 import { Composer, ConversationHeader } from "./conversation-surface";
 import { ComposerAttachmentTray } from "./composer-attachment-tray";
 import { ThreadRootPreview } from "./thread-root-preview";
@@ -282,7 +317,7 @@ function DmHeader({
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const openAgentPanel = useOpenAgentPanel();
-  const { getMemberHonor, getAgentFleetRank } = useActorName();
+  const { getMemberHonor, getAgentHonorLevel } = useActorName();
   const peerId = dm.peer.id;
   const peerType = dm.peer.type;
   const isMuted = isConversationMuted(dm);
@@ -332,7 +367,8 @@ function DmHeader({
     [isAgentPair, mutedBadge, t],
   );
   const peerHonor = !agentPair && peerType === "user" ? getMemberHonor(peerId) : undefined;
-  const peerFleet = !agentPair && peerType === "agent" ? getAgentFleetRank(peerId) : undefined;
+  const peerHonorLevel =
+    !agentPair && peerType === "agent" ? getAgentHonorLevel(peerId) : undefined;
   // LRM-749/LRM-710: header mirrors the DM list row — weak gray @handle next
   // to the peer name only while the display name collides in this workspace.
   const wsId = useWorkspaceId();
@@ -348,7 +384,7 @@ function DmHeader({
       <ActorStyledName
         displayName={dm.peer.name}
         honor={peerHonor}
-        fleet={peerFleet}
+        agentHonorLevel={peerHonorLevel}
         className="truncate text-sm font-semibold text-foreground"
       />
       {dupHandleLabel && (
@@ -937,6 +973,12 @@ function DmChannelConversation({
     }
   }, [threadDeepLinkId, deepLinkMessageId, channelId, wsId]);
 
+  // LRM-1264: unload other channels' message caches when switching DMs.
+  useEffect(() => {
+    if (!channelId) return;
+    evictInactiveChannelMessageCaches(qc, channelId);
+  }, [channelId, qc]);
+
   // LRM-1063: reset mid-history message cache for this deep-link target.
   useEffect(() => {
     const target = deepLinkMessageId || threadDeepLinkId;
@@ -1362,7 +1404,6 @@ function DmChannelConversation({
           currentUserId={currentUserId}
           ownName={currentUserName ?? undefined}
           emptyLabel={t(($) => $.thread.empty_replies)}
-          initialScroll="top"
           highlightMessageId={deepLinkHighlightId}
           // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- ChannelMessageList header slot
           header={
@@ -1524,7 +1565,11 @@ function DmChannelConversation({
           </TabsList>
         </div>
         <TabsContent value="files" className="flex flex-1 min-h-0 flex-col text-base">
-          <ChannelFilesPanel channelId={channelId} wide />
+          {dmView === "files" ? (
+            <Suspense fallback={<DmLazyPanelFallback />}>
+              <ChannelFilesPanel channelId={channelId} wide />
+            </Suspense>
+          ) : null}
         </TabsContent>
         <TabsContent value="chat" className="flex flex-1 min-h-0 flex-col text-base">
       {convSearch.open && (
@@ -1766,6 +1811,7 @@ function DmChannelConversation({
     : undefined;
   const agentPanel =
     selectedAgentPanelId ? (
+      <Suspense fallback={<DmLazyPanelFallback />}>
       <ResolvedAgentSidePanel
         agentId={selectedAgentPanelId}
         identitySnapshot={selectedAgentPanelSnapshot}
@@ -1778,9 +1824,11 @@ function DmChannelConversation({
         }
         backLabel={agentPanelBackLabel}
       />
+      </Suspense>
     ) : null;
   const memberPanel =
     selectedMemberPanelId ? (
+      <Suspense fallback={<DmLazyPanelFallback />}>
       <MemberSidePanel
         userId={selectedMemberPanelId}
         onClose={() => {
@@ -1799,6 +1847,7 @@ function DmChannelConversation({
           isMobile ? tAgents(($) => $.side_panel.back_to_messages) : undefined
         }
       />
+      </Suspense>
     ) : null;
   const detailPanel = threadPanel ?? agentPanel ?? memberPanel;
 

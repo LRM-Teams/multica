@@ -52,4 +52,36 @@ describe("ResearchDeliveryModeBody / Chip", () => {
       "running",
     );
   });
+
+  // Delivery flips loading → running inside one mount, so the announcement
+  // must live on a node that survives every mode change (same fix shape as
+  // LRM-1225 chat chip + M2 aux cards). A live region that only exists on the
+  // loading branch is unmounted exactly when the content becomes ready.
+  it("keeps one persistent live region across every mode flip", () => {
+    const { rerender } = render(<ResearchDeliveryModeChip mode="loading" />);
+    const live = screen.getByTestId("research-delivery-mode-live");
+    expect(live).toHaveAttribute("aria-live", "polite");
+    expect(live).toHaveAttribute("aria-busy", "true");
+    expect(live).toHaveTextContent("Loading");
+
+    rerender(<ResearchDeliveryModeChip mode="running" />);
+    // Same DOM node — a remount would reset the live region and swallow the
+    // ready announcement.
+    expect(screen.getByTestId("research-delivery-mode-live")).toBe(live);
+    expect(live).toHaveAttribute("aria-busy", "false");
+    expect(live).toHaveTextContent("In progress");
+
+    rerender(<ResearchDeliveryModeChip mode="error" />);
+    expect(screen.getByTestId("research-delivery-mode-live")).toBe(live);
+    expect(live).toHaveTextContent("Error");
+  });
+
+  it("does not duplicate the mode announcement on the loading body", () => {
+    render(<ResearchDeliveryModeBody mode="loading" />);
+    const loading = screen.getByTestId("research-delivery-loading");
+    // aria-busy stays (it describes the region), but the announcement is owned
+    // by the persistent chip region — two live regions would double-speak.
+    expect(loading).toHaveAttribute("aria-busy");
+    expect(loading).not.toHaveAttribute("aria-live");
+  });
 });

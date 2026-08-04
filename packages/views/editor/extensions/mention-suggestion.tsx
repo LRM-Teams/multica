@@ -61,8 +61,8 @@ export interface MentionItem {
   type: "member" | "agent" | "squad" | "issue" | "project" | "channel" | "all";
   /** Stable handle for actor mentions. Shown only as weak identity help. */
   handle?: string;
-  /** Optional grouping hint for injected context items. */
-  group?: "current" | "recent" | "search";
+  /** Optional grouping hint for injected context items / channel membership. */
+  group?: "current" | "recent" | "search" | "in_channel" | "not_in_channel";
   /** Secondary text shown beside the label (e.g. issue title) */
   description?: string;
   /** Secondary row for actor identity, e.g. @backend-engineer. */
@@ -95,7 +95,16 @@ export interface MentionListRef {
 // ---------------------------------------------------------------------------
 
 interface MentionGroup {
-  label: "Broadcast" | "Current" | "Recent" | "Search" | "Members" | "Issues" | "Channels";
+  label:
+    | "Broadcast"
+    | "Current"
+    | "Recent"
+    | "Search"
+    | "InChannel"
+    | "NotInChannel"
+    | "Members"
+    | "Issues"
+    | "Channels";
   items: MentionItem[];
 }
 
@@ -104,6 +113,8 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
   const current: MentionItem[] = [];
   const recent: MentionItem[] = [];
   const search: MentionItem[] = [];
+  const inChannel: MentionItem[] = [];
+  const notInChannel: MentionItem[] = [];
   const members: MentionItem[] = [];
   const issues: MentionItem[] = [];
   const channels: MentionItem[] = [];
@@ -117,6 +128,10 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
       recent.push(item);
     } else if (item.group === "search") {
       search.push(item);
+    } else if (item.group === "in_channel") {
+      inChannel.push(item);
+    } else if (item.group === "not_in_channel") {
+      notInChannel.push(item);
     } else if (item.type === "issue" || item.type === "project") {
       issues.push(item);
     } else if (item.type === "channel") {
@@ -126,11 +141,14 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
     }
   }
 
+  // M5: empty sections are omitted (no bare headers).
   const groups: MentionGroup[] = [];
   if (broadcast.length > 0) groups.push({ label: "Broadcast", items: broadcast });
   if (current.length > 0) groups.push({ label: "Current", items: current });
   if (recent.length > 0) groups.push({ label: "Recent", items: recent });
   if (search.length > 0) groups.push({ label: "Search", items: search });
+  if (inChannel.length > 0) groups.push({ label: "InChannel", items: inChannel });
+  if (notInChannel.length > 0) groups.push({ label: "NotInChannel", items: notInChannel });
   if (members.length > 0) groups.push({ label: "Members", items: members });
   if (issues.length > 0) groups.push({ label: "Issues", items: issues });
   if (channels.length > 0) groups.push({ label: "Channels", items: channels });
@@ -269,9 +287,19 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       return mergeMentionItems(items, currentServerItems).slice(0, MAX_ITEMS);
     }, [items, normalizedQuery, searchedQuery, serverItems]);
 
+    // Selection / keyboard indices must follow the *rendered* group order
+    // (InChannel before NotInChannel, etc.), not the raw candidate array order.
+    // #2115 regrouped for display but left selectItem(displayItems[index]) —
+    // clicking row N could insert a different person.
+    const groups = useMemo(() => groupItems(displayItems), [displayItems]);
+    const visibleItems = useMemo(
+      () => groups.flatMap((group) => group.items),
+      [groups],
+    );
+
     useEffect(() => {
       setSelectedIndex(0);
-    }, [displayItems]);
+    }, [visibleItems]);
 
     useEffect(() => {
       itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
@@ -279,13 +307,13 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
 
     const selectItem = useCallback(
       (index: number) => {
-        const item = displayItems[index];
+        const item = visibleItems[index];
         if (!item) return;
         const wsId = getCurrentWsId();
         if (wsId) recordMentionUsage(wsId, item);
         command(item);
       },
-      [displayItems, command],
+      [visibleItems, command],
     );
 
     useImperativeHandle(ref, () => ({
@@ -294,19 +322,19 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
         // those keys belong to the IME (Enter commits composition, etc).
         if (isImeComposing(event)) return false;
         if (event.key === "ArrowUp") {
-          if (displayItems.length === 0) return true;
+          if (visibleItems.length === 0) return true;
           setSelectedIndex(
-            (i) => (i + displayItems.length - 1) % displayItems.length,
+            (i) => (i + visibleItems.length - 1) % visibleItems.length,
           );
           return true;
         }
         if (event.key === "ArrowDown") {
-          if (displayItems.length === 0) return true;
-          setSelectedIndex((i) => (i + 1) % displayItems.length);
+          if (visibleItems.length === 0) return true;
+          setSelectedIndex((i) => (i + 1) % visibleItems.length);
           return true;
         }
         if (event.key === "Enter") {
-          if (displayItems.length === 0) return true;
+          if (visibleItems.length === 0) return true;
           selectItem(selectedIndex);
           return true;
         }
@@ -314,7 +342,7 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       },
     }));
 
-    if (displayItems.length === 0) {
+    if (visibleItems.length === 0) {
       const isWaitingForServer =
         normalizedQuery !== "" &&
         (isSearching || searchedQuery !== normalizedQuery);
@@ -328,25 +356,26 @@ export const MentionList = forwardRef<MentionListRef, MentionListProps>(
       );
     }
 
-    const groups = groupItems(displayItems);
-    const hasContextGroups = displayItems.some((item) => item.group === "current" || item.group === "recent");
+    const hasContextGroups = visibleItems.some((item) => item.group === "current" || item.group === "recent");
     const contextLayout = hasContextGroups;
     const groupLabel = (label: MentionGroup["label"]): string => {
       if (label === "Broadcast") return "";
       if (label === "Current") return t(($) => $.mention.group_current);
       if (label === "Recent") return t(($) => $.mention.group_recent);
       if (label === "Search") return t(($) => $.mention.group_search);
+      if (label === "InChannel") return t(($) => $.mention.group_in_channel);
+      if (label === "NotInChannel") return t(($) => $.mention.group_not_in_channel);
       if (label === "Members") return t(($) => $.mention.group_members);
       if (label === "Issues") return t(($) => $.mention.group_issues);
       if (label === "Channels") return t(($) => $.mention.group_channels);
       return label;
     };
 
-    // Build a flat index mapping: globalIndex → item
+    // Build a flat index mapping aligned with visibleItems (grouped order)
     let globalIndex = 0;
     const duplicateActorLabels = new Set(
       Object.entries(
-        displayItems.reduce<Record<string, number>>((acc, item) => {
+        visibleItems.reduce<Record<string, number>>((acc, item) => {
           if (item.type === "member" || item.type === "agent") {
             const key = item.label.trim().toLowerCase();
             if (key) acc[key] = (acc[key] ?? 0) + 1;
@@ -644,6 +673,12 @@ interface MentionSuggestionOptions {
    *  a channel co-member agent they couldn't assign (e.g. a teammate's private
    *  Wendy). Ignored outside channel scope. */
   getScopedAgents?: () => readonly MentionAgentCandidate[] | null | undefined;
+  /**
+   * #35 / Raft: when set, actor rows are tagged `in_channel` / `not_in_channel`
+   * for section headers. Does **not** filter the pool — `getAllowedActorIds`
+   * still owns who is mentionable (group = workspace; DM/private = members).
+   */
+  getChannelMemberIds?: () => ReadonlySet<string> | null | undefined;
 }
 
 export function createMentionSuggestion(
@@ -682,6 +717,14 @@ export function createMentionSuggestion(
     const q = normalizeActorSearchQuery(query);
     // When set (e.g. a channel's members), candidates are scoped to these ids.
     const allow = options.getAllowedActorIds?.();
+    // #35: membership set for IN / NOT IN sections only — does not filter the pool.
+    const channelMemberIds = options.getChannelMemberIds?.() ?? null;
+    const membershipGroup = (
+      actorId: string,
+    ): "in_channel" | "not_in_channel" | undefined => {
+      if (!channelMemberIds) return undefined;
+      return channelMemberIds.has(actorId) ? "in_channel" : "not_in_channel";
+    };
 
     // @all is no longer offered: the bare-mention cutover (#600/#446) dropped
     // the broadcast token — the server neither parses nor triggers `@all`, so
@@ -707,6 +750,7 @@ export function createMentionSuggestion(
           handle: presentation.handle,
           secondaryLabel: presentation.handleLabel ?? undefined,
           type: "member" as const,
+          group: membershipGroup(m.user_id),
         };
       });
 
@@ -756,6 +800,7 @@ export function createMentionSuggestion(
           handle: presentation.handle,
           secondaryLabel: presentation.handleLabel ?? undefined,
           type: "agent" as const,
+          group: membershipGroup(a.id),
         });
       }
       return items;

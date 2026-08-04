@@ -228,6 +228,12 @@ jobs:
       - name: Build
         run: cd server && go build ./...
 
+      # task #85 P0: catch unkeyed composite literals that silently mis-assign
+      # when models.go field order changes (the silent-shift class next to
+      # hand-written SQL drift). composites is on by default in go vet.
+      - name: Go vet (composites + default checks)
+        run: cd server && go vet ./...
+
       - name: Cursor-deadlock check
         # Task #91: catches the #1803/#1812 shape (a rows cursor from
         # Query() left open while a nested call acquires a second pool

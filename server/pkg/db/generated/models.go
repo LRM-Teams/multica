@@ -207,46 +207,7 @@ type AgentMemoryWriteEvent struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
-type AgentRadarAction struct {
-	ID          pgtype.UUID        `json:"id"`
-	RadarRunID  pgtype.UUID        `json:"radar_run_id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	AgentID     pgtype.UUID        `json:"agent_id"`
-	ActionType  string             `json:"action_type"`
-	Status      string             `json:"status"`
-	RiskLevel   string             `json:"risk_level"`
-	Confidence  string             `json:"confidence"`
-	DedupeKey   string             `json:"dedupe_key"`
-	TargetKind  string             `json:"target_kind"`
-	TargetID    pgtype.UUID        `json:"target_id"`
-	Reason      string             `json:"reason"`
-	Evidence    []byte             `json:"evidence"`
-	Payload     []byte             `json:"payload"`
-	Result      []byte             `json:"result"`
-	Error       string             `json:"error"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-}
 
-type AgentRadarRun struct {
-	ID             pgtype.UUID        `json:"id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	AgentID        pgtype.UUID        `json:"agent_id"`
-	RuntimeID      pgtype.UUID        `json:"runtime_id"`
-	TaskID         pgtype.UUID        `json:"task_id"`
-	TriggerKind    string             `json:"trigger_kind"`
-	TriggerRef     string             `json:"trigger_ref"`
-	Status         string             `json:"status"`
-	CooldownKey    string             `json:"cooldown_key"`
-	ContextSummary string             `json:"context_summary"`
-	ActionPlan     []byte             `json:"action_plan"`
-	Error          string             `json:"error"`
-	ScheduledFor   pgtype.Timestamptz `json:"scheduled_for"`
-	StartedAt      pgtype.Timestamptz `json:"started_at"`
-	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
 
 type AgentRuntime struct {
 	ID             pgtype.UUID        `json:"id"`
@@ -406,20 +367,29 @@ type ChannelMember struct {
 }
 
 type ChannelMessage struct {
-	ID                pgtype.UUID        `json:"id"`
-	ChannelID         pgtype.UUID        `json:"channel_id"`
-	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
-	AuthorType        string             `json:"author_type"`
-	AuthorID          pgtype.UUID        `json:"author_id"`
-	AuthorName        string             `json:"author_name"`
-	Content           string             `json:"content"`
-	Source            string             `json:"source"`
-	ExternalMessageID pgtype.Text        `json:"external_message_id"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	QuoteMessageID    pgtype.UUID        `json:"quote_message_id"`
-	QuoteSnapshot     []byte             `json:"quote_snapshot"`
-	ThreadID          pgtype.Text        `json:"thread_id"`
-	TriggerDepth      int32              `json:"trigger_depth"`
+	ID                     pgtype.UUID        `json:"id"`
+	ChannelID              pgtype.UUID        `json:"channel_id"`
+	WorkspaceID            pgtype.UUID        `json:"workspace_id"`
+	AuthorType             string             `json:"author_type"`
+	AuthorID               pgtype.UUID        `json:"author_id"`
+	AuthorName             string             `json:"author_name"`
+	Content                string             `json:"content"`
+	Source                 string             `json:"source"`
+	ExternalMessageID      pgtype.Text        `json:"external_message_id"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	ThreadID               pgtype.Text        `json:"thread_id"`
+	TriggerDepth           int32              `json:"trigger_depth"`
+	ReplyToMessageID       pgtype.UUID        `json:"reply_to_message_id"`
+	ThreadRootMessageID    pgtype.UUID        `json:"thread_root_message_id"`
+	Parts                  []byte             `json:"parts"`
+	ConversationID         pgtype.UUID        `json:"conversation_id"`
+	Seq                    int64              `json:"seq"`
+	ClientMessageID        pgtype.Text        `json:"client_message_id"`
+	EditedAt               pgtype.Timestamptz `json:"edited_at"`
+	DeletedAt              pgtype.Timestamptz `json:"deleted_at"`
+	QuoteMessageID         pgtype.UUID        `json:"quote_message_id"`
+	QuoteSnapshot          []byte             `json:"quote_snapshot"`
+	MembershipGenerationID pgtype.UUID        `json:"membership_generation_id"`
 }
 
 type ChannelRead struct {
@@ -591,11 +561,37 @@ type EnvDispatchRequest struct {
 }
 
 type EnvDispatchRun struct {
-	ProjectID    pgtype.UUID        `json:"project_id"`
-	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
-	TrainingMode bool               `json:"training_mode"`
-	RootTaskID   pgtype.UUID        `json:"root_task_id"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ProjectID      pgtype.UUID        `json:"project_id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	TrainingMode   bool               `json:"training_mode"`
+	RootTaskID     pgtype.UUID        `json:"root_task_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	RunID          pgtype.UUID        `json:"run_id"`
+	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
+	SampleIndex    int32              `json:"sample_index"`
+	LocalIssueID   pgtype.UUID        `json:"local_issue_id"`
+	LocalChannelID pgtype.UUID        `json:"local_channel_id"`
+}
+
+type SourceTask struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Type        string             `json:"type"`
+	Payload     []byte             `json:"payload"`
+	ContentHash string             `json:"content_hash"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type SweLegoTemplateCache struct {
+	NodeID            pgtype.UUID        `json:"node_id"`
+	CacheKey          string             `json:"cache_key"`
+	ParentTemplateID  string             `json:"parent_template_id"`
+	TaskTemplateID    pgtype.Text        `json:"task_template_id"`
+	Status            string             `json:"status"`
+	Error             pgtype.Text        `json:"error"`
+	BuilderInstanceID pgtype.UUID        `json:"builder_instance_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Environment struct {

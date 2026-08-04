@@ -263,6 +263,7 @@
     "remove_confirm_title": "「{{name}}」を削除しますか？",
     "remove_confirm_description": "このチャンネルの読み書き権限をすぐに失います。",
     "remove_confirm": "削除を確認",
+    "remove_confirming": "削除中…",
     "remove_cancel": "キャンセル",
     "remove_failed": "メンバーを削除できませんでした。もう一度お試しください。",
     "remove_retry": "再試行",
@@ -575,12 +576,18 @@
     "project_tooltip": "このチャンネルが作業するプロジェクトを設定",
     "tray_remove_aria": "{{filename}} を削除",
     "tray_retry_aria": "{{filename}} のアップロードを再試行",
+    "tray_preview_aria": "{{filename}} をプレビュー",
     "tray_uploading": "アップロード中",
     "tray_upload_failed": "アップロードに失敗しました",
     "voice_unsent": "音声メッセージは送信されていません（{{duration}}）",
+    "voice_unsent_retrying": "音声メッセージを再送信中（{{duration}}）",
     "voice_unsent_retry": "再送信",
     "voice_unsent_delete": "削除",
-    "tray_reselect": "再選択が必要です"
+    "tray_reselect": "再選択が必要です",
+    "undelivered_mentions_title": "Not delivered to everyone",
+    "undelivered_mentions_body": "{{who}} is not in this channel. Invite so they get the @ mention.",
+    "undelivered_invite": "Invite",
+    "undelivered_invite_done": "Invited — they can see the message now."
   },
   "message": {
     "add_reaction": "リアクションを追加",

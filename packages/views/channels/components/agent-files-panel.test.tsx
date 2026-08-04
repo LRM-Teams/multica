@@ -126,6 +126,15 @@ describe("AgentFilesPanel", () => {
     expect(api.listAgentFiles).toHaveBeenCalledWith("agent-1", { include_hidden: false });
   });
 
+  // LRM-1305 — decorative lucide inside named buttons must not dual-announce.
+  it("chrome lucide icons inside named buttons are aria-hidden", async () => {
+    renderPanel(makeAgent());
+    const close = screen.getByRole("button", { name: "Close agent panel" });
+    expect(close.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    const hiddenToggle = screen.getByRole("button", { name: /show hidden files/i });
+    expect(hiddenToggle.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  });
+
   it("shows only public information for a non-owner", async () => {
     renderPanel(makeAgent("user-owner"), "user-other");
     expect(screen.getByText("Atlas")).toBeInTheDocument();

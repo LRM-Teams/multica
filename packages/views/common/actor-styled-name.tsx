@@ -1,22 +1,16 @@
 "use client";
 
-import type { AgentFleetRank } from "@multica/core/types/agent-fleet";
 import type { HonorSnapshot } from "@multica/core/types/honor";
-import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
-import { HonorBadgeIcon } from "@multica/ui/components/honor/honor-badge";
 import { honorNameDisplayProps } from "@multica/ui/lib/honor-name-display";
 import { cn } from "@multica/ui/lib/utils";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@multica/ui/components/ui/tooltip";
-import { useAgentFleetClassName } from "../agents/hooks/use-agent-fleet-class-name";
+import { AgentHonorLevelIcon } from "../agents/components/agent-honor-level-icon";
+import { UserHonorLevelIcon } from "../honor/user-honor-level-icon";
+import { useT } from "../i18n";
 
 export interface ActorStyledNameProps {
   displayName: string;
   honor?: HonorSnapshot | null;
-  fleet?: AgentFleetRank | null;
+  agentHonorLevel?: number | null;
   honorSurface?: "inline" | "profile";
   /** Dense lists can keep earned name styling while omitting space-consuming badges. */
   showBadges?: boolean;
@@ -24,17 +18,17 @@ export interface ActorStyledNameProps {
   nameClassName?: string;
 }
 
-/** Inline actor display name with platform honor styling and/or agent fleet badge. */
+/** Inline actor display name with the platform's human or Agent honor crest. */
 export function ActorStyledName({
   displayName,
   honor,
-  fleet,
+  agentHonorLevel,
   honorSurface = "inline",
   showBadges = true,
   className,
   nameClassName = "truncate",
 }: ActorStyledNameProps) {
-  const fleetClassName = useAgentFleetClassName();
+  const { t } = useT("common");
   const nameDisplay = honor
     ? honorNameDisplayProps({
         nameStyle: honor.name_style,
@@ -53,25 +47,18 @@ export function ActorStyledName({
       >
         {displayName}
       </span>
-      {showBadges && honor?.equipped_badge ? (
-        <Tooltip>
-          <TooltipTrigger className="inline-flex shrink-0">
-            <HonorBadgeIcon
-              svgKey={honor.equipped_badge.svg_key}
-              title={honor.equipped_badge.title}
-              medal
-            />
-          </TooltipTrigger>
-          <TooltipContent side="top">{honor.equipped_badge.title}</TooltipContent>
-        </Tooltip>
+      {showBadges && honor ? (
+        <UserHonorLevelIcon
+          level={honor.level}
+          title={t(($) => $.honor_level_value, { level: honor.level })}
+          className="size-6 drop-shadow-sm"
+        />
       ) : null}
-      {showBadges && fleet ? (
-        <FleetRankBadge
-          classId={fleet.class_id}
-          classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
-          fleetRank={fleet.fleet_rank}
-          frozen={fleet.frozen}
-          medal
+      {showBadges && agentHonorLevel ? (
+        <AgentHonorLevelIcon
+          level={agentHonorLevel}
+          title={t(($) => $.honor_level_value, { level: agentHonorLevel })}
+          className="size-6 drop-shadow-sm"
         />
       ) : null}
     </span>

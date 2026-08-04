@@ -538,3 +538,33 @@ func newPostgresUpdateTestRuntime(t *testing.T) string {
 	})
 	return runtimeID
 }
+
+func TestPostgresUpdateStoreLatestForRuntimes(t *testing.T) {
+	ctx := context.Background()
+	firstRuntimeID := newPostgresUpdateTestRuntime(t)
+	secondRuntimeID := newPostgresUpdateTestRuntime(t)
+	store := NewPostgresUpdateStore(testPool)
+
+	first, err := store.Create(ctx, firstRuntimeID, "v0.3.70")
+	if err != nil {
+		t.Fatalf("create first: %v", err)
+	}
+	second, err := store.Create(ctx, secondRuntimeID, "v0.3.71")
+	if err != nil {
+		t.Fatalf("create second: %v", err)
+	}
+
+	updates, err := store.LatestForRuntimes(ctx, []string{firstRuntimeID, secondRuntimeID, firstRuntimeID})
+	if err != nil {
+		t.Fatalf("LatestForRuntimes: %v", err)
+	}
+	if len(updates) != 2 {
+		t.Fatalf("updates length = %d, want 2: %+v", len(updates), updates)
+	}
+	if updates[firstRuntimeID] == nil || updates[firstRuntimeID].ID != first.ID {
+		t.Fatalf("first runtime latest = %+v, want %s", updates[firstRuntimeID], first.ID)
+	}
+	if updates[secondRuntimeID] == nil || updates[secondRuntimeID].ID != second.ID {
+		t.Fatalf("second runtime latest = %+v, want %s", updates[secondRuntimeID], second.ID)
+	}
+}

@@ -263,6 +263,7 @@
     "remove_confirm_title": "Remove \"{{name}}\"?",
     "remove_confirm_description": "They will immediately lose read and write access to this channel.",
     "remove_confirm": "Confirm remove",
+    "remove_confirming": "Removing…",
     "remove_cancel": "Cancel",
     "remove_failed": "Couldn't remove this member. Please try again.",
     "remove_retry": "Retry",
@@ -575,12 +576,18 @@
     "project_tooltip": "Set the project this channel works in",
     "tray_remove_aria": "Remove {{filename}}",
     "tray_retry_aria": "Retry upload of {{filename}}",
+    "tray_preview_aria": "Preview {{filename}}",
     "tray_uploading": "Uploading",
     "tray_upload_failed": "Upload failed",
     "voice_unsent": "Voice message not sent ({{duration}})",
+    "voice_unsent_retrying": "Resending voice message ({{duration}})",
     "voice_unsent_retry": "Retry send",
     "voice_unsent_delete": "Delete",
-    "tray_reselect": "Needs re-selection"
+    "tray_reselect": "Needs re-selection",
+    "undelivered_mentions_title": "Not delivered to everyone",
+    "undelivered_mentions_body": "{{who}} is not in this channel. Invite so they get the @ mention.",
+    "undelivered_invite": "Invite",
+    "undelivered_invite_done": "Invited — they can see the message now."
   },
   "message": {
     "add_reaction": "Add reaction",

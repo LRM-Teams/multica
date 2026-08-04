@@ -131,7 +131,7 @@ vi.mock("../../navigation/context", () => ({
   }),
 }));
 
-vi.mock("../../editor/content-editor", () => ({
+vi.mock("../../editor/lazy-content-editor", () => ({
   ContentEditor: () => <div data-testid="content-editor" />,
 }));
 vi.mock("../../common/project-picker-button", () => ({
@@ -139,7 +139,6 @@ vi.mock("../../common/project-picker-button", () => ({
 }));
 vi.mock("./dm-conversation", () => ({ DmConversation: () => <div data-testid="dm-conversation" /> }));
 vi.mock("./channel-files-panel", () => ({ ChannelFilesPanel: () => <div /> }));
-vi.mock("./channel-stats-panel", () => ({ ChannelStatsPanel: () => <div /> }));
 vi.mock("./channel-message-list", () => ({ ChannelMessageList: () => <div data-testid="message-list" /> }));
 
 // Surface the active channel's title unambiguously (the sidebar rows also print

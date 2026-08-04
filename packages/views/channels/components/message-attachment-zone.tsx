@@ -3,7 +3,8 @@
 import * as React from "react";
 import type { Attachment, MessagePart } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
-import { Attachment as AttachmentRenderer, AttachmentDownloadProvider } from "../../editor";
+import { Attachment as AttachmentRenderer } from "../../editor/attachment";
+import { AttachmentDownloadProvider } from "../../editor/attachment-download-context";
 import { useT } from "../../i18n/use-t";
 import {
   resolveGalleryLayout,
@@ -175,6 +176,7 @@ function ImageGallery({ items }: { items: ResolvedAttachmentItem[] }) {
       ref={rootRef}
       data-testid="message-attachment-gallery"
       data-layout={layout}
+      data-count={items.length}
       className={cn(
         "message-attachment-gallery min-w-0",
         layout === "grid" ? "gallery-layout-grid" : "gallery-layout-stack",
@@ -216,7 +218,7 @@ function AttachmentUnavailablePlaceholder() {
   return (
     <span
       data-testid="attachment-unavailable"
-      className="inline-flex min-h-9 max-w-full items-center rounded-md border border-dashed border-border/80 bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground"
+      className="inline-flex min-h-9 max-w-full items-center border border-dashed border-border/80 bg-muted/30 px-2.5 py-1.5 text-xs text-muted-foreground"
     >
       {t(($) => $.message.attachment_unavailable)}
     </span>

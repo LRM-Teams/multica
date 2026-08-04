@@ -86,6 +86,7 @@ type AgentFleetRankService struct {
 	archiveRefreshMu      sync.Mutex
 	archiveRefreshQueued  map[string]bool
 	archiveRefreshPending map[string]bool
+	archiveRefresh        func(context.Context, pgtype.UUID) error
 }
 
 func NewAgentFleetRankService(queries *db.Queries) *AgentFleetRankService {
@@ -94,10 +95,6 @@ func NewAgentFleetRankService(queries *db.Queries) *AgentFleetRankService {
 		archiveRefreshQueued:  make(map[string]bool),
 		archiveRefreshPending: make(map[string]bool),
 	}
-}
-
-func BuildFleetRulesDocument() FleetRulesDocument {
-	return fleetRulesDocumentFromHonorRules(DefaultAgentHonorRules())
 }
 
 func fleetRulesDocumentFromHonorRules(rules AgentHonorRules) FleetRulesDocument {
@@ -538,7 +535,13 @@ func (s *AgentFleetRankService) RefreshWorkspaceAfterArchiveAsync(workspaceID pg
 func (s *AgentFleetRankService) runArchiveRefresh(workspaceID pgtype.UUID, workspaceKey string) {
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		_, err := s.RefreshWorkspace(ctx, workspaceID, "agent_archived")
+		refresh := s.archiveRefresh
+		var err error
+		if refresh != nil {
+			err = refresh(ctx, workspaceID)
+		} else {
+			_, err = s.RefreshWorkspace(ctx, workspaceID, "agent_archived")
+		}
 		cancel()
 		if err != nil {
 			slog.Warn("refresh agent fleet ranks after archive failed", "workspace_id", workspaceKey, "error", err)

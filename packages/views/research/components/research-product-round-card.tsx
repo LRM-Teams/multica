@@ -133,9 +133,14 @@ export function ResearchProductRoundCardView({
     interactedRef.current = true;
   };
 
+  // LRM-1339 — summary 行的层级只靠字号/字重/等宽，不靠 alpha 压文字。
+  // 这些 span 继承 `decisionTone` 的语义色（brand/success/warning/muted-foreground），
+  // 再乘 opacity 会把 11px/10px 小字压到 WCAG AA 以下（同 LRM-1252 缺陷类）。
   const summary = (
     <button
       type="button"
+      data-testid="research-round-summary"
+      data-round-decision={card.decision}
       className={cn(
         "flex w-full items-start gap-2 rounded-lg border px-2.5 py-2 text-left text-xs transition-colors hover:bg-muted/40",
         decisionTone(card.decision),
@@ -145,15 +150,24 @@ export function ResearchProductRoundCardView({
       <span className="font-semibold">
         {t(($) => $.round.round_n, { n: card.round_number })} · {decisionLabel}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[11px] opacity-80">
+      <span
+        data-testid="research-round-summary-note"
+        className="min-w-0 flex-1 truncate text-[11px] font-normal"
+      >
         {card.confidence_note || t(($) => $.round.open_detail)}
       </span>
       {!autoAdopted && secondsLeft > 0 ? (
-        <span className="shrink-0 font-mono text-[10px] tabular-nums opacity-70">
+        <span
+          data-testid="research-round-summary-countdown"
+          className="shrink-0 font-mono text-[10px] tabular-nums"
+        >
           {t(($) => $.round.auto_adopt_countdown, { s: secondsLeft })}
         </span>
       ) : null}
-      <span className="shrink-0 font-mono text-[10px] opacity-70">
+      <span
+        data-testid="research-round-summary-budget"
+        className="shrink-0 font-mono text-[10px] tabular-nums"
+      >
         {card.budget_used}/{card.budget_used + card.budget_remaining}
       </span>
     </button>
@@ -181,26 +195,28 @@ export function ResearchProductRoundCardView({
             >
               {decisionLabel}
               {card.decision === "stop_budget" ? (
-                <span className="ml-2 font-normal opacity-80">
+                <span
+                  data-testid="research-round-budget-capped"
+                  className="ml-2 font-normal"
+                >
                   {t(($) => $.round.budget_capped)}
                 </span>
               ) : null}
             </div>
 
             {autoAdopted ? (
-              <p
-                role="status"
-                className="rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[11px] text-warning"
+              // LRM-1239 — native <output> (status) for react-doctor prefer-tag-over-role.
+              <output
+                className="block rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[11px] text-warning"
               >
                 {t(($) => $.round.auto_adopted)}
-              </p>
+              </output>
             ) : secondsLeft > 0 && !pending ? (
-              <p
-                role="status"
-                className="rounded-md border bg-muted/40 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground tabular-nums"
+              <output
+                className="block rounded-md border bg-muted/40 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground tabular-nums"
               >
                 {t(($) => $.round.auto_adopt_countdown, { s: secondsLeft })}
-              </p>
+              </output>
             ) : null}
 
             <section>
@@ -251,7 +267,10 @@ export function ResearchProductRoundCardView({
                   {t(($) => $.round.goal_patch)}
                 </h3>
                 {currentGoal ? (
-                  <p className="mb-1 text-[11px] text-muted-foreground line-through opacity-70">
+                  <p
+                    data-testid="research-round-goal-current"
+                    className="mb-1 text-[11px] text-muted-foreground line-through"
+                  >
                     {currentGoal}
                   </p>
                 ) : null}
@@ -260,30 +279,42 @@ export function ResearchProductRoundCardView({
                 <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"
-                    disabled={pending}
+                    data-testid="research-round-goal-confirm"
+                    // LRM-1239 — pending must stay focusable (same root cause as LRM-1213).
+                    aria-disabled={pending || undefined}
                     onClick={() => {
+                      if (pending) return;
                       setGoalDraft(card.goal_patch_proposal ?? "");
                       setGoalOpen(true);
                     }}
+                    className={cn(pending && "opacity-50 cursor-not-allowed")}
                   >
                     {t(($) => $.round.goal_confirm)}
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={pending}
+                    data-testid="research-round-goal-edit"
+                    aria-disabled={pending || undefined}
                     onClick={() => {
+                      if (pending) return;
                       setGoalDraft(card.goal_patch_proposal ?? "");
                       setGoalOpen(true);
                     }}
+                    className={cn(pending && "opacity-50 cursor-not-allowed")}
                   >
                     {t(($) => $.round.goal_edit)}
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={pending}
-                    onClick={() => onRejectGoalPatch?.()}
+                    data-testid="research-round-goal-reject"
+                    aria-disabled={pending || undefined}
+                    onClick={() => {
+                      if (pending) return;
+                      onRejectGoalPatch?.();
+                    }}
+                    className={cn(pending && "opacity-50 cursor-not-allowed")}
                   >
                     {t(($) => $.round.goal_reject)}
                   </Button>
@@ -294,9 +325,17 @@ export function ResearchProductRoundCardView({
 
           <DialogFooter className="flex-col gap-2 sm:flex-col sm:space-x-0">
             <Button
-              className="w-full"
-              disabled={pending || autoAdopted}
+              className={cn(
+                "w-full",
+                pending && !autoAdopted && "opacity-50 cursor-not-allowed",
+              )}
+              data-testid="research-round-agree"
+              // True unavailability (auto-adopted) may keep native disabled; pending
+              // alone must stay focusable (LRM-1239 / LRM-1213).
+              disabled={autoAdopted || undefined}
+              aria-disabled={pending || undefined}
               onClick={() => {
+                if (pending || autoAdopted) return;
                 markInteracted();
                 onAgree?.();
                 setOpen(false);
@@ -306,10 +345,21 @@ export function ResearchProductRoundCardView({
             </Button>
             {isContinue ? (
               <Button
-                className="w-full"
+                className={cn(
+                  "w-full",
+                  pending &&
+                    !autoAdopted &&
+                    card.budget_remaining > 0 &&
+                    "opacity-50 cursor-not-allowed",
+                )}
                 variant="outline"
-                disabled={pending || autoAdopted || card.budget_remaining <= 0}
+                data-testid="research-round-reject-continue"
+                disabled={
+                  autoAdopted || card.budget_remaining <= 0 || undefined
+                }
+                aria-disabled={pending || undefined}
                 onClick={() => {
+                  if (pending || autoAdopted || card.budget_remaining <= 0) return;
                   markInteracted();
                   onRejectContinue?.();
                   setOpen(false);
@@ -320,10 +370,21 @@ export function ResearchProductRoundCardView({
             ) : null}
             {isStop ? (
               <Button
-                className="w-full"
+                className={cn(
+                  "w-full",
+                  pending &&
+                    !autoAdopted &&
+                    card.budget_remaining > 0 &&
+                    "opacity-50 cursor-not-allowed",
+                )}
                 variant="outline"
-                disabled={pending || autoAdopted || card.budget_remaining <= 0}
+                data-testid="research-round-reject-stop"
+                disabled={
+                  autoAdopted || card.budget_remaining <= 0 || undefined
+                }
+                aria-disabled={pending || undefined}
                 onClick={() => {
+                  if (pending || autoAdopted || card.budget_remaining <= 0) return;
                   markInteracted();
                   onRejectStop?.();
                   setOpen(false);
@@ -350,20 +411,33 @@ export function ResearchProductRoundCardView({
           <DialogFooter className="gap-2">
             <Button
               variant="outline"
+              data-testid="research-round-goal-edit-send"
+              // Empty draft is truly unavailable; pending alone stays focusable.
+              disabled={!goalDraft.trim() || undefined}
+              aria-disabled={pending || undefined}
               onClick={() => {
+                if (pending || !goalDraft.trim()) return;
                 onEditGoalPatch?.(goalDraft.trim());
                 setGoalOpen(false);
               }}
-              disabled={pending || !goalDraft.trim()}
+              className={cn(
+                pending && goalDraft.trim() && "opacity-50 cursor-not-allowed",
+              )}
             >
               {t(($) => $.round.goal_edit_send)}
             </Button>
             <Button
+              data-testid="research-round-goal-confirm-send"
+              disabled={!goalDraft.trim() || undefined}
+              aria-disabled={pending || undefined}
               onClick={() => {
+                if (pending || !goalDraft.trim()) return;
                 onConfirmGoalPatch?.(goalDraft.trim());
                 setGoalOpen(false);
               }}
-              disabled={pending || !goalDraft.trim()}
+              className={cn(
+                pending && goalDraft.trim() && "opacity-50 cursor-not-allowed",
+              )}
             >
               {t(($) => $.round.goal_confirm)}
             </Button>

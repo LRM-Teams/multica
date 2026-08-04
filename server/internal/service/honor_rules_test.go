@@ -18,6 +18,9 @@ func TestLevelFromTotalXP_IncreasesWithXP(t *testing.T) {
 
 func TestXPToNextLevelStopsAtMaximumLevel(t *testing.T) {
 	t.Parallel()
+	if MaxHonorLevel != 80 {
+		t.Fatalf("MaxHonorLevel = %d, want 80 approved user honor levels", MaxHonorLevel)
+	}
 
 	totalXP := honorLevelThresholdXP(MaxHonorLevel)
 	if got := LevelFromTotalXP(totalXP); got != MaxHonorLevel {
@@ -98,7 +101,7 @@ func TestExpandedHonorCatalogPublishesTwentyFourNameStylesAndFiftyOneBadges(t *t
 		t.Fatalf("badge requirements = %d, want %d", got, want)
 	}
 	if honorBadgeRequirements["infinity_engine"].minLevel != MaxHonorLevel {
-		t.Fatal("Infinity Engine must remain the level-60 completion badge")
+		t.Fatal("Infinity Engine must remain the maximum-level completion badge")
 	}
 }
 

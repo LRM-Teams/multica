@@ -30,7 +30,7 @@ import { useNewMessagesDivider } from "../hooks/use-new-messages-divider";
 import { useNewMessagesPill } from "../hooks/use-new-arrivals-pill";
 import { useUnreadAnchorScroll } from "../hooks/use-unread-anchor-scroll";
 import { useBottomSettleScroll } from "../hooks/use-bottom-settle-scroll";
-import { buildMessageGroupCompactMap } from "./message-group-compact";
+import { buildMessageGroupCompactMap, buildMessageGroupEndMap } from "./message-group-compact";
 
 // Small centered date pill (Iris #303 A) — the inline date divider at each local
 // day boundary. Pill is OK for *dates*; system event rows must not reuse this
@@ -143,8 +143,6 @@ type MessageViewportProps = {
   emptyLabel: string;
   /** Content rendered at the top of the scroll window, before messages. */
   header?: ReactNode;
-  /** Initial viewport anchor. Main conversations open at the latest message; threads open at root context. */
-  initialScroll?: "bottom" | "top";
   /** Called when the user opens the message's side thread. */
   onOpenThread?: (message: ChannelMessage) => void;
   /**
@@ -200,7 +198,6 @@ function MessageViewport({
   firstItemIndex = 0,
   emptyLabel,
   header,
-  initialScroll = "bottom",
   onOpenThread,
   onScrollToMessage,
   onReact,
@@ -273,6 +270,14 @@ function MessageViewport({
       }),
     [messages, foldedIssueIds, dayDividers, tz],
   );
+  // LRM-1227 / LRM-1233 G: the joined bubble shell has no wrapping DOM node
+  // (each message is its own Virtuoso row), so the last row of a group has to
+  // know it owns the shell's bottom edge. Derived from the compact map above so
+  // the two can never disagree.
+  const messageGroupEnd = useMemo(
+    () => buildMessageGroupEndMap(messages, messageGroupCompact, { foldedIds: foldedIssueIds }),
+    [messages, messageGroupCompact, foldedIssueIds],
+  );
   const newMessagesDivider = useNewMessagesDivider(
     channelId,
     messages,
@@ -335,20 +340,27 @@ function MessageViewport({
   });
 
   // Cold-open "land at the latest message" safety net for the DEFAULT case (no
-  // deep-link highlight, no unread anchor, initialScroll === "bottom"). The
-  // declarative mount-once `initialTopMostItemIndex` below is unreliable with
+  // deep-link highlight, no unread anchor). The declarative mount-once
+  // `initialTopMostItemIndex` below is unreliable with
   // customScrollParent + async data on a fresh/no-cache mount (real-device P0:
   // the list opened at scrollTop=0 with the oldest row on top despite the index
   // computing to the last row). The unread-anchor path never hit this because it
   // ALSO runs an imperative scrollToIndex settle after mount; this gives the
   // bottom-default case the same imperative net. Mutually exclusive with the
-  // anchor/highlight settles.
+  // anchor/highlight settles. LRM-1156: thread surfaces get this net too — they
+  // used to opt out of the bottom landing entirely.
   useBottomSettleScroll({
     channelId,
     messages,
-    enabled:
-      highlightIndex < 0 && unreadAnchorIndex < 0 && initialScroll === "bottom",
-    handleAttached,
+    enabled: highlightIndex < 0 && unreadAnchorIndex < 0,
+    // LRM-1220: the direct fallback renders plain, non-virtualized divs — no
+    // Virtuoso, so `handleAttached` is permanently false and the settle used to
+    // refuse to write a single scrollTop, timing out with the viewport resting on
+    // the OLDEST loaded row (jianghp3 on mobile web: every open landed on 「今天」
+    // + 当日第一条 with 「加载更早消息」 at the top). That path has no landing logic
+    // of its own, so this settle is the only owner of its initial position; it is
+    // "ready" precisely because there is no imperative handle to wait for.
+    listReady: handleAttached || useDirectFallback,
     scrollContainerEl,
     messageRefMap,
   });
@@ -481,6 +493,7 @@ function MessageViewport({
     const dividerLabel = dayDividers.get(msg.id);
     const isUnreadAnchor = newMessagesDivider?.anchorMessageId === msg.id;
     const compact = messageGroupCompact.get(rowKey) ?? messageGroupCompact.get(msg.id) ?? false;
+    const groupEnd = messageGroupEnd.get(rowKey) ?? messageGroupEnd.get(msg.id) ?? true;
     return (
       <Fragment key={rowKey}>
         {dividerLabel && <DateDivider label={dividerLabel} />}
@@ -500,7 +513,9 @@ function MessageViewport({
               if (rowKey !== msg.id) messageRefMap.delete(msg.id);
             }
           }}
-          className={cn("px-5", compact ? "pt-px" : "pt-1.5")}
+          // LRM-1227: inside a joined group the rows must touch, otherwise the
+          // shell's side edges show a 1px break between continuations.
+          className={cn("px-5", compact ? "pt-0" : "pt-1.5")}
           data-testid="message-row"
           data-message-group={compact ? "compact" : "lead"}
         >
@@ -520,6 +535,7 @@ function MessageViewport({
             searchHighlighted={searchHighlighted}
             searchQuery={searchHighlighted ? searchQuery : undefined}
             compact={compact}
+            groupEnd={groupEnd}
           />
         </div>
       </Fragment>
@@ -572,10 +588,15 @@ function MessageViewport({
     );
   }
 
-  // Open scrolled to: a deep-link target first, else the chat default (latest /
-  // thread root). LRM-1068: do NOT pin the first-unread row on cold open — that
+  // Open scrolled to: a deep-link target first, else the chat default — the
+  // LATEST row. LRM-1068: do NOT pin the first-unread row on cold open — that
   // landed busy channels on 「今天」+ 当日第一条. Unread stays visible via the
   // divider + "N new" pill; jump-on-demand, don't steal the landing.
+  // LRM-1156: thread surfaces share that default. They used to anchor at local
+  // index 0 (pinned-root context), which made every thread open land on the
+  // OLDEST reply and forced a manual scroll to read the newest one (Frank:
+  // 「别老是让我滑动」). The root preview is the scroll window's header, so it
+  // is still one scroll-up away.
   // #689/#1189 index-contract fix: `initialTopMostItemIndex` resolves
   // against the LOCAL data array (0..messages.length-1), same as
   // `scrollToIndex` above — never offset by `firstItemIndex`. See that
@@ -589,9 +610,7 @@ function MessageViewport({
       ? { index: highlightIndex, align: "center" }
       : unreadAnchorIndex >= 0
         ? { index: unreadAnchorIndex, align: "start" }
-        : initialScroll === "bottom"
-          ? Math.max(0, messages.length - 1)
-          : 0;
+        : Math.max(0, messages.length - 1);
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">

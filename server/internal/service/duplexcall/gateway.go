@@ -28,12 +28,14 @@ type Session struct {
 	CallID    string
 	SessionID string
 
-	dialog  *doubaodialog.Session
-	bridge  *doubaodialog.MulticaToolBridge
-	emit    Emitter
-	cancel  context.CancelFunc
-	done    chan struct{}
-	closeOnce sync.Once
+	dialog         *doubaodialog.Session
+	bridge         *doubaodialog.MulticaToolBridge
+	emit           Emitter
+	speak          func(context.Context, string) error
+	welcomeMessage string
+	cancel         context.CancelFunc
+	done           chan struct{}
+	closeOnce      sync.Once
 }
 
 // Gateway tracks in-flight Duplex sessions keyed by Multica voice call id.
@@ -42,7 +44,12 @@ type Gateway struct {
 	config   doubaodialog.Config
 	mu       sync.Mutex
 	sessions map[string]*Session
-	pending  map[string]struct{} // activated via HTTP before WS connects
+	pending  map[string]pendingDuplex // call ID -> welcome + Agent-aware instructions
+}
+
+type pendingDuplex struct {
+	WelcomeMessage string
+	Instructions   string
 }
 
 func NewGateway(client DialogClient, config doubaodialog.Config) (*Gateway, error) {
@@ -57,7 +64,7 @@ func NewGateway(client DialogClient, config doubaodialog.Config) (*Gateway, erro
 		client:   client,
 		config:   cfg,
 		sessions: make(map[string]*Session),
-		pending:  make(map[string]struct{}),
+		pending:  make(map[string]pendingDuplex),
 	}, nil
 }
 
@@ -67,17 +74,23 @@ func (g *Gateway) Configured() bool {
 
 // MarkPending records that callID chose Duplex media (no RTC VoiceChat).
 // Stop must skip provider.Stop even before the browser opens the WS.
-func (g *Gateway) MarkPending(callID string) {
+// instructions should already include Agent identity / recent DM / task context.
+func (g *Gateway) MarkPending(callID, welcomeMessage, instructions string) {
 	if g == nil {
 		return
 	}
 	callID = strings.TrimSpace(callID)
-	if callID == "" {
+	welcomeMessage = strings.TrimSpace(welcomeMessage)
+	instructions = strings.TrimSpace(instructions)
+	if callID == "" || welcomeMessage == "" || instructions == "" {
 		return
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.pending[callID] = struct{}{}
+	g.pending[callID] = pendingDuplex{
+		WelcomeMessage: welcomeMessage,
+		Instructions:   instructions,
+	}
 }
 
 func (g *Gateway) Has(callID string) bool {
@@ -121,12 +134,21 @@ func (g *Gateway) Start(
 		g.mu.Unlock()
 		return nil, fmt.Errorf("duplex session already active for call %s", callID)
 	}
+	pending := g.pending[callID]
 	g.mu.Unlock()
+	welcomeMessage := strings.TrimSpace(pending.WelcomeMessage)
+	instructions := strings.TrimSpace(pending.Instructions)
+	if welcomeMessage == "" {
+		return nil, fmt.Errorf("duplex welcome message is required for call %s", callID)
+	}
+	if instructions == "" {
+		return nil, fmt.Errorf("duplex dialog instructions are required for call %s", callID)
+	}
 
 	dialog, err := g.client.OpenSession(ctx, doubaodialog.DefaultSessionConfig(
 		g.config.Model,
 		g.config.Voice,
-		doubaodialog.DefaultDialogInstructions(),
+		instructions,
 		doubaodialog.DefaultDialogTools(),
 	))
 	if err != nil {
@@ -141,12 +163,14 @@ func (g *Gateway) Start(
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	session := &Session{
-		CallID: callID,
-		dialog: dialog,
-		bridge: bridge,
-		emit:   emit,
-		cancel: cancel,
-		done:   make(chan struct{}),
+		CallID:         callID,
+		dialog:         dialog,
+		bridge:         bridge,
+		emit:           emit,
+		speak:          dialog.SendSpeechText,
+		welcomeMessage: welcomeMessage,
+		cancel:         cancel,
+		done:           make(chan struct{}),
 	}
 
 	g.mu.Lock()
@@ -234,13 +258,22 @@ func (s *Session) handleProviderEvent(ctx context.Context, event doubaodialog.Se
 	switch event.Type {
 	case doubaodialog.EventSessionCreated:
 		s.SessionID = strings.TrimSpace(event.SessionID)
-		return s.safeEmit(ServerEvent{
+		if err := s.safeEmit(ServerEvent{
 			Type:        ServerReady,
 			CallID:      s.CallID,
 			SessionID:   s.SessionID,
 			SampleRate:  24000, // Duplex TTS output rate; client mic ingress remains 16 kHz PCM
 			AudioFormat: "pcm_s16le",
-		})
+		}); err != nil {
+			return err
+		}
+		if s.speak == nil {
+			return nil
+		}
+		if err := s.speak(ctx, s.welcomeMessage); err != nil {
+			return fmt.Errorf("start duplex welcome audio: %w", err)
+		}
+		return nil
 	case doubaodialog.EventASRStarted:
 		_, _ = s.bridge.HandleServerEvent(ctx, event)
 		return s.safeEmit(ServerEvent{
@@ -299,27 +332,16 @@ func (s *Session) handleProviderEvent(ctx context.Context, event doubaodialog.Se
 				Status: "started",
 			})
 		}
-		handled, err := s.bridge.HandleServerEvent(ctx, event)
-		if err != nil {
-			_ = s.safeEmit(ServerEvent{
-				Type:   ServerTool,
-				CallID: s.CallID,
-				Name:   toolName,
-				Status: "error",
-				Result: err.Error(),
-			})
-			return err
-		}
-		if handled {
-			_ = s.safeEmit(ServerEvent{
-				Type:   ServerTool,
-				CallID: s.CallID,
-				Name:   toolName,
-				Status: "done",
-			})
-		}
+		// Run tools off the provider read loop so web_search / delegate do not
+		// mute or stall full-duplex audio while Multica work is in flight.
+		go s.runToolsAsync(ctx, toolName, event)
 		return nil
 	case doubaodialog.EventError:
+		slog.Warn(
+			"duplex provider error",
+			"call_id", s.CallID,
+			"message", strings.TrimSpace(event.ErrorMessage),
+		)
 		return s.safeEmit(ServerEvent{
 			Type:    ServerError,
 			CallID:  s.CallID,
@@ -331,6 +353,34 @@ func (s *Session) handleProviderEvent(ctx context.Context, event doubaodialog.Se
 	default:
 		_, err := s.bridge.HandleServerEvent(ctx, event)
 		return err
+	}
+}
+
+func (s *Session) runToolsAsync(ctx context.Context, toolName string, event doubaodialog.ServerEvent) {
+	if s == nil || s.bridge == nil {
+		return
+	}
+	handled, err := s.bridge.HandleServerEvent(ctx, event)
+	if err != nil {
+		slog.Warn("duplex async tool failed", "call_id", s.CallID, "tool", toolName, "error", err)
+		_ = s.safeEmit(ServerEvent{
+			Type:   ServerTool,
+			CallID: s.CallID,
+			Name:   toolName,
+			Status: "error",
+			Result: err.Error(),
+		})
+		// Speakable tool failure already returned to Doubao via function output.
+		// Do not tear down the media session for a single tool error.
+		return
+	}
+	if handled {
+		_ = s.safeEmit(ServerEvent{
+			Type:   ServerTool,
+			CallID: s.CallID,
+			Name:   toolName,
+			Status: "done",
+		})
 	}
 }
 

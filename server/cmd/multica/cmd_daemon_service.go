@@ -40,6 +40,29 @@ type daemonServiceInstaller interface {
 // the build-tagged file the compiler selects for the target OS.
 var platformServiceInstaller daemonServiceInstaller
 
+// daemonServiceUnitSyncer is an optional capability on platform installers that
+// can rewrite the OS service definition to a new binary path without restarting
+// the running process. Linux implements this (systemd unit + clear ExecStart
+// drop-ins) so a post-update handoff does not leave systemd pinned to a deleted
+// versioned path. Other platforms may omit it.
+type daemonServiceUnitSyncer interface {
+	SyncUnit(profile, exePath string, args []string) error
+}
+
+// bestEffortSyncInstalledServiceUnit rewrites the installed service to exePath
+// when the platform supports SyncUnit and a unit is present. Failures are
+// returned for the caller to log; they must not block the update handoff.
+func bestEffortSyncInstalledServiceUnit(profile, exePath string) error {
+	if platformServiceInstaller == nil {
+		return nil
+	}
+	syncer, ok := platformServiceInstaller.(daemonServiceUnitSyncer)
+	if !ok {
+		return nil
+	}
+	return syncer.SyncUnit(profile, exePath, buildSuperviseServiceArgs(profile))
+}
+
 var daemonInstallServiceCmd = &cobra.Command{
 	Use:   "install-service",
 	Short: "Install the daemon as a per-user OS service (starts automatically at login)",

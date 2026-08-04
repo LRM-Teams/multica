@@ -83,6 +83,41 @@ func TestRemediationRoutesReportQualityFailureToSynthesis(t *testing.T) {
 	}
 }
 
+func TestTerminalRemediationFailureStopsAfterInitialPlanExhaustsAttempts(t *testing.T) {
+	run := Run{GoalVersion: 1, PlanVersion: 1}
+	tasks := []Task{{
+		ID: "plan-1", Kind: TaskKindPlan, Status: TaskStatusBlocked,
+		GoalVersion: 1, PlanVersion: 1, TerminalReason: "result_not_submitted",
+	}}
+	reason, failed := terminalRemediationFailure(run, tasks, TaskKindReplan, "repair plan")
+	if !failed || !strings.Contains(reason, "plan-1") || !strings.Contains(reason, "result_not_submitted") {
+		t.Fatalf("failed=%v reason=%q", failed, reason)
+	}
+}
+
+func TestTerminalRemediationFailureStopsSameFailedControlTaskFromRepeating(t *testing.T) {
+	run := Run{GoalVersion: 2, PlanVersion: 3}
+	tasks := []Task{
+		{ID: "plan-ok", Kind: TaskKindPlan, Status: TaskStatusSucceeded, GoalVersion: 2, PlanVersion: 3},
+		{ID: "replan-failed", ClientKey: "control:replan:2:3:1", Kind: TaskKindReplan, Objective: "repair evidence", Status: TaskStatusBlocked, GoalVersion: 2, PlanVersion: 3, TerminalReason: "inbox_task_failed"},
+	}
+	reason, failed := terminalRemediationFailure(run, tasks, TaskKindReplan, "repair evidence")
+	if !failed || !strings.Contains(reason, "replan-failed") {
+		t.Fatalf("failed=%v reason=%q", failed, reason)
+	}
+}
+
+func TestTerminalRemediationFailureAllowsSucceededOrOlderVersionWork(t *testing.T) {
+	run := Run{GoalVersion: 2, PlanVersion: 3}
+	tasks := []Task{
+		{ID: "old-failure", ClientKey: "control:replan:1:1:1", Kind: TaskKindReplan, Objective: "repair evidence", Status: TaskStatusBlocked, GoalVersion: 1, PlanVersion: 1},
+		{ID: "current-success", ClientKey: "control:replan:2:3:1", Kind: TaskKindReplan, Objective: "repair evidence", Status: TaskStatusSucceeded, GoalVersion: 2, PlanVersion: 3},
+	}
+	if reason, failed := terminalRemediationFailure(run, tasks, TaskKindReplan, "repair evidence"); failed {
+		t.Fatalf("succeeded/old remediation blocked progress: %q", reason)
+	}
+}
+
 func TestTaskPromptCarriesOnlyDurableSubmissionProtocol(t *testing.T) {
 	run := Run{SessionID: "session-1", Goal: "Investigate", GoalVersion: 2, PlanVersion: 3, OrchestratorVersion: OrchestratorVersionV1}
 	task := Task{ID: "task-1", Kind: TaskKindDiscover, Objective: "Find evidence", ExpectedResult: "research_evidence_v1"}

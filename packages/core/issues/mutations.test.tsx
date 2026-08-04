@@ -499,3 +499,41 @@ describe("channel Tasks board invalidation on settle (#562)", () => {
     },
   );
 });
+
+describe("useCreateIssue seeds detail cache (LRM-1123)", () => {
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+  });
+
+  afterEach(() => {
+    qc.clear();
+    vi.restoreAllMocks();
+  });
+
+  it("writes create response (incl. top-level channel) into issueKeys.detail", async () => {
+    const created = makeIssue(42, {
+      channel: {
+        channel_id: "chan-9",
+        channel_name: "调研模块开发",
+        channel_kind: "group",
+      },
+    });
+    setApiInstance({
+      createIssue: vi.fn().mockResolvedValue(created),
+    } as unknown as ApiClient);
+
+    const { result } = renderHook(() => useCreateIssue(), {
+      wrapper: createWrapper(qc),
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync({ title: "Bound to group", channel_id: "chan-9" });
+    });
+
+    expect(qc.getQueryData<Issue>(issueKeys.detail(WS_ID, created.id))).toEqual(created);
+  });
+});

@@ -82,7 +82,11 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		cancel()
 		return nil, fmt.Errorf("cursor stdout pipe: %w", err)
 	}
-	cmd.Stderr = newLogWriter(b.cfg.Logger, "[cursor:stderr] ")
+	// Preserve the bounded diagnostic tail in addition to daemon logging. A
+	// Cursor process can exit before emitting stream-json, so without this the
+	// inbox only receives an opaque exit status.
+	stderrBuf := newStderrTail(newLogWriter(b.cfg.Logger, "[cursor:stderr] "), agentStderrTailBytes)
+	cmd.Stderr = stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -211,6 +215,8 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				if evt.Subtype == "error" {
 					errMsg := cursorErrorText(&evt)
 					if errMsg != "" {
+						finalStatus = "failed"
+						finalError = errMsg
 						trySend(msgCh, Message{Type: MessageError, Content: errMsg})
 					}
 				}
@@ -239,6 +245,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 			case "error":
 				errMsg := cursorErrorText(&evt)
 				if errMsg != "" {
+					finalStatus = "failed"
 					finalError = errMsg
 				}
 				trySend(msgCh, Message{Type: MessageError, Content: errMsg})
@@ -298,9 +305,16 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		} else if runCtx.Err() == context.Canceled && !resultSeen {
 			finalStatus = "aborted"
 			finalError = "execution cancelled"
-		} else if exitErr != nil && finalStatus == "completed" && !resultSeen {
+		} else if exitErr != nil && finalStatus == "completed" && !resultSeen && finalError == "" {
 			finalStatus = "failed"
 			finalError = fmt.Sprintf("cursor-agent exited with error: %v", exitErr)
+		}
+
+		// cmd.Wait has drained the stderr pipe, so attach its bounded and
+		// redacted tail only after the child has exited. The provider-auth marker
+		// stays intact for the existing inbox classification path.
+		if finalError != "" {
+			finalError = withAgentStderr(finalError, "cursor", sanitizeAgentStderr(stderrBuf.Tail()))
 		}
 
 		b.cfg.Logger.Info("cursor-agent finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())

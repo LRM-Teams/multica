@@ -273,7 +273,6 @@ export function ThreadPanel({
         currentUserId={currentUserId}
         ownName={currentUserName}
         emptyLabel={t(($) => $.thread.empty_replies)}
-        initialScroll="top"
         highlightMessageId={highlightMessageId}
         header={
           <ThreadRootPreview

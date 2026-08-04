@@ -200,6 +200,41 @@ func TestDefaultDialogToolsIncludesWebLookup(t *testing.T) {
 	if !strings.Contains(DefaultDialogInstructions(), WebSearchToolName) {
 		t.Fatal("instructions should mention web_search")
 	}
+	instr := DefaultDialogInstructions()
+	if !strings.Contains(instr, "先正常闲聊") {
+		t.Fatal("instructions should prefer chat before tools")
+	}
+	if !strings.Contains(instr, "不要一开口就调用") {
+		t.Fatal("instructions should forbid immediate tool use on connect")
+	}
+	if !strings.Contains(WebSearchTool().Description, "不要在通话刚开始时主动搜索") {
+		t.Fatal("web_search tool should discourage proactive search")
+	}
+	if !strings.Contains(instr, "继续保持通话可听可说") {
+		t.Fatal("instructions should keep duplex open during web tools")
+	}
+}
+
+func TestComposeDialogInstructionsIncludesAgentContext(t *testing.T) {
+	got := ComposeDialogInstructions(DefaultDialogInstructions(), []string{
+		"Agent identity\nYou are 贝克汉姆.",
+		"Recent DM context\n用户：修登录",
+	})
+	if !strings.Contains(got, DefaultDialogInstructions()) {
+		t.Fatal("composed instructions missing base dialog rules")
+	}
+	if !strings.Contains(got, "被叫 Agent") {
+		t.Fatal("composed instructions missing agent-context preamble")
+	}
+	if !strings.Contains(got, "You are 贝克汉姆.") {
+		t.Fatal("composed instructions missing agent identity")
+	}
+	if !strings.Contains(got, "用户：修登录") {
+		t.Fatal("composed instructions missing recent DM")
+	}
+	if !strings.Contains(got, "不要以空白会话开场") {
+		t.Fatal("composed instructions missing anti-amnesia cue")
+	}
 }
 
 func TestRejectPrivateHost(t *testing.T) {

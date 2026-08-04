@@ -133,6 +133,85 @@ func (s *PostgresUpdateStore) LatestForRuntime(ctx context.Context, runtimeID st
 	return req, nil
 }
 
+// LatestForRuntimes returns the latest request for every supplied runtime in
+// one transaction. It preserves LatestForRuntime's stale-update transition
+// before reading while avoiding one transaction per runtime-list row.
+func (s *PostgresUpdateStore) LatestForRuntimes(ctx context.Context, runtimeIDs []string) (map[string]*UpdateRequest, error) {
+	latest := make(map[string]*UpdateRequest)
+	if len(runtimeIDs) == 0 {
+		return latest, nil
+	}
+	if err := s.requireDB(); err != nil {
+		return nil, err
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin latest daemon runtime updates: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := s.expireStaleForRuntimes(ctx, tx, runtimeIDs); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, postgresUpdateSelect+`
+		WHERE runtime_id = ANY($1::text[]::uuid[])
+		ORDER BY runtime_id, updated_at DESC, created_at DESC, id DESC
+	`, runtimeIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list latest daemon runtime updates: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		req, err := scanPostgresUpdate(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan latest daemon runtime update: %w", err)
+		}
+		if _, ok := latest[req.RuntimeID]; !ok {
+			latest[req.RuntimeID] = req
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list latest daemon runtime updates: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit latest daemon runtime updates: %w", err)
+	}
+	return latest, nil
+}
+
+func (s *PostgresUpdateStore) expireStaleForRuntimes(ctx context.Context, exec dbExecutor, runtimeIDs []string) error {
+	if _, err := exec.Exec(ctx, `
+		UPDATE daemon_runtime_update
+		SET
+			status = 'timeout',
+			error = CASE status
+				WHEN 'pending' THEN 'daemon did not respond within 120 seconds'
+				WHEN 'ready_to_apply' THEN 'activation did not complete within 20 minutes'
+				ELSE 'update did not complete within 150 seconds'
+			END,
+			updated_at = now()
+		WHERE runtime_id = ANY($4::text[]::uuid[])
+		  AND (
+			(
+				status = 'pending'
+				AND created_at < now() - ($1 * interval '1 second')
+			)
+			OR (
+				status = 'running'
+				AND run_started_at IS NOT NULL
+				AND run_started_at < now() - ($2 * interval '1 second')
+			)
+			OR (
+				status = 'ready_to_apply'
+				AND updated_at < now() - ($3 * interval '1 second')
+			)
+		  )
+	`, updatePendingTimeout.Seconds(), updateRunningTimeout.Seconds(), updateReadyTimeout.Seconds(), runtimeIDs); err != nil {
+		return fmt.Errorf("expire stale daemon runtime updates: %w", err)
+	}
+	return nil
+}
+
 func (s *PostgresUpdateStore) HasPending(ctx context.Context, runtimeID string) (bool, error) {
 	if err := s.requireDB(); err != nil {
 		return false, err

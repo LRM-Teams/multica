@@ -154,13 +154,32 @@ func (h *Handler) latestRuntimeUpdate(ctx context.Context, rt db.AgentRuntime) *
 	return nil
 }
 
+// runtimeUpdateBatchStore is intentionally optional so custom/test stores that
+// only implement UpdateStore retain the single-runtime fallback.
+type runtimeUpdateBatchStore interface {
+	LatestForRuntimes(ctx context.Context, runtimeIDs []string) (map[string]*UpdateRequest, error)
+}
+
 func (h *Handler) runtimeUpdatesForList(ctx context.Context, runtimes []db.AgentRuntime) map[string]*UpdateRequest {
 	updates := make(map[string]*UpdateRequest, len(runtimes))
-	if h == nil || h.UpdateStore == nil {
+	if h == nil || h.UpdateStore == nil || len(runtimes) == 0 {
 		return updates
 	}
+
+	runtimeIDs := make([]string, 0, len(runtimes))
 	for _, rt := range runtimes {
-		runtimeID := uuidToString(rt.ID)
+		runtimeIDs = append(runtimeIDs, uuidToString(rt.ID))
+	}
+	if batchStore, ok := h.UpdateStore.(runtimeUpdateBatchStore); ok {
+		batch, err := batchStore.LatestForRuntimes(ctx, runtimeIDs)
+		if err != nil {
+			slog.Warn("failed to load runtime update states", "error", err)
+			return coalesceRuntimeUpdatesByDaemon(runtimes, updates)
+		}
+		return coalesceRuntimeUpdatesByDaemon(runtimes, batch)
+	}
+
+	for _, runtimeID := range runtimeIDs {
 		update, err := h.UpdateStore.LatestForRuntime(ctx, runtimeID)
 		if err != nil {
 			slog.Warn("failed to load runtime update state", "error", err, "runtime_id", runtimeID)
@@ -250,6 +269,10 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 	if runtimeHealth == "update_available" && availableUpdateTarget != nil {
 		targetVersion = availableUpdateTarget
 	}
+	// Hard gate (P0 / task #120): never project an "upgrade" target that is not
+	// strictly newer than the running CLI. Stale completed/failed rows, equal
+	// versions, and lagging latest-cache hits must not light the upgrade button.
+	targetVersion, runtimeHealth = clampUpgradeProjection(currentVersion, targetVersion, updateState, runtimeHealth)
 	updateError := runtimeUpdateError(update, currentVersion, updateState)
 	if stagedWaiting && updateError == nil {
 		// Stable code for FE i18n: staged binary waiting for daemon reconnect/switch.
@@ -385,10 +408,20 @@ func runtimeUpdateError(update *UpdateRequest, currentVersion *string, updateSta
 			return &reason
 		}
 	}
+	// Surface the last terminal failure/timeout reason on the runtime
+	// projection so a page refresh still shows human-readable cause
+	// (Frank 2026-08-03). Key off derived updateState only — when a
+	// failed/timeout attempt already matches target, runtimeUpdateState
+	// remaps to "completed" and we must not keep a stale error that
+	// masks the healthy register (see TestRuntimeToResponseRetained…).
 	if updateState == "timed_out" || updateState == "failed" {
 		reason := strings.TrimSpace(update.Error)
 		if reason == "" {
-			reason = "runtime_update_failed"
+			if updateState == "timed_out" {
+				reason = "runtime_update_timed_out"
+			} else {
+				reason = "runtime_update_failed"
+			}
 		}
 		return &reason
 	}
@@ -473,6 +506,31 @@ func runtimeAvailableUpdateTarget(rt db.AgentRuntime, metadata any, currentVersi
 	}
 	target := release.TagName
 	return &target
+}
+
+// clampUpgradeProjection enforces IsNewer(target, current) on the API surface.
+// In-flight updates (pending/running) keep their target so the UI can show
+// progress; every other state drops a non-newer target and demotes
+// update_available → ok.
+func clampUpgradeProjection(currentVersion, targetVersion *string, updateState, runtimeHealth string) (*string, string) {
+	switch updateState {
+	case "pending", "running":
+		return targetVersion, runtimeHealth
+	}
+	if targetVersion == nil {
+		if runtimeHealth == "update_available" {
+			return nil, "ok"
+		}
+		return nil, runtimeHealth
+	}
+	if currentVersion != nil && cli.IsNewerVersion(*targetVersion, *currentVersion) {
+		return targetVersion, runtimeHealth
+	}
+	// target == current, target older, or unparsable → no upgrade affordance
+	if runtimeHealth == "update_available" {
+		runtimeHealth = "ok"
+	}
+	return nil, runtimeHealth
 }
 
 func launchedBy(metadata any) string {
@@ -1016,6 +1074,13 @@ func canEditRuntime(member db.Member, rt db.AgentRuntime) bool {
 // canDeleteRuntime intentionally has no workspace owner/admin override.
 // Runtime deletion is reserved for the member who owns the runtime.
 func canDeleteRuntime(member db.Member, rt db.AgentRuntime) bool {
+	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+}
+
+// canOwnRuntime is Computer-owner-only for upgrade/restart mutations.
+// Frank 2026-08-03: non-owners must not upgrade or restart others' machines;
+// workspace admin is not enough — FE hide is insufficient without a server 403.
+func canOwnRuntime(member db.Member, rt db.AgentRuntime) bool {
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
 }
 

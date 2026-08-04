@@ -13,11 +13,13 @@ export type RuntimeConfigResult =
   | { ok: true; config: RuntimeConfig }
   | { ok: false; error: RuntimeConfigError };
 
+// Hosted product defaults (#29 domain unification → leagent.me).
+// Self-host / env / runtime-config.json still override.
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = Object.freeze({
   schemaVersion: 1,
-  apiUrl: "https://api.multica.ai",
-  wsUrl: "wss://api.multica.ai/ws",
-  appUrl: "https://multica.ai",
+  apiUrl: "https://api.leagent.me",
+  wsUrl: "wss://api.leagent.me/ws",
+  appUrl: "https://leagent.me",
 });
 
 const LOCAL_DEV_RUNTIME_CONFIG: RuntimeConfig = Object.freeze({
@@ -93,8 +95,8 @@ export function deriveWsUrl(apiUrl: string): string {
   return trimTrailingSlash(url.toString());
 }
 
-// Convention: api hosts are exposed at `api.<web-host>` (api.multica.ai →
-// multica.ai, api.test.multica.ai → test.multica.ai). Strip the leading
+// Convention: api hosts are exposed at `api.<web-host>` (api.leagent.me →
+// leagent.me, api.test.example.com → test.example.com). Strip the leading
 // `api.` label so a single `apiUrl` configuration produces the right
 // shareable web URL. Hosts that don't match the convention (no leading
 // `api.` label, or short two-label hosts like `api.local`) fall through

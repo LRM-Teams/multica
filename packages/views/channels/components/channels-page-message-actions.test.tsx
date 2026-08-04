@@ -146,7 +146,7 @@ vi.mock("../../navigation/context", () => ({
 // Expose `plainUrls` so a test can assert the channel composer opts into
 // plain-text URLs (#542) — the miss-surface root cause was this prop never
 // reaching the web channel composer.
-vi.mock("../../editor/content-editor", () => ({
+vi.mock("../../editor/lazy-content-editor", () => ({
   ContentEditor: (props: { plainUrls?: boolean }) => (
     <div data-testid="content-editor" data-plain-urls={String(!!props.plainUrls)} />
   ),
@@ -162,7 +162,6 @@ vi.mock("../../common/project-picker-button", () => ({
 
 vi.mock("./dm-conversation", () => ({ DmConversation: () => <div /> }));
 vi.mock("./channel-files-panel", () => ({ ChannelFilesPanel: () => <div /> }));
-vi.mock("./channel-stats-panel", () => ({ ChannelStatsPanel: () => <div /> }));
 
 // The message list is mocked so we can capture the exact props ChannelsPage
 // hands it — this is the parent→list contract the live bug broke.

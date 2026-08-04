@@ -1,0 +1,26 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "../../packages/ui/styles/tokens.css";
+@import "../../packages/ui/styles/base.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@source "../../packages/ui/**/*.{ts,tsx}";
+@source "../../packages/views/**/*.{ts,tsx}";
+@source "./main.tsx";
+
+html,
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+}
+
+/* Make the focused element unmistakable in a still frame — the whole point of
+   the shots is "where did focus land", which a default UA ring does not show
+   reliably in a screenshot. */
+:focus-visible,
+:focus {
+  outline: 3px solid #e11d48 !important;
+  outline-offset: 2px !important;
+}

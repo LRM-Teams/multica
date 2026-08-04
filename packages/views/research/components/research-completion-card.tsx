@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef } from "react";
 import { createPortal } from "react-dom";
 import { CheckCircle2, Home, Plus, X, FileText, AlertCircle } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
@@ -12,6 +12,11 @@ import type { CompletionGuideKind } from "../lib/completion-guide";
  * LRM-832 — terminal completion / failure guide card.
  * Narrow: full-width sheet; desktop: centered card. Below Delivery modal (z-80).
  * Native `<dialog>` for focus trap / Escape (react-doctor a11y).
+ *
+ * LRM-1244 — no full-screen dismiss scrim. A `tabindex="-1"` overlay is still
+ * focusable, so native dialog focusing steps parked initial focus on the
+ * invisible layer (same root cause as LRM-1243 / #2082). Gutter dismiss is a
+ * click on the dialog box itself (`event.target === dialog`).
  */
 export function ResearchCompletionCard({
   kind,
@@ -46,6 +51,23 @@ export function ResearchCompletionCard({
     fn();
   };
 
+  const onGutterClose = useEffectEvent(() => {
+    closeThen(onDismiss);
+  });
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const handle = (event: MouseEvent) => {
+      if (event.target === dialog) onGutterClose();
+    };
+    dialog.addEventListener("click", handle);
+    return () => dialog.removeEventListener("click", handle);
+    // Intentionally omit onGutterClose: useEffectEvent must not be listed in
+    // deps (react-doctor: Effect Event listed in effect deps).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- SoT LRM-1243
+  }, []);
+
   if (typeof document === "undefined") return null;
 
   return createPortal(
@@ -65,12 +87,6 @@ export function ResearchCompletionCard({
       }}
       onClose={onDismiss}
     >
-      <button
-        type="button"
-        className="absolute inset-0 z-0 cursor-default bg-transparent"
-        aria-label={t(($) => $.completion_guide.dismiss)}
-        onClick={() => closeThen(onDismiss)}
-      />
       <div
         role="document"
         className={cn(
@@ -89,9 +105,9 @@ export function ResearchCompletionCard({
             aria-hidden
           >
             {done ? (
-              <CheckCircle2 className="size-5" strokeWidth={2} />
+              <CheckCircle2 className="size-5" strokeWidth={2} aria-hidden />
             ) : (
-              <AlertCircle className="size-5" strokeWidth={2} />
+              <AlertCircle className="size-5" strokeWidth={2} aria-hidden />
             )}
           </span>
           <div className="min-w-0 flex-1">
@@ -130,7 +146,7 @@ export function ResearchCompletionCard({
             aria-label={t(($) => $.completion_guide.dismiss)}
             onClick={() => closeThen(onDismiss)}
           >
-            <X className="size-4" />
+            <X className="size-4" aria-hidden />
           </Button>
         </div>
 

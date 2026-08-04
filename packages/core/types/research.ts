@@ -129,6 +129,23 @@ export interface ResearchGraphNode {
   payload: Record<string, unknown> | unknown;
   /** Projected from payload.confidence when present (LRM-806). */
   confidence?: number | null;
+  /** LRM-1278: single tree parent from leads_to; null = root. */
+  parent_id?: string | null;
+  /** LRM-1278: direct child ids from leads_to. */
+  child_ids?: string[];
+  child_count?: number;
+  descendant_count?: number;
+  /** Stable theme key: payload.theme_key|dimension_family|… or `type:<node_type>`. */
+  theme_key?: string;
+  /** Optional payload.phase; session stage remains on session.current_stage. */
+  phase?: string;
+  /**
+   * LRM-1278 quality assessment. Always present on BE snapshot.
+   * Missing/illegal payload → pending_review.
+   */
+  assessment?: "trusted" | "pending_review" | "detour" | string;
+  reason?: string | null;
+  evidence_summary?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -282,6 +299,27 @@ export interface ResearchClarificationQuestion {
   created_at: string;
 }
 
+/** LRM-1310/1330 utterance match decision (omit when absent — never invent). */
+export type ResearchMatchDecisionAction =
+  | "continue"
+  | "branch_after"
+  | "deprecate"
+  | "pending_confirm";
+
+export interface ResearchMatchDecisionItem {
+  node_id: string;
+  action: ResearchMatchDecisionAction;
+  reason?: string;
+}
+
+export interface ResearchMatchDecision {
+  utterance_id: string;
+  confidence?: number;
+  primary_anchor_node_id?: string;
+  matched_node_ids: string[];
+  decisions: ResearchMatchDecisionItem[];
+}
+
 export interface ResearchMessage {
   id: string;
   session_id: string;
@@ -291,7 +329,22 @@ export interface ResearchMessage {
   body: string;
   card_kind?: ResearchMessageCardKind;
   meta?: Record<string, unknown> | unknown;
+  /** Projected from meta.match_decision when present (LRM-1330). */
+  match_decision?: ResearchMatchDecision;
   created_at: string;
+}
+
+/** LRM-1318 / LRM-1306 side-panel row. Never invent from title/summary. */
+export type ResearchThoughtStrategyState = "drafting" | "active" | "settled";
+
+export interface ResearchThoughtStrategy {
+  node_id: string;
+  rationale: string;
+  expected_outcome: string;
+  strategy_label?: string | null;
+  strategy_revision?: string | null;
+  state: ResearchThoughtStrategyState | string;
+  updated_at?: string;
 }
 
 /** Create-session response includes a kickoff snapshot so the canvas paints immediately. */
@@ -313,6 +366,8 @@ export interface ResearchSessionSnapshot {
   report: ResearchReport | null;
   evals: ResearchStageEval[];
   messages: ResearchMessage[];
+  /** LRM-1318 side-panel rows (LRM-1306). Always an array; may be empty. */
+  thought_strategies?: ResearchThoughtStrategy[];
   /** Durable execution state. */
   run?: ResearchRunSnapshot;
 }
@@ -381,6 +436,8 @@ export interface ResearchRunContract {
 
 export interface ResearchRunQuestion {
   id: string;
+  parent_question_id?: string;
+  created_by_task_id?: string;
   client_key: string;
   kind: string;
   question: string;
@@ -394,15 +451,44 @@ export interface ResearchRunQuestion {
 
 export interface ResearchRunTask {
   id: string;
+  question_id?: string;
+  parent_task_id?: string;
   client_key: string;
   kind: string;
   objective: string;
   required_capability: string;
+  expected_result?: string;
+  acceptance_criteria?: Record<string, unknown> | unknown;
+  priority?: number;
   status: string;
   assigned_agent_id?: string;
   attempt_count: number;
   goal_version: number;
   plan_version: number;
+  max_attempts?: number;
+  timeout_seconds?: number;
+  ready_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  terminal_reason?: string;
+}
+
+export interface ResearchRunAttempt {
+  id: string;
+  task_id: string;
+  attempt_number: number;
+  assigned_agent_id: string;
+  inbox_task_id?: string;
+  dispatch_key?: string;
+  client_request_id?: string;
+  status: string;
+  result_hash?: string;
+  failure_class?: string;
+  diagnostics?: string;
+  dispatched_at?: string;
+  started_at?: string;
+  result_submitted_at?: string;
+  completed_at?: string;
 }
 
 export interface ResearchRunSourceSnapshot {
@@ -470,7 +556,7 @@ export interface ResearchRunSnapshot {
   contract: ResearchRunContract;
   questions: ResearchRunQuestion[];
   tasks: ResearchRunTask[];
-  attempts: Array<Record<string, unknown>>;
+  attempts: ResearchRunAttempt[];
   sources: ResearchRunSourceSnapshot[];
   observations: ResearchRunObservation[];
   claims: ResearchRunClaim[];

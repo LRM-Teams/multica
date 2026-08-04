@@ -97,6 +97,43 @@ export const MESSAGE_COLLAPSE_FADE_HEIGHT_PX = 40;
 const MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[320px]";
 const MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX = 2;
 
+/**
+ * LRM-1227 — bubble shell, frozen in LRM-1233 as density ① + granularity G.
+ *
+ * Surface matches the conversation pane (`bg-background`) — Frank 2026-08-04
+ * kicked back D1 `bg-muted` (#f6f6f4 grey slab). Edged by a 1px `--line`.
+ * Hover / `focus-within` strengthens the edge instead of a row wash
+ * (`--line` → `--line-strong`).
+ *
+ * Density ① is "keep the live rhythm": the shell adds no vertical padding, only
+ * the 4px horizontal inset the frozen 660px body width accounts for.
+ */
+const MESSAGE_SHELL_CLASS =
+  "px-1 border-line transition-colors group-hover:border-line-strong group-focus-within:border-line-strong";
+
+/**
+ * LRM-1331 — hover action bar + geometry reserves only on fine pointer AND
+ * ≥640px. Narrow fine windows fall back to the coarse long-press / context
+ * menu path (360px + 162px reserve left ~9 CJK chars — not worth it).
+ */
+const FINE_DESKTOP_MQ = "[@media(pointer:fine)_and_(min-width:640px)]";
+
+/**
+ * Joined-shell segment for granularity G. Every message is its own virtual row
+ * (`channel-message-list`, Virtuoso), so there is no DOM node wrapping a group —
+ * the single bubble is drawn as three segments instead.
+ *
+ * Per-side widths only (`border-x` / `border-t` / `border-b`): `border` plus
+ * `border-b-0` would need Tailwind's emitted order to win, whereas disjoint
+ * side utilities cannot collide.
+ */
+function messageShellEdgeClass(groupStart: boolean, groupEnd: boolean) {
+  if (groupStart && groupEnd) return "rounded-lg border-x border-y";
+  if (groupStart) return "rounded-t-lg border-x border-t";
+  if (groupEnd) return "rounded-b-lg border-x border-b";
+  return "border-x";
+}
+
 function isInteractiveMessageTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
   return Boolean(
@@ -255,6 +292,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   collapseLongContent = true,
   /** Slack-style continuation: no avatar/name row; gutter shows HH:mm on hover. */
   compact = false,
+  groupEnd = true,
 }: {
   message: ChannelMessage;
   currentUserId: string | null;
@@ -292,13 +330,24 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   collapseLongContent?: boolean;
   /** When true, render as a same-author continuation (avatar/name hidden). */
   compact?: boolean;
+  /**
+   * LRM-1227 / LRM-1233 **G**: true when this row is the last of its visual
+   * group, i.e. it draws the joined shell's bottom edge + bottom corners.
+   * Defaults to true so a standalone bubble renders a fully enclosed shell.
+   */
+  groupEnd?: boolean;
 // LRM-268 adds contentExpanded/contentOverflows; mobileOverlay already uses a
 // union instead of three booleans (#568). Full useReducer consolidation is a
 // separate refactor of this ~1100-line component — suppress to unblock CI.
 // react-doctor-disable-next-line react-doctor/prefer-useReducer
 }) {
   const { t } = useT("channels");
-  const { getActorName, getMemberHonor, getAgentFleetRank } = useActorName();
+  const {
+    getActorName,
+    getMemberHonor,
+    getAgentFleetRank,
+    getAgentHonorLevel,
+  } = useActorName();
   // LRM-364: group managers miss ListAgents → resolve via member-profile, never
   // surface "Unknown Agent" in the reaction hover card.
   const getReactionActorName = useReactionActorName(message.reactions ?? []);
@@ -345,6 +394,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   const tapFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mobileActionsDialogRef = useRef<HTMLDialogElement | null>(null);
   const mobileReactionDialogRef = useRef<HTMLDialogElement | null>(null);
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
   const messageBodyRef = useRef<HTMLDivElement | null>(null);
   const measureContentOverflowRef = useRef<() => void>(() => {});
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -373,6 +423,22 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     if (typeof dialog.showModal === "function") dialog.showModal();
     else dialog.setAttribute("open", "");
   }, []);
+
+  // LRM-1174 (LRM-1173 freeze B): dismissing a top-layer <dialog> leaves
+  // activeElement on <body>, so the next keyboard/AT step restarts from the top
+  // of the list instead of the message the sheet belonged to. Hand focus back to
+  // the bubble that opened it. Only a real dismissal (→ "none") returns focus:
+  // the actions → reaction handover (#568) keeps focus inside the overlay stack.
+  const mobileOverlayWasOpenRef = useRef(false);
+  useEffect(() => {
+    const open = mobileOverlay !== "none";
+    const wasOpen = mobileOverlayWasOpenRef.current;
+    mobileOverlayWasOpenRef.current = open;
+    if (!wasOpen || open) return;
+    // preventScroll: the bubble is already on screen (it was just long-pressed);
+    // a Virtuoso row must not be yanked into view by the focus call.
+    bubbleRef.current?.focus({ preventScroll: true });
+  }, [mobileOverlay]);
 
   const measureContentOverflow = useCallback(() => {
     const body = messageBodyRef.current;
@@ -505,6 +571,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
   // overflow the box and lift the dot off the avatar's bottom edge).
   const authorFleet =
     isAgent && message.author_id ? getAgentFleetRank(message.author_id) : undefined;
+  const authorHonorLevel =
+    isAgent && message.author_id ? getAgentHonorLevel(message.author_id) : undefined;
   const avatarNode =
     identityActorType && message.author_id ? (
       <ActorAvatar
@@ -531,7 +599,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     <ActorStyledName
       displayName={displayName}
       honor={authorHonor}
-      fleet={authorFleet}
+      agentHonorLevel={authorHonorLevel}
       className="shrink-0 text-[13.5px] font-semibold text-foreground"
       nameClassName="whitespace-nowrap"
     />
@@ -755,10 +823,20 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
     searchHighlighted: Boolean(searchHighlighted),
   });
   const showAuthor = !compact;
+  const groupStart = !compact;
+  // LRM-1233: the self-mention wash must *replace* the shell fill, not sit under
+  // it — same for the deep-link highlight and the mobile thread-tap flash. Those
+  // washes live on the row, so the shell drops its own surface and keeps only its
+  // edges, letting the row colour through the group's silhouette.
+  const shellFilled = !selfMentioned && !highlighted && !mobileThreadTapActive;
 
   const bubble = (
     <div
       id={`message-${message.id}`}
+      ref={bubbleRef}
+      // Programmatic focus target only (never tab-reachable): the mobile sheets
+      // return focus here on dismissal (LRM-1174).
+      tabIndex={-1}
       data-testid="message-bubble"
       data-message-group={compact ? "compact" : "lead"}
       data-message-id={message.id}
@@ -769,7 +847,9 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       className={cn(
         // LRM-495: no permanent mobile ⋯ column — coarse pointers open actions
         // via long-press / left-swipe; fine pointers keep the hover action bar.
-        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 outline-none transition-colors duration-1000 hover:bg-muted/35 focus-within:bg-muted/35",
+        // LRM-1227: the row no longer washes on hover — the bubble shell below
+        // owns that signal (see MESSAGE_SHELL_CLASS).
+        "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 outline-none transition-colors duration-1000",
         // Tighten lead-row vertical rhythm one notch (py-1.5 → py-1); keep
         // avatar / name / time alignment. Compact continuations stay tighter.
         compact ? "py-0" : "py-1",
@@ -811,19 +891,32 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       {/* LRM-400: fill the conversation column — a 760px cap left a wide empty
           right band that still read as Frank's "半屏空白" after the PanelGroup
           shell fix (#1154). Soft wrap stays on `.message-surface`.
-          LRM-1126: fine-pointer md+ keeps a permanent ~184px right gutter so the
-          hover action bar never covers body text (not hover-only — avoids reflow).
-          Coarse pointers skip the gutter (no hover bar on mobile). */}
+          LRM-1331: drop the shell-wide fine-pointer `pr-[136px]` gutter (it ate
+          10–47% of body width and still failed to clear the 154px bar). Reserves
+          move to the author row / continuation float / leading-card inset below.
+          LRM-1227/G: this element is also the bubble shell — see
+          MESSAGE_SHELL_CLASS / messageShellEdgeClass. Border geometry is out of
+          this issue's scope (描边 FE is a separate knife). */}
       <div
+        data-testid="message-shell"
+        data-group-start={groupStart ? "true" : undefined}
+        data-group-end={groupEnd ? "true" : undefined}
         className={cn(
           "min-w-0 max-w-full",
-          "[@media(pointer:fine)]:md:pr-[184px]",
+          MESSAGE_SHELL_CLASS,
+          messageShellEdgeClass(groupStart, groupEnd),
+          // Same token as the message pane — no muted grey slab (LRM-1227 kickback).
+          shellFilled && "bg-background",
         )}
       >
         {showAuthor && (
           <div
             data-testid="message-author-row"
-            className="mb-0.5 flex min-w-0 select-none items-center gap-1.5 text-[13.5px]"
+            className={cn(
+              "mb-0.5 flex min-w-0 select-none items-center gap-1.5 text-[13.5px]",
+              // LRM-1331 §2: reserve only on the author line (162 = 154 bar + 8).
+              `${FINE_DESKTOP_MQ}:pr-[162px]`,
+            )}
           >
             {profileActorType && profileActorId ? (
               <ActorProfileTrigger
@@ -867,10 +960,22 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             data-message-action-surface="true"
             className={cn(
               // LRM-1126: solid popover chrome so icons never punch through body
-              // text; vertical center on author/avatar midline (lead) or first
-              // body line (compact). Lives in the permanent 184px gutter.
-              "pointer-events-none absolute right-3 z-10 hidden items-center gap-0.5 rounded-lg border border-border/70 bg-popover p-0.5 text-muted-foreground opacity-0 shadow-sm transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:pointer-events-auto [@media(pointer:fine)]:group-hover:opacity-100 [@media(pointer:fine)]:group-focus-within:pointer-events-auto [@media(pointer:fine)]:group-focus-within:opacity-100",
-              compact ? "top-0.5" : "top-1.5",
+              // text. Overlay — not a document-flow gutter (LRM-1331).
+              // LRM-1227/D2 chrome kept; bar measured ~154×34 with 5 keys.
+              // LRM-1331: gate on fine+≥640 — narrow fine uses long-press menu.
+              "pointer-events-none absolute right-2 z-10 hidden items-center gap-0.5 rounded-lg border border-line-strong bg-popover p-0.5 text-muted-foreground opacity-0 shadow-sm transition-opacity",
+              `${FINE_DESKTOP_MQ}:flex`,
+              `${FINE_DESKTOP_MQ}:group-hover:pointer-events-auto`,
+              `${FINE_DESKTOP_MQ}:group-hover:opacity-100`,
+              `${FINE_DESKTOP_MQ}:group-focus-within:pointer-events-auto`,
+              `${FINE_DESKTOP_MQ}:group-focus-within:opacity-100`,
+              // Lead row: ride the shell's top edge (bar mid-line == shell top
+              // line). D2 froze `top-0 -translate-y-1/2` measured from the shell;
+              // the bar is positioned against the row, whose `py-1` offsets the
+              // shell by 4px — hence `top-1`, same resulting geometry.
+              // C2: inside a joined group a compact row has no edge to ride, so
+              // the bar sits fully inside its own row and still clears the text.
+              compact ? "top-0.5" : "top-1 -translate-y-1/2",
             )}
           >
             {onReact && (
@@ -878,7 +983,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 onSelect={(emoji) => onReact(message, emoji)}
                 align="end"
                 side="bottom"
-                className="size-8 rounded-md hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground"
+                className="size-7 rounded-md hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 ariaLabel={t(($) => $.message.add_reaction)}
                 sideOffset={4}
                 emojis={quickReactionEmojis}
@@ -889,7 +994,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             <button
               type="button"
               onClick={handleCopy}
-              className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground"
+              className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               aria-label={t(($) => $.message.copy_action)}
               title={t(($) => $.message.copy_action)}
             >
@@ -899,7 +1004,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               <button
                 type="button"
                 onClick={handleQuote}
-                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground"
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 aria-label={t(($) => $.quote.action)}
                 title={t(($) => $.quote.action)}
               >
@@ -910,7 +1015,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               <button
                 type="button"
                 onClick={() => onOpenThread?.(message)}
-                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground"
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 aria-label={t(($) => $.thread.reply)}
                 title={t(($) => $.thread.reply)}
               >
@@ -921,7 +1026,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               <button
                 type="button"
                 onClick={handleStartEdit}
-                className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground"
+                className="inline-flex size-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:bg-muted focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 aria-label={t(($) => $.message.edit_action)}
                 title={t(($) => $.message.edit_action)}
               >
@@ -948,6 +1053,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               isContentCollapsed && "overflow-hidden",
               isContentCollapsed ? MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
               searchHighlighted && "rounded-md bg-primary/5",
+              // LRM-1331 §3: compact continuations — first-line float safety zone
+              // (36×158) instead of shell padding. Skip when a leading card owns
+              // its own inset (§4); block boxes slide under floats.
+              compact &&
+                !(message.quote || message.quote_message_id) &&
+                `${FINE_DESKTOP_MQ}:before:float-right ${FINE_DESKTOP_MQ}:before:h-[36px] ${FINE_DESKTOP_MQ}:before:w-[158px] ${FINE_DESKTOP_MQ}:before:content-['']`,
             )}
             data-testid="message-body"
             data-collapsed={isContentCollapsed ? "true" : undefined}
@@ -960,6 +1071,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 currentUserId={currentUserId}
                 ownName={ownName}
                 onJump={onScrollTo}
+                // LRM-1331 §4: leading card inset on compact rows (bar overlays body).
+                className={
+                  compact
+                    ? `${FINE_DESKTOP_MQ}:pr-[158px]`
+                    : undefined
+                }
               />
             )}
             <MessageBody
@@ -1060,7 +1177,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         {!isEditing && mobileActionsOpen && (
           <dialog
             ref={showMobileActionsDialog}
-            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10 [@media(pointer:fine)]:hidden"
+            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10"
             aria-label={t(($) => $.message.actions_menu)}
             onCancel={(event) => {
               event.preventDefault();
@@ -1127,7 +1244,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         {!isEditing && onReact && mobileReactionOpen && (
           <dialog
             ref={showMobileReactionDialog}
-            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10 [@media(pointer:fine)]:hidden"
+            className="fixed inset-0 z-50 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-transparent p-0 backdrop:bg-black/10"
             aria-label={t(($) => $.message.add_reaction)}
             onCancel={(event) => {
               event.preventDefault();

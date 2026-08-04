@@ -26,6 +26,7 @@ import (
 type EnvDispatchRequest struct {
 	Mode           string `json:"mode"`
 	EnvID          string `json:"env_id"`
+	SourceTaskID   string `json:"source_task_id,omitempty"`
 	Domain         string `json:"domain,omitempty"`
 	DispatchType   string `json:"dispatch_type"`
 	GroupSize      int    `json:"group_size"`
@@ -96,6 +97,8 @@ type EnvDispatchResponse struct {
 }
 
 type EnvRolloutResponse struct {
+	RunID            string                                `json:"run_id,omitempty"`
+	SourceTaskID     string                                `json:"source_task_id,omitempty"`
 	ChannelID        string                                `json:"channel_id,omitempty"`
 	LeaderRunID      string                                `json:"leader_run_id,omitempty"`
 	AgentSandboxes   map[string]service.AgentSandboxStatus `json:"agent_sandboxes,omitempty"`
@@ -145,6 +148,11 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.SourceTaskID != "" {
+		if _, ok := parseUUIDOrBadRequest(w, req.SourceTaskID, "source_task_id"); !ok {
+			return
+		}
+	}
 	if req.AgentID != "" {
 		if _, ok := parseUUIDOrBadRequest(w, req.AgentID, "agent_id"); !ok {
 			return
@@ -186,6 +194,7 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 	res, err := svc.Dispatch(r.Context(), service.EnvDispatchInput{
 		WorkspaceID: workspaceID, UserID: userID,
 		Mode: service.EnvMode(req.Mode), EnvID: req.EnvID,
+		SourceTaskID: req.SourceTaskID,
 		Domain:       service.EnvDomain(req.Domain),
 		DispatchType: service.EnvDispatchType(req.DispatchType),
 		GroupSize:    req.GroupSize, AgentID: req.AgentID,
@@ -471,6 +480,7 @@ func mapRollouts(rs []service.EnvRollout) []EnvRolloutResponse {
 	out := make([]EnvRolloutResponse, 0, len(rs))
 	for _, r := range rs {
 		out = append(out, EnvRolloutResponse{
+			RunID: r.RunID, SourceTaskID: r.SourceTaskID,
 			ChannelID: r.ChannelID, LeaderRunID: r.LeaderRunID, AgentSandboxes: r.AgentSandboxes,
 			EnvID: r.EnvID, ProjectID: r.ProjectID, IssueID: r.IssueID,
 			ChatSessionID: r.ChatSessionID, AgentRunID: r.AgentRunID, Error: r.Error,
@@ -1294,7 +1304,6 @@ func (a *envDispatchDepsAdapter) SetDefaultSelfPlayEnv(ctx context.Context, work
 // service fake. The column is nullable, and the daemon resolves ownership
 // via agent_id + chat_session_id, so NULL is a safe intermediate state.
 // A follow-up task should extend the interface to pass UserID explicitly.
-//
 func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, actorUserID, agentID, issueID, chatSessionID, sandboxInstanceID, envID, runtimeID string, idx int) (string, error) {
 	switch {
 	case issueID != "":
@@ -1718,6 +1727,61 @@ func (a *envDispatchDepsAdapter) SaveTrainingDispatch(ctx context.Context, proje
 	return nil
 }
 
+// sourceTaskFromDB converts the generated immutable row into the service value
+// consumed by dispatch. The database query is workspace scoped, so callers
+// cannot materialize another workspace's source task.
+func sourceTaskFromDB(row db.SourceTask) service.SourceTask {
+	return service.SourceTask{
+		ID: util.UUIDToString(row.ID), WorkspaceID: util.UUIDToString(row.WorkspaceID),
+		Type: service.SourceTaskType(row.Type), Payload: row.Payload, ContentHash: row.ContentHash,
+	}
+}
+
+func (a *envDispatchDepsAdapter) GetSourceTask(ctx context.Context, sourceTaskID, workspaceID string) (service.SourceTask, error) {
+	row, err := a.h.Queries.GetSourceTaskForWorkspace(ctx, db.GetSourceTaskForWorkspaceParams{
+		ID: parseUUID(sourceTaskID), WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		return service.SourceTask{}, stackerr.Wrap(err, "get source task")
+	}
+	return sourceTaskFromDB(row), nil
+}
+
+func (a *envDispatchDepsAdapter) GetEnvDispatchRunSourceTask(ctx context.Context, projectID, workspaceID string) (service.SourceTask, error) {
+	row, err := a.h.Queries.GetEnvDispatchRunSourceTask(ctx, db.GetEnvDispatchRunSourceTaskParams{
+		ProjectID: parseUUID(projectID), WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		return service.SourceTask{}, stackerr.Wrap(err, "get env dispatch run source task")
+	}
+	return sourceTaskFromDB(row), nil
+}
+
+func (a *envDispatchDepsAdapter) CreateEnvDispatchRunWithSource(ctx context.Context, projectID, workspaceID string, trainingMode bool, sourceTaskID string, sampleIndex int) (string, error) {
+	row, err := a.h.Queries.CreateEnvDispatchRunWithSource(ctx, db.CreateEnvDispatchRunWithSourceParams{
+		ProjectID: parseUUID(projectID), WorkspaceID: parseUUID(workspaceID), TrainingMode: trainingMode,
+		SourceTaskID: parseUUID(sourceTaskID), SampleIndex: int32(sampleIndex),
+	})
+	if err != nil {
+		return "", stackerr.Wrap(err, "create source-aware env_dispatch_run")
+	}
+	return util.UUIDToString(row.RunID), nil
+}
+
+func (a *envDispatchDepsAdapter) SetEnvDispatchRunLocalTargets(ctx context.Context, projectID, workspaceID, localIssueID, localChannelID string) error {
+	params := db.SetEnvDispatchRunLocalTargetsParams{ProjectID: parseUUID(projectID), WorkspaceID: parseUUID(workspaceID)}
+	if localIssueID != "" {
+		params.LocalIssueID = parseUUID(localIssueID)
+	}
+	if localChannelID != "" {
+		params.LocalChannelID = parseUUID(localChannelID)
+	}
+	if err := a.h.Queries.SetEnvDispatchRunLocalTargets(ctx, params); err != nil {
+		return stackerr.Wrap(err, "set env dispatch local targets")
+	}
+	return nil
+}
+
 // CreateEnvDispatchRun persists the durable dispatch root row for a project
 // (spec: durable dispatch identity independent of training_dispatch). One row
 // per project, keyed by project_id. Created after the project exists.
@@ -1947,6 +2011,18 @@ func (s *stubEnvDispatchDeps) SetDefaultSelfPlayEnv(context.Context, string, str
 	return nil
 }
 func (s *stubEnvDispatchDeps) SaveTrainingDispatch(context.Context, string, string, string, string, float64) error {
+	return nil
+}
+func (s *stubEnvDispatchDeps) GetSourceTask(_ context.Context, sourceTaskID, workspaceID string) (service.SourceTask, error) {
+	return service.SourceTask{ID: sourceTaskID, WorkspaceID: workspaceID, Type: service.SourceTaskIssue, Payload: json.RawMessage(`{"title":"stub","description":"stub"}`)}, nil
+}
+func (s *stubEnvDispatchDeps) GetEnvDispatchRunSourceTask(context.Context, string, string) (service.SourceTask, error) {
+	return service.SourceTask{}, pgx.ErrNoRows
+}
+func (s *stubEnvDispatchDeps) CreateEnvDispatchRunWithSource(context.Context, string, string, bool, string, int) (string, error) {
+	return "stub-dispatch-run", nil
+}
+func (s *stubEnvDispatchDeps) SetEnvDispatchRunLocalTargets(context.Context, string, string, string, string) error {
 	return nil
 }
 func (s *stubEnvDispatchDeps) CreateEnvDispatchRun(context.Context, string, string, bool) error {

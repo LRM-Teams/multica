@@ -5,12 +5,12 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/internal/integrations/doubaodialog"
 	"github.com/multica-ai/multica/server/internal/service/duplexcall"
 	"github.com/multica-ai/multica/server/internal/service/voicecall"
 )
@@ -22,7 +22,7 @@ var duplexUpgrader = websocket.Upgrader{
 }
 
 type VoiceCallDuplexAPI interface {
-	ActivateDuplex(context.Context, voicecall.AnswerInput) (voicecall.Session, error)
+	ActivateDuplex(context.Context, voicecall.AnswerInput) (voicecall.DuplexActivation, error)
 	EndWithoutProviderStop(context.Context, voicecall.StopInput) (voicecall.Session, error)
 	Get(context.Context, string, string, string) (voicecall.Session, error)
 }
@@ -31,7 +31,7 @@ type VoiceCallDuplexAPI interface {
 type DuplexGatewayAPI interface {
 	Configured() bool
 	Has(callID string) bool
-	MarkPending(callID string)
+	MarkPending(callID, welcomeMessage, instructions string)
 	Close(callID string)
 	Start(
 		ctx context.Context,
@@ -42,11 +42,11 @@ type DuplexGatewayAPI interface {
 }
 
 type duplexStartResponse struct {
-	Call voiceCallResponse `json:"call"`
-	Mode string            `json:"mode"`
-	WSPath string          `json:"ws_path"`
-	Audio  duplexAudioHint `json:"audio"`
-	Events duplexEventHint `json:"events"`
+	Call   voiceCallResponse `json:"call"`
+	Mode   string            `json:"mode"`
+	WSPath string            `json:"ws_path"`
+	Audio  duplexAudioHint   `json:"audio"`
+	Events duplexEventHint   `json:"events"`
 }
 
 type duplexAudioHint struct {
@@ -92,7 +92,7 @@ func (h *Handler) StartVoiceCallDuplex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := service.ActivateDuplex(r.Context(), voicecall.AnswerInput{
+	activation, err := service.ActivateDuplex(r.Context(), voicecall.AnswerInput{
 		WorkspaceID: workspaceID,
 		UserID:      userID,
 		CallID:      callID,
@@ -101,11 +101,15 @@ func (h *Handler) StartVoiceCallDuplex(w http.ResponseWriter, r *http.Request) {
 		writeVoiceCallServiceError(w, "duplex_start", err)
 		return
 	}
-	h.DuplexGateway.MarkPending(callID)
-	h.publishVoiceCallUpdated(session)
+	instructions := doubaodialog.ComposeDialogInstructions(
+		doubaodialog.DefaultDialogInstructions(),
+		activation.SystemMessages,
+	)
+	h.DuplexGateway.MarkPending(callID, activation.WelcomeMessage, instructions)
+	h.publishVoiceCallUpdated(activation.Session)
 
 	writeJSON(w, http.StatusOK, duplexStartResponse{
-		Call:   voiceCallResponseFromSession(session),
+		Call:   voiceCallResponseFromSession(activation.Session),
 		Mode:   "duplex",
 		WSPath: "/api/workspaces/" + workspaceID + "/voice-calls/" + callID + "/duplex/ws",
 		Audio: duplexAudioHint{
@@ -283,20 +287,14 @@ func (e *voiceCallDuplexExecutor) Delegate(ctx context.Context, request string) 
 	if e == nil || e.bridge == nil {
 		return "", errors.New("duplex multica executor is not configured")
 	}
-	reply, err := e.bridge.Reply(ctx, VoiceCallLLMInput{
+	// Fire-and-forget: keep the Duplex session free to keep talking while the
+	// real agent turn runs in the DM (same product intent as RTC comfort+async).
+	if err := e.bridge.EnqueueAgentWork(ctx, VoiceCallLLMInput{
 		VoiceCallID: e.callID,
 		RoundID:     "duplex-" + uuid.NewString(),
 		Transcript:  request,
-	})
-	if err != nil {
-		if errors.Is(err, errVoiceCallAgentTurnTimeout) {
-			return "任务已交给真实 Agent 继续执行。电话等待已超时，执行过程和结果会保留在当前私聊中。", nil
-		}
+	}); err != nil {
 		return "", err
 	}
-	content := strings.TrimSpace(reply.Content)
-	if content == "" {
-		return "任务已交给真实 Agent，请在当前私聊查看执行详情。", nil
-	}
-	return content, nil
+	return "已经安排后台继续干活了，你可以接着跟我聊天，进度会留在私聊里。", nil
 }

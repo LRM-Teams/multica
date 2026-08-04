@@ -111,6 +111,9 @@ type sandboxJobPayload struct {
 	EndpointInfo     json.RawMessage   `json:"endpoint_info"`
 	SourceExternalID string            `json:"source_external_id"`
 	CreatePayload    json.RawMessage   `json:"create_payload"`
+	Code             string            `json:"code"`
+	Language         string            `json:"language"`
+	TimeoutSeconds   int               `json:"timeout_seconds"`
 }
 
 type cubeSandbox struct {
@@ -216,7 +219,7 @@ func (c *sandboxdClient) register(ctx context.Context) error {
 		"name":            c.cfg.Name,
 		"owner_user_id":   c.cfg.OwnerUserID,
 		"max_concurrency": c.cfg.Concurrency,
-		"capabilities":    []string{"create", "docker_create", "stop", "resume", "delete", "reconfigure", "clone", "create_template", "delete_template"},
+		"capabilities":    []string{"create", "docker_create", "stop", "resume", "delete", "reconfigure", "clone", "create_template", "delete_template", "exec"},
 		"metadata":        c.nodeMetadata(),
 	}, nil)
 }
@@ -629,6 +632,8 @@ func (c *sandboxdClient) callCube(ctx context.Context, job sandboxJob) (map[stri
 		return c.createCubeSnapshotTemplate(ctx, sandboxID, payload)
 	case "delete_template":
 		return c.deleteCubeSnapshotTemplate(ctx, payload)
+	case "exec":
+		return c.execCubeSandbox(ctx, sandboxID, payload)
 	default:
 		return nil, fmt.Errorf("unsupported sandbox job type %q", job.Type)
 	}
@@ -953,6 +958,27 @@ func (c *sandboxdClient) resumeCubeSandbox(ctx context.Context, sandboxID string
 
 // createCubeSnapshotTemplate calls Cube POST /sandboxes/{id}/snapshots.
 // The resulting snapshotID is a reusable Cube template for future creates.
+func (c *sandboxdClient) execCubeSandbox(ctx context.Context, sandboxID string, payload sandboxJobPayload) (map[string]any, error) {
+	if strings.TrimSpace(sandboxID) == "" {
+		return nil, fmt.Errorf("exec job missing local_ref")
+	}
+	if payload.Language != "python" {
+		return nil, fmt.Errorf("exec job language must be python")
+	}
+	if len(payload.Code) == 0 || len(payload.Code) > 32<<10 {
+		return nil, fmt.Errorf("exec job code must be 1..32768 bytes")
+	}
+	timeout := time.Duration(payload.TimeoutSeconds) * time.Second
+	if timeout <= 0 || timeout > 5*time.Minute {
+		return nil, fmt.Errorf("exec job timeout_seconds must be in [1, 300]")
+	}
+	var result map[string]any
+	if err := c.cubeJSONWithTimeout(ctx, timeout, http.MethodPost, "/execute", map[string]any{"code": payload.Code, "language": payload.Language}, fmt.Sprintf("49999-%s.%s", sandboxID, c.cfg.CubeDomain), &result); err != nil {
+		return nil, err
+	}
+	return map[string]any{"local_ref": sandboxID, "result": result}, nil
+}
+
 func (c *sandboxdClient) createCubeSnapshotTemplate(ctx context.Context, sandboxID string, payload sandboxJobPayload) (map[string]any, error) {
 	if sandboxID == "" {
 		return nil, fmt.Errorf("cube sandbox id is required")

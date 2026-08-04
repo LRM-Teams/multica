@@ -35,6 +35,10 @@ export function memberListOptions(wsId: string) {
   return queryOptions({
     queryKey: workspaceKeys.members(wsId),
     queryFn: () => api.listMembers(wsId),
+    // Membership/profile changes arrive over realtime and invalidate this key.
+    // Keep navigation remounts from turning the expensive directory into a
+    // request storm, while retaining a bounded recovery window for missed events.
+    staleTime: 5 * 60 * 1000,
   });
 }
 

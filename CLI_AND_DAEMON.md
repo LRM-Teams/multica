@@ -376,7 +376,7 @@ multica issue create --title "Fix login bug" --description "..." --priority high
 multica issue create --title "Fix login bug" --assignee-id 5fb87ac7-23b5-4a7a-81fa-ed295a54545d
 ```
 
-Flags: `--title` (required), `--description`, `--status`, `--priority`, `--assignee` / `--assignee-id`, `--parent`, `--project`, `--due-date`. Pass `--assignee-id <uuid>` (mutually exclusive with `--assignee`) when scripting against the IDs returned by `multica workspace member list --output json` / `multica agent list --output json`.
+Flags: `--title` (required), `--description`, `--status`, `--priority`, `--assignee` / `--assignee-id`, `--parent`, `--project`, `--due-date`. Pass `--assignee-id <uuid>` (mutually exclusive with `--assignee`) when scripting against the IDs returned by `multica workspace member list --output json` / `multica workspace info --agents --output json`.
 
 ### Update Issue
 
@@ -697,72 +697,18 @@ multica config set workspace_id <workspace-id>
 
 `config set workspace_id <id>` is the low-level interface — it writes the value verbatim without checking that the workspace exists or that you have access. Prefer `multica workspace switch <id|slug>` for day-to-day workspace changes; it does both checks before saving.
 
-## Autopilot Commands
+## Autopilot Commands (retired)
 
-Autopilots are scheduled/triggered automations that dispatch agent tasks (either by creating an issue or by running an agent directly).
+**Autopilot is retired.** The `multica autopilot …` CLI, API, scheduler, and UI entry points are gone (LRM-1049/1051, task #40). Historical issue/task fields such as `origin_type=autopilot` / `autopilot_run_id` may still appear on old rows for audit only.
 
-### List Autopilots
-
-```bash
-multica autopilot list
-multica autopilot list --full-id
-multica autopilot list --status active --output json
-```
-
-Autopilot table IDs are short UUID prefixes; follow-up autopilot commands accept copied prefixes when they are unique in the current workspace. Use `--full-id` to print canonical UUIDs.
-
-### Get Autopilot Details
-
-```bash
-multica autopilot get <id>
-multica autopilot get <id> --output json   # includes triggers
-```
-
-### Create / Update / Delete
-
-```bash
-multica autopilot create \
-  --title "Nightly bug triage" \
-  --description "Scan todo issues and prioritize." \
-  --agent "Lambda" \
-  --mode create_issue
-
-multica autopilot update <id> --status paused
-multica autopilot update <id> --description "New prompt"
-multica autopilot delete <id>
-```
-
-`--mode` accepts `create_issue` (creates a new issue on each run and assigns it to the agent) or `run_only` (enqueues a direct agent task without creating an issue). `--agent` accepts either a name or UUID.
-
-### Manual Trigger
-
-```bash
-multica autopilot trigger <id>            # Fires the autopilot once, returns the run
-```
-
-### Run History
-
-```bash
-multica autopilot runs <id>
-multica autopilot runs <id> --limit 50 --output json
-```
-
-### Schedule Triggers
-
-```bash
-multica autopilot trigger-add <autopilot-id> --cron "0 9 * * 1-5" --timezone "America/New_York"
-multica autopilot trigger-update <autopilot-id> <trigger-id> --enabled=false
-multica autopilot trigger-delete <autopilot-id> <trigger-id>
-```
-
-Only cron-based `schedule` triggers are currently exposed via the CLI. The data model also defines `webhook` and `api` kinds, but there is no server endpoint that fires them yet, so they're not surfaced here.
+For recurring agent work, use **agent reminders** (`multica reminder schedule` / the reminder UI) with a message-id anchor in the target channel.
 
 ## Other Commands
 
 ```bash
 multica version              # Show CLI version and commit hash
 multica update               # Update to latest version
-multica agent list           # List agents in the current workspace
+multica workspace info --agents           # List agents in the current workspace
 ```
 
 ## Output Formats

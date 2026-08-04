@@ -1016,6 +1016,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/presence", h.GetResearchPresence)
 					r.Delete("/", h.DeleteResearchSession)
 					r.Post("/messages", h.PostResearchMessage)
+					r.Put("/messages/{messageId}/match-decision", h.PutResearchMessageMatchDecision)
 					r.Post("/steer", h.SteerResearchRun)
 					r.Post("/stop", h.StopResearchSession)
 					r.Post("/graph/nodes", h.AppendResearchGraphNode)
@@ -1073,6 +1074,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/windy", h.EnsureWindy)
 				r.Post("/drafts", h.CreateAgentDraft)
 				r.Get("/drafts/{draftId}", h.GetAgentDraft)
+				// agent:create action cards (human load / dismiss)
+				r.Get("/action-cards/{id}", h.GetActionCard)
+				r.Post("/action-cards/{id}/dismiss", h.DismissActionCard)
 				// Agent templates: pre-configured instructions + skill refs.
 				// Picking a template imports the referenced skills into the
 				// workspace (find-or-create by name) and creates the agent
@@ -1218,6 +1222,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// route group with the four endpoints backing the env-state model.
 			r.Post("/api/v1/env", h.CreateEnv)
 			r.Delete("/api/v1/env/{envID}", h.DeleteEnv)
+			r.Post("/api/v1/source-tasks", h.CreateSourceTask)
+			r.Get("/api/v1/source-tasks/{sourceTaskID}", h.GetSourceTask)
 			r.Post("/api/v1/env-dispatch", h.EnvDispatch)
 			r.Delete("/api/v1/env-dispatch/{projectID}", h.DeleteEnvDispatchProject)
 			r.Get("/api/v1/env-dispatch/{projectID}/dag", h.GetDag)
@@ -1344,6 +1350,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Route("/sessions/{id}", func(r chi.Router) {
 						r.Get("/", h.GetAgentResearchSessionSnapshot)
 						r.Post("/messages", h.PostAgentResearchMessage)
+						r.Put("/messages/{messageId}/match-decision", h.PutAgentResearchMessageMatchDecision)
 						r.Post("/graph/nodes", h.AppendAgentResearchGraphNode)
 						r.Post("/sources", h.UpsertAgentResearchSource)
 						r.Post("/report", h.PatchAgentResearchReport)
@@ -1364,6 +1371,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/reminders/update", h.AgentTransportUpdateReminder)
 			r.Post("/api/agent/reminders/cancel", h.AgentTransportCancelReminder)
 			r.Post("/api/agent/reminders/log", h.AgentTransportReminderLog)
+				r.Post("/api/agent/actions/prepare", h.AgentTransportPrepareAction)
 
 			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
 			// sessions) plus idempotent create-or-find. Sole data source for the

@@ -1069,3 +1069,125 @@ func scanSandboxJob(row interface{ Scan(...interface{}) error }) (SandboxJob, er
 	err := row.Scan(&i.ID, &i.WorkspaceID, &i.InitiatorUserID, &i.NodeID, &i.InstanceID, &i.Type, &i.Status, &i.Payload, &i.Result, &i.Error, &i.LeaseUntil, &i.StartedAt, &i.CompletedAt, &i.JobTokenHash, &i.JobTokenExpiresAt, &i.CreatedAt, &i.UpdatedAt)
 	return i, err
 }
+
+const getSweLegoTemplateCache = `-- name: GetSweLegoTemplateCache :one
+SELECT node_id, cache_key, parent_template_id, task_template_id, status, error,
+       builder_instance_id, created_at, updated_at
+FROM swe_lego_template_cache
+WHERE node_id = $1 AND cache_key = $2
+`
+
+type GetSweLegoTemplateCacheParams struct {
+	NodeID   pgtype.UUID `json:"node_id"`
+	CacheKey string      `json:"cache_key"`
+}
+
+func (q *Queries) GetSweLegoTemplateCache(ctx context.Context, arg GetSweLegoTemplateCacheParams) (SweLegoTemplateCache, error) {
+	row := q.db.QueryRow(ctx, getSweLegoTemplateCache, arg.NodeID, arg.CacheKey)
+	return scanSweLegoTemplateCache(row)
+}
+
+const claimSweLegoTemplateBuild = `-- name: ClaimSweLegoTemplateBuild :one
+INSERT INTO swe_lego_template_cache (node_id, cache_key, parent_template_id, status)
+VALUES ($1, $2, $3, 'building')
+ON CONFLICT (node_id, cache_key) DO UPDATE
+SET status = 'building',
+    task_template_id = NULL,
+    error = NULL,
+    builder_instance_id = NULL,
+    updated_at = now()
+WHERE swe_lego_template_cache.status = 'failed'
+RETURNING node_id, cache_key, parent_template_id, task_template_id, status, error,
+          builder_instance_id, created_at, updated_at
+`
+
+type ClaimSweLegoTemplateBuildParams struct {
+	NodeID           pgtype.UUID `json:"node_id"`
+	CacheKey         string      `json:"cache_key"`
+	ParentTemplateID string      `json:"parent_template_id"`
+}
+
+func (q *Queries) ClaimSweLegoTemplateBuild(ctx context.Context, arg ClaimSweLegoTemplateBuildParams) (SweLegoTemplateCache, error) {
+	row := q.db.QueryRow(ctx, claimSweLegoTemplateBuild, arg.NodeID, arg.CacheKey, arg.ParentTemplateID)
+	return scanSweLegoTemplateCache(row)
+}
+
+const setSweLegoTemplateBuildBuilder = `-- name: SetSweLegoTemplateBuildBuilder :exec
+UPDATE swe_lego_template_cache
+SET builder_instance_id = $3,
+    updated_at = now()
+WHERE node_id = $1 AND cache_key = $2 AND status = 'building'
+`
+
+type SetSweLegoTemplateBuildBuilderParams struct {
+	NodeID            pgtype.UUID `json:"node_id"`
+	CacheKey          string      `json:"cache_key"`
+	BuilderInstanceID pgtype.UUID `json:"builder_instance_id"`
+}
+
+func (q *Queries) SetSweLegoTemplateBuildBuilder(ctx context.Context, arg SetSweLegoTemplateBuildBuilderParams) error {
+	_, err := q.db.Exec(ctx, setSweLegoTemplateBuildBuilder, arg.NodeID, arg.CacheKey, arg.BuilderInstanceID)
+	return err
+}
+
+const completeSweLegoTemplateBuild = `-- name: CompleteSweLegoTemplateBuild :one
+UPDATE swe_lego_template_cache
+SET task_template_id = $3,
+    status = 'ready',
+    error = NULL,
+    builder_instance_id = NULL,
+    updated_at = now()
+WHERE node_id = $1 AND cache_key = $2 AND status = 'building'
+RETURNING node_id, cache_key, parent_template_id, task_template_id, status, error,
+          builder_instance_id, created_at, updated_at
+`
+
+type CompleteSweLegoTemplateBuildParams struct {
+	NodeID         pgtype.UUID `json:"node_id"`
+	CacheKey       string      `json:"cache_key"`
+	TaskTemplateID string      `json:"task_template_id"`
+}
+
+func (q *Queries) CompleteSweLegoTemplateBuild(ctx context.Context, arg CompleteSweLegoTemplateBuildParams) (SweLegoTemplateCache, error) {
+	row := q.db.QueryRow(ctx, completeSweLegoTemplateBuild, arg.NodeID, arg.CacheKey, arg.TaskTemplateID)
+	return scanSweLegoTemplateCache(row)
+}
+
+const failSweLegoTemplateBuild = `-- name: FailSweLegoTemplateBuild :one
+UPDATE swe_lego_template_cache
+SET status = 'failed',
+    task_template_id = NULL,
+    error = $3,
+    builder_instance_id = NULL,
+    updated_at = now()
+WHERE node_id = $1 AND cache_key = $2 AND status = 'building'
+RETURNING node_id, cache_key, parent_template_id, task_template_id, status, error,
+          builder_instance_id, created_at, updated_at
+`
+
+type FailSweLegoTemplateBuildParams struct {
+	NodeID   pgtype.UUID `json:"node_id"`
+	CacheKey string      `json:"cache_key"`
+	Error    pgtype.Text `json:"error"`
+}
+
+func (q *Queries) FailSweLegoTemplateBuild(ctx context.Context, arg FailSweLegoTemplateBuildParams) (SweLegoTemplateCache, error) {
+	row := q.db.QueryRow(ctx, failSweLegoTemplateBuild, arg.NodeID, arg.CacheKey, arg.Error)
+	return scanSweLegoTemplateCache(row)
+}
+
+func scanSweLegoTemplateCache(row interface{ Scan(...interface{}) error }) (SweLegoTemplateCache, error) {
+	var item SweLegoTemplateCache
+	err := row.Scan(
+		&item.NodeID,
+		&item.CacheKey,
+		&item.ParentTemplateID,
+		&item.TaskTemplateID,
+		&item.Status,
+		&item.Error,
+		&item.BuilderInstanceID,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	return item, err
+}

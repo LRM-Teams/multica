@@ -89,8 +89,8 @@ function taskRowKey(task: ChannelActiveTask): string {
 
 /**
  * Working-list verb + dot from Agent Activity projection (LRM-581 A v3).
- * Falls back to channel Thinking/Queued only when projection has nothing yet
- * (same Activity opener language — not a second pending semantic).
+ * LRM-1288 / LRM-238: never invent Thinking when projection is empty —
+ * running/queued without a real activity/phase signal → Waiting.
  */
 function useWorkingRowActivityVerb(
   agentId: string,
@@ -142,10 +142,8 @@ function useWorkingRowActivityVerb(
     };
   }
 
-  const base =
-    task.status === "running"
-      ? ACTIVITY_LABEL_EN.thinking
-      : ACTIVITY_LABEL_EN.waiting;
+  // No compact projection: Waiting (never invent Thinking) — LRM-1288.
+  const base = ACTIVITY_LABEL_EN.waiting;
   const verb = duration
     ? t(($) => $.header.working_verb_with_duration, { verb: base, duration })
     : base;

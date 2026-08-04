@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { useIsNavigating } from "../navigation";
+import { usePrefersReducedMotion } from "../common/use-prefers-reduced-motion";
 
 // 2px top-of-content progress bar shown while a transition-wrapped
 // push/replace is mid-flight. Indeterminate by design — we don't know
@@ -15,6 +16,7 @@ import { useIsNavigating } from "../navigation";
 export function NavigationProgress() {
   const isNavigating = useIsNavigating();
   const [renderSweep, setRenderSweep] = useState(false);
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     if (isNavigating) setRenderSweep(true);
@@ -33,7 +35,17 @@ export function NavigationProgress() {
     >
       {renderSweep && (
         <div
-          className="h-full w-1/3 animate-nav-progress-sweep bg-brand"
+          // LRM-1362 — under prefers-reduced-motion the infinite translateX
+          // sweep is dropped (WCAG 2.2.2 / 2.3.3). It must not merely freeze at
+          // `w-1/3`: a motionless third-width bar reads as "33% done", and this
+          // bar is indeterminate by design. Show a static full-width brand bar
+          // instead — still says "loading, progress unknown", with zero
+          // movement. GitHub and Linear degrade indeterminate bars the same way.
+          className={
+            prefersReducedMotion
+              ? "h-full w-full bg-brand"
+              : "h-full w-1/3 animate-nav-progress-sweep bg-brand"
+          }
           style={{
             boxShadow:
               "0 0 8px color-mix(in oklab, var(--brand) 60%, transparent), 0 0 2px color-mix(in oklab, var(--brand) 80%, transparent)",

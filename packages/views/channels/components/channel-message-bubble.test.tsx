@@ -4,7 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelMessage } from "@multica/core/types";
+import type { AgentFleetRank, ChannelMessage } from "@multica/core/types";
+import type { HonorSnapshot } from "@multica/core/types/honor";
 import { stickerCatalogKeys } from "@multica/core/stickers";
 import { __resetAuthorAvatarOkCacheForTests } from "./author-avatar-cache";
 import { ChannelMessageBubble } from "./channel-message-bubble";
@@ -166,6 +167,13 @@ vi.mock("../../navigation/app-link", () => ({
 const getActorAvatarUrlMock = vi.fn(
   (_type: string, _id: string): string | null => null,
 );
+const getAgentHonorLevelMock = vi.fn((_agentId: string): number | undefined => undefined);
+const getMemberHonorMock = vi.fn(
+  (_userId: string): HonorSnapshot | undefined => undefined,
+);
+const getAgentFleetRankMock = vi.fn(
+  (_agentId: string): AgentFleetRank | undefined => undefined,
+);
 // LRM-281 system rows may call useWorkspaceId + useQuery(member-profiles).
 // Layout tests stub the actor directory; give them a stable workspace id so
 // profile resolution does not throw outside a workspace route.
@@ -204,8 +212,9 @@ vi.mock("@multica/core/workspace/hooks", () => ({
           : id === "user-1" || id === "user-2"
             ? ("member" as const)
             : null,
-    getMemberHonor: () => undefined,
-    getAgentFleetRank: () => undefined,
+    getMemberHonor: getMemberHonorMock,
+    getAgentFleetRank: getAgentFleetRankMock,
+    getAgentHonorLevel: getAgentHonorLevelMock,
   }),
 }));
 
@@ -352,6 +361,7 @@ vi.mock("../../i18n/use-t", () => ({
         };
         thread: { reply: string; reply_count: string };
         time: { today: string; yesterday: string };
+        honor_level_value: string;
         profile_popover: {
           role: { owner: string; admin: string; member: string; agent: string };
         };
@@ -442,6 +452,7 @@ vi.mock("../../i18n/use-t", () => ({
           reply_count: "2 replies",
         },
         time: { today: "Today", yesterday: "Yesterday" },
+        honor_level_value: "Level {{level}}",
         profile_popover: {
           role: { owner: "Owner", admin: "Admin", member: "Member", agent: "Agent" },
         },
@@ -524,10 +535,36 @@ describe("ChannelMessageBubble", () => {
     });
   };
 
+  // LRM-1174: a touch laptop in a narrow window is the dead-zone cell — the JS
+  // gate sees `innerWidth < 768` and a touch pointerType, while the SAME device
+  // reports `(pointer: fine)`. Only `(pointer: coarse)` is false here.
+  const setMixedPointerNarrowViewport = () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 760 });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: query.includes("max-width") || query.includes("pointer: fine"),
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+  };
+
   beforeEach(() => {
     copyTextMock.mockReset();
     getActorAvatarUrlMock.mockReset();
     getActorAvatarUrlMock.mockReturnValue(null);
+    getAgentHonorLevelMock.mockReset();
+    getAgentHonorLevelMock.mockReturnValue(undefined);
+    getMemberHonorMock.mockReset();
+    getMemberHonorMock.mockReturnValue(undefined);
+    getAgentFleetRankMock.mockReset();
+    getAgentFleetRankMock.mockReturnValue(undefined);
     vi.mocked(toast.success).mockReset();
     vi.mocked(toast.error).mockReset();
     __resetAuthorAvatarOkCacheForTests();
@@ -557,6 +594,46 @@ describe("ChannelMessageBubble", () => {
     expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-own", "false");
   });
 
+  it("uses the permanent honor-level crest beside an agent author name", () => {
+    getAgentHonorLevelMock.mockReturnValue(8);
+    getAgentFleetRankMock.mockReturnValue({
+      agent_id: "agent-1",
+      fleet_score: 0,
+      class_id: "reserve",
+      class_label: "Reserve",
+      fleet_rank: 0,
+      fleet_size: 1,
+      sample_tasks: 0,
+      sample_sufficient: false,
+      frozen: false,
+      pillars: { delivery: 0, evolution: 0, growth: 0, efficiency: 0 },
+    });
+
+    const { container } = render(
+      <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />,
+    );
+
+    expect(container.querySelector('[data-agent-honor-level="8"]')).toBeInTheDocument();
+    expect(screen.queryByTitle("Reserve")).not.toBeInTheDocument();
+  });
+
+  it("uses the user's armor level crest beside a group-message author name", () => {
+    getMemberHonorMock.mockReturnValue({ level: 42, name_style: "default" });
+
+    const { container } = render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          type: "user",
+          author_id: "user-2",
+          author_name: "Bob Display",
+        })}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(container.querySelector('[data-user-honor-level="42"]')).toBeInTheDocument();
+  });
+
   it("centers the quiet timestamp with the author name and earned badge row", () => {
     render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
 
@@ -581,7 +658,7 @@ describe("ChannelMessageBubble", () => {
     expect(contentCol!.className).not.toMatch(/760px/);
   });
 
-  it("LRM-1126: reserves a fine-pointer action-bar gutter and solid chrome so hover never covers body", () => {
+  it("LRM-1331: drops shell gutter; author row reserves; bar chrome stays overlay", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage()}
@@ -591,15 +668,25 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    const contentCol = screen.getByTestId("message-body").parentElement;
-    expect(contentCol).toHaveClass("[@media(pointer:fine)]:md:pr-[184px]");
+    const shell = screen.getByTestId("message-shell");
+    expect(shell.className).not.toMatch(/pr-\[136px\]/);
+    expect(shell.className).not.toMatch(/pointer:fine.*pr-/);
+
+    const authorRow = screen.getByTestId("message-author-row");
+    expect(authorRow.className).toMatch(
+      /\[@media\(pointer:fine\)_and_\(min-width:640px\)\]:pr-\[162px\]/,
+    );
 
     const actionBar = screen.getByTestId("message-action-bar");
     expect(actionBar).toHaveClass("bg-popover");
-    expect(actionBar).toHaveClass("border-border/70");
+    expect(actionBar).toHaveClass("border-line-strong");
     expect(actionBar).toHaveClass("shadow-sm");
     expect(actionBar).toHaveClass("rounded-lg");
-    expect(actionBar).toHaveClass("top-1.5");
+    expect(actionBar).toHaveClass("top-1");
+    expect(actionBar.className).toMatch(
+      /\[@media\(pointer:fine\)_and_\(min-width:640px\)\]:flex/,
+    );
+    expect(actionBar.className).not.toMatch(/\[@media\(pointer:fine\)\]:flex\b/);
 
     // Author name: never wrap (role/time shrink first on narrow).
     expect(screen.getByText("Research Agent").className).toMatch(/whitespace-nowrap/);
@@ -615,6 +702,236 @@ describe("ChannelMessageBubble", () => {
       />,
     );
     expect(screen.getByTestId("message-action-bar")).toHaveClass("top-0.5");
+  });
+
+  it("LRM-1331: compact text rows use a first-line float safety zone", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: "follow-up line that wraps" })}
+        currentUserId="user-1"
+        compact
+        onReact={vi.fn()}
+      />,
+    );
+    const body = screen.getByTestId("message-body");
+    const gate = "[@media(pointer:fine)_and_(min-width:640px)]";
+    expect(body.className).toContain(`${gate}:before:float-right`);
+    expect(body.className).toContain(`${gate}:before:h-[36px]`);
+    expect(body.className).toContain(`${gate}:before:w-[158px]`);
+    expect(screen.getByTestId("message-shell").className).not.toMatch(/pr-\[136px\]/);
+  });
+
+  it("LRM-1331: compact leading quote uses card inset instead of body float", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          content: "reply with quote",
+          quote_message_id: "q-1",
+          quote: {
+            messageId: "q-1",
+            status: "active",
+            snapshot: {
+              type: "user",
+              authorId: "user-a",
+              authorName: "Alice",
+              content: "quoted",
+              createdAt: "2026-06-17T09:00:00Z",
+            },
+          },
+        })}
+        currentUserId="user-1"
+        compact
+        onReact={vi.fn()}
+      />,
+    );
+    const body = screen.getByTestId("message-body");
+    const quote = screen.getByTestId("message-quote-card");
+    const gate = "[@media(pointer:fine)_and_(min-width:640px)]";
+    expect(body.className).not.toContain(`${gate}:before:float-right`);
+    expect(quote.className).toContain(`${gate}:pr-[158px]`);
+  });
+
+  describe("LRM-1227 bubble shell (① + G + C2 + D2, frozen in LRM-1233)", () => {
+    it("paints a fully enclosed shell on a standalone message", () => {
+      render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+      const shell = screen.getByTestId("message-shell");
+
+      // Shell is the content column itself — no extra wrapper node.
+      expect(shell).toBe(screen.getByTestId("message-body").parentElement);
+      expect(shell).toHaveAttribute("data-group-start", "true");
+      expect(shell).toHaveAttribute("data-group-end", "true");
+      // Surface = message pane (`bg-background`); 1px --line on all four sides.
+      expect(shell).toHaveClass("bg-background");
+      expect(shell.className).not.toMatch(/\bbg-muted\b/);
+      expect(shell).toHaveClass("border-line");
+      expect(shell).toHaveClass("border-x");
+      expect(shell).toHaveClass("border-y");
+      expect(shell).toHaveClass("rounded-lg");
+    });
+
+    it("splits a joined group into head / middle / tail segments", () => {
+      const { rerender } = render(
+        <ChannelMessageBubble
+          message={makeMessage()}
+          currentUserId="user-1"
+          groupEnd={false}
+        />,
+      );
+      // Group head: top edge + top corners only, no bottom edge.
+      let shell = screen.getByTestId("message-shell");
+      expect(shell).toHaveClass("rounded-t-lg");
+      expect(shell).toHaveClass("border-t");
+      expect(shell.className).not.toMatch(/\bborder-b\b/);
+      expect(shell.className).not.toMatch(/\brounded-b-lg\b/);
+
+      // Middle continuation: side edges only — no top/bottom edge, no corners.
+      rerender(
+        <ChannelMessageBubble
+          message={makeMessage({ content: "middle" })}
+          currentUserId="user-1"
+          compact
+          groupEnd={false}
+        />,
+      );
+      shell = screen.getByTestId("message-shell");
+      expect(shell).toHaveClass("border-x");
+      expect(shell.className).not.toMatch(/\bborder-t\b/);
+      expect(shell.className).not.toMatch(/\bborder-b\b/);
+      expect(shell.className).not.toMatch(/rounded-[tb]?-?lg/);
+
+      // Group tail: bottom edge + bottom corners only.
+      rerender(
+        <ChannelMessageBubble
+          message={makeMessage({ content: "last" })}
+          currentUserId="user-1"
+          compact
+          groupEnd
+        />,
+      );
+      shell = screen.getByTestId("message-shell");
+      expect(shell).toHaveClass("rounded-b-lg");
+      expect(shell).toHaveClass("border-b");
+      expect(shell.className).not.toMatch(/\bborder-t\b/);
+      expect(shell.className).not.toMatch(/\brounded-t-lg\b/);
+    });
+
+    it("moves the row hover signal onto the shell edge instead of a bg wash", () => {
+      render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+      // The old 1.02:1 wash is unreadable once the shell is permanently filled.
+      expect(screen.getByTestId("message-bubble").className).not.toMatch(
+        /hover:bg-muted\/35|focus-within:bg-muted\/35/,
+      );
+      const shell = screen.getByTestId("message-shell");
+      expect(shell).toHaveClass("group-hover:border-line-strong");
+      expect(shell).toHaveClass("group-focus-within:border-line-strong");
+    });
+
+    it("lets the self-mention wash replace the shell fill, never stack under it", () => {
+      const msg = makeMessage({
+        type: "user",
+        author_id: "user-2",
+        author_name: "bob",
+        content: "hey [@Alice](mention://member/user-1) look",
+      });
+      render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
+
+      expect(screen.getByTestId("message-bubble").className).toContain("bg-[#fef9e8]");
+      const shell = screen.getByTestId("message-shell");
+      // Shell keeps the silhouette (edges) but drops its own surface, so the
+      // row's wash is what the viewer actually sees.
+      expect(shell.className).not.toMatch(/\bbg-background\b/);
+      expect(shell.className).not.toMatch(/\bbg-muted\b/);
+      expect(shell).toHaveClass("border-line");
+    });
+
+    it("lets the deep-link highlight replace the shell fill too", () => {
+      render(
+        <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" highlighted />,
+      );
+      expect(screen.getByTestId("message-bubble").className).toContain("bg-primary/10");
+      const shell = screen.getByTestId("message-shell");
+      expect(shell.className).not.toMatch(/\bbg-background\b/);
+      expect(shell.className).not.toMatch(/\bbg-muted\b/);
+    });
+
+    it("D2: bar rides the shell top edge on a lead row and sits inside a compact row", () => {
+      const { rerender } = render(
+        <ChannelMessageBubble
+          message={makeMessage()}
+          currentUserId="user-1"
+          onReact={vi.fn()}
+        />,
+      );
+      const bar = screen.getByTestId("message-action-bar");
+      // right-2 == the row's own px-2, so bar right edge == shell right edge.
+      expect(bar).toHaveClass("right-2");
+      expect(bar).toHaveClass("top-1");
+      expect(bar).toHaveClass("-translate-y-1/2");
+
+      rerender(
+        <ChannelMessageBubble
+          message={makeMessage({ content: "follow-up" })}
+          currentUserId="user-1"
+          compact
+          onReact={vi.fn()}
+        />,
+      );
+      const compactBar = screen.getByTestId("message-action-bar");
+      expect(compactBar).toHaveClass("top-0.5");
+      expect(compactBar.className).not.toMatch(/-translate-y-1\/2/);
+    });
+
+    it("D2: 124x34 bar geometry — four size-7 controls, each with its own focus ring", () => {
+      render(
+        <ChannelMessageBubble
+          message={makeMessage()}
+          currentUserId="user-1"
+          onReact={vi.fn()}
+          onQuote={vi.fn()}
+          onOpenThread={vi.fn()}
+        />,
+      );
+      const bar = screen.getByTestId("message-action-bar");
+      const controls = Array.from(bar.querySelectorAll("button"));
+      // 4 × 28 + 3 × 2 (gap-0.5) + 2 × 2 (p-0.5) + 2 × 1 (edge) = 124; 28+4+2 = 34.
+      expect(controls).toHaveLength(4);
+      expect(bar).toHaveClass("gap-0.5");
+      expect(bar).toHaveClass("p-0.5");
+      for (const control of controls) {
+        expect(control.className).toMatch(/\bsize-7\b/);
+        expect(control.className).toMatch(/focus-visible:ring-1/);
+        expect(control.className).toMatch(/focus-visible:ring-ring/);
+      }
+    });
+
+    it("LRM-1331: bar + reserves share fine+≥640 gate (no shell-wide pr gutter)", () => {
+      render(
+        <ChannelMessageBubble
+          message={makeMessage()}
+          currentUserId="user-1"
+          onReact={vi.fn()}
+        />,
+      );
+      const shell = screen.getByTestId("message-shell");
+      const bar = screen.getByTestId("message-action-bar");
+      const authorRow = screen.getByTestId("message-author-row");
+      const gate = "[@media(pointer:fine)_and_(min-width:640px)]";
+      expect(shell.className).not.toMatch(/pr-\[136px\]/);
+      expect(authorRow.className).toContain(`${gate}:pr-[162px]`);
+      expect(bar.className).toContain(`${gate}:flex`);
+      // Narrow fine (<640) must not get the hover bar (falls back to long-press).
+      expect(bar.className).not.toMatch(/\[@media\(pointer:fine\)\]:flex\b/);
+    });
+
+    it("a11y: the shell is decoration only — no role, no aria, no new tab stop", () => {
+      render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+      const shell = screen.getByTestId("message-shell");
+      expect(shell.getAttribute("role")).toBeNull();
+      expect(shell.getAttribute("tabindex")).toBeNull();
+      expect(
+        Array.from(shell.attributes).filter((attr) => attr.name.startsWith("aria-")),
+      ).toHaveLength(0);
+    });
   });
 
   it("renders compact continuations without author chrome but keeps body and gutter time (LRM-255)", () => {
@@ -1727,7 +2044,9 @@ describe("ChannelMessageBubble", () => {
     const bubble = screen.getByTestId("message-bubble");
     const actionBar = screen.getByTestId("message-action-bar");
     expect(actionBar).toHaveClass("hidden");
-    expect(actionBar).toHaveClass("[@media(pointer:fine)]:flex");
+    expect(actionBar).toHaveClass(
+      "[@media(pointer:fine)_and_(min-width:640px)]:flex",
+    );
     expect(actionBar).toHaveClass("opacity-0");
     expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
 
@@ -1777,6 +2096,82 @@ describe("ChannelMessageBubble", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
     );
+  });
+
+  // LRM-1174 (LRM-1173 freeze B): the JS gate (pointerType === "touch" +
+  // isMobileActionViewport) can open the sheet on a touch laptop in a narrow
+  // window, but the dialog also carried `[@media(pointer:fine)]:hidden` — the
+  // same device reports `pointer: fine`, so showModal() put an INVISIBLE modal
+  // in the top layer and the page went inert (cellA-mixed-760-DEAD). Visibility
+  // and modality must come from one source: the JS gate only.
+  it("keeps the mobile action sheet visible on a mixed-pointer narrow window (LRM-1174)", async () => {
+    setMixedPointerNarrowViewport();
+    render(
+      <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" onReact={vi.fn()} />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const menu = await screen.findByRole("dialog", { name: "Message actions" });
+    expect(menu.className).not.toMatch(/\[@media\(pointer:fine\)\]:hidden/);
+
+    await userEvent.click(within(menu).getByRole("button", { name: "Add reaction" }));
+    const reactionSheet = await screen.findByRole("dialog", { name: "Add reaction" });
+    expect(reactionSheet.className).not.toMatch(/\[@media\(pointer:fine\)\]:hidden/);
+
+    // LRM-1331: hover action bar is fine-pointer + ≥640 only.
+    expect(screen.getByTestId("message-action-bar")).toHaveClass(
+      "[@media(pointer:fine)_and_(min-width:640px)]:flex",
+    );
+  });
+
+  it("returns focus to the triggering bubble when the mobile action sheet closes (LRM-1174)", async () => {
+    setMobileViewport();
+    copyTextMock.mockResolvedValue(true);
+    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
+
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const menu = await screen.findByRole("dialog", { name: "Message actions" });
+    await userEvent.click(within(menu).getByRole("button", { name: "Copy" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
+    );
+    // Removing a top-layer <dialog> drops activeElement to <body>; the bubble
+    // that opened the sheet must get focus back so the next action/keyboard
+    // step continues from the same message.
+    await waitFor(() => expect(document.activeElement).toBe(bubble));
+  });
+
+  it("returns focus to the triggering bubble when the mobile reaction sheet closes (LRM-1174)", async () => {
+    setMobileViewport();
+    const onReact = vi.fn();
+    render(
+      <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" onReact={onReact} />,
+    );
+
+    const bubble = screen.getByTestId("message-bubble");
+    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
+
+    const menu = await screen.findByRole("dialog", { name: "Message actions" });
+    await userEvent.click(within(menu).getByRole("button", { name: "Add reaction" }));
+    const reactionSheet = await screen.findByRole("dialog", { name: "Add reaction" });
+
+    // Handing the primary sheet over to the reaction sheet is NOT a dismissal —
+    // focus must stay inside the overlay stack, not snap back to the bubble.
+    expect(document.activeElement).not.toBe(bubble);
+
+    await userEvent.click(within(reactionSheet).getByRole("button", { name: "🎉" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Add reaction" })).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(document.activeElement).toBe(bubble));
   });
 
   it("hides the permanent mobile More trigger; long-press and left-swipe open the action sheet (LRM-495)", async () => {

@@ -37,7 +37,7 @@ export function MyIssuesHeader({ allIssues }: { allIssues: Issue[] }) {
   const scopeLabel = SCOPES.find((s) => s.value === scope)?.label ?? SCOPES[0]?.label;
 
   return (
-    <div className="h-12 shrink-0 overflow-x-auto px-4 [-webkit-overflow-scrolling:touch]">
+    <div className="h-12 shrink-0 overflow-x-auto px-4 momentum-scroll">
       <div className="flex h-full w-max min-w-full items-center justify-between gap-2">
         <div className="hidden shrink-0 items-center gap-1 md:flex">
           {SCOPES.map((s) => (

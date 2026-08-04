@@ -422,7 +422,7 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
   const wsId = useWorkspaceId();
   const currentUser = useAuthStore((s) => s.user);
   const { openDM, isPending } = useOpenDM();
-  const { getMemberHonor, getAgentFleetRank } = useActorName();
+  const { getMemberHonor } = useActorName();
   const [search, setSearch] = useState("");
 
   const { data: agents = [], isLoading: agentsLoading } = useQuery(
@@ -517,7 +517,6 @@ function DmPickerContent({ onClose }: { onClose: () => void }) {
                 handle={item.presentation.handle}
                 showHandle={item.presentation.showHandleLabel}
                 honor={item.kind === "user" ? getMemberHonor(item.id) : undefined}
-                fleet={item.kind === "agent" ? getAgentFleetRank(item.id) : undefined}
                 showBadges={false}
                 primaryClassName="truncate text-sm font-medium text-foreground"
               />
@@ -574,7 +573,7 @@ export function DmConversationRow({
   onClose: () => void;
 }) {
   const { t } = useT("channels");
-  const { getMemberHonor, getAgentFleetRank } = useActorName();
+  const { getMemberHonor } = useActorName();
   const last = dm.last_message;
   // System rows (issue/member/project/reminder events) carry their own
   // localized narrative from the same structured facts the full in-channel
@@ -631,8 +630,6 @@ export function DmConversationRow({
   }, [agents, dm.mode, dm.peer.id, dm.peer.type]);
   const peerHonor =
     !agentPair && dm.peer.type === "user" ? getMemberHonor(dm.peer.id) : undefined;
-  const peerFleet =
-    !agentPair && dm.peer.type === "agent" ? getAgentFleetRank(dm.peer.id) : undefined;
   const titleWeightClass = realUnread > 0 ? "font-semibold" : "font-medium";
 
   return (
@@ -705,7 +702,6 @@ export function DmConversationRow({
                     <ActorStyledName
                       displayName={title}
                       honor={peerHonor}
-                      fleet={peerFleet}
                       showBadges={false}
                       className={cn("text-sm text-foreground", titleWeightClass)}
                     />

@@ -746,10 +746,13 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			}
 		}
 		if ctx.AgentMemoryDir != "" {
-			fmt.Fprintf(&b, "- Memory root (`MULTICA_AGENT_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
+			fmt.Fprintf(&b, "- Portable memory root (`MULTICA_AGENT_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
 			if provider == "pi" {
 				fmt.Fprintf(&b, "- Pi memory root (`PI_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
 			}
+		}
+		if ctx.DeviceMemoryDir != "" {
+			fmt.Fprintf(&b, "- Device-local state (`MULTICA_DEVICE_MEMORY_DIR`): `%s`\n", ctx.DeviceMemoryDir)
 		}
 		if ctx.UserMemoryDir != "" {
 			fmt.Fprintf(&b, "- Current user memory (`MULTICA_USER_MEMORY_DIR`): `%s`\n", ctx.UserMemoryDir)
@@ -769,7 +772,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 				fmt.Fprintf(&b, "- Pi skill drafts root (`PI_SKILL_DRAFTS_DIR`): `%s`\n", ctx.AgentSkillDraftsDir)
 			}
 		}
-		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Use `MULTICA_AGENT_MEMORY_DIR` / `MULTICA_AGENT_ROOT` for durable memory changes. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
+		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Write portable preferences, decisions, and durable facts under `MULTICA_AGENT_MEMORY_DIR` or the scoped user/project/channel directories. Write absolute paths, installed-tool state, loopback endpoints, ports, and other machine-specific facts under `MULTICA_DEVICE_MEMORY_DIR`; that directory is never replicated as portable center memory. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
 		b.WriteString("### Harness boundary (kernel vs shell)\n\n")
 		b.WriteString("- **Multica kernel (not swappable with the coding harness):** Issue status machine, Goal, channel permissions, group manager, daemon claim/inbox, audit.\n")
 		b.WriteString("- **Execution shell (swappable):** coding harness / provider (Codex, Claude, Pi, …), model choice, research backends.\n")
@@ -784,7 +787,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 	renderPinnedRules(&b, ctx)
 
-	if ctx.ChatSessionID != "" && ctx.IssueID == "" {
+	if isChatLikeContext(ctx) {
 		renderChatRuntimeBrief(&b, provider, ctx)
 		return b.String()
 	}
@@ -918,10 +921,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			b.WriteString(ctx.AutopilotDescription)
 			b.WriteString("\n\n")
 		}
-		if ctx.AutopilotID != "" {
-			fmt.Fprintf(&b, "- Run `multica autopilot get %s --output json` if you need the full autopilot configuration\n", ctx.AutopilotID)
-		}
-		b.WriteString("- Complete the autopilot instructions directly\n")
+		// Autopilot CLI retired (task #40): do not suggest multica autopilot get.
+		b.WriteString("- Complete the autopilot instructions in this brief directly (no `multica autopilot` CLI — product retired)\n")
 		b.WriteString("- Do not run `multica issue get`, `multica issue comment add`, or `multica issue status` for this run unless the autopilot instructions explicitly tell you to create or update an issue\n\n")
 	} else if ctx.TriggerCommentID != "" {
 		// Comment-triggered: focus on reading and replying
@@ -1093,7 +1094,7 @@ func renderPinnedRules(b *strings.Builder, ctx TaskContextForEnv) {
 	if ctx.IssueID != "" {
 		b.WriteString("- Issue description + acceptance criteria + attachments = spec. Chat/comments are context. Challenge a bad spec with its owner; never silently rewrite or lower it.\n")
 	}
-	if ctx.ChatSessionID != "" {
+	if isChatLikeContext(ctx) {
 		b.WriteString("- Thread attention is explicit. Unfollow only after work and every handoff/review/decision/reply/follow-up completes. CI/deploy/human wait/reminder/idle/task-done/mute are not completion. Personal @mentions still pierce; posting re-follows.\n")
 	}
 	b.WriteString("\n")
@@ -1103,7 +1104,7 @@ func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("### Memory Operating Guide (v0.11)\n\n")
 	b.WriteString("Use high-strength auto-write for human preferences and durable work arrangements, and medium-strength auto-write for other durable knowledge: record them without waiting for a separate request when they are specific, supported by the current interaction, likely to matter in a future run, and belong to this agent. During real work, treat **human speech and peer-agent durable statements** as high-signal by default — preferences, ownership, handoffs, process lessons, corrections, and \"who works with whom\" are almost never idle chatter whether they come from a member or another agent; only skip writing when the turn is clearly a test, greeting, thanks, ack-only loop, or throwaway joke. A verbal acknowledgment such as \"got it\" / \"记住了\" does not count as remembering; a durable file write must succeed before you claim it. You judge the right destination — `USER.md`, `RELATIONSHIP.md`, agent `memory/MEMORY.md`, `notes/*`, or project/channel files — based on what the fact governs. Do not record guesses, ephemeral execution noise (one-off file paths, transient logs), raw transcripts, secrets, or facts that are useful only for the current response. Prefer updating an existing entry over creating a duplicate.\n\n")
 	b.WriteString("- **Entry gates (platform-enforced)**: group-chat wakes do not inject personal (`USER.md` / user-scoped) memory by default; a clear bring-in phrase (e.g. \"带上我的个人偏好\" / \"use my personal memory\") can temporarily allow it. Project memory loads only when this task has a bound project. Historical formal memories without a scope tag belong in `REVIEW.md` for governance — do not pretend they are already layered.\n")
-	if ctx.ChatSessionID != "" && ctx.Directed {
+	if isChatLikeContext(ctx) && ctx.Directed {
 		b.WriteString("- **Recall before action**: the effective snapshot already contains only context selected for this member, project, and channel. Read the current user's isolated `USER.md` only through `MULTICA_USER_MEMORY_DIR`; never read another member directory.\n")
 	}
 	b.WriteString("- **Source is not scope**: who said a memory is provenance, not its applicability. Do not make a rule user-scoped merely because Andong or another member stated it, and do not discard a rule merely because a peer agent stated it. Choose scope from what the memory governs: this member, this project, this channel, this agent everywhere, or the workspace/team.\n")
@@ -1209,7 +1210,7 @@ func renderChannelChatRuntimeBrief(b *strings.Builder, provider string, ctx Task
 	b.WriteString("Common capability index — use these forms directly when they fit; inspect help only when a needed flag is missing:\n")
 	b.WriteString("- Delivery boundary: only successful chat send/react commands deliver visible chat output. Text outside those commands, including final assistant output, is never delivered.\n")
 	b.WriteString("- Chat output: use `multica message send --target <target>` with an explicit target (`#channel`, `#channel:<threadId>`, `dm:@handle`, or `dm:@handle:<threadId>`). Use `--message \"short text\"` for short plain text, `--message-stdin` with a single-quote heredoc or `--message-file <path>` for agent-authored multiline/shell-special text, and `--sticker <id>` for sticker replies. Add `--voice` when the current human message is marked as voice input or the human explicitly asks for a spoken/voice reply; otherwise omit it. A voice send still requires the complete response text as its accessible transcript, no longer than 4,096 characters; write it for listening, without tables, code blocks, or raw URLs. `--voice` is the only supported voice-reply path: do not synthesize, encode, upload, or attach an audio file, because Multica creates playback audio from the transcript. After a successful send, do not duplicate the reply in final output.\n")
-	b.WriteString("- Message content references: you can embed structured @mentions and #channel references inside any message body (send, issue description, or comment). To @mention a person or agent, write `[@DisplayName](mention://member/<uuid>)` — use `multica workspace member list --output json` or `multica agent list --output json` to find the UUID. To reference a channel (e.g. when pointing someone to another channel), write `[#ChannelName](mention://channel/<uuid>)` — use `multica channel list --output json` to find the UUID. Both forms render as clickable links for the recipient and work in all message delivery paths including `multica message send`, issue descriptions, and comments.\n")
+	b.WriteString("- Message content references: you can embed structured @mentions and #channel references inside any message body (send, issue description, or comment). To @mention a person or agent, write `[@DisplayName](mention://member/<uuid>)` — use `multica workspace member list --output json` or `multica workspace info --agents --output json` to find the UUID. To reference a channel (e.g. when pointing someone to another channel), write `[#ChannelName](mention://channel/<uuid>)` — use `multica channel list --output json` to find the UUID. Both forms render as clickable links for the recipient and work in all message delivery paths including `multica message send`, issue descriptions, and comments.\n")
 	b.WriteString("- Interactive choice cards (yes/no or 2–4 options): when you need a human decision, use `multica message ask-choice --target <target> --prompt \"…\" --layout binary|list --option id=…,label=…` (repeat `--option`). This is the Multica-native path for Cursor/PI/Claude/etc. — do not rely on vendor AskUserQuestion UIs. Use sparingly; do not force a card after every investigation.\n")
 	b.WriteString("- Proactive human DM: use `multica message send --target dm:@<human-handle> --message-stdin`. The human handle is always explicit: there is no recipient fallback. Unknown or agent handles are rejected; to reach another agent, post in a group and @-mention it. Treat a DM as sent only after the command exits 0 and its JSON response contains `message.id`; a freshness `held` result exits non-zero and is not a sent message.\n")
 	b.WriteString("- Common sticker fast path: use stable ids directly without lookup — greeting `hi`, ok `ok`, received/understood `got-it`, agree `nod-yes`, praise `thumbs-up` or `impressive`, thanks `thanks`, on-it `on-it`, laughter `huaji`. Only for a rare, specific sticker, run one targeted `multica sticker search <query>`; do not list the whole sticker catalog.\n")
@@ -1286,7 +1287,7 @@ func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 		switch {
 		case ctx.IssueID != "":
 			fmt.Fprintf(b, "This issue belongs to **%s**.\n\n", ctx.ProjectTitle)
-		case ctx.ChatSessionID != "":
+		case isChatLikeContext(ctx):
 			fmt.Fprintf(b, "This conversation is associated with **%s**.\n\n", ctx.ProjectTitle)
 		case ctx.QuickCreatePrompt != "":
 			fmt.Fprintf(b, "The requested issue will be created in **%s**.\n\n", ctx.ProjectTitle)

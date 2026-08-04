@@ -127,7 +127,7 @@ describe("ChannelProjectSettingsPanel", () => {
   });
 
   // Control case: the desktop docked side panel never wraps this component
-  // in a Drawer (see channel-settings-side-panel.tsx / ChannelDetailsPanel's
+  // in a Drawer (see ChannelDetailsPanel's
   // `variant="panel"` call in channels-page.tsx, which passes no
   // `portalContainer`). Picking an option must fire onChange — this is the
   // baseline the mobile case must match.

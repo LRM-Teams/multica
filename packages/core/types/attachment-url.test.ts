@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   attachmentDownloadPath,
   attachmentIdFromDownloadURL,
+  attachmentIdFromRef,
   contentReferencesAttachment,
 } from "./attachment-url";
 
@@ -66,11 +67,39 @@ describe("attachmentIdFromDownloadURL", () => {
   });
 });
 
+describe("attachmentIdFromRef", () => {
+  it("accepts the stable download path", () => {
+    expect(attachmentIdFromRef(`/api/attachments/${ID}/download`)).toBe(ID);
+  });
+
+  it("accepts the attachment:<uuid> CLI/agent shorthand (LRM-1130)", () => {
+    expect(attachmentIdFromRef(`attachment:${ID}`)).toBe(ID);
+  });
+
+  it("trims whitespace around the shorthand", () => {
+    expect(attachmentIdFromRef(`  attachment:${ID}  `)).toBe(ID);
+  });
+
+  it("rejects non-uuid attachment: values", () => {
+    expect(attachmentIdFromRef("attachment:not-a-uuid")).toBeUndefined();
+    expect(attachmentIdFromRef("attachment:")).toBeUndefined();
+  });
+
+  it("rejects unrelated schemes", () => {
+    expect(attachmentIdFromRef("https://cdn.example.com/photo.png")).toBeUndefined();
+  });
+});
+
 describe("contentReferencesAttachment", () => {
   const att = { id: ID, url: "/uploads/workspaces/ws/legacy.png" };
 
   it("matches when the markdown uses the stable download path", () => {
     const md = `body\n\n![file](${attachmentDownloadPath(ID)})\n`;
+    expect(contentReferencesAttachment(md, att)).toBe(true);
+  });
+
+  it("matches when the markdown uses attachment:<uuid> (LRM-1130)", () => {
+    const md = `body\n\n![file](attachment:${ID})\n`;
     expect(contentReferencesAttachment(md, att)).toBe(true);
   });
 

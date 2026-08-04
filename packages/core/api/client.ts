@@ -19,6 +19,7 @@ import type {
   CreateAgentRequest,
   CreateAgentDraftRequest,
   AgentCreationDraft,
+  AgentActionCard,
   EnsureWindyResponse,
   AgentTemplate,
   AgentTemplateSummary,
@@ -491,6 +492,20 @@ export class PreviewUnsupportedError extends Error {
 // a mis-fired timeout costs one extra retry tap, no longer lost text (a message
 // should send in ~1s anyway; 8s stays tolerant of slow networks).
 const SEND_TIMEOUT_MS = 8_000;
+
+/**
+ * Forward a caller's `AbortSignal` (React Query hands one to every queryFn) into
+ * a fetch init, or nothing at all when absent.
+ *
+ * LRM-1296: this is not cosmetic. React Query only aborts an in-flight fetch on
+ * last-observer-unsubscribe when the queryFn *consumed* the signal it was given;
+ * a read that ignores it keeps running after the user switched away, holding one
+ * of the ~6 per-origin connection slots that the newly-opened conversation's
+ * message page needs to paint.
+ */
+function abortInit(options?: { signal?: AbortSignal }): RequestInit | undefined {
+  return options?.signal ? { signal: options.signal } : undefined;
+}
 
 /** Build a same-origin Duplex WebSocket URL from an HTTP API base URL. */
 export function voiceCallDuplexWsUrl(
@@ -1218,6 +1233,18 @@ export class ApiClient {
 
   async getAgentDraft(id: string): Promise<AgentCreationDraft> {
     return this.fetch(`/api/agents/drafts/${encodeURIComponent(id)}`);
+  }
+
+  /** Load a prepared/done/dismissed agent:create action card (hire path). */
+  async getAgentActionCard(id: string): Promise<AgentActionCard> {
+    return this.fetch(`/api/agents/action-cards/${encodeURIComponent(id)}`);
+  }
+
+  /** Human cancel of a prepared agent:create action card. */
+  async dismissAgentActionCard(id: string): Promise<AgentActionCard> {
+    return this.fetch(`/api/agents/action-cards/${encodeURIComponent(id)}/dismiss`, {
+      method: "POST",
+    });
   }
 
   async listAgentTemplates(): Promise<AgentTemplateSummary[]> {
@@ -3211,8 +3238,11 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/unread`, { method: "POST" });
   }
 
-  async listChannelMembers(channelId: string): Promise<ChannelMember[]> {
-    return this.fetch(`/api/channels/${channelId}/members`);
+  async listChannelMembers(
+    channelId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ChannelMember[]> {
+    return this.fetch(`/api/channels/${channelId}/members`, abortInit(options));
   }
 
   /**
@@ -3221,8 +3251,12 @@ export class ApiClient {
    */
   async getChannelMemberManagementCapabilities(
     channelId: string,
+    options?: { signal?: AbortSignal },
   ): Promise<ChannelMemberManagementCapabilities> {
-    return this.fetch(`/api/channels/${channelId}/member-management-capabilities`);
+    return this.fetch(
+      `/api/channels/${channelId}/member-management-capabilities`,
+      abortInit(options),
+    );
   }
 
   /** LRM-622 — single invite-picker pool (users + agents), server-filtered. */
@@ -3319,8 +3353,11 @@ export class ApiClient {
     });
   }
 
-  async listChannelMessages(channelId: string): Promise<ChannelMessage[]> {
-    const page = await this.listChannelMessagesPage(channelId);
+  async listChannelMessages(
+    channelId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ChannelMessage[]> {
+    const page = await this.listChannelMessagesPage(channelId, options);
     return page.messages;
   }
 
@@ -3336,6 +3373,8 @@ export class ApiClient {
        * rejects both); when set, `before` is ignored.
        */
       around?: number | null;
+      /** React Query's cancellation signal — see {@link abortInit} (LRM-1296). */
+      signal?: AbortSignal;
     } = {},
   ): Promise<ChannelMessagesPage> {
     const limit = options.limit ?? 50;
@@ -3352,6 +3391,7 @@ export class ApiClient {
     }
     const raw = await this.fetch<unknown>(
       `/api/channels/${channelId}/messages?${params.toString()}`,
+      abortInit(options),
     );
     return parseWithFallback(
       raw,
@@ -3364,7 +3404,7 @@ export class ApiClient {
   async listChannelMessageThread(
     channelId: string,
     messageId: string,
-    options?: { limit?: number; beforeSeq?: number; before?: string; beforeId?: string },
+    options?: { limit?: number; beforeSeq?: number; before?: string; beforeId?: string; signal?: AbortSignal },
   ): Promise<ChannelThreadMessagesPage> {
     const params = new URLSearchParams();
     if (options?.limit) {
@@ -3379,6 +3419,7 @@ export class ApiClient {
     const suffix = params.toString();
     const raw = await this.fetch<unknown>(
       `/api/channels/${channelId}/messages/${messageId}/thread${suffix ? `?${suffix}` : ""}`,
+      abortInit(options),
     );
     return parseWithFallback(
       raw,
@@ -3762,8 +3803,11 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/stats`);
   }
 
-  async getChannelGoal(channelId: string): Promise<ChannelGoalEnvelope> {
-    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal`);
+  async getChannelGoal(
+    channelId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ChannelGoalEnvelope> {
+    const raw = await this.fetch<unknown>(`/api/channels/${channelId}/goal`, abortInit(options));
     return parseWithFallback(raw, ChannelGoalEnvelopeSchema, { goal: null }, {
       endpoint: "GET /api/channels/:id/goal",
     });
@@ -3887,8 +3931,11 @@ export class ApiClient {
     return this.fetch(`/api/channels/${channelId}/project-files/content?path=${encodeURIComponent(path)}`);
   }
 
-  async listChannelActiveTasks(channelId: string): Promise<{ tasks: ChannelActiveTask[] }> {
-    return this.fetch(`/api/channels/${channelId}/active-tasks`);
+  async listChannelActiveTasks(
+    channelId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ tasks: ChannelActiveTask[] }> {
+    return this.fetch(`/api/channels/${channelId}/active-tasks`, abortInit(options));
   }
 
   /**
@@ -3950,8 +3997,11 @@ export class ApiClient {
     });
   }
 
-  async getChannelProject(channelId: string): Promise<{ project_id: string }> {
-    return this.fetch(`/api/channels/${channelId}/project`);
+  async getChannelProject(
+    channelId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ project_id: string }> {
+    return this.fetch(`/api/channels/${channelId}/project`, abortInit(options));
   }
 
   async setChannelProject(channelId: string, projectId: string | null): Promise<{ project_id: string }> {

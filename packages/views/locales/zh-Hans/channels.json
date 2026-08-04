@@ -263,6 +263,7 @@
     "remove_confirm_title": "移除「{{name}}」？",
     "remove_confirm_description": "将立即失去本频道读写权限。",
     "remove_confirm": "确认移除",
+    "remove_confirming": "移除中…",
     "remove_cancel": "取消",
     "remove_failed": "移出失败，请重试。",
     "remove_retry": "重试",
@@ -312,7 +313,7 @@
       "keep_building": "继续开发以解锁荣誉",
       "collection": "已收集 {{unlocked}} / {{total}}",
       "agent_collection": "已解锁 {{unlocked}} 项",
-      "level_value": "LV.{{level}}"
+      "level_value": "第 {{level}} 级"
     },
     "restricted": {
       "runtime": "Runtime",
@@ -575,12 +576,18 @@
     "project_tooltip": "设置该频道对应的项目",
     "tray_remove_aria": "移除 {{filename}}",
     "tray_retry_aria": "重试上传 {{filename}}",
+    "tray_preview_aria": "查看 {{filename}}",
     "tray_uploading": "上传中",
     "tray_upload_failed": "上传失败",
     "voice_unsent": "语音未发送（{{duration}}）",
+    "voice_unsent_retrying": "正在重试发送（{{duration}}）",
     "voice_unsent_retry": "重试发送",
     "voice_unsent_delete": "删除",
-    "tray_reselect": "需重新选择"
+    "tray_reselect": "需重新选择",
+    "undelivered_mentions_title": "有人还收不到 @",
+    "undelivered_mentions_body": "{{who}} 还不在本频道。邀请后他们才能收到 @。",
+    "undelivered_invite": "邀请进频道",
+    "undelivered_invite_done": "已邀请，对方现在可以收到这条 @。"
   },
   "message": {
     "add_reaction": "添加表情回应",

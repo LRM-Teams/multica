@@ -90,6 +90,25 @@ describe("ResearchClarificationCard", () => {
     );
   });
 
+  it("announces a missing required field and describes the invalid input", () => {
+    render(
+      <ResearchClarificationCard
+        question={formQuestion}
+        resolution={{ status: "pending" }}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("research-clarification-submit"));
+
+    const error = screen.getByTestId("research-clarification-error");
+    const budget = screen.getByLabelText(/Budget/);
+    expect(error).toHaveAttribute("role", "alert");
+    expect(budget).toHaveAttribute("aria-required", "true");
+    expect(budget).toHaveAttribute("aria-invalid", "true");
+    expect(budget).toHaveAttribute("aria-describedby", error.id);
+    expect(budget).toHaveFocus();
+  });
+
   it("locks controls after skip and shows status", () => {
     render(
       <ResearchClarificationCard
@@ -102,6 +121,138 @@ describe("ResearchClarificationCard", () => {
     const options = screen.getAllByTestId("research-clarification-option");
     for (const opt of options) {
       expect((opt as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+
+  // LRM-1169 — an answered option must stay readable by keyboard / screen reader.
+  it("keeps the answered option focusable and announces it as selected", () => {
+    const onSelect = vi.fn();
+    render(
+      <ResearchClarificationCard
+        question={listQuestion}
+        resolution={{
+          status: "answered",
+          optionId: "cost",
+          optionLabel: "Cost",
+          replyMessageId: "u1",
+        }}
+        onSelectOption={onSelect}
+      />,
+    );
+
+    const answered = screen
+      .getAllByTestId("research-clarification-option")
+      .find((el) => el.getAttribute("data-option-id") === "cost") as HTMLButtonElement;
+    const notPicked = screen
+      .getAllByTestId("research-clarification-option")
+      .find((el) => el.getAttribute("data-option-id") === "recall") as HTMLButtonElement;
+
+    // The picked option is not removed from the tab order.
+    expect(answered.hasAttribute("disabled")).toBe(false);
+    expect(answered.disabled).toBe(false);
+    expect(answered.getAttribute("aria-disabled")).toBe("true");
+    expect(answered.getAttribute("aria-pressed")).toBe("true");
+    expect(answered.getAttribute("aria-label")).toBe("Cost");
+    answered.focus();
+    expect(document.activeElement).toBe(answered);
+
+    // Options the user did not pick still leave the tab order.
+    expect(notPicked.disabled).toBe(true);
+    expect(notPicked.getAttribute("aria-pressed")).toBe("false");
+
+    // Re-activating the answered option must not resubmit.
+    fireEvent.click(answered);
+    fireEvent.keyDown(answered, { key: "Enter" });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("does not resubmit while a pending answer is in flight", () => {
+    const onSelect = vi.fn();
+    render(
+      <ResearchClarificationCard
+        question={listQuestion}
+        resolution={{ status: "pending" }}
+        pending
+        onSelectOption={onSelect}
+      />,
+    );
+    const options = screen.getAllByTestId("research-clarification-option");
+    for (const opt of options) {
+      expect((opt as HTMLButtonElement).disabled).toBe(true);
+      expect(opt.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(opt);
+    }
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  // LRM-1170 — one dim level per state, and skip settles the same way in both layouts.
+  it("applies exactly one opacity utility per option state", () => {
+    const opacities = (el: Element) =>
+      el.className.split(/\s+/).filter((c) => c.startsWith("opacity-"));
+
+    const interactive = render(
+      <ResearchClarificationCard question={listQuestion} resolution={{ status: "pending" }} />,
+    );
+    for (const opt of screen.getAllByTestId("research-clarification-option")) {
+      expect(opacities(opt)).toEqual([]);
+    }
+    interactive.unmount();
+
+    const inFlight = render(
+      <ResearchClarificationCard
+        question={listQuestion}
+        resolution={{ status: "pending" }}
+        pending
+      />,
+    );
+    for (const opt of screen.getAllByTestId("research-clarification-option")) {
+      expect(opacities(opt)).toEqual(["opacity-60"]);
+    }
+    inFlight.unmount();
+
+    render(
+      <ResearchClarificationCard
+        question={listQuestion}
+        resolution={{
+          status: "answered",
+          optionId: "cost",
+          optionLabel: "Cost",
+          replyMessageId: "u1",
+        }}
+      />,
+    );
+    for (const opt of screen.getAllByTestId("research-clarification-option")) {
+      const expected =
+        opt.getAttribute("data-option-id") === "cost" ? [] : ["opacity-50"];
+      expect(opacities(opt)).toEqual(expected);
+    }
+  });
+
+  it("removes skip once settled in both option and form layouts", () => {
+    for (const question of [listQuestion, formQuestion]) {
+      const pendingRender = render(
+        <ResearchClarificationCard question={question} resolution={{ status: "pending" }} />,
+      );
+      expect(screen.getByTestId("research-clarification-skip")).toBeTruthy();
+      pendingRender.unmount();
+
+      const answeredRender = render(
+        <ResearchClarificationCard
+          question={question}
+          resolution={{ status: "answered", replyMessageId: "u1" }}
+        />,
+      );
+      expect(screen.queryByTestId("research-clarification-skip")).toBeNull();
+      answeredRender.unmount();
+
+      const skippedRender = render(
+        <ResearchClarificationCard
+          question={question}
+          resolution={{ status: "skipped", replyMessageId: "u1" }}
+        />,
+      );
+      expect(screen.queryByTestId("research-clarification-skip")).toBeNull();
+      skippedRender.unmount();
     }
   });
 });

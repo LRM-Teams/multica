@@ -31,6 +31,7 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { cn } from "@multica/ui/lib/utils";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
 import { useT } from "../../i18n/use-t";
@@ -63,6 +64,9 @@ import {
   buildHumanBoundary,
   buildSourceStrategy,
   dimensionFamilyOf,
+  evidenceRevisionKey,
+  readErrorStatus,
+  resolveEvidenceOverviewMode,
 } from "../lib/m2-visibility";
 import { isResearchSessionStoppable } from "../lib/research-stream";
 import {
@@ -82,6 +86,7 @@ import { useBrowserOnline } from "../lib/use-browser-online";
 import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchAuxDrawer } from "./research-aux-drawer";
+import { ResearchEvidencePulse } from "./research-evidence-pulse";
 import { ResearchCanvas } from "./research-canvas";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
@@ -96,10 +101,7 @@ import { ResearchConnectivityShell } from "./research-connectivity-shell";
 import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
 import { ResearchFleetStepCard } from "./research-fleet-step-card";
 import { ResearchLiveStream } from "./research-live-stream";
-import {
-  ResearchModuleRail,
-  type ResearchAuxPanelId,
-} from "./research-module-rail";
+import { type ResearchAuxPanelId } from "./research-module-rail";
 import { ResearchNodeDetail } from "./research-node-detail";
 import { ResearchProductRoundCardView } from "./research-product-round-card";
 import { ResearchServerErrorPage } from "./research-server-error-page";
@@ -217,6 +219,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     onResizePointerDown: onAgentSideResizePointerDown,
   } = useProfilePanelWidth(CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  // LRM-1250 / LRM-1248 AC4 — focus restore target after successful send.
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
@@ -224,6 +228,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const send = useMutation({
     mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
     onSuccess: () => {
+      // Focus before clearBody so empty-state native disabled does not dump focus to BODY.
+      composerRef.current?.focus();
       dispatch({ type: "clearBody" });
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
       void qc.invalidateQueries({ queryKey: researchKeys.productRounds(wsId, sessionId) });
@@ -437,6 +443,23 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { session, messages, report, sources } = data;
   const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
   const fleet = { ...data.fleet, members: fleetMembers };
+  const selectedNode = ui.selected
+    ? data.nodes.find((node) => node.id === ui.selected?.id) ?? ui.selected
+    : null;
+  // LRM-1329 — drawer overview owns error/permission; cards stay fact-only.
+  // Signal error with a non-empty token only — never pass raw API strings into
+  // the drawer (safe copy lives in EvidencePulse i18n / role=alert).
+  const evidenceFetchFailed = Boolean(isError && data);
+  const evidenceOverview = resolveEvidenceOverviewMode({
+    sourceModel: sourceStrategy,
+    boundaryModel: humanBoundary,
+    sessionStatus: session.status,
+    error: evidenceFetchFailed ? "evidence_unavailable" : null,
+    errorStatus: evidenceFetchFailed ? readErrorStatus(error) : null,
+  });
+  const evidenceRevision = evidenceRevisionKey(sourceStrategy, humanBoundary);
+  const hideEvidenceCards =
+    evidenceOverview === "error" || evidenceOverview === "permission";
   const canvasMode = resolveCanvasBodyMode(data.nodes.length, session.status);
   const canConfirm = session.status === "awaiting_user_confirm" || session.status === "running";
   const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
@@ -593,26 +616,25 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           className="relative z-[1] min-h-0 min-w-0 flex-1"
           data-testid="research-session-canvas-host"
         >
-          <ResearchModuleRail
-            active={auxPanel}
-            onSelect={(id) =>
-              setAuxPanel((prev) => (prev === id ? null : id))
-            }
-          />
           <ResearchCanvas
             nodes={data.nodes}
             edges={data.edges}
             sources={sources}
             members={fleet.members}
+            run={data.run}
             sessionStatus={session.status}
             presence={presence}
-            selectedId={ui.selected?.id}
+            selectedId={selectedNode?.id}
             onSelect={(node) => dispatch({ type: "select", node })}
             onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
             onOpenChat={() => setChatOpen(true)}
             chatOpen={chatOpen}
             chatMode={chatMode}
             detailPlacement="drawer"
+            auxPanel={auxPanel}
+            onAuxPanelSelect={(id) =>
+              setAuxPanel((prev) => (prev === id ? null : id))
+            }
             onOpenDetail={(node) => {
               dispatch({ type: "select", node });
               setAuxPanel("detail");
@@ -644,7 +666,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 dimensions={explorationDims}
                 sessionStatus={session.status}
                 selectedFamily={ui.selectedFamily}
-                selectedQuestionId={ui.selected?.id}
+                selectedQuestionId={selectedNode?.id}
                 onSelectFamily={(family) =>
                   dispatch({ type: "setFamily", family })
                 }
@@ -657,21 +679,39 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             ) : null}
             {auxPanel === "sources" ? (
               <div className="space-y-3">
-                <SourceStrategyStrip
-                  model={sourceStrategy}
-                  sessionStatus={session.status}
+                <ResearchEvidencePulse
+                  mode={evidenceOverview}
+                  revisionKey={evidenceRevision}
+                  onRetry={
+                    evidenceOverview === "error"
+                      ? () => {
+                          void refetch();
+                        }
+                      : undefined
+                  }
+                  retryPending={evidenceFetchFailed && isFetching}
                 />
-                <HumanBoundaryCard
-                  model={humanBoundary}
-                  sessionStatus={session.status}
-                />
+                {hideEvidenceCards ? null : (
+                  <>
+                    <SourceStrategyStrip
+                      model={sourceStrategy}
+                      sessionStatus={session.status}
+                    />
+                    <HumanBoundaryCard
+                      model={humanBoundary}
+                      sessionStatus={session.status}
+                    />
+                  </>
+                )}
               </div>
             ) : null}
             {auxPanel === "detail" ? (
-              ui.selected ? (
+              selectedNode ? (
                 <ResearchNodeDetail
-                  node={ui.selected}
+                  node={selectedNode}
                   sources={sources}
+                  run={data.run}
+                  members={fleet.members}
                   open
                   placement="overlay-card"
                   onClose={() => {
@@ -898,6 +938,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             <div className="border-t bg-card p-3">
               <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
                 <Textarea
+                  ref={composerRef}
                   data-testid="research-chat-composer"
                   rows={2}
                   value={ui.body}
@@ -930,11 +971,19 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                         type="button"
                         size="default"
                         variant="outline"
-                        className="h-9 min-w-[88px] gap-1.5 px-3 text-[13px] font-semibold"
-                        disabled={stop.isPending}
+                        className={cn(
+                          "h-9 min-w-[88px] gap-1.5 px-3 text-[13px] font-semibold",
+                          // LRM-1246 S3 — keep Stop focusable while pending (LRM-1213).
+                          stop.isPending && "opacity-50 cursor-not-allowed",
+                        )}
+                        aria-disabled={stop.isPending || undefined}
                         aria-label={t(($) => $.panel.stop_aria)}
                         title={t(($) => $.panel.stop_tooltip)}
-                        onClick={() => stop.mutate()}
+                        data-testid="research-session-composer-stop"
+                        onClick={() => {
+                          if (stop.isPending) return;
+                          stop.mutate();
+                        }}
                       >
                         <Square className="h-3.5 w-3.5 fill-current" />
                         {stop.isPending
@@ -945,9 +994,19 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                     <Button
                       type="button"
                       size="default"
-                      className="h-9 min-w-[88px] px-4 text-[13px] font-semibold shadow-sm"
-                      disabled={!ui.body.trim() || send.isPending}
-                      onClick={() => send.mutate(ui.body.trim())}
+                      className={cn(
+                        "h-9 min-w-[88px] px-4 text-[13px] font-semibold shadow-sm",
+                        // LRM-1250 S4 — keep Send focusable while pending (LRM-1248 / LRM-1213).
+                        send.isPending && "opacity-50 cursor-not-allowed",
+                      )}
+                      // Empty: native disabled OK. Pending: aria-disabled only (not native).
+                      disabled={(!ui.body.trim() && !send.isPending) || undefined}
+                      aria-disabled={send.isPending || undefined}
+                      data-testid="research-session-composer-send"
+                      onClick={() => {
+                        if (!ui.body.trim() || send.isPending) return;
+                        send.mutate(ui.body.trim());
+                      }}
                     >
                       {send.isPending
                         ? t(($) => $.step_card.sending)

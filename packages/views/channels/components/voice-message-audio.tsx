@@ -249,6 +249,29 @@ export function VoiceMessageAudio({
     : t(($) => $.message.voice_show_transcript);
   const transcriptPanelId = `voice-transcript-${message.id}`;
   const transcriptLabelId = `voice-transcript-label-${message.id}`;
+  // LRM-1266 — `loading` must NOT put a native `disabled` on the play control.
+  // It is the only focusable node this bubble owns whenever the transcript
+  // toggle is absent (transcription pending/failed, or a fresh recording with no
+  // transcript yet), so the keyboard user who just pressed Enter would lose focus
+  // to BODY and restart their next Tab from the document head — the same root
+  // cause as LRM-1213/1250/1251. The control stays focusable via `aria-disabled`
+  // and refuses to act instead; `start()` already returns early for
+  // `loading`/`playing`, so a second Enter/click cannot double-start.
+  //
+  // `synthesisBlocked` keeps its native `disabled` (LRM-1251's rule for a gate
+  // the user has not pressed): it is blocked from first paint, so there is no
+  // focus on it to lose, and both existing synthesis tests stay unchanged.
+  const busy = state === "loading";
+  // Playback state is announced HERE, not on the control: every child of the
+  // button is `aria-hidden` and its accessible name comes from `aria-label`, so a
+  // live region on the control itself has no text to announce while making some
+  // readers re-read the whole button on each flip. The region stands mounted and
+  // empty (LRM-1225) so the state CHANGE is what gets announced.
+  const playbackStatusText = busy
+    ? t(($) => $.message.voice_loading)
+    : state === "error"
+      ? t(($) => $.message.voice_retry)
+      : "";
 
   return (
     <div className="mt-1.5 flex max-w-full flex-col items-start" data-testid="voice-reply">
@@ -260,10 +283,10 @@ export function VoiceMessageAudio({
             state === "error" && "border-destructive/30 bg-destructive/5 text-destructive hover:bg-destructive/10",
           )}
           onClick={state === "playing" ? stop : () => void start()}
-          disabled={state === "loading" || synthesisBlocked}
+          disabled={synthesisBlocked}
+          aria-disabled={busy || undefined}
           aria-label={label}
-          aria-live={synthesisBlocked ? undefined : "polite"}
-          aria-busy={state === "loading" || synthesisPending}
+          aria-busy={busy || synthesisPending}
           data-testid="voice-reply-control"
           data-voice-bubble="true"
           style={{ width: voiceBubbleWidthPx(durationSeconds) }}
@@ -293,10 +316,21 @@ export function VoiceMessageAudio({
             {durationSeconds ? `${durationSeconds}″` : "…"}
           </span>
         </button>
+        {/* LRM-1266 — standing playback live region. `sr-only` is absolutely
+            positioned, so it neither consumes the row's gap nor changes the
+            bubble's visual geometry. */}
+        <output
+          className="sr-only"
+          aria-live="polite"
+          data-testid="voice-playback-status"
+        >
+          {playbackStatusText}
+        </output>
         {synthesisPending ? (
           <output
             className="inline-flex min-h-9 shrink-0 items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground"
             aria-live="polite"
+            data-testid="voice-side-status"
           >
             <LoaderCircle
               className="size-3.5 animate-spin motion-reduce:animate-none"
@@ -308,6 +342,7 @@ export function VoiceMessageAudio({
           <output
             className="inline-flex min-h-9 shrink-0 items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground"
             aria-live="polite"
+            data-testid="voice-side-status"
           >
             <VolumeX className="size-3.5" aria-hidden="true" />
             {t(($) => $.message.voice_synthesis_unavailable)}
@@ -317,6 +352,7 @@ export function VoiceMessageAudio({
           <output
             className="inline-flex min-h-9 shrink-0 items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground"
             aria-live="polite"
+            data-testid="voice-side-status"
           >
             <LoaderCircle
               className="size-3.5 animate-spin motion-reduce:animate-none"
@@ -328,6 +364,7 @@ export function VoiceMessageAudio({
           <output
             className="inline-flex min-h-9 shrink-0 items-center gap-1.5 px-2 text-[11px] font-medium text-muted-foreground"
             aria-live="polite"
+            data-testid="voice-side-status"
           >
             <CaptionsOff className="size-3.5" aria-hidden="true" />
             {t(($) => $.message.voice_transcription_unavailable)}

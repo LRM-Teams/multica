@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Clock, Copy, Loader2, Terminal } from "lucide-react";
+import { Check, Copy, Terminal } from "lucide-react";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "@multica/core/api";
@@ -9,10 +9,7 @@ import type { Agent, AgentRuntime } from "@multica/core/types";
 import { useDeleteRuntime } from "@multica/core/runtimes/mutations";
 import { runtimeKeys } from "@multica/core/runtimes/queries";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import {
-  type AgentPresenceDetail,
-  useWorkspacePresenceMap,
-} from "@multica/core/agents";
+import { useWorkspacePresenceMap } from "@multica/core/agents";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { CODE_LIGATURE_CLASS } from "@multica/ui/lib/code-style";
@@ -25,12 +22,13 @@ import {
 } from "@multica/ui/components/ui/alert-dialog";
 import { Button } from "@multica/ui/components/ui/button";
 import { resolveActorIdentityPresentation } from "@multica/core/identity";
-import { ActorAvatar } from "../../common/actor-avatar";
-import { ActorIdentityRow } from "../../common/actor-identity-row";
-import { AppLink } from "../../navigation/app-link";
-import { presentAgentActivityBand, resolveAgentActivityBand } from "../../agents/resolve-agent-live-status";
+import {
+  AgentActivityListItem,
+} from "../../agents/components/agent-activity-list-item";
+import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { isSelfHealingRuntime } from "../utils";
+import { knownProviderLabel } from "./provider-logo";
 import { splitRuntimeName } from "./runtime-machines";
 
 // The "device" shown in the stop-daemon step should be the actual machine
@@ -248,13 +246,16 @@ function AgentsBlockingBody({
 }: {
   runtime: AgentRuntime;
   agents: Agent[];
-  presenceMap: Map<string, AgentPresenceDetail>;
+  presenceMap: Map<string, import("@multica/core/agents").AgentPresenceDetail>;
   agentHref: (agentId: string) => string;
   notice: string | null;
   onClose: () => void;
 }) {
   const { t } = useT("runtimes");
+  const navigation = useNavigation();
   const count = agents.length;
+  const runtimeLabel =
+    knownProviderLabel(runtime.provider) ?? runtime.provider;
 
   return (
     <>
@@ -285,33 +286,20 @@ function AgentsBlockingBody({
             );
             const presence = presenceMap.get(agent.id);
             return (
-              <AppLink
+              <AgentActivityListItem
                 key={agent.id}
-                href={agentHref(agent.id)}
-                className="flex items-center justify-between gap-3 px-3 py-2.5 text-xs hover:bg-muted/40"
-              >
-                <span className="inline-flex min-w-0 items-center gap-2">
-                  <ActorAvatar
-                    actorType="agent"
-                    actorId={agent.id}
-                    size={20}
-                    enableHoverCard
-                  />
-                  <ActorIdentityRow
-                    displayName={presentation.displayName}
-                    handle={presentation.handle}
-                    showHandle={presentation.showHandleLabel}
-                    primaryClassName="truncate font-medium text-foreground"
-                    secondaryClassName="truncate text-[11px] text-muted-foreground"
-                  />
-                </span>
-                <span className="inline-flex shrink-0 items-center gap-1.5">
-                  <PresenceCell presence={presence} />
-                  <span className="text-primary">
-                    {t(($) => $.detail.delete_dialog.blocked_by_agents.view_agent)}
-                  </span>
-                </span>
-              </AppLink>
+                agentId={agent.id}
+                displayName={presentation.displayName}
+                provider={runtime.provider}
+                runtimeLabel={runtimeLabel}
+                presence={presence}
+                avatarSize={20}
+                className="px-3 py-2.5 text-xs hover:bg-muted/40"
+                onClick={() => navigation.push(agentHref(agent.id))}
+                trailingLabel={t(
+                  ($) => $.detail.delete_dialog.blocked_by_agents.view_agent,
+                )}
+              />
             );
           })}
         </div>
@@ -325,38 +313,6 @@ function AgentsBlockingBody({
         </div>
       </div>
     </>
-  );
-}
-
-function PresenceCell({ presence }: { presence: AgentPresenceDetail | undefined }) {
-  const { t } = useT("runtimes");
-  if (!presence) {
-    return (
-      <span className="text-muted-foreground/60">
-        {t(($) => $.detail.delete_dialog.blocked_by_agents.table.presence_unknown)}
-      </span>
-    );
-  }
-  // task #7 (2026-07-31): was availabilityConfig + workloadConfig — a single
-  // combined cell (one dot, one label), no adjacent Status column elsewhere
-  // in this dialog, so `showDisconnected: true` — Activity carries the
-  // connectivity fact here since nothing else does.
-  const band = resolveAgentActivityBand(presence);
-  if (!band) return null;
-  const view = presentAgentActivityBand(band, true);
-  const isWorking = band === "working";
-  const isQueued = presence.workload === "queued";
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className={`size-1.5 shrink-0 rounded-full ${view.dotClass}`} />
-      <span className="text-foreground">
-        {isWorking && !isQueued && (
-          <Loader2 className="mr-1 inline size-3 align-[-2px] animate-spin text-running" />
-        )}
-        {isQueued && <Clock className="mr-1 inline size-3 align-[-2px] text-muted-foreground" />}
-        {view.label}
-      </span>
-    </span>
   );
 }
 

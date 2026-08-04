@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -101,6 +102,10 @@ type AgentResponse struct {
 	UpdatedAt     string              `json:"updated_at"`
 	ArchivedAt    *string             `json:"archived_at"`
 	ArchivedBy    *string             `json:"archived_by"`
+	// HonorLevel is batch-projected on ListAgents for compact identity surfaces.
+	// Other agent endpoints may omit it; the dedicated honor endpoint remains
+	// the source for the complete dashboard.
+	HonorLevel int `json:"honor_level,omitempty"`
 	// Memory growth tier/progress for profile & agent card (LRM-303). Null when
 	// the agent has zero valid Phase① memory writes.
 	MemoryGrowth *AgentMemoryGrowthResponse `json:"memory_growth,omitempty"`
@@ -824,6 +829,19 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	honorLevels, err := h.Queries.ListAgentHonorLevelsByWorkspace(
+		r.Context(),
+		parseUUID(workspaceID),
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load agent honor levels")
+		return
+	}
+	honorLevelByAgentID := make(map[string]int, len(honorLevels))
+	for _, row := range honorLevels {
+		honorLevelByAgentID[uuidToString(row.AgentID)] = int(row.Level)
+	}
+
 	// Batch-load research-fleet membership to avoid N+1 (task #903: the
 	// research_fleet_member table is the single source of truth for "is
 	// this agent a research-fleet member" — agent.managed_role is retired).
@@ -862,6 +880,7 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		resp := agentToResponse(a)
+		resp.HonorLevel = honorLevelByAgentID[resp.ID]
 		if skills, ok := skillMap[resp.ID]; ok {
 			resp.Skills = skills
 		}
@@ -1096,9 +1115,41 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		mc = append([]byte(nil), rawMcpConfig...)
 	}
 
+	// Hire hard-cut: agent:create cards use action_card_id (no draft_id bridge).
+	actionCardID, hasActionCardID, err := extractActionCardID(rawFields)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if hasActionCardID {
+		card, code := h.loadActionCard(r, workspaceID, actionCardID)
+		switch code {
+		case agentActionLookupOK:
+			if card.Status != agentActionStatusPrepared {
+				writeCodedError(w, http.StatusConflict, agentActionLookupNotPrepared, "action card is not prepared")
+				return
+			}
+			if card.ActionType != agentActionTypeCreate {
+				writeError(w, http.StatusBadRequest, "action_card_id is not an agent:create card")
+				return
+			}
+		case agentActionLookupNotFound:
+			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
+			return
+		default:
+			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
+			return
+		}
+	}
+	// Research / legacy seed only: draft_id still loads initial notes/memory when
+	// present. Agent hire must not use drafts (agent draft create is 410).
 	draftID, hasDraftID, err := extractDraftID(rawFields)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if hasDraftID && hasActionCardID {
+		writeError(w, http.StatusBadRequest, "action_card_id and draft_id are mutually exclusive")
 		return
 	}
 	initialNotes := cleanInitialContextMap(req.InitialNotes, allowedInitialNoteSeedPath)
@@ -1183,6 +1234,19 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
+	if hasActionCardID {
+		code, markErr := h.markActionCardDone(r, workspaceID, actionCardID, parseUUID(ownerID), created.ID)
+		if markErr != nil {
+			slog.Warn("mark action card done failed", append(logger.RequestAttrs(r), "error", markErr, "action_card_id", uuidToString(actionCardID))...)
+		} else if code == agentActionLookupNotPrepared {
+			// Card raced to non-prepared; agent row already created — report conflict.
+			writeCodedError(w, http.StatusConflict, agentActionLookupNotPrepared, "action card is not prepared")
+			return
+		} else if code == agentActionLookupNotFound {
+			writeCodedError(w, http.StatusNotFound, agentActionLookupNotFound, "action card not found")
+			return
+		}
+	}
 	if hasDraftID {
 		h.MarkAgentDraftUsed(r, workspaceID, ownerID, draftID, created.ID)
 	}
@@ -1378,6 +1442,15 @@ func redactAgentResponseForActor(resp *AgentResponse, actorType string) {
 // agent owner or workspace owner/admin can do that, regardless of whether the
 // agent is public or private.
 func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent db.Agent) bool {
+	// Agent principal (Raft align / task #125): may only manage self.
+	// Human owner/admin workspace management is unchanged.
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		if p.AgentID != uuidToString(agent.ID) {
+			writeError(w, http.StatusForbidden, "agents may only manage themselves")
+			return false
+		}
+		return true
+	}
 	wsID := uuidToString(agent.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
 	if !ok {
@@ -1392,8 +1465,16 @@ func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent d
 	return true
 }
 
-// canUpdateAgent permits the normal owner/admin update path.
+// canUpdateAgent permits the normal owner/admin update path for humans,
+// and self-only updates for AgentPrincipal (task #125 / Raft align).
 func (h *Handler) canUpdateAgent(w http.ResponseWriter, r *http.Request, agent db.Agent, rawFields map[string]json.RawMessage) bool {
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		if p.AgentID != uuidToString(agent.ID) {
+			writeError(w, http.StatusForbidden, "agents may only update themselves")
+			return false
+		}
+		return true
+	}
 	wsID := uuidToString(agent.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
 	if !ok {
@@ -2188,6 +2269,9 @@ func (h *Handler) GetWorkspaceAgentActivity30d(w http.ResponseWriter, r *http.Re
 // outcome"; a failed outcome stays sticky until the user starts a new task or
 // one succeeds. Per-agent filtering happens in the front-end against this
 // workspace-wide snapshot.
+//
+// LRM-1261: short TTL + singleflight collapses burst refetches; SQL trims heavy
+// blobs; actor resolve is agents-only (snapshot rows are always agent-authored).
 func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	member, ok := h.workspaceMember(w, r, workspaceID)
@@ -2195,22 +2279,39 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 		return
 	}
 
-	tasks, err := h.Queries.ListWorkspaceAgentTaskSnapshot(r.Context(), parseUUID(workspaceID))
+	if cached, hit := getCachedAgentTaskSnapshot(workspaceID); hit {
+		writeJSON(w, http.StatusOK, cached)
+		return
+	}
+
+	// Detach from the leader request's cancel so coalesced waiters still get a
+	// result if the first client disconnects mid-query.
+	loadCtx := context.WithoutCancel(r.Context())
+	v, err, _ := agentTaskSnapshotCache.group.Do(workspaceID, func() (any, error) {
+		if cached, hit := getCachedAgentTaskSnapshot(workspaceID); hit {
+			return cached, nil
+		}
+		tasks, err := h.Queries.ListWorkspaceAgentTaskSnapshot(loadCtx, parseUUID(workspaceID))
+		if err != nil {
+			return nil, err
+		}
+		actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
+		resolver := h.newAgentOnlyActorIdentityResolver(loadCtx, workspaceID, actorType, actorID, member.Role)
+		resp := make([]AgentTaskResponse, 0, len(tasks))
+		for _, t := range tasks {
+			item := taskToResponse(t, workspaceID)
+			applyActorIdentityToTask(&item, resolver.resolve("agent", item.AgentID))
+			resp = append(resp, item)
+		}
+		putCachedAgentTaskSnapshot(workspaceID, resp)
+		return resp, nil
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list agent task snapshot")
 		return
 	}
-
-	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	resolver := h.newActorIdentityResolver(r.Context(), workspaceID, actorType, actorID, member.Role)
-
-	resp := make([]AgentTaskResponse, 0, len(tasks))
-	for _, t := range tasks {
-		item := taskToResponse(t, workspaceID)
-		applyActorIdentityToTask(&item, resolver.resolve("agent", item.AgentID))
-		resp = append(resp, item)
-	}
-	writeJSON(w, http.StatusOK, resp)
+	resp, _ := v.([]AgentTaskResponse)
+	writeJSON(w, http.StatusOK, cloneAgentTaskSnapshot(resp))
 }
 
 // AgentTaskFeedItem is one terminal task in the workspace activity feed,

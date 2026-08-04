@@ -108,8 +108,9 @@ vi.mock("@multica/core/workspace/hooks", () => ({
     getActorAvatarUrl: () => null,
     getActorName: () => null,
     getMemberRole: () => null,
-    getMemberHonor: () => undefined,
+    getMemberHonor: () => ({ level: 42, name_style: "default" }),
     getAgentFleetRank: () => undefined,
+    getAgentHonorLevel: () => undefined,
   }),
 }));
 vi.mock("@multica/core/agents", () => ({ useAgentPresenceDetail: () => "loading" }));
@@ -124,7 +125,7 @@ vi.mock("../../chat/components/dm-agent-bubble", () => ({
   DmAgentBubble: () => null,
 }));
 vi.mock("./dm-agent-working-cue", () => ({ DmAgentWorkingCue: () => null }));
-vi.mock("../../editor/content-editor", () => ({
+vi.mock("../../editor/lazy-content-editor", () => ({
   ContentEditor: () => <div data-testid="content-editor" />,
 }));
 vi.mock("../../common/markdown", () => ({
@@ -208,6 +209,15 @@ function renderDm() {
 }
 
 describe("LRM-682 DM 聊天|文件 tab bar", () => {
+  it("shows the user's armor level crest in the DM header and message identity", async () => {
+    const { container } = renderDm();
+
+    await screen.findByTestId("virtuoso-scroller");
+    expect(
+      container.querySelectorAll('[data-user-honor-level="42"]').length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
   it("renders exactly 聊天 | 文件 (Files 2nd, no count badge per LRM-698) — no Issues tab", async () => {
     renderDm();
     const tablist = await screen.findByRole("tablist");

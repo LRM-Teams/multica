@@ -10,6 +10,8 @@ export const DUPLEX_FRAME_SAMPLES =
   (DUPLEX_INPUT_SAMPLE_RATE * DUPLEX_FRAME_MS) / 1_000;
 export const DUPLEX_SILENCE_COMMIT_MS = 600;
 export const DUPLEX_BARGE_IN_RMS = 0.015;
+/** Louder threshold while speakerphone is on — speaker→mic echo otherwise self-interrupts TTS. */
+export const DUPLEX_SPEAKERPHONE_BARGE_IN_RMS = 0.08;
 
 export type DuplexToolStatus = "started" | "done" | "error";
 export type DuplexAsrPhase = "started" | "completed";
@@ -170,6 +172,10 @@ export function createDuplexMediaSession(
   let muted = false;
   let speakerphone = false;
   let closed = false;
+  // A disconnect can race an awaited browser permission prompt. Incrementing
+  // this generation invalidates every in-flight setup continuation, even if a
+  // later connect has already reset `closed`.
+  let connectionGeneration = 0;
   let pcmBuffer: number[] = [];
   let silenceMs = 0;
   let playbackTime = 0;
@@ -209,8 +215,22 @@ export function createDuplexMediaSession(
     playingTts = false;
   };
 
+  const ensureAudioContextsRunning = async () => {
+    // Mobile browsers often leave freshly created AudioContexts suspended.
+    // Ringback already resumes; Duplex must too or UI "connects" with silence.
+    if (captureContext?.state === "suspended") {
+      await captureContext.resume().catch(() => undefined);
+    }
+    if (playbackContext?.state === "suspended") {
+      await playbackContext.resume().catch(() => undefined);
+    }
+  };
+
   const schedulePlayback = (samples: Int16Array, sampleRate: number) => {
     if (!playbackContext || samples.length === 0) return;
+    if (playbackContext.state === "suspended") {
+      void playbackContext.resume().catch(() => undefined);
+    }
     const floatSamples = pcmS16leToFloat32(samples);
     const buffer = playbackContext.createBuffer(
       1,
@@ -351,6 +371,7 @@ export function createDuplexMediaSession(
         );
       }
 
+      const setupGeneration = ++connectionGeneration;
       closed = false;
       ws = new WebSocketImpl(wsUrl);
 
@@ -372,6 +393,8 @@ export function createDuplexMediaSession(
         ws?.addEventListener("error", onError);
       });
 
+      if (closed || setupGeneration !== connectionGeneration) return;
+
       ws.addEventListener("message", (raw) => {
         const message = raw as MessageEvent<string>;
         try {
@@ -391,13 +414,26 @@ export function createDuplexMediaSession(
 
       captureContext = new AudioContextImpl();
       playbackContext = new AudioContextImpl();
+      await ensureAudioContextsRunning();
       playbackTime = playbackContext.currentTime;
       await applySpeakerphone();
 
-      mediaStream = await getUserMedia({
+      const grantedStream = await getUserMedia({
         audio: deviceId ? { deviceId: { exact: deviceId } } : true,
         video: false,
       });
+      if (closed || setupGeneration !== connectionGeneration) {
+        for (const track of grantedStream.getTracks()) track.stop();
+        return;
+      }
+      mediaStream = grantedStream;
+      // Permission grant is a fresh user-activation window on mobile — resume again.
+      await ensureAudioContextsRunning();
+      if (closed || setupGeneration !== connectionGeneration) {
+        await teardownCapture();
+        await teardownPlayback();
+        return;
+      }
       sourceNode = captureContext.createMediaStreamSource(mediaStream);
       processor = captureContext.createScriptProcessor(4096, 1, 1);
       processor.onaudioprocess = (audioEvent) => {
@@ -412,7 +448,10 @@ export function createDuplexMediaSession(
           pcmBuffer.push(downsampled[i]!);
         }
 
-        if (playingTts && rms >= DUPLEX_BARGE_IN_RMS) {
+        const bargeInRms = speakerphone
+          ? DUPLEX_SPEAKERPHONE_BARGE_IN_RMS
+          : DUPLEX_BARGE_IN_RMS;
+        if (playingTts && rms >= bargeInRms) {
           sendJson({ type: "client.interrupt" });
           clearPlaybackQueue();
         }
@@ -437,7 +476,12 @@ export function createDuplexMediaSession(
         }
       };
       sourceNode.connect(processor);
-      processor.connect(captureContext.destination);
+      // Keep ScriptProcessor alive without monitoring the mic on the speaker
+      // (open destination would feed speakerphone echo → false barge-in).
+      const silentGain = captureContext.createGain();
+      silentGain.gain.value = 0;
+      processor.connect(silentGain);
+      silentGain.connect(captureContext.destination);
     },
 
     setMuted(nextMuted: boolean) {
@@ -457,6 +501,7 @@ export function createDuplexMediaSession(
     async disconnect(): Promise<void> {
       if (closed) return;
       closed = true;
+      connectionGeneration += 1;
       flushPcmFrame(false);
       sendJson({ type: "client.close" });
       ws?.close();

@@ -90,7 +90,14 @@
   max-width: 100%;
   max-height: 22.5rem;
   height: auto;
-  border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+  /* LRM-1242 R2+R3: concentric radius + inset ring (no outer border; overflow:hidden safe). */
+  border: 0;
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foreground) 14%, transparent);
+}
+
+.dark .message-surface .image-content {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 16%, transparent);
 }
 
 /* LRM-273 — reserve inline image box before decode (mobile layout shift). */
@@ -122,7 +129,8 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.375rem;
-  max-width: min(100%, 28rem);
+  /* LRM-1242 R1: align media rail with single-image 22.5rem cap (was 28rem). */
+  max-width: min(100%, 22.5rem);
 }
 
 .message-attachment-gallery.gallery-layout-stack {
@@ -140,7 +148,21 @@
   aspect-ratio: 1 / 1;
   max-height: 11.25rem;
   overflow: hidden;
-  border-radius: var(--radius);
+  /* LRM-1242 R2: media radius = shell − 2px via --radius-md. */
+  border-radius: var(--radius-md);
+}
+
+/* LRM-1242 R4: odd-3 first cell spans full rail; do not keep 11.25rem clamp. */
+.message-attachment-gallery.gallery-layout-grid[data-count="3"]
+  .gallery-cell:first-child {
+  grid-column: span 2;
+  aspect-ratio: 16 / 9;
+  max-height: none;
+}
+
+/* LRM-1242 R2: unavailable placeholder matches media radius (dashed stays). */
+[data-testid="attachment-unavailable"] {
+  border-radius: var(--radius-md);
 }
 
 .message-attachment-gallery.gallery-layout-grid .gallery-cell .image-figure {
@@ -170,8 +192,20 @@
     max-width: 100%;
   }
 
+  /*
+   * LRM-1247 — narrow viewport: do not pair aspect-ratio:1/1 with max-height:9rem.
+   * Height cap otherwise forces cell width to 144px when the track > ~294px, leaving
+   * large inter-cell gaps / trailing empty space (same clamp class as pre-R1 desktop).
+   * Keep LRM-201's 144px height budget via explicit height; width fills the track.
+   */
   .message-attachment-gallery.gallery-layout-grid .gallery-cell {
-    max-height: 9rem;
+    aspect-ratio: auto;
+    height: 9rem;
+  }
+
+  /* R4 first cell stays 16/9 auto-height — must not inherit the narrow height clamp. */
+  .message-attachment-gallery.gallery-layout-grid[data-count="3"] .gallery-cell:first-child {
+    height: auto;
   }
 
   .message-attachment-gallery.gallery-layout-stack {

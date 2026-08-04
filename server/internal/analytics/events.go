@@ -334,10 +334,6 @@ type AutopilotAssignee struct {
 	AssigneeType string // "agent"
 }
 
-func AutopilotRunStarted(actorID, workspaceID, autopilotID, runID, cadence string, assignee AutopilotAssignee, triggerSource string) Event {
-	return autopilotRunEvent(EventAutopilotRunStarted, actorID, workspaceID, autopilotID, runID, cadence, assignee, triggerSource, nil)
-}
-
 func AutopilotRunCompleted(actorID, workspaceID, autopilotID, runID, cadence string, assignee AutopilotAssignee, triggerSource string, durationMS int64) Event {
 	return autopilotRunEvent(EventAutopilotRunCompleted, actorID, workspaceID, autopilotID, runID, cadence, assignee, triggerSource, map[string]any{
 		"duration_ms": durationMS,
@@ -596,28 +592,6 @@ func ContactSalesSubmitted(inquiryID, companySize, countryRegion, useCase, formS
 		DistinctID: inquiryID,
 		Properties: withCoreProperties(props, CoreProperties{
 			Source: "marketing_contact_sales",
-		}),
-	}
-}
-
-// AutopilotCreated fires when a workspace member creates a new autopilot.
-// `cadence` matches the autopilot.cadence enum (hourly/daily/weekly/...
-// /webhook). triggerKind is the initial trigger type (schedule / webhook /
-// manual) — when both schedule and webhook triggers are seeded, we report
-// the dominant one (schedule wins).
-func AutopilotCreated(actorID, workspaceID, autopilotID, cadence, triggerKind string) Event {
-	return Event{
-		Name:        EventAutopilotCreated,
-		DistinctID:  actorID,
-		WorkspaceID: workspaceID,
-		Properties: withCoreProperties(map[string]any{
-			"autopilot_id": autopilotID,
-			"cadence":      cadence,
-			"trigger_kind": triggerKind,
-		}, CoreProperties{
-			UserID:      nonAgentUserID(actorID),
-			WorkspaceID: workspaceID,
-			Source:      SourceManual,
 		}),
 	}
 }

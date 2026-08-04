@@ -269,7 +269,27 @@ func runDaemonSupervise(cmd *cobra.Command, _ []string) error {
 	}
 
 	logger := logger_pkg.NewLogger("daemon-supervisor")
-	logger.Info("starting supervised daemon", "worker_path", exePath, "profile", profile)
+
+	// Self-heal OS service unit before the first generation: a pre-#2094
+	// handoff can leave systemd ExecStart (or a drop-in) pinned to a deleted
+	// version path while VersionStore Active already points at the new
+	// binary (s144 0.4.1→0.4.2: unit still nailing v0.4.1). The outgoing
+	// binary never ran bestEffortSyncInstalledServiceUnit; the NEW supervise
+	// process must rewrite unit → resolved worker path so the next OS
+	// restart does not 203/EXEC. Failures must not block start.
+	workerPath, _, resolveErr := resolveSupervisedWorkerPath(exePath, buildDaemonStartArgs(cmd))
+	if resolveErr != nil {
+		workerPath = exePath
+	}
+	if workerPath == "" {
+		workerPath = exePath
+	}
+	if err := bestEffortSyncInstalledServiceUnit(profile, workerPath); err != nil {
+		logger.Warn("could not rewrite OS service unit to Active worker path on supervise start; re-run `multica daemon install-service` if a later OS restart fails",
+			"path", workerPath, "error", err)
+	}
+
+	logger.Info("starting supervised daemon", "worker_path", workerPath, "profile", profile)
 
 	ctx, stop := notifyShutdownContext(context.Background())
 	defer stop()

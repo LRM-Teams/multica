@@ -325,16 +325,16 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "title must be between 1 and 500 characters")
 		return
 	}
-	anchorMessageID, threadRootID, ok := h.resolveReminderAnchor(w, r.Context(), origin, req.MessageID)
+	anchorMessageID, anchorChannelID, threadRootID, ok := h.resolveReminderAnchor(w, r.Context(), origin, req.MessageID)
 	if !ok {
 		return
 	}
-	initiatorUserID, ok := h.agentTransportInitiatorUserID(r, source)
-	if !ok {
-		writeError(w, http.StatusForbidden, "reminder initiator is not available")
-		return
-	}
-	timezone := reminderInitiatorTimezone(r.Context(), h.DB, initiatorUserID)
+	// P0+P1 (Frank/Parker 2026-08-04): timezone never from user viewing
+	// preference; default UTC. initiator_user_id is optional audit fill
+	// (anchor human → owner → ws owner when available) and is NOT required
+	// for 201 — agent self-schedule without a human member still succeeds.
+	initiatorUserID, _ := h.agentReminderScheduleInitiatorUserID(r.Context(), origin.workspaceID, task.AgentID, anchorMessageID)
+	timezone := reminderScheduleTimezone("") // explicit API field can be wired later
 	schedule, err := parseReminderSchedule(time.Now().UTC(), req.DelaySeconds, req.FireAt, req.Repeat, timezone)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -374,6 +374,9 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 			scheduleTimezone = schedule.Timezone
 		}
 	}
+	// Anchor channel is the message's channel (may differ from wake origin —
+	// product lock B / 贝克汉姆 cross-channel patrol). Membership already
+	// checked in resolveReminderAnchor.
 	row := tx.QueryRow(r.Context(), `
 		INSERT INTO agent_reminder (
 			workspace_id, agent_id, initiator_user_id, title, anchor_channel_id, anchor_message_id,
@@ -381,7 +384,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING `+reminderSelectColumns(),
-		origin.workspaceID, task.AgentID, initiatorUserID, title, origin.channelID,
+		origin.workspaceID, task.AgentID, initiatorUserID, title, anchorChannelID,
 		anchorMessageID, nullableUUID(threadRootID), schedule.FireAt, cadence, scheduleTimezone, cadenceNextAt)
 	created, err := scanAgentReminder(row)
 	if err != nil {
@@ -715,18 +718,10 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 		timezone := ""
 		if calendarRule {
 			if previous.ScheduleTimezone.Valid {
-				timezone = previous.ScheduleTimezone.String
+				timezone = reminderScheduleTimezone(previous.ScheduleTimezone.String)
 			} else {
-				initiatorUserID := previous.InitiatorUserID
-				if !initiatorUserID.Valid {
-					var initiatorOK bool
-					initiatorUserID, initiatorOK = h.agentTransportInitiatorUserID(r, source)
-					if !initiatorOK {
-						writeError(w, http.StatusForbidden, "reminder initiator is not available")
-						return
-					}
-				}
-				timezone = reminderInitiatorTimezone(r.Context(), tx, initiatorUserID)
+				// P0: never fall back to user viewing timezone.
+				timezone = reminderScheduleTimezone("")
 			}
 		}
 		cadence, parseErr := parseReminderCadence(rawCadence, timezone)
@@ -860,27 +855,86 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, reminderResponse(cancelled))
 }
 
-func (h *Handler) resolveReminderAnchor(w http.ResponseWriter, ctx context.Context, origin chatOutputOrigin, rawMessageID string) (pgtype.UUID, pgtype.UUID, bool) {
+// agentReminderScheduleInitiatorUserID resolves initiator_user_id for schedule
+// (and calendar-update timezone fallback) only. Product lock (Frank/Parker
+// 2026-08-04 long-term):
+//
+//  1. anchor message author is human (user|member) and still a workspace member
+//  2. else agent.owner (if member)
+//  3. else workspace owner (oldest)
+//
+// Does not require the wake source / inbox event to have a human author —
+// reminder re-anchor and agent-authored anchors fall through to owner.
+func (h *Handler) agentReminderScheduleInitiatorUserID(ctx context.Context, workspaceID, agentID, anchorMessageID pgtype.UUID) (pgtype.UUID, bool) {
+	var empty pgtype.UUID
+	if h == nil || h.DB == nil || !workspaceID.Valid || !agentID.Valid {
+		return empty, false
+	}
+	var target pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+		SELECT c.user_id
+		FROM (
+			SELECT 1 AS ord, msg.author_id AS user_id
+			FROM channel_message msg
+			WHERE msg.id = $3
+			  AND msg.workspace_id = $1
+			  AND msg.deleted_at IS NULL
+			  AND msg.author_type IN ('user', 'member')
+			UNION ALL
+			SELECT 2, a.owner_id
+			FROM agent a
+			WHERE a.id = $2
+			  AND a.workspace_id = $1
+			  AND a.archived_at IS NULL
+			UNION ALL
+			SELECT 3, (
+				SELECT m.user_id
+				FROM member m
+				WHERE m.workspace_id = $1 AND m.role = 'owner'
+				ORDER BY m.created_at ASC NULLS LAST, m.user_id ASC
+				LIMIT 1
+			)
+		) c
+		JOIN member mem ON mem.workspace_id = $1 AND mem.user_id = c.user_id
+		WHERE c.user_id IS NOT NULL
+		ORDER BY c.ord ASC
+		LIMIT 1`, workspaceID, agentID, anchorMessageID).Scan(&target)
+	return target, err == nil && target.Valid
+}
+
+// resolveReminderAnchor locates the anchor message by id in the workspace and
+// returns (messageID, channelID, threadRootID, ok).
+//
+// Product lock B (2026-08-04): schedule may cross channels — msg-id is the
+// source of truth for the anchor channel. The agent must currently be a
+// member/manager of that channel (agentHasSurfaceAccess). Wake origin.channel
+// is NOT required to match (贝克汉姆 LRM2.0 patrol → pr-frontend schedule).
+func (h *Handler) resolveReminderAnchor(w http.ResponseWriter, ctx context.Context, origin chatOutputOrigin, rawMessageID string) (pgtype.UUID, pgtype.UUID, pgtype.UUID, bool) {
 	rawMessageID = strings.TrimSpace(rawMessageID)
 	if rawMessageID == "" {
 		writeError(w, http.StatusBadRequest, "message_id is required")
-		return pgtype.UUID{}, pgtype.UUID{}, false
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false
 	}
 	messageID, ok := parseUUIDOrBadRequest(w, rawMessageID, "message_id")
 	if !ok {
-		return pgtype.UUID{}, pgtype.UUID{}, false
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false
 	}
-	var threadRootID pgtype.UUID
-	var exists bool
+	var channelID, threadRootID pgtype.UUID
 	if err := h.DB.QueryRow(ctx, `
-		SELECT true, thread_root_message_id
+		SELECT channel_id, thread_root_message_id
 		FROM channel_message
-		WHERE id = $1 AND channel_id = $2 AND workspace_id = $3 AND deleted_at IS NULL`,
-		messageID, origin.channelID, origin.workspaceID).Scan(&exists, &threadRootID); err != nil || !exists {
+		WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
+		messageID, origin.workspaceID).Scan(&channelID, &threadRootID); err != nil {
 		writeError(w, http.StatusNotFound, "anchor message not found")
-		return pgtype.UUID{}, pgtype.UUID{}, false
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false
 	}
-	return messageID, threadRootID, true
+	// Member or manager on the anchor channel (surface access = current
+	// channel_member agent row). Not a member → 403, not 404 (message exists).
+	if !h.agentHasSurfaceAccess(ctx, origin.workspaceID, origin.agentID, channelID) {
+		writeError(w, http.StatusForbidden, "agent is not a member of the anchor channel")
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, false
+	}
+	return messageID, channelID, threadRootID, true
 }
 
 func (h *Handler) resolveReminderID(w http.ResponseWriter, ctx context.Context, workspaceID, agentID pgtype.UUID, raw string) (pgtype.UUID, bool) {
@@ -1752,7 +1806,7 @@ func (h *Handler) fireReminderOccurrenceWithTx(ctx context.Context, tx pgx.Tx, r
 	prompt := buildReminderPrompt(ch, reminder, occurrenceID, anchorExcerpt, anchorAvailable)
 	// LRM-1079: reminder fires are channel-only wakes (no chat_session).
 	promptResult, err := h.enqueueChannelAgentPromptWithTx(
-		ctx, txQueries, tx, ch, agent, trigger, creatorID, prompt, "dm", channelDirectedWakePriority,
+		ctx, txQueries, tx, ch, agent, trigger, creatorID, prompt, "reminder", channelDirectedWakePriority,
 	)
 	if err != nil {
 		return err
@@ -1871,7 +1925,19 @@ func loadReminderAnchorSnapshot(ctx context.Context, q reminderQueryRower, remin
 }
 
 func reminderFireCreatorID(ctx context.Context, exec db.DBTX, workspaceID, initiatorUserID, agentOwnerID pgtype.UUID) (pgtype.UUID, error) {
-	for _, candidate := range []pgtype.UUID{initiatorUserID, agentOwnerID} {
+	// Prefer optional audit initiator, then agent owner, then oldest workspace
+	// owner. P1: fire must not fail solely because initiator_user_id is NULL.
+	candidates := []pgtype.UUID{initiatorUserID, agentOwnerID}
+	var wsOwner pgtype.UUID
+	_ = exec.QueryRow(ctx, `
+		SELECT m.user_id FROM member m
+		WHERE m.workspace_id = $1 AND m.role = 'owner'
+		ORDER BY m.created_at ASC NULLS LAST, m.user_id ASC
+		LIMIT 1`, workspaceID).Scan(&wsOwner)
+	if wsOwner.Valid {
+		candidates = append(candidates, wsOwner)
+	}
+	for _, candidate := range candidates {
 		if !candidate.Valid {
 			continue
 		}
@@ -1945,33 +2011,41 @@ func reminderCadenceTimezone(reminder agentReminder) string {
 
 func buildReminderPrompt(ch ChannelResponse, reminder agentReminder, occurrenceID pgtype.UUID, anchorExcerpt string, anchorAvailable bool) string {
 	var b strings.Builder
-	b.WriteString("A self-scheduled reminder is due. This is a directed wake that you previously requested.\n")
+	// Compact Raft-aligned brief: msg-id first, one channel line, short surface rule.
+	// Hard fan-out block is enforced on message send (enforceReminderAnchorSend).
+	b.WriteString("A self-scheduled reminder is due.\n")
 	fmt.Fprintf(&b, "Reminder id: %s\n", uuidToString(reminder.ID))
 	fmt.Fprintf(&b, "Occurrence id: %s\n", uuidToString(occurrenceID))
 	fmt.Fprintf(&b, "Reminder title: %s\n", reminder.Title)
+	// msg-id + readable context first (Frank/Parker: Raft-style, not empty channel pin)
+	if anchorAvailable && reminder.AnchorMessageID.Valid {
+		fmt.Fprintf(&b, "msg-id: %s\n", uuidToString(reminder.AnchorMessageID))
+		if strings.TrimSpace(anchorExcerpt) != "" {
+			fmt.Fprintf(&b, "Anchor excerpt: %s\n", truncateForActivity(anchorExcerpt, 500))
+		}
+	} else {
+		b.WriteString("msg-id: unavailable (deleted).\n")
+	}
+	// One channel line only — no ManagerChannels list.
+	// When the anchor is gone, omit #name (deleted-thread tests must not leak surface names).
+	if ch.Kind == "dm" {
+		fmt.Fprintf(&b, "Target channel id: %s (direct message)\n", ch.ID)
+	} else if anchorAvailable && strings.TrimSpace(ch.Name) != "" {
+		fmt.Fprintf(&b, "Target channel id: %s (#%s)\n", ch.ID, ch.Name)
+	} else {
+		fmt.Fprintf(&b, "Target channel id: %s\n", ch.ID)
+	}
+	b.WriteString("Reply only on that anchor surface (thread if anchored in a thread; main channel if not).\n")
 	if reminder.Cadence.Valid {
 		fmt.Fprintf(&b, "Cadence: %s\n", reminder.Cadence.String)
 	}
 	if reminderTimezonePtr(reminder.Cadence, reminder.ScheduleTimezone) != nil {
 		fmt.Fprintf(&b, "Locked schedule timezone: %s\n", reminder.ScheduleTimezone.String)
 	}
-	if anchorAvailable && reminder.AnchorMessageID.Valid {
-		if ch.Kind == "dm" {
-			b.WriteString("Anchored surface: direct message\n")
-		} else {
-			fmt.Fprintf(&b, "Anchored surface: #%s\n", ch.Name)
-		}
-		fmt.Fprintf(&b, "Current message id: %s\n", uuidToString(reminder.AnchorMessageID))
-	} else {
-		b.WriteString("Anchor message: unavailable (deleted).\n")
-	}
-	if strings.TrimSpace(anchorExcerpt) != "" {
-		fmt.Fprintf(&b, "Anchor message excerpt: %s\n", truncateForActivity(anchorExcerpt, 500))
-	}
 	if anchorAvailable {
-		b.WriteString("Check the current state now. Reply in the anchored channel/thread only if there is a useful update, decision, follow-up question, or conclusion. If nothing changed, you may reschedule or finish without noise.\n")
+		b.WriteString("Check the current state now. If nothing useful changed, reschedule or finish without noise.\n")
 	} else {
-		b.WriteString("Check the current state now. Send a message only if there is a useful update, decision, follow-up question, or conclusion. If nothing changed, you may reschedule or finish without noise.\n")
+		b.WriteString("Check the current state now. Send only if there is a useful update; otherwise reschedule or finish without noise.\n")
 	}
 	b.WriteString(channelOutputContractInstruction)
 	b.WriteString("\n")

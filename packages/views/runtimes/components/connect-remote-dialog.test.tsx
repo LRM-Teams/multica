@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { configStore } from "@multica/core/config";
 import enCommon from "../../locales/en/common.json";
@@ -8,6 +8,8 @@ import enRuntimes from "../../locales/en/runtimes.json";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 
 const TEST_RESOURCES = { en: { common: enCommon, runtimes: enRuntimes } };
+
+const wsHandlers = new Map<string, (payload: unknown) => void>();
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-test",
@@ -24,7 +26,9 @@ vi.mock("@multica/core/paths", () => ({
 }));
 
 vi.mock("@multica/core/realtime", () => ({
-  useWSEvent: vi.fn(),
+  useWSEvent: (event: string, handler: (payload: unknown) => void) => {
+    wsHandlers.set(event, handler);
+  },
 }));
 
 vi.mock("../../navigation/context", () => ({
@@ -66,6 +70,10 @@ const ligatureClasses = [
 ];
 
 describe("ConnectRemoteDialog", () => {
+  beforeEach(() => {
+    wsHandlers.clear();
+  });
+
   it("uses cloud setup commands by default", () => {
     const { baseElement } = renderDialog();
 
@@ -116,12 +124,12 @@ describe("ConnectRemoteDialog", () => {
     expect(statusCode).toHaveClass(...ligatureClasses);
   });
 
-  // Distinct from the "can't open a browser" troubleshooting section — this
-  // one guards the step-1 install-command failure path added after users hit
-  // a blocked install host with no self-service guidance in the dialog.
-  it("offers self-service guidance for the install command itself failing", () => {
+  // LRM-1176 / LRM-1129 freeze ① — install + browser trouble share one
+  // "Having trouble?" details after Waiting; both bodies stay intact.
+  it("merges install and browser trouble into one details after Waiting", () => {
     const { baseElement } = renderDialog();
 
+    expect(baseElement).toHaveTextContent("Having trouble?");
     expect(baseElement).toHaveTextContent("Command not working?");
     expect(baseElement).toHaveTextContent(
       "Check your internet connection and try the command again",
@@ -129,21 +137,60 @@ describe("ConnectRemoteDialog", () => {
     expect(baseElement).toHaveTextContent(
       "it may be blocking outbound access to the install script",
     );
-  });
-
-  // Step 2 (`multica setup`) always ends in the device-code login flow,
-  // which already prints a link + one-time code confirmable from any
-  // device — headless machines never needed a manual token-paste fallback
-  // in the first place. This guards against that stale fallback creeping
-  // back in.
-  it("explains the device-code flow instead of a manual token fallback for headless machines", () => {
-    const { baseElement } = renderDialog();
-
     expect(baseElement).toHaveTextContent("Can't open a browser on that computer?");
-    expect(baseElement).toHaveTextContent(
-      "Step 2 already handles this",
-    );
+    expect(baseElement).toHaveTextContent("Step 2 already handles this");
     expect(baseElement).not.toHaveTextContent("multica config set server_url");
     expect(baseElement).not.toHaveTextContent("multica login --token");
+
+    const details = baseElement.querySelectorAll("details");
+    expect(details).toHaveLength(1);
+    // LRM-1199: expandable help uses solid border vocabulary, not dropzone dashed.
+    expect(details[0]).toHaveClass("border", "border-border");
+    expect(details[0]).not.toHaveClass("border-dashed");
+    const waiting = screen.getByRole("status");
+    expect(
+      waiting.compareDocumentPosition(details[0]!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("keeps OS selector compact without visible mode label or hints", () => {
+    const { baseElement } = renderDialog();
+
+    expect(baseElement).toHaveTextContent("Install commands");
+    expect(baseElement).not.toHaveTextContent("Where are you running this?");
+    expect(baseElement).not.toHaveTextContent(
+      "Use this for macOS, Linux, SSH boxes",
+    );
+    expect(
+      screen.getByRole("radiogroup", { name: "Where are you running this?" }),
+    ).toBeTruthy();
+  });
+
+  // LRM-1141 / LRM-1129 freeze v2 — Waiting is brand-soft status; Done disabled
+  // until daemon:register replaces the panel with the existing success state.
+  it("shows Waiting status and disabled Done before register", () => {
+    renderDialog();
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Waiting for computer to connect");
+    expect(status).toHaveTextContent(
+      "Keep this dialog open. It will continue automatically when the computer is registered.",
+    );
+    expect(status.className).toContain("bg-brand/5");
+    expect(status.className).not.toContain("bg-success");
+    expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
+  });
+
+  it("replaces Waiting with success after daemon:register", () => {
+    renderDialog();
+
+    act(() => {
+      wsHandlers.get("daemon:register")!({ runtime_id: "rt-1" });
+    });
+
+    expect(screen.getByText("Computer connected")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
+    expect(screen.getByRole("button", { name: /Create an agent/i })).toBeInTheDocument();
   });
 });

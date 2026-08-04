@@ -214,7 +214,6 @@ function MemberRow({
             <ActorStyledName
               displayName={presentation.displayName}
               honor={actorHonor}
-              fleet={actorFleet}
               showBadges={false}
               className="text-sm font-semibold text-ink"
             />
@@ -502,7 +501,7 @@ export function ChannelMembersList({
     return (
       <div
         className={cn(
-          "min-h-0 space-y-2 overflow-y-auto overscroll-contain px-5 py-3 [-webkit-overflow-scrolling:touch]",
+          "min-h-0 space-y-2 overflow-y-auto overscroll-contain px-5 py-3 momentum-scroll",
           className,
         )}
         aria-busy="true"
@@ -536,7 +535,7 @@ export function ChannelMembersList({
   return (
     <div
       className={cn(
-        "min-h-0 overflow-y-auto overscroll-contain px-2 pb-2 [-webkit-overflow-scrolling:touch]",
+        "min-h-0 overflow-y-auto overscroll-contain px-2 pb-2 momentum-scroll",
         className,
       )}
       data-testid="channel-members-list"

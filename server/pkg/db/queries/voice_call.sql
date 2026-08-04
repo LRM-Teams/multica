@@ -252,3 +252,19 @@ WHERE id = sqlc.arg('id')
   AND workspace_id = sqlc.arg('workspace_id')
   AND status IN ('ending', 'ended', 'failed')
 RETURNING *;
+
+
+-- name: FailVoiceCallSessionsStartedBefore :many
+-- A backend restart cannot safely resume provider work that this process no
+-- longer owns. Mark only sessions created before this boot as terminal so they
+-- cannot permanently hold the active member/agent uniqueness key.
+UPDATE voice_call_session
+SET
+  status = 'failed',
+  ended_at = now(),
+  end_reason = 'backend_restart_recovery',
+  error_code = 'backend_restart_recovery',
+  updated_at = now()
+WHERE status IN ('starting', 'connecting', 'active', 'reconnecting', 'ending')
+  AND started_at < sqlc.arg('started_before')
+RETURNING *;

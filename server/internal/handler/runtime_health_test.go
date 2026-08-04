@@ -412,3 +412,57 @@ func TestRuntimeToResponseNoStagedMessageWhenAlreadyOnTarget(t *testing.T) {
 		t.Fatalf("update_error = %v, want nil when already on target", *resp.UpdateError)
 	}
 }
+
+func TestRuntimeToResponseEqualTargetDoesNotOfferUpgrade(t *testing.T) {
+	// P0: current 0.4.0 + stale completed/ready target 0.4.0 must not light upgrade.
+	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "0.4.0"})
+	update := &UpdateRequest{
+		ID:            "update-1",
+		RuntimeID:     "runtime-1",
+		TargetVersion: "v0.4.0",
+		Status:        UpdateCompleted,
+	}
+	// latest still 0.4.0 (stale cache) or equal — must not show upgrade to same version
+	resp := runtimeToResponseWithUpdateAndRelease(rt, update, &RuntimeRelease{TagName: "v0.4.0"})
+	if resp.RuntimeHealth != "ok" {
+		t.Fatalf("runtime_health = %q, want ok", resp.RuntimeHealth)
+	}
+	if resp.TargetVersion != nil {
+		t.Fatalf("target_version = %v, want nil", *resp.TargetVersion)
+	}
+}
+
+func TestRuntimeToResponseEqualTargetOffersNewerLatest(t *testing.T) {
+	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "0.4.0"})
+	update := &UpdateRequest{
+		ID:            "update-1",
+		RuntimeID:     "runtime-1",
+		TargetVersion: "v0.4.0",
+		Status:        UpdateCompleted,
+	}
+	resp := runtimeToResponseWithUpdateAndRelease(rt, update, &RuntimeRelease{TagName: "v0.4.1"})
+	if resp.RuntimeHealth != "update_available" {
+		t.Fatalf("runtime_health = %q, want update_available", resp.RuntimeHealth)
+	}
+	if resp.TargetVersion == nil || *resp.TargetVersion != "v0.4.1" {
+		t.Fatalf("target_version = %v, want v0.4.1", resp.TargetVersion)
+	}
+}
+
+func TestRuntimeToResponseReadyToApplyEqualCurrentClearsUpgrade(t *testing.T) {
+	// ready_to_apply with current already on target (should collapse to completed then clear)
+	rt := runtimeHealthTestRuntime(t, map[string]any{"cli_version": "0.4.0"})
+	update := &UpdateRequest{
+		ID:            "update-1",
+		RuntimeID:     "runtime-1",
+		TargetVersion: "0.4.0",
+		Status:        UpdateReady,
+	}
+	resp := runtimeToResponseWithUpdateAndRelease(rt, update, &RuntimeRelease{TagName: "0.4.0"})
+	if resp.RuntimeHealth != "ok" {
+		t.Fatalf("runtime_health = %q, want ok", resp.RuntimeHealth)
+	}
+	if resp.TargetVersion != nil {
+		t.Fatalf("target_version = %v, want nil", *resp.TargetVersion)
+	}
+}

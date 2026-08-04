@@ -335,8 +335,8 @@ func TestDaemonReminderFireAttemptIsIdempotentAcrossConnections(t *testing.T) {
 		"Reminder id: " + reminderID,
 		"Occurrence id: " + occurrenceID,
 		"Reminder title: " + title,
-		"Current message id: " + anchor.ID,
-		"Anchor message excerpt: anchor",
+		"msg-id: " + anchor.ID,
+		"Anchor excerpt: anchor",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("directed wake prompt missing %q: %q", want, prompt)
@@ -1813,7 +1813,7 @@ func TestDeletedReminderAnchorFiresWithUnavailableMarker(t *testing.T) {
 		"Reminder id: " + reminderID,
 		"Occurrence id: " + occurrenceID,
 		"Reminder title: " + title,
-		"Anchor message: unavailable (deleted).",
+		"msg-id: unavailable (deleted).",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("deleted-anchor directed wake prompt missing %q: %q", want, prompt)
@@ -1877,7 +1877,7 @@ func TestDeletedReminderThreadRootHidesAnchorEverywhere(t *testing.T) {
 			t.Fatalf("deleted root leaked %q in prompt=%q", leaked, prompt)
 		}
 	}
-	if available || !receiptNull || !strings.Contains(prompt, "Anchor message: unavailable") {
+	if available || !receiptNull || !strings.Contains(prompt, "msg-id: unavailable") {
 		t.Fatalf("deleted root projection available=%v receipt_null=%v prompt=%q", available, receiptNull, prompt)
 	}
 	reminder, err := scanAgentReminder(testPool.QueryRow(context.Background(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1`, reminderID))
@@ -2684,8 +2684,8 @@ func TestAgentReminderHandlersAcceptModernAgentTransportSources(t *testing.T) {
 				WHERE id = $1`, scheduled.ID).Scan(&initiatorUserID); err != nil {
 				t.Fatalf("load reminder initiator: %v", err)
 			}
-			if initiatorUserID != fixture.initiatorUserID || scheduled.ScheduleTimezone == nil || *scheduled.ScheduleTimezone != "Asia/Shanghai" {
-				t.Fatalf("schedule initiator/timezone=%s/%v want=%s/Asia/Shanghai", initiatorUserID, scheduled.ScheduleTimezone, fixture.initiatorUserID)
+			if initiatorUserID != fixture.initiatorUserID || scheduled.ScheduleTimezone == nil || *scheduled.ScheduleTimezone != "UTC" {
+				t.Fatalf("schedule initiator/timezone=%s/%v want=%s/UTC", initiatorUserID, scheduled.ScheduleTimezone, fixture.initiatorUserID)
 			}
 
 			listRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/list", map[string]any{"status": "active"})
@@ -2695,7 +2695,7 @@ func TestAgentReminderHandlersAcceptModernAgentTransportSources(t *testing.T) {
 			updateRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/update", map[string]any{
 				"id": scheduled.ID, "cadence": "weekly:mon,fri@10:30",
 			})
-			if updateRec.Code != http.StatusOK || !strings.Contains(updateRec.Body.String(), "Asia/Shanghai") {
+			if updateRec.Code != http.StatusOK || !strings.Contains(updateRec.Body.String(), "UTC") {
 				t.Fatalf("update status=%d body=%s", updateRec.Code, updateRec.Body.String())
 			}
 			snoozeRec := serveReminderModernTransport(t, router, fixture, "/api/agent/reminders/snooze", map[string]any{
@@ -2811,22 +2811,19 @@ WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, fixture.initiatorUse
 			if taskInitiatorID != testUserID {
 				t.Fatalf("fallback task creator=%s, want current owner %s", taskInitiatorID, testUserID)
 			}
-			if status != "scheduled" || cadence != "daily@09:00" || timezone != "Asia/Shanghai" {
-				t.Fatalf("recurrence state=%s/%s/%s, want scheduled/daily@09:00/Asia/Shanghai", status, cadence, timezone)
+			if status != "scheduled" || cadence != "daily@09:00" || timezone != "UTC" {
+				t.Fatalf("recurrence state=%s/%s/%s, want scheduled/daily@09:00/UTC", status, cadence, timezone)
 			}
-			shanghai, err := time.LoadLocation("Asia/Shanghai")
-			if err != nil {
-				t.Fatal(err)
+			// P0: calendar locks UTC, not initiator/owner viewing timezone.
+			if got := nextFireAt.UTC().Format("15:04"); got != "09:00" {
+				t.Fatalf("next fire in locked UTC=%s, want 09:00", got)
 			}
 			newYork, err := time.LoadLocation("America/New_York")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := nextFireAt.In(shanghai).Format("15:04"); got != "09:00" {
-				t.Fatalf("next fire in locked timezone=%s, want 09:00", got)
-			}
 			if got := nextFireAt.In(newYork).Format("15:04"); got == "09:00" {
-				t.Fatalf("next fire drifted to owner timezone: %s", got)
+				t.Fatalf("next fire drifted to owner viewing timezone: %s", got)
 			}
 		})
 	}
@@ -2864,7 +2861,10 @@ func TestAgentReminderModernTransportSourcesRemainFailClosed(t *testing.T) {
 			t.Fatalf("cross agent event status=%d body=%s", rec.Code, rec.Body.String())
 		}
 	})
-	t.Run("cross origin anchor", func(t *testing.T) {
+	t.Run("cross origin anchor without membership", func(t *testing.T) {
+		// Product lock B: message may live outside wake origin, but agent
+		// must be a member of the *anchor* channel. No membership → 403
+		// (message exists; access denied), not 404.
 		fixture := seedReminderModernTransportFixture(t, "agent_credential")
 		foreignChannelID := seedChannelForTest(t, "reminder-foreign-origin-"+uuid.NewString(), fixture.initiatorUserID)
 		foreignMessage, err := testHandler.insertChannelMessage(context.Background(), parseUUID(foreignChannelID), parseUUID(testWorkspaceID),
@@ -2876,8 +2876,45 @@ func TestAgentReminderModernTransportSourcesRemainFailClosed(t *testing.T) {
 		rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
 			"title": "must fail", "delay_seconds": 300, "message_id": foreignMessage.ID,
 		})
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("cross origin status=%d body=%s", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "not a member of the anchor channel") {
+			t.Fatalf("cross origin without membership status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+	t.Run("cross origin anchor with membership", func(t *testing.T) {
+		// 贝克汉姆 shape: wake on channel A, schedule against msg-id on channel B
+		// where the agent is already a member → 201 and anchor_channel_id = B.
+		fixture := seedReminderModernTransportFixture(t, "agent_credential")
+		otherChannelID := seedChannelForTest(t, "reminder-cross-member-"+uuid.NewString(), fixture.initiatorUserID)
+		if _, err := testPool.Exec(context.Background(), `
+			INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role, join_source, added_by_type)
+			VALUES ($1, $2, 'agent', $3, 'manager', 'manual', 'system')
+			ON CONFLICT DO NOTHING`, otherChannelID, testWorkspaceID, fixture.agentID); err != nil {
+			t.Fatal(err)
+		}
+		otherMessage, err := testHandler.insertChannelMessage(context.Background(), parseUUID(otherChannelID), parseUUID(testWorkspaceID),
+			"user", parseUUID(fixture.initiatorUserID), "Reminder Initiator", "cross channel patrol anchor",
+			"multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+			"title": "cross channel patrol", "delay_seconds": 300, "message_id": otherMessage.ID,
+		})
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("cross origin with membership status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var scheduled agentReminderResponse
+		if err := json.NewDecoder(rec.Body).Decode(&scheduled); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+		})
+		if scheduled.AnchorChannelID != otherChannelID {
+			t.Fatalf("anchor_channel_id=%q want other channel %s", scheduled.AnchorChannelID, otherChannelID)
+		}
+		if scheduled.AnchorMessageID == nil || *scheduled.AnchorMessageID != otherMessage.ID {
+			t.Fatalf("anchor_message_id=%v want %s", scheduled.AnchorMessageID, otherMessage.ID)
 		}
 	})
 	t.Run("cross workspace", func(t *testing.T) {
@@ -2894,6 +2931,134 @@ func TestAgentReminderModernTransportSourcesRemainFailClosed(t *testing.T) {
 			t.Fatalf("cross workspace status=%d body=%s", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+func TestAgentReminderScheduleFallsBackToAgentOwnerWithoutHumanWakeAuthor(t *testing.T) {
+	// P1: agent-authored anchor still schedules (no 403). Initiator may be
+	// filled as optional audit (owner) but is not required for success.
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	fixture := seedReminderModernTransportFixture(t, "agent_inbox_token")
+
+	// Agent-authored *anchor* message (patrol re-anchor on own prior post).
+	if _, err := testPool.Exec(ctx, `
+		UPDATE channel_message
+		SET author_type = 'agent', author_id = $2, author_name = 'patrol agent'
+		WHERE id = $1`, fixture.anchorMessageID, fixture.agentID); err != nil {
+		t.Fatalf("agent-author anchor message: %v", err)
+	}
+	// Ensure agent owner is a current workspace member (testUserID is runtime owner).
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent SET owner_id = $2 WHERE id = $1`, fixture.agentID, testUserID); err != nil {
+		t.Fatalf("set agent owner: %v", err)
+	}
+
+	rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+		"title": "patrol re-anchor every hour", "message_id": fixture.anchorMessageID, "repeat": "every:1h",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("schedule without human wake author status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var scheduled agentReminderResponse
+	if err := json.NewDecoder(rec.Body).Decode(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+	})
+	var initiator string
+	if err := testPool.QueryRow(ctx, `SELECT initiator_user_id::text FROM agent_reminder WHERE id = $1`, scheduled.ID).Scan(&initiator); err != nil {
+		t.Fatal(err)
+	}
+	if initiator != testUserID {
+		t.Fatalf("initiator_user_id=%s want agent owner %s", initiator, testUserID)
+	}
+}
+
+func TestAgentReminderScheduleInitiatorFromHumanAnchorMessage(t *testing.T) {
+	// L2 long-term: human-authored anchor → initiator = that human, not agent.owner.
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	fixture := seedReminderModernTransportFixture(t, "agent_inbox_token")
+
+	// Force owner ≠ anchor human so the assertion is not accidental equality.
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent SET owner_id = $2 WHERE id = $1`, fixture.agentID, testUserID); err != nil {
+		t.Fatalf("set agent owner: %v", err)
+	}
+	// Anchor remains the fixture human trigger (author_type=user, author_id=initiatorUserID).
+	if fixture.initiatorUserID == testUserID {
+		t.Fatal("fixture initiator must differ from runtime owner for this test")
+	}
+
+	rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+		"title": "human anchored patrol", "message_id": fixture.anchorMessageID, "repeat": "every:1h",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("schedule with human anchor status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var scheduled agentReminderResponse
+	if err := json.NewDecoder(rec.Body).Decode(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+	})
+	var initiator string
+	if err := testPool.QueryRow(ctx, `SELECT initiator_user_id::text FROM agent_reminder WHERE id = $1`, scheduled.ID).Scan(&initiator); err != nil {
+		t.Fatal(err)
+	}
+	if initiator != fixture.initiatorUserID {
+		t.Fatalf("initiator_user_id=%s want anchor human %s (not owner %s)", initiator, fixture.initiatorUserID, testUserID)
+	}
+}
+
+
+func TestAgentReminderScheduleCalendarTimezoneIgnoresUserViewingTimezone(t *testing.T) {
+	// P0: daily@ uses UTC (or locked schedule_timezone), never user.timezone viewing pref.
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	fixture := seedReminderModernTransportFixture(t, "agent_inbox_token")
+	// Fixture sets initiator user timezone Asia/Shanghai and owner America/New_York.
+	// Calendar schedule must still lock UTC when no explicit schedule tz is passed.
+	rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+		"title": "daily patrol", "message_id": fixture.anchorMessageID, "repeat": "daily@09:00",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("daily schedule status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var scheduled agentReminderResponse
+	if err := json.NewDecoder(rec.Body).Decode(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+	})
+	var tz *string
+	if err := testPool.QueryRow(ctx, `SELECT schedule_timezone FROM agent_reminder WHERE id = $1`, scheduled.ID).Scan(&tz); err != nil {
+		t.Fatal(err)
+	}
+	if tz == nil || *tz != "UTC" {
+		t.Fatalf("schedule_timezone=%v want UTC (must not use user viewing timezone Asia/Shanghai)", tz)
+	}
+}
+
+func TestReminderScheduleTimezoneExplicitAndInvalid(t *testing.T) {
+	if got := reminderScheduleTimezone(""); got != "UTC" {
+		t.Fatalf("empty -> %q", got)
+	}
+	if got := reminderScheduleTimezone("Asia/Shanghai"); got != "Asia/Shanghai" {
+		t.Fatalf("valid -> %q", got)
+	}
+	if got := reminderScheduleTimezone("Not/A/Zone"); got != "UTC" {
+		t.Fatalf("invalid -> %q", got)
+	}
 }
 
 func TestAgentReminderTransportLocksTimezoneAndLogsLifecycle(t *testing.T) {
@@ -2934,12 +3099,12 @@ func TestAgentReminderTransportLocksTimezoneAndLogsLifecycle(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
 	})
-	if scheduled.Cadence == nil || *scheduled.Cadence != "daily@09:00" || scheduled.ScheduleTimezone == nil || *scheduled.ScheduleTimezone != "Asia/Shanghai" {
-		t.Fatalf("schedule did not lock initiator timezone: %+v", scheduled)
+	if scheduled.Cadence == nil || *scheduled.Cadence != "daily@09:00" || scheduled.ScheduleTimezone == nil || *scheduled.ScheduleTimezone != "UTC" {
+		t.Fatalf("schedule did not lock UTC calendar timezone: %+v", scheduled)
 	}
 
-	// Later initiator timezone changes cannot reinterpret an existing calendar
-	// definition, including when its cadence is replaced.
+	// Later initiator viewing-timezone changes cannot reinterpret an existing
+	// calendar definition, including when its cadence is replaced.
 	if _, err := testPool.Exec(context.Background(), `UPDATE "user" SET timezone = 'America/New_York' WHERE id = $1`, testUserID); err != nil {
 		t.Fatal(err)
 	}
@@ -2955,7 +3120,7 @@ func TestAgentReminderTransportLocksTimezoneAndLogsLifecycle(t *testing.T) {
 	if err := json.NewDecoder(updateRec.Body).Decode(&updated); err != nil {
 		t.Fatal(err)
 	}
-	if updated.ScheduleTimezone == nil || *updated.ScheduleTimezone != "Asia/Shanghai" {
+	if updated.ScheduleTimezone == nil || *updated.ScheduleTimezone != "UTC" {
 		t.Fatalf("cadence update drifted locked timezone: %+v", updated)
 	}
 	for _, transition := range []struct {
@@ -2963,7 +3128,7 @@ func TestAgentReminderTransportLocksTimezoneAndLogsLifecycle(t *testing.T) {
 		wantVisible *string
 	}{
 		{cadence: "every:2h"},
-		{cadence: "daily@08:15", wantVisible: stringPtr("Asia/Shanghai")},
+		{cadence: "daily@08:15", wantVisible: stringPtr("UTC")},
 	} {
 		req := agentTransportRequest(t, http.MethodPost, "/api/agent/reminders/update", taskID, agentID, map[string]any{"id": scheduled.ID, "cadence": transition.cadence})
 		rec := httptest.NewRecorder()
@@ -3091,12 +3256,12 @@ func TestAgentReminderExplicitTimeUpdateConvertsRecurrenceToOneShotAndRetainsTim
 	if err := testPool.QueryRow(context.Background(), `SELECT cadence, schedule_timezone, cadence_next_at FROM agent_reminder WHERE id = $1`, scheduled.ID).Scan(&cadence, &timezone, &cadenceNextAt); err != nil {
 		t.Fatal(err)
 	}
-	if cadence.Valid || cadenceNextAt.Valid || !timezone.Valid || timezone.String != "Asia/Shanghai" {
+	if cadence.Valid || cadenceNextAt.Valid || !timezone.Valid || timezone.String != "UTC" {
 		t.Fatalf("hidden timezone lock cadence=%v timezone=%v cadence_next_at=%v", cadence, timezone, cadenceNextAt)
 	}
 
 	recurring := updateSchedule(map[string]any{"id": scheduled.ID, "cadence": "daily@08:15"})
-	if recurring.Cadence == nil || *recurring.Cadence != "daily@08:15" || recurring.ScheduleTimezone == nil || *recurring.ScheduleTimezone != "Asia/Shanghai" {
+	if recurring.Cadence == nil || *recurring.Cadence != "daily@08:15" || recurring.ScheduleTimezone == nil || *recurring.ScheduleTimezone != "UTC" {
 		t.Fatalf("calendar recurrence did not reuse original timezone: %+v", recurring)
 	}
 	updateSchedule(map[string]any{"id": scheduled.ID, "delay_seconds": 300})

@@ -223,6 +223,10 @@ type ChannelMessageResponse struct {
 	// Attachments referenced by this message. The chat bubble renders
 	// file/image cards from these canonical associations.
 	Attachments []AttachmentResponse `json:"attachments,omitempty"`
+	// UndeliveredMentions lists structured @ targets who are not channel
+	// members yet. Message is still stored; delivery is withheld until the
+	// sender invites (Raft undelivered / invite). Omit when empty.
+	UndeliveredMentions []UndeliveredMention `json:"undelivered_mentions,omitempty"`
 }
 
 type ChannelThreadParticipant struct {
@@ -3375,6 +3379,18 @@ func (h *Handler) attachChannelMessageThreadRootSummaries(ctx context.Context, w
 	}
 }
 
+// attachChannelMessageThreadMetadata hydrates the mainline thread read model
+// (reply count, last reply, follow flag, unread count) for root messages.
+//
+// LRM-1145: thread_unread_count must answer the same question as the Activity
+// feed (loadActivityThreads) — a member has unread thread replies when they are
+// following the thread, already spoke in it, or were personally @-mentioned
+// anywhere in it (root included), and an explicit unfollow silences it. The old
+// rule counted only `followed_at IS NOT NULL`, so a member @-mentioned in a
+// root message (mention-follow only fires for mentions inside replies) saw
+// Activity flag the thread as unread while the channel preview rendered a bare
+// 「N 条回复」with no「M 条新」. `thread_followed` stays a strict follow-state
+// flag for the follow toggle; only the unread badge uses the broader rule.
 func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, workspaceID string, userID pgtype.UUID, messages []ChannelMessageResponse) {
 	rootIDs := []pgtype.UUID{}
 	for _, msg := range messages {
@@ -3392,7 +3408,35 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 		       max(replies.created_at) AS last_reply_at,
 		       COALESCE(tp.followed_at IS NOT NULL, false) AS followed,
 	       CASE
-	         WHEN tp.followed_at IS NOT NULL THEN count(replies.id) FILTER (
+	         WHEN COALESCE(tp.wake_state, 'no_wake') = 'unfollowed' THEN 0
+	         WHEN tp.followed_at IS NOT NULL
+	           OR EXISTS (
+	             SELECT 1
+	             FROM channel_message mine
+	             WHERE mine.thread_root_message_id = roots.id
+	               AND mine.author_type = 'user'
+	               AND mine.author_id = $3
+	               AND mine.deleted_at IS NULL
+	           )
+	           OR EXISTS (
+	             SELECT 1
+	             FROM channel_message mentioning
+	             WHERE (mentioning.id = roots.id OR mentioning.thread_root_message_id = roots.id)
+	               AND mentioning.deleted_at IS NULL
+	               AND EXISTS (
+	                 SELECT 1
+	                 FROM jsonb_array_elements(COALESCE(mentioning.parts, '[]'::jsonb)) AS part(value)
+	                 WHERE part.value->>'type' = 'reference'
+	                   AND part.value->>'ref_type' = 'mention'
+	                   AND part.value->>'ref_subtype' = 'member'
+	                   AND CASE
+	                         WHEN part.value->>'ref_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+	                           THEN (part.value->>'ref_id')::uuid = $3
+	                         ELSE false
+	                       END
+	               )
+	           )
+	         THEN count(replies.id) FILTER (
 	           WHERE replies.seq > COALESCE(tp.last_read_seq, 0)
 	             AND replies.author_type <> 'system'
 	             AND NOT (replies.author_type = 'user' AND replies.author_id = $3)
@@ -3408,7 +3452,7 @@ func (h *Handler) attachChannelMessageThreadMetadata(ctx context.Context, worksp
 		 AND tp.member_type = 'user'
 		 AND tp.member_id = $3
 		WHERE roots.workspace_id = $2 AND roots.id = ANY($1::uuid[])
-		GROUP BY roots.id, tp.followed_at, tp.last_read_seq`,
+		GROUP BY roots.id, tp.followed_at, tp.wake_state, tp.last_read_seq`,
 		rootIDs, parseUUID(workspaceID), userID)
 	if err != nil {
 		slog.Warn("channel thread metadata: load failed", "workspace", workspaceID, "error", err)
@@ -4172,6 +4216,7 @@ func (h *Handler) SendChannelMessageThreadReply(w http.ResponseWriter, r *http.R
 	}
 	msg := result.Message
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
+	msg.UndeliveredMentions = h.undeliveredMentionsForMessage(r.Context(), ch, msg.Content, msg.Parts)
 	if !result.Created {
 		writeJSON(w, http.StatusOK, msg)
 		if channelMessageNeedsVoiceTranscription(msg.Parts) {
@@ -4869,6 +4914,10 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := h.validateDMMentionMembership(r.Context(), ch, content, parts); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	replyToMessageID, ok := h.validateChannelReplyTarget(w, r.Context(), workspaceID, channelID, req.ReplyToMessageID)
 	if !ok {
 		return
@@ -4906,6 +4955,7 @@ func (h *Handler) SendChannelMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	msg := result.Message
 	msg = h.attachSingleChannelMessageDetails(r.Context(), workspaceID, parseUUID(userID), msg)
+	msg.UndeliveredMentions = h.undeliveredMentionsForMessage(r.Context(), ch, msg.Content, msg.Parts)
 	if !result.Created {
 		writeJSON(w, http.StatusOK, msg)
 		if channelMessageNeedsVoiceTranscription(msg.Parts) {

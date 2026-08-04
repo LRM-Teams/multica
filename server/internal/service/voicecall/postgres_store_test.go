@@ -177,6 +177,48 @@ func TestPostgresStoreMapsSessionAndScopesEveryMutation(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreRecoversInterruptedSessionsAtStartup(t *testing.T) {
+	endedAt := time.Date(2026, time.August, 3, 13, 41, 0, 0, time.UTC)
+	row := testDBVoiceCallSession()
+	row.Status = string(StatusFailed)
+	row.EndedAt = pgtype.Timestamptz{Time: endedAt, Valid: true}
+	row.EndReason = "backend_restart_recovery"
+	row.ErrorCode = "backend_restart_recovery"
+	queries := &restartRecoveryVoiceCallQueries{
+		fakeVoiceCallQueries: &fakeVoiceCallQueries{},
+		recovered:           []db.VoiceCallSession{row},
+	}
+	store := &PostgresStore{queries: queries}
+	cutoff := time.Date(2026, time.August, 3, 13, 35, 0, 0, time.FixedZone("CST", 8*60*60))
+
+	recovered, err := store.RecoverInterruptedSessionsAtStartup(time.Second, cutoff)
+	if err != nil || len(recovered) != 1 ||
+		recovered[0].Status != StatusFailed ||
+		recovered[0].EndReason != "backend_restart_recovery" ||
+		recovered[0].ErrorCode != "backend_restart_recovery" ||
+		recovered[0].EndedAt == nil || !recovered[0].EndedAt.Equal(endedAt) {
+		t.Fatalf("recovered = %+v error=%v", recovered, err)
+	}
+	if !queries.cutoff.Valid || !queries.cutoff.Time.Equal(cutoff.UTC()) {
+		t.Fatalf("recovery cutoff = %+v, want %s", queries.cutoff, cutoff.UTC())
+	}
+}
+
+type restartRecoveryVoiceCallQueries struct {
+	*fakeVoiceCallQueries
+	recovered []db.VoiceCallSession
+	cutoff    pgtype.Timestamptz
+	err       error
+}
+
+func (queries *restartRecoveryVoiceCallQueries) FailVoiceCallSessionsStartedBefore(
+	_ context.Context,
+	cutoff pgtype.Timestamptz,
+) ([]db.VoiceCallSession, error) {
+	queries.cutoff = cutoff
+	return queries.recovered, queries.err
+}
+
 func TestPostgresStoreRejectsInvalidUUIDBeforeQuery(t *testing.T) {
 	queries := &fakeVoiceCallQueries{session: testDBVoiceCallSession()}
 	store, err := NewPostgresStore(queries)
@@ -605,6 +647,41 @@ func TestPostgresStoreStateQueriesAgainstMigration(t *testing.T) {
 		stopResult.Status != StatusFailed ||
 		stopResult.ErrorCode != "volcengine_1005004" {
 		t.Fatalf("provider failure during stop = %+v error=%v", stopResult, err)
+	}
+
+	interrupted, err := store.CreateStarting(ctx, NewSession{
+		WorkspaceID:    testVoiceWorkspaceID,
+		ChannelID:      testVoiceChannelID,
+		AgentID:        testVoiceAgentID,
+		UserID:         testVoiceUserID,
+		Provider:       "volcengine",
+		ProviderTaskID: "voice-task-integration-restart",
+		RoomID:         "voice-call-integration-restart",
+	})
+	if err != nil {
+		t.Fatalf("create interrupted session: %v", err)
+	}
+	recovered, err := store.RecoverInterruptedSessionsAtStartup(
+		time.Second,
+		time.Now().Add(time.Second),
+	)
+	if err != nil || len(recovered) != 1 || recovered[0].ID != interrupted.ID ||
+		recovered[0].Status != StatusFailed ||
+		recovered[0].EndReason != "backend_restart_recovery" ||
+		recovered[0].ErrorCode != "backend_restart_recovery" ||
+		recovered[0].EndedAt == nil {
+		t.Fatalf("restart recovery = %+v error=%v", recovered, err)
+	}
+	if _, err := store.CreateStarting(ctx, NewSession{
+		WorkspaceID:    testVoiceWorkspaceID,
+		ChannelID:      testVoiceChannelID,
+		AgentID:        testVoiceAgentID,
+		UserID:         testVoiceUserID,
+		Provider:       "volcengine",
+		ProviderTaskID: "voice-task-integration-retry",
+		RoomID:         "voice-call-integration-retry",
+	}); err != nil {
+		t.Fatalf("retry after restart recovery: %v", err)
 	}
 }
 

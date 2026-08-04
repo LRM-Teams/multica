@@ -113,7 +113,10 @@ vi.mock("../i18n/use-t", () => ({
           avatar_err_size: "Too large",
           avatar_err_dimensions: "Too small",
         },
-        profile_popover: { close_aria: "Close" },
+        profile_popover: {
+          close_aria: "Close",
+          honor: { level_value: "Level {{level}}" },
+        },
         side_panel: { back_to_messages: "Back to messages" },
       } as never),
   }),
@@ -175,6 +178,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
           model: "Claude Code",
           runtime_mode: "local",
           runtime_name: null,
+          honor_level: 8,
         },
         {
           id: "a2",
@@ -201,6 +205,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
     expect(screen.getByTestId("member-role-soft-pill").textContent).toContain("Owner");
     expect(screen.getByText("me@example.com")).toBeTruthy();
     expect(screen.getAllByTestId("member-created-agent-row")).toHaveLength(2);
+    expect(document.querySelector('[data-agent-honor-level="8"]')).toBeInTheDocument();
   });
 
   it("hides Message for self and shows (you)", () => {
@@ -257,6 +262,7 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
           email: "self@example.com",
           avatar_url: null,
           profile_description: "Hello",
+          honor: { level: 42, name_style: "default" },
         },
       ],
       isPending: false,
@@ -277,9 +283,10 @@ describe("MemberSidePanel (LRM-619 lock A)", () => {
       isPending: false,
     });
     agentsMock.mockReturnValue({ data: [], isPending: false });
-    renderPanel("u-self");
+    const { container } = renderPanel("u-self");
     expect(screen.getByTestId("member-self-avatar-change")).toBeTruthy();
     expect(screen.getByTestId("member-profile-name-trigger").textContent).toContain("Me");
+    expect(container.querySelector('[data-user-honor-level="42"]')).not.toBeNull();
     expect(screen.getByTestId("member-profile-description-trigger")).toBeTruthy();
     const editLink = screen.getByTestId("member-side-panel-edit-profile").closest("a");
     expect(editLink?.getAttribute("href")).toBe("/ws-1/settings?tab=profile");

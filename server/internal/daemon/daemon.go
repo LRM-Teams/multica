@@ -3655,6 +3655,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	agentRootPath := ""
 	agentMemoryDir := ""
+	deviceMemoryDir := ""
 	agentSkillDir := ""
 	agentSkillDraftsPath := ""
 	if !restrictedExecution && task.WorkspaceID != "" && agentID != "" {
@@ -3700,6 +3701,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				}, nil
 			}
 			d.hydrateAgentMemoryCenter(ctx, task.WorkspaceID, agentID, task.RuntimeID, agentRoot)
+			var deviceErr error
+			deviceMemoryDir, deviceErr = ensureDeviceMemoryRoot(agentRoot, d.cfg.DaemonID)
+			if deviceErr != nil {
+				taskLog.Warn("device-local memory root creation failed", "error", deviceErr)
+			}
 		}
 		agentRootPath = agentRoot
 		agentMemoryDir = filepath.Join(agentRootPath, "memory")
@@ -3733,6 +3739,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentInstructions:                instructions,
 		AgentRoot:                        agentRootPath,
 		AgentMemoryDir:                   agentMemoryDir,
+		DeviceMemoryDir:                  deviceMemoryDir,
 		UserMemoryDir:                    scopedMemory.UserDir,
 		ProjectMemoryDir:                 scopedMemory.ProjectDir,
 		ChannelMemoryDir:                 scopedMemory.ChannelDir,
@@ -4414,6 +4421,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	switch result.Status {
 	case "completed":
+		if reason, ok := classifyFailedOutput(output); ok {
+			taskLog.Warn("agent emitted a provider failure as final output", "failure_reason", reason)
+			return TaskResult{
+				Status:        "blocked",
+				Comment:       output,
+				SessionID:     result.SessionID,
+				WorkDir:       env.WorkDir,
+				EnvRoot:       env.RootDir,
+				Usage:         usageEntries,
+				RuntimeStats:  runtimeStats,
+				FailureReason: reason,
+			}, nil
+		}
 		if isChannelOnboardingSkipReceipt(task, output) {
 			taskLog.Info("agent produced typed channel onboarding skip receipt")
 			return TaskResult{
@@ -4785,8 +4805,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 		var trajectory taskMessageTrajectoryBuffer
 		var batch []TaskMessageData
 		callIDToTool := map[string]string{}
-		var phase taskMessagePhaseTracker
-
 		emitTrajectory := func(kind, content, lineage string) {
 			s := seq.Add(1)
 			batch = append(batch, TaskMessageData{
@@ -4795,16 +4813,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				Content: content,
 				Lineage: lineage,
 			})
-		}
-		emitPhaseStatus := func() {
-			if !phase.enter() {
-				return
-			}
-			s := seq.Add(1)
-			// A blank thinking row is a status transition, not raw thought
-			// content. The client uses it to leave a stale tool label while the
-			// transcript intentionally renders no timeline row for empty text.
-			batch = append(batch, TaskMessageData{Seq: int(s), Type: "thinking"})
 		}
 		flush := func(force bool) {
 			mu.Lock()
@@ -4892,7 +4900,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					}
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
-					phase.leave()
 					s := seq.Add(1)
 					batch = append(batch, TaskMessageData{
 						Seq:    int(s),
@@ -4929,7 +4936,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					}
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
-					phase.leave()
 					s := seq.Add(1)
 					// #103 temporary: when MULTICA_DEBUG_TOOL_RESULT_INPUT=1, log
 					// whether completed tool Input is empty (backfill depends on it).
@@ -4960,14 +4966,12 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 				case agent.MessageThinking:
 					if msg.Content != "" {
 						mu.Lock()
-						emitPhaseStatus()
 						trajectory.append("thinking", msg.Content, msg.Lineage, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
 				case agent.MessageCompactionStarted, agent.MessageCompactionFinished:
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
-					phase.leave()
 					s := seq.Add(1)
 					messageType := "compaction_started"
 					if msg.Type == agent.MessageCompactionFinished {
@@ -4979,7 +4983,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					if msg.Content != "" {
 						taskLog.Debug("agent", "text", truncateLog(msg.Content, 200))
 						mu.Lock()
-						emitPhaseStatus()
 						trajectory.append("text", msg.Content, msg.Lineage, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
@@ -4987,7 +4990,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					taskLog.Error("agent error", "content", msg.Content)
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
-					phase.leave()
 					s := seq.Add(1)
 					batch = append(batch, TaskMessageData{
 						Seq:     int(s),
@@ -5000,7 +5002,6 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						taskLog.Debug("agent log", "level", msg.Level, "content", truncateLog(msg.Content, 200))
 						mu.Lock()
 						trajectory.flush(time.Now(), true, emitTrajectory)
-						phase.leave()
 						s := seq.Add(1)
 						batch = append(batch, TaskMessageData{
 							Seq:     int(s),
@@ -5496,6 +5497,9 @@ func addMulticaAgentEnv(env map[string]string, cfg Config, workspaceID, agentID,
 	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
 	env["MULTICA_AGENT_ROOT"] = agentRoot
 	env["MULTICA_AGENT_MEMORY_DIR"] = filepath.Join(agentRoot, "memory")
+	if deviceRoot := deviceMemoryRoot(agentRoot, cfg.DaemonID); deviceRoot != "" {
+		env["MULTICA_DEVICE_MEMORY_DIR"] = deviceRoot
+	}
 	env["MULTICA_AGENT_NOTES_DIR"] = filepath.Join(agentRoot, "notes")
 	env["MULTICA_AGENT_PROFILE_DIR"] = filepath.Join(agentRoot, "profile")
 	env["MULTICA_AGENT_FEEDBACK_DIR"] = filepath.Join(agentRoot, "feedback")

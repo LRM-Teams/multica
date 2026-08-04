@@ -9,8 +9,15 @@ import {
   Plus,
   Search,
 } from "lucide-react";
+import { Virtuoso } from "react-virtuoso";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Agent, AgentRuntime, CreateAgentRequest, AgentCreationDraft } from "@multica/core/types";
+import type {
+  Agent,
+  AgentActionCard,
+  AgentRuntime,
+  CreateAgentRequest,
+  AgentCreationDraft,
+} from "@multica/core/types";
 import {
   agentRunCounts30dOptions,
   agentFleetRankingsOptions,
@@ -48,7 +55,6 @@ import {
 import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useNavigation } from "../../navigation";
-import { useAgentFleetClassName } from "../hooks/use-agent-fleet-class-name";
 import { PageHeader } from "../../layout/page-header";
 import {
   availabilityConfig,
@@ -64,12 +70,14 @@ import { RuntimeMachineFilterDropdown } from "./runtime-machine-filter-dropdown"
 import { AgentDetailOverview, type AgentMetric } from "./agent-detail-overview";
 import { ConfirmDeleteAgent } from "./confirm-delete-agent";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { useOpenDM } from "../../common/use-open-dm";
 import { estimateCost } from "../../runtimes/utils";
-import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
+import { AgentOpenDmButton } from "./agent-open-dm-button";
+import { AgentHonorLevelIcon } from "./agent-honor-level-icon";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { AgentActivityStatus } from "./agent-activity-list-item";
+import type { AgentPresenceDetail } from "@multica/core/agents";
 
 // Filter axes:
 //
@@ -176,6 +184,7 @@ export function AgentsPage({
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [createDraft, setCreateDraft] = useState<AgentCreationDraft | null>(null);
+  const [createActionCard, setCreateActionCard] = useState<AgentActionCard | null>(null);
   // When set, the Create dialog opens pre-populated with this agent's
   // config — driven by the row-level "Duplicate" action. We keep this
   // separate from `showCreate` so a stray null-template doesn't open the
@@ -185,24 +194,46 @@ export function AgentsPage({
   );
   const openBlankCreate = useCallback(() => {
     setCreateDraft(null);
+    setCreateActionCard(null);
     setDuplicateTemplate(null);
     setShowCreate(true);
   }, []);
 
+  // Hire path: ?action_card=<id> loads agent:create card (no draft bridge).
+  // Research / legacy: ?draft=<id> still opens draft-seeded create when present.
   useEffect(() => {
-    const draftId = navigation.searchParams.get("draft");
-    if (!draftId) return;
+    const actionCardId = navigation.searchParams.get("action_card");
+    const draftId = actionCardId ? null : navigation.searchParams.get("draft");
+    if (!actionCardId && !draftId) return;
     let cancelled = false;
     (async () => {
       try {
-        const draft = await api.getAgentDraft(draftId);
-        if (cancelled) return;
-        setCreateDraft(draft);
-        setDuplicateTemplate(null);
-        setShowCreate(true);
+        if (actionCardId) {
+          const card = await api.getAgentActionCard(actionCardId);
+          if (cancelled) return;
+          setCreateActionCard(card);
+          setCreateDraft(null);
+          setDuplicateTemplate(null);
+          setShowCreate(true);
+          return;
+        }
+        if (draftId) {
+          const draft = await api.getAgentDraft(draftId);
+          if (cancelled) return;
+          setCreateDraft(draft);
+          setCreateActionCard(null);
+          setDuplicateTemplate(null);
+          setShowCreate(true);
+        }
       } catch (err) {
         if (!cancelled) {
-          showErrorToast(err instanceof Error ? err.message : "Failed to load Wendy draft");
+          showErrorToast(
+            err instanceof Error
+              ? err.message
+              : actionCardId
+                ? "Failed to load hire card"
+                : "Failed to load Wendy draft",
+          );
         }
       }
     })();
@@ -740,7 +771,7 @@ export function AgentsPage({
               )}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto py-1">
+            <div className="min-h-0 flex-1 py-1">
               {sortedAgents.length === 0 ? (
                 <NoMatches
                   view={view}
@@ -749,15 +780,22 @@ export function AgentsPage({
                   runtimeMachineTitle={selectedMachine?.title ?? null}
                 />
               ) : (
-                sortedAgents.map((agent) => (
-                  <AgentRailRow
-                    key={agent.id}
-                    agent={agent}
-                    fleet={fleetByAgentId.get(agent.id)}
-                    selected={selectedAgent?.id === agent.id}
-                    onClick={() => setSelectedId(agent.id)}
-                  />
-                ))
+                // LRM-1264: window the rail — large workspaces keep ~150 agent
+                // rows off-DOM without changing row chrome.
+                <Virtuoso
+                  className="h-full"
+                  data={sortedAgents}
+                  increaseViewportBy={{ top: 200, bottom: 200 }}
+                  itemContent={(_, agent) => (
+                    <AgentRailRow
+                      agent={agent}
+                      fleet={fleetByAgentId.get(agent.id)}
+                      presence={presenceMap.get(agent.id)}
+                      selected={selectedAgent?.id === agent.id}
+                      onClick={() => setSelectedId(agent.id)}
+                    />
+                  )}
+                />
               )}
             </div>
           </div>
@@ -805,9 +843,11 @@ export function AgentsPage({
           currentUserId={currentUser?.id ?? null}
           template={duplicateTemplate}
           draft={createDraft}
+          actionCard={createActionCard}
           onClose={() => {
             setShowCreate(false);
             setCreateDraft(null);
+            setCreateActionCard(null);
             setDuplicateTemplate(null);
           }}
           onCreate={handleCreate}
@@ -843,7 +883,7 @@ function PageHeaderBar({
         <p className="ml-2 hidden text-xs text-muted-foreground md:block">
           {t(($) => $.page.tagline)}{" "}
           <a
-            href="https://multica.ai/docs/agents"
+            href="https://leagent.me/docs/agents"
             target="_blank"
             rel="noopener noreferrer"
             className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground"
@@ -1045,24 +1085,23 @@ function AvailabilityChip({
 function AgentRailRow({
   agent,
   fleet,
+  presence,
   selected,
   onClick,
 }: {
   agent: Agent;
   fleet?: import("@multica/core/types/agent-fleet").AgentFleetRank;
+  presence?: AgentPresenceDetail;
   selected: boolean;
   onClick: () => void;
 }) {
   const { t } = useT("agents");
-  const fleetClassName = useAgentFleetClassName();
-  const { openDM, isPending: openingDM } = useOpenDM();
   const displayName = resolveActorDisplayName(agent, agent.name);
   const isArchived = !!agent.archived_at;
   return (
-    // Outer div (not a button) lets us nest two independent buttons:
-    // the avatar (→ open DM) and the content area (→ select in detail).
-    // Horizontal padding lives inside each button so the flex gap is not a
-    // dead click zone between the two targets.
+    // Outer div nests select (avatar+copy) and an explicit DM "小框" so
+    // private chat is discoverable — avatar alone was not a clear entry
+    // (LRM-1216). Profile-card Message (LRM-283) stays on its own track.
     <div
       className={cn(
         "flex w-full items-stretch border-l-2 transition-colors",
@@ -1073,11 +1112,8 @@ function AgentRailRow({
     >
       <button
         type="button"
-        disabled={openingDM}
-        onClick={() => void openDM({ peer_type: "agent", peer_id: agent.id })}
-        title={t(($) => $.profile_card.send_message)}
-        aria-label={t(($) => $.profile_card.send_message)}
-        className="shrink-0 self-center rounded-full py-2.5 pl-3 pr-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+        onClick={onClick}
+        className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-3 pr-1.5 text-left"
       >
         <ActorAvatar
           actorType="agent"
@@ -1088,12 +1124,6 @@ function AgentRailRow({
           profileLink={false}
           className={isArchived ? "opacity-50 grayscale" : undefined}
         />
-      </button>
-      <button
-        type="button"
-        onClick={onClick}
-        className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-1.5 pr-3 text-left"
-      >
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <p
@@ -1104,13 +1134,16 @@ function AgentRailRow({
             >
               {displayName}
             </p>
-            {fleet ? (
-              <FleetRankBadge
-                classId={fleet.class_id}
-                classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
-                fleetRank={fleet.fleet_rank}
-                frozen={fleet.frozen || isArchived}
-                medal
+            {agent.honor_level ? (
+              <AgentHonorLevelIcon
+                level={agent.honor_level}
+                title={t(($) => $.honor_agent.level_value, {
+                  level: agent.honor_level,
+                })}
+                className={cn(
+                  "size-6 drop-shadow-sm",
+                  isArchived && "opacity-50 grayscale",
+                )}
               />
             ) : null}
           </div>
@@ -1118,7 +1151,19 @@ function AgentRailRow({
             {agent.description?.trim() || "—"}
           </p>
         </div>
+        {!isArchived ? (
+          <AgentActivityStatus
+            presence={presence}
+            alignEnd
+            className="max-w-[36%]"
+          />
+        ) : null}
       </button>
+      {!isArchived ? (
+        <div className="flex shrink-0 items-center pr-2">
+          <AgentOpenDmButton agentId={agent.id} variant="icon" />
+        </div>
+      ) : null}
     </div>
   );
 }

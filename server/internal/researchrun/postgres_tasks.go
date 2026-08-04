@@ -237,15 +237,16 @@ func (s *PostgresStore) FailAttempt(ctx context.Context, in AttemptFailure) (Run
 		return RunEvent{}, err
 	}
 	defer tx.Rollback(ctx)
-	var sessionID, workspaceID, taskID string
+	var sessionID, workspaceID, taskID, assignedAgentID string
 	var attemptNumber, maxAttempts int
 	err = tx.QueryRow(ctx, `
 		SELECT a.session_id::text, a.workspace_id::text, a.task_id::text,
+		       a.assigned_agent_id::text,
 		       a.attempt_number, t.max_attempts
 		FROM research_task_attempt a JOIN research_task t ON t.id = a.task_id
 		WHERE a.id = $1::uuid AND a.status IN ('dispatching', 'running')
 		FOR UPDATE OF a, t
-	`, in.AttemptID).Scan(&sessionID, &workspaceID, &taskID, &attemptNumber, &maxAttempts)
+	`, in.AttemptID).Scan(&sessionID, &workspaceID, &taskID, &assignedAgentID, &attemptNumber, &maxAttempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RunEvent{}, fmt.Errorf("%w: attempt is terminal", ErrInvalidTransition)
 	}
@@ -275,7 +276,8 @@ func (s *PostgresStore) FailAttempt(ctx context.Context, in AttemptFailure) (Run
 		return RunEvent{}, err
 	}
 	event, err := appendEvent(ctx, tx, workspaceID, sessionID, "task_attempt_failed", "attempt-failed:"+in.AttemptID, "system", "", map[string]any{
-		"task_id": taskID, "attempt_id": in.AttemptID, "failure_class": in.FailureClass, "retryable": nextStatus == TaskStatusReady,
+		"task_id": taskID, "attempt_id": in.AttemptID, "failure_class": in.FailureClass,
+		"agent_id": assignedAgentID, "diagnostics": diagnostics, "retryable": nextStatus == TaskStatusReady,
 	})
 	if err != nil {
 		return RunEvent{}, err
@@ -359,7 +361,10 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, sessionID string,
 	if err != nil {
 		return Task{}, RunEvent{}, err
 	}
-	event, err := appendEvent(ctx, tx, workspaceID, sessionID, "control_task_created", "control-task:"+taskID, "system", "", map[string]any{"task_id": taskID, "kind": kind})
+	event, err := appendEvent(ctx, tx, workspaceID, sessionID, "control_task_created", "control-task:"+taskID, "system", "", map[string]any{
+		"task_id": taskID, "kind": kind, "objective": objective,
+		"required_capability": capability, "expected_result": expected,
+	})
 	if err != nil {
 		return Task{}, RunEvent{}, err
 	}
@@ -674,10 +679,6 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 	}
 	run, err = s.GetRun(ctx, in.SessionID, in.WorkspaceID)
 	return run, event, cancelIDs, err
-}
-
-func expectedResultForTask(kind TaskKind) string {
-	return expectedResultForTaskVersion(OrchestratorVersionV1, kind)
 }
 
 func expectedResultForTaskVersion(version string, kind TaskKind) string {

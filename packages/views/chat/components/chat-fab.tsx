@@ -13,6 +13,7 @@ import {
   TooltipContent,
 } from "@multica/ui/components/ui/tooltip";
 import { useT } from "../../i18n";
+import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion";
 
 const logger = createLogger("chat.ui");
 
@@ -23,6 +24,7 @@ export function ChatFab() {
   const toggle = useChatStore((s) => s.toggle);
   const { data: sessions = [] } = useQuery(chatSessionsOptions(wsId));
   const { data: pending } = useQuery(pendingChatTasksOptions(wsId));
+  const prefersReducedMotion = usePrefersReducedMotion();
 
   if (isOpen) return null;
 
@@ -49,7 +51,18 @@ export function ChatFab() {
           "absolute bottom-2 right-2 z-50 flex size-10 cursor-pointer items-center justify-center rounded-full ring-1 ring-foreground/10 bg-card text-muted-foreground shadow-sm transition-transform hover:scale-110 hover:text-accent-foreground active:scale-95",
           // Impulse the button itself while a chat task is running — no
           // outer ring to keep things calm.
-          isRunning && "animate-chat-impulse",
+          //
+          // LRM-1362 — the impulse is the *only* visual carrier of "a chat task
+          // is running" (icon and unread badge don't change), so reduced motion
+          // can't simply drop it or the running state would render
+          // pixel-identical to idle. Freeze it at the keyframe's 50% peak
+          // instead: brand text + brand-tinted ring at the SAME ring width, so
+          // the unread cue's heavier `ring-2` still outranks it (matches the
+          // working-state precedent in common/actor-avatar.tsx).
+          isRunning &&
+            (prefersReducedMotion
+              ? "text-brand ring-brand/40"
+              : "animate-chat-impulse"),
         )}
       >
         <MessageCircle className="size-5" />

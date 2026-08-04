@@ -1,7 +1,7 @@
 /**
- * LRM-817 / LRM-906: homepage quick-start templates.
- * Long professional prompts (≥800 chars) live in research-template-prompts.ts.
- * Cards never dump the full prompt into the composer — chip + hidden goal (T2).
+ * Homepage quick-start templates.
+ * Decision-oriented methods live in research-template-prompts.ts.
+ * The composer holds the concrete intent; submit merges it with the editable method.
  */
 import { RESEARCH_TEMPLATE_PROMPTS } from "./research-template-prompts";
 
@@ -23,34 +23,43 @@ export const RESEARCH_TEMPLATES: readonly ResearchTemplate[] = [
   {
     id: "industry",
     title: { zh: "行业调研", en: "Industry research" },
-    blurb: { zh: "市场规模、格局与趋势", en: "Market size, landscape, trends" },
+    blurb: {
+      zh: "边界、运行机制与变化",
+      en: "Boundaries, mechanisms, and change",
+    },
     sessionTitle: { zh: "行业调研", en: "Industry research" },
     goal: RESEARCH_TEMPLATE_PROMPTS.industry,
     params: {
-      zh: ["市场规模", "竞争格局", "增长驱动", "风险与不确定因素"],
-      en: ["Market size", "Competitive landscape", "Growth drivers", "Risks & unknowns"],
+      zh: ["研究边界", "驱动机制", "证据与反证", "决策含义"],
+      en: ["Research scope", "Causal mechanisms", "Evidence and counterevidence", "Decision implications"],
     },
   },
   {
     id: "competitor",
     title: { zh: "竞品分析", en: "Competitor analysis" },
-    blurb: { zh: "对手对比、差异与机会", en: "Compare rivals, gaps, opportunities" },
+    blurb: {
+      zh: "用户选择、替代方案与差异",
+      en: "User choice, alternatives, and differentiation",
+    },
     sessionTitle: { zh: "竞品分析", en: "Competitor analysis" },
     goal: RESEARCH_TEMPLATE_PROMPTS.competitor,
     params: {
-      zh: ["功能对比", "定价策略", "获客渠道", "口碑与评价"],
-      en: ["Feature comparison", "Pricing", "Go-to-market", "Sentiment"],
+      zh: ["替代集合", "用户任务", "可比证据", "差异化验证"],
+      en: ["Alternative set", "User jobs", "Comparable evidence", "Differentiation tests"],
     },
   },
   {
     id: "tech_selection",
     title: { zh: "技术选型", en: "Tech selection" },
-    blurb: { zh: "方案对比与落地建议", en: "Options, trade-offs, recommendation" },
+    blurb: {
+      zh: "约束、场景验证与可逆决策",
+      en: "Constraints, scenario tests, and reversibility",
+    },
     sessionTitle: { zh: "技术选型", en: "Tech selection" },
     goal: RESEARCH_TEMPLATE_PROMPTS.tech_selection,
     params: {
-      zh: ["能力边界", "成本与性能", "生态成熟度", "迁移风险"],
-      en: ["Capability fit", "Cost & performance", "Ecosystem maturity", "Migration risk"],
+      zh: ["真实工作负载", "硬约束", "失败模式", "迁移与可逆性"],
+      en: ["Real workloads", "Hard constraints", "Failure modes", "Migration and reversibility"],
     },
   },
 ] as const;
@@ -63,7 +72,7 @@ export function localizeTemplateField<T>(
   return lang.startsWith("zh") ? field.zh : field.en;
 }
 
-/** Compose the hidden professional goal (params appended). Never dump into the textarea. */
+/** Compose the professional goal (params appended). Used as default full prompt. */
 export function composeTemplateGoal(
   template: ResearchTemplate,
   language: string | undefined,
@@ -76,8 +85,8 @@ export function composeTemplateGoal(
 }
 
 /**
- * LRM-1092 / LRM-1072: short starter written into the composer on chip select.
- * Long professional prompts stay hidden via buildCreateGoal on submit.
+ * LRM-1092 / LRM-1072 / LRM-1140 A2: short starter written into the composer on chip select.
+ * Long professional prompts stay in templatePrompt / expand editor; submit via buildCreateGoal.
  */
 export function composeTemplateStarter(
   template: ResearchTemplate,
@@ -94,18 +103,22 @@ export function composeTemplateStarter(
   return `Research around "${blurb}" for ${title}: cover ${focus.join(", ")}, and deliver verifiable conclusions.`;
 }
 
-/** Merge hidden template prompt with the user's short goal line for create. */
+/**
+ * Merge full template prompt with the user's short goal line for create.
+ * `promptOverride` is the expand-editor draft (defaults to composeTemplateGoal).
+ */
 export function buildCreateGoal(
   template: ResearchTemplate | null | undefined,
   userGoal: string,
   language: string | undefined,
+  promptOverride?: string | null,
 ): string {
   const user = userGoal.trim();
   if (!template) return user;
-  const prompt = composeTemplateGoal(template, language);
+  const prompt = (promptOverride ?? composeTemplateGoal(template, language)).trim();
   if (!user) return prompt;
   const label = (language ?? "en").toLowerCase().startsWith("zh")
-    ? "用户补充目标"
-    : "User goal";
+    ? "用户具体目标"
+    : "User-specific goal";
   return `${prompt}\n\n${label}：\n${user}`;
 }

@@ -535,11 +535,10 @@ describe("IssueDetail (shared)", () => {
   it("shows loading skeleton while data is loading", () => {
     // Make the API hang to keep loading state
     mockApiObj.getIssue.mockReturnValue(new Promise(() => {}));
-    renderIssueDetail();
+    const { container } = renderIssueDetail();
 
-    expect(
-      screen.getAllByRole("generic").some((el) => el.getAttribute("data-slot") === "skeleton"),
-    ).toBe(true);
+    // Skeleton is aria-hidden (decorative); query DOM slot, not a11y roles.
+    expect(container.querySelector('[data-slot="skeleton"]')).toBeTruthy();
   });
 
   it("renders issue title and description after loading", async () => {
@@ -1293,6 +1292,63 @@ describe("IssueDetail (shared)", () => {
       expect(mockApiObj.updateIssue).toHaveBeenCalledWith(
         "issue-1",
         expect.objectContaining({ description: "" }),
+      );
+    });
+  });
+
+  // LRM-1123 — Properties "Associated group" reads top-level `issue.channel`
+  // (BE LRM-1122 mirrors source_refs.channel). Never derive display from
+  // source_refs alone (LRM-238).
+  describe("associated group property (LRM-1123)", () => {
+    it("shows the group name when top-level channel is present", async () => {
+      mockApiObj.getIssue.mockResolvedValue({
+        ...mockIssue,
+        channel: {
+          channel_id: "chan-9",
+          channel_name: "调研模块开发",
+          channel_kind: "group",
+        },
+        // Nested copy may also be present; UI must still prefer top-level.
+        source_refs: {
+          channel: {
+            channel_id: "chan-9",
+            channel_name: "调研模块开发",
+            channel_kind: "group",
+          },
+        },
+      });
+
+      renderIssueDetail();
+
+      expect(await screen.findByText("Associated group")).toBeInTheDocument();
+      expect(screen.getByText("调研模块开发")).toBeInTheDocument();
+      expect(screen.queryByText("No associated group")).not.toBeInTheDocument();
+    });
+
+    it("shows empty label when top-level channel is absent (does not fall back to source_refs.message)", async () => {
+      mockApiObj.getIssue.mockResolvedValue({
+        ...mockIssue,
+        channel: null,
+        source_refs: {
+          message: {
+            channel_id: "chan-9",
+            channel_name: "product",
+            channel_kind: "group",
+            message_id: "msg-42",
+            thread_root_message_id: "msg-42",
+            excerpt: "we should file an issue",
+          },
+        },
+      });
+
+      renderIssueDetail();
+
+      // Properties associated-group trigger stays empty; provenance row may still
+      // show #product under "From discussion" — that is a different field.
+      expect(await screen.findByText("No associated group")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "No associated group" })).toHaveAttribute(
+        "title",
+        "No associated group",
       );
     });
   });

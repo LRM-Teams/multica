@@ -1619,14 +1619,14 @@ func TestListTaskMessagesByUser_InboxEventProjectsActivityMessages(t *testing.T)
 		VALUES
 			($1, $2, $3, 'thinking', 'runtime_phase', 'info', 'dm', '',
 			 jsonb_build_object('inbox_event_id', $4::text, 'seq', 1),
-			 'user_facing', now() - interval '2 seconds'),
+			 'diagnostic_only', now() - interval '2 seconds'),
 			($1, $2, $3, 'thinking', 'thinking', 'info', 'dm', 'Planning',
 			 jsonb_build_object(
 				'inbox_event_id', $4::text,
 				'seq', 2,
 				'lineage', 'main'
 			 ),
-			 'user_facing', now() - interval '1 second'),
+			 'diagnostic_only', now() - interval '1 second'),
 			($1, $2, $3, 'tool_call', 'tool_use', 'info', 'dm', '',
 			 jsonb_build_object(
 				'inbox_event_id', $4::text,
@@ -1658,20 +1658,17 @@ func TestListTaskMessagesByUser_InboxEventProjectsActivityMessages(t *testing.T)
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(resp) != 3 {
-		t.Fatalf("expected phase status plus user-facing non-thinking messages, got %d: %+v", len(resp), resp)
+	if len(resp) != 2 {
+		t.Fatalf("expected tool + text without diagnostic thinking, got %d: %+v", len(resp), resp)
 	}
-	if resp[0].TaskID != eventID || resp[0].Seq != 1 || resp[0].Type != "thinking" || resp[0].Content != "" {
-		t.Fatalf("unexpected first message: %+v", resp[0])
+	if resp[0].TaskID != eventID || resp[0].Seq != 3 || resp[0].Type != "tool_use" || resp[0].Tool != "bash" {
+		t.Fatalf("unexpected tool projection: %+v", resp[0])
 	}
-	if resp[1].TaskID != eventID || resp[1].Seq != 3 || resp[1].Type != "tool_use" || resp[1].Tool != "bash" {
-		t.Fatalf("unexpected tool projection: %+v", resp[1])
-	}
-	if got := fmt.Sprint(resp[1].Input["cmd"]); got != "raft message send --send-draft" {
+	if got := fmt.Sprint(resp[0].Input["cmd"]); got != "raft message send --send-draft" {
 		t.Fatalf("projected tool input cmd = %q", got)
 	}
-	if resp[2].Seq != 4 || resp[2].Type != "text" || resp[2].Content != "Done" {
-		t.Fatalf("unexpected text projection: %+v", resp[2])
+	if resp[1].Seq != 4 || resp[1].Type != "text" || resp[1].Content != "Done" {
+		t.Fatalf("unexpected text projection: %+v", resp[1])
 	}
 
 	req = withURLParam(newRequest(http.MethodGet, "/api/tasks/"+eventID+"/messages?since=1", nil), "taskId", eventID)
@@ -1690,7 +1687,7 @@ func TestListTaskMessagesByUser_InboxEventProjectsActivityMessages(t *testing.T)
 	}
 }
 
-func TestListTaskMessagesByUser_HidesRawThinkingAndDiagnosticRows(t *testing.T) {
+func TestListTaskMessagesByUser_ShowsThinkingContentHidesDiagnosticRows(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1702,8 +1699,8 @@ func TestListTaskMessagesByUser_HidesRawThinkingAndDiagnosticRows(t *testing.T) 
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO task_message (task_id, seq, type, content, visibility)
 		VALUES
-			($1, 1, 'thinking', 'legacy raw thought', 'user_facing'),
-			($1, 2, 'thinking', '', 'user_facing'),
+			($1, 1, 'thinking', 'legacy raw thought', 'diagnostic_only'),
+			($1, 2, 'thinking', '', 'diagnostic_only'),
 			($1, 3, 'text', 'diagnostic wrapper', 'diagnostic_only'),
 			($1, 4, 'text', 'visible answer', 'user_facing')
 	`, taskID); err != nil {
@@ -1721,14 +1718,8 @@ func TestListTaskMessagesByUser_HidesRawThinkingAndDiagnosticRows(t *testing.T) 
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(resp) != 2 {
-		t.Fatalf("expected phase status and visible text only, got %+v", resp)
-	}
-	if resp[0].Seq != 2 || resp[0].Type != "thinking" || resp[0].Content != "" {
-		t.Fatalf("phase status wire = %+v", resp[0])
-	}
-	if resp[1].Seq != 4 || resp[1].Type != "text" || resp[1].Content != "visible answer" {
-		t.Fatalf("visible message = %+v", resp[1])
+	if len(resp) != 1 || resp[0].Seq != 4 || resp[0].Type != "text" || resp[0].Content != "visible answer" {
+		t.Fatalf("diagnostic thinking leaked into user projection: %+v", resp)
 	}
 }
 
@@ -1773,12 +1764,20 @@ func TestTaskMessageVisibility_ToolResultIsDiagnostic(t *testing.T) {
 	}
 }
 
-func TestTaskMessageRequestVisibility_EmptyThinkingIsPhaseStatus(t *testing.T) {
-	if got := taskMessageRequestVisibility(TaskMessageRequest{Type: "thinking"}); got != "user_facing" {
-		t.Fatalf("empty thinking phase status visibility = %q, want user_facing", got)
+func TestTaskMessageRequestVisibility_ThinkingIsDiagnostic(t *testing.T) {
+	for _, msg := range []TaskMessageRequest{
+		{Type: "thinking"},
+		{Type: "thinking", Content: "private chain of thought"},
+	} {
+		if got := taskMessageRequestVisibility(msg); got != "diagnostic_only" {
+			t.Fatalf("thinking visibility = %q, want diagnostic_only", got)
+		}
 	}
-	if got := taskMessageRequestVisibility(TaskMessageRequest{Type: "thinking", Content: "private chain of thought"}); got != "diagnostic_only" {
-		t.Fatalf("raw thinking visibility = %q, want diagnostic_only", got)
+}
+
+func TestTaskMessageVisibleToUser_HidesDiagnosticThinking(t *testing.T) {
+	if taskMessageVisibleToUser("thinking", "plan step", "diagnostic_only") {
+		t.Fatal("diagnostic_only thinking must stay hidden")
 	}
 }
 
@@ -1807,17 +1806,17 @@ func TestTaskMessageCompactionActivityUsesRaftCanonicalLifecycle(t *testing.T) {
 	}
 }
 
-func TestAgentInboxTaskMessagePayload_EmitsOnlyEmptyThinkingPhaseStatus(t *testing.T) {
+func TestAgentInboxTaskMessagePayload_HidesThinking(t *testing.T) {
 	eventID := uuid.New()
 	event := db.AgentInboxEvent{ID: pgtype.UUID{Bytes: eventID, Valid: true}}
 
-	phase, ok := agentInboxTaskMessagePayload(event, TaskMessageRequest{Seq: 1, Type: "thinking"}, activityKindThinking, nil)
-	if !ok || phase.TaskID != eventID.String() || phase.Type != "thinking" || phase.Content != "" {
-		t.Fatalf("phase payload = %+v, ok=%v", phase, ok)
-	}
-
-	if _, ok := agentInboxTaskMessagePayload(event, TaskMessageRequest{Seq: 2, Type: "thinking", Content: "raw thought"}, activityKindCustom, nil); ok {
-		t.Fatal("raw thinking must not become an inbox task-message payload")
+	for _, msg := range []TaskMessageRequest{
+		{Seq: 1, Type: "thinking"},
+		{Seq: 2, Type: "thinking", Content: "raw thought"},
+	} {
+		if payload, ok := agentInboxTaskMessagePayload(event, msg, activityKindThinking, nil); ok {
+			t.Fatalf("thinking payload must not reach clients: %+v", payload)
+		}
 	}
 }
 

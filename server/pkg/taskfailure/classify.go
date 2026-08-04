@@ -132,6 +132,12 @@ func Classify(rawError string) Reason {
 	):
 		return ReasonAgentProviderCapacityOrRateLimit
 
+	// A keepalive ping timeout is a transport failure even when a wrapper also
+	// prefixes it with an "internal error" label. Keep this before the generic
+	// provider-server rule so the actionable network classification wins.
+	case strings.Contains(lower, "keepalive ping timed out"):
+		return ReasonAgentProviderNetwork
+
 	// 6. Provider 5xx / server error. The 5xx regex is checked here
 	//    rather than as plain string matches because the SQL uses an
 	//    anchored regex — see providerHTTP5xxRe's docstring.

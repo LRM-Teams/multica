@@ -124,7 +124,7 @@ const baseProps = (
   channelId: "c1",
   messages: messages(IDS),
   enabled: true,
-  handleAttached: true,
+  listReady: true,
   ...over,
 });
 
@@ -261,7 +261,7 @@ describe("useBottomSettleScroll", () => {
     const h = harness({ finalHeight: 879, stepPerWrite: 90 });
     renderHook(() =>
       useBottomSettleScroll(
-        baseProps({ handleAttached: false, scrollContainerEl: h.el, messageRefMap: h.map }),
+        baseProps({ listReady: false, scrollContainerEl: h.el, messageRefMap: h.map }),
       ),
     );
     flushFrames();
@@ -314,8 +314,8 @@ describe("useBottomSettleScroll", () => {
   // --- around-seq successor contract (2026-07-26) ---
   // NOTE: the ROOT bug is a browser-layer timing race — Virtuoso detaches/reattaches
   // its imperative handle mid-mount while the tail row measures/mounts ~440ms late,
-  // and the effect (with `handleAttached` a dep) failed to re-arm the settle at that
-  // moment. jsdom CANNOT reproduce that exact race (here `handleAttached` is a prop,
+  // and the effect (with `listReady` a dep) failed to re-arm the settle at that
+  // moment. jsdom CANNOT reproduce that exact race (here `listReady` is a prop,
   // so any flip re-runs the old effect and it self-heals). These tests therefore
   // lock the NEW logic's *properties* (loop survives a detach and still lands the
   // bottom; a late-attaching handle still settles; short content settles at 0);
@@ -346,13 +346,13 @@ describe("useBottomSettleScroll", () => {
     // Virtuoso detaches its handle mid-settle. A handle-ONLY rerender must NOT
     // cancel the running rAF (proving the effect did not re-run and restart it).
     const cancelsBaseline = cancelled.size;
-    rerender(props({ handleAttached: false }));
+    rerender(props({ listReady: false }));
     expect(cancelled.size).toBe(cancelsBaseline); // no cleanup → same persistent loop
     flushFrames(15);
     expect(h.scrollTop).toBe(midway); // kept looping but never pinned while detached
 
     // Reattach (handle-only again, no re-run) — the SAME loop re-arms and lands.
-    rerender(props({ handleAttached: true }));
+    rerender(props({ listReady: true }));
     expect(cancelled.size).toBe(cancelsBaseline); // still no effect re-run
     flushFrames();
     expect(h.scrollTop).toBe(2000 - CLIENT_HEIGHT); // landed, not stuck
@@ -365,14 +365,14 @@ describe("useBottomSettleScroll", () => {
       baseProps({ messages: stableMessages, scrollContainerEl: h.el, messageRefMap: h.map, ...over });
     const { rerender } = renderHook((p: BottomProps) => useBottomSettleScroll(p), {
       // Mount with the handle NOT yet attached — the loop starts (guard no longer
-      // gates on handleAttached) but waits, pinning nothing.
-      initialProps: props({ handleAttached: false }),
+      // gates on listReady) but waits, pinning nothing.
+      initialProps: props({ listReady: false }),
     });
     flushFrames(5);
     expect(h.scrollTop).toBe(0); // nothing pinned while detached
 
     const cancelsBaseline = cancelled.size;
-    rerender(props({ handleAttached: true })); // handle-only flip
+    rerender(props({ listReady: true })); // handle-only flip
     expect(cancelled.size).toBe(cancelsBaseline); // the SAME loop picks up the attach live
     flushFrames();
     expect(h.scrollTop).toBe(879 - CLIENT_HEIGHT); // pins to bottom once attached
@@ -466,7 +466,7 @@ describe("useBottomSettleScroll", () => {
     const props = (over: Partial<BottomProps> = {}): BottomProps =>
       baseProps({ messages: stableMessages, scrollContainerEl: el, messageRefMap: map, ...over });
     const { rerender } = renderHook((p: BottomProps) => useBottomSettleScroll(p), {
-      initialProps: props({ handleAttached: false }), // mounted DETACHED
+      initialProps: props({ listReady: false }), // mounted DETACHED
     });
     flushFrames(6);
     // Buggy version: settles here at 0 on zero attached pin, stuck forever.
@@ -476,8 +476,112 @@ describe("useBottomSettleScroll", () => {
     // Measurement completes (the real total is now known) and the handle reattaches.
     // The same still-alive loop pins and lands the EXACT true bottom.
     sh = SH_FINAL;
-    rerender(props({ handleAttached: true }));
+    rerender(props({ listReady: true }));
     flushFrames();
     expect(scrollTop).toBe(SH_FINAL - CLIENT_HEIGHT); // 1384 — real bottom, NOT 0, NOT 616's false bottom
+  });
+
+  // --- LRM-1220: measurement lands AFTER an attached "reached" frame ---
+  // jianghp3 (mobile web, #pr-frontend): every channel open landed on 「今天」+
+  // 当日第一条 with 「加载更早消息」 visible at the top — i.e. scrollTop 0 of the
+  // loaded window, ~7h behind the newest message.
+  //
+  // The `pinnedThisFrame` gate only excludes the DETACHED collapsed window. On a
+  // cold mount the handle IS attached while Virtuoso — seeded with
+  // `initialTopMostItemIndex = last` — has rendered ONLY the tail rows: the
+  // scroller is still collapsed (scrollHeight === clientHeight, the pin write is a
+  // clamped no-op) yet the tail row's bottom edge sits exactly on the container
+  // bottom, so `hasReached()` is true on frame one. The settle then completes
+  // PERMANENTLY. When the remaining rows measure a few hundred ms later the
+  // content grows BELOW a scrollTop that is still 0 — and nothing is left alive to
+  // re-pin.
+  function collapsedThenMeasuredHarness() {
+    const el = document.createElement("div");
+    let sh = CLIENT_HEIGHT; // collapsed: only the tail rows are measured
+    let scrollTop = 0;
+    Object.defineProperty(el, "clientHeight", { value: CLIENT_HEIGHT, configurable: true });
+    Object.defineProperty(el, "scrollHeight", { get: () => sh, configurable: true });
+    Object.defineProperty(el, "scrollTop", {
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = Math.max(0, Math.min(v, sh - CLIENT_HEIGHT)); // browser clamp
+      },
+      configurable: true,
+    });
+    el.getBoundingClientRect = () => ({ top: 0, bottom: CLIENT_HEIGHT }) as DOMRect;
+    const lastRowEl = document.createElement("div");
+    // Derived, never mock-set: the tail row's bottom edge is the content bottom's
+    // position after scrolling. Collapsed + scrollTop 0 → 616 → inside the band.
+    lastRowEl.getBoundingClientRect = () =>
+      ({ top: sh - scrollTop - 40, bottom: sh - scrollTop }) as DOMRect;
+    const map = new Map<string, HTMLElement>([[LAST_ID, lastRowEl]]);
+    return {
+      el,
+      map,
+      get scrollTop() {
+        return scrollTop;
+      },
+      measurementLands(total: number) {
+        sh = total; // rows above the tail finally measure; scrollTop is untouched
+      },
+      userScrollTo(v: number) {
+        scrollTop = Math.max(0, Math.min(v, sh - CLIENT_HEIGHT));
+      },
+    };
+  }
+
+  it("re-pins when the real measurement lands AFTER an attached bottom-band frame (LRM-1220: stuck on 今天首条)", () => {
+    const h = collapsedThenMeasuredHarness();
+    renderHook(() =>
+      useBottomSettleScroll(baseProps({ scrollContainerEl: h.el, messageRefMap: h.map })),
+    );
+    // Collapsed window: the pin is a clamped no-op and the tail is transiently in
+    // the bottom band. Nothing has actually scrolled yet either way.
+    flushFrames(6);
+    expect(h.scrollTop).toBe(0);
+
+    // Virtuoso finishes measuring the rows above the tail: the content is now
+    // 2000px tall and scrollTop 0 shows the OLDEST loaded row — the bug's exact
+    // viewport. The settle must still be alive to correct it.
+    h.measurementLands(2000);
+    flushFrames();
+    expect(h.scrollTop).toBe(2000 - CLIENT_HEIGHT); // 1384 — landed on the newest row
+  });
+
+  it("does NOT re-pin after post-reach measurement growth once the user has gestured", () => {
+    // The re-pin window must never out-rank the user: a gesture is still a
+    // permanent handoff, even if the content grows afterwards.
+    const h = collapsedThenMeasuredHarness();
+    renderHook(() =>
+      useBottomSettleScroll(baseProps({ scrollContainerEl: h.el, messageRefMap: h.map })),
+    );
+    flushFrames(3);
+    h.el.dispatchEvent(new Event("touchstart"));
+    h.el.dispatchEvent(new Event("touchend"));
+
+    h.measurementLands(2000);
+    h.userScrollTo(0); // the user is reading history at the top
+    flushFrames();
+    expect(h.scrollTop).toBe(0); // ownership stayed with the user
+  });
+
+  it("pins a NON-VIRTUALIZED list (direct fallback: no Virtuoso handle will ever attach)", () => {
+    // LRM-1220's other half: `ChannelMessageList` drops to plain divs when
+    // Virtuoso renders nothing within 350ms, so its imperative handle stays null
+    // forever. `listReady` therefore means "the rows are a settled render we may
+    // pin", NOT "Virtuoso attached" — the caller passes
+    // `handleAttached || useDirectFallback`. Reading it as attach-only meant this
+    // path never wrote a single scrollTop and the open rested on the oldest
+    // loaded row (verified on the real stack: 50 plain rows, scrollTop 0,
+    // "settle timed out" in the console).
+    const h = harness({ finalHeight: 3560, stepPerWrite: 120 });
+    renderHook(() =>
+      // Ready with no handle — exactly what the fallback branch passes.
+      useBottomSettleScroll(
+        baseProps({ listReady: true, scrollContainerEl: h.el, messageRefMap: h.map }),
+      ),
+    );
+    flushFrames();
+    expect(h.scrollTop).toBe(3560 - CLIENT_HEIGHT); // landed on the newest row
   });
 });

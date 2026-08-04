@@ -92,7 +92,23 @@ vi.mock("../../navigation/app-link", () => ({
   ),
 }));
 
+vi.mock("../../navigation", () => ({
+  useNavigation: () => ({ push: vi.fn(), replace: vi.fn() }),
+}));
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
+}));
+
+vi.mock("@multica/core/agents", () => ({
+  useWorkspacePresenceMap: () => ({ byAgent: new Map(), loading: false }),
+}));
+
 vi.mock("../../common/actor-avatar", () => ({ ActorAvatar: () => null }));
+vi.mock("./provider-logo", () => ({
+  ProviderLogo: () => null,
+  knownProviderLabel: (p: string) => p,
+}));
 vi.mock("../../common/actor-identity-row", () => ({
   ActorIdentityRow: ({ displayName }: { displayName: string }) => (
     <span>{displayName}</span>

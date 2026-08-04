@@ -263,6 +263,7 @@
     "remove_confirm_title": "「{{name}}」을(를) 제거할까요?",
     "remove_confirm_description": "이 채널의 읽기/쓰기 권한을 즉시 잃습니다.",
     "remove_confirm": "제거 확인",
+    "remove_confirming": "제거 중…",
     "remove_cancel": "취소",
     "remove_failed": "멤버를 내보내지 못했습니다. 다시 시도해 주세요.",
     "remove_retry": "다시 시도",
@@ -575,12 +576,18 @@
     "project_tooltip": "이 채널이 작업할 프로젝트 설정",
     "tray_remove_aria": "{{filename}} 제거",
     "tray_retry_aria": "{{filename}} 업로드 재시도",
+    "tray_preview_aria": "{{filename}} 미리 보기",
     "tray_uploading": "업로드 중",
     "tray_upload_failed": "업로드 실패",
     "voice_unsent": "음성 메시지가 전송되지 않았습니다({{duration}})",
+    "voice_unsent_retrying": "음성 메시지 재전송 중({{duration}})",
     "voice_unsent_retry": "다시 보내기",
     "voice_unsent_delete": "삭제",
-    "tray_reselect": "다시 선택 필요"
+    "tray_reselect": "다시 선택 필요",
+    "undelivered_mentions_title": "Not delivered to everyone",
+    "undelivered_mentions_body": "{{who}} is not in this channel. Invite so they get the @ mention.",
+    "undelivered_invite": "Invite",
+    "undelivered_invite_done": "Invited — they can see the message now."
   },
   "message": {
     "add_reaction": "반응 추가",

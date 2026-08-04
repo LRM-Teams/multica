@@ -158,6 +158,25 @@ const ResearchStageEvalSchema = z
   })
   .passthrough();
 
+const ResearchMatchDecisionSchema = z
+  .object({
+    utterance_id: z.string(),
+    confidence: z.number().optional(),
+    primary_anchor_node_id: z.string().optional(),
+    matched_node_ids: z.array(z.string()).optional().default([]),
+    decisions: z
+      .array(
+        z.object({
+          node_id: z.string(),
+          action: z.enum(["continue", "branch_after", "deprecate", "pending_confirm"]),
+          reason: z.string().optional(),
+        }),
+      )
+      .optional()
+      .default([]),
+  })
+  .passthrough();
+
 const ResearchMessageSchema = z
   .object({
     id: z.string(),
@@ -168,7 +187,21 @@ const ResearchMessageSchema = z
     body: z.string().optional().default(""),
     card_kind: z.string().optional().default("chat"),
     meta: z.unknown().optional().default({}),
+    match_decision: ResearchMatchDecisionSchema.optional(),
     created_at: z.string().optional().default(""),
+  })
+  .passthrough();
+
+/** LRM-1318 thought/strategy panel row (LRM-1306). */
+const ResearchThoughtStrategySchema = z
+  .object({
+    node_id: z.string(),
+    rationale: z.string().optional().default(""),
+    expected_outcome: z.string().optional().default(""),
+    strategy_label: z.string().nullable().optional(),
+    strategy_revision: z.string().nullable().optional(),
+    state: z.string().optional().default("active"),
+    updated_at: z.string().optional(),
   })
   .passthrough();
 
@@ -379,6 +412,7 @@ export const ResearchSessionSnapshotSchema = z
     report: ResearchReportSchema.nullable().optional().default(null),
     evals: z.array(ResearchStageEvalSchema).optional().default([]),
     messages: z.array(ResearchMessageSchema).optional().default([]),
+    thought_strategies: z.array(ResearchThoughtStrategySchema).optional().default([]),
     run: ResearchRunSnapshotSchema.optional(),
   })
   .passthrough();
@@ -419,4 +453,5 @@ export const EMPTY_RESEARCH_SNAPSHOT: ResearchSessionSnapshot = {
   report: null,
   evals: [],
   messages: [],
+  thought_strategies: [],
 };

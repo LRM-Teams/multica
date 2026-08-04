@@ -231,14 +231,6 @@ func fetchIssueCandidates(ctx context.Context, client *cli.APIClient) ([]idCandi
 	return candidates, nil
 }
 
-func resolveAutopilotID(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {
-	return resolvedID{}, fmt.Errorf("autopilot has been removed (LRM-1049); use multica reminder")
-}
-
-func fetchAutopilotCandidates(ctx context.Context, client *cli.APIClient) ([]idCandidate, error) {
-	return nil, fmt.Errorf("autopilot has been removed (LRM-1049)")
-}
-
 func resolveTaskRunID(ctx context.Context, client *cli.APIClient, issueID, input string) (resolvedID, error) {
 	trimmed := strings.TrimSpace(input)
 	if uuidRegexp.MatchString(trimmed) {
@@ -274,10 +266,6 @@ func fetchTaskRunCandidatesForIssue(ctx context.Context, client *cli.APIClient, 
 		})
 	}
 	return candidates, nil
-}
-
-func resolveAutopilotTriggerID(ctx context.Context, client *cli.APIClient, autopilotID, input string) (resolvedID, error) {
-	return resolvedID{}, fmt.Errorf("autopilot has been removed (LRM-1049); use multica reminder")
 }
 
 func resolveProjectID(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {
@@ -398,10 +386,8 @@ type actorDisplayLookup struct {
 type actorDisplayLookupState struct {
 	members       map[string]string
 	agents        map[string]string
-	squads        map[string]string
 	membersLoaded bool
 	agentsLoaded  bool
-	squadsLoaded  bool
 }
 
 func loadActorDisplayLookup(ctx context.Context, client *cli.APIClient) actorDisplayLookup {
@@ -454,16 +440,6 @@ func (l actorDisplayLookup) loadAgents() {
 			}
 		}
 	}
-}
-
-func (l actorDisplayLookup) loadSquads() {
-	// Squad product retired: no /api/squads. Historical assignee_type=squad
-	// displays as 原小队指派 via actor() without name resolution.
-	if l.state == nil || l.state.squadsLoaded {
-		return
-	}
-	l.state.squadsLoaded = true
-	l.state.squads = map[string]string{}
 }
 
 func (l actorDisplayLookup) actor(actorType, id string) string {

@@ -34,7 +34,7 @@
     "avatar_err_dimensions": "图片尺寸至少 256×256",
     "honor_title": "荣誉",
     "honor_completion": "{{unlocked}} / {{total}} 徽章",
-    "honor_stats": "{{unlocked}}/{{total}} · Lv.{{level}}",
+    "honor_stats": "{{unlocked}}/{{total}} · 第 {{level}} 级",
     "honor_showcase": "展示徽章",
     "honor_recent": "最近解锁",
     "honor_compare": "与你对比",

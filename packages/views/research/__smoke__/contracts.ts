@@ -49,8 +49,10 @@ export const OVERLAY_A11Y_CONTRACT = {
 } as const;
 
 /**
- * LRM-1105 keyboard map freeze (parent LRM-1102). Smoke only — implementers
- * wire these in research-canvas / graph nodes.
+ * LRM-1105 keyboard map freeze (parent LRM-1102).
+ * Slice 1 (#1952): pure helpers — hard-gated.
+ * Slice 2 (#1968): canvas-keyboard-nav pure module — hard-gated via helpers.
+ * Slice 3 (#2010 / LRM-1190): Home/End via resolveCanvasKeyEvent — hard-gated.
  */
 export const CANVAS_KEYBOARD_CONTRACT = {
   ArrowLeft: "main-chain-prev",
@@ -70,7 +72,8 @@ export const CANVAS_KEYBOARD_CONTRACT = {
 
 /**
  * LRM-1091 planar keyboard AC (product increment on top of LRM-1105 freeze).
- * Implementers flip matching `it.fails` after topology wiring lands.
+ * #1956 shipped layout + arrow/Enter/Esc/Shift+F10 — hard-gated.
+ * Remaining `it.fails`: dedicated --branch-* tokens; destructive confirm/undo.
  */
 export const PLANAR_KEYBOARD_CONTRACT = {
   ArrowUp: "topology-prev",

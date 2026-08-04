@@ -93,6 +93,31 @@ export function attachmentIdFromDownloadURL(rawURL: string): string | undefined 
 }
 
 /**
+ * CLI / agent shorthand written into issue descriptions and comments:
+ * `![alt](attachment:<uuid>)`. Same attachment id as the stable download
+ * path — renderers must resolve it through the shared Attachment path
+ * (LRM-1130), not a surface-specific markdown rewrite.
+ */
+const ATTACHMENT_SCHEME_RE =
+  /^attachment:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/**
+ * Extract an attachment id from any markdown media ref the shared
+ * Attachment renderer understands: stable download URLs **or** the
+ * `attachment:<uuid>` scheme. Prefer this over `attachmentIdFromDownloadURL`
+ * at render/lookup call sites so both shapes share one resolution path.
+ */
+export function attachmentIdFromRef(rawURL: string): string | undefined {
+  if (!rawURL) return undefined;
+  const fromDownload = attachmentIdFromDownloadURL(rawURL);
+  if (fromDownload) return fromDownload;
+  const trimmed = rawURL.trim();
+  const m = ATTACHMENT_SCHEME_RE.exec(trimmed);
+  if (!m) return undefined;
+  return m[1];
+}
+
+/**
  * True when `content` contains a markdown reference to `attachment` —
  * either the new stable `/api/attachments/<id>/download` shape OR the
  * legacy `att.url` storage path. Used by the comment composer and the
@@ -113,6 +138,8 @@ export function contentReferencesAttachment(
 ): boolean {
   if (!content) return false;
   if (content.includes(attachmentDownloadPath(attachment.id))) return true;
+  // Agent/CLI shorthand in issue descriptions (LRM-1130).
+  if (content.includes(`attachment:${attachment.id}`)) return true;
   if (attachment.url && content.includes(attachment.url)) return true;
   return false;
 }

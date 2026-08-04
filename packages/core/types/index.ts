@@ -52,6 +52,9 @@ export type {
   AgentAvatarSelection,
   CreateAgentRequest,
   AgentCreationDraft,
+  AgentActionCard,
+  AgentActionCardPayload,
+  AgentActionCardStatus,
   CreateAgentDraftRequest,
   EnsureWindyResponse,
   AgentTemplate,
@@ -229,7 +232,12 @@ export type { MessagePart } from "./message-part";
 export { buildChannelMessageParts } from "./message-part";
 export type { StickerAsset, StickerCatalogResponse, StickerPack } from "./sticker";
 export type { Attachment } from "./attachment";
-export { attachmentDownloadPath, attachmentIdFromDownloadURL, contentReferencesAttachment } from "./attachment-url";
+export {
+  attachmentDownloadPath,
+  attachmentIdFromDownloadURL,
+  attachmentIdFromRef,
+  contentReferencesAttachment,
+} from "./attachment-url";
 export type {
   RuntimeTokenStats,
   ChatSession,
@@ -293,17 +301,23 @@ export type {
   ResearchReportStructuredV1,
   ResearchReportStructured,
   ResearchStageEval,
+  ResearchMatchDecision,
+  ResearchMatchDecisionAction,
+  ResearchMatchDecisionItem,
   ResearchMessage,
   ResearchMessageCardKind,
   ResearchClarificationLayout,
   ResearchClarificationOption,
   ResearchClarificationField,
   ResearchClarificationQuestion,
+  ResearchThoughtStrategyState,
+  ResearchThoughtStrategy,
   ResearchSessionSnapshot,
   ResearchRun,
   ResearchRunContract,
   ResearchRunQuestion,
   ResearchRunTask,
+  ResearchRunAttempt,
   ResearchRunGateFinding,
   ResearchRunSnapshot,
   SteerResearchRunRequest,
@@ -380,6 +394,7 @@ export type {
   ChannelMemberBrief,
   ChannelLastMessage,
   ChannelMessage,
+  UndeliveredMention,
   ChannelMessageQuote,
   ChannelMessageQuoteSnapshot,
   ChannelMessagesCursor,

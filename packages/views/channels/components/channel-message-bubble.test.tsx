@@ -693,7 +693,7 @@ describe("ChannelMessageBubble", () => {
   });
 
   describe("LRM-1227 bubble shell (① + G + C2 + D2, frozen in LRM-1233)", () => {
-    it("paints a fully enclosed D1 shell on a standalone message", () => {
+    it("paints a fully enclosed shell on a standalone message", () => {
       render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
       const shell = screen.getByTestId("message-shell");
 
@@ -701,8 +701,9 @@ describe("ChannelMessageBubble", () => {
       expect(shell).toBe(screen.getByTestId("message-body").parentElement);
       expect(shell).toHaveAttribute("data-group-start", "true");
       expect(shell).toHaveAttribute("data-group-end", "true");
-      // D1 surface: bg-muted + 1px --line on all four sides, fully rounded.
-      expect(shell).toHaveClass("bg-muted");
+      // Surface = message pane (`bg-background`); 1px --line on all four sides.
+      expect(shell).toHaveClass("bg-background");
+      expect(shell.className).not.toMatch(/\bbg-muted\b/);
       expect(shell).toHaveClass("border-line");
       expect(shell).toHaveClass("border-x");
       expect(shell).toHaveClass("border-y");
@@ -779,6 +780,7 @@ describe("ChannelMessageBubble", () => {
       const shell = screen.getByTestId("message-shell");
       // Shell keeps the silhouette (edges) but drops its own surface, so the
       // row's wash is what the viewer actually sees.
+      expect(shell.className).not.toMatch(/\bbg-background\b/);
       expect(shell.className).not.toMatch(/\bbg-muted\b/);
       expect(shell).toHaveClass("border-line");
     });
@@ -788,7 +790,9 @@ describe("ChannelMessageBubble", () => {
         <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" highlighted />,
       );
       expect(screen.getByTestId("message-bubble").className).toContain("bg-primary/10");
-      expect(screen.getByTestId("message-shell").className).not.toMatch(/\bbg-muted\b/);
+      const shell = screen.getByTestId("message-shell");
+      expect(shell.className).not.toMatch(/\bbg-background\b/);
+      expect(shell.className).not.toMatch(/\bbg-muted\b/);
     });
 
     it("D2: bar rides the shell top edge on a lead row and sits inside a compact row", () => {

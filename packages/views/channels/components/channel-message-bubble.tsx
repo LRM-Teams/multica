@@ -98,13 +98,12 @@ const MESSAGE_COLLAPSE_HEIGHT_CLASS = "max-h-[320px]";
 const MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX = 2;
 
 /**
- * LRM-1227 — bubble shell, frozen in LRM-1233 as density ① + granularity G + D1.
+ * LRM-1227 — bubble shell, frozen in LRM-1233 as density ① + granularity G.
  *
- * Surface is D1: `bg-muted` on the conversation pane's `bg-background`, edged by
- * a 1px `--line`. The shell also takes over the row's hover signal: the old
- * `hover:bg-muted/35` wash is invisible (1.02:1) once the surface is permanently
- * filled, so hover / `focus-within` strengthens the edge instead
- * (`--line` 1.19:1 → `--line-strong` 1.53:1 against the pane).
+ * Surface matches the conversation pane (`bg-background`) — Frank 2026-08-04
+ * kicked back D1 `bg-muted` (#f6f6f4 grey slab). Edged by a 1px `--line`.
+ * Hover / `focus-within` strengthens the edge instead of a row wash
+ * (`--line` → `--line-strong`).
  *
  * Density ① is "keep the live rhythm": the shell adds no vertical padding, only
  * the 4px horizontal inset the frozen 660px body width accounts for.
@@ -903,7 +902,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
           "[@media(pointer:fine)]:pr-[136px]",
           MESSAGE_SHELL_CLASS,
           messageShellEdgeClass(groupStart, groupEnd),
-          shellFilled && "bg-muted",
+          // Same token as the message pane — no muted grey slab (LRM-1227 kickback).
+          shellFilled && "bg-background",
         )}
       >
         {showAuthor && (

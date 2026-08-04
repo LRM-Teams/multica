@@ -112,6 +112,7 @@
     "hast-util-to-html": "^9.0.5",
     "katex": "catalog:",
     "lowlight": "^3.3.0",
+    "highlight.js": "^11.11.1",
     "mermaid": "catalog:",
     "motion": "^12.38.0",
     "pinyin-pro": "3.26.0",

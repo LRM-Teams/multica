@@ -48,7 +48,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { ContentEditor, type ContentEditorRef } from "../../editor/content-editor";
+import {
+  ContentEditor,
+  type ContentEditorRef,
+} from "../../editor/lazy-content-editor";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorProfileTrigger } from "../../common/actor-profile-popover";
 import { ActorStyledName } from "../../common/actor-styled-name";

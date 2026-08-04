@@ -192,7 +192,7 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 
-vi.mock("../../editor/content-editor", () => ({
+vi.mock("../../editor/lazy-content-editor", () => ({
   ContentEditor: () => <div data-testid="content-editor" />,
 }));
 vi.mock("../../common/markdown", () => ({

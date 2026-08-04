@@ -244,7 +244,7 @@ vi.mock("../../navigation/context", () => ({
   }),
 }));
 
-vi.mock("../../editor/content-editor", () => ({
+vi.mock("../../editor/lazy-content-editor", () => ({
   ContentEditor: () => <div data-testid="content-editor" />,
 }));
 vi.mock("../../common/project-picker-button", () => ({

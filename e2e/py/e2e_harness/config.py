@@ -16,7 +16,7 @@ ENV_MULTICA_WORKSPACE_ID = "MULTICA_WORKSPACE_ID"
 ENV_MULTICA_WORKSPACE_SLUG = "MULTICA_WORKSPACE_SLUG"
 ENV_MULTICA_API_KEY = "MULTICA_API_KEY"
 ENV_MULTICA_CREDENTIALS_FILE = "MULTICA_CREDENTIALS_FILE"
-ENV_MULTICA_SQUAD_ID = "MULTICA_SQUAD_ID"
+ENV_MULTICA_AGENT_ID = "MULTICA_AGENT_ID"
 ENV_MULTICA_BASE_ENV_ID = "MULTICA_BASE_ENV_ID"
 ENV_CUBE_PROXY_URL = "CUBE_PROXY_URL"
 ENV_CUBE_DOMAIN = "CUBE_DOMAIN"
@@ -41,7 +41,7 @@ class HarnessConfig:
     """Resolved harness configuration (contracts/harness-config.md)."""
 
     base_url: str
-    squad_id: str
+    agent_id: str
     base_env_id: str
     cube_proxy_url: str
     workspace_id: str | None = None
@@ -75,7 +75,7 @@ def missing_required_vars(env: dict[str, str]) -> list[str]:
     if _blank(ENV_MULTICA_API_KEY) and _blank(ENV_MULTICA_CREDENTIALS_FILE):
         missing.append(f"{ENV_MULTICA_API_KEY} or {ENV_MULTICA_CREDENTIALS_FILE}")
     for name in (
-        ENV_MULTICA_SQUAD_ID,
+        ENV_MULTICA_AGENT_ID,
         ENV_MULTICA_BASE_ENV_ID,
         ENV_CUBE_PROXY_URL,
     ):
@@ -116,7 +116,7 @@ def load_config(env: dict[str, str] | None = None) -> HarnessConfig:
         workspace_slug=env.get(ENV_MULTICA_WORKSPACE_SLUG, "").strip() or None,
         api_key=env.get(ENV_MULTICA_API_KEY, "").strip() or None,
         credentials_file=env.get(ENV_MULTICA_CREDENTIALS_FILE, "").strip() or None,
-        squad_id=env[ENV_MULTICA_SQUAD_ID].strip(),
+        agent_id=env[ENV_MULTICA_AGENT_ID].strip(),
         base_env_id=env[ENV_MULTICA_BASE_ENV_ID].strip(),
         cube_proxy_url=env[ENV_CUBE_PROXY_URL].strip().rstrip("/"),
         cube_domain=env.get(ENV_CUBE_DOMAIN, "").strip() or DEFAULT_CUBE_DOMAIN,

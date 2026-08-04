@@ -18,7 +18,7 @@ def _full_env(**overrides: str) -> dict[str, str]:
         "MULTICA_BASE_URL": "http://server:8090",
         "MULTICA_WORKSPACE_ID": "ws-uuid",
         "MULTICA_API_KEY": "pat_test",
-        "MULTICA_SQUAD_ID": "squad-uuid",
+        "MULTICA_AGENT_ID": "agent-uuid",
         "MULTICA_BASE_ENV_ID": "env-uuid",
         "CUBE_PROXY_URL": "http://cube-proxy",
     }
@@ -67,7 +67,7 @@ def test_missing_required_error_lists_every_missing_var() -> None:
         "MULTICA_BASE_URL",
         "MULTICA_WORKSPACE_ID or MULTICA_WORKSPACE_SLUG",
         "MULTICA_API_KEY or MULTICA_CREDENTIALS_FILE",
-        "MULTICA_SQUAD_ID",
+        "MULTICA_AGENT_ID",
         "MULTICA_BASE_ENV_ID",
         "CUBE_PROXY_URL",
     ):

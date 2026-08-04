@@ -144,7 +144,7 @@ function AgentFileEditorDialog({
         <DialogHeader className="flex-row items-center justify-between gap-3 border-b px-4 py-3">
           <DialogTitle className="truncate font-mono text-sm">{name}</DialogTitle>
           <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close editor">
-            <X className="size-4" />
+            <X className="size-4" aria-hidden />
           </Button>
         </DialogHeader>
         {isPending ? (
@@ -240,7 +240,7 @@ function AgentFileEditorForm({
             onClick={() => save.mutate()}
             disabled={save.isPending || draft === initialContent}
           >
-            <Save className="mr-1.5 size-3.5" />
+            <Save className="mr-1.5 size-3.5" aria-hidden />
             {SAVE_FILE_LABEL}
           </Button>
         </div>
@@ -349,7 +349,7 @@ export function AgentFilesPanel({
               onClick={() => setIncludeHidden((v) => !v)}
               className={cn("size-7", includeHidden && "text-primary")}
             >
-              {includeHidden ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
+              {includeHidden ? <Eye className="size-4" aria-hidden /> : <EyeOff className="size-4" aria-hidden />}
             </Button>
           </div>
           <div className="min-h-0 min-w-0 flex-1 overflow-auto p-2">
@@ -405,7 +405,7 @@ export function AgentFilesPanel({
           <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{agent.description || agent.name}</p>
         </div>
         <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close agent panel">
-          <X className="size-4" />
+          <X className="size-4" aria-hidden />
         </Button>
       </div>
       {body}

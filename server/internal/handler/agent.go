@@ -1617,12 +1617,6 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if runtime.ID != existing.RuntimeID {
-			// An agent's bound computer cannot change (Frank's rule,
-			// 2026-08-02) — only which runtime on that same computer it uses.
-			// The frontend already restricts the runtime picker to the bound
-			// machine (runtime-picker.tsx's sameComputerRuntimes), but that's
-			// a UI affordance, not an authorization boundary: this endpoint
-			// must reject the move itself, or a direct API call bypasses it.
 			currentRuntime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
 				ID:          existing.RuntimeID,
 				WorkspaceID: existing.WorkspaceID,
@@ -1631,8 +1625,8 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "failed to load current runtime")
 				return
 			}
-			if !runtimesShareMachine(currentRuntime, runtime) {
-				writeError(w, http.StatusForbidden, "an agent's computer cannot be changed; choose a runtime on the same computer")
+			if !runtimesShareMachine(currentRuntime, runtime) && !agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityMemoryCrossDeviceSync) {
+				writeCodedError(w, http.StatusConflict, "daemon_memory_sync_required", "target daemon must upgrade before moving an agent between computers")
 				return
 			}
 		}

@@ -1102,10 +1102,9 @@ func canUseRuntimeForAgent(member db.Member, rt db.AgentRuntime) bool {
 }
 
 // runtimesShareMachine reports whether two runtimes represent the same
-// physical machine — the authorization-side check backing "an agent's bound
-// computer cannot change; only the runtime within that computer can"
-// (Frank's rule, 2026-08-02). It is deliberately narrower than the frontend's
-// cosmetic runtimeMachineKey (packages/views/runtimes/components/
+// physical machine. Same-machine moves do not require the cross-device memory
+// sync capability. It is deliberately narrower than the frontend's cosmetic
+// runtimeMachineKey (packages/views/runtimes/components/
 // runtime-machines.ts), which also falls back to parsing a hostname out of
 // `name`/`device_info` for display grouping — free text is not a safe signal
 // for an authorization boundary. Here, only daemon_id (the persistent

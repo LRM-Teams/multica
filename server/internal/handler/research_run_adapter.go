@@ -262,8 +262,34 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 	if len(event.Payload) > 0 {
 		_ = json.Unmarshal(event.Payload, &payload)
 	}
-	nodeType, title, summary, status := projectResearchEvent(event, session, payload)
-	if nodeType != "" {
+
+	// LRM-1401: canvas truth is the run-v2 ledger projection. Keep writing
+	// event→node rows only as recoverable audit fallback; live WS carries the
+	// deterministic semantic graph so the UI stops treating dispatch events as
+	// the research map.
+	if h.ResearchRun != nil {
+		if snap, snapErr := h.ResearchRun.Snapshot(ctx, event.SessionID, event.WorkspaceID); snapErr == nil {
+			nodes, edges := projectRunV2Graph(snap)
+			publishProjectedRunGraph(h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, nodes, edges)
+		} else {
+			// Snapshot unavailable: retain legacy single-event node insert.
+			if nodeType, title, summary, status := projectResearchEvent(event, session, payload); nodeType != "" {
+				actorAgentID := projectedResearchActorAgentID(event, payload)
+				nodePayload := map[string]any{
+					"run_event_id": event.ID,
+					"event_type":   event.Type,
+					"sequence":     event.Sequence,
+					"details":      payload,
+				}
+				encoded, _ := json.Marshal(nodePayload)
+				node, insertErr := insertProjectedResearchNode(ctx, h.DB, workspaceID, sessionID, event.ID, nodeType, title, summary, status, actorAgentID, encoded)
+				if insertErr != nil {
+					return insertErr
+				}
+				h.publishResearchGraph(event.WorkspaceID, event.ActorType, event.ActorID, sessionID, node, nil)
+			}
+		}
+	} else if nodeType, title, summary, status := projectResearchEvent(event, session, payload); nodeType != "" {
 		actorAgentID := projectedResearchActorAgentID(event, payload)
 		nodePayload := map[string]any{
 			"run_event_id": event.ID,
@@ -278,6 +304,7 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 		}
 		h.publishResearchGraph(event.WorkspaceID, event.ActorType, event.ActorID, sessionID, node, nil)
 	}
+
 	h.publish(protocol.EventResearchSessionStatusChanged, event.WorkspaceID, event.ActorType, event.ActorID, map[string]any{
 		"session":      researchSessionToResponse(session),
 		"run_event_id": event.ID,
@@ -294,6 +321,36 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 		}
 	}
 	return nil
+}
+
+// publishProjectedRunGraph upserts the full run-v2 projected graph over WS.
+// Stable node/edge IDs let the client replace prior semantic nodes in place.
+func publishProjectedRunGraph(h *Handler, workspaceID, actorType, actorID, sessionID string, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) {
+	if h == nil {
+		return
+	}
+	edgeByTo := map[string]ResearchGraphEdgeResp{}
+	for _, e := range edges {
+		if e.EdgeType != researchTreeEdgeType {
+			continue
+		}
+		if _, exists := edgeByTo[e.ToNodeID]; exists {
+			continue
+		}
+		edgeByTo[e.ToNodeID] = e
+	}
+	for _, node := range nodes {
+		payload := map[string]any{
+			"session_id": sessionID,
+			"node":       node,
+		}
+		if edge, ok := edgeByTo[node.ID]; ok {
+			payload["edge"] = edge
+		} else {
+			payload["edge"] = nil
+		}
+		h.publish(protocol.EventResearchSessionGraphUpdated, workspaceID, actorType, actorID, payload)
+	}
 }
 
 func projectedResearchActorAgentID(event researchrun.RunEvent, payload map[string]any) pgtype.UUID {

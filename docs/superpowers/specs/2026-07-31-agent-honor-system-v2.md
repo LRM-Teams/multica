@@ -71,7 +71,13 @@ Endpoints:
 Realtime:
 
 - `agent_honor:achievement_unlocked`
+- `agent_honor:level_changed`
 - `agent_honor:fleet_class_changed`
+
+Every event includes the Agent display name. Level changes invalidate the
+Agent directory, detail, and honor queries so identity crests update on every
+surface without a page reload. Promotion notifications name the Agent; level
+decreases still invalidate cached identity data but do not show a promotion.
 
 ## UI surfaces
 
@@ -82,3 +88,8 @@ Realtime:
   achievement, and showcase.
 - Global listener: custom achievement toast and fleet promotion toast with
   React Query invalidation.
+
+Fleet rank responses include `min_sample_tasks` alongside `sample_tasks` and
+`sample_sufficient`. Clients render the workspace-configured warm-up target
+from the response; older responses without the field parse to the historical
+default of five at the API boundary.

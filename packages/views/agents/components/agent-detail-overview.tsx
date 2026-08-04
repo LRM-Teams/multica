@@ -157,7 +157,7 @@ function FleetHonorCard({
                   <span className="text-xs text-muted-foreground">
                     {t(($) => $.fleet.warming_up, {
                       current: fleet.sample_tasks,
-                      required: 5,
+                      required: fleet.min_sample_tasks,
                     })}
                   </span>
                 ) : null}

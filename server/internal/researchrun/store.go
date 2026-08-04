@@ -67,6 +67,7 @@ type Store interface {
 	FailAttempt(context.Context, AttemptFailure) (RunEvent, error)
 	AcceptResult(context.Context, AcceptResultInput) (AcceptResultOutcome, error)
 	CreateControlTask(context.Context, string, TaskKind, string, string, float64) (Task, RunEvent, error)
+	NodeCommand(context.Context, NodeCommandInput) (NodeCommandOutcome, error)
 	SetAwaitingConfirmation(context.Context, string, GateResult) (Run, RunEvent, error)
 	Complete(context.Context, string, string, string) (Run, RunEvent, error)
 

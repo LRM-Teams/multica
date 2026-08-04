@@ -74,6 +74,7 @@ type serviceAgentFleetRankResponse struct {
 	FleetRank        int                        `json:"fleet_rank"`
 	FleetSize        int                        `json:"fleet_size"`
 	SampleTasks      int                        `json:"sample_tasks"`
+	MinSampleTasks   int                        `json:"min_sample_tasks"`
 	SampleSufficient bool                       `json:"sample_sufficient"`
 	Frozen           bool                       `json:"frozen"`
 	Pillars          serviceFleetPillarResponse `json:"pillars"`
@@ -95,6 +96,7 @@ func toAgentFleetRankResponse(row service.AgentFleetRankView) serviceAgentFleetR
 		FleetRank:        row.FleetRank,
 		FleetSize:        row.FleetSize,
 		SampleTasks:      row.SampleTasks,
+		MinSampleTasks:   row.MinSampleTasks,
 		SampleSufficient: row.SampleSufficient,
 		Frozen:           row.Frozen,
 		Pillars: serviceFleetPillarResponse{

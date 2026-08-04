@@ -21,6 +21,7 @@ export interface AgentFleetRank {
   fleet_rank: number;
   fleet_size: number;
   sample_tasks: number;
+  min_sample_tasks: number;
   sample_sufficient: boolean;
   frozen: boolean;
   pillars: AgentFleetPillarScores;

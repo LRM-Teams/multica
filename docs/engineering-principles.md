@@ -349,6 +349,7 @@
 - 删除是 `superseded + deleted_at` tombstone，离线旧设备自动上行不得复活；active 更新、conflict 和删除都推进单调 change sequence。冲突内容移出正式文件，只进 `REVIEW.md`，不得作为权威规则注入。
 - 绝对本机路径、loopback endpoint、credential-like 内容在 daemon 和 server 双端 fail closed，不进入中心。机器环境事实写 `<agent-root>/devices/<daemon-id>/STATE.md`，通过 `MULTICA_DEVICE_MEMORY_DIR` 暴露。
 - published/bound skill 的跨机事实仍只有 `skill/skill_file/agent_skill`；`skills/enabled` 是可重建镜像，draft/sync_queue/provider-global skill root 不因换机自动搬运。OS/arch/tool capability 需要独立 typed manifest，不从路径猜测。
+- Agent 可切换到另一台电脑的 runtime；跨机目标 daemon 必须显式上报 `memory_cross_device_sync_v2`，否则服务端 fail closed。同机 runtime 切换不需要该能力。切换只迁移 portable memory 与服务端任务状态，不声称迁移本地工作目录、provider 登录态或 device-local 状态。
 - **物**：migration `278_agent_memory_cross_device_sync`；`memory_center_replication.go`；`memorysync.PortabilityReason`；`memory_center_replication_test.go`、`compare_test.go`、runtime memory-scope contract tests；完整产品模型见 `docs/agent-memory-model.md` §8.1。
 
 ---

@@ -981,3 +981,29 @@ func (e *Engine) Steer(ctx context.Context, in SteerInput) (Run, error) {
 	}
 	return run, e.ReconcileSession(ctx, in.SessionID)
 }
+
+// NodeCommand applies continue|fork from a canvas node, then reconciles so the
+// new ready task can dispatch (LRM-1413).
+func (e *Engine) NodeCommand(ctx context.Context, in NodeCommandInput) (NodeCommandOutcome, error) {
+	outcome, err := e.store.NodeCommand(ctx, in)
+	if err != nil {
+		return NodeCommandOutcome{}, err
+	}
+	if !outcome.Replayed {
+		if recErr := e.ReconcileSession(ctx, in.SessionID); recErr != nil {
+			// Command already committed; surface reconcile failure without rolling back.
+			return outcome, recErr
+		}
+	}
+	if outcome.Task != nil {
+		if latest, getErr := e.store.GetTask(ctx, outcome.Task.ID, in.SessionID); getErr == nil {
+			outcome.Task = &latest
+			if aid := strings.TrimSpace(latest.AssignedAgentID); aid != "" {
+				outcome.Assigned = &aid
+			}
+			outcome.Queued = latest.Status == TaskStatusReady || latest.Status == TaskStatusPending ||
+				latest.Status == TaskStatusDispatching || latest.Status == TaskStatusRunning
+		}
+	}
+	return outcome, nil
+}

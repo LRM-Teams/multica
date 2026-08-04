@@ -8,7 +8,7 @@ const FoundingMemberCutoff = "2026-08-01T00:00:00Z"
 var foundingMemberCutoffTime = mustParseHonorTime(FoundingMemberCutoff)
 
 // HonorRulesVersion is bumped when public scoring tables change.
-const HonorRulesVersion = "2026-08-03.1"
+const HonorRulesVersion = "2026-08-04.1"
 
 // MaxHonorLevel is the highest level the progression curve can award.
 const MaxHonorLevel = 80
@@ -36,9 +36,26 @@ func honorLevelThresholdXP(level int) int64 {
 	}
 	var total int64
 	for l := 2; l <= level; l++ {
-		total += int64(10 * pow115(l-2))
+		total += honorLevelIncrementXP(l)
 	}
 	return total
+}
+
+func honorLevelIncrementXP(level int) int64 {
+	switch {
+	case level <= 1:
+		return 0
+	case level <= 20:
+		return int64(10 * pow115(level-2))
+	case level <= 40:
+		return int64(140 + 20*(level-21))
+	case level <= 60:
+		return int64(550 + 70*(level-41))
+	case level <= 70:
+		return int64(2500 + 250*(level-61))
+	default:
+		return int64(5000 + 500*(level-71))
+	}
 }
 
 func pow115(exp int) float64 {
@@ -179,6 +196,7 @@ func BuildHonorRulesDocument(badges []HonorBadgeCatalogEntry) HonorRulesDocument
 		NameStyleUnlocks: append([]HonorNameStyleRuleEntry(nil), honorNameStyleRules...),
 		BadgeCatalog:     badges,
 		Changelog: []string{
+			"2026-08-04: replace the unreachable exponential tail with non-demoting level bands",
 			"2026-08-03: expand the human honor progression and level crest series to 80 levels",
 			"2026-07-31: expand to 24 visible name styles and 51 badges",
 			"2026-07-31: publish the complete level 1-60 progression table",

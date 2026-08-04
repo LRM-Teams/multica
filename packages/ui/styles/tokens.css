@@ -48,6 +48,10 @@
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);
     --color-muted: var(--muted);
+    /* LRM-1366 — loading placeholder fill. Separate from --muted because in
+       light `--muted` IS `--page-bg`, i.e. byte-identical to `--sidebar`
+       (1.00:1) and 1.03:1 on white, so `bg-muted` skeletons were invisible. */
+    --color-skeleton: var(--skeleton);
     --color-secondary-foreground: var(--secondary-foreground);
     --color-secondary: var(--secondary);
     --color-primary-foreground: var(--primary-foreground);
@@ -117,6 +121,13 @@
     --secondary-foreground: var(--ink);
     --muted: var(--page-bg);
     --muted-foreground: var(--ink-2);
+    /* LRM-1366 — skeleton fill. `--muted` equals `--page-bg`, which is also
+       `--sidebar`, so a `bg-muted` placeholder was literally invisible in the
+       conversation list (1.00:1) and near-invisible on white (1.03:1). Reuse
+       the frozen `--line-strong` (#d1d1d1): 1.41:1 on sidebar chrome and
+       1.53:1 on `--surface`, both above the 1.25:1 placeholder floor, and no
+       new colour enters the LRM-226 palette. */
+    --skeleton: var(--line-strong);
     /* shadcn --accent = hover wash; design link blue lives on --brand */
     --accent: var(--hover);
     --accent-foreground: var(--ink);
@@ -194,6 +205,12 @@
     --secondary-foreground: oklch(0.985 0 0);
     --muted: oklch(0.274 0.006 286.033);
     --muted-foreground: oklch(0.705 0.015 286.067);
+    /* LRM-1366 — dark needs its own step too: the shipped `--muted`
+       oklch(0.274) measured 1.19:1 against the dark `--sidebar` oklch(0.21) in
+       Chromium, i.e. below the 1.25:1 placeholder floor. 0.32 lands at
+       1.39:1 / 1.48:1, mirroring light's 1.41:1 / 1.53:1. Only the skeleton
+       fill moves — `--muted` itself stays put. */
+    --skeleton: oklch(0.32 0.006 286.033);
     --accent: oklch(0.274 0.006 286.033);
     --accent-foreground: oklch(0.985 0 0);
     --destructive: oklch(0.704 0.191 22.216);

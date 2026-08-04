@@ -24,6 +24,40 @@ func TestAgentFleetClassChangedPayloadIncludesAgentName(t *testing.T) {
 	}
 }
 
+func TestAgentHonorUnlockedPayloadIncludesAgentName(t *testing.T) {
+	payload := agentHonorUnlockedPayload(service.AgentHonorUnlockEvent{
+		AgentID: pgtype.UUID{Bytes: [16]byte{2}, Valid: true},
+		Achievement: service.AgentAchievementView{
+			ID: "first_launch",
+		},
+	}, "前端工程师")
+
+	if got := payload["agent_name"]; got != "前端工程师" {
+		t.Fatalf("agent_name = %q, want %q", got, "前端工程师")
+	}
+	if got := payload["achievement"].(service.AgentAchievementView).ID; got != "first_launch" {
+		t.Fatalf("achievement id = %q, want %q", got, "first_launch")
+	}
+}
+
+func TestAgentHonorLevelChangedPayloadIncludesTransition(t *testing.T) {
+	payload := agentHonorLevelChangedPayload(service.AgentHonorLevelEvent{
+		AgentID:  pgtype.UUID{Bytes: [16]byte{3}, Valid: true},
+		Previous: 7,
+		Current:  8,
+	}, "前端工程师")
+
+	if got := payload["agent_name"]; got != "前端工程师" {
+		t.Fatalf("agent_name = %q, want %q", got, "前端工程师")
+	}
+	if got := payload["previous_level"]; got != 7 {
+		t.Fatalf("previous_level = %v, want 7", got)
+	}
+	if got := payload["level"]; got != 8 {
+		t.Fatalf("level = %v, want 8", got)
+	}
+}
+
 func TestAgentHonorAudienceRequiresNamedOwnedAgent(t *testing.T) {
 	ownerID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
 

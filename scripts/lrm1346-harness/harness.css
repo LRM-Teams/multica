@@ -1,0 +1,19 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "../../packages/ui/styles/tokens.css";
+@import "../../packages/ui/styles/base.css";
+/* Written by scripts/lrm1346-deborder-shots.mjs — safelists the exact utility
+   tokens read out of the component at both revisions, because the class strings
+   arrive as data (JSON) and Tailwind's static scanner cannot see them. */
+@import "./safelist.generated.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@source "./main.tsx";
+
+html,
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+}

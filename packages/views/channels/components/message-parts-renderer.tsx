@@ -7,12 +7,12 @@ import { api } from "@multica/core/api";
 import type { MessagePart, StickerAsset, StickerCatalogResponse } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { MemoizedMarkdown } from "../../common/markdown";
+import { usePrefersReducedMotion } from "../../common/use-prefers-reduced-motion";
 import { useT } from "../../i18n/use-t";
 import { ChoiceCard, ChoiceReplyPart } from "./choice-card";
 import { AgentCreateActionCard } from "../../common/windy-create-agent-links";
 
 const SAFE_STICKER_ID = /^[a-z0-9-]+$/;
-const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
 interface StickerAssetIndex {
   byStickerId: Map<string, StickerAsset>;
@@ -112,7 +112,7 @@ function StickerPart({ part }: { part: Extract<MessagePart, { type: "sticker" }>
   }
 
   if (asset.animated && prefersReducedMotion) {
-    return <StickerPlaceholder label={alt} muted />;
+    return <StickerMotionReduced alt={alt} />;
   }
 
   return (
@@ -229,6 +229,37 @@ function StickerPlaceholder({
   );
 }
 
+/**
+ * Animated sticker rendered for a user who asked for reduced motion.
+ *
+ * LRM-1373 — this is deliberately NOT `StickerPlaceholder`. That component's
+ * dashed border is this repo's "missing / broken / still loading" language and
+ * it is used by the unsafe-id, catalog-loading, asset-missing and image-failed
+ * branches. Reusing it here told reduced-motion users their sticker was broken:
+ * the rendered class list was byte-identical to the muted loading placeholder.
+ * A solid border plus body-coloured alt text says "this is content, shown
+ * statically on purpose", and the second line says why.
+ *
+ * There is no real still frame to show: `StickerAsset` carries no static or
+ * thumbnail URL, and painting the animation into a canvas to grab frame 0 taints
+ * it, because `absolutizeStickerURL` can resolve onto the API origin. So this
+ * branch stays text — it just stops lying about being an error.
+ */
+function StickerMotionReduced({ alt }: { alt: string }) {
+  const { t } = useT("channels");
+  return (
+    <span
+      data-testid="message-sticker-motion-reduced"
+      className="not-prose inline-flex min-h-20 w-fit max-w-32 flex-col items-center justify-center gap-1 rounded-md border border-border bg-muted/40 px-3 py-2 text-center sm:max-w-40"
+    >
+      <span className="text-xs text-foreground">{alt}</span>
+      <span className="text-[11px] text-muted-foreground">
+        {t(($) => $.message.sticker_motion_reduced)}
+      </span>
+    </span>
+  );
+}
+
 function StickerImage({
   src,
   alt,
@@ -252,28 +283,4 @@ function StickerImage({
     loading: "lazy",
     onError,
   });
-}
-
-function usePrefersReducedMotion(): boolean {
-  return React.useSyncExternalStore(
-    subscribeReducedMotion,
-    getReducedMotionSnapshot,
-    () => false,
-  );
-}
-
-function subscribeReducedMotion(onStoreChange: () => void): () => void {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return () => {};
-  }
-  const query = window.matchMedia(REDUCED_MOTION_QUERY);
-  query.addEventListener?.("change", onStoreChange);
-  return () => query.removeEventListener?.("change", onStoreChange);
-}
-
-function getReducedMotionSnapshot(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return false;
-  }
-  return window.matchMedia(REDUCED_MOTION_QUERY).matches;
 }

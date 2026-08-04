@@ -601,6 +601,7 @@
     "sticker_loading": "Loading sticker",
     "sticker_failed": "Sticker failed to load",
     "sticker_unavailable": "Sticker unavailable",
+    "sticker_motion_reduced": "Animation paused for your reduced-motion setting",
     "attachment_unavailable": "Attachment unavailable",
     "send_failed": "Couldn't send",
     "retry_send": "Retry",

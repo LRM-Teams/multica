@@ -601,6 +601,7 @@
     "sticker_loading": "스티커 로드 중",
     "sticker_failed": "스티커를 불러오지 못했습니다",
     "sticker_unavailable": "스티커를 사용할 수 없습니다",
+    "sticker_motion_reduced": "동작 줄이기 설정에 따라 애니메이션을 정지했습니다",
     "attachment_unavailable": "첨부 파일을 사용할 수 없습니다",
     "send_failed": "전송 실패",
     "retry_send": "다시 시도",

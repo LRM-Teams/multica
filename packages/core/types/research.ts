@@ -299,6 +299,27 @@ export interface ResearchClarificationQuestion {
   created_at: string;
 }
 
+/** LRM-1310/1330 utterance match decision (omit when absent — never invent). */
+export type ResearchMatchDecisionAction =
+  | "continue"
+  | "branch_after"
+  | "deprecate"
+  | "pending_confirm";
+
+export interface ResearchMatchDecisionItem {
+  node_id: string;
+  action: ResearchMatchDecisionAction;
+  reason?: string;
+}
+
+export interface ResearchMatchDecision {
+  utterance_id: string;
+  confidence?: number;
+  primary_anchor_node_id?: string;
+  matched_node_ids: string[];
+  decisions: ResearchMatchDecisionItem[];
+}
+
 export interface ResearchMessage {
   id: string;
   session_id: string;
@@ -308,6 +329,8 @@ export interface ResearchMessage {
   body: string;
   card_kind?: ResearchMessageCardKind;
   meta?: Record<string, unknown> | unknown;
+  /** Projected from meta.match_decision when present (LRM-1330). */
+  match_decision?: ResearchMatchDecision;
   created_at: string;
 }
 

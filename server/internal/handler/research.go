@@ -155,15 +155,16 @@ type ResearchStageEvalResp struct {
 }
 
 type ResearchMessageResp struct {
-	ID            string          `json:"id"`
-	SessionID     string          `json:"session_id"`
-	SenderType    string          `json:"sender_type"`
-	SenderID      *string         `json:"sender_id"`
-	TargetAgentID *string         `json:"target_agent_id"`
-	Body          string          `json:"body"`
-	CardKind      string          `json:"card_kind"`
-	Meta          json.RawMessage `json:"meta"`
-	CreatedAt     string          `json:"created_at"`
+	ID            string                 `json:"id"`
+	SessionID     string                 `json:"session_id"`
+	SenderType    string                 `json:"sender_type"`
+	SenderID      *string                `json:"sender_id"`
+	TargetAgentID *string                `json:"target_agent_id"`
+	Body          string                 `json:"body"`
+	CardKind      string                 `json:"card_kind"`
+	Meta          json.RawMessage        `json:"meta"`
+	MatchDecision *ResearchMatchDecision `json:"match_decision,omitempty"`
+	CreatedAt     string                 `json:"created_at"`
 }
 
 func researchSessionToResponse(s db.ResearchSession) ResearchSessionResponse {
@@ -586,8 +587,9 @@ func mapMessages(rows []db.ResearchMessage) []ResearchMessageResp {
 		if len(meta) == 0 {
 			meta = json.RawMessage(`{}`)
 		}
+		msgID := uuidToString(m.ID)
 		out = append(out, ResearchMessageResp{
-			ID:            uuidToString(m.ID),
+			ID:            msgID,
 			SessionID:     uuidToString(m.SessionID),
 			SenderType:    m.SenderType,
 			SenderID:      uuidToPtr(m.SenderID),
@@ -595,6 +597,7 @@ func mapMessages(rows []db.ResearchMessage) []ResearchMessageResp {
 			Body:          m.Body,
 			CardKind:      cardKind,
 			Meta:          meta,
+			MatchDecision: extractMatchDecisionFromMeta(meta, msgID),
 			CreatedAt:     timestampToString(m.CreatedAt),
 		})
 	}

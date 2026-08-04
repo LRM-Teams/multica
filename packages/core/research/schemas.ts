@@ -158,6 +158,25 @@ const ResearchStageEvalSchema = z
   })
   .passthrough();
 
+const ResearchMatchDecisionSchema = z
+  .object({
+    utterance_id: z.string(),
+    confidence: z.number().optional(),
+    primary_anchor_node_id: z.string().optional(),
+    matched_node_ids: z.array(z.string()).optional().default([]),
+    decisions: z
+      .array(
+        z.object({
+          node_id: z.string(),
+          action: z.enum(["continue", "branch_after", "deprecate", "pending_confirm"]),
+          reason: z.string().optional(),
+        }),
+      )
+      .optional()
+      .default([]),
+  })
+  .passthrough();
+
 const ResearchMessageSchema = z
   .object({
     id: z.string(),
@@ -168,6 +187,7 @@ const ResearchMessageSchema = z
     body: z.string().optional().default(""),
     card_kind: z.string().optional().default("chat"),
     meta: z.unknown().optional().default({}),
+    match_decision: ResearchMatchDecisionSchema.optional(),
     created_at: z.string().optional().default(""),
   })
   .passthrough();

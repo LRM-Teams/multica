@@ -14,9 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // seedReadySharedBinding marks one environment_agent_sandbox row ready with a
@@ -34,6 +32,46 @@ func seedReadySharedBinding(t *testing.T, envID, agentID, instanceID, runtimeID,
 		 WHERE env_id = $1 AND agent_id = $2`,
 		envID, agentID, instanceID, runtimeID, daemonID)
 	require.NoError(t, err)
+}
+
+// seedSharedBindingTargets creates the real FK targets required by a ready
+// environment_agent_sandbox row and registers dependency-safe cleanup.
+func seedSharedBindingTargets(t *testing.T) (instanceID, runtimeID string) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, metadata, last_seen_at)
+		VALUES ($1, $2, 'cloud', 'pi', 'online', '{}'::jsonb, now())
+		RETURNING id`, testWorkspaceID, "shared-diag-binding-rt-"+uuid.NewString()).Scan(&runtimeID))
+	t.Cleanup(func() {
+		_, err := testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		require.NoError(t, err)
+	})
+
+	var nodeID string
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO sandbox_node (node_key, name, owner_user_id, capabilities, max_concurrency, metadata)
+		VALUES ($1, 'shared diagnosis binding node', $2, '{}'::jsonb, 1, '{}'::jsonb)
+		RETURNING id`, "shared-diag-binding-"+uuid.NewString(), testUserID).Scan(&nodeID))
+	t.Cleanup(func() {
+		_, err := testPool.Exec(context.Background(), `DELETE FROM sandbox_node WHERE id = $1`, nodeID)
+		require.NoError(t, err)
+	})
+
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO sandbox_instance (workspace_id, creator_user_id, node_id, status, template, limits, metadata)
+		VALUES ($1, $2, $3, 'running', 'default', '{}'::jsonb, '{}'::jsonb)
+		RETURNING id`, testWorkspaceID, testUserID, nodeID).Scan(&instanceID))
+	t.Cleanup(func() {
+		_, err := testPool.Exec(context.Background(), `
+			UPDATE environment_agent_sandbox
+			   SET status = 'pending', sandbox_instance_id = NULL, runtime_id = NULL, daemon_id = NULL
+			 WHERE sandbox_instance_id = $1 OR runtime_id = $2`, instanceID, runtimeID)
+		require.NoError(t, err)
+		_, err = testPool.Exec(context.Background(), `DELETE FROM sandbox_instance WHERE id = $1`, instanceID)
+		require.NoError(t, err)
+	})
+	return instanceID, runtimeID
 }
 
 func TestResolveSharedDiagnosisBindingRequiresOneCanonicalRuntime(t *testing.T) {
@@ -54,8 +92,7 @@ func TestResolveSharedDiagnosisBindingRequiresOneCanonicalRuntime(t *testing.T) 
 		VALUES ($1, $2, $3, 'pending', '{}'::jsonb)`, envID, channelID, agentBID)
 	require.NoError(t, err)
 
-	sharedSandboxID := uuid.NewString()
-	sharedRuntimeID := uuid.NewString()
+	sharedSandboxID, sharedRuntimeID := seedSharedBindingTargets(t)
 	sharedDaemonID := uuid.NewString()
 	seedReadySharedBinding(t, envID, agentAID, sharedSandboxID, sharedRuntimeID, sharedDaemonID)
 	seedReadySharedBinding(t, envID, agentBID, sharedSandboxID, sharedRuntimeID, sharedDaemonID)
@@ -74,6 +111,7 @@ func TestResolveSharedDiagnosisBindingReturnsNilForNonShared(t *testing.T) {
 	}
 	ctx := context.Background()
 	envID, projectID, _, agentID := setupEnvDispatchChannelRolloutFixture(t)
+	instanceID, runtimeID := seedSharedBindingTargets(t)
 	_, err := testPool.Exec(ctx, `
 		UPDATE environment_agent_sandbox
 		   SET status = 'ready',
@@ -82,7 +120,7 @@ func TestResolveSharedDiagnosisBindingReturnsNilForNonShared(t *testing.T) {
 		       daemon_id = $5,
 		       sandbox_config = '{"template":"default","shared":false}'::jsonb
 		 WHERE env_id = $1 AND agent_id = $2`,
-		envID, agentID, uuid.NewString(), uuid.NewString(), uuid.NewString())
+		envID, agentID, instanceID, runtimeID, uuid.NewString())
 	require.NoError(t, err)
 
 	ref, err := testHandler.resolveSharedDiagnosisBinding(ctx, testWorkspaceID, projectID)
@@ -108,8 +146,10 @@ func TestResolveSharedDiagnosisBindingFailsClosedOnDivergentTriples(t *testing.T
 		VALUES ($1, $2, $3, 'pending', '{}'::jsonb)`, envID, channelID, agentBID)
 	require.NoError(t, err)
 
-	seedReadySharedBinding(t, envID, agentAID, uuid.NewString(), uuid.NewString(), uuid.NewString())
-	seedReadySharedBinding(t, envID, agentBID, uuid.NewString(), uuid.NewString(), uuid.NewString())
+	instanceAID, runtimeAID := seedSharedBindingTargets(t)
+	instanceBID, runtimeBID := seedSharedBindingTargets(t)
+	seedReadySharedBinding(t, envID, agentAID, instanceAID, runtimeAID, uuid.NewString())
+	seedReadySharedBinding(t, envID, agentBID, instanceBID, runtimeBID, uuid.NewString())
 
 	ref, err := testHandler.resolveSharedDiagnosisBinding(ctx, testWorkspaceID, projectID)
 	require.Error(t, err)
@@ -118,23 +158,10 @@ func TestResolveSharedDiagnosisBindingFailsClosedOnDivergentTriples(t *testing.T
 }
 
 func TestResolveSharedDiagnosisBindingFailsClosedOnIncompleteTriple(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	envID, projectID, _, agentID := setupEnvDispatchChannelRolloutFixture(t)
-	_, err := testPool.Exec(ctx, `
-		UPDATE environment_agent_sandbox
-		   SET status = 'ready',
-		       sandbox_instance_id = $3,
-		       runtime_id = NULL,
-		       daemon_id = $4,
-		       sandbox_config = '{"template":"default","shared":true}'::jsonb
-		 WHERE env_id = $1 AND agent_id = $2`,
-		envID, agentID, uuid.NewString(), uuid.NewString())
-	require.NoError(t, err)
+	instanceID := uuid.NewString()
+	daemonID := uuid.NewString()
 
-	ref, err := testHandler.resolveSharedDiagnosisBinding(ctx, testWorkspaceID, projectID)
+	ref, err := mergeSharedDiagnosisBinding(nil, &instanceID, nil, &daemonID)
 	require.Error(t, err)
 	assert.Nil(t, ref)
 	assert.True(t, strings.HasPrefix(err.Error(), "provisioning_binding:"))
@@ -212,15 +239,29 @@ func TestGetLatestEnvDispatchDiagnosisExposesSandboxMode(t *testing.T) {
 	}
 	ctx := context.Background()
 	projectID, rootTaskID := seedHandlerDagNonTrainingCompletedRoot(t, ctx, testWorkspaceID)
+	var envID string
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO environment (workspace_id, sandbox_ids, mode)
+		VALUES ($1, '{}', 'scratch')
+		RETURNING id`, testWorkspaceID).Scan(&envID))
+	_, err := testPool.Exec(ctx, `UPDATE project SET env_id = $2 WHERE id = $1`, projectID, envID)
+	require.NoError(t, err)
+	var channelID string
+	require.NoError(t, testPool.QueryRow(ctx, `
+		INSERT INTO channel (workspace_id, name, kind, project_id, created_by)
+		VALUES ($1, $2, 'group', $3, $4)
+		RETURNING id`, testWorkspaceID, "diagnosis-latest-"+uuid.NewString(), projectID, testUserID).Scan(&channelID))
 	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM channel WHERE id = $1`, channelID)
 		testPool.Exec(ctx, `DELETE FROM env_dispatch_run WHERE project_id = $1`, projectID)
 		testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, projectID)
+		testPool.Exec(ctx, `DELETE FROM environment WHERE id = $1`, envID)
 	})
 
 	teamSandboxID := uuid.NewString()
 	runID := "diag-latest-" + uuid.NewString()
 	store := service.NewDiagnosisStateStore(testHandler.Queries)
-	_, err := store.CreateRun(ctx, service.DiagnosisRunCheckpoint{
+	_, err = store.CreateRun(ctx, service.DiagnosisRunCheckpoint{
 		RunID:             runID,
 		ProjectID:         projectID,
 		TaskID:            rootTaskID,
@@ -236,10 +277,8 @@ func TestGetLatestEnvDispatchDiagnosisExposesSandboxMode(t *testing.T) {
 		service.DiagnosisExecutionModeSandbox, service.DiagnosisSandboxModeShared))
 
 	w := httptest.NewRecorder()
-	r := withURLParam(newRequest(http.MethodGet, "/api/v1/env-dispatch/"+projectID+"/diagnosis/latest", nil), "projectID", projectID)
-	r = r.WithContext(middleware.SetMemberContext(r.Context(), testWorkspaceID, db.Member{}))
-	r.Header.Set("X-User-ID", testUserID)
-	testHandler.GetLatestEnvDispatchDiagnosis(w, r)
+	r := authedChannelRequest(http.MethodGet, "/api/v1/env-dispatch/channels/"+channelID+"/diagnosis/latest", "channelID", channelID)
+	testHandler.GetLatestEnvDispatchChannelDiagnosis(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
 	var body map[string]any

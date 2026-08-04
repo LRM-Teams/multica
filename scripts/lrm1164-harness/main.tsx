@@ -3,10 +3,11 @@
  * session list row + row skeleton so Playwright can capture the 700 / 767 / 768
  * tiers with live Tailwind media queries (jsdom cannot evaluate `md:`).
  *
- * `?case=report` → ReportReader (outline drawer vs 220px aside)
- * `?case=list`   → ResearchSessionRow ×2 + ResearchSessionRowSkeleton ×2
+ * `?case=report`     → ReportReader (outline drawer vs 220px aside)
+ * `?case=list`       → ResearchSessionRow ×2 + ResearchSessionRowSkeleton ×2
+ * `?case=completion` → ResearchCompletionCard (LRM-1244 focus gate shots)
  *
- * Temporary tooling: delete after the shots are attached to LRM-1164.
+ * Temporary tooling: delete after the shots are attached to LRM-1164 / LRM-1244.
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -28,7 +29,8 @@ import type { Workspace } from "../../packages/core/types/workspace";
 import { NavigationProvider } from "../../packages/views/navigation/context";
 import { ReportReader } from "../../packages/views/research/report/report-reader";
 import { ResearchCompletionCard } from "../../packages/views/research/components/research-completion-card";
-import { ResearchSessionRow } from "../../packages/views/research/components/research-session-row";import {
+import { ResearchSessionRow } from "../../packages/views/research/components/research-session-row";
+import {
   ResearchSessionRowSkeleton,
 } from "../../packages/views/research/components/research-session-row-skeleton";
 import zhResearch from "../../packages/views/locales/zh-Hans/research.json";
@@ -225,11 +227,11 @@ function CompletionCase() {
 }
 
 const params = new URLSearchParams(window.location.search);
-const caseParam = params.get("case");
+// Keep `params.get("case") === "report"` literal — LRM-1212 source lock asserts it.
 const which =
-  caseParam === "report"
+  params.get("case") === "report"
     ? "report"
-    : caseParam === "completion"
+    : params.get("case") === "completion"
       ? "completion"
       : "list";
 

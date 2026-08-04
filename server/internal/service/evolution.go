@@ -65,10 +65,6 @@ func NewEvolutionService(queries *db.Queries) *EvolutionService {
 	return NewEvolutionServiceWithReviewerAndTx(queries, nil, NoopEvolutionReviewer{}, false)
 }
 
-func NewEvolutionServiceWithTx(queries *db.Queries, txStarter TxStarter) *EvolutionService {
-	return NewEvolutionServiceWithReviewerAndTx(queries, txStarter, NoopEvolutionReviewer{}, false)
-}
-
 func NewTransactionalEvolutionService(queries *db.Queries, txStarter EvolutionTxStarter) *EvolutionService {
 	service := NewEvolutionService(queries)
 	service.TxStarter = txStarter

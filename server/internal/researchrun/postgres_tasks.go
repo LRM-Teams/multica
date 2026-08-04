@@ -676,10 +676,6 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 	return run, event, cancelIDs, err
 }
 
-func expectedResultForTask(kind TaskKind) string {
-	return expectedResultForTaskVersion(OrchestratorVersionV1, kind)
-}
-
 func expectedResultForTaskVersion(version string, kind TaskKind) string {
 	suffix := "v1"
 	if version == OrchestratorVersionV2 {

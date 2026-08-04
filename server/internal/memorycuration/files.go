@@ -397,14 +397,3 @@ func sectionLines(content, heading string) []string {
 	}
 	return out
 }
-
-func DefaultWorkspacesRoot() string {
-	if root := os.Getenv("MULTICA_WORKSPACES_ROOT"); root != "" {
-		return root
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ""
-	}
-	return filepath.Join(home, "multica_workspaces")
-}

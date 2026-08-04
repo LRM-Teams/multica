@@ -96,10 +96,6 @@ func NewAgentFleetRankService(queries *db.Queries) *AgentFleetRankService {
 	}
 }
 
-func BuildFleetRulesDocument() FleetRulesDocument {
-	return fleetRulesDocumentFromHonorRules(DefaultAgentHonorRules())
-}
-
 func fleetRulesDocumentFromHonorRules(rules AgentHonorRules) FleetRulesDocument {
 	thresholds := make([]FleetClassThreshold, 0, len(rules.FleetClasses))
 	for _, class := range rules.FleetClasses {

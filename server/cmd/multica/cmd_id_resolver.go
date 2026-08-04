@@ -386,10 +386,8 @@ type actorDisplayLookup struct {
 type actorDisplayLookupState struct {
 	members       map[string]string
 	agents        map[string]string
-	squads        map[string]string
 	membersLoaded bool
 	agentsLoaded  bool
-	squadsLoaded  bool
 }
 
 func loadActorDisplayLookup(ctx context.Context, client *cli.APIClient) actorDisplayLookup {
@@ -442,16 +440,6 @@ func (l actorDisplayLookup) loadAgents() {
 			}
 		}
 	}
-}
-
-func (l actorDisplayLookup) loadSquads() {
-	// Squad product retired: no /api/squads. Historical assignee_type=squad
-	// displays as 原小队指派 via actor() without name resolution.
-	if l.state == nil || l.state.squadsLoaded {
-		return
-	}
-	l.state.squadsLoaded = true
-	l.state.squads = map[string]string{}
 }
 
 func (l actorDisplayLookup) actor(actorType, id string) string {

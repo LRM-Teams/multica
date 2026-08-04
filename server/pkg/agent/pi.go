@@ -915,8 +915,6 @@ func splitPiModel(s string) (provider, model string) {
 // ── Session path ──
 
 // piSessionDir returns the directory where Pi session JSONL files live.
-// Exported via a helper so the usage scanner (package usage) can point at
-// the same location without duplicating the path construction.
 func piSessionDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -946,11 +944,6 @@ func ensurePiSessionFile(path string) error {
 		return err
 	}
 	return f.Close()
-}
-
-// PiSessionDir exposes piSessionDir to other packages in this module.
-func PiSessionDir() (string, error) {
-	return piSessionDir()
 }
 
 // validateTrustedExtensionPaths checks that every path in TrustedExtensionPaths

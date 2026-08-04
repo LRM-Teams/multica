@@ -101,7 +101,8 @@ const AGGREGATE_BOARD_MIN_HEIGHT = 655;
 const AGGREGATE_SIDE_INSET = 48;
 const AGGREGATE_SIBLING_X = 454;
 const AGGREGATE_SIBLING_COLUMN_GAP = 42;
-const AGGREGATE_SIBLING_ROW_GAP = 32;
+const AGGREGATE_SIBLING_SPREAD_ROW_GAP = 240;
+const AGGREGATE_SIBLING_DENSE_ROW_GAP = 56;
 const AGGREGATE_CHILD_X = 1022;
 const AGGREGATE_CHILD_GAP = 16;
 const AGGREGATE_TOP_INSET = 56;
@@ -308,10 +309,18 @@ export function layoutAggregateTreeShell({
   children,
   edges,
 }: AggregateTreeShellInput): AggregateTreeShellLayout {
-  const siblingRows = Math.max(1, Math.ceil(siblings.length / 2));
+  // A two-branch window is the common route state. Give each branch a distinct
+  // vertical track so the aggregate tree reads as a branching surface rather
+  // than a narrow row floating in the middle of the desktop canvas.
+  const siblingColumns = siblings.length <= 2 ? 1 : 2;
+  const siblingRows = Math.max(1, Math.ceil(siblings.length / siblingColumns));
+  // Spread one or two visible rows across the desktop canvas. Denser projections
+  // use a compact rhythm so 5–8 siblings remain legible without shrinking the tree.
+  const siblingRowGap =
+    siblingRows <= 2 ? AGGREGATE_SIBLING_SPREAD_ROW_GAP : AGGREGATE_SIBLING_DENSE_ROW_GAP;
   const siblingHeight =
     siblingRows * AGGREGATE_SIBLING_CARD.height +
-    (siblingRows - 1) * AGGREGATE_SIBLING_ROW_GAP;
+    (siblingRows - 1) * siblingRowGap;
   const childHeight =
     Math.max(1, children.length) * AGGREGATE_CHILD_CARD.height +
     Math.max(0, children.length - 1) * AGGREGATE_CHILD_GAP;
@@ -333,15 +342,15 @@ export function layoutAggregateTreeShell({
       AGGREGATE_PARENT_CARD,
     ),
     ...siblings.map((sibling, index) => {
-      const column = index % 2;
-      const row = Math.floor(index / 2);
+      const column = index % siblingColumns;
+      const row = Math.floor(index / siblingColumns);
       return aggregateTreeNode(
         sibling,
         "sibling",
         {
           x: AGGREGATE_SIBLING_X +
             column * (AGGREGATE_SIBLING_CARD.width + AGGREGATE_SIBLING_COLUMN_GAP),
-          y: siblingY + row * (AGGREGATE_SIBLING_CARD.height + AGGREGATE_SIBLING_ROW_GAP),
+          y: siblingY + row * (AGGREGATE_SIBLING_CARD.height + siblingRowGap),
         },
         AGGREGATE_SIBLING_CARD,
       );

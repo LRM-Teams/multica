@@ -95,4 +95,24 @@ describe("layoutAggregateTreeShell (LRM-1295)", () => {
       "agent-delivery",
     ]);
   });
+
+  it("stages a two-branch window across distinct vertical tracks", () => {
+    const parent = node("root", "Root strategy");
+    const siblings = [
+      node("evidence", "Evidence branch"),
+      node("risk", "Risk branch"),
+    ];
+    const laid = layoutAggregateTreeShell({ parent, siblings, children: [], edges: [] });
+    const boxes = aggregateTreeCardBoxes(laid);
+    const siblingBoxes = boxes
+      .filter((box) => box.tier === "sibling")
+      .sort((a, b) => a.y - b.y);
+
+    expect(siblingBoxes).toHaveLength(2);
+    expect(siblingBoxes[1]!.y).toBeGreaterThan(siblingBoxes[0]!.y + siblingBoxes[0]!.h);
+
+    const top = Math.min(...boxes.map((box) => box.y));
+    const bottom = Math.max(...boxes.map((box) => box.y + box.h));
+    expect(bottom - top).toBeGreaterThanOrEqual(524);
+  });
 });

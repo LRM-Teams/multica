@@ -17,6 +17,7 @@ export type ResearchExecutionAgent = {
   actionDetail?: string;
   failureReason?: string;
   timeLabel: string;
+  currentNodeId?: string;
   locationLabel?: string;
 };
 

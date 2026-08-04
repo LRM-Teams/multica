@@ -59,10 +59,6 @@ export interface IssueSourceMessageRef {
   excerpt_parts?: MessagePart[];
 }
 
-export interface IssueSourceRefs {
-  message?: IssueSourceMessageRef;
-}
-
 /**
  * The group (channel) an issue is associated with — 1:1 (#574). Distinct from
  * `source_refs.message`: an issue can be linked to a group without originating
@@ -72,6 +68,16 @@ export interface IssueSourceChannelRef {
   channel_id: string;
   channel_name?: string | null;
   channel_kind: string;
+}
+
+export interface IssueSourceRefs {
+  /**
+   * Associated group (#574 / LRM-1122). Same durable row as top-level
+   * `Issue.channel`; Properties UI reads the top-level field only — do not
+   * derive display from this nested copy (LRM-238 / no silent dual-track).
+   */
+  channel?: IssueSourceChannelRef;
+  message?: IssueSourceMessageRef;
 }
 
 /** A group (channel) bound to a project (#574 / #629). Returned by

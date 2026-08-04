@@ -4,6 +4,10 @@ export { parseMessageParts, parseStickerMessage } from "./message-parts";
 export type { MessagePart, StickerPart } from "./message-parts";
 export { useRecentContextStore, selectRecentContexts } from "./recent-context-store";
 export type { RecentContextEntry, RecentContextType } from "./recent-context-store";
+export {
+  evictInactiveChatMessageCaches,
+  CHAT_MESSAGE_GC_TIME_MS,
+} from "./evict-inactive-caches";
 
 import type { createChatStore as CreateChatStoreFn } from "./store";
 

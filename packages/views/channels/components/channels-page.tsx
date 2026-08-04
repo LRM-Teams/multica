@@ -32,6 +32,7 @@ import {
   channelMessagesFirstItemIndex,
   flattenChannelMessagePages,
   enrichChannelMessagesPreservingAvatars,
+  evictInactiveChannelMessageCaches,
   useEnsureMessageLoaded,
   channelsOptions,
   archivedChannelsOptions,
@@ -1129,6 +1130,11 @@ export function ChannelsPage({
     }),
   );
   const activeChannelId = active?.id ?? "";
+  // LRM-1264: unload other channels' message/thread caches when switching.
+  useEffect(() => {
+    if (!activeChannelId) return;
+    evictInactiveChannelMessageCaches(qc, activeChannelId);
+  }, [activeChannelId, qc]);
   useEffect(() => {
     const target = urlDeepLinkMessage || urlDeepLinkThread;
     if (!target || !activeChannelId) return;

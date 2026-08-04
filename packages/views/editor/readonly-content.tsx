@@ -27,8 +27,8 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import { createLowlight, common } from "lowlight";
 import { toHtml } from "hast-util-to-html";
+import { sharedLowlight as lowlight } from "./lowlight";
 import { cn } from "@multica/ui/lib/utils";
 import { useWorkspacePaths, useWorkspaceSlug } from "@multica/core/paths";
 import type { Attachment } from "@multica/core/types";
@@ -57,11 +57,8 @@ import { Attachment as AttachmentRenderer } from "./attachment";
 import "katex/dist/katex.min.css";
 import "./styles/index.css";
 
-// ---------------------------------------------------------------------------
-// Lowlight — same engine + language set as Tiptap's CodeBlockLowlight
-// ---------------------------------------------------------------------------
-
-const lowlight = createLowlight(common);
+// Lowlight: shared singleton (LRM-1264) — same engine + language set as
+// Tiptap's CodeBlockLowlight via `./lowlight`.
 
 // Code fences that the `code` renderer returns as a non-<code> React element
 // (Mermaid diagram, HTML preview iframe). The `pre` renderer below unwraps

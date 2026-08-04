@@ -1,5 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
+import { CHAT_MESSAGE_GC_TIME_MS } from "./evict-inactive-caches";
 
 // NOTE on workspace scoping:
 // `wsId` is used only as part of queryKey for cache isolation per workspace.
@@ -51,6 +52,8 @@ export function chatMessagesOptions(sessionId: string) {
     queryFn: () => api.listChatMessages(sessionId),
     enabled: !!sessionId,
     staleTime: Infinity,
+    // LRM-1264: leave the heap sooner once the session is inactive.
+    gcTime: CHAT_MESSAGE_GC_TIME_MS,
   });
 }
 
@@ -64,6 +67,8 @@ export function chatMessagesPageOptions(sessionId: string, limit = 50) {
       lastPage.has_more ? lastPage.next_cursor ?? undefined : undefined,
     enabled: !!sessionId,
     staleTime: Infinity,
+    // LRM-1264: leave the heap sooner once the session is inactive.
+    gcTime: CHAT_MESSAGE_GC_TIME_MS,
   });
 }
 
@@ -78,6 +83,7 @@ export function pendingChatTaskOptions(sessionId: string) {
     queryFn: () => api.getPendingChatTask(sessionId),
     enabled: !!sessionId,
     staleTime: Infinity,
+    gcTime: CHAT_MESSAGE_GC_TIME_MS,
   });
 }
 

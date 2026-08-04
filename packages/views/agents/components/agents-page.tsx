@@ -9,6 +9,7 @@ import {
   Plus,
   Search,
 } from "lucide-react";
+import { Virtuoso } from "react-virtuoso";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Agent, AgentRuntime, CreateAgentRequest, AgentCreationDraft } from "@multica/core/types";
 import {
@@ -742,7 +743,7 @@ export function AgentsPage({
               )}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto py-1">
+            <div className="min-h-0 flex-1 py-1">
               {sortedAgents.length === 0 ? (
                 <NoMatches
                   view={view}
@@ -751,16 +752,22 @@ export function AgentsPage({
                   runtimeMachineTitle={selectedMachine?.title ?? null}
                 />
               ) : (
-                sortedAgents.map((agent) => (
-                  <AgentRailRow
-                    key={agent.id}
-                    agent={agent}
-                    fleet={fleetByAgentId.get(agent.id)}
-                    presence={presenceMap.get(agent.id)}
-                    selected={selectedAgent?.id === agent.id}
-                    onClick={() => setSelectedId(agent.id)}
-                  />
-                ))
+                // LRM-1264: window the rail — large workspaces keep ~150 agent
+                // rows off-DOM without changing row chrome.
+                <Virtuoso
+                  className="h-full"
+                  data={sortedAgents}
+                  increaseViewportBy={{ top: 200, bottom: 200 }}
+                  itemContent={(_, agent) => (
+                    <AgentRailRow
+                      agent={agent}
+                      fleet={fleetByAgentId.get(agent.id)}
+                      presence={presenceMap.get(agent.id)}
+                      selected={selectedAgent?.id === agent.id}
+                      onClick={() => setSelectedId(agent.id)}
+                    />
+                  )}
+                />
               )}
             </div>
           </div>

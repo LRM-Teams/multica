@@ -45,26 +45,33 @@ const ALL_SUPPORTED: AgentLifecyclePreflight = {
   },
 };
 
-function renderModal() {
-  return render(
-    <I18nProvider locale="en" resources={{ en: { agents: enAgents } }}>
-      <AgentRestartModal
-        agentId="a-1"
-        agentHandle="atlas"
-        agentName="Atlas"
-        open
-        onOpenChange={() => {}}
-      />
-    </I18nProvider>,
-  );
+function renderModal(onOpenChange = vi.fn()) {
+  return {
+    onOpenChange,
+    ...render(
+      <I18nProvider locale="en" resources={{ en: { agents: enAgents } }}>
+        <AgentRestartModal
+          agentId="a-1"
+          agentHandle="atlas"
+          agentName="Atlas"
+          open
+          onOpenChange={onOpenChange}
+        />
+      </I18nProvider>,
+    ),
+  };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   lifecycleState.current = { preflight: ALL_SUPPORTED, operation: null, isPending: false };
+  // Default: mutate invokes onSuccess so dismiss-after-start is exercised.
+  mutate.mockImplementation((_kind: string, opts?: { onSuccess?: () => void }) => {
+    opts?.onSuccess?.();
+  });
 });
 
-describe("AgentRestartModal (#27 / #28 scope under each tier)", () => {
+describe("AgentRestartModal (#27 / #28 / #34)", () => {
   it("renders three blocks with title + scope so each restart kind is clear", () => {
     renderModal();
     expect(screen.getByTestId("restart-tier-blocks")).toBeInTheDocument();
@@ -89,11 +96,20 @@ describe("AgentRestartModal (#27 / #28 scope under each tier)", () => {
   it("starts plain restart on primary CTA without changing selection", () => {
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: "Restart" }));
-    expect(mutate).toHaveBeenCalledWith("restart");
+    expect(mutate).toHaveBeenCalledWith("restart", expect.any(Object));
+  });
+
+  it("#34 R1: successful start closes the modal (no stuck progress/Done)", () => {
+    const { onOpenChange } = renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    expect(mutate).toHaveBeenCalled();
+    expect(refreshAfterTerminal).toHaveBeenCalled();
+    expect(reset).toHaveBeenCalled();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("full reset: select Full and click CTA — no type-to-confirm (Frank)", () => {
-    renderModal();
+    const { onOpenChange } = renderModal();
     expect(screen.queryByLabelText("Enter atlas")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("restart-tier-full_reset_restart"));
     // Still no type-handle field
@@ -101,7 +117,9 @@ describe("AgentRestartModal (#27 / #28 scope under each tier)", () => {
     const cta = screen.getByRole("button", { name: "Full reset & restart" });
     expect(cta).toBeEnabled();
     fireEvent.click(cta);
-    expect(mutate).toHaveBeenCalledWith("full_reset_restart");
+    expect(mutate).toHaveBeenCalledWith("full_reset_restart", expect.any(Object));
+    // R5: same dismiss-after-start path as plain restart
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("disables unsupported tier with reason", () => {
@@ -122,50 +140,11 @@ describe("AgentRestartModal (#27 / #28 scope under each tier)", () => {
     ).toBeInTheDocument();
   });
 
-  it("scheduled op is non-blocking — Done, no spinner lock", () => {
-    lifecycleState.current.operation = {
-      id: "op-sched",
-      agent_id: "a-1",
-      runtime_id: "rt-1",
-      action_kind: "reset_session_restart",
-      status: "scheduled",
-      execution_mode: "after_current_run",
-      created_at: "2026-07-28T00:00:00Z",
-    };
+  it("#34: no in-modal Done/success chrome — selection UI only until submit", () => {
     renderModal();
-    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
-    expect(document.querySelector(".animate-spin")).toBeNull();
-  });
-
-  it("shows success + Done", () => {
-    lifecycleState.current.operation = {
-      id: "op-1",
-      agent_id: "a-1",
-      runtime_id: "rt-1",
-      action_kind: "restart",
-      status: "succeeded",
-      execution_mode: "immediate",
-      created_at: "2026-07-28T00:00:00Z",
-    };
-    renderModal();
-    expect(screen.getByText("Done. The agent is back online.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
-  });
-
-  it("shows failure + Retry", () => {
-    lifecycleState.current.operation = {
-      id: "op-1",
-      agent_id: "a-1",
-      runtime_id: "rt-1",
-      action_kind: "restart",
-      status: "failed",
-      execution_mode: "immediate",
-      reason_code: "disk_full",
-      created_at: "2026-07-28T00:00:00Z",
-    };
-    renderModal();
-    expect(screen.getByText(/Restart failed: disk_full/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(mutate).toHaveBeenCalledWith("restart");
+    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Done. The agent is back online.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restart" })).toBeInTheDocument();
   });
 });

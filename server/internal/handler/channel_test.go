@@ -1772,8 +1772,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if len(activity) != 9 {
 		t.Fatalf("activity rows = %+v, want 9", activity)
 	}
-	if activity[0].kind != activityKindCustom || activity[0].eventType != "runtime_thinking" || activity[0].visibility != "diagnostic_only" {
-		t.Fatalf("thinking row = %+v, want diagnostic runtime_thinking", activity[0])
+	if activity[0].kind != activityKindThinking || activity[0].eventType != "runtime_thinking" || activity[0].visibility != "user_facing" {
+		t.Fatalf("thinking row = %+v, want user_facing thinking/runtime_thinking (task #121)", activity[0])
 	}
 	if activity[1].kind != activityKindToolCall || activity[1].eventType != "tool_use" || activity[1].visibility != "user_facing" {
 		t.Fatalf("tool row = %+v, want user-facing tool_use", activity[1])

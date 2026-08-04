@@ -167,7 +167,7 @@ function InstructionsStep({ onClose }: { onClose: () => void }) {
   const [mode, setMode] = useState<DaemonSetupMode>(() => defaultDaemonSetupMode());
   const { installCmd, setupCmd } = daemonSetupCommands(
     mode,
-    useWorkspaceSlug(),
+    useWorkspaceSlug() ?? undefined,
   );
   return (
     <>

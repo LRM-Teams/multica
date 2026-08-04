@@ -1,39 +1,24 @@
 import type { QueryClient } from "@tanstack/react-query";
 
 /**
- * LRM-1264 — conversation message caches that are not for the active channel
- * should leave the JS heap promptly. Channel lists / members / stats stay;
- * only the heavy message/thread/search families are dropped.
+ * LRM-1363 / Frank product lock (2026-08-04): keep cross-channel message /
+ * thread RQ caches for the session. Instant switch-back fill beats heap
+ * convergence. Do **not** remove inactive channel message caches.
  *
- * Safe with WS upserts: `upsertChannelMessageInCache` refuses to seed a page
- * for a channel the user has never opened, so eviction does not create a
- * "fresh empty window" hole on the next visit.
+ * LRM-1264 previously shortened GC + actively evicted; that caused cold loads
+ * on every channel reopen. Eviction is now a documented no-op so accidental
+ * call sites cannot revive the defect; prefer deleting callers instead.
  */
-const CHANNEL_MESSAGE_CACHE_ROOTS = new Set([
-  "channel-messages",
-  "channel-messages-page",
-  "channel-message-thread",
-  "channel-message-search",
-]);
+/** Session-scoped retention (pairs with staleTime: Infinity on message queries). */
+export const CHANNEL_MESSAGE_GC_TIME_MS = Number.POSITIVE_INFINITY;
 
-/** Soft GC for inactive channel message queries (overrides default 10m). */
-export const CHANNEL_MESSAGE_GC_TIME_MS = 2 * 60 * 1000;
-
+/**
+ * @deprecated LRM-1363 — no-op. Callers should be removed; do not reintroduce
+ * active eviction for heap pressure.
+ */
 export function evictInactiveChannelMessageCaches(
-  qc: QueryClient,
-  activeChannelId: string | null | undefined,
+  _qc: QueryClient,
+  _activeChannelId: string | null | undefined,
 ): number {
-  const keep = activeChannelId ?? "";
-  const doomed = qc.getQueryCache().getAll().filter((query) => {
-    const key = query.queryKey;
-    if (!Array.isArray(key) || key.length < 2) return false;
-    if (typeof key[0] !== "string" || !CHANNEL_MESSAGE_CACHE_ROOTS.has(key[0])) {
-      return false;
-    }
-    return typeof key[1] === "string" && key[1] !== keep;
-  });
-  for (const query of doomed) {
-    qc.removeQueries({ queryKey: query.queryKey, exact: true });
-  }
-  return doomed.length;
+  return 0;
 }

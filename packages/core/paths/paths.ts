@@ -48,6 +48,8 @@ function workspaceScoped(slug: string) {
     // the "runtime" concept (a computer's bound code-agent process), which
     // keeps its existing name everywhere else per Frank's explicit ruling.
     computers: () => `${ws}/computers`,
+    computersAttention: (runtimeId: string) =>
+      `${ws}/computers?attention_runtime=${encode(runtimeId)}`,
     computerDetail: (id: string) => `${ws}/computers/${encode(id)}`,
     sandboxes: () => `${ws}/sandboxes`,
     sandboxDetail: (id: string) => `${ws}/sandboxes/${encode(id)}`,

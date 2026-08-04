@@ -901,6 +901,12 @@ func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (R
 	}, nil
 }
 
+// ListFleetMembers returns the session-bound research fleet roster used for
+// presence/dispatch (LRM-1377 follow-up).
+func (e *Engine) ListFleetMembers(ctx context.Context, sessionID, workspaceID string) ([]FleetMember, error) {
+	return e.store.ListFleetMembers(ctx, sessionID, workspaceID)
+}
+
 func compactJSON(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return "{}"

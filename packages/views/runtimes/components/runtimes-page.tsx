@@ -26,6 +26,10 @@ import {
 import { useAgentPanelStore } from "@multica/core/agents/stores";
 import { runtimeListOptions, runtimeKeys } from "@multica/core/runtimes/queries";
 import {
+  RUNTIME_ATTENTION_RUNTIME_QUERY,
+  runtimeHasHealthAttention,
+} from "@multica/core/runtimes";
+import {
   useDeleteRuntimeAgentWorkspace,
   useRuntimeAgentWorkspaces,
 } from "@multica/core/runtimes/mutations";
@@ -77,6 +81,7 @@ import { MachineDaemonUpgrade } from "./machine-daemon-upgrade";
 import { MachineHeaderOps } from "./machine-header-ops";
 import { MachineWorkspacesSection } from "./machine-workspaces-section";
 import { useT } from "../../i18n/use-t";
+import { useNavigation } from "../../navigation";
 
 interface RuntimesPageProps {
   localDaemonId?: string | null;
@@ -143,6 +148,22 @@ function providerLabel(runtime: AgentRuntime | null): string {
   }
 }
 
+export function attentionMachineIdFromRuntime(
+  machines: RuntimeMachine[],
+  runtimeId: string | null,
+  currentUserId: string | null,
+): string | null {
+  if (!runtimeId || !currentUserId) return null;
+  return (
+    machines.find((machine) =>
+      machine.runtimes.some(
+        (runtime) =>
+          runtime.id === runtimeId &&
+          runtimeHasHealthAttention(runtime, currentUserId),
+      ),
+    )?.id ?? null
+  );
+}
 
 /** Mutually exclusive Computers overlays — one discriminant (prefer-useReducer). */
 type PageOverlay = null | "add-chooser" | "connect" | "cloud";
@@ -173,6 +194,7 @@ export function RuntimesPage({
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
   const isMobile = useIsMobile();
+  const { pathname, replace, searchParams } = useNavigation();
   const [userPickId, setUserPickId] = useState<string | null>(null);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
   const [pageOverlay, setPageOverlay] = useState<PageOverlay>(null);
@@ -216,6 +238,41 @@ export function RuntimesPage({
       hasLocalMachine,
     ],
   );
+
+  const attentionRuntimeId = searchParams.get(
+    RUNTIME_ATTENTION_RUNTIME_QUERY,
+  );
+  const searchParamsString = searchParams.toString();
+  useEffect(() => {
+    if (!attentionRuntimeId || fetching || isLoading) return;
+
+    const machineId = attentionMachineIdFromRuntime(
+      machines,
+      attentionRuntimeId,
+      currentUserId ?? null,
+    );
+    if (machineId) {
+      setUserPickId(machineId);
+      setMobileDetailOpen(true);
+    }
+
+    // Consume the one-shot selection parameter. Besides keeping the URL tidy,
+    // this lets Mobile Back return to the list instead of reopening the same
+    // detail forever. A forged/other-owner runtime id is simply discarded.
+    const nextSearchParams = new URLSearchParams(searchParamsString);
+    nextSearchParams.delete(RUNTIME_ATTENTION_RUNTIME_QUERY);
+    const nextSearch = nextSearchParams.toString();
+    replace(nextSearch ? `${pathname}?${nextSearch}` : pathname);
+  }, [
+    attentionRuntimeId,
+    currentUserId,
+    fetching,
+    isLoading,
+    machines,
+    pathname,
+    replace,
+    searchParamsString,
+  ]);
 
   const userPickValid =
     !!userPickId && machines.some((m) => m.id === userPickId);

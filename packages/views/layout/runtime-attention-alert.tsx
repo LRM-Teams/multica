@@ -1,7 +1,7 @@
 "use client";
 
 import { TriangleAlert } from "lucide-react";
-import { useMyAttentionRuntimeCount } from "@multica/core/runtimes/hooks";
+import { useMyAttentionRuntimeSummary } from "@multica/core/runtimes/hooks";
 import {
   Popover,
   PopoverContent,
@@ -39,9 +39,9 @@ import { useT } from "../i18n";
 export function RuntimeAttentionAlert({ wsId }: { wsId: string | undefined }) {
   const { t } = useT("layout");
   const paths = useWorkspacePaths();
-  const count = useMyAttentionRuntimeCount(wsId);
+  const { count, firstRuntimeId } = useMyAttentionRuntimeSummary(wsId);
 
-  if (count === 0) return null;
+  if (count === 0 || !firstRuntimeId) return null;
 
   return (
     <Popover>
@@ -64,7 +64,7 @@ export function RuntimeAttentionAlert({ wsId }: { wsId: string | undefined }) {
           {t(($) => $.runtime_attention.count, { count })}
         </p>
         <AppLink
-          href={paths.computers()}
+          href={paths.computersAttention(firstRuntimeId)}
           className="text-xs font-medium text-brand hover:underline"
         >
           {t(($) => $.runtime_attention.view)}

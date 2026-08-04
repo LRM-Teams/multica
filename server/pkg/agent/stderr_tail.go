@@ -2,6 +2,7 @@ package agent
 
 import (
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -69,4 +70,18 @@ func withAgentStderr(msg, label, tail string) string {
 		return msg
 	}
 	return msg + "; " + label + " stderr: " + tail
+}
+
+// sensitiveStderrValue matches common CLI diagnostic key/value forms. Stderr is
+// retained in daemon logs for operators, but a Result.Error is user-visible, so
+// credentials must not travel with the bounded diagnostic tail.
+var sensitiveStderrValue = regexp.MustCompile(`(?im)\b(authorization|api[_ -]?key|token|secret|password|credential)\b(\s*(?:=|:)\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
+var bearerStderrValue = regexp.MustCompile(`(?i)\bBearer\s+[^\s,;]+`)
+
+// sanitizeAgentStderr removes common secret-bearing values before stderr is
+// copied from daemon-only logs into the user-visible Result.Error. It leaves
+// error codes such as provider_auth_required intact for failure classification.
+func sanitizeAgentStderr(tail string) string {
+	tail = bearerStderrValue.ReplaceAllString(tail, "Bearer <redacted>")
+	return sensitiveStderrValue.ReplaceAllString(tail, "$1$2<redacted>")
 }

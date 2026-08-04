@@ -134,6 +134,7 @@ function Panel({
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive honor-tab feature module; title helper shares this file's panel contract
 function PanelTitle({
   icon: Icon,
   title,
@@ -156,6 +157,7 @@ function PanelTitle({
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive honor-tab feature module; exported for focused behavior tests
 export function AchievementCard({
   achievement,
   selected,
@@ -273,6 +275,7 @@ export function AchievementCard({
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- primary honor-tab surface composed with the adjacent private feature helpers
 export function AgentHonorTab({
   agent,
   canManage,
@@ -787,6 +790,7 @@ export function AgentHonorTab({
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- private dialog belongs to the honor-tab administration surface
 function AgentHonorAdminDialog({
   agent,
   rulesView,
@@ -835,6 +839,7 @@ function AgentHonorAdminDialog({
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- cohesive admin surface; exported for focused accessibility tests
 export function AgentHonorAdminContent({
   agent,
   rulesView,
@@ -1167,6 +1172,7 @@ export function AgentHonorAdminContent({
   );
 }
 
+// react-doctor-disable-next-line react-doctor/no-multi-comp -- private numeric rule field shares the admin form contract
 function NumberField({
   label,
   value,

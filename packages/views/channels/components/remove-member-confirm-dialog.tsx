@@ -33,13 +33,23 @@ export function RemoveMemberConfirmDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const { t } = useT("channels");
+  // Sync double-click lock. Must clear when:
+  // - pending true→false (normal RQ path), OR
+  // - we submitted but never observed pending (sync mock reject / same-tick settle)
+  //   — otherwise the button sticks on「移除中…」and #839 row notice stays aria-hidden.
   const lockedRef = useRef(false);
+  const submittedRef = useRef(false);
   const prevPendingRef = useRef(!!pending);
 
-  if (prevPendingRef.current && !pending) {
-    lockedRef.current = false;
+  if (pending) {
+    prevPendingRef.current = true;
+  } else {
+    if (prevPendingRef.current || submittedRef.current) {
+      lockedRef.current = false;
+      submittedRef.current = false;
+    }
+    prevPendingRef.current = false;
   }
-  prevPendingRef.current = !!pending;
 
   const busy = !!pending || lockedRef.current;
 
@@ -49,7 +59,10 @@ export function RemoveMemberConfirmDialog({
       onOpenChange={(next) => {
         // §5 提交中：Esc / 遮罩不关
         if (!next && busy) return;
-        if (!next) lockedRef.current = false;
+        if (!next) {
+          lockedRef.current = false;
+          submittedRef.current = false;
+        }
         onOpenChange(next);
       }}
     >
@@ -79,6 +92,7 @@ export function RemoveMemberConfirmDialog({
             onClick={() => {
               if (lockedRef.current || pending) return;
               lockedRef.current = true;
+              submittedRef.current = true;
               onConfirm();
             }}
           >

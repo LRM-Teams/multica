@@ -215,6 +215,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     onResizePointerDown: onAgentSideResizePointerDown,
   } = useProfilePanelWidth(CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  // LRM-1250 / LRM-1248 AC4 — focus restore target after successful send.
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   // Stick-to-bottom while content grows (live stream / new cards); releases if
   // the user scrolls up to read history — no jump-scroll (LRM-820).
   useAutoScroll(chatScrollRef, chatOpen);
@@ -222,6 +224,8 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const send = useMutation({
     mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
     onSuccess: () => {
+      // Focus before clearBody so empty-state native disabled does not dump focus to BODY.
+      composerRef.current?.focus();
       dispatch({ type: "clearBody" });
       void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
       void qc.invalidateQueries({ queryKey: researchKeys.productRounds(wsId, sessionId) });
@@ -894,6 +898,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             <div className="border-t bg-card p-3">
               <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
                 <Textarea
+                  ref={composerRef}
                   data-testid="research-chat-composer"
                   rows={2}
                   value={ui.body}
@@ -949,9 +954,19 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                     <Button
                       type="button"
                       size="default"
-                      className="h-9 min-w-[88px] px-4 text-[13px] font-semibold shadow-sm"
-                      disabled={!ui.body.trim() || send.isPending}
-                      onClick={() => send.mutate(ui.body.trim())}
+                      className={cn(
+                        "h-9 min-w-[88px] px-4 text-[13px] font-semibold shadow-sm",
+                        // LRM-1250 S4 — keep Send focusable while pending (LRM-1248 / LRM-1213).
+                        send.isPending && "opacity-50 cursor-not-allowed",
+                      )}
+                      // Empty: native disabled OK. Pending: aria-disabled only (not native).
+                      disabled={(!ui.body.trim() && !send.isPending) || undefined}
+                      aria-disabled={send.isPending || undefined}
+                      data-testid="research-session-composer-send"
+                      onClick={() => {
+                        if (!ui.body.trim() || send.isPending) return;
+                        send.mutate(ui.body.trim());
+                      }}
                     >
                       {send.isPending
                         ? t(($) => $.step_card.sending)

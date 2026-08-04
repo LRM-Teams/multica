@@ -23,6 +23,7 @@ type envDispatchAuditContextKey struct{}
 type envDispatchAuditRecorder struct {
 	storage   EnvDispatchAuditStorage
 	auditID   string
+	report    EnvDispatchAuditReport
 	resources map[envDispatchAuditResourceKey]EnvDispatchAuditResource
 	mu        sync.Mutex
 }
@@ -54,6 +55,7 @@ func startEnvDispatchAudit(ctx context.Context, storage EnvDispatchAuditStorage,
 	recorder := &envDispatchAuditRecorder{
 		storage:   storage,
 		auditID:   report.AuditID,
+		report:    report,
 		resources: make(map[envDispatchAuditResourceKey]EnvDispatchAuditResource),
 	}
 	return context.WithValue(ctx, envDispatchAuditContextKey{}, recorder), recorder
@@ -76,8 +78,25 @@ func (r *envDispatchAuditRecorder) complete(ctx context.Context, outcome EnvDisp
 		return
 	}
 	now := time.Now().UTC()
-	_, _ = r.storage.UpdateAuditOutcome(ctx, r.auditID, outcome, &now)
+	if report, err := r.storage.UpdateAuditOutcome(ctx, r.auditID, outcome, &now); err == nil && report.AuditID != "" {
+		r.mu.Lock()
+		r.report = report
+		r.mu.Unlock()
+	}
 	r.recordEvent(ctx, EnvDispatchAuditEventDispatchOutcome, "", string(outcome))
+}
+
+func (r *envDispatchAuditRecorder) reportResult() *EnvDispatchAuditReport {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.report.AuditID == "" {
+		return nil
+	}
+	report := r.report
+	return &report
 }
 
 func (r *envDispatchAuditRecorder) recordResource(ctx context.Context, kind EnvDispatchAuditResourceKind, resourceID, environmentID, projectID, channelID, daemonID string) EnvDispatchAuditResource {

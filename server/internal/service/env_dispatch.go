@@ -265,6 +265,9 @@ type EnvDispatchResult struct {
 	ChannelID string
 	ProjectID string // single project for the dispatch (group_size=1: the rollout's project)
 	Rollouts  []EnvRollout
+	// Audit is set only when the configured audit storage created a real run.
+	// It is never derived from caller input.
+	Audit *EnvDispatchAuditReport
 }
 
 // EnvDispatchDeps is the seam between the service and the DB + cloud runtime.
@@ -839,9 +842,11 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 	}
 	if succeeded == 0 {
 		audit.complete(ctx, EnvDispatchAuditOutcomeFailed)
+		result.Audit = audit.reportResult()
 		return result, ErrAllDispatchFailed
 	}
 	audit.complete(ctx, EnvDispatchAuditOutcomeSucceeded)
+	result.Audit = audit.reportResult()
 	return result, nil
 }
 

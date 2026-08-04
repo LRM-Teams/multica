@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -205,6 +206,37 @@ func TestEnvDispatchAudit_CreateWireContract(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestMapEnvDispatchAuditRequest_MapsOnlyEnabledRequests(t *testing.T) {
+	t.Run("enabled", func(t *testing.T) {
+		got := mapEnvDispatchAuditRequest(&EnvDispatchAuditRequest{
+			Enabled:                  true,
+			ReclamationWindowSeconds: 600,
+		})
+		if got == nil || !got.Enabled || got.ReclamationWindow != 10*time.Minute {
+			t.Fatalf("mapEnvDispatchAuditRequest() = %+v, want enabled 10-minute request", got)
+		}
+	})
+
+	for _, input := range []*EnvDispatchAuditRequest{nil, {Enabled: false, ReclamationWindowSeconds: 600}} {
+		if got := mapEnvDispatchAuditRequest(input); got != nil {
+			t.Fatalf("mapEnvDispatchAuditRequest(%+v) = %+v, want nil", input, got)
+		}
+	}
+}
+
+func TestMapAuditEvent_OmitsUnsanitizedReasonCode(t *testing.T) {
+	event := mapAuditEvent(db.EnvDispatchAuditEvent{
+		ID:         parseUUID(auditContractAuditID),
+		AuditID:    parseUUID(auditContractAuditID),
+		EventType:  "creation_failed",
+		ReasonCode: pgtype.Text{String: "postgres connection refused", Valid: true},
+		OccurredAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+	})
+	if event.ReasonCode != nil {
+		t.Fatalf("unsafe reason code escaped storage mapping: %q", *event.ReasonCode)
+	}
 }
 
 func TestEnvDispatchAuditReport_LoadsOnlyInitiatorScopedEvidence(t *testing.T) {

@@ -225,12 +225,13 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		Issue:               mapIssueInput(req.Issue),
 		Message:             mapMessageInput(req.Message),
 		PerAgentEnvSpecs:    mapPerAgentEnvSpecs(req.PerAgentEnv),
+		Audit:               mapEnvDispatchAuditRequest(req.Audit),
 	})
 	if err != nil {
 		writeEnvDispatchError(w, err, res)
 		return
 	}
-	writeJSON(w, http.StatusCreated, EnvDispatchResponse{ChannelID: res.ChannelID, ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts)})
+	writeJSON(w, http.StatusCreated, EnvDispatchResponse{ChannelID: res.ChannelID, ProjectID: res.ProjectID, Rollouts: mapRollouts(res.Rollouts), Audit: envDispatchAuditResponseFromResult(res)})
 }
 
 // DeleteEnvDispatchProject handles DELETE /api/v1/env-dispatch/{projectID}.
@@ -419,6 +420,7 @@ func writeEnvDispatchError(w http.ResponseWriter, err error, res service.EnvDisp
 			ProjectID: res.ProjectID,
 			Rollouts:  mapRollouts(res.Rollouts),
 			Message:   "all rollouts failed",
+			Audit:     envDispatchAuditResponseFromResult(res),
 		})
 	case strings.Contains(msg, "validation_failed"):
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "validation_failed", "message": msg, "traceback": tb})
@@ -458,6 +460,23 @@ func mapMessageInput(m *MessageDispatchInput) *service.MessageInput {
 		return nil
 	}
 	return &service.MessageInput{Content: m.Content}
+}
+
+func mapEnvDispatchAuditRequest(request *EnvDispatchAuditRequest) *service.EnvDispatchAuditRequest {
+	if request == nil || !request.Enabled {
+		return nil
+	}
+	return &service.EnvDispatchAuditRequest{
+		Enabled:           true,
+		ReclamationWindow: time.Duration(request.ReclamationWindowSeconds) * time.Second,
+	}
+}
+
+func envDispatchAuditResponseFromResult(result service.EnvDispatchResult) *EnvDispatchAuditResponse {
+	if result.Audit == nil || result.Audit.AuditID == "" {
+		return nil
+	}
+	return envDispatchAuditResponseFromReport(*result.Audit)
 }
 
 // mapPerAgentEnvSpecs converts the request's agent_id→spec map into the sorted
@@ -526,14 +545,6 @@ func newEnvDispatchService(h *Handler, concurrency int) *service.EnvDispatchServ
 		svc = svc.WithSandboxLifecycle(lc)
 	}
 	return svc
-}
-
-// newEnvDispatchAuditStorage is the handler-level injection point for the
-// T004 audit ledger. Its concrete SQLC adapter belongs with the audit
-// lifecycle work; returning nil now keeps audit disabled until an explicit
-// audit-enabled request is implemented.
-func newEnvDispatchAuditStorage(_ *Handler) service.EnvDispatchAuditStorage {
-	return nil
 }
 
 // newEnvDispatchReclaimer is the handler-level injection point for the shared

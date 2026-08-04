@@ -247,6 +247,9 @@ func TestDispatchAudit_CorrelatesAllRolloutsAndLazyBindings(t *testing.T) {
 	if run.AuditID == "" {
 		t.Fatal("audit run must have a server-generated correlation ID")
 	}
+	if result.Audit == nil || result.Audit.AuditID != run.AuditID {
+		t.Fatalf("Dispatch() audit = %+v, want server-created report %q", result.Audit, run.AuditID)
+	}
 	if run.WorkspaceID != "workspace-audit" || run.InitiatorID != "initiator-audit" {
 		t.Fatalf("audit scope = workspace %q initiator %q, want request scope", run.WorkspaceID, run.InitiatorID)
 	}

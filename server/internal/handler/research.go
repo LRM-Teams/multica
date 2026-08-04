@@ -52,12 +52,6 @@ type ResearchSessionListItem struct {
 	FleetPreview []ResearchFleetPreviewMember `json:"fleet_preview"`
 }
 
-// ResearchPresenceEntry is one agent's live activity caption for a session.
-type ResearchPresenceEntry struct {
-	Activity  string `json:"activity"`
-	UpdatedAt int64  `json:"updated_at"` // unix ms
-}
-
 type ResearchSessionSnapshot struct {
 	Session       ResearchSessionResponse        `json:"session"`
 	Fleet         ResearchFleetResponse          `json:"fleet"`
@@ -484,34 +478,6 @@ func confidenceFromPayload(payload json.RawMessage) *float64 {
 	default:
 		return nil
 	}
-}
-
-// buildResearchPresenceMap rebuilds ephemeral presence from the latest
-// agent_activity graph node per actor (GET bootstrap for LRM-804/775).
-func buildResearchPresenceMap(nodes []db.ResearchGraphNode) map[string]ResearchPresenceEntry {
-	out := map[string]ResearchPresenceEntry{}
-	for _, n := range nodes {
-		if n.NodeType != "agent_activity" || !n.ActorAgentID.Valid {
-			continue
-		}
-		agentID := uuidToString(n.ActorAgentID)
-		activity := strings.TrimSpace(n.Title)
-		if activity == "" {
-			activity = strings.TrimSpace(n.Summary)
-		}
-		if activity == "" {
-			continue
-		}
-		updatedAt := n.UpdatedAt.Time.UnixMilli()
-		if !n.UpdatedAt.Valid {
-			updatedAt = n.CreatedAt.Time.UnixMilli()
-		}
-		prev, ok := out[agentID]
-		if !ok || updatedAt >= prev.UpdatedAt {
-			out[agentID] = ResearchPresenceEntry{Activity: activity, UpdatedAt: updatedAt}
-		}
-	}
-	return out
 }
 
 func mapEdges(rows []db.ResearchGraphEdge) []ResearchGraphEdgeResp {

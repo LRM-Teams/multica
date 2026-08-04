@@ -563,9 +563,35 @@ func (h *Handler) GetResearchPresence(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load presence")
 		return
 	}
+	// Full active fleet roster (LRM-1377): members without activity still appear.
+	members := []researchPresenceMember{}
+	if fleet, ferr := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID); ferr == nil {
+		rows, merr := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{
+			FleetID:     fleet.ID,
+			WorkspaceID: wsUUID,
+		})
+		if merr == nil {
+			members = researchPresenceMembersFromFleet(rows)
+		}
+	}
+	if len(members) == 0 {
+		// Fleet unavailable — still surface observed actors (legacy bootstrap).
+		seen := map[string]struct{}{}
+		for _, n := range nodes {
+			if n.NodeType != "agent_activity" || !n.ActorAgentID.Valid {
+				continue
+			}
+			id := uuidToString(n.ActorAgentID)
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			members = append(members, researchPresenceMember{AgentID: id})
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": uuidToString(sessionID),
-		"presence":   buildResearchPresenceMap(nodes),
+		"presence":   buildResearchPresenceRoster(members, nodes, time.Now().UTC()),
 	})
 }
 

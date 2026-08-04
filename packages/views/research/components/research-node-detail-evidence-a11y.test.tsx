@@ -63,6 +63,17 @@ vi.mock("../../i18n/use-t", () => ({
             unknown: "Unknown",
           },
         },
+        content_faces: {
+          goal: "Goal",
+          operation_approach: "Operation approach",
+          research_approach: "Research approach",
+          result: "Result",
+          missing: "Not provided",
+          result_pending: "Result in progress",
+          result_pending_detail: "Still organizing — no displayable result yet.",
+          result_failed: "No displayable result this round",
+          result_failed_detail: "No displayable result was produced this round.",
+        },
       }),
   }),
 }));

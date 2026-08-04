@@ -38,6 +38,17 @@ vi.mock("../../i18n/use-t", () => ({
           },
         },
         card_menu: { open: "打开菜单" },
+        content_faces: {
+          goal: "目标",
+          operation_approach: "操作思路",
+          research_approach: "调研思路",
+          result: "调研结果",
+          missing: "未提供",
+          result_pending: "结果整理中",
+          result_pending_detail: "正在整理，暂未形成可展示结果。",
+          result_failed: "本轮未产出可展示结果",
+          result_failed_detail: "本轮未产出可展示结果。",
+        },
       };
       return picker(keys as never);
     },
@@ -83,6 +94,47 @@ describe("ResearchGraphNode a11y (LRM-1105 slice3)", () => {
     const card = screen.getByRole("button", { name: /探源/ });
     expect(card).toHaveAttribute("tabindex", "0");
     expect(card.getAttribute("aria-label")).toContain("低置信");
+    expect(card.getAttribute("aria-label")).toContain("目标");
+    expect(card.getAttribute("aria-label")).toContain("操作思路");
+    expect(screen.getByTestId("research-node-content-faces-surface")).toBeTruthy();
+  });
+
+  it("renders projected content faces without summary fallback", () => {
+    const withContent = {
+      ...node,
+      summary: "SUMMARY_LEAK",
+      content: {
+        goal: "达成定价决策",
+        operation_approach: "官网交叉",
+        research_approach: "先横向",
+        result: "三条结论",
+      },
+    } as ResearchGraphNode;
+    render(
+      <ResearchGraphNodeView
+        id="n1"
+        type="research"
+        data={{
+          research: withContent,
+          laneId: "source",
+          branchId: "main",
+          logicRole: "step",
+        }}
+        selected
+        dragging={false}
+        zIndex={1}
+        selectable
+        deletable={false}
+        draggable={false}
+        isConnectable={false}
+        positionAbsoluteX={0}
+        positionAbsoluteY={0}
+      />,
+    );
+    const surface = screen.getByTestId("research-node-content-faces-surface");
+    expect(surface.textContent).toContain("达成定价决策");
+    expect(surface.textContent).toContain("官网交叉");
+    expect(surface.textContent).not.toContain("SUMMARY_LEAK");
   });
 
   it("keeps unselected nodes in tab order as tabindex=-1", () => {

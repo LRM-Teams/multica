@@ -25,3 +25,8 @@
 - `经验调整值`
 - `选择成就`
 - `修正原因`
+
+## 提交
+
+- [x] 非草稿 PR：[#2151](https://github.com/LRM-Teams/multica/pull/2151)，目标分支 `dev`。
+- [x] PR 提交后不代替用户合并。

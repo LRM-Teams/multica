@@ -284,7 +284,7 @@ export function ExplorationRail({
                       {dim.findingSummary}
                     </span>
                   ) : (
-                    <span className="mt-2 block text-[11px] text-muted-foreground/80">
+                    <span className="mt-2 block text-[11px] text-muted-foreground">
                       {t(($) => $.m2.rail_summary_pending)}
                     </span>
                   )}

@@ -25,6 +25,10 @@ export {
   type ChannelIssuesParams,
 } from "./queries";
 export {
+  evictInactiveChannelMessageCaches,
+  CHANNEL_MESSAGE_GC_TIME_MS,
+} from "./evict-inactive-caches";
+export {
   buildOptimisticChannelMessage,
   channelMessageListItemKey,
   isOptimisticChannelMessage,

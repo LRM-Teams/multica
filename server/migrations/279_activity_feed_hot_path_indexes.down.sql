@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_channel_message_active_ws_author_thread;
+DROP INDEX IF EXISTS idx_channel_message_active_parts_gin;

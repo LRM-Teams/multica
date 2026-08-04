@@ -5,9 +5,26 @@ import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import type { Agent, UpdateAgentRequest } from "@multica/core/types";
 import { api } from "@multica/core/api";
-import { agentDetailKeys } from "@multica/core/agents";
+import {
+  agentDetailKeys,
+  agentLifecycleActionState,
+} from "@multica/core/agents";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { useT } from "../../i18n";
+
+/** Fields that change the running code-agent session (Frank/Raft: restart after save). */
+const EXECUTION_CONFIG_KEYS = new Set([
+  "runtime_id",
+  "model",
+  "thinking_level",
+]);
+
+function touchesExecutionConfig(data: Record<string, unknown>): boolean {
+  for (const key of Object.keys(data)) {
+    if (EXECUTION_CONFIG_KEYS.has(key)) return true;
+  }
+  return false;
+}
 
 /**
  * Shared agent-update mutation used by BOTH the agent detail inspector and
@@ -31,6 +48,11 @@ import { useT } from "../../i18n";
  *    invalidate+refetch detail (that race can briefly restore the pre-PATCH
  *    agent and leave Runtime Config stale until a hard reload — LRM-296).
  *    List is still invalidated so directory consumers converge.
+ *  - When the patch touches runtime/model/thinking (execution config), also
+ *    kick the existing agent lifecycle `restart` (same path as Restart
+ *    button — Parker A2) so the new config applies immediately (Frank
+ *    2026-08-04 / Raft). Preflight gates offline / unsupported (A3/A4);
+ *    restart failure does not roll back the saved config.
  *  - On error: rolls back ONLY the fields THIS call wrote, invalidates so
  *    the cache converges with the server, shows an error toast, and
  *    rethrows so the caller's own catch can react. Never silently keep
@@ -118,7 +140,43 @@ export function useUpdateAgent(wsId: string) {
       );
       // List directory can refetch; panel body must NOT — PATCH is authority.
       qc.invalidateQueries({ queryKey: listKey });
-      toast.success(t(($) => $.detail.agent_updated_toast));
+
+      if (!touchesExecutionConfig(data)) {
+        toast.success(t(($) => $.detail.agent_updated_toast));
+        return;
+      }
+
+      // A1/A2/A3/A4 — save first, then reuse lifecycle restart when preflight allows.
+      try {
+        const preflight = await api.getAgentLifecyclePreflight(id);
+        const restartState = agentLifecycleActionState(preflight, "restart");
+        // Same gate as the profile Restart button: capability + supported.
+        const canForce =
+          preflight.provider_capabilities?.force_restart === true;
+        if (!canForce || !restartState.supported) {
+          toast.success(t(($) => $.detail.agent_updated_next_run_toast));
+          return;
+        }
+        await api.startAgentLifecycleAction(
+          id,
+          "restart",
+          crypto.randomUUID(),
+        );
+        if (restartState.execution_mode === "after_current_run") {
+          // A3: scheduled after busy run — don't claim "already restarted".
+          toast.success(t(($) => $.detail.agent_updated_restart_scheduled_toast));
+        } else {
+          toast.success(t(($) => $.detail.agent_updated_restart_toast));
+        }
+      } catch (restartErr) {
+        // Config already saved — surface restart failure without rolling back.
+        toast.success(t(($) => $.detail.agent_updated_toast));
+        showErrorToast(
+          restartErr instanceof Error
+            ? restartErr.message
+            : t(($) => $.detail.restart_after_update_failed_toast),
+        );
+      }
     } catch (e) {
       if (prevAgentFromList || prevAgentFromDetail) {
         patchList(prevFields);

@@ -79,3 +79,56 @@ describe("ExplorationRail accessible name (LRM-1172)", () => {
     ).toBeTruthy();
   });
 });
+
+/**
+ * LRM-1252 — pending 摘要曾是 `text-[11px] text-muted-foreground/80`，
+ * 落在 `bg-card/90` 上亮色实测 3.93:1（WCAG AA 4.5 FAIL）。
+ */
+describe("ExplorationRail text contrast (LRM-1252)", () => {
+  const pendingDimensions: ExplorationDimension[] = [
+    {
+      family: "cost",
+      title: "成本",
+      status: "open",
+      questions: [],
+    },
+  ];
+
+  it("renders the pending summary with solid muted text", () => {
+    render(<ExplorationRail dimensions={pendingDimensions} />);
+    const pending = screen.getByText("pending");
+    expect(pending.className).toContain("text-muted-foreground");
+    expect(pending.className).not.toMatch(/text-muted-foreground\/\d/);
+    expect(pending.className).not.toMatch(/\bopacity-\d/);
+  });
+
+  it("guard: no text-bearing node uses alpha-dimmed muted text or an opacity ancestor", () => {
+    const { container } = render(
+      <ExplorationRail dimensions={[...pendingDimensions, ...sampleDimensions]} />,
+    );
+    const offenders: string[] = [];
+    for (const el of container.querySelectorAll<HTMLElement>("*")) {
+      const ownText = [...el.childNodes]
+        .filter((n) => n.nodeType === 3)
+        .map((n) => n.textContent ?? "")
+        .join("")
+        .trim();
+      if (!ownText) continue;
+      if (el.closest('[aria-hidden="true"]')) continue;
+      const chain: string[] = [];
+      let cur: HTMLElement | null = el;
+      while (cur && cur !== container) {
+        chain.push(cur.className || "");
+        cur = cur.parentElement;
+      }
+      const classes = chain.join(" ");
+      if (/text-muted-foreground\/[5-8]\d/.test(classes)) {
+        offenders.push(`${ownText}: dimmed muted text (${classes})`);
+      }
+      if (/\bopacity-\d/.test(classes)) {
+        offenders.push(`${ownText}: opacity ancestor (${classes})`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});

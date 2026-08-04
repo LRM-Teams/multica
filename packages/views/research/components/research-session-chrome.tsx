@@ -373,12 +373,29 @@ export function ResearchSessionChrome({
             </Popover>
           ) : null}
           {showHandoff ? (
-            <Popover open={handoffOpen} onOpenChange={setHandoffOpen}>
+            <Popover
+              open={handoffOpen}
+              onOpenChange={(open) => {
+                // LRM-1265 — do not re-open handoff while pending (pending lives on trigger).
+                if (handoffPending && open) return;
+                setHandoffOpen(open);
+              }}
+            >
               <PopoverTrigger
                 render={
                   <Button
                     size="sm"
-                    className={primaryClass}
+                    className={cn(
+                      primaryClass,
+                      // LRM-1265 / LRM-1248·H — pending expression on trigger (not submit).
+                      handoffPending && "opacity-50 cursor-not-allowed",
+                    )}
+                    // Native `disabled` drops focus to <body> after the click that
+                    // started the pending handoff. Guard open/click instead.
+                    aria-disabled={handoffPending || undefined}
+                    onClick={() => {
+                      if (handoffPending) return;
+                    }}
                     data-testid="research-session-primary"
                   />
                 }
@@ -405,7 +422,7 @@ export function ResearchSessionChrome({
                 </label>
                 <Button
                   size="sm"
-                  disabled={handoffPending || (!createProject && !createChannel)}
+                  disabled={!createProject && !createChannel}
                   onClick={() => {
                     onHandoff();
                     setHandoffOpen(false);

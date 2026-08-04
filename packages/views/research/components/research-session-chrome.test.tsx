@@ -327,6 +327,24 @@ describe("ResearchSessionChrome", () => {
     expect(confirm).toHaveProperty("disabled", true);
   });
 
+  it("LRM-1265: handoffPending keeps trigger focusable via aria-disabled (not native disabled)", () => {
+    const onHandoff = vi.fn();
+    renderChrome(makeSession({ status: "completed" }), {
+      onHandoff,
+      handoffPending: true,
+    });
+
+    const trigger = screen.getByTestId("research-session-primary");
+    expect(trigger).toHaveProperty("disabled", false);
+    expect(trigger.getAttribute("aria-disabled")).toBe("true");
+    expect(trigger.className).toMatch(/opacity-50/);
+    expect(trigger.className).toMatch(/cursor-not-allowed/);
+
+    fireEvent.click(trigger);
+    expect(screen.queryByText("Create development project")).toBeNull();
+    expect(onHandoff).not.toHaveBeenCalled();
+  });
+
   it("LRM-1008: Goal Card shows session.goal (not selected node summary)", () => {
     const { container } = renderChrome(makeSession());
     expect(screen.getByTestId("research-session-goal-card").textContent).toContain(

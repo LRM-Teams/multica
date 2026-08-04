@@ -663,3 +663,34 @@ func TestDaemonRegisterCompletesRunningUpdateOnTargetVersion(t *testing.T) {
 		t.Fatalf("runtime_health after reconnect = %q, want ok", resp.RuntimeHealth)
 	}
 }
+
+func TestInMemoryUpdateStore_LatestForRuntimes(t *testing.T) {
+	ctx := context.Background()
+	store := NewInMemoryUpdateStore()
+
+	first, err := store.Create(ctx, "rt-1", "v1.2.3")
+	if err != nil {
+		t.Fatalf("create rt-1: %v", err)
+	}
+	second, err := store.Create(ctx, "rt-2", "v1.2.4")
+	if err != nil {
+		t.Fatalf("create rt-2: %v", err)
+	}
+
+	updates, err := store.LatestForRuntimes(ctx, []string{"rt-1", "rt-2", "missing", "rt-1"})
+	if err != nil {
+		t.Fatalf("LatestForRuntimes: %v", err)
+	}
+	if len(updates) != 2 {
+		t.Fatalf("updates length = %d, want 2: %+v", len(updates), updates)
+	}
+	if updates["rt-1"] == nil || updates["rt-1"].ID != first.ID {
+		t.Fatalf("rt-1 latest = %+v, want %s", updates["rt-1"], first.ID)
+	}
+	if updates["rt-2"] == nil || updates["rt-2"].ID != second.ID {
+		t.Fatalf("rt-2 latest = %+v, want %s", updates["rt-2"], second.ID)
+	}
+	if _, ok := updates["missing"]; ok {
+		t.Fatalf("missing runtime unexpectedly returned: %+v", updates["missing"])
+	}
+}

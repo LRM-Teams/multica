@@ -137,7 +137,11 @@
     "agent_archived_toast": "エージェントをアーカイブしました",
     "archive_failed_toast": "エージェントをアーカイブできませんでした",
     "agent_restored_toast": "エージェントを復元しました",
-    "restore_failed_toast": "エージェントを復元できませんでした"
+    "restore_failed_toast": "エージェントを復元できませんでした",
+    "agent_updated_restart_toast": "保存しました。新しい実行設定を適用するため agent を再起動しています…",
+    "restart_after_update_failed_toast": "設定は保存されましたが再起動に失敗しました。手動で Restart するか、次回実行まで待ってください。",
+    "agent_updated_restart_scheduled_toast": "保存しました。現在のタスク終了後に agent を再起動し、設定を適用します。",
+    "agent_updated_next_run_toast": "保存しました。いまは再起動できないため、変更は次回実行から反映されます。"
   },
   "inspector": {
     "section_properties": "プロパティ",
@@ -518,7 +522,7 @@
     "writes_progress": "{{current}} / {{required}} writes"
   },
   "execution_config": {
-    "applies_next_run": "変更は次回の実行から反映されます。実行中のセッションには影響しません。"
+    "applies_next_run": "ランタイム / モデル / 思考レベルを保存すると、可能な場合 agent が自動再起動し設定がすぐ反映されます。"
   },
   "side_panel": {
     "close_aria": "エージェントパネルを閉じる",

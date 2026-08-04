@@ -36,6 +36,17 @@ type actorUserIdentity struct {
 }
 
 func (h *Handler) newActorIdentityResolver(ctx context.Context, workspaceID, viewerActorType, viewerActorID, viewerRole string) actorIdentityResolver {
+	return h.newActorIdentityResolverOpts(ctx, workspaceID, viewerActorType, viewerActorID, viewerRole, true)
+}
+
+// newAgentOnlyActorIdentityResolver loads workspace agents only. Snapshot
+// rows are always agent-authored, so skipping the members query removes an
+// avoidable round-trip on the presence hot path (LRM-1261).
+func (h *Handler) newAgentOnlyActorIdentityResolver(ctx context.Context, workspaceID, viewerActorType, viewerActorID, viewerRole string) actorIdentityResolver {
+	return h.newActorIdentityResolverOpts(ctx, workspaceID, viewerActorType, viewerActorID, viewerRole, false)
+}
+
+func (h *Handler) newActorIdentityResolverOpts(ctx context.Context, workspaceID, viewerActorType, viewerActorID, viewerRole string, includeUsers bool) actorIdentityResolver {
 	resolver := actorIdentityResolver{
 		agents:          map[string]db.Agent{},
 		users:           map[string]actorUserIdentity{},
@@ -50,7 +61,9 @@ func (h *Handler) newActorIdentityResolver(ctx context.Context, workspaceID, vie
 				resolver.agents[uuidToString(agent.ID)] = agent
 			}
 		}
-		resolver.users = h.listWorkspaceActorUsers(ctx, ws)
+		if includeUsers {
+			resolver.users = h.listWorkspaceActorUsers(ctx, ws)
+		}
 	}
 	return resolver
 }

@@ -14,12 +14,10 @@
  */
 
 import { useMemo } from "react";
-import { createLowlight, common } from "lowlight";
 import { toHtml } from "hast-util-to-html";
 import { cn } from "@multica/ui/lib/utils";
+import { sharedLowlight as lowlight } from "./lowlight";
 import "./styles/code.css";
-
-const lowlight = createLowlight(common);
 
 interface CodeBlockStaticProps {
   language: string | undefined;

@@ -209,14 +209,15 @@ func (h *Handler) loadActivityThreads(ctx context.Context, workspaceID, userID p
 		  FROM channel_message m
 		  WHERE m.workspace_id = $1
 		    AND m.deleted_at IS NULL
-		    AND EXISTS (
-		      SELECT 1
-		      FROM jsonb_array_elements(COALESCE(m.parts, '[]'::jsonb)) AS part(value)
-		      WHERE part.value->>'type' = 'reference'
-		        AND part.value->>'ref_type' = 'mention'
-		        AND part.value->>'ref_subtype' = 'member'
-		        AND (part.value->>'ref_id')::uuid = $2
-		    )
+		    -- JSONB containment is equivalent to the old per-part reference
+		    -- predicate, but lets the active-parts GIN index narrow mentions
+		    -- before evaluating the rest of the activity-feed query.
+		    AND m.parts @> jsonb_build_array(jsonb_build_object(
+		      'type', 'reference',
+		      'ref_type', 'mention',
+		      'ref_subtype', 'member',
+		      'ref_id', ($2::uuid)::text
+		    ))
 		),
 		participated_roots AS (
 		  SELECT DISTINCT m.thread_root_message_id AS root_message_id

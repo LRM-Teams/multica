@@ -15,14 +15,11 @@ import { Label } from "@multica/ui/components/ui/label";
 import { CustomModelIdRow } from "./custom-model-id-row";
 import { useT } from "../../i18n";
 
-// ModelDropdown renders a searchable, creatable model picker for an agent.
-// It fetches the supported-model catalog from the selected runtime — the
-// daemon enumerates models on demand via heartbeat piggyback. Providers
-// whose runtime ignores per-agent model selection return supported=false,
-// and the dropdown renders disabled with an explanation instead of silently
-// accepting a value the backend would ignore. No built-in provider does so
-// today — Antigravity gained `--model` in agy 1.0.6 — but the path stays for
-// any future model-less runtime.
+// ModelDropdown: searchable model picker. Catalog fetch is gated on
+// `runtimeOnline` only (#124 / Frank+Parker 2026-08-04). Freeform model id
+// stays available when offline, discovery fails, or the catalog is empty —
+// CreateAgent already accepts a plain model string without catalog_request_id.
+// Providers with supported=false still hide the picker (managed-by-runtime).
 export function ModelDropdown({
   runtimeId,
   runtimeOnline,
@@ -49,6 +46,7 @@ export function ModelDropdown({
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
+  // Catalog only while the runtime is online — never disable the control.
   const modelsQuery = useQuery(
     runtimeModelsOptions(runtimeOnline ? runtimeId : null),
   );
@@ -65,6 +63,22 @@ export function ModelDropdown({
   );
   const grouped = useMemo(() => groupByProvider(models), [models]);
 
+  // No live catalog answer → still allow freeform (offline / error / empty).
+  // Online + capability false → keep freeform off (provider manages model).
+  const catalogSettled = !runtimeOnline || !modelsQuery.isLoading;
+  const freeformAllowed =
+    customModelIdSupported ||
+    !runtimeOnline ||
+    modelsQuery.isError ||
+    (catalogSettled && models.length === 0);
+
+  const catalogHint =
+    !runtimeOnline
+      ? t(($) => $.model_dropdown.catalog_unavailable_hint)
+      : modelsQuery.isError
+        ? t(($) => $.model_dropdown.discovery_failed)
+        : null;
+
   // When the selected runtime reports it doesn't support per-agent
   // model selection, clear any previously-saved value so we don't
   // persist a ghost configuration that never takes effect.
@@ -76,13 +90,21 @@ export function ModelDropdown({
 
   // Seed a concrete catalog model on create/hire so "Create" does not
   // silently 400 with "model is required" while the trigger still reads
-  // like a default is already chosen.
+  // like a default is already chosen. Skip when offline (no catalog).
   useEffect(() => {
-    if (!autoSelectFirst || !supported || modelsQuery.isLoading) return;
+    if (!autoSelectFirst || !supported || !runtimeOnline || modelsQuery.isLoading)
+      return;
     if (value.trim()) return;
     const first = models[0]?.id?.trim();
     if (first) onChangeRef.current(first);
-  }, [autoSelectFirst, supported, modelsQuery.isLoading, models, value]);
+  }, [
+    autoSelectFirst,
+    supported,
+    runtimeOnline,
+    modelsQuery.isLoading,
+    models,
+    value,
+  ]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return grouped;
@@ -105,15 +127,15 @@ export function ModelDropdown({
     setSearch("");
   };
 
+  // Empty trigger: never claim "runtime offline" as if model is broken —
+  // prefer select/required/default copy; soft catalog hint sits beside label.
   const triggerLabel =
     value ||
     (disabled
       ? t(($) => $.model_dropdown.select_runtime_first)
-      : runtimeOnline
-        ? required
-          ? t(($) => $.model_dropdown.select_required)
-          : t(($) => $.model_dropdown.default_provider)
-        : t(($) => $.model_dropdown.runtime_offline_manual));
+      : required
+        ? t(($) => $.model_dropdown.select_required)
+        : t(($) => $.model_dropdown.default_provider));
 
   if (!supported && !modelsQuery.isLoading) {
     return (
@@ -136,15 +158,21 @@ export function ModelDropdown({
 
   return (
     <div className="flex flex-col min-w-0">
-      <div className="flex h-6 items-center justify-between">
+      <div className="flex h-6 items-center justify-between gap-2">
         <Label className="text-xs text-muted-foreground">{t(($) => $.model_dropdown.label)}</Label>
-        {modelsQuery.isError && (
-          <span className="text-xs text-muted-foreground">{t(($) => $.model_dropdown.discovery_failed)}</span>
-        )}
+        {catalogHint ? (
+          <span
+            className="truncate text-xs text-muted-foreground"
+            data-testid="model-dropdown-catalog-hint"
+          >
+            {catalogHint}
+          </span>
+        ) : null}
       </div>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           disabled={disabled}
+          data-testid="model-dropdown-trigger"
           className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 mt-1.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
         >
           <Cpu className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -179,14 +207,14 @@ export function ModelDropdown({
             />
           </div>
           <div className="max-h-72 overflow-y-auto p-1">
-            {modelsQuery.isLoading && (
+            {runtimeOnline && modelsQuery.isLoading && (
               <div className="flex items-center gap-2 px-3 py-6 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 {t(($) => $.pickers.model_discovering)}
               </div>
             )}
 
-            {!modelsQuery.isLoading &&
+            {(!runtimeOnline || !modelsQuery.isLoading) &&
               Object.entries(filtered).map(([provider, list]) => (
                 <div key={provider} className="mb-1">
                   {provider && (
@@ -219,15 +247,16 @@ export function ModelDropdown({
                 </div>
               ))}
 
-            {!modelsQuery.isLoading && Object.keys(filtered).length === 0 && (
+            {(!runtimeOnline || !modelsQuery.isLoading) &&
+              Object.keys(filtered).length === 0 && (
               <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                {customModelIdSupported
+                {freeformAllowed
                   ? t(($) => $.pickers.model_empty_custom_hint)
                   : t(($) => $.pickers.model_empty_with_dot)}
               </div>
             )}
 
-            {!modelsQuery.isLoading && customModelIdSupported && (
+            {(!runtimeOnline || !modelsQuery.isLoading) && freeformAllowed && (
               <CustomModelIdRow onSubmit={select} />
             )}
 

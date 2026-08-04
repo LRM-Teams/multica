@@ -110,4 +110,33 @@ describe("ResearchGraphNode a11y (LRM-1105 slice3)", () => {
     const card = screen.getByRole("button", { name: /探源/ });
     expect(card).toHaveAttribute("tabindex", "-1");
   });
+
+  it("renders the aggregate parent shell at the layout-provided size", () => {
+    render(
+      <ResearchGraphNodeView
+        id="n1"
+        type="research"
+        data={{
+          research: node,
+          laneId: "source",
+          branchId: "theme:research",
+          logicRole: "step",
+          aggregateTier: "parent",
+          aggregateSize: { width: 282, height: 242 },
+        }}
+        selected={false}
+        dragging={false}
+        zIndex={1}
+        selectable
+        deletable={false}
+        draggable={false}
+        isConnectable={false}
+        positionAbsoluteX={0}
+        positionAbsoluteY={0}
+      />,
+    );
+    const shell = screen.getByTestId("research-logic-card");
+    expect(shell).toHaveAttribute("data-aggregate-tier", "parent");
+    expect(shell).toHaveStyle({ width: "282px", height: "242px" });
+  });
 });

@@ -71,14 +71,19 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
     logicRole === "end" ? t(($) => $.logic.end_title) : n.title || t(($) => $.logic.lane[laneId]);
 
   const ariaLabel = buildNodeAccessibleName(n);
+  const aggregateTier = data.aggregateTier;
+  const aggregateSize = data.aggregateSize;
+  const nodeSizeStyle = aggregateSize
+    ? { width: aggregateSize.width, height: aggregateSize.height }
+    : undefined;
 
   const menuOpen = !!data.menuOpen;
 
   return (
     <div
       className={cn(
-        "research-graph-node-shell relative grid w-[240px] grid-cols-[1fr_auto] gap-x-2 gap-y-1 overflow-hidden rounded-lg border bg-card px-3 py-2.5 text-left transition-colors duration-150",
-        "min-h-[68px] max-h-[88px]",
+        "research-graph-node-shell relative grid w-full grid-cols-[1fr_auto] gap-x-2 gap-y-1 overflow-hidden rounded-lg border bg-card px-3 py-2.5 text-left transition-colors duration-150",
+        aggregateSize ? "min-h-0 max-h-none" : "min-h-[68px] max-h-[88px]",
         "hover:border-muted-foreground/40",
         selected &&
           "border-[var(--brand)] ring-2 ring-[color-mix(in_oklch,var(--brand)_18%,transparent)]",
@@ -88,7 +93,9 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
           "border-[color-mix(in_oklch,var(--destructive)_40%,var(--border))]",
         pulse && "motion-safe:[&_[data-status-dot]]:animate-pulse",
       )}
+      style={nodeSizeStyle}
       data-logic-role={logicRole}
+      data-aggregate-tier={aggregateTier}
       data-lane={laneId}
       data-git-lane={data.gitLane ?? 0}
       data-branch={data.branchId}
@@ -101,9 +108,12 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
             : "research-logic-card"
       }
     >
-      {/* Port dot — visual only; edges live in gutter */}
+      {/* Visual port: legacy edges live in the gutter; aggregate edges leave right. */}
       <span
-        className="pointer-events-none absolute top-1/2 -left-[22px] size-3 -translate-y-1/2 rounded-full border-2 bg-card"
+        className={cn(
+          "pointer-events-none absolute top-1/2 size-3 -translate-y-1/2 rounded-full border-2 bg-card",
+          aggregateTier ? "-right-[22px]" : "-left-[22px]",
+        )}
         style={{ borderColor: branchColor }}
         aria-hidden
       />
@@ -171,7 +181,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
       ) : null}
       <Handle
         type="source"
-        position={Position.Left}
+        position={Position.Right}
         className="!h-2 !w-2 !opacity-0"
       />
     </div>

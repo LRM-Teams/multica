@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/agent"
@@ -1396,6 +1397,15 @@ func redactAgentResponseForActor(resp *AgentResponse, actorType string) {
 // agent owner or workspace owner/admin can do that, regardless of whether the
 // agent is public or private.
 func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent db.Agent) bool {
+	// Agent principal (Raft align / task #125): may only manage self.
+	// Human owner/admin workspace management is unchanged.
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		if p.AgentID != uuidToString(agent.ID) {
+			writeError(w, http.StatusForbidden, "agents may only manage themselves")
+			return false
+		}
+		return true
+	}
 	wsID := uuidToString(agent.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
 	if !ok {
@@ -1410,8 +1420,16 @@ func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent d
 	return true
 }
 
-// canUpdateAgent permits the normal owner/admin update path.
+// canUpdateAgent permits the normal owner/admin update path for humans,
+// and self-only updates for AgentPrincipal (task #125 / Raft align).
 func (h *Handler) canUpdateAgent(w http.ResponseWriter, r *http.Request, agent db.Agent, rawFields map[string]json.RawMessage) bool {
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		if p.AgentID != uuidToString(agent.ID) {
+			writeError(w, http.StatusForbidden, "agents may only update themselves")
+			return false
+		}
+		return true
+	}
 	wsID := uuidToString(agent.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
 	if !ok {

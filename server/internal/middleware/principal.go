@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -170,18 +171,52 @@ func RequireAgentPrincipal(next http.Handler) http.Handler {
 	})
 }
 
+// agentSelfManagePath allows AgentPrincipal onto the human agent resource
+// routes used for self-only profile updates (task #125 / Raft align).
+// Handler canUpdateAgent / canManageAgent still require path id == principal.
+// Everything else under /api/agents/* remains blocked.
+//
+// Matches:
+//   PUT  /api/agents/{uuid}
+//   POST /api/agents/{uuid}/archive
+//   POST /api/agents/{uuid}/restore
+var agentSelfManagePath = regexp.MustCompile(`(?i)^/api/agents/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:/(?:archive|restore))?$`)
+
+func agentPrincipalMayUseHumanAgentPath(method, path string) bool {
+	if !agentSelfManagePath.MatchString(path) {
+		return false
+	}
+	switch method {
+	case http.MethodPut:
+		// PUT /api/agents/{id} only (no sub-resource)
+		return !strings.HasSuffix(path, "/archive") && !strings.HasSuffix(path, "/restore")
+	case http.MethodPost:
+		return strings.HasSuffix(path, "/archive") || strings.HasSuffix(path, "/restore")
+	default:
+		return false
+	}
+}
+
 // RejectAgentOnHumanAPI fails closed when AgentPrincipal hits any non-/api/agent/*
 // route (admin, labels CRUD, human issues, etc.). #801 completion: 403 surfaces
 // must actually 403. Dedicated agent data-plane stays under /api/agent/*.
+// Exception (task #125): PUT/archive/restore on /api/agents/{id} for self-only
+// management; handlers enforce id == principal AgentID.
 func RejectAgentOnHumanAPI(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := AgentPrincipalFromContext(r.Context()); ok {
 			path := r.URL.Path
-			if path != "/api/agent" && !strings.HasPrefix(path, "/api/agent/") {
-				RecordAgentHumanRouteHit("RejectAgentOnHumanAPI")
-				http.Error(w, `{"error":"agent must use dedicated /api/agent/* route"}`, http.StatusForbidden)
+			if path == "/api/agent" || strings.HasPrefix(path, "/api/agent/") {
+				next.ServeHTTP(w, r)
 				return
 			}
+			if agentPrincipalMayUseHumanAgentPath(r.Method, path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			RecordAgentHumanRouteHit("RejectAgentOnHumanAPI")
+			http.Error(w, `{"error":"agent must use dedicated /api/agent/* route"}`, http.StatusForbidden)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})

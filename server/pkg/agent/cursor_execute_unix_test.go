@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -184,6 +185,69 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
 	}
 	if messages[3].Type != MessageToolUse || messages[3].CallID != "call-2" || messages[3].Tool != "write_file" {
 		t.Fatalf("real unmatched started event = %+v", messages[3])
+	}
+}
+
+func TestCursorExecuteIncludesSanitizedStderrOnUnexpectedExit(t *testing.T) {
+	t.Parallel()
+
+	script := `#!/bin/sh
+printf '%s\n' 'provider_auth_required: run cursor-agent login; api_key=top-secret; Authorization: Bearer bearer-secret' >&2
+exit 1
+`
+	result := executeFakeCursor(t, script)
+
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed; error=%q", result.Status, result.Error)
+	}
+	for _, want := range []string{"cursor-agent exited with error: exit status 1", "cursor stderr:", ProviderAuthRequiredMarker, "api_key=<redacted>", "Authorization: <redacted>"} {
+		if !strings.Contains(result.Error, want) {
+			t.Fatalf("error = %q, want %q", result.Error, want)
+		}
+	}
+	for _, secret := range []string{"top-secret", "bearer-secret"} {
+		if strings.Contains(result.Error, secret) {
+			t.Fatalf("error leaked secret %q: %q", secret, result.Error)
+		}
+	}
+}
+
+func TestCursorExecuteUnexpectedExitWithoutStderrKeepsExitStatus(t *testing.T) {
+	t.Parallel()
+
+	result := executeFakeCursor(t, "#!/bin/sh\nexit 1\n")
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed; error=%q", result.Status, result.Error)
+	}
+	if !strings.Contains(result.Error, "cursor-agent exited with error: exit status 1") {
+		t.Fatalf("error = %q, want exit status", result.Error)
+	}
+	if strings.Contains(result.Error, "cursor stderr:") {
+		t.Fatalf("error = %q, must not add an empty stderr hint", result.Error)
+	}
+}
+
+func TestCursorExecutePreservesStreamErrorOverExitFallback(t *testing.T) {
+	t.Parallel()
+
+	script := `#!/bin/sh
+printf '%s\n' '{"type":"error","error":"stream protocol failed"}'
+printf '%s\n' 'secondary cursor diagnostic' >&2
+exit 1
+`
+	result := executeFakeCursor(t, script)
+
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed; error=%q", result.Status, result.Error)
+	}
+	if !strings.Contains(result.Error, "stream protocol failed") {
+		t.Fatalf("error = %q, want stream error", result.Error)
+	}
+	if strings.Contains(result.Error, "cursor-agent exited with error") {
+		t.Fatalf("error = %q, exit fallback must not replace stream error", result.Error)
+	}
+	if !strings.Contains(result.Error, "secondary cursor diagnostic") {
+		t.Fatalf("error = %q, want stderr diagnostic", result.Error)
 	}
 }
 

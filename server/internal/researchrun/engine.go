@@ -224,8 +224,9 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 		return e.projectPending(ctx, sessionID)
 	}
 
-	kind, objective, capability := remediationTask(gate)
-	if reason, terminal := terminalRemediationFailure(run, tasks, kind, objective); terminal {
+	control := remediationTask(gate)
+	control.SessionID = sessionID
+	if reason, terminal := terminalRemediationFailure(run, tasks, control.Kind, control.Objective); terminal {
 		terminalErr := errors.New(reason)
 		failed, _, _, failErr := e.store.MarkFailed(ctx, sessionID, reason)
 		_, cancelErr := e.cancelPendingAttempts(ctx, failed, "research_remediation_failed")
@@ -234,12 +235,16 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 		}
 		return errors.Join(terminalErr, failErr, e.projectPending(ctx, sessionID))
 	}
-	task, _, err := e.store.CreateControlTask(ctx, sessionID, kind, objective, capability, 1)
+	task, _, err := e.store.CreateControlTask(ctx, control)
 	if err != nil {
 		if errors.Is(err, ErrBudgetExhausted) {
 			return e.handleBudgetExhaustion(ctx, run, "tasks", err.Error())
 		}
-		reason := fmt.Sprintf("cannot create %s remediation task: %v", kind, err)
+		if errors.Is(err, ErrControlTargetChanged) {
+			next = e.clock.Now().Add(time.Second)
+			return e.projectPending(ctx, sessionID)
+		}
+		reason := fmt.Sprintf("cannot create %s remediation task: %v", control.Kind, err)
 		failed, _, _, failErr := e.store.MarkFailed(ctx, sessionID, reason)
 		_, cancelErr := e.cancelPendingAttempts(ctx, failed, "research_run_failed")
 		if cancelErr != nil {
@@ -248,7 +253,7 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 		return errors.Join(err, failErr, e.projectPending(ctx, sessionID))
 	}
 	if task.Status == TaskStatusBlocked || task.Status == TaskStatusFailed || task.Status == TaskStatusCancelled {
-		reason := fmt.Sprintf("%s remediation task is terminal: %s", kind, task.Status)
+		reason := fmt.Sprintf("%s remediation task is terminal: %s", control.Kind, task.Status)
 		failed, _, _, failErr := e.store.MarkFailed(ctx, sessionID, reason)
 		_, cancelErr := e.cancelPendingAttempts(ctx, failed, "research_run_failed")
 		if cancelErr != nil {
@@ -622,33 +627,110 @@ func terminalResearchTaskReason(label string, task Task) string {
 	return fmt.Sprintf("%s task %s exhausted its attempts: %s", label, task.ID, reason)
 }
 
-func remediationTask(gate GateResult) (TaskKind, string, string) {
+func remediationTask(gate GateResult) ControlTaskInput {
 	codes := map[string]bool{}
 	for _, finding := range gate.Findings {
 		codes[finding.Code] = true
 	}
-	if codes["plan_incomplete"] {
-		return TaskKindReplan, gateObjective("Repair the research plan and replace blocked work with an executable evidence plan.", gate), "lead"
+	control := func(kind TaskKind, capability, rationale, objective string, targetCodes ...string) ControlTaskInput {
+		target := filterGateFindings(gate, targetCodes...)
+		return ControlTaskInput{
+			Kind: kind, Capability: capability, Priority: 1,
+			Objective: gateObjective(objective, target), Findings: target.Findings,
+			ObservedFindings: gate.Findings, Rationale: rationale,
+		}
 	}
-	evidenceGap := codes["tasks_blocked"] || codes["required_questions_missing"] ||
-		codes["required_questions_unanswered"] || codes["independent_sources_insufficient"] ||
-		codes["claim_evidence_standard_missing"] || codes["claim_evidence_standard_unmet"] || codes["claim_counterevidence_search_missing"] ||
-		codes["report_claims_unsupported"] || codes["major_claim_sources_insufficient"] || codes["report_claims_stale"] || codes["report_conflicts_unresolved"] ||
-		codes["citation_audit_failed"]
-	if evidenceGap {
-		return TaskKindReplan, gateObjective("Revise the plan to remediate every delivery-gate finding. Preserve valid evidence, add targeted verification and counter-search work, then require a new report revision.", gate), "lead"
+	controlOne := func(kind TaskKind, capability, rationale, objective string, targetCodes ...string) ControlTaskInput {
+		out := control(kind, capability, rationale, objective, targetCodes...)
+		target := firstGateFinding(out.Findings)
+		out.Findings = target.Findings
+		out.Objective = gateObjective(objective, target)
+		return out
+	}
+	if codes["plan_incomplete"] || codes["research_method_missing"] || codes["required_questions_missing"] ||
+		codes["tasks_blocked"] {
+		return control(TaskKindReplan, "lead", "The accepted method or executable task graph is structurally incomplete.",
+			"Repair the research method and task graph. Preserve still-valid scope and evidence, replace only invalid or blocked work, and produce an executable plan.",
+			"plan_incomplete", "research_method_missing", "required_questions_missing", "tasks_blocked")
+	}
+	if codes["claim_counterevidence_search_missing"] || codes["report_conflicts_unresolved"] {
+		return controlOne(TaskKindCounterSearch, "validator", "The evidence graph requires a targeted adversarial test or conflict resolution.",
+			"Target the identified Claim and search for evidence that could falsify, qualify, or reconcile it. Update the Claim resolution from verified observations; do not rewrite the research plan.",
+			"claim_counterevidence_search_missing", "report_conflicts_unresolved")
+	}
+	if codes["required_questions_unanswered"] {
+		out := control(TaskKindDiscover, "scout", "The highest-priority required question still lacks an accepted evidence-backed answer.",
+			"Answer the bound required question with new, directly relevant evidence. Return an answer Claim and a measured coverage increase; do not broaden the plan.",
+			"required_questions_unanswered")
+		out.QuestionID = findingMetadataString(gate.Findings, "required_questions_unanswered", "question_id")
+		return out
+	}
+	if codes["independent_sources_insufficient"] || codes["claim_evidence_standard_missing"] ||
+		codes["claim_evidence_standard_unmet"] || codes["report_claims_unsupported"] || codes["major_claim_sources_insufficient"] {
+		return controlOne(TaskKindVerify, "validator", "A Claim or required answer lacks evidence that satisfies its accepted method.",
+			"Verify the identified Claim against its accepted evidence standard. Add only evidence that repairs the stated independence, source-trait, strength, directness, or method-fit deficit; do not rewrite the plan.",
+			"independent_sources_insufficient", "claim_evidence_standard_missing", "claim_evidence_standard_unmet", "report_claims_unsupported", "major_claim_sources_insufficient")
 	}
 	if codes["report_missing"] || codes["report_claims_missing"] || codes["major_claims_unlinked"] ||
-		codes["required_answers_unreported"] || codes["report_structure_incomplete"] || codes["report_author_missing"] || codes["quality_evaluation_failed"] {
-		return TaskKindSynthesize, gateObjective("Produce a decision-useful report from the normalized claims and verified evidence. Link every report section to claim keys.", gate), "reporter"
+		codes["required_answers_unreported"] || codes["report_structure_incomplete"] || codes["report_author_missing"] ||
+		codes["report_claims_stale"] || codes["quality_evaluation_failed"] || codes["citation_audit_failed"] {
+		return control(TaskKindSynthesize, "reporter", "The evidence ledger is usable but the current report does not represent it correctly.",
+			"Revise the report from the current normalized Claims and verified evidence. Repair every stated structure, coverage, quality, citation, or version defect without changing the research plan.",
+			"report_missing", "report_claims_missing", "major_claims_unlinked", "required_answers_unreported", "report_structure_incomplete", "report_author_missing", "report_claims_stale", "quality_evaluation_failed", "citation_audit_failed")
 	}
 	if codes["quality_evaluation_missing"] || codes["quality_evaluation_not_independent"] {
-		return TaskKindQualityGate, gateObjective("Independently evaluate the latest report. Check factual grounding, coverage, analytical depth, source quality, contradiction handling, instruction adherence, and readability.", gate), "validator"
+		return control(TaskKindQualityGate, "validator", "The current report lacks a valid independent quality evaluation.",
+			"Independently evaluate the latest report for factual grounding, coverage, analytical depth, source quality, contradiction handling, instruction adherence, and readability.",
+			"quality_evaluation_missing", "quality_evaluation_not_independent")
 	}
 	if codes["citation_audit_missing"] || codes["citation_audit_not_independent"] {
-		return TaskKindCitationAudit, gateObjective("Audit every latest-report claim against exact observations and source snapshots. Fail unsupported, misquoted, or unresolved contradictory claims.", gate), "validator"
+		return control(TaskKindCitationAudit, "validator", "The current report lacks a valid independent citation audit.",
+			"Audit every latest-report Claim against exact observations and source snapshots. Fail unsupported, misquoted, stale, or unresolved contradictory Claims.",
+			"citation_audit_missing", "citation_audit_not_independent")
 	}
-	return TaskKindReplan, gateObjective("Inspect the remaining gate findings and create the smallest evidence-producing remediation graph that resolves all of them.", gate), "lead"
+	if codes["marginal_gain_not_saturated"] {
+		return control(TaskKindDiscover, "scout", "The configured stopping rule requires another measured exploration batch.",
+			"Explore the highest-impact unresolved frontier and return one bounded evidence batch. Maximize information gain, record negative findings, and do not rewrite the accepted plan.",
+			"marginal_gain_not_saturated")
+	}
+	return control(TaskKindReplan, "lead", "No narrower remediation action is defined for the observed gate findings.",
+		"Inspect the remaining gate findings and create the smallest evidence-producing task graph that resolves them while preserving valid artifacts.")
+}
+
+func filterGateFindings(gate GateResult, codes ...string) GateResult {
+	if len(codes) == 0 {
+		return gate
+	}
+	wanted := make(map[string]struct{}, len(codes))
+	for _, code := range codes {
+		wanted[code] = struct{}{}
+	}
+	findings := make([]GateFinding, 0, len(gate.Findings))
+	for _, finding := range gate.Findings {
+		if _, ok := wanted[finding.Code]; ok {
+			findings = append(findings, finding)
+		}
+	}
+	return GateResult{Passed: len(findings) == 0, Findings: findings}
+}
+
+func firstGateFinding(findings []GateFinding) GateResult {
+	if len(findings) == 0 {
+		return GateResult{Passed: true}
+	}
+	return GateResult{Findings: []GateFinding{findings[0]}}
+}
+
+func findingMetadataString(findings []GateFinding, code, key string) string {
+	for _, finding := range findings {
+		if finding.Code != code || finding.Metadata == nil {
+			continue
+		}
+		if value, ok := finding.Metadata[key].(string); ok {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func gateObjective(prefix string, gate GateResult) string {
@@ -1059,7 +1141,11 @@ func (e *Engine) Steer(ctx context.Context, in SteerInput) (Run, error) {
 	if _, err = e.cancelPendingAttempts(ctx, run, "research_goal_steered"); err != nil {
 		return run, err
 	}
-	if _, _, err = e.store.CreateControlTask(ctx, in.SessionID, TaskKindReplan, "Create a new evidence-oriented plan for the revised user goal. Treat earlier-version artifacts as audit history only.", "lead", 1); err != nil {
+	if _, _, err = e.store.CreateControlTask(ctx, ControlTaskInput{
+		SessionID: in.SessionID, Kind: TaskKindReplan,
+		Objective:  "Create a new evidence-oriented plan for the revised user goal. Treat earlier-version artifacts as audit history only.",
+		Capability: "lead", Priority: 1, Rationale: "The user changed the durable research goal.",
+	}); err != nil {
 		return run, err
 	}
 	return run, e.ReconcileSession(ctx, in.SessionID)

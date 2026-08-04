@@ -69,17 +69,51 @@ func TestMissingResultCapabilitiesAcceptsActiveSpecialistRole(t *testing.T) {
 	}
 }
 
-func TestRemediationRoutesMarginalGainToEvidenceReplan(t *testing.T) {
-	kind, objective, capability := remediationTask(GateResult{Findings: []GateFinding{{Code: "marginal_gain_not_saturated"}}})
-	if kind != TaskKindReplan || capability != "lead" || !strings.Contains(objective, "smallest evidence-producing") {
-		t.Fatalf("kind=%s capability=%s objective=%q", kind, capability, objective)
+func TestRemediationRoutesFindingsToSmallestAction(t *testing.T) {
+	tests := []struct {
+		name       string
+		findings   []GateFinding
+		kind       TaskKind
+		capability string
+		questionID string
+	}{
+		{name: "method defect", findings: []GateFinding{{Code: "research_method_missing"}}, kind: TaskKindReplan, capability: "lead"},
+		{name: "counterevidence", findings: []GateFinding{{Code: "claim_counterevidence_search_missing"}}, kind: TaskKindCounterSearch, capability: "validator"},
+		{name: "question target", findings: []GateFinding{{Code: "required_questions_unanswered", Metadata: map[string]any{"question_id": "question-1"}}}, kind: TaskKindDiscover, capability: "scout", questionID: "question-1"},
+		{name: "claim fitness", findings: []GateFinding{{Code: "claim_evidence_standard_unmet"}}, kind: TaskKindVerify, capability: "validator"},
+		{name: "stale report", findings: []GateFinding{{Code: "report_claims_stale"}}, kind: TaskKindSynthesize, capability: "reporter"},
+		{name: "quality audit", findings: []GateFinding{{Code: "quality_evaluation_missing"}}, kind: TaskKindQualityGate, capability: "validator"},
+		{name: "citation audit", findings: []GateFinding{{Code: "citation_audit_missing"}}, kind: TaskKindCitationAudit, capability: "validator"},
+		{name: "information gain", findings: []GateFinding{{Code: "marginal_gain_not_saturated"}}, kind: TaskKindDiscover, capability: "scout"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := remediationTask(GateResult{Findings: test.findings})
+			if got.Kind != test.kind || got.Capability != test.capability || got.QuestionID != test.questionID || got.Priority != 1 || !strings.Contains(got.Objective, test.findings[0].Code) {
+				t.Fatalf("control=%+v", got)
+			}
+		})
 	}
 }
 
-func TestRemediationRoutesReportQualityFailureToSynthesis(t *testing.T) {
-	kind, objective, capability := remediationTask(GateResult{Findings: []GateFinding{{Code: "quality_evaluation_failed"}}})
-	if kind != TaskKindSynthesize || capability != "reporter" || !strings.Contains(objective, "report") {
-		t.Fatalf("kind=%s capability=%s objective=%q", kind, capability, objective)
+func TestRemediationPrefersEvidenceRepairBeforeReportRevision(t *testing.T) {
+	got := remediationTask(GateResult{Findings: []GateFinding{
+		{Code: "report_missing"},
+		{Code: "claim_evidence_standard_unmet"},
+		{Code: "marginal_gain_not_saturated"},
+	}})
+	if got.Kind != TaskKindVerify || got.Capability != "validator" || len(got.Findings) != 1 || strings.Contains(got.Objective, "report_missing") {
+		t.Fatalf("control=%+v", got)
+	}
+}
+
+func TestRemediationAssignsOneClaimFitnessDefectPerVerificationTask(t *testing.T) {
+	got := remediationTask(GateResult{Findings: []GateFinding{
+		{Code: "claim_evidence_standard_unmet", Metadata: map[string]any{"claim_key": "claim-a"}},
+		{Code: "claim_evidence_standard_unmet", Metadata: map[string]any{"claim_key": "claim-b"}},
+	}})
+	if len(got.Findings) != 1 || findingMetadataString(got.Findings, "claim_evidence_standard_unmet", "claim_key") != "claim-a" || strings.Contains(got.Objective, "claim-b") {
+		t.Fatalf("control=%+v", got)
 	}
 }
 

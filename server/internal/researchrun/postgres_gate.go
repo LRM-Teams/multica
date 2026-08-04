@@ -217,6 +217,19 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 			return GateResult{}, err
 		}
 	}
+	var unansweredQuestion map[string]any
+	if counts.unansweredRequired > 0 {
+		var found bool
+		unansweredQuestion, found, err = s.loadTopUnansweredRequiredQuestion(ctx, sessionID, run.GoalVersion, run.PlanVersion)
+		if err != nil {
+			return GateResult{}, err
+		}
+		if !found {
+			// Result acceptance can finish a question between the aggregate gate
+			// read and this targeted read. Do not create stale unbound work.
+			counts.unansweredRequired = 0
+		}
+	}
 	var reportStructureErr error
 	if usesStructuredResultContract(run.OrchestratorVersion) && counts.reportCount > 0 {
 		var report ReportProposal
@@ -252,7 +265,8 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	if counts.requiredQuestions == 0 {
 		add("required_questions_missing", "The plan contains no required research questions.", nil)
 	} else if counts.unansweredRequired > 0 {
-		add("required_questions_unanswered", "Required questions lack an accepted answer and sufficient coverage.", map[string]any{"count": counts.unansweredRequired})
+		unansweredQuestion["count"] = counts.unansweredRequired
+		add("required_questions_unanswered", "Required questions lack an accepted answer and sufficient coverage.", unansweredQuestion)
 	}
 	if run.OrchestratorVersion != OrchestratorVersionV4 && counts.independentSources < minimumIndependentSources {
 		add("independent_sources_insufficient", "Verified evidence does not span enough independent sources.", map[string]any{"actual": counts.independentSources, "required": minimumIndependentSources})
@@ -318,6 +332,43 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		})
 	}
 	return GateResult{Passed: len(findings) == 0, Findings: findings}, nil
+}
+
+func (s *PostgresStore) loadTopUnansweredRequiredQuestion(ctx context.Context, sessionID string, goalVersion, planVersion int) (map[string]any, bool, error) {
+	var id, clientKey, question, status string
+	var priority, impact, uncertainty, coverage float64
+	err := s.pool.QueryRow(ctx, `
+		WITH supported AS (
+		  SELECT DISTINCT evidence.claim_id
+		  FROM research_claim_evidence evidence
+		  JOIN research_observation observation ON observation.id = evidence.observation_id
+		  JOIN research_source_snapshot source ON source.id = observation.source_snapshot_id
+		  WHERE evidence.session_id = $1::uuid AND evidence.relation = 'supports'
+		    AND evidence.verification_status = 'verified'
+		    AND observation.verification_status = 'verified'
+		    AND source.verification_status = 'verified'
+		)
+		SELECT q.id::text, q.client_key, q.question, q.status,
+		       q.priority, q.impact, q.uncertainty, q.coverage
+		FROM research_question q
+		WHERE q.session_id = $1::uuid AND q.goal_version = $2 AND q.plan_version = $3 AND q.required
+		  AND (q.status <> 'answered' OR q.coverage < 0.8 OR q.answer_claim_id IS NULL
+		       OR NOT EXISTS (SELECT 1 FROM supported WHERE supported.claim_id = q.answer_claim_id))
+		ORDER BY q.priority DESC, q.impact DESC, q.uncertainty DESC, q.created_at, q.id
+		LIMIT 1
+	`, sessionID, goalVersion, planVersion).Scan(
+		&id, &clientKey, &question, &status, &priority, &impact, &uncertainty, &coverage,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return map[string]any{
+		"question_id": id, "question_key": clientKey, "question": question, "status": status,
+		"priority": priority, "impact": impact, "uncertainty": uncertainty, "coverage": coverage,
+	}, true, nil
 }
 
 func (s *PostgresStore) loadLatestReportForGate(ctx context.Context, sessionID string, goalVersion, planVersion int) (ReportProposal, error) {

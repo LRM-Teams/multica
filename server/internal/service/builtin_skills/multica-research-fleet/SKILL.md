@@ -92,9 +92,15 @@ chat before `task-result` succeeds.
   unsupported, stale, misquoted, omitted, hides unresolved contradiction, or
   departs from the accepted Method or, in V4, its evidence standards.
 
-The server decides readiness, retries, timeouts, concurrency, replans,
-diminishing information gain, and final delivery. Never manufacture a passing
-evaluation to stop the run.
+The server decides readiness, retries, timeouts, concurrency, diminishing
+information gain, remediation, replans, and final delivery. Remediation is
+targeted: unanswered questions bind the task to a durable question ID, Claim
+fitness defects route to verification, required adversarial checks route to
+counter-search, and report defects route to synthesis. Replan is reserved for
+an invalid method, scope, or task graph. Follow the assigned task and its
+remediation acceptance criteria; do not turn a local evidence gap into an
+unrequested method change. Never manufacture a passing evaluation to stop the
+run.
 
 Every `required_capability` in a proposed task must exactly match an active
 fleet role. When a real specialty is missing, the lead must hire it, optimize

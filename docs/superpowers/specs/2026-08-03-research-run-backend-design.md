@@ -388,11 +388,13 @@ After each accepted result, the Module:
 2. recalculates the Research Frontier;
 3. activates dependency-ready tasks;
 4. materializes valid proposed follow-up tasks;
-5. creates a `replan` task when progress stalls, contradictions remain, or the
-   plan no longer covers the highest-value frontier items;
-6. checks new observations against the accepted Method and creates a versioned
-   `replan` when the method or scope is invalidated;
-7. creates synthesis and independent validation work when evidence is ready;
+5. routes the highest-priority unmet Gate finding to the smallest typed task:
+   question-bound `discover`, Claim-targeted `verify` or `counter_search`, report
+   `synthesize`, or independent quality/citation audit;
+6. creates a versioned `replan` only when the question, scope, accepted Method,
+   evidence standards, or executable task graph is invalidated;
+7. records every routing choice, finding set, target, task, and rationale in the
+   Decision Log atomically with control-task creation;
 8. evaluates stopping against the accepted stopping conditions and deterministic
    evidence gates only when no higher-priority work is runnable.
 
@@ -415,8 +417,9 @@ Deterministic gates reject delivery when:
 
 - a required Research Question is still open or in progress;
 - a required Research Question's answer Claim lacks verified support;
-- a high-significance Claim lacks the configured number of independent support
-  families;
+- a current V4 required/report Claim fails its referenced EvidenceStandard's
+  source-trait, independence, strength, directness, method-fit, or counter-search
+  requirement (legacy versions retain their pinned independent-source rubric);
 - a disputed Claim is presented without an explicit unresolved marker;
 - an Observation quote is absent from its Source Snapshot;
 - a report Claim link does not resolve through verified Evidence and an
@@ -551,8 +554,9 @@ The bounded-cardinality Prometheus sampler exposes:
 - sampler query duration and error counters.
 
 The Decision Log and ordered run-event sequence are the per-run trace for
-steering, dispatch, retry, result acceptance, budget exhaustion, gates, and
-terminal transitions. Task and Attempt timestamps retain dispatch/start/result
+steering, dispatch, retry, result acceptance, Gate observations, typed
+remediation routing, budget exhaustion, and terminal transitions. Task and
+Attempt timestamps retain dispatch/start/result
 latency for SQL diagnostics without adding per-run Prometheus labels. Projection
 errors and retry counters remain on each event; projection failure never rolls
 back canonical accepted evidence.
@@ -564,7 +568,7 @@ revision 1 backfill but retain a null `run_initialized_at`, so their existing
 legacy execution path continues unchanged. The metrics Adapter reports those
 sessions as `legacy`. The server does not silently convert an in-progress legacy
 session into a Research Run. New sessions initialize the durable task/evidence
-ledgers and use `research-run-v3`.
+ledgers and use `research-run-v4`.
 
 Old desktop clients continue consuming the existing session snapshot fields.
 New response fields are additive and schema-parsed with defaults. The existing
@@ -575,9 +579,9 @@ Running Research Runs retain their orchestrator, result schema, prompt, and
 gate rubric versions across deploys. New server code must continue processing
 those versions until no active run references them.
 
-Existing `research-run-v1` and `research-run-v2` runs remain on their pinned
-prompts and result contracts. They are not silently rewritten or re-evaluated
-under v3. Existing
+Existing `research-run-v1` through `research-run-v3` runs remain on their pinned
+prompts, result contracts, and versioned Gate rules. They are not silently
+rewritten or re-evaluated under v4. Existing
 HTTP and WebSocket report response shapes are unchanged; author, task,
 attempt, and report-claim anchors are internal provenance fields.
 
@@ -588,8 +592,10 @@ Tests cross the ResearchRun Interface and its production persistence Adapter.
 The repository test suite covers:
 
 - plan validation, dependency ordering, and cycle rejection;
-- v3 method validation, persistence, task-context inheritance, replan history,
-  and v1/v2 compatibility;
+- v3/v4 method and EvidenceStandard validation, persistence, task-context
+  inheritance, replan history, and v1/v2 compatibility;
+- typed remediation precedence, question-target binding, routing Decision
+  persistence, target-aware idempotency, and stale/cross-session target rejection;
 - capability routing and concurrency limits;
 - duplicate dispatch and duplicate result replay;
 - quote/snapshot, claim/evidence, independence, and citation validation;

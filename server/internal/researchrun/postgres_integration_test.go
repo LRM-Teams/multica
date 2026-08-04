@@ -594,7 +594,9 @@ func TestPostgresStoreReplanVersionsResearchMethod(t *testing.T) {
 	initial.ClientRequestID = "method-plan-initial"
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", initial, run.Config)
 
-	replanTask, _, err := store.CreateControlTask(ctx, fixture.sessionID, TaskKindReplan, "Replace the method after a scope mismatch", "lead", 1)
+	replanTask, _, err := store.CreateControlTask(ctx, ControlTaskInput{
+		SessionID: fixture.sessionID, Kind: TaskKindReplan, Objective: "Replace the method after a scope mismatch", Capability: "lead", Priority: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -852,12 +854,113 @@ func TestCreateControlTaskDoesNotReuseSucceededDeliveryTask(t *testing.T) {
 	`, succeededID, fixture.workspaceID, fixture.sessionID, run.GoalVersion, run.PlanVersion); err != nil {
 		t.Fatal(err)
 	}
-	task, _, err := store.CreateControlTask(ctx, fixture.sessionID, TaskKindSynthesize, "Revise the report after quality failure", "reporter", 1)
+	task, _, err := store.CreateControlTask(ctx, ControlTaskInput{
+		SessionID: fixture.sessionID, Kind: TaskKindSynthesize, Objective: "Revise the report after quality failure", Capability: "reporter", Priority: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if task.ID == succeededID || task.Status != TaskStatusReady || task.ClientKey == "synthesize-initial" {
 		t.Fatalf("control task reused succeeded work: %+v", task)
+	}
+}
+
+func TestControlTaskBindsGateQuestionAndRecordsRoutingDecision(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	run, _, err := store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Answer the required decision question",
+		Title: "Targeted remediation", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := validV4PlanResult(t)
+	plan.ClientRequestID = "targeted-control-plan"
+	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
+
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var questionFinding GateFinding
+	for _, finding := range gate.Findings {
+		if finding.Code == "required_questions_unanswered" {
+			questionFinding = finding
+			break
+		}
+	}
+	questionID, _ := questionFinding.Metadata["question_id"].(string)
+	questionKey, _ := questionFinding.Metadata["question_key"].(string)
+	if questionID == "" || questionKey != "question-1" {
+		t.Fatalf("required question finding=%+v", questionFinding)
+	}
+	control := remediationTask(gate)
+	control.SessionID = fixture.sessionID
+	if control.Kind != TaskKindDiscover || control.QuestionID != questionID {
+		t.Fatalf("control=%+v", control)
+	}
+	task, event, err := store.CreateControlTask(ctx, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.QuestionID != questionID || event.Type != "control_task_created" {
+		t.Fatalf("task=%+v event=%+v", task, event)
+	}
+	runAfter, err := store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil || runAfter.PlanVersion != run.PlanVersion {
+		t.Fatalf("evidence remediation changed plan version: before=%d after=%d err=%v", run.PlanVersion, runAfter.PlanVersion, err)
+	}
+	var decisionCount int
+	var outcome []byte
+	if err = pool.QueryRow(ctx, `
+		SELECT count(*)::int
+		FROM research_decision
+		WHERE session_id = $1::uuid AND decision_kind = 'remediation_routing'
+	`, fixture.sessionID).Scan(&decisionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `
+		SELECT outcome FROM research_decision
+		WHERE session_id = $1::uuid AND decision_kind = 'remediation_routing'
+		ORDER BY created_at DESC LIMIT 1
+	`, fixture.sessionID).Scan(&outcome); err != nil {
+		t.Fatal(err)
+	}
+	if decisionCount != 1 || !strings.Contains(string(outcome), questionID) || !strings.Contains(string(outcome), "required_questions_unanswered") {
+		t.Fatalf("routing decisions=%d outcome=%s", decisionCount, outcome)
+	}
+	replayed, replayEvent, err := store.CreateControlTask(ctx, control)
+	if err != nil || replayed.ID != task.ID || replayEvent.ID != "" {
+		t.Fatalf("replayed=%+v event=%+v err=%v", replayed, replayEvent, err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_session SET plan_version = plan_version + 1 WHERE id = $1::uuid`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.CreateControlTask(ctx, control); !errors.Is(err, ErrControlTargetChanged) {
+		t.Fatalf("stale-plan question error=%v", err)
+	}
+	if _, _, err = store.CreateControlTask(ctx, ControlTaskInput{
+		SessionID: fixture.sessionID, Kind: TaskKindDiscover, Objective: "Invalid cross-session target",
+		Capability: "scout", Priority: 1, QuestionID: uuid.NewString(),
+	}); !errors.Is(err, ErrControlTargetChanged) {
+		t.Fatalf("cross-session question error=%v", err)
 	}
 }
 

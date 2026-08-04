@@ -101,7 +101,7 @@ describe("RuntimeAttentionAlert", () => {
       <div>
         <SidebarProvider>
           <SidebarMenuItem>
-            <SidebarMenuButton render={<a href="/acme/computers" onClick={outerClick} />}>
+            <SidebarMenuButton render={<a href="/acme/computers" aria-label="Computers" onClick={outerClick} />}>
               Computers
             </SidebarMenuButton>
             <RuntimeAttentionAlert

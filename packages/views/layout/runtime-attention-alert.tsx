@@ -52,6 +52,8 @@ export function RuntimeAttentionAlert({
 
   if (count === 0 || !firstRuntimeId) return null;
 
+  const triggerLabel = t(($) => $.runtime_attention.trigger_label, { count });
+
   return (
     <Popover>
       <PopoverTrigger
@@ -60,10 +62,11 @@ export function RuntimeAttentionAlert({
             <button
               type="button"
               className="inline-flex items-center justify-center rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              aria-label={triggerLabel}
             />
           )
         }
-        aria-label={t(($) => $.runtime_attention.trigger_label, { count })}
+        aria-label={triggerLabel}
       >
         <TriangleAlert className="size-3.5 text-warning" />
       </PopoverTrigger>

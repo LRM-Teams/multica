@@ -689,7 +689,7 @@ function createComponents(
  */
 function isPlainChatProse(text: string, issueRefPrefix?: string): boolean {
   if (!text) return true
-  if (/[`*_~\[\]#>|\\]/.test(text)) return false
+  if (/[`*_~[\]#>|\\]/.test(text)) return false
   if (/https?:\/\//i.test(text) || /mention:\/\//i.test(text) || /cit:\/\//i.test(text)) {
     return false
   }

@@ -770,7 +770,7 @@ func TestAgentTransportSendFreshnessHoldSavesDraftAndDoesNotWriteMessage(t *test
 		held.ContextWindow.OldestSeq != newer.Seq || held.ContextWindow.NewestSeq != newer.Seq {
 		t.Fatalf("held bounded window mismatch: %+v", held.ContextWindow)
 	}
-	if got := strings.Join(held.AvailableActions, ","); got != "review_newer_messages,await_explicit_confirmation,discard_draft" {
+	if got := strings.Join(held.AvailableActions, ","); got != "review_newer_messages,agent_decide,discard_draft" {
 		t.Fatalf("held available actions=%q", got)
 	}
 	assertNoChannelMessageContent(t, channelID, draftContent)
@@ -1042,7 +1042,7 @@ func TestAgentTransportHeldResponseMakesBoundedWindowEdgesExplicit(t *testing.T)
 		body.ContextWindow.NewerBoundary != "No newer." {
 		t.Fatalf("bounded context edges=%+v", body.ContextWindow)
 	}
-	if got := strings.Join(body.AvailableActions, ","); got != "review_newer_messages,await_explicit_confirmation,discard_draft" {
+	if got := strings.Join(body.AvailableActions, ","); got != "review_newer_messages,agent_decide,discard_draft" {
 		t.Fatalf("bounded available actions=%q", got)
 	}
 }

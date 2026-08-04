@@ -2402,7 +2402,7 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 		// A held draft is deliberately inert. Do not expose ready-to-execute
 		// resend commands here: tool runtimes can mistake them for follow-up work
 		// and publish a message that the freshness gate just withheld.
-		AvailableActions:    []string{"review_newer_messages", "await_explicit_confirmation", "discard_draft"},
+		AvailableActions:    []string{"review_newer_messages", "agent_decide", "discard_draft"},
 		HeldMessages:        decision.Messages,
 		NewMessageCount:     decision.TotalNewer,
 		ShownMessageCount:   int64(len(decision.Messages)),

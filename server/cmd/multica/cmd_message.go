@@ -36,7 +36,7 @@ func newMessageSendCmd() *cobra.Command {
 			"attach an audio file for a voice reply; Multica synthesizes the transcript. If the " +
 			"server holds a send because newer messages arrived, it remains an unsent " +
 			"draft. Do not automatically retry it; --send-draft is only for an explicit " +
-			"continue decision.",
+			"agent decision after reviewing the newer context.",
 		RunE: runAgentMessageSend,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
@@ -338,7 +338,7 @@ func agentMessageSendTextFallback(out map[string]any) string {
 				}
 			}
 		}
-		b.WriteString("\nA human must explicitly continue or discard it. A later, independent agent decision may send a newly composed message after reviewing this context.")
+		b.WriteString("\nThe agent must explicitly decide whether to discard it or, after reviewing this context, send a newly composed message. The held draft is never sent automatically.")
 		return b.String()
 	}
 	return "Message sent."

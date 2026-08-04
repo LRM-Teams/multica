@@ -324,7 +324,7 @@ func TestAgentMessageSendTextFallbackReportsHeld(t *testing.T) {
 	for _, want := range []string{
 		"No older.",
 		"No newer.",
-		"A human must explicitly continue or discard it.",
+		"The agent must explicitly decide whether to discard it",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("fallback = %q, want %q", got, want)

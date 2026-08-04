@@ -163,6 +163,7 @@ export function RuntimeConfigDialog({
           <Field label={t(($) => $.inspector.prop_runtime)}>
             <RuntimePicker
               value={draft.runtime_id}
+              boundRuntimeId={agent.runtime_id}
               runtimes={runtimes}
               members={members}
               currentUserId={currentUserId}

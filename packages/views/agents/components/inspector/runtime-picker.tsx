@@ -9,7 +9,7 @@ import {
   PropertyPicker,
 } from "../../../issues/components/pickers";
 import { ProviderLogo } from "../../../runtimes/components/provider-logo";
-import { runtimeMachineKey } from "../../../runtimes/components/runtime-machines";
+import { filterRuntimesOnBoundComputer } from "../../../runtimes/components/runtime-machines";
 import { CHIP_CLASS } from "./chip";
 import { useT } from "../../../i18n";
 import {
@@ -29,6 +29,12 @@ export function RuntimePicker({
   members,
   currentUserId,
   canEdit = true,
+  /**
+   * Agent's saved runtime id — locks the option list to that computer even
+   * while the draft `value` changes inside RuntimeConfigDialog (LRM-1365).
+   * Defaults to `value` when omitted (read-only summary / single-shot edit).
+   */
+  boundRuntimeId,
   onChange,
 }: {
   value: string;
@@ -37,6 +43,7 @@ export function RuntimePicker({
   currentUserId: string | null;
   /** When false, render a static read-only display and skip the popover. */
   canEdit?: boolean;
+  boundRuntimeId?: string;
   onChange: (runtimeId: string) => Promise<void> | void;
 }) {
   const { t } = useT("agents");
@@ -44,16 +51,19 @@ export function RuntimePicker({
 
   const selected = runtimes.find((r) => r.id === value) ?? null;
   const Icon = selected?.runtime_mode === "cloud" ? Cloud : Monitor;
-  // Lock computer: only peers that share the bound machine key are options.
-  // When the bound runtime is missing from `runtimes` (deleted / not loaded),
-  // boundMachineKey is null — fall back to the full list so the user can
-  // re-bind to a living runtime (orphan recovery). Not a cross-machine move
-  // of a still-present binding.
-  const boundMachineKey = selected ? runtimeMachineKey(selected) : null;
+  // Lock to the agent's bound computer (saved runtime), not the draft
+  // selection — otherwise picking a mis-grouped option could expand the
+  // list onto another machine. Prefer explicit boundRuntimeId from the
+  // dialog; fall back to value. When that runtime is missing from
+  // `runtimes` (deleted / not loaded), fall back to the full list so the
+  // user can re-bind (orphan recovery) — not a cross-machine move of a
+  // still-present binding.
+  const lockId = boundRuntimeId || value;
   const sameComputerRuntimes = useMemo(() => {
-    if (!boundMachineKey) return runtimes;
-    return runtimes.filter((r) => runtimeMachineKey(r) === boundMachineKey);
-  }, [runtimes, boundMachineKey]);
+    const boundRuntime = runtimes.find((r) => r.id === lockId) ?? null;
+    if (!boundRuntime) return runtimes;
+    return filterRuntimesOnBoundComputer(boundRuntime, runtimes);
+  }, [runtimes, lockId]);
 
   // Others' private runtimes are excluded outright, not shown-disabled — a
   // private runtime that isn't mine and isn't public has nothing for me to

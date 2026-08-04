@@ -263,6 +263,7 @@
     "remove_confirm_title": "Remove \"{{name}}\"?",
     "remove_confirm_description": "They will immediately lose read and write access to this channel.",
     "remove_confirm": "Confirm remove",
+    "remove_confirming": "Removing…",
     "remove_cancel": "Cancel",
     "remove_failed": "Couldn't remove this member. Please try again.",
     "remove_retry": "Retry",

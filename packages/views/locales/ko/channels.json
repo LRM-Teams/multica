@@ -263,6 +263,7 @@
     "remove_confirm_title": "「{{name}}」을(를) 제거할까요?",
     "remove_confirm_description": "이 채널의 읽기/쓰기 권한을 즉시 잃습니다.",
     "remove_confirm": "제거 확인",
+    "remove_confirming": "제거 중…",
     "remove_cancel": "취소",
     "remove_failed": "멤버를 내보내지 못했습니다. 다시 시도해 주세요.",
     "remove_retry": "다시 시도",

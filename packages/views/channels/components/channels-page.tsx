@@ -219,6 +219,7 @@ import {
   type ChannelDetailsTab,
 } from "./channel-details-panel";
 import { DeleteChannelDialog } from "./delete-channel-dialog";
+import { RemoveMemberConfirmDialog } from "./remove-member-confirm-dialog";
 import { ChannelNotifyPrefsDialog } from "./channel-notify-prefs";
 import {
   channelNotifyLevelLabel,
@@ -4769,81 +4770,55 @@ export function ChannelsPage({
         </SheetContent>
       </Sheet>
 
-      {/* LRM-1289 — remove confirm was a full-bleed bottom Sheet (`inset-x-0`),
-          so the pink primary stretched nearly viewport-wide. Use AlertDialog
-          (max-w-xs / sm:max-w-sm) like archive/delete — same mutate semantics. */}
-      <AlertDialog
+      {/* LRM-1289 width fix + LRM-1327 pending/focus (LRM-1300 A/D3). */}
+      <RemoveMemberConfirmDialog
         open={removeMemberTarget !== null}
+        displayName={
+          removeMemberTarget
+            ? resolveActorDisplayName(
+                removeMemberTarget,
+                removeMemberTarget.member_type === "agent"
+                  ? t(($) => $.message.agent_badge)
+                  : t(($) => $.members.title),
+              )
+            : ""
+        }
+        pending={removeMember.isPending}
         onOpenChange={(open) => {
           if (!open) setRemoveMemberTarget(null);
         }}
-      >
-        <AlertDialogContent data-testid="group-member-remove-confirm">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {t(($) => $.members.remove_confirm_title, {
-                name: removeMemberTarget
-                  ? resolveActorDisplayName(
-                      removeMemberTarget,
-                      removeMemberTarget.member_type === "agent"
-                        ? t(($) => $.message.agent_badge)
-                        : t(($) => $.members.title),
-                    )
-                  : "",
-              })}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(($) => $.members.remove_confirm_description)}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={removeMember.isPending}>
-              {t(($) => $.members.remove_cancel)}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={removeMember.isPending}
-              onClick={() => {
-                if (!active || !removeMemberTarget) return;
-                // Capture: `removeMemberTarget` is cleared in onSettled, so the
-                // callbacks must not read it back.
-                const target = removeMemberTarget;
-                removeMember.mutate(
-                  {
-                    channelId: active.id,
-                    memberType: removeMemberTarget.member_type,
-                    memberId: removeMemberTarget.member_id,
-                  },
-                  {
-                    // #833 — same reasoning as the desktop path: closing the
-                    // dialog on a failed removal would look exactly like a
-                    // successful one.
-                    onError: () => {
-                      showErrorToast(t(($) => $.members.remove_failed));
-                      // #839 — also record it on the row so the failure survives
-                      // the toast being dismissed or expiring.
-                      setRemoveFailedKeys((prev) =>
-                        new Set(prev).add(memberFailureKey(active.id, target)),
-                      );
-                    },
-                    // A successful removal drops the row; clear any stale mark so
-                    // a later re-add can't inherit it.
-                    onSuccess: () =>
-                      setRemoveFailedKeys((prev) => {
-                        const next = new Set(prev);
-                        next.delete(memberFailureKey(active.id, target));
-                        return next;
-                      }),
-                    onSettled: () => setRemoveMemberTarget(null),
-                  },
+        onConfirm={() => {
+          if (!active || !removeMemberTarget) return;
+          // Capture: success clears the target; failure keeps the dialog open
+          // (#833 / LRM-1300 §5) so callbacks must not read state back.
+          const target = removeMemberTarget;
+          const channelId = active.id;
+          removeMember.mutate(
+            {
+              channelId,
+              memberType: target.member_type,
+              memberId: target.member_id,
+            },
+            {
+              onError: () => {
+                showErrorToast(t(($) => $.members.remove_failed));
+                // #839 — row mark survives toast dismiss/expiry.
+                setRemoveFailedKeys((prev) =>
+                  new Set(prev).add(memberFailureKey(channelId, target)),
                 );
-              }}
-            >
-              {t(($) => $.members.remove_confirm)}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              },
+              onSuccess: () => {
+                setRemoveFailedKeys((prev) => {
+                  const next = new Set(prev);
+                  next.delete(memberFailureKey(channelId, target));
+                  return next;
+                });
+                setRemoveMemberTarget(null);
+              },
+            },
+          );
+        }}
+      />
 
       <DeleteChannelDialog
         open={deleteTarget !== null}

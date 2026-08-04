@@ -59,7 +59,7 @@ const title = members.remove_confirm_title.replace("{{name}}", name);
 const description = members.remove_confirm_description;
 const confirmLabel = members.remove_confirm;
 const cancelLabel = members.remove_cancel;
-const confirmingLabel = "移除中…";
+const confirmingLabel = members.remove_confirming;
 
 /** Channel-page-ish backdrop so the overlay/width relation is honest. */
 function PageBackdrop() {

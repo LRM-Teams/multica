@@ -83,7 +83,7 @@ func TestFinalizeAgentChannelMessageDMResolvesChannelReferences(t *testing.T) {
 	}
 
 	link := "[" + targetName + "](mention://channel/" + targetChannelID + ")"
-	content := "structured " + link + " and bare #" + targetName
+	content := "structured " + link + " but bare #" + targetName + " stays text"
 	gotContent, parts, err := testHandler.finalizeAgentChannelMessage(ctx, dm, content, nil)
 	if err != nil {
 		t.Fatalf("finalize dm channel references: %v", err)
@@ -98,16 +98,15 @@ func TestFinalizeAgentChannelMessageDMResolvesChannelReferences(t *testing.T) {
 			refs = append(refs, part)
 		}
 	}
-	if len(refs) != 2 {
-		t.Fatalf("dm channel references = %+v, want structured and bare anchors", refs)
+	if len(refs) != 1 {
+		t.Fatalf("dm channel references = %+v, want only the structured anchor", refs)
 	}
-	for i, ref := range refs {
-		if ref.RefID != targetChannelID || ref.Label != targetName {
-			t.Fatalf("dm channel reference[%d] = %+v, want target %s / %q", i, ref, targetChannelID, targetName)
-		}
-		if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 >= *ref.ContentEndUTF16 {
-			t.Fatalf("dm channel reference[%d] has no source anchor: %+v", i, ref)
-		}
+	ref := refs[0]
+	if ref.RefID != targetChannelID || ref.Label != targetName {
+		t.Fatalf("dm channel reference = %+v, want target %s / %q", ref, targetChannelID, targetName)
+	}
+	if ref.ContentStartUTF16 == nil || ref.ContentEndUTF16 == nil || *ref.ContentStartUTF16 >= *ref.ContentEndUTF16 {
+		t.Fatalf("dm channel reference has no source anchor: %+v", ref)
 	}
 }
 

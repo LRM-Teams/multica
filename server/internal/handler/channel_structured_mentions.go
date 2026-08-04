@@ -82,6 +82,12 @@ func (h *Handler) enrichChannelMessageMentions(ctx context.Context, ch ChannelRe
 	if strings.TrimSpace(ch.WorkspaceID) == "" {
 		return content, appendReferenceOccurrences(parts, nil), nil
 	}
+	if ch.Kind != "group" {
+		// DMs accept only an explicit channel wire link that the server can verify
+		// into a channel-ref MessagePart. Bare #names stay plain text by product
+		// contract; actor mention delivery remains group-only.
+		return content, appendReferenceOccurrences(parts, h.resolveChannelReferenceLinks(ctx, ch.WorkspaceID, content)), nil
+	}
 	parts = appendReferenceOccurrences(parts, h.resolveBareChannelIssueReferences(ctx, ch.WorkspaceID, content, parts))
 	parts = appendReferenceOccurrences(parts, h.resolveChannelReferenceLinks(ctx, ch.WorkspaceID, content))
 	// Bare `#name` runs after the link form so an explicit composer link always

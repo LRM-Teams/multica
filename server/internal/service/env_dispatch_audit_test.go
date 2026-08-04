@@ -215,8 +215,8 @@ func TestDispatchAudit_StorageInjectionAloneDoesNotOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
-	if len(storage.runs) != 0 || len(storage.resources) != 0 || len(storage.events) != 0 {
-		t.Fatalf("storage injection without Audit.Enabled must not persist audit evidence: runs=%+v resources=%+v events=%+v", storage.runs, storage.resources, storage.events)
+	if len(storage.runs) != 0 || len(storage.resources) != 0 || len(storage.events) != 0 || len(storage.obligations) != 0 {
+		t.Fatalf("storage injection without Audit.Enabled must not persist audit evidence: runs=%+v resources=%+v events=%+v obligations=%+v", storage.runs, storage.resources, storage.events, storage.obligations)
 	}
 }
 

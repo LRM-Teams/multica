@@ -78,7 +78,7 @@ export function ResearchFleetAvatarStack({
               className={cn(
                 "rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
                 mode === "done"
-                  ? "border-success/35 bg-success/10 text-success"
+                  ? "border-success/35 bg-success/10 text-success-strong"
                   : "border-brand/35 bg-brand/10 text-brand",
               )}
             >

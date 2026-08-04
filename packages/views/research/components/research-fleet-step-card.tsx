@@ -11,7 +11,7 @@ import type { FleetStepCardModel, FleetStepStatus } from "../lib/fleet-step-card
 function badgeClass(status: FleetStepStatus): string {
   switch (status) {
     case "done":
-      return "bg-success/10 text-success";
+      return "bg-success/10 text-success-strong";
     case "running":
       return "bg-primary/10 text-primary";
     case "waiting":

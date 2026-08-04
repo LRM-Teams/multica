@@ -1237,6 +1237,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// project internally. Project-first routes above remain available.
 			r.Get("/api/v1/env-dispatch/channels/{channelID}/dag", h.GetEnvDispatchChannelDag)
 			r.Post("/api/v1/env-dispatch/channels/{channelID}/diagnosis", h.DiagnoseEnvDispatchChannel)
+			r.Get("/api/v1/env-dispatch/channels/{channelID}/diagnosis/latest", h.GetLatestEnvDispatchChannelDiagnosis)
 			r.Delete("/api/v1/env-dispatch/channels/{channelID}", h.DeleteEnvDispatchChannel)
 			r.Get("/api/v1/channels/{channelID}/env-checkpoints", h.ListChannelEnvCheckpoints)
 

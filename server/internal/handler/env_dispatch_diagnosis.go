@@ -94,6 +94,35 @@ func (h *Handler) DiagnoseEnvDispatchChannel(w http.ResponseWriter, r *http.Requ
 	h.diagnoseEnvDispatchProject(w, r, projectID, userID)
 }
 
+// GetLatestEnvDispatchChannelDiagnosis is the message-dispatch facade for
+// GET .../diagnosis/latest. AReaL's shared non-training client polls the
+// channel-scoped path for dispatch_type=message.
+func (h *Handler) GetLatestEnvDispatchChannelDiagnosis(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireUserID(w, r); !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	if workspaceID == "" {
+		writeError(w, http.StatusBadRequest, "workspace ID required")
+		return
+	}
+	channelID := chi.URLParam(r, "channelID")
+	if _, ok := parseUUIDOrBadRequest(w, channelID, "channelID"); !ok {
+		return
+	}
+	projectID, _, err := h.resolveChannelProject(r.Context(), workspaceID, channelID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		return
+	}
+	// Re-bind the project ID so GetLatestEnvDispatchDiagnosis can reuse its
+	// existing workspace/project guards without duplicating the lookup path.
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("projectID", projectID)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	h.GetLatestEnvDispatchDiagnosis(w, r)
+}
+
 func (h *Handler) diagnoseEnvDispatchProject(w http.ResponseWriter, r *http.Request, projectID, userID string) {
 	workspaceID := ctxWorkspaceID(r.Context())
 	if workspaceID == "" {
@@ -233,6 +262,23 @@ func (h *Handler) diagnoseEnvDispatchProjectSandbox(w http.ResponseWriter, r *ht
 			return
 		}
 	}
+	var sharedSandbox *service.DiagnosisSharedSandboxRef
+	var trainingMode bool
+	if err := h.DB.QueryRow(r.Context(),
+		`SELECT training_mode FROM env_dispatch_run WHERE project_id = $1 AND workspace_id = $2`, projectID, workspaceID,
+	).Scan(&trainingMode); err != nil {
+		_ = state.FailRun(r.Context(), run.RunID, fmt.Errorf("provisioning_binding: resolve dispatch mode: %w", err))
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "diagnosis_failed"})
+		return
+	}
+	if !trainingMode {
+		sharedSandbox, err = h.resolveSharedDiagnosisBinding(r.Context(), workspaceID, projectID)
+		if err != nil {
+			_ = state.FailRun(r.Context(), run.RunID, err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "diagnosis_failed"})
+			return
+		}
+	}
 	req := service.DiagnosisProvisionRequest{
 		RunID:           run.RunID,
 		WorkspaceID:     workspaceID,
@@ -241,6 +287,7 @@ func (h *Handler) diagnoseEnvDispatchProjectSandbox(w http.ResponseWriter, r *ht
 		BootstrapPrompt: bootstrap.BootstrapPrompt,
 		SystemPrompt:    bootstrap.SystemPrompt,
 		Model:           cfg.DiagnosisAgentModel,
+		SharedSandbox:   sharedSandbox,
 	}
 	go func() {
 		// Detached from the request: provisioning outlives the HTTP call and
@@ -258,6 +305,49 @@ func (h *Handler) diagnoseEnvDispatchProjectSandbox(w http.ResponseWriter, r *ht
 	})
 }
 
+// resolveSharedDiagnosisBinding returns the sole ready shared sandbox/runtime
+// triple for a non-training env-dispatch project. No qualifying binding means
+// this is not a shared dispatch; incomplete or divergent bindings are unsafe
+// and fail closed rather than letting diagnosis allocate a dedicated sandbox.
+func (h *Handler) resolveSharedDiagnosisBinding(ctx context.Context, workspaceID, projectID string) (*service.DiagnosisSharedSandboxRef, error) {
+	rows, err := h.DB.Query(ctx, `
+SELECT eas.sandbox_instance_id::text, eas.runtime_id::text, eas.daemon_id::text
+FROM project p
+JOIN environment_agent_sandbox eas ON eas.env_id = p.env_id
+WHERE p.id = $1
+  AND p.workspace_id = $2
+  AND eas.status = 'ready'
+  AND eas.sandbox_config->>'shared' = 'true'`, projectID, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("provisioning_binding: query shared sandbox binding: %w", err)
+	}
+	defer rows.Close()
+
+	var canonical *service.DiagnosisSharedSandboxRef
+	for rows.Next() {
+		var instanceID, runtimeID, daemonID *string
+		if err := rows.Scan(&instanceID, &runtimeID, &daemonID); err != nil {
+			return nil, fmt.Errorf("provisioning_binding: scan shared sandbox binding: %w", err)
+		}
+		if instanceID == nil || runtimeID == nil || daemonID == nil ||
+			*instanceID == "" || *runtimeID == "" || *daemonID == "" {
+			return nil, fmt.Errorf("provisioning_binding: shared sandbox binding is incomplete")
+		}
+		candidate := service.DiagnosisSharedSandboxRef{InstanceID: *instanceID, RuntimeID: *runtimeID, DaemonID: *daemonID}
+		if canonical == nil {
+			canonical = &candidate
+			continue
+		}
+		if *canonical != candidate {
+			return nil, fmt.Errorf("provisioning_binding: shared sandbox bindings are divergent")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("provisioning_binding: read shared sandbox binding: %w", err)
+	}
+	return canonical, nil
+}
+
 func (h *Handler) envDispatchRootTaskID(ctx context.Context, projectID, workspaceID string) (string, error) {
 	var taskID string
 	err := h.DB.QueryRow(ctx, `SELECT root_task_id::text FROM env_dispatch_run WHERE project_id = $1 AND workspace_id = $2 AND root_task_id IS NOT NULL`, projectID, workspaceID).Scan(&taskID)
@@ -270,6 +360,7 @@ func (h *Handler) envDispatchRootTaskID(ctx context.Context, projectID, workspac
 type diagnosisLatestResponse struct {
 	service.DiagnosisRunProgress
 	ExecutionMode     string `json:"execution_mode,omitempty"`
+	SandboxMode       string `json:"sandbox_mode,omitempty"`
 	SandboxInstanceID string `json:"sandbox_instance_id,omitempty"`
 }
 
@@ -328,6 +419,7 @@ func (h *Handler) GetLatestEnvDispatchDiagnosis(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, diagnosisLatestResponse{
 		DiagnosisRunProgress: service.BuildDiagnosisRunProgress(run, segments),
 		ExecutionMode:        run.ExecutionMode,
+		SandboxMode:          run.SandboxMode,
 		SandboxInstanceID:    run.SandboxInstanceID,
 	})
 }

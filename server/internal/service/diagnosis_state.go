@@ -30,6 +30,11 @@ const (
 	DiagnosisRunFailed       DiagnosisRunStatus = "failed"
 )
 
+const (
+	DiagnosisSandboxModeDedicated = "dedicated"
+	DiagnosisSandboxModeShared    = "shared"
+)
+
 // SegmentDiagnosisStatus is the lifecycle state of one segment checkpoint.
 type SegmentDiagnosisStatus string
 
@@ -65,6 +70,7 @@ type DiagnosisRunCheckpoint struct {
 	SandboxInstanceID   string
 	CapabilityTokenHash string
 	ExecutionMode       string
+	SandboxMode         string
 }
 
 // SegmentDiagnosisCheckpoint is the service-boundary view of one segment row.
@@ -139,6 +145,7 @@ func diagnosisRunFromRow(row db.InteractionDagDiagnosisRun) (DiagnosisRunCheckpo
 		SandboxInstanceID:     textValue(row.SandboxInstanceID),
 		CapabilityTokenHash:   textValue(row.CapabilityTokenHash),
 		ExecutionMode:         textValue(row.ExecutionMode),
+		SandboxMode:           textValue(row.SandboxMode),
 	}, nil
 }
 
@@ -552,9 +559,9 @@ func (s *DiagnosisStateStore) FailRun(ctx context.Context, runID string, cause e
 }
 
 // SetRunSandbox records the sandbox instance, per-run capability token hash,
-// and execution mode for a run (migration 278). Empty strings persist as NULL
-// so a re-provision can clear a stale sandbox binding.
-func (s *DiagnosisStateStore) SetRunSandbox(ctx context.Context, runID, sandboxInstanceID, capabilityTokenHash, executionMode string) error {
+// execution mode, and sandbox ownership mode for a run. Empty strings persist
+// as NULL so a re-provision can clear a stale sandbox binding.
+func (s *DiagnosisStateStore) SetRunSandbox(ctx context.Context, runID, sandboxInstanceID, capabilityTokenHash, executionMode, sandboxMode string) error {
 	if strings.TrimSpace(runID) == "" {
 		return fmt.Errorf("%w: run_id is required", ErrDiagnosisInvalidTransition)
 	}
@@ -566,6 +573,7 @@ func (s *DiagnosisStateStore) SetRunSandbox(ctx context.Context, runID, sandboxI
 		SandboxInstanceID:   pgtype.Text{String: sandboxInstanceID, Valid: sandboxInstanceID != ""},
 		CapabilityTokenHash: pgtype.Text{String: capabilityTokenHash, Valid: capabilityTokenHash != ""},
 		ExecutionMode:       pgtype.Text{String: executionMode, Valid: executionMode != ""},
+		SandboxMode:         pgtype.Text{String: sandboxMode, Valid: sandboxMode != ""},
 	})
 }
 

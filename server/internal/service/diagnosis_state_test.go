@@ -133,6 +133,7 @@ func (f *fakeDiagnosisStateQueries) SetInteractionDAGDiagnosisRunSandbox(_ conte
 	row.SandboxInstanceID = arg.SandboxInstanceID
 	row.CapabilityTokenHash = arg.CapabilityTokenHash
 	row.ExecutionMode = arg.ExecutionMode
+	row.SandboxMode = arg.SandboxMode
 	f.runs[arg.RunID] = row
 	return nil
 }
@@ -567,7 +568,7 @@ func TestDiagnosisStateSetRunSandbox_PersistsFields(t *testing.T) {
 	store, _ := newTestDiagnosisStore(t)
 	createTestDiagnosisRun(t, store, "run-1", "seg-a")
 
-	require.NoError(t, store.SetRunSandbox(context.Background(), "run-1", "sbx-123", "hash-abc", "sandbox"))
+	require.NoError(t, store.SetRunSandbox(context.Background(), "run-1", "sbx-123", "hash-abc", "sandbox", DiagnosisSandboxModeDedicated))
 
 	run, err := store.GetRun(context.Background(), "run-1")
 	require.NoError(t, err)
@@ -584,9 +585,40 @@ func TestDiagnosisStateSetRunSandbox_PersistsFields(t *testing.T) {
 	assert.Empty(t, run.ExecutionMode)
 }
 
+func TestDiagnosisRunFromRowPreservesSandboxMode(t *testing.T) {
+	row := db.InteractionDagDiagnosisRun{
+		RunID:             "run-shared",
+		SandboxInstanceID: pgtype.Text{String: "sandbox-1", Valid: true},
+		ExecutionMode:     pgtype.Text{String: DiagnosisExecutionModeSandbox, Valid: true},
+		SandboxMode:       pgtype.Text{String: DiagnosisSandboxModeShared, Valid: true},
+	}
+
+	got, err := diagnosisRunFromRow(row)
+	require.NoError(t, err)
+	assert.Equal(t, DiagnosisSandboxModeShared, got.SandboxMode)
+}
+
+func TestDiagnosisStateSetRunSandbox_PersistsSandboxMode(t *testing.T) {
+	store, _ := newTestDiagnosisStore(t)
+	createTestDiagnosisRun(t, store, "run-shared", "seg-a")
+
+	require.NoError(t, store.SetRunSandbox(
+		context.Background(),
+		"run-shared",
+		"sandbox-1",
+		"hash-1",
+		DiagnosisExecutionModeSandbox,
+		DiagnosisSandboxModeShared,
+	))
+
+	run, err := store.GetRun(context.Background(), "run-shared")
+	require.NoError(t, err)
+	assert.Equal(t, DiagnosisSandboxModeShared, run.SandboxMode)
+}
+
 func TestDiagnosisStateSetRunSandbox_UnknownRun(t *testing.T) {
 	store, _ := newTestDiagnosisStore(t)
-	err := store.SetRunSandbox(context.Background(), "run-unknown", "sbx", "hash", "sandbox")
+	err := store.SetRunSandbox(context.Background(), "run-unknown", "sbx", "hash", "sandbox", DiagnosisSandboxModeDedicated)
 	require.ErrorIs(t, err, ErrDiagnosisRunNotFound)
 }
 

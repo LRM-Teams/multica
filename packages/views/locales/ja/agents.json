@@ -217,7 +217,8 @@
     "managed_by_runtime_title": "このランタイムがモデル選択を管理します。",
     "managed_by_runtime_hint": "ランタイムホストでモデルを設定してください（例: Hermes は自身の設定ファイルから読み込みます）。",
     "discovery_failed": "検出に失敗しました",
-    "clear_full": "選択をクリア（プロバイダーのデフォルトを使用）"
+    "clear_full": "選択をクリア（プロバイダーのデフォルトを使用）",
+    "catalog_unavailable_hint": "カタログを取得できません — モデル ID を手入力できます"
   },
   "tabs": {
     "activity": "アクティビティ",

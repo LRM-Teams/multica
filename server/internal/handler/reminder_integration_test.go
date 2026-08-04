@@ -2937,8 +2937,8 @@ func TestAgentReminderModernTransportSourcesRemainFailClosed(t *testing.T) {
 }
 
 func TestAgentReminderScheduleFallsBackToAgentOwnerWithoutHumanWakeAuthor(t *testing.T) {
-	// L1/L3 long-term: schedule initiator binds to *anchor* message, not wake
-	// human. Agent-authored anchor → agent.owner (member); no 403.
+	// P1: agent-authored anchor still schedules (no 403). Initiator may be
+	// filled as optional audit (owner) but is not required for success.
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -3017,6 +3017,50 @@ func TestAgentReminderScheduleInitiatorFromHumanAnchorMessage(t *testing.T) {
 	}
 	if initiator != fixture.initiatorUserID {
 		t.Fatalf("initiator_user_id=%s want anchor human %s (not owner %s)", initiator, fixture.initiatorUserID, testUserID)
+	}
+}
+
+
+func TestAgentReminderScheduleCalendarTimezoneIgnoresUserViewingTimezone(t *testing.T) {
+	// P0: daily@ uses UTC (or locked schedule_timezone), never user.timezone viewing pref.
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	fixture := seedReminderModernTransportFixture(t, "agent_inbox_token")
+	// Fixture sets initiator user timezone Asia/Shanghai and owner America/New_York.
+	// Calendar schedule must still lock UTC when no explicit schedule tz is passed.
+	rec := serveReminderModernTransport(t, reminderModernTransportRouter(), fixture, "/api/agent/reminders/schedule", map[string]any{
+		"title": "daily patrol", "message_id": fixture.anchorMessageID, "repeat": "daily@09:00",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("daily schedule status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var scheduled agentReminderResponse
+	if err := json.NewDecoder(rec.Body).Decode(&scheduled); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_reminder WHERE id = $1`, scheduled.ID)
+	})
+	var tz *string
+	if err := testPool.QueryRow(ctx, `SELECT schedule_timezone FROM agent_reminder WHERE id = $1`, scheduled.ID).Scan(&tz); err != nil {
+		t.Fatal(err)
+	}
+	if tz == nil || *tz != "UTC" {
+		t.Fatalf("schedule_timezone=%v want UTC (must not use user viewing timezone Asia/Shanghai)", tz)
+	}
+}
+
+func TestReminderScheduleTimezoneExplicitAndInvalid(t *testing.T) {
+	if got := reminderScheduleTimezone(""); got != "UTC" {
+		t.Fatalf("empty -> %q", got)
+	}
+	if got := reminderScheduleTimezone("Asia/Shanghai"); got != "Asia/Shanghai" {
+		t.Fatalf("valid -> %q", got)
+	}
+	if got := reminderScheduleTimezone("Not/A/Zone"); got != "UTC" {
+		t.Fatalf("invalid -> %q", got)
 	}
 }
 

@@ -438,7 +438,6 @@ describe("ChannelPresenceCluster (LRM-581 A v3)", () => {
     fireEvent.click(screen.getByTestId("channel-agents-working-stop"));
     expect(onStopTask).toHaveBeenCalledTimes(1);
     expect(onStopTask).toHaveBeenCalledWith(stopped, "群内Agent");
-    expect(onStopTask.mock.calls[0][1]).not.toBe("Unknown Agent");
   });
 
   it("LRM-391 AC#5: channel roster name+avatar keeps Working face (no over-omit)", () => {

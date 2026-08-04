@@ -89,6 +89,36 @@ func TestBuildChannelAmbientUnreadPromptUsesRuntimeOutputContract(t *testing.T) 
 	}
 }
 
+// LRM: a human @mention to specific agent(s) wakes every other unmuted agent
+// through the ordinary ambient path too (so shared context isn't lost), but
+// those non-mentioned agents must know the task is already claimed instead of
+// piling on with duplicate "我也去处理" replies.
+func TestBuildChannelAmbientUnreadPromptDiscouragesDuplicateClaimWhenAlreadyMentioned(t *testing.T) {
+	h := &Handler{}
+	agent := db.Agent{Name: "QA机器人", DisplayName: "QA机器人"}
+	trigger := ChannelMessageResponse{
+		ID:         "11111111-1111-1111-1111-111111111111",
+		AuthorName: "用户",
+		Type:       "user",
+		Content:    "[@Dev工程师](mention://agent/44444444-4444-4444-4444-444444444444) 帮忙查一下这个连贯性问题，查完私信我",
+	}
+	p := h.buildChannelAmbientUnreadPromptWithDB(context.Background(), channelPromptNoopDB{}, ChannelResponse{
+		ID:          "22222222-2222-2222-2222-222222222222",
+		WorkspaceID: "33333333-3333-3333-3333-333333333333",
+		Name:        "产品讨论",
+	}, agent, trigger, 1, 2)
+
+	for _, want := range []string{
+		"already @-mentions one or more specific other agents",
+		"treat that task as already claimed",
+		"do not restate, duplicate, or race the same claim",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("ambient unread prompt missing already-delegated rule %q:\n%s", want, p)
+		}
+	}
+}
+
 func TestBuildChannelMentionPromptUsesCLITransportContract(t *testing.T) {
 	h := &Handler{DB: channelPromptNoopDB{}}
 	ch := ChannelResponse{

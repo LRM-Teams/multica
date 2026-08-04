@@ -704,9 +704,11 @@ func listVersionDirs(t *testing.T, store *VersionStore) []string {
 	return names
 }
 
-// TestPruneInactiveVersions_RemovesOldLeavesActive tests the positive case:
-// after two upgrades, only the currently active version directory survives.
-func TestPruneInactiveVersions_RemovesOldLeavesActive(t *testing.T) {
+// TestPruneInactiveVersions_RemovesOldLeavesActiveAndPrevious tests that after
+// successive upgrades, prune reclaims older-than-previous dirs but keeps both
+// Active and Previous (so a lagging OS service unit can still ExecStart the
+// just-superseded path for one cycle).
+func TestPruneInactiveVersions_RemovesOldLeavesActiveAndPrevious(t *testing.T) {
 	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
 
 	// Simulate two consecutive upgrades.
@@ -721,6 +723,9 @@ func TestPruneInactiveVersions_RemovesOldLeavesActive(t *testing.T) {
 	if state.ActiveVersion != "v0.3.92" {
 		t.Fatalf("expected active v0.3.92, got %s", state.ActiveVersion)
 	}
+	if state.PreviousVersion != "v0.3.91" {
+		t.Fatalf("expected previous v0.3.91, got %s", state.PreviousVersion)
+	}
 
 	// All three should be present before prune.
 	dirs := listVersionDirs(t, store)
@@ -732,14 +737,20 @@ func TestPruneInactiveVersions_RemovesOldLeavesActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PruneInactiveVersions: %v", err)
 	}
-	if len(result.RemovedVersions) != 2 {
-		t.Fatalf("expected 2 removed, got %d: %v", len(result.RemovedVersions), result.RemovedVersions)
+	if len(result.RemovedVersions) != 1 || result.RemovedVersions[0] != "v0.3.90" {
+		t.Fatalf("expected only v0.3.90 removed, got %v", result.RemovedVersions)
 	}
 
-	// After prune, only the active version directory remains.
+	// After prune, Active + Previous remain; older-than-previous is gone.
 	dirs = listVersionDirs(t, store)
-	if len(dirs) != 1 || dirs[0] != "v0.3.92" {
-		t.Fatalf("expected only v0.3.92 after prune, got %v", dirs)
+	want := map[string]bool{"v0.3.91": true, "v0.3.92": true}
+	if len(dirs) != 2 {
+		t.Fatalf("expected active+previous after prune, got %v", dirs)
+	}
+	for _, d := range dirs {
+		if !want[d] {
+			t.Fatalf("unexpected dir after prune: %s (all=%v)", d, dirs)
+		}
 	}
 
 	// The active binary must still exist and be readable.
@@ -749,6 +760,38 @@ func TestPruneInactiveVersions_RemovesOldLeavesActive(t *testing.T) {
 	}
 	if _, err := os.Stat(activePath); err != nil {
 		t.Fatalf("active binary missing after prune: %v", err)
+	}
+	// Previous binary must still exist (OS unit lag safety).
+	prevStaged, err := store.ResolveStagedVersion(state.PreviousVersion)
+	if err != nil {
+		t.Fatalf("ResolveStagedVersion(previous): %v", err)
+	}
+	if _, err := os.Stat(prevStaged.BinaryPath); err != nil {
+		t.Fatalf("previous binary missing after prune: %v", err)
+	}
+}
+
+// TestPruneInactiveVersions_NeverDeletesPrevious is the guard for the
+// Previous keep: even when surrounded by junk versions, Previous survives.
+func TestPruneInactiveVersions_NeverDeletesPrevious(t *testing.T) {
+	store := testVersionStore(t, func(context.Context, string, string) error { return nil })
+
+	stageAndActivate(t, store, "v0.3.90")
+	stageAndActivate(t, store, "v0.3.91")
+
+	state, _ := store.ReadActivationState()
+	if state.PreviousVersion != "v0.3.90" {
+		t.Fatalf("expected previous v0.3.90, got %s", state.PreviousVersion)
+	}
+
+	_, err := store.PruneInactiveVersions(context.Background())
+	if err != nil {
+		t.Fatalf("PruneInactiveVersions: %v", err)
+	}
+
+	prevDir := filepath.Join(store.VersionsRoot(), state.PreviousVersion)
+	if _, err := os.Stat(prevDir); err != nil {
+		t.Fatalf("previous version directory was deleted: %v", err)
 	}
 }
 

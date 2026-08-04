@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown, Cloud, Loader2 } from "lucide-react";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -50,23 +50,12 @@ export function RuntimePicker({
   };
 
   const sortedRuntimes = useMemo(
-    // react-doctor-disable-next-line react-doctor/no-event-handler -- flags the useEffect below that seeds selection from this list; it reacts to `runtimes` arriving from the parent's query/WS subscription, not a local user event this component can hook a handler into.
     () => sortRuntimesForPicker(runtimes, currentUserId),
     [runtimes, currentUserId],
   );
 
   const selectedRuntime =
     runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
-
-  // Sole source of truth for seeding the parent's selection when it's empty
-  // — first mount with no template runtime, or runtimes arriving later over
-  // WS. Only fires when `selectedRuntimeId === ""` so a duplicate-mode
-  // pre-fill (template runtime) is never silently overwritten.
-  useEffect(() => {
-    if (selectedRuntimeId !== "") return;
-    const firstRuntime = sortedRuntimes[0];
-    if (firstRuntime) onSelect(firstRuntime.id);
-  }, [sortedRuntimes, selectedRuntimeId, onSelect]);
 
   const selectedOwner = selectedRuntime
     ? getOwnerMember(selectedRuntime.owner_id)

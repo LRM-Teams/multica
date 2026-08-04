@@ -616,13 +616,11 @@ func buildAutopilotPrompt(task Task) string {
 	} else if task.AutopilotTitle != "" {
 		fmt.Fprintf(&b, "%s\n\n", task.AutopilotTitle)
 	} else {
-		b.WriteString("No additional autopilot instructions were provided. Inspect the autopilot configuration before proceeding.\n\n")
+		b.WriteString("No additional autopilot instructions were provided. Use only the task context above — the Autopilot product is retired (no `multica autopilot` CLI).\n\n")
 	}
-	if task.AutopilotID != "" {
-		fmt.Fprintf(&b, "Start by running `multica autopilot get %s --output json` if you need the full autopilot configuration, then complete the instructions above.\n", task.AutopilotID)
-	} else {
-		b.WriteString("Complete the instructions above.\n")
-	}
+	// Autopilot CLI/API retired (task #40 / LRM-1049). Do not instruct agents
+	// to run multica autopilot get — that command no longer exists.
+	b.WriteString("Complete the instructions above.\n")
 	b.WriteString("Do not run `multica issue get`; this run does not have an issue ID.\n")
 	return b.String()
 }

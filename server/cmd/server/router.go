@@ -1371,7 +1371,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/reminders/update", h.AgentTransportUpdateReminder)
 			r.Post("/api/agent/reminders/cancel", h.AgentTransportCancelReminder)
 			r.Post("/api/agent/reminders/log", h.AgentTransportReminderLog)
-				r.Post("/api/agent/actions/prepare", h.AgentTransportPrepareAction)
+			r.Post("/api/agent/actions/prepare", h.AgentTransportPrepareAction)
+
+			// Unified Messages read model. Group-channel and DM mutations/details
+			// intentionally remain on their domain-specific routes below.
+			r.Get("/api/conversations", h.ListConversations)
 
 			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
 			// sessions) plus idempotent create-or-find. Sole data source for the

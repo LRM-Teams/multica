@@ -500,6 +500,31 @@ type EnvDispatchService struct {
 	deps        EnvDispatchDeps
 	concurrency int
 	lifecycle   SandboxInstanceCreator // optional; nil ⇒ existing Fleet fork path
+	// auditStorage is deliberately optional: ordinary env-dispatch requests do
+	// not opt into audit correlation and must not incur audit persistence.
+	auditStorage EnvDispatchAuditStorage
+	// reclaimer is installed by the handler once the shared lifecycle cleanup
+	// implementation is available. Keeping the dependency optional preserves
+	// the current project-delete behavior until T020 delegates to it.
+	reclaimer EnvDispatchReclaimer
+}
+
+// EnvDispatchReclamationRequest identifies one env-dispatch-owned scope for
+// shared lifecycle cleanup. Exactly one of ProjectID and ChannelID is set by
+// the caller. The Trigger is retained as a typed value so the reclaimer can
+// create a matching audit obligation without inferring the delete path.
+type EnvDispatchReclamationRequest struct {
+	WorkspaceID string
+	ProjectID   string
+	ChannelID   string
+	Trigger     EnvDispatchAuditObligationTrigger
+}
+
+// EnvDispatchReclaimer is the shared cleanup seam consumed by env-dispatch
+// deletion entry points. Its implementation is intentionally deferred to the
+// reclaimer task; a nil dependency leaves existing dispatch behavior intact.
+type EnvDispatchReclaimer interface {
+	Reclaim(ctx context.Context, request EnvDispatchReclamationRequest) error
 }
 
 // SandboxInstanceCreator creates a sandbox_instance-backed environment
@@ -531,6 +556,21 @@ func NewEnvDispatchService(deps EnvDispatchDeps, concurrency int) *EnvDispatchSe
 // Fleet fork path. Returns the service for chaining.
 func (s *EnvDispatchService) WithSandboxLifecycle(lc SandboxInstanceCreator) *EnvDispatchService {
 	s.lifecycle = lc
+	return s
+}
+
+// WithAuditStorage injects the opt-in audit ledger. A nil storage disables
+// audit recording, which is the default for ordinary dispatch construction.
+func (s *EnvDispatchService) WithAuditStorage(storage EnvDispatchAuditStorage) *EnvDispatchService {
+	s.auditStorage = storage
+	return s
+}
+
+// WithReclaimer injects the shared env-dispatch lifecycle cleanup seam. A nil
+// reclaimer preserves the current delete behavior until a caller explicitly
+// provides the T018 implementation.
+func (s *EnvDispatchService) WithReclaimer(reclaimer EnvDispatchReclaimer) *EnvDispatchService {
+	s.reclaimer = reclaimer
 	return s
 }
 

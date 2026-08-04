@@ -179,10 +179,7 @@ func (h *Handler) EnvDispatch(w http.ResponseWriter, r *http.Request) {
 		template = h.cfg.DefaultSelfPlayTemplate
 	}
 
-	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), envDispatchConcurrency())
-	if lc := newEnvSandboxLifecycleService(h); lc != nil {
-		svc = svc.WithSandboxLifecycle(lc)
-	}
+	svc := newEnvDispatchService(h, envDispatchConcurrency())
 	res, err := svc.Dispatch(r.Context(), service.EnvDispatchInput{
 		WorkspaceID: workspaceID, UserID: userID,
 		Mode: service.EnvMode(req.Mode), EnvID: req.EnvID,
@@ -220,7 +217,7 @@ func (h *Handler) DeleteEnvDispatchProject(w http.ResponseWriter, r *http.Reques
 	if _, ok := parseUUIDOrBadRequest(w, projectID, "projectID"); !ok {
 		return
 	}
-	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), 8)
+	svc := newEnvDispatchService(h, 8)
 	if err := svc.DeleteProject(r.Context(), projectID, workspaceID); err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -308,7 +305,7 @@ func (h *Handler) getEnvDispatchDagForProject(w http.ResponseWriter, r *http.Req
 	//     DagReadinessInProgress -> 202 {"status":"in_progress"} (keep polling).
 	//   - terminal root (completed/failed/cancelled) -> DagReadinessTerminal ->
 	//     proceed to DAG assembly below (200 failed or 200 assembled DAG).
-	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), envDispatchConcurrency())
+	svc := newEnvDispatchService(h, envDispatchConcurrency())
 	readiness, err := svc.GetDagReadiness(r.Context(), projectID, workspaceID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "lookup dispatch root: "+err.Error())
@@ -485,6 +482,35 @@ func mapRollouts(rs []service.EnvRollout) []EnvRolloutResponse {
 // envDispatchConcurrency reads ENV_DISPATCH_CONCURRENCY (default 8).
 func envDispatchConcurrency() int {
 	return 8
+}
+
+// newEnvDispatchService centralizes production dependency injection for every
+// env-dispatch entry point. Audit storage and lifecycle reclamation are both
+// optional: T012/T018 install their concrete implementations here, while a
+// nil dependency keeps ordinary dispatches fully unchanged.
+func newEnvDispatchService(h *Handler, concurrency int) *service.EnvDispatchService {
+	svc := service.NewEnvDispatchService(newEnvDispatchDepsAdapter(h), concurrency).
+		WithAuditStorage(newEnvDispatchAuditStorage(h)).
+		WithReclaimer(newEnvDispatchReclaimer(h))
+	if lc := newEnvSandboxLifecycleService(h); lc != nil {
+		svc = svc.WithSandboxLifecycle(lc)
+	}
+	return svc
+}
+
+// newEnvDispatchAuditStorage is the handler-level injection point for the
+// T004 audit ledger. Its concrete SQLC adapter belongs with the audit
+// lifecycle work; returning nil now keeps audit disabled until an explicit
+// audit-enabled request is implemented.
+func newEnvDispatchAuditStorage(_ *Handler) service.EnvDispatchAuditStorage {
+	return nil
+}
+
+// newEnvDispatchReclaimer is the handler-level injection point for the shared
+// cleanup implementation. T018 supplies the concrete reclaimer; keeping this
+// nil before then preserves current project/channel deletion semantics.
+func newEnvDispatchReclaimer(_ *Handler) service.EnvDispatchReclaimer {
+	return nil
 }
 
 // newEnvDispatchDepsAdapter returns the production Deps adapter wired to real
@@ -1294,7 +1320,6 @@ func (a *envDispatchDepsAdapter) SetDefaultSelfPlayEnv(ctx context.Context, work
 // service fake. The column is nullable, and the daemon resolves ownership
 // via agent_id + chat_session_id, so NULL is a safe intermediate state.
 // A follow-up task should extend the interface to pass UserID explicitly.
-//
 func (a *envDispatchDepsAdapter) EnqueueAgentRun(ctx context.Context, workspaceID, actorUserID, agentID, issueID, chatSessionID, sandboxInstanceID, envID, runtimeID string, idx int) (string, error) {
 	switch {
 	case issueID != "":

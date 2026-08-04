@@ -102,6 +102,8 @@ func TestClassifyRules(t *testing.T) {
 		{"connectionrefused single", "ConnectionRefused", ReasonAgentProviderNetwork},
 		{"dns", "dns lookup failed", ReasonAgentProviderNetwork},
 		{"i/o timeout", "read tcp 1.2.3.4:443: i/o timeout", ReasonAgentProviderNetwork},
+		{"http2 keepalive timeout", "Error: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms", ReasonAgentProviderNetwork},
+		{"http2 keepalive beats internal error", "RetriableError: internal error: HTTP/2 keepalive ping timed out after 5000ms", ReasonAgentProviderNetwork},
 
 		// 8. Model not found / unavailable.
 		{"model not found", "Error: model claude-3-opus-99 not found", ReasonAgentModelNotFoundOrUnavailable},

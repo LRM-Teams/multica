@@ -225,6 +225,15 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	}
 
 	kind, objective, capability := remediationTask(gate)
+	if reason, terminal := terminalRemediationFailure(run, tasks, kind, objective); terminal {
+		terminalErr := errors.New(reason)
+		failed, _, _, failErr := e.store.MarkFailed(ctx, sessionID, reason)
+		_, cancelErr := e.cancelPendingAttempts(ctx, failed, "research_remediation_failed")
+		if cancelErr != nil {
+			return errors.Join(terminalErr, failErr, cancelErr)
+		}
+		return errors.Join(terminalErr, failErr, e.projectPending(ctx, sessionID))
+	}
 	task, _, err := e.store.CreateControlTask(ctx, sessionID, kind, objective, capability, 1)
 	if err != nil {
 		if errors.Is(err, ErrBudgetExhausted) {
@@ -561,6 +570,43 @@ func hasActiveCurrentWork(run Run, tasks []Task) bool {
 		}
 	}
 	return false
+}
+
+func terminalRemediationFailure(run Run, tasks []Task, kind TaskKind, objective string) (string, bool) {
+	planningSucceeded := false
+	var terminalInitialPlan *Task
+	var terminalSameControl *Task
+	for i := range tasks {
+		task := &tasks[i]
+		if task.GoalVersion != run.GoalVersion || task.PlanVersion != run.PlanVersion {
+			continue
+		}
+		if (task.Kind == TaskKindPlan || task.Kind == TaskKindReplan) && task.Status == TaskStatusSucceeded {
+			planningSucceeded = true
+		}
+		terminal := task.Status == TaskStatusBlocked || task.Status == TaskStatusFailed
+		if terminal && task.Kind == TaskKindPlan {
+			terminalInitialPlan = task
+		}
+		if terminal && task.Kind == kind && task.Objective == objective && strings.HasPrefix(task.ClientKey, "control:") {
+			terminalSameControl = task
+		}
+	}
+	if kind == TaskKindReplan && !planningSucceeded && terminalInitialPlan != nil {
+		return terminalResearchTaskReason("initial research plan", *terminalInitialPlan), true
+	}
+	if terminalSameControl != nil {
+		return terminalResearchTaskReason("research remediation", *terminalSameControl), true
+	}
+	return "", false
+}
+
+func terminalResearchTaskReason(label string, task Task) string {
+	reason := strings.TrimSpace(task.TerminalReason)
+	if reason == "" {
+		reason = string(task.Status)
+	}
+	return fmt.Sprintf("%s task %s exhausted its attempts: %s", label, task.ID, reason)
 }
 
 func remediationTask(gate GateResult) (TaskKind, string, string) {

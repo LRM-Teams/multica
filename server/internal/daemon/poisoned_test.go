@@ -89,6 +89,21 @@ on long outputs.`,
 	}
 }
 
+func TestClassifyFailedOutput(t *testing.T) {
+	t.Run("provider retriable error emitted as final output", func(t *testing.T) {
+		reason, ok := classifyFailedOutput("Error: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms")
+		if !ok || reason != "agent_error.provider_network" {
+			t.Fatalf("ok=%v reason=%q", ok, reason)
+		}
+	})
+	t.Run("real answer quoting marker is not failed", func(t *testing.T) {
+		output := "The log contained `Error: RetriableError: [internal] HTTP/2 keepalive ping timed out after 5000ms`. After reconnecting, the operation completed successfully."
+		if reason, ok := classifyFailedOutput(output); ok {
+			t.Fatalf("real answer classified as failed: %q", reason)
+		}
+	})
+}
+
 func TestClassifyPoisonedError(t *testing.T) {
 	cases := []struct {
 		name       string

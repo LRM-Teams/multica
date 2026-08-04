@@ -1,0 +1,45 @@
+# 调研任务结果提交与失败恢复修复记录
+
+## 目标
+
+修复调研任务能够执行却无法提交结构化结果、失败后重复创建无效节点、基础设施错误分类失真，以及失败信息不足的问题；同时让节点详情明确展示目的、方法、动作、执行者、结果、证据、失败诊断和后续关系。
+
+## 生产证据
+
+- 会话 `36cb121e-f8c4-42e5-be95-576acf3e2c00` 的首个规划任务返回 `HTTP/2 keepalive ping timed out after 5000ms`，随后被记为不可重试失败。
+- 后续重新规划任务已经生成完整 `research_plan_v2`，调用 `multica research task-result` 时收到 `403 task-bound agent credential required`。
+- 该会话当时 `accepted_results=0`、`sources=0`、`observations=0`、`claims=0`；调度器持续创建 `control:replan:*`，画布因此出现大量重复节点。
+- CLI 已发送当前投递的 inbox event、delivery 和 lease token；HTTP handler 只读取 principal 内的 task 绑定。长期 agent credential 的 principal 没有投递绑定，因此合法提交被拒绝。
+
+## 根因假设与验证顺序
+
+1. **结果接口没有验证并使用长期 credential 携带的当前投递租约。** 代码已经证实：CLI 发送三个投递头，handler 没有读取它们。
+2. **`acked/replied` 被当作不可重试 inbox 失败。** 这会绕过“任务完成但未提交结果”的同任务重试逻辑，并触发重新规划。
+3. **控制任务失败后仍可再次创建同类控制任务。** 任务级重试耗尽以后，engine 没有把失败升级为会话失败。
+4. **HTTP/2 keepalive 超时被归到 agent timeout。** 错误匹配顺序会丢失 provider/network 语义。
+
+## 完成记录
+
+- [x] 从生产会话、API 快照与代码确认失败路径。
+- [x] 从最新 `origin/dev` 建立隔离 worktree，未接触用户当前工作区改动。
+- [x] 为四类根因增加失败测试并确认修复前失败。
+- [x] 实现当前投递租约校验及路由上下文绑定。
+- [x] 修正未提交结构化结果的终态映射与诊断。
+- [x] 阻止已耗尽重试的规划/控制任务生成同类重复节点。
+- [x] 将短格式 `Error: RetriableError:` 输出识别为任务失败，并修正 HTTP/2 keepalive 的 provider/network 分类。
+- [x] 后端聚焦验证通过：`handler`、`researchrun`、`daemon`、`taskfailure` 的相关测试和包级完整测试均通过。
+- [x] 补齐节点详情数据：任务、尝试、执行 Agent、失败诊断和创建任务时的目标、角色、预期产出均由后端快照/事件提供。
+- [x] 节点详情按任务上下文展示小目标、执行方法、执行者、实际/要求角色、任务类型、预期产出、尝试次数与状态、完成动作、结果、失败诊断、来源、证据摘录、主张、派生任务和新问题。
+- [x] 修复调研舰队头像控件的嵌套交互元素：Agent 资料入口与舰队展开按钮分离，消除浏览器 hydration 错误，并阻止展开态头像无限横向增长。
+- [x] 前端调研测试通过：84 个测试文件、501 个通过、2 个既有预期失败；节点详情和舰队控件修改后的聚焦测试、类型检查、ESLint 均通过。
+- [x] 整个 Go 测试集通过。首次与前端测试并行执行时 `pkg/agent` 的时序测试失败；该包无缓存单独重跑通过，随后 `go test -p 1 ./...` 整体重跑通过，未发现与调研改动相关的失败。
+- [x] 合并最新 `origin/dev`（`86de3d724`），无冲突。
+- [x] 合并 `dev` 后重新验证：后端 `handler`、`researchrun`、`daemon`、`taskfailure` 通过；调研前端 87 个文件、515 个测试通过、2 个既有预期失败；全仓类型检查和修改文件 lint 通过。
+- [x] PR 首轮 frontend CI 在 React Doctor 阶段发现节点指标使用 `.filter().map()` 两次遍历；改为单次遍历后 React Doctor 为 0 issues，节点详情测试、类型检查和 ESLint 通过。
+- [ ] 提交非草稿 PR、合并到 `dev`、确认部署。
+
+## 非目标
+
+- 不重做前端画布布局；只修改节点详情入口和详情内容。
+- 不通过接受缺失结果、伪造研究卡片或吞掉提交错误来让任务显示成功。
+- 不自动重跑或删除现有生产调研会话。

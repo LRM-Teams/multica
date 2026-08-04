@@ -1125,13 +1125,10 @@ func (h *Handler) requireAgentTransportInboxEvent(w http.ResponseWriter, r *http
 }
 
 func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWriter, r *http.Request) (db.AgentInboxEvent, chatOutputOrigin, pgtype.UUID, bool) {
-	if strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Event-ID")) == "" ||
-		strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Delivery-ID")) == "" ||
-		strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Lease-Token")) == "" {
-		writeError(w, http.StatusForbidden, "agent credential transport requires active inbox delivery")
+	event, runtimeID, ok := h.requireAgentCredentialActiveInboxDelivery(w, r)
+	if !ok {
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
-
 	workspaceID := ctxWorkspaceID(r.Context())
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
@@ -1141,23 +1138,56 @@ func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWrite
 	if !ok {
 		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
 	}
+	task := agentInboxSyntheticTask(event, runtimeID)
+	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
+	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
+		// LRM-1055: missing chat_session alone is no longer a hard reject; reject
+		// only when neither session nor channel_id yields a surface origin.
+		writeError(w, http.StatusForbidden, "agent inbox event has no channel transport origin")
+		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
+	}
+	return task, origin, event.ID, true
+}
+
+// requireAgentCredentialActiveInboxDelivery validates the short-lived delivery
+// fence presented alongside a durable agent credential. It intentionally does
+// not require a chat transport origin: non-chat agent APIs, including research
+// result submission, still need freshness and ownership checks but do not send
+// a message to a channel.
+func (h *Handler) requireAgentCredentialActiveInboxDelivery(w http.ResponseWriter, r *http.Request) (db.AgentInboxEvent, pgtype.UUID, bool) {
+	if strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Event-ID")) == "" ||
+		strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Delivery-ID")) == "" ||
+		strings.TrimSpace(r.Header.Get("X-Agent-Inbox-Lease-Token")) == "" {
+		writeError(w, http.StatusForbidden, "agent credential transport requires active inbox delivery")
+		return db.AgentInboxEvent{}, pgtype.UUID{}, false
+	}
+
+	workspaceID := ctxWorkspaceID(r.Context())
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return db.AgentInboxEvent{}, pgtype.UUID{}, false
+	}
+	agentID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent id")
+	if !ok {
+		return db.AgentInboxEvent{}, pgtype.UUID{}, false
+	}
 	eventID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Event-ID"), "inbox event id")
 	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, pgtype.UUID{}, false
 	}
 	deliveryID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Delivery-ID"), "delivery id")
 	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, pgtype.UUID{}, false
 	}
 	leaseToken, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-Inbox-Lease-Token"), "lease token")
 	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, pgtype.UUID{}, false
 	}
 
 	event, err := h.Queries.GetAgentInboxEvent(r.Context(), eventID)
 	if err != nil || event.AgentID != agentID || event.WorkspaceID != wsUUID {
 		writeError(w, http.StatusForbidden, "agent credential does not match this agent event")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, pgtype.UUID{}, false
 	}
 	var runtimeID pgtype.UUID
 	if err := h.DB.QueryRow(r.Context(), `
@@ -1183,17 +1213,9 @@ func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWrite
 		      AND newer.created_at >= d.created_at
 		  )`, deliveryID, event.ID, leaseToken).Scan(&runtimeID); err != nil {
 		writeError(w, http.StatusConflict, "agent inbox delivery is not active")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
+		return db.AgentInboxEvent{}, pgtype.UUID{}, false
 	}
-	task := agentInboxSyntheticTask(event, runtimeID)
-	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
-	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
-		// LRM-1055: missing chat_session alone is no longer a hard reject; reject
-		// only when neither session nor channel_id yields a surface origin.
-		writeError(w, http.StatusForbidden, "agent inbox event has no channel transport origin")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	return task, origin, event.ID, true
+	return event, runtimeID, true
 }
 
 func (h *Handler) resolveAgentTransportTarget(ctx context.Context, task db.AgentInboxEvent, origin chatOutputOrigin, rawTarget string, createDM bool) (agentTransportTarget, error) {

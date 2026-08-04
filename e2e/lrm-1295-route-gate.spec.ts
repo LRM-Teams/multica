@@ -25,14 +25,6 @@ async function authenticate(page: Page) {
   await page.evaluate((token) => localStorage.setItem("multica_token", token), api.getToken());
 }
 
-async function dismissOnboarding(page: Page) {
-  const surveyChoice = page.getByText("Don't remember", { exact: true });
-  await surveyChoice.waitFor({ state: "visible", timeout: 30000 });
-  await surveyChoice.click();
-  await page.getByRole("button", { name: "Submit", exact: true }).click();
-  await expect(surveyChoice).toBeHidden();
-}
-
 test.describe.serial("LRM-1295 aggregate tree route gate", () => {
   test.setTimeout(90000);
   test.beforeAll(async () => {
@@ -41,7 +33,13 @@ test.describe.serial("LRM-1295 aggregate tree route gate", () => {
     const workspace = await api.ensureWorkspace("LRM 1295 Gate", `lrm-1295-${Date.now()}`);
     slug = workspace.slug;
     workspaceId = workspace.id;
-    await db('UPDATE "user" SET onboarded_at = now() WHERE email = $1', [email]);
+    await db(
+      `UPDATE "user"
+       SET onboarded_at = now(),
+           onboarding_questionnaire = '{"source":["other"],"source_skipped":false}'::jsonb
+       WHERE email = $1`,
+      [email],
+    );
     await db(
       `INSERT INTO agent_runtime (
          workspace_id, daemon_id, name, runtime_mode, provider, status,
@@ -97,7 +95,6 @@ test.describe.serial("LRM-1295 aggregate tree route gate", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await authenticate(page);
     await page.goto(`/${slug}/research/${sessionId}`, { waitUntil: "commit", timeout: 60000 });
-    await dismissOnboarding(page);
     await expect(page.getByText("Root strategy").first()).toBeVisible({ timeout: 60000 });
     await expect(page.getByText("Evidence leaf").first()).toBeVisible();
     await page.screenshot({ path: "e2e/artifacts/lrm-1295-route-1440.png", fullPage: true });

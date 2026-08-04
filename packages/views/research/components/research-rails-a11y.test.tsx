@@ -27,23 +27,50 @@ const RAIL_FILES = ["exploration-rail.tsx", "research-module-rail.tsx"] as const
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: Record<string, unknown>) => unknown) =>
-      fn({
+    t: (
+      fn: (dict: Record<string, unknown>) => unknown,
+      vars?: Record<string, unknown>,
+    ) => {
+      const out = fn({
         m2: {
           rail_title: "Exploration",
-          rail_hint: "Dimensions to cover",
+          rail_hint: "Review verified directions",
           rail_loading: "Generating dimensions…",
+          rail_loading_hint: "Results appear when ready",
           rail_error: "Failed to load rail",
+          rail_error_title: "Could not organize the exploration trail",
+          rail_error_body: "Please try again later; technical details are hidden.",
           rail_empty_title: "No dimensions yet",
           rail_empty_body: "Start the session to explore.",
+          rail_empty_expect_verified: "Verified directions",
+          rail_empty_expect_gap: "Questions needing evidence",
+          rail_empty_expect_reuse: "Reusable findings",
           rail_question_count: "{{count}} questions",
           rail_summary_pending: "Summary pending",
+          rail_summary_verified: "{{count}} directions verified",
+          rail_summary_adopted: "{{count}} findings adopted",
+          rail_summary_dead: "{{count}} without a usable conclusion",
+          rail_summary_joiner: " · ",
+          rail_completed_banner: "This research is complete",
+          rail_completed_directions: "{{count}} directions",
+          rail_completed_findings: "{{count}} findings",
+          rail_result_prefix: "Result: ",
+          rail_result_open: "Collecting evidence",
+          rail_result_covered_fallback: "A usable conclusion is ready",
+          rail_result_gap: "Evidence is insufficient",
+          rail_result_dead: "No usable conclusion yet",
+          rail_result_dead_reason: "Reason: {{reason}}",
+          rail_next_expand_covered: "{{count}} questions · expand",
+          rail_next_expand_gap: "{{count}} questions · expand gaps",
+          rail_next_expand_dead: "{{count}} questions · collapse",
+          rail_collapse: "Collapse",
+          rail_ready_live: "Exploration trail ready",
           required: "Required",
           status: {
-            open: "Open",
-            covered: "Covered",
-            gap: "Gap",
-            dead: "Dead",
+            open: "Verifying",
+            covered: "Adopted",
+            gap: "Needs evidence",
+            dead: "No conclusion",
           },
         },
         session_page: { retry: "Retry" },
@@ -51,11 +78,18 @@ vi.mock("../../i18n/use-t", () => ({
           module_trajectory_ico: "轨",
           module_sources_ico: "源",
           module_detail_ico: "详",
-          module_trajectory: "Trajectory",
+          module_trajectory: "Exploration trail",
           module_sources: "Sources",
           module_detail: "Detail",
         },
-      }),
+      });
+      if (typeof out === "string" && vars) {
+        return out.replace(/\{\{(\w+)\}\}/g, (_, k: string) =>
+          String(vars[k] ?? ""),
+        );
+      }
+      return out;
+    },
   }),
 }));
 
@@ -127,7 +161,11 @@ describe("research rails a11y static contract (LRM-1204)", () => {
       '[data-testid="exploration-rail-error"]',
     );
     expect(err).toHaveAttribute("role", "alert");
-    expect(screen.getByText("boom")).toBeTruthy();
+    // LRM-1281/1287: raw error never enters DOM — only safe user copy.
+    expect(container.textContent).not.toContain("boom");
+    expect(
+      screen.getByText("Could not organize the exploration trail"),
+    ).toBeTruthy();
 
     rerender(<ExplorationRail dimensions={[]} sessionStatus="drafting" />);
     const empty = container.querySelector(

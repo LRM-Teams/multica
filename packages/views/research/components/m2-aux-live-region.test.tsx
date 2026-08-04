@@ -34,11 +34,34 @@ const M2 = {
   rail_hint: "By dimension family",
   rail_empty_title: "No trail yet",
   rail_empty_body: "Kick off to populate.",
+  rail_empty_expect_verified: "Verified directions",
+  rail_empty_expect_gap: "Questions needing evidence",
+  rail_empty_expect_reuse: "Reusable findings",
   rail_loading: "Building the question tree…",
+  rail_loading_hint: "Results appear when ready",
   rail_ready_live: "Exploration trail ready",
   rail_error: "Trail failed to load",
+  rail_error_title: "Could not organize the exploration trail",
+  rail_error_body: "Please try again later",
   rail_question_count: "nodes",
   rail_summary_pending: "Summary pending",
+  rail_summary_verified: "{{count}} directions verified",
+  rail_summary_adopted: "{{count}} findings adopted",
+  rail_summary_dead: "{{count}} without a usable conclusion",
+  rail_summary_joiner: " · ",
+  rail_completed_banner: "This research is complete",
+  rail_completed_directions: "{{count}} directions",
+  rail_completed_findings: "{{count}} findings",
+  rail_result_prefix: "Result: ",
+  rail_result_open: "Collecting evidence",
+  rail_result_covered_fallback: "A usable conclusion is ready",
+  rail_result_gap: "Evidence is insufficient",
+  rail_result_dead: "No usable conclusion yet",
+  rail_result_dead_reason: "Reason: {{reason}}",
+  rail_next_expand_covered: "{{count}} questions · expand",
+  rail_next_expand_gap: "{{count}} questions · expand gaps",
+  rail_next_expand_dead: "{{count}} questions · collapse",
+  rail_collapse: "Collapse",
   required: "Required",
   status: { open: "Open", covered: "Covered", gap: "Gap", dead: "Dead" },
   strategy_title: "Which sources informed this research",
@@ -83,8 +106,18 @@ const M2 = {
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: Record<string, unknown>) => unknown) =>
-      fn({ m2: M2, session_page: { retry: "Retry" } }),
+    t: (
+      fn: (dict: Record<string, unknown>) => unknown,
+      vars?: Record<string, unknown>,
+    ) => {
+      const out = fn({ m2: M2, session_page: { retry: "Retry" } });
+      if (typeof out === "string" && vars) {
+        return out.replace(/\{\{(\w+)\}\}/g, (_, k: string) =>
+          String(vars[k] ?? ""),
+        );
+      }
+      return out;
+    },
   }),
 }));
 
@@ -285,7 +318,15 @@ describe("M2 aux cards keep a persistent live region (LRM-1201)", () => {
       }
 
       // The visible error text stays inside an assertive alert.
-      expect(screen.getByRole("alert").textContent).toContain("boom");
+      // ExplorationRail (LRM-1281/1287) never surfaces the raw error string.
+      if (c.rootTestId === "exploration-rail") {
+        expect(screen.getByRole("alert").textContent).toContain(
+          "Could not organize the exploration trail",
+        );
+        expect(screen.getByRole("alert").textContent).not.toContain("boom");
+      } else {
+        expect(screen.getByRole("alert").textContent).toContain("boom");
+      }
       // The polite region must stay silent so the message is not read twice.
       expect(screen.getByTestId(c.liveTestId).textContent).toBe("");
       screen.getByTestId(c.rootTestId);

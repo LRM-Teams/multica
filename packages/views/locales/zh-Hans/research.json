@@ -27,6 +27,12 @@
     "s3_validation": "S3 · 验证",
     "s4_delivery": "S4 · 交付"
   },
+  "stage_short": {
+    "s1_plan": "S1",
+    "s2_sources": "S2",
+    "s3_validation": "S3",
+    "s4_delivery": "S4"
+  },
   "groups": {
     "in_progress": "进行中",
     "completed": "已完成"

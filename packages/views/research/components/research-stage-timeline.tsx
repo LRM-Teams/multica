@@ -1,6 +1,7 @@
 "use client";
 
 import { Check } from "lucide-react";
+import type { CSSProperties } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import {
@@ -10,78 +11,129 @@ import {
   type StageStepState,
 } from "../lib/research-stages";
 
-type StageTone = {
-  fill: string;
-  gradient: string;
-  outline: string;
-};
-
-/** Theme-aware research lane tokens keep the energy rail legible in light and dark mode. */
-const STAGE_TONES: Record<ResearchStageId, StageTone> = {
+/**
+ * LRM-1271/1291 — one semantic hue per stage, resolved through `tokens.css`
+ * (`--research-stage-*`) rather than hex in JSX: the values land on gradient
+ * `background-image` and on inline custom properties, and neither position can
+ * carry a Tailwind `dark:` variant.
+ *
+ * `--stage` is the stage's own hue; `--stage-2` is a *different* hue used as the
+ * second gradient stop on the CURRENT segment. It must never equal `--stage`:
+ * with identical stops the current band paints as one flat color and becomes
+ * indistinguishable from a `done` segment, which is exactly what the first
+ * gate-shot run showed for define/verify/deliver.
+ *
+ * Explore is pinned to the spec's violet → fuchsia. The others lean into the
+ * next stage's hue so the band reads as flowing forward; `deliver` is terminal
+ * and closes back to define (emerald → cyan, both cool, no clash).
+ */
+const STAGE_HUES: Record<ResearchStageId, { from: string; to: string }> = {
   s1_plan: {
-    fill: "bg-[var(--research-lane-1)]",
-    gradient: "from-[var(--research-lane-3)] to-[var(--research-lane-1)]",
-    outline: "text-[var(--research-lane-1)]",
+    from: "var(--research-stage-define)",
+    to: "var(--research-stage-explore)",
   },
   s2_sources: {
-    fill: "bg-[var(--research-lane-4)]",
-    gradient: "from-[var(--research-lane-4)] to-brand",
-    outline: "text-[var(--research-lane-4)]",
+    from: "var(--research-stage-explore)",
+    to: "var(--research-stage-explore-2)",
   },
   s3_validation: {
-    fill: "bg-[var(--research-lane-5)]",
-    gradient: "from-[var(--research-lane-5)] to-[var(--research-lane-2)]",
-    outline: "text-[var(--research-lane-2)]",
+    from: "var(--research-stage-verify)",
+    to: "var(--research-stage-deliver)",
   },
   s4_delivery: {
-    fill: "bg-success",
-    gradient: "from-success to-[var(--research-lane-1)]",
-    outline: "text-success",
+    from: "var(--research-stage-deliver)",
+    to: "var(--research-stage-define)",
   },
 };
 
-function StepGlyph({ state, tone }: { state: StageStepState; tone: StageTone }) {
+function stageVars(stage: ResearchStageId): CSSProperties {
+  const hue = STAGE_HUES[stage];
+  return {
+    "--stage": hue.from,
+    "--stage-2": hue.to,
+  } as CSSProperties;
+}
+
+/**
+ * The 9px continuous band. Segments abut (no gap, `flex-1`) so the four stages
+ * read as one track; only the outer ends are rounded.
+ *
+ * State is never carried by hue alone (WCAG 1.4.1):
+ * - done     → solid fill
+ * - current  → two-stop gradient + a single sheen overlay
+ * - upcoming → 45° hatch at low alpha, i.e. a different *pattern*, not just a
+ *              paler version of the same color
+ */
+function StageBand({
+  state,
+  isFirst,
+  isLast,
+}: {
+  state: StageStepState;
+  isFirst: boolean;
+  isLast: boolean;
+}) {
+  return (
+    <span
+      aria-hidden
+      data-stage-band={state}
+      className={cn(
+        "relative block h-[9px] w-full overflow-hidden",
+        isFirst && "rounded-l-full",
+        isLast && "rounded-r-full",
+        state === "done" && "bg-[var(--stage)]",
+        state === "current" &&
+          "bg-[linear-gradient(90deg,var(--stage)_0%,var(--stage-2)_100%)]",
+        state === "upcoming" &&
+          "bg-[repeating-linear-gradient(135deg,color-mix(in_oklch,var(--stage)_38%,transparent)_0_3px,transparent_3px_6px)]",
+      )}
+    >
+      {state === "current" ? (
+        <span
+          aria-hidden
+          data-stage-sheen=""
+          className="animate-research-stage-sheen absolute inset-0 block"
+        />
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Glyphs differ by shape as well as color so `done` / `current` / `upcoming`
+ * survive greyscale and color-blind viewing:
+ * - done     → filled disc + check
+ * - current  → 28px ring with a background-colored outline and a solid center
+ *              dot (the frozen spec's "28px 白描边 ring / 中心实点")
+ * - upcoming → hollow disc, stage-hued stroke only
+ */
+function StepGlyph({ state }: { state: StageStepState }) {
   if (state === "done") {
     return (
       <span
-        data-stage-glyph="done"
-        className={cn(
-          "flex size-6 items-center justify-center rounded-full text-background shadow-sm",
-          tone.fill,
-        )}
+        className="flex size-5 items-center justify-center rounded-full bg-[var(--stage)] text-background"
         aria-hidden
       >
-        <Check className="size-3.5 stroke-[2.5]" />
+        <Check className="size-3 stroke-[2.5]" />
       </span>
     );
   }
-
   if (state === "current") {
     return (
       <span
-        data-stage-glyph="current"
-        className={cn(
-          "flex size-7 items-center justify-center rounded-full border-2 border-background ring-1 ring-foreground/20",
-          tone.fill,
-        )}
+        data-stage-current-ring=""
+        className="flex size-7 items-center justify-center rounded-full border-2 border-[var(--stage)] ring-2 ring-background"
         aria-hidden
       >
-        <span className="size-2 rounded-full bg-background" />
+        <span className="size-2.5 rounded-full bg-[linear-gradient(90deg,var(--stage)_0%,var(--stage-2)_100%)]" />
       </span>
     );
   }
-
   return (
     <span
-      data-stage-glyph="upcoming"
-      className={cn(
-        "flex size-6 items-center justify-center rounded-full border-2 border-current bg-background",
-        tone.outline,
-      )}
+      className="flex size-5 items-center justify-center rounded-full border-2 border-[color-mix(in_oklch,var(--stage)_55%,transparent)]"
       aria-hidden
-    >
-      <span className="size-1.5 rounded-full bg-current" />
-    </span>
+    />
   );
 }
 
@@ -104,13 +156,17 @@ export function ResearchStageTimeline({
       className="relative z-[1] shrink-0 border-b border-border/55 bg-background/55 backdrop-blur-sm"
     >
       <ol
-        data-testid="research-stage-energy-rail"
-        className="grid grid-cols-4 overflow-hidden px-3 pt-3 pb-2 md:px-4"
+        className={cn(
+          // Four equal segments at every width: with S1–S4 short labels the
+          // narrow track fits 360 without a scroll strip, so the band stays
+          // continuous instead of being cut by an overflow edge.
+          "flex gap-0 px-3 py-2 md:px-4",
+        )}
       >
         {RESEARCH_STAGE_ORDER.map((stage, index) => {
           const state = resolveStageStepState(stage, currentStage, sessionStatus);
           const label = t(($) => $.stage[stage]);
-          const tone = STAGE_TONES[stage];
+          const shortLabel = t(($) => $.stage_short[stage]);
           const clickable = state !== "upcoming" && Boolean(onSelectStage);
           const stateLabel =
             state === "done"
@@ -123,64 +179,70 @@ export function ResearchStageTimeline({
             <li
               key={stage}
               data-stage-state={state}
-              data-stage-energy-segment
-              data-stage-energy-state={state}
-              className="relative min-w-0"
+              data-stage={stage}
+              style={stageVars(stage)}
+              className="flex min-w-0 flex-1 flex-col gap-1.5"
             >
-              <span
-                aria-hidden
-                className={cn(
-                  "absolute top-0 right-0 left-0 h-2 bg-gradient-to-r",
-                  state === "upcoming" ? "opacity-35" : "opacity-100",
-                  tone.gradient,
-                )}
-              >
-                {state === "current" ? (
-                  <span
-                    data-stage-flow="current"
-                    className="absolute inset-0 bg-gradient-to-r from-transparent via-background/70 to-transparent animate-pulse motion-reduce:animate-none"
-                  />
-                ) : (
-                  <span data-stage-flow="none" />
-                )}
-              </span>
+              <StageBand
+                state={state}
+                isFirst={index === 0}
+                isLast={index === RESEARCH_STAGE_ORDER.length - 1}
+              />
               <button
                 type="button"
                 disabled={!clickable}
                 onClick={() => onSelectStage?.(stage)}
                 className={cn(
-                  "relative flex min-h-12 w-full min-w-0 items-center gap-1.5 pt-3 text-left transition-[background-color,box-shadow] duration-200 md:justify-center md:gap-2",
+                  "relative z-[1] flex max-w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors",
                   clickable &&
-                    "rounded-md hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40",
+                    "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
                   !clickable && "cursor-default",
-                  state === "current" && "rounded-md bg-muted/45",
+                  state === "current" &&
+                    "bg-[color-mix(in_oklch,var(--stage)_10%,transparent)]",
                 )}
                 aria-current={state === "current" ? "step" : undefined}
                 aria-label={`${label} — ${stateLabel}`}
               >
-                <StepGlyph state={state} tone={tone} />
+                <StepGlyph state={state} />
                 <span className="min-w-0">
+                  {/* Narrow shows S1–S4, but the short form is a real locale
+                      entry (`stage_short`) — never derived by truncating the
+                      full label — and it is aria-hidden, so the button's
+                      accessible name keeps the full stage name at every width
+                      (LRM-1271 AC3). */}
                   <span
-                    data-stage-short-label
-                    className="block text-xs font-medium text-foreground md:hidden"
+                    aria-hidden
+                    className={cn(
+                      "block truncate tracking-wide md:hidden",
+                      state === "current" && "text-xs font-semibold text-foreground",
+                      state === "done" && "font-mono text-[11px] text-foreground/75",
+                      state === "upcoming" &&
+                        "font-mono text-[11px] text-muted-foreground",
+                    )}
                   >
-                    {`S${index + 1}`}
+                    {shortLabel}
                   </span>
                   <span
-                    data-stage-label
                     className={cn(
-                      "hidden truncate text-xs md:block",
-                      state === "current" && "font-medium text-foreground",
-                      state === "done" && "font-normal text-foreground",
-                      state === "upcoming" && "font-normal text-muted-foreground",
+                      "hidden truncate tracking-wide md:block",
+                      state === "current" && "text-xs font-semibold text-foreground",
+                      state === "done" && "font-mono text-[11px] text-foreground/75",
+                      state === "upcoming" &&
+                        "font-mono text-[11px] text-muted-foreground",
                     )}
                   >
                     {label}
                   </span>
+                  {/* Text redundancy for the band color: every state names
+                      itself at md+, so "done vs upcoming" never rests on hue.
+                      LRM-1252: solid tokens only — no alpha on these labels. */}
                   <span
+                    data-stage-state-text=""
                     className={cn(
-                      "mt-0.5 hidden text-xs md:block",
-                      state === "upcoming" ? "text-muted-foreground" : "text-foreground",
+                      "mt-0.5 hidden text-[10px] font-medium md:block",
+                      state === "current"
+                        ? "text-[var(--stage)]"
+                        : "text-muted-foreground",
                     )}
                   >
                     {stateLabel}

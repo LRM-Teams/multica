@@ -27,6 +27,12 @@
     "s3_validation": "S3 · 검증",
     "s4_delivery": "S4 · 전달"
   },
+  "stage_short": {
+    "s1_plan": "S1",
+    "s2_sources": "S2",
+    "s3_validation": "S3",
+    "s4_delivery": "S4"
+  },
   "groups": {
     "in_progress": "진행 중",
     "completed": "완료"

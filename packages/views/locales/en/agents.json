@@ -547,7 +547,11 @@
     }
   },
   "execution_config": {
-    "applies_next_run": "Saving runtime, model, or thinking restarts the agent (when available) so changes apply immediately."
+    "applies_next_run": "Open the dialog to edit runtime, model, and thinking. Saving applies all changes and restarts the agent when available (at most once).",
+    "dialog_title": "Runtime config",
+    "dialog_description": "Edits stay local until you save. Cancel discards the draft without restarting.",
+    "dialog_saving": "Saving…",
+    "edit_trigger_aria": "Edit runtime, model, and thinking"
   },
   "side_panel": {
     "close_aria": "Close agent panel",

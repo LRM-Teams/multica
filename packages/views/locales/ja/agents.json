@@ -734,6 +734,8 @@
     "eyebrow": "Multica エージェント栄誉",
     "title": "栄誉コア",
     "subtitle": "永続 XP、実績コレクション、艦隊昇格、承認された成果の追跡可能な記録。",
+    "xp_label": "XP",
+    "xp_value": "{{value}} XP",
     "unlocked": "解除済み",
     "remove_showcase": "外す",
     "add_showcase": "展示",

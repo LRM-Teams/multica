@@ -312,7 +312,7 @@
       "keep_building": "继续开发以解锁荣誉",
       "collection": "已收集 {{unlocked}} / {{total}}",
       "agent_collection": "已解锁 {{unlocked}} 项",
-      "level_value": "LV.{{level}}"
+      "level_value": "第 {{level}} 级"
     },
     "restricted": {
       "runtime": "Runtime",

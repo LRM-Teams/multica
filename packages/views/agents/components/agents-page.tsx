@@ -1064,6 +1064,7 @@ function AgentRailRow({
   selected: boolean;
   onClick: () => void;
 }) {
+  const { t } = useT("agents");
   const displayName = resolveActorDisplayName(agent, agent.name);
   const isArchived = !!agent.archived_at;
   return (
@@ -1105,7 +1106,9 @@ function AgentRailRow({
             {agent.honor_level ? (
               <AgentHonorLevelIcon
                 level={agent.honor_level}
-                title={`LV.${agent.honor_level}`}
+                title={t(($) => $.honor_agent.level_value, {
+                  level: agent.honor_level,
+                })}
                 className={cn(
                   "size-6 drop-shadow-sm",
                   isArchived && "opacity-50 grayscale",

@@ -84,7 +84,7 @@ var channelMemberAddCmd = &cobra.Command{
 	Short: "Add agent(s) to a group channel",
 	Long: "Add one or more agents to a group channel in one call. Each <agent> " +
 		"may be an agent UUID or display name (resolved against the workspace " +
-		"agent list). Only agents can be added this way — to invite people, add " +
+		"workspace info --agents). Only agents can be added this way — to invite people, add " +
 		"them from the channel UI. <channel> is the --target channel UUID or #name.", Args: cobra.MinimumNArgs(1),
 	RunE: runChannelMemberAdd,
 }

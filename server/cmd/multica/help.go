@@ -121,7 +121,7 @@ EXAMPLES
   $ multica login
   $ multica issue list --output json
   $ multica daemon start
-  $ multica agent list --output json
+  $ multica workspace info --agents --output json
 
 ENVIRONMENT VARIABLES
   MULTICA_SERVER_URL    Override the default server URL

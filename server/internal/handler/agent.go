@@ -2206,6 +2206,9 @@ func (h *Handler) GetWorkspaceAgentActivity30d(w http.ResponseWriter, r *http.Re
 // outcome"; a failed outcome stays sticky until the user starts a new task or
 // one succeeds. Per-agent filtering happens in the front-end against this
 // workspace-wide snapshot.
+//
+// LRM-1261: short TTL + singleflight collapses burst refetches; SQL trims heavy
+// blobs; actor resolve is agents-only (snapshot rows are always agent-authored).
 func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 	member, ok := h.workspaceMember(w, r, workspaceID)
@@ -2213,22 +2216,39 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 		return
 	}
 
-	tasks, err := h.Queries.ListWorkspaceAgentTaskSnapshot(r.Context(), parseUUID(workspaceID))
+	if cached, hit := getCachedAgentTaskSnapshot(workspaceID); hit {
+		writeJSON(w, http.StatusOK, cached)
+		return
+	}
+
+	// Detach from the leader request's cancel so coalesced waiters still get a
+	// result if the first client disconnects mid-query.
+	loadCtx := context.WithoutCancel(r.Context())
+	v, err, _ := agentTaskSnapshotCache.group.Do(workspaceID, func() (any, error) {
+		if cached, hit := getCachedAgentTaskSnapshot(workspaceID); hit {
+			return cached, nil
+		}
+		tasks, err := h.Queries.ListWorkspaceAgentTaskSnapshot(loadCtx, parseUUID(workspaceID))
+		if err != nil {
+			return nil, err
+		}
+		actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
+		resolver := h.newAgentOnlyActorIdentityResolver(loadCtx, workspaceID, actorType, actorID, member.Role)
+		resp := make([]AgentTaskResponse, 0, len(tasks))
+		for _, t := range tasks {
+			item := taskToResponse(t, workspaceID)
+			applyActorIdentityToTask(&item, resolver.resolve("agent", item.AgentID))
+			resp = append(resp, item)
+		}
+		putCachedAgentTaskSnapshot(workspaceID, resp)
+		return resp, nil
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list agent task snapshot")
 		return
 	}
-
-	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	resolver := h.newActorIdentityResolver(r.Context(), workspaceID, actorType, actorID, member.Role)
-
-	resp := make([]AgentTaskResponse, 0, len(tasks))
-	for _, t := range tasks {
-		item := taskToResponse(t, workspaceID)
-		applyActorIdentityToTask(&item, resolver.resolve("agent", item.AgentID))
-		resp = append(resp, item)
-	}
-	writeJSON(w, http.StatusOK, resp)
+	resp, _ := v.([]AgentTaskResponse)
+	writeJSON(w, http.StatusOK, cloneAgentTaskSnapshot(resp))
 }
 
 // AgentTaskFeedItem is one terminal task in the workspace activity feed,

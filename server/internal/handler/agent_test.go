@@ -57,6 +57,7 @@ func TestListWorkspaceAgentTaskSnapshot(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
+	resetAgentTaskSnapshotCacheForTest()
 
 	ctx := context.Background()
 	// Three agents so we can verify per-agent semantics independently.
@@ -297,6 +298,7 @@ func TestListWorkspaceAgentTaskSnapshotIncludesActorIdentity(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
+	resetAgentTaskSnapshotCacheForTest()
 
 	ctx := context.Background()
 	visibleAgentID := createHandlerTestAgent(t, "snapshot-identity-visible-"+uuid.NewString()[:8], []byte(`{}`))

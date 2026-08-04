@@ -365,7 +365,7 @@ INSERT INTO env_dispatch_audit_event (
 )
 VALUES (
     @audit_id,
-    @audit_resource_id,
+    sqlc.narg(audit_resource_id),
     @sequence,
     @event_type,
     sqlc.narg(reason_code),

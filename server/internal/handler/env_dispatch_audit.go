@@ -57,7 +57,7 @@ type EnvDispatchAuditResourceResponse struct {
 // errors or any event payload.
 type EnvDispatchAuditEventResponse struct {
 	ID              string                            `json:"id"`
-	AuditResourceID string                            `json:"audit_resource_id"`
+	AuditResourceID *string                           `json:"audit_resource_id,omitempty"`
 	Sequence        int64                             `json:"sequence"`
 	Type            service.EnvDispatchAuditEventType `json:"type"`
 	ReasonCode      *string                           `json:"reason_code,omitempty"`

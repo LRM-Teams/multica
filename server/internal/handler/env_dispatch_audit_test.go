@@ -269,7 +269,7 @@ func TestEnvDispatchAuditReport_RedactsContentCredentialsAndLeaseTokens(t *testi
 	report := auditContractReport()
 	report.Events = []service.EnvDispatchAuditEvent{{
 		ID:              "event-1",
-		AuditResourceID: "resource-1",
+		AuditResourceID: ptrAuditContractString("resource-1"),
 		Sequence:        1,
 		Type:            service.EnvDispatchAuditEventCleanupFailed,
 		ReasonCode:      ptrAuditContractString("raw error: " + secret + " " + content),
@@ -294,6 +294,33 @@ func TestEnvDispatchAuditReport_RedactsContentCredentialsAndLeaseTokens(t *testi
 		if strings.Contains(string(body), forbidden) {
 			t.Fatalf("public audit report leaked %q: %s", forbidden, body)
 		}
+	}
+}
+
+func TestEnvDispatchAuditReport_OmitsResourceIDForRunLevelEvent(t *testing.T) {
+	report := auditContractReport()
+	report.Events = []service.EnvDispatchAuditEvent{{
+		ID:         "event-1",
+		Sequence:   1,
+		Type:       service.EnvDispatchAuditEventCreationFailed,
+		OccurredAt: report.AsOf,
+	}}
+
+	body, err := json.Marshal(mapEnvDispatchAuditReportResponse(report))
+	if err != nil {
+		t.Fatalf("encode public audit report: %v", err)
+	}
+	var response struct {
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("decode public audit report: %v", err)
+	}
+	if len(response.Events) != 1 {
+		t.Fatalf("event count = %d, want 1", len(response.Events))
+	}
+	if _, ok := response.Events[0]["audit_resource_id"]; ok {
+		t.Fatalf("run-level event must omit audit_resource_id: %s", body)
 	}
 }
 

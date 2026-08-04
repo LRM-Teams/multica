@@ -21,11 +21,10 @@ type envDispatchAuditContextKey struct{}
 // correctness must never depend on audit persistence, while a recorder that
 // has not been explicitly enabled must perform no storage calls at all.
 type envDispatchAuditRecorder struct {
-	storage            EnvDispatchAuditStorage
-	auditID            string
-	resources          map[envDispatchAuditResourceKey]EnvDispatchAuditResource
-	fallbackResourceID string
-	mu                 sync.Mutex
+	storage   EnvDispatchAuditStorage
+	auditID   string
+	resources map[envDispatchAuditResourceKey]EnvDispatchAuditResource
+	mu        sync.Mutex
 }
 
 type envDispatchAuditResourceKey struct {
@@ -57,11 +56,6 @@ func startEnvDispatchAudit(ctx context.Context, storage EnvDispatchAuditStorage,
 		auditID:   report.AuditID,
 		resources: make(map[envDispatchAuditResourceKey]EnvDispatchAuditResource),
 	}
-	// The storage schema requires every event to reference a resource. Create a
-	// server-generated, content-free correlation resource before any lifecycle
-	// work so first-operation failures can retain their creation/rollback and
-	// terminal events without inventing an ID from request content.
-	recorder.recordResource(ctx, EnvDispatchAuditResourceDerivedAgent, "dispatch:"+report.AuditID, in.EnvID, "", "", "")
 	return context.WithValue(ctx, envDispatchAuditContextKey{}, recorder), recorder
 }
 
@@ -123,9 +117,6 @@ func (r *envDispatchAuditRecorder) recordResource(ctx context.Context, kind EnvD
 		return EnvDispatchAuditResource{}
 	}
 	r.resources[key] = resource
-	if r.fallbackResourceID == "" {
-		r.fallbackResourceID = resource.ID
-	}
 	return resource
 }
 
@@ -149,20 +140,9 @@ func (r *envDispatchAuditRecorder) recordEvent(ctx context.Context, eventType En
 	if r == nil {
 		return
 	}
-	if auditResourceID == "" {
-		r.mu.Lock()
-		auditResourceID = r.fallbackResourceID
-		r.mu.Unlock()
-	}
-	// Audit events have a non-null audit_resource_id FK. When dispatch fails
-	// before any resource exists, the terminal run outcome is still durable but
-	// there is no lifecycle resource to which an event can truthfully attach.
-	if auditResourceID == "" {
-		return
-	}
 	_, _ = r.storage.AppendAuditEvent(ctx, EnvDispatchAuditEvent{
 		AuditID:         r.auditID,
-		AuditResourceID: auditResourceID,
+		AuditResourceID: auditOptionalString(auditResourceID),
 		Type:            eventType,
 		ReasonCode:      auditOptionalString(reasonCode),
 		OccurredAt:      time.Now().UTC(),
@@ -281,12 +261,11 @@ const (
 type EnvDispatchAuditResourceKind string
 
 const (
-	EnvDispatchAuditResourceSandbox      EnvDispatchAuditResourceKind = "sandbox"
-	EnvDispatchAuditResourceRuntime      EnvDispatchAuditResourceKind = "runtime"
-	EnvDispatchAuditResourceBinding      EnvDispatchAuditResourceKind = "binding"
-	EnvDispatchAuditResourceDerivedAgent EnvDispatchAuditResourceKind = "derived_agent"
-	EnvDispatchAuditResourceTask         EnvDispatchAuditResourceKind = "task"
-	EnvDispatchAuditResourceSession      EnvDispatchAuditResourceKind = "session"
+	EnvDispatchAuditResourceSandbox EnvDispatchAuditResourceKind = "sandbox"
+	EnvDispatchAuditResourceRuntime EnvDispatchAuditResourceKind = "runtime"
+	EnvDispatchAuditResourceBinding EnvDispatchAuditResourceKind = "binding"
+	EnvDispatchAuditResourceTask    EnvDispatchAuditResourceKind = "task"
+	EnvDispatchAuditResourceSession EnvDispatchAuditResourceKind = "session"
 )
 
 // EnvDispatchAuditOwnershipMode declares whether reclamation is exclusive to
@@ -415,7 +394,7 @@ type EnvDispatchAuditReclamationResource struct {
 type EnvDispatchAuditEvent struct {
 	ID              string
 	AuditID         string
-	AuditResourceID string
+	AuditResourceID *string
 	Sequence        int64
 	Type            EnvDispatchAuditEventType
 	ReasonCode      *string

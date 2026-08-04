@@ -318,6 +318,37 @@ func TestDispatchAudit_PartialResetFailureRecordsRollbackEvidence(t *testing.T) 
 	}
 }
 
+func TestDispatchAudit_FirstCreationFailureRecordsRunLevelEventsWithoutSyntheticResource(t *testing.T) {
+	deps := newFakeEnvDispatchDeps()
+	deps.createEnvErr = fmt.Errorf("create env failed before a rollout exists")
+	svc, storage := newAuditedDispatchService(deps)
+
+	_, err := svc.Dispatch(context.Background(), EnvDispatchInput{
+		WorkspaceID: "workspace-audit", UserID: "initiator-audit", Mode: EnvModeScratch,
+		EnvID: deps.seedBaseEnv(), Domain: EnvDomainSweLego, DispatchType: EnvDispatchIssue,
+		GroupSize: 1, AgentID: "agent", Issue: &IssueInput{Title: "audit-safe title"},
+		Audit: enabledEnvDispatchAuditRequest(),
+	})
+	if err == nil {
+		t.Fatal("Dispatch() error = nil, want reset failure")
+	}
+
+	for _, eventType := range []EnvDispatchAuditEventType{
+		EnvDispatchAuditEventCreationFailed,
+		EnvDispatchAuditEventRollbackStarted,
+		EnvDispatchAuditEventDispatchOutcome,
+	} {
+		if !hasRunLevelAuditEvent(storage.events, eventType) {
+			t.Fatalf("first creation failure must persist run-level %q, got events %+v", eventType, storage.events)
+		}
+	}
+	for _, resource := range storage.resources {
+		if resource.Kind == EnvDispatchAuditResourceKind("derived_agent") {
+			t.Fatalf("audit resources must not contain synthetic derived_agent evidence: %+v", storage.resources)
+		}
+	}
+}
+
 func TestDispatchAudit_DistinguishesAbsentResourceFromUnavailableObservation(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
@@ -390,6 +421,15 @@ func hasAuditEvent(events []EnvDispatchAuditEvent, want EnvDispatchAuditEventTyp
 	return false
 }
 
+func hasRunLevelAuditEvent(events []EnvDispatchAuditEvent, want EnvDispatchAuditEventType) bool {
+	for _, event := range events {
+		if event.Type == want && event.AuditResourceID == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func findAuditResource(resources []EnvDispatchAuditResource, kind EnvDispatchAuditResourceKind, resourceID string) (EnvDispatchAuditResource, bool) {
 	for _, resource := range resources {
 		if resource.Kind == kind && resource.ResourceID == resourceID {
@@ -401,7 +441,7 @@ func findAuditResource(resources []EnvDispatchAuditResource, kind EnvDispatchAud
 
 func hasAuditEventForResource(events []EnvDispatchAuditEvent, want EnvDispatchAuditEventType, auditResourceID string) bool {
 	for _, event := range events {
-		if event.Type == want && event.AuditResourceID == auditResourceID {
+		if event.Type == want && event.AuditResourceID != nil && *event.AuditResourceID == auditResourceID {
 			return true
 		}
 	}

@@ -193,6 +193,10 @@ function WorkingListRow({
   const actionLabel = isTerminal
     ? t(($) => $.header.working_dismiss)
     : t(($) => $.agent_status.stop);
+  // LRM-1348: pending phase semantics are unchanged — only how it is expressed.
+  const isStopPending =
+    stoppingTaskId === task.task_id ||
+    stoppingTaskId === STOPPING_ALL_TASKS_ID;
 
   return (
     <div
@@ -248,14 +252,25 @@ function WorkingListRow({
           type="button"
           variant="ghost"
           size="sm"
-          className="h-8 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-          disabled={
-            stoppingTaskId === task.task_id ||
-            stoppingTaskId === STOPPING_ALL_TASKS_ID
-          }
+          // LRM-1348 (design gate LRM-1347) — pending must not be a native
+          // `disabled`. This button lives inside a Portal overlay (desktop Base
+          // UI PreviewCard / narrow Popover): Chromium drops focus to <body>,
+          // the overlay treats that as a dismiss and unmounts its whole
+          // subtree, so Stop all and the other rows' Stop leave the DOM
+          // mid-interaction. Same frozen pattern as LRM-1213 / LRM-1169:
+          // stay focusable, guard the handler.
+          aria-disabled={isStopPending || undefined}
+          className={cn(
+            "h-8 shrink-0 gap-1 px-2 text-[11px] text-muted-foreground",
+            isStopPending
+              ? "cursor-not-allowed opacity-50"
+              : "hover:text-foreground",
+          )}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
+            // aria-disabled does not block clicks — the guard does.
+            if (isStopPending) return;
             // LRM-1350: pass the same resolved label the row paints — do not
             // let the toast fall back to raw `task.agent_name` sentinels.
             onStopTask(task, displayName);
@@ -526,6 +541,8 @@ export function ChannelPresenceCluster({
   const isLive = allowWorkingChrome && listTasks.length > 0;
   const hasStoppable = stoppable.length > 0;
   const workingCount = stoppable.length;
+  // LRM-1348: pending semantics verbatim — only the expression changes.
+  const isStopAllPending = stoppingTaskId === STOPPING_ALL_TASKS_ID;
 
   const stackedMembers = useMemo(() => {
     if (!isLive || workingAgentIds.size === 0) {
@@ -611,11 +628,20 @@ export function ChannelPresenceCluster({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-8 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-            disabled={stoppingTaskId === STOPPING_ALL_TASKS_ID}
+            // LRM-1348 — same frozen pattern as the row Stop above: a native
+            // `disabled` here drops focus to <body> and the Portal overlay
+            // dismisses the entire Working list (LRM-1347 case B).
+            aria-disabled={isStopAllPending || undefined}
+            className={cn(
+              "h-8 gap-1 px-2 text-[11px] text-muted-foreground",
+              isStopAllPending
+                ? "cursor-not-allowed opacity-50"
+                : "hover:text-foreground",
+            )}
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
+              if (isStopAllPending) return;
               onStopAll();
             }}
             aria-label={t(($) => $.agent_status.stop_all_aria, {

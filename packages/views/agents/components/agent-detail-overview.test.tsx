@@ -56,6 +56,7 @@ const agent: Agent = {
   max_concurrent_tasks: 1,
   model: "",
   owner_id: "user-1",
+  honor_level: 8,
   skills: [],
   created_at: "2026-07-13T00:00:00Z",
   updated_at: "2026-07-13T00:00:00Z",
@@ -152,6 +153,21 @@ describe("AgentDetailOverview", () => {
     fireEvent.click(fleetCard);
 
     expect(onHonor).toHaveBeenCalledOnce();
+  });
+
+  it("shows the Agent honor crest without the legacy fleet glyph", () => {
+    renderOverview(makeTask("queued"), vi.fn(), fleet);
+
+    const fleetCard = screen.getByTestId("agent-fleet-honor-card").closest("section");
+
+    expect(fleetCard).not.toBeNull();
+    expect(fleetCard?.querySelector('img[data-agent-honor-level="8"]')).not.toBeNull();
+    expect(
+      Array.from(fleetCard?.querySelectorAll("svg title") ?? []).some(
+        (title) => title.textContent === "Cruiser",
+      ),
+    ).toBe(false);
+    expect(screen.getByTestId("fleet-rank-badge")).toHaveTextContent("Cruiser");
   });
 
   it("exposes a Message DM entry on the detail header", () => {

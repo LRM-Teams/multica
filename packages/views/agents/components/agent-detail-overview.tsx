@@ -17,19 +17,18 @@ import {
 } from "lucide-react";
 import type { Agent, AgentRuntime, AgentTask, AgentFleetRank } from "@multica/core/types";
 import { FleetRankBadge } from "@multica/ui/components/fleet/fleet-class-badge";
-import { FleetClassIcon } from "@multica/ui/components/fleet/fleet-class-icons";
 import { agentTasksOptions } from "@multica/core/agents";
 import { resolveActorDisplayName, resolveActorHandle } from "@multica/core/identity";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
-import { fleetClassTone } from "@multica/ui/lib/fleet-class";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ActorIdentityRow } from "../../common/actor-identity-row";
 import { useT, useTimeAgo } from "../../i18n";
 import { AgentRestartModal } from "./agent-restart-modal";
 import { AgentOpenDmButton } from "./agent-open-dm-button";
+import { AgentHonorLevelIcon } from "./agent-honor-level-icon";
 import { useAgentFleetClassName } from "../hooks/use-agent-fleet-class-name";
 
 export interface AgentMetric {
@@ -81,11 +80,13 @@ function SectionCard({
 
 function FleetHonorCard({
   fleet,
+  honorLevel,
   isArchived,
   classLabel,
   onHonor,
 }: {
   fleet: AgentFleetRank;
+  honorLevel?: number;
   isArchived: boolean;
   classLabel: string;
   onHonor: () => void;
@@ -132,35 +133,22 @@ function FleetHonorCard({
         aria-hidden="true"
         className="pointer-events-none absolute -bottom-24 left-1/3 -z-10 size-52 rounded-full bg-chart-2/10 blur-3xl"
       />
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute right-8 top-5 -z-10 size-24 rounded-full border border-primary/15"
-      />
-
       <div className="relative flex flex-col gap-5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="relative grid size-16 shrink-0 place-items-center rounded-2xl border border-primary/20 bg-background/75 shadow-sm backdrop-blur-sm">
-              <span
-                aria-hidden="true"
-                className="absolute inset-2 rounded-full border border-dashed border-primary/25 transition-transform duration-500 group-hover:rotate-45 motion-reduce:transition-none"
+            {honorLevel !== undefined ? (
+              <AgentHonorLevelIcon
+                level={honorLevel}
+                title={t(($) => $.honor_agent.level_value, { level: honorLevel })}
+                className="size-20 drop-shadow-xl transition-transform duration-300 group-hover:scale-105 motion-reduce:transition-none"
               />
-              <FleetClassIcon
-                classId={fleet.class_id}
-                title={classLabel}
-                className={cn(
-                  "relative size-10 drop-shadow-sm transition-transform duration-300 group-hover:scale-110 motion-reduce:transition-none",
-                  fleetClassTone(fleet.class_id),
-                )}
-              />
-            </span>
+            ) : null}
             <span className="min-w-0">
-              <span className="block text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+              <span className="block text-[11px] font-medium tracking-[0.14em] text-muted-foreground">
                 {t(($) => $.fleet.title)}
               </span>
               <span className="mt-1.5 flex flex-wrap items-center gap-2">
                 <FleetRankBadge
-                  classId={fleet.class_id}
                   classLabel={classLabel}
                   fleetRank={fleet.fleet_rank}
                   frozen={frozen}
@@ -438,6 +426,7 @@ export function AgentDetailOverview({
         {fleet ? (
           <FleetHonorCard
             fleet={fleet}
+            honorLevel={agent.honor_level}
             isArchived={isArchived}
             classLabel={fleetClassName(fleet.class_id, fleet.class_label)}
             onHonor={onHonor}

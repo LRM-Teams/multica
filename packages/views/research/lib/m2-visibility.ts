@@ -60,8 +60,20 @@ export type SourceStrategyModel = {
   empty: boolean;
 };
 
-/** Source strip body mode when chips are empty or errored (LRM-977). */
-export type SourceStrategyMode = "ready" | "loading" | "empty" | "error";
+/**
+ * Source strip body mode (LRM-977 / LRM-1282).
+ * `partial` = in-flight session that already has real chips — keep facts visible.
+ */
+export type SourceStrategyMode =
+  | "ready"
+  | "partial"
+  | "loading"
+  | "empty"
+  | "error";
+
+function isSessionInFlight(sessionStatus?: string | null): boolean {
+  return sessionStatus === "running" || sessionStatus === "paused";
+}
 
 export function resolveSourceStrategyMode(
   model: SourceStrategyModel,
@@ -69,8 +81,11 @@ export function resolveSourceStrategyMode(
   error?: string | null,
 ): SourceStrategyMode {
   if (error) return "error";
-  if (!model.empty && model.chips.length > 0) return "ready";
-  if (sessionStatus === "running" || sessionStatus === "paused") return "loading";
+  const hasFacts = !model.empty && model.chips.length > 0;
+  if (hasFacts) {
+    return isSessionInFlight(sessionStatus) ? "partial" : "ready";
+  }
+  if (isSessionInFlight(sessionStatus)) return "loading";
   return "empty";
 }
 
@@ -81,8 +96,16 @@ export type HumanBoundaryModel = {
   empty: boolean;
 };
 
-/** Boundary panel mode when content is empty or errored (LRM-978). */
-export type HumanBoundaryMode = "ready" | "loading" | "empty" | "error";
+/**
+ * Boundary panel mode (LRM-978 / LRM-1282).
+ * `partial` = in-flight session that already has real boundary facts.
+ */
+export type HumanBoundaryMode =
+  | "ready"
+  | "partial"
+  | "loading"
+  | "empty"
+  | "error";
 
 export function resolveHumanBoundaryMode(
   model: HumanBoundaryModel,
@@ -90,8 +113,10 @@ export function resolveHumanBoundaryMode(
   error?: string | null,
 ): HumanBoundaryMode {
   if (error) return "error";
-  if (!model.empty) return "ready";
-  if (sessionStatus === "running" || sessionStatus === "paused") return "loading";
+  if (!model.empty) {
+    return isSessionInFlight(sessionStatus) ? "partial" : "ready";
+  }
+  if (isSessionInFlight(sessionStatus)) return "loading";
   return "empty";
 }
 

@@ -307,6 +307,8 @@ export type {
   ResearchClarificationOption,
   ResearchClarificationField,
   ResearchClarificationQuestion,
+  ResearchThoughtStrategyState,
+  ResearchThoughtStrategy,
   ResearchSessionSnapshot,
   ResearchRun,
   ResearchRunContract,

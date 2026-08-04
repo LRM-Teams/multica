@@ -68,7 +68,10 @@ type ResearchSessionSnapshot struct {
 	Evals         []ResearchStageEvalResp        `json:"evals"`
 	Messages      []ResearchMessageResp          `json:"messages"`
 	ProductRounds []ResearchProductRoundCardResp `json:"product_rounds"`
-	Run           *researchrun.RunSnapshot       `json:"run,omitempty"`
+	// ThoughtStrategies powers the LRM-1306 side panel (LRM-1318). Omit-empty
+	// list is always present (possibly length 0); FE must not invent rows.
+	ThoughtStrategies []ResearchThoughtStrategyResp `json:"thought_strategies"`
+	Run               *researchrun.RunSnapshot      `json:"run,omitempty"`
 }
 
 // ResearchNodeContentFaces is the four content-face projection (LRM-1317 / LRM-1308).
@@ -443,16 +446,17 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, ResearchSessionSnapshot{
-		Session:       researchSessionToResponse(session),
-		Fleet:         h.researchFleetToResponse(r.Context(), fleet, members),
-		Nodes:         mapGraphNodes(nodes, edges),
-		Edges:         mapEdges(edges),
-		Sources:       mapSources(sources),
-		Report:        report,
-		Evals:         mapEvals(evals),
-		Messages:      mapMessages(messages),
-		ProductRounds: mapProductRoundCards(productRounds),
-		Run:           loadedRun,
+		Session:           researchSessionToResponse(session),
+		Fleet:             h.researchFleetToResponse(r.Context(), fleet, members),
+		Nodes:             mapGraphNodes(nodes, edges),
+		Edges:             mapEdges(edges),
+		Sources:           mapSources(sources),
+		Report:            report,
+		Evals:             mapEvals(evals),
+		Messages:          mapMessages(messages),
+		ProductRounds:     mapProductRoundCards(productRounds),
+		ThoughtStrategies: mapThoughtStrategies(nodes),
+		Run:               loadedRun,
 	})
 }
 

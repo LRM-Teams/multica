@@ -334,6 +334,19 @@ export interface ResearchMessage {
   created_at: string;
 }
 
+/** LRM-1318 / LRM-1306 side-panel row. Never invent from title/summary. */
+export type ResearchThoughtStrategyState = "drafting" | "active" | "settled";
+
+export interface ResearchThoughtStrategy {
+  node_id: string;
+  rationale: string;
+  expected_outcome: string;
+  strategy_label?: string | null;
+  strategy_revision?: string | null;
+  state: ResearchThoughtStrategyState | string;
+  updated_at?: string;
+}
+
 /** Create-session response includes a kickoff snapshot so the canvas paints immediately. */
 export interface CreateResearchSessionResponse {
   session: ResearchSession;
@@ -353,6 +366,8 @@ export interface ResearchSessionSnapshot {
   report: ResearchReport | null;
   evals: ResearchStageEval[];
   messages: ResearchMessage[];
+  /** LRM-1318 side-panel rows (LRM-1306). Always an array; may be empty. */
+  thought_strategies?: ResearchThoughtStrategy[];
   /** Durable execution state. */
   run?: ResearchRunSnapshot;
 }

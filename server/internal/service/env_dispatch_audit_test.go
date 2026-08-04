@@ -176,7 +176,10 @@ type unavailableSandboxDeleteDeps struct {
 	*fakeEnvDispatchDeps
 }
 
-func (d unavailableSandboxDeleteDeps) DeleteSandbox(_ context.Context, _ string) error {
+func (d unavailableSandboxDeleteDeps) DeleteSandbox(_ context.Context, sandboxID string) error {
+	d.mu.Lock()
+	d.deleteSandboxCalls = append(d.deleteSandboxCalls, sandboxID)
+	d.mu.Unlock()
 	return fmt.Errorf("sandbox observation unavailable")
 }
 
@@ -197,10 +200,24 @@ func auditedMessageInput(baseEnv string, groupSize int) EnvDispatchInput {
 // T011 has not yet added Audit.Enabled to EnvDispatchInput. Until that wire
 // contract exists, WithAuditStorage is the smallest existing T006 construction
 // seam that lets these service tests demand T012's lifecycle behavior. T012
-// must retain the assertions below while switching activation to Audit.Enabled.
+// must retain the assertions below while switching activation to Audit.Enabled;
+// storage injection is capability wiring, never the production opt-in signal.
 func newAuditedDispatchService(deps EnvDispatchDeps) (*EnvDispatchService, *recordingEnvDispatchAuditStorage) {
 	storage := &recordingEnvDispatchAuditStorage{}
 	return NewEnvDispatchService(deps, 1).WithAuditStorage(storage), storage
+}
+
+func TestDispatchAudit_StorageInjectionAloneDoesNotOptIn(t *testing.T) {
+	deps := newFakeEnvDispatchDeps()
+	svc, storage := newAuditedDispatchService(deps)
+
+	_, err := svc.Dispatch(context.Background(), auditedMessageInput(deps.seedBaseEnv(), 1))
+	if err != nil {
+		t.Fatalf("Dispatch() error = %v", err)
+	}
+	if len(storage.runs) != 0 || len(storage.resources) != 0 || len(storage.events) != 0 {
+		t.Fatalf("storage injection without Audit.Enabled must not persist audit evidence: runs=%+v resources=%+v events=%+v", storage.runs, storage.resources, storage.events)
+	}
 }
 
 func TestDispatchAudit_CorrelatesAllRolloutsAndLazyBindings(t *testing.T) {
@@ -230,22 +247,39 @@ func TestDispatchAudit_CorrelatesAllRolloutsAndLazyBindings(t *testing.T) {
 		t.Fatalf("audit dispatch type = %q, want message", run.DispatchType)
 	}
 
-	bindings := 0
+	bindingIDsByScope := make(map[string]map[string]struct{}, len(result.Rollouts))
 	for _, resource := range storage.resources {
 		if resource.AuditID != run.AuditID {
 			t.Fatalf("resource %q escaped audit correlation %q", resource.ResourceID, run.AuditID)
 		}
 		if resource.Kind == EnvDispatchAuditResourceBinding {
-			bindings++
+			if resource.ChannelID == nil || resource.ProjectID == nil {
+				t.Fatalf("binding %q must retain channel and project scope: %+v", resource.ResourceID, resource)
+			}
+			if resource.ResourceID == "" {
+				t.Fatalf("binding evidence for scope %q:%q is missing its logical identity", *resource.ChannelID, *resource.ProjectID)
+			}
+			scope := *resource.ChannelID + ":" + *resource.ProjectID
+			if bindingIDsByScope[scope] == nil {
+				bindingIDsByScope[scope] = map[string]struct{}{}
+			}
+			bindingIDsByScope[scope][resource.ResourceID] = struct{}{}
 		}
 	}
-	if bindings != 4 {
-		t.Fatalf("binding evidence = %d, want 4 (2 rollouts × leader plus lazy peer)", bindings)
-	}
 	for _, rollout := range result.Rollouts {
+		if rollout.AgentSandboxes["leader"].Status != "ready" {
+			t.Fatalf("leader must be ready in rollout scope %q:%q, got %+v", rollout.ChannelID, rollout.ProjectID, rollout.AgentSandboxes["leader"])
+		}
 		if rollout.AgentSandboxes["lazy-peer"].Status != "pending" {
 			t.Fatalf("lazy peer must remain pending before its first mention, got %+v", rollout.AgentSandboxes["lazy-peer"])
 		}
+		scope := rollout.ChannelID + ":" + rollout.ProjectID
+		if len(bindingIDsByScope[scope]) != 2 {
+			t.Fatalf("rollout scope %q must retain distinct leader and lazy-peer binding identities, got %d bindings: %+v", scope, len(bindingIDsByScope[scope]), storage.resources)
+		}
+	}
+	if len(bindingIDsByScope) != len(result.Rollouts) {
+		t.Fatalf("binding scopes = %d, want every rollout scope (%d): %+v", len(bindingIDsByScope), len(result.Rollouts), storage.resources)
 	}
 }
 
@@ -316,11 +350,23 @@ func TestDispatchAudit_DistinguishesAbsentResourceFromUnavailableObservation(t *
 				t.Fatal("Dispatch() error = nil, want reset failure that triggers rollback")
 			}
 
-			if !hasAuditClassification(storage.resources, tc.wantClassification) {
-				t.Fatalf("resources must include classification %q, got %+v", tc.wantClassification, storage.resources)
+			if len(tc.fixture.deleteSandboxCalls) == 0 {
+				t.Fatalf("rollback did not target any sandbox: resources=%+v events=%+v", storage.resources, storage.events)
 			}
-			if got := hasAuditEvent(storage.events, EnvDispatchAuditEventObservationUnavailable); got != tc.wantUnavailable {
-				t.Fatalf("observation_unavailable event = %t, want %t; events=%+v", got, tc.wantUnavailable, storage.events)
+			for _, sandboxID := range tc.fixture.deleteSandboxCalls {
+				resource, ok := findAuditResource(storage.resources, EnvDispatchAuditResourceSandbox, sandboxID)
+				if !ok {
+					t.Fatalf("rollback sandbox %q is missing audit resource evidence: %+v", sandboxID, storage.resources)
+				}
+				if resource.Classification != tc.wantClassification {
+					t.Fatalf("rollback sandbox %q classification = %q, want %q", sandboxID, resource.Classification, tc.wantClassification)
+				}
+				if resource.Classification == EnvDispatchAuditClassificationReclaimed && tc.wantUnavailable {
+					t.Fatalf("unavailable rollback sandbox %q must never be reclaimed", sandboxID)
+				}
+				if got := hasAuditEventForResource(storage.events, EnvDispatchAuditEventObservationUnavailable, resource.ID); got != tc.wantUnavailable {
+					t.Fatalf("rollback sandbox %q observation_unavailable = %t, want %t; events=%+v", sandboxID, got, tc.wantUnavailable, storage.events)
+				}
 			}
 		})
 	}
@@ -335,9 +381,18 @@ func hasAuditEvent(events []EnvDispatchAuditEvent, want EnvDispatchAuditEventTyp
 	return false
 }
 
-func hasAuditClassification(resources []EnvDispatchAuditResource, want EnvDispatchAuditClassification) bool {
+func findAuditResource(resources []EnvDispatchAuditResource, kind EnvDispatchAuditResourceKind, resourceID string) (EnvDispatchAuditResource, bool) {
 	for _, resource := range resources {
-		if resource.Classification == want {
+		if resource.Kind == kind && resource.ResourceID == resourceID {
+			return resource, true
+		}
+	}
+	return EnvDispatchAuditResource{}, false
+}
+
+func hasAuditEventForResource(events []EnvDispatchAuditEvent, want EnvDispatchAuditEventType, auditResourceID string) bool {
+	for _, event := range events {
+		if event.Type == want && event.AuditResourceID == auditResourceID {
 			return true
 		}
 	}

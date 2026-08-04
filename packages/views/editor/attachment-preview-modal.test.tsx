@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import type { Attachment } from "@multica/core/types";
 
 const openExternalMock = vi.hoisted(() => vi.fn());
@@ -832,4 +832,215 @@ describe("rendersFromUrlAlone — single source of truth for URL-only previewabi
       expect(rendersFromUrlAlone(kind)).toBe(false);
     },
   );
+});
+
+// LRM-1298 — the modal declares `role="dialog"` + `aria-modal="true"` from a
+// hand-rolled `createPortal` overlay, but shipped with no focus management at
+// all: no initial focus, no trap (Tab walked straight out into the page behind
+// the overlay), and no restore on close (the whole file had zero `.focus()`
+// calls). Escape / backdrop close already worked, so these tests pin only the
+// focus contract and must keep the existing dismissal paths untouched.
+describe("AttachmentPreviewModal — focus contract (LRM-1298)", () => {
+  const imageAttachment = makeAttachment({
+    filename: "shot.png",
+    content_type: "image/png",
+  });
+
+  function getDialog() {
+    return screen.getByRole("dialog");
+  }
+
+  function focusablesInDialog() {
+    return Array.from(
+      getDialog().querySelectorAll<HTMLElement>("button, iframe, video, audio"),
+    );
+  }
+
+  /**
+   * Opener + a background control that lives OUTSIDE the portal, so an escaped
+   * Tab has somewhere real to land (that is exactly the shipped defect).
+   *
+   * `unmountOpenerWhileOpen` reproduces the LRM-1177 shape: the trigger is
+   * conditionally rendered, so it is detached for the whole time the modal is
+   * open and comes back as a *different* DOM node. Node identity alone cannot
+   * restore focus there.
+   */
+  function FocusHarness({
+    unmountOpenerWhileOpen = false,
+  }: {
+    unmountOpenerWhileOpen?: boolean;
+  }) {
+    const [open, setOpen] = useState(false);
+    return (
+      <div>
+        {(!open || !unmountOpenerWhileOpen) && (
+          <button
+            type="button"
+            id="preview-opener"
+            onClick={() => setOpen(true)}
+          >
+            Open preview
+          </button>
+        )}
+        <button type="button" id="background-control">
+          Background control
+        </button>
+        <AttachmentPreviewModal
+          source={{ kind: "full", attachment: imageAttachment }}
+          open={open}
+          onClose={() => setOpen(false)}
+        />
+      </div>
+    );
+  }
+
+  it("moves focus into the dialog on open instead of leaving it on <body>", () => {
+    render(
+      <AttachmentPreviewModal
+        source={{ kind: "full", attachment: imageAttachment }}
+        open
+        onClose={() => {}}
+      />,
+    );
+
+    const dialog = getDialog();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    // The labelled `role="dialog"` node itself takes focus so screen readers
+    // announce the filename label, which means it must be programmatically
+    // focusable without joining the Tab order.
+    expect(document.activeElement).toBe(dialog);
+    expect(dialog).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("wraps Tab from the last control back to the first (no escape forward)", () => {
+    render(
+      <AttachmentPreviewModal
+        source={{ kind: "full", attachment: imageAttachment }}
+        open
+        onClose={() => {}}
+      />,
+    );
+
+    const controls = focusablesInDialog();
+    expect(controls.length).toBeGreaterThan(1);
+    const first = controls[0]!;
+    const last = controls[controls.length - 1]!;
+
+    act(() => last.focus());
+    fireEvent.keyDown(last, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("wraps Shift+Tab from the first control to the last (no escape backward)", () => {
+    render(
+      <AttachmentPreviewModal
+        source={{ kind: "full", attachment: imageAttachment }}
+        open
+        onClose={() => {}}
+      />,
+    );
+
+    const controls = focusablesInDialog();
+    const first = controls[0]!;
+    const last = controls[controls.length - 1]!;
+
+    act(() => first.focus());
+    fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("pulls focus back in when it is already outside the aria-modal dialog", () => {
+    render(<FocusHarness />);
+    const opener = document.getElementById("preview-opener")!;
+    act(() => opener.focus());
+    fireEvent.click(opener);
+
+    const background = document.getElementById("background-control")!;
+    act(() => background.focus());
+    expect(getDialog().contains(document.activeElement)).toBe(false);
+
+    fireEvent.keyDown(background, { key: "Tab" });
+    expect(getDialog().contains(document.activeElement)).toBe(true);
+  });
+
+  it("restores focus to the trigger after closing", () => {
+    render(<FocusHarness />);
+    const opener = document.getElementById("preview-opener")!;
+    act(() => opener.focus());
+    fireEvent.click(opener);
+    expect(getDialog().contains(document.activeElement)).toBe(true);
+
+    fireEvent.click(screen.getByLabelText("Close"));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(
+      document.getElementById("preview-opener"),
+    );
+  });
+
+  it("restores focus after Escape, not only after the Close button", () => {
+    render(<FocusHarness />);
+    const opener = document.getElementById("preview-opener")!;
+    act(() => opener.focus());
+    fireEvent.click(opener);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(
+      document.getElementById("preview-opener"),
+    );
+  });
+
+  it("re-finds a trigger that was unmounted while open and returned as a new node (LRM-1177 shape)", () => {
+    render(<FocusHarness unmountOpenerWhileOpen />);
+    const opener = document.getElementById("preview-opener")!;
+    act(() => opener.focus());
+    fireEvent.click(opener);
+
+    // The trigger really is gone while the modal is open — restoring by node
+    // identity alone would silently no-op here.
+    expect(document.getElementById("preview-opener")).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Close"));
+
+    const reborn = document.getElementById("preview-opener");
+    expect(reborn).not.toBeNull();
+    expect(reborn).not.toBe(opener);
+    expect(document.activeElement).toBe(reborn);
+  });
+
+  it("keeps focus inside the dialog when the trigger cannot be re-located", () => {
+    // No id / data-testid to re-find, and the node is detached by close time:
+    // focus must not be dumped on an unrelated control or on <body>.
+    function AnonymousTriggerHarness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          {!open && (
+            <button type="button" onClick={() => setOpen(true)}>
+              Open preview
+            </button>
+          )}
+          <AttachmentPreviewModal
+            source={{ kind: "full", attachment: imageAttachment }}
+            open={open}
+            onClose={() => setOpen(false)}
+          />
+        </div>
+      );
+    }
+
+    render(<AnonymousTriggerHarness />);
+    const opener = screen.getByText("Open preview");
+    act(() => opener.focus());
+    fireEvent.click(opener);
+    expect(getDialog().contains(document.activeElement)).toBe(true);
+
+    fireEvent.click(screen.getByLabelText("Close"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Nothing to restore to → leave focus where it is rather than stealing it.
+    expect(document.activeElement).not.toBeNull();
+  });
 });

@@ -15,6 +15,8 @@ import { preprocessStickers } from './stickers'
 import { loadMathPlugins, looksLikeMathMarkdown, type MathPluginPair } from './math-plugins'
 import './markdown.css'
 
+/* LRM-1264 R4: file carries the pre-existing rich pipeline moved out of Markdown.tsx for lazy loading. */
+
 type AppLinkRenderer = React.ComponentType<{ href: string; children: React.ReactNode }>
 
 /**
@@ -167,7 +169,7 @@ const HIGHLIGHT_SKIP_TAGS = new Set([
   'textarea',
 ])
 
-export function normalizeHighlightQuery(query?: string): string | undefined {
+function normalizeHighlightQuery(query?: string): string | undefined {
   const trimmed = query?.trim()
   return trimmed ? trimmed : undefined
 }
@@ -199,7 +201,7 @@ function highlightTextWithQuery(text: string, query: string): React.ReactNode {
   return nodes
 }
 
-export function highlightSearchText(text: string, query?: string): React.ReactNode {
+function highlightSearchText(text: string, query?: string): React.ReactNode {
   const normalizedQuery = normalizeHighlightQuery(query)
   if (!normalizedQuery) return text
   return highlightTextWithQuery(text, normalizedQuery)
@@ -284,6 +286,7 @@ function createComponents(
         const href = isAllowedFileCardHref(rawHref) ? rawHref : ''
         const filename = (node?.properties?.dataFilename as string) || ''
         if (renderFileCard) {
+        // react-doctor-disable-next-line react-doctor/no-render-in-render -- pluggable card slot from caller props
           return <>{renderFileCard({ href, filename })}</>
         }
         return (
@@ -309,6 +312,7 @@ function createComponents(
     // Images: render uploaded images with constrained sizing
     img: ({ src, alt }) => {
       if (renderImage) {
+        // react-doctor-disable-next-line react-doctor/no-render-in-render -- pluggable image slot from caller props
         return <>{renderImage({ src: typeof src === 'string' ? src : '', alt: alt ?? '' })}</>
       }
       return (
@@ -650,14 +654,18 @@ function createComponents(
     input: ({ type, checked }) => {
       if (type === 'checkbox') {
         return (
+          // react-doctor-disable-next-line react-doctor/control-has-associated-label -- GFM task checkbox is decorative/read-only in chat markdown
           <input
             type="checkbox"
             checked={checked}
             readOnly
+            tabIndex={-1}
+            aria-hidden="true"
             className="mr-2 rounded border-muted-foreground"
           />
         )
       }
+      // react-doctor-disable-next-line react-doctor/control-has-associated-label -- non-checkbox inputs are not expected in chat markdown
       return <input type={type} />
     },
     // Horizontal rules

@@ -31,7 +31,7 @@ plaintext `custom_env`.
 ## Core model
 
 An agent is a workspace-scoped row (table `agent`). Creation is a single
-`POST /api/agents` (`multica agent create`). At task claim time the daemon
+`POST /api/agents` (Web UI / agent:create action card). At task claim time the daemon
 re-reads the agent row and assembles the runtime payload — so the persisted
 fields, not the create-time output, are what the agent runs on.
 
@@ -50,7 +50,7 @@ Two distinct text fields, often confused:
 Minimum CLI create call (`--name` and `--runtime-id` are both required):
 
 ```bash
-multica agent create --name <name> --runtime-id <runtime-id> \
+Web UI create agent --name <name> --runtime-id <runtime-id> \
   --description "<short catalog summary>" \
   --instructions "<runtime behavior contract>" \
   --output json
@@ -121,8 +121,8 @@ handler inspects `custom_args` for a model flag.
 secrets out of shell history and the process list:
 
 ```bash
-multica agent create --name <name> --runtime-id <runtime-id> --custom-env-stdin --output json
-multica agent create --name <name> --runtime-id <runtime-id> --custom-env-file <0600-json> --output json
+Web UI create agent --name <name> --runtime-id <runtime-id> --custom-env-stdin --output json
+Web UI create agent --name <name> --runtime-id <runtime-id> --custom-env-file <0600-json> --output json
 ```
 
 `--custom-env-stdin` reads the JSON object from stdin; `--custom-env-file`
@@ -153,7 +153,7 @@ API tokens — and offers the same three input channels as `custom_env`, on BOTH
 `agent create` and `agent update`:
 
 ```bash
-multica agent create --name <name> --runtime-id <runtime-id> --mcp-config-file <0600-json> --output json
+Web UI create agent --name <name> --runtime-id <runtime-id> --mcp-config-file <0600-json> --output json
 multica agent update <agent-id> --mcp-config-stdin --output json
 multica agent update <agent-id> --mcp-config 'null'   # clears the config
 ```
@@ -202,7 +202,7 @@ Read-only (safe): `agent get`, `agent skills list`, `agent env get`.
 
 State-changing (require an explicit instruction — do not run speculatively):
 
-- `multica agent create` — inserts a new agent row.
+- Web UI / agent:create action card — inserts a new agent row.
 - `multica agent skills add` / `set` — mutate bindings (`set` is destructive:
   it drops bindings not in the new list).
 - `multica agent env set` — overwrites the full `custom_env` map and writes an

@@ -301,7 +301,6 @@ export const AgentRuntimeSchema = z.object({
   // field. The runtime row remains usable by older installed desktop builds.
   auto_update: DaemonUpdateStatusSchema.nullable().optional().catch(null),
   owner_id: z.string().nullable(),
-  visibility: z.enum(["private", "public"]).catch("private"),
   last_seen_at: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),

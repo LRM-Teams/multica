@@ -121,7 +121,7 @@ func (h *Handler) seedResearchFleetMembers(ctx context.Context, fleet db.Researc
 		}
 	}
 
-	runtime, ok := h.pickVisibleAgentRuntime(ctx, workspaceID, userID)
+	runtime, ok := h.pickAgentRuntime(ctx, workspaceID, userID)
 	if !ok {
 		return db.ResearchFleet{}, nil, errors.New("no agent runtime available to seed research fleet")
 	}

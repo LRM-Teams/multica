@@ -2,12 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "@multica/core/types";
 import { runtimePickerOptions } from "./runtime-picker-options";
 
-function runtime(
-  id: string,
-  daemonId: string,
-  ownerId: string,
-  visibility: "public" | "private",
-): AgentRuntime {
+function runtime(id: string, daemonId: string, ownerId: string): AgentRuntime {
   return {
     id,
     workspace_id: "workspace-1",
@@ -20,7 +15,6 @@ function runtime(
     device_info: "Linux",
     metadata: {},
     owner_id: ownerId,
-    visibility,
     last_seen_at: new Date().toISOString(),
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -33,19 +27,20 @@ function runtime(
 }
 
 describe("runtimePickerOptions", () => {
-  it("includes public runtimes on another computer while hiding foreign private runtimes", () => {
+  it("includes every workspace runtime and keeps the current user's runtimes first", () => {
     const options = runtimePickerOptions(
       [
-        runtime("current", "daemon-a", "me", "private"),
-        runtime("other-computer", "daemon-b", "teammate", "public"),
-        runtime("foreign-private", "daemon-c", "teammate", "private"),
+        runtime("teammate-a", "daemon-a", "teammate"),
+        runtime("mine", "daemon-b", "me"),
+        runtime("teammate-b", "daemon-c", "teammate"),
       ],
       "me",
     );
 
     expect(options.map((option) => option.id)).toEqual([
-      "current",
-      "other-computer",
+      "mine",
+      "teammate-a",
+      "teammate-b",
     ]);
   });
 });

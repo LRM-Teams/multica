@@ -119,12 +119,12 @@ func (h *Handler) GetAgentTemplate(w http.ResponseWriter, r *http.Request) {
 // --- Create-from-template handler ---
 
 type CreateAgentFromTemplateRequest struct {
-	TemplateSlug       string  `json:"template_slug"`
-	Name               string  `json:"name"`
-	DisplayName        string  `json:"display_name"`
-	RuntimeID          string  `json:"runtime_id"`
-	Model              string  `json:"model,omitempty"`
-	MaxConcurrentTasks int32   `json:"max_concurrent_tasks,omitempty"`
+	TemplateSlug       string `json:"template_slug"`
+	Name               string `json:"name"`
+	DisplayName        string `json:"display_name"`
+	RuntimeID          string `json:"runtime_id"`
+	Model              string `json:"model,omitempty"`
+	MaxConcurrentTasks int32  `json:"max_concurrent_tasks,omitempty"`
 	// Optional overrides — let the picker UI customise the template before
 	// creation without forcing a second round-trip to the detail page.
 	// When nil/empty, the template's own values are used.
@@ -200,9 +200,9 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Runtime validation reproduces the gating done by CreateAgent
-	// (handler/agent.go) — keep the two paths in sync. Done before fetch so
-	// we don't waste GitHub API calls for a request that's going to 403.
+	// Runtime validation reproduces the workspace scoping done by CreateAgent
+	// (handler/agent.go). Done before fetch so an invalid request does not
+	// waste GitHub API calls.
 	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
 		ID:          runtimeUUID,
 		WorkspaceID: wsUUID,
@@ -211,12 +211,7 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid runtime_id")
 		return
 	}
-	member, ok := h.workspaceMember(w, r, workspaceID)
-	if !ok {
-		return
-	}
-	if !canUseRuntimeForAgent(member, runtime) {
-		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
 		return
 	}
 

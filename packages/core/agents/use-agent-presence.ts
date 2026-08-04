@@ -166,9 +166,8 @@ export function useAgentPresenceDetail(
     // Agent referenced but not in the workspace's active list and detail
     // miss/forbidden (archived assignee, deleted, …). Gray-offline fallback.
     if (!agent) return MISSING_AGENT_DETAIL;
-    // Missing from the visible runtime list is NOT the same as offline when
-    // the agent carries a presence-safe status projection (private runtime
-    // filtered by ListVisibleAgentRuntimes — LRM-248 AC5).
+    // Missing from the runtime list is NOT the same as offline when the agent
+    // carries a presence-safe status projection (LRM-248 AC5).
     const runtime =
       safeRuntimes.find((r) => r.id === agent.runtime_id) ??
       runtimeReachabilityFromAgent(agent);

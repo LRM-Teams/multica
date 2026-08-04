@@ -159,6 +159,82 @@ func TestMapGraphNodesLosingLeadsToDoesNotPolluteCounts(t *testing.T) {
 	}
 }
 
+func TestMapGraphNodesContentFacesAndAbandonReason(t *testing.T) {
+	activeID := mustTestUUID("99999999-9999-9999-9999-999999999991")
+	abandonedID := mustTestUUID("99999999-9999-9999-9999-999999999992")
+	emptyID := mustTestUUID("99999999-9999-9999-9999-999999999993")
+	sessionID := mustTestUUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+	nodes := []db.ResearchGraphNode{
+		{
+			ID: activeID, SessionID: sessionID, NodeType: "subquestion", Title: "定价", Status: "active",
+			Payload: []byte(`{
+				"content": {
+					"goal": "摸清价带",
+					"operation_approach": "官网交叉",
+					"research_approach": "先横向",
+					"result": "粗分完成"
+				},
+				"assessment": "trusted"
+			}`),
+		},
+		{
+			ID: abandonedID, SessionID: sessionID, NodeType: "finding", Title: "旧支", Status: "abandoned",
+			Payload: []byte(`{
+				"goal_text": "flat goal",
+				"operation_approach": "flat ops",
+				"research_approach": "flat research",
+				"result_summary": "flat result",
+				"deprecate_reason": "用户改监管合规 — 不符",
+				"assessment": "detour"
+			}`),
+		},
+		{
+			ID: emptyID, SessionID: sessionID, NodeType: "probe", Title: "空", Status: "active",
+			Payload: []byte(`{}`),
+		},
+	}
+
+	out := mapGraphNodes(nodes, nil)
+	byID := map[string]ResearchGraphNodeResp{}
+	for _, n := range out {
+		byID[n.ID] = n
+	}
+
+	active := byID[uuidToString(activeID)]
+	if active.Content.Goal != "摸清价带" ||
+		active.Content.OperationApproach != "官网交叉" ||
+		active.Content.ResearchApproach != "先横向" ||
+		active.Content.Result != "粗分完成" {
+		t.Fatalf("active content=%+v", active.Content)
+	}
+	if active.AbandonReason != nil {
+		t.Fatalf("active must omit abandon_reason, got %v", active.AbandonReason)
+	}
+
+	abandoned := byID[uuidToString(abandonedID)]
+	if abandoned.Content.Goal != "flat goal" ||
+		abandoned.Content.OperationApproach != "flat ops" ||
+		abandoned.Content.ResearchApproach != "flat research" ||
+		abandoned.Content.Result != "flat result" {
+		t.Fatalf("abandoned content=%+v", abandoned.Content)
+	}
+	if abandoned.AbandonReason == nil || *abandoned.AbandonReason != "用户改监管合规 — 不符" {
+		t.Fatalf("abandon_reason=%v", abandoned.AbandonReason)
+	}
+	if abandoned.Assessment != researchAssessmentDetour || abandoned.Status != "abandoned" {
+		t.Fatalf("must keep assessment≠status: assessment=%q status=%q", abandoned.Assessment, abandoned.Status)
+	}
+
+	empty := byID[uuidToString(emptyID)]
+	if empty.Content != (ResearchNodeContentFaces{}) {
+		t.Fatalf("empty content must be neutral zero, got %+v", empty.Content)
+	}
+	if empty.AbandonReason != nil {
+		t.Fatalf("empty abandon_reason=%v", empty.AbandonReason)
+	}
+}
+
 func mustTestUUID(s string) pgtype.UUID {
 	return parseUUID(s)
 }

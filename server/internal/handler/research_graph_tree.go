@@ -61,6 +61,8 @@ func mapGraphNodes(rows []db.ResearchGraphNode, edges []db.ResearchGraphEdge) []
 			Assessment:       assessment,
 			Reason:           reason,
 			EvidenceSummary:  evidence,
+			Content:          contentFacesFromPayload(payload),
+			AbandonReason:    abandonReasonFromPayload(payload),
 			CreatedAt:        timestampToString(n.CreatedAt),
 			UpdatedAt:        timestampToString(n.UpdatedAt),
 		})
@@ -145,6 +147,44 @@ func assessmentFieldsFromPayload(payload json.RawMessage) (assessment string, re
 	reason = optionalTrimmedString(obj, "reason", "assessment_reason")
 	evidence = optionalTrimmedString(obj, "evidence_summary", "evidence")
 	return assessment, reason, evidence
+}
+
+// contentFacesFromPayload projects LRM-1317 four faces. Empty strings are
+// intentional neutrals — callers must not invent copy from title/summary.
+func contentFacesFromPayload(payload json.RawMessage) ResearchNodeContentFaces {
+	obj := payloadObject(payload)
+	nested, _ := obj["content"].(map[string]any)
+	return ResearchNodeContentFaces{
+		Goal:              firstPayloadString(nested, obj, "goal", "goal_text", "node_goal"),
+		OperationApproach: firstPayloadString(nested, obj, "operation_approach", "ops_approach"),
+		ResearchApproach:  firstPayloadString(nested, obj, "research_approach"),
+		Result:            firstPayloadString(nested, obj, "result", "research_result", "result_summary"),
+	}
+}
+
+func abandonReasonFromPayload(payload json.RawMessage) *string {
+	return optionalTrimmedString(payloadObject(payload), "abandon_reason", "deprecate_reason")
+}
+
+// firstPayloadString prefers nested content keys, then flat payload aliases.
+func firstPayloadString(nested, flat map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if nested != nil {
+			if v, ok := nested[key].(string); ok {
+				if t := strings.TrimSpace(v); t != "" {
+					return t
+				}
+			}
+		}
+		if flat != nil {
+			if v, ok := flat[key].(string); ok {
+				if t := strings.TrimSpace(v); t != "" {
+					return t
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func normalizeResearchAssessment(raw any) string {

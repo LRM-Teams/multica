@@ -71,6 +71,15 @@ type ResearchSessionSnapshot struct {
 	Run           *researchrun.RunSnapshot       `json:"run,omitempty"`
 }
 
+// ResearchNodeContentFaces is the four content-face projection (LRM-1317 / LRM-1308).
+// Always present on nodes[]; empty strings are neutral — FE must not invent copy.
+type ResearchNodeContentFaces struct {
+	Goal               string `json:"goal"`
+	OperationApproach  string `json:"operation_approach"`
+	ResearchApproach   string `json:"research_approach"`
+	Result             string `json:"result"`
+}
+
 type ResearchGraphNodeResp struct {
 	ID           string          `json:"id"`
 	SessionID    string          `json:"session_id"`
@@ -92,8 +101,11 @@ type ResearchGraphNodeResp struct {
 	Assessment      string   `json:"assessment"`
 	Reason          *string  `json:"reason,omitempty"`
 	EvidenceSummary *string  `json:"evidence_summary,omitempty"`
-	CreatedAt       string   `json:"created_at"`
-	UpdatedAt       string   `json:"updated_at"`
+	// LRM-1317 content faces + abandon reason (payload projection; no migration).
+	Content       ResearchNodeContentFaces `json:"content"`
+	AbandonReason *string                  `json:"abandon_reason,omitempty"`
+	CreatedAt     string                   `json:"created_at"`
+	UpdatedAt     string                   `json:"updated_at"`
 }
 
 type ResearchGraphEdgeResp struct {

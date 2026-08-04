@@ -3673,6 +3673,7 @@ export function ChannelsPage({
         onFollowChange={handleThreadFollowChange}
         parentContext="channel"
         parentChannelName={active.name}
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- thread surface keyed on root; parent jump closure is not memo-sensitive
         onViewParent={() => {
           if (embedded) {
             if (!onOpenInChannels) {
@@ -3706,6 +3707,7 @@ export function ChannelsPage({
         quoteTarget={threadQuoteTarget}
         onClearQuote={() => setThreadQuoteTarget(null)}
         sendError={channelThreadSendError}
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- thread send helpers recreate with surface state; panel remounts with root
         onRestorePrevious={handleRestoreChannelThreadPrevious}
         editor={
           <ContentEditor
@@ -3728,13 +3730,16 @@ export function ChannelsPage({
             }
           />
         }
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- same thread send helper as onRestorePrevious
         onSend={handleThreadSend}
         voicePlaybackScope={voicePlaybackScope(active.id, threadSurfaceRoot.id)}
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-object-as-prop -- voice gate flags; ThreadPanel is not memoized on this object
         voiceBlock={{
           pendingVoice: !!threadPendingVoiceHere,
           hasTextDraft: !threadDraftEmpty,
           hasAttachmentDraft: threadPending.pending.length > 0,
         }}
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- thread voice send recreates with draft/pending
         onVoiceSend={handleThreadVoiceSend}
         // react-doctor-disable-next-line react-doctor/jsx-no-jsx-as-prop -- Composer prefix slot; identity is not memo-sensitive
         composerPrefixExtra={
@@ -3826,6 +3831,7 @@ export function ChannelsPage({
         onClose={() => setSelectedMemberPanelId(null)}
         variant={isMobile ? "page" : "panel"}
         doneLabel={isMobile ? tAgents(($) => $.side_panel.back_to_messages) : undefined}
+        // react-doctor-disable-next-line react-doctor/jsx-no-new-function-as-prop -- member→DM handoff; panel unmounts on navigate
         onMessage={(userId) => {
           createOrFindDm.mutate(
             { peer_type: "user", peer_id: userId },

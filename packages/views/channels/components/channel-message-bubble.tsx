@@ -112,6 +112,13 @@ const MESSAGE_SHELL_CLASS =
   "px-1 border-line transition-colors group-hover:border-line-strong group-focus-within:border-line-strong";
 
 /**
+ * LRM-1331 — hover action bar + geometry reserves only on fine pointer AND
+ * ≥640px. Narrow fine windows fall back to the coarse long-press / context
+ * menu path (360px + 162px reserve left ~9 CJK chars — not worth it).
+ */
+const FINE_DESKTOP_MQ = "[@media(pointer:fine)_and_(min-width:640px)]";
+
+/**
  * Joined-shell segment for granularity G. Every message is its own virtual row
  * (`channel-message-list`, Virtuoso), so there is no DOM node wrapping a group —
  * the single bubble is drawn as three segments instead.
@@ -884,22 +891,18 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       {/* LRM-400: fill the conversation column — a 760px cap left a wide empty
           right band that still read as Frank's "半屏空白" after the PanelGroup
           shell fix (#1154). Soft wrap stays on `.message-surface`.
-          LRM-1126: fine pointers keep a permanent right gutter so the hover
-          action bar never covers body text (not hover-only — avoids reflow).
-          Coarse pointers skip the gutter (no hover bar on mobile).
-          LRM-1227/D2: gutter 184 → 136 (bar is 124 wide → 12px slack), and the
-          gutter now shares the bar's pointer gate exactly. It used to add `md:`,
-          so a fine pointer narrower than 768px got the bar with no reserved band
-          and the icons sat on top of the body text.
+          LRM-1331: drop the shell-wide fine-pointer `pr-[136px]` gutter (it ate
+          10–47% of body width and still failed to clear the 154px bar). Reserves
+          move to the author row / continuation float / leading-card inset below.
           LRM-1227/G: this element is also the bubble shell — see
-          MESSAGE_SHELL_CLASS / messageShellEdgeClass. */}
+          MESSAGE_SHELL_CLASS / messageShellEdgeClass. Border geometry is out of
+          this issue's scope (描边 FE is a separate knife). */}
       <div
         data-testid="message-shell"
         data-group-start={groupStart ? "true" : undefined}
         data-group-end={groupEnd ? "true" : undefined}
         className={cn(
           "min-w-0 max-w-full",
-          "[@media(pointer:fine)]:pr-[136px]",
           MESSAGE_SHELL_CLASS,
           messageShellEdgeClass(groupStart, groupEnd),
           // Same token as the message pane — no muted grey slab (LRM-1227 kickback).
@@ -909,7 +912,11 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         {showAuthor && (
           <div
             data-testid="message-author-row"
-            className="mb-0.5 flex min-w-0 select-none items-center gap-1.5 text-[13.5px]"
+            className={cn(
+              "mb-0.5 flex min-w-0 select-none items-center gap-1.5 text-[13.5px]",
+              // LRM-1331 §2: reserve only on the author line (162 = 154 bar + 8).
+              `${FINE_DESKTOP_MQ}:pr-[162px]`,
+            )}
           >
             {profileActorType && profileActorId ? (
               <ActorProfileTrigger
@@ -953,12 +960,15 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             data-message-action-surface="true"
             className={cn(
               // LRM-1126: solid popover chrome so icons never punch through body
-              // text. Lives in the permanent fine-pointer gutter.
-              // LRM-1227/D2: 124×34 (4 × size-7 + gap-0.5 + p-0.5 + 1px edge),
-              // `--line-strong` edge, `shadow-sm` kept. `right-2` matches the
-              // row's own `px-2`, so the bar's right edge and the shell's right
-              // edge are the same line (measured Δ = 0).
-              "pointer-events-none absolute right-2 z-10 hidden items-center gap-0.5 rounded-lg border border-line-strong bg-popover p-0.5 text-muted-foreground opacity-0 shadow-sm transition-opacity [@media(pointer:fine)]:flex [@media(pointer:fine)]:group-hover:pointer-events-auto [@media(pointer:fine)]:group-hover:opacity-100 [@media(pointer:fine)]:group-focus-within:pointer-events-auto [@media(pointer:fine)]:group-focus-within:opacity-100",
+              // text. Overlay — not a document-flow gutter (LRM-1331).
+              // LRM-1227/D2 chrome kept; bar measured ~154×34 with 5 keys.
+              // LRM-1331: gate on fine+≥640 — narrow fine uses long-press menu.
+              "pointer-events-none absolute right-2 z-10 hidden items-center gap-0.5 rounded-lg border border-line-strong bg-popover p-0.5 text-muted-foreground opacity-0 shadow-sm transition-opacity",
+              `${FINE_DESKTOP_MQ}:flex`,
+              `${FINE_DESKTOP_MQ}:group-hover:pointer-events-auto`,
+              `${FINE_DESKTOP_MQ}:group-hover:opacity-100`,
+              `${FINE_DESKTOP_MQ}:group-focus-within:pointer-events-auto`,
+              `${FINE_DESKTOP_MQ}:group-focus-within:opacity-100`,
               // Lead row: ride the shell's top edge (bar mid-line == shell top
               // line). D2 froze `top-0 -translate-y-1/2` measured from the shell;
               // the bar is positioned against the row, whose `py-1` offsets the
@@ -1043,6 +1053,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               isContentCollapsed && "overflow-hidden",
               isContentCollapsed ? MESSAGE_COLLAPSE_HEIGHT_CLASS : "overflow-visible",
               searchHighlighted && "rounded-md bg-primary/5",
+              // LRM-1331 §3: compact continuations — first-line float safety zone
+              // (36×158) instead of shell padding. Skip when a leading card owns
+              // its own inset (§4); block boxes slide under floats.
+              compact &&
+                !(message.quote || message.quote_message_id) &&
+                `${FINE_DESKTOP_MQ}:before:float-right ${FINE_DESKTOP_MQ}:before:h-[36px] ${FINE_DESKTOP_MQ}:before:w-[158px] ${FINE_DESKTOP_MQ}:before:content-['']`,
             )}
             data-testid="message-body"
             data-collapsed={isContentCollapsed ? "true" : undefined}
@@ -1055,6 +1071,12 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 currentUserId={currentUserId}
                 ownName={ownName}
                 onJump={onScrollTo}
+                // LRM-1331 §4: leading card inset on compact rows (bar overlays body).
+                className={
+                  compact
+                    ? `${FINE_DESKTOP_MQ}:pr-[158px]`
+                    : undefined
+                }
               />
             )}
             <MessageBody

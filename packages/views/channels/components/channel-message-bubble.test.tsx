@@ -658,7 +658,7 @@ describe("ChannelMessageBubble", () => {
     expect(contentCol!.className).not.toMatch(/760px/);
   });
 
-  it("LRM-1126: reserves a fine-pointer action-bar gutter and solid chrome so hover never covers body", () => {
+  it("LRM-1331: drops shell gutter; author row reserves; bar chrome stays overlay", () => {
     render(
       <ChannelMessageBubble
         message={makeMessage()}
@@ -668,8 +668,14 @@ describe("ChannelMessageBubble", () => {
       />,
     );
 
-    const contentCol = screen.getByTestId("message-body").parentElement;
-    expect(contentCol).toHaveClass("[@media(pointer:fine)]:pr-[136px]");
+    const shell = screen.getByTestId("message-shell");
+    expect(shell.className).not.toMatch(/pr-\[136px\]/);
+    expect(shell.className).not.toMatch(/pointer:fine.*pr-/);
+
+    const authorRow = screen.getByTestId("message-author-row");
+    expect(authorRow.className).toMatch(
+      /\[@media\(pointer:fine\)_and_\(min-width:640px\)\]:pr-\[162px\]/,
+    );
 
     const actionBar = screen.getByTestId("message-action-bar");
     expect(actionBar).toHaveClass("bg-popover");
@@ -677,6 +683,10 @@ describe("ChannelMessageBubble", () => {
     expect(actionBar).toHaveClass("shadow-sm");
     expect(actionBar).toHaveClass("rounded-lg");
     expect(actionBar).toHaveClass("top-1");
+    expect(actionBar.className).toMatch(
+      /\[@media\(pointer:fine\)_and_\(min-width:640px\)\]:flex/,
+    );
+    expect(actionBar.className).not.toMatch(/\[@media\(pointer:fine\)\]:flex\b/);
 
     // Author name: never wrap (role/time shrink first on narrow).
     expect(screen.getByText("Research Agent").className).toMatch(/whitespace-nowrap/);
@@ -692,6 +702,53 @@ describe("ChannelMessageBubble", () => {
       />,
     );
     expect(screen.getByTestId("message-action-bar")).toHaveClass("top-0.5");
+  });
+
+  it("LRM-1331: compact text rows use a first-line float safety zone", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({ content: "follow-up line that wraps" })}
+        currentUserId="user-1"
+        compact
+        onReact={vi.fn()}
+      />,
+    );
+    const body = screen.getByTestId("message-body");
+    const gate = "[@media(pointer:fine)_and_(min-width:640px)]";
+    expect(body.className).toContain(`${gate}:before:float-right`);
+    expect(body.className).toContain(`${gate}:before:h-[36px]`);
+    expect(body.className).toContain(`${gate}:before:w-[158px]`);
+    expect(screen.getByTestId("message-shell").className).not.toMatch(/pr-\[136px\]/);
+  });
+
+  it("LRM-1331: compact leading quote uses card inset instead of body float", () => {
+    render(
+      <ChannelMessageBubble
+        message={makeMessage({
+          content: "reply with quote",
+          quote_message_id: "q-1",
+          quote: {
+            messageId: "q-1",
+            status: "active",
+            snapshot: {
+              type: "user",
+              authorId: "user-a",
+              authorName: "Alice",
+              content: "quoted",
+              createdAt: "2026-06-17T09:00:00Z",
+            },
+          },
+        })}
+        currentUserId="user-1"
+        compact
+        onReact={vi.fn()}
+      />,
+    );
+    const body = screen.getByTestId("message-body");
+    const quote = screen.getByTestId("message-quote-card");
+    const gate = "[@media(pointer:fine)_and_(min-width:640px)]";
+    expect(body.className).not.toContain(`${gate}:before:float-right`);
+    expect(quote.className).toContain(`${gate}:pr-[158px]`);
   });
 
   describe("LRM-1227 bubble shell (① + G + C2 + D2, frozen in LRM-1233)", () => {
@@ -847,7 +904,7 @@ describe("ChannelMessageBubble", () => {
       }
     });
 
-    it("keeps the gutter on the same pointer gate as the bar (no fine + <768 text overlap)", () => {
+    it("LRM-1331: bar + reserves share fine+≥640 gate (no shell-wide pr gutter)", () => {
       render(
         <ChannelMessageBubble
           message={makeMessage()}
@@ -857,12 +914,13 @@ describe("ChannelMessageBubble", () => {
       );
       const shell = screen.getByTestId("message-shell");
       const bar = screen.getByTestId("message-action-bar");
-      const gate = "[@media(pointer:fine)]";
-      expect(shell.className).toContain(`${gate}:pr-[136px]`);
-      // Regression: the gutter used to add `md:`, so a fine pointer under 768px
-      // rendered the bar with no reserved band and covered the body text.
-      expect(shell.className).not.toContain(`${gate}:md:`);
+      const authorRow = screen.getByTestId("message-author-row");
+      const gate = "[@media(pointer:fine)_and_(min-width:640px)]";
+      expect(shell.className).not.toMatch(/pr-\[136px\]/);
+      expect(authorRow.className).toContain(`${gate}:pr-[162px]`);
       expect(bar.className).toContain(`${gate}:flex`);
+      // Narrow fine (<640) must not get the hover bar (falls back to long-press).
+      expect(bar.className).not.toMatch(/\[@media\(pointer:fine\)\]:flex\b/);
     });
 
     it("a11y: the shell is decoration only — no role, no aria, no new tab stop", () => {
@@ -1986,7 +2044,9 @@ describe("ChannelMessageBubble", () => {
     const bubble = screen.getByTestId("message-bubble");
     const actionBar = screen.getByTestId("message-action-bar");
     expect(actionBar).toHaveClass("hidden");
-    expect(actionBar).toHaveClass("[@media(pointer:fine)]:flex");
+    expect(actionBar).toHaveClass(
+      "[@media(pointer:fine)_and_(min-width:640px)]:flex",
+    );
     expect(actionBar).toHaveClass("opacity-0");
     expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
 
@@ -2060,9 +2120,9 @@ describe("ChannelMessageBubble", () => {
     const reactionSheet = await screen.findByRole("dialog", { name: "Add reaction" });
     expect(reactionSheet.className).not.toMatch(/\[@media\(pointer:fine\)\]:hidden/);
 
-    // LRM-1126 stays intact: the hover action bar is still fine-pointer only.
+    // LRM-1331: hover action bar is fine-pointer + ≥640 only.
     expect(screen.getByTestId("message-action-bar")).toHaveClass(
-      "[@media(pointer:fine)]:flex",
+      "[@media(pointer:fine)_and_(min-width:640px)]:flex",
     );
   });
 

@@ -8,6 +8,13 @@ import {
   runtimeHasHealthAttention,
 } from "./runtime-health-state";
 
+export const RUNTIME_ATTENTION_RUNTIME_QUERY = "attention_runtime";
+
+export interface MyAttentionRuntimeSummary {
+  count: number;
+  firstRuntimeId: string | null;
+}
+
 /**
  * Machine key for attention aggregation. Prefer daemon_id (one computer may
  * host many provider runtimes); fall back to runtime id when daemon_id is
@@ -22,17 +29,43 @@ export function attentionMachineKey(runtime: AgentRuntime): string {
  * Distinct machines owned by `userId` that need health attention.
  * Pure helper for tests and hooks (task #31 — owner-only, machine-level).
  */
+export function summarizeMyAttentionMachines(
+  runtimes: readonly AgentRuntime[] | null | undefined,
+  userId: string | null | undefined,
+): MyAttentionRuntimeSummary {
+  if (!runtimes || !userId) return { count: 0, firstRuntimeId: null };
+  const keys = new Set<string>();
+  let firstRuntimeId: string | null = null;
+  for (const runtime of runtimes) {
+    if (!runtimeHasHealthAttention(runtime, userId)) continue;
+    const machineKey = attentionMachineKey(runtime);
+    if (keys.has(machineKey)) continue;
+    keys.add(machineKey);
+    firstRuntimeId ??= runtime.id;
+  }
+  return { count: keys.size, firstRuntimeId };
+}
+
 export function countMyAttentionMachines(
   runtimes: readonly AgentRuntime[] | null | undefined,
   userId: string | null | undefined,
 ): number {
-  if (!runtimes || !userId) return 0;
-  const keys = new Set<string>();
-  for (const runtime of runtimes) {
-    if (!runtimeHasHealthAttention(runtime, userId)) continue;
-    keys.add(attentionMachineKey(runtime));
-  }
-  return keys.size;
+  return summarizeMyAttentionMachines(runtimes, userId).count;
+}
+
+export function useMyAttentionRuntimeSummary(
+  wsId: string | undefined,
+): MyAttentionRuntimeSummary {
+  const userId = useAuthStore((s) => s.user?.id);
+  const { data: runtimes } = useQuery({
+    ...runtimeListOptions(wsId ?? ""),
+    enabled: !!wsId,
+  });
+
+  return useMemo(
+    () => summarizeMyAttentionMachines(runtimes, userId),
+    [runtimes, userId],
+  );
 }
 
 /**
@@ -40,13 +73,7 @@ export function countMyAttentionMachines(
  * Accepts wsId as parameter so callers outside WorkspaceIdProvider can use it safely.
  */
 export function useMyRuntimeHealthAttention(wsId: string | undefined): boolean {
-  const userId = useAuthStore((s) => s.user?.id);
-  const { data: runtimes } = useQuery({
-    ...runtimeListOptions(wsId ?? ""),
-    enabled: !!wsId,
-  });
-
-  return countMyAttentionMachines(runtimes, userId) > 0;
+  return useMyAttentionRuntimeSummary(wsId).count > 0;
 }
 
 /**
@@ -62,16 +89,7 @@ export const useMyRuntimesNeedUpdate = useMyRuntimeHealthAttention;
  * never counts another user's computers.
  */
 export function useMyAttentionRuntimeCount(wsId: string | undefined): number {
-  const userId = useAuthStore((s) => s.user?.id);
-  const { data: runtimes } = useQuery({
-    ...runtimeListOptions(wsId ?? ""),
-    enabled: !!wsId,
-  });
-
-  return useMemo(
-    () => countMyAttentionMachines(runtimes, userId),
-    [runtimes, userId],
-  );
+  return useMyAttentionRuntimeSummary(wsId).count;
 }
 
 /**

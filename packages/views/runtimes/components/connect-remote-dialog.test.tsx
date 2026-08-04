@@ -78,7 +78,7 @@ describe("ConnectRemoteDialog", () => {
     const { baseElement } = renderDialog();
 
     expect(baseElement).toHaveTextContent(
-      "curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash",
+      "curl -fsSL https://cdn.leagent.me/computer/install.sh | bash",
     );
     expect(baseElement).toHaveTextContent("multica setup");
     expect(baseElement).not.toHaveTextContent("multica setup self-host");

@@ -48,11 +48,11 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 
 	switch RunStatus(status) {
 	case RunStatusCompleted, RunStatusCancelled, RunStatusArchived, RunStatusFailed:
-		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeSessionTerminal, "调研已结束，无法继续或分叉")
+		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeSessionTerminal, "调研已结束，无法继续该操作")
 	case RunStatusPaused:
 		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeRunNotRunning, "调研已暂停，请先恢复后再操作")
 	case RunStatusDrafting, RunStatusAwaitingUserConfirm:
-		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeRunNotRunning, "当前阶段不可续研或分叉，请稍后再试")
+		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeRunNotRunning, "当前阶段不可执行该操作，请稍后再试")
 	case RunStatusRunning:
 		// ok
 	default:
@@ -76,6 +76,21 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 		return NodeCommandOutcome{}, loadErr
 	}
 
+	switch in.Action {
+	case NodeActionRetry:
+		return s.nodeCommandRetry(ctx, tx, in, workspaceID, goalVersion, planVersion, maxAttempts)
+	case NodeActionReassign:
+		return s.nodeCommandReassign(ctx, tx, in, workspaceID, goalVersion, planVersion)
+	}
+
+	return s.nodeCommandContinueFork(ctx, tx, in, workspaceID, orchestratorVersion, goalVersion, planVersion, maxTasks, maxAttempts, timeout)
+}
+
+func (s *PostgresStore) nodeCommandContinueFork(
+	ctx context.Context, tx pgx.Tx, in NodeCommandInput,
+	workspaceID, orchestratorVersion string,
+	goalVersion, planVersion, maxTasks, maxAttempts, timeout int,
+) (NodeCommandOutcome, error) {
 	questionID := strings.TrimSpace(in.AnchorQuestionID)
 	parentTaskID := strings.TrimSpace(in.AnchorTaskID)
 	if parentTaskID != "" && questionID == "" {
@@ -102,7 +117,7 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 	}
 
 	var taskCount int
-	if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid`, in.SessionID).Scan(&taskCount); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid`, in.SessionID).Scan(&taskCount); err != nil {
 		return NodeCommandOutcome{}, err
 	}
 	if taskCount >= maxTasks {
@@ -129,8 +144,8 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 		"node_command":       in.Action,
 		"source_node_id":     in.NodeID,
 		"goal_patch":         strings.TrimSpace(in.GoalPatch),
-		"strategy":           strings.TrimSpace(in.Strategy),
-		"source_constraints": jsonRawOrNil(in.SourceConstraints),
+		"strategy":           strategyForNodeCommand(in),
+		"source_constraints": jsonRawOrNil(sourcePatchForNodeCommand(in)),
 		// goal_patch is proposal-only — never write research_session.goal (LRM-898).
 		"goal_authoritative": false,
 	})
@@ -153,7 +168,7 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 			`, in.SessionID).Scan(&parentForInsert)
 		}
 		var newQID string
-		err = tx.QueryRow(ctx, `
+		err := tx.QueryRow(ctx, `
 			INSERT INTO research_question (
 				workspace_id, session_id, parent_question_id, client_key, kind,
 				question, required, status, priority, impact, uncertainty, novelty,
@@ -201,11 +216,11 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 	tClientKey := nodeCommandClientKey(in.ClientRequestID, "task")
 	expected := expectedResultForTaskVersion(orchestratorVersion, TaskKindDiscover)
 	capability := "scout"
-	if strat := strings.TrimSpace(in.Strategy); strat != "" {
+	if strat := strategyForNodeCommand(in); strat != "" {
 		capability = truncateRunes(strat, 64)
 	}
 	var taskID string
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 		INSERT INTO research_task (
 			workspace_id, session_id, question_id, parent_task_id, client_key,
 			kind, objective, required_capability, expected_result,
@@ -282,7 +297,7 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 		"parent_task_id":     outcome.ParentLineage.ParentTaskID,
 		"queued":             true,
 	}
-	event, err := appendEvent(ctx, tx, workspaceID, in.SessionID, "node_command_"+in.Action, eventKey, in.ActorType, in.ActorID, payload)
+	event, err := appendEvent(ctx, tx, workspaceID, in.SessionID, "node_command_"+in.Action, nodeCommandClientKey(in.ClientRequestID, "event"), in.ActorType, in.ActorID, payload)
 	if err != nil {
 		if errors.Is(err, ErrResultConflict) {
 			return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeIdempotencyConflict, "相同请求标识已用于其他操作，请换新标识重试")
@@ -292,12 +307,435 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 	outcome.CommandID = event.ID
 	outcome.StateVersion = event.Sequence
 	outcome.Event = event
-	// Re-embed final command_id into a consistent replay payload by updating is hard;
-	// replay loads from event payload — patch payload.command.command_id in memory for response.
 	if err = tx.Commit(ctx); err != nil {
 		return NodeCommandOutcome{}, err
 	}
 	return outcome, nil
+}
+
+func (s *PostgresStore) nodeCommandRetry(
+	ctx context.Context, tx pgx.Tx, in NodeCommandInput,
+	workspaceID string, goalVersion, planVersion, defaultMaxAttempts int,
+) (NodeCommandOutcome, error) {
+	taskID := strings.TrimSpace(in.AnchorTaskID)
+	task, err := scanTask(tx.QueryRow(ctx, taskSelectSQL+` WHERE t.id = $1::uuid AND t.session_id = $2::uuid FOR UPDATE`, taskID, in.SessionID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeNodeStale, "任务节点已失效，请刷新后重试")
+	}
+	if err != nil {
+		return NodeCommandOutcome{}, err
+	}
+
+	latest, hasLatest, err := loadLatestAttemptForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return NodeCommandOutcome{}, err
+	}
+	if deny := retryEligibility(task, latest, hasLatest); deny != nil {
+		return NodeCommandOutcome{}, deny
+	}
+
+	// Preserve original attempts; only reopen the task for a new attempt.
+	if hasLatest && (latest.Status == AttemptStatusDispatching || latest.Status == AttemptStatusRunning) {
+		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeNotRetryable, "任务仍在执行，请等待结束后再重试，或先改派")
+	}
+
+	acceptance := mergeTaskAcceptancePatch(task.AcceptanceCriteria, map[string]any{
+		"node_command":        NodeActionRetry,
+		"source_node_id":      in.NodeID,
+		"strategy_patch":      strategyForNodeCommand(in),
+		"source_patch":        jsonRawOrNil(sourcePatchForNodeCommand(in)),
+		"previous_attempt_id": "",
+	})
+	if hasLatest {
+		acceptance = mergeTaskAcceptancePatch(acceptance, map[string]any{
+			"previous_attempt_id": latest.ID,
+		})
+	}
+	if strat := strategyForNodeCommand(in); strat != "" {
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_task SET required_capability = $2, updated_at = now()
+			WHERE id = $1::uuid
+		`, taskID, truncateRunes(strat, 64)); err != nil {
+			return NodeCommandOutcome{}, err
+		}
+	}
+
+	nextMax := task.MaxAttempts
+	var attemptCount int
+	if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_task_attempt WHERE task_id = $1::uuid`, taskID).Scan(&attemptCount); err != nil {
+		return NodeCommandOutcome{}, err
+	}
+	if attemptCount >= nextMax {
+		nextMax = attemptCount + 1
+	}
+	if nextMax < defaultMaxAttempts {
+		nextMax = defaultMaxAttempts
+	}
+
+	if _, err = tx.Exec(ctx, `
+		UPDATE research_task
+		SET status = 'ready',
+		    ready_at = now(),
+		    terminal_reason = NULL,
+		    completed_at = NULL,
+		    max_attempts = $2,
+		    acceptance_criteria = $3,
+		    goal_version = $4,
+		    plan_version = $5,
+		    updated_at = now()
+		WHERE id = $1::uuid
+	`, taskID, nextMax, acceptance, goalVersion, planVersion); err != nil {
+		return NodeCommandOutcome{}, err
+	}
+
+	task, err = scanTask(tx.QueryRow(ctx, taskSelectSQL+` WHERE t.id = $1::uuid`, taskID))
+	if err != nil {
+		return NodeCommandOutcome{}, err
+	}
+
+	lineage := &RetryLineage{
+		TaskID:            taskID,
+		NextAttemptNumber: attemptCount + 1,
+	}
+	if hasLatest {
+		lineage.PreviousAttemptID = latest.ID
+	}
+	outcome := NodeCommandOutcome{
+		Action:          NodeActionRetry,
+		ClientRequestID: in.ClientRequestID,
+		Task:            &task,
+		ParentLineage: ParentLineage{
+			ParentQuestionID: task.QuestionID,
+			ParentTaskID:     task.ParentTaskID,
+			SourceNodeID:     in.NodeID,
+		},
+		RetryLineage: lineage,
+		Queued:       true,
+		Acceptance:   acceptance,
+	}
+	if aid := strings.TrimSpace(task.AssignedAgentID); aid != "" {
+		outcome.Assigned = &aid
+	}
+
+	payload := map[string]any{
+		"command":            outcome,
+		"action":             NodeActionRetry,
+		"client_request_id":  in.ClientRequestID,
+		"source_node_id":     in.NodeID,
+		"task_id":            taskID,
+		"previous_attempt_id": lineage.PreviousAttemptID,
+		"queued":             true,
+	}
+	event, err := appendEvent(ctx, tx, workspaceID, in.SessionID, "node_command_retry", nodeCommandClientKey(in.ClientRequestID, "event"), in.ActorType, in.ActorID, payload)
+	if err != nil {
+		if errors.Is(err, ErrResultConflict) {
+			return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeIdempotencyConflict, "相同请求标识已用于其他操作，请换新标识重试")
+		}
+		return NodeCommandOutcome{}, err
+	}
+	outcome.CommandID = event.ID
+	outcome.StateVersion = event.Sequence
+	outcome.Event = event
+	if err = tx.Commit(ctx); err != nil {
+		return NodeCommandOutcome{}, err
+	}
+	return outcome, nil
+}
+
+func (s *PostgresStore) nodeCommandReassign(
+	ctx context.Context, tx pgx.Tx, in NodeCommandInput,
+	workspaceID string, goalVersion, planVersion int,
+) (NodeCommandOutcome, error) {
+	taskID := strings.TrimSpace(in.AnchorTaskID)
+	task, err := scanTask(tx.QueryRow(ctx, taskSelectSQL+` WHERE t.id = $1::uuid AND t.session_id = $2::uuid FOR UPDATE`, taskID, in.SessionID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeNodeStale, "任务节点已失效，请刷新后重试")
+	}
+	if err != nil {
+		return NodeCommandOutcome{}, err
+	}
+
+	fromAgent := strings.TrimSpace(task.AssignedAgentID)
+	latest, hasLatest, err := loadLatestAttemptForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return NodeCommandOutcome{}, err
+	}
+	if hasLatest && fromAgent == "" {
+		fromAgent = strings.TrimSpace(latest.AssignedAgentID)
+	}
+
+	// Cancel in-flight attempt so a new assignee can take over; keep the row.
+	if hasLatest && (latest.Status == AttemptStatusDispatching || latest.Status == AttemptStatusRunning) {
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_task_attempt
+			SET status = 'cancelled', failure_class = 'reassigned',
+			    diagnostics = '改派取消原执行', completed_at = now(), updated_at = now()
+			WHERE id = $1::uuid
+		`, latest.ID); err != nil {
+			return NodeCommandOutcome{}, err
+		}
+	}
+
+	members, err := listFleetMembersTx(ctx, tx, in.SessionID, in.WorkspaceID)
+	if err != nil {
+		return NodeCommandOutcome{}, err
+	}
+	activeLoad := map[string]int{}
+	rows, qerr := tx.Query(ctx, `
+		SELECT assigned_agent_id::text FROM research_task_attempt
+		WHERE session_id = $1::uuid AND status IN ('dispatching', 'running')
+	`, in.SessionID)
+	if qerr != nil {
+		return NodeCommandOutcome{}, qerr
+	}
+	for rows.Next() {
+		var aid string
+		if scanErr := rows.Scan(&aid); scanErr != nil {
+			rows.Close()
+			return NodeCommandOutcome{}, scanErr
+		}
+		activeLoad[aid]++
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return NodeCommandOutcome{}, err
+	}
+
+	toAgent := strings.TrimSpace(in.TargetAgentID)
+	reason := ""
+	if toAgent != "" {
+		member, ok := findActiveFleetMember(members, toAgent)
+		if !ok {
+			return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeNoEligibleMember, "指定成员不可用（已归档或未激活）")
+		}
+		if activeLoad[toAgent] > 0 {
+			return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeNoEligibleMember, "指定成员当前任务已满，请稍后再改派或选择其他人")
+		}
+		_ = member
+		reason = "用户指定成员"
+	} else {
+		// Auto-select: prefer role match, exclude from-agent and overloaded.
+		pickTask := task
+		if strat := strategyForNodeCommand(in); strat != "" {
+			pickTask.RequiredCapability = truncateRunes(strat, 64)
+		}
+		filteredLoad := map[string]int{}
+		for k, v := range activeLoad {
+			filteredLoad[k] = v
+		}
+		if fromAgent != "" {
+			// Force exclude current assignee from idle preference by marking busy.
+			filteredLoad[fromAgent] = filteredLoad[fromAgent] + 100
+		}
+		toAgent = selectAgent(pickTask, members, filteredLoad)
+		if toAgent == "" || toAgent == fromAgent {
+			return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeNoEligibleMember, "没有可改派的空闲成员，请先扩编或等待产能释放")
+		}
+		reason = "自动选择空闲且能力匹配的成员"
+	}
+
+	acceptance := mergeTaskAcceptancePatch(task.AcceptanceCriteria, map[string]any{
+		"node_command":    NodeActionReassign,
+		"source_node_id":  in.NodeID,
+		"strategy_patch":  strategyForNodeCommand(in),
+		"source_patch":    jsonRawOrNil(sourcePatchForNodeCommand(in)),
+		"from_agent_id":   fromAgent,
+		"to_agent_id":     toAgent,
+		"reassign_reason": reason,
+	})
+
+	if _, err = tx.Exec(ctx, `
+		UPDATE research_task
+		SET status = 'ready',
+		    assigned_agent_id = $2::uuid,
+		    ready_at = now(),
+		    terminal_reason = NULL,
+		    completed_at = NULL,
+		    acceptance_criteria = $3,
+		    goal_version = $4,
+		    plan_version = $5,
+		    updated_at = now()
+		WHERE id = $1::uuid
+	`, taskID, toAgent, acceptance, goalVersion, planVersion); err != nil {
+		return NodeCommandOutcome{}, err
+	}
+
+	queuePos, err := countReadyQueuePosition(ctx, tx, in.SessionID, taskID, task.Priority)
+	if err != nil {
+		return NodeCommandOutcome{}, err
+	}
+
+	task, err = scanTask(tx.QueryRow(ctx, taskSelectSQL+` WHERE t.id = $1::uuid`, taskID))
+	if err != nil {
+		return NodeCommandOutcome{}, err
+	}
+
+	reassign := &ReassignInfo{
+		FromAgentID:   fromAgent,
+		ToAgentID:     toAgent,
+		Reason:        reason,
+		QueuePosition: queuePos,
+	}
+	outcome := NodeCommandOutcome{
+		Action:          NodeActionReassign,
+		ClientRequestID: in.ClientRequestID,
+		Task:            &task,
+		ParentLineage: ParentLineage{
+			ParentQuestionID: task.QuestionID,
+			ParentTaskID:     task.ParentTaskID,
+			SourceNodeID:     in.NodeID,
+		},
+		Reassign:   reassign,
+		Assigned:   &toAgent,
+		Queued:     true,
+		Acceptance: acceptance,
+	}
+	if hasLatest {
+		outcome.RetryLineage = &RetryLineage{
+			PreviousAttemptID: latest.ID,
+			TaskID:            taskID,
+		}
+	}
+
+	payload := map[string]any{
+		"command":           outcome,
+		"action":            NodeActionReassign,
+		"client_request_id": in.ClientRequestID,
+		"source_node_id":    in.NodeID,
+		"task_id":           taskID,
+		"from_agent_id":     fromAgent,
+		"to_agent_id":       toAgent,
+		"queue_position":    queuePos,
+		"queued":            true,
+	}
+	event, err := appendEvent(ctx, tx, workspaceID, in.SessionID, "node_command_reassign", nodeCommandClientKey(in.ClientRequestID, "event"), in.ActorType, in.ActorID, payload)
+	if err != nil {
+		if errors.Is(err, ErrResultConflict) {
+			return NodeCommandOutcome{}, denyNodeCommand(NodeCmdCodeIdempotencyConflict, "相同请求标识已用于其他操作，请换新标识重试")
+		}
+		return NodeCommandOutcome{}, err
+	}
+	outcome.CommandID = event.ID
+	outcome.StateVersion = event.Sequence
+	outcome.Event = event
+	if err = tx.Commit(ctx); err != nil {
+		return NodeCommandOutcome{}, err
+	}
+	return outcome, nil
+}
+
+func loadLatestAttemptForUpdate(ctx context.Context, tx pgx.Tx, taskID string) (Attempt, bool, error) {
+	row := tx.QueryRow(ctx, attemptSelectSQL+`
+		WHERE a.task_id = $1::uuid
+		ORDER BY a.attempt_number DESC
+		LIMIT 1
+		FOR UPDATE OF a
+	`, taskID)
+	attempt, err := scanAttempt(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Attempt{}, false, nil
+	}
+	if err != nil {
+		return Attempt{}, false, err
+	}
+	return attempt, true, nil
+}
+
+func retryEligibility(task Task, latest Attempt, hasLatest bool) *NodeCommandDenied {
+	switch task.Status {
+	case TaskStatusSucceeded, TaskStatusObsolete, TaskStatusCancelled:
+		return denyNodeCommand(NodeCmdCodeNotRetryable, "该任务已结束，无法重试")
+	case TaskStatusPending:
+		return denyNodeCommand(NodeCmdCodeNotRetryable, "任务尚未就绪，无法重试")
+	}
+	if !hasLatest {
+		if task.Status == TaskStatusBlocked || task.Status == TaskStatusFailed {
+			return nil
+		}
+		return denyNodeCommand(NodeCmdCodeNotRetryable, "没有可重试的失败记录")
+	}
+	switch latest.Status {
+	case AttemptStatusFailed, AttemptStatusCancelled, AttemptStatusLost:
+		return nil
+	case AttemptStatusSucceeded:
+		if task.Status == TaskStatusBlocked || task.Status == TaskStatusFailed {
+			return nil
+		}
+		return denyNodeCommand(NodeCmdCodeNotRetryable, "最近一次尝试已成功，无需重试")
+	case AttemptStatusDispatching, AttemptStatusRunning:
+		return denyNodeCommand(NodeCmdCodeNotRetryable, "任务仍在执行，请等待结束后再重试，或先改派")
+	default:
+		if task.Status == TaskStatusBlocked || task.Status == TaskStatusFailed {
+			return nil
+		}
+		return denyNodeCommand(NodeCmdCodeNotRetryable, "当前状态不可重试")
+	}
+}
+
+func mergeTaskAcceptancePatch(existing json.RawMessage, patch map[string]any) json.RawMessage {
+	base := map[string]any{}
+	if len(existing) > 0 {
+		_ = json.Unmarshal(existing, &base)
+	}
+	for k, v := range patch {
+		if v == nil {
+			continue
+		}
+		if s, ok := v.(string); ok && s == "" {
+			continue
+		}
+		base[k] = v
+	}
+	out, err := json.Marshal(base)
+	if err != nil {
+		return existing
+	}
+	return out
+}
+
+func listFleetMembersTx(ctx context.Context, tx pgx.Tx, sessionID, workspaceID string) ([]FleetMember, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT m.agent_id::text, m.role, m.status, m.is_lead
+		FROM research_fleet_member m
+		JOIN research_session s ON s.fleet_id = m.fleet_id
+		WHERE s.id = $1::uuid AND s.workspace_id = $2::uuid AND m.workspace_id = s.workspace_id
+		ORDER BY m.is_lead DESC, m.created_at, m.id
+	`, sessionID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []FleetMember{}
+	for rows.Next() {
+		var item FleetMember
+		if err := rows.Scan(&item.AgentID, &item.Role, &item.Status, &item.IsLead); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func findActiveFleetMember(members []FleetMember, agentID string) (FleetMember, bool) {
+	for _, m := range members {
+		if m.AgentID == agentID && m.Status == "active" {
+			return m, true
+		}
+	}
+	return FleetMember{}, false
+}
+
+func countReadyQueuePosition(ctx context.Context, tx pgx.Tx, sessionID, taskID string, priority float64) (int, error) {
+	var ahead int
+	err := tx.QueryRow(ctx, `
+		SELECT count(*)::int FROM research_task
+		WHERE session_id = $1::uuid AND status = 'ready' AND id <> $2::uuid
+		  AND (priority > $3 OR (priority = $3 AND id < $2::uuid))
+	`, sessionID, taskID, priority).Scan(&ahead)
+	if err != nil {
+		return 0, err
+	}
+	return ahead + 1, nil
 }
 
 func loadNodeCommandEvent(ctx context.Context, tx pgx.Tx, sessionID, key string) (RunEvent, error) {

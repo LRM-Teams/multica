@@ -9,11 +9,17 @@ import { RuntimeAttentionAlert } from "./runtime-attention-alert";
 const mockCount = vi.hoisted(() => ({ current: 0 }));
 
 vi.mock("@multica/core/runtimes/hooks", () => ({
-  useMyAttentionRuntimeCount: () => mockCount.current,
+  useMyAttentionRuntimeSummary: () => ({
+    count: mockCount.current,
+    firstRuntimeId: mockCount.current > 0 ? "rt-mine" : null,
+  }),
 }));
 
 vi.mock("@multica/core/paths", () => ({
-  useWorkspacePaths: () => ({ computers: () => "/acme/computers" }),
+  useWorkspacePaths: () => ({
+    computersAttention: (runtimeId: string) =>
+      `/acme/computers?attention_runtime=${runtimeId}`,
+  }),
 }));
 
 vi.mock("../navigation/app-link", () => ({
@@ -69,7 +75,10 @@ describe("RuntimeAttentionAlert", () => {
     mockCount.current = 2;
     renderWithI18n(<RuntimeAttentionAlert wsId="ws-1" />);
     const link = screen.getByRole("link", { name: "View" });
-    expect(link).toHaveAttribute("href", "/acme/computers");
+    expect(link).toHaveAttribute(
+      "href",
+      "/acme/computers?attention_runtime=rt-mine",
+    );
     // Scoped to the popover content only — the trigger button itself is
     // legitimately labeled "N machines need updates", that's not the thing
     // being ruled out here.

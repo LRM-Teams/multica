@@ -50,4 +50,4 @@
 - [x] Views 类型检查通过；完整 Views ESLint 为 0 错误、11 个本分支未引入的既有警告。
 - [x] React Doctor 扫描 2 个改动组件，0 项问题。
 - [x] 四份 locale JSON 解析、旧长度接口扫描和 `git diff --check` 通过。
-- [ ] 提交分支、推送并创建非草稿 PR。
+- [x] 提交并推送 `fix/research-template-prompts`，创建指向 `dev` 的非草稿 PR [#2136](https://github.com/LRM-Teams/multica/pull/2136)。

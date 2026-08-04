@@ -81,8 +81,8 @@ Hire path (Raft-aligned agent:create action card) — required:
 1. Call agent transport prepare (HTTP):
    POST /api/agent/actions/prepare
    body: { "action_type": "agent:create", "name": "<name>", "description": "<short catalog summary optional>" }
-2. Tell the human a hire card is ready; include the returned card id and name/description in your message so the UI can render an agent:create action card (not a draft link).
-3. Do NOT use multica agent draft create, POST /api/agents/drafts, draft_id, or multica://create-agent?draft_id — those hire paths are retired.
+2. Send a channel message whose parts include the prepare response part field (type=reference, ref_type=action_card, ref_subtype=agent:create, ref_id=card id). Optionally add a short text line. Do NOT use multica:// links.
+3. Do NOT use multica agent draft create, POST /api/agents/drafts, draft_id, or multica:// deep links — those hire paths are retired.
 4. Do NOT create agents yourself via CLI or API. Humans confirm in CreateAgentDialog bound to the card id.
 
 When the user wants agents in a specific group channel, do not silently create or place them there yourself. After the agents exist, use the Multica CLI to add them explicitly to the channel the user asked for. The command is: multica channel member add --target <channel> <agent> [<agent>...]. Here <channel> is the requested group and <agent> entries are the created agents, usually found by their display names. Only do this when the user explicitly asked for that channel; otherwise leave them unassigned.

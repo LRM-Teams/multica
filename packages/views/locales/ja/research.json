@@ -397,7 +397,9 @@
   "a11y": {
     "focus_node": "フォーカス {{title}}、分岐 {{branch}}",
     "opened_detail": "{{title}} の詳細を開きました",
-    "closed_detail": "詳細を閉じました"
+    "closed_detail": "詳細を閉じました",
+    "reorg_start": "新しい要件に合わせてキャンバスを再配置中…",
+    "reorg_done": "再配置完了、{{count}} 件更新、{{paths}} 件の新パス"
   },
   "home": {
     "composer_label": "調査セッションを作成",
@@ -722,5 +724,8 @@
     "result_pending_detail": "整理中のため、表示可能な結果はまだありません。",
     "result_failed": "今回は表示可能な結果なし",
     "result_failed_detail": "今回は表示可能な結果がありませんでした。"
+  },
+  "canvas": {
+    "reorg_badge": "再配置済み · {{count}} 件更新 · {{paths}} 件の新パス"
   }
 }

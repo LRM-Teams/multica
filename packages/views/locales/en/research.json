@@ -397,7 +397,9 @@
   "a11y": {
     "focus_node": "Focus {{title}}, branch {{branch}}",
     "opened_detail": "Opened detail for {{title}}",
-    "closed_detail": "Closed detail"
+    "closed_detail": "Closed detail",
+    "reorg_start": "Reorganizing canvas for new requirements…",
+    "reorg_done": "Reorganization complete, {{count}} updates, {{paths}} new paths"
   },
   "home": {
     "composer_label": "Create a research session",
@@ -722,5 +724,8 @@
     "result_pending_detail": "Still organizing — no displayable result yet.",
     "result_failed": "No displayable result this round",
     "result_failed_detail": "No displayable result was produced this round."
+  },
+  "canvas": {
+    "reorg_badge": "Reorganized · {{count}} updates · {{paths}} new paths"
   }
 }

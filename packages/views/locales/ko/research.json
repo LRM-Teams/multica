@@ -397,7 +397,9 @@
   "a11y": {
     "focus_node": "포커스 {{title}}, 분기 {{branch}}",
     "opened_detail": "{{title}} 상세 열림",
-    "closed_detail": "상세 닫힘"
+    "closed_detail": "상세 닫힘",
+    "reorg_start": "새 요구사항에 맞게 캔버스를 재배치 중…",
+    "reorg_done": "재배치 완료, {{count}}개 업데이트, {{paths}}개 새 경로"
   },
   "home": {
     "composer_label": "리서치 세션 만들기",
@@ -722,5 +724,8 @@
     "result_pending_detail": "정리 중이라 표시 가능한 결과가 아직 없습니다.",
     "result_failed": "이번 라운드 표시 결과 없음",
     "result_failed_detail": "이번 라운드에서 표시 가능한 결과가 없습니다."
+  },
+  "canvas": {
+    "reorg_badge": "재배치 완료 · {{count}}개 업데이트 · {{paths}}개 새 경로"
   }
 }

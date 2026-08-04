@@ -397,7 +397,9 @@
   "a11y": {
     "focus_node": "焦点 {{title}}，分支 {{branch}}",
     "opened_detail": "已打开 {{title}} 详情",
-    "closed_detail": "已关闭详情"
+    "closed_detail": "已关闭详情",
+    "reorg_start": "正在按新需求重排画布…",
+    "reorg_done": "重排完成，{{count}} 处更新，{{paths}} 条新路径"
   },
   "home": {
     "composer_label": "创建调研会话",
@@ -722,5 +724,8 @@
     "result_pending_detail": "正在整理，暂未形成可展示结果。",
     "result_failed": "本轮未产出可展示结果",
     "result_failed_detail": "本轮未产出可展示结果。"
+  },
+  "canvas": {
+    "reorg_badge": "已按新需求重排 · {{count}} 处更新 · {{paths}} 条新路径"
   }
 }

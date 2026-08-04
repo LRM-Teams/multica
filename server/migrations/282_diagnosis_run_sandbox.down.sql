@@ -1,3 +1,8 @@
+-- Remap statuses that disappear from the narrowed check before re-adding it.
+UPDATE interaction_dag_diagnosis_run
+SET status = 'failed'
+WHERE status = 'provisioning';
+
 ALTER TABLE interaction_dag_diagnosis_run
   DROP CONSTRAINT interaction_dag_diagnosis_run_status_check;
 ALTER TABLE interaction_dag_diagnosis_run

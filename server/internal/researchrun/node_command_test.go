@@ -9,24 +9,68 @@ import (
 
 func TestValidateNodeCommandInput(t *testing.T) {
 	base := NodeCommandInput{
-		SessionID:       "s1",
-		WorkspaceID:     "w1",
-		NodeID:          "n1",
-		Action:          NodeActionContinue,
-		ClientRequestID: "req-1",
+		SessionID:        "s1",
+		WorkspaceID:      "w1",
+		NodeID:           "n1",
+		Action:           NodeActionContinue,
+		ClientRequestID:  "req-1",
 		AnchorQuestionID: "q1",
 	}
 	if err := validateNodeCommandInput(base); err != nil {
 		t.Fatalf("valid input: %v", err)
 	}
 	bad := base
-	bad.Action = "retry"
+	bad.Action = "explode"
 	var denied *NodeCommandDenied
 	if err := validateNodeCommandInput(bad); !errors.As(err, &denied) || denied.MachineCode != NodeCmdCodeActionNotAllowed {
 		t.Fatalf("want action_not_allowed, got %v", err)
 	}
 	if denied.Message == "" || denied.MessageKey == "" {
 		t.Fatalf("denied must carry message_key + Chinese message: %+v", denied)
+	}
+
+	retry := base
+	retry.Action = NodeActionRetry
+	retry.AnchorTaskID = ""
+	if err := validateNodeCommandInput(retry); !errors.As(err, &denied) || denied.MachineCode != NodeCmdCodeNodeStale {
+		t.Fatalf("retry without task: %v", err)
+	}
+	retry.AnchorTaskID = "t1"
+	if err := validateNodeCommandInput(retry); err != nil {
+		t.Fatalf("valid retry: %v", err)
+	}
+}
+
+func TestRetryEligibility(t *testing.T) {
+	task := Task{Status: TaskStatusBlocked}
+	latest := Attempt{Status: AttemptStatusFailed, ID: "a1"}
+	if deny := retryEligibility(task, latest, true); deny != nil {
+		t.Fatalf("failed attempt should retry: %v", deny)
+	}
+	latest.Status = AttemptStatusRunning
+	if deny := retryEligibility(task, latest, true); deny == nil || deny.MachineCode != NodeCmdCodeNotRetryable {
+		t.Fatalf("running should deny: %v", deny)
+	}
+	task.Status = TaskStatusSucceeded
+	latest.Status = AttemptStatusSucceeded
+	if deny := retryEligibility(task, latest, true); deny == nil {
+		t.Fatal("succeeded should deny")
+	}
+}
+
+func TestSelectAgentPrefersAssigned(t *testing.T) {
+	task := Task{RequiredCapability: "scout", AssignedAgentID: "agent-b"}
+	members := []FleetMember{
+		{AgentID: "agent-a", Role: "scout", Status: "active"},
+		{AgentID: "agent-b", Role: "reader", Status: "active"},
+	}
+	got := selectAgent(task, members, map[string]int{})
+	if got != "agent-b" {
+		t.Fatalf("prefer assigned, got %q", got)
+	}
+	got = selectAgent(task, members, map[string]int{"agent-b": 1})
+	if got != "agent-a" {
+		t.Fatalf("fall back when assigned busy, got %q", got)
 	}
 }
 

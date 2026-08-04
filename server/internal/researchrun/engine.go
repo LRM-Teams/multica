@@ -486,6 +486,19 @@ func hasActiveCapability(task Task, members []FleetMember) bool {
 
 func selectAgent(task Task, members []FleetMember, active map[string]int) string {
 	role := roleForTask(task)
+	if pref := strings.TrimSpace(task.AssignedAgentID); pref != "" {
+		for _, member := range members {
+			if member.AgentID != pref || member.Status != "active" {
+				continue
+			}
+			if active[pref] > 0 {
+				break
+			}
+			// Prefer sticky/reassigned agent when idle; role match preferred but not required
+			// for explicit reassign overrides already validated upstream.
+			return pref
+		}
+	}
 	candidates := make([]FleetMember, 0, len(members))
 	for _, member := range members {
 		if member.Status != "active" || !strings.EqualFold(strings.TrimSpace(member.Role), role) {
@@ -917,8 +930,8 @@ func (e *Engine) Steer(ctx context.Context, in SteerInput) (Run, error) {
 	return run, e.ReconcileSession(ctx, in.SessionID)
 }
 
-// NodeCommand applies continue|fork from a canvas node, then reconciles so the
-// new ready task can dispatch (LRM-1413).
+// NodeCommand applies continue|fork|retry|reassign from a canvas node, then
+// reconciles so ready tasks can dispatch (LRM-1413 / LRM-1408).
 func (e *Engine) NodeCommand(ctx context.Context, in NodeCommandInput) (NodeCommandOutcome, error) {
 	outcome, err := e.store.NodeCommand(ctx, in)
 	if err != nil {

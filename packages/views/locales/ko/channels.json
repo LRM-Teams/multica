@@ -687,6 +687,7 @@
     "heading": "다이렉트 메시지",
     "empty": "아직 다이렉트 메시지가 없습니다.",
     "empty_cta": "채팅 시작",
+    "all_pinned": "모든 대화가 고정되어 있습니다. 위의 ‘고정’ 섹션을 확인하세요.",
     "wendy_title": "Ask Wendy",
     "wendy_description": "Wendy can help you turn real work into useful agents.",
     "new_aria": "새 다이렉트 메시지",

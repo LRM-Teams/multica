@@ -832,3 +832,69 @@ describe("DmList supervised Agent DM folder (LRM-764)", () => {
     expect(screen.getByText("Alice · Bob")).toBeInTheDocument();
   });
 });
+
+/**
+ * LRM-1366 — the DIRECT MESSAGES region must never settle into "heading + `+`
+ * and nothing else". Pinned DMs live in the unified PINNED section above, so
+ * `dms.length > 0` with zero rows *in this list* is a reachable steady state
+ * (all pinned, or a search that only matches pinned rows) and used to render an
+ * empty fragment: a silent hole indistinguishable from a broken list.
+ */
+describe("DmList never renders a silent empty region (LRM-1366)", () => {
+  beforeEach(() => {
+    mockViewport.isMobile = false;
+    mockQueryData.dmsPending = false;
+    mockQueryData.agents = [];
+    mockQueryData.members = [];
+    mockQueryData.dms = [];
+  });
+
+  it("points at the PINNED section when every DM is pinned", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-pinned",
+        pinned_at: "2026-08-04T00:00:00Z",
+        peer: { type: "user", id: "p1", name: "Pinned Person" },
+      }),
+    ];
+
+    renderDmList();
+
+    expect(screen.getByTestId("dm-list-all-pinned")).toBeInTheDocument();
+    // Not the "no DMs at all" state — the viewer does have conversations.
+    expect(screen.queryByText("No direct messages yet.")).not.toBeInTheDocument();
+  });
+
+  it("shows the no-match hint when a search only leaves pinned DMs", () => {
+    mockQueryData.dms = [
+      makeDm({
+        id: "dm-pinned",
+        pinned_at: "2026-08-04T00:00:00Z",
+        peer: { type: "user", id: "p1", name: "Pinned Person" },
+      }),
+    ];
+
+    renderDmList({ searchQuery: "zzz" });
+
+    expect(screen.getByText("No matching conversations")).toBeInTheDocument();
+    expect(screen.queryByTestId("dm-list-all-pinned")).not.toBeInTheDocument();
+  });
+
+  it("still offers the empty CTA when the viewer has no DMs at all", () => {
+    renderDmList();
+
+    expect(screen.getByText("No direct messages yet.")).toBeInTheDocument();
+    expect(screen.getByText("Start a chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("dm-list-all-pinned")).not.toBeInTheDocument();
+  });
+
+  it("keeps the skeleton — not a hint — while the DM query is pending", () => {
+    mockQueryData.dmsPending = true;
+
+    renderDmList();
+
+    expect(screen.getByTestId("dm-list-skeleton")).toBeInTheDocument();
+    expect(screen.queryByTestId("dm-list-all-pinned")).not.toBeInTheDocument();
+    expect(screen.queryByText("No direct messages yet.")).not.toBeInTheDocument();
+  });
+});

@@ -21,6 +21,9 @@ func TestDiagnoseEnvDispatchProject_WithoutEnablementFlags(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
+	// Default DIAGNOSIS_EXECUTION_MODE is sandbox (async 200). This test pins
+	// the deprecated server path so a missing agent binary fails closed.
+	t.Setenv("DIAGNOSIS_EXECUTION_MODE", "server")
 	t.Setenv("DIAGNOSIS_AGENT_PATH", "/nonexistent/multica-pi")
 
 	ctx := context.Background()

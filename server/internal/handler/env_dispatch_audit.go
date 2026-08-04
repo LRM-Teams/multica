@@ -111,6 +111,10 @@ func (h *Handler) loadVisibleEnvDispatchAuditReport(w http.ResponseWriter, r *ht
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "env dispatch audit not found")
+		} else if status, ok := envDispatchAuditHTTPStatus(err); ok {
+			// Visibility / observation contracts surface stable HTTP codes
+			// (403/503) instead of collapsing to a generic 500.
+			writeError(w, status, "failed to load env dispatch audit")
 		} else {
 			writeError(w, http.StatusInternalServerError, "failed to load env dispatch audit")
 		}
@@ -235,4 +239,20 @@ func sanitizedEnvDispatchAuditCode(code *string) *string {
 	default:
 		return nil
 	}
+}
+
+// envDispatchAuditHTTPStatus extracts a stable HTTP status from loader errors
+// that implement AuditHTTPStatus() int (handler tests + service contracts).
+func envDispatchAuditHTTPStatus(err error) (int, bool) {
+	type statusCarrier interface {
+		AuditHTTPStatus() int
+	}
+	var carrier statusCarrier
+	if errors.As(err, &carrier) {
+		status := carrier.AuditHTTPStatus()
+		if status >= 400 && status < 600 {
+			return status, true
+		}
+	}
+	return 0, false
 }

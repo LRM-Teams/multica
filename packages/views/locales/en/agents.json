@@ -183,7 +183,24 @@
     "description_placeholder": "What does this agent do?",
     "save": "Save",
     "cancel": "Cancel",
-    "save_failed": "Failed to save"
+    "save_failed": "Failed to save",
+    "section_workspace_role": "Workspace role",
+    "prop_workspace_role": "Workspace role",
+    "role_member": "Member",
+    "role_admin": "Admin",
+    "workspace_role": {
+      "make_admin_trigger": "Set as workspace admin",
+      "remove_admin_trigger": "Remove workspace admin",
+      "make_admin_confirm_title": "Set this agent as workspace Admin?",
+      "make_admin_confirm_desc": "The agent gains admin capabilities in this workspace (manage channels, invitations, agents & computers, and settings). It can never become Owner.",
+      "remove_admin_confirm_title": "Remove workspace Admin from this agent?",
+      "remove_admin_confirm_desc": "The agent will return to Member and lose admin capabilities.",
+      "confirm": "Confirm",
+      "cancel": "Cancel",
+      "role_updated_toast": "Workspace role updated",
+      "role_update_failed_toast": "Failed to update workspace role",
+      "role_readonly_hint": "Only workspace owners and admins can change an agent's workspace role."
+    }
   },
   "skill_attach": {
     "trigger_aria": "Attach a workspace skill",

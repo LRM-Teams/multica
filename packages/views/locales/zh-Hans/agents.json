@@ -178,7 +178,24 @@
     "description_placeholder": "这个智能体做什么？",
     "save": "保存",
     "cancel": "取消",
-    "save_failed": "保存失败"
+    "save_failed": "保存失败",
+    "section_workspace_role": "工作区角色",
+    "prop_workspace_role": "工作区角色",
+    "role_member": "成员",
+    "role_admin": "管理员",
+    "workspace_role": {
+      "make_admin_trigger": "设为工作区管理员",
+      "remove_admin_trigger": "移除工作区管理员",
+      "make_admin_confirm_title": "将该 agent 设为工作区管理员（Admin）？",
+      "make_admin_confirm_desc": "该 agent 将获得本工作区的管理能力（管理通道、邀请、agents & computers 与设置），且永远不能成为 Owner。",
+      "remove_admin_confirm_title": "移除该 agent 的工作区管理员（Admin）？",
+      "remove_admin_confirm_desc": "该 agent 将恢复为 Member，失去管理能力。",
+      "confirm": "确认",
+      "cancel": "取消",
+      "role_updated_toast": "工作区角色已更新",
+      "role_update_failed_toast": "更新工作区角色失败",
+      "role_readonly_hint": "仅工作区 owner/admin 可更改 agent 的工作区角色。"
+    }
   },
   "skill_attach": {
     "trigger_aria": "附加工作区 skill",

@@ -933,13 +933,15 @@ func (h *Handler) CreateSandboxInstance(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	metadata = mergeRuntimeEnvMetadata(metadata, runtimeEnv)
-	if _, err := h.Queries.UpdateSandboxInstanceMetadata(r.Context(), db.UpdateSandboxInstanceMetadataParams{
+	updated, err := h.Queries.UpdateSandboxInstanceMetadata(r.Context(), db.UpdateSandboxInstanceMetadataParams{
 		ID:       inst.ID,
 		Metadata: jsonBytesOrDefault(metadata, "{}"),
-	}); err != nil {
+	})
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to persist sandbox runtime env")
 		return
 	}
+	inst = updated
 	payloadMap := map[string]any{
 		"template":    req.Template,
 		"limits":      json.RawMessage(jsonBytesOrDefault(req.Limits, "{}")),

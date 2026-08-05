@@ -6,7 +6,8 @@ import {
   type RuntimeHealth,
   type RuntimeHealthPresentation,
 } from "@multica/core/runtimes";
-import type { AgentRuntime } from "@multica/core/types";
+import { sandboxDisplayName } from "@multica/core/sandboxes/utils";
+import type { AgentRuntime, SandboxInstance } from "@multica/core/types";
 import { formatDeviceInfo } from "../utils";
 
 export type RuntimeMachineSection = "local" | "remote" | "cloud";
@@ -43,6 +44,15 @@ export interface RuntimeMachine {
   queuedCount: number;
   providerNames: string[];
   lastSeenAt: string | null;
+  /**
+   * Cloud computer created via sandbox/docker that has not yet registered a
+   * daemon runtime. Shown in the Computers sidebar with a gray (offline) dot.
+   */
+  pendingCloud?: boolean;
+  /** Sandbox instance id when this row is (or was) backed by a cloud sandbox. */
+  sandboxInstanceId?: string | null;
+  /** Owner for pending rows that have no runtimes yet. */
+  ownerUserId?: string | null;
 }
 
 interface RuntimeMachineOptions {
@@ -126,6 +136,10 @@ export function isMineMachine(
   machine: RuntimeMachine,
   currentUserId: string | null,
 ): boolean {
+  if (!currentUserId) return false;
+  if (machine.pendingCloud) {
+    return machine.ownerUserId === currentUserId;
+  }
   return machine.runtimes.some((r) => r.owner_id === currentUserId);
 }
 
@@ -182,6 +196,217 @@ export function buildRuntimeMachines(
   }
 
   return machines.sort(compareRuntimeMachines);
+}
+
+const PENDING_CLOUD_STATUSES = new Set([
+  "pending",
+  "creating",
+  "running",
+  "resuming",
+  "reconfiguring",
+  "stopping",
+]);
+
+/** Stable Computers sidebar id for a cloud computer before daemon register. */
+export function pendingCloudComputerMachineId(instanceId: string): string {
+  return `sandbox:instance:${instanceId}`;
+}
+
+export function isDockerCloudComputerInstance(instance: SandboxInstance): boolean {
+  const endpointKind =
+    typeof instance.endpoint_info?.kind === "string" ? instance.endpoint_info.kind : "";
+  const creationMode =
+    typeof instance.metadata?.creation_mode === "string"
+      ? instance.metadata.creation_mode
+      : "";
+  return (
+    endpointKind === "docker" ||
+    creationMode === "docker_container" ||
+    instance.template.startsWith("docker:")
+  );
+}
+
+function sandboxInstanceDaemonId(instance: SandboxInstance): string | null {
+  const runtimeEnv = instance.metadata?.runtime_env;
+  if (!runtimeEnv || typeof runtimeEnv !== "object" || Array.isArray(runtimeEnv)) {
+    return null;
+  }
+  const daemonId = (runtimeEnv as Record<string, unknown>).MULTICA_DAEMON_ID;
+  return typeof daemonId === "string" && daemonId.trim() ? daemonId.trim() : null;
+}
+
+function runtimeSandboxInstanceId(runtime: AgentRuntime): string | null {
+  const sid = runtime.metadata?.sandbox_instance_id;
+  return typeof sid === "string" && sid.trim() ? sid.trim() : null;
+}
+
+/**
+ * Build a gray-dot sidebar row for a cloud computer whose daemon has not
+ * registered yet. Does not touch the Desktop "your computer" placeholder path.
+ */
+export function buildPendingCloudComputerMachine(
+  instance: SandboxInstance,
+): RuntimeMachine {
+  const daemonId = sandboxInstanceDaemonId(instance);
+  return {
+    id: pendingCloudComputerMachineId(instance.id),
+    daemonId,
+    title: sandboxDisplayName(instance),
+    subtitle: null,
+    deviceInfo: null,
+    deviceName: null,
+    cliVersion: null,
+    mode: "local",
+    section: "remote",
+    isCurrent: false,
+    health: "offline",
+    runtimeHealth: null,
+    updateError: null,
+    updateTargetVersion: null,
+    runtimes: [],
+    onlineCount: 0,
+    issueCount: 0,
+    runningCount: 0,
+    queuedCount: 0,
+    providerNames: [],
+    lastSeenAt: null,
+    pendingCloud: true,
+    sandboxInstanceId: instance.id,
+    ownerUserId: instance.creator_user_id,
+  };
+}
+
+/**
+ * Append pending cloud-computer rows for docker sandbox instances that do not
+ * yet have a matching registered runtime. Existing runtime machines win.
+ */
+export function mergePendingCloudComputers(
+  machines: RuntimeMachine[],
+  sandboxInstances: SandboxInstance[],
+): RuntimeMachine[] {
+  const claimedSandboxIds = new Set<string>();
+  const claimedDaemonIds = new Set<string>();
+
+  for (const machine of machines) {
+    if (machine.daemonId) claimedDaemonIds.add(machine.daemonId);
+    for (const runtime of machine.runtimes) {
+      const sid = runtimeSandboxInstanceId(runtime);
+      if (sid) claimedSandboxIds.add(sid);
+      if (runtime.daemon_id) claimedDaemonIds.add(runtime.daemon_id);
+    }
+  }
+
+  const pending = sandboxInstances
+    .filter(isDockerCloudComputerInstance)
+    .filter((instance) => PENDING_CLOUD_STATUSES.has(instance.status))
+    .filter((instance) => !claimedSandboxIds.has(instance.id))
+    .filter((instance) => {
+      const daemonId = sandboxInstanceDaemonId(instance);
+      return !daemonId || !claimedDaemonIds.has(daemonId);
+    })
+    .map(buildPendingCloudComputerMachine);
+
+  if (pending.length === 0) return machines;
+  return [...machines, ...pending].sort(compareRuntimeMachines);
+}
+
+/**
+ * When a pending cloud row is replaced by a registered daemon machine, map the
+ * selection id so the detail pane stays on the same computer.
+ */
+export function resolveCloudComputerSelectionId(
+  machines: RuntimeMachine[],
+  selectedId: string | null,
+): string | null {
+  if (!selectedId) return null;
+  if (machines.some((machine) => machine.id === selectedId)) return selectedId;
+  if (!selectedId.startsWith("sandbox:instance:")) return selectedId;
+  const sandboxId = selectedId.slice("sandbox:instance:".length);
+  const match = machines.find(
+    (machine) =>
+      !machine.pendingCloud &&
+      machine.runtimes.some(
+        (runtime) => runtimeSandboxInstanceId(runtime) === sandboxId,
+      ),
+  );
+  return match?.id ?? selectedId;
+}
+
+/** True when this Computers row was created via Cloud computer (sandbox/docker). */
+export function isCloudComputerMachine(machine: RuntimeMachine): boolean {
+  return machine.pendingCloud === true || !!machine.sandboxInstanceId?.trim();
+}
+
+/** Owner check for deleting a cloud computer (pending or registered). */
+export function canDeleteCloudComputerMachine(
+  machine: RuntimeMachine,
+  userId: string | null | undefined,
+): boolean {
+  if (!userId || !isCloudComputerMachine(machine)) return false;
+  if (machine.pendingCloud || machine.runtimes.length === 0) {
+    return machine.ownerUserId === userId;
+  }
+  return machine.runtimes.every((runtime) => runtime.owner_id === userId);
+}
+
+/**
+ * Keep Computers sidebar labels stable across pending → daemon-connected.
+ * Uses the sandbox create-time name whenever the user has not set display_name.
+ * No-op for non-sandbox ("your computer") machines.
+ */
+export function decorateCloudComputerMachines(
+  machines: RuntimeMachine[],
+  sandboxInstances: SandboxInstance[],
+): RuntimeMachine[] {
+  if (sandboxInstances.length === 0) {
+    return machines.map((machine) => {
+      if (machine.pendingCloud || machine.sandboxInstanceId) return machine;
+      let sandboxId: string | null = null;
+      for (const runtime of machine.runtimes) {
+        const sid = runtimeSandboxInstanceId(runtime);
+        if (sid) {
+          sandboxId = sid;
+          break;
+        }
+      }
+      return sandboxId ? { ...machine, sandboxInstanceId: sandboxId } : machine;
+    });
+  }
+
+  const byId = new Map(
+    sandboxInstances.map((instance) => [instance.id, instance] as const),
+  );
+
+  return machines.map((machine) => {
+    if (machine.pendingCloud) return machine;
+
+    let sandboxId = machine.sandboxInstanceId ?? null;
+    if (!sandboxId) {
+      for (const runtime of machine.runtimes) {
+        const sid = runtimeSandboxInstanceId(runtime);
+        if (sid) {
+          sandboxId = sid;
+          break;
+        }
+      }
+    }
+    if (!sandboxId) return machine;
+
+    const instance = byId.get(sandboxId);
+    const hasDisplayName = firstNonEmptyDisplayName(machine.runtimes) !== null;
+    if (!instance) {
+      return sandboxId === machine.sandboxInstanceId
+        ? machine
+        : { ...machine, sandboxInstanceId: sandboxId };
+    }
+
+    const createName = sandboxDisplayName(instance);
+    return {
+      ...machine,
+      sandboxInstanceId: sandboxId,
+      title: hasDisplayName ? machine.title : createName,
+    };
+  });
 }
 
 function placeholderLocalMachine(
@@ -506,6 +731,9 @@ export function machineHostname(machine: RuntimeMachine): string | null {
     const host = runtimeDeviceName(runtime);
     if (host) return host;
   }
+  // Pending cloud rows have a daemon id before register; never use the truncated
+  // id as the visible label — keep the create-time sandbox name (machine.title).
+  if (machine.pendingCloud) return null;
   if (machine.isCurrent && machine.title) return machine.title;
   return machine.daemonId ? shortDaemonId(machine.daemonId) : null;
 }

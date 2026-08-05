@@ -117,6 +117,7 @@
     "delete_computer": {
       "button": "Delete computer",
       "toast_deleted": "Permanently deleted \"{{name}}\".",
+      "toast_deleted_cloud": "Deleted cloud computer \"{{name}}\" and its container.",
       "operation_failed": {
         "title": "Operation failed. Nothing was changed.",
         "description": "\"{{name}}\" was not deleted and its agents are unchanged. Try again later."
@@ -124,6 +125,7 @@
       "confirm": {
         "title": "Permanently delete this computer?",
         "description": "This cannot be undone. \"{{name}}\", all archived agents on it ({{count}} total), and their history and messages will be permanently deleted. This computer will no longer be able to connect to Multica.",
+        "description_cloud": "This cannot be undone. \"{{name}}\" and its cloud container will be permanently deleted, along with archived agents on it ({{count}} total) and their history.",
         "type_to_confirm": "Type the computer name \"{{name}}\" to confirm.",
         "cancel": "Cancel",
         "confirm": "Permanently delete",
@@ -155,6 +157,10 @@
       "blocked_missing_daemon": {
         "title": "Cannot delete this computer",
         "description": "\"{{name}}\" has no daemon id, so one-click delete is unavailable. Per-runtime delete is not used as a substitute."
+      },
+      "blocked_missing_sandbox": {
+        "title": "Cannot delete this cloud computer",
+        "description": "\"{{name}}\" is missing its sandbox id, so the cloud container cannot be deleted from here."
       }
     },
     "daemon_version_chip": "daemon v{{version}}",
@@ -189,7 +195,8 @@
     },
     "danger_zone": {
       "title": "Danger Zone",
-      "description": "Permanently delete this computer and its runtimes from the workspace."
+      "description": "Permanently delete this computer and its runtimes from the workspace.",
+      "description_cloud": "Permanently delete this cloud computer, its container, and its runtimes from the workspace."
     },
     "agents_select": "Select",
     "agents_create": "Create",
@@ -277,10 +284,18 @@
     "your_computer": "Your computer",
     "your_computer_hint": "Run agents on a computer you control.",
     "cloud": "Cloud computer",
-    "cloud_hint": "Managed computers are not available yet.",
+    "cloud_hint": "Create a Docker container on a connected sandbox node.",
     "cloud_coming_soon": "Coming soon",
     "next": "Next",
     "cancel": "Cancel"
+  },
+  "create_cloud_computer": {
+    "title": "Create cloud computer",
+    "description": "Choose a name, sandbox node, and Docker image. Runtime models can be edited after creation.",
+    "submit": "Create",
+    "toast_created": "Cloud computer creation started",
+    "toast_create_failed": "Failed to create cloud computer",
+    "provisioning_hint": "Starting this cloud computer. It will show as connected once the daemon registers."
   },
   "connect": {
     "title": "Connect computer",

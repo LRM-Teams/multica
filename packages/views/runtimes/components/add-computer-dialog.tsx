@@ -18,15 +18,16 @@ type Choice = "your_computer" | "cloud";
 
 /**
  * LRM-1141 / LRM-1129 Step A — Add computer chooser.
- * Visual uses existing Dialog tokens (not neo-brutal yellow/pink).
- * Cloud stays Coming soon / disabled until that path ships.
+ * Cloud opens the create-sandbox flow (Cloud computer).
  */
 export function AddComputerDialog({
   onClose,
   onChooseYourComputer,
+  onChooseCloud,
 }: {
   onClose: () => void;
   onChooseYourComputer: () => void;
+  onChooseCloud: () => void;
 }) {
   const { t } = useT("runtimes");
   const [choice, setChoice] = useState<Choice>("your_computer");
@@ -57,13 +58,11 @@ export function AddComputerDialog({
               subtitle={t(($) => $.add_computer.your_computer_hint)}
             />
             <ChoiceCard
-              selected={false}
-              disabled
-              onSelect={() => {}}
+              selected={choice === "cloud"}
+              onSelect={() => setChoice("cloud")}
               icon={<Cloud className="h-5 w-5" aria-hidden />}
               title={t(($) => $.add_computer.cloud)}
               subtitle={t(($) => $.add_computer.cloud_hint)}
-              badge={t(($) => $.add_computer.cloud_coming_soon)}
             />
           </div>
         </div>
@@ -74,8 +73,10 @@ export function AddComputerDialog({
           </Button>
           <Button
             size="sm"
-            disabled={choice !== "your_computer"}
-            onClick={onChooseYourComputer}
+            onClick={() => {
+              if (choice === "cloud") onChooseCloud();
+              else onChooseYourComputer();
+            }}
           >
             {t(($) => $.add_computer.next)}
           </Button>

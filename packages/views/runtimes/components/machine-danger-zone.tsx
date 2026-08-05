@@ -6,7 +6,11 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
 import { useT } from "../../i18n/use-t";
 import { DeleteComputerDialog } from "./delete-computer-dialog";
-import type { RuntimeMachine } from "./runtime-machines";
+import {
+  canDeleteCloudComputerMachine,
+  isCloudComputerMachine,
+  type RuntimeMachine,
+} from "./runtime-machines";
 
 /**
  * LRM-1071 / v5 S4 — Delete computer lives only in the page-bottom Danger Zone.
@@ -23,10 +27,14 @@ export function MachineDangerZone({
   const user = useAuthStore((s) => s.user);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  if (!machine.runtimes.length) return null;
+  const isCloud = isCloudComputerMachine(machine);
+  if (!machine.runtimes.length && !machine.pendingCloud) return null;
 
-  const canDeleteComputer =
-    !!user && machine.runtimes.every((r) => r.owner_id === user.id);
+  const canDeleteComputer = isCloud
+    ? canDeleteCloudComputerMachine(machine, user?.id)
+    : !!user &&
+      machine.runtimes.length > 0 &&
+      machine.runtimes.every((r) => r.owner_id === user.id);
   const deleteBlockedReason = canDeleteComputer
     ? null
     : t(($) => $.machine.ops.delete_owner_only);
@@ -42,7 +50,9 @@ export function MachineDangerZone({
             {t(($) => $.machine.danger_zone.title)}
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            {t(($) => $.machine.danger_zone.description)}
+            {isCloud
+              ? t(($) => $.machine.danger_zone.description_cloud)
+              : t(($) => $.machine.danger_zone.description)}
           </p>
           {deleteBlockedReason ? (
             <p

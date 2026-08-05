@@ -13,7 +13,17 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/turntransport"
 	"github.com/multica-ai/multica/server/pkg/protocol"
+	"github.com/spf13/pflag"
 )
+
+func TestMessageSendHasNoAgentControlledCursorFlag(t *testing.T) {
+	cmd := newMessageSendCmd()
+	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
+		if strings.Contains(strings.ToLower(flag.Name), "seen") {
+			t.Errorf("message send exposes cursor flag %q", flag.Name)
+		}
+	})
+}
 
 func TestBuildAgentSendPartsIncludesAttachmentParts(t *testing.T) {
 	parts := buildAgentSendParts("got-it", "see files", []string{
@@ -221,41 +231,6 @@ func TestRunAgentMessageSendPostsVoiceMarkerAfterTranscript(t *testing.T) {
 	}
 	assertPartMap(t, rawParts[0], map[string]any{"type": "text", "text": "spoken answer"})
 	assertPartMap(t, rawParts[1], map[string]any{"type": "voice"})
-}
-
-func TestRunAgentMessageSendIncludesSeenUpToSeqFromInboxEnv(t *testing.T) {
-	var body map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent/messages/send" {
-			http.NotFound(w, r)
-			return
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode body: %v", err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"action":  "message_send",
-			"created": true,
-			"message": map[string]any{"id": "msg-1"},
-		})
-	}))
-	defer srv.Close()
-
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
-	t.Setenv("MULTICA_AGENT_INBOX_SEQ_TO", "42")
-
-	cmd := newMessageSendCmd()
-	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("message", "fresh send")
-	_ = cmd.Flags().Set("client-message-id", "cli-msg-1")
-	if err := runAgentMessageSend(cmd, nil); err != nil {
-		t.Fatalf("runAgentMessageSend: %v", err)
-	}
-	if body["seen_up_to_seq"] != float64(42) {
-		t.Fatalf("seen_up_to_seq = %#v, want 42", body["seen_up_to_seq"])
-	}
 }
 
 func TestAgentMessageSendTextFallbackReportsHeld(t *testing.T) {

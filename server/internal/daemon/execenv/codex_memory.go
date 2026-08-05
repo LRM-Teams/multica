@@ -27,13 +27,13 @@ import (
 //     is never cleared by `prepareCodexHomeWithOpts`, so stale memories
 //     from a prior turn on the same (agent, issue) feed into the next.
 //   - Codex CLI may also read user-level state from `~/.codex/memories/`
-//     entirely outside the daemon's per-task isolation, dragging
+//     entirely outside the daemon's Agent-scoped isolation, dragging
 //     unrelated host-project context into Multica tasks. The reproduction
 //     in github.com/multica-ai/multica#3130 saw Raw Memories from
 //     `D:\Project\MoHaYu\WowChat` (a host-local project) injected into a
 //     brand-new Multica issue's first Codex turn.
 //
-// Mitigation: write a managed block into the per-task `config.toml` that
+// Mitigation: write a managed block into the Agent-scoped `config.toml` that
 // disables both the `features.memories` flag and the `memories.*`
 // generation/consumption switches. Codex then neither writes nor reads
 // from its memory subsystem, eliminating both leak paths regardless of
@@ -269,13 +269,13 @@ func injectAfterHeader(content string, headerRe *regexp.Regexp, block string) st
 }
 
 // ensureCodexMemoryConfig writes the daemon-managed memory blocks into the
-// per-task config.toml so Codex native memory stays disabled. Idempotent:
+// Agent-scoped config.toml so Codex native memory stays disabled. Idempotent:
 // running it twice produces the same file.
 //
 // When MULTICA_CODEX_MEMORY is set to a truthy value, the function is a
 // no-op — the user has explicitly opted into Codex native memory and
 // accepts the leak risk. Toggling the env var across prepare runs is not
-// supported: the per-task config is short-lived (recreated per task), so
+// supported: the Agent-scoped config is short-lived (recreated per task), so
 // users should set the var once at daemon start.
 func ensureCodexMemoryConfig(configPath string, logger *slog.Logger) error {
 	if codexMemoryEnabled() {

@@ -16,12 +16,12 @@ import (
 // field, so it rejects the plugin entries with `missing field path` and
 // refuses to start. Multica copies the user's `~/.codex/config.toml` verbatim
 // into each task's isolated codex-home, which propagates the broken entries
-// into the per-task config and blocks `codex thread/start`.
+// into the Agent-scoped config and blocks `codex thread/start`.
 //
 // Stripping the whole `[[skills.config]]` array sidesteps the issue: Multica
 // writes the agent's currently assigned skills directly to
 // `codex-home/skills/<name>/SKILL.md`, and Codex auto-discovers them from
-// that directory. The user-level skill registry is irrelevant to a per-task
+// that directory. The user-level skill registry is irrelevant to a Agent-scoped
 // run, so dropping it is both safe and the right scope of isolation.
 //
 // Lines outside `[[skills.config]]` blocks are preserved untouched.
@@ -65,7 +65,7 @@ func stripSkillsConfigEntries(content string) string {
 	return stripped
 }
 
-// sanitizeCopiedCodexConfig rewrites the per-task config.toml in place,
+// sanitizeCopiedCodexConfig rewrites the Agent-scoped config.toml in place,
 // dropping `[[skills.config]]` entries inherited from the shared
 // `~/.codex/config.toml`. No-op if the file doesn't exist or doesn't change.
 func sanitizeCopiedCodexConfig(configPath string) error {

@@ -23,7 +23,10 @@ func TestBuildSuperviseServiceArgsNamedProfile(t *testing.T) {
 
 // fakeServiceUnitSyncer doubles as daemonServiceInstaller + daemonServiceUnitSyncer.
 type fakeServiceUnitSyncer struct {
-	syncCalls []struct{ profile, exePath string; args []string }
+	syncCalls []struct {
+		profile, exePath string
+		args             []string
+	}
 	statusRegistered bool
 }
 

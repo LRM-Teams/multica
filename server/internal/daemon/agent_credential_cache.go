@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
 const agentCredentialRefreshBeforeExpiry = time.Hour
@@ -24,7 +26,7 @@ type cachedAgentCredential struct {
 }
 
 func agentCredentialCachePath(cfg Config, workspaceID, agentID string) string {
-	return filepath.Join(multicaAgentRoot(cfg, workspaceID, agentID), "runtime", "credentials", "current.json")
+	return filepath.Join(agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID), "runtime", "credentials", "current.json")
 }
 
 func readCachedAgentCredential(cfg Config, workspaceID, runtimeID, agentID string, now time.Time) (cachedAgentCredential, bool) {

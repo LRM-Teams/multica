@@ -1,7 +1,6 @@
 package execenv
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,35 +9,12 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
-const (
-	agentWorkspaceMetaFile      = ".workspace_meta.json"
-	agentWorkspaceSchemaVersion = 1
-)
-
-// AgentWorkspaceLayout is the dormant D2 filesystem contract for one agent.
-// D6 activates WorkDir as the provider CWD after per-agent serialization and
-// current-turn transport binding are live.
+// AgentWorkspaceLayout is the filesystem contract for one Agent.
 type AgentWorkspaceLayout struct {
-	RootDir  string
-	WorkDir  string
-	ReposDir string
-	TurnsDir string
-}
-
-// AgentTurnLayout isolates the disposable material for exactly one canonical
-// turn. Durable workspace and repo material never lives below this subtree.
-type AgentTurnLayout struct {
-	RootDir      string
-	WorktreesDir string
-	ArtifactsDir string
-}
-
-type agentWorkspaceMeta struct {
-	SchemaVersion int    `json:"schema_version"`
-	WorkspaceID   string `json:"workspace_id"`
-	AgentID       string `json:"agent_id"`
+	AgentRoot string
 }
 
 // AgentWorkspaceRemovalReason is the small, explicit set of lifecycle events
@@ -46,25 +22,15 @@ type agentWorkspaceMeta struct {
 type AgentWorkspaceRemovalReason string
 
 const (
-	AgentWorkspaceRemovalFullReset       AgentWorkspaceRemovalReason = "full_reset"
-	AgentWorkspaceRemovalAgentDeleted    AgentWorkspaceRemovalReason = "agent_deleted"
-	AgentWorkspaceRemovalWorkspaceRevoke AgentWorkspaceRemovalReason = "workspace_revoked"
+	AgentWorkspaceRemovalFullReset AgentWorkspaceRemovalReason = "full_reset"
 )
-
-// AgentWorkspaceRemovalProof is supplied by the lifecycle owner after it has
-// checked server/runtime state. Filesystem code cannot infer leases safely.
-type AgentWorkspaceRemovalProof struct {
-	NoActiveTurn          bool
-	NoActiveProviderLease bool
-}
 
 type RemoveAgentWorkspaceParams struct {
 	WorkspacesRoot string
 	WorkspaceID    string
 	AgentID        string
-	RootDir        string
+	AgentRoot      string
 	Reason         AgentWorkspaceRemovalReason
-	Proof          AgentWorkspaceRemovalProof
 }
 
 // PredictAgentRootDir returns the canonical full-ID agent root without doing
@@ -75,7 +41,7 @@ func PredictAgentRootDir(workspacesRoot, workspaceID, agentID string) string {
 		!isCanonicalFullUUID(agentID) {
 		return ""
 	}
-	return filepath.Join(workspacesRoot, workspaceID, ".multica", "agents", agentID)
+	return agentworkspace.Root(workspacesRoot, workspaceID, agentID)
 }
 
 // ResolveAgentWorkspaceLayout returns the canonical stable workspace layout.
@@ -85,148 +51,35 @@ func ResolveAgentWorkspaceLayout(workspacesRoot, workspaceID, agentID string) (A
 		return AgentWorkspaceLayout{}, errors.New("execenv: workspaces root and canonical full workspace/agent UUIDs are required")
 	}
 	return AgentWorkspaceLayout{
-		RootDir:  root,
-		WorkDir:  filepath.Join(root, "workspace"),
-		ReposDir: filepath.Join(root, "repos"),
-		TurnsDir: filepath.Join(root, "turns"),
+		AgentRoot: root,
 	}, nil
 }
 
-// Turn returns the disposable subtree for one canonical full turn UUID.
-func (layout AgentWorkspaceLayout) Turn(turnID string) (AgentTurnLayout, error) {
-	if !isCanonicalFullUUID(turnID) {
-		return AgentTurnLayout{}, errors.New("execenv: canonical full turn UUID is required")
-	}
-	if strings.TrimSpace(layout.RootDir) == "" || strings.TrimSpace(layout.TurnsDir) == "" {
-		return AgentTurnLayout{}, errors.New("execenv: agent workspace layout is incomplete")
-	}
-	root := filepath.Join(layout.TurnsDir, turnID)
-	if !pathWithin(layout.RootDir, root) {
-		return AgentTurnLayout{}, errors.New("execenv: turn root escapes agent workspace")
-	}
-	return AgentTurnLayout{
-		RootDir:      root,
-		WorktreesDir: filepath.Join(root, "worktree"),
-		ArtifactsDir: filepath.Join(root, "artifacts"),
-	}, nil
-}
-
-// ProvisionAgentWorkspace idempotently creates the stable D2 layout and an
-// atomic managed marker. It never removes or resets existing content.
+// ProvisionAgentWorkspace idempotently creates the stable root directory. It
+// never removes, resets, or pre-populates Agent content.
 func ProvisionAgentWorkspace(workspacesRoot, workspaceID, agentID string, logger *slog.Logger) (*AgentWorkspaceLayout, error) {
 	layout, err := ResolveAgentWorkspaceLayout(workspacesRoot, workspaceID, agentID)
 	if err != nil {
 		return nil, err
 	}
-	for _, dir := range []string{layout.RootDir, layout.WorkDir, layout.ReposDir, layout.TurnsDir} {
-		if err := mkdirAllWithoutSymlink(paramsRoot(workspacesRoot), dir, 0o755); err != nil {
-			return nil, fmt.Errorf("execenv: create agent workspace directory %s: %w", dir, err)
-		}
-	}
-	meta := agentWorkspaceMeta{
-		SchemaVersion: agentWorkspaceSchemaVersion,
-		WorkspaceID:   workspaceID,
-		AgentID:       agentID,
-	}
-	if err := writeAgentWorkspaceMetaAtomic(layout.RootDir, meta); err != nil {
-		return nil, err
+	if err := mkdirAllWithoutSymlink(paramsRoot(workspacesRoot), layout.AgentRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("execenv: create agent workspace directory %s: %w", layout.AgentRoot, err)
 	}
 	if logger != nil {
-		logger.Debug("execenv: provisioned agent workspace", "root", layout.RootDir)
+		logger.Debug("execenv: provisioned agent workspace", "root", layout.AgentRoot)
 	}
 	return &layout, nil
-}
-
-// ResolveSharedEnvWorkspaceLayout returns the shared_sandbox sample workdir
-// layout (research D5, FR-008): all agents of one env-dispatch sample anchor
-// to <root>/<ws>/.multica/envs/<env>/workspace. It is deliberately namespaced
-// away from .multica/agents/ so agent memory/skills roots stay per-agent —
-// only the working directory is shared.
-func ResolveSharedEnvWorkspaceLayout(workspacesRoot, workspaceID, envID string) (AgentWorkspaceLayout, error) {
-	if strings.TrimSpace(workspacesRoot) == "" ||
-		!isCanonicalFullUUID(workspaceID) ||
-		!isCanonicalFullUUID(envID) {
-		return AgentWorkspaceLayout{}, errors.New("execenv: workspaces root and canonical full workspace/env UUIDs are required")
-	}
-	root := filepath.Join(workspacesRoot, workspaceID, ".multica", "envs", envID)
-	return AgentWorkspaceLayout{
-		RootDir: root,
-		WorkDir: filepath.Join(root, "workspace"),
-	}, nil
-}
-
-// ProvisionSharedEnvWorkspace idempotently creates the sample's shared
-// workdir. Like ProvisionAgentWorkspace it never removes or resets existing
-// content, so concurrent first-turn anchors of the same sample race safely.
-func ProvisionSharedEnvWorkspace(workspacesRoot, workspaceID, envID string, logger *slog.Logger) (*AgentWorkspaceLayout, error) {
-	layout, err := ResolveSharedEnvWorkspaceLayout(workspacesRoot, workspaceID, envID)
-	if err != nil {
-		return nil, err
-	}
-	for _, dir := range []string{layout.RootDir, layout.WorkDir} {
-		if err := mkdirAllWithoutSymlink(paramsRoot(workspacesRoot), dir, 0o755); err != nil {
-			return nil, fmt.Errorf("execenv: create shared env workspace directory %s: %w", dir, err)
-		}
-	}
-	if logger != nil {
-		logger.Debug("execenv: provisioned shared env workspace", "root", layout.RootDir)
-	}
-	return &layout, nil
-}
-
-// ProvisionAgentTurn idempotently creates only the disposable subtree for one
-// turn. It never changes durable workspace or repo material.
-func ProvisionAgentTurn(layout AgentWorkspaceLayout, turnID string) (*AgentTurnLayout, error) {
-	turn, err := layout.Turn(turnID)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateManagedBase(layout.RootDir); err != nil {
-		return nil, fmt.Errorf("execenv: invalid agent workspace root: %w", err)
-	}
-	for _, dir := range []string{turn.WorktreesDir, turn.ArtifactsDir} {
-		if err := mkdirAllWithoutSymlink(layout.RootDir, dir, 0o755); err != nil {
-			return nil, fmt.Errorf("execenv: create agent turn directory %s: %w", dir, err)
-		}
-	}
-	return &turn, nil
-}
-
-// CleanupAgentTurn removes exactly one canonical turn subtree. Ordinary
-// terminal/orphan cleanup must use this boundary, never the agent root.
-func CleanupAgentTurn(layout AgentWorkspaceLayout, turnID string) error {
-	turn, err := layout.Turn(turnID)
-	if err != nil {
-		return err
-	}
-	if !pathWithin(layout.TurnsDir, turn.RootDir) {
-		return errors.New("execenv: refusing to clean turn outside managed turns root")
-	}
-	if err := ValidateAgentWorkspacePath(layout, turn.RootDir); err != nil {
-		return fmt.Errorf("execenv: refusing unsafe agent turn cleanup: %w", err)
-	}
-	if err := os.RemoveAll(turn.RootDir); err != nil {
-		return fmt.Errorf("execenv: clean agent turn: %w", err)
-	}
-	return nil
 }
 
 // RemoveAgentWorkspace is intentionally separate from provision and turn GC.
-// Callers must prove both runtime quiescence conditions and an exact canonical
-// full-ID root before the durable workspace can be removed.
+// Callers must supply the exact canonical full-ID root before the durable
+// workspace can be removed. Full reset deliberately has hard-cut semantics.
 func RemoveAgentWorkspace(params RemoveAgentWorkspaceParams) error {
-	if !params.Proof.NoActiveTurn || !params.Proof.NoActiveProviderLease {
-		return errors.New("execenv: refusing agent workspace removal without quiescence proof")
-	}
-	switch params.Reason {
-	case AgentWorkspaceRemovalFullReset,
-		AgentWorkspaceRemovalAgentDeleted,
-		AgentWorkspaceRemovalWorkspaceRevoke:
-	default:
+	if params.Reason != AgentWorkspaceRemovalFullReset {
 		return fmt.Errorf("execenv: unsupported agent workspace removal reason %q", params.Reason)
 	}
 	expected := PredictAgentRootDir(params.WorkspacesRoot, params.WorkspaceID, params.AgentID)
-	if expected == "" || filepath.Clean(params.RootDir) != filepath.Clean(expected) {
+	if expected == "" || filepath.Clean(params.AgentRoot) != filepath.Clean(expected) {
 		return errors.New("execenv: refusing agent workspace removal outside exact canonical root")
 	}
 	if err := validateNoSymlinkDescendants(paramsRoot(params.WorkspacesRoot), expected); err != nil {
@@ -239,15 +92,15 @@ func RemoveAgentWorkspace(params RemoveAgentWorkspaceParams) error {
 }
 
 // ValidateAgentWorkspacePath rejects lexical escapes and symlinked managed
-// ancestors. Repo materialization calls it immediately before git writes.
+// ancestors.
 func ValidateAgentWorkspacePath(layout AgentWorkspaceLayout, target string) error {
-	if !pathWithin(layout.RootDir, target) {
+	if !pathWithin(layout.AgentRoot, target) {
 		return errors.New("execenv: path escapes agent workspace")
 	}
-	if err := validateManagedBase(layout.RootDir); err != nil {
+	if err := validateManagedBase(layout.AgentRoot); err != nil {
 		return err
 	}
-	return validateNoSymlinkDescendants(layout.RootDir, target)
+	return validateNoSymlinkDescendants(layout.AgentRoot, target)
 }
 
 func isCanonicalFullUUID(value string) bool {
@@ -362,41 +215,4 @@ func pathWithin(root, target string) bool {
 	}
 	rel, err := filepath.Rel(absRoot, absTarget)
 	return err == nil && rel != "." && rel != "" && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
-}
-
-func writeAgentWorkspaceMetaAtomic(root string, meta agentWorkspaceMeta) error {
-	path := filepath.Join(root, agentWorkspaceMetaFile)
-	data, err := json.Marshal(meta)
-	if err != nil {
-		return fmt.Errorf("execenv: marshal agent workspace metadata: %w", err)
-	}
-	data = append(data, '\n')
-	if existing, err := os.ReadFile(path); err == nil && string(existing) == string(data) {
-		return nil
-	}
-
-	tmp, err := os.CreateTemp(root, "."+agentWorkspaceMetaFile+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("execenv: create agent workspace metadata temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return fmt.Errorf("execenv: chmod agent workspace metadata: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("execenv: write agent workspace metadata: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("execenv: close agent workspace metadata: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		if existing, readErr := os.ReadFile(path); readErr == nil && string(existing) == string(data) {
-			return nil
-		}
-		return fmt.Errorf("execenv: publish agent workspace metadata: %w", err)
-	}
-	return nil
 }

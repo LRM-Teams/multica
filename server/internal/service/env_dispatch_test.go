@@ -2646,7 +2646,7 @@ func TestEnvDispatch_GetDagReadiness_InProgress(t *testing.T) {
 	if len(f.createRunCalls) != 1 || len(f.bindRootTaskCalls) != 1 {
 		t.Fatalf("want run+bind persisted, got create=%d bind=%d", len(f.createRunCalls), len(f.bindRootTaskCalls))
 	}
-	for _, status := range []string{"queued", "running", "dispatched", "waiting_local_directory"} {
+	for _, status := range []string{"queued", "running", "dispatched"} {
 		f.rootTaskStatusOverride = status
 		readiness, rerr := svc.GetDagReadiness(context.Background(), res.ProjectID, "ws")
 		if rerr != nil {

@@ -73,7 +73,6 @@ func (d *Daemon) tryCanonicalChatBackend(
 		MulticaBinary:          selfBin,
 		Token:                  agentToken,
 		Environment:            stripProviderCredentialTransport(agentEnv),
-		SharedWorkdirEnvID:     task.SharedWorkdirEnvID,
 	})
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("canonical turn begin: %w", err)
@@ -127,7 +126,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 		Factory:            factory,
 		BeforeCreate: func() error {
 			// ledgerRoot unused; pass agent root sibling for API compat only.
-			ledgerRoot := execenv.CanonicalTurnLedgerRoot(turn.Workspace.RootDir)
+			ledgerRoot := execenv.CanonicalTurnLedgerRoot(turn.Workspace.AgentRoot)
 			brief, receipt, err := execenv.MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider, taskCtxCopy)
 			if err != nil {
 				return fmt.Errorf("materialize canonical AGENTS: %w", err)

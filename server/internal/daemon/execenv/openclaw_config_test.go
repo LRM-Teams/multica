@@ -150,7 +150,7 @@ func TestPrepareOpenclawConfigDelegatesParsingToCLI(t *testing.T) {
 
 	// Per-agent workspaces must be rewritten so a host-scope agents.list[].
 	// workspace cannot silently win over our defaults override. This is
-	// intentional per-task isolation (see prepareOpenclawConfig doc).
+	// intentional Agent-scoped isolation (see prepareOpenclawConfig doc).
 	list := agents["list"].([]any)
 	if len(list) != 2 {
 		t.Fatalf("agents.list length = %d, want 2", len(list))
@@ -964,11 +964,10 @@ func TestPrepareEnvironmentOpenclawWiresConfigPath(t *testing.T) {
 		"config file": {stdout: filepath.Join(t.TempDir(), "absent.json")},
 	})
 
-	env, err := Prepare(PrepareParams{
+	env, err := prepareTestEnvironment(testPrepareParams{
 		WorkspacesRoot: wsRoot,
 		WorkspaceID:    "ws-1",
-		TaskID:         "11111111-2222-3333-4444-555555555555",
-		AgentName:      "scout",
+		AgentID:        "11111111-2222-3333-4444-555555555555",
 		Provider:       "openclaw",
 		OpenclawBin:    stub.bin,
 		Task: TaskContextForEnv{
@@ -979,12 +978,12 @@ func TestPrepareEnvironmentOpenclawWiresConfigPath(t *testing.T) {
 		t.Fatalf("Prepare: %v", err)
 	}
 	if env.OpenclawConfigPath == "" {
-		t.Fatal("Prepare(openclaw) did not set OpenclawConfigPath")
+		t.Fatal("prepareTestEnvironment(openclaw) did not set OpenclawConfigPath")
 	}
 	got := mustReadJSON(t, env.OpenclawConfigPath)
 	workspace := got["agents"].(map[string]any)["defaults"].(map[string]any)["workspace"]
-	if workspace != env.WorkDir {
-		t.Errorf("agents.defaults.workspace = %v, want %q", workspace, env.WorkDir)
+	if workspace != env.AgentRoot {
+		t.Errorf("agents.defaults.workspace = %v, want %q", workspace, env.AgentRoot)
 	}
 	// Fresh install path emits no $include, so the Environment should
 	// leave OpenclawIncludeRoot empty — the daemon must NOT spuriously
@@ -1012,11 +1011,10 @@ func TestPrepareEnvironmentOpenclawWiresIncludeRoot(t *testing.T) {
 		"config get agents.list --json": {stdout: "null"},
 	})
 
-	env, err := Prepare(PrepareParams{
+	env, err := prepareTestEnvironment(testPrepareParams{
 		WorkspacesRoot: wsRoot,
 		WorkspaceID:    "ws-1",
-		TaskID:         "33333333-2222-3333-4444-555555555555",
-		AgentName:      "scout",
+		AgentID:        "33333333-2222-3333-4444-555555555555",
 		Provider:       "openclaw",
 		OpenclawBin:    stub.bin,
 		Task:           TaskContextForEnv{IssueID: "issue-1"},
@@ -1039,20 +1037,19 @@ func TestPrepareEnvironmentOpenclawFailsClosed(t *testing.T) {
 		"config file": {err: errors.New("openclaw config validation failed")},
 	})
 
-	_, err := Prepare(PrepareParams{
+	_, err := prepareTestEnvironment(testPrepareParams{
 		WorkspacesRoot: wsRoot,
 		WorkspaceID:    "ws-1",
-		TaskID:         "22222222-2222-3333-4444-555555555555",
-		AgentName:      "scout",
+		AgentID:        "22222222-2222-3333-4444-555555555555",
 		Provider:       "openclaw",
 		OpenclawBin:    stub.bin,
 		Task:           TaskContextForEnv{IssueID: "issue-1"},
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err == nil {
-		t.Fatal("Prepare(openclaw) succeeded when CLI errored; expected fail closed")
+		t.Fatal("prepareTestEnvironment(openclaw) succeeded when CLI errored; expected fail closed")
 	}
-	if !strings.Contains(err.Error(), "prepare openclaw config") {
-		t.Errorf("error message %q does not name the openclaw config step", err.Error())
+	if !strings.Contains(err.Error(), "openclaw") {
+		t.Errorf("error message %q does not name the openclaw provider", err.Error())
 	}
 }
 
@@ -1074,21 +1071,20 @@ func TestPrepareEnvironmentNonOpenclawSkipsConfig(t *testing.T) {
 	}
 	for provider, taskID := range taskIDs {
 		t.Run(provider, func(t *testing.T) {
-			env, err := Prepare(PrepareParams{
+			env, err := prepareTestEnvironment(testPrepareParams{
 				WorkspacesRoot: wsRoot,
 				WorkspaceID:    "ws-1",
-				TaskID:         taskID,
-				AgentName:      "scout",
+				AgentID:        taskID,
 				Provider:       provider,
 				Task:           TaskContextForEnv{IssueID: "issue-1"},
 			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if err != nil {
-				t.Fatalf("Prepare(%s): %v", provider, err)
+				t.Fatalf("prepareTestEnvironment(%s): %v", provider, err)
 			}
 			if env.OpenclawConfigPath != "" {
 				t.Errorf("provider %s should not get an OpenclawConfigPath, got %q", provider, env.OpenclawConfigPath)
 			}
-			if _, err := os.Stat(filepath.Join(env.RootDir, openclawConfigFile)); !os.IsNotExist(err) {
+			if _, err := os.Stat(filepath.Join(env.AgentRoot, openclawConfigFile)); !os.IsNotExist(err) {
 				t.Errorf("provider %s left a stray openclaw-config.json", provider)
 			}
 		})

@@ -865,10 +865,8 @@ func TestBuildPromptWithoutChannelGoalKeepsOrdinaryChatUnchanged(t *testing.T) {
 	}
 }
 
-// TestWriteAgentRootSection asserts the layered layout: the three primary
-// surfaces (memory, skills, notes) get their own detailed line, the remaining
-// managed subdirs collapse into a single "Other local dirs" line, and an empty
-// root omits the section entirely.
+// TestWriteAgentRootSection asserts the lazy persistence contract under the
+// canonical AgentRoot. An empty root omits the section entirely.
 func TestWriteAgentRootSection(t *testing.T) {
 	t.Run("empty root is omitted", func(t *testing.T) {
 		var b strings.Builder
@@ -878,7 +876,7 @@ func TestWriteAgentRootSection(t *testing.T) {
 		}
 	})
 
-	const root = "/tmp/multica/ws-1/.multica/agents/agent-1"
+	const root = "/tmp/multica/workspace-1/agents/agent-1"
 	var b strings.Builder
 	writeAgentRootSection(&b, root)
 	out := b.String()
@@ -896,6 +894,16 @@ func TestWriteAgentRootSection(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("prompt missing %q:\n%s", want, out)
+		}
+	}
+
+	for _, legacy := range []string{
+		"Other local dirs",
+		"repos/",
+		"- memory: " + root,
+	} {
+		if strings.Contains(out, legacy) {
+			t.Errorf("prompt still enumerates legacy directory %q:\n%s", legacy, out)
 		}
 	}
 }

@@ -515,7 +515,6 @@
     "queued": "대기 중",
     "dispatched": "시작 중",
     "running": "생각 중",
-    "waiting_local_directory": "로컬 디렉터리 대기 중",
     "stop": "중지",
     "stop_named": "{{name}} 중지",
     "stop_aria": "{{name}}의 현재 작업 중지",

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/memorysignal"
 )
 
@@ -206,7 +207,7 @@ func (d *Daemon) reportAgentMemoryWrites(ctx context.Context, task Task) {
 	if workspaceID == "" || agentID == "" {
 		return
 	}
-	agentRoot := multicaAgentRoot(d.cfg, workspaceID, agentID)
+	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, workspaceID, agentID)
 	prior, err := loadMemoryWriteSnapshot(agentRoot)
 	if err != nil {
 		return

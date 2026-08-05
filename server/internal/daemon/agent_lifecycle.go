@@ -158,12 +158,8 @@ func (e *agentLifecycleExecutor) resetWorkspace(request agentLifecycleExecutionR
 		WorkspacesRoot: e.workspacesRoot,
 		WorkspaceID:    request.WorkspaceID,
 		AgentID:        request.AgentID,
-		RootDir:        layout.RootDir,
+		AgentRoot:      layout.AgentRoot,
 		Reason:         execenv.AgentWorkspaceRemovalFullReset,
-		Proof: execenv.AgentWorkspaceRemovalProof{
-			NoActiveTurn:          true,
-			NoActiveProviderLease: true,
-		},
 	}); err != nil {
 		return lifecycleStepError("remove_workspace", err)
 	}

@@ -68,22 +68,6 @@ func (s *popRecordingLocalSkillImportStore) PopPending(ctx context.Context, runt
 	return s.LocalSkillImportStore.PopPending(ctx, runtimeID)
 }
 
-func setHandlerTestWorkspaceRepos(t *testing.T, repos []map[string]string) {
-	t.Helper()
-	data, err := json.Marshal(repos)
-	if err != nil {
-		t.Fatalf("marshal repos: %v", err)
-	}
-	if _, err := testPool.Exec(context.Background(), `UPDATE workspace SET repos = $1 WHERE id = $2`, data, testWorkspaceID); err != nil {
-		t.Fatalf("update workspace repos: %v", err)
-	}
-	t.Cleanup(func() {
-		if _, err := testPool.Exec(context.Background(), `UPDATE workspace SET repos = $1 WHERE id = $2`, []byte("[]"), testWorkspaceID); err != nil {
-			t.Fatalf("reset workspace repos: %v", err)
-		}
-	})
-}
-
 // newDaemonTokenRequest creates an HTTP request with daemon token context set
 // (simulating DaemonAuth middleware for mdt_ tokens).
 func newDaemonTokenRequest(method, path string, body any, workspaceID, daemonID string) *http.Request {
@@ -914,8 +898,11 @@ func TestDaemonRegister_WithDaemonToken(t *testing.T) {
 	if !ok || len(runtimes) == 0 {
 		t.Fatalf("DaemonRegister: expected runtimes in response, got %v", resp)
 	}
-	if _, ok := resp["repos_version"].(string); !ok {
-		t.Fatalf("DaemonRegister: expected repos_version in response, got %v", resp)
+	if _, ok := resp["repos_version"]; ok {
+		t.Fatalf("DaemonRegister: repository metadata must not be sent to daemons, got %v", resp)
+	}
+	if _, ok := resp["repos"]; ok {
+		t.Fatalf("DaemonRegister: repository URLs must not be sent to daemons, got %v", resp)
 	}
 	rt0 := runtimes[0].(map[string]any)
 	if got := rt0["device_name"]; got != "test-device" {
@@ -1499,62 +1486,6 @@ func TestGetTaskStatus_ErrNoRows_Returns404(t *testing.T) {
 	}
 }
 
-func TestGetIssueGCCheck_WithDaemonToken_CrossWorkspace(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	// Create an issue in the test workspace. The daemon GC endpoint returns
-	// only status + updated_at, so a "done" issue exercises the typical path.
-	var issueID string
-	err := testPool.QueryRow(context.Background(), `
-		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type)
-		VALUES ($1, 'gc-check-auth-test-issue', 'done', 'medium', $2, 'member')
-		RETURNING id
-	`, testWorkspaceID, testUserID).Scan(&issueID)
-	if err != nil {
-		t.Fatalf("setup: create issue: %v", err)
-	}
-	defer testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
-
-	// Cross-workspace daemon token must be rejected with 404 — same status
-	// code as "issue not found" so there is no UUID enumeration oracle.
-	w := httptest.NewRecorder()
-	req := newDaemonTokenRequest("GET", "/api/daemon/issues/"+issueID+"/gc-check", nil,
-		"00000000-0000-0000-0000-000000000000", "attacker-daemon")
-	req = withURLParam(req, "issueId", issueID)
-
-	testHandler.GetIssueGCCheck(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("GetIssueGCCheck with cross-workspace token: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Same-workspace daemon token succeeds and returns status + updated_at.
-	w = httptest.NewRecorder()
-	req = newDaemonTokenRequest("GET", "/api/daemon/issues/"+issueID+"/gc-check", nil,
-		testWorkspaceID, "legit-daemon")
-	req = withURLParam(req, "issueId", issueID)
-
-	testHandler.GetIssueGCCheck(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("GetIssueGCCheck with correct workspace token: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp struct {
-		Status    string `json:"status"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.Status != "done" {
-		t.Fatalf("expected status %q, got %q", "done", resp.Status)
-	}
-	if resp.UpdatedAt == "" {
-		t.Fatal("expected updated_at to be set")
-	}
-}
-
 // withURLParams merges the given chi URL parameters into the request context.
 // Unlike calling withURLParam twice (which replaces the whole chi.RouteContext
 // and loses earlier params), this preserves previously-added params.
@@ -2106,110 +2037,6 @@ func TestGetIssueUsage_CrossWorkspace_Returns404(t *testing.T) {
 	}
 }
 
-func TestGetDaemonWorkspaceRepos_WithDaemonToken(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	setHandlerTestWorkspaceRepos(t, []map[string]string{
-		{"url": "git@example.com:team/api.git", "description": "API"},
-		{"url": "  git@example.com:team/web.git  ", "description": " Web "},
-	})
-
-	w := httptest.NewRecorder()
-	req := newDaemonTokenRequest("GET", "/api/daemon/workspaces/"+testWorkspaceID+"/repos", nil, testWorkspaceID, "test-daemon-mdt")
-	req = withURLParam(req, "workspaceId", testWorkspaceID)
-
-	testHandler.GetDaemonWorkspaceRepos(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("GetDaemonWorkspaceRepos: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp struct {
-		WorkspaceID  string              `json:"workspace_id"`
-		Repos        []map[string]string `json:"repos"`
-		ReposVersion string              `json:"repos_version"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-
-	if resp.WorkspaceID != testWorkspaceID {
-		t.Fatalf("expected workspace_id %s, got %s", testWorkspaceID, resp.WorkspaceID)
-	}
-	if len(resp.Repos) != 2 {
-		t.Fatalf("expected 2 repos, got %d", len(resp.Repos))
-	}
-	if resp.Repos[1]["url"] != "git@example.com:team/web.git" {
-		t.Fatalf("expected trimmed repo URL, got %q", resp.Repos[1]["url"])
-	}
-	if resp.ReposVersion == "" {
-		t.Fatal("expected repos_version to be set")
-	}
-}
-
-func TestGetDaemonWorkspaceRepos_WithDaemonToken_WorkspaceMismatch(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	w := httptest.NewRecorder()
-	req := newDaemonTokenRequest("GET", "/api/daemon/workspaces/"+testWorkspaceID+"/repos", nil, "00000000-0000-0000-0000-000000000000", "test-daemon-mdt")
-	req = withURLParam(req, "workspaceId", testWorkspaceID)
-
-	testHandler.GetDaemonWorkspaceRepos(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("GetDaemonWorkspaceRepos with mismatched workspace: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestGetDaemonWorkspaceRepos_VersionIgnoresOrderAndDescription(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	setHandlerTestWorkspaceRepos(t, []map[string]string{
-		{"url": "git@example.com:team/api.git", "description": "API"},
-		{"url": "git@example.com:team/web.git", "description": "Web"},
-	})
-
-	getReposVersion := func() string {
-		t.Helper()
-		w := httptest.NewRecorder()
-		req := newDaemonTokenRequest("GET", "/api/daemon/workspaces/"+testWorkspaceID+"/repos", nil, testWorkspaceID, "test-daemon-mdt")
-		req = withURLParam(req, "workspaceId", testWorkspaceID)
-		testHandler.GetDaemonWorkspaceRepos(w, req)
-		if w.Code != http.StatusOK {
-			t.Fatalf("GetDaemonWorkspaceRepos: expected 200, got %d: %s", w.Code, w.Body.String())
-		}
-		var resp struct {
-			ReposVersion string `json:"repos_version"`
-		}
-		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-			t.Fatalf("decode response: %v", err)
-		}
-		return resp.ReposVersion
-	}
-
-	version1 := getReposVersion()
-
-	if _, err := testPool.Exec(context.Background(), `UPDATE workspace SET repos = $1 WHERE id = $2`, []byte(`[{"url":"git@example.com:team/web.git","description":"frontend"},{"url":"git@example.com:team/api.git","description":"backend"}]`), testWorkspaceID); err != nil {
-		t.Fatalf("update workspace repos: %v", err)
-	}
-	version2 := getReposVersion()
-	if version1 != version2 {
-		t.Fatalf("expected repos_version to ignore order/description changes, got %s vs %s", version1, version2)
-	}
-
-	if _, err := testPool.Exec(context.Background(), `UPDATE workspace SET repos = $1 WHERE id = $2`, []byte(`[{"url":"git@example.com:team/api.git","description":"backend"},{"url":"git@example.com:team/mobile.git","description":"mobile"}]`), testWorkspaceID); err != nil {
-		t.Fatalf("update workspace repos: %v", err)
-	}
-	version3 := getReposVersion()
-	if strings.EqualFold(version2, version3) {
-		t.Fatalf("expected repos_version to change when URL set changes, got %s", version3)
-	}
-}
-
 // TestDaemonRegister_MergesLegacyDaemonIDRuntime simulates the migration path
 // for an existing user whose runtime was previously keyed on a hostname-derived
 // daemon_id (e.g. "MacBook-Pro.local"). After the daemon switches to a stable
@@ -2688,21 +2515,14 @@ func TestStartTask_AutopilotRunOnlyTask_ResolvesWorkspace(t *testing.T) {
 	}
 }
 
-func TestClaimTask_ProjectGithubReposOverrideWorkspaceRepos(t *testing.T) {
+func TestClaimTask_ProjectResourceMetadataDoesNotLeak(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 
 	ctx := context.Background()
 
-	// Workspace repos: two of them, neither matches the project repo URL.
-	setHandlerTestWorkspaceRepos(t, []map[string]string{
-		{"url": "https://github.com/example/workspace-repo-a", "description": "ws a"},
-		{"url": "https://github.com/example/workspace-repo-b", "description": "ws b"},
-	})
-
-	// Project + project_resource(github_repo) with a URL that is NOT in the
-	// workspace's repos list.
+	// Project resource URLs remain metadata and must not enter the Agent claim.
 	var projectID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id
@@ -2756,9 +2576,7 @@ func TestClaimTask_ProjectGithubReposOverrideWorkspaceRepos(t *testing.T) {
 
 	var resp struct {
 		Task *struct {
-			Repos            []RepoData            `json:"repos"`
-			ProjectID        string                `json:"project_id"`
-			ProjectResources []ProjectResourceData `json:"project_resources"`
+			ProjectID string `json:"project_id"`
 		} `json:"task"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
@@ -2770,78 +2588,8 @@ func TestClaimTask_ProjectGithubReposOverrideWorkspaceRepos(t *testing.T) {
 	if resp.Task.ProjectID != projectID {
 		t.Errorf("project_id = %q, want %q", resp.Task.ProjectID, projectID)
 	}
-	if len(resp.Task.Repos) != 1 || resp.Task.Repos[0].URL != projectRepoURL {
-		t.Fatalf("expected resp.Repos to contain only the project repo URL, got %+v", resp.Task.Repos)
-	}
-	for _, r := range resp.Task.Repos {
-		if strings.HasSuffix(r.URL, "workspace-repo-a") || strings.HasSuffix(r.URL, "workspace-repo-b") {
-			t.Errorf("workspace repo %q leaked into resp.Repos despite project override", r.URL)
-		}
-	}
-	if len(resp.Task.ProjectResources) != 1 {
-		t.Errorf("expected 1 project_resources entry, got %d", len(resp.Task.ProjectResources))
-	}
-}
-
-// When the issue has no project, the claim handler falls back to workspace
-// repos. (Project-bound issues with no github_repo resources instead get a
-// managed shared workdir — see TestClaimTask_IssueProjectProvisionsManagedWorkdir.)
-func TestClaimTask_ProjectWithoutRepos_FallsBackToWorkspaceRepos(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-
-	setHandlerTestWorkspaceRepos(t, []map[string]string{
-		{"url": "https://github.com/example/workspace-fallback", "description": "ws"},
-	})
-
-	agentID, runtimeID := createHandlerTestAgentWithIsolatedRuntime(t)
-
-	var issueID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO issue (
-			workspace_id, title, status, priority, creator_id, creator_type, number, position
-		) VALUES ($1, 'no project repos', 'todo', 'medium', $2, 'member', 88002, 0)
-		RETURNING id
-	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
-		t.Fatalf("create issue: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
-
-	var taskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_inbox_event (
-			agent_id, runtime_id, issue_id, status, priority
-		) VALUES ($1, $2, $3, 'pending', 0)
-		RETURNING id
-	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
-
-	w := httptest.NewRecorder()
-	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, "test-claim-fallback")
-	req = withURLParam(req, "runtimeId", runtimeID)
-	claimTaskThroughInboxForTest(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("ClaimTaskByRuntime: %d %s", w.Code, w.Body.String())
-	}
-
-	var resp struct {
-		Task *struct {
-			Repos []RepoData `json:"repos"`
-		} `json:"task"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp.Task == nil {
-		t.Fatal("expected task in response")
-	}
-	if len(resp.Task.Repos) != 1 || !strings.HasSuffix(resp.Task.Repos[0].URL, "workspace-fallback") {
-		t.Fatalf("expected workspace fallback repo, got %+v", resp.Task.Repos)
+	if strings.Contains(w.Body.String(), projectRepoURL) {
+		t.Fatalf("claim response leaked repository metadata: %s", w.Body.String())
 	}
 }
 
@@ -4283,17 +4031,15 @@ func TestCompleteTask_AssignmentTriggered_DoesNotSuppressTrivialDoneOutput(t *te
 }
 
 type claimRuntimeGuardTask struct {
-	ID                       string                `json:"id"`
-	ProjectID                string                `json:"project_id"`
-	ChannelID                string                `json:"channel_id"`
-	Repos                    []RepoData            `json:"repos"`
-	ProjectResources         []ProjectResourceData `json:"project_resources"`
-	PriorSessionID           string                `json:"prior_session_id"`
-	PriorWorkDir             string                `json:"prior_work_dir"`
-	ChatMessage              string                `json:"chat_message"`
-	ChatContextSummary       string                `json:"chat_context_summary"`
-	ThreadName               string                `json:"thread_name"`
-	QuickCreateAttachmentIDs []string              `json:"quick_create_attachment_ids"`
+	ID                       string   `json:"id"`
+	ProjectID                string   `json:"project_id"`
+	ChannelID                string   `json:"channel_id"`
+	PriorSessionID           string   `json:"prior_session_id"`
+	PriorWorkDir             string   `json:"prior_work_dir"`
+	ChatMessage              string   `json:"chat_message"`
+	ChatContextSummary       string   `json:"chat_context_summary"`
+	ThreadName               string   `json:"thread_name"`
+	QuickCreateAttachmentIDs []string `json:"quick_create_attachment_ids"`
 }
 
 func claimTaskForRuntimeGuard(t *testing.T, runtimeID, daemonID string) *claimRuntimeGuardTask {
@@ -4982,7 +4728,7 @@ func TestClaimTask_ChatPopulatesInitiator(t *testing.T) {
 	}
 }
 
-func TestClaimTask_ChatBoundProjectSurfacesResources(t *testing.T) {
+func TestClaimTask_ChatBoundProjectKeepsResourcesOutOfAgentPayload(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -5039,10 +4785,7 @@ func TestClaimTask_ChatBoundProjectSurfacesResources(t *testing.T) {
 
 	var resp struct {
 		Task *struct {
-			Repos                   []RepoData            `json:"repos"`
-			ProjectID               string                `json:"project_id"`
-			ProjectResources        []ProjectResourceData `json:"project_resources"`
-			ProvisionManagedWorkdir bool                  `json:"provision_managed_workdir"`
+			ProjectID string `json:"project_id"`
 		} `json:"task"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -5054,83 +4797,8 @@ func TestClaimTask_ChatBoundProjectSurfacesResources(t *testing.T) {
 	if resp.Task.ProjectID != projectID {
 		t.Errorf("project_id = %q, want %q", resp.Task.ProjectID, projectID)
 	}
-	if resp.Task.ProvisionManagedWorkdir {
-		t.Errorf("did not expect provision flag when the bound project already has a resource")
-	}
-	foundRepo := false
-	for _, repo := range resp.Task.Repos {
-		if repo.URL == projectRepoURL {
-			foundRepo = true
-		}
-	}
-	if !foundRepo {
-		t.Errorf("expected chat repos to include the bound project repo %q, got %+v", projectRepoURL, resp.Task.Repos)
-	}
-}
-
-func TestClaimTask_IssueProjectProvisionsManagedWorkdir(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
-
-	// A project with NO resources → the claim should ask the daemon to
-	// provision a managed shared workdir at projects/<id>/workdir.
-	var projectID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO project (workspace_id, title) VALUES ($1, $2) RETURNING id
-	`, testWorkspaceID, "Managed workdir project").Scan(&projectID); err != nil {
-		t.Fatalf("setup: create project: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM project WHERE id = $1`, projectID) })
-
-	var issueID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO issue (workspace_id, project_id, title, status, priority, creator_id, creator_type, number, position)
-		VALUES ($1, $2, 'managed workdir issue', 'todo', 'medium', $3, 'member', 88010, 0)
-		RETURNING id
-	`, testWorkspaceID, projectID, testUserID).Scan(&issueID); err != nil {
-		t.Fatalf("setup: create issue: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
-
-	var taskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_inbox_event (agent_id, runtime_id, issue_id, status, priority)
-		VALUES ($1, $2, $3, 'pending', 0) RETURNING id
-	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
-		t.Fatalf("setup: create task: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM agent_inbox_event WHERE id = $1`, taskID) })
-
-	w := httptest.NewRecorder()
-	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, daemonID)
-	req = withURLParam(req, "runtimeId", runtimeID)
-	claimTaskThroughInboxForTest(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp struct {
-		Task *struct {
-			ProjectID               string `json:"project_id"`
-			ProvisionManagedWorkdir bool   `json:"provision_managed_workdir"`
-			ManagedWorkdirRelPath   string `json:"managed_workdir_rel_path"`
-		} `json:"task"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode claim response: %v", err)
-	}
-	if resp.Task == nil {
-		t.Fatalf("expected a claimed task, got %s", w.Body.String())
-	}
-	if !resp.Task.ProvisionManagedWorkdir {
-		t.Errorf("expected provision_managed_workdir=true for a project with no resource")
-	}
-	wantRel := "projects/" + projectID + "/workdir"
-	if resp.Task.ManagedWorkdirRelPath != wantRel {
-		t.Errorf("managed_workdir_rel_path = %q, want %q", resp.Task.ManagedWorkdirRelPath, wantRel)
+	if strings.Contains(w.Body.String(), projectRepoURL) || strings.Contains(w.Body.String(), "project_resources") || strings.Contains(w.Body.String(), "provision_managed_workdir") {
+		t.Fatalf("chat claim leaked project repository or managed-workdir metadata: %s", w.Body.String())
 	}
 }
 
@@ -5286,148 +4954,6 @@ func TestClaimTask_ChatLegacyNullRuntimeFallsBackToTaskRow(t *testing.T) {
 	}
 }
 
-// TestGetChatSessionGCCheck verifies the chat session gc-check endpoint
-// matches the same anti-enumeration shape as GetIssueGCCheck: cross-workspace
-// daemon tokens get 404, same-workspace tokens get the live status.
-func TestGetChatSessionGCCheck(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-
-	var agentID string
-	if err := testPool.QueryRow(ctx, `SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
-		t.Fatalf("setup: get agent: %v", err)
-	}
-
-	var sessionID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, status)
-		VALUES ($1, $2, $3, 'gc-check fixture', 'active')
-		RETURNING id
-	`, testWorkspaceID, agentID, testUserID).Scan(&sessionID); err != nil {
-		t.Fatalf("setup: create chat session: %v", err)
-	}
-	defer testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, sessionID)
-
-	// Cross-workspace daemon token must 404 with no oracle.
-	w := httptest.NewRecorder()
-	req := newDaemonTokenRequest("GET", "/api/daemon/chat-sessions/"+sessionID+"/gc-check", nil,
-		"00000000-0000-0000-0000-000000000000", "attacker-daemon")
-	req = withURLParam(req, "sessionId", sessionID)
-	testHandler.GetChatSessionGCCheck(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("cross-workspace token: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Same-workspace daemon token sees the live row.
-	w = httptest.NewRecorder()
-	req = newDaemonTokenRequest("GET", "/api/daemon/chat-sessions/"+sessionID+"/gc-check", nil,
-		testWorkspaceID, "legit-daemon")
-	req = withURLParam(req, "sessionId", sessionID)
-	testHandler.GetChatSessionGCCheck(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("same-workspace token: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp struct {
-		Status    string `json:"status"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp.Status != "active" {
-		t.Fatalf("expected status %q, got %q", "active", resp.Status)
-	}
-	if resp.UpdatedAt == "" {
-		t.Fatal("expected updated_at to be set")
-	}
-
-	// Hard-deleted session: 404 — exactly what the daemon needs to reclaim
-	// the workdir on the next GC pass after a user runs DeleteChatSession.
-	if _, err := testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, sessionID); err != nil {
-		t.Fatalf("delete chat session: %v", err)
-	}
-	w = httptest.NewRecorder()
-	req = newDaemonTokenRequest("GET", "/api/daemon/chat-sessions/"+sessionID+"/gc-check", nil,
-		testWorkspaceID, "legit-daemon")
-	req = withURLParam(req, "sessionId", sessionID)
-	testHandler.GetChatSessionGCCheck(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("hard-deleted session: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestGetTaskGCCheck(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-
-	var agentID, runtimeID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
-	`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
-		t.Fatalf("setup: get agent: %v", err)
-	}
-
-	// Quick-create-shaped task: no issue_id, no chat_session_id, no run id.
-	// context.type is set so ResolveTaskWorkspaceID can recover workspace.
-	quickContext, _ := json.Marshal(map[string]any{
-		"type":         "quick_create",
-		"prompt":       "fixture",
-		"requester_id": testUserID,
-		"workspace_id": testWorkspaceID,
-	})
-
-	var taskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_inbox_event (
-			agent_id, runtime_id, status, priority, context, completed_at
-		)
-		VALUES ($1, $2, 'acked', 0, $3, NOW())
-		RETURNING id
-	`, agentID, runtimeID, quickContext).Scan(&taskID); err != nil {
-		t.Fatalf("setup: create quick-create task: %v", err)
-	}
-	defer testPool.Exec(ctx, `DELETE FROM agent_inbox_event WHERE id = $1`, taskID)
-
-	// Cross-workspace probe.
-	w := httptest.NewRecorder()
-	req := newDaemonTokenRequest("GET", "/api/daemon/tasks/"+taskID+"/gc-check", nil,
-		"00000000-0000-0000-0000-000000000000", "attacker-daemon")
-	req = withURLParam(req, "taskId", taskID)
-	testHandler.GetTaskGCCheck(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("cross-workspace token: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Same-workspace probe — terminal task returns its status.
-	w = httptest.NewRecorder()
-	req = newDaemonTokenRequest("GET", "/api/daemon/tasks/"+taskID+"/gc-check", nil,
-		testWorkspaceID, "legit-daemon")
-	req = withURLParam(req, "taskId", taskID)
-	testHandler.GetTaskGCCheck(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("same-workspace token: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp struct {
-		Status      string `json:"status"`
-		CompletedAt string `json:"completed_at"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp.Status != "acked" {
-		t.Fatalf("expected status %q, got %q", "acked", resp.Status)
-	}
-	if resp.CompletedAt == "" {
-		t.Fatal("expected completed_at to be set for completed task")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Membership Cache Integration Tests
 //
@@ -5504,7 +5030,7 @@ func TestRequireDaemonWorkspaceAccess_CacheHit(t *testing.T) {
 	ghostUserID := createEphemeralUser(t, "ghost")
 
 	// Baseline: with an empty cache the ghost has no path to access.
-	req := newRequestAsUser(ghostUserID, "GET", "/api/daemon/workspaces/"+testWorkspaceID+"/repos", nil)
+	req := newRequestAsUser(ghostUserID, "GET", "/api/daemon/workspaces/"+testWorkspaceID+"/access-check", nil)
 	w := httptest.NewRecorder()
 	if testHandler.requireDaemonWorkspaceAccess(w, req, testWorkspaceID) {
 		t.Fatal("setup: ghost user must not be allowed without cache priming")
@@ -5514,7 +5040,7 @@ func TestRequireDaemonWorkspaceAccess_CacheHit(t *testing.T) {
 	// must now succeed via the cache short-circuit.
 	testHandler.MembershipCache.Set(ctx, ghostUserID, testWorkspaceID)
 
-	req = newRequestAsUser(ghostUserID, "GET", "/api/daemon/workspaces/"+testWorkspaceID+"/repos", nil)
+	req = newRequestAsUser(ghostUserID, "GET", "/api/daemon/workspaces/"+testWorkspaceID+"/access-check", nil)
 	w = httptest.NewRecorder()
 	if !testHandler.requireDaemonWorkspaceAccess(w, req, testWorkspaceID) {
 		t.Fatalf("expected access via cache hit, got denied (status %d)", w.Code)
@@ -5535,7 +5061,7 @@ func TestRequireDaemonWorkspaceAccess_CacheMissBackfills(t *testing.T) {
 	}
 
 	// Make a request that triggers DB lookup.
-	req := newRequest("GET", "/api/daemon/workspaces/"+testWorkspaceID+"/repos", nil)
+	req := newRequest("GET", "/api/daemon/workspaces/"+testWorkspaceID+"/access-check", nil)
 	w := httptest.NewRecorder()
 	if !testHandler.requireDaemonWorkspaceAccess(w, req, testWorkspaceID) {
 		t.Fatalf("expected access granted via DB lookup, got denied (status %d)", w.Code)

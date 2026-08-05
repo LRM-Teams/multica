@@ -33,7 +33,6 @@
       "tokens": "API 토큰",
       "sandboxes": "샌드박스",
       "general": "일반",
-      "repositories": "저장소",
       "github": "GitHub",
       "integrations": "연동",
       "labs": "실험실",
@@ -444,28 +443,7 @@
     "feature_co_author_description_suffix": "을(를) 추가합니다.",
     "feature_auto_link_label": "이슈와 PR 자동 연결",
     "feature_auto_link_description": "PR 제목, 본문, 브랜치 이름을 이슈 식별자와 대조해 자동으로 연결합니다.",
-    "section_repositories": "저장소",
-    "repositories_shortcut_label": "저장소 URL은 저장소 탭에 있습니다",
-    "repositories_shortcut_link": "저장소 관리 →",
     "toast_failed": "GitHub 설정을 업데이트하지 못했습니다"
-  },
-  "repositories": {
-    "section_title": "저장소",
-    "description": "이 워크스페이스와 연결된 Git 저장소입니다. 에이전트는 이 저장소를 클론해 코드 작업을 합니다.",
-    "url_placeholder": "https://git.example.com/org/repo.git 또는 git@git.example.com:org/repo.git",
-    "url_empty": "(빈 URL)",
-    "description_placeholder": "설명(예: Go 백엔드 + Next.js 프런트엔드)",
-    "add": "저장소 추가",
-    "save": "저장",
-    "saving": "저장하는 중...",
-    "saved_hint": "모든 변경사항 저장됨",
-    "empty": "아직 저장소가 없습니다.",
-    "edit_aria": "저장소 수정",
-    "cancel_aria": "수정 취소",
-    "delete_aria": "저장소 삭제",
-    "manage_hint": "관리자와 소유자만 저장소를 관리할 수 있습니다.",
-    "toast_saved": "저장소를 저장했습니다",
-    "toast_save_failed": "저장소를 저장하지 못했습니다"
   },
   "desktop": {
     "tabs": {

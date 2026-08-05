@@ -26,7 +26,6 @@ func freshDaemon(serverURL string) *Daemon {
 		runtimeSet:                newRuntimeSetWatcher(),
 		agentVersions:             make(map[string]string),
 		wsHBLastAck:               make(map[string]time.Time),
-		activeEnvRoots:            make(map[string]int),
 		runtimeGoneInflight:       make(map[string]struct{}),
 		reregisterNextAttempt:     make(map[string]time.Time),
 		reregisterLastCompletedAt: make(map[string]time.Time),
@@ -148,7 +147,6 @@ func newHandleRuntimeGoneFixture(t *testing.T) *handleRuntimeGoneFixture {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(RegisterResponse{
 				Runtimes: []Runtime{{ID: "rt-new", Name: "Claude", Provider: "claude", Status: "online"}},
-				Repos:    []RepoData{},
 			})
 		case strings.HasSuffix(r.URL.Path, "/recover-orphans"):
 			w.WriteHeader(http.StatusOK)
@@ -406,7 +404,6 @@ func newMultiProviderRegisterFixture(t *testing.T, providers map[string]string) 
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(RegisterResponse{
 				Runtimes: runtimes,
-				Repos:    []RepoData{},
 			})
 		case strings.HasSuffix(r.URL.Path, "/recover-orphans"):
 			w.WriteHeader(http.StatusOK)

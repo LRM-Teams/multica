@@ -328,17 +328,15 @@ export function AgentTranscriptDialog({
   const toolCount = items.filter((i) => i.type === "tool_use").length;
 
   // Localized label for the states that fall through the badge branches below
-  // (queued / dispatched / waiting_local_directory / running / cancelled) — the
+  // (queued / dispatched / running / cancelled) — the
   // badge otherwise renders live / completed / failed, so this covers the rest
-  // instead of leaking the raw enum token (e.g. "Waiting_local_directory").
+  // instead of leaking a raw unknown enum token.
   const statusFallbackLabel = ((): string => {
     switch (task.status) {
       case "queued":
         return t(($) => $.transcript.status_queued);
       case "dispatched":
         return t(($) => $.transcript.status_dispatched);
-      case "waiting_local_directory":
-        return t(($) => $.transcript.status_waiting_local_directory);
       case "running":
         return t(($) => $.transcript.status_running);
       case "cancelled":

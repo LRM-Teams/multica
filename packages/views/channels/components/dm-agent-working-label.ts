@@ -35,6 +35,5 @@ export function resolveDmShortWorkingLabel(args: {
 
   if (activeTask.status === "queued") return queuedLabel;
   if (activeTask.status === "dispatched") return startingLabel;
-  if (activeTask.status === "waiting_local_directory") return startingLabel;
   return thinkingLabel;
 }

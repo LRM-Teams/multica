@@ -23,7 +23,7 @@ import (
 // lifecycle state with drain/cancel primitives, or the Multica runtime
 // models child threads as first-class task entities, the daemon disables
 // Codex native multi-agent by default for daemon-managed task sessions.
-// The override only touches the per-task `CODEX_HOME/config.toml`; the
+// The override only touches the Agent-scoped `CODEX_HOME/config.toml`; the
 // user's global `~/.codex/config.toml` is never modified.
 //
 // Users who explicitly want Codex native subagents inside a Multica task
@@ -183,13 +183,13 @@ func injectManagedBlockIntoFeaturesTable(content string) string {
 }
 
 // ensureCodexMultiAgentConfig writes the daemon-managed multi-agent block
-// into the per-task config.toml so Codex native subagents stay disabled.
+// into the Agent-scoped config.toml so Codex native subagents stay disabled.
 // Idempotent: running it twice produces the same file.
 //
 // When MULTICA_CODEX_MULTI_AGENT is set to a truthy value, the function is
 // a no-op — the user has explicitly opted into Codex native subagents and
 // accepts the lifecycle risk. Toggling the env var across prepare runs is
-// not supported: the per-task config is short-lived (recreated per task),
+// not supported: the Agent-scoped config is short-lived (recreated per task),
 // so users should set the var once at daemon start.
 func ensureCodexMultiAgentConfig(configPath string, logger *slog.Logger) error {
 	if codexMultiAgentEnabled() {

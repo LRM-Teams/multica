@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -59,18 +58,6 @@ var daemonLogsCmd = &cobra.Command{
 	RunE:  runDaemonLogs,
 }
 
-var daemonDiskUsageCmd = &cobra.Command{
-	Use:   "disk-usage",
-	Short: "Show daemon workspace disk usage by task or workspace",
-	Long: "Walks the daemon's workspaces root and reports per-task or per-workspace disk usage.\n" +
-		"Default view is per-task, sorted by size descending. --by-workspace switches to a per-workspace summary;\n" +
-		"--top N keeps only the largest N entries.\n\n" +
-		"Bytes are split into total and the artifact-cleanable subset (node_modules, .next, .turbo by default,\n" +
-		"overridable via MULTICA_GC_ARTIFACT_PATTERNS) so the report stays in sync with what the GC reclaims.\n" +
-		"The walk skips .git and never follows symlinks. The daemon does not need to be running.",
-	RunE: runDaemonDiskUsage,
-}
-
 func init() {
 	f := daemonStartCmd.Flags()
 	f.Bool("foreground", false, "Run in the foreground instead of background")
@@ -102,19 +89,11 @@ func init() {
 	rf.Bool("no-auto-update", false, "Disable periodic CLI self-update (env: MULTICA_DAEMON_AUTO_UPDATE=false)")
 	rf.Duration("auto-update-interval", 0, "How often to poll GitHub for a newer release (env: MULTICA_DAEMON_AUTO_UPDATE_INTERVAL)")
 
-	df := daemonDiskUsageCmd.Flags()
-	df.Bool("by-workspace", false, "Aggregate output by workspace instead of by task")
-	df.Bool("by-task", false, "Per-task view (default; mutually exclusive with --by-workspace)")
-	df.Int("top", 0, "Keep only the largest N entries (across all workspaces)")
-	df.String("output", "table", "Output format: table or json")
-	df.String("workspaces-root", "", "Override the workspaces root path (default: same as the daemon)")
-
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
 	daemonCmd.AddCommand(daemonRestartCmd)
 	daemonCmd.AddCommand(daemonStatusCmd)
 	daemonCmd.AddCommand(daemonLogsCmd)
-	daemonCmd.AddCommand(daemonDiskUsageCmd)
 }
 
 // daemonDirForProfile returns the state directory for the given profile.
@@ -710,217 +689,6 @@ func flagString(cmd *cobra.Command, name string) string {
 	return val
 }
 
-// --- daemon disk-usage ---
-
-func runDaemonDiskUsage(cmd *cobra.Command, _ []string) error {
-	profile := resolveProfile(cmd)
-	rootOverride, _ := cmd.Flags().GetString("workspaces-root")
-	byWorkspace, _ := cmd.Flags().GetBool("by-workspace")
-	byTask, _ := cmd.Flags().GetBool("by-task")
-	top, _ := cmd.Flags().GetInt("top")
-	output, _ := cmd.Flags().GetString("output")
-
-	if byWorkspace && byTask {
-		return fmt.Errorf("--by-workspace and --by-task are mutually exclusive")
-	}
-	if top < 0 {
-		return fmt.Errorf("--top must be a non-negative integer")
-	}
-
-	workspacesRoot, err := daemon.ResolveWorkspacesRoot(profile, rootOverride)
-	if err != nil {
-		return fmt.Errorf("resolve workspaces root: %w", err)
-	}
-
-	report, err := daemon.ScanDiskUsage(workspacesRoot, daemon.ArtifactPatternsFromEnv())
-	if err != nil {
-		return err
-	}
-
-	if top > 0 {
-		if byWorkspace {
-			if top < len(report.Workspaces) {
-				report.Workspaces = report.Workspaces[:top]
-			}
-		} else if top < len(report.Tasks) {
-			report.Tasks = report.Tasks[:top]
-		}
-	}
-
-	if output == "json" {
-		return cli.PrintJSON(os.Stdout, report)
-	}
-
-	if byWorkspace {
-		printDiskUsageWorkspaceTable(os.Stdout, report)
-		printDiskUsageEmptyHint(os.Stdout, report, profile, rootOverride)
-		return nil
-	}
-	printDiskUsageTaskTable(os.Stdout, report)
-	printDiskUsageEmptyHint(os.Stdout, report, profile, rootOverride)
-	return nil
-}
-
-func printDiskUsageTaskTable(w io.Writer, report daemon.DiskUsageReport) {
-	fmt.Fprintf(w, "Workspaces root: %s\n", report.WorkspacesRoot)
-	if report.TotalTaskCount == 0 {
-		if report.TotalManagedSizeBytes > 0 {
-			fmt.Fprintf(w, "(no legacy task directories; durable agent state: %s)\n", formatBytes(report.TotalManagedSizeBytes))
-		} else {
-			fmt.Fprintln(w, "(no task directories)")
-		}
-		return
-	}
-	rows := make([][]string, 0, len(report.Tasks))
-	var displayedSize, displayedArtifact int64
-	for _, task := range report.Tasks {
-		displayedSize += task.SizeBytes
-		displayedArtifact += task.ArtifactSizeBytes
-		rows = append(rows, []string{
-			task.WorkspaceShort + "/" + task.TaskShort,
-			task.Kind,
-			emptyDash(task.ParentStatus),
-			formatAge(task.AgeSeconds),
-			formatBytes(task.SizeBytes),
-			formatBytes(task.ArtifactSizeBytes),
-		})
-	}
-	cli.PrintTable(w, []string{"PATH", "KIND", "STATUS", "AGE", "SIZE", "ARTIFACTS"}, rows)
-
-	if len(report.Tasks) < report.TotalTaskCount {
-		// Report-wide totals stay anchored to the full scan; the displayed
-		// row is what the user is currently looking at. Calling these out
-		// separately keeps `--top N` from misleading at-a-glance triage.
-		fmt.Fprintf(w, "\nShowing top %d of %d task(s). Displayed: %s (%s artifacts). Scan total: %s, including %s durable agent state (%s artifacts, %.1f%% reclaimable).\n",
-			len(report.Tasks), report.TotalTaskCount,
-			formatBytes(displayedSize), formatBytes(displayedArtifact),
-			formatBytes(report.TotalSizeBytes), formatBytes(report.TotalManagedSizeBytes), formatBytes(report.TotalArtifactSizeBytes),
-			report.TotalArtifactRatio*100)
-		return
-	}
-	fmt.Fprintf(w, "\nTotal: %s across %d task(s), including %s durable agent state; %s reclaimable as artifacts (%.1f%%).\n",
-		formatBytes(report.TotalSizeBytes), report.TotalTaskCount,
-		formatBytes(report.TotalManagedSizeBytes), formatBytes(report.TotalArtifactSizeBytes), report.TotalArtifactRatio*100)
-}
-
-func printDiskUsageWorkspaceTable(w io.Writer, report daemon.DiskUsageReport) {
-	fmt.Fprintf(w, "Workspaces root: %s\n", report.WorkspacesRoot)
-	if report.TotalWorkspaceCount == 0 {
-		fmt.Fprintln(w, "(no workspaces)")
-		return
-	}
-	rows := make([][]string, 0, len(report.Workspaces))
-	var displayedSize, displayedArtifact int64
-	for _, ws := range report.Workspaces {
-		displayedSize += ws.SizeBytes
-		displayedArtifact += ws.ArtifactSizeBytes
-		rows = append(rows, []string{
-			ws.WorkspaceShort,
-			strconv.Itoa(ws.TaskCount),
-			formatBytes(ws.SizeBytes),
-			formatBytes(ws.ManagedSizeBytes),
-			formatBytes(ws.ArtifactSizeBytes),
-			formatRatio(ws.ArtifactRatio),
-			formatAge(ws.OldestAgeSeconds),
-		})
-	}
-	cli.PrintTable(w, []string{"WORKSPACE", "TASKS", "SIZE", "AGENT STATE", "ARTIFACTS", "ARTIFACT %", "OLDEST"}, rows)
-
-	if len(report.Workspaces) < report.TotalWorkspaceCount {
-		fmt.Fprintf(w, "\nShowing top %d of %d workspace(s). Displayed: %s (%s artifacts). Scan total: %s, including %s durable agent state (%s artifacts, %.1f%% reclaimable).\n",
-			len(report.Workspaces), report.TotalWorkspaceCount,
-			formatBytes(displayedSize), formatBytes(displayedArtifact),
-			formatBytes(report.TotalSizeBytes), formatBytes(report.TotalManagedSizeBytes), formatBytes(report.TotalArtifactSizeBytes),
-			report.TotalArtifactRatio*100)
-		return
-	}
-	fmt.Fprintf(w, "\nTotal: %s across %d workspace(s), including %s durable agent state; %s reclaimable as artifacts (%.1f%%).\n",
-		formatBytes(report.TotalSizeBytes), report.TotalWorkspaceCount,
-		formatBytes(report.TotalManagedSizeBytes), formatBytes(report.TotalArtifactSizeBytes), report.TotalArtifactRatio*100)
-}
-
-func printDiskUsageEmptyHint(w io.Writer, report daemon.DiskUsageReport, profile, rootOverride string) {
-	if report.TotalTaskCount != 0 || rootOverride != "" {
-		return
-	}
-	suggestions := diskUsageProfileSuggestions(profile, report.WorkspacesRoot)
-	if len(suggestions) == 0 {
-		return
-	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Other workspace roots contain task directories:")
-	for _, s := range suggestions {
-		fmt.Fprintf(w, "  %s  # %s (%d task%s)\n",
-			s.Command, s.Root, s.TaskCount, pluralS(s.TaskCount))
-	}
-}
-
-type diskUsageProfileSuggestion struct {
-	Profile   string
-	Command   string
-	Root      string
-	TaskCount int
-}
-
-func diskUsageProfileSuggestions(currentProfile, currentRoot string) []diskUsageProfileSuggestion {
-	out := make([]diskUsageProfileSuggestion, 0)
-	if currentProfile != "" {
-		if root, err := daemon.ResolveWorkspacesRoot("", ""); err == nil && !samePath(root, currentRoot) {
-			if taskCount := countDiskUsageTaskDirs(root); taskCount > 0 {
-				out = append(out, diskUsageProfileSuggestion{
-					Profile:   "",
-					Command:   "multica daemon disk-usage",
-					Root:      root,
-					TaskCount: taskCount,
-				})
-			}
-		}
-	}
-
-	profilesRoot, err := profilesRootDir()
-	if err != nil {
-		return out
-	}
-	entries, err := os.ReadDir(profilesRoot)
-	if err != nil {
-		return out
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		profile := entry.Name()
-		if profile == currentProfile {
-			continue
-		}
-		root, err := daemon.ResolveWorkspacesRoot(profile, "")
-		if err != nil || samePath(root, currentRoot) {
-			continue
-		}
-		taskCount := countDiskUsageTaskDirs(root)
-		if taskCount == 0 {
-			continue
-		}
-		out = append(out, diskUsageProfileSuggestion{
-			Profile:   profile,
-			Command:   "multica --profile " + shellQuoteArg(profile) + " daemon disk-usage",
-			Root:      root,
-			TaskCount: taskCount,
-		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].TaskCount == out[j].TaskCount {
-			return out[i].Profile < out[j].Profile
-		}
-		return out[i].TaskCount > out[j].TaskCount
-	})
-	const maxSuggestions = 5
-	if len(out) > maxSuggestions {
-		out = out[:maxSuggestions]
-	}
-	return out
-}
-
 func shellQuoteArg(s string) string {
 	if s == "" {
 		return "''"
@@ -934,108 +702,4 @@ func shellQuoteArg(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
-}
-
-func countDiskUsageTaskDirs(root string) int {
-	wsEntries, err := os.ReadDir(root)
-	if err != nil {
-		return 0
-	}
-	count := 0
-	for _, wsEntry := range wsEntries {
-		if !wsEntry.IsDir() || wsEntry.Name() == ".repos" {
-			continue
-		}
-		taskEntries, err := os.ReadDir(filepath.Join(root, wsEntry.Name()))
-		if err != nil {
-			continue
-		}
-		for _, taskEntry := range taskEntries {
-			if taskEntry.IsDir() {
-				count++
-			}
-		}
-	}
-	return count
-}
-
-func profilesRootDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".multica", "profiles"), nil
-}
-
-func samePath(a, b string) bool {
-	if a == "" || b == "" {
-		return false
-	}
-	aa, errA := filepath.Abs(a)
-	bb, errB := filepath.Abs(b)
-	if errA != nil || errB != nil {
-		return a == b
-	}
-	return aa == bb
-}
-
-func pluralS(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
-}
-
-// formatRatio renders a 0..1 fraction as a percentage to one decimal. A
-// non-finite or negative input collapses to "0.0%" — total=0 workspaces
-// shouldn't surface "NaN%".
-func formatRatio(r float64) string {
-	if r != r || r < 0 { // NaN check via inequality
-		return "0.0%"
-	}
-	return fmt.Sprintf("%.1f%%", r*100)
-}
-
-func emptyDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
-}
-
-// formatBytes renders a byte count in IEC units (KiB/MiB/GiB) with one decimal
-// place above 1 KiB. Kept intentionally compact so the table view stays
-// scannable at terminal widths.
-func formatBytes(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	prefix := "KMGTPE"[exp]
-	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), prefix)
-}
-
-// formatAge renders an age in the most human-friendly unit that still keeps
-// the value above 1. "0s" stands for "less than a second" — matches what the
-// GC log lines look like.
-func formatAge(seconds int64) string {
-	if seconds <= 0 {
-		return "0s"
-	}
-	d := time.Duration(seconds) * time.Second
-	switch {
-	case d >= 24*time.Hour:
-		return fmt.Sprintf("%dd %dh", int(d/(24*time.Hour)), int((d%(24*time.Hour))/time.Hour))
-	case d >= time.Hour:
-		return fmt.Sprintf("%dh %dm", int(d/time.Hour), int((d%time.Hour)/time.Minute))
-	case d >= time.Minute:
-		return fmt.Sprintf("%dm %ds", int(d/time.Minute), int((d%time.Minute)/time.Second))
-	default:
-		return fmt.Sprintf("%ds", seconds)
-	}
 }

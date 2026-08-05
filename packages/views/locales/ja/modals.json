@@ -73,8 +73,6 @@
     "repos_pill_count_other": "{{count}} 個のリポジトリ",
     "repos_heading": "このプロジェクトに GitHub リポジトリを接続",
     "repos_empty": "まだワークスペースレベルのリポジトリがありません。下に URL を貼り付けてアドホックに接続してください。",
-    "repos_search_placeholder": "リポジトリを検索...",
-    "repos_search_empty": "検索に一致するリポジトリがありません。",
     "repos_url_placeholder": "https://github.com/owner/repo または git@github.com:owner/repo.git",
     "repos_add": "追加",
     "repos_selected": "選択済み",

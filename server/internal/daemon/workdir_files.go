@@ -16,6 +16,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -199,11 +201,15 @@ func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayl
 
 // isAgentWorkspaceRelPath reports whether relPath (server-supplied, relative
 // to WorkspacesRoot) points into a durable agent workspace
-// ({workspaceID}/.multica/agents/{agentID}, see agentRootRelPath in
-// handler/agent_files.go) as opposed to a per-run task workdir or a
-// project's local_directory workdir, which this quota does not apply to.
+// ({workspaceID}/agents/{agentID}, see agentRootRelPath in handler/agent_files.go).
 func isAgentWorkspaceRelPath(relPath string) bool {
-	return strings.Contains(filepath.ToSlash(relPath), "/.multica/agents/")
+	workspaceID, agentID, ok := agentworkspace.IDsFromRelPath(relPath)
+	return ok && isCanonicalUUIDDirName(workspaceID) && isCanonicalUUIDDirName(agentID)
+}
+
+func isCanonicalUUIDDirName(name string) bool {
+	parsed, err := uuid.Parse(name)
+	return err == nil && parsed.String() == name
 }
 
 // handleDeleteDirRequest removes one confined directory under WorkspacesRoot.

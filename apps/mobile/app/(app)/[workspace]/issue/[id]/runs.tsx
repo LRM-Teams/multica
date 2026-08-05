@@ -30,7 +30,6 @@ const PAST_STATUS_ORDER: Record<AgentTask["status"], number> = {
   completed: 2,
   queued: 99,
   dispatched: 99,
-  waiting_local_directory: 99,
   running: 99,
 };
 

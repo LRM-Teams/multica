@@ -11,7 +11,7 @@
 Multica already gives each managed agent an isolated workspace root under:
 
 ```text
-<workspaces_root>/<workspace_id>/.multica/agents/<agent_id>/
+<workspaces_root>/<workspace_id>/agents/<agent_id>/
 ```
 
 The current workspace memory spec defines the local layout:
@@ -30,7 +30,7 @@ The current workspace memory spec defines the local layout:
   sync_queue/
 ```
 
-Runtime setup already points managed providers at this isolated root. Pi additionally receives `PI_MEMORY_DIR`, `PI_AGENT_ROOT`, and related environment variables mapped to the same Multica agent root. The daemon also initializes missing root files through `ensureMulticaAgentRoot`.
+Runtime setup points managed providers at this isolated root through `MULTICA_AGENT_ROOT`. All memory, skills, and state paths are relative to it. Pi compatibility variables are derived only at the Pi adapter boundary. The daemon also initializes missing root files through `ensureMulticaAgentRoot`.
 
 However, current behavior is still mostly runtime-local and candidate-driven:
 
@@ -64,8 +64,8 @@ This plan adds a platform-owned Memory Curation Pipeline so memory becomes autom
 
 | Area | Current fact | Implication |
 |---|---|---|
-| Agent root | `multicaAgentRoot` resolves `.multica/agents/<agent_id>` and `ensureMulticaAgentRoot` seeds memory files. | New jobs should reuse this root and never write provider-global memory. |
-| Runtime env | Managed tasks receive `MULTICA_AGENT_ROOT` / `MULTICA_AGENT_MEMORY_DIR`; Pi receives matching `PI_*` env. | Curated output is visible to subsequent runs through existing prompt/env wiring. |
+| Agent root | `multicaAgentRoot` resolves `<workspace_id>/agents/<agent_id>` and `ensureMulticaAgentRoot` seeds memory files. | New jobs should reuse this root and never write provider-global memory. |
+| Runtime env | Managed tasks receive only `MULTICA_AGENT_ROOT` as the generic location; Pi compatibility paths are derived at its adapter boundary. | Curated output is visible to subsequent runs through the stable Agent workspace. |
 | Scheduler | `server/internal/scheduler` provides a DB-backed `sys_cron_executions` scheduler with distributed leases and audit rows. | Memory jobs should register as scheduler jobs, not ad-hoc goroutines. |
 | Server memory table | `agent_memory` stores agent-scoped memory documents with `name`, `sync_key`, `content`, and `config`. | Curated canonical memory can be mirrored/upserted here for UI and server-side retrieval. |
 | Evolution submissions | `sync_queue/memory-candidates.jsonl` uploads to `evolution_unit_submission`; memory-like units can promote to `agent_memory`. | Review-stage candidates can use this path for governed promotion. |

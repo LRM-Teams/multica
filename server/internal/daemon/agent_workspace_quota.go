@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 )
 
 // agentWorkspaceWriteQuotaError returns a non-empty user-facing error when a
@@ -43,4 +45,19 @@ func agentWorkspaceAtOrOverCap(root string, quota int64) (used int64, over bool)
 	}
 	used = dirSize(root)
 	return used, used >= quota
+}
+
+func dirSize(root string) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		info, infoErr := entry.Info()
+		if infoErr == nil && info.Mode().IsRegular() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }

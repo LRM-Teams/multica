@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
 func ensureMemoryRootFixtures(root string) error {
@@ -32,7 +34,7 @@ func ensureMemoryRootFixtures(root string) error {
 
 func TestLegacyL2KeepsDeterministicCandidatesUntilSensitivityIsExplicit(t *testing.T) {
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
 	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +91,7 @@ func TestLegacyL2KeepsDeterministicCandidatesUntilSensitivityIsExplicit(t *testi
 
 func TestRunAllInvokesSelfReviewThenTeamCurationWithDBEvidence(t *testing.T) {
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
 	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +145,7 @@ func TestRunAllInvokesSelfReviewThenTeamCurationWithDBEvidence(t *testing.T) {
 
 func TestTeamCurationUsesPendingCandidatesNotRawChat(t *testing.T) {
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
 	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +241,7 @@ func stageNames(stages []Stage) []string {
 
 func TestL4ExpiresStateAndClosedReviewEntries(t *testing.T) {
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
 	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +361,7 @@ func TestDetectOversizedMemoryFilesUsesCanonicalSoftLimits(t *testing.T) {
 
 func TestL4ExpiresAndDedupesProjectMemory(t *testing.T) {
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
 	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}

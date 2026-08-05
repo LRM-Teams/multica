@@ -167,7 +167,7 @@ export interface RuntimeDevice {
 
 export type AgentRuntime = RuntimeDevice;
 
-/** LRM-810 — one on-disk agent root under `{workspace}/.multica/agents/`. */
+/** One durable on-disk Agent workspace at `~/.multica/workspaces/<workspace_id>/agents/<agent_id>`. */
 export interface RuntimeAgentWorkspace {
   dir_name: string;
   rel_path: string;
@@ -304,15 +304,9 @@ export interface AgentTask {
   // schedule-spawned. Check chat_session_id / autopilot_run_id to tell
   // which source produced it.
   issue_id: string;
-  // `waiting_local_directory` is the daemon-emitted hold state for the
-  // local_directory flow: a task that has been dispatched but is parked
-  // because another task currently owns the same on-disk path lock.
-  // Treated as an active (non-terminal) state alongside queued/dispatched/
-  // running by every consumer that buckets tasks into "active vs done".
   status:
     | "queued"
     | "dispatched"
-    | "waiting_local_directory"
     | "running"
     | "completed"
     | "failed"
@@ -372,12 +366,10 @@ export interface AgentTask {
   work_dir?: string;
   /**
    * Privacy-safe display form of `work_dir`, derived on the server. For
-   * standard tasks the daemon's workspaces root has been stripped off
-   * (`<wsUUID>/<taskShort>/workdir`); for local_directory tasks where the
-   * path lives outside that layout, the server strips recognised home
-   * prefixes (`/Users/<name>/`, `/home/<name>/`, `<drive>:/Users/<name>/`)
-   * and otherwise falls back to the basename so neither the home directory
-   * nor the username leak into the UI. Older backends omit the field —
+   * canonical Agent workspaces the daemon's workspaces root has been stripped
+   * off (`<workspaceUUID>/agents/<agentUUID>`). Unexpected external paths are
+   * reduced to a safe home-relative path or basename so neither the home
+   * directory nor username leaks into the UI. Older backends omit the field —
    * render it conditionally and never render `work_dir` raw (not even in
    * a tooltip / `title` / `aria-label`, since the goal is that screen
    * shares and screenshots also stay safe).

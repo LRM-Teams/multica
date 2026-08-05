@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -100,12 +100,7 @@ func (h *Handler) authorizeAgentFiles(w http.ResponseWriter, r *http.Request, mo
 }
 
 func agentRootRelPath(agent db.Agent) string {
-	return filepath.ToSlash(filepath.Join(
-		uuidToString(agent.WorkspaceID),
-		".multica",
-		"agents",
-		uuidToString(agent.ID),
-	))
+	return agentworkspace.RootRelPath(uuidToString(agent.WorkspaceID), uuidToString(agent.ID))
 }
 
 func agentFileRuntimeID(agent db.Agent) (string, bool) {

@@ -392,8 +392,7 @@ function isActiveStatus(status: string | undefined): boolean {
   return (
     status === "queued" ||
     status === "dispatched" ||
-    status === "running" ||
-    status === "waiting_local_directory"
+    status === "running"
   );
 }
 

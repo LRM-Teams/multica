@@ -517,7 +517,7 @@ export function createJaDict(allowSignup: boolean): LandingDict {
           features: [
             "初めて実用的なモバイルクライアントとなる Multica for iOS をリリースし、ログイン・ワークスペース・インボックス・イシュー・プロジェクト・チャット・コメント・リアルタイム更新をすべて利用できます。",
             "セルフホストのチームが Helm チャートで Kubernetes にデプロイできるようになり、Docker でのインストール時もポートと URL の設定がより明確になりました。",
-            "プロジェクトのリソース選択にリポジトリ検索が加わり、ランタイムの使用量が主要なモデルのコストをより正確に集計します。",
+            "ランタイムの使用量が主要なモデルのコストをより正確に集計します。",
           ],
           improvements: [
           ],
@@ -753,10 +753,9 @@ export function createJaDict(allowSignup: boolean): LandingDict {
         {
           version: "0.2.24",
           date: "2026-05-03",
-          title: "Repo checkout --ref と Hermes の再生修正",
+          title: "Hermes の再生修正",
           changes: [],
           features: [
-            "`multica repo checkout --ref` が、ブランチ、タグ、特定のコミットを対象にリポジトリを取得できます。",
             "`multica agent avatar` が、CLI からエージェントのアバターを直接アップロードします。",
             "インボックスの Done タスクにアーカイブボタンが加わり、重複していた mark-as-done の hover ボタンは削除されました。",
           ],

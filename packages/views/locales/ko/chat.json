@@ -127,7 +127,6 @@
       "offline": "오프라인",
       "reconnecting": "다시 연결 중",
       "queued": "대기 중",
-      "waiting_local_directory": "로컬 디렉터리 대기 중",
       "starting_up": "작업 중",
       "thinking": "생각 중",
       "typing": "출력"

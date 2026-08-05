@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -393,10 +394,10 @@ func (m *reminderAgentManager) bootstrapFromLocalAgentConfigs() {
 		return
 	}
 	for _, workspace := range workspaces {
-		if !workspace.IsDir() || strings.HasPrefix(workspace.Name(), ".") {
+		if !workspace.IsDir() || !isCanonicalUUIDDirName(workspace.Name()) {
 			continue
 		}
-		agentsRoot := filepath.Join(m.root, workspace.Name(), ".multica", "agents")
+		agentsRoot := agentworkspace.AgentsDir(m.root, workspace.Name())
 		agents, readErr := os.ReadDir(agentsRoot)
 		if readErr != nil {
 			continue
@@ -405,7 +406,7 @@ func (m *reminderAgentManager) bootstrapFromLocalAgentConfigs() {
 			if !agentDir.IsDir() {
 				continue
 			}
-			configPath := filepath.Join(agentsRoot, agentDir.Name(), "runtime", "credentials", "current.json")
+			configPath := filepath.Join(agentworkspace.Root(m.root, workspace.Name(), agentDir.Name()), "runtime", "credentials", "current.json")
 			raw, readErr := os.ReadFile(configPath)
 			if readErr != nil {
 				continue

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
 type Engine struct {
@@ -412,7 +414,7 @@ func (e *Engine) runAgentSelfReview(root agentRoot, opts Options) (AgentRunResul
 }
 
 func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResult, error) {
-	ar := AgentRunResult{WorkspaceID: opts.WorkspaceID, AgentID: "team", Root: filepath.Join(opts.WorkspacesRoot, opts.WorkspaceID, ".multica", "agents")}
+	ar := AgentRunResult{WorkspaceID: opts.WorkspaceID, AgentID: "team", Root: agentworkspace.AgentsDir(opts.WorkspacesRoot, opts.WorkspaceID)}
 	if opts.StageAgent == nil {
 		return ar, fmt.Errorf("team curation requires a selected curator runtime and agent")
 	}

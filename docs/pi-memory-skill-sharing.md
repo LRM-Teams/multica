@@ -2,7 +2,7 @@
 
 This note documents the Pi-specific memory and skill sharing paths in Multica, excluding the workspace-level `~/.pi/share/skills` scanner.
 
-Last verified against the current working tree on 2026-06-30.
+Last verified against the current working tree on 2026-08-05.
 
 ## Scope
 
@@ -34,17 +34,17 @@ It does not cover the global shared-skill scanner under `~/.pi/share/skills`, wh
 
 - **Skill promotion ≠ assignment.** A promoted skill is written to the workspace public `skill` table. Binding it to an agent is a separate, user-confirmed step.
 - **Memory auto-assigns to the submitting agent.** After deterministic hard gates pass, memory-like units are promoted and written to `agent_memory` for `source_agent_id` with no LLM or manual review.
-- **No per-agent delivery table.** `evolution_unit_delivery` was removed (migration 137). Evolution does not push generated bundles back to `skills/generated/` or `skills/enabled/`. (A separate Prepare/Reuse step may mirror already-bound `agent_skill` rows into `skills/enabled/` for inspection only.)
+- **No per-agent delivery table.** `evolution_unit_delivery` was removed (migration 137). Evolution does not push generated bundles into AgentRoot. A separate Prepare/Reuse step mirrors already-bound `agent_skill` rows into `skills/enabled/` for inspection only.
 
-## Local Pi Agent Root
+## Canonical Agent Root
 
-For each workspace agent, Multica creates a stable Pi agent root:
+Every provider for the same Agent uses one stable root:
 
 ```text
-<WorkspacesRoot>/<workspace_id>/.pi/agents/<agent_id>/
+<WorkspacesRoot>/<workspace_id>/agents/<agent_id>/
 ```
 
-The daemon helper is `piAgentRoot(cfg, workspaceID, agentID)` in `server/internal/daemon/shared_skills.go`.
+The path source of truth is `agentworkspace.Root(...)` in `server/internal/agentworkspace/path.go`. Pi-specific helpers delegate to it and do not define another layout.
 
 The root contains these directories:
 
@@ -54,8 +54,7 @@ memory/
   audit/
 skills/
   drafts/
-  generated/          # legacy empty scaffold; evolution no longer writes here
-  enabled/            # legacy empty scaffold; evolution no longer writes here
+  enabled/            # DB-to-disk mirror of currently bound skills
 inbox/
   memory/
   skills/
@@ -67,20 +66,18 @@ feedback/
 sync_queue/
 ```
 
-`ensurePiAgentRoot` still creates `skills/generated/` and `skills/enabled/` for layout compatibility. Evolution does **not** populate them. Task-time skills still come from the database via `agent_skill` and hydrate into provider-native workdir paths (`.pi/skills/`, `.cursor/skills/`, …).
+Task-time skills come from the database via `agent_skill` and hydrate into provider-native paths below AgentRoot (`.pi/skills/`, `.cursor/skills/`, …).
 
 Additionally, on Prepare/Reuse the daemon **mirrors** currently bound skills into `skills/enabled/<slug>/` (marked with `.multica-bound-mirror`) so the agent root shows what is bound. This mirror is one-way (DB → disk), best-effort, and does not change task hydration or write disk edits back to the DB.
 
-The daemon exposes paths to the Pi runtime through environment variables:
+The daemon exposes one filesystem boundary to every provider, including Pi:
 
 ```bash
-PI_AGENT_ROOT=<agent_root>
-PI_MEMORY_DIR=<agent_root>/memory
-PI_SKILL_DRAFTS_DIR=<agent_root>/skills/drafts
-PI_AGENT_INBOX_DIR=<agent_root>/inbox
-PI_AGENT_SHARED_CACHE_DIR=<agent_root>/shared-cache
-PI_AGENT_SYNC_QUEUE_DIR=<agent_root>/sync_queue
+MULTICA_AGENT_ROOT=<agent_root>
 ```
+
+Memory, skills, notes, and runtime state use relative paths below that root.
+Subdirectories are created only when a feature writes to them.
 
 ## Upload Sources
 
@@ -163,14 +160,13 @@ The daemon runs local memory curation for workspaces that have an online Pi runt
 
 ## Paths That Are Not Uploaded Directly
 
-These paths are for Pi runtime state or legacy layout. They are not direct upload sources and are not written by the evolution downflow in the current implementation:
+These paths are local Agent state. They are not direct upload sources and are not written by the evolution downflow in the current implementation:
 
 - `<agent_root>/memory/MEMORY.md`
 - `<agent_root>/memory/USER.md`
 - `<agent_root>/memory/STATE.md`
 - `<agent_root>/memory/REVIEW.md`
 - `<agent_root>/memory/daily/`
-- `<agent_root>/skills/generated/`
 - `<agent_root>/skills/enabled/`
 - `<agent_root>/inbox/`
 - `<agent_root>/shared-cache/`
@@ -189,10 +185,10 @@ POST /api/daemon/runtimes/{runtimeId}/evolution/submissions
 
 The server handler is `SyncEvolutionSubmissions` in `server/internal/handler/evolution.go`.
 
-The daemon only runs this flow for Pi runtimes with a workspace id. It scans agent roots under:
+The daemon only runs this flow for Pi runtimes with a workspace id. It scans Agent roots under:
 
 ```text
-<WorkspacesRoot>/<workspace_id>/.pi/agents/
+<WorkspacesRoot>/<workspace_id>/agents/
 ```
 
 There is no daemon polling endpoint for evolution deliveries; that path was removed with `evolution_unit_delivery`.
@@ -446,7 +442,7 @@ Accepted bindings in `agent_skill` are what the runtime uses. On task dispatch, 
 TaskService.LoadAgentSkills(ctx, agentID)
 ```
 
-This reads `skill` + `skill_file` through `agent_skill` joins and returns skill content to the daemon. The daemon injects them into the Pi task environment (for example under `<task_workdir>/.pi/skills/<skill_name>/`).
+This reads `skill` + `skill_file` through `agent_skill` joins and returns skill content to the daemon. The daemon injects them below the canonical AgentRoot (for example under `<agent_root>/.pi/skills/<skill_name>/`).
 
 Evolution-promoted skills therefore reach Pi only after:
 

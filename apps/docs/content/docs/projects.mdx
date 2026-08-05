@@ -23,9 +23,7 @@ The sidebar **Workspace → Projects** link always shows every project in the wo
 
 ## Attaching resources
 
-Each project has a **Resources** section where you attach GitHub repositories. Once attached, any [agent](/agents) assigned to issues in this project can read and write to those repos when executing tasks — Multica passes the repo URLs as context to the [daemon](/daemon-runtimes).
-
-Resources are per-project; if multiple projects share a repo, attach it to each one.
+Each project can have a **Resources** section for product metadata and references. Resources do not choose an [agent's](/agents) working directory, trigger a clone, or inject repository URLs into the Agent prompt. Every Agent works from its own durable workspace and chooses its own tools and Git workflow.
 
 ## Deleting a project
 

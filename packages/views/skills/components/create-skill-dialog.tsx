@@ -43,7 +43,7 @@ import { RuntimeLocalSkillImportPanel } from "./runtime-local-skill-import-panel
 import { useT } from "../../i18n";
 import { isNameConflictError } from "../lib/utils";
 
-type Method = "chooser" | "manual" | "url" | "runtime" | "platform";
+type Method = "chooser" | "manual" | "url" | "runtime";
 
 function seedAfterCreate(
   qc: ReturnType<typeof useQueryClient>,
@@ -64,9 +64,8 @@ function MethodChooser({ onChoose }: { onChoose: (m: Method) => void }) {
   const methods: {
     key: Method;
     icon: typeof Plus;
-    titleKey: "manual" | "url" | "runtime" | "platform";
+    titleKey: "manual" | "url" | "runtime";
   }[] = [
-    { key: "platform", icon: Plus, titleKey: "platform" },
     { key: "manual", icon: Plus, titleKey: "manual" },
     { key: "url", icon: Download, titleKey: "url" },
     { key: "runtime", icon: HardDrive, titleKey: "runtime" },
@@ -95,70 +94,6 @@ function MethodChooser({ onChoose }: { onChoose: (m: Method) => void }) {
         </button>
       ))}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Platform form
-// ---------------------------------------------------------------------------
-
-function PlatformForm({
-  onCreated,
-  onCancel,
-}: {
-  onCreated: (skill: Skill) => void;
-  onCancel: () => void;
-}) {
-  const { t } = useT("skills");
-  const qc = useQueryClient();
-  const wsId = useWorkspaceId();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  const install = async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const skill = await api.installPlatformSkill("multica-memory-migration");
-      seedAfterCreate(qc, wsId, skill);
-      toast.success(t(($) => $.create.platform.toast_installed));
-      onCreated(skill);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t(($) => $.create.platform.fallback_error));
-      setLoading(false);
-    }
-  };
-
-  return (
-    <>
-      <div className="space-y-4 px-5 py-4">
-        <div className="rounded-lg border bg-muted/30 p-4">
-          <div className="text-sm font-medium">
-            {t(($) => $.create.platform.skill_title)}
-          </div>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            {t(($) => $.create.platform.skill_desc)}
-          </p>
-        </div>
-        {error && (
-          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
-      </div>
-      <div className="flex shrink-0 justify-end gap-2 border-t px-5 py-3">
-        <Button variant="ghost" size="sm" onClick={onCancel} disabled={loading}>
-          {t(($) => $.create.platform.cancel)}
-        </Button>
-        <Button size="sm" onClick={install} disabled={loading}>
-          {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          {loading
-            ? t(($) => $.create.platform.installing)
-            : t(($) => $.create.platform.install)}
-        </Button>
-      </div>
-    </>
   );
 }
 
@@ -566,12 +501,6 @@ export function CreateSkillDialog({
 
         {/* Method body — each form owns its scroll middle + footer */}
         {method === "chooser" && <MethodChooser onChoose={setMethod} />}
-        {method === "platform" && (
-          <PlatformForm
-            onCreated={handleCreated}
-            onCancel={() => setMethod("chooser")}
-          />
-        )}
         {method === "manual" && (
           <ManualForm
             onCreated={handleCreated}

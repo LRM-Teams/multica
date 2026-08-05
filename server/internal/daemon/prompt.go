@@ -519,7 +519,7 @@ func buildChatPrompt(task Task, agentRoot string) string {
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread only. Do not assume visibility into other DMs, channels, issues, or threads unless the user explicitly references them and the Multica CLI allows access.\n")
 	b.WriteString("- For thread-triggered runs, the thread root and recent replies are the relevant conversation boundary; do not infer the entire parent channel/DM history.\n")
 	b.WriteString("- Channel/thread snippets are intentionally bounded. If the answer depends on omitted channel history, search or fetch more channel/thread messages via Multica before guessing.\n")
-	b.WriteString("- Full histories, issue timelines, attachments, repositories, and complete skill files are lazy context: load them only with the appropriate tool/CLI command when needed.\n\n")
+	b.WriteString("- Full histories, issue timelines, attachments, project metadata, and complete skill files are lazy context: load them only with the appropriate tool/CLI command when needed.\n\n")
 	if task.Agent != nil && len(task.Agent.Skills) > 0 {
 		refs := ExtractSlashSkills(task.ChatMessage)
 		if len(refs) > 0 {

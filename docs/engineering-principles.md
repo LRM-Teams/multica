@@ -382,10 +382,18 @@
 ### 4.17 跨设备 Memory 以 portable 中心事实 + device-local overlay 同步 — `可执行`（① tombstone/change_seq + ② typed cursor/outbox + ⑤回归；owner: @Kiro ✅）
 - portable USER/RELATIONSHIP/MEMORY/project/channel atom 必须先写本机 `memory-sync-outbox.json`，server ACK 后才能移除 batch；daemon 重启和网络失败不得靠已推进的文件 hash 丢写入。每次 agent turn 前按 `change_seq` cursor 增量 pull，不再用一次性 hydrate marker。
 - 删除是 `superseded + deleted_at` tombstone，离线旧设备自动上行不得复活；active 更新、conflict 和删除都推进单调 change sequence。冲突内容移出正式文件，只进 `REVIEW.md`，不得作为权威规则注入。
-- 绝对本机路径、loopback endpoint、credential-like 内容在 daemon 和 server 双端 fail closed，不进入中心。机器环境事实写 `<agent-root>/devices/<daemon-id>/STATE.md`，通过 `MULTICA_DEVICE_MEMORY_DIR` 暴露。
+- 绝对本机路径、loopback endpoint、credential-like 内容在 daemon 和 server 双端 fail closed，不进入中心。机器环境事实写 `$MULTICA_AGENT_ROOT/devices/<daemon-id>/STATE.md`；运行时不再暴露独立的 memory/device/skill 目录变量。
 - published/bound skill 的跨机事实仍只有 `skill/skill_file/agent_skill`；`skills/enabled` 是可重建镜像，draft/sync_queue/provider-global skill root 不因换机自动搬运。OS/arch/tool capability 需要独立 typed manifest，不从路径猜测。
 - Agent 可切换到另一台电脑的 runtime；跨机目标 daemon 必须显式上报 `memory_cross_device_sync_v2`，否则服务端 fail closed。同机 runtime 切换不需要该能力。切换只迁移 portable memory 与服务端任务状态，不声称迁移本地工作目录、provider 登录态或 device-local 状态。
 - **物**：migration `278_agent_memory_cross_device_sync`；`memory_center_replication.go`；`memorysync.PortabilityReason`；`memory_center_replication_test.go`、`compare_test.go`、runtime memory-scope contract tests；完整产品模型见 `docs/agent-memory-model.md` §8.1。
+
+### 4.18 Agent workspace 只有一个持久根 — `可执行`（②单一路径 API + ⑤合同测试；owner: @Codex）
+- `WorkspacesRoot` 默认且唯一为 `~/.multica/workspaces`；每个 Agent 的根目录、工作目录和 subprocess cwd 都是 `<WorkspacesRoot>/<workspace_id>/agents/<agent_id>/`。路径拼装只通过 `server/internal/agentworkspace`，禁止 caller 自己拼 `agents`、task ID 或 provider/profile 后缀。
+- 运行时只暴露 `MULTICA_AGENT_ROOT`。`memory/`、`skills/`、`devices/`、provider 私有配置和 Agent 自己创建的代码/worktree 都位于 AgentRoot 下，以相对路径定位；不得为这些子目录增加平行 context 字段或 `MULTICA_*_DIR` 环境变量。
+- 同一 Agent 跨 task、daemon 重启和 provider 切换复用同一目录。硬切不扫描、不迁移、不删除旧 per-task/repo 目录；旧文件留在原处，新运行只认 canonical AgentRoot。
+- Multica 不 clone/pull/reset/branch/worktree，也不提供 `multica repo` 命令。Git 与 worktree 工作方式由 Agent 自己决定。项目资源只保留用户管理的 metadata，不改变 cwd，不写入 daemon claim/register payload，也不把 repository URL 注入 Agent prompt。
+- AgentRoot 不参与 task GC，也没有后台 retention/GC；仅用户明确选择 full reset，或在 Computer 存储页确认删除时，才可删除精确 canonical root。full reset 是硬切语义：先强制中断 runtime，然后直接删除并重建，不等待 quiescence。
+- **物**：`server/internal/agentworkspace/path.go`；`agent_runtime_turn.go`；`execenv/agent_workspace.go`；`TestCanonicalAgentWorkspace*`、`TestMulticaAgentRootStableAcrossHarnessSwitch`、`TestMulticaAgentEnvUsesProviderNeutralRoot`。
 
 ### 4.19 Agent 消息链路硬切到 Raft 风格 coordinator — `仅文档`（新协议尚未落地）
 

@@ -39,6 +39,9 @@ func TestDaemonRegistrationCapabilities_GatesCredentialTransport(t *testing.T) {
 	if !containsString(legacy, protocol.DaemonCapabilityRestrictedExecution) {
 		t.Fatalf("legacy capabilities missing restricted execution support: %#v", legacy)
 	}
+	if !containsString(legacy, protocol.DaemonCapabilityMemoryCrossDeviceSync) {
+		t.Fatalf("legacy capabilities missing cross-device memory sync support: %#v", legacy)
+	}
 
 	capable := daemonRegistrationCapabilities(true)
 	if !containsString(capable, protocol.DaemonCapabilityAgentCredentialTransport) {

@@ -160,17 +160,13 @@ func validateResearchArchiveAntiChurn(
 	return nil
 }
 
-// researchRosterGraphStatus maps roster actions to canvas node status so archive
-// cards are not shown as ACTIVE (LRM-918 H5 / LRM-904 AC).
+// researchRosterGraphStatus maps roster actions to persisted canvas node
+// statuses. Member lifecycle status remains available in the node payload.
 func researchRosterGraphStatus(action string) string {
-	switch strings.TrimSpace(action) {
-	case "archive":
-		return "archived"
-	case "hire":
-		return "pending"
-	default:
-		return "active"
+	if strings.TrimSpace(action) == "archive" {
+		return "abandoned"
 	}
+	return "active"
 }
 
 func (h *Handler) researchAgentHasObservableWork(

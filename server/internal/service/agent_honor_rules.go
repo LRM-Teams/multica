@@ -125,6 +125,11 @@ func AgentHonorXPToNextLevel(totalXP int64, level int) int64 {
 	return next - totalXP
 }
 
+func agentHonorLevelTransition(previousLevel int, totalXP int64) (int, bool) {
+	level := AgentHonorLevelFromXP(totalXP)
+	return level, level != previousLevel
+}
+
 func validateAgentHonorRules(rules AgentHonorRules) error {
 	if rules.CompletionXP < 1 || rules.CompletionXP > 100 {
 		return errors.New("completion_xp must be between 1 and 100")

@@ -85,8 +85,6 @@
     "working_verb_with_duration": "{{verb}} · {{duration}}",
     "working_failed": "Couldn't reply · try @ again",
     "working_no_reply": "No reply · try @ again",
-    "working_dismiss": "Dismiss",
-    "working_dismiss_aria": "Dismiss {{name}}'s status",
     "settings_aria": "Group settings"
   },
   "group_manager_hint": {
@@ -603,6 +601,7 @@
     "sticker_loading": "Loading sticker",
     "sticker_failed": "Sticker failed to load",
     "sticker_unavailable": "Sticker unavailable",
+    "sticker_motion_reduced": "Animation paused for your reduced-motion setting",
     "attachment_unavailable": "Attachment unavailable",
     "send_failed": "Couldn't send",
     "retry_send": "Retry",
@@ -689,6 +688,7 @@
     "heading": "Direct messages",
     "empty": "No direct messages yet.",
     "empty_cta": "Start a chat",
+    "all_pinned": "All chats are pinned — see Pinned above.",
     "wendy_title": "Ask Wendy",
     "wendy_description": "Wendy can help you turn real work into useful agents.",
     "new_aria": "New direct message",

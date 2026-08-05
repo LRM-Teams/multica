@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Camera, Loader2 } from "lucide-react";
+import { Camera, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
@@ -130,51 +130,37 @@ export function AgentDetailInspector({
           the value is visible but not interactive. */}
       <Section label={t(($) => $.inspector.section_properties)}>
         {/* LRM-1351: runtime/model/thinking open one Dialog; summary shows
-            effective values only (no per-field save → restart). */}
-        <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={canEdit}>
+            effective values only. Frank pencil lock: trailing pencil only —
+            summary chips are not a row-wide click target. */}
+        <PropRow label={t(($) => $.inspector.prop_runtime)} interactive={false}>
+          <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+            <RuntimePicker
+              value={agent.runtime_id}
+              runtimes={runtimes}
+              members={members}
+              currentUserId={currentUserId}
+              canEdit={false}
+              onChange={() => {}}
+            />
+            <ModelPicker
+              runtimeId={agent.runtime_id}
+              runtimeOnline={!!isOnline}
+              value={agent.model ?? ""}
+              canEdit={false}
+              onChange={() => {}}
+            />
+          </span>
           {canEdit ? (
             <button
               type="button"
-              className="flex min-w-0 flex-wrap items-center gap-1.5 text-left focus:outline-none"
+              className="ml-auto inline-flex shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => setRuntimeDialogOpen(true)}
               aria-label={t(($) => $.execution_config.edit_trigger_aria)}
               data-testid="agent-inspector-runtime-config-edit"
             >
-              <RuntimePicker
-                value={agent.runtime_id}
-                runtimes={runtimes}
-                members={members}
-                currentUserId={currentUserId}
-                canEdit={false}
-                onChange={() => {}}
-              />
-              <ModelPicker
-                runtimeId={agent.runtime_id}
-                runtimeOnline={!!isOnline}
-                value={agent.model ?? ""}
-                canEdit={false}
-                onChange={() => {}}
-              />
+              <Pencil className="h-3.5 w-3.5" aria-hidden />
             </button>
-          ) : (
-            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <RuntimePicker
-                value={agent.runtime_id}
-                runtimes={runtimes}
-                members={members}
-                currentUserId={currentUserId}
-                canEdit={false}
-                onChange={() => {}}
-              />
-              <ModelPicker
-                runtimeId={agent.runtime_id}
-                runtimeOnline={!!isOnline}
-                value={agent.model ?? ""}
-                canEdit={false}
-                onChange={() => {}}
-              />
-            </span>
-          )}
+          ) : null}
         </PropRow>
         <ThinkingPropRow
           runtimeId={agent.runtime_id}

@@ -398,6 +398,58 @@ func TestAgentDMSupervisionListReadOnly(t *testing.T) {
 	}
 }
 
+// TestListSupervisedAgentDMChannelsIncludesAllParticipants verifies the list
+// keeps every supervised agent-pair's participant set when multiple rows are
+// returned. This is the regression coverage for batching the participant lookup
+// rather than issuing one query per visible pair.
+func TestListSupervisedAgentDMChannelsIncludesAllParticipants(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	channelIDs := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		firstAgentID := createHandlerTestAgent(t, "Batch pair A "+uuid.NewString(), []byte("[]"))
+		secondAgentID := createHandlerTestAgent(t, "Batch pair B "+uuid.NewString(), []byte("[]"))
+		channel, created := testHandler.createDMChannel(
+			ctx,
+			nil,
+			testWorkspaceID,
+			testUserID,
+			dmCanonicalName("agent", firstAgentID, "agent", secondAgentID),
+			[]dmMember{
+				{memberType: "agent", memberID: parseUUID(firstAgentID)},
+				{memberType: "agent", memberID: parseUUID(secondAgentID)},
+			},
+		)
+		if !created {
+			t.Fatalf("create supervised pair %d", i)
+		}
+		channelIDs = append(channelIDs, channel.ID)
+		t.Cleanup(func() {
+			testPool.Exec(ctx, `DELETE FROM channel WHERE id = $1`, channel.ID)
+		})
+	}
+
+	items := listDMItemsForTest(t)
+	for _, channelID := range channelIDs {
+		var found *DMItem
+		for i := range items {
+			if items[i].ID == channelID {
+				found = &items[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatalf("supervised channel %s missing from DM list", channelID)
+		}
+		if !found.Supervised || found.Mode != "agent_pair" || len(found.Participants) != 2 {
+			t.Fatalf("supervised channel %s has unexpected participants: %+v", channelID, found)
+		}
+	}
+}
+
 // TestSupervisedAgentPairUnreadAndMarkRead (LRM-762): supervised agent_pair list
 // projects real unread from channel_read; owner mark-read clears it without
 // becoming a channel_member (write stays forbidden).
@@ -1209,5 +1261,55 @@ func TestCreateDMChannel_RollsBackOnMemberFailure(t *testing.T) {
 	testPool.QueryRow(ctx, `SELECT count(*) FROM channel_member cm JOIN channel ch ON ch.id=cm.channel_id WHERE ch.workspace_id=$1 AND ch.name=$2`, testWorkspaceID, canonical).Scan(&members)
 	if members != 0 {
 		t.Fatalf("transaction not rolled back: %d orphan member row(s) for %q survived", members, canonical)
+	}
+}
+
+// TestListDMChannelsProjectsMentionReadModel locks the DM list to the same
+// maintained mention counter used by the channel list. It guards the refresh
+// hot-path optimization against losing mention badges.
+func TestListDMChannelsProjectsMentionReadModel(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	cleanupDMArtifacts(t)
+	agentID := createHandlerTestAgent(t, "DM Mention Counter Bot "+uuid.NewString()[:8], []byte("[]"))
+	channelID := seedAgentDMChannel(t, agentID)
+	parts := []protocol.MessagePart{{
+		Type:       protocol.MessagePartTypeReference,
+		RefType:    "mention",
+		RefSubType: "member",
+		RefID:      testUserID,
+		Label:      "@Handler Test User",
+	}}
+	if _, err := testHandler.insertChannelMessageWithParts(
+		ctx,
+		parseUUID(channelID),
+		parseUUID(testWorkspaceID),
+		"agent",
+		parseUUID(agentID),
+		"DM Mention Counter Bot",
+		"please review this",
+		parts,
+		"multica",
+		nil,
+		pgtype.UUID{},
+		pgtype.UUID{},
+		nil,
+		0,
+	); err != nil {
+		t.Fatalf("insert mentioned DM message: %v", err)
+	}
+
+	beforeRead := listedDMItemForTest(t, channelID)
+	if beforeRead == nil || !beforeRead.HasMention {
+		t.Fatalf("DM mention badge missing before mark-read: %+v", beforeRead)
+	}
+
+	markChannelReadForTest(t, channelID, testUserID)
+	afterRead := listedDMItemForTest(t, channelID)
+	if afterRead == nil || afterRead.HasMention {
+		t.Fatalf("DM mention badge not cleared after mark-read: %+v", afterRead)
 	}
 }

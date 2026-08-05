@@ -53,11 +53,6 @@ type AgentTransportFreshnessContextWindow struct {
 	NewerBoundary string `json:"newerBoundary"`
 }
 
-type AgentTransportFreshnessDecisionCommands struct {
-	RevisedSend string `json:"revisedSend"`
-	SendDraft   string `json:"sendDraft"`
-}
-
 type AgentTransportFreshnessResolution struct {
 	ProducerFactID                 string  `json:"producerFactId"`
 	Outcome                        string  `json:"outcome"`
@@ -66,24 +61,23 @@ type AgentTransportFreshnessResolution struct {
 }
 
 type AgentTransportSendHeldResponse struct {
-	Action              string                                  `json:"action"`
-	Target              string                                  `json:"target"`
-	State               string                                  `json:"state"`
-	Outcome             string                                  `json:"outcome"`
-	Subtype             string                                  `json:"subtype"`
-	Reason              string                                  `json:"reason"`
-	Decision            string                                  `json:"decision"`
-	ProducerFactID      string                                  `json:"producerFactId"`
-	AvailableActions    []string                                `json:"availableActions"`
-	HeldMessages        []ChannelMessageResponse                `json:"heldMessages"`
-	NewMessageCount     int64                                   `json:"newMessageCount"`
-	ShownMessageCount   int64                                   `json:"shownMessageCount"`
-	OmittedMessageCount int64                                   `json:"omittedMessageCount"`
-	SeenUpToSeq         int64                                   `json:"seenUpToSeq"`
-	LatestSeq           int64                                   `json:"latestSeq"`
-	TransportID         string                                  `json:"transport_id"`
-	ContextWindow       AgentTransportFreshnessContextWindow    `json:"contextWindow"`
-	DecisionCommands    AgentTransportFreshnessDecisionCommands `json:"decisionCommands"`
+	Action              string                               `json:"action"`
+	Target              string                               `json:"target"`
+	State               string                               `json:"state"`
+	Outcome             string                               `json:"outcome"`
+	Subtype             string                               `json:"subtype"`
+	Reason              string                               `json:"reason"`
+	Decision            string                               `json:"decision"`
+	ProducerFactID      string                               `json:"producerFactId"`
+	AvailableActions    []string                             `json:"availableActions"`
+	HeldMessages        []ChannelMessageResponse             `json:"heldMessages"`
+	NewMessageCount     int64                                `json:"newMessageCount"`
+	ShownMessageCount   int64                                `json:"shownMessageCount"`
+	OmittedMessageCount int64                                `json:"omittedMessageCount"`
+	SeenUpToSeq         int64                                `json:"seenUpToSeq"`
+	LatestSeq           int64                                `json:"latestSeq"`
+	TransportID         string                               `json:"transport_id"`
+	ContextWindow       AgentTransportFreshnessContextWindow `json:"contextWindow"`
 }
 
 type AgentTransportReactRequest struct {
@@ -2397,15 +2391,18 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 		olderBoundary = fmt.Sprintf("%d older %s omitted.", decision.Omitted, noun)
 	}
 	writeJSON(w, http.StatusOK, AgentTransportSendHeldResponse{
-		Action:              agentTransportActionSend,
-		Target:              target.raw,
-		State:               "held",
-		Outcome:             "held",
-		Subtype:             "freshness",
-		Reason:              "newer_messages_available",
-		Decision:            "local_hold",
-		ProducerFactID:      decision.ProducerID,
-		AvailableActions:    []string{"send_draft", "revise_message"},
+		Action:         agentTransportActionSend,
+		Target:         target.raw,
+		State:          "held",
+		Outcome:        "held",
+		Subtype:        "freshness",
+		Reason:         "newer_messages_available",
+		Decision:       "local_hold",
+		ProducerFactID: decision.ProducerID,
+		// A held draft is deliberately inert. Do not expose ready-to-execute
+		// resend commands here: tool runtimes can mistake them for follow-up work
+		// and publish a message that the freshness gate just withheld.
+		AvailableActions:    []string{"review_newer_messages", "agent_decide", "discard_draft"},
 		HeldMessages:        decision.Messages,
 		NewMessageCount:     decision.TotalNewer,
 		ShownMessageCount:   int64(len(decision.Messages)),
@@ -2418,15 +2415,6 @@ func writeAgentTransportHeldResponse(w http.ResponseWriter, target agentTranspor
 			NewestSeq:     maxChannelMessageSeq(decision.Messages),
 			OlderBoundary: olderBoundary,
 			NewerBoundary: "No newer.",
-		},
-		DecisionCommands: AgentTransportFreshnessDecisionCommands{
-			RevisedSend: fmt.Sprintf(
-				"multica message send --target %q --message-stdin --seen-up-to-seq %d --client-message-id %q",
-				target.raw,
-				decision.LatestSeq,
-				agentTransportFreshnessRevisedClientMessageID(decision.ProducerID),
-			),
-			SendDraft: fmt.Sprintf("multica message send --send-draft --target %q", target.raw),
 		},
 	})
 }

@@ -76,14 +76,10 @@ When the user describes a goal, prepare human-confirmable agent hire cards inste
 
 Before preparing, do a light HR intake when important context is missing. Ask 3-6 focused questions about business/project background, goals, inputs/outputs, current workflow, collaborators, permission boundaries, quality bar, and no-go areas. Do not over-interview when the user already gave enough detail.
 
-Hire path (Raft-aligned agent:create action card) — required:
+Hire path:
 
-1. Call agent transport prepare (HTTP):
-   POST /api/agent/actions/prepare
-   body: { "action_type": "agent:create", "name": "<name>", "description": "<short catalog summary optional>" }
-2. Tell the human a hire card is ready; include the returned card id and name/description in your message so the UI can render an agent:create action card (not a draft link).
-3. Do NOT use multica agent draft create, POST /api/agents/drafts, draft_id, or multica://create-agent?draft_id — those hire paths are retired.
-4. Do NOT create agents yourself via CLI or API. Humans confirm in CreateAgentDialog bound to the card id.
+1. multica action prepare --target <channel> --name <name> [--description <desc>] --output json
+2. Human confirms in CreateAgentDialog.
 
 When the user wants agents in a specific group channel, do not silently create or place them there yourself. After the agents exist, use the Multica CLI to add them explicitly to the channel the user asked for. The command is: multica channel member add --target <channel> <agent> [<agent>...]. Here <channel> is the requested group and <agent> entries are the created agents, usually found by their display names. Only do this when the user explicitly asked for that channel; otherwise leave them unassigned.
 
@@ -118,8 +114,8 @@ Success is not a long onboarding conversation. Success means the user gets a use
 const windyInstructionsCapabilityMarker = "current channel membership role is the only source"
 
 // windyInstructionsAvatarDraftMarker detects Wendy personas that still teach
-// retired agent draft create hire path instead of agent:create action prepare.
-const windyInstructionsAvatarDraftMarker = "POST /api/agent/actions/prepare"
+// retired agent draft create hire path instead of multica action prepare CLI.
+const windyInstructionsAvatarDraftMarker = "multica action prepare"
 
 type WindyResponse struct {
 	Agent AgentResponse `json:"agent"`
@@ -173,8 +169,7 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	member, ok := h.workspaceMember(w, r, workspaceID)
-	if !ok {
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
 		return
 	}
 
@@ -182,11 +177,6 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canUseRuntimeForAgent(member, runtime) {
-		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
-		return
-	}
-
 	agent, created, err := h.ensureWindyAgent(r, wsUUID, runtime)
 	if err != nil {
 		slog.Warn("ensure Wendy failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -243,7 +233,7 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 		return runtime, true
 	}
 
-	runtimes, err := h.Queries.ListVisibleAgentRuntimes(r.Context(), db.ListVisibleAgentRuntimesParams{WorkspaceID: workspaceID, OwnerID: userID})
+	runtimes, err := h.Queries.ListAgentRuntimes(r.Context(), workspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list runtimes")
 		return db.AgentRuntime{}, false
@@ -263,7 +253,7 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 			return rt, true
 		}
 	}
-	// Fail closed: do not fall back to a ghost first-visible row.
+	// Fail closed: do not fall back to a ghost first row.
 	writeError(w, http.StatusUnprocessableEntity, "no online runtime with a fresh heartbeat; start or reconnect a machine first")
 	return db.AgentRuntime{}, false
 }

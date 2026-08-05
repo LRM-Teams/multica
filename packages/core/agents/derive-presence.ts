@@ -185,9 +185,9 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
 
 
 /**
- * LRM-248 AC5: when ListVisibleAgentRuntimes hides another member's private
- * runtime, the agent list still projects status + last_seen so live chrome
- * can render. Prefer a full runtime row when present; otherwise use this stub.
+ * LRM-248 AC5: the agent list projects status + last_seen so live chrome can
+ * still render if the runtime list is temporarily incomplete or stale. Prefer
+ * a full runtime row when present; otherwise use this stub.
  */
 export function runtimeReachabilityFromAgent(agent: Agent): RuntimeReachability | null {
   const status = agent.runtime_status;

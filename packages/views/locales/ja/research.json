@@ -202,6 +202,15 @@
       "error": "エラー"
     },
     "module_sources_desc": "根拠の出所 · 役割分担 · 準備状況",
+    "execution": {
+      "title": "実行状況",
+      "locatable": "{{location}} に移動可能",
+      "locate": "{{location}} に移動",
+      "unavailable": "移動できるノードはありません",
+      "load_failed": "実行状況を読み込めませんでした",
+      "retry": "再試行",
+      "empty": "実行メンバーはいません"
+    },
     "aux_close_sources": "調査根拠と協業分担を閉じる"
   },
   "chat": {
@@ -288,6 +297,8 @@
     "doing": "進行中",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
+    "abandon_reason": "破棄理由",
+    "abandon_reason_pending": "理由は同期待ち",
     "retry_cta": "再試行 / 別経路",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources.",

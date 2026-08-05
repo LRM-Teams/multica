@@ -225,6 +225,9 @@ export function DmList({
     [agentPairDms],
   );
   const hasSearchQuery = searchQuery.trim().length > 0;
+  // Rows this region actually paints — the two buckets partition the filtered
+  // list, so 0 means the body would otherwise be an empty fragment (LRM-1366).
+  const visibleRowCount = directDms.length + agentPairDms.length;
 
   // Header "+" still available when the only DMs are pinned (they live above).
   // LRM-294: no Ask Wendy promo card — Wendy stays a normal DM row / picker entry.
@@ -236,13 +239,6 @@ export function DmList({
     !collapsed &&
     (dmsPending ? (
       <DmListSkeleton />
-    ) : hasSearchQuery && filteredDms.length === 0 && unpinnedDms.length > 0 ? (
-      <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">
-          {t(($) => $.sidebar.no_conversation_matches)}
-        </p>
-        <p>{t(($) => $.sidebar.search_scope_hint)}</p>
-      </div>
     ) : dms.length === 0 ? (
       <div className="flex flex-col items-center gap-2 px-3 py-3">
         <p className="text-xs text-foreground">{t(($) => $.dm.empty)}</p>
@@ -268,6 +264,26 @@ export function DmList({
           </PopoverTrigger>
         )}
       </div>
+    ) : visibleRowCount === 0 ? (
+      // LRM-1366: DMs exist but none of them render *here* — every one is
+      // pinned (they live in the unified PINNED section) or the search only
+      // matched pinned rows. Both used to render an empty fragment, leaving the
+      // region as「heading + `+`」and nothing else, which reads as a broken list.
+      hasSearchQuery ? (
+        <div className="space-y-1 px-3 py-4 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground">
+            {t(($) => $.sidebar.no_conversation_matches)}
+          </p>
+          <p>{t(($) => $.sidebar.search_scope_hint)}</p>
+        </div>
+      ) : (
+        <p
+          data-testid="dm-list-all-pinned"
+          className="px-3 py-3 text-xs text-muted-foreground"
+        >
+          {t(($) => $.dm.all_pinned)}
+        </p>
+      )
     ) : (
       <>
         {directDms.map((dm) => {

@@ -19,6 +19,7 @@ import type {
   CreateAgentRequest,
   CreateAgentDraftRequest,
   AgentCreationDraft,
+  AgentActionCard,
   EnsureWindyResponse,
   AgentTemplate,
   AgentTemplateSummary,
@@ -1234,6 +1235,18 @@ export class ApiClient {
     return this.fetch(`/api/agents/drafts/${encodeURIComponent(id)}`);
   }
 
+  /** Load a prepared/done/dismissed agent:create action card (hire path). */
+  async getAgentActionCard(id: string): Promise<AgentActionCard> {
+    return this.fetch(`/api/agents/action-cards/${encodeURIComponent(id)}`);
+  }
+
+  /** Human cancel of a prepared agent:create action card. */
+  async dismissAgentActionCard(id: string): Promise<AgentActionCard> {
+    return this.fetch(`/api/agents/action-cards/${encodeURIComponent(id)}/dismiss`, {
+      method: "POST",
+    });
+  }
+
   async listAgentTemplates(): Promise<AgentTemplateSummary[]> {
     const raw = await this.fetch<unknown>("/api/agent-templates");
     return parseWithFallback(
@@ -1669,7 +1682,7 @@ export class ApiClient {
 
   async updateRuntime(
     runtimeId: string,
-    patch: { visibility?: "private" | "public"; display_name?: string | null },
+    patch: { display_name?: string | null },
   ): Promise<AgentRuntime> {
     return this.fetch(`/api/runtimes/${runtimeId}`, {
       method: "PATCH",
@@ -1988,6 +2001,7 @@ export class ApiClient {
         fleet_rank: 0,
         fleet_size: 0,
         sample_tasks: 0,
+        min_sample_tasks: 5,
         sample_sufficient: false,
         frozen: false,
         pillars: { delivery: 0, evolution: 0, growth: 0, efficiency: 0 },
@@ -4346,17 +4360,15 @@ export class ApiClient {
   async getResearchPresence(
     id: string,
   ): Promise<import("../research/queries").ResearchPresenceResponse> {
-    const raw = (await this.fetch(`/api/research/sessions/${id}/presence`)) as {
-      session_id?: string;
-      presence?: Record<
-        string,
-        { activity?: string; updated_at?: number; updatedAt?: number }
-      >;
-    };
-    return {
-      session_id: typeof raw?.session_id === "string" ? raw.session_id : id,
-      presence: raw?.presence ?? {},
-    };
+    const { ResearchPresenceResponseSchema } = await import("../research/schemas");
+    const raw = await this.fetch(`/api/research/sessions/${id}/presence`);
+    const parsed = parseWithFallback(
+      raw,
+      ResearchPresenceResponseSchema,
+      { session_id: id, presence: {} },
+      { endpoint: "GET /api/research/sessions/:id/presence" },
+    );
+    return { ...parsed, session_id: parsed.session_id || id };
   }
 
   async postResearchMessage(

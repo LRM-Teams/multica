@@ -373,7 +373,7 @@ function CloudRuntimeStatusBadge({ status }: { status: string }) {
       variant="secondary"
       className={cn(
         "h-5 rounded-md px-1.5 font-mono text-[10px]",
-        active.has(normalized) && "bg-success/10 text-success",
+        active.has(normalized) && "bg-success/10 text-success-strong",
         pending.has(normalized) && "bg-warning/10 text-warning",
         failed.has(normalized) && "bg-destructive/10 text-destructive",
       )}

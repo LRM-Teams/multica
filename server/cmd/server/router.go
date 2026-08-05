@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -616,6 +617,20 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/{jobId}/fail", h.FailSandboxJob)
 	})
 
+	// Diagnosis-run API (spec 005). The sandboxed diagnosis agent reaches its
+	// tool surface exclusively here, authenticated by a per-run capability
+	// token (no user JWT); DiagnosisRunAuth resolves {runID}, verifies the
+	// token against the run's stored hash, and injects the run record.
+	r.Route("/api/v1/diagnosis-runs/{runID}", func(r chi.Router) {
+		r.Use(middleware.DiagnosisRunAuth(diagnosisRunLoaderAdapter{store: service.NewDiagnosisStateStore(queries)}))
+		r.Post("/get-segment-messages", h.DiagnosisRunGetSegmentMessages)
+		r.Post("/record-step-rewards", h.DiagnosisRunRecordStepRewards)
+		r.Get("/diagnosis-progress", h.DiagnosisRunProgress)
+		r.Post("/finish-segment", h.DiagnosisRunFinishSegment)
+		r.Post("/complete-diagnosis", h.DiagnosisRunCompleteDiagnosis)
+		r.Get("/task-context", h.DiagnosisRunTaskContext)
+	})
+
 	// Protected API routes
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(queries, patCache, cloudPATVerifier))
@@ -1005,6 +1020,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/steer", h.SteerResearchRun)
 					r.Post("/stop", h.StopResearchSession)
 					r.Post("/graph/nodes", h.AppendResearchGraphNode)
+					r.Post("/nodes/{nodeId}/commands", h.PostResearchNodeCommand)
 					r.Post("/sources", h.UpsertResearchSourceHandler)
 					r.Post("/report", h.PatchResearchReport)
 					r.Post("/presence", h.PostResearchPresence)
@@ -1213,10 +1229,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Delete("/api/v1/env-dispatch/{projectID}", h.DeleteEnvDispatchProject)
 			r.Get("/api/v1/env-dispatch/{projectID}/dag", h.GetDag)
 			r.Post("/api/v1/env-dispatch/{projectID}/diagnosis", h.DiagnoseEnvDispatchProject)
+			// Human-facing latest-run poll for sandbox-mode diagnosis
+			// (spec 005); lets operators/AReaL track runs without the
+			// per-run capability token.
+			r.Get("/api/v1/env-dispatch/{projectID}/diagnosis/latest", h.GetLatestEnvDispatchDiagnosis)
 			// Channel-first facades for dispatch_type=message: resolve the bound
 			// project internally. Project-first routes above remain available.
 			r.Get("/api/v1/env-dispatch/channels/{channelID}/dag", h.GetEnvDispatchChannelDag)
 			r.Post("/api/v1/env-dispatch/channels/{channelID}/diagnosis", h.DiagnoseEnvDispatchChannel)
+			r.Get("/api/v1/env-dispatch/channels/{channelID}/diagnosis/latest", h.GetLatestEnvDispatchChannelDiagnosis)
 			r.Delete("/api/v1/env-dispatch/channels/{channelID}", h.DeleteEnvDispatchChannel)
 			r.Get("/api/v1/channels/{channelID}/env-checkpoints", h.ListChannelEnvCheckpoints)
 
@@ -1333,6 +1354,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Post("/messages", h.PostAgentResearchMessage)
 						r.Put("/messages/{messageId}/match-decision", h.PutAgentResearchMessageMatchDecision)
 						r.Post("/graph/nodes", h.AppendAgentResearchGraphNode)
+						r.Post("/nodes/{nodeId}/commands", h.PostAgentResearchNodeCommand)
 						r.Post("/sources", h.UpsertAgentResearchSource)
 						r.Post("/report", h.PatchAgentResearchReport)
 						r.Post("/presence", h.PostAgentResearchPresence)
@@ -1352,7 +1374,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/reminders/update", h.AgentTransportUpdateReminder)
 			r.Post("/api/agent/reminders/cancel", h.AgentTransportCancelReminder)
 			r.Post("/api/agent/reminders/log", h.AgentTransportReminderLog)
-				r.Post("/api/agent/actions/prepare", h.AgentTransportPrepareAction)
+			r.Post("/api/agent/actions/prepare", h.AgentTransportPrepareAction)
+
+			// Unified Messages read model. Group-channel and DM mutations/details
+			// intentionally remain on their domain-specific routes below.
+			r.Get("/api/conversations", h.ListConversations)
 
 			// Unified 1-on-1 DM list (kind='dm' channels ∪ legacy unbound chat
 			// sessions) plus idempotent create-or-find. Sole data source for the
@@ -1641,4 +1667,32 @@ func defaultSelfPlayTemplateFromEnv() string {
 		return t
 	}
 	return "default"
+}
+
+// diagnosisRunLoaderAdapter adapts the diagnosis state store to the
+// middleware.DiagnosisRunLoader surface (the middleware package cannot import
+// internal/service without an import cycle).
+type diagnosisRunLoaderAdapter struct {
+	store *service.DiagnosisStateStore
+}
+
+func (a diagnosisRunLoaderAdapter) GetRun(ctx context.Context, runID string) (middleware.DiagnosisRun, error) {
+	ckpt, err := a.store.GetRun(ctx, runID)
+	if err != nil {
+		if errors.Is(err, service.ErrDiagnosisRunNotFound) {
+			return middleware.DiagnosisRun{}, middleware.ErrDiagnosisRunNotFound
+		}
+		return middleware.DiagnosisRun{}, err
+	}
+	return middleware.DiagnosisRun{
+		RunID:               ckpt.RunID,
+		ProjectID:           ckpt.ProjectID,
+		TaskID:              ckpt.TaskID,
+		TopologyHash:        ckpt.TopologyHash,
+		OrderedSegmentIDs:   ckpt.OrderedSegmentIDs,
+		Status:              string(ckpt.Status),
+		CapabilityTokenHash: ckpt.CapabilityTokenHash,
+		ExecutionMode:       ckpt.ExecutionMode,
+		SandboxInstanceID:   ckpt.SandboxInstanceID,
+	}, nil
 }

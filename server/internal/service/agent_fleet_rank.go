@@ -52,6 +52,7 @@ type AgentFleetRankView struct {
 	FleetRank        int               `json:"fleet_rank"`
 	FleetSize        int               `json:"fleet_size"`
 	SampleTasks      int               `json:"sample_tasks"`
+	MinSampleTasks   int               `json:"min_sample_tasks"`
 	SampleSufficient bool              `json:"sample_sufficient"`
 	Frozen           bool              `json:"frozen"`
 	Pillars          FleetPillarScores `json:"pillars"`
@@ -427,6 +428,7 @@ func (s *AgentFleetRankService) RefreshWorkspace(
 				AgentID: util.UUIDToString(row.agentID), FleetScore: row.score,
 				ClassID: row.classID, ClassLabel: fleetClassLabel(row.classID),
 				FleetRank: int(rank), FleetSize: int(fleetSize), SampleTasks: int(row.sampleTasks),
+				MinSampleTasks:   rules.FleetMinSampleTasks,
 				SampleSufficient: row.sampleSufficient, Pillars: row.pillars,
 			},
 		})
@@ -444,6 +446,7 @@ func snapshotToView(row db.AgentFleetSnapshot, minSampleTasks int) AgentFleetRan
 		FleetRank:        int(row.FleetRank),
 		FleetSize:        int(row.FleetSize),
 		SampleTasks:      sampleTasks,
+		MinSampleTasks:   minSampleTasks,
 		SampleSufficient: sampleTasks >= minSampleTasks,
 		Frozen:           row.Frozen,
 		Pillars: FleetPillarScores{
@@ -483,10 +486,11 @@ func (s *AgentFleetRankService) GetAgentRank(ctx context.Context, workspaceID, a
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return AgentFleetRankView{
-				AgentID:    util.UUIDToString(agentID),
-				ClassID:    "reserve",
-				ClassLabel: fleetClassLabel("reserve"),
-				Pillars:    FleetPillarScores{},
+				AgentID:        util.UUIDToString(agentID),
+				ClassID:        "reserve",
+				ClassLabel:     fleetClassLabel("reserve"),
+				MinSampleTasks: rules.FleetMinSampleTasks,
+				Pillars:        FleetPillarScores{},
 			}, nil
 		}
 		return AgentFleetRankView{}, err

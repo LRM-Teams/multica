@@ -240,7 +240,7 @@ export function ResearchGitList({
                     <span
                       className={cn(
                         "rounded-full px-1.5 py-0.5 text-xs font-medium",
-                        status.tone === "ok" && "bg-success/15 text-success",
+                        status.tone === "ok" && "bg-success/15 text-success-strong",
                         status.tone === "run" && "bg-brand/15 text-brand",
                         status.tone === "fail" && "bg-destructive/15 text-destructive",
                         status.tone === "wait" && "bg-warning/15 text-warning",

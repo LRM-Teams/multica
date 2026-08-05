@@ -102,7 +102,13 @@ test.describe.serial("LRM-1295 aggregate tree route gate", () => {
     const desktopTiers = await page.locator("[data-aggregate-tier]").evaluateAll((elements) =>
       elements.map((element) => {
         const box = element.getBoundingClientRect();
-        return { tier: element.getAttribute("data-aggregate-tier"), x: box.x, width: box.width };
+        return {
+          tier: element.getAttribute("data-aggregate-tier"),
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+        };
       }),
     );
     const parent = desktopTiers.find((item) => item.tier === "parent")!;
@@ -116,6 +122,15 @@ test.describe.serial("LRM-1295 aggregate tree route gate", () => {
     expect(Math.max(...siblings.map((item) => item.x))).toBeLessThan(
       Math.min(...children.map((item) => item.x)),
     );
+
+    const canvasBox = await page
+      .locator('[data-testid="research-canvas-overlay-grid"][data-overlay="desktop"]')
+      .boundingBox();
+    expect(canvasBox).not.toBeNull();
+    const treeTop = Math.min(...desktopTiers.map((item) => item.y));
+    const treeBottom = Math.max(...desktopTiers.map((item) => item.y + item.height));
+    expect((treeBottom - treeTop) / canvasBox!.height).toBeGreaterThanOrEqual(0.58);
+
     await page.screenshot({ path: "e2e/artifacts/lrm-1295-route-1440.png", fullPage: true });
 
     await page.setViewportSize({ width: 390, height: 844 });

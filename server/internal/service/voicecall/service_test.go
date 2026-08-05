@@ -178,6 +178,31 @@ func TestServiceStartRejectsUnauthorizedCallBeforePersistence(t *testing.T) {
 	}
 }
 
+func TestServiceStartReclaimsOrphanActivePairThenCreates(t *testing.T) {
+	deps := newTestDependencies()
+	deps.store.createErr = ErrCallAlreadyActive
+	service := newTestService(t, deps)
+
+	result, err := service.Start(context.Background(), validStartInput())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if deps.store.createCalls != 2 {
+		t.Fatalf("createCalls = %d, want 2 (fail then retry)", deps.store.createCalls)
+	}
+	if deps.store.failActivePair != 1 {
+		t.Fatalf("failActivePair = %d, want 1", deps.store.failActivePair)
+	}
+	if result.Session.Status != StatusStarting {
+		t.Fatalf("session status = %s", result.Session.Status)
+	}
+	if !reflect.DeepEqual(deps.order, []string{
+		"authorize", "create", "fail_active_pair", "create", "provider_prepare",
+	}) {
+		t.Fatalf("order = %v", deps.order)
+	}
+}
+
 func TestServiceStartRecordsMediaPreparationFailure(t *testing.T) {
 	deps := newTestDependencies()
 	deps.provider.prepareErr = errors.New("token unavailable")
@@ -513,6 +538,9 @@ type fakeStore struct {
 	order             *[]string
 	session           Session
 	createCalls       int
+	createErr         error
+	failActivePair    int
+	failActivePairErr error
 	markFailedCalls   int
 	markEndedCalls    int
 	markConnectingErr error
@@ -521,6 +549,12 @@ type fakeStore struct {
 func (store *fakeStore) CreateStarting(_ context.Context, input NewSession) (Session, error) {
 	*store.order = append(*store.order, "create")
 	store.createCalls++
+	if store.createErr != nil {
+		err := store.createErr
+		// One-shot reclaim path: first create fails, retry succeeds.
+		store.createErr = nil
+		return Session{}, err
+	}
 	store.session = Session{
 		ID:             "call-1",
 		WorkspaceID:    input.WorkspaceID,
@@ -533,6 +567,28 @@ func (store *fakeStore) CreateStarting(_ context.Context, input NewSession) (Ses
 		Status:         StatusStarting,
 	}
 	return store.session, nil
+}
+
+func (store *fakeStore) FailActivePair(
+	_ context.Context,
+	workspaceID, userID, agentID, endReason, errorCode string,
+) (int, error) {
+	*store.order = append(*store.order, "fail_active_pair")
+	if store.failActivePairErr != nil {
+		return 0, store.failActivePairErr
+	}
+	store.failActivePair++
+	if store.session.WorkspaceID == workspaceID &&
+		store.session.UserID == userID &&
+		store.session.AgentID == agentID &&
+		store.session.Status != StatusEnded &&
+		store.session.Status != StatusFailed {
+		store.session.Status = StatusFailed
+		store.session.EndReason = endReason
+		store.session.ErrorCode = errorCode
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func (store *fakeStore) Get(_ context.Context, workspaceID, userID, callID string) (Session, error) {

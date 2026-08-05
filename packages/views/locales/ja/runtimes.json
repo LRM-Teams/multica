@@ -38,7 +38,7 @@
     "section_remote": "リモート",
     "section_cloud": "クラウド",
     "section_mine": "自分のマシン",
-    "section_team_public_other": "チーム公開 ({{count}})",
+    "section_team_other": "チーム ({{count}})",
     "this_machine": "このデバイス",
     "local_badge": "ローカル · このマシン",
     "runtime_count_other": "ランタイム {{count}} 個",
@@ -184,15 +184,6 @@
       "restart": "再起動",
       "more_empty": "その他の操作はありません"
     },
-    "sharing": {
-      "section": "共有設定",
-      "owner_only": "所有者のみ",
-      "switch_locked": "変更不可",
-      "switch_to": {
-        "public": "公開にする",
-        "private": "非公開にする"
-      }
-    },
     "danger_zone": {
       "title": "危険ゾーン",
       "description": "このコンピュータとランタイムをワークスペースから完全に削除します。"
@@ -239,16 +230,6 @@
   },
   "detail": {
     "no_agents": "まだこのランタイムに紐づいたエージェントがありません。",
-    "visibility_label": {
-      "private": "非公開",
-      "public": "公開"
-    },
-    "visibility_hint": {
-      "private": "あなたとワークスペース管理者のみが、このランタイムでエージェントを作成できます。",
-      "public": "ワークスペースのメンバーなら誰でも、このランタイムでエージェントを作成できます。"
-    },
-    "visibility_toast_updated": "公開範囲を {{visibility}} に設定しました",
-    "visibility_toast_failed": "公開範囲を更新できませんでした",
     "delete_dialog": {
       "final": {
         "title": "ランタイムを削除しますか?",

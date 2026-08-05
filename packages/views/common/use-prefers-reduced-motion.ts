@@ -21,10 +21,7 @@ function getSnapshot(): boolean {
 }
 
 // Server render can't know the user's motion preference; report "motion is
-// fine" and let the first client commit correct it (same contract as the
-// private copy inside channels/components/message-parts-renderer.tsx, which a
-// follow-up should fold into this hook — left alone here to keep this change's
-// file surface mutually exclusive with LRM-1337).
+// fine" and let the first client commit correct it.
 function getServerSnapshot(): boolean {
   return false;
 }

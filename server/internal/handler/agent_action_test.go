@@ -40,10 +40,13 @@ func TestAgentTransportPrepareAction_AgentCreateCard(t *testing.T) {
 	if resp.ID == "" || resp.PreparedByAgentID == nil || *resp.PreparedByAgentID != agentID {
 		t.Fatalf("id/prepared_by=%+v", resp)
 	}
-	// No draft bridge fields.
+	if resp.Part == nil || resp.Part.Type != "reference" || resp.Part.RefType != "action_card" || resp.Part.RefID != resp.ID {
+		t.Fatalf("part template=%+v", resp.Part)
+	}
+	// No draft bridge / multica:// protocol.
 	raw := rec.Body.String()
-	if strings.Contains(raw, "draft_id") || strings.Contains(raw, "card_url") || strings.Contains(raw, "multica://create-agent") {
-		t.Fatalf("response must not bridge draft: %s", raw)
+	if strings.Contains(raw, "draft_id") || strings.Contains(raw, "multica://") {
+		t.Fatalf("response must not use draft or multica:// protocol: %s", raw)
 	}
 	var name, description, status string
 	if err := testPool.QueryRow(context.Background(), `

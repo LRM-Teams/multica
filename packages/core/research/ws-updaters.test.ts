@@ -78,6 +78,29 @@ describe("applyResearchWSEvent", () => {
     expect(presence.a1.updatedAt).toBe(100);
   });
 
+  it("preserves v2 location fields when a legacy WS patch arrives", () => {
+    const store = new Map<string, unknown>();
+    store.set(JSON.stringify(researchKeys.presence("ws", "s1")), {
+      a1: { activity: "starting", updatedAt: 10, phase: "running", role: "scout", fleetMemberId: "fm1", taskId: "task1", nodeId: "node1", branchId: null, stage: "s2_sources", expiresAt: 999, staleReason: null },
+    });
+    const qc = {
+      setQueryData: (_key: unknown, updater: unknown) => {
+        const key = JSON.stringify(_key);
+        const next = (updater as (value: unknown) => unknown)(store.get(key));
+        store.set(key, next);
+        return next;
+      },
+      invalidateQueries: vi.fn(),
+    } as unknown as QueryClient;
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:presence",
+      payload: { session_id: "s1", agent_id: "a1", activity: "reading RFC", updated_at: 100 },
+    });
+    expect(store.get(JSON.stringify(researchKeys.presence("ws", "s1")))).toEqual({
+      a1: expect.objectContaining({ activity: "reading RFC", updatedAt: 100, phase: "running", nodeId: "node1", taskId: "task1" }),
+    });
+  });
+
   it("updates an existing message body in place (streaming upsert)", () => {
     const qc = makeQc({
       ...EMPTY_RESEARCH_SNAPSHOT,
@@ -143,5 +166,49 @@ describe("applyResearchWSEvent", () => {
       unknown
     >;
     expect(presence.a1).toBeUndefined();
+  });
+
+  it("upserts product-round cards into the dedicated query cache", () => {
+    const store = new Map<string, unknown>();
+    const qc = {
+      setQueryData: (_key: unknown, updater: unknown) => {
+        const key = JSON.stringify(_key);
+        const prev = store.get(key);
+        const next =
+          typeof updater === "function"
+            ? (updater as (value: unknown) => unknown)(prev)
+            : updater;
+        store.set(key, next);
+        return next;
+      },
+      invalidateQueries: vi.fn(),
+    } as unknown as QueryClient;
+
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:product_round",
+      payload: {
+        session_id: "s1",
+        card: { id: "round-1", round_number: 1, decision: "continue" },
+      },
+    });
+    applyResearchWSEvent(qc, "ws", {
+      type: "research_session:product_round",
+      payload: {
+        session_id: "s1",
+        card: { id: "round-1", round_number: 1, decision: "stop_enough" },
+      },
+    });
+
+    expect(store.get(JSON.stringify(researchKeys.productRounds("ws", "s1")))).toEqual({
+      rounds: [
+        expect.objectContaining({
+          id: "round-1",
+          session_id: "s1",
+          round_number: 1,
+          decision: "stop_enough",
+          coverage_gaps: [],
+        }),
+      ],
+    });
   });
 });

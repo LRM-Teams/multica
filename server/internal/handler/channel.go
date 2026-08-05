@@ -52,6 +52,7 @@ const channelOutputContractInstruction = "Channel output contract: use the runti
 const channelDirectedReplyInstruction = "This run is directly addressed to you. Human DMs, human @mentions, direct questions, assigned tasks, and DM-style continuations require a visible result. Agent-to-agent channel @mentions are weak notifications unless they ask for an immediate deliverable, review, decision, or direct answer; weak notifications should finish without visible output. Reply only to the Message target for chat transport supplied below: it is the current message's source location. A top-level group message stays in the main channel, a thread message stays in that thread, and a DM stays in that DM. Never create or switch to a thread based on message content or tone. Pure greetings (hi/你好/在吗) get a greeting sticker only. Substantive requests get a helpful answer using the requested supported delivery modality (no acknowledgement sticker first). Never return no_reply, stay_silent, JSON, or other protocol text."
 const channelAmbientNoReplyInstruction = "If you should not reply, finish without a visible reply. Do not use the visible-output path, and do not print no_reply, stay_silent, JSON, or CLI/protocol text."
 const channelAmbientGreetingReactionInstruction = "If the current channel message or unread bundle is only a casual greeting or small talk (for example hi, hello, hey, 你好, 在吗) with no @-mention, no question, and no task request, respond with a 👋 reaction to the reaction target only and do not create a text reply. This also applies when you are the only agent in the channel: treat the greeting as directed to you, but keep the action reaction-only unless the user includes a question or request. If reactions are unavailable, finish without visible output rather than explaining that no reply is needed."
+const channelAmbientAlreadyDelegatedInstruction = "If the current message or unread bundle already @-mentions one or more specific other agents to do something, and you are not one of the mentioned agents, treat that task as already claimed. By default do not restate, duplicate, or race the same claim (for example \"收到，我也去查/处理\", \"我也确认一下\") — it adds noise and makes it unclear who is actually doing the work. Finish without visible output unless you are separately and directly asked to participate (for example a vote, a decision that specifically needs your role, or a direct question addressed to you)."
 const channelStickerReplyInstruction = "Sticker replies: for directed short social beats (hi/你好, ok/好的, 收到/明白, 谢谢, 赞), use a sticker OR a short reply — not both. For substantive answers, do not add an acknowledgement sticker; preserve the requested supported delivery modality. For ambient/unaddressed runs, use stickers only when explicitly requested or genuinely welcoming someone; otherwise react or stay silent. Follow the runtime output path and never print protocol text."
 const channelContinuationInstruction = "Collaborative discussion rule: reply only when you move the topic toward a decision, owner, or completed action. For a requested completion/blocker summary in a group chat, you may @-mention the responsible human once. Use @-mentions only for concrete actions, unresolved questions, human escalation, or requested completion/blocker delivery; never for thanks, generic status, future handoffs, or generic opinion invites. If the topic already has an owner and you add nothing immediate, finish without visible output."
 const channelVoiceInputReplyInstruction = "Voice delivery: the current human message came from voice input. If you send a visible answer, use `multica message send --voice` and include the complete answer text as its accessible transcript."
@@ -427,138 +428,12 @@ func (h *Handler) ListChannels(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	workspaceID := ctxWorkspaceID(r.Context())
-	uid := parseUUID(userID)
-	archivedOnly := queryBool(r, "archived")
-	rows, err := h.DB.Query(r.Context(), `
-		SELECT ch.id, ch.workspace_id, ch.name, ch.description, ch.lark_chat_id, ch.project_id, ch.created_by, ch.created_at, ch.updated_at, ch.kind, ch.system_key,
-		       ch.archived_at, ch.archived_by, ch.avatar_url, cm.pinned_at, cm.manual_unread_at, COALESCE(vcm.muted_at, cm.muted_at),
-		       cm.notify_level,
-		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
-		       COALESCE(vcm.main_unread_count, 0)::int,
-		       GREATEST(COALESCE(vcm.main_unread_count, 0)::int, CASE WHEN cm.manual_unread_at IS NOT NULL THEN 1 ELSE 0 END),
-		       COALESCE(vcm.mention_unread_count, 0),
-		       NULLIF(COALESCE(vcm.last_read_seq, cr.last_read_seq, 0), 0)::bigint
-		FROM channel ch
-		JOIN channel_member cm ON cm.channel_id = ch.id AND cm.member_type = 'user' AND cm.member_id = $2
-		JOIN conversation conv ON conv.channel_id = ch.id
-		LEFT JOIN conversation_member vcm
-		  ON vcm.conversation_id = conv.id
-		 AND vcm.member_type = 'user'
-		 AND vcm.member_id = $2
-		LEFT JOIN LATERAL (
-			SELECT author_type, author_name, content, parts, created_at
-			FROM channel_message m
-			WHERE m.channel_id = ch.id
-			  AND m.workspace_id = $1
-			  AND m.thread_root_message_id IS NULL
-			  AND m.deleted_at IS NULL
-			ORDER BY m.seq DESC LIMIT 1
-		) lm ON true
-		LEFT JOIN channel_read cr ON cr.channel_id = ch.id AND cr.user_id = $2
-		WHERE ch.workspace_id = $1 AND ch.kind = 'group'
-		  AND (($3 AND ch.archived_at IS NOT NULL) OR (NOT $3 AND ch.archived_at IS NULL))
-		ORDER BY CASE WHEN $3 THEN ch.archived_at ELSE cm.pinned_at END DESC NULLS LAST, ch.updated_at DESC, ch.created_at DESC`, parseUUID(workspaceID), uid, archivedOnly)
+	channels, err := h.listConversationGroupChannels(r.Context(), ctxWorkspaceID(r.Context()), userID, queryBool(r, "archived"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list channels")
 		return
 	}
-	defer rows.Close()
-	out := []ChannelResponse{}
-	channelIDs := []pgtype.UUID{}
-	for rows.Next() {
-		var id, wsID, projectID, createdBy, archivedBy pgtype.UUID
-		var name string
-		var desc, lark, systemKey, avatarURL, lastType, lastName, lastContent, notifyLevel pgtype.Text
-		var lastParts []byte
-		var createdAt, updatedAt, archivedAt, pinnedAt, manualUnreadAt, mutedAt, lastAt pgtype.Timestamptz
-		var realUnread, unread int
-		var mentionUnreadCount int
-		var kind string
-		var lastReadSeq *int64
-		if err := rows.Scan(&id, &wsID, &name, &desc, &lark, &projectID, &createdBy, &createdAt, &updatedAt, &kind, &systemKey,
-			&archivedAt, &archivedBy, &avatarURL, &pinnedAt, &manualUnreadAt, &mutedAt, &notifyLevel, &lastType, &lastName, &lastContent, &lastParts, &lastAt, &realUnread, &unread, &mentionUnreadCount, &lastReadSeq); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read channels")
-			return
-		}
-		ch := ChannelResponse{
-			ID: uuidToString(id), WorkspaceID: uuidToString(wsID), ProjectID: uuidToPtr(projectID), Name: name,
-			Description: textToPtr(desc), LarkChatID: textToPtr(lark), AvatarURL: textToPtr(avatarURL), CreatedBy: uuidToString(createdBy),
-			CreatedAt: timestampToString(createdAt), UpdatedAt: timestampToString(updatedAt),
-			ArchivedAt: timestampToPtr(archivedAt), ArchivedBy: uuidToPtr(archivedBy),
-			Kind: kind, SystemKey: textToPtr(systemKey), UnreadCount: unread, RealUnreadCount: realUnread, ManuallyUnread: manualUnreadAt.Valid,
-			PinnedAt: timestampToPtr(pinnedAt), MutedAt: timestampToPtr(mutedAt), Muted: mutedAt.Valid,
-			NotifyLevel: channelNotifyLevelAPI(notifyLevel), MentionUnreadCount: mentionUnreadCount, LastReadSeq: lastReadSeq, Members: []ChannelMemberBrief{},
-		}
-		if lastContent.Valid {
-			ch.LastMessage = channelLastMessage(lastType.String, lastName.String, lastContent.String, lastParts, lastAt)
-		}
-		out = append(out, ch)
-		channelIDs = append(channelIDs, id)
-	}
-	rows.Close()
-
-	// Second pass: members for the avatar stack, grouped by channel.
-	if len(channelIDs) > 0 {
-		// Single canonical rank for avatar stack (matches channelMemberSummaries):
-		// role (owner/manager/member) → created_at → member_type → member_id.
-		// No manager agent-before-human priority: same role = same rank (Iris/Parker
-		// same-rights product); member_type only last identity tie-break with member_id.
-		// LATERAL row_number is the sole order source; outer sorts by stack_position.
-		memberRows, err := h.DB.Query(r.Context(), `
-			SELECT limited.channel_id, limited.member_type, limited.member_id,
-			       COALESCE(u.name, a.name, ''),
-			       COALESCE(NULLIF(u.display_name, ''), u.name, u.email, NULLIF(a.display_name, ''), a.name, ''),
-			       CASE WHEN limited.member_type = 'user' THEN u.avatar_url ELSE a.avatar_url END,
-			       limited.role
-			FROM unnest($1::uuid[]) AS selected(channel_id)
-			JOIN LATERAL (
-				SELECT ranked.channel_id, ranked.member_type, ranked.member_id, ranked.created_at, ranked.role, ranked.stack_position
-				FROM (
-					SELECT cm.channel_id, cm.member_type, cm.member_id, cm.created_at, cm.role,
-					       row_number() OVER (
-					         ORDER BY
-					           CASE cm.role
-					             WHEN 'owner' THEN 0
-					             WHEN 'manager' THEN 1
-					             ELSE 2
-					           END,
-					           cm.created_at ASC,
-					           cm.member_type ASC,
-					           cm.member_id ASC
-					       ) AS stack_position
-					FROM channel_member cm
-					WHERE cm.channel_id = selected.channel_id AND cm.workspace_id = $2
-				) ranked
-				WHERE ranked.stack_position <= $3
-			) limited ON true
-			LEFT JOIN "user" u ON limited.member_type = 'user' AND u.id = limited.member_id
-			LEFT JOIN agent a ON limited.member_type = 'agent' AND a.id = limited.member_id
-			ORDER BY selected.channel_id, limited.stack_position`, channelIDs, parseUUID(workspaceID), channelListMemberAvatarLimit)
-		if err == nil {
-			defer memberRows.Close()
-			grouped := map[string][]ChannelMemberBrief{}
-			for memberRows.Next() {
-				var chID, memberID pgtype.UUID
-				var memberType, memberName, memberDisplayName, role string
-				var avatarURL pgtype.Text
-				if err := memberRows.Scan(&chID, &memberType, &memberID, &memberName, &memberDisplayName, &avatarURL, &role); err != nil {
-					continue
-				}
-				if role == "" {
-					role = "member"
-				}
-				key := uuidToString(chID)
-				grouped[key] = append(grouped[key], ChannelMemberBrief{MemberType: memberType, MemberID: uuidToString(memberID), Name: memberName, DisplayName: firstNonEmpty(memberDisplayName, memberName), AvatarURL: textToPtr(avatarURL), Role: role})
-			}
-			for i := range out {
-				if m := grouped[out[i].ID]; m != nil {
-					out[i].Members = m
-				}
-			}
-		}
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, channels)
 }
 
 func (h *Handler) MarkChannelRead(w http.ResponseWriter, r *http.Request) {

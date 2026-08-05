@@ -6,11 +6,11 @@ import { ModelDropdown } from "./model-dropdown";
 import { ThinkingDropdown } from "./thinking-dropdown";
 import { ComputerPicker } from "./computer-picker";
 import {
-  firstUsableMachine,
-  firstUsableRuntimeIdOnMachine,
+  firstRuntimeMachine,
+  firstRuntimeIdOnMachine,
   machineForRuntime,
 } from "./computer-picker-utils";
-import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
+import { RuntimePicker } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker, type AvatarPickerSelection } from "./avatar-picker";
@@ -24,6 +24,7 @@ import { resolveActorDisplayName } from "@multica/core/identity";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type {
   Agent,
+  AgentActionCard,
   AgentAvatarSelection,
   RuntimeDevice,
   MemberWithUser,
@@ -55,6 +56,7 @@ export function CreateAgentDialog({
   currentUserId,
   template,
   draft,
+  actionCard,
   defaultMachineId = null,
   onClose,
   onCreate,
@@ -71,9 +73,10 @@ export function CreateAgentDialog({
   // Skills are copied separately by the caller after createAgent
   // succeeds — they're not part of CreateAgentRequest.
   template?: Agent | null;
-  // When provided by Wendy, the dialog opens with a generated role draft
-  // and marks that draft as used after the agent is created.
+  // Research / legacy seed only. Hire path uses actionCard (no draft bridge).
   draft?: AgentCreationDraft | null;
+  /** Hire hard-cut: prepared agent:create card — prefills name/desc, binds action_card_id. */
+  actionCard?: AgentActionCard | null;
   /** Prefer this group as home when opening on「仅本群」(channel context). */
   defaultHomeChannelId?: string | null;
   /** Prefill computer (machine id from buildRuntimeMachines). */
@@ -87,16 +90,20 @@ export function CreateAgentDialog({
 }) {
   const { t } = useT("agents");
   const isDuplicate = !!template;
-  const isDraft = !!draft && !isDuplicate;
+  const hireCard = actionCard && !isDuplicate ? actionCard : null;
+  const isHireCard = !!hireCard;
+  const isDraft = !!draft && !isDuplicate && !isHireCard;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
   // Display-name defaults: duplicate uses "<original> copy". Manual-create starts blank.
   const [name, setName] = useState(
     template
       ? `${resolveActorDisplayName(template, template.id)}${t(($) => $.create_dialog.duplicate_copy_suffix)}`
-      : draft?.name ?? "",
+      : hireCard?.payload.name ?? draft?.name ?? "",
   );
-  const [description, setDescription] = useState(template?.description ?? draft?.description ?? "");
+  const [description, setDescription] = useState(
+    template?.description ?? hireCard?.payload.description ?? draft?.description ?? "",
+  );
   const [model, setModel] = useState(template?.model ?? "");
   const [thinkingLevel, setThinkingLevel] = useState(template?.thinking_level ?? "");
   const [instructions, setInstructions] = useState(template?.instructions ?? draft?.instructions ?? "");
@@ -104,6 +111,7 @@ export function CreateAgentDialog({
   // present; create with draft_id lets the server apply it as assigned. User
   // uploads go through avatar_selection; clearing a draft preview sends a
   // random picked preset so create does not re-apply the draft face.
+  // Hire action cards have no avatar payload — server assigns preset.
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(
     () => (draft?.avatar_url?.trim() ? draft.avatar_url : null),
   );
@@ -129,8 +137,7 @@ export function CreateAgentDialog({
   const [creating, setCreating] = useState(false);
 
   // Computer → runtime selection (Frank 2026-08-01). Duplicate mode seeds
-  // from the template's computer+runtime when still usable; otherwise the
-  // parent derives the first usable machine (no effect-based seeding).
+  // from the template's workspace runtime; otherwise use the first machine.
   const initialMachines = buildRuntimeMachines(runtimes, {
     now: Date.now(),
     currentUserId,
@@ -139,27 +146,24 @@ export function CreateAgentDialog({
     const templateRuntime = template?.runtime_id
       ? runtimes.find((r) => r.id === template.runtime_id)
       : undefined;
-    if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
+    if (templateRuntime) {
       return machineForRuntime(templateRuntime, initialMachines)?.id ?? "";
     }
     if (defaultMachineId && initialMachines.some((m) => m.id === defaultMachineId)) {
       return defaultMachineId;
     }
-    const usableRuntime = runtimes.find((r) =>
-      isRuntimeUsableForUser(r, currentUserId),
-    );
-    return machineForRuntime(usableRuntime, initialMachines)?.id ?? "";
+    return machineForRuntime(runtimes[0], initialMachines)?.id ?? "";
   });
   const [selectedRuntimeId, setSelectedRuntimeId] = useState(() => {
     const templateRuntime = template?.runtime_id
       ? runtimes.find((r) => r.id === template.runtime_id)
       : undefined;
-    if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
+    if (templateRuntime) {
       return templateRuntime.id;
     }
     const machine =
       initialMachines.find((m) => m.id === selectedMachineId) ?? null;
-    return firstUsableRuntimeIdOnMachine(machine, currentUserId);
+    return firstRuntimeIdOnMachine(machine);
   });
 
   const machines = useMemo(
@@ -168,7 +172,7 @@ export function CreateAgentDialog({
   );
   const effectiveMachineId =
     selectedMachineId ||
-    firstUsableMachine(machines, currentUserId)?.id ||
+    firstRuntimeMachine(machines)?.id ||
     "";
   const selectedMachine =
     machines.find((m) => m.id === effectiveMachineId) ?? null;
@@ -177,13 +181,13 @@ export function CreateAgentDialog({
   const machineRuntimes = selectedMachine?.runtimes ?? [];
   const effectiveRuntimeId =
     selectedRuntimeId ||
-    firstUsableRuntimeIdOnMachine(selectedMachine, currentUserId);
+    firstRuntimeIdOnMachine(selectedMachine);
 
   const handleMachineSelect = (machineId: string) => {
     if (machineId === selectedMachineId) return;
     setSelectedMachineId(machineId);
     const next = machines.find((m) => m.id === machineId) ?? null;
-    setSelectedRuntimeId(firstUsableRuntimeIdOnMachine(next, currentUserId));
+    setSelectedRuntimeId(firstRuntimeIdOnMachine(next));
   };
 
   const selectedRuntime = runtimes.find((d) => d.id === effectiveRuntimeId) ?? null;
@@ -192,17 +196,8 @@ export function CreateAgentDialog({
   // app). Computed once so both dropdowns below agree.
   const selectedRuntimeOnline =
     !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
-  // Defense-in-depth: even if a locked runtime somehow ends up selected
-  // (e.g. duplicate of an agent whose template runtime is now locked, and
-  // the workspace has no usable fallback), gate Create on it so we don't
-  // submit a request the backend will reject with 403.
-  const selectedRuntimeLocked =
-    selectedRuntime != null &&
-    !isRuntimeUsableForUser(selectedRuntime, currentUserId);
-
-
   const handleSubmit = async () => {
-    if (!name.trim() || !selectedRuntime || selectedRuntimeLocked) return;
+    if (!name.trim() || !selectedRuntime) return;
     const trimmedModel = model.trim();
     if (!trimmedModel) {
       showErrorToast(t(($) => $.model_dropdown.select_required));
@@ -220,7 +215,12 @@ export function CreateAgentDialog({
         thinking_level: thinkingLevel || undefined,
         instructions: trimmedInstructions || undefined,
         avatar_selection: avatarSelectionRef.current ?? undefined,
-        draft_id: draft?.id,
+        // Hire path: action_card_id only (mutually exclusive with draft_id on BE).
+        ...(hireCard
+          ? { action_card_id: hireCard.id }
+          : draft?.id
+            ? { draft_id: draft.id }
+            : {}),
       };
       if (template) {
         // Duplicate path: forward the hidden config fields the source
@@ -270,7 +270,7 @@ export function CreateAgentDialog({
 
   const headerTitle = isDuplicate
     ? t(($) => $.create_dialog.title_duplicate)
-    : isDraft
+    : isHireCard || isDraft
       ? t(($) => $.windy.create_agent)
       : t(($) => $.create_dialog.title_create);
 
@@ -284,12 +284,12 @@ export function CreateAgentDialog({
               {t(($) => $.create_dialog.description_duplicate, { name: resolveActorDisplayName(template, template.id) })}
             </DialogDescription>
           )}
-          {!isDuplicate && !isDraft && (
+          {!isDuplicate && !isDraft && !isHireCard && (
             <DialogDescription className="mt-1 text-xs">
               {t(($) => $.create_dialog.description_create)}
             </DialogDescription>
           )}
-          {isDraft && draft && (
+          {(isHireCard || isDraft) && (
             <DialogDescription className="mt-1 text-xs">
               {t(($) => $.windy.draft_description)}
             </DialogDescription>
@@ -423,15 +423,12 @@ export function CreateAgentDialog({
               creating ||
               !name.trim() ||
               !selectedRuntime ||
-              selectedRuntimeLocked ||
               !model.trim()
             }
             title={
-              selectedRuntimeLocked
-                ? t(($) => $.create_dialog.runtime_private_locked_tooltip)
-                : !model.trim()
-                  ? t(($) => $.model_dropdown.select_required)
-                  : undefined
+              !model.trim()
+                ? t(($) => $.model_dropdown.select_required)
+                : undefined
             }
           >
             {creating ? t(($) => $.create_dialog.creating) : t(($) => $.create_dialog.create)}

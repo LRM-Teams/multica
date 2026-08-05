@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowLeft, BarChart3, Bell, FileText, User } from "lucide-react";
+import { Activity, ArrowLeft, BarChart3, Bell, FileText, Pencil, User } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { AGENT_DESCRIPTION_MAX_LENGTH } from "@multica/core/agents";
 import type { Agent, DashboardUsageByAgent, MemberWithUser } from "@multica/core/types";
@@ -437,14 +437,10 @@ function AgentProfileTabContent({
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             {t(($) => $.side_panel.runtime_section)}
           </h3>
-          {canEditRuntime ? (
-            <button
-              type="button"
-              className="w-full rounded-md text-left transition-colors hover:bg-accent/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              onClick={() => setRuntimeDialogOpen(true)}
-              aria-label={t(($) => $.execution_config.edit_trigger_aria)}
-              data-testid="agent-runtime-config-edit"
-            >
+          {/* LRM-1351 (Frank pencil lock): summary body is not a click target;
+              only the trailing pencil opens the Dialog. */}
+          <div className="flex items-start gap-1">
+            <div className="min-w-0 flex-1">
               <RuntimeConfigSummary
                 agent={agent}
                 runtimes={runtimes}
@@ -454,18 +450,19 @@ function AgentProfileTabContent({
                 runtimeUpdateHealth={runtimeUpdateHealth}
                 runtimeHealthLabel={runtimeHealthLabel}
               />
-            </button>
-          ) : (
-            <RuntimeConfigSummary
-              agent={agent}
-              runtimes={runtimes}
-              members={members}
-              currentUserId={currentUserId}
-              isOnline={isOnline}
-              runtimeUpdateHealth={runtimeUpdateHealth}
-              runtimeHealthLabel={runtimeHealthLabel}
-            />
-          )}
+            </div>
+            {canEditRuntime ? (
+              <button
+                type="button"
+                className="mt-0.5 inline-flex shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => setRuntimeDialogOpen(true)}
+                aria-label={t(($) => $.execution_config.edit_trigger_aria)}
+                data-testid="agent-runtime-config-edit"
+              >
+                <Pencil className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            ) : null}
+          </div>
           {canEditRuntime ? (
             <p className="mt-2 text-[10px] leading-tight text-muted-foreground">
               {t(($) => $.execution_config.applies_next_run)}
@@ -530,11 +527,12 @@ function RuntimeConfigSummary({
             canEdit={false}
             onChange={() => {}}
           />
-          {runtimeUpdateHealth !== "ok" && (
-            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-              {runtimeHealthLabel(runtimeUpdateHealth)}
-            </span>
-          )}
+          {runtimeUpdateHealth !== "ok" &&
+            runtimeUpdateHealth !== "update_available" && (
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {runtimeHealthLabel(runtimeUpdateHealth)}
+              </span>
+            )}
           <ModelPicker
             runtimeId={agent.runtime_id}
             runtimeOnline={!!isOnline}

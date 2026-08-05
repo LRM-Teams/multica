@@ -55,13 +55,9 @@ type AgentRuntimeResponse struct {
 	UpdateError    *string                     `json:"update_error,omitempty"`
 	AutoUpdate     *DaemonUpdateStatusResponse `json:"auto_update"`
 	OwnerID        *string                     `json:"owner_id"`
-	// Visibility is "private" (default — only the owner / workspace admins
-	// can bind agents) or "public" (any workspace member can). See migration
-	// 083 and canUseRuntimeForAgent.
-	Visibility string  `json:"visibility"`
-	LastSeenAt *string `json:"last_seen_at"`
-	CreatedAt  string  `json:"created_at"`
-	UpdatedAt  string  `json:"updated_at"`
+	LastSeenAt     *string                     `json:"last_seen_at"`
+	CreatedAt      string                      `json:"created_at"`
+	UpdatedAt      string                      `json:"updated_at"`
 	// ComputerConnected and DaemonLastSeenAt (task #58) reflect the physical
 	// machine's own heartbeat, independent of this runtime's LastSeenAt —
 	// see computerConnected's doc comment for why the two must not be
@@ -301,7 +297,6 @@ func runtimeToResponseWithUpdateReleaseAndObservation(
 		UpdateError:          updateError,
 		AutoUpdate:           autoUpdate,
 		OwnerID:              uuidToPtr(rt.OwnerID),
-		Visibility:           rt.Visibility,
 		LastSeenAt:           timestampToPtr(rt.LastSeenAt),
 		CreatedAt:            timestampToString(rt.CreatedAt),
 		UpdatedAt:            timestampToString(rt.UpdatedAt),
@@ -953,18 +948,14 @@ const maxRuntimeDisplayNameLength = 128
 // Only fields users may legitimately edit are listed; other runtime metadata
 // (provider, daemon_id, status…) flows in from the daemon and is read-only here.
 type UpdateAgentRuntimeRequest struct {
-	// Visibility flips a runtime between "private" (default — only the owner
-	// or workspace admins can bind agents) and "public" (any workspace
-	// member can). Owner / workspace admin only, gated by canEditRuntime.
-	Visibility *string `json:"visibility,omitempty"`
 	// DisplayName sets the user-editable machine label. Empty string clears
 	// the override so clients fall back to daemon-reported name. Whitespace
 	// is trimmed. Owner / workspace admin only, gated by canEditRuntime.
 	DisplayName *string `json:"display_name,omitempty"`
 }
 
-// UpdateAgentRuntime handles PATCH /api/runtimes/:id. Visibility and
-// display_name are editable; the request shape is open-ended so future
+// UpdateAgentRuntime handles PATCH /api/runtimes/:id. Display_name is
+// editable; the request shape is open-ended so future
 // fields can be added without a route change.
 // Workspace-membership-checked; write access is gated by canEditRuntime.
 func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
@@ -996,23 +987,10 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		newVisibility   string
-		needVisibility  bool
 		newDisplayName  string
 		needDisplayName bool
 		changed         bool
 	)
-	if req.Visibility != nil {
-		v := *req.Visibility
-		if v != "private" && v != "public" {
-			writeError(w, http.StatusBadRequest, "visibility must be 'private' or 'public'")
-			return
-		}
-		if v != rt.Visibility {
-			newVisibility = v
-			needVisibility = true
-		}
-	}
 	if req.DisplayName != nil {
 		trimmed := strings.TrimSpace(*req.DisplayName)
 		if utf8.RuneCountInString(trimmed) > maxRuntimeDisplayNameLength {
@@ -1025,19 +1003,6 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if needVisibility {
-		updated, err := h.Queries.UpdateAgentRuntimeVisibility(r.Context(), db.UpdateAgentRuntimeVisibilityParams{
-			ID:         runtimeUUID,
-			Visibility: newVisibility,
-		})
-		if err != nil {
-			slog.Error("UpdateAgentRuntimeVisibility failed", "error", err, "runtime_id", runtimeID)
-			writeError(w, http.StatusInternalServerError, "failed to update runtime")
-			return
-		}
-		rt = updated
-		changed = true
-	}
 	if needDisplayName {
 		updated, err := h.Queries.UpdateAgentRuntimeDisplayName(r.Context(), db.UpdateAgentRuntimeDisplayNameParams{
 			ID:          runtimeUUID,
@@ -1084,28 +1049,10 @@ func canOwnRuntime(member db.Member, rt db.AgentRuntime) bool {
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
 }
 
-// canUseRuntimeForAgent reports whether a workspace member is allowed to
-// bind a new agent to — or move an existing agent onto — the given runtime.
-// Mirrors canEditRuntime but layers on the runtime's visibility flag so a
-// `public` runtime is usable by anyone in the workspace while a `private`
-// runtime stays bound to its owner. Workspace owners/admins keep an
-// administrative override for both. See migration 083 for the visibility
-// column.
-func canUseRuntimeForAgent(member db.Member, rt db.AgentRuntime) bool {
-	if roleAllowed(member.Role, "owner", "admin") {
-		return true
-	}
-	if rt.Visibility == "public" {
-		return true
-	}
-	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
-}
-
 // runtimesShareMachine reports whether two runtimes represent the same
-// physical machine — the authorization-side check backing "an agent's bound
-// computer cannot change; only the runtime within that computer can"
-// (Frank's rule, 2026-08-02). It is deliberately narrower than the frontend's
-// cosmetic runtimeMachineKey (packages/views/runtimes/components/
+// physical machine. Same-machine moves do not require the cross-device memory
+// sync capability. It is deliberately narrower than the frontend's cosmetic
+// runtimeMachineKey (packages/views/runtimes/components/
 // runtime-machines.ts), which also falls back to parsing a hostname out of
 // `name`/`device_info` for display grouping — free text is not a safe signal
 // for an authorization boundary. Here, only daemon_id (the persistent
@@ -1144,13 +1091,10 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 			OwnerID:     parseUUID(userID),
 		})
 	} else {
-		// Privacy: a member sees their own runtimes plus everyone's public
-		// ones — never another member's private runtime. No owner/admin
-		// override: visibility is per-user even for workspace admins.
-		runtimes, err = h.Queries.ListVisibleAgentRuntimes(r.Context(), db.ListVisibleAgentRuntimesParams{
-			WorkspaceID: parseUUID(workspaceID),
-			OwnerID:     parseUUID(userID),
-		})
+		// Every member sees every runtime in the active workspace. The query
+		// remains workspace-scoped, so retiring visibility cannot expose a
+		// runtime across workspace boundaries.
+		runtimes, err = h.Queries.ListAgentRuntimes(r.Context(), parseUUID(workspaceID))
 	}
 
 	if err != nil {

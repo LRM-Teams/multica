@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -98,6 +99,10 @@ func (h *Handler) ListChannelEnvCheckpoints(w http.ResponseWriter, r *http.Reque
 // DeleteEnvDispatchChannel handles DELETE /api/v1/env-dispatch/channels/{channelID}.
 // It resolves the bound project+env and performs concurrency-safe rollout
 // cleanup. Idempotent: a missing channel returns 204.
+// errSharedDiagnosisInProgress prevents channel cleanup from racing the
+// diagnosis task that borrows the team sandbox.
+var errSharedDiagnosisInProgress = errors.New("diagnosis_in_progress")
+
 func (h *Handler) DeleteEnvDispatchChannel(w http.ResponseWriter, r *http.Request) {
 	actorUserID, ok := requireUserID(w, r)
 	if !ok {
@@ -119,6 +124,10 @@ func (h *Handler) DeleteEnvDispatchChannel(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := h.deleteEnvDispatchChannelRollout(r.Context(), workspaceID, actorUserID, channelID, projectID, envID); err != nil {
+		if errors.Is(err, errSharedDiagnosisInProgress) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "diagnosis_in_progress"})
+			return
+		}
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
@@ -131,6 +140,20 @@ func (h *Handler) DeleteEnvDispatchChannel(w http.ResponseWriter, r *http.Reques
 // reach a terminal state, reclaims ready sandboxes/runtimes, then removes the
 // channel, project, bindings, and env in foreign-key-safe order.
 func (h *Handler) deleteEnvDispatchChannelRollout(ctx context.Context, workspaceID, actorUserID, channelID, projectID, envID string) error {
+	var active bool
+	if err := h.DB.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM interaction_dag_diagnosis_run
+  WHERE project_id = $1
+    AND sandbox_mode = 'shared'
+    AND status IN ('provisioning', 'running', 'compacting')
+)`, projectID).Scan(&active); err != nil {
+		return fmt.Errorf("lookup shared diagnosis status: %w", err)
+	}
+	if active {
+		return errSharedDiagnosisInProgress
+	}
 	store := envDispatchChannelStore{}
 	if err := store.markDeleting(ctx, h.DB, envID); err != nil {
 		return fmt.Errorf("mark bindings deleting: %w", err)

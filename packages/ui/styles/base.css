@@ -161,6 +161,18 @@
   animation: chat-text-shimmer 2.5s linear infinite;
 }
 
+/* LRM-1337 — reduced-motion must drop the infinite shimmer AND restore readable
+ * solid text. Clearing animation alone leaves `color: transparent` /
+ * `-webkit-text-fill-color: transparent` (frozen wash or invisible glyphs). */
+@media (prefers-reduced-motion: reduce) {
+  .animate-chat-text-shimmer {
+    animation: none;
+    background-image: none;
+    color: inherit;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
 /* LRM-1271/1291 Research stage energy track — sheen on the CURRENT segment
  * only. Deliberately one moving thing on the whole header: no particles, no
  * bounce, no full-track marquee (UI Designer 2026-08-04 frozen spec).

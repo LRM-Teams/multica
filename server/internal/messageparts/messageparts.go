@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/stickers"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -345,6 +346,17 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 			if part.RefSubType != "" {
 				return protocol.MessagePart{}, fmt.Errorf("unsupported channel-ref ref_subtype %q", part.RefSubType)
 			}
+		case "action_card":
+			// Hire hard-cut: structured reference (like issue-ref), not multica:// links.
+			if part.RefSubType == "" {
+				part.RefSubType = "agent:create"
+			}
+			if part.RefSubType != "agent:create" {
+				return protocol.MessagePart{}, fmt.Errorf("unsupported action_card ref_subtype %q", part.RefSubType)
+			}
+			if _, err := uuid.Parse(part.RefID); err != nil {
+				return protocol.MessagePart{}, fmt.Errorf("action_card ref_id must be a UUID")
+			}
 		default:
 			return protocol.MessagePart{}, fmt.Errorf("unsupported ref_type %q", part.RefType)
 		}
@@ -477,12 +489,12 @@ func normalizePart(part protocol.MessagePart) (protocol.MessagePart, error) {
 }
 
 const (
-	choiceIDMaxLen    = 64
-	choiceLabelMaxLen = 80
-	choiceDescMaxLen  = 160
+	choiceIDMaxLen     = 64
+	choiceLabelMaxLen  = 80
+	choiceDescMaxLen   = 160
 	choicePromptMaxLen = 280
-	choiceMaxOptions  = 4
-	choiceMinOptions  = 2
+	choiceMaxOptions   = 4
+	choiceMinOptions   = 2
 )
 
 func normalizeChoicePart(part protocol.MessagePart) (protocol.MessagePart, error) {

@@ -18,9 +18,10 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-AREAL_REMOTE_SHELL_ENABLED=true uv run python -m db_bridge.run_shell_runner >> logs/shell.log  2>&1 & pids+=("$!")
-# uv run python -m db_bridge.run_stub     --side areal >> logs/bridge.log 2>&1 & pids+=("$!")
-uv run python -m db_bridge.run_executor --side areal >> logs/bridge.log 2>&1 & pids+=("$!")
+PYTHON="$(dirname "$0")/.venv/bin/python"
+AREAL_REMOTE_SHELL_ENABLED=true "$PYTHON" -m db_bridge.run_shell_runner >> logs/shell.log  2>&1 & pids+=("$!")
+# "$PYTHON" -m db_bridge.run_stub     --side areal >> logs/bridge.log 2>&1 & pids+=("$!")
+"$PYTHON" -m db_bridge.run_executor --side areal >> logs/bridge.log 2>&1 & pids+=("$!")
 
 wait -n "${pids[@]}"
 status=$?

@@ -13,6 +13,7 @@ import {
   resolveLogicStatus,
   type LogicLaneId,
 } from "../lib/logic-lanes";
+import { isAbandonedStatus } from "../lib/abandon-reason";
 import { nodeIsVisuallyBusy } from "../lib/node-visuals";
 import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { isCompactActivityLabel } from "../../channels/components/is-compact-activity-label";
@@ -79,6 +80,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
     : undefined;
 
   const menuOpen = !!data.menuOpen;
+  const abandoned = isAbandonedStatus(n.status);
 
   return (
     <div
@@ -87,11 +89,15 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
         // LRM-1332 content face height (112–124); global row gap remains LRM-1295.
         aggregateSize ? "min-h-0 max-h-none" : "min-h-[112px] max-h-[124px]",
         "hover:border-muted-foreground/40",
+        // LRM-1333: abandoned = dashed + muted wash (not destructive / strikethrough).
+        abandoned && "border-dashed border-muted-foreground/40 bg-muted text-muted-foreground",
         selected &&
           "border-[var(--brand)] ring-2 ring-[color-mix(in_oklch,var(--brand)_18%,transparent)]",
-        status.tone === "run" &&
+        !abandoned &&
+          status.tone === "run" &&
           "border-[color-mix(in_oklch,var(--brand)_45%,var(--border))]",
-        status.tone === "fail" &&
+        !abandoned &&
+          status.tone === "fail" &&
           "border-[color-mix(in_oklch,var(--destructive)_40%,var(--border))]",
         pulse && "motion-safe:[&_[data-status-dot]]:animate-pulse",
       )}
@@ -102,6 +108,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
       data-git-lane={data.gitLane ?? 0}
       data-branch={data.branchId}
       data-node-type={n.node_type}
+      data-abandoned={abandoned || undefined}
       data-testid={
         logicRole === "start"
           ? "research-logic-start"
@@ -145,16 +152,20 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <span
             data-status-dot
+            data-testid={abandoned ? "research-node-abandoned-pill" : undefined}
+            aria-hidden={abandoned || undefined}
             className={cn(
               "inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-xs font-medium",
-              status.tone === "ok" && "bg-success/15 text-success",
-              status.tone === "run" && "bg-brand/15 text-brand",
-              status.tone === "wait" && "bg-warning/15 text-warning",
-              status.tone === "fail" && "bg-destructive/15 text-destructive",
-              status.tone === "mute" && "bg-muted text-muted-foreground",
+              !abandoned && status.tone === "ok" && "bg-success/15 text-success-strong",
+              !abandoned && status.tone === "run" && "bg-brand/15 text-brand",
+              !abandoned && status.tone === "wait" && "bg-warning/15 text-warning",
+              !abandoned && status.tone === "fail" && "bg-destructive/15 text-destructive",
+              (abandoned || status.tone === "mute") && "bg-muted text-muted-foreground",
             )}
           >
-            {t(($) => $.logic.status[status.key])}
+            {abandoned
+              ? t(($) => $.logic.status.abandoned)
+              : t(($) => $.logic.status[status.key])}
           </span>
           <span className="truncate">{ownerLabel}</span>
           <span className="shrink-0 truncate">

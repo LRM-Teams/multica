@@ -21,6 +21,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -46,8 +47,7 @@ type AgentResponse struct {
 	RuntimeMode  string  `json:"runtime_mode"`
 	RuntimeName  string  `json:"runtime_name"`
 	// Presence-safe projection of the bound runtime. Always filled when the
-	// runtime row exists — even if ListVisibleAgentRuntimes would hide the
-	// private runtime details from this viewer (LRM-248 AC5).
+	// runtime row exists. Runtime tenancy remains workspace-scoped (LRM-248 AC5).
 	RuntimeStatus     string  `json:"runtime_status,omitempty"`
 	RuntimeLastSeenAt *string `json:"runtime_last_seen_at,omitempty"`
 	// RuntimeDisplayStatus is the honest, read-time status for this surface
@@ -1066,12 +1066,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	member, ok := h.workspaceMember(w, r, workspaceID)
-	if !ok {
-		return
-	}
-	if !canUseRuntimeForAgent(member, runtime) {
-		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
 		return
 	}
 
@@ -1441,6 +1436,15 @@ func redactAgentResponseForActor(resp *AgentResponse, actorType string) {
 // agent owner or workspace owner/admin can do that, regardless of whether the
 // agent is public or private.
 func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent db.Agent) bool {
+	// Agent principal (Raft align / task #125): may only manage self.
+	// Human owner/admin workspace management is unchanged.
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		if p.AgentID != uuidToString(agent.ID) {
+			writeError(w, http.StatusForbidden, "agents may only manage themselves")
+			return false
+		}
+		return true
+	}
 	wsID := uuidToString(agent.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
 	if !ok {
@@ -1455,8 +1459,16 @@ func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent d
 	return true
 }
 
-// canUpdateAgent permits the normal owner/admin update path.
+// canUpdateAgent permits the normal owner/admin update path for humans,
+// and self-only updates for AgentPrincipal (task #125 / Raft align).
 func (h *Handler) canUpdateAgent(w http.ResponseWriter, r *http.Request, agent db.Agent, rawFields map[string]json.RawMessage) bool {
+	if p, ok := middleware.AgentPrincipalFromContext(r.Context()); ok {
+		if p.AgentID != uuidToString(agent.ID) {
+			writeError(w, http.StatusForbidden, "agents may only update themselves")
+			return false
+		}
+		return true
+	}
 	wsID := uuidToString(agent.WorkspaceID)
 	member, ok := h.requireWorkspaceRole(w, r, wsID, "agent not found", "owner", "admin", "member")
 	if !ok {
@@ -1587,24 +1599,10 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid runtime_id")
 			return
 		}
-		// Same gate as CreateAgent — prevents UpdateAgent from being used to
-		// re-bind an agent onto someone else's private runtime, which would
-		// otherwise be a quiet end-run around the CreateAgent check.
-		member, ok := h.workspaceMember(w, r, uuidToString(existing.WorkspaceID))
-		if !ok {
-			return
-		}
-		if !canUseRuntimeForAgent(member, runtime) {
-			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can move agents onto it")
+		if _, ok := h.workspaceMember(w, r, uuidToString(existing.WorkspaceID)); !ok {
 			return
 		}
 		if runtime.ID != existing.RuntimeID {
-			// An agent's bound computer cannot change (Frank's rule,
-			// 2026-08-02) — only which runtime on that same computer it uses.
-			// The frontend already restricts the runtime picker to the bound
-			// machine (runtime-picker.tsx's sameComputerRuntimes), but that's
-			// a UI affordance, not an authorization boundary: this endpoint
-			// must reject the move itself, or a direct API call bypasses it.
 			currentRuntime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
 				ID:          existing.RuntimeID,
 				WorkspaceID: existing.WorkspaceID,
@@ -1613,8 +1611,8 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "failed to load current runtime")
 				return
 			}
-			if !runtimesShareMachine(currentRuntime, runtime) {
-				writeError(w, http.StatusForbidden, "an agent's computer cannot be changed; choose a runtime on the same computer")
+			if !runtimesShareMachine(currentRuntime, runtime) && !agentRuntimeHasCapability(runtime, protocol.DaemonCapabilityMemoryCrossDeviceSync) {
+				writeCodedError(w, http.StatusConflict, "daemon_memory_sync_required", "target daemon must upgrade before moving an agent between computers")
 				return
 			}
 		}

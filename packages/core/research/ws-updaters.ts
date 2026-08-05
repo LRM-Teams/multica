@@ -1,7 +1,11 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { WSMessage } from "../types/events";
-import type { ResearchSessionSnapshot } from "../types/research";
+import type {
+  ListResearchProductRoundCardsResponse,
+  ResearchSessionSnapshot,
+} from "../types/research";
 import { researchKeys, type ResearchPresenceMap } from "./queries";
+import { ResearchProductRoundCardSchema } from "./schemas";
 
 function sessionIdFromPayload(payload: Record<string, unknown>): string | null {
   if (typeof payload.session_id === "string") return payload.session_id;
@@ -87,6 +91,26 @@ export function applyResearchWSEvent(
       }));
       break;
     }
+    case "research_session:product_round": {
+      const parsed = ResearchProductRoundCardSchema.safeParse(payload.card);
+      if (!parsed.success) break;
+      const card = {
+        ...parsed.data,
+        session_id: parsed.data.session_id || sessionId,
+      };
+      qc.setQueryData<ListResearchProductRoundCardsResponse>(
+        researchKeys.productRounds(wsId, sessionId),
+        (prev) => {
+          const rounds = prev?.rounds ?? [];
+          const index = rounds.findIndex((round) => round.id === card.id);
+          if (index < 0) return { rounds: [...rounds, card] };
+          const next = rounds.slice();
+          next[index] = card;
+          return { rounds: next };
+        },
+      );
+      break;
+    }
     case "research_session:status_changed": {
       if (payload.deleted === true) {
         qc.removeQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
@@ -117,7 +141,13 @@ export function applyResearchWSEvent(
             delete next[agentId];
             return next;
           }
-          next[agentId] = { activity, updatedAt };
+          next[agentId] = {
+            ...(next[agentId] ?? {
+              phase: "idle", role: "", fleetMemberId: null, taskId: null,
+              nodeId: null, branchId: null, stage: null, expiresAt: null, staleReason: null,
+            }),
+            activity, updatedAt,
+          };
           return next;
         },
       );

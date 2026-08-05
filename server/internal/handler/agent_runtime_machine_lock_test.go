@@ -11,15 +11,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// TestUpdateAgent_RejectsRuntimeChangeToDifferentMachine pins Frank's rule,
-// 2026-08-02: an agent's bound computer cannot change — only which runtime on
-// that same computer it uses. This is the authorization boundary the
-// frontend's runtime picker already enforces cosmetically (runtime-picker.tsx
-// filters to sameComputerRuntimes); this test proves a direct API call that
-// bypasses the UI is rejected the same way, not silently allowed.
-func TestUpdateAgent_RejectsRuntimeChangeToDifferentMachine(t *testing.T) {
+// TestUpdateAgent_AllowsRuntimeChangeToDifferentMemorySyncMachine proves an
+// agent can move between computers once the target daemon advertises durable
+// cross-device memory sync. Pending inbox/session rows are covered separately
+// by agent_inbox_runtime_heal_test.go.
+func TestUpdateAgent_AllowsRuntimeChangeToDifferentMemorySyncMachine(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -29,6 +28,13 @@ func TestUpdateAgent_RejectsRuntimeChangeToDifferentMachine(t *testing.T) {
 	homeRuntimeID := seedMachineLockedRuntime(t, homeDaemonID, "Machine Lock Home Runtime")
 	otherDaemonID := "machine-lock-other-" + uuid.NewString()
 	otherMachineRuntimeID := seedMachineLockedRuntime(t, otherDaemonID, "Machine Lock Other Runtime")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_runtime
+		SET metadata = jsonb_build_object('capabilities', jsonb_build_array($2::text))
+		WHERE id = $1
+	`, otherMachineRuntimeID, protocol.DaemonCapabilityMemoryCrossDeviceSync); err != nil {
+		t.Fatalf("enable target cross-device memory sync: %v", err)
+	}
 
 	agentID := createHandlerTestAgentOnRuntime(t, "machine-lock-reject-"+uuid.NewString()[:8], homeRuntimeID)
 
@@ -38,25 +44,44 @@ func TestUpdateAgent_RejectsRuntimeChangeToDifferentMachine(t *testing.T) {
 	}), "id", agentID)
 	testHandler.UpdateAgent(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("cross-machine move status = %d, want 403: %s", rec.Code, rec.Body.String())
-	}
-	var body struct {
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode error body: %v", err)
-	}
-	if body.Error != "an agent's computer cannot be changed; choose a runtime on the same computer" {
-		t.Fatalf("error message = %q, unexpected", body.Error)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cross-machine move status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 
 	var runtimeID string
 	if err := testPool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
 		t.Fatalf("read agent runtime after rejected move: %v", err)
 	}
-	if runtimeID != homeRuntimeID {
-		t.Fatalf("agent runtime_id = %q after rejected move, want unchanged %q", runtimeID, homeRuntimeID)
+	if runtimeID != otherMachineRuntimeID {
+		t.Fatalf("agent runtime_id = %q after move, want %q", runtimeID, otherMachineRuntimeID)
+	}
+}
+
+func TestUpdateAgent_RejectsCrossMachineMoveWithoutMemorySync(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	homeRuntimeID := seedMachineLockedRuntime(t, "machine-lock-home-"+uuid.NewString(), "Machine Lock Home Runtime")
+	otherRuntimeID := seedMachineLockedRuntime(t, "machine-lock-other-"+uuid.NewString(), "Machine Lock Legacy Runtime")
+	agentID := createHandlerTestAgentOnRuntime(t, "machine-lock-legacy-"+uuid.NewString()[:8], homeRuntimeID)
+
+	rec := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodPut, "/api/agents/"+agentID, map[string]any{
+		"runtime_id": otherRuntimeID,
+	}), "id", agentID)
+	testHandler.UpdateAgent(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("legacy cross-machine move status = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body.Code != "daemon_memory_sync_required" {
+		t.Fatalf("error code = %q, want daemon_memory_sync_required", body.Code)
 	}
 }
 

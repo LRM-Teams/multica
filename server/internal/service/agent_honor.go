@@ -22,6 +22,13 @@ type AgentHonorUnlockEvent struct {
 	Achievement AgentAchievementView
 }
 
+type AgentHonorLevelEvent struct {
+	WorkspaceID pgtype.UUID
+	AgentID     pgtype.UUID
+	Previous    int
+	Current     int
+}
+
 type AgentFleetClassEvent struct {
 	WorkspaceID pgtype.UUID
 	AgentID     pgtype.UUID
@@ -114,6 +121,7 @@ type AgentHonorService struct {
 	Queries               *db.Queries
 	Fleet                 *AgentFleetRankService
 	OnAchievementUnlocked func(ctx context.Context, evt AgentHonorUnlockEvent)
+	OnLevelChanged        func(ctx context.Context, evt AgentHonorLevelEvent)
 	OnFleetClassChanged   func(ctx context.Context, evt AgentFleetClassEvent)
 }
 
@@ -625,17 +633,34 @@ func (s *AgentHonorService) ListAdminAudit(
 }
 
 func (s *AgentHonorService) reconcileState(ctx context.Context, workspaceID, agentID pgtype.UUID) error {
+	state, err := s.Queries.GetAgentHonorState(ctx, db.GetAgentHonorStateParams{
+		WorkspaceID: workspaceID,
+		AgentID:     agentID,
+	})
+	if err != nil {
+		return err
+	}
 	total, err := s.Queries.SumAgentHonorXP(ctx, db.SumAgentHonorXPParams{
 		WorkspaceID: workspaceID, AgentID: agentID,
 	})
 	if err != nil {
 		return err
 	}
-	level := AgentHonorLevelFromXP(total)
-	_, err = s.Queries.UpdateAgentHonorStats(ctx, db.UpdateAgentHonorStatsParams{
+	level, levelChanged := agentHonorLevelTransition(int(state.Level), total)
+	if _, err = s.Queries.UpdateAgentHonorStats(ctx, db.UpdateAgentHonorStatsParams{
 		WorkspaceID: workspaceID, AgentID: agentID, TotalXp: total, Level: int32(level),
-	})
-	return err
+	}); err != nil {
+		return err
+	}
+	if levelChanged && s.OnLevelChanged != nil {
+		s.OnLevelChanged(ctx, AgentHonorLevelEvent{
+			WorkspaceID: workspaceID,
+			AgentID:     agentID,
+			Previous:    int(state.Level),
+			Current:     level,
+		})
+	}
+	return nil
 }
 
 func (s *AgentHonorService) loadMetrics(
@@ -675,6 +700,7 @@ func (s *AgentHonorService) currentFleet(
 	if s.Fleet == nil {
 		return AgentFleetRankView{
 			AgentID: util.UUIDToString(agentID), ClassID: "reserve", ClassLabel: "Reserve",
+			MinSampleTasks: FleetMinSampleTasks,
 		}, nil
 	}
 	return s.Fleet.GetAgentRank(ctx, workspaceID, agentID)

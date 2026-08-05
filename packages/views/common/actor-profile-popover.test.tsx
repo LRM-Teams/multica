@@ -345,6 +345,7 @@ describe("ActorProfileContentLoaded", () => {
         fleet_rank: 2,
         fleet_size: 18,
         sample_tasks: 34,
+        min_sample_tasks: 5,
         sample_sufficient: true,
         frozen: false,
         pillars: {

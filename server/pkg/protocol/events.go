@@ -65,6 +65,7 @@ const (
 	// Honor events
 	EventHonorBadgeUnlocked     = "honor:badge_unlocked"
 	EventAgentHonorUnlocked     = "agent_honor:achievement_unlocked"
+	EventAgentHonorLevelChanged = "agent_honor:level_changed"
 	EventAgentFleetClassChanged = "agent_honor:fleet_class_changed"
 
 	// Subscriber events

@@ -202,6 +202,15 @@
       "error": "Error"
     },
     "module_sources_desc": "Where evidence comes from · who owns what · whether it is ready",
+    "execution": {
+      "title": "Execution activity",
+      "locatable": "Locate at {{location}}",
+      "locate": "Locate at {{location}}",
+      "unavailable": "No locatable node yet",
+      "load_failed": "Could not load execution status",
+      "retry": "Retry",
+      "empty": "No execution members"
+    },
     "aux_close_sources": "Close evidence & collaboration"
   },
   "chat": {
@@ -288,6 +297,8 @@
     "doing": "In progress",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
+    "abandon_reason": "Abandon reason",
+    "abandon_reason_pending": "Reason pending sync",
     "retry_cta": "Retry / Reroute",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources.",

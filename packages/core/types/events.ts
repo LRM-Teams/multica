@@ -50,6 +50,7 @@ export type WSEventType =
   | "member:presence"
   | "honor:badge_unlocked"
   | "agent_honor:achievement_unlocked"
+  | "agent_honor:level_changed"
   | "agent_honor:fleet_class_changed"
   | "daemon:heartbeat"
   | "daemon:register"
@@ -105,7 +106,8 @@ export type WSEventType =
   | "research_session:report_updated"
   | "research_session:message"
   | "research_session:stage_eval"
-  | "research_session:status_changed";
+  | "research_session:status_changed"
+  | "research_session:product_round";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;
@@ -548,7 +550,16 @@ export interface HonorBadgeUnlockedPayload {
 
 export interface AgentHonorUnlockedPayload {
   agent_id: string;
+  /** Added by newer servers; older event payloads may omit it. */
+  agent_name?: string;
   achievement: AgentAchievement;
+}
+
+export interface AgentHonorLevelChangedPayload {
+  agent_id: string;
+  agent_name: string;
+  previous_level: number;
+  level: number;
 }
 
 export interface AgentFleetClassChangedPayload {
@@ -617,6 +628,7 @@ export interface WSEventPayloadMap {
   "member:presence": MemberPresencePayload;
   "honor:badge_unlocked": HonorBadgeUnlockedPayload;
   "agent_honor:achievement_unlocked": AgentHonorUnlockedPayload;
+  "agent_honor:level_changed": AgentHonorLevelChangedPayload;
   "agent_honor:fleet_class_changed": AgentFleetClassChangedPayload;
   "subscriber:added": SubscriberAddedPayload;
   "subscriber:removed": SubscriberRemovedPayload;

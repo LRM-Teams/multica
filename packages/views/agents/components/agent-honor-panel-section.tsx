@@ -93,7 +93,6 @@ export function AgentHonorPanelSection({
                 {t(($) => $.honor_agent.level_value, { level: honor.level })}
               </span>
               <FleetRankBadge
-                classId={honor.fleet.class_id}
                 classLabel={fleetClassName(
                   honor.fleet.class_id,
                   honor.fleet.class_label,

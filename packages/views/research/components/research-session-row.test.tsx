@@ -219,13 +219,25 @@ describe("ResearchSessionRow (LRM-1106 / LRM-1099)", () => {
     expect(screen.queryByTestId("avatar-stack")).toBeNull();
   });
 
-  it("dims archived rows", () => {
+  it("softens archived rows with solid muted title — no row opacity-* (LRM-1368)", () => {
     const { container } = render(
       <ResearchSessionRow session={session({ status: "archived" })} href="/research/s1" />,
     );
-    expect(
-      container.querySelector('[data-testid="research-session-row"]')?.className,
-    ).toContain("opacity-55");
+    const row = container.querySelector('[data-testid="research-session-row"]');
+    expect(row?.className).not.toMatch(/\bopacity-\d/);
+    const title = row?.querySelector("a .text-sm.font-medium");
+    expect(title?.className).toContain("text-muted-foreground");
+    expect(title?.className).not.toMatch(/\btext-foreground\b/);
+    expect(title?.className).not.toMatch(/\bopacity-\d/);
+  });
+
+  it("keeps non-archived titles on solid foreground (LRM-1368)", () => {
+    const { container } = render(<ResearchSessionRow session={session()} href="/research/s1" />);
+    const title = container.querySelector(
+      '[data-testid="research-session-row"] a .text-sm.font-medium',
+    );
+    expect(title?.className).toContain("text-foreground");
+    expect(title?.className).not.toContain("text-muted-foreground");
   });
 
   it("links title to the session with a single primary tab stop; actions stay outside", () => {

@@ -52,12 +52,6 @@ type ResearchSessionListItem struct {
 	FleetPreview []ResearchFleetPreviewMember `json:"fleet_preview"`
 }
 
-// ResearchPresenceEntry is one agent's live activity caption for a session.
-type ResearchPresenceEntry struct {
-	Activity  string `json:"activity"`
-	UpdatedAt int64  `json:"updated_at"` // unix ms
-}
-
 type ResearchSessionSnapshot struct {
 	Session       ResearchSessionResponse        `json:"session"`
 	Fleet         ResearchFleetResponse          `json:"fleet"`
@@ -77,10 +71,10 @@ type ResearchSessionSnapshot struct {
 // ResearchNodeContentFaces is the four content-face projection (LRM-1317 / LRM-1308).
 // Always present on nodes[]; empty strings are neutral — FE must not invent copy.
 type ResearchNodeContentFaces struct {
-	Goal               string `json:"goal"`
-	OperationApproach  string `json:"operation_approach"`
-	ResearchApproach   string `json:"research_approach"`
-	Result             string `json:"result"`
+	Goal              string `json:"goal"`
+	OperationApproach string `json:"operation_approach"`
+	ResearchApproach  string `json:"research_approach"`
+	Result            string `json:"result"`
 }
 
 type ResearchGraphNodeResp struct {
@@ -347,14 +341,20 @@ func (h *Handler) CreateResearchSession(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Return a fresh snapshot so the client can paint the kickoff graph without waiting on WS.
-	nodes, _ := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: session.ID, WorkspaceID: wsUUID})
-	edges, _ := h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: session.ID, WorkspaceID: wsUUID})
+	// Durable run sessions use run-v2 ledger projection for nodes/edges (LRM-1401).
+	dbNodes, _ := h.Queries.ListResearchGraphNodes(r.Context(), db.ListResearchGraphNodesParams{SessionID: session.ID, WorkspaceID: wsUUID})
+	dbEdges, _ := h.Queries.ListResearchGraphEdges(r.Context(), db.ListResearchGraphEdgesParams{SessionID: session.ID, WorkspaceID: wsUUID})
 	messages, _ := h.Queries.ListResearchMessages(r.Context(), db.ListResearchMessagesParams{SessionID: session.ID, WorkspaceID: wsUUID})
+	graphNodes, graphEdges := projectRunV2Graph(runSnapshot)
+	if len(graphNodes) == 0 {
+		graphNodes = mapGraphNodes(dbNodes, dbEdges)
+		graphEdges = mapEdges(dbEdges)
+	}
 	response := map[string]any{
 		"session":  researchSessionToResponse(session),
 		"fleet":    h.researchFleetToResponse(r.Context(), fleet, members),
-		"nodes":    mapGraphNodes(nodes, edges),
-		"edges":    mapEdges(edges),
+		"nodes":    graphNodes,
+		"edges":    graphEdges,
 		"messages": mapMessages(messages),
 		"run":      runSnapshot,
 	}
@@ -445,11 +445,19 @@ func (h *Handler) GetResearchSessionSnapshot(w http.ResponseWriter, r *http.Requ
 		loadedRun = &snapshot
 	}
 
+	graphNodes := mapGraphNodes(nodes, edges)
+	graphEdges := mapEdges(edges)
+	if loadedRun != nil {
+		// Durable run-v2: canvas truth is the deterministic ledger projection.
+		// Event-log graph rows remain audit data and are not returned as the research map.
+		graphNodes, graphEdges = projectRunV2Graph(*loadedRun)
+	}
+
 	writeJSON(w, http.StatusOK, ResearchSessionSnapshot{
 		Session:           researchSessionToResponse(session),
 		Fleet:             h.researchFleetToResponse(r.Context(), fleet, members),
-		Nodes:             mapGraphNodes(nodes, edges),
-		Edges:             mapEdges(edges),
+		Nodes:             graphNodes,
+		Edges:             graphEdges,
 		Sources:           mapSources(sources),
 		Report:            report,
 		Evals:             mapEvals(evals),
@@ -484,34 +492,6 @@ func confidenceFromPayload(payload json.RawMessage) *float64 {
 	default:
 		return nil
 	}
-}
-
-// buildResearchPresenceMap rebuilds ephemeral presence from the latest
-// agent_activity graph node per actor (GET bootstrap for LRM-804/775).
-func buildResearchPresenceMap(nodes []db.ResearchGraphNode) map[string]ResearchPresenceEntry {
-	out := map[string]ResearchPresenceEntry{}
-	for _, n := range nodes {
-		if n.NodeType != "agent_activity" || !n.ActorAgentID.Valid {
-			continue
-		}
-		agentID := uuidToString(n.ActorAgentID)
-		activity := strings.TrimSpace(n.Title)
-		if activity == "" {
-			activity = strings.TrimSpace(n.Summary)
-		}
-		if activity == "" {
-			continue
-		}
-		updatedAt := n.UpdatedAt.Time.UnixMilli()
-		if !n.UpdatedAt.Valid {
-			updatedAt = n.CreatedAt.Time.UnixMilli()
-		}
-		prev, ok := out[agentID]
-		if !ok || updatedAt >= prev.UpdatedAt {
-			out[agentID] = ResearchPresenceEntry{Activity: activity, UpdatedAt: updatedAt}
-		}
-	}
-	return out
 }
 
 func mapEdges(rows []db.ResearchGraphEdge) []ResearchGraphEdgeResp {

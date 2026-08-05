@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/service/duplexcall"
 	"github.com/multica-ai/multica/server/internal/service/voicecall"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -465,4 +466,107 @@ func (service *fakeVoiceCallService) Stop(
 ) (voicecall.Session, error) {
 	service.stopInput = input
 	return service.session, service.stopErr
+}
+
+// fakeDuplexVoiceCallService adds EndWithoutProviderStop for StopVoiceCall fallback.
+type fakeDuplexVoiceCallService struct {
+	fakeVoiceCallService
+	endWithoutProviderStopCalls int
+	endWithoutProviderStopErr   error
+	endedSession                voicecall.Session
+}
+
+func (service *fakeDuplexVoiceCallService) ActivateDuplex(
+	_ context.Context,
+	_ voicecall.AnswerInput,
+) (voicecall.DuplexActivation, error) {
+	return voicecall.DuplexActivation{}, errors.New("not used in stop fallback test")
+}
+
+func (service *fakeDuplexVoiceCallService) EndWithoutProviderStop(
+	_ context.Context,
+	input voicecall.StopInput,
+) (voicecall.Session, error) {
+	service.endWithoutProviderStopCalls++
+	service.stopInput = input
+	if service.endWithoutProviderStopErr != nil {
+		return voicecall.Session{}, service.endWithoutProviderStopErr
+	}
+	if service.endedSession.ID != "" {
+		return service.endedSession, nil
+	}
+	session := service.session
+	session.Status = voicecall.StatusEnded
+	session.EndReason = input.Reason
+	return session, nil
+}
+
+type fakeDuplexGateway struct {
+	configured bool
+	hasCallID  string
+}
+
+func (g *fakeDuplexGateway) Configured() bool { return g != nil && g.configured }
+func (g *fakeDuplexGateway) Has(callID string) bool {
+	return g != nil && g.hasCallID != "" && g.hasCallID == callID
+}
+func (g *fakeDuplexGateway) MarkPending(string, string, string) {}
+func (g *fakeDuplexGateway) Close(string)              {}
+func (g *fakeDuplexGateway) Start(
+	context.Context,
+	string,
+	duplexcall.MulticaExecutor,
+	duplexcall.Emitter,
+) (*duplexcall.Session, error) {
+	return nil, errors.New("not used")
+}
+
+func TestStopVoiceCallFallsBackToDuplexEndWhenProviderStopFailsAfterRestart(t *testing.T) {
+	endedAt := time.Date(2026, time.August, 3, 13, 40, 0, 0, time.UTC)
+	service := &fakeDuplexVoiceCallService{
+		fakeVoiceCallService: fakeVoiceCallService{
+			stopErr: errors.New("stop Volcengine voice task: task not found"),
+			session: voicecall.Session{
+				ID:          testVoiceAPICallID,
+				WorkspaceID: testVoiceAPIWorkspaceID,
+				UserID:      testVoiceAPIUserID,
+				Status:      voicecall.StatusEnding,
+			},
+		},
+		endedSession: voicecall.Session{
+			ID:          testVoiceAPICallID,
+			WorkspaceID: testVoiceAPIWorkspaceID,
+			UserID:      testVoiceAPIUserID,
+			Status:      voicecall.StatusEnded,
+			EndedAt:     &endedAt,
+			EndReason:   "user_hangup",
+		},
+	}
+	handler := &Handler{
+		VoiceCallService: service,
+		DuplexGateway:    &fakeDuplexGateway{configured: true}, // Has empty after restart
+		Bus:              events.New(),
+	}
+	request := voiceCallAPIRequest(
+		http.MethodPost,
+		"/api/workspaces/"+testVoiceAPIWorkspaceID+"/voice-calls/"+testVoiceAPICallID+"/stop",
+		"",
+	)
+	request = withRouteParams(
+		request,
+		"id",
+		testVoiceAPIWorkspaceID,
+		"callId",
+		testVoiceAPICallID,
+	)
+	response := httptest.NewRecorder()
+
+	handler.StopVoiceCall(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if service.endWithoutProviderStopCalls != 1 {
+		t.Fatalf("EndWithoutProviderStop calls = %d, want 1", service.endWithoutProviderStopCalls)
+	}
 }

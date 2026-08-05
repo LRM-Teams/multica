@@ -5,11 +5,14 @@ import {
   buildRuntimeMachines,
   defaultDesktopSelectedMachineId,
   filterRuntimeMachines,
+  filterRuntimesOnBoundComputer,
   headerRuntimeHealthBadge,
   machineDeviceName,
   runtimeComputerLabel,
   runtimeDisplayLabel,
   runtimeMachineCounts,
+  runtimeMachineKey,
+  runtimesShareMachine,
   splitRuntimeName,
 } from "./runtime-machines";
 
@@ -31,7 +34,6 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     update_state: "idle",
     runtime_health: "ok",
     owner_id: "user-1",
-    visibility: "private",
     last_seen_at: new Date(NOW - 10_000).toISOString(),
     created_at: "2026-05-17T11:00:00Z",
     updated_at: "2026-05-17T11:00:00Z",
@@ -411,7 +413,6 @@ describe("runtime machine grouping", () => {
           id: "rt-foreign-local-daemon",
           daemon_id: "desktop-daemon-uuid",
           owner_id: "user-2",
-          visibility: "public",
         }),
         makeRuntime({
           id: "rt-mine",
@@ -535,6 +536,76 @@ describe("runtimeComputerLabel (Frank 2026-08-02)", () => {
         }),
       ),
     ).toBe("Andong's Mac");
+  });
+});
+
+describe("runtimesShareMachine / filterRuntimesOnBoundComputer (LRM-1365)", () => {
+  it("shares only when daemon_id matches (ignores hostname collisions)", () => {
+    const onUbuntu = makeRuntime({
+      id: "rt-ubuntu-kiro",
+      daemon_id: "daemon-ubuntu",
+      name: "Kiro (ubuntu)",
+      provider: "kiro",
+    });
+    const onKiroBox = makeRuntime({
+      id: "rt-kiro-codex",
+      daemon_id: "daemon-kiro",
+      name: "Codex (kiro)",
+      provider: "codex",
+      // Same free-text hostname token must NOT merge machines.
+      device_info: "ubuntu · fake",
+    });
+    expect(runtimesShareMachine(onUbuntu, onKiroBox)).toBe(false);
+    expect(
+      filterRuntimesOnBoundComputer(onUbuntu, [onUbuntu, onKiroBox]).map(
+        (r) => r.id,
+      ),
+    ).toEqual(["rt-ubuntu-kiro"]);
+  });
+
+  it("includes same-daemon peers and always keeps the bound runtime", () => {
+    const cursor = makeRuntime({
+      id: "rt-s144-cursor",
+      daemon_id: "daemon-s144",
+      name: "Cursor (s144)",
+      provider: "cursor",
+    });
+    const pi = makeRuntime({
+      id: "rt-s144-pi",
+      daemon_id: "daemon-s144",
+      name: "Pi (s144)",
+      provider: "pi",
+    });
+    const other = makeRuntime({
+      id: "rt-other",
+      daemon_id: "daemon-other",
+      name: "Cursor (other)",
+      provider: "cursor",
+    });
+    expect(
+      filterRuntimesOnBoundComputer(cursor, [cursor, pi, other]).map((r) => r.id),
+    ).toEqual(["rt-s144-cursor", "rt-s144-pi"]);
+  });
+
+  it("does not group by hostname when daemon_id is missing (BE parity)", () => {
+    const a = makeRuntime({
+      id: "rt-a",
+      daemon_id: null,
+      name: "Cursor (ubuntu)",
+      provider: "cursor",
+    });
+    const b = makeRuntime({
+      id: "rt-b",
+      daemon_id: null,
+      name: "Pi (ubuntu)",
+      provider: "pi",
+    });
+    // Cosmetic runtimeMachineKey would merge these; auth boundary must not.
+    expect(runtimeMachineKey(a)).toBe(runtimeMachineKey(b));
+    expect(runtimesShareMachine(a, b)).toBe(false);
+    expect(filterRuntimesOnBoundComputer(a, [a, b]).map((r) => r.id)).toEqual([
+      "rt-a",
+    ]);
   });
 });
 

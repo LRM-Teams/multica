@@ -40,7 +40,6 @@ import {
   channelMessagesFirstItemIndex,
   flattenChannelMessagePages,
   enrichChannelMessagesPreservingAvatars,
-  evictInactiveChannelMessageCaches,
   useEnsureMessageLoaded,
   channelsOptions,
   archivedChannelsOptions,
@@ -268,6 +267,7 @@ import { buildPinnedConversationEntries } from "./pinned-conversations";
 import { PinnedConversationsSection } from "./pinned-conversations-section";
 import { useSidebarSectionCollapsed } from "../hooks/use-sidebar-section-collapsed";
 import { useJumpNotFoundToast } from "../hooks/use-jump-not-found-toast";
+import { usePrefetchThreadPreviews } from "../hooks/use-prefetch-thread-previews";
 import { AgentPanelProvider } from "../../common/agent-panel-context";
 import { MemberPanelProvider } from "../../common/member-panel-context";
 import { MotionContent } from "../../common/motion-content";
@@ -685,6 +685,25 @@ export function ChannelsPage({
       delete next[targetId];
       return next;
     });
+  }, []);
+  // LRM-1356 — WHICH record has a retry actually in flight, keyed by the same
+  // immutable target id as `pendingVoices`.
+  //
+  // This used to be read straight off `sendMessage.isPending` /
+  // `sendThreadMessage.isPending`, but those are one mutation for the whole
+  // surface and they outlive a channel/thread switch: any send in flight
+  // anywhere on the page dimmed the unsent recording. Since both of its actions
+  // guard on that flag (LRM-1354), it took Delete away too — and a committed
+  // retry or an explicit delete are this record's ONLY two exits, so an
+  // unrelated send left the user unable to resolve it at all. Scope the flag to
+  // the record whose own retry was dispatched.
+  const [retryingVoiceTargetId, setRetryingVoiceTargetId] = useState<string | null>(null);
+  /**
+   * Release the in-flight mark, but only if it is still THIS target's — a send
+   * settling for another surface must not clear someone else's retry.
+   */
+  const settlePendingVoiceRetry = useCallback((targetId: string) => {
+    setRetryingVoiceTargetId((current) => (current === targetId ? null : current));
   }, []);
   // #839 — durable in-row record of a failed removal, keyed by member identity.
   // The toast is the immediate announcement; it is NOT storage — it can be
@@ -1175,11 +1194,6 @@ export function ChannelsPage({
     }),
   );
   const activeChannelId = active?.id ?? "";
-  // LRM-1264: unload other channels' message/thread caches when switching.
-  useEffect(() => {
-    if (!activeChannelId) return;
-    evictInactiveChannelMessageCaches(qc, activeChannelId);
-  }, [activeChannelId, qc]);
   useEffect(() => {
     const target = urlDeepLinkMessage || urlDeepLinkThread;
     if (!target || !activeChannelId) return;
@@ -1197,6 +1211,7 @@ export function ChannelsPage({
     setChannelView("chat");
   }
   const messages = useMemo(() => flattenChannelMessagePages(activeChannelId ? messagePages : undefined), [activeChannelId, messagePages]);
+  usePrefetchThreadPreviews(messages);
   const messagesFirstItemIndex = useMemo(
     () => channelMessagesFirstItemIndex(activeChannelId ? messagePages : undefined, messages.length > 0),
     [activeChannelId, messagePages, messages.length],
@@ -2123,7 +2138,12 @@ export function ChannelsPage({
     });
   };
 
-  const handleStopChannelTask = useCallback(async (task: ChannelActiveTask) => {
+  const handleStopChannelTask = useCallback(async (
+    task: ChannelActiveTask,
+    // LRM-1350: Working-list resolved label (same cascade as live cue). Never
+    // toast raw `task.agent_name` — that may be the Unknown Agent sentinel.
+    displayName: string,
+  ) => {
     if (!active?.id) return;
     // Terminal failed/no_reply rows are dismissed client-side in the live cue
     // (LRM-581) — cancel is only for in-flight wakes.
@@ -2135,11 +2155,16 @@ export function ChannelsPage({
       showErrorToast(t(($) => $.agent_status.stop_failed));
       return;
     }
+    const toastName = displayName.trim();
+    if (!toastName) {
+      showErrorToast(t(($) => $.agent_status.stop_failed));
+      return;
+    }
     setStoppingChannelTaskId(task.task_id);
     try {
       await api.cancelChannelInboxEvent(active.id, inboxEventId);
       toast.success(
-        t(($) => $.agent_status.stop_success, { name: task.agent_name }),
+        t(($) => $.agent_status.stop_success, { name: toastName }),
       );
       qc.invalidateQueries({ queryKey: activeChannelTasksKeys.all(active.id) });
       qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
@@ -2424,8 +2449,13 @@ export function ChannelsPage({
       }),
       mutate: sendMessage.mutate,
       // Only a send that actually committed clears the record.
-      onCommitted: () => forgetPendingVoice(voiceTargetId(channelId)),
+      onCommitted: () => {
+        settlePendingVoiceRetry(voiceTargetId(channelId));
+        forgetPendingVoice(voiceTargetId(channelId));
+      },
       onVisibleError: (kind) => {
+        // The retry (if this was one) has settled — failed, but settled.
+        settlePendingVoiceRetry(voiceTargetId(channelId));
         // EVERY failure kind lands here now. Previously only `conflict` said
         // anything, so a retry/timeout/too-long voice send — the common cases —
         // produced no feedback at all: the recording vanished silently.
@@ -2476,11 +2506,18 @@ export function ChannelsPage({
   // Re-sends to the recording's OWN channel, not whatever is on screen now.
   const retryChannelVoice = () => {
     if (!channelPendingVoiceHere) return;
-    submitChannelVoice(
+    // Mark BEFORE dispatching: the send can settle synchronously (a mocked or
+    // already-cached mutation), and settling before the mark would leave the
+    // record stuck in the in-flight state forever.
+    setRetryingVoiceTargetId(channelPendingVoiceHere.targetId);
+    const dispatched = submitChannelVoice(
       channelPendingVoiceHere.channelId,
       channelPendingVoiceHere.durationMs,
       channelPendingVoiceHere.attachment,
     );
+    // The send lock can refuse the dispatch (held / auto-repeat trigger). No
+    // request means nothing will settle it, so don't leave the mark behind.
+    if (!dispatched) settlePendingVoiceRetry(channelPendingVoiceHere.targetId);
   };
 
   const handleThreadSend = () => {
@@ -2563,8 +2600,12 @@ export function ChannelsPage({
         clientMessageId,
       }),
       mutate: sendThreadMessage.mutate,
-      onCommitted: () => forgetPendingVoice(voiceTargetId(channelId, threadRootId)),
+      onCommitted: () => {
+        settlePendingVoiceRetry(voiceTargetId(channelId, threadRootId));
+        forgetPendingVoice(voiceTargetId(channelId, threadRootId));
+      },
       onVisibleError: (kind) => {
+        settlePendingVoiceRetry(voiceTargetId(channelId, threadRootId));
         // #838 — same gap as the channel path: only `conflict` used to speak,
         // so retry/timeout/too-long failures lost the recording in silence.
         showErrorToast(
@@ -2601,12 +2642,15 @@ export function ChannelsPage({
   // Re-sends to the recording's OWN channel + thread root.
   const retryThreadVoice = () => {
     if (!threadPendingVoiceHere) return;
-    submitThreadVoice(
+    // Same ordering rule as the channel retry (see retryChannelVoice).
+    setRetryingVoiceTargetId(threadPendingVoiceHere.targetId);
+    const dispatched = submitThreadVoice(
       threadPendingVoiceHere.channelId,
       threadPendingVoiceHere.threadRootId ?? "",
       threadPendingVoiceHere.durationMs,
       threadPendingVoiceHere.attachment,
     );
+    if (!dispatched) settlePendingVoiceRetry(threadPendingVoiceHere.targetId);
   };
 
   // #772 restore-previous (conflicted case: composer held new text).
@@ -3557,7 +3601,10 @@ export function ChannelsPage({
                             <button
                               type="button"
                               onClick={() => selectChannel(channel.id)}
-                              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left opacity-60 hover:opacity-100"
+                              data-testid="channel-sidebar-archived-row"
+                              // LRM-1374: archived softening is solid muted title —
+                              // never row opacity-* (alpha multiplies through name).
+                              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 pr-7 text-left"
                             >
                               <div className="min-w-0 flex-1">
                                 <span className="flex min-w-0 items-center gap-1 truncate text-sm font-medium text-muted-foreground">
@@ -3746,7 +3793,10 @@ export function ChannelsPage({
         composerPrefixExtra={
           <ComposerPendingVoice
             pending={threadPendingVoiceHere}
-            retrying={sendThreadMessage.isPending}
+            retrying={
+              threadPendingVoiceHere !== null &&
+              retryingVoiceTargetId === threadPendingVoiceHere.targetId
+            }
             onRetry={retryThreadVoice}
             onDelete={() =>
               threadPendingVoiceHere && forgetPendingVoice(threadPendingVoiceHere.targetId)
@@ -4436,7 +4486,10 @@ export function ChannelsPage({
                         />
                         <ComposerPendingVoice
                           pending={channelPendingVoiceHere}
-                          retrying={sendMessage.isPending}
+                          retrying={
+                            channelPendingVoiceHere !== null &&
+                            retryingVoiceTargetId === channelPendingVoiceHere.targetId
+                          }
                           onRetry={retryChannelVoice}
                           onDelete={() =>
                             channelPendingVoiceHere &&

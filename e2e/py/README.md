@@ -1,7 +1,7 @@
 # Env-Dispatch Issue E2E Test (pytest harness)
 
 On-demand E2E suite proving the full non-training env-dispatch loop: an issue
-is submitted to a squad (agent team), a coding agent completes the fixture
+is submitted to a single agent, a coding agent completes the fixture
 code task inside forked Cube sandboxes across a `scratch -> branch -> resume`
 chain, and this harness independently verifies lineage and acceptance checks
 via the Cube `/execute` endpoint. Agent self-reported results are never
@@ -26,7 +26,7 @@ gitignored and loaded via python-dotenv when installed):
 | `MULTICA_BASE_URL` | multica server base URL |
 | `MULTICA_WORKSPACE_ID` or `MULTICA_WORKSPACE_SLUG` | workspace scoping (query param) |
 | `MULTICA_API_KEY` (or `MULTICA_CREDENTIALS_FILE`) | PAT auth (Bearer); file is JSON `{"api_key": ...}` |
-| `MULTICA_SQUAD_ID` | target squad (agent team) UUID |
+| `MULTICA_AGENT_ID` | target agent UUID (squad product retired) |
 | `MULTICA_BASE_ENV_ID` | fixture base env from `provision_fixture.py` |
 | `CUBE_PROXY_URL` | Cube HTTP proxy for `/execute` |
 

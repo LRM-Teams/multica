@@ -32,7 +32,10 @@ vi.mock("../../common/actor-avatar", () => ({
   ),
 }));
 
-import { MachineListView } from "./runtimes-page";
+import {
+  attentionMachineIdFromRuntime,
+  MachineListView,
+} from "./runtimes-page";
 import {
   defaultDesktopSelectedMachineId,
   isMineMachine,
@@ -59,7 +62,6 @@ function makeMachine(
     update_state: "idle",
     runtime_health: "ok",
     owner_id: ownerId,
-    visibility: ownerId === "user-mine" ? "private" : "public",
     last_seen_at: "2026-08-01T00:00:00Z",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
@@ -129,12 +131,12 @@ describe("MachineListView — ownership grouping", () => {
     ];
     renderList(machines, "user-mine");
     expect(screen.queryByText("Mine")).toBeNull();
-    expect(screen.queryByText(/Team public/)).toBeNull();
+    expect(screen.queryByText(/Team/)).toBeNull();
     expect(screen.getByText("Box A")).toBeInTheDocument();
     expect(screen.getByText("Box B")).toBeInTheDocument();
   });
 
-  it("splits into Mine (expanded, no owner badge) and Team public (collapsed, with owner badge)", () => {
+  it("splits into Mine (expanded, no owner badge) and Team (collapsed, with owner badge)", () => {
     const machines = [
       makeMachine("m1", "My box", "user-mine"),
       makeMachine("m2", "Their box", "user-other"),
@@ -146,11 +148,11 @@ describe("MachineListView — ownership grouping", () => {
     // Mine rows carry no owner avatar.
     expect(within(screen.getByText("My box").closest("div")!.parentElement!).queryByTestId("owner-avatar")).toBeNull();
 
-    // Team public starts collapsed — the row isn't rendered/visible yet.
-    expect(screen.getByText("Team public (1)")).toBeInTheDocument();
+    // Team starts collapsed — the row isn't rendered/visible yet.
+    expect(screen.getByText("Team (1)")).toBeInTheDocument();
     expect(screen.queryByText("Their box")).toBeNull();
 
-    fireEvent.click(screen.getByText("Team public (1)"));
+    fireEvent.click(screen.getByText("Team (1)"));
     expect(screen.getByText("Their box")).toBeInTheDocument();
     expect(screen.getByTestId("owner-avatar")).toHaveTextContent("user-other");
   });
@@ -193,7 +195,7 @@ describe("defaultDesktopSelectedMachineId — LRM-1094", () => {
     expect(defaultDesktopSelectedMachineId(machines, "user-mine")).toBe("mine-b");
   });
 
-  it("falls back to the first Mine machine, never Team public machines[0]", () => {
+  it("falls back to the first Mine machine, never Team machines[0]", () => {
     const machines = [
       makeMachine("team", "Team box", "user-other"),
       makeMachine("mine-a", "Mine A", "user-mine"),
@@ -202,9 +204,39 @@ describe("defaultDesktopSelectedMachineId — LRM-1094", () => {
     expect(defaultDesktopSelectedMachineId(machines, "user-mine")).toBe("mine-a");
   });
 
-  it("returns null when there is no Mine machine (no Team public fallback)", () => {
+  it("returns null when there is no Mine machine (no Team fallback)", () => {
     const machines = [makeMachine("team", "Team box", "user-other")];
     expect(defaultDesktopSelectedMachineId(machines, "user-mine")).toBeNull();
+  });
+});
+
+describe("attentionMachineIdFromRuntime — LRM-1396", () => {
+  it("selects the current user's attention machine", () => {
+    const mine = makeMachine("mine", "Mine", "user-mine");
+    mine.runtimes[0]!.runtime_health = "update_available";
+    mine.runtimes[0]!.target_version = "1.1.0";
+
+    expect(
+      attentionMachineIdFromRuntime(
+        [mine],
+        mine.runtimes[0]!.id,
+        "user-mine",
+      ),
+    ).toBe("mine");
+  });
+
+  it("rejects another owner's runtime even when its update is visible", () => {
+    const theirs = makeMachine("theirs", "Theirs", "user-other");
+    theirs.runtimes[0]!.runtime_health = "update_available";
+    theirs.runtimes[0]!.target_version = "1.1.0";
+
+    expect(
+      attentionMachineIdFromRuntime(
+        [theirs],
+        theirs.runtimes[0]!.id,
+        "user-mine",
+      ),
+    ).toBeNull();
   });
 });
 
@@ -232,7 +264,7 @@ describe("MachineListView — row select hit-target (LRM-923 / #23)", () => {
       makeMachine("m2", "Their box", "user-other"),
     ];
     renderList(machines, "user-mine");
-    fireEvent.click(screen.getByText("Team public (1)"));
+    fireEvent.click(screen.getByText("Team (1)"));
 
     const avatarBadge = screen.getByTestId("owner-avatar").parentElement!;
     expect(avatarBadge.className).toContain("pointer-events-auto");

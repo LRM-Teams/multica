@@ -202,6 +202,15 @@
       "error": "오류"
     },
     "module_sources_desc": "근거가 어디서 왔는지 · 누가 무엇을 하는지 · 준비됐는지",
+    "execution": {
+      "title": "실행 현황",
+      "locatable": "{{location}} 위치로 이동 가능",
+      "locate": "{{location}} 위치로 이동",
+      "unavailable": "이동할 수 있는 노드가 없습니다",
+      "load_failed": "실행 상태를 불러오지 못했습니다",
+      "retry": "다시 시도",
+      "empty": "실행 중인 멤버가 없습니다"
+    },
     "aux_close_sources": "조사 근거와 협업 분담 닫기"
   },
   "chat": {
@@ -288,6 +297,8 @@
     "doing": "진행 중",
     "summary_empty": "No summary yet.",
     "dead_end_reason": "Dead-end reason",
+    "abandon_reason": "폐기 이유",
+    "abandon_reason_pending": "이유 동기화 대기",
     "retry_cta": "재시도 / 경로 변경",
     "evidence": "Evidence / sources",
     "evidence_empty": "No linked sources.",

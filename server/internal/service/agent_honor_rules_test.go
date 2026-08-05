@@ -35,6 +35,34 @@ func TestAgentHonorLevelBoundaries(t *testing.T) {
 	}
 }
 
+func TestAgentHonorLevelTransition(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		previousLevel int
+		totalXP       int64
+		wantLevel     int
+		wantChanged   bool
+	}{
+		{name: "promotion", previousLevel: 1, totalXP: 25, wantLevel: 2, wantChanged: true},
+		{name: "unchanged", previousLevel: 2, totalXP: 99, wantLevel: 2, wantChanged: false},
+		{name: "demotion after negative grant", previousLevel: 3, totalXP: 99, wantLevel: 2, wantChanged: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			level, changed := agentHonorLevelTransition(test.previousLevel, test.totalXP)
+			if level != test.wantLevel {
+				t.Fatalf("level = %d, want %d", level, test.wantLevel)
+			}
+			if changed != test.wantChanged {
+				t.Fatalf("changed = %v, want %v", changed, test.wantChanged)
+			}
+		})
+	}
+}
+
 func TestDefaultAgentHonorRulesPublishCompleteCatalog(t *testing.T) {
 	t.Parallel()
 

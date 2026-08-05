@@ -101,38 +101,49 @@ const MESSAGE_COLLAPSE_OVERFLOW_EPSILON_PX = 2;
  * LRM-1227 — bubble shell, frozen in LRM-1233 as density ① + granularity G.
  *
  * Surface matches the conversation pane (`bg-background`) — Frank 2026-08-04
- * kicked back D1 `bg-muted` (#f6f6f4 grey slab). Edged by a 1px `--line`.
- * Hover / `focus-within` strengthens the edge instead of a row wash
- * (`--line` → `--line-strong`).
+ * kicked back D1 `bg-muted` (#f6f6f4 grey slab).
+ *
+ * LRM-1346 (Frank lock ①, 2026-08-04): the shell carries **no visible edge** —
+ * the 1px `--line` frame and its hover / `focus-within` `--line-strong`
+ * strengthening are gone, together with the per-segment group outline (see
+ * below). A border cannot be "strengthened" once it does not exist, so the
+ * fine-pointer hover affordance is the action bar alone. The floating action
+ * bar keeps its own `border` / `bg-popover` / `shadow-sm`, and deep-link
+ * `highlighted` keeps its `ring` — neither is a bubble edge.
  *
  * Density ① is "keep the live rhythm": the shell adds no vertical padding, only
  * the 4px horizontal inset the frozen 660px body width accounts for.
  */
-const MESSAGE_SHELL_CLASS =
-  "px-1 border-line transition-colors group-hover:border-line-strong group-focus-within:border-line-strong";
+const MESSAGE_SHELL_CLASS = "px-1";
 
 /**
  * LRM-1331 — hover action bar + geometry reserves only on fine pointer AND
  * ≥640px. Narrow fine windows fall back to the coarse long-press / context
  * menu path (360px + 162px reserve left ~9 CJK chars — not worth it).
+ *
+ * LRM-1360: the gate MUST be written as a literal class on every candidate —
+ * `[@media(pointer:fine)_and_(min-width:640px)]:…`. Tailwind v4 extracts
+ * candidates by statically scanning source text, so a template-interpolated
+ * variant (gate constant + ":group-hover:opacity-100") yields no CSS at all and
+ * the bar stays `opacity-0 pointer-events-none` forever — that is exactly how the
+ * thread entry became invisible on desktop. `className` unit assertions cannot
+ * catch it (the class string is still on the node); the guard test
+ * `channel-message-bubble-static-gate.test.ts` does.
  */
-const FINE_DESKTOP_MQ = "[@media(pointer:fine)_and_(min-width:640px)]";
 
 /**
- * Joined-shell segment for granularity G. Every message is its own virtual row
- * (`channel-message-list`, Virtuoso), so there is no DOM node wrapping a group —
- * the single bubble is drawn as three segments instead.
+ * LRM-1227/G drew a joined group as three bordered segments (head `border-x
+ * border-t` + `rounded-t-lg`, middle `border-x`, tail `border-x border-b` +
+ * `rounded-b-lg`), because every message is its own virtual row
+ * (`channel-message-list`, Virtuoso) and no DOM node wraps a group.
  *
- * Per-side widths only (`border-x` / `border-t` / `border-b`): `border` plus
- * `border-b-0` would need Tailwind's emitted order to win, whereas disjoint
- * side utilities cannot collide.
+ * LRM-1346 removed all three segments' visible edges (Frank lock ①), so there
+ * is no per-segment class left to compute — grouping now shows up only in the
+ * `data-group-start` / `data-group-end` attributes and in the LRM-1331 row
+ * geometry (author-row reserve vs. continuation float). The corner radii went
+ * with the borders: with the shell painted in the pane's own `bg-background`
+ * they rounded nothing visible.
  */
-function messageShellEdgeClass(groupStart: boolean, groupEnd: boolean) {
-  if (groupStart && groupEnd) return "rounded-lg border-x border-y";
-  if (groupStart) return "rounded-t-lg border-x border-t";
-  if (groupEnd) return "rounded-b-lg border-x border-b";
-  return "border-x";
-}
 
 function isInteractiveMessageTarget(target: EventTarget | null) {
   if (!(target instanceof Element)) return false;
@@ -847,8 +858,11 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
       className={cn(
         // LRM-495: no permanent mobile ⋯ column — coarse pointers open actions
         // via long-press / left-swipe; fine pointers keep the hover action bar.
-        // LRM-1227: the row no longer washes on hover — the bubble shell below
-        // owns that signal (see MESSAGE_SHELL_CLASS).
+        // LRM-1227 moved the hover signal off the row onto the shell edge;
+        // LRM-1346 then deleted that edge (lock ①), so on fine pointers the
+        // hover affordance is the floating action bar — the row still must not
+        // reintroduce a wash. Selected / highlighted / self-mention states below
+        // keep their own backgrounds.
         "group relative grid grid-cols-[28px_minmax(0,1fr)] gap-2.5 rounded-lg px-2 outline-none transition-colors duration-1000",
         // Tighten lead-row vertical rhythm one notch (py-1.5 → py-1); keep
         // avatar / name / time alignment. Compact continuations stay tighter.
@@ -895,8 +909,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
           10–47% of body width and still failed to clear the 154px bar). Reserves
           move to the author row / continuation float / leading-card inset below.
           LRM-1227/G: this element is also the bubble shell — see
-          MESSAGE_SHELL_CLASS / messageShellEdgeClass. Border geometry is out of
-          this issue's scope (描边 FE is a separate knife). */}
+          MESSAGE_SHELL_CLASS. LRM-1346 took its visible border away (lock ①);
+          the group segments survive only as data attributes. */}
       <div
         data-testid="message-shell"
         data-group-start={groupStart ? "true" : undefined}
@@ -904,7 +918,6 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
         className={cn(
           "min-w-0 max-w-full",
           MESSAGE_SHELL_CLASS,
-          messageShellEdgeClass(groupStart, groupEnd),
           // Same token as the message pane — no muted grey slab (LRM-1227 kickback).
           shellFilled && "bg-background",
         )}
@@ -915,7 +928,8 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
             className={cn(
               "mb-0.5 flex min-w-0 select-none items-center gap-1.5 text-[13.5px]",
               // LRM-1331 §2: reserve only on the author line (162 = 154 bar + 8).
-              `${FINE_DESKTOP_MQ}:pr-[162px]`,
+              // LRM-1360: literal gate class — see the note on the gate above.
+              "[@media(pointer:fine)_and_(min-width:640px)]:pr-[162px]",
             )}
           >
             {profileActorType && profileActorId ? (
@@ -963,12 +977,15 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               // text. Overlay — not a document-flow gutter (LRM-1331).
               // LRM-1227/D2 chrome kept; bar measured ~154×34 with 5 keys.
               // LRM-1331: gate on fine+≥640 — narrow fine uses long-press menu.
+              // LRM-1360: literal gate classes — interpolated variants produce no
+              // CSS, which left the bar (and the thread entry) permanently
+              // `opacity-0 pointer-events-none` on desktop.
               "pointer-events-none absolute right-2 z-10 hidden items-center gap-0.5 rounded-lg border border-line-strong bg-popover p-0.5 text-muted-foreground opacity-0 shadow-sm transition-opacity",
-              `${FINE_DESKTOP_MQ}:flex`,
-              `${FINE_DESKTOP_MQ}:group-hover:pointer-events-auto`,
-              `${FINE_DESKTOP_MQ}:group-hover:opacity-100`,
-              `${FINE_DESKTOP_MQ}:group-focus-within:pointer-events-auto`,
-              `${FINE_DESKTOP_MQ}:group-focus-within:opacity-100`,
+              "[@media(pointer:fine)_and_(min-width:640px)]:flex",
+              "[@media(pointer:fine)_and_(min-width:640px)]:group-hover:pointer-events-auto",
+              "[@media(pointer:fine)_and_(min-width:640px)]:group-hover:opacity-100",
+              "[@media(pointer:fine)_and_(min-width:640px)]:group-focus-within:pointer-events-auto",
+              "[@media(pointer:fine)_and_(min-width:640px)]:group-focus-within:opacity-100",
               // Lead row: ride the shell's top edge (bar mid-line == shell top
               // line). D2 froze `top-0 -translate-y-1/2` measured from the shell;
               // the bar is positioned against the row, whose `py-1` offsets the
@@ -1058,7 +1075,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
               // its own inset (§4); block boxes slide under floats.
               compact &&
                 !(message.quote || message.quote_message_id) &&
-                `${FINE_DESKTOP_MQ}:before:float-right ${FINE_DESKTOP_MQ}:before:h-[36px] ${FINE_DESKTOP_MQ}:before:w-[158px] ${FINE_DESKTOP_MQ}:before:content-['']`,
+                "[@media(pointer:fine)_and_(min-width:640px)]:before:float-right [@media(pointer:fine)_and_(min-width:640px)]:before:h-[36px] [@media(pointer:fine)_and_(min-width:640px)]:before:w-[158px] [@media(pointer:fine)_and_(min-width:640px)]:before:content-['']",
             )}
             data-testid="message-body"
             data-collapsed={isContentCollapsed ? "true" : undefined}
@@ -1074,7 +1091,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 // LRM-1331 §4: leading card inset on compact rows (bar overlays body).
                 className={
                   compact
-                    ? `${FINE_DESKTOP_MQ}:pr-[158px]`
+                    ? "[@media(pointer:fine)_and_(min-width:640px)]:pr-[158px]"
                     : undefined
                 }
               />

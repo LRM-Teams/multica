@@ -292,6 +292,7 @@ const (
 	DaemonCapabilityAgentCLITransport        = "agent_cli_transport"
 	DaemonCapabilityAgentCredentialTransport = "agent_credential_transport_v1"
 	DaemonCapabilityMemoryCuration           = "memory_curation_v1"
+	DaemonCapabilityMemoryCrossDeviceSync    = "memory_cross_device_sync_v2"
 	DaemonCapabilityRestrictedExecution      = "restricted_execution_profiles_v1"
 	DaemonCapabilityReminderVersionedCache   = "reminder_versioned_cache_v1"
 	// DaemonCapabilityAgentLifecycleActions gates the restart/reset-session/

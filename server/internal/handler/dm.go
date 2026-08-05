@@ -767,9 +767,9 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 		       a.avatar_url AS peer_avatar,
 		       a.archived_at AS peer_archived_at,
 		       lm.author_type, lm.author_name, lm.content, lm.parts, lm.created_at,
-		       COALESCE(uc.cnt, 0) AS real_unread,
+		       COALESCE(vcm.main_unread_count, 0)::int AS real_unread,
 		       state.pinned_at, state.manual_unread_at, COALESCE(vcm.muted_at, state.muted_at),
-		       COALESCE(hm.has_mention, false),
+		       (COALESCE(vcm.mention_unread_count, 0) > 0) AS has_mention,
 		       NULLIF(COALESCE(vcm.last_read_seq, cr.last_read_seq, 0), 0)::bigint,
 		       cs.runtime_token_stats
 		FROM channel ch
@@ -796,25 +796,6 @@ func (h *Handler) listDMChannels(ctx context.Context, workspaceID, userID string
 			ORDER BY m.seq DESC LIMIT 1
 		) lm ON true
 		LEFT JOIN channel_read cr ON cr.channel_id = ch.id AND cr.user_id = $2
-		LEFT JOIN LATERAL (
-			SELECT count(*) AS cnt FROM channel_message m
-			WHERE m.channel_id = ch.id
-			  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
-			  AND NOT (m.author_type = 'user' AND m.author_id = $2)
-			  AND m.thread_root_message_id IS NULL
-		) uc ON true
-		LEFT JOIN LATERAL (
-			SELECT EXISTS (
-				SELECT 1 FROM channel_message m
-				WHERE m.channel_id = ch.id
-				  AND m.seq > COALESCE(vcm.last_read_seq, cr.last_read_seq, 0)
-				  AND NOT (m.author_type = 'user' AND m.author_id = $2)
-				  AND m.deleted_at IS NULL
-				  AND (m.content ILIKE '%@' || (
-				    SELECT name FROM "user" WHERE id = $2
-				  ) || '%' OR m.parts::text ILIKE '%mention://' || $2::text || '%')
-			) AS has_mention
-		) hm ON true
 		LEFT JOIN dm_peer_state state
 		  ON state.workspace_id = ch.workspace_id
 		 AND state.user_id = $2
@@ -968,11 +949,9 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 		lastReadSeq                                          *int64
 		hasMention                                           bool
 	}
-	// Scan every row into memory and close the cursor BEFORE calling
-	// agentDMParticipants: that helper acquires its own pool connection, and
-	// doing so while this cursor is still open can deadlock a bounded pool
-	// under concurrent requests (same shape as the #1803 attachAgentRuntimeNames
-	// bug).
+	// Scan every row into memory and close the cursor before issuing the
+	// participant query. This keeps bounded connection pools safe while also
+	// avoiding one participant query for every visible supervised DM.
 	var scanned []supervisedDMRow
 	for rows.Next() {
 		var row supervisedDMRow
@@ -988,9 +967,15 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 	}
 	rows.Close()
 
+	channelIDs := make([]pgtype.UUID, 0, len(scanned))
+	for _, row := range scanned {
+		channelIDs = append(channelIDs, row.channelID)
+	}
+	participantsByChannel := h.agentDMParticipantsForChannels(ctx, parseUUID(workspaceID), channelIDs)
+
 	out := []DMItem{}
 	for _, row := range scanned {
-		participants := h.agentDMParticipants(ctx, parseUUID(workspaceID), row.channelID)
+		participants := participantsByChannel[uuidToString(row.channelID)]
 		if len(participants) != 2 {
 			continue
 		}
@@ -1024,9 +1009,15 @@ func (h *Handler) listSupervisedAgentDMChannels(ctx context.Context, workspaceID
 	return out
 }
 
-func (h *Handler) agentDMParticipants(ctx context.Context, workspaceID, channelID pgtype.UUID) []DMPeer {
+func (h *Handler) agentDMParticipantsForChannels(ctx context.Context, workspaceID pgtype.UUID, channelIDs []pgtype.UUID) map[string][]DMPeer {
+	participantsByChannel := make(map[string][]DMPeer, len(channelIDs))
+	if len(channelIDs) == 0 {
+		return participantsByChannel
+	}
+
 	rows, err := h.DB.Query(ctx, `
-		SELECT agent.id,
+		SELECT member.channel_id,
+		       agent.id,
 		       COALESCE(NULLIF(agent.display_name, ''), agent.name),
 		       agent.avatar_url
 		FROM channel_member member
@@ -1034,29 +1025,31 @@ func (h *Handler) agentDMParticipants(ctx context.Context, workspaceID, channelI
 		  ON agent.id = member.member_id
 		 AND agent.workspace_id = member.workspace_id
 		WHERE member.workspace_id = $1
-		  AND member.channel_id = $2
+		  AND member.channel_id = ANY($2::uuid[])
 		  AND member.member_type = 'agent'
-		ORDER BY agent.id::text`,
-		workspaceID, channelID)
+		ORDER BY member.channel_id, agent.id::text`,
+		workspaceID, channelIDs)
 	if err != nil {
-		return nil
+		return participantsByChannel
 	}
 	defer rows.Close()
-	participants := []DMPeer{}
+
 	for rows.Next() {
-		var id pgtype.UUID
+		var channelID, agentID pgtype.UUID
 		var name string
 		var avatarURL pgtype.Text
-		if rows.Scan(&id, &name, &avatarURL) == nil {
-			participants = append(participants, DMPeer{
-				Type:      "agent",
-				ID:        uuidToString(id),
-				Name:      name,
-				AvatarURL: textToPtr(avatarURL),
-			})
+		if rows.Scan(&channelID, &agentID, &name, &avatarURL) != nil {
+			continue
 		}
+		key := uuidToString(channelID)
+		participantsByChannel[key] = append(participantsByChannel[key], DMPeer{
+			Type:      "agent",
+			ID:        uuidToString(agentID),
+			Name:      name,
+			AvatarURL: textToPtr(avatarURL),
+		})
 	}
-	return participants
+	return participantsByChannel
 }
 
 // dispatchDMAgentReply dispatches a 1-on-1 DM's user message to the channel's

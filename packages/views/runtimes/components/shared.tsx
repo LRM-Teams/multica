@@ -36,7 +36,7 @@ const HEALTH_VISUAL: Record<
 > = {
   online: {
     dot: "bg-success",
-    tone: "bg-success/10 text-success",
+    tone: "bg-success/10 text-success-strong",
     text: "text-success",
   },
   recently_lost: {
@@ -265,7 +265,7 @@ const RUNTIME_HEALTH_STATE_VISUAL: Record<
   RuntimeHealthPresentation,
   { dot: string; text: string; tone: string }
 > = {
-  ok: { dot: "bg-success", text: "text-success", tone: "bg-success/10 text-success" },
+  ok: { dot: "bg-success", text: "text-success-strong", tone: "bg-success/10 text-success-strong" },
   update_available: { dot: "bg-warning", text: "text-warning", tone: "bg-warning/10 text-warning" },
   // Staged: downloaded, applies when idle — brand tone like "updating", since the
   // work is effectively done and just waiting, not a pending user action.

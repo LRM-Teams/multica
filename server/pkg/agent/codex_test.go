@@ -2216,3 +2216,38 @@ func TestHasManagedCodexMcpConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexExecuteAllowsInitialProgressAfterFormerFirstTurnWatchdog(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	fakePath := writeFakeCodexAppServer(t, ""+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":1,"result":{}}'`+"\n"+
+		`read line`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thr-delayed"}}}'`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":3,"result":{}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thr-delayed","turn":{"id":"turn-delayed"}}}'`+"\n"+
+		`sleep 0.45`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-delayed","item":{"type":"agentMessage","id":"msg-delayed","text":"delayed but healthy"}}}'`+"\n"+
+		`sleep 0.02`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-delayed","turn":{"id":"turn-delayed","status":"completed"}}}'`+"\n")
+
+	// The former first-turn watchdog used 80% of short test budgets (400ms
+	// here, and a hard 30s cap in production), so this healthy 450ms first
+	// event deterministically reproduced the false timeout.
+	result := executeFakeCodex(t, fakePath, ExecOptions{
+		Timeout:                   5 * time.Second,
+		SemanticInactivityTimeout: 500 * time.Millisecond,
+	})
+	if result.Status != "completed" {
+		t.Fatalf("expected completed delayed turn, got status=%q error=%q", result.Status, result.Error)
+	}
+	if result.Output != "delayed but healthy" {
+		t.Fatalf("expected delayed output, got %q", result.Output)
+	}
+}

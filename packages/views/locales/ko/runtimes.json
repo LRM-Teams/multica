@@ -38,7 +38,7 @@
     "section_remote": "원격",
     "section_cloud": "클라우드",
     "section_mine": "내 머신",
-    "section_team_public_other": "팀 공개 ({{count}})",
+    "section_team_other": "팀 ({{count}})",
     "this_machine": "이 Mac",
     "local_badge": "로컬 · 이 기기",
     "runtime_count_one": "런타임 {{count}}개",
@@ -186,15 +186,6 @@
       "restart": "재시작",
       "more_empty": "추가 작업 없음"
     },
-    "sharing": {
-      "section": "공유 설정",
-      "owner_only": "소유자만",
-      "switch_locked": "변경 불가",
-      "switch_to": {
-        "public": "공개로 전환",
-        "private": "비공개로 전환"
-      }
-    },
     "danger_zone": {
       "title": "위험 구역",
       "description": "이 컴퓨터와 런타임을 워크스페이스에서 영구 삭제합니다."
@@ -241,16 +232,6 @@
   },
   "detail": {
     "no_agents": "아직 이 런타임에 연결된 에이전트가 없습니다.",
-    "visibility_label": {
-      "private": "비공개",
-      "public": "공개"
-    },
-    "visibility_hint": {
-      "private": "본인과 워크스페이스 관리자만 이 런타임에 에이전트를 만들 수 있습니다.",
-      "public": "워크스페이스 멤버라면 누구나 이 런타임에 에이전트를 만들 수 있습니다."
-    },
-    "visibility_toast_updated": "공개 범위를 {{visibility}}(으)로 설정했습니다",
-    "visibility_toast_failed": "공개 범위를 업데이트하지 못했습니다",
     "delete_dialog": {
       "final": {
         "title": "런타임을 삭제할까요?",

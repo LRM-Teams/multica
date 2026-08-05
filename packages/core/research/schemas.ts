@@ -90,6 +90,20 @@ export const ResearchPresenceResponseSchema = z
   })
   .passthrough();
 
+export const ResearchNodeCommandResponseSchema = z.object({
+  command_id: z.string(),
+  action: z.enum(["continue", "fork", "retry", "reassign"]),
+  client_request_id: z.string(),
+  replayed: z.boolean().optional().default(false),
+  state_version: z.number(),
+  queued: z.boolean().optional().default(false),
+  assigned: z.string().nullable().optional(),
+}).passthrough();
+
+export const EMPTY_RESEARCH_NODE_COMMAND: import("../types/research").ResearchNodeCommandResponse = {
+  command_id: "", action: "continue", client_request_id: "", replayed: false, state_version: 0, queued: false,
+};
+
 export const ResearchProductRoundCardSchema = z
   .object({
     id: z.string(),

@@ -35,14 +35,6 @@ export type AgentRuntimeDisplayStatus =
   | "crashed"
   | "blocked";
 
-// Runtime visibility is a separate axis from agent visibility — different
-// vocabulary because it gates a different action. "private" (default) means
-// only the runtime owner and workspace admins can bind agents to it;
-// "public" opens binding to any workspace member. Older backends that
-// haven't shipped MUL-2062 omit the field; the consumer must default to
-// "private" so the strictest behavior is the fallback.
-export type RuntimeVisibility = "private" | "public";
-
 export type DaemonUpdateConfigSource =
   | "official_host_default"
   | "self_host_default"
@@ -150,8 +142,6 @@ export interface RuntimeDevice {
   /** Daemon-resolved update truth. Null/absent means an older daemon. */
   auto_update?: DaemonUpdateStatus | null;
   owner_id: string | null;
-  /** Defaults to "private" when the backend predates the visibility flag. */
-  visibility: RuntimeVisibility;
   /**
    * Task #81 — non-null when the daemon's `MULTICA_PINNED_VERSION` reported
    * this machine as pinned. This only reflects the daemon's local intent —
@@ -418,8 +408,8 @@ export interface Agent {
   runtime_name?: string | null;
   /**
    * Presence-safe projection of the bound runtime's connectivity. Always
-   * attached when the runtime row exists — even if ListVisibleAgentRuntimes
-   * hides private runtime *details* from this viewer (LRM-248 AC5).
+   * attached when the runtime row exists, so temporary runtime-list gaps do
+   * not erase the agent's last known reachability (LRM-248 AC5).
    */
   runtime_status?: "online" | "offline" | null;
   /** ISO heartbeat from the bound runtime; pairs with `runtime_status`. */

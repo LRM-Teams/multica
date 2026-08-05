@@ -20,8 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
-	"github.com/multica-ai/multica/server/internal/middleware"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -47,8 +47,7 @@ type AgentResponse struct {
 	RuntimeMode  string  `json:"runtime_mode"`
 	RuntimeName  string  `json:"runtime_name"`
 	// Presence-safe projection of the bound runtime. Always filled when the
-	// runtime row exists — even if ListVisibleAgentRuntimes would hide the
-	// private runtime details from this viewer (LRM-248 AC5).
+	// runtime row exists. Runtime tenancy remains workspace-scoped (LRM-248 AC5).
 	RuntimeStatus     string  `json:"runtime_status,omitempty"`
 	RuntimeLastSeenAt *string `json:"runtime_last_seen_at,omitempty"`
 	// RuntimeDisplayStatus is the honest, read-time status for this surface
@@ -1067,12 +1066,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	member, ok := h.workspaceMember(w, r, workspaceID)
-	if !ok {
-		return
-	}
-	if !canUseRuntimeForAgent(member, runtime) {
-		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
 		return
 	}
 
@@ -1605,15 +1599,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid runtime_id")
 			return
 		}
-		// Same gate as CreateAgent — prevents UpdateAgent from being used to
-		// re-bind an agent onto someone else's private runtime, which would
-		// otherwise be a quiet end-run around the CreateAgent check.
-		member, ok := h.workspaceMember(w, r, uuidToString(existing.WorkspaceID))
-		if !ok {
-			return
-		}
-		if !canUseRuntimeForAgent(member, runtime) {
-			writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can move agents onto it")
+		if _, ok := h.workspaceMember(w, r, uuidToString(existing.WorkspaceID)); !ok {
 			return
 		}
 		if runtime.ID != existing.RuntimeID {

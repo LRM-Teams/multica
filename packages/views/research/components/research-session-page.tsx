@@ -26,6 +26,7 @@ import type {
   ResearchProductRoundCard,
 } from "@multica/core/types";
 import { memberListOptions } from "@multica/core/workspace/queries";
+import { createSafeId } from "@multica/core/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
@@ -70,6 +71,7 @@ import {
   resolveEvidenceOverviewMode,
 } from "../lib/m2-visibility";
 import { isResearchSessionStoppable } from "../lib/research-stream";
+import { buildRunV2CanvasViewModel } from "../lib/run-v2-canvas-view-model";
 import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
@@ -188,7 +190,10 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
   const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
   // LRM-1061 — one aux drawer at a time (trajectory | sources | detail).
-  const [auxPanel, setAuxPanel] = useState<ResearchAuxPanelId | null>(null);
+  const linkedPanel = nav.searchParams.get("panel");
+  const [auxPanel, setAuxPanel] = useState<ResearchAuxPanelId | null>(
+    linkedPanel === "trajectory" || linkedPanel === "sources" || linkedPanel === "detail" ? linkedPanel : null,
+  );
   // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
   const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
   const completionDismissed =
@@ -314,6 +319,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   );
 
   // LRM-824 — anchor targets (hooks must stay above the early returns below).
+  const runCanvas = useMemo(
+    () => buildRunV2CanvasViewModel(data?.nodes ?? [], data?.run, data?.fleet.members ?? []),
+    [data?.nodes, data?.run, data?.fleet.members],
+  );
+
   const stageFirstMessageId = useMemo(
     () => buildStageMessageAnchors(data?.messages ?? []),
     [data?.messages],
@@ -450,9 +460,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { session, messages, report, sources } = data;
   const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
   const fleet = { ...data.fleet, members: fleetMembers };
+  const linkedNodeId = nav.searchParams.get("node");
   const selectedNode = ui.selected
     ? data.nodes.find((node) => node.id === ui.selected?.id) ?? ui.selected
-    : null;
+    : linkedNodeId
+      ? data.nodes.find((node) => node.id === linkedNodeId) ?? null
+      : null;
   const executionAgents = buildResearchExecutionAgents(fleet.members, presence, data.nodes);
   const locateExecutionAgent = (agent: (typeof executionAgents)[number]) => {
     const node = agent.currentNodeId
@@ -475,7 +488,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const evidenceRevision = evidenceRevisionKey(sourceStrategy, humanBoundary);
   const hideEvidenceCards =
     evidenceOverview === "error" || evidenceOverview === "permission";
-  const canvasMode = resolveCanvasBodyMode(data.nodes.length, session.status);
+  const canvasMode = resolveCanvasBodyMode({
+    nodes: data.nodes,
+    edges: data.edges,
+    sessionStatus: session.status,
+  });
   const canConfirm = session.status === "awaiting_user_confirm" || session.status === "running";
   const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
   const canStop = isResearchSessionStoppable(session.status);
@@ -632,11 +649,13 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           data-testid="research-session-canvas-host"
         >
           <ResearchCanvas
-            nodes={data.nodes}
+            nodes={runCanvas.nodes}
             edges={data.edges}
             sources={sources}
             members={fleet.members}
             run={data.run}
+            runBlockers={runCanvas.blockers}
+            runDegraded={runCanvas.degraded}
             sessionStatus={session.status}
             presence={presence}
             selectedId={selectedNode?.id}
@@ -654,18 +673,14 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
               dispatch({ type: "select", node });
               setAuxPanel("detail");
             }}
-            onRetry={(node) => {
-              // LRM-848 entry → LRM-828 retry path. Until a dedicated BE API lands,
-              // ask the fleet lead to re-explore from this dead_end via chat.
-              const body = t(($) => $.ring.retry_message, {
-                title: node.title || node.node_type,
-                id: node.id,
+            onNodeCommand={async (node, action) => {
+              await api.postResearchNodeCommand(sessionId, node.id, {
+                action,
+                client_request_id: createSafeId(),
               });
-              void api
-                .postResearchMessage(sessionId, { body })
-                .then(() =>
-                  qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
-                );
+              await qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+              dispatch({ type: "select", node });
+              toast.success(t(($) => $.ring.success));
             }}
           />
           <div className="pointer-events-none absolute right-3 top-3 z-20 w-[min(22rem,calc(100%-1.5rem))]">
@@ -678,7 +693,15 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
               onLocate={locateExecutionAgent}
             />
           </div>
-          {canvasMode === "forming" ? <ResearchCanvasForming /> : null}
+          {canvasMode === "forming" || canvasMode === "stalled" ? (
+            <ResearchCanvasForming
+              mode={canvasMode}
+              stage={session.current_stage}
+              members={fleet.members}
+              tasks={data.run?.tasks ?? []}
+              messages={messages}
+            />
+          ) : null}
           {canvasMode === "empty" ? <ResearchCanvasEmptyState /> : null}
 
           <ResearchAuxDrawer

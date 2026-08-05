@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useState } from "react";
 import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
 import { MoreHorizontal } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
@@ -18,7 +18,8 @@ import { nodeIsVisuallyBusy } from "../lib/node-visuals";
 import { useAgentActivityProjection } from "../../agents/use-agent-live-status";
 import { isCompactActivityLabel } from "../../channels/components/is-compact-activity-label";
 import { useT } from "../../i18n/use-t";
-import { ResearchCardMenu } from "./research-card-menu";
+import { ResearchNodeActionRing } from "./research-node-action-ring";
+import type { NodeRingAction } from "../lib/node-action-ring";
 import { ResearchNodeContentFaces } from "./research-node-content-faces";
 
 export type ResearchFlowNode = Node<ResearchFlowNodeData, "research">;
@@ -32,10 +33,20 @@ function formatPhaseTime(iso: string | undefined): string {
   return `${mm}-${dd}`;
 }
 
+ type ExecutionSummary = { agent?: string | null; status?: string | null; duration?: string | null; failure?: string | null };
+
+function executionSummary(payload: unknown): ExecutionSummary | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const execution = (payload as { execution?: unknown }).execution;
+  if (!execution || typeof execution !== "object" || Array.isArray(execution)) return null;
+  return execution as ExecutionSummary;
+}
+
 function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNode>) {
   const { t } = useT("research");
   const wsId = useWorkspaceId();
   const n = data.research;
+  const [commandState, setCommandState] = useState<{ pending: NodeRingAction | null; error: string | null }>({ pending: null, error: null });
   const actorId = n?.actor_agent_id ?? undefined;
   const projection = useAgentActivityProjection(wsId, actorId);
   if (!n) return null;
@@ -68,6 +79,7 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
       : null;
   const phaseLabel: string = payloadPhase || t(($) => $.logic.lane[laneId]);
   const updated = formatPhaseTime(n.updated_at);
+  const execution = executionSummary(n.payload);
 
   const title =
     logicRole === "end" ? t(($) => $.logic.end_title) : n.title || t(($) => $.logic.lane[laneId]);
@@ -81,6 +93,25 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
 
   const menuOpen = !!data.menuOpen;
   const abandoned = isAbandonedStatus(n.status);
+  const runAction = (action: NodeRingAction) => {
+    if (action === "detail" || action === "locate_source") {
+      data.onViewDetail?.(n);
+      data.onMenuOpenChange?.(false);
+      return;
+    }
+    if (action === "copy_prompt") {
+      void navigator.clipboard?.writeText(n.summary || n.title);
+      data.onMenuOpenChange?.(false);
+      return;
+    }
+    if (action === "reassign" && !window.confirm(t(($) => $.ring.reassign_confirm))) return;
+    if (!data.onNodeCommand) return;
+    setCommandState({ pending: action, error: null });
+    void data.onNodeCommand(n, action).then(
+      () => { setCommandState({ pending: null, error: null }); data.onMenuOpenChange?.(false); },
+      (error: unknown) => setCommandState({ pending: null, error: error instanceof Error ? error.message : t(($) => $.ring.failure) }),
+    );
+  };
 
   return (
     <div
@@ -173,6 +204,14 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
             {updated ? ` · ${updated}` : ""}
           </span>
         </span>
+        {execution ? (
+          <span className="flex min-w-0 gap-1.5 text-[11px] text-muted-foreground" data-testid="research-node-execution">
+            {execution.agent ? <span className="truncate font-medium text-foreground">{execution.agent}</span> : null}
+            {execution.status ? <span className="shrink-0">· {execution.status}</span> : null}
+            {execution.duration ? <span className="shrink-0">· {execution.duration}</span> : null}
+            {execution.failure ? <span className="truncate text-destructive">· {execution.failure}</span> : null}
+          </span>
+        ) : null}
       </button>
       <button
         type="button"
@@ -188,11 +227,13 @@ function ResearchGraphNodeComponent({ data, selected }: NodeProps<ResearchFlowNo
         <MoreHorizontal className="size-4" aria-hidden />
       </button>
       {menuOpen ? (
-        <ResearchCardMenu
+        <ResearchNodeActionRing
           node={n}
+          mode="ring"
           onClose={() => data.onMenuOpenChange?.(false)}
-          onRetry={data.onRetry}
-          onViewDetail={data.onViewDetail}
+          onAction={runAction}
+          pendingAction={commandState.pending}
+          error={commandState.error}
         />
       ) : null}
       <Handle

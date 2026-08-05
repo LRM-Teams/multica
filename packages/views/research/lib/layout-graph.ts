@@ -1,5 +1,5 @@
 import type { Edge, Node } from "@xyflow/react";
-import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
+import type { ResearchGraphEdge, ResearchGraphNode, ResearchNodeCommandAction } from "@multica/core/types";
 import {
   branchIdForLane,
   colorForLane,
@@ -49,6 +49,7 @@ export type ResearchFlowNodeData = {
   row?: number;
   laneLabelKey?: LogicLaneId;
   onRetry?: (node: ResearchGraphNode) => void;
+  onNodeCommand?: (node: ResearchGraphNode, action: ResearchNodeCommandAction) => Promise<void>;
   onViewDetail?: (node: ResearchGraphNode) => void;
   menuOpen?: boolean;
   onMenuOpenChange?: (open: boolean) => void;

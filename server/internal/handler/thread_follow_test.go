@@ -260,6 +260,12 @@ func TestHumanThreadFollowLifecyclePreservesExplicitOptOutInGroupAndDM(t *testin
 			markRead(rootByOther)
 			assertState(rootByOther, false, "no_wake")
 			sendReply(testUserID, rootByOther, "@"+targetHandle+" first personal mention", mention)
+			if channelKind == "dm" {
+				// DMs deliberately keep actor mentions as plain text. Only group
+				// messages resolve them into member delivery/follow state.
+				assertState(rootByOther, false, "no_wake")
+				setFollow(rootByOther, true)
+			}
 			assertState(rootByOther, true, "active")
 			setFollow(rootByOther, false)
 			assertState(rootByOther, false, "unfollowed")
@@ -276,8 +282,12 @@ func TestHumanThreadFollowLifecyclePreservesExplicitOptOutInGroupAndDM(t *testin
 				  AND details->>'message_id' = $2`, targetID, mentionedAfterUnfollow.ID).Scan(&mentionInboxCount); err != nil {
 				t.Fatalf("count mention-after-unfollow inbox delivery: %v", err)
 			}
-			if mentionInboxCount != 1 {
-				t.Fatalf("mention-after-unfollow inbox deliveries=%d, want 1", mentionInboxCount)
+			wantMentionInboxCount := 1
+			if channelKind == "dm" {
+				wantMentionInboxCount = 0
+			}
+			if mentionInboxCount != wantMentionInboxCount {
+				t.Fatalf("mention-after-unfollow inbox deliveries=%d, want %d", mentionInboxCount, wantMentionInboxCount)
 			}
 			sendReply(targetID, rootByOther, "my own post re-follows")
 			assertState(rootByOther, true, "active")

@@ -169,8 +169,7 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	member, ok := h.workspaceMember(w, r, workspaceID)
-	if !ok {
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
 		return
 	}
 
@@ -178,11 +177,6 @@ func (h *Handler) EnsureWindy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !canUseRuntimeForAgent(member, runtime) {
-		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can create agents on it")
-		return
-	}
-
 	agent, created, err := h.ensureWindyAgent(r, wsUUID, runtime)
 	if err != nil {
 		slog.Warn("ensure Wendy failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -239,7 +233,7 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 		return runtime, true
 	}
 
-	runtimes, err := h.Queries.ListVisibleAgentRuntimes(r.Context(), db.ListVisibleAgentRuntimesParams{WorkspaceID: workspaceID, OwnerID: userID})
+	runtimes, err := h.Queries.ListAgentRuntimes(r.Context(), workspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list runtimes")
 		return db.AgentRuntime{}, false
@@ -259,7 +253,7 @@ func (h *Handler) pickWindyRuntime(w http.ResponseWriter, r *http.Request, works
 			return rt, true
 		}
 	}
-	// Fail closed: do not fall back to a ghost first-visible row.
+	// Fail closed: do not fall back to a ghost first row.
 	writeError(w, http.StatusUnprocessableEntity, "no online runtime with a fresh heartbeat; start or reconnect a machine first")
 	return db.AgentRuntime{}, false
 }

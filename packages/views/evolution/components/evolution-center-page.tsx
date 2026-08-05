@@ -1020,9 +1020,7 @@ function CuratorProfileCard({
     until: defaultBackfillUntil(),
   }));
 
-  const availableRuntimes = runtimes.filter(
-    (runtime) => runtime.owner_id === userId || runtime.visibility === "public",
-  );
+  const availableRuntimes = runtimes;
   // Computed once per render, outside JSX, so react:doctor's
   // hydration-mismatch rule doesn't flag a fresh Date.now() per row.
   const now = Date.now();

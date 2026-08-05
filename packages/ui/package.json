@@ -33,7 +33,8 @@
     "./lib/avatar-fallback": "./lib/avatar-fallback.ts",
     "./i18n-types": "./types/i18next.ts",
     "./styles/tokens.css": "./styles/tokens.css",
-    "./styles/base.css": "./styles/base.css"
+    "./styles/base.css": "./styles/base.css",
+    "./styles/research-canvas.css": "./styles/research-canvas.css"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

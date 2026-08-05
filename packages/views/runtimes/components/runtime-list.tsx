@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Globe, MoreHorizontal, Trash2 } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type {
   Agent,
@@ -28,11 +28,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { workloadConfig } from "../../agents/presence";
@@ -200,7 +195,6 @@ function RuntimeRow({
         )}
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
           <span className="truncate text-sm font-medium">{baseName}</span>
-          <VisibilityBadge runtime={runtime} />
         </span>
         <RuntimeRowStatus runtime={runtime} workload={workload} now={now} />
         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" />
@@ -280,26 +274,6 @@ function RuntimeRowStatus({
         {tAgents(($) => $.workload[workloadState])}
       </span>
     </span>
-  );
-}
-
-// Only public is worth a badge — private is the default and rendering a
-// `Public` chip on every row turns the list into noise.
-function VisibilityBadge({ runtime }: { runtime: AgentRuntime }) {
-  const { t } = useT("runtimes");
-  if (runtime.visibility !== "public") return null;
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-brand/10 px-1 text-[10px] font-medium text-brand">
-            <Globe className="h-2.5 w-2.5" />
-            {t(($) => $.detail.visibility_label.public)}
-          </span>
-        }
-      />
-      <TooltipContent>{t(($) => $.detail.visibility_hint.public)}</TooltipContent>
-    </Tooltip>
   );
 }
 

@@ -1209,7 +1209,7 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	runtime, okRuntime := h.pickVisibleAgentRuntime(r.Context(), wsUUID, parseUUID(userID))
+	runtime, okRuntime := h.pickAgentRuntime(r.Context(), wsUUID, parseUUID(userID))
 	if !okRuntime {
 		writeError(w, http.StatusBadRequest, "no runtime available for hire")
 		return

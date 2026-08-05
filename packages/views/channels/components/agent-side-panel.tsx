@@ -527,11 +527,12 @@ function RuntimeConfigSummary({
             canEdit={false}
             onChange={() => {}}
           />
-          {runtimeUpdateHealth !== "ok" && (
-            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-              {runtimeHealthLabel(runtimeUpdateHealth)}
-            </span>
-          )}
+          {runtimeUpdateHealth !== "ok" &&
+            runtimeUpdateHealth !== "update_available" && (
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {runtimeHealthLabel(runtimeUpdateHealth)}
+              </span>
+            )}
           <ModelPicker
             runtimeId={agent.runtime_id}
             runtimeOnline={!!isOnline}

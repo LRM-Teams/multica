@@ -277,6 +277,11 @@
     "answered_option": "選択：{{label}}",
     "skipped": "スキップ済み · セッション続行"
   },
+  "run_v2": {
+    "delivery_blocked": "Delivery blocked",
+    "syncing_title": "Execution data is still syncing",
+    "syncing_body": "The run ledger is available, but its canvas projection has not arrived yet. Existing canvas data remains visible."
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",
@@ -440,6 +445,13 @@
     "detail": "詳細",
     "locate_source": "ソース",
     "copy_prompt": "コピー",
+    "continue": "続行",
+    "fork": "分岐を探索",
+    "reassign": "再割り当て",
+    "reassign_confirm": "別のメンバーに再割り当てしますか？",
+    "pending": "実行中…",
+    "success": "操作を受け付けました",
+    "failure": "操作に失敗しました。再試行してください。",
     "retry": "再試行",
     "dig_deeper": "深掘り",
     "more": "その他",

@@ -34,7 +34,9 @@ describe("CliInstallInstructions", () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByText("multica setup")).toHaveClass(...ligatureClasses);
+    expect(
+      screen.getByText("multica setup /<workspace-slug>"),
+    ).toHaveClass(...ligatureClasses);
   });
 
   it("uses the CDN PowerShell installer for Windows", () => {
@@ -51,7 +53,9 @@ describe("CliInstallInstructions", () => {
         "irm https://cdn.leagent.me/computer/install.ps1 | iex",
       ),
     ).toBeTruthy();
-    expect(screen.getByText("multica setup")).toBeTruthy();
+    expect(
+      screen.getByText("multica setup /<workspace-slug>"),
+    ).toBeTruthy();
   });
 
   it("does not render the legacy Windows + WSL mode", () => {
@@ -65,6 +69,21 @@ describe("CliInstallInstructions", () => {
     expect(screen.getByRole("radio", { name: "Windows" })).toBeTruthy();
     expect(screen.queryByRole("radio", { name: "Windows + WSL" })).toBeNull();
     expect(screen.queryByText(/callback-host/)).toBeNull();
+  });
+
+  it("renders workspace-scoped setup command (not bare multica setup)", () => {
+    render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <CliInstallInstructions />
+      </I18nProvider>,
+    );
+
+    // The setup command must include a workspace slug path — bare `multica setup`
+    // without a workspace scope is no longer the expected flow (LRM-1420).
+    expect(screen.queryByText("multica setup")).toBeNull();
+    expect(
+      screen.getByText(/^multica setup \/</),
+    ).toBeTruthy();
   });
 
   it("offers a troubleshooting disclosure with self-diagnosis steps, no invented contact", () => {

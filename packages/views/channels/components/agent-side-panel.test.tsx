@@ -362,6 +362,14 @@ describe("AgentSidePanel", () => {
     expect(screen.getByText("ready_to_apply")).toBeInTheDocument();
   });
 
+  it("does not show update_available in the Agent Profile runtime summary (LRM-1430)", () => {
+    mockRuntimes.current = [
+      { id: "runtime-1", status: "online", runtime_health: "update_available", update_state: "idle" },
+    ];
+    renderPanel();
+    expect(screen.queryByText("update_available")).not.toBeInTheDocument();
+  });
+
   // task #22: the panel must thread the bound runtime's real capability
   // through to AgentProfileActions, not a hardcoded provider list or the
   // wrong runtime's data.

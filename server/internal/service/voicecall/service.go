@@ -207,6 +207,9 @@ type Store interface {
 	BeginProviderStart(ctx context.Context, workspaceID, callID string) (BeginProviderStartResult, error)
 	ApplyClientAnswered(ctx context.Context, workspaceID, userID, callID string) (Session, error)
 	MarkFailed(ctx context.Context, workspaceID, callID, errorCode string) (Session, error)
+	// FailActivePair clears rows holding voice_call_session_active_pair_idx for
+	// this member+agent so a new Start can proceed after deploy/orphan hangups.
+	FailActivePair(ctx context.Context, workspaceID, userID, agentID, endReason, errorCode string) (int, error)
 	BeginEnding(ctx context.Context, workspaceID, userID, callID, reason string) (BeginEndingResult, error)
 	MarkEnded(ctx context.Context, workspaceID, callID, reason string) (Session, error)
 }
@@ -301,7 +304,7 @@ func (service *Service) Start(ctx context.Context, input StartInput) (StartResul
 	taskID := providerTaskIDPrefix + nonce
 	memberUserID := providerMemberIDPrefix + nonce
 
-	session, err := service.store.CreateStarting(ctx, NewSession{
+	newSession := NewSession{
 		WorkspaceID:    scope.WorkspaceID,
 		ChannelID:      scope.ChannelID,
 		AgentID:        scope.AgentID,
@@ -309,7 +312,26 @@ func (service *Service) Start(ctx context.Context, input StartInput) (StartResul
 		Provider:       service.providerName,
 		ProviderTaskID: taskID,
 		RoomID:         roomID,
-	})
+	}
+	session, err := service.store.CreateStarting(ctx, newSession)
+	if errors.Is(err, ErrCallAlreadyActive) {
+		// Deploy / duplex hangup can leave a non-terminal row after in-memory
+		// DuplexGateway.Has is lost; reclaim once so the user can redial.
+		if _, reclaimErr := service.store.FailActivePair(
+			ctx,
+			scope.WorkspaceID,
+			scope.UserID,
+			scope.AgentID,
+			"superseded_by_new_call",
+			"orphan_active_pair",
+		); reclaimErr != nil {
+			return StartResult{}, fmt.Errorf(
+				"create starting voice call: reclaim active pair: %w",
+				errors.Join(err, reclaimErr),
+			)
+		}
+		session, err = service.store.CreateStarting(ctx, newSession)
+	}
 	if err != nil {
 		return StartResult{}, fmt.Errorf("create starting voice call: %w", err)
 	}

@@ -18,7 +18,7 @@ import (
 type fakeDiagnosisRunState struct {
 	run         DiagnosisRunCheckpoint
 	transitions []DiagnosisRunStatus
-	setSandbox  []string // instanceID, tokenHash, executionMode
+	setSandbox  []string // instanceID, tokenHash, executionMode, sandboxMode
 	failErr     error
 }
 
@@ -26,11 +26,12 @@ func (f *fakeDiagnosisRunState) GetRun(context.Context, string) (DiagnosisRunChe
 	return f.run, nil
 }
 
-func (f *fakeDiagnosisRunState) SetRunSandbox(_ context.Context, _ string, instanceID, tokenHash, mode string) error {
-	f.setSandbox = []string{instanceID, tokenHash, mode}
+func (f *fakeDiagnosisRunState) SetRunSandbox(_ context.Context, _ string, instanceID, tokenHash, mode, sandboxMode string) error {
+	f.setSandbox = []string{instanceID, tokenHash, mode, sandboxMode}
 	f.run.SandboxInstanceID = instanceID
 	f.run.CapabilityTokenHash = tokenHash
 	f.run.ExecutionMode = mode
+	f.run.SandboxMode = sandboxMode
 	return nil
 }
 
@@ -218,10 +219,11 @@ func TestDiagnosisSandboxProvisionSuccess(t *testing.T) {
 	require.Len(t, h.creator.creates, 1)
 	assert.Equal(t, "ws-1", h.creator.creates[0].WorkspaceID)
 	assert.True(t, h.creator.creates[0].DaemonEnabled)
-	require.Len(t, h.state.setSandbox, 3)
+	require.Len(t, h.state.setSandbox, 4)
 	assert.Equal(t, "inst-new", h.state.setSandbox[0])
 	assert.NotEmpty(t, h.state.setSandbox[1], "capability token hash persisted")
 	assert.Equal(t, DiagnosisExecutionModeSandbox, h.state.setSandbox[2])
+	assert.Equal(t, DiagnosisSandboxModeDedicated, h.state.setSandbox[3])
 	assert.Equal(t, []DiagnosisRunStatus{DiagnosisRunProvisioning, DiagnosisRunRunning}, h.state.transitions)
 	assert.Equal(t, DiagnosisRunRunning, h.state.run.Status)
 	require.Len(t, h.resolver.calls, 1)
@@ -246,6 +248,66 @@ func TestDiagnosisSandboxProvisionSuccess(t *testing.T) {
 	// No reclaim on success; no process-wide env mutation.
 	assert.Empty(t, h.reclaimer.calls)
 	assertNoDiagnosisProcessEnv(t)
+}
+
+func TestDiagnosisSandboxProvisionSharedBindingReusesRuntime(t *testing.T) {
+	assertNoDiagnosisProcessEnv(t)
+	h := newDiagnosisSandboxHarness(t, DiagnosisRunCheckpoint{
+		RunID: "run-1", ProjectID: "proj-1", TaskID: "task-1", Status: DiagnosisRunRunning,
+	})
+	req := diagnosisSandboxRequest()
+	req.SharedSandbox = &DiagnosisSharedSandboxRef{
+		InstanceID: "team-sbx",
+		RuntimeID:  "team-rt",
+		DaemonID:   "team-daemon",
+	}
+
+	require.NoError(t, h.orch.ProvisionRun(context.Background(), req))
+	assert.Empty(t, h.creator.creates, "shared binding must not create a diagnosis sandbox")
+	assert.Empty(t, h.resolver.calls, "shared binding must reuse the supplied runtime")
+	require.Len(t, h.state.setSandbox, 4)
+	assert.Equal(t, "team-sbx", h.state.setSandbox[0])
+	assert.NotEmpty(t, h.state.setSandbox[1], "capability token hash persisted")
+	assert.Equal(t, DiagnosisExecutionModeSandbox, h.state.setSandbox[2])
+	assert.Equal(t, DiagnosisSandboxModeShared, h.state.setSandbox[3])
+	assert.Equal(t, []DiagnosisRunStatus{DiagnosisRunProvisioning, DiagnosisRunRunning}, h.state.transitions)
+	require.Len(t, h.enqueuer.work, 1)
+	work := h.enqueuer.work[0]
+	assert.Equal(t, "team-sbx", work.SandboxInstanceID)
+	assert.Equal(t, "team-rt", work.RuntimeID)
+	require.NotNil(t, work.Env)
+	assert.True(t, VerifyDiagnosisCapabilityToken(work.Env["MULTICA_DIAGNOSIS_CAPABILITY_TOKEN"], h.state.setSandbox[1]))
+	assert.Empty(t, h.reclaimer.calls, "shared binding is owned by dispatch cleanup")
+	assertNoDiagnosisProcessEnv(t)
+}
+
+func TestDiagnosisSandboxProvisionSharedBindingFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ref  DiagnosisSharedSandboxRef
+	}{
+		{name: "missing instance", ref: DiagnosisSharedSandboxRef{RuntimeID: "team-rt", DaemonID: "team-daemon"}},
+		{name: "missing runtime", ref: DiagnosisSharedSandboxRef{InstanceID: "team-sbx", DaemonID: "team-daemon"}},
+		{name: "missing daemon", ref: DiagnosisSharedSandboxRef{InstanceID: "team-sbx", RuntimeID: "team-rt"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newDiagnosisSandboxHarness(t, DiagnosisRunCheckpoint{
+				RunID: "run-1", ProjectID: "proj-1", TaskID: "task-1", Status: DiagnosisRunRunning,
+			})
+			req := diagnosisSandboxRequest()
+			req.SharedSandbox = &tc.ref
+
+			err := h.orch.ProvisionRun(context.Background(), req)
+			require.Error(t, err)
+			assert.True(t, strings.HasPrefix(err.Error(), "provisioning_binding:"))
+			assert.Equal(t, DiagnosisRunFailed, h.state.run.Status)
+			assert.True(t, strings.HasPrefix(h.state.run.LastError, "provisioning_binding:"))
+			assert.Empty(t, h.creator.creates)
+			assert.Empty(t, h.resolver.calls)
+			assert.Empty(t, h.enqueuer.work)
+			assert.Empty(t, h.reclaimer.calls, "invalid shared binding must not be reclaimed")
+		})
+	}
 }
 
 func TestDiagnosisSandboxProvisionFailsClosedWithoutPublicURL(t *testing.T) {
@@ -381,9 +443,10 @@ func TestDiagnosisSandboxResumeReprovisionsWhenSandboxGone(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, h.creator.creates, 1, "dead sandbox must be re-provisioned")
-	require.Len(t, h.state.setSandbox, 3)
+	require.Len(t, h.state.setSandbox, 4)
 	assert.Equal(t, "inst-new", h.state.setSandbox[0])
 	assert.NotEqual(t, "oldhash", h.state.setSandbox[1], "re-provision re-mints the capability token")
+	assert.Equal(t, DiagnosisSandboxModeDedicated, h.state.setSandbox[3])
 	require.Len(t, h.enqueuer.work, 1)
 	require.NotNil(t, h.enqueuer.work[0].Env)
 	assert.True(t, VerifyDiagnosisCapabilityToken(h.enqueuer.work[0].Env["MULTICA_DIAGNOSIS_CAPABILITY_TOKEN"], h.state.setSandbox[1]))

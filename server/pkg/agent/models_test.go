@@ -996,24 +996,28 @@ func TestParseCodexDebugModelsCatalog_ListOnly(t *testing.T) {
 	}
 }
 
-func TestDiscoverClaudeModels_NoStaticFallback(t *testing.T) {
+func TestDiscoverClaudeModels_StaticFallbackWhenNoListCommand(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	modelCacheMu.Lock()
 	delete(modelCache, "claude")
 	delete(modelCache, "claude:/nonexistent/claude")
 	modelCacheMu.Unlock()
+	// Claude Code has no `models list` subcommand, so with a missing/unusable
+	// CLI dynamic discovery fails. ListModels must fall back to the static
+	// alias lineup so the picker always has selectable, requestable models
+	// (Frank 2026-08-05: static config so requests can reach models).
 	got, err := ListModels(ctx, "claude", "/nonexistent/claude")
-	if err == nil {
-		t.Fatal("expected error when Claude cannot list models")
+	if err != nil {
+		t.Fatalf("expected no error with static fallback, got %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("expected empty list on failure, got %+v", got)
+	ids := map[string]bool{}
+	for _, m := range got {
+		ids[m.ID] = true
 	}
-	if !strings.Contains(err.Error(), "cannot list models") && !strings.Contains(err.Error(), "unable") {
-		// accept either phrasing
-		if !strings.Contains(strings.ToLower(err.Error()), "claude") {
-			t.Fatalf("error should mention Claude: %v", err)
+	for _, want := range []string{"sonnet", "opus", "haiku"} {
+		if !ids[want] {
+			t.Errorf("static fallback missing model %q in: %+v", want, got)
 		}
 	}
 }

@@ -94,10 +94,19 @@ const modelCacheTTL = 10 * time.Minute
 func ListModels(ctx context.Context, providerType, executablePath string) ([]Model, error) {
 	switch providerType {
 	case "claude":
-		// Frank 2026-08-03: dynamic only — no static picker fallback.
-		return cachedDiscovery(discoveryCacheKey(providerType, executablePath), func() ([]Model, error) {
-			return discoverClaudeModels(ctx, executablePath)
-		})
+		// Claude Code has no `models list` subcommand on any shipping CLI —
+		// `--model` takes stable aliases (sonnet/opus/haiku) that resolve to
+		// the latest model, or a full model name. The CLI never enumerates
+		// what a given account can actually reach, so dynamic discovery fails
+		// closed and the picker would be empty ("Claude Code 无法选择模型").
+		//
+		// Fix: try dynamic discovery first (forward-compatible if a future
+		// CLI adds a list command), and on any failure or empty result fall
+		// back to the statically-configured aliases so the picker always has
+		// selectable rows whose IDs resolve to the latest model the user's
+		// account supports. See Frank directive 2026-08-05: static config so
+		// requests can reach models.
+		return claudeModelsWithFallback(ctx, executablePath)
 	case "codex":
 		// Frank 2026-08-03: dynamic only from `codex debug models`.
 		// Picker rows are visibility=list; thinking catalog is filled
@@ -241,6 +250,25 @@ func claudeStaticModels() []Model {
 		{ID: "opus", Label: "Opus", Provider: "anthropic"},
 		{ID: "haiku", Label: "Haiku", Provider: "anthropic"},
 	}
+}
+
+// claudeModelsWithFallback returns the Claude model catalog the picker
+// shows. It tries dynamic discovery first and falls back to the static
+// alias lineup (sonnet/opus/haiku) whenever discovery fails or yields
+// nothing, then annotates each entry with its thinking-level picker. The
+// static aliases are always resolvable by the installed CLI and resolve
+// to the latest models, so this guarantees a usable, requestable picker.
+func claudeModelsWithFallback(ctx context.Context, executablePath string) ([]Model, error) {
+	models, err := cachedDiscovery(discoveryCacheKey("claude", executablePath), func() ([]Model, error) {
+		return discoverClaudeModels(ctx, executablePath)
+	})
+	if err != nil || len(models) == 0 {
+		models = claudeStaticModels()
+	}
+	if Capabilities("claude").ThinkingDiscovery {
+		annotateClaudeThinking(ctx, models, executablePath)
+	}
+	return models, nil
 }
 
 // claudeCompatibilityModels keeps historical, persisted model IDs valid for

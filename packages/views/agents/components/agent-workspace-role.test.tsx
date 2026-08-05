@@ -36,7 +36,7 @@ const RESOURCES = {
   },
 };
 
-const ALLOW = { allowed: true, reason: "" as const };
+const ALLOW = { allowed: true, reason: "allowed" as const, message: "" };
 const DENY = { allowed: false, reason: "not_admin_role" as const, message: "nope" };
 
 function makeAgent(workspace_role: "member" | "admin") {

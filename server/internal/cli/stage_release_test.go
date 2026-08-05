@@ -62,7 +62,7 @@ func TestDownloadReleaseBinaryUsesManifestInlineSHA256(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1.2.3/release.json":
+		case "/1.2.3/manifest.json":
 			manifest := ReleaseManifest{
 				TagName: "v1.2.3",
 				Version: "1.2.3",

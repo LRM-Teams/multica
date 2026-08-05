@@ -103,7 +103,7 @@ func TestReleaseManifestBaseURLWithOverridePrecedence(t *testing.T) {
 func TestFetchLatestReleaseWithOverrideUsesServerDispatchedBaseURL(t *testing.T) {
 	want := ReleaseManifest{TagName: "v0.3.83", Version: "0.3.83"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/latest.json" {
+		if r.URL.Path != "/manifest.json" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(want)
@@ -133,7 +133,7 @@ func TestFetchLatestReleaseWithOverrideUsesServerDispatchedBaseURL(t *testing.T)
 func TestFetchReleaseByTagWithOverrideUsesServerDispatchedBaseURL(t *testing.T) {
 	want := ReleaseManifest{TagName: "v0.3.83", Version: "0.3.83"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v0.3.83/release.json" {
+		if r.URL.Path != "/0.3.83/manifest.json" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(want)
@@ -148,6 +148,94 @@ func TestFetchReleaseByTagWithOverrideUsesServerDispatchedBaseURL(t *testing.T) 
 	}
 	if got.TagName != want.TagName {
 		t.Fatalf("got %+v, want %+v (server-dispatched base URL should have won over the env var)", got, want)
+	}
+}
+
+func TestFetchLatestReleaseFallsBackToLegacyPathOnNotFound(t *testing.T) {
+	want := ReleaseManifest{TagName: "v0.3.83", Version: "0.3.83"}
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/manifest.json":
+			w.WriteHeader(http.StatusNotFound)
+		case "/latest.json":
+			_ = json.NewEncoder(w).Encode(want)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	got, err := FetchLatestReleaseWithOverride(server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.TagName != want.TagName {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	if strings.Join(paths, ",") != "/manifest.json,/latest.json" {
+		t.Fatalf("request paths = %v, want new path followed by legacy path", paths)
+	}
+}
+
+func TestFetchReleaseByTagFallsBackToLegacyPathOnNotFound(t *testing.T) {
+	want := ReleaseManifest{TagName: "v0.3.83", Version: "0.3.83"}
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/0.3.83/manifest.json":
+			w.WriteHeader(http.StatusNotFound)
+		case "/v0.3.83/release.json":
+			_ = json.NewEncoder(w).Encode(want)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	got, err := fetchReleaseByTagWithOverride("0.3.83", server.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.TagName != want.TagName {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	if strings.Join(paths, ",") != "/0.3.83/manifest.json,/v0.3.83/release.json" {
+		t.Fatalf("request paths = %v, want new path followed by legacy path", paths)
+	}
+}
+
+func TestManifestCompatibilityFallbackFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		body       string
+	}{
+		{name: "server error", statusCode: http.StatusInternalServerError},
+		{name: "malformed canonical manifest", statusCode: http.StatusOK, body: "not-json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fallbackRequested := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/latest.json" {
+					fallbackRequested = true
+					_ = json.NewEncoder(w).Encode(ReleaseManifest{TagName: "v0.3.82", Version: "0.3.82"})
+					return
+				}
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			if _, err := FetchLatestReleaseWithOverride(server.URL); err == nil {
+				t.Fatal("expected canonical manifest failure, got nil")
+			}
+			if fallbackRequested {
+				t.Fatal("legacy path must not hide a broken canonical manifest")
+			}
+		})
 	}
 }
 

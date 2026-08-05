@@ -33,6 +33,10 @@ for required in \
   'OSS_BUCKET: leagent' \
   'RELEASE_PREFIX: computer' \
   'PUBLIC_BASE_URL: https://cdn.leagent.me/computer' \
+  'canonical_prefix="${RELEASE_PREFIX}/${version}"' \
+  'legacy_prefix="${RELEASE_PREFIX}/${TAG_NAME}"' \
+  '"${canonical_prefix}/manifest.json" "${legacy_prefix}/release.json"' \
+  'for name in manifest.json latest.json' \
   'cdn RefreshObjectCaches' \
   'Verify the published feed through the public CDN'; do
   if ! grep -Fq -- "$required" <<<"$release_workflow"; then

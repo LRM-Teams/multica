@@ -891,6 +891,8 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 ### B. 深化 Module，缩小修改面
 
 - [ ] 把 `engine.go` 的 Prompt、dispatch、result acceptance、failure、Gate、projection 拆到拥有对应不变量的内部 Module。
+  - [x] B1：建立 `projectionModule`，只读取 committed Event，按顺序调用 Projection output，成功后确认，失败后按 durable attempt count 写退避时间，单次最多处理 500 条。`engine.go` 只保留到 Module 的调用，不再拥有 outbox 消费规则。
+  - [ ] 迁出 Prompt、dispatch、result acceptance、failure 和 Gate。
 - [ ] 删除巨型 `Store` Interface；PostgreSQL 事务留在业务 Module 内。
 - [ ] 固定外部 `ResearchRun` Interface，禁止 Handler 直接写子实体状态。
 - [ ] 保持 V1–V5 字节级 Prompt/Result 兼容和行为回放一致。
@@ -1074,6 +1076,7 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [x] A3 把六类已发生生产故障映射到脱敏可执行回归；新增画布 Projection 内部身份唯一断言和真实 PostgreSQL 重复证据饱和测试，其余四类复用并标注现有生产路径回归。测试输入不含线上 workspace、Run、Agent、来源或用户内容。
 - [x] A4 实现 `internal/researcheval` 评测契约、八模式固定受控语料、三个确定性 grader、重复 seed Runner、版本化聚合 Report 和同语料对照。当前装置是离线评测基础，不宣称已把生产 Research Run 自动执行器、LLM judge、Episode 或 Strategy Promotion 接入；这些仍属于 M。
 - [x] A5 实现七个自主行为固定场景和 `AutonomyGrader`：Oracle 同时约束动作执行者、必需/禁用行为、30 种 Projection Node、typed edge、14 项节点详情、递归 stale、异质 probe、原作者 Contribution、一万节点分页及 gap resync。`go test ./internal/researcheval -count=1` 与 `go vet ./internal/researcheval` 通过；生产 Adapter 尚未接入，不能把 fixture 正例当作生产验收结果。
+- [x] B1 把 committed Event 的 outbox 消费、顺序投影、成功确认、失败退避和 500 条批次上限迁入 `projectionModule`；Module 的持久化输入仅包含三项 Projection 操作，Projection output 仍使用现有 `Projector` Adapter。新增成功、失败、批次上限和禁用输出测试；该项没有改变 canonical Event schema 或生产投影 payload。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

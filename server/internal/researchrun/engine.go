@@ -1013,40 +1013,6 @@ func buildTaskPromptV5(run Run, task Task, attempt Attempt, snapshot RunSnapshot
 	).Replace(prompt)
 }
 
-func (e *Engine) projectPending(ctx context.Context, sessionID string) error {
-	if e.projector == nil {
-		return nil
-	}
-	for i := 0; i < 500; i++ {
-		events, err := e.store.ListUnprojectedEvents(ctx, sessionID, 1)
-		if err != nil {
-			return err
-		}
-		if len(events) == 0 {
-			return nil
-		}
-		event := events[0]
-		if err = e.projector.Project(ctx, event); err != nil {
-			delay := projectionRetryDelay(event.ProjectionAttempts)
-			if markErr := e.store.MarkEventProjectionFailed(ctx, event.ID, err.Error(), e.clock.Now().Add(delay)); markErr != nil {
-				return errors.Join(err, markErr)
-			}
-			return err
-		}
-		if err = e.store.MarkEventProjected(ctx, event.ID); err != nil {
-			return err
-		}
-	}
-	return errors.New("research event projection batch limit reached")
-}
-
-func projectionRetryDelay(attempts int) time.Duration {
-	if attempts < 0 {
-		attempts = 0
-	}
-	return time.Duration(1<<min(attempts, 8)) * time.Second
-}
-
 func (e *Engine) Pause(ctx context.Context, sessionID, workspaceID, userID string) (Run, error) {
 	run, _, _, err := e.store.Pause(ctx, sessionID, workspaceID, userID)
 	if err != nil {

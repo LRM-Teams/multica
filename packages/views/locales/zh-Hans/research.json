@@ -202,6 +202,15 @@
       "error": "错误"
     },
     "module_sources_desc": "依据从哪里来 · 谁负责什么 · 现在齐了没有",
+    "execution": {
+      "title": "执行动态",
+      "locatable": "可定位至 {{location}}",
+      "locate": "定位至 {{location}}",
+      "unavailable": "暂无可定位节点",
+      "load_failed": "执行状态加载失败",
+      "retry": "重试",
+      "empty": "暂无执行成员"
+    },
     "aux_close_sources": "关闭调研依据与协作分工"
   },
   "chat": {

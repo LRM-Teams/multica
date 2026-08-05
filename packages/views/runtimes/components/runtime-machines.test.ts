@@ -34,7 +34,6 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     update_state: "idle",
     runtime_health: "ok",
     owner_id: "user-1",
-    visibility: "private",
     last_seen_at: new Date(NOW - 10_000).toISOString(),
     created_at: "2026-05-17T11:00:00Z",
     updated_at: "2026-05-17T11:00:00Z",
@@ -414,7 +413,6 @@ describe("runtime machine grouping", () => {
           id: "rt-foreign-local-daemon",
           daemon_id: "desktop-daemon-uuid",
           owner_id: "user-2",
-          visibility: "public",
         }),
         makeRuntime({
           id: "rt-mine",

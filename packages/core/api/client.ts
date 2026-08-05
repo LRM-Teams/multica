@@ -1682,7 +1682,7 @@ export class ApiClient {
 
   async updateRuntime(
     runtimeId: string,
-    patch: { visibility?: "private" | "public"; display_name?: string | null },
+    patch: { display_name?: string | null },
   ): Promise<AgentRuntime> {
     return this.fetch(`/api/runtimes/${runtimeId}`, {
       method: "PATCH",
@@ -4360,17 +4360,15 @@ export class ApiClient {
   async getResearchPresence(
     id: string,
   ): Promise<import("../research/queries").ResearchPresenceResponse> {
-    const raw = (await this.fetch(`/api/research/sessions/${id}/presence`)) as {
-      session_id?: string;
-      presence?: Record<
-        string,
-        { activity?: string; updated_at?: number; updatedAt?: number }
-      >;
-    };
-    return {
-      session_id: typeof raw?.session_id === "string" ? raw.session_id : id,
-      presence: raw?.presence ?? {},
-    };
+    const { ResearchPresenceResponseSchema } = await import("../research/schemas");
+    const raw = await this.fetch(`/api/research/sessions/${id}/presence`);
+    const parsed = parseWithFallback(
+      raw,
+      ResearchPresenceResponseSchema,
+      { session_id: id, presence: {} },
+      { endpoint: "GET /api/research/sessions/:id/presence" },
+    );
+    return { ...parsed, session_id: parsed.session_id || id };
   }
 
   async postResearchMessage(

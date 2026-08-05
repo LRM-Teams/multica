@@ -135,7 +135,7 @@ class MulticaClient:
         self,
         base_url: str,
         api_key: str,
-        squad_id: str,
+        agent_id: str,
         base_env_id: str,
         *,
         workspace_id: str | None = None,
@@ -146,7 +146,7 @@ class MulticaClient:
             raise MulticaAPIError("workspace_id or workspace_slug is required")
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
-        self.squad_id = squad_id
+        self.agent_id = agent_id
         self.base_env_id = base_env_id
         self.workspace_id = workspace_id
         self.workspace_slug = workspace_slug
@@ -158,7 +158,7 @@ class MulticaClient:
         return cls(
             base_url=config.base_url,
             api_key=api_key,
-            squad_id=config.squad_id,
+            agent_id=config.agent_id,
             base_env_id=config.base_env_id,
             workspace_id=config.workspace_id,
             workspace_slug=config.workspace_slug,
@@ -243,7 +243,7 @@ class MulticaClient:
             "domain": _ISSUE_DOMAIN,
             "dispatch_type": _DISPATCH_TYPE_ISSUE,
             "group_size": 1,
-            "squad_id": self.squad_id,
+            "agent_id": self.agent_id,
             "training_mode": False,
         }
         if source_task_id:
@@ -267,7 +267,7 @@ class MulticaClient:
                 "domain": _ISSUE_DOMAIN,
                 "dispatch_type": _DISPATCH_TYPE_ISSUE,
                 "group_size": 1,
-                "squad_id": self.squad_id,
+                "agent_id": self.agent_id,
                 "training_mode": False,
             }
         )

@@ -17,7 +17,6 @@ function makeRuntime(over: Partial<AgentRuntime> = {}): AgentRuntime {
     daemon_id: "d-1",
     runtime_mode: "local",
     owner_id: "user-me",
-    visibility: "private",
     last_seen_at: new Date().toISOString(),
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),

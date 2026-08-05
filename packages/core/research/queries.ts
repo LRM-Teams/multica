@@ -1,17 +1,49 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 
-export type ResearchPresenceMap = Record<
-  string,
-  { activity: string; updatedAt: number }
->;
+export type ResearchPresencePhase =
+  | "idle"
+  | "queued"
+  | "running"
+  | "done"
+  | "failed"
+  | "stale";
+
+export type ResearchPresenceEntry = {
+  activity: string;
+  updatedAt: number;
+  phase: ResearchPresencePhase;
+  role: string;
+  fleetMemberId: string | null;
+  taskId: string | null;
+  nodeId: string | null;
+  branchId: string | null;
+  stage: string | null;
+  expiresAt: number | null;
+  staleReason: string | null;
+};
+
+export type ResearchPresenceMap = Record<string, ResearchPresenceEntry>;
 
 /** Wire shape from GET /presence before normalizeResearchPresenceMap. */
 export type ResearchPresenceResponse = {
   session_id: string;
   presence: Record<
     string,
-    { activity?: string; updated_at?: number; updatedAt?: number }
+    {
+      activity?: string;
+      updated_at?: number;
+      updatedAt?: number;
+      phase?: string;
+      role?: string;
+      fleet_member_id?: string | null;
+      task_id?: string | null;
+      node_id?: string | null;
+      branch_id?: string | null;
+      stage?: string | null;
+      expires_at?: number | null;
+      stale_reason?: string | null;
+    }
   >;
 };
 
@@ -29,20 +61,33 @@ export const researchKeys = {
 
 /** Normalize GET /presence wire map (snake updated_at) → ResearchPresenceMap. */
 export function normalizeResearchPresenceMap(
-  raw: Record<string, { activity?: string; updated_at?: number; updatedAt?: number }> | null | undefined,
+  raw: ResearchPresenceResponse["presence"] | null | undefined,
 ): ResearchPresenceMap {
   const out: ResearchPresenceMap = {};
   if (!raw) return out;
   for (const [agentId, entry] of Object.entries(raw)) {
     const activity = typeof entry?.activity === "string" ? entry.activity.trim() : "";
-    if (!activity) continue;
     const updatedAt =
       typeof entry.updated_at === "number"
         ? entry.updated_at
         : typeof entry.updatedAt === "number"
           ? entry.updatedAt
           : Date.now();
-    out[agentId] = { activity, updatedAt };
+    const phase: ResearchPresencePhase =
+      entry.phase === "queued" || entry.phase === "running" ||
+      entry.phase === "done" || entry.phase === "failed" || entry.phase === "stale"
+        ? entry.phase : "idle";
+    out[agentId] = {
+      activity, updatedAt, phase,
+      role: typeof entry.role === "string" ? entry.role : "",
+      fleetMemberId: typeof entry.fleet_member_id === "string" ? entry.fleet_member_id : null,
+      taskId: typeof entry.task_id === "string" ? entry.task_id : null,
+      nodeId: typeof entry.node_id === "string" ? entry.node_id : null,
+      branchId: typeof entry.branch_id === "string" ? entry.branch_id : null,
+      stage: typeof entry.stage === "string" ? entry.stage : null,
+      expiresAt: typeof entry.expires_at === "number" ? entry.expires_at : null,
+      staleReason: typeof entry.stale_reason === "string" ? entry.stale_reason : null,
+    };
   }
   return out;
 }

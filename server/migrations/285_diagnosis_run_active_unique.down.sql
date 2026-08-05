@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS interaction_dag_diagnosis_run_active_unique;

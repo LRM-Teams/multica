@@ -15,7 +15,7 @@ import (
 // the upgrade button lives on the machine/runtime detail page, which reads
 // this list endpoint — not GET /agents, which was the only place the first
 // pass of #81 (PR #1813) wired pinned_version into. GetAgentRuntime /
-// ListVisibleAgentRuntimes / etc. are all normal sqlc `SELECT *` queries, but
+// ListAgentRuntimes / etc. are all normal sqlc `SELECT *` queries, but
 // their checked-in generated code was hand-aligned (not regenerated, to keep
 // task #85's drift out of this change) and had gone stale the same way
 // attachAgentRuntimeNames did for #1801/#1802 — this test is the reason that

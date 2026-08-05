@@ -52,6 +52,7 @@ import {
   type FleetStepCardModel,
 } from "../lib/fleet-step-cards";
 import { resolveCanvasBodyMode } from "../lib/canvas-body-mode";
+import { buildResearchExecutionAgents } from "../lib/research-execution-panel-view-model";
 import { resolveChatDrawerMode } from "../lib/chat-drawer-mode";
 import {
   dismissCompletionGuide,
@@ -88,6 +89,7 @@ import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchAuxDrawer } from "./research-aux-drawer";
 import { ResearchEvidencePulse } from "./research-evidence-pulse";
+import { ResearchExecutionPanel } from "./research-execution-panel";
 import { ResearchCanvas } from "./research-canvas";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
@@ -200,7 +202,12 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
     researchSessionSnapshotOptions(wsId, sessionId),
   );
-  const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
+  const {
+    data: presence = {},
+    isError: isPresenceError,
+    isFetching: isPresenceFetching,
+    refetch: refetchPresence,
+  } = useQuery(researchPresenceOptions(wsId, sessionId));
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
   // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
@@ -452,6 +459,14 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const selectedNode = ui.selected
     ? data.nodes.find((node) => node.id === ui.selected?.id) ?? ui.selected
     : null;
+  const executionAgents = buildResearchExecutionAgents(fleet.members, presence, data.nodes);
+  const locateExecutionAgent = (agent: (typeof executionAgents)[number]) => {
+    const node = agent.currentNodeId
+      ? data.nodes.find((candidate) => candidate.id === agent.currentNodeId)
+      : undefined;
+    if (!node) return;
+    dispatch({ type: "select", node });
+  };
   // LRM-1329 — drawer overview owns error/permission; cards stay fact-only.
   // Signal error with a non-empty token only — never pass raw API strings into
   // the drawer (safe copy lives in EvidencePulse i18n / role=alert).
@@ -661,6 +676,16 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                 );
             }}
           />
+          <div className="pointer-events-none absolute right-3 top-3 z-20 w-[min(22rem,calc(100%-1.5rem))]">
+            <ResearchExecutionPanel
+              agents={executionAgents}
+              className="pointer-events-auto max-h-[min(32rem,calc(100vh-12rem))] overflow-y-auto"
+              error={isPresenceError ? "presence_unavailable" : null}
+              isRetrying={isPresenceFetching}
+              onRetry={() => { void refetchPresence(); }}
+              onLocate={locateExecutionAgent}
+            />
+          </div>
           {canvasMode === "forming" ? <ResearchCanvasForming /> : null}
           {canvasMode === "empty" ? <ResearchCanvasEmptyState /> : null}
 

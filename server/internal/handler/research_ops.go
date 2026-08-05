@@ -563,15 +563,33 @@ func (h *Handler) GetResearchPresence(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load presence")
 		return
 	}
-	// Full active fleet roster (LRM-1377): members without activity still appear.
+
+	sessionKey := uuidToString(sessionID)
+	var tasks []researchrun.Task
+	var attempts []researchrun.Attempt
+	runStage := ""
+	// Prefer session-scoped fleet + run ledger when durable run-v2 exists.
+	// Presence remains a derived view; attempts stay the execution SoT.
 	members := []researchPresenceMember{}
-	if fleet, ferr := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID); ferr == nil {
-		rows, merr := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{
-			FleetID:     fleet.ID,
-			WorkspaceID: wsUUID,
-		})
-		if merr == nil {
-			members = researchPresenceMembersFromFleet(rows)
+	if h.ResearchRun != nil {
+		if fm, ferr := h.ResearchRun.ListFleetMembers(r.Context(), sessionKey, workspaceID); ferr == nil && len(fm) > 0 {
+			members = researchPresenceMembersFromRunFleet(fm)
+		}
+		if snap, serr := h.ResearchRun.Snapshot(r.Context(), sessionKey, workspaceID); serr == nil {
+			tasks = snap.Tasks
+			attempts = snap.Attempts
+			runStage = strings.TrimSpace(snap.Run.CurrentStage)
+		}
+	}
+	if len(members) == 0 {
+		if fleet, ferr := h.Queries.GetResearchFleetByWorkspace(r.Context(), wsUUID); ferr == nil {
+			rows, merr := h.Queries.ListResearchFleetMembers(r.Context(), db.ListResearchFleetMembersParams{
+				FleetID:     fleet.ID,
+				WorkspaceID: wsUUID,
+			})
+			if merr == nil {
+				members = researchPresenceMembersFromFleet(rows)
+			}
 		}
 	}
 	if len(members) == 0 {
@@ -588,10 +606,19 @@ func (h *Handler) GetResearchPresence(w http.ResponseWriter, r *http.Request) {
 			seen[id] = struct{}{}
 			members = append(members, researchPresenceMember{AgentID: id})
 		}
+		for agentID := range presenceSignalsFromRun(sessionKey, runStage, tasks, attempts) {
+			if _, ok := seen[agentID]; ok {
+				continue
+			}
+			seen[agentID] = struct{}{}
+			members = append(members, researchPresenceMember{AgentID: agentID})
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"session_id": uuidToString(sessionID),
-		"presence":   buildResearchPresenceRoster(members, nodes, time.Now().UTC()),
+		"session_id": sessionKey,
+		"presence": buildResearchPresenceRosterWithRun(
+			members, nodes, tasks, attempts, sessionKey, runStage, time.Now().UTC(),
+		),
 	})
 }
 
@@ -1182,7 +1209,7 @@ func (h *Handler) HireResearchFleetMember(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	runtime, okRuntime := h.pickVisibleAgentRuntime(r.Context(), wsUUID, parseUUID(userID))
+	runtime, okRuntime := h.pickAgentRuntime(r.Context(), wsUUID, parseUUID(userID))
 	if !okRuntime {
 		writeError(w, http.StatusBadRequest, "no runtime available for hire")
 		return

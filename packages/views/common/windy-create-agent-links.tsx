@@ -28,11 +28,11 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { ComputerPicker } from "../agents/components/computer-picker";
 import {
-  firstUsableMachine,
-  firstUsableRuntimeIdOnMachine,
+  firstRuntimeMachine,
+  firstRuntimeIdOnMachine,
   machineForRuntime,
 } from "../agents/components/computer-picker-utils";
-import { RuntimePicker, isRuntimeUsableForUser } from "../agents/components/runtime-picker";
+import { RuntimePicker } from "../agents/components/runtime-picker";
 import { ModelDropdown } from "../agents/components/model-dropdown";
 import { ThinkingDropdown } from "../agents/components/thinking-dropdown";
 import { AvatarPicker, type AvatarPickerSelection } from "../agents/components/avatar-picker";
@@ -279,11 +279,8 @@ function InlineCreateAgentDialog({
 
   const effectiveMachineId =
     selectedMachineId ||
-    firstUsableMachine(machines, userId)?.id ||
-    machineForRuntime(
-      runtimes.find((r) => isRuntimeUsableForUser(r, userId)),
-      machines,
-    )?.id ||
+    firstRuntimeMachine(machines)?.id ||
+    machineForRuntime(runtimes[0], machines)?.id ||
     "";
   const selectedMachine =
     machines.find((m) => m.id === effectiveMachineId) ?? null;
@@ -292,22 +289,19 @@ function InlineCreateAgentDialog({
     if (machineId === selectedMachineId) return;
     setSelectedMachineId(machineId);
     const next = machines.find((m) => m.id === machineId) ?? null;
-    setSelectedRuntimeId(firstUsableRuntimeIdOnMachine(next, userId));
+    setSelectedRuntimeId(firstRuntimeIdOnMachine(next));
   };
 
   const effectiveRuntimeId =
     selectedRuntimeId ||
-    firstUsableRuntimeIdOnMachine(selectedMachine, userId);
+    firstRuntimeIdOnMachine(selectedMachine);
   const selectedRuntime = runtimes.find((r) => r.id === effectiveRuntimeId) ?? null;
   const selectedRuntimeOnline =
     !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
-  const hasUsableRuntime = runtimes.some((r) => isRuntimeUsableForUser(r, userId));
-  const selectedRuntimeLocked =
-    selectedRuntime != null &&
-    !isRuntimeUsableForUser(selectedRuntime, userId);
+  const hasRuntime = runtimes.length > 0;
 
   const handleCreate = async () => {
-    if (!selectedRuntime || creating || selectedRuntimeLocked) return;
+    if (!selectedRuntime || creating) return;
     const trimmedModel = model.trim();
     if (!trimmedModel) {
       showErrorToast(t(($) => $.model_dropdown.select_required));
@@ -392,7 +386,7 @@ function InlineCreateAgentDialog({
             </div>
           </div>
 
-          {!hasUsableRuntime && !runtimesLoading ? (
+          {!hasRuntime && !runtimesLoading ? (
             <div className="rounded-lg border border-dashed bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground">
               {t(($) => $.windy.runtime_required)}
             </div>
@@ -448,8 +442,7 @@ function InlineCreateAgentDialog({
             disabled={
               !selectedRuntime ||
               creating ||
-              !hasUsableRuntime ||
-              selectedRuntimeLocked ||
+              !hasRuntime ||
               !model.trim()
             }
             className="w-full sm:w-auto"

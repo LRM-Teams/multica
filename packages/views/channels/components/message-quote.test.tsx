@@ -121,6 +121,32 @@ describe("ComposerQuotePreview", () => {
     expect(screen.queryByText(/agent_123/)).toBeNull();
   });
 
+  it("projects a quoted channel reference to its readable channel name (LRM-1431)", () => {
+    const raw = "[pr-ops](mention://channel/channel-1)";
+    render(
+      <ComposerQuotePreview
+        quote={message({
+          content: `ask ${raw}`,
+          parts: [
+            {
+              type: "reference",
+              ref_type: "channel-ref",
+              ref_id: "channel-1",
+              label: "pr-ops",
+              content_start_utf16: 4,
+              content_end_utf16: 4 + raw.length,
+            },
+          ],
+        } as never)}
+        cancelLabel="Cancel quote"
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("ask #pr-ops")).toBeInTheDocument();
+    expect(screen.queryByText(/mention:\/\/channel/)).toBeNull();
+  });
+
   it("still summarizes an ordinary quote — the control (#530)", () => {
     // Without this, a projection returning "" would satisfy the leak assertion
     // above while destroying every quote summary.

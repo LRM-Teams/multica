@@ -52,7 +52,6 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     update_state: "idle",
     runtime_health: "ok",
     owner_id: null,
-    visibility: "private",
     last_seen_at: "2026-04-27T11:59:50Z",
     created_at: "2026-04-01T00:00:00Z",
     updated_at: "2026-04-01T00:00:00Z",
@@ -548,7 +547,7 @@ describe("runtimeReachabilityFromAgent (LRM-248 AC5)", () => {
     expect(deriveAgentAvailability(stub, NOW)).toBe("online");
   });
 
-  it("buildPresenceMap uses the agent stub when the runtime is absent from the visible list", () => {
+  it("buildPresenceMap uses the agent stub when the runtime is absent from the list", () => {
     const agent = makeAgent({
       runtime_id: "private-rt",
       runtime_status: "online",
@@ -556,7 +555,7 @@ describe("runtimeReachabilityFromAgent (LRM-248 AC5)", () => {
     });
     const map = buildPresenceMap({
       agents: [agent],
-      runtimes: [], // filtered out by ListVisibleAgentRuntimes
+      runtimes: [], // simulates a stale or partial runtime-list response
       snapshot: [],
       now: NOW,
     });

@@ -38,7 +38,7 @@
     "section_remote": "远程",
     "section_cloud": "云端",
     "section_mine": "我的机器",
-    "section_team_public_other": "团队公开 ({{count}})",
+    "section_team_other": "团队 ({{count}})",
     "this_machine": "本机",
     "local_badge": "本地 · 这台机器",
     "runtime_count_other": "{{count}} 个运行时",
@@ -184,15 +184,6 @@
       "restart": "重启",
       "more_empty": "暂无更多操作"
     },
-    "sharing": {
-      "section": "共享设置",
-      "owner_only": "仅所有者可操作",
-      "switch_locked": "不可切换",
-      "switch_to": {
-        "public": "切换为公开",
-        "private": "切换为私有"
-      }
-    },
     "danger_zone": {
       "title": "危险区",
       "description": "从工作区永久删除此电脑及其全部 Runtime。"
@@ -239,16 +230,6 @@
   },
   "detail": {
     "no_agents": "还没有智能体绑定到这个运行时。",
-    "visibility_label": {
-      "private": "私有",
-      "public": "公开"
-    },
-    "visibility_hint": {
-      "private": "仅你和工作区管理员可以在此运行时上创建智能体。",
-      "public": "工作区内任何成员都可以在此运行时上创建智能体。"
-    },
-    "visibility_toast_updated": "可见性已设为「{{visibility}}」",
-    "visibility_toast_failed": "更新可见性失败",
     "delete_dialog": {
       "final": {
         "title": "删除运行时？",

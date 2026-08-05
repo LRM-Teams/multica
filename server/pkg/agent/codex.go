@@ -33,10 +33,9 @@ var codexBlockedArgs = map[string]blockedArgMode{
 // rejects). Kept as its own constant so bumping codex independently of
 // other agents stays easy if codex starts shipping longer failure traces.
 const (
-	codexStderrTailBytes                   = 2048
-	defaultCodexSemanticInactivityTimeout  = 10 * time.Minute
-	defaultCodexFirstTurnNoProgressTimeout = 30 * time.Second
-	codexVersionDiagnosticTimeout          = 2 * time.Second
+	codexStderrTailBytes                  = 2048
+	defaultCodexSemanticInactivityTimeout = 10 * time.Minute
+	codexVersionDiagnosticTimeout         = 2 * time.Second
 	// codexGracefulShutdownTimeout bounds how long the lifecycle goroutine
 	// waits for codex to exit on its own after stdin is closed, before forcing
 	// a context-cancel kill. A clean exit lets codex run its shutdown path and
@@ -746,7 +745,6 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			case activity := <-semanticActivityCh:
 				lastSemanticActivity = time.Now()
 				lastSemanticActivityDescription = activity
-				resetTimer(semanticTimer, semanticInactivityTimeout)
 				if activity == "status:running" && !firstTurnStarted {
 					firstTurnStarted = true
 					firstTurnNoProgressTimer = time.NewTimer(firstTurnNoProgressTimeout)
@@ -755,6 +753,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 					firstTurnProgressObserved = true
 					stopFirstTurnNoProgressTimer()
 				}
+				resetTimer(semanticTimer, semanticInactivityTimeout)
 			case <-firstTurnNoProgressTimerC:
 				waitingForTurn = false
 				finalStatus = "timeout"
@@ -776,15 +775,21 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			case <-semanticTimer.C:
 				waitingForTurn = false
 				finalStatus = "timeout"
+				timeoutKind := codexTimeoutSemanticInactivity
+				timeoutMarker := CodexSemanticInactivityMarker
+				if firstTurnStarted && !firstTurnProgressObserved {
+					timeoutKind = codexTimeoutFirstTurnNoProgress
+					timeoutMarker = CodexFirstTurnNoProgressMarker
+				}
 				timeoutDiagnostic = codexTimeoutDiagnostic{
-					Kind:         codexTimeoutSemanticInactivity,
+					Kind:         timeoutKind,
 					Timeout:      semanticInactivityTimeout,
 					LastActivity: lastSemanticActivityDescription,
 					ThreadID:     threadID,
 					TurnID:       c.turnID,
 					Model:        opts.Model,
 				}
-				b.cfg.Logger.Warn(CodexSemanticInactivityMarker,
+				b.cfg.Logger.Warn(timeoutMarker,
 					"pid", cmd.Process.Pid,
 					"thread_id", threadID,
 					"turn_id", c.turnID,
@@ -1011,15 +1016,16 @@ func stopTimer(timer *time.Timer) {
 	}
 }
 
+// A started Codex turn that has not emitted its first semantic event uses the
+// same inactivity budget as every later gap. A shorter independent cap used to
+// abort healthy turns whose first token or model-catalog preparation exceeded
+// 30 seconds even though the daemon's configured Codex inactivity budget is
+// normally much longer.
 func codexFirstTurnNoProgressTimeout(semanticInactivityTimeout time.Duration) time.Duration {
-	if semanticInactivityTimeout <= 0 || semanticInactivityTimeout > defaultCodexFirstTurnNoProgressTimeout {
-		return defaultCodexFirstTurnNoProgressTimeout
+	if semanticInactivityTimeout <= 0 {
+		return defaultCodexSemanticInactivityTimeout
 	}
-	scaled := semanticInactivityTimeout * 4 / 5
-	if scaled <= 0 {
-		return semanticInactivityTimeout
-	}
-	return scaled
+	return semanticInactivityTimeout
 }
 
 func isCodexFirstTurnProgressActivity(activity string) bool {

@@ -2368,11 +2368,13 @@ func TestPrepareCodexHomeAddsOnlyAgentWorkspaceWritableRoot(t *testing.T) {
 	t.Setenv("CODEX_HOME", sharedHome)
 
 	workspacesRoot := t.TempDir()
-	agentRoot := PredictAgentRootDir(workspacesRoot, "ws-codex-memory", "agent-1")
+	workspaceID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	agentID := "11111111-2222-3333-4444-555555555555"
+	agentRoot := PredictAgentRootDir(workspacesRoot, workspaceID, agentID)
 	env, err := prepareTestEnvironment(testPrepareParams{
 		WorkspacesRoot: workspacesRoot,
-		WorkspaceID:    "ws-codex-memory",
-		AgentID:        "11111111-2222-3333-4444-555555555555",
+		WorkspaceID:    workspaceID,
+		AgentID:        agentID,
 		Provider:       "codex",
 		Task:           TaskContextForEnv{IssueID: "memory-test", AgentRoot: agentRoot},
 	}, testLogger())

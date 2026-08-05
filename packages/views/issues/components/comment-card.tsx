@@ -460,6 +460,8 @@ function CommentRow({
           <QuickEmojiPicker
             onSelect={(emoji) => onToggleReaction(entry.id, emoji)}
             align="end"
+            moreLabel={t(($) => $.comment.more_emojis)}
+            loadingLabel={t(($) => $.comment.loading_emojis)}
           />
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -746,6 +748,8 @@ function CommentCardImpl({
                 <QuickEmojiPicker
                   onSelect={(emoji) => onToggleReaction(entry.id, emoji)}
                   align="end"
+                  moreLabel={t(($) => $.comment.more_emojis)}
+                  loadingLabel={t(($) => $.comment.loading_emojis)}
                 />
               <DropdownMenu>
                 <DropdownMenuTrigger

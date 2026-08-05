@@ -275,6 +275,8 @@
     "edit_placeholder": "コメントを編集...",
     "save_action": "保存",
     "cancel_edit": "キャンセル",
+    "more_emojis": "その他の絵文字",
+    "loading_emojis": "絵文字を読み込み中…",
     "copy_action": "コピー",
     "copied_toast": "コピーしました",
     "edit_action": "編集",

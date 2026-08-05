@@ -280,6 +280,8 @@
     "edit_placeholder": "编辑评论...",
     "save_action": "保存",
     "cancel_edit": "取消",
+    "more_emojis": "更多表情",
+    "loading_emojis": "正在加载表情…",
     "copy_action": "复制",
     "copied_toast": "已复制",
     "edit_action": "编辑",

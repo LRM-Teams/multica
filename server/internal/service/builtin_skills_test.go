@@ -417,7 +417,6 @@ func TestSquadsSkillRetired(t *testing.T) {
 	}
 }
 
-
 func TestAutopilotsSkillRetired(t *testing.T) {
 	// Autopilot product retired (LRM-1049 / Frank): skill must not ship.
 	for _, s := range loadBuiltinSkills() {
@@ -427,8 +426,8 @@ func TestAutopilotsSkillRetired(t *testing.T) {
 	}
 }
 
-func TestRuntimesAndReposSkillCoversClaimAndCheckoutChain(t *testing.T) {
-	skill, ok := findSkill(t, "multica-runtimes-and-repos")
+func TestRuntimesSkillCoversClaimChain(t *testing.T) {
+	skill, ok := findSkill(t, "multica-runtimes")
 	if !ok {
 		return
 	}
@@ -445,25 +444,21 @@ func TestRuntimesAndReposSkillCoversClaimAndCheckoutChain(t *testing.T) {
 		"agent_inbox_event",
 		"daemon drains and leases the canonical inbox event",
 		"multica runtime list --output json",
-		"multica repo checkout <url>",
-		"MULTICA_DAEMON_PORT",
-		"github_repo",
-		"local_directory",
-		"Runtime and repo commands affect active agent execution",
-		"references/runtimes-and-repos-source-map.md",
+		"Agent's durable workspace",
+		"references/runtimes-source-map.md",
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(body, want) {
-			t.Errorf("runtimes-and-repos skill missing %q", want)
+			t.Errorf("runtimes skill missing %q", want)
 		}
 	}
-	if !skillHasFile(skill, "references/runtimes-and-repos-source-map.md") {
-		t.Errorf("runtimes-and-repos skill missing supporting file references/runtimes-and-repos-source-map.md")
+	if !skillHasFile(skill, "references/runtimes-source-map.md") {
+		t.Errorf("runtimes skill missing supporting source map")
 	}
 }
 
-func TestProjectsAndResourcesSkillCoversDurableContext(t *testing.T) {
-	skill, ok := findSkill(t, "multica-projects-and-resources")
+func TestProjectsSkillCoversProjectOperations(t *testing.T) {
+	skill, ok := findSkill(t, "multica-projects")
 	if !ok {
 		return
 	}
@@ -477,22 +472,19 @@ func TestProjectsAndResourcesSkillCoversDurableContext(t *testing.T) {
 	}
 
 	mustContain := []string{
-		"Projects are durable context containers",
-		".multica/project/resources.json",
-		"multica project resource list <project-id> --output json",
-		"multica project resource add <project-id> --type github_repo --url <github-url> --output json",
-		"multica project resource add <project-id> --type local_directory",
-		"Project resources are durable and affect future tasks",
-		"github_repo.resource_ref.url",
-		"references/projects-and-resources-source-map.md",
+		"Projects group issues",
+		"multica project create --title",
+		"Agent memory",
+		"AGENTS.md",
+		"references/projects-source-map.md",
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(body, want) {
-			t.Errorf("projects-and-resources skill missing %q", want)
+			t.Errorf("projects skill missing %q", want)
 		}
 	}
-	if !skillHasFile(skill, "references/projects-and-resources-source-map.md") {
-		t.Errorf("projects-and-resources skill missing supporting file references/projects-and-resources-source-map.md")
+	if !skillHasFile(skill, "references/projects-source-map.md") {
+		t.Errorf("projects skill missing supporting source map")
 	}
 }
 

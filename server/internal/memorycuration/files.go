@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
 const (
@@ -84,7 +86,7 @@ func discoverAgentRoots(workspacesRoot, workspaceID string, agentIDs []string, a
 			roots = append(roots, agentRoot{
 				WorkspaceID: workspaceID,
 				AgentID:     id,
-				Root:        filepath.Join(workspacesRoot, workspaceID, ".multica", "agents", id),
+				Root:        agentworkspace.Root(workspacesRoot, workspaceID, id),
 			})
 		}
 		return roots, nil
@@ -107,7 +109,7 @@ func discoverAgentRoots(workspacesRoot, workspaceID string, agentIDs []string, a
 		sort.Strings(workspaceIDs)
 	}
 	for _, ws := range workspaceIDs {
-		base := filepath.Join(workspacesRoot, ws, ".multica", "agents")
+		base := agentworkspace.AgentsDir(workspacesRoot, ws)
 		entries, err := os.ReadDir(base)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -117,7 +119,7 @@ func discoverAgentRoots(workspacesRoot, workspaceID string, agentIDs []string, a
 		}
 		for _, entry := range entries {
 			if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
-				roots = append(roots, agentRoot{WorkspaceID: ws, AgentID: entry.Name(), Root: filepath.Join(base, entry.Name())})
+				roots = append(roots, agentRoot{WorkspaceID: ws, AgentID: entry.Name(), Root: agentworkspace.Root(workspacesRoot, ws, entry.Name())})
 			}
 		}
 	}

@@ -677,7 +677,6 @@
     "status_failed": "실패함",
     "status_queued": "대기열",
     "status_dispatched": "시작됨",
-    "status_waiting_local_directory": "대기 중",
     "status_cancelled": "취소됨",
     "status_unknown": "처리 중",
     "filter": "필터",

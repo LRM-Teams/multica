@@ -58,7 +58,6 @@ type APIClient struct {
 	AgentInboxEventID    string
 	AgentInboxDeliveryID string
 	AgentInboxLeaseToken string
-	AgentInboxSeqTo      int64
 	HTTPClient           *http.Client
 
 	// Identity overrides. Empty values fall back to the package-level

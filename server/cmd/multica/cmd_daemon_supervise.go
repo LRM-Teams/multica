@@ -384,4 +384,3 @@ func resolveVersionHandoffTarget() (string, error) {
 	}
 	return resolveVersionHandoffBinary(store, version)
 }
-

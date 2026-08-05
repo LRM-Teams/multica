@@ -214,10 +214,6 @@
       "runtime": {
         "title": "Copy from runtime",
         "desc": "Scan a local runtime and promote one of its on-disk skills into this workspace."
-      },
-      "platform": {
-        "title": "Install platform workflow",
-        "desc": "Add a Multica-maintained migration skill to this workspace."
       }
     },
     "method_card": {
@@ -226,9 +222,7 @@
       "url_title": "Import from URL",
       "url_desc": "Pull a published skill from ClawHub or Skills.sh.",
       "runtime_title": "Copy from runtime",
-      "runtime_desc": "Promote a skill already installed on your local runtime.",
-      "platform_title": "Memory migration workflow",
-      "platform_desc": "Install Multica's staged semantic migration skill, then assign it to agents that need to migrate old memory."
+      "runtime_desc": "Promote a skill already installed on your local runtime."
     },
     "manual": {
       "name_label": "Name",
@@ -255,15 +249,6 @@
       "fallback_error": "Import failed",
       "cancel": "Cancel",
       "toast_imported": "Skill imported"
-    },
-    "platform": {
-      "skill_title": "multica-memory-migration",
-      "skill_desc": "Adds a guided workflow for semantic migration from old agent folders: inventory, alias mapping, candidate extraction, REVIEW.md triage, safe writes, and a final report.",
-      "cancel": "Cancel",
-      "install": "Install skill",
-      "installing": "Installing...",
-      "toast_installed": "Installed migration skill",
-      "fallback_error": "Failed to install platform skill"
     }
   },
   "runtime_import": {

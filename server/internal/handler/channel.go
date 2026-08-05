@@ -3541,7 +3541,7 @@ func channelThreadWakeAnnotationState(memberType, taskStatus, terminalOutcome st
 	switch taskStatus {
 	case "queued", "pending":
 		return "pending", nil, true
-	case "dispatched", "running", "waiting_local_directory", "draining":
+	case "dispatched", "running", "draining":
 		return "delivered", nil, true
 	case "acked":
 		return "acked", nil, true

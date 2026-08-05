@@ -194,7 +194,6 @@ export type {
 } from "./honor";
 export type {
   Workspace,
-  WorkspaceRepo,
   Member,
   MemberRole,
   User,

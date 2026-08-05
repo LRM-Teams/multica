@@ -10,12 +10,9 @@ import (
 	"strings"
 )
 
-// sidecarManifestFile is the on-disk JSON Prepare writes into envRoot to
-// record every file and intermediate directory it created inside WorkDir.
-// CleanupSidecars reads it back to roll the workdir to its pre-Prepare
-// state. The file lives in envRoot (daemon scratch), never in WorkDir,
-// so a local_directory run does not litter the user's repo with the
-// bookkeeping file used to undo the litter.
+// sidecarManifestFile records the context files and directories Multica
+// created during the latest Agent workspace refresh. The next refresh uses it
+// to remove only Multica-owned paths before materializing current context.
 const sidecarManifestFile = ".multica_sidecar_manifest.json"
 
 // errPathPreExists is the sentinel recordWriteFile returns when the
@@ -31,17 +28,15 @@ const sidecarManifestFile = ".multica_sidecar_manifest.json"
 //     alternative slug (see allocateCollisionFreeSkillDir) and retries
 //     so the agent still discovers the Multica skill, just under a
 //     different directory name.
-//   - For Multica-only namespaces (.agent_context/issue_context.md,
-//     .multica/project/resources.json) the caller swallows the error
+//   - For Multica-only namespaces (.agent_context/issue_context.md) the caller
+//     swallows the error
 //     and proceeds — the agent's runtime brief already carries every
 //     fact that would have appeared in those files, so missing-from-
 //     disk is degraded behavior, not failure.
 var errPathPreExists = errors.New("execenv: refuse to overwrite pre-existing path")
 
-// sidecarManifest records the filesystem mutations writeContextFiles and
-// its callees make inside the agent's WorkDir for a single task. The
-// manifest is the second half of the contract that makes local_directory
-// runs byte-exactly reversible:
+// sidecarManifest records the filesystem mutations writeContextFiles and its
+// callees make inside AgentRoot during one refresh:
 //
 //   - Files lists absolute paths of regular files we created. Files are
 //     recorded only after recordWriteFile has verified the target did
@@ -58,12 +53,8 @@ var errPathPreExists = errors.New("execenv: refuse to overwrite pre-existing pat
 //     directory is recorded only when it did NOT pre-exist for the same
 //     reason files are conditional.
 //
-// The manifest is intentionally minimal: it carries the paths needed to
-// reverse our writes and nothing else. It is not a log of every operation
-// and is not a substitute for the runtime config marker block, which has
-// its own dedicated round-trip mechanism in runtime_config.go (the brief
-// is appended to user-owned content rather than written into a new sidecar
-// directory).
+// The manifest is intentionally minimal: it carries only the paths needed to
+// replace Multica-managed context on the next refresh.
 type sidecarManifest struct {
 	Files []string `json:"files,omitempty"`
 	Dirs  []string `json:"dirs,omitempty"`
@@ -75,10 +66,7 @@ type sidecarManifest struct {
 // recorded paths are appended in root-first order; Cleanup iterates in
 // reverse so the deepest directory is removed first.
 //
-// When m is nil this is identical to os.MkdirAll — the Reuse path uses
-// the nil mode because Reuse runs on cloud workdirs that the GC loop
-// wipes wholesale, so per-file cleanup is irrelevant and tracking the
-// dirs would just leave stale manifest bytes around.
+// When m is nil this is identical to os.MkdirAll.
 func recordMkdirAll(path string, perm os.FileMode, m *sidecarManifest) error {
 	if path == "" {
 		return os.MkdirAll(path, perm)
@@ -131,10 +119,7 @@ func recordMkdirAll(path string, perm os.FileMode, m *sidecarManifest) error {
 // once by leaving the corrupted bytes in place at exit. Refusing to
 // overwrite removes both halves of that failure mode.
 //
-// When m is nil this collapses to a plain os.WriteFile — the Reuse
-// path uses the nil mode because Reuse runs on cloud workdirs that
-// the GC loop wipes wholesale, so per-file collision avoidance is
-// irrelevant.
+// When m is nil this collapses to a plain os.WriteFile.
 func recordWriteFile(path string, data []byte, perm os.FileMode, m *sidecarManifest) error {
 	if m == nil {
 		return os.WriteFile(path, data, perm)
@@ -157,9 +142,8 @@ func recordWriteFile(path string, data []byte, perm os.FileMode, m *sidecarManif
 
 // managedSkillMarker is written into every skill directory Multica creates
 // under a provider-native skills parent (e.g. .cursor/skills/). It lets a
-// later Prepare reclaim our own leftover dirs — critical for local_directory
-// tasks, which skip Reuse and can otherwise accumulate `-multica-N` siblings
-// until allocateCollisionFreeSkillDir exhausts its attempt budget.
+// later refresh reclaim our own leftover dirs without confusing them with
+// Agent-created skill directories.
 const managedSkillMarker = ".multica-managed-skill"
 
 func isManagedSkillDir(dir string) bool {
@@ -173,9 +157,7 @@ func isManagedSkillDir(dir string) bool {
 // `-multica`, then `-multica-2`, `-multica-3`, … until a free slot is found.
 //
 // Directories Multica previously created (bearing managedSkillMarker) are
-// reclaimed in place instead of bumping the slug — otherwise local_directory
-// Prepare loops leave 64 collision siblings and inbox delivery fails with
-// "exhausted N attempts".
+// reclaimed in place instead of bumping the slug on every refresh.
 //
 // The collision-free fallback name is still a sibling under the same
 // skillsParent, so provider-native discovery still picks the skill up.
@@ -247,13 +229,8 @@ func reclaimManagedSkillCollisionSiblings(skillsParent, baseSlug, keepSlug strin
 	}
 }
 
-// writeSidecarManifest persists m to {envRoot}/{sidecarManifestFile}.
-// Empty manifests are still written so a later Cleanup that finds the
-// file knows tracking was attempted (vs. an old build that predates this
-// mechanism, where the file is absent and Cleanup must no-op). Failures
-// are returned to the caller; the caller treats them as non-fatal because
-// a missed manifest only degrades local_directory cleanup, not task
-// execution.
+// writeSidecarManifest persists m to {agentRoot}/{sidecarManifestFile}.
+// Empty manifests are still written so the next refresh knows tracking ran.
 func writeSidecarManifest(envRoot string, m *sidecarManifest) error {
 	if envRoot == "" {
 		return nil
@@ -268,9 +245,8 @@ func writeSidecarManifest(envRoot string, m *sidecarManifest) error {
 	return os.WriteFile(filepath.Join(envRoot, sidecarManifestFile), data, 0o644)
 }
 
-// CleanupSidecars rolls the user's workdir back to its pre-Prepare
-// state by removing every file the manifest at envRoot records and
-// then rmdir-ing every directory it records, deepest first.
+// CleanupSidecars removes context created by the previous Agent workspace
+// refresh, then removes recorded empty directories deepest first.
 //
 // Two failure modes the function deliberately swallows:
 //
@@ -296,18 +272,7 @@ func writeSidecarManifest(envRoot string, m *sidecarManifest) error {
 // entries so a single bad path does not strand the rest of the
 // rollback.
 //
-// The function is a no-op when:
-//   - envRoot is empty (no daemon scratch for this task),
-//   - the manifest file is missing (older build, or Prepare did not run).
-//
-// Pair this with CleanupRuntimeConfig on the local_directory cleanup
-// path: that function handles the runtime brief inside CLAUDE.md /
-// AGENTS.md / GEMINI.md, this one handles the sidecar tree
-// (.agent_context/, .multica/, .claude/skills/, .github/skills/,
-// .opencode/skills/, skills/, .pi/skills/, .cursor/skills/,
-// .kimi/skills/, .kiro/skills/, .agents/skills/, fallback
-// .agent_context/skills/). The two together restore the workdir to
-// byte-exact pre-task state.
+// The function is a no-op when AgentRoot is empty or the manifest is absent.
 func CleanupSidecars(envRoot string) error {
 	if envRoot == "" {
 		return nil
@@ -389,8 +354,8 @@ func CleanupSidecars(envRoot string) error {
 //
 // CleanupSidecars deliberately preserves a recorded directory once it has
 // become non-empty — the agent may have dropped a file inside a dir we
-// created, and on the local_directory teardown path that content must
-// survive. But that same preservation reopens #3684 on the reuse path: if a
+// created, and that content must survive generic cleanup. But that same
+// preservation reopens #3684 on refresh: if a
 // prior-run agent wrote into .claude/skills/issue-review/, CleanupSidecars
 // deletes the recorded SKILL.md yet keeps the directory, so the canonical
 // slug stays occupied and the refreshed skill dodges to
@@ -402,10 +367,8 @@ func CleanupSidecars(envRoot string) error {
 //
 // Only directories whose immediate parent is skillsParent are removed, so
 // the blast radius is exactly the platform's own skill roots: sibling skills
-// the agent installed under the same parent, checked-out repos, and the rest
-// of the workdir are untouched. The reuse path only ever runs on cloud
-// workdirs (the daemon skips Reuse for local_directory tasks), so there is no
-// user-owned skills tree to protect here in the first place.
+// the agent installed under the same parent and the rest of AgentRoot are
+// untouched.
 //
 // envRoot or skillsParent empty, a missing manifest, or a parse failure are
 // all no-ops — the refresh simply proceeds. The manifest file is left in

@@ -123,14 +123,10 @@ func restrictTaskForExecutionProfile(task Task, profile string) Task {
 		return task
 	}
 	contextMessages, memoryBudgetBytes := restrictedContextLimits(task, profile)
-	task.Repos = nil
-	task.ProjectResources = nil
 	task.ChatMessageAttachments = nil
 	task.PriorSessionID = ""
 	task.PriorWorkDir = ""
 	task.WorkspaceContext = ""
-	task.ProvisionManagedWorkdir = false
-	task.ManagedWorkdirRelPath = ""
 	task.ArealProxy = nil
 	task.ChatContextSummary = boundedRestrictedContext(task.ChatContextSummary, contextMessages, restrictedContextBytes)
 	task.ChatMessage = truncateUTF8Bytes(task.ChatMessage, restrictedMessageBytes)

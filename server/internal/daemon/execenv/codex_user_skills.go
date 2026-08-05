@@ -10,9 +10,9 @@ import (
 )
 
 // seedUserCodexSkills copies user-installed skill directories from the shared
-// ~/.codex/skills/ into the per-task CODEX_HOME so the codex CLI discovers
+// ~/.codex/skills/ into the Agent-scoped CODEX_HOME so the codex CLI discovers
 // them natively. Codex is the only runtime whose HOME is redirected to a
-// per-task directory (via the CODEX_HOME env var), so without this step the
+// Agent-scoped directory (via the CODEX_HOME env var), so without this step the
 // CLI never sees the user's `~/.codex/skills/` content.
 //
 // Workspace-assigned skills take precedence on name conflict: any user skill
@@ -60,7 +60,7 @@ func seedUserCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv,
 		src := filepath.Join(sharedSkillsDir, name)
 		// Installers like lark-cli ship each skill as a symlink into a
 		// shared ~/.agents/skills/<name>/ directory. Resolve symlinks so we
-		// copy the real content into the per-task home.
+		// copy the real content into the Agent-scoped home.
 		resolved, err := filepath.EvalSymlinks(src)
 		if err != nil {
 			logger.Warn("execenv: codex user-skill resolve failed", "name", name, "error", err)
@@ -85,7 +85,7 @@ func seedUserCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv,
 
 // copyDirTree walks src recursively and copies every regular file under it
 // to the matching path under dst. Nested symlinks are ignored to keep the
-// per-task home self-contained; the caller is expected to resolve the root
+// Agent-scoped home self-contained; the caller is expected to resolve the root
 // before calling.
 func copyDirTree(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, walkErr error) error {

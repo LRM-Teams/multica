@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -418,7 +420,7 @@ func TestReminderCacheCorruptDurableStateRecoversThroughCanonicalRuntimeReset(t 
 	d := &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
 		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 		reminderAgents: mgr,
@@ -511,7 +513,7 @@ func TestReminderCacheCorruptDurableStateResetPersistFailureKeepsTimersAndProjec
 	d := &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
 		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 		reminderAgents: mgr,
@@ -870,15 +872,15 @@ func TestReminderAgentManagerPersistsIdleResidency(t *testing.T) {
 func TestReminderAgentManagerBootstrapsRecoverableConfigAndKeepsRemovalTombstone(t *testing.T) {
 	root := t.TempDir()
 	config := cachedAgentCredential{
-		AgentID:     "agent-bootstrap",
+		AgentID:     uuid.NewString(),
 		RuntimeID:   "runtime-bootstrap",
-		WorkspaceID: "workspace-bootstrap",
+		WorkspaceID: uuid.NewString(),
 	}
 	raw, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, config.WorkspaceID, ".multica", "agents", config.AgentID, "runtime", "credentials", "current.json")
+	path := filepath.Join(agentworkspace.Root(root, config.WorkspaceID, config.AgentID), "runtime", "credentials", "current.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -986,7 +988,7 @@ func TestReminderReconnectRequestsSnapshotForRunningAndIdleOwners(t *testing.T) 
 	done := make(chan struct{})
 	d := &Daemon{
 		logger:         logger,
-		workspaces:     map[string]*workspaceState{"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache)},
+		workspaces:     map[string]*workspaceState{"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache)},
 		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 		reminderAgents: mgr,
 	}
@@ -1028,7 +1030,7 @@ func TestReminderLifecycleReplayEndsBeforeSnapshotAndPersistsAckCursor(t *testin
 	d := &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
 		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 		reminderAgents: mgr,
@@ -1087,7 +1089,7 @@ func TestReminderLifecycleHeartbeatCatchupRecoversLostMoveWithoutReconnect(t *te
 	d := &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a", "runtime-b"}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a", "runtime-b"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
 		runtimeIndex: map[string]Runtime{
 			"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"},
@@ -1224,7 +1226,7 @@ func TestReminderRuntimeSetReconcileRetiresOldStateBeforeNewLifecycleRecovery(t 
 	d := &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-new"}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-new"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
 		runtimeIndex:   map[string]Runtime{"runtime-new": {ID: "runtime-new", WorkspaceID: "workspace-a"}},
 		reminderAgents: mgr,
@@ -1388,7 +1390,7 @@ func TestReminderProjectionCursorLossAtomicResetUsesOnlyLocalResidencies(t *test
 	d := &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
 		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 		reminderAgents: mgr,
@@ -1447,7 +1449,7 @@ func TestReminderProjectionCursorLossResetPersistFailureKeepsGateClosedAndSendsN
 	d := &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
 		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 		reminderAgents: mgr,
@@ -1495,7 +1497,7 @@ func TestReminderLifecyclePersistFailureRollsBackAndSendsNoAckOrSnapshot(t *test
 	d := &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil, protocol.DaemonCapabilityReminderVersionedCache),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, protocol.DaemonCapabilityReminderVersionedCache),
 		},
 		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 		reminderAgents: mgr,
@@ -1524,7 +1526,7 @@ func TestServerOriginatedOwnerStartBypassesStaleCapabilityCacheAndSchedulesTimer
 	d := &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}),
 		},
 		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 		reminderAgents: newReminderAgentManager(t.TempDir(), logger),
@@ -1563,15 +1565,15 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	root := t.TempDir()
 	config := cachedAgentCredential{
-		AgentID:     "agent-a",
+		AgentID:     uuid.NewString(),
 		RuntimeID:   "runtime-a",
-		WorkspaceID: "workspace-a",
+		WorkspaceID: uuid.NewString(),
 	}
 	raw, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	configPath := filepath.Join(root, config.WorkspaceID, ".multica", "agents", config.AgentID, "runtime", "credentials", "current.json")
+	configPath := filepath.Join(agentworkspace.Root(root, config.WorkspaceID, config.AgentID), "runtime", "credentials", "current.json")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1592,7 +1594,7 @@ func TestReminderGenZeroOwnerRecoversAckedProjectionsThroughLifecycleCheckpointS
 	d = &Daemon{
 		logger: logger,
 		workspaces: map[string]*workspaceState{
-			config.WorkspaceID: newWorkspaceState(config.WorkspaceID, []string{config.RuntimeID}, "", nil, nil),
+			config.WorkspaceID: newWorkspaceState(config.WorkspaceID, []string{config.RuntimeID}),
 		},
 		runtimeIndex:   map[string]Runtime{config.RuntimeID: {ID: config.RuntimeID, WorkspaceID: config.WorkspaceID}},
 		reminderAgents: mgr,
@@ -1770,7 +1772,7 @@ func TestReminderLifecycleProbeAgainstOldServerStaysFailClosedWithoutReconnect(t
 	d := &Daemon{
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces: map[string]*workspaceState{
-			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}, "", nil, nil),
+			"workspace-a": newWorkspaceState("workspace-a", []string{"runtime-a"}),
 		},
 		runtimeIndex:   map[string]Runtime{"runtime-a": {ID: "runtime-a", WorkspaceID: "workspace-a"}},
 		reminderAgents: newReminderAgentManager(t.TempDir(), nil),

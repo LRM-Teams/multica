@@ -10,7 +10,6 @@ const mockUpdateWorkspace = vi.hoisted(() => vi.fn());
 const mockDeleteInstallation = vi.hoisted(() => vi.fn());
 const mockGetConnectURL = vi.hoisted(() => vi.fn());
 const mockInvalidate = vi.hoisted(() => vi.fn());
-const mockNavPush = vi.hoisted(() => vi.fn());
 const mockSetQueryData = vi.hoisted(() => vi.fn());
 
 const workspaceRef = vi.hoisted(() => ({
@@ -19,7 +18,6 @@ const workspaceRef = vi.hoisted(() => ({
     name: "Acme",
     slug: "acme",
     settings: {} as Record<string, unknown>,
-    repos: [{ url: "https://github.com/acme/api" }] as { url: string }[],
   },
 }));
 type MemberRole = "owner" | "admin" | "member" | "guest";
@@ -95,17 +93,6 @@ vi.mock("@multica/core/auth", () => {
   return { useAuthStore };
 });
 
-vi.mock("../../navigation", () => ({
-  useNavigation: () => ({
-    push: mockNavPush,
-    replace: vi.fn(),
-    back: vi.fn(),
-    pathname: "/acme/settings",
-    searchParams: new URLSearchParams("tab=github"),
-    getShareableUrl: (p: string) => `https://app.example${p}`,
-  }),
-}));
-
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
@@ -131,7 +118,6 @@ function resetFixtures() {
     name: "Acme",
     slug: "acme",
     settings: {},
-    repos: [{ url: "https://github.com/acme/api" }],
   };
   membersRef.current = [{ user_id: "user-1", role: "owner" }];
   installationsRef.current = { installations: [], configured: true, can_manage: true };
@@ -271,10 +257,4 @@ describe("GitHubTab", () => {
     expect(screen.getByText(/Connected by Jiayuan/)).toBeTruthy();
   });
 
-  it("repositories shortcut navigates to the repositories tab", async () => {
-    const user = userEvent.setup();
-    render(<GitHubTab />, { wrapper: I18nWrapper });
-    await user.click(screen.getByRole("button", { name: /Manage repositories/ }));
-    expect(mockNavPush).toHaveBeenCalledWith("/acme/settings?tab=repositories");
-  });
 });

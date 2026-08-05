@@ -12,22 +12,24 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+)
 
-	"github.com/multica-ai/multica/server/internal/daemon/execenv"
+const (
+	workdirRaceWorkspaceID = "11111111-1111-1111-1111-111111111111"
+	workdirRaceAgentID     = "22222222-2222-2222-2222-222222222222"
 )
 
 // TestHandleTask_DoesNotCallStartTaskItself is the regression guard for
 // issue #3999 race A. handleTask must not call /tasks/{id}/start before
 // runner.run — the runner is now responsible for calling StartTask only
-// after execenv.Prepare/Reuse has put env.WorkDir on disk, so consumers
+// after execenv.Prepare/Reuse has provisioned the AgentRoot on disk, so consumers
 // that read status==running can resolve the workdir path without racing
 // the daemon's os.MkdirAll.
 //
 // Before the fix: handleTask called StartTask before invoking the runner,
-// flipping the server-side state to "running" while the per-task workdir
-// still didn't exist on disk. Hermes/OpenClaw agents that resolved
-// /multica_workspaces/{ws}/{short-id}/workdir from the running signal
-// would then hit FileNotFoundError.
+// flipping the server-side state to "running" while the working directory
+// still didn't exist on disk. Providers resolving the cwd from the running
+// signal would then hit FileNotFoundError.
 func TestHandleTask_DoesNotCallStartTaskItself(t *testing.T) {
 	t.Parallel()
 
@@ -57,12 +59,11 @@ func TestHandleTask_DoesNotCallStartTaskItself(t *testing.T) {
 		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		workspaces:         make(map[string]*workspaceState),
 		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-		activeEnvRoots:     make(map[string]int),
 		cancelPollInterval: time.Hour, // disable poll-cancel path; we only care about the entry-side ordering
 	}
 
 	// Fake runner that does NOT call StartTask — production runTask does
-	// the call itself, after Prepare/Reuse confirms env.WorkDir on disk.
+	// the call itself, after Prepare/Reuse confirms AgentRoot on disk.
 	d.runner = taskRunnerFunc(func(_ context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
 		runnerCalled.Store(true)
 		return TaskResult{Status: "completed"}, nil
@@ -95,15 +96,15 @@ func TestRunTask_ChatWithoutRunTokenFailsBeforeAgentExecution(t *testing.T) {
 			startCalls.Add(1)
 		}
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
 	}))
 	t.Cleanup(srv.Close)
 
 	d := &Daemon{
-		client:         NewClient(srv.URL),
-		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		workspaces:     make(map[string]*workspaceState),
-		runtimeIndex:   map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-		activeEnvRoots: make(map[string]int),
+		client:       NewClient(srv.URL),
+		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:   make(map[string]*workspaceState),
+		runtimeIndex: map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
 		cfg: Config{
 			WorkspacesRoot: t.TempDir(),
 			Agents: map[string]AgentEntry{
@@ -114,12 +115,12 @@ func TestRunTask_ChatWithoutRunTokenFailsBeforeAgentExecution(t *testing.T) {
 
 	result, err := d.runTask(context.Background(), canonicalInboxTaskForTest(Task{
 		ID:            "task-chat-no-token",
-		WorkspaceID:   "ws-chat-no-token",
+		WorkspaceID:   workdirRaceWorkspaceID,
 		RuntimeID:     "rt-1",
 		IssueID:       "issue-chat-no-token",
 		ChatSessionID: "chat-1",
-		AgentID:       "agent-1",
-		Agent:         &AgentData{ID: "agent-1", Name: "test-agent"},
+		AgentID:       workdirRaceAgentID,
+		Agent:         &AgentData{ID: workdirRaceAgentID, Name: "test-agent"},
 	}), "claude", 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("runTask error = %v, want fail-closed TaskResult", err)
@@ -163,6 +164,7 @@ func TestRunTask_ChatTransportSetupErrorsFailBeforeAgentExecution(t *testing.T) 
 					startCalls.Add(1)
 				}
 				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("{}"))
 			}))
 			t.Cleanup(srv.Close)
 
@@ -171,7 +173,6 @@ func TestRunTask_ChatTransportSetupErrorsFailBeforeAgentExecution(t *testing.T) 
 				logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 				workspaces:          make(map[string]*workspaceState),
 				runtimeIndex:        map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-				activeEnvRoots:      make(map[string]int),
 				resolveExecutable:   tc.resolveExecutable,
 				prepareCLITransport: tc.prepareCLITransport,
 				cfg: Config{
@@ -184,12 +185,13 @@ func TestRunTask_ChatTransportSetupErrorsFailBeforeAgentExecution(t *testing.T) 
 
 			result, err := d.runTask(context.Background(), canonicalInboxTaskForTest(Task{
 				ID:            "task-chat-transport-setup",
-				WorkspaceID:   "ws-chat-transport-setup",
+				WorkspaceID:   workdirRaceWorkspaceID,
 				RuntimeID:     "rt-1",
 				IssueID:       "issue-chat-transport-setup",
 				ChatSessionID: "chat-1",
 				AuthToken:     "task-token",
-				Agent:         &AgentData{Name: "test-agent"},
+				AgentID:       workdirRaceAgentID,
+				Agent:         &AgentData{ID: workdirRaceAgentID, Name: "test-agent"},
 			}), "claude", 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if err != nil {
 				t.Fatalf("runTask error = %v, want fail-closed TaskResult", err)
@@ -201,97 +203,5 @@ func TestRunTask_ChatTransportSetupErrorsFailBeforeAgentExecution(t *testing.T) 
 				t.Fatalf("legacy StartTask calls = %d, want zero", startCalls.Load())
 			}
 		})
-	}
-}
-
-// TestHandleTask_KeepsEnvRootActiveAcrossCompletion is the regression guard
-// for issue #3999 race B. After runner.run returns, the in-process active
-// guard installed inside runTask (defer unmarkActiveEnvRoot at the
-// goroutine's exit) has already fired by the time handleTask calls
-// reportTaskResult and execenv.WriteGCMeta. Without an outer guard at the
-// handleTask level, the GC loop sees a window where the directory has
-// neither isActiveEnvRoot nor a .gc_meta.json file — falling through to
-// orphanByMTime, gated only by the 72h GCOrphanTTL.
-//
-// This test fakes the inner guard's lifecycle (mark + deferred unmark),
-// then asserts that at the moment /complete is hit (i.e. between runner.run
-// returning and WriteGCMeta running), isActiveEnvRoot(envRoot) is still
-// true thanks to the outer guard handleTask installs.
-func TestHandleTask_KeepsEnvRootActiveAcrossCompletion(t *testing.T) {
-	t.Parallel()
-
-	workspacesRoot := t.TempDir()
-	workspaceID := "ws-active-during-complete"
-	taskID := "task-active-during-complete"
-	expectedEnvRoot := execenv.PredictRootDir(workspacesRoot, workspaceID, taskID)
-
-	var (
-		completeCalled   atomic.Bool
-		activeAtComplete atomic.Bool
-	)
-
-	d := &Daemon{
-		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
-		workspaces:         make(map[string]*workspaceState),
-		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-		activeEnvRoots:     make(map[string]int),
-		cancelPollInterval: time.Hour,
-		cfg:                Config{WorkspacesRoot: workspacesRoot},
-	}
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/complete") {
-			completeCalled.Store(true)
-			// This is the exact window race B exposed: the inner deferred
-			// unmark has already fired (see fake runner below); only the
-			// outer guard installed by handleTask keeps the env root in the
-			// active set at this moment.
-			if d.isActiveEnvRoot(expectedEnvRoot) {
-				activeAtComplete.Store(true)
-			}
-		}
-		w.WriteHeader(http.StatusOK)
-		// See the sibling handler in TestHandleTask_DoesNotCallStartTaskItself:
-		// an empty body here decodes as io.EOF, which reads as a transient
-		// error and sends handleTask into a real multi-second retry backoff
-		// instead of the mocked-instant round trip this test expects.
-		_, _ = w.Write([]byte("{}"))
-	}))
-	t.Cleanup(srv.Close)
-	d.client = NewClient(srv.URL)
-
-	// Fake runner mimics the real runTask's mark/defer-unmark pair. Without
-	// the outer guard added in handleTask, the deferred unmark would bring
-	// isActiveEnvRoot back to false before reportTaskResult fires.
-	d.runner = taskRunnerFunc(func(_ context.Context, tk Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
-		predicted := execenv.PredictRootDir(d.cfg.WorkspacesRoot, tk.WorkspaceID, tk.ID)
-		d.markActiveEnvRoot(predicted)
-		defer d.unmarkActiveEnvRoot(predicted)
-		return TaskResult{
-			Status:  "completed",
-			EnvRoot: predicted,
-		}, nil
-	})
-
-	task := canonicalInboxTaskForTest(Task{
-		ID:          taskID,
-		WorkspaceID: workspaceID,
-		RuntimeID:   "rt-1",
-		IssueID:     "issue-active-during-complete",
-		Agent:       &AgentData{Name: "test-agent"},
-	})
-
-	d.handleTask(context.Background(), task, 0)
-
-	if !completeCalled.Load() {
-		t.Fatal("/complete was never hit — handleTask did not reach reportTaskResult")
-	}
-	if !activeAtComplete.Load() {
-		t.Fatal("env root was NOT in the active set at /complete time — issue #3999 race B regression: GC could reclaim the directory between runner.run returning and WriteGCMeta landing on disk")
-	}
-	// And the outer guard must have been released by the time handleTask
-	// returned, otherwise we'd be leaking active marks across tasks.
-	if d.isActiveEnvRoot(expectedEnvRoot) {
-		t.Fatal("env root remained active after handleTask returned — outer guard's deferred unmark did not fire")
 	}
 }

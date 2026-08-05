@@ -131,7 +131,7 @@ const WRITE_LONGPATH: ActivityEvent = {
   activity_kind: "tool_call",
   detail_kind: "tool_use",
   tool: "write_file",
-  tool_target: "/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt",
+  tool_target: "/Users/frank/.multica/workspaces/workspace-1/agents/agent-1/pathcheck.txt",
   status: "completed",
   target_ref: { kind: "agent", id: "agent-1" },
 };
@@ -316,11 +316,11 @@ describe("ActivityTimeline", () => {
     // head span — never right-truncate the basename), and the full path is
     // exposed on hover via `title`.
     render(<ActivityTimeline events={[WRITE_LONGPATH]} />);
-    const full = "/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt";
+    const full = "/Users/frank/.multica/workspaces/workspace-1/agents/agent-1/pathcheck.txt";
     // Basename (with leading "/") is a discrete, non-truncating node.
     expect(screen.getByText("/pathcheck.txt")).toBeInTheDocument();
     // Leading directories live in a truncating head span (middle-ellipsis).
-    const head = screen.getByText("/Users/frank/multica_workspaces/7373de75/workdir");
+    const head = screen.getByText("/Users/frank/.multica/workspaces/workspace-1/agents/agent-1");
     expect(head).toHaveClass("truncate");
     // Full path is recoverable on hover.
     expect(screen.getByTitle(full)).toBeInTheDocument();
@@ -332,7 +332,7 @@ describe("ActivityTimeline", () => {
     expect(screen.getByText("Writing file")).toBeInTheDocument();
     expect(screen.queryByText("/pathcheck.txt")).toBeNull();
     expect(
-      screen.queryByTitle("/Users/frank/multica_workspaces/7373de75/workdir/pathcheck.txt"),
+      screen.queryByTitle("/Users/frank/.multica/workspaces/workspace-1/agents/agent-1/pathcheck.txt"),
     ).toBeNull();
   });
 

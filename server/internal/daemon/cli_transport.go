@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/turntransport"
 )
 
@@ -17,7 +18,7 @@ func prepareStableAgentCLITransport(cfg Config, workspaceID, agentID, multicaBin
 	if workspaceID == "" || agentID == "" {
 		return nil, fmt.Errorf("workspace_id and agent_id are required")
 	}
-	root := filepath.Join(multicaAgentRoot(cfg, workspaceID, agentID), "runtime", "cli-transport")
+	root := filepath.Join(agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID), "runtime", "cli-transport")
 	return turntransport.Prepare(root, multicaBin)
 }
 
@@ -62,7 +63,7 @@ func prepareTaskCLITransport(cfg Config, workspaceID, agentID, runID, multicaBin
 		return "", "", fmt.Errorf("task token is required")
 	}
 
-	root := filepath.Join(multicaAgentRoot(cfg, workspaceID, agentID), "runtime", "cli-transport", runID)
+	root := filepath.Join(agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID), "runtime", "cli-transport", runID)
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", "", fmt.Errorf("create cli transport dir: %w", err)
 	}

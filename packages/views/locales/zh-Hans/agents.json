@@ -667,7 +667,6 @@
     "status_failed": "失败",
     "status_queued": "排队中",
     "status_dispatched": "已派发",
-    "status_waiting_local_directory": "等待中",
     "status_cancelled": "已取消",
     "status_unknown": "处理中",
     "filter": "筛选",

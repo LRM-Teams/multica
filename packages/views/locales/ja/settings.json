@@ -33,7 +33,6 @@
       "tokens": "API トークン",
       "sandboxes": "サンドボックス",
       "general": "一般",
-      "repositories": "リポジトリ",
       "github": "GitHub",
       "integrations": "連携",
       "labs": "ラボ",
@@ -444,9 +443,6 @@
     "feature_co_author_description_suffix": "を追加します。",
     "feature_auto_link_label": "イシューと PR を自動リンク",
     "feature_auto_link_description": "PR のタイトル、本文、ブランチ名をイシュー識別子と照合し、自動でリンクを作成します。",
-    "section_repositories": "リポジトリ",
-    "repositories_shortcut_label": "リポジトリ URL はリポジトリタブにあります",
-    "repositories_shortcut_link": "リポジトリを管理 →",
     "toast_failed": "GitHub 設定を更新できませんでした"
   },
   "lark": {
@@ -523,24 +519,6 @@
     "install_error_session_lost": "設置セッションが期限切れまたは失われました。もう一度スキャンしてやり直してください。",
     "install_error_forbidden": "このワークスペースに Lark ボットを設置する権限がなくなりました。ワークスペース管理者にお問い合わせください。",
     "install_error_generic": "設置に失敗しました。もう一度お試しください。"
-  },
-  "repositories": {
-    "section_title": "リポジトリ",
-    "description": "このワークスペースに関連付けられた Git リポジトリです。エージェントはこれらをクローンしてコードを作業します。",
-    "url_placeholder": "https://git.example.com/org/repo.git または git@git.example.com:org/repo.git",
-    "url_empty": "（空の URL）",
-    "description_placeholder": "説明（例: Go バックエンド + Next.js フロントエンド）",
-    "add": "リポジトリを追加",
-    "save": "保存",
-    "saving": "保存中...",
-    "saved_hint": "すべての変更を保存しました",
-    "empty": "まだリポジトリがありません。",
-    "edit_aria": "リポジトリを編集",
-    "cancel_aria": "編集をキャンセル",
-    "delete_aria": "リポジトリを削除",
-    "manage_hint": "リポジトリを管理できるのは admin と owner のみです。",
-    "toast_saved": "リポジトリを保存しました",
-    "toast_save_failed": "リポジトリを保存できませんでした"
   },
   "desktop": {
     "tabs": {

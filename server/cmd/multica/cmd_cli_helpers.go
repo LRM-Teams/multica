@@ -3,8 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -42,11 +40,6 @@ func newAPIClient(cmd *cobra.Command) (*cli.APIClient, error) {
 	}
 	if leaseToken := os.Getenv("MULTICA_AGENT_INBOX_LEASE_TOKEN"); leaseToken != "" {
 		client.AgentInboxLeaseToken = leaseToken
-	}
-	if seqTo := strings.TrimSpace(os.Getenv("MULTICA_AGENT_INBOX_SEQ_TO")); seqTo != "" {
-		if parsed, err := strconv.ParseInt(seqTo, 10, 64); err == nil && parsed > 0 {
-			client.AgentInboxSeqTo = parsed
-		}
 	}
 	return client, nil
 }

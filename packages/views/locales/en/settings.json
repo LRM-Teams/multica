@@ -33,7 +33,6 @@
       "tokens": "API Tokens",
       "sandboxes": "Sandboxes",
       "general": "General",
-      "repositories": "Repositories",
       "github": "GitHub",
       "integrations": "Integrations",
       "labs": "Labs",
@@ -597,9 +596,6 @@
     "feature_co_author_description_suffix": "to commits authored by agents.",
     "feature_auto_link_label": "Auto-link issues and PRs",
     "feature_auto_link_description": "Match PR titles, bodies, and branch names against issue identifiers and create the link automatically.",
-    "section_repositories": "Repositories",
-    "repositories_shortcut_label": "Repository URLs live in the Repositories tab",
-    "repositories_shortcut_link": "Manage repositories →",
     "toast_failed": "Failed to update GitHub settings"
   },
   "lark": {
@@ -676,24 +672,6 @@
     "install_error_session_lost": "Install session expired or was lost. Scan again to start over.",
     "install_error_forbidden": "You no longer have permission to install Lark Bots in this workspace. Ask a workspace admin to continue.",
     "install_error_generic": "Install failed. Try again."
-  },
-  "repositories": {
-    "section_title": "Repositories",
-    "description": "Git repositories associated with this workspace. Agents use these to clone and work on code.",
-    "url_placeholder": "https://git.example.com/org/repo.git or git@git.example.com:org/repo.git",
-    "url_empty": "(empty URL)",
-    "description_placeholder": "Description (e.g. Go backend + Next.js frontend)",
-    "add": "Add repository",
-    "save": "Save",
-    "saving": "Saving...",
-    "saved_hint": "All changes saved",
-    "empty": "No repositories yet.",
-    "edit_aria": "Edit repository",
-    "cancel_aria": "Cancel edit",
-    "delete_aria": "Delete repository",
-    "manage_hint": "Only admins and owners can manage repositories.",
-    "toast_saved": "Repositories saved",
-    "toast_save_failed": "Failed to save repositories"
   },
   "desktop": {
     "tabs": {

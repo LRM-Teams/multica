@@ -19,7 +19,7 @@ func TestHandleDeleteDirRequest_ConfinedAndIdempotent(t *testing.T) {
 	}
 	writes := make(chan []byte, 1)
 
-	targetRel := filepath.ToSlash(filepath.Join("ws", ".multica", "agents", "deadbeef-dead-beef-dead-beefdeadbeef"))
+	targetRel := filepath.ToSlash(filepath.Join("ws", "deadbeef-dead-beef-dead-beefdeadbeef"))
 	abs := filepath.Join(root, filepath.FromSlash(targetRel))
 	if err := os.MkdirAll(abs, 0o755); err != nil {
 		t.Fatal(err)

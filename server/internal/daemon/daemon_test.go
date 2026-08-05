@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
-	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -171,7 +171,7 @@ func TestDaemonRegister_InvalidWorkspaceDaemonTokenRetriesBootstrap(t *testing.T
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		agentVersions: make(map[string]string),
 		workspaces: map[string]*workspaceState{
-			"ws-1": newWorkspaceState("ws-1", []string{"old-rt"}, "", nil, nil),
+			"ws-1": newWorkspaceState("ws-1", []string{"old-rt"}),
 		},
 		runtimeIndex: map[string]Runtime{
 			"old-rt": {ID: "old-rt", WorkspaceID: "ws-1", Provider: "pi"},
@@ -2556,7 +2556,6 @@ func TestShouldInterruptAgent(t *testing.T) {
 		{name: "status completed (finished elsewhere)", status: "completed", err: nil, want: true},
 		{name: "task deleted (404)", status: "", err: notFound, want: true},
 		{name: "running normally", status: "running", err: nil, want: false},
-		{name: "waiting_local_directory keeps running", status: "waiting_local_directory", err: nil, want: false},
 		{name: "dispatched keeps running", status: "dispatched", err: nil, want: false},
 		{name: "transient 5xx is not a cancel signal", status: "", err: transient, want: false},
 		{name: "no information yet", status: "", err: nil, want: false},
@@ -2752,10 +2751,9 @@ func TestHandleTask_CancellingAStuckInboxTaskForceKillsIt(t *testing.T) {
 	}
 }
 
-func TestPiAgentEnvUsesNestedAgentIDFallback(t *testing.T) {
+func TestResolvedTaskAgentIDPrefersNestedAgent(t *testing.T) {
 	t.Parallel()
 
-	workspaceRoot := filepath.Join(t.TempDir(), "multica_workspaces")
 	task := Task{
 		WorkspaceID: "workspace-1",
 		Agent:       &AgentData{ID: "agent-nested", Name: "Pi Agent"},
@@ -2764,43 +2762,15 @@ func TestPiAgentEnvUsesNestedAgentIDFallback(t *testing.T) {
 	if agentID != "agent-nested" {
 		t.Fatalf("resolvedTaskAgentID = %q, want nested agent id", agentID)
 	}
-
-	env := map[string]string{}
-	addPiAgentEnv(env, Config{WorkspacesRoot: workspaceRoot}, task.WorkspaceID, agentID)
-
-	agentRoot := filepath.Join(workspaceRoot, "workspace-1", ".multica", "agents", "agent-nested")
-	want := map[string]string{
-		"PI_AGENT_ROOT":             agentRoot,
-		"PI_MEMORY_DIR":             filepath.Join(agentRoot, "memory"),
-		"PI_SKILL_DRAFTS_DIR":       filepath.Join(agentRoot, "skills", "drafts"),
-		"PI_AGENT_INBOX_DIR":        filepath.Join(agentRoot, "inbox"),
-		"PI_AGENT_SHARED_CACHE_DIR": filepath.Join(agentRoot, "shared-cache"),
-		"PI_AGENT_PROFILE_DIR":      filepath.Join(agentRoot, "profile"),
-		"PI_AGENT_FEEDBACK_DIR":     filepath.Join(agentRoot, "feedback"),
-		"PI_AGENT_SYNC_QUEUE_DIR":   filepath.Join(agentRoot, "sync_queue"),
-	}
-	for key, value := range want {
-		if got := env[key]; got != value {
-			t.Fatalf("%s = %q, want %q", key, got, value)
-		}
-	}
 }
 
-func TestPiAgentEnvUsesTopLevelAgentIDFallback(t *testing.T) {
+func TestResolvedTaskAgentIDFallsBackToTopLevelAgent(t *testing.T) {
 	t.Parallel()
 
-	workspaceRoot := filepath.Join(t.TempDir(), "multica_workspaces")
 	task := Task{WorkspaceID: "workspace-1", AgentID: "agent-top"}
 	agentID := resolvedTaskAgentID(task)
 	if agentID != "agent-top" {
 		t.Fatalf("resolvedTaskAgentID = %q, want top-level agent id", agentID)
-	}
-
-	env := map[string]string{}
-	addPiAgentEnv(env, Config{WorkspacesRoot: workspaceRoot}, task.WorkspaceID, agentID)
-	wantRoot := filepath.Join(workspaceRoot, "workspace-1", ".multica", "agents", "agent-top")
-	if got := env["PI_AGENT_ROOT"]; got != wantRoot {
-		t.Fatalf("PI_AGENT_ROOT = %q, want %q", got, wantRoot)
 	}
 }
 
@@ -2808,7 +2778,7 @@ func TestPiAgentEnvDisablesExpensiveAutomaticMemoryWork(t *testing.T) {
 	t.Parallel()
 
 	env := map[string]string{}
-	addPiAgentEnv(env, Config{WorkspacesRoot: t.TempDir()}, "workspace-1", "agent-1")
+	addPiMemoryFastModeEnv(env)
 
 	want := map[string]string{
 		"PI_MEMORY_BACKGROUND_SHUTDOWN":          "off",
@@ -2835,18 +2805,11 @@ func TestMulticaAgentEnvUsesProviderNeutralRoot(t *testing.T) {
 
 	workspaceRoot := filepath.Join(t.TempDir(), "multica_workspaces")
 	env := map[string]string{}
-	addMulticaAgentEnv(env, Config{WorkspacesRoot: workspaceRoot, DaemonID: "daemon-1"}, "workspace-1", "agent-1", "project-1")
+	addMulticaAgentEnv(env, Config{WorkspacesRoot: workspaceRoot, DaemonID: "daemon-1"}, "workspace-1", "agent-1")
 
-	agentRoot := filepath.Join(workspaceRoot, "workspace-1", ".multica", "agents", "agent-1")
+	agentRoot := agentworkspace.Root(workspaceRoot, "workspace-1", "agent-1")
 	want := map[string]string{
-		"MULTICA_AGENT_ROOT":           agentRoot,
-		"MULTICA_AGENT_MEMORY_DIR":     filepath.Join(agentRoot, "memory"),
-		"MULTICA_DEVICE_MEMORY_DIR":    filepath.Join(agentRoot, "devices", "daemon-1"),
-		"MULTICA_AGENT_NOTES_DIR":      filepath.Join(agentRoot, "notes"),
-		"MULTICA_AGENT_PROFILE_DIR":    filepath.Join(agentRoot, "profile"),
-		"MULTICA_AGENT_FEEDBACK_DIR":   filepath.Join(agentRoot, "feedback"),
-		"MULTICA_AGENT_SYNC_QUEUE_DIR": filepath.Join(agentRoot, "sync_queue"),
-		"MULTICA_PROJECT_MEMORY_DIR":   filepath.Join(agentRoot, "projects", "project-1"),
+		"MULTICA_AGENT_ROOT": agentRoot,
 	}
 	for key, value := range want {
 		if got := env[key]; got != value {
@@ -2855,13 +2818,11 @@ func TestMulticaAgentEnvUsesProviderNeutralRoot(t *testing.T) {
 	}
 }
 
-func TestBlockedEnvKeyBlocksPiMemoryOverrides(t *testing.T) {
+func TestBlockedEnvKeyProtectsProviderNeutralAgentRoot(t *testing.T) {
 	t.Parallel()
 
-	for _, key := range []string{"PI_AGENT_ROOT", "PI_MEMORY_DIR", "PI_SKILL_DRAFTS_DIR", "PI_AGENT_SYNC_QUEUE_DIR", "MULTICA_AGENT_ROOT", "MULTICA_AGENT_MEMORY_DIR", "MULTICA_DEVICE_MEMORY_DIR", "MULTICA_PROJECT_MEMORY_DIR"} {
-		if !isBlockedEnvKey(key) {
-			t.Fatalf("%s should be blocked from custom_env", key)
-		}
+	if !isBlockedEnvKey("MULTICA_AGENT_ROOT") {
+		t.Fatal("MULTICA_AGENT_ROOT should be blocked from custom_env")
 	}
 	for _, key := range []string{"PI_MEMORY_LEARNING", "PI_MEMORY_QMD_UPDATE", "PI_MEMORY_AUTO_SYNC"} {
 		if isBlockedEnvKey(key) {
@@ -2878,9 +2839,9 @@ func TestInjectScopedSecretsFiltersByChannelAndProject(t *testing.T) {
 		ChannelID: "chan-a",
 		ProjectID: "proj-a",
 		Agent: &AgentData{CustomEnv: map[string]string{
-			"AGENT_KEY":       "agent",
-			"MULTICA_TASK_ID": "blocked",
-			"PI_AGENT_ROOT":   "blocked",
+			"AGENT_KEY":          "agent",
+			"MULTICA_TASK_ID":    "blocked",
+			"MULTICA_AGENT_ROOT": "blocked",
 		}},
 		ScopedSecrets: []ScopedSecret{
 			{Key: "CHANNEL_A", Value: "a", Scope: "channel", ChannelID: "chan-a"},
@@ -2893,7 +2854,7 @@ func TestInjectScopedSecretsFiltersByChannelAndProject(t *testing.T) {
 	if env["AGENT_KEY"] != "agent" || env["CHANNEL_A"] != "a" || env["PROJ_A"] != "pa" {
 		t.Fatalf("expected allowed secrets, got %#v", env)
 	}
-	for _, key := range []string{"CHANNEL_B", "PROJ_B", "MULTICA_TASK_ID", "PI_AGENT_ROOT"} {
+	for _, key := range []string{"CHANNEL_B", "PROJ_B", "MULTICA_TASK_ID", "MULTICA_AGENT_ROOT"} {
 		if _, ok := env[key]; ok {
 			t.Fatalf("leaked or blocked key %q present: %#v", key, env)
 		}
@@ -2994,25 +2955,6 @@ func newTestDaemon(t *testing.T) *Daemon {
 		client: NewClient(srv.URL),
 		logger: slog.Default(),
 	}
-}
-
-func newRepoReadyTestDaemon(t *testing.T, handler http.HandlerFunc) *Daemon {
-	t.Helper()
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-	d := &Daemon{
-		client:       NewClient(srv.URL),
-		repoCache:    repocache.New(t.TempDir(), slog.Default()),
-		logger:       slog.Default(),
-		workspaces:   make(map[string]*workspaceState),
-		runtimeIndex: make(map[string]Runtime),
-	}
-	// Drain background syncs (started by registerTaskRepos) before the
-	// t.TempDir cache root is cleaned up, otherwise an in-flight clone/fetch
-	// races against the deletion and the test fails with a misleading
-	// "directory not empty" cleanup error.
-	t.Cleanup(d.waitBackgroundSyncs)
-	return d
 }
 
 func TestGateResumeToReusedWorkdir(t *testing.T) {
@@ -4031,291 +3973,6 @@ func TestExecuteAndDrain_IdleWatchdog_FiresAfterToolResultIfBackendStaysSilent(t
 	}
 	if result.Status != "idle_watchdog" {
 		t.Fatalf("expected status=idle_watchdog after tool_result with no further activity, got %q (err=%q)", result.Status, result.Error)
-	}
-}
-
-// ensureRepoReady must refresh `workspaceState.settings` on every checkout —
-// even when the repo cache already holds the URL. The /repo/checkout handler
-// reads `workspaceCoAuthoredByEnabled` right after, and the 30s workspace
-// sync tick is too slow to make a freshly-flipped GitHub toggle feel live.
-// PR #2847 review by Emacs caught this fast-path regression; the test
-// asserts the cached-repo path still issues exactly one refresh.
-func TestEnsureRepoReadyCachedRepoStillRefreshesSettings(t *testing.T) {
-	t.Parallel()
-
-	sourceRepo := createDaemonTestRepo(t)
-	var refreshCalls atomic.Int32
-	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/daemon/workspaces/ws-1/repos" {
-			http.NotFound(w, r)
-			return
-		}
-		refreshCalls.Add(1)
-		json.NewEncoder(w).Encode(WorkspaceReposResponse{
-			WorkspaceID:  "ws-1",
-			Repos:        []RepoData{{URL: sourceRepo}},
-			ReposVersion: "v2",
-			Settings:     json.RawMessage(`{"github_enabled":false,"co_authored_by_enabled":true}`),
-		})
-	})
-	if err := d.repoCache.Sync("ws-1", []repocache.RepoInfo{{URL: sourceRepo}}); err != nil {
-		t.Fatalf("seed repo cache: %v", err)
-	}
-	// Workspace starts with the master switch ON. The server above will return
-	// the user's just-flipped OFF state — ensureRepoReady must pick that up
-	// before the handler reads workspaceCoAuthoredByEnabled.
-	d.workspaces["ws-1"] = newWorkspaceState(
-		"ws-1",
-		nil,
-		"v1",
-		[]RepoData{{URL: sourceRepo}},
-		json.RawMessage(`{"github_enabled":true,"co_authored_by_enabled":true}`),
-	)
-	if !d.workspaceCoAuthoredByEnabled("ws-1") {
-		t.Fatalf("precondition: expected co-author hook enabled before checkout")
-	}
-
-	if err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
-		t.Fatalf("ensureRepoReady: %v", err)
-	}
-	if got := refreshCalls.Load(); got != 1 {
-		t.Fatalf("expected exactly 1 refresh call on cached repo, got %d", got)
-	}
-	if d.workspaceCoAuthoredByEnabled("ws-1") {
-		t.Fatalf("expected co-author hook disabled after server-side toggle; daemon used stale workspaceState.settings via cache fast path")
-	}
-}
-
-func TestEnsureRepoReadyTrimsURL(t *testing.T) {
-	t.Parallel()
-
-	sourceRepo := createDaemonTestRepo(t)
-	var refreshCalls atomic.Int32
-	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/daemon/workspaces/ws-1/repos" {
-			http.NotFound(w, r)
-			return
-		}
-		refreshCalls.Add(1)
-		json.NewEncoder(w).Encode(WorkspaceReposResponse{
-			WorkspaceID:  "ws-1",
-			Repos:        []RepoData{{URL: sourceRepo}},
-			ReposVersion: "v2",
-		})
-	})
-	if err := d.repoCache.Sync("ws-1", []repocache.RepoInfo{{URL: sourceRepo}}); err != nil {
-		t.Fatalf("seed repo cache: %v", err)
-	}
-	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "v1", []RepoData{{URL: sourceRepo}}, nil)
-
-	// URL with trailing whitespace should still resolve to the cached repo.
-	if err := d.ensureRepoReady(context.Background(), "ws-1", "  "+sourceRepo+"  "); err != nil {
-		t.Fatalf("ensureRepoReady with padded URL: %v", err)
-	}
-	// Even on cache hit we refresh settings once so toggle flips feel live.
-	if got := refreshCalls.Load(); got != 1 {
-		t.Fatalf("expected 1 refresh call for trimmed URL, got %d", got)
-	}
-}
-
-func TestEnsureRepoReadyRefreshesOnMiss(t *testing.T) {
-	t.Parallel()
-
-	sourceRepo := createDaemonTestRepo(t)
-	var refreshCalls atomic.Int32
-	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/daemon/workspaces/ws-1/repos" {
-			http.NotFound(w, r)
-			return
-		}
-		refreshCalls.Add(1)
-		json.NewEncoder(w).Encode(WorkspaceReposResponse{
-			WorkspaceID:  "ws-1",
-			Repos:        []RepoData{{URL: sourceRepo}},
-			ReposVersion: "v2",
-		})
-	})
-	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
-
-	if err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
-		t.Fatalf("ensureRepoReady: %v", err)
-	}
-	if got := refreshCalls.Load(); got != 1 {
-		t.Fatalf("expected 1 refresh call, got %d", got)
-	}
-	if d.repoCache.Lookup("ws-1", sourceRepo) == "" {
-		t.Fatal("expected repo to be cached after refresh")
-	}
-}
-
-// A project github_repo URL that the workspace itself does not bind must still
-// be allowed for `multica repo checkout` after registerTaskRepos runs. Without
-// this, the new project-repos-override-workspace-repos behavior would surface
-// repos in the meta-skill that the agent then can't actually clone.
-func TestRegisterTaskReposAllowsProjectOnlyURL(t *testing.T) {
-	t.Parallel()
-
-	sourceRepo := createDaemonTestRepo(t)
-	var refreshCalls atomic.Int32
-	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		refreshCalls.Add(1)
-		// If the workspace endpoint is hit it returns an empty list — the
-		// project-only URL must NOT depend on this for allowlist membership.
-		json.NewEncoder(w).Encode(WorkspaceReposResponse{
-			WorkspaceID:  "ws-1",
-			Repos:        []RepoData{},
-			ReposVersion: "v1",
-		})
-	})
-	// Workspace has zero workspace-bound repos; the project resource gives us
-	// the only repo URL the agent should be able to check out.
-	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
-
-	d.registerTaskRepos("ws-1", []RepoData{{URL: sourceRepo}})
-
-	// The async clone goroutine in registerTaskRepos may not have finished;
-	// poll briefly until the cache is populated so the test isn't racy.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if d.repoCache.Lookup("ws-1", sourceRepo) != "" {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if d.repoCache.Lookup("ws-1", sourceRepo) == "" {
-		t.Fatalf("expected repo to be cached after registerTaskRepos, but Lookup returned empty")
-	}
-
-	if !d.workspaceRepoAllowed("ws-1", sourceRepo) {
-		t.Fatal("expected project repo to pass workspaceRepoAllowed")
-	}
-
-	if err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo); err != nil {
-		t.Fatalf("ensureRepoReady: %v", err)
-	}
-	// ensureRepoReady refreshes settings on every call (RFC MUL-2414 §4.8; PR
-	// #2847 review by Emacs) so a freshly-flipped GitHub toggle takes effect
-	// without waiting for the 30s sync tick. We expect exactly one refresh —
-	// the project-only URL still skips re-cloning because the cache is warm.
-	if got := refreshCalls.Load(); got != 1 {
-		t.Fatalf("expected 1 workspace-repos refresh (settings live-refresh on checkout), got %d", got)
-	}
-}
-
-// Confirms that a workspace refresh wiping allowedRepoURLs does not also wipe
-// task-scoped URLs (project repos). Without the separate taskRepoURLs map a
-// concurrent refresh would silently revoke project-only URLs and the next
-// checkout would fail.
-func TestRegisterTaskReposSurvivesWorkspaceRefresh(t *testing.T) {
-	t.Parallel()
-
-	sourceRepo := createDaemonTestRepo(t)
-	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(WorkspaceReposResponse{
-			WorkspaceID:  "ws-1",
-			Repos:        []RepoData{},
-			ReposVersion: "v2",
-		})
-	})
-	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
-	d.registerTaskRepos("ws-1", []RepoData{{URL: sourceRepo}})
-
-	// Wait for the registration to populate the cache.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && d.repoCache.Lookup("ws-1", sourceRepo) == "" {
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	if _, err := d.refreshWorkspaceRepos(context.Background(), "ws-1"); err != nil {
-		t.Fatalf("refreshWorkspaceRepos: %v", err)
-	}
-
-	if !d.workspaceRepoAllowed("ws-1", sourceRepo) {
-		t.Fatal("project repo URL was wiped by workspace refresh")
-	}
-}
-
-func TestEnsureRepoReadyReturnsNotConfigured(t *testing.T) {
-	t.Parallel()
-
-	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(WorkspaceReposResponse{
-			WorkspaceID:  "ws-1",
-			Repos:        []RepoData{},
-			ReposVersion: "v1",
-		})
-	})
-	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
-
-	err := d.ensureRepoReady(context.Background(), "ws-1", "git@example.com:team/api.git")
-	if !errors.Is(err, ErrRepoNotConfigured) {
-		t.Fatalf("expected ErrRepoNotConfigured, got %v", err)
-	}
-}
-
-func TestEnsureRepoReadyReportsSyncFailure(t *testing.T) {
-	t.Parallel()
-
-	missingRepo := filepath.Join(t.TempDir(), "missing-repo")
-	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(WorkspaceReposResponse{
-			WorkspaceID:  "ws-1",
-			Repos:        []RepoData{{URL: missingRepo}},
-			ReposVersion: "v1",
-		})
-	})
-	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
-
-	err := d.ensureRepoReady(context.Background(), "ws-1", missingRepo)
-	if err == nil || !strings.Contains(err.Error(), "repo is configured but not synced:") {
-		t.Fatalf("expected sync failure error, got %v", err)
-	}
-	if got := d.workspaceLastRepoSyncErr("ws-1"); got == "" {
-		t.Fatal("expected lastRepoSyncErr to be recorded")
-	}
-}
-
-func TestEnsureRepoReadyConcurrentMissRefreshesOnce(t *testing.T) {
-	t.Parallel()
-
-	sourceRepo := createDaemonTestRepo(t)
-	var refreshCalls atomic.Int32
-	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/daemon/workspaces/ws-1/repos" {
-			http.NotFound(w, r)
-			return
-		}
-		refreshCalls.Add(1)
-		json.NewEncoder(w).Encode(WorkspaceReposResponse{
-			WorkspaceID:  "ws-1",
-			Repos:        []RepoData{{URL: sourceRepo}},
-			ReposVersion: "v2",
-		})
-	})
-	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
-
-	const concurrency = 8
-	var wg sync.WaitGroup
-	errCh := make(chan error, concurrency)
-	for range concurrency {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			errCh <- d.ensureRepoReady(context.Background(), "ws-1", sourceRepo)
-		}()
-	}
-	wg.Wait()
-	close(errCh)
-
-	for err := range errCh {
-		if err != nil {
-			t.Fatalf("ensureRepoReady returned error: %v", err)
-		}
-	}
-	// All 8 goroutines race on a cold miss; the per-workspace mutex
-	// must serialize them so the server is only called once.
-	if got := refreshCalls.Load(); got != 1 {
-		t.Fatalf("expected exactly 1 refresh call, got %d", got)
 	}
 }
 

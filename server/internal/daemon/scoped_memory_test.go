@@ -10,6 +10,32 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
+func TestPrepareExecutionMemoryDoesNotCreateFiles(t *testing.T) {
+	root := t.TempDir()
+	task := Task{
+		AgentID:       "agent-1",
+		InitiatorType: "member",
+		InitiatorID:   "member-a",
+		ProjectID:     "project-a",
+		ChannelID:     "channel-a",
+	}
+
+	memories, paths := prepareExecutionMemory(root, task, nil)
+	if len(memories) != 0 {
+		t.Fatalf("memories = %+v, want none", memories)
+	}
+	if paths.UserDir == "" || paths.ProjectDir == "" || paths.ChannelDir == "" {
+		t.Fatalf("scope paths should still resolve: %+v", paths)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("reading execution memory created files: %+v", entries)
+	}
+}
+
 func TestPrepareExecutionMemoryLoadsOnlyCurrentScopesAndToday(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "agent")
 	if err := ensureMulticaAgentRoot(root); err != nil {

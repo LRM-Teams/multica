@@ -659,7 +659,6 @@
     "status_failed": "失敗",
     "status_queued": "キュー待ち",
     "status_dispatched": "起動中",
-    "status_waiting_local_directory": "待機中",
     "status_cancelled": "キャンセル済み",
     "status_unknown": "処理中",
     "filter": "フィルター",

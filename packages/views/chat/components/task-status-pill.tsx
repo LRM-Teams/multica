@@ -26,7 +26,6 @@ type StageKey =
   | "offline"
   | "reconnecting"
   | "queued"
-  | "waiting_local_directory"
   | "starting_up"
   | "thinking"
   | "typing";
@@ -85,14 +84,6 @@ export function pickStageKeys(
   }
   // LRM-248: unstable folds to Online — never surface "Reconnecting" as a
   // live status label. Fall through to the normal online stage decision.
-  // Daemon-emitted hold state for the local_directory flow: the project is
-  // pinned to a path that another task currently owns. The daemon publishes
-  // this status string when it dequeues a task but can't acquire the path
-  // lock; the renderer surfaces a dedicated label so the user understands
-  // why a queued task isn't moving.
-  if (status === "waiting_local_directory") {
-    return { stageKey: "waiting_local_directory", static: true };
-  }
   if (status === "queued") return { stageKey: "queued" };
   if (status === "dispatched") return { stageKey: "starting_up" };
 

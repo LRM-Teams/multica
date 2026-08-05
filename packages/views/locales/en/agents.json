@@ -677,7 +677,6 @@
     "status_failed": "Failed",
     "status_queued": "Queued",
     "status_dispatched": "Dispatched",
-    "status_waiting_local_directory": "Waiting",
     "status_cancelled": "Cancelled",
     "status_unknown": "Processing",
     "filter": "Filter",

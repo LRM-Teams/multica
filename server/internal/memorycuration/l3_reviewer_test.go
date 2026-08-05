@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -408,7 +409,7 @@ func TestCuratorModeAllowsOnlyGovernedAutomaticDecisions(t *testing.T) {
 func prepareL3ReviewRoot(t *testing.T, entries []reviewEntry) (string, string) {
 	t.Helper()
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
 	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}

@@ -163,19 +163,6 @@ UPDATE agent SET archived_at = NULL, archived_by = NULL, updated_at = now()
 WHERE id = $1
 RETURNING *;
 
--- name: ListAgentIDsArchivedBefore :many
--- Batch reconciliation for the daemon-side agent-workspace retention job
--- (task #96): the daemon reports which agent IDs it has a local
--- .multica/agents/<id> directory for, scoped to one workspace; this returns
--- the subset that are archived (soft-deleted, see ArchiveAgent/RestoreAgent)
--- with archived_at older than the retention cutoff the caller passes in.
--- RestoreAgent clears archived_at, so a restored agent falls out of this set
--- on its own — no separate "undo" handling needed. Scoped by workspace_id so
--- a daemon can only learn the archived state of agents in its own workspace.
-SELECT id, archived_at
-FROM agent
-WHERE workspace_id = $1 AND id = ANY(@agent_ids::uuid[]) AND archived_at IS NOT NULL AND archived_at < @before;
-
 -- name: ListAgentTasks :many
 SELECT * FROM agent_inbox_event
 WHERE agent_id = $1
@@ -380,32 +367,12 @@ JOIN agent a ON a.id = atq.agent_id
 WHERE atq.id = $1 AND a.workspace_id = $2;
 
 -- name: StartAgentTask :one
--- Transitions a task to running. Accepts either 'dispatched' (the normal
--- claim → run flow) or 'waiting_local_directory' (the daemon held the row in
--- a wait state while another task owned the local_directory path lock; once
--- the lock was acquired the daemon flips here). wait_reason is cleared on
--- the transition so a future read can't conflate "currently waiting" with
--- "previously waited".
+-- Transitions a claimed delivery to running and clears any generic wait hint.
 UPDATE agent_inbox_event AS atq
 SET started_at = COALESCE(started_at, now()), wait_reason = NULL
 WHERE atq.id = $1
   AND atq.status = 'draining'
 RETURNING atq.*;
-
--- name: MarkAgentTaskWaitingLocalDirectory :one
--- Transitions a freshly-dispatched task into 'waiting_local_directory' while
--- the daemon waits for another in-flight task to release the path lock on a
--- project_resource of type local_directory. wait_reason carries a short
--- human-readable hint (typically the contested path) that the UI surfaces
--- alongside the status.
---
--- The CHECK only allows the transition from 'dispatched' so a daemon can't
--- mark an already-running or terminal task as waiting; the StartAgentTask
--- mutation handles the reverse transition once the lock is acquired.
-UPDATE agent_inbox_event
-SET wait_reason = $2
-WHERE id = $1 AND status = 'draining'
-RETURNING *;
 
 -- name: CompleteAgentTask :one
 UPDATE agent_inbox_event
@@ -506,8 +473,7 @@ RETURNING *;
 -- usable session_id/work_dir on the task row (PinTaskSession / --resume).
 -- This TEXT column is NOT agent_session / agent_session_id (Multica inbox
 -- wake/drain UUID). No FK between them; task #109. No-op if the task is no
--- longer draining. waiting_local_directory tasks have no resume token yet
--- so this query intentionally skips them.
+-- longer draining.
 UPDATE agent_inbox_event
 SET session_id = COALESCE(sqlc.narg('session_id'), session_id),
     work_dir  = COALESCE(sqlc.narg('work_dir'), work_dir)
@@ -548,12 +514,8 @@ SET context = COALESCE(context, '{}'::jsonb) - 'areal_proxy'
 WHERE id = $1;
 
 -- name: RecoverOrphanedTasksForRuntime :many
--- Called by the daemon at startup. Atomically fails any dispatched/running/
--- waiting_local_directory task that the prior incarnation of this runtime
--- owned but did not finalize. Returns the failed rows so callers can hand
--- them to the auto-retry path. waiting_local_directory rows are included
--- because the daemon holding the path lock is the same process that just
--- died — without us, the row would sit waiting forever.
+-- Called by the daemon at startup. Atomically fails any in-flight delivery
+-- that the prior incarnation of this runtime owned but did not finalize.
 UPDATE agent_inbox_event
 SET status = 'acked',
     completed_at = now(),
@@ -572,11 +534,6 @@ RETURNING *;
 -- Fails tasks stuck in dispatched/running beyond the given thresholds.
 -- Handles cases where the daemon is alive but the task is orphaned
 -- (e.g. agent process hung, daemon failed to report completion).
--- waiting_local_directory rows are intentionally excluded: the daemon owns
--- the wait (with its own ctx-driven timeout) and a legitimate queue ahead
--- of this task can exceed the dispatch / running timeouts without being
--- "stuck". If the daemon dies, RecoverOrphanedTasksForRuntime reclaims
--- those rows at restart.
 UPDATE agent_inbox_event
 SET status = 'acked',
     completed_at = now(),
@@ -688,7 +645,7 @@ RETURNING t.*;
 -- and claiming the task. If the sandbox/daemon never comes up, the task would
 -- otherwise sit in 'queued' until the slow 2h queued-TTL sweep. This drains it
 -- in ~5 min so the rollout fails promptly. FailTasksForOfflineRuntimes does NOT
--- cover this: it only touches dispatched/running/waiting_local_directory, so
+-- cover this: it only touches in-flight tasks, so
 -- 'queued' rows on offline runtimes are otherwise only caught by the 2h sweep.
 --
 -- Same concurrency contract as ExpireStaleQueuedTasks: FOR UPDATE SKIP LOCKED
@@ -748,13 +705,12 @@ WHERE agent_id = $1
   AND status = 'draining';
 
 -- name: HasActiveTaskForIssue :one
--- Returns true if there is any queued, dispatched, waiting_local_directory,
--- or running task for the issue.
+-- Returns true if there is any active task for the issue.
 SELECT count(*) > 0 AS has_active FROM agent_inbox_event
 WHERE issue_id = $1 AND status IN ('pending', 'draining', 'failed');
 
 -- name: HasOtherActiveTaskForRuntime :one
--- Returns true if any queued/dispatched/running/waiting_local_directory task
+-- Returns true if any active task
 -- OTHER than the given one is still bound to this runtime. Used by the Phase 5
 -- ephemeral-sandbox cleanup guard: a retry child inherits the parent's runtime_id
 -- (CreateRetryTask copies runtime_id), so the sandbox + runtime must not be

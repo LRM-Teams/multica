@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
@@ -43,7 +44,7 @@ func (d *Daemon) handleMemoryCuration(ctx context.Context, rt Runtime, pending P
 	if model == "" {
 		model = entry.Model
 	}
-	curatorRoot := multicaAgentRoot(d.cfg, pending.WorkspaceID, pending.CuratorAgentID)
+	curatorRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, pending.WorkspaceID, pending.CuratorAgentID)
 	reviewerCfg := memorycuration.AgentL3ReviewerConfig{
 		Provider:       rt.Provider,
 		Path:           entry.Path,

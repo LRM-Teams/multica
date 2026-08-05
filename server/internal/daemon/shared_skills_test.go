@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
@@ -188,19 +189,13 @@ func TestSharedSkillScanRootUsesProviderDefault(t *testing.T) {
 	}
 
 	workspaceRoot := filepath.Join(home, "multica_workspaces")
-	agentRoot := piAgentRoot(Config{WorkspacesRoot: workspaceRoot}, "workspace-1", "agent-1")
-	agentWant := filepath.Join(workspaceRoot, "workspace-1", ".multica", "agents", "agent-1")
+	agentRoot := agentworkspace.Root(workspaceRoot, "workspace-1", "agent-1")
+	agentWant := agentworkspace.Root(workspaceRoot, "workspace-1", "agent-1")
 	if agentRoot != agentWant {
 		t.Fatalf("got %q want %q", agentRoot, agentWant)
 	}
 
-	legacyRoot := legacyPiAgentRoot(Config{WorkspacesRoot: workspaceRoot}, "workspace-1", "agent-1")
-	legacyWant := filepath.Join(workspaceRoot, "workspace-1", ".pi", "agents", "agent-1")
-	if legacyRoot != legacyWant {
-		t.Fatalf("got legacy %q want %q", legacyRoot, legacyWant)
-	}
-
-	skillQueue := piAgentSkillCandidatesPath(agentRoot)
+	skillQueue := agentSkillCandidatesPath(agentRoot)
 	skillQueueWant := filepath.Join(agentWant, "sync_queue", "skill-candidates.jsonl")
 	if skillQueue != skillQueueWant {
 		t.Fatalf("got %q want %q", skillQueue, skillQueueWant)
@@ -218,8 +213,9 @@ func TestSharedSkillScanRootGlobalOverride(t *testing.T) {
 	}
 }
 
-func TestEnsureMulticaAgentRootIsLazy(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "workspace-1", ".multica", "agents", "agent-1")
+func TestEnsureMulticaAgentRootCreatesOnlyRoot(t *testing.T) {
+	workspacesRoot := t.TempDir()
+	root := agentworkspace.Root(workspacesRoot, "workspace-1", "agent-1")
 	if err := ensureMulticaAgentRoot(root); err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +224,18 @@ func TestEnsureMulticaAgentRootIsLazy(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
-		t.Fatalf("new agent root contains placeholder entries: %+v", entries)
+		t.Fatalf("fresh AgentRoot should be empty; children are lazy: %+v", entries)
+	}
+
+	customPath := filepath.Join(root, "custom.txt")
+	if err := os.WriteFile(customPath, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureMulticaAgentRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(customPath); err != nil || string(got) != "keep\n" {
+		t.Fatalf("reusing AgentRoot changed existing content: got=%q err=%v", got, err)
 	}
 }
 
@@ -237,9 +244,9 @@ func TestMulticaAgentRootStableAcrossHarnessSwitch(t *testing.T) {
 	workspaceID := "workspace-1"
 	agentID := "agent-shared-memory"
 
-	codexRoot := multicaAgentRoot(cfg, workspaceID, agentID)
-	claudeRoot := multicaAgentRoot(cfg, workspaceID, agentID)
-	piRoot := piAgentRoot(cfg, workspaceID, agentID)
+	codexRoot := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
+	claudeRoot := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
+	piRoot := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
 	if codexRoot != claudeRoot || codexRoot != piRoot {
 		t.Fatalf("memory roots diverged across harnesses: codex=%q claude=%q pi=%q", codexRoot, claudeRoot, piRoot)
 	}
@@ -249,14 +256,10 @@ func TestMulticaAgentRootStableAcrossHarnessSwitch(t *testing.T) {
 
 	envCodex := map[string]string{}
 	envPi := map[string]string{}
-	addMulticaAgentEnv(envCodex, cfg, workspaceID, agentID, "")
-	addMulticaAgentEnv(envPi, cfg, workspaceID, agentID, "")
-	addPiAgentEnv(envPi, cfg, workspaceID, agentID)
-	if envCodex["MULTICA_AGENT_ROOT"] != envPi["MULTICA_AGENT_ROOT"] || envCodex["MULTICA_AGENT_MEMORY_DIR"] != envPi["MULTICA_AGENT_MEMORY_DIR"] {
-		t.Fatalf("MULTICA memory env diverged: %#v vs %#v", envCodex, envPi)
-	}
-	if envPi["PI_AGENT_ROOT"] != envPi["MULTICA_AGENT_ROOT"] || envPi["PI_MEMORY_DIR"] != envPi["MULTICA_AGENT_MEMORY_DIR"] {
-		t.Fatalf("Pi aliases must point at Multica agent root: %#v", envPi)
+	addMulticaAgentEnv(envCodex, cfg, workspaceID, agentID)
+	addMulticaAgentEnv(envPi, cfg, workspaceID, agentID)
+	if envCodex["MULTICA_AGENT_ROOT"] != envPi["MULTICA_AGENT_ROOT"] {
+		t.Fatalf("MULTICA agent root diverged: %#v vs %#v", envCodex, envPi)
 	}
 }
 

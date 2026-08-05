@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
@@ -227,44 +228,10 @@ func sharedSkillScanRoot(cfg Config, provider string) (string, bool) {
 	}
 }
 
-func piAgentRoot(cfg Config, workspaceID, agentID string) string {
-	return multicaAgentRoot(cfg, workspaceID, agentID)
-}
-
 // multicaAgentRoot is the authoritative on-disk root for one Multica agent.
 // It is keyed only by workspace + agent ID (LRM-955): switching coding harness /
 // provider / runtime on the same machine must keep reading and writing this
-// same tree. Provider session state and task workdirs may diverge; memory must not.
-func multicaAgentRoot(cfg Config, workspaceID, agentID string) string {
-	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".multica", "agents", agentID)
-}
-
-func legacyPiAgentRoot(cfg Config, workspaceID, agentID string) string {
-	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".pi", "agents", agentID)
-}
-
-func deviceMemoryRoot(agentRoot, daemonID string) string {
-	daemonID = strings.TrimSpace(daemonID)
-	if daemonID == "" || daemonID == "." || daemonID == ".." || filepath.Base(daemonID) != daemonID {
-		return ""
-	}
-	return filepath.Join(agentRoot, "devices", daemonID)
-}
-
-func ensureDeviceMemoryRoot(agentRoot, daemonID string) (string, error) {
-	root := deviceMemoryRoot(agentRoot, daemonID)
-	if root == "" {
-		return "", nil
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", err
-	}
-	if err := ensureFile(filepath.Join(root, "STATE.md"), "# Device-local State\n\nAbsolute paths, installed tools, loopback endpoints, and other facts that apply only to this daemon device. This file is never replicated as portable center memory.\n"); err != nil {
-		return "", err
-	}
-	return root, nil
-}
-
+// same tree. The tree is also the Agent's durable execution cwd.
 func agentSyncQueueDir(agentRoot string) string { return filepath.Join(agentRoot, "sync_queue") }
 func agentSkillDraftsDir(agentRoot string) string {
 	return filepath.Join(agentRoot, "skills", "drafts")
@@ -274,19 +241,6 @@ func agentMemoryCandidatesPath(agentRoot string) string {
 }
 func agentSkillCandidatesPath(agentRoot string) string {
 	return filepath.Join(agentSyncQueueDir(agentRoot), "skill-candidates.jsonl")
-}
-
-// Legacy names remain for compatibility with callers that still refer to the
-// original Pi-only queue. The on-disk contract is provider-neutral.
-func piAgentSyncQueueDir(agentRoot string) string   { return agentSyncQueueDir(agentRoot) }
-func piAgentSkillDraftsDir(agentRoot string) string { return agentSkillDraftsDir(agentRoot) }
-func piAgentMemoryCandidatesPath(agentRoot string) string {
-	return agentMemoryCandidatesPath(agentRoot)
-}
-func piAgentSkillCandidatesPath(agentRoot string) string { return agentSkillCandidatesPath(agentRoot) }
-
-func ensurePiAgentRoot(root string) error {
-	return ensureMulticaAgentRoot(root)
 }
 
 func ensureMulticaAgentRoot(root string) error {
@@ -400,24 +354,17 @@ func (d *Daemon) syncEvolutionSubmissionsForRuntime(ctx context.Context, rt Runt
 	}
 	payload := EvolutionSubmissionSyncPayload{}
 	pendingFingerprints := map[string]string{}
-	roots := []string{
-		filepath.Join(d.cfg.WorkspacesRoot, rt.WorkspaceID, ".multica", "agents"),
-		filepath.Join(d.cfg.WorkspacesRoot, rt.WorkspaceID, ".pi", "agents"),
-	}
-	for _, base := range roots {
-		submissions, err := d.scanEvolutionSubmissionsRoot(rt, base)
-		if err != nil {
-			d.logger.Warn("agent evolution root unavailable", "path", base, "provider", rt.Provider, "error", err)
-			continue
-		}
+	base := agentworkspace.AgentsDir(d.cfg.WorkspacesRoot, rt.WorkspaceID)
+	submissions, err := d.scanEvolutionSubmissionsRoot(rt, base)
+	if err != nil {
+		d.logger.Warn("agent evolution root unavailable", "path", base, "provider", rt.Provider, "error", err)
+	} else {
 		for _, submission := range submissions {
 			ackKey := evolutionSubmissionAckKey(submission.AgentID, submission.LocalUnitID)
 			fingerprint := evolutionSubmissionFingerprint(submission)
 			if acknowledged[ackKey] == fingerprint {
 				continue
 			}
-			// Prefer the first occurrence when a candidate is present in both the
-			// provider-neutral root and the legacy Pi root.
 			if _, exists := pendingFingerprints[ackKey]; exists {
 				continue
 			}
@@ -686,7 +633,7 @@ func evolutionSubmissionFingerprint(submission EvolutionSubmissionBundle) string
 }
 
 func evolutionAcknowledgementsPath(cfg Config, workspaceID string) string {
-	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".multica", "evolution-sync-acks.json")
+	return filepath.Join(agentworkspace.WorkspaceDir(cfg.WorkspacesRoot, workspaceID), ".multica", "evolution-sync-acks.json")
 }
 
 func loadEvolutionAcknowledgements(cfg Config, workspaceID string) (map[string]string, error) {

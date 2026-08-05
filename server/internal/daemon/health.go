@@ -3,15 +3,12 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"runtime"
 	"time"
-
-	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 )
 
 // HealthResponse is returned by the daemon's local health endpoint.
@@ -49,16 +46,6 @@ func (d *Daemon) listenHealth() (net.Listener, error) {
 		return nil, fmt.Errorf("another daemon is already running on %s: %w", addr, err)
 	}
 	return ln, nil
-}
-
-// repoCheckoutRequest is the body of a POST /repo/checkout request.
-type repoCheckoutRequest struct {
-	URL         string `json:"url"`
-	WorkspaceID string `json:"workspace_id"`
-	WorkDir     string `json:"workdir"`
-	Ref         string `json:"ref,omitempty"`
-	AgentName   string `json:"agent_name"`
-	TaskID      string `json:"task_id"`
 }
 
 // healthHandler returns the /health HTTP handler. Extracted from serveHealth
@@ -138,64 +125,6 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
-
-	mux.HandleFunc("/repo/checkout", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req repoCheckoutRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		if req.URL == "" {
-			http.Error(w, "url is required", http.StatusBadRequest)
-			return
-		}
-		if req.WorkspaceID == "" {
-			http.Error(w, "workspace_id is required", http.StatusBadRequest)
-			return
-		}
-		if req.WorkDir == "" {
-			http.Error(w, "workdir is required", http.StatusBadRequest)
-			return
-		}
-
-		if d.repoCache == nil {
-			http.Error(w, "repo cache not initialized", http.StatusInternalServerError)
-			return
-		}
-
-		if err := d.ensureRepoReady(r.Context(), req.WorkspaceID, req.URL); err != nil {
-			statusCode := http.StatusInternalServerError
-			if errors.Is(err, ErrRepoNotConfigured) {
-				statusCode = http.StatusBadRequest
-			}
-			d.logger.Error("repo checkout readiness failed", "workspace_id", req.WorkspaceID, "url", req.URL, "error", err)
-			http.Error(w, err.Error(), statusCode)
-			return
-		}
-
-		result, err := d.repoCache.CreateWorktree(repocache.WorktreeParams{
-			WorkspaceID:         req.WorkspaceID,
-			RepoURL:             req.URL,
-			WorkDir:             req.WorkDir,
-			Ref:                 req.Ref,
-			AgentName:           req.AgentName,
-			TaskID:              req.TaskID,
-			CoAuthoredByEnabled: d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
-		})
-		if err != nil {
-			d.logger.Error("repo checkout failed", "url", req.URL, "error", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
-	})
 
 	srv := &http.Server{Handler: mux}
 

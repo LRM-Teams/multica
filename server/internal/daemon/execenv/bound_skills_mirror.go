@@ -23,7 +23,7 @@ const boundSkillMirrorMarker = ".multica-bound-mirror"
 //
 // Safety:
 //   - Only creates/updates/removes directories that carry boundSkillMirrorMarker.
-//   - Never touches skills/drafts or skills/generated.
+//   - Never touches skills/drafts.
 //   - If an unmarked directory already occupies the natural slug, that skill
 //     is skipped (no overwrite of user content).
 func mirrorBoundSkillsToAgentEnabled(agentRoot string, skills []SkillContextForEnv) error {

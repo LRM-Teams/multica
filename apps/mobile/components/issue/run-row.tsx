@@ -133,7 +133,6 @@ function fallbackSummary(task: AgentTask): string {
 const STATUS_LABEL: Record<AgentTask["status"], string> = {
   queued: "Queued",
   dispatched: "Starting",
-  waiting_local_directory: "Waiting for directory",
   running: "Running",
   completed: "Done",
   failed: "Failed",
@@ -143,7 +142,6 @@ const STATUS_LABEL: Record<AgentTask["status"], string> = {
 const STATUS_CLASS: Record<AgentTask["status"], string> = {
   queued: "text-muted-foreground",
   dispatched: "text-brand",
-  waiting_local_directory: "text-muted-foreground",
   running: "text-brand",
   completed: "text-muted-foreground",
   failed: "text-destructive",

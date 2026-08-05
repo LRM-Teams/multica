@@ -494,12 +494,8 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 			Description: "Use when organizing issue work.",
 			Content:     "Full skill body should live on disk.",
 		}},
-		Repos:        []RepoContextForEnv{{URL: "https://github.com/acme/app.git", Description: "main app"}},
+		ProjectID:    "project-1",
 		ProjectTitle: "Launch Project",
-		ProjectResources: []ProjectResourceForEnv{{
-			ResourceType: "github_repo",
-			ResourceRef:  []byte(`{"url":"https://github.com/acme/app.git"}`),
-		}},
 	}
 	out := buildMetaSkillContent("codex", ctx)
 
@@ -545,11 +541,10 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"issue list --mine --output json",
 		"must not self-approve `in_review -> done`",
 		"Issue metadata: `multica issue metadata list|set|delete ...`",
-		"multica repo checkout <url>",
 		"multica attachment view <id> --output <path>",
-		"## Repositories",
 		"## Project Context",
 		"## Skills",
+		"## Lazy References",
 		"$CODEX_HOME/skills/issue-triage/SKILL.md",
 		"After the command succeeds",
 		compactCloseoutStatusInstruction,
@@ -774,7 +769,6 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 		ChatSessionID:                    "chat-1",
 		ChannelID:                        "channel-1",
 		Directed:                         true,
-		Repos:                            []RepoContextForEnv{{URL: "https://github.com/acme/app.git"}},
 		AgentSkills:                      []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
 		RequestingUserName:               "Frank",
 		RequestingUserProfileDescription: "Product owner",
@@ -805,7 +799,6 @@ func TestChatRuntimeBriefAlwaysAdvertisesTaskScopedCLITransport(t *testing.T) {
 		"After the command succeeds",
 		"Issues/comments: `multica issue list|get|search|comment ...`",
 		"issue list --mine --output json",
-		"## Repositories",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("compat chat brief missing %q\n---\n%s", want, out)
@@ -849,8 +842,6 @@ func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
 		"## Comment Formatting",
 		"## Issue Metadata",
 		"## Sub-issue Creation",
-		"## Lazy References",
-		"CLI details: inspect `multica ... --help`",
 		"Final results MUST be delivered via `multica issue comment add`",
 		"You are responsible for managing the issue status throughout your work",
 		compactCloseoutStatusInstruction,
@@ -1059,19 +1050,14 @@ func TestWorkspaceContextRenderedAcrossTaskKinds(t *testing.T) {
 	}
 }
 
-func TestPinnedRulesAndLazyReferencesRenderForChat(t *testing.T) {
+func TestPinnedRulesAndProjectContextRenderForChat(t *testing.T) {
 	t.Parallel()
 	out := buildMetaSkillContent("pi", TaskContextForEnv{
 		ChatSessionID: "chat-1",
 		ChannelID:     "channel-1",
 		ProjectID:     "project-1",
 		ProjectTitle:  "Demo Project",
-		ProjectResources: []ProjectResourceForEnv{{
-			ResourceType: "github_repo",
-			ResourceRef:  []byte(`{"url":"https://github.com/LRM-Teams/multica","default_branch_hint":"dev"}`),
-			Label:        "main app",
-		}},
-		AgentSkills: []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
+		AgentSkills:   []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
 	})
 
 	for _, want := range []string{
@@ -1079,13 +1065,8 @@ func TestPinnedRulesAndLazyReferencesRenderForChat(t *testing.T) {
 		"All Multica platform I/O via `multica` CLI. No raw HTTP.",
 		"Treat the injected conversation context as scoped to the current DM, channel, or thread surface",
 		"## Project Context",
-		"Pinned project resources (full structured payload is in `.multica/project/resources.json`)",
-		"default branch: `dev`",
 		"## Skills",
 		"## Lazy References",
-		"Chat history: use `multica message read` or `multica message search`",
-		"Project resources: read `.multica/project/resources.json`",
-		"Skills: open the relevant `SKILL.md` only after its name/description matches the task",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("chat brief missing pinned/lazy guidance %q\n---\n%s", want, out)
@@ -1124,32 +1105,22 @@ func TestRenderProjectContextUsesTruthfulTaskKindWording(t *testing.T) {
 func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChannelID:           "channel-1",
-		ChatSessionID:       "chat-1",
-		AgentRoot:           "/tmp/multica/workspace-1/.multica/agents/agent-1",
-		AgentMemoryDir:      "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
-		DeviceMemoryDir:     "/tmp/multica/workspace-1/.multica/agents/agent-1/devices/daemon-1",
-		AgentSkillDir:       "/tmp/multica/workspace-1/.multica/agents/agent-1/skills",
-		AgentSkillDraftsDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/skills/drafts",
+		ChannelID:     "channel-1",
+		ChatSessionID: "chat-1",
+		AgentRoot:     "/tmp/multica/workspace-1/agents/agent-1",
 	}
 	out := buildMetaSkillContent("pi", ctx)
 
 	for _, want := range []string{
 		"## Multica Agent Memory Scope",
-		"Agent root (`MULTICA_AGENT_ROOT`): `/tmp/multica/workspace-1/.multica/agents/agent-1`",
-		"Pi agent root (`PI_AGENT_ROOT`): `/tmp/multica/workspace-1/.multica/agents/agent-1`",
-		"Portable memory root (`MULTICA_AGENT_MEMORY_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/memory`",
-		"Device-local state (`MULTICA_DEVICE_MEMORY_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/devices/daemon-1`",
-		"Pi memory root (`PI_MEMORY_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/memory`",
-		"Skill root: `/tmp/multica/workspace-1/.multica/agents/agent-1/skills`",
-		"Pi skill drafts root (`PI_SKILL_DRAFTS_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/skills/drafts`",
-		"report these Multica agent paths, not host-global runtime paths",
-		"Write absolute paths, installed-tool state, loopback endpoints, ports, and other machine-specific facts under `MULTICA_DEVICE_MEMORY_DIR`",
-		"Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`",
+		"Agent workspace (`MULTICA_AGENT_ROOT`): `/tmp/multica/workspace-1/agents/agent-1`",
+		"Relative layout: `memory/`, `skills/`, `notes/`, `users/`, `projects/`, and `channels/`",
+		"does not expose a separate environment variable for every subdirectory",
+		"Do not use provider-global memory directories",
 		"### Harness boundary (kernel vs shell)",
 		"Multica kernel (not swappable with the coding harness)",
 		"Same-machine runtime switch",
-		"Multica memory follows **Agent ID**",
+		"durable Agent workspace follows **Agent ID**",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Multica memory scope missing %q\n%s", want, out)
@@ -1166,77 +1137,38 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChannelID:        "channel-1",
-		ChatSessionID:    "chat-1",
-		Directed:         true,
-		AgentRoot:        "/tmp/multica/workspace-1/.multica/agents/agent-1",
-		AgentMemoryDir:   "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
-		UserMemoryDir:    "/tmp/multica/workspace-1/.multica/agents/agent-1/users/member-1",
-		ProjectMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/projects/project-1",
-		ChannelMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/channels/channel-1",
+		ChannelID:     "channel-1",
+		ChatSessionID: "chat-1",
+		Directed:      true,
+		AgentRoot:     "/tmp/multica/workspace-1/agents/agent-1",
 	}
 	out := buildMetaSkillContent("codex", ctx)
 
 	for _, want := range []string{
 		"### Memory Operating Guide (v0.11)",
-		"Entry gates (platform-enforced)",
-		"group-chat wakes do not inject personal",
-		"Use high-strength auto-write for human preferences and durable work arrangements",
-		"treat **human speech and peer-agent durable statements** as high-signal by default",
-		"A verbal acknowledgment such as \"got it\" / \"记住了\" does not count as remembering",
-		"You judge the right destination",
-		"current user's isolated `USER.md`",
+		"All memory and skills move with this agent workspace",
+		"do not depend on separate memory, project, channel, user, device, or skill directory environment variables",
 		"likely to matter in a future run",
 		"Write target map",
-		"MULTICA_AGENT_MEMORY_DIR/daily/YYYY-MM-DD.md",
-		"only the most important long-lived cross-project rules",
+		"memory/daily/YYYY-MM-DD.md",
 		"memory/MEMORY.md",
-		"should follow this agent into unrelated DMs, channels, and projects",
-		"If no project directory is present, do not create or infer one",
-		"MULTICA_USER_MEMORY_DIR",
-		"current member's durable preferences and standing working style",
-		"Relationships, handoffs, and work arrangements",
+		"users/<member-id>/USER.md",
+		"projects/<project-id>/MEMORY.md",
+		"channels/<channel-id>/CONTEXT.md",
 		"RELATIONSHIP.md",
 		"notes/relationship-map.md",
-		"not only at welcome/introduction",
-		"Pure social greetings",
-		"Feedback from humans and peer agents",
-		"Do not treat agent-to-agent talk as disposable chatter",
-		"Peer-agent messages can be remembered",
-		"Claiming \"记住了\"",
-		"After solving a problem, remember it yourself",
-		"do not wait for anyone to say \"记住\"",
-		"Closing with only \"fixed\" and no durable write is wrong",
-		"memory-signal.jsonl",
-		"Daily journal (hot path) vs self-review/curator (cold path)",
-		"peer-agent durable lessons",
-		"reusable problem-resolution lessons still write immediately",
-		"memory/daily/YYYY-MM-DD.md",
-		"Do **not** run a full self-review or curator-style promotion inside every chat/task turn",
-		"Only promote the most durable, broadly reusable facts out of Daily into `MEMORY.md`",
-		"project-specific durable facts belong in project files, not agent-global memory",
-		"must not block chat latency",
-		"Source is not scope",
-		"who said a memory is provenance",
-		"do not discard a rule merely because a peer agent stated it",
-		"agents addressed by the current message",
-		"Do not add a workspace/shared candidate merely to fan the preference out",
+		"Scope and privacy",
+		"source is provenance, not scope",
+		"Claiming memory",
+		"Human and peer-agent durable instructions use the same bar",
+		"Problem closeout",
 		"memory/STATE.md",
-		"status, TTL/expiry, or reset date",
 		"memory/REVIEW.md",
-		"MULTICA_AGENT_SYNC_QUEUE_DIR/memory-candidates.jsonl",
-		"remember this",
-		"defaults to agent-global `memory/MEMORY.md`",
-		"Collective intent does not require the exact words \"all agents\"",
-		"都给我记住",
-		"separate inbox delivery for each eligible channel agent",
-		"including offline runtimes",
-		"do not create a workspace/shared candidate merely to redeliver",
-		"agents beyond the current message recipients",
-		"explicitly canonical workspace/team knowledge",
+		"Collective requests",
+		"each addressed agent writes its own local memory",
+		"agents beyond the current recipients",
+		"canonical workspace-wide knowledge",
 		"current task remain authoritative",
-		"Do not record guesses",
-		"never to copy private memory across agents directly",
 		"never silently rewrite instructions",
 	} {
 		if !strings.Contains(out, want) {
@@ -1287,17 +1219,13 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 	withRoot := buildMetaSkillContent("codex", TaskContextForEnv{
 		ChannelID:     "channel-1",
 		ChatSessionID: "chat-1",
-		AgentRoot:     "/tmp/multica/workspace-1/.multica/agents/agent-1",
+		AgentRoot:     "/tmp/multica/workspace-1/agents/agent-1",
 	})
 	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.11)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 
-	skillsOnly := buildMetaSkillContent("codex", TaskContextForEnv{
-		ChannelID:     "channel-1",
-		ChatSessionID: "chat-1",
-		AgentSkillDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/skills",
-	})
+	skillsOnly := buildMetaSkillContent("codex", TaskContextForEnv{ChannelID: "channel-1", ChatSessionID: "chat-1", AgentSkills: []SkillContextForEnv{{Name: "demo"}}})
 	if strings.Contains(skillsOnly, "Memory Operating Guide") {
 		t.Fatalf("memory operating guide must not render for a skills-only scope:\n%s", skillsOnly)
 	}
@@ -1306,21 +1234,21 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 func TestMulticaMemoryScopeRenderedForNonPiProvider(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		AgentRoot:      "/tmp/multica/workspace-1/.multica/agents/agent-1",
-		AgentMemoryDir: "/tmp/multica/workspace-1/.multica/agents/agent-1/memory",
+		AgentRoot: "/tmp/multica/workspace-1/agents/agent-1",
 	}
 	out := buildMetaSkillContent("codex", ctx)
 	for _, want := range []string{
 		"## Multica Agent Memory Scope",
-		"Agent root (`MULTICA_AGENT_ROOT`): `/tmp/multica/workspace-1/.multica/agents/agent-1`",
-		"Portable memory root (`MULTICA_AGENT_MEMORY_DIR`): `/tmp/multica/workspace-1/.multica/agents/agent-1/memory`",
+		"Agent workspace (`MULTICA_AGENT_ROOT`): `/tmp/multica/workspace-1/agents/agent-1`",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Codex memory scope missing %q\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "PI_MEMORY_DIR") {
-		t.Errorf("non-Pi provider must not emit Pi-specific env names")
+	for _, obsolete := range []string{"PI_MEMORY_DIR", "MULTICA_AGENT_MEMORY_DIR", "MULTICA_DEVICE_MEMORY_DIR"} {
+		if strings.Contains(out, obsolete) {
+			t.Errorf("non-Pi provider must not emit per-subdirectory env name %q", obsolete)
+		}
 	}
 }
 
@@ -1741,423 +1669,9 @@ func TestWriteRuntimeConfigFileReplacesMalformedHalfBlock(t *testing.T) {
 }
 
 // Cleanup excises the marker block, preserving every byte of surrounding
-// user content. This is the local_directory invariant: a `claude` /
+// user content. This is the Agent-workspace invariant: a `claude` /
 // `codex` run started by the user after a Multica task must see the same
 // file the user wrote.
-func TestCleanupRuntimeConfigPreservesUserContent(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "CLAUDE.md")
-
-	const userBefore = "# Repo CLAUDE.md\n\nuser line above\n"
-	const userAfter = "\nuser line below the block\n"
-	const userExpected = "# Repo CLAUDE.md\n\nuser line above\n\nuser line below the block\n"
-	// Inject via the production write path so we exercise the actual
-	// marker block format, not a hand-rolled approximation.
-	if err := os.WriteFile(path, []byte(userBefore+userAfter), 0o644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	if err := writeRuntimeConfigFile(path, "brief body"); err != nil {
-		t.Fatalf("seed brief: %v", err)
-	}
-
-	if err := CleanupRuntimeConfig(dir, "claude"); err != nil {
-		t.Fatalf("CleanupRuntimeConfig: %v", err)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read back: %v", err)
-	}
-	s := string(got)
-	if strings.Contains(s, runtimeMarkerBegin) || strings.Contains(s, runtimeMarkerEnd) {
-		t.Errorf("marker block must be removed, got:\n%s", s)
-	}
-	if strings.Contains(s, "brief body") {
-		t.Errorf("brief body must be removed, got:\n%s", s)
-	}
-	if s != userExpected {
-		t.Errorf("user content must be preserved byte-for-byte\n got:\n%q\nwant:\n%q", s, userExpected)
-	}
-}
-
-// Cleanup removes the file entirely when the marker block was the only
-// content — i.e. we created the file from scratch in a directory that had
-// no pre-existing CLAUDE.md / AGENTS.md / GEMINI.md.
-func TestCleanupRuntimeConfigRemovesFileWhenOnlyBlockRemained(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "CLAUDE.md")
-
-	// No seed — writeRuntimeConfigFile creates the file with only the
-	// marker block inside.
-	if err := writeRuntimeConfigFile(path, "brief body"); err != nil {
-		t.Fatalf("seed brief: %v", err)
-	}
-
-	if err := CleanupRuntimeConfig(dir, "claude"); err != nil {
-		t.Fatalf("CleanupRuntimeConfig: %v", err)
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("expected file to be removed, stat err=%v", err)
-	}
-}
-
-// Cleanup is a no-op when no marker block exists or when the file is
-// missing — Cleanup is safe to call defensively from the daemon's defer.
-func TestCleanupRuntimeConfigNoOpCases(t *testing.T) {
-	t.Parallel()
-
-	t.Run("missing file", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		if err := CleanupRuntimeConfig(dir, "claude"); err != nil {
-			t.Errorf("missing file must be no-op, got: %v", err)
-		}
-		// And the directory must remain untouched.
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatalf("readdir: %v", err)
-		}
-		if len(entries) != 0 {
-			t.Errorf("expected dir to remain empty, got: %v", entries)
-		}
-	})
-
-	t.Run("file without marker block", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		path := filepath.Join(dir, "CLAUDE.md")
-		const userContent = "# Repo CLAUDE.md\n\nrules\n"
-		if err := os.WriteFile(path, []byte(userContent), 0o644); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		if err := CleanupRuntimeConfig(dir, "claude"); err != nil {
-			t.Errorf("no-marker-block file must be no-op, got: %v", err)
-		}
-		got, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read back: %v", err)
-		}
-		if string(got) != userContent {
-			t.Errorf("file must be untouched\n got:\n%q\nwant:\n%q", string(got), userContent)
-		}
-	})
-
-	t.Run("unknown provider", func(t *testing.T) {
-		t.Parallel()
-		dir := t.TempDir()
-		// Seed every candidate filename to verify none of them get touched.
-		for _, name := range []string{"CLAUDE.md", "AGENTS.md", "GEMINI.md"} {
-			if err := os.WriteFile(filepath.Join(dir, name), []byte("untouched\n"), 0o644); err != nil {
-				t.Fatalf("seed %s: %v", name, err)
-			}
-		}
-		if err := CleanupRuntimeConfig(dir, "totally-unknown-provider"); err != nil {
-			t.Errorf("unknown provider must be no-op, got: %v", err)
-		}
-		for _, name := range []string{"CLAUDE.md", "AGENTS.md", "GEMINI.md"} {
-			got, err := os.ReadFile(filepath.Join(dir, name))
-			if err != nil {
-				t.Fatalf("read %s: %v", name, err)
-			}
-			if string(got) != "untouched\n" {
-				t.Errorf("unknown provider must not touch %s; got:\n%s", name, string(got))
-			}
-		}
-	})
-}
-
-// Cleanup must handle a half-block left by a previous crashed run: begin
-// marker present but no end. Otherwise the half-block would survive
-// cleanup and pollute the next manual CLI invocation in the same dir.
-func TestCleanupRuntimeConfigRemovesMalformedHalfBlock(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "AGENTS.md")
-
-	const userTop = "# Repo AGENTS.md\n\nrules\n"
-	original := userTop + runtimeMarkerBegin + "\nhalf-written brief no end\n"
-	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	if err := CleanupRuntimeConfig(dir, "codex"); err != nil {
-		t.Fatalf("CleanupRuntimeConfig: %v", err)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read back: %v", err)
-	}
-	s := string(got)
-	if strings.Contains(s, runtimeMarkerBegin) {
-		t.Errorf("half-block begin marker must be excised, got:\n%s", s)
-	}
-	if strings.Contains(s, "half-written brief no end") {
-		t.Errorf("half-block body must be excised, got:\n%s", s)
-	}
-	if !strings.HasPrefix(s, userTop) {
-		t.Errorf("user content above the half-block must remain, got:\n%s", s)
-	}
-}
-
-// Cleanup must remove the marker block for every provider's target file,
-// using the same provider→filename mapping as InjectRuntimeConfig — so a
-// new provider added to one side cannot drift past the other.
-func TestCleanupRuntimeConfigByProvider(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		provider string
-		filename string
-	}{
-		{"claude", "CLAUDE.md"},
-		{"codex", "AGENTS.md"},
-		{"copilot", "AGENTS.md"},
-		{"opencode", "AGENTS.md"},
-		{"openclaw", "AGENTS.md"},
-		{"hermes", "AGENTS.md"},
-		{"pi", "AGENTS.md"},
-		{"cursor", "AGENTS.md"},
-		{"kimi", "AGENTS.md"},
-		{"kiro", "AGENTS.md"},
-		{"antigravity", "AGENTS.md"},
-		{"grok", "AGENTS.md"},
-		{"gemini", "GEMINI.md"},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.provider, func(t *testing.T) {
-			t.Parallel()
-			dir := t.TempDir()
-			path := filepath.Join(dir, tc.filename)
-			const userContent = "# User file\n\ndon't touch this\n"
-			if err := os.WriteFile(path, []byte(userContent), 0o644); err != nil {
-				t.Fatalf("seed: %v", err)
-			}
-
-			// Inject through the production path so cleanup runs against
-			// the same wire format the agent saw.
-			if _, err := InjectRuntimeConfig(dir, tc.provider, TaskContextForEnv{
-				IssueID: "11111111-2222-3333-4444-555555555555",
-			}); err != nil {
-				t.Fatalf("InjectRuntimeConfig: %v", err)
-			}
-			if err := CleanupRuntimeConfig(dir, tc.provider); err != nil {
-				t.Fatalf("CleanupRuntimeConfig: %v", err)
-			}
-			got, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("read back: %v", err)
-			}
-			s := string(got)
-			if strings.Contains(s, runtimeMarkerBegin) || strings.Contains(s, runtimeMarkerEnd) {
-				t.Errorf("[%s] marker block must be removed from %s, got:\n%s", tc.provider, tc.filename, s)
-			}
-			if s != userContent {
-				t.Errorf("[%s] user content in %s must be preserved byte-for-byte\n got:\n%q\nwant:\n%q", tc.provider, tc.filename, s, userContent)
-			}
-		})
-	}
-}
-
-// Inject → Cleanup → manual edit → Inject must converge back to the
-// pre-injection state on the next Cleanup. This is the end-to-end
-// regression that locks in: the user's repo is byte-identical to what
-// they had before the task, every task cycle.
-func TestInjectThenCleanupRoundTrip(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "CLAUDE.md")
-	const userContent = "# User-authored CLAUDE.md\n\n- rule A\n- rule B\n"
-	if err := os.WriteFile(path, []byte(userContent), 0o644); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	// Two full inject→cleanup cycles — covers both the "first task on a
-	// fresh user file" path and the "subsequent task hits a clean file
-	// again" path.
-	for i := 0; i < 2; i++ {
-		if _, err := InjectRuntimeConfig(dir, "claude", TaskContextForEnv{
-			IssueID: "11111111-2222-3333-4444-555555555555",
-		}); err != nil {
-			t.Fatalf("iter %d inject: %v", i, err)
-		}
-		if err := CleanupRuntimeConfig(dir, "claude"); err != nil {
-			t.Fatalf("iter %d cleanup: %v", i, err)
-		}
-		got, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("iter %d read back: %v", i, err)
-		}
-		if string(got) != userContent {
-			t.Errorf("iter %d: user file must be byte-identical to pre-injection state\n got:\n%q\nwant:\n%q", i, string(got), userContent)
-		}
-	}
-}
-
-// Byte-exact boundary coverage flagged in PR #3438 review (Elon): the
-// previous cleanup used TrimRight + "\n" and TrimSpace-based file removal,
-// which created a real diff in three boundary cases. The table walks each
-// one through a full inject→cleanup cycle and asserts the file ends up
-// byte-identical (or, for missing-file, that it stays missing).
-func TestInjectThenCleanupRoundTripByteExactBoundaries(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		// seed describes the pre-inject filesystem state. When seedExists
-		// is false the file is absent; when true the file is created with
-		// seedContent (which may be empty / whitespace-only / arbitrary
-		// bytes).
-		seedExists  bool
-		seedContent string
-	}{
-		{
-			name:        "file missing — Inject creates, Cleanup removes",
-			seedExists:  false,
-			seedContent: "",
-		},
-		{
-			name:        "pre-existing empty file (zero bytes)",
-			seedExists:  true,
-			seedContent: "",
-		},
-		{
-			name:        "pre-existing whitespace-only file",
-			seedExists:  true,
-			seedContent: "   \n",
-		},
-		{
-			name:        "no trailing newline",
-			seedExists:  true,
-			seedContent: "rules",
-		},
-		{
-			name:        "one trailing newline (the common markdown shape)",
-			seedExists:  true,
-			seedContent: "# Rules\n\nbody\n",
-		},
-		{
-			name:        "two trailing newlines",
-			seedExists:  true,
-			seedContent: "rules\n\n",
-		},
-		{
-			name:        "many trailing newlines",
-			seedExists:  true,
-			seedContent: "rules\n\n\n\n",
-		},
-		{
-			name:        "CRLF line endings",
-			seedExists:  true,
-			seedContent: "rule A\r\nrule B\r\n",
-		},
-		{
-			name:        "no final newline AND embedded blank lines",
-			seedExists:  true,
-			seedContent: "para 1\n\npara 2\n\npara 3",
-		},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			dir := t.TempDir()
-			path := filepath.Join(dir, "CLAUDE.md")
-
-			if tc.seedExists {
-				if err := os.WriteFile(path, []byte(tc.seedContent), 0o644); err != nil {
-					t.Fatalf("seed: %v", err)
-				}
-			}
-
-			// Two cycles to cover both "first inject hits user file" and
-			// "subsequent inject hits a cleaned file" paths.
-			for i := 0; i < 2; i++ {
-				if _, err := InjectRuntimeConfig(dir, "claude", TaskContextForEnv{
-					IssueID: "11111111-2222-3333-4444-555555555555",
-				}); err != nil {
-					t.Fatalf("iter %d inject: %v", i, err)
-				}
-				if err := CleanupRuntimeConfig(dir, "claude"); err != nil {
-					t.Fatalf("iter %d cleanup: %v", i, err)
-				}
-
-				if !tc.seedExists {
-					// Missing file must remain missing after the cycle so
-					// the user's directory listing is also byte-identical
-					// (no zero-byte stub left behind).
-					if _, err := os.Stat(path); !os.IsNotExist(err) {
-						t.Errorf("iter %d: file must remain missing, stat err=%v", i, err)
-					}
-					continue
-				}
-				got, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatalf("iter %d read back: %v", i, err)
-				}
-				if string(got) != tc.seedContent {
-					t.Errorf("iter %d: file must be byte-identical to seed\n got:  %q\n want: %q", i, string(got), tc.seedContent)
-				}
-			}
-		})
-	}
-}
-
-// Idempotency across the byte-exact boundaries: when a second Inject runs
-// against a file that already carries a marker block (the "replace in
-// place" branch), the surrounding bytes must stay untouched and the
-// subsequent Cleanup must still restore the user's original file
-// byte-exactly. This guards against a regression where the replace path
-// would re-normalise pre/post bytes the way the old cleanup did.
-func TestInjectReplaceThenCleanupRestoresByteExact(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name        string
-		seedContent string
-	}{
-		{name: "no trailing newline", seedContent: "rules"},
-		{name: "two trailing newlines", seedContent: "rules\n\n"},
-		{name: "empty file", seedContent: ""},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			dir := t.TempDir()
-			path := filepath.Join(dir, "CLAUDE.md")
-			if err := os.WriteFile(path, []byte(tc.seedContent), 0o644); err != nil {
-				t.Fatalf("seed: %v", err)
-			}
-
-			// First inject — append path.
-			if _, err := InjectRuntimeConfig(dir, "claude", TaskContextForEnv{
-				IssueID: "11111111-2222-3333-4444-555555555555",
-			}); err != nil {
-				t.Fatalf("first inject: %v", err)
-			}
-			// Second inject — replace-in-place path.
-			if _, err := InjectRuntimeConfig(dir, "claude", TaskContextForEnv{
-				IssueID: "11111111-2222-3333-4444-555555555555",
-			}); err != nil {
-				t.Fatalf("second inject: %v", err)
-			}
-			if err := CleanupRuntimeConfig(dir, "claude"); err != nil {
-				t.Fatalf("cleanup: %v", err)
-			}
-			got, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("read back: %v", err)
-			}
-			if string(got) != tc.seedContent {
-				t.Errorf("file must be byte-identical to seed after replace+cleanup\n got:  %q\n want: %q", string(got), tc.seedContent)
-			}
-		})
-	}
-}
-
-// The fixed managed separator is the invariant that makes byte-exact
-// cleanup possible. This test pins it: writeRuntimeConfigFile must
-// produce exactly `<user-bytes><\n\n><marker-block>` for ANY non-empty
-// or empty pre-existing file, with no trailing-newline normalisation.
 func TestWriteRuntimeConfigFileAlwaysInsertsFixedManagedSeparator(t *testing.T) {
 	t.Parallel()
 	for _, seed := range []string{"", "rules", "rules\n", "rules\n\n", "rules\n\n\n\n"} {

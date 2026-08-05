@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Builds the release manifest JSON consumed by server/internal/cli/update.go
 # (ReleaseManifest) from a GoReleaser checksums.txt, and prints it to stdout.
-# Used by the release workflow's publish-downloads-feed job; the same shape
-# is written as both the immutable {tag}/release.json and, on promotion, the
-# mutable latest.json.
+# Used by the release workflow's publish-downloads-feed job. During the naming
+# migration, the same bytes are published under both canonical manifest.json
+# paths and the previous release.json/latest.json paths.
 #
 # Usage: publish-release-manifest.sh <tag> <version> <base-url> <checksums-file> <archive-dir>
 set -euo pipefail

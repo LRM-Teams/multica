@@ -91,6 +91,10 @@ jobs:
   # URL, or Caddy/local-disk copy: upload, cache refresh, and consumer-visible
   # verification are one release gate.
   #
+  # Archives are stored once under computer/{version}/. The small manifest is
+  # also written to the previous latest.json and {tag}/release.json names so
+  # already-installed daemons can cross the naming migration.
+  #
   # RELEASES_OSS_* belongs to a dedicated RAM identity. Its policy must allow
   # writes only below oss://leagent/computer/ and CDN RefreshObjectCaches for
   # cdn.leagent.me. Aliyun OSS compatibility details remain documented in the
@@ -164,36 +168,42 @@ jobs:
           version="${TAG_NAME#v}"
           bash scripts/publish-release-manifest.sh \
             "${TAG_NAME}" "${version}" \
-            "${PUBLIC_BASE_URL}/${TAG_NAME}" \
+            "${PUBLIC_BASE_URL}/${version}" \
             "${RUNNER_TEMP}/release-assets/checksums.txt" \
             "${RUNNER_TEMP}/release-assets" \
-            >"${RUNNER_TEMP}/release.json"
-          cat "${RUNNER_TEMP}/release.json"
+            >"${RUNNER_TEMP}/manifest.json"
+          cat "${RUNNER_TEMP}/manifest.json"
 
       - name: Publish immutable per-version objects
         run: |
           set -euo pipefail
-          prefix="${RELEASE_PREFIX}/${TAG_NAME}"
-          # Refuse to overwrite an immutable release manifest.
-          if aws s3api head-object \
-            --endpoint-url "$OSS_ENDPOINT_URL" --bucket "$OSS_BUCKET" --key "${prefix}/release.json" \
-            >/dev/null 2>&1; then
-            echo "::error title=Immutable release object already exists::s3://${OSS_BUCKET}/${prefix}/release.json"
-            exit 1
-          fi
+          version="${TAG_NAME#v}"
+          canonical_prefix="${RELEASE_PREFIX}/${version}"
+          legacy_prefix="${RELEASE_PREFIX}/${TAG_NAME}"
+          for key in "${canonical_prefix}/manifest.json" "${legacy_prefix}/release.json"; do
+            if aws s3api head-object \
+              --endpoint-url "$OSS_ENDPOINT_URL" --bucket "$OSS_BUCKET" --key "$key" \
+              >/dev/null 2>&1; then
+              echo "::error title=Immutable release object already exists::s3://${OSS_BUCKET}/${key}"
+              exit 1
+            fi
+          done
           shopt -s nullglob
           for f in "${RUNNER_TEMP}/release-assets"/multica-cli-*.tar.gz "${RUNNER_TEMP}/release-assets"/multica-cli-*.zip; do
             aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
               --cache-control "public,max-age=31536000,immutable" \
-              "$f" "s3://${OSS_BUCKET}/${prefix}/$(basename "$f")"
+              "$f" "s3://${OSS_BUCKET}/${canonical_prefix}/$(basename "$f")"
           done
           aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
             --cache-control "public,max-age=31536000,immutable" \
-            "${RUNNER_TEMP}/release-assets/checksums.txt" "s3://${OSS_BUCKET}/${prefix}/checksums.txt"
-          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
-            --cache-control "public,max-age=31536000,immutable" \
-            "${RUNNER_TEMP}/release.json" "s3://${OSS_BUCKET}/${prefix}/release.json"
-          echo "Published immutable release objects: s3://${OSS_BUCKET}/${prefix}/"
+            "${RUNNER_TEMP}/release-assets/checksums.txt" "s3://${OSS_BUCKET}/${canonical_prefix}/checksums.txt"
+          for destination in "${canonical_prefix}/manifest.json" "${legacy_prefix}/release.json"; do
+            aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
+              --cache-control "public,max-age=31536000,immutable" \
+              "${RUNNER_TEMP}/manifest.json" "s3://${OSS_BUCKET}/${destination}"
+          done
+          echo "Published canonical release objects: s3://${OSS_BUCKET}/${canonical_prefix}/"
+          echo "Published legacy manifest alias: s3://${OSS_BUCKET}/${legacy_prefix}/release.json"
 
       - name: Publish install scripts + docs (stable path, not per-version)
         run: |
@@ -204,14 +214,16 @@ jobs:
               "$file" "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/$(basename "$file")"
           done
 
-      - name: Promote latest.json
+      - name: Promote release manifest
         if: env.IS_STABLE == 'true'
         run: |
           set -euo pipefail
-          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
-            --cache-control "no-cache,max-age=0,must-revalidate" \
-            "${RUNNER_TEMP}/release.json" "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/latest.json"
-          echo "Promoted ${TAG_NAME} to s3://${OSS_BUCKET}/${RELEASE_PREFIX}/latest.json"
+          for name in manifest.json latest.json; do
+            aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
+              --cache-control "no-cache,max-age=0,must-revalidate" \
+              "${RUNNER_TEMP}/manifest.json" "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/${name}"
+          done
+          echo "Promoted ${TAG_NAME} to the canonical and legacy release manifests"
 
       - name: Install pinned Aliyun CLI
         run: |
@@ -226,7 +238,7 @@ jobs:
           install -m 0755 "${RUNNER_TEMP}/aliyun-cli/aliyun" "${RUNNER_TEMP}/bin/aliyun"
           echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
 
-      - name: Refresh mutable CDN objects
+      - name: Refresh CDN objects
         env:
           CDN_ACCESS_KEY_ID: ${{ secrets.RELEASES_OSS_ACCESS_KEY_ID }}
           CDN_ACCESS_KEY_SECRET: ${{ secrets.RELEASES_OSS_SECRET_ACCESS_KEY }}
@@ -240,11 +252,15 @@ jobs:
             --region cn-hangzhou \
             --access-key-id "$CDN_ACCESS_KEY_ID" \
             --access-key-secret "$CDN_ACCESS_KEY_SECRET"
-          printf -v object_paths '%s\n%s\n%s' \
+          version="${TAG_NAME#v}"
+          printf -v object_paths '%s\n%s\n%s\n%s\n%s' \
             "${PUBLIC_BASE_URL}/install.sh" \
             "${PUBLIC_BASE_URL}/install.ps1" \
-            "${PUBLIC_BASE_URL}/CLI_INSTALL.md"
+            "${PUBLIC_BASE_URL}/CLI_INSTALL.md" \
+            "${PUBLIC_BASE_URL}/${version}/manifest.json" \
+            "${PUBLIC_BASE_URL}/${TAG_NAME}/release.json"
           if [ "$IS_STABLE" = "true" ]; then
+            object_paths+=$'\n'"${PUBLIC_BASE_URL}/manifest.json"
             object_paths+=$'\n'"${PUBLIC_BASE_URL}/latest.json"
           fi
           aliyun --config-path "$config" --profile release-cdn \
@@ -274,13 +290,18 @@ jobs:
             echo "::error title=CDN object does not match uploaded content::${label} (${url})"
             exit 1
           }
-          verify_matches "${PUBLIC_BASE_URL}/${TAG_NAME}/checksums.txt" \
+          version="${TAG_NAME#v}"
+          verify_matches "${PUBLIC_BASE_URL}/${version}/checksums.txt" \
             "${RUNNER_TEMP}/release-assets/checksums.txt" "checksums.txt"
+          verify_matches "${PUBLIC_BASE_URL}/${version}/manifest.json" \
+            "${RUNNER_TEMP}/manifest.json" "canonical version manifest"
           verify_matches "${PUBLIC_BASE_URL}/${TAG_NAME}/release.json" \
-            "${RUNNER_TEMP}/release.json" "release.json"
+            "${RUNNER_TEMP}/manifest.json" "legacy version manifest"
           if [ "$IS_STABLE" = "true" ]; then
+            verify_matches "${PUBLIC_BASE_URL}/manifest.json" \
+              "${RUNNER_TEMP}/manifest.json" "canonical promoted manifest"
             verify_matches "${PUBLIC_BASE_URL}/latest.json" \
-              "${RUNNER_TEMP}/release.json" "latest.json"
+              "${RUNNER_TEMP}/manifest.json" "legacy promoted manifest"
           fi
           echo "Verified: public CDN bytes match the canonical release feed."
 

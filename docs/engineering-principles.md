@@ -286,6 +286,12 @@
 - **物**：migration `274_research_run_backend` + `276_research_report_quality`；`server/internal/researchrun`；`research_run_adapter.go` / `research_run_http.go` / `research_run_guard.go`；scheduler `research_run_reconcile`；CLI `multica research task-result`；builtin skill `multica-research-fleet`；前端 typed Run snapshot 和 steer API。
 - **已见红**：全新 PostgreSQL 逐迁移到 274 通过；274 down/up 直接回放通过；真实 Store 集成回归首次执行在 `run_stats` 参数推断处失败，显式 SQL casts 修复后锁住 initialize→attempt→result materialize→dependency activation→idempotent replay。v2 回归先因不支持 `research-run-v2`、质量失败错误进入 replan、placeholder report 被接受而失败；实现后覆盖 required-answer 报告遗漏、作者自审、报告结构、精确引用支持、独立审核范围、质量失败新修订任务和 v1 prompt/contract 固定。后续回归继续覆盖证据去重计数、证据只读视图、依赖失败传播、重试退避、terminal projection recovery；strict envelope、exact quote、DAG cycle、capability routing 和 durable-only prompt 另有单测。v4 PostgreSQL 回归先让 deep run 的单一控制记录被旧全局来源配额错误阻塞，再锁定 Claim 标准通过；无关反证任务的假通过改为 Claim 定向检查；迁移后 v1–v3 来源写入曾因 nil traits 触发 `NOT NULL`，统一规范为空数组后旧版回归恢复。控制环回归先证明旧路由会把边际收益、未回答问题和 Claim 缺口都送进 replan；现锁定 finding precedence、question 绑定、plan version 不变、routing Decision、目标幂等和跨 session/stale target 拒绝。信息增益回归锁定重复 batch 为零、canonical verification upgrade、Claim 降置信度与裁决更新、动态 follow-up 交付依赖、无验证路径 required Question 拒绝、replan 阻塞旧交付、零变化探测不使报告过期及真实图变化强制报告修订。
 
+### 4.18 主动调研必须通过可寻址状态持续整合与解决争议 — `仅文档`（目标已定，Implementation 尚未落地）
+- 目标协议见 `docs/superpowers/plans/2026-08-05-autonomous-research-system.md`。新能力必须把 Hypothesis、Branch、Insight、Search/Corpus 谱系、Integration Round、Dispute、Research Monitor、Capability Observation、Episode 和 Strategy Version 变成服务端可验证事实；增加 Agent 角色或 Prompt 文字不能算完成。
+- 每批可信结果都必须能够触发固定输入版本的整合、争议检测、候选工作生成和有分项理由的组合选择。Integrator 只能提议，Evidence、Inquiry、Dispute、Task 和 Gate 状态仍由 Research Run 验证后更新。
+- 生产 Strategy 不得在线自改。Episode 只能产生候选；候选经过固定评测集、历史回放、安全不变量、非退化检查和 Promotion Decision 后，才对新 Run 生效。已有 Run 固定旧版本，且保留 previous version 回退。
+- 本条在 schema、状态机、迁移、回放、故障注入和系统评测均见红并通过前保持 `仅文档`；实施 PR 必须逐项把约束升级为类型、唯一约束、事务或测试，并在本条记录具体装置。
+
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）
 
 - **渲染活实体的功能，验收必须含"写入后变更"测例**（fixture 先改后写=永远假绿）。→ 有测试模板后升 `可执行`。

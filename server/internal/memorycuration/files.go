@@ -54,33 +54,7 @@ func NormalizeStage(raw string) (Stage, error) {
 }
 
 func ensureMemoryRoot(root string) error {
-	dirs := []string{
-		filepath.Join(root, "memory", "daily"),
-		filepath.Join(root, "memory", "audit"),
-		filepath.Join(root, "notes"),
-		filepath.Join(root, "shared-cache", "memory", "proposals"),
-		filepath.Join(root, "sync_queue"),
-	}
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-	}
-	files := map[string]string{
-		filepath.Join(root, "memory", "MEMORY.md"):     memoryHeader,
-		filepath.Join(root, "memory", "USER.md"):       userHeader,
-		filepath.Join(root, "memory", "STATE.md"):      stateHeader,
-		filepath.Join(root, "memory", "REVIEW.md"):     reviewHeader,
-		filepath.Join(root, "memory", "SCRATCHPAD.md"): scratchHeader,
-		filepath.Join(root, "notes", "work-log.md"):    "# Work Log\n\nConcise task history and handoffs.\n",
-		filepath.Join(root, "notes", "decisions.md"):   "# Decisions\n\nDurable decisions relevant to this agent.\n",
-	}
-	for path, content := range files {
-		if err := ensureFile(path, content); err != nil {
-			return err
-		}
-	}
-	return nil
+	return os.MkdirAll(root, 0o755)
 }
 
 func ensureFile(path, content string) error {
@@ -168,6 +142,9 @@ func appendAudit(root, stage string, planDate time.Time, payload map[string]any,
 		return err
 	}
 	path := filepath.Join(root, "memory", "audit", fmt.Sprintf("%s-%s.jsonl", stage, formatDate(planDate)))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err

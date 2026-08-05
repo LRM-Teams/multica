@@ -218,64 +218,17 @@ func TestSharedSkillScanRootGlobalOverride(t *testing.T) {
 	}
 }
 
-func TestEnsureMulticaAgentRootSeedsManagedFiles(t *testing.T) {
+func TestEnsureMulticaAgentRootIsLazy(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "workspace-1", ".multica", "agents", "agent-1")
 	if err := ensureMulticaAgentRoot(root); err != nil {
 		t.Fatal(err)
 	}
-
-	for _, path := range []string{
-		filepath.Join(root, "memory", "MEMORY.md"),
-		filepath.Join(root, "memory", "USER.md"),
-		filepath.Join(root, "memory", "REVIEW.md"),
-		filepath.Join(root, "notes", "agent-plan.md"),
-		filepath.Join(root, "notes", "channels.md"),
-		filepath.Join(root, "notes", "relationship-map.md"),
-		filepath.Join(root, "notes", "role-playbook.md"),
-		filepath.Join(root, "runtime", "pi"),
-		filepath.Join(root, "runtime", "openclaw"),
-		filepath.Join(root, "sync_queue"),
-	} {
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("expected %s to exist: %v", path, err)
-		}
-	}
-	plan, err := os.ReadFile(filepath.Join(root, "notes", "agent-plan.md"))
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"# Agent Plan",
-		"## Mission",
-		"## Ownership",
-		"## Current Project State",
-		"## Active Work",
-		"## Watchlist",
-		"## Completed Work",
-		"## Future Bets",
-		"## Collaboration Map",
-		"## Initiative Rules",
-		"## Last Checks",
-	} {
-		if !strings.Contains(string(plan), want) {
-			t.Fatalf("agent-plan.md missing %q:\n%s", want, plan)
-		}
-	}
-
-	memoryPath := filepath.Join(root, "memory", "MEMORY.md")
-	custom := []byte("custom memory\n")
-	if err := os.WriteFile(memoryPath, custom, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureMulticaAgentRoot(root); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(memoryPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(custom) {
-		t.Fatalf("ensureMulticaAgentRoot overwrote existing memory: %q", got)
+	if len(entries) != 0 {
+		t.Fatalf("new agent root contains placeholder entries: %+v", entries)
 	}
 }
 

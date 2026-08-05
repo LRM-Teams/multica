@@ -502,13 +502,35 @@ func appendSeedContextFile(root, rel, content string, maxBytes int) error {
 	target := filepath.Join(root, filepath.FromSlash(rel))
 	current, err := os.ReadFile(target)
 	if err != nil {
-		return err
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		current = []byte(seedContextHeader(rel))
 	}
 	block := "\n\n## Initial Context\n\n" + trimmed + "\n"
 	if len(current)+len([]byte(block)) > maxBytes {
 		return errSeedContextTooLarge
 	}
 	return os.WriteFile(target, append(current, []byte(block)...), 0o644)
+}
+
+func seedContextHeader(rel string) string {
+	if strings.HasPrefix(rel, "memory/") {
+		return defaultHeaderForRel(rel)
+	}
+	headings := map[string]string{
+		"notes/agents.md":           "Agents",
+		"notes/channels.md":         "Channels",
+		"notes/project-map.md":      "Project Map",
+		"notes/relationship-map.md": "Relationship Map",
+		"notes/role-playbook.md":    "Role Playbook",
+		"notes/work-log.md":         "Work Log",
+		"notes/decisions.md":        "Decisions",
+	}
+	return "# " + headings[rel] + "\n"
 }
 
 func writeWorkdirTextFile(root, filePath, content, expectedContentHash string, maxBytes int) protocol.WriteWorkdirFileResponsePayload {

@@ -185,6 +185,10 @@ func (r *AgentStageRunner) RunStage(ctx context.Context, input StageAgentInput) 
 		"local_files":        input.LocalFiles,
 		"db_evidence":        input.DBEvidence,
 	}
+	if len(input.OversizedFiles) > 0 {
+		payload["oversized_files"] = input.OversizedFiles
+		payload["memory_maintenance"] = "For every oversized_files entry, use filesystem tools to read the complete file, not only local_files. Compact it in place: remove duplicates, remove facts whose explicit expiry has passed, merge equivalent bullets, preserve provenance/applicability and all still-valid unique facts, and keep uncertain conflicts in memory/REVIEW.md. Do not summarize away exact IDs, commands, decisions, user attribution, or safety constraints. Re-read the result before finishing and report each replacement in local_writes."
+	}
 	if len(input.ReviewEntries) > 0 {
 		payload["review_entries"] = input.ReviewEntries
 	}

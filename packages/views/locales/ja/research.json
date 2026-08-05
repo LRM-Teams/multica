@@ -209,7 +209,36 @@
       "unavailable": "移動できるノードはありません",
       "load_failed": "実行状況を読み込めませんでした",
       "retry": "再試行",
-      "empty": "実行メンバーはいません"
+      "empty": "実行メンバーはいません",
+      "status": {
+        "queued": "待機",
+        "running": "実行中",
+        "done": "完了",
+        "failed": "失敗",
+        "stale": "停滞",
+        "idle": "待機中"
+      },
+      "action": {
+        "waiting": "現在のタスクの開始を待っています",
+        "working": "現在のタスクを実行中です",
+        "recent_done": "直近のタスクが完了しました",
+        "recent_failed": "直近のタスクが失敗しました",
+        "stale": "実行状態が古くなっています",
+        "idle": "引き受けられる小タスクはありません"
+      },
+      "time": {
+        "queued": "待機中",
+        "running": "実行中",
+        "recent": "最近更新",
+        "failed": "実行失敗",
+        "stale": "長時間更新なし",
+        "idle": "待機中"
+      },
+      "failed_reason": "タスクは完了していません。最近のアクティビティを確認して再試行してください。",
+      "active_count": "{{count}} 体のエージェントが実行中",
+      "no_active": "実行中のエージェントはいません",
+      "locate_aria": "{{name}} の現在ノードへ移動",
+      "view_aria": "{{name}} の最近のアクティビティを表示"
     },
     "aux_close_sources": "調査根拠と協業分担を閉じる"
   },

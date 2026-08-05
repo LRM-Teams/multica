@@ -1,23 +1,32 @@
 import type { ResearchPresenceMap } from "@multica/core/research";
 import type { ResearchFleetMember, ResearchGraphNode } from "@multica/core/types";
-import type { ResearchExecutionAgent } from "./research-execution-panel-fixture";
+import type {
+  ResearchExecutionActionKey,
+  ResearchExecutionAgent,
+  ResearchExecutionTimeKey,
+} from "./research-execution-panel-fixture";
 
-const STATUS_ACTION: Record<ResearchExecutionAgent["status"], string> = {
-  queued: "等待开始当前任务",
-  running: "正在执行当前任务",
-  done: "最近任务已完成",
-  failed: "最近任务执行失败",
-  stale: "执行状态已过期",
-  idle: "当前没有可领取的小任务",
+// The panel chrome (status badge, fallback action, last-update label, failure
+// reason) is locale-independent: this view-model only carries semantic codes
+// and the UI component translates them against the active locale. Hardcoding
+// Chinese here is what leaked 混文 into en/ja/ko. Live `signal.activity` text
+// (server-provided, already locale-appropriate) remains the primary action.
+const STATUS_ACTION_KEY: Record<ResearchExecutionAgent["status"], ResearchExecutionActionKey> = {
+  queued: "waiting",
+  running: "working",
+  done: "recent_done",
+  failed: "recent_failed",
+  stale: "stale",
+  idle: "idle",
 };
 
-const STATUS_TIME: Record<ResearchExecutionAgent["status"], string> = {
-  queued: "排队中",
-  running: "执行中",
-  done: "最近更新",
-  failed: "执行失败",
-  stale: "长时间未更新",
-  idle: "空闲",
+const STATUS_TIME_KEY: Record<ResearchExecutionAgent["status"], ResearchExecutionTimeKey> = {
+  queued: "queued",
+  running: "running",
+  done: "recent",
+  failed: "failed",
+  stale: "stale",
+  idle: "idle",
 };
 
 function initials(name: string): string {
@@ -51,11 +60,11 @@ export function buildResearchExecutionAgents(
         initials: initials(name),
         avatarUrl: member.avatar_url ?? undefined,
         status,
-        action: signal?.activity || STATUS_ACTION[status],
+        action: signal?.activity || undefined,
+        actionKey: signal?.activity ? undefined : STATUS_ACTION_KEY[status],
         actionDetail: signal?.activity || undefined,
-        failureReason:
-          status === "failed" ? "任务未完成，可查看最近活动后重试。" : undefined,
-        timeLabel: STATUS_TIME[status],
+        failureReasonKey: status === "failed" ? "failed" : undefined,
+        timeKey: STATUS_TIME_KEY[status],
         currentNodeId: node?.id,
         locationLabel: node?.title || undefined,
       };

@@ -42,3 +42,10 @@ CREATE INDEX idx_agent_action_workspace_created
 CREATE INDEX idx_agent_action_result_agent
     ON agent_action(result_agent_id)
     WHERE result_agent_id IS NOT NULL;
+
+-- Supporting index for agent hard-delete: every FK reference to the agent
+-- table must carry a child index so deleting an agent does not require a
+-- full table scan of agent_action. Mirrors idx_agent_action_result_agent.
+CREATE INDEX idx_agent_action_prepared_by_agent
+    ON agent_action(prepared_by_agent_id)
+    WHERE prepared_by_agent_id IS NOT NULL;

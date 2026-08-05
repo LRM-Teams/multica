@@ -35,8 +35,8 @@ func newMessageSendCmd() *cobra.Command {
 			"the message text remains the accessible transcript. Do not generate or " +
 			"attach an audio file for a voice reply; Multica synthesizes the transcript. If the " +
 			"server holds a send because newer messages arrived, it remains an unsent " +
-			"draft. Do not automatically retry it; --send-draft is only for an explicit " +
-			"agent decision after reviewing the newer context.",
+			"draft. Do not automatically retry it or send it later; after reviewing the newer " +
+			"context, compose a fresh response if one is still needed.",
 		RunE: runAgentMessageSend,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
@@ -47,7 +47,6 @@ func newMessageSendCmd() *cobra.Command {
 	cmd.Flags().Bool("voice", false, "Deliver the message text as synthesized speech and an accessible transcript")
 	cmd.Flags().StringSlice("attachment-id", nil, "Attachment id to link (repeatable). Get one from `multica attachment upload`")
 	cmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
-	cmd.Flags().Bool("send-draft", false, "Send the current server-saved draft for --target unchanged")
 	cmd.Flags().Int64("seen-up-to-seq", 0, "Last channel message sequence the agent reviewed before composing")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	_ = cmd.Flags().MarkHidden("seen-up-to-seq")
@@ -234,31 +233,6 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	sendDraft, _ := cmd.Flags().GetBool("send-draft")
-	if sendDraft {
-		if cmd.Flags().Changed("message") || cmd.Flags().Changed("message-stdin") || cmd.Flags().Changed("message-file") ||
-			cmd.Flags().Changed("sticker") || cmd.Flags().Changed("voice") || cmd.Flags().Changed("attachment-id") || cmd.Flags().Changed("client-message-id") ||
-			cmd.Flags().Changed("seen-up-to-seq") {
-			return fmt.Errorf("--send-draft cannot be combined with message, sticker, attachment, or client-message-id options")
-		}
-		client, err := newAPIClient(cmd)
-		if err != nil {
-			return err
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
-		defer cancel()
-		var out map[string]any
-		if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
-			return err
-		}
-		if err := client.PostJSON(ctx, "/api/agent/messages/send", map[string]any{
-			"target":     target,
-			"send_draft": true,
-		}, &out); err != nil {
-			return fmt.Errorf("send saved draft: %w", err)
-		}
-		return printAgentTransportOutput(cmd, out, "Draft sent.")
-	}
 	content, contentOK, err := resolveTextFlag(cmd, "message")
 	if err != nil {
 		return err
@@ -338,7 +312,7 @@ func agentMessageSendTextFallback(out map[string]any) string {
 				}
 			}
 		}
-		b.WriteString("\nThe agent must explicitly decide whether to discard it or, after reviewing this context, send a newly composed message. The held draft is never sent automatically.")
+		b.WriteString("\nThis send attempt is finished. Review the newer context and, if a reply is still needed, compose and send a new message; the held draft is never retried.")
 		return b.String()
 	}
 	return "Message sent."

@@ -66,6 +66,7 @@ import { AddComputerDialog } from "./add-computer-dialog";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CreateCloudComputerDialog } from "./create-cloud-computer-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
+import { SandboxEndpointLinks } from "../../sandboxes/components/sandbox-endpoint-links";
 import { buildWorkloadIndex } from "./runtime-list";
 import {
   buildRuntimeMachines,
@@ -302,6 +303,11 @@ export function RuntimesPage({
 
   const selectedMachine =
     machines.find((m) => m.id === selectedMachineId) ?? null;
+  const selectedCloudSandbox = useMemo(() => {
+    const sandboxId = selectedMachine?.sandboxInstanceId?.trim();
+    if (!sandboxId) return null;
+    return sandboxInstances.find((instance) => instance.id === sandboxId) ?? null;
+  }, [sandboxInstances, selectedMachine?.sandboxInstanceId]);
 
   const handleSelectMachine = useCallback((id: string) => {
     setUserPickId(id);
@@ -417,6 +423,7 @@ export function RuntimesPage({
       showBack={isMobile}
       showListActions={isMobile}
       headerActions={headerActions}
+      cloudSandbox={selectedCloudSandbox}
     />
   ) : (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center px-6 text-center">
@@ -687,6 +694,8 @@ type MachineDetailViewProps = {
   headerActions: React.ReactNode;
   showBack: boolean;
   showListActions: boolean;
+  /** Docker cloud computer sandbox row — used for Terminal / Pi / noVNC links. */
+  cloudSandbox?: SandboxInstance | null;
 };
 
 /**
@@ -711,6 +720,7 @@ function MachineDetailView({
   headerActions,
   showBack,
   showListActions,
+  cloudSandbox = null,
 }: MachineDetailViewProps) {
   void _snapshot;
   const { t } = useT("runtimes");
@@ -1010,6 +1020,12 @@ function MachineDetailView({
               )}
             </div>
           </section>
+
+          {cloudSandbox ? (
+            <section data-testid="machine-cloud-endpoint-links">
+              <SandboxEndpointLinks instance={cloudSandbox} />
+            </section>
+          ) : null}
 
           <MachineCodeAgentsSection machine={machine} />
 

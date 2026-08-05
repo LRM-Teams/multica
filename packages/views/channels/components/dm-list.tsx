@@ -103,8 +103,8 @@ export function DmList({
   currentUserName,
   searchQuery = "",
   onSelect,
-  dms = [],
-  dmsPending = false,
+  dms,
+  dmsPending,
 }: {
   /** Currently open conversation id (DM or group) — drives row highlight. */
   activeId: string | null;
@@ -119,8 +119,8 @@ export function DmList({
    * `GET /api/dm` list request, so both sidebar regions share one loading
    * boundary and one data source.
    */
-  dms?: DMItem[];
-  dmsPending?: boolean;
+  dms: DMItem[];
+  dmsPending: boolean;
 }) {
   const { t } = useT("channels");
   const isMobile = useIsMobile();

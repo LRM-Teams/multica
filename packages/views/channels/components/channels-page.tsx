@@ -974,16 +974,18 @@ export function ChannelsPage({
   // globally ordered (pinned → updated_at → id) page of group channels and
   // DMs; we split it back into the two familiar region arrays (native shapes
   // preserved) so every downstream render/mutation path is unchanged while the
-  // two regions share one pending/error boundary (LRM-1367 AC).
-  const conversationsQuery = useInfiniteQuery(conversationsOptions(wsId));
+  // two regions share one pending/error boundary (LRM-1367 AC). Destructure
+  // only the consumed fields so TanStack Query subscribes narrowly.
+  const { data: conversationsData, isPending: conversationsPending, isSuccess: conversationsSuccess, refetch: refetchConversations } =
+    useInfiniteQuery(conversationsOptions(wsId));
   const conversationItems = useMemo(
-    () => flattenConversationPages(conversationsQuery.data ?? { pages: [], pageParams: [] }),
-    [conversationsQuery.data],
+    () => flattenConversationPages(conversationsData ?? { pages: [], pageParams: [] }),
+    [conversationsData],
   );
   const channels = useMemo(() => conversationGroupChannels(conversationItems), [conversationItems]);
   const dms = useMemo(() => conversationDMs(conversationItems), [conversationItems]);
-  const channelsPending = conversationsQuery.isPending;
-  const channelsLoaded = conversationsQuery.isSuccess;
+  const channelsPending = conversationsPending;
+  const channelsLoaded = conversationsSuccess;
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
   const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -1011,7 +1013,7 @@ export function ChannelsPage({
   // Mobile is list-first: `active` resolves only from an explicit selection
   // (click or ?channel= deep link), so the list shows until the user opens a
   // channel and the Back button (which clears activeId) returns to it.
-  const refetchDms = conversationsQuery.refetch;
+  const refetchDms = refetchConversations;
   const bubbleActivityByAgent = useAgentBubbleActivityByAgent(wsId);
   const lastSelectedChannelId = useLastSelectedChannelStore(
     (state) => state.lastSelectedChannelId,

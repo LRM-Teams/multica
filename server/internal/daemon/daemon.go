@@ -94,6 +94,10 @@ type Daemon struct {
 	client *Client
 	logger *slog.Logger
 
+	messageCoordinatorMu sync.RWMutex
+	messageCoordinators  map[string]*MessageCoordinator
+	messageRuntimeIDs    map[string]string
+
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
 	runtimeIndex map[string]Runtime // runtimeID -> Runtime for provider lookups
@@ -230,6 +234,118 @@ type Daemon struct {
 	canonicalChatFactoryOverride canonicalRuntimeBackendFactory
 }
 
+// registerIdleMessageCoordinator installs the one long-running coordinator for
+// an Agent on this Machine Service. The coordinator itself serializes delivery,
+// runtime handoff, and Context Boundary persistence.
+func (d *Daemon) registerIdleMessageCoordinator(agentID string, coordinator *MessageCoordinator) error {
+	if d == nil || agentID == "" || coordinator == nil {
+		return errors.New("agent id and Message coordinator are required")
+	}
+	d.messageCoordinatorMu.Lock()
+	defer d.messageCoordinatorMu.Unlock()
+	if d.messageCoordinators == nil {
+		d.messageCoordinators = make(map[string]*MessageCoordinator)
+	}
+	if d.messageRuntimeIDs == nil {
+		d.messageRuntimeIDs = make(map[string]string)
+	}
+	if _, exists := d.messageCoordinators[agentID]; exists {
+		return fmt.Errorf("Message coordinator already registered for agent %q", agentID)
+	}
+	d.messageCoordinators[agentID] = coordinator
+	return nil
+}
+
+func (d *Daemon) removeIdleMessageCoordinator(agentID, runtimeID string) {
+	d.messageCoordinatorMu.Lock()
+	defer d.messageCoordinatorMu.Unlock()
+	if current := d.messageRuntimeIDs[agentID]; current != "" && current != runtimeID {
+		return
+	}
+	delete(d.messageCoordinators, agentID)
+	delete(d.messageRuntimeIDs, agentID)
+}
+
+func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (protocol.AgentDeliverAckPayload, error) {
+	d.messageCoordinatorMu.RLock()
+	defer d.messageCoordinatorMu.RUnlock()
+	coordinator := d.messageCoordinators[delivery.AgentID]
+	if coordinator == nil {
+		return protocol.AgentDeliverAckPayload{}, fmt.Errorf("no idle Message coordinator for agent %q", delivery.AgentID)
+	}
+	if _, err := coordinator.Accept(ctx, delivery); err != nil {
+		return protocol.AgentDeliverAckPayload{}, err
+	}
+	return coordinator.Acknowledgement(delivery), nil
+}
+
+func (d *Daemon) flushIdleAgentDelivery(ctx context.Context, agentID string) error {
+	d.messageCoordinatorMu.RLock()
+	defer d.messageCoordinatorMu.RUnlock()
+	coordinator := d.messageCoordinators[agentID]
+	if coordinator == nil {
+		return fmt.Errorf("no idle Message coordinator for agent %q", agentID)
+	}
+	return coordinator.Flush(ctx)
+}
+
+func (d *Daemon) beginMessageRecovery(writes chan<- []byte) {
+	d.messageCoordinatorMu.RLock()
+	coordinators := make(map[string]*MessageCoordinator, len(d.messageCoordinators))
+	for agentID, coordinator := range d.messageCoordinators {
+		coordinators[agentID] = coordinator
+	}
+	d.messageCoordinatorMu.RUnlock()
+	for agentID, coordinator := range coordinators {
+		d.enqueueMessageRecoveryRequest(coordinator.BeginRecovery(agentID, 100), writes)
+	}
+}
+
+func (d *Daemon) beginAgentMessageRecovery(agentID string, writes chan<- []byte) {
+	d.messageCoordinatorMu.RLock()
+	coordinator := d.messageCoordinators[agentID]
+	d.messageCoordinatorMu.RUnlock()
+	if coordinator == nil {
+		return
+	}
+	request := coordinator.BeginRecovery(agentID, 100)
+	if writes != nil {
+		d.enqueueMessageRecoveryRequest(request, writes)
+		return
+	}
+	d.queueReminderFrame(protocol.EventAgentRecoveryRequest, request)
+}
+
+func (d *Daemon) enqueueMessageRecoveryRequest(request protocol.AgentRecoveryRequest, writes chan<- []byte) {
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentRecoveryRequest, Payload: marshalRaw(request)})
+	if err != nil {
+		d.logger.Warn("agent Message recovery request marshal failed", "error", err, "agent_id", request.AgentID)
+		return
+	}
+	select {
+	case writes <- frame:
+	default:
+		d.logger.Warn("agent Message recovery request dropped", "agent_id", request.AgentID)
+	}
+}
+
+func (d *Daemon) handleMessageRecoveryPage(ctx context.Context, page protocol.AgentRecoveryPage, writes chan<- []byte) error {
+	d.messageCoordinatorMu.RLock()
+	defer d.messageCoordinatorMu.RUnlock()
+	coordinator := d.messageCoordinators[page.AgentID]
+	if coordinator == nil {
+		return fmt.Errorf("no Message coordinator for recovery agent %q", page.AgentID)
+	}
+	if err := coordinator.MergeRecoveryPage(page); err != nil {
+		return err
+	}
+	if page.HasMore {
+		d.enqueueMessageRecoveryRequest(coordinator.RecoveryRequest(page.AgentID, 100), writes)
+		return nil
+	}
+	return coordinator.Flush(ctx)
+}
+
 // New creates a new Daemon instance.
 func New(cfg Config, logger *slog.Logger) *Daemon {
 	client := NewClient(cfg.ServerBaseURL)
@@ -256,6 +372,8 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		persistentRuntimes:        newPersistentRuntimePool(),
 		piPersistentRuntimes:      newPiPersistentPool(),
 		canonicalRuntimes:         newCanonicalAgentRuntimePool(),
+		messageCoordinators:       make(map[string]*MessageCoordinator),
+		messageRuntimeIDs:         make(map[string]string),
 		residentCrashBackoff:      newResidentCrashBackoffTracker(residentCrashBackoffWindow, residentCrashRetryCap),
 	}
 	d.canonicalRuntimes.setMaxAgentProcesses(cfg.MaxAgentProcesses)
@@ -317,6 +435,7 @@ func (d *Daemon) removeReminderAgent(agentID, runtimeID string, generation int64
 		}
 	}
 	if removed {
+		d.removeIdleMessageCoordinator(agentID, runtimeID)
 		d.reminderGateMu.Lock()
 		delete(d.reminderPendingSnapshots, agentID)
 		d.reminderGateMu.Unlock()

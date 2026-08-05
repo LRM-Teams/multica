@@ -7374,8 +7374,8 @@ func assertChannelAgentWakeActivity(t *testing.T, agentID, sourceMessageID, want
 		LIMIT 1`, agentID, wantReason, sourceMessageID).Scan(&eventKind, &eventType, &reasonCode); err != nil {
 		t.Fatalf("load wake activity event: %v", err)
 	}
-	if eventKind != activityKindWakeAttempt || eventType != "task_dispatched" || reasonCode != wantReason {
-		t.Fatalf("wake activity = kind:%q type:%q reason:%q, want wake_attempt/task_dispatched/%q", eventKind, eventType, reasonCode, wantReason)
+	if eventKind != activityKindTransport || eventType != "task_dispatched" || reasonCode != wantReason {
+		t.Fatalf("wake activity = kind:%q type:%q reason:%q, want transport/task_dispatched/%q", eventKind, eventType, reasonCode, wantReason)
 	}
 }
 

@@ -429,6 +429,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.HandleDaemonReminderProjection,
 		h.HandleDaemonReminderProjectionAck,
 	)
+	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
+	daemonHub.SetAgentRecoveryHandler(h.HandleAgentMessageRecovery)
+	daemonHub.SetAgentMessageHandoffHandler(h.HandleAgentMessageHandoff)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()

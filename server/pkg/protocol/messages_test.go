@@ -1,6 +1,73 @@
 package protocol
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestAgentMessageWireFieldsFollowTheirBoundaryContracts(t *testing.T) {
+	delivery := AgentDeliverPayload{
+		AgentID:    "agent-1",
+		Target:     "channel:1",
+		Seq:        7,
+		DeliveryID: "delivery-1",
+		Message: AgentMessageProjection{
+			ID:      "message-1",
+			Target:  "channel:1",
+			Seq:     7,
+			Content: "hello",
+		},
+	}
+	raftValues := []any{
+		delivery,
+		AgentDeliverAckPayload{AgentID: "agent-1", DeliveryID: "delivery-1", Seq: 7, Traceparent: "trace"},
+	}
+	var raftEncoded strings.Builder
+	for _, value := range raftValues {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal %T: %v", value, err)
+		}
+		raftEncoded.Write(data)
+	}
+	raftWire := raftEncoded.String()
+	for _, field := range []string{`"agentId"`, `"deliveryId"`, `"traceparent"`} {
+		if !strings.Contains(raftWire, field) {
+			t.Fatalf("Raft payloads %s do not contain %s", raftWire, field)
+		}
+	}
+	for _, field := range []string{`"agent_id"`, `"delivery_id"`} {
+		if strings.Contains(raftWire, field) {
+			t.Fatalf("Raft payloads %s contain project API field %s", raftWire, field)
+		}
+	}
+
+	projectValues := []any{
+		AgentRecoveryRequest{AgentID: "agent-1", RecoveryID: "recovery-1", Boundaries: map[string]int64{}, SnapshotID: "snapshot-1", Cursor: "cursor-1", Limit: 10},
+		AgentRecoveryPage{AgentID: "agent-1", RecoveryID: "recovery-1", SnapshotID: "snapshot-1", HighWatermark: "fence-1", NextCursor: "cursor-2", HasMore: true},
+		AgentMessageHandoffPayload{AgentID: "agent-1", RuntimeID: "runtime-1", HandoffID: "handoff-1", Count: 1},
+	}
+	var encoded strings.Builder
+	for _, value := range projectValues {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal %T: %v", value, err)
+		}
+		encoded.Write(data)
+	}
+	wire := encoded.String()
+	for _, field := range []string{`"agent_id"`, `"recovery_id"`, `"snapshot_id"`, `"high_watermark"`, `"next_cursor"`, `"has_more"`, `"runtime_id"`, `"handoff_id"`} {
+		if !strings.Contains(wire, field) {
+			t.Fatalf("encoded payloads %s do not contain %s", wire, field)
+		}
+	}
+	for _, field := range []string{`"recoveryId"`, `"snapshotId"`, `"highWatermark"`, `"nextCursor"`, `"hasMore"`, `"runtimeId"`, `"handoffId"`} {
+		if strings.Contains(wire, field) {
+			t.Fatalf("encoded payloads %s contain non-project field %s", wire, field)
+		}
+	}
+}
 
 func TestNormalizeChatOutputActionRequiresMessageSend(t *testing.T) {
 	action, err := NormalizeChatOutputAction("message_send")

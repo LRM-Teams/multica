@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -144,6 +145,16 @@ func (d *Daemon) tryCanonicalChatBackend(
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("acquire canonical runtime: %w", err)
 	}
+	if mode == canonicalRuntimeResident {
+		created, err := d.ensureIdleMessageCoordinator(agentID, task.RuntimeID, turn.Workspace.RootDir)
+		if err != nil {
+			lease.release(false)
+			return nil, nil, nil, false, fmt.Errorf("register idle Message coordinator: %w", err)
+		}
+		if created {
+			d.beginAgentMessageRecovery(agentID, nil)
+		}
+	}
 
 	releaseTurn = false
 	if taskLog != nil {
@@ -169,6 +180,11 @@ func (d *Daemon) tryCanonicalChatBackend(
 			lease.release(false)
 		}
 		_ = turn.Close()
+		if healthy {
+			if err := d.flushIdleAgentDelivery(context.Background(), agentID); err != nil && taskLog != nil {
+				taskLog.Debug("idle Message flush deferred", "error", err)
+			}
+		}
 	}, turn, true, nil
 }
 

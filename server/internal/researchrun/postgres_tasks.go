@@ -687,6 +687,8 @@ func expectedResultForTaskVersion(version string, kind TaskKind) string {
 		suffix = "v2"
 	} else if version == OrchestratorVersionV3 {
 		suffix = "v3"
+	} else if version == OrchestratorVersionV4 {
+		suffix = "v4"
 	}
 	switch kind {
 	case TaskKindPlan, TaskKindReplan:
@@ -707,6 +709,8 @@ func resultSchemaVersionForOrchestrator(version string) int {
 		return 2
 	} else if version == OrchestratorVersionV3 {
 		return 3
+	} else if version == OrchestratorVersionV4 {
+		return 4
 	}
 	return 1
 }

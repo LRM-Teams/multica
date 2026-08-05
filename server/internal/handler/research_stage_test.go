@@ -54,7 +54,7 @@ func TestBuildDurableResearchWakePromptSeparatesConversationFromWork(t *testing.
 
 func TestResearchDomainPlaybooks(t *testing.T) {
 	books := researchDomainPlaybooks()
-	for _, domain := range []string{"tech", "market", "academic", "game", "ai_engineering", "academic_papers", "finance", "design_visual"} {
+	for _, domain := range []string{"general", "tech", "market", "academic", "game", "ai_engineering", "academic_papers", "finance", "design_visual"} {
 		if books[domain] == "" {
 			t.Fatalf("missing playbook %s", domain)
 		}
@@ -88,9 +88,9 @@ func TestResearchSeedRolesIncludeLead(t *testing.T) {
 			if r.Instructions == "" || len(r.Instructions) < 200 {
 				t.Fatal("ronaldo instructions must be detailed")
 			}
-			for _, required := range []string{"accepted Method", "multica research task-result", "do not use a universal source hierarchy"} {
+			for _, required := range []string{"accepted Method", "multica research task-result", "do not use a universal source hierarchy", "evidence standards", "directness", "method fit"} {
 				if !strings.Contains(r.Instructions, required) {
-					t.Fatalf("ronaldo instructions missing durable v3 rule %q", required)
+					t.Fatalf("ronaldo instructions missing durable research rule %q", required)
 				}
 			}
 			for _, forbidden := range []string{"S1 Plan", "graph-append|source-upsert", "fixed; playbooks evolve"} {

@@ -42,33 +42,39 @@ func TestAdaptivePlansDifferAcrossDomains(t *testing.T) {
 		t.Fatal("expected different source class strategies")
 	}
 	if !game.DeliveryLike || !finance.DeliveryLike {
-		t.Fatal("delivery-like goals should require human↔AI / cost probes")
+		t.Fatal("build goals should retain delivery context")
+	}
+	if game.HumanAIBoundaryRequired || finance.HumanAIBoundaryRequired {
+		t.Fatal("build verbs alone must not manufacture a human/AI requirement")
+	}
+	explicit := buildResearchAdaptivePlan("开发一款需要人工审批 AI 输出的游戏")
+	if !explicit.HumanAIBoundaryRequired {
+		t.Fatal("an explicit human/AI responsibility question must be preserved")
 	}
 	hasBoundary := false
-	for _, d := range game.Dimensions {
+	for _, d := range explicit.Dimensions {
 		if d.Family == "human_ai_boundary" && d.Required {
 			hasBoundary = true
 		}
 	}
 	if !hasBoundary {
-		t.Fatal("game delivery plan must require human_ai_boundary")
+		t.Fatal("explicit human/AI goal must require the corresponding dimension")
 	}
 }
 
 func TestResearchDomainPlaybooksFineDomains(t *testing.T) {
 	books := researchDomainPlaybooks()
 	for _, domain := range []string{
-		"tech", "market", "academic",
+		"general", "tech", "market", "academic",
 		researchDomainGame, researchDomainAIEngineering, researchDomainAcademicPapers,
 		researchDomainFinance, researchDomainDesignVisual,
 	} {
 		if books[domain] == "" {
 			t.Fatalf("missing playbook %s", domain)
 		}
-		if !strings.Contains(books[domain], "Human") && !strings.Contains(books[domain], "人机") && domain != "tech" && domain != "market" && domain != "academic" {
-			// coarse seeds mention human↔AI in S4; fine must mention human/AI boundary section
-			if !strings.Contains(strings.ToLower(books[domain]), "human") {
-				t.Fatalf("playbook %s should discuss human↔AI", domain)
+		for _, required := range []string{"## Decision", "## Method", "## Failure"} {
+			if !strings.Contains(books[domain], required) && domain != "general" {
+				t.Fatalf("playbook %s missing adaptation section %q", domain, required)
 			}
 		}
 	}
@@ -105,9 +111,9 @@ func TestReportHasHumanAIBoundary(t *testing.T) {
 }
 
 func TestAdaptiveKickoffLeadPrompt(t *testing.T) {
-	plan := buildResearchAdaptivePlan("制作一款页游传奇")
-	prompt := adaptiveKickoffLeadPrompt("制作一款页游传奇", plan)
-	for _, needle := range []string{"Detected fine domain: game", "payload.why", "human↔AI", "Seeded dimension families"} {
+	plan := buildResearchAdaptivePlan("制作一款需要人工审批 AI 资产的页游传奇")
+	prompt := adaptiveKickoffLeadPrompt("制作一款需要人工审批 AI 资产的页游传奇", plan)
+	for _, needle := range []string{"Tentative domain profile: game", "payload.why", "human/AI responsibility", "Candidate dimensions", "fixed source count"} {
 		if !strings.Contains(prompt, needle) {
 			t.Fatalf("missing %q in prompt", needle)
 		}

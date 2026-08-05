@@ -9,7 +9,8 @@ const (
 	OrchestratorVersionV1 = "research-run-v1"
 	OrchestratorVersionV2 = "research-run-v2"
 	OrchestratorVersionV3 = "research-run-v3"
-	OrchestratorVersion   = OrchestratorVersionV3
+	OrchestratorVersionV4 = "research-run-v4"
+	OrchestratorVersion   = OrchestratorVersionV4
 )
 
 type RunStatus string
@@ -146,25 +147,40 @@ type ResearchContract struct {
 }
 
 // ResearchMethod is the accepted, versioned method shared by every task in a
-// plan. It is derived from a v3 plan result and stored in the append-only
+// plan. It is derived from a v3 or v4 plan result and stored in the append-only
 // decision ledger; Agents cannot supply its attribution or version fields.
 type ResearchMethod struct {
-	GoalVersion             int       `json:"goal_version"`
-	PlanVersion             int       `json:"plan_version"`
-	DecisionQuestion        string    `json:"decision_question"`
-	MethodRationale         string    `json:"method_rationale"`
-	AnalysisMethods         []string  `json:"analysis_methods"`
-	EvidenceRequirements    []string  `json:"evidence_requirements"`
-	InclusionCriteria       []string  `json:"inclusion_criteria"`
-	ExclusionCriteria       []string  `json:"exclusion_criteria"`
-	SourceStrategy          []string  `json:"source_strategy"`
-	CounterevidenceStrategy []string  `json:"counterevidence_strategy"`
-	StoppingConditions      []string  `json:"stopping_conditions"`
-	Uncertainties           []string  `json:"uncertainties"`
-	PlanningRisks           []string  `json:"planning_risks"`
-	CreatedByTaskID         string    `json:"created_by_task_id"`
-	CreatedByAgentID        string    `json:"created_by_agent_id"`
-	CreatedAt               time.Time `json:"created_at"`
+	GoalVersion             int                `json:"goal_version"`
+	PlanVersion             int                `json:"plan_version"`
+	DecisionQuestion        string             `json:"decision_question"`
+	MethodRationale         string             `json:"method_rationale"`
+	AnalysisMethods         []string           `json:"analysis_methods"`
+	EvidenceRequirements    []string           `json:"evidence_requirements"`
+	EvidenceStandards       []EvidenceStandard `json:"evidence_standards,omitempty"`
+	InclusionCriteria       []string           `json:"inclusion_criteria"`
+	ExclusionCriteria       []string           `json:"exclusion_criteria"`
+	SourceStrategy          []string           `json:"source_strategy"`
+	CounterevidenceStrategy []string           `json:"counterevidence_strategy"`
+	StoppingConditions      []string           `json:"stopping_conditions"`
+	Uncertainties           []string           `json:"uncertainties"`
+	PlanningRisks           []string           `json:"planning_risks"`
+	CreatedByTaskID         string             `json:"created_by_task_id"`
+	CreatedByAgentID        string             `json:"created_by_agent_id"`
+	CreatedAt               time.Time          `json:"created_at"`
+}
+
+// EvidenceStandard is a method-owned, machine-checkable evidence requirement
+// referenced by Claims. RequiredSourceTraits are satisfied across the set of
+// eligible independent sources; one source does not need every trait.
+type EvidenceStandard struct {
+	ClientKey                 string   `json:"client_key"`
+	Purpose                   string   `json:"purpose"`
+	MinimumIndependentSources int      `json:"minimum_independent_sources"`
+	RequiredSourceTraits      []string `json:"required_source_traits"`
+	MinimumStrength           float64  `json:"minimum_strength"`
+	MinimumDirectness         float64  `json:"minimum_directness"`
+	MinimumMethodFit          float64  `json:"minimum_method_fit"`
+	CounterevidenceRequired   bool     `json:"counterevidence_required"`
 }
 
 type Run struct {
@@ -271,6 +287,7 @@ type SourceSnapshotView struct {
 	Title              string          `json:"title"`
 	Publisher          string          `json:"publisher"`
 	SourceClass        string          `json:"source_class"`
+	EvidenceTraits     []string        `json:"evidence_traits,omitempty"`
 	IndependenceKey    string          `json:"independence_key"`
 	RetrievedAt        time.Time       `json:"retrieved_at"`
 	ContentHash        string          `json:"content_hash"`
@@ -296,25 +313,28 @@ type ClaimEvidence struct {
 	ObservationID      string  `json:"observation_id"`
 	Relation           string  `json:"relation"`
 	Strength           float64 `json:"strength"`
+	Directness         float64 `json:"directness,omitempty"`
+	MethodFit          float64 `json:"method_fit,omitempty"`
 	VerificationStatus string  `json:"verification_status"`
 	VerifiedByTaskID   string  `json:"verified_by_task_id,omitempty"`
 	Rationale          string  `json:"rationale,omitempty"`
 }
 
 type Claim struct {
-	ID               string          `json:"id"`
-	ProducedByTaskID string          `json:"produced_by_task_id,omitempty"`
-	ClientKey        string          `json:"client_key"`
-	Text             string          `json:"text"`
-	Significance     string          `json:"significance"`
-	Confidence       float64         `json:"confidence"`
-	Status           ClaimStatus     `json:"status"`
-	GoalVersion      int             `json:"goal_version"`
-	PlanVersion      int             `json:"plan_version"`
-	Resolution       string          `json:"resolution,omitempty"`
-	Evidence         []ClaimEvidence `json:"evidence"`
-	CreatedAt        time.Time       `json:"created_at"`
-	UpdatedAt        time.Time       `json:"updated_at"`
+	ID                  string          `json:"id"`
+	ProducedByTaskID    string          `json:"produced_by_task_id,omitempty"`
+	ClientKey           string          `json:"client_key"`
+	EvidenceStandardKey string          `json:"evidence_standard_key,omitempty"`
+	Text                string          `json:"text"`
+	Significance        string          `json:"significance"`
+	Confidence          float64         `json:"confidence"`
+	Status              ClaimStatus     `json:"status"`
+	GoalVersion         int             `json:"goal_version"`
+	PlanVersion         int             `json:"plan_version"`
+	Resolution          string          `json:"resolution,omitempty"`
+	Evidence            []ClaimEvidence `json:"evidence"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
 }
 
 type FleetMember struct {

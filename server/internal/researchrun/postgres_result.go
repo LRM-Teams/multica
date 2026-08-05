@@ -53,9 +53,9 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		GoalVersion: state.task.GoalVersion,
 		PlanVersion: state.targetPlan,
 	}
-	if !state.stale && (state.task.Kind == TaskKindPlan || state.task.Kind == TaskKindReplan) && state.run.OrchestratorVersion == OrchestratorVersionV3 {
+	if !state.stale && (state.task.Kind == TaskKindPlan || state.task.Kind == TaskKindReplan) && usesResearchMethodContract(state.run.OrchestratorVersion) {
 		if in.Result.Plan == nil || in.Result.Plan.Method == nil {
-			return AcceptResultOutcome{}, fmt.Errorf("%w: v3 plan requires a research method", ErrInvalidResult)
+			return AcceptResultOutcome{}, fmt.Errorf("%w: this orchestrator version requires a research method", ErrInvalidResult)
 		}
 		if err = materializeResearchMethod(ctx, tx, state, *in.Result.Plan, in.AgentID); err != nil {
 			return AcceptResultOutcome{}, err
@@ -200,13 +200,18 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 
 func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedResultState, plan PlanProposal, agentID string) error {
 	if plan.Method == nil {
-		return fmt.Errorf("%w: v3 plan requires a research method", ErrInvalidResult)
+		return fmt.Errorf("%w: this orchestrator version requires a research method", ErrInvalidResult)
 	}
 	if err := validateMethodProposal(*plan.Method); err != nil {
 		return err
 	}
 	if err := validateV3PlanMethodLists(plan); err != nil {
 		return err
+	}
+	if state.run.OrchestratorVersion == OrchestratorVersionV4 {
+		if _, err := validateEvidenceStandards(plan.Method.EvidenceStandards); err != nil {
+			return err
+		}
 	}
 	method := ResearchMethod{
 		GoalVersion:             state.run.GoalVersion,
@@ -215,6 +220,7 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 		MethodRationale:         strings.TrimSpace(plan.Method.MethodRationale),
 		AnalysisMethods:         plan.Method.AnalysisMethods,
 		EvidenceRequirements:    plan.Method.EvidenceRequirements,
+		EvidenceStandards:       plan.Method.EvidenceStandards,
 		InclusionCriteria:       plan.InclusionCriteria,
 		ExclusionCriteria:       plan.ExclusionCriteria,
 		SourceStrategy:          plan.SourceStrategy,
@@ -629,6 +635,10 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 	ids := map[string]string{}
 	created := 0
 	for _, source := range result.Sources {
+		evidenceTraits := source.EvidenceTraits
+		if evidenceTraits == nil {
+			evidenceTraits = []string{}
+		}
 		canonical, err := CanonicalURL(source.URL)
 		if err != nil {
 			return nil, 0, fmt.Errorf("%w: source %q: %v", ErrInvalidResult, source.ClientKey, err)
@@ -652,18 +662,22 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 		err = tx.QueryRow(ctx, `
 			INSERT INTO research_source_snapshot (
 				workspace_id, session_id, produced_by_task_id, canonical_url,
-				title, publisher, source_class, independence_key, retrieved_at,
+				title, publisher, source_class, evidence_traits, independence_key, retrieved_at,
 				snapshot_text, content_hash, metadata, verification_status
-			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9,
-			          $10, $11, $12, $13)
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::text[], $9, $10,
+			          $11, $12, $13, $14)
 			ON CONFLICT (session_id, canonical_url, content_hash)
 			DO UPDATE SET
 			  title = CASE WHEN research_source_snapshot.title = '' THEN EXCLUDED.title ELSE research_source_snapshot.title END,
+			  evidence_traits = CASE
+			    WHEN EXCLUDED.verification_status = 'verified' AND cardinality(EXCLUDED.evidence_traits) > 0 THEN EXCLUDED.evidence_traits
+			    ELSE research_source_snapshot.evidence_traits
+			  END,
 			  verification_status = CASE WHEN EXCLUDED.verification_status = 'verified' THEN 'verified' ELSE research_source_snapshot.verification_status END
 			RETURNING id::text
 		`, state.workspaceID, state.run.SessionID, state.task.ID, canonical,
 			truncateBytes(source.Title, 4096), truncateBytes(source.Publisher, 1024),
-			truncateBytes(source.SourceClass, 160), truncateBytes(source.IndependenceKey, 160),
+			truncateBytes(source.SourceClass, 160), evidenceTraits, truncateBytes(source.IndependenceKey, 160),
 			source.RetrievedAt, source.SnapshotText, contentHash,
 			normalizeJSON(source.Metadata, `{}`), verificationStatus).Scan(&id)
 		if err != nil {
@@ -676,7 +690,7 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 		payload, _ := json.Marshal(map[string]any{
 			"snapshot_id": id, "publisher": source.Publisher,
 			"independence_key": source.IndependenceKey, "retrieved_at": source.RetrievedAt,
-			"verification_status": verificationStatus,
+			"verification_status": verificationStatus, "evidence_traits": evidenceTraits,
 		})
 		if _, err = tx.Exec(ctx, `
 			INSERT INTO research_source (
@@ -689,7 +703,7 @@ func materializeSources(ctx context.Context, tx pgx.Tx, state acceptedResultStat
 			  SELECT 1 FROM research_source WHERE source_snapshot_id = $10::uuid
 			)
 		`, state.workspaceID, state.run.SessionID, canonical, truncateBytes(source.Title, 4096),
-			truncateBytes(source.SourceClass, 160), sourceClassWeight(source.SourceClass),
+			truncateBytes(source.SourceClass, 160), sourceProjectionWeight(state.run.OrchestratorVersion, source.SourceClass),
 			truncateBytes(result.Summary, 4096), truncateBytes(source.SnapshotText, 2000), payload, id); err != nil {
 			return nil, 0, err
 		}
@@ -753,7 +767,22 @@ func materializeObservations(ctx context.Context, tx pgx.Tx, state acceptedResul
 func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState, result ResultEnvelope, observationIDs map[string]string) (map[string]string, int, error) {
 	ids := map[string]string{}
 	created := 0
+	standards := map[string]EvidenceStandard{}
+	if state.run.OrchestratorVersion == OrchestratorVersionV4 && len(result.Claims) > 0 {
+		method, err := loadResearchMethodVersion(ctx, tx, state.run.SessionID, state.task.GoalVersion, state.targetPlan)
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, standard := range method.EvidenceStandards {
+			standards[standard.ClientKey] = standard
+		}
+	}
 	for _, claim := range result.Claims {
+		if state.run.OrchestratorVersion == OrchestratorVersionV4 {
+			if _, ok := standards[claim.EvidenceStandardKey]; !ok {
+				return nil, 0, fmt.Errorf("%w: claim %q references unknown evidence standard %q", ErrInvalidResult, claim.ClientKey, claim.EvidenceStandardKey)
+			}
+		}
 		status := claim.Status
 		if status == "" {
 			status = ClaimStatusProposed
@@ -770,19 +799,21 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		}
 		err := tx.QueryRow(ctx, `
 			INSERT INTO research_claim (
-				workspace_id, session_id, produced_by_task_id, client_key, claim_text,
+				workspace_id, session_id, produced_by_task_id, client_key, evidence_standard_key, claim_text,
 				significance, confidence, status, goal_version, plan_version, resolution
-			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11)
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			ON CONFLICT (session_id, goal_version, plan_version, client_key)
 			DO UPDATE SET
+			  evidence_standard_key = CASE WHEN research_claim.evidence_standard_key = '' THEN EXCLUDED.evidence_standard_key ELSE research_claim.evidence_standard_key END,
 			  confidence = GREATEST(research_claim.confidence, EXCLUDED.confidence),
 			  status = CASE WHEN research_claim.status = 'proposed' THEN EXCLUDED.status ELSE research_claim.status END,
 			  resolution = CASE WHEN research_claim.resolution = '' THEN EXCLUDED.resolution ELSE research_claim.resolution END,
 			  updated_at = now()
 			WHERE research_claim.claim_text = EXCLUDED.claim_text
+			  AND (research_claim.evidence_standard_key = '' OR EXCLUDED.evidence_standard_key = '' OR research_claim.evidence_standard_key = EXCLUDED.evidence_standard_key)
 			RETURNING id::text
 		`, state.workspaceID, state.run.SessionID, state.task.ID, claim.ClientKey,
-			strings.TrimSpace(claim.Text), claim.Significance, claim.Confidence, status,
+			claim.EvidenceStandardKey, strings.TrimSpace(claim.Text), claim.Significance, claim.Confidence, status,
 			state.task.GoalVersion, state.targetPlan, truncateBytes(claim.Resolution, 8192)).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, 0, fmt.Errorf("%w: claim key %q was reused for different text", ErrResultConflict, claim.ClientKey)
@@ -808,23 +839,49 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 			if _, err = tx.Exec(ctx, `
 				INSERT INTO research_claim_evidence (
 					workspace_id, session_id, claim_id, observation_id, relation,
-					strength, verification_status, verified_by_task_id, rationale
-				) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7,
-				          NULLIF($8, '')::uuid, $9)
+					strength, directness, method_fit, verification_status, verified_by_task_id, rationale
+				) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, $7, $8, $9,
+				          NULLIF($10, '')::uuid, $11)
 				ON CONFLICT (claim_id, observation_id, relation)
 				DO UPDATE SET
-				  strength = GREATEST(research_claim_evidence.strength, EXCLUDED.strength),
+				  strength = CASE WHEN $12::boolean AND EXCLUDED.verification_status = 'verified' THEN EXCLUDED.strength ELSE GREATEST(research_claim_evidence.strength, EXCLUDED.strength) END,
+				  directness = CASE WHEN $12::boolean AND EXCLUDED.verification_status = 'verified' THEN EXCLUDED.directness ELSE GREATEST(research_claim_evidence.directness, EXCLUDED.directness) END,
+				  method_fit = CASE WHEN $12::boolean AND EXCLUDED.verification_status = 'verified' THEN EXCLUDED.method_fit ELSE GREATEST(research_claim_evidence.method_fit, EXCLUDED.method_fit) END,
 				  verification_status = CASE WHEN EXCLUDED.verification_status = 'verified' THEN 'verified' ELSE research_claim_evidence.verification_status END,
 				  verified_by_task_id = COALESCE(EXCLUDED.verified_by_task_id, research_claim_evidence.verified_by_task_id),
 				  rationale = CASE WHEN EXCLUDED.rationale <> '' THEN EXCLUDED.rationale ELSE research_claim_evidence.rationale END,
 				  updated_at = now()
 			`, state.workspaceID, state.run.SessionID, id, observationID, evidence.Relation,
-				evidence.Strength, verificationStatus, verifiedBy, truncateBytes(evidence.Rationale, 4096)); err != nil {
+				evidence.Strength, evidence.Directness, evidence.MethodFit, verificationStatus, verifiedBy,
+				truncateBytes(evidence.Rationale, 4096), state.run.OrchestratorVersion == OrchestratorVersionV4); err != nil {
 				return nil, 0, err
 			}
 		}
 	}
 	return ids, created, nil
+}
+
+func loadResearchMethodVersion(ctx context.Context, tx pgx.Tx, sessionID string, goalVersion, planVersion int) (ResearchMethod, error) {
+	var outcome []byte
+	err := tx.QueryRow(ctx, `
+		SELECT outcome
+		FROM research_decision
+		WHERE session_id = $1::uuid AND decision_kind = 'research_method'
+		  AND goal_version = $2 AND plan_version = $3
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, sessionID, goalVersion, planVersion).Scan(&outcome)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ResearchMethod{}, fmt.Errorf("%w: current plan has no accepted research method", ErrInvalidResult)
+	}
+	if err != nil {
+		return ResearchMethod{}, err
+	}
+	var method ResearchMethod
+	if err = json.Unmarshal(outcome, &method); err != nil {
+		return ResearchMethod{}, fmt.Errorf("decode research method: %w", err)
+	}
+	return method, nil
 }
 
 func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState, report ReportProposal, resultClaimIDs map[string]string) (string, error) {
@@ -1056,6 +1113,13 @@ func sourceClassWeight(class string) float64 {
 	default:
 		return 0.5
 	}
+}
+
+func sourceProjectionWeight(orchestratorVersion, class string) float64 {
+	if orchestratorVersion == OrchestratorVersionV4 {
+		return 0.5
+	}
+	return sourceClassWeight(class)
 }
 
 func classifyResultConstraint(err error) error {

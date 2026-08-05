@@ -60,12 +60,6 @@ func (h *Handler) evaluateResearchStage(ctx context.Context, workspaceID pgtype.
 			score -= 0.5
 			findings = append(findings, "missing goal/subquestion decomposition")
 		}
-		// Adaptive depth: expect a multi-dimension tree, not a thin single Q.
-		if countType("subquestion") < 3 {
-			passed = false
-			score -= 0.2
-			findings = append(findings, "need ≥3 dimension/subquestion nodes (adaptive depth tree)")
-		}
 		families := map[string]bool{}
 		for _, node := range nodes {
 			if node.NodeType != "subquestion" {
@@ -79,42 +73,22 @@ func (h *Handler) evaluateResearchStage(ctx context.Context, workspaceID pgtype.
 				families[fam] = true
 			}
 		}
-		if len(families) < 2 && countType("subquestion") >= 3 {
-			// Soft signal: prefer dimension_family tagging when present.
+		if len(families) == 0 && countType("subquestion") > 0 {
 			findings = append(findings, "prefer dimension_family on subquestions for adaptive routing")
 		}
 		if len(findings) == 0 {
 			findings = append(findings, fmt.Sprintf("plan gate passed (fine_domain=%s)", plan.FineDomain))
 		}
 	case "s2_sources":
-		if len(sources) < 3 {
+		if len(sources) == 0 {
 			passed = false
 			score -= 0.4
-			findings = append(findings, "need at least 3 weighted sources")
+			findings = append(findings, "no evidence source was recorded")
 		}
-		classes := map[string]bool{}
-		high := 0
-		for _, s := range sources {
-			classes[s.SourceClass] = true
-			if s.CredibilityWeight >= 0.7 {
-				high++
-			}
-		}
-		if len(classes) < 2 {
+		if len(sources) > 0 && withWhy*2 < len(sources) {
 			passed = false
 			score -= 0.2
-			findings = append(findings, "sources lack class diversity")
-		}
-		if high == 0 {
-			passed = false
-			score -= 0.2
-			findings = append(findings, "no high-credibility source (>=0.7)")
-		}
-		// Visible routing rationale: majority of sources should carry why.
-		if len(sources) >= 3 && withWhy*2 < len(sources) {
-			passed = false
-			score -= 0.2
-			findings = append(findings, "need payload.why on most sources (why this source / dimension)")
+			findings = append(findings, "most sources need payload.why explaining the Claim or uncertainty they address")
 		}
 	case "s3_validation":
 		if countType("conflict") == 0 && len(sources) >= 2 {
@@ -137,15 +111,15 @@ func (h *Handler) evaluateResearchStage(ctx context.Context, workspaceID pgtype.
 			score -= 0.5
 			findings = append(findings, "report content too thin")
 		}
-		if len(sources) < 3 {
+		if len(sources) == 0 {
 			passed = false
 			score -= 0.2
-			findings = append(findings, "delivery requires multi-source evidence")
+			findings = append(findings, "delivery has no recorded evidence source")
 		}
-		if plan.DeliveryLike && reportErr == nil && !reportHasHumanAIBoundary(report.ContentMd) {
+		if plan.HumanAIBoundaryRequired && reportErr == nil && !reportHasHumanAIBoundary(report.ContentMd) {
 			passed = false
 			score -= 0.3
-			findings = append(findings, "delivery-like goal requires human↔AI boundary in report (AI ceiling / must-have-human / human vs AI)")
+			findings = append(findings, "the goal explicitly asks for a human/AI responsibility boundary, but the report omits it")
 		}
 	default:
 		passed = false

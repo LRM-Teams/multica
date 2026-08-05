@@ -68,6 +68,8 @@ func DecodeAndValidateResultForVersion(version string, raw json.RawMessage, task
 		return decodeAndValidateResult(raw, task, config, (*ResultEnvelope).validateV2)
 	case OrchestratorVersionV3:
 		return decodeAndValidateResult(raw, task, config, (*ResultEnvelope).validateV3)
+	case OrchestratorVersionV4:
+		return decodeAndValidateResult(raw, task, config, (*ResultEnvelope).validateV4)
 	default:
 		return ResultEnvelope{}, "", fmt.Errorf("%w: %q", ErrUnsupportedVersion, version)
 	}
@@ -75,7 +77,7 @@ func DecodeAndValidateResultForVersion(version string, raw json.RawMessage, task
 
 func ensureSupportedOrchestratorVersion(version string) error {
 	switch version {
-	case OrchestratorVersionV1, OrchestratorVersionV2, OrchestratorVersionV3:
+	case OrchestratorVersionV1, OrchestratorVersionV2, OrchestratorVersionV3, OrchestratorVersionV4:
 		return nil
 	default:
 		return fmt.Errorf("%w: %q", ErrUnsupportedVersion, version)
@@ -83,7 +85,11 @@ func ensureSupportedOrchestratorVersion(version string) error {
 }
 
 func usesStructuredResultContract(version string) bool {
-	return version == OrchestratorVersionV2 || version == OrchestratorVersionV3
+	return version == OrchestratorVersionV2 || version == OrchestratorVersionV3 || version == OrchestratorVersionV4
+}
+
+func usesResearchMethodContract(version string) bool {
+	return version == OrchestratorVersionV3 || version == OrchestratorVersionV4
 }
 
 type PlanProposal struct {
@@ -101,12 +107,13 @@ type PlanProposal struct {
 // versions and attribution are assigned by the ResearchRun Module when the
 // plan is accepted.
 type MethodProposal struct {
-	DecisionQuestion        string   `json:"decision_question"`
-	MethodRationale         string   `json:"method_rationale"`
-	AnalysisMethods         []string `json:"analysis_methods"`
-	EvidenceRequirements    []string `json:"evidence_requirements"`
-	CounterevidenceStrategy []string `json:"counterevidence_strategy"`
-	StoppingConditions      []string `json:"stopping_conditions"`
+	DecisionQuestion        string             `json:"decision_question"`
+	MethodRationale         string             `json:"method_rationale"`
+	AnalysisMethods         []string           `json:"analysis_methods"`
+	EvidenceRequirements    []string           `json:"evidence_requirements"`
+	EvidenceStandards       []EvidenceStandard `json:"evidence_standards,omitempty"`
+	CounterevidenceStrategy []string           `json:"counterevidence_strategy"`
+	StoppingConditions      []string           `json:"stopping_conditions"`
 }
 
 type QuestionProposal struct {
@@ -141,6 +148,7 @@ type SourceProposal struct {
 	Title           string          `json:"title"`
 	Publisher       string          `json:"publisher"`
 	SourceClass     string          `json:"source_class"`
+	EvidenceTraits  []string        `json:"evidence_traits,omitempty"`
 	IndependenceKey string          `json:"independence_key"`
 	RetrievedAt     time.Time       `json:"retrieved_at"`
 	SnapshotText    string          `json:"snapshot_text"`
@@ -160,17 +168,20 @@ type EvidenceProposal struct {
 	ObservationKey string  `json:"observation_key"`
 	Relation       string  `json:"relation"`
 	Strength       float64 `json:"strength"`
+	Directness     float64 `json:"directness,omitempty"`
+	MethodFit      float64 `json:"method_fit,omitempty"`
 	Rationale      string  `json:"rationale,omitempty"`
 }
 
 type ClaimProposal struct {
-	ClientKey    string             `json:"client_key"`
-	Text         string             `json:"text"`
-	Significance string             `json:"significance"`
-	Confidence   float64            `json:"confidence"`
-	Status       ClaimStatus        `json:"status,omitempty"`
-	Resolution   string             `json:"resolution,omitempty"`
-	Evidence     []EvidenceProposal `json:"evidence"`
+	ClientKey           string             `json:"client_key"`
+	EvidenceStandardKey string             `json:"evidence_standard_key,omitempty"`
+	Text                string             `json:"text"`
+	Significance        string             `json:"significance"`
+	Confidence          float64            `json:"confidence"`
+	Status              ClaimStatus        `json:"status,omitempty"`
+	Resolution          string             `json:"resolution,omitempty"`
+	Evidence            []EvidenceProposal `json:"evidence"`
 }
 
 type ReportClaimProposal struct {
@@ -252,6 +263,9 @@ func (r *ResultEnvelope) Validate(task Task, cfg RunConfig) error {
 	}
 	if r.Plan != nil && r.Plan.Method != nil {
 		return fmt.Errorf("%w: plan method requires schema_version 3", ErrInvalidResult)
+	}
+	if hasEvidenceFitnessFields(*r) {
+		return fmt.Errorf("%w: evidence fitness fields require schema_version 4", ErrInvalidResult)
 	}
 	if err := validateKey("client_request_id", r.ClientRequestID); err != nil {
 		return err

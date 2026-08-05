@@ -632,6 +632,7 @@ func remediationTask(gate GateResult) (TaskKind, string, string) {
 	}
 	evidenceGap := codes["tasks_blocked"] || codes["required_questions_missing"] ||
 		codes["required_questions_unanswered"] || codes["independent_sources_insufficient"] ||
+		codes["claim_evidence_standard_missing"] || codes["claim_evidence_standard_unmet"] || codes["claim_counterevidence_search_missing"] ||
 		codes["report_claims_unsupported"] || codes["major_claim_sources_insufficient"] || codes["report_claims_stale"] || codes["report_conflicts_unresolved"] ||
 		codes["citation_audit_failed"]
 	if evidenceGap {
@@ -663,6 +664,8 @@ func buildTaskPrompt(run Run, task Task, attempt Attempt, snapshot RunSnapshot, 
 		return buildTaskPromptV2(run, task, attempt, snapshot, members), nil
 	case OrchestratorVersionV3:
 		return buildTaskPromptV3(run, task, attempt, snapshot, members), nil
+	case OrchestratorVersionV4:
+		return buildTaskPromptV4(run, task, attempt, snapshot, members), nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnsupportedVersion, run.OrchestratorVersion)
 	}
@@ -824,6 +827,67 @@ func buildTaskPromptV3(run Run, task Task, attempt Attempt, snapshot RunSnapshot
 		b.WriteString("10. Keep result artifacts scoped to this assignment and propose follow-up work only for a method-relevant frontier gap.\n")
 	}
 	b.WriteString("11. Submit the JSON exactly once with:\n\n")
+	fmt.Fprintf(&b, "```bash\nmultica research task-result %s %s %s --file /absolute/path/research-result.json\n```\n", run.SessionID, task.ID, attempt.ID)
+	b.WriteString("\nDo not use graph-append, source-upsert, report-patch, or stage-eval for this task. Do not claim completion in chat before task-result succeeds.\n")
+	return b.String()
+}
+
+func buildTaskPromptV4(run Run, task Task, attempt Attempt, snapshot RunSnapshot, members []FleetMember) string {
+	var b strings.Builder
+	b.WriteString("## Durable Research Run task\n\n")
+	fmt.Fprintf(&b, "- Session ID: `%s`\n- Task ID: `%s`\n- Attempt ID: `%s`\n- Dispatch key: `%s`\n", run.SessionID, task.ID, attempt.ID, attempt.DispatchKey)
+	fmt.Fprintf(&b, "- Goal version: %d\n- Plan version: %d\n- Task kind: `%s`\n- Expected result: `%s`\n", task.GoalVersion, task.PlanVersion, task.Kind, task.ExpectedResult)
+	fmt.Fprintf(&b, "- Research goal: %s\n- Objective: %s\n", run.Goal, task.Objective)
+	fmt.Fprintf(&b, "- Contract language: %s\n- Contract audience: %s\n- Contract freshness: %s\n", snapshot.Contract.Language, snapshot.Contract.Audience, snapshot.Contract.Freshness)
+	fmt.Fprintf(&b, "- Contract scope: `%s`\n- Source policy: `%s`\n", compactJSON(snapshot.Contract.Scope), compactJSON(snapshot.Contract.SourcePolicy))
+	if len(task.AcceptanceCriteria) > 0 {
+		fmt.Fprintf(&b, "- Acceptance criteria: `%s`\n", string(task.AcceptanceCriteria))
+	}
+	b.WriteString("- Active fleet roles:")
+	for _, member := range members {
+		if member.Status == "active" {
+			fmt.Fprintf(&b, " `%s`", strings.ToLower(strings.TrimSpace(member.Role)))
+		}
+	}
+	b.WriteString("\n\nCurrent accepted research method:\n")
+	if snapshot.Method == nil {
+		b.WriteString("- No method has been accepted yet. A plan task must define the complete method and evidence standards below.\n")
+	} else {
+		encoded, _ := json.Marshal(snapshot.Method)
+		fmt.Fprintf(&b, "```json\n%s\n```\n", encoded)
+	}
+	b.WriteString("\nCurrent required questions:\n")
+	for _, question := range snapshot.Questions {
+		if question.GoalVersion == run.GoalVersion && question.PlanVersion == run.PlanVersion && question.Required {
+			fmt.Fprintf(&b, "- `%s` [%s, coverage %.2f]: %s\n", question.ClientKey, question.Status, question.Coverage, question.Question)
+		}
+	}
+	fmt.Fprintf(&b, "\nCanonical evidence ledger: %d source snapshots, %d observations, %d claims. Read the complete session with `multica research session get %s --output json`; chat messages are not evidence.\n", len(snapshot.Sources), len(snapshot.Observations), len(snapshot.Claims), run.SessionID)
+
+	b.WriteString("\nExecution contract:\n")
+	b.WriteString("1. Inspect current state before working. Return exactly one strict JSON object with schema_version=4 and a globally unique client_request_id. Allowed top-level fields: schema_version, client_request_id, summary, questions, plan, sources, observations, claims, proposed_tasks, report, evaluation, answer_claim_key, coverage_delta, confidence, incomplete_reason.\n")
+	b.WriteString("2. A plan or replan defines the Method fields and method.evidence_standards. Each standard has client_key, purpose, minimum_independent_sources (1..8), required_source_traits, minimum_strength, minimum_directness, minimum_method_fit, and counterevidence_required. Required traits are covered across the eligible source set; one source need not contain every trait. Define standards from the Claim and decision risk. A single authoritative record may legitimately require one source; causal, comparative, safety, or disputed Claims may require more.\n")
+	b.WriteString("3. If any evidence standard requires counterevidence, the plan includes a counter_search task. Every non-plan task inherits the accepted Method exactly. If evidence invalidates the Method, propose a versioned replan; do not silently change scope, standards, or judgment criteria.\n")
+	b.WriteString("4. Every source supplies evidence_traits describing what the captured Snapshot can establish, such as official_record, direct_measurement, first_party_statement, independent_evaluation, reproducible_artifact, expert_interview, or user_report. Source class is descriptive and has no global credibility score. Preserve bounded retrieved text, provenance, publisher, retrieval time, and a truthful independence_key.\n")
+	b.WriteString("5. Every Claim supplies evidence_standard_key. Every Evidence Link supplies observation_key, relation, strength, directness, method_fit, and a substantive rationale. Directness measures how directly the Observation establishes this Claim; method_fit measures whether it satisfies the accepted analysis method. A validator must resubmit the exact artifacts to mark them verified.\n")
+	b.WriteString("6. Source fields are client_key,url,title,publisher,source_class,evidence_traits,independence_key,retrieved_at,snapshot_text,metadata. Observation fields are client_key,source_key,quote,datum,locator,interpretation. Claim fields are client_key,evidence_standard_key,text,significance,confidence,status,resolution,evidence. Every Observation quote must occur exactly in its Snapshot.\n")
+	b.WriteString("7. Every proposed task uses an active fleet role and this exact expected_result mapping: plan/replan=research_plan_v4; discover/deep_read/verify/counter_search=research_evidence_v4; synthesize=research_report_v4; quality_gate=research_quality_evaluation_v4; citation_audit=research_citation_audit_v4. Delivery roles are fixed: synthesize=reporter; quality_gate=validator; citation_audit=validator. Every plan includes all three delivery tasks, and both audit tasks directly depend on synthesis.\n")
+	b.WriteString("8. A question-scoped evidence result that increases coverage supplies answer_claim_key pointing to one Claim in that result. Evidence is sufficient only when the Claim-level standard passes; source count, source class, or depth tier alone never establishes sufficiency.\n")
+	b.WriteString("9. A report uses the existing reader schema exactly: report={content_md,structured,claims}; structured={schema_version:1,title,outline:[{id,title,level,children}],sections:[{id,title,level,markdown,citation_ids}],citations:[{id,index,source_id,label,quote,locator}],sources:[{source_id,title,url,credibility_weight,source_class}],gaps,conclusion}; claims=[{claim_key,section_id,anchor_quote}]. Every report Claim must cite verified evidence that passes its accepted standard.\n")
+	policy := reportPolicyForDepth(run.DepthTier)
+	fmt.Fprintf(&b, "10. This %s run requires at least %d sections, %d substantive characters per section, and %d in the conclusion to reject placeholders. These prose floors do not alter Claim-level evidence standards.\n", run.DepthTier, policy.MinimumSections, policy.MinimumSectionCharacters, policy.MinimumConclusionCharacters)
+	b.WriteString("11. A quality or citation evaluation reviews a report written by another Agent. Return all v2 evaluation fields and fail when a Claim uses the wrong standard, a Source trait is unsupported by its Snapshot, link scores are inflated, counterevidence work is absent, or any material defect remains.\n")
+	switch task.Kind {
+	case TaskKindVerify, TaskKindCounterSearch:
+		b.WriteString("12. Include every source, observation, Claim, and Evidence Link being verified. Reuse stable keys and exact ledger content. Set directness and method_fit from this Claim–Observation relation, not from the source reputation. Counter-search records contrary evidence and unresolved conflicts without forcing a contradiction to exist.\n")
+	case TaskKindSynthesize:
+		b.WriteString("12. Cover every required answer Claim and supported high-significance Claim. Explain the Method, evidence standards, contrary evidence, limitations, unresolved gaps, and decision consequences.\n")
+	case TaskKindQualityGate, TaskKindCitationAudit:
+		b.WriteString("12. Audit the latest report, current evidence ledger, accepted Method, Evidence Standards, Source traits, and link scores independently. Do not add evidence or manufacture passing scores.\n")
+	default:
+		b.WriteString("12. Keep artifacts scoped to this assignment and propose follow-up work only for a method-relevant evidence gap.\n")
+	}
+	b.WriteString("13. Submit the JSON exactly once with:\n\n")
 	fmt.Fprintf(&b, "```bash\nmultica research task-result %s %s %s --file /absolute/path/research-result.json\n```\n", run.SessionID, task.ID, attempt.ID)
 	b.WriteString("\nDo not use graph-append, source-upsert, report-patch, or stage-eval for this task. Do not claim completion in chat before task-result succeeds.\n")
 	return b.String()

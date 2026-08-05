@@ -74,6 +74,7 @@ func filledSnapshot(now time.Time) *samplerSnapshot {
 
 	snap.researchRuns[researchMetricKey{first: "running", second: "research-run-v1"}] = 2
 	snap.researchRuns[researchMetricKey{first: "running", second: "research-run-v3"}] = 1
+	snap.researchRuns[researchMetricKey{first: "running", second: "research-run-v4"}] = 1
 	snap.researchRuns[researchMetricKey{first: "completed", second: "research-run-v1"}] = 9
 	snap.researchTasks[researchMetricKey{first: "verify", second: "running"}] = 3
 	snap.researchTasks[researchMetricKey{first: "synthesize", second: "ready"}] = 1
@@ -142,6 +143,7 @@ func TestBusinessSamplerCollectorEmitsExpectedMetrics(t *testing.T) {
 		`multica_reminder_scheduled_overdue 4`,
 		`multica_research_runs{orchestrator_version="research-run-v1",status="running"} 2`,
 		`multica_research_runs{orchestrator_version="research-run-v3",status="running"} 1`,
+		`multica_research_runs{orchestrator_version="research-run-v4",status="running"} 1`,
 		`multica_research_tasks{kind="verify",status="running"} 3`,
 		`multica_research_attempts{failure_class="task_timeout",status="failed"} 2`,
 		`multica_research_evidence_artifacts{artifact="source_snapshot",verification_status="verified"} 17`,

@@ -100,6 +100,28 @@ type ResidentMessageAcceptance struct {
 	Done <-chan error
 }
 
+// ResidentPendingTarget is content-free metadata for one target represented by
+// a Pending Notice. It deliberately carries no Message body, Parts, sender, or
+// attachment data.
+type ResidentPendingTarget struct {
+	Target       string `json:"target"`
+	PendingCount int    `json:"pending_count"`
+}
+
+// ResidentPendingNotice tells a busy runtime that concrete canonical Messages
+// remain Pending without crossing their bodies into runtime context.
+type ResidentPendingNotice struct {
+	TotalPending   int                     `json:"total_pending"`
+	ChangedTargets []ResidentPendingTarget `json:"changed_targets"`
+}
+
+// ResidentPendingNoticeInput is an optional resident-runtime capability. A nil
+// error means the provider accepted the content-free Notice at a safe busy
+// input boundary; it does not mean any Pending Message was consumed.
+type ResidentPendingNoticeInput interface {
+	AcceptPendingNotice(context.Context, ResidentPendingNotice) error
+}
+
 // ExecOptions configures a single execution.
 type ExecOptions struct {
 	Cwd   string

@@ -258,12 +258,17 @@ func (d *Daemon) registerIdleMessageCoordinator(agentID string, coordinator *Mes
 
 func (d *Daemon) removeIdleMessageCoordinator(agentID, runtimeID string) {
 	d.messageCoordinatorMu.Lock()
-	defer d.messageCoordinatorMu.Unlock()
 	if current := d.messageRuntimeIDs[agentID]; current != "" && current != runtimeID {
+		d.messageCoordinatorMu.Unlock()
 		return
 	}
+	coordinator := d.messageCoordinators[agentID]
 	delete(d.messageCoordinators, agentID)
 	delete(d.messageRuntimeIDs, agentID)
+	d.messageCoordinatorMu.Unlock()
+	if coordinator != nil {
+		coordinator.Close()
+	}
 }
 
 func (d *Daemon) acceptIdleAgentDelivery(ctx context.Context, delivery protocol.AgentDeliverPayload) (protocol.AgentDeliverAckPayload, error) {

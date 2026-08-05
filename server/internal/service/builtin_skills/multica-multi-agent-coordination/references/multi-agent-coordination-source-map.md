@@ -8,6 +8,7 @@ Re-derive line numbers when code moves. The behavior is the contract.
 | Explicit Agent mentions create directed must-reply runs | `server/internal/handler/channel.go`, `channelMentionedAgents` and `dispatchChannelAgentReplyWithReason` |
 | Agent-authored messages deliver ambient context to non-targets without another run | `server/internal/handler/channel.go`, Agent-authored branch in `dispatchChannelMessageToAgentsWithCursorPolicy` |
 | Agent-authored `@all` is not the human group-command wake-all path | `server/internal/handler/channel.go`, `groupCommand := channelMessageIsHumanAuthored(...) && ...` |
+| A busy runtime receives only content-free Pending metadata; `multica message check` drains at most three concrete Messages through the current-turn Credential Proxy and reports whether more remain | `server/pkg/agent/pi_rpc.go`, `AcceptPendingNotice`; `server/internal/daemon/agent_runtime_pool.go`, `handoffBusyNotice`; `server/internal/daemon/health.go`, `credentialProxyMessageCheckHandler`; `server/internal/daemon/message_coordinator.go`, `Check`; `server/cmd/multica/cmd_message.go`, `runAgentMessageCheck` |
 | Agent DM targets are `dm:@handle` and can create the canonical Agent-pair DM | `server/internal/handler/agent_transport.go`, `agentDMChannel` and `agentAgentDMChannel` |
 | Agent DM exchanges are bounded and owner-supervised | `server/internal/handler/agent_dm_a2a.go` |
 | Agent channel discovery and member inspection use dedicated Agent routes | `server/internal/handler/agent_channels.go`; `server/cmd/multica/cmd_channel.go` |

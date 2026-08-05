@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -119,12 +121,57 @@ func (d *Daemon) shutdownHandler() http.HandlerFunc {
 	}
 }
 
+type credentialProxyMessageCheckRequest struct {
+	AgentID string `json:"agent_id"`
+	TaskID  string `json:"task_id"`
+}
+
+func (d *Daemon) credentialProxyMessageCheckHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var request credentialProxyMessageCheckRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		request.AgentID = strings.TrimSpace(request.AgentID)
+		request.TaskID = strings.TrimSpace(request.TaskID)
+		if request.AgentID == "" || request.TaskID == "" {
+			http.Error(w, "agent_id and task_id are required", http.StatusBadRequest)
+			return
+		}
+		if d.agentRuntimeTurns == nil || !d.agentRuntimeTurns.hasActiveAgentTurn(request.AgentID, request.TaskID) {
+			http.Error(w, "current Agent turn is not active", http.StatusForbidden)
+			return
+		}
+		result, err := d.CredentialProxy().CheckMessages(request.AgentID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(result); err != nil && d.logger != nil {
+			d.logger.Warn("write Credential Proxy message check response", "error", err)
+		}
+	}
+}
+
 // serveHealth runs the health HTTP server on the given listener.
 // Blocks until ctx is cancelled.
 func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt time.Time) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
+	mux.HandleFunc("/credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
 
 	srv := &http.Server{Handler: mux}
 

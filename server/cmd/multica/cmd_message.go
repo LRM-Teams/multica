@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -118,6 +124,7 @@ var messageCmd = &cobra.Command{
 var messageReadCmd = newMessageReadCmd()
 var messageSearchCmd = newMessageSearchCmd()
 var messageA2AControlCmd = newMessageA2AControlCmd()
+var messageCheckCmd = newMessageCheckCmd()
 
 func init() {
 	messageCmd.AddCommand(messageSendCmd)
@@ -126,6 +133,94 @@ func init() {
 	messageCmd.AddCommand(messageReadCmd)
 	messageCmd.AddCommand(messageSearchCmd)
 	messageCmd.AddCommand(messageA2AControlCmd)
+	messageCmd.AddCommand(messageCheckCmd)
+}
+
+type messageCheckCLIResponse struct {
+	Messages  []protocol.AgentMessageProjection `json:"messages"`
+	HasMore   bool                              `json:"has_more"`
+	Remaining int                               `json:"remaining"`
+	Status    string                            `json:"status"`
+}
+
+func newMessageCheckCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "check",
+		Short: "Drain a bounded window of Pending messages",
+		Args:  cobra.NoArgs,
+		RunE:  runAgentMessageCheck,
+	}
+}
+
+func runAgentMessageCheck(_ *cobra.Command, _ []string) error {
+	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
+	taskID := strings.TrimSpace(os.Getenv("MULTICA_TASK_ID"))
+	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
+	if agentID == "" || taskID == "" {
+		return errors.New("message check requires an active daemon Agent turn")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return errors.New("message check requires a valid MULTICA_DAEMON_PORT")
+	}
+	body, err := json.Marshal(map[string]string{"agent_id": agentID, "task_id": taskID})
+	if err != nil {
+		return fmt.Errorf("encode message check request: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/credential-proxy/messages/check", portNumber), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("prepare message check: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+	if err != nil {
+		return fmt.Errorf("message check through Credential Proxy: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+		return fmt.Errorf("message check through Credential Proxy: %s: %s", response.Status, strings.TrimSpace(string(detail)))
+	}
+	var result messageCheckCLIResponse
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
+	if err := decoder.Decode(&result); err != nil {
+		return fmt.Errorf("decode message check response: %w", err)
+	}
+	return printMessageCheckResult(os.Stdout, result)
+}
+
+func printMessageCheckResult(w io.Writer, result messageCheckCLIResponse) error {
+	for _, message := range result.Messages {
+		if _, err := fmt.Fprintf(w, "Message %s (%s seq %d)\n", message.ID, message.Target, message.Seq); err != nil {
+			return err
+		}
+		if message.Content != "" {
+			if _, err := fmt.Fprintln(w, message.Content); err != nil {
+				return err
+			}
+		}
+		if len(message.Parts) > 0 {
+			parts, err := json.Marshal(message.Parts)
+			if err != nil {
+				return fmt.Errorf("encode Message parts: %w", err)
+			}
+			if _, err := fmt.Fprintf(w, "Parts: %s\n", parts); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+	}
+	if result.HasMore {
+		_, err := fmt.Fprintf(w, "More Pending messages remain (%d); run `multica message check` again.\n", result.Remaining)
+		return err
+	}
+	_, err := fmt.Fprintln(w, "Message check complete.")
+	return err
 }
 
 func newMessageReadCmd() *cobra.Command {

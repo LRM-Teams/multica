@@ -230,15 +230,17 @@ type canonicalAgentRuntimePool struct {
 }
 
 type canonicalAgentRuntimeSlot struct {
-	mu               sync.Mutex
-	fingerprint      string
-	mode             canonicalRuntimeMode
-	provider         string
-	running          bool
-	idleSince        time.Time
-	backend          agent.Backend
-	close            func()
-	messageInputDone <-chan error
+	mu                           sync.Mutex
+	fingerprint                  string
+	mode                         canonicalRuntimeMode
+	provider                     string
+	running                      bool
+	idleSince                    time.Time
+	backend                      agent.Backend
+	close                        func()
+	messageInputDone             <-chan error
+	lastPendingNoticeFingerprint string
+	lastPendingTargetFingerprint map[string]string
 }
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
@@ -547,6 +549,8 @@ func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	}
 	slot.backend = nil
 	slot.close = nil
+	slot.lastPendingNoticeFingerprint = ""
+	slot.lastPendingTargetFingerprint = nil
 }
 
 func (p *canonicalAgentRuntimePool) slotCount() int {
@@ -605,6 +609,54 @@ func (p *canonicalAgentRuntimePool) handoffIdleMessages(ctx context.Context, age
 	slot.running = true
 	slot.messageInputDone = acceptance.Done
 	go p.finishResidentMessageInput(slot, acceptance.Done)
+	return nil
+}
+
+func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agentID, runtimeID string, snapshot PendingNoticeSnapshot) error {
+	if p == nil {
+		return errors.New("canonical agent runtime pool is nil")
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot == nil {
+		p.mu.Unlock()
+		return errors.New("canonical resident runtime is not registered")
+	}
+	slot.mu.Lock()
+	p.mu.Unlock()
+	defer slot.mu.Unlock()
+	if !slot.running {
+		return errors.New("canonical resident runtime is idle")
+	}
+	if slot.mode != canonicalRuntimeResident || slot.backend == nil {
+		return errors.New("canonical resident runtime is unavailable")
+	}
+	if snapshot.Fingerprint == slot.lastPendingNoticeFingerprint {
+		return nil
+	}
+	input, ok := slot.backend.(agent.ResidentPendingNoticeInput)
+	if !ok {
+		return errors.New("canonical resident runtime does not support Pending Notice input")
+	}
+	notice := snapshot.Notice
+	notice.ChangedTargets = make([]agent.ResidentPendingTarget, 0, len(snapshot.Notice.ChangedTargets))
+	for _, target := range snapshot.Notice.ChangedTargets {
+		if snapshot.TargetFingerprints[target.Target] != slot.lastPendingTargetFingerprint[target.Target] {
+			notice.ChangedTargets = append(notice.ChangedTargets, target)
+		}
+	}
+	if len(notice.ChangedTargets) == 0 {
+		notice.ChangedTargets = append(notice.ChangedTargets, snapshot.Notice.ChangedTargets...)
+	}
+	if err := input.AcceptPendingNotice(ctx, notice); err != nil {
+		return err
+	}
+	slot.lastPendingNoticeFingerprint = snapshot.Fingerprint
+	slot.lastPendingTargetFingerprint = make(map[string]string, len(snapshot.TargetFingerprints))
+	for target, fingerprint := range snapshot.TargetFingerprints {
+		slot.lastPendingTargetFingerprint[target] = fingerprint
+	}
 	return nil
 }
 

@@ -79,7 +79,7 @@ func TestSyncWorkspacesRefreshesSettingsOnExistingWorkspace(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/workspaces":
-			json.NewEncoder(w).Encode([]WorkspaceInfo{{ID: workspaceID, Name: "ws"}})
+			json.NewEncoder(w).Encode([]WorkspaceInfo{{ID: workspaceID, Name: "ws"}, {ID: "ws-unselected", Name: "other"}})
 		case "/api/daemon/workspaces/" + workspaceID + "/repos":
 			raw, _ := settingsPayload.Load().(json.RawMessage)
 			json.NewEncoder(w).Encode(WorkspaceReposResponse{
@@ -95,6 +95,7 @@ func TestSyncWorkspacesRefreshesSettingsOnExistingWorkspace(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	d := &Daemon{
+		cfg:          Config{WorkspaceID: workspaceID},
 		client:       NewClient(srv.URL),
 		logger:       slog.Default(),
 		workspaces:   make(map[string]*workspaceState),

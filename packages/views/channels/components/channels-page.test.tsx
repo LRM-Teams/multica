@@ -319,6 +319,32 @@ vi.mock("@multica/core/dm", async (importOriginal) => ({
   dmListOptions: () => ({ queryKey: ["dm-list"], queryFn: async () => dmListFixture.current }),
 }));
 
+// LRM-1399 — the page now reads the unified `GET /api/conversations` list as
+// its single CHANNELS+DM source. Rebuild it here from the same channel/dm
+// fixtures the older suite used so every pre-existing assertion (channels
+// render, DM behavior) stays intact while the page only ever asks for the
+// conversations query.
+vi.mock("@multica/core/conversations", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/conversations")>();
+  return {
+    ...actual,
+    conversationsOptions: () => ({
+      queryKey: ["conversations", "ws-1", "list"],
+      queryFn: async () => ({
+        items: [
+          ...(channelsFixture.current as import("@multica/core/types").Channel[]).map(
+            (channel) => ({ kind: "channel" as const, channel }),
+          ),
+          ...dmListFixture.current.map((dm) => ({ kind: "dm" as const, dm })),
+        ],
+        next_cursor: undefined,
+      }),
+      initialPageParam: null as string | null,
+      getNextPageParam: () => undefined,
+    }),
+  };
+});
+
 vi.mock("@multica/core/workspace/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/workspace/queries")>()),
   memberListOptions: () => ({ queryKey: ["members"], queryFn: async () => [] }),
@@ -2293,10 +2319,12 @@ describe("ChannelsPage — DM that never reappears in the list shows a retry, no
     vi.useFakeTimers({ shouldAdvanceTime: true });
 
     // Simulate the list losing the DM on a subsequent fetch (the real bug:
-    // an invalidate-triggered refetch that comes back without it).
+    // an invalidate-triggered refetch that comes back without it). The page
+    // reads the unified conversations query (LRM-1399), not the legacy
+    // `dm-list` key — invalidate what actually feeds the sidebar.
     dmListFixture.current = [];
     await act(async () => {
-      await qc.invalidateQueries({ queryKey: ["dm-list"] });
+      await qc.invalidateQueries({ queryKey: ["conversations", "ws-1", "list"] });
     });
     await waitFor(() => {
       expect(screen.queryByTestId("dm-conversation")).not.toBeInTheDocument();

@@ -225,6 +225,7 @@ import type {
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
+import type { ConversationListResponse } from "../conversations/types";
 import type { RawReminderPage } from "../agents/reminder-view-model";
 import type {
   CloudRuntimeNode,
@@ -3176,6 +3177,22 @@ export class ApiClient {
 
   async listChannels(options?: { archived?: boolean }): Promise<Channel[]> {
     return this.fetch(options?.archived ? "/api/channels?archived=true" : "/api/channels");
+  }
+
+  /**
+   * LRM-1399 — unified active Conversations list (CHANNELS + DIRECT MESSAGES in
+   * one globally-ordered read). Read-only: create/send, detail, membership,
+   * preference, and permission routes remain under /api/channels and /api/dm.
+   */
+  async listConversations(options?: {
+    limit?: number;
+    cursor?: string;
+  }): Promise<ConversationListResponse> {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set("limit", String(options.limit));
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.fetch(`/api/conversations${suffix}`);
   }
 
   async createChannel(data: { name: string; description?: string; lark_chat_id?: string; project_id?: string | null }): Promise<Channel> {

@@ -71,6 +71,44 @@ vi.mock("@multica/core/dm", async (importOriginal) => {
   return dmMock(importOriginal);
 });
 
+// LRM-1399 — custom conversations mock that mirrors this file's resolver
+// mechanism from `channelsOptions` so the pending → loaded skeleton behavior
+// is preserved now that the page reads the unified conversations query.
+vi.mock("@multica/core/conversations", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@multica/core/conversations")>();
+  return {
+    ...actual,
+    conversationsOptions: () => ({
+      queryKey: ["conversations", "ws-1", "list"],
+      queryFn: async () => {
+        const channels =
+          channelsFixture.resolver?.() ??
+          Promise.resolve([
+            {
+              id: "chan-1",
+              workspace_id: "ws-1",
+              name: "general",
+              kind: "group" as const,
+              description: null,
+              lark_chat_id: null,
+              created_by: "user-1",
+              created_at: "2026-06-17T09:00:00Z",
+              updated_at: "2026-06-17T09:00:00Z",
+            },
+          ]);
+        const rows = await channels;
+        return {
+          items: rows.map((channel) => ({ kind: "channel" as const, channel })),
+          next_cursor: undefined,
+        };
+      },
+      initialPageParam: null as string | null,
+      getNextPageParam: () => undefined,
+    }),
+  };
+});
+
 vi.mock("@multica/core/workspace/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/workspace/queries")>()),
   memberListOptions: () => ({ queryKey: ["members"], queryFn: async () => [] }),

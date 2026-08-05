@@ -214,7 +214,14 @@ function seedPickerPeers() {
 function renderDmList(props: Partial<Parameters<typeof DmList>[0]> = {}) {
   return render(
     <I18nProvider resources={TEST_RESOURCES} locale="en">
-      <DmList activeId={null} currentUserName="Test User" onSelect={vi.fn()} {...props} />
+      <DmList
+        activeId={null}
+        currentUserName="Test User"
+        onSelect={vi.fn()}
+        dms={mockQueryData.dms}
+        dmsPending={mockQueryData.dmsPending}
+        {...props}
+      />
     </I18nProvider>,
   );
 }

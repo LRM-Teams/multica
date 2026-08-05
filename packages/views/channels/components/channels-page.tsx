@@ -41,7 +41,6 @@ import {
   flattenChannelMessagePages,
   enrichChannelMessagesPreservingAvatars,
   useEnsureMessageLoaded,
-  channelsOptions,
   archivedChannelsOptions,
   channelMembersOptions,
   channelMemberManagementCapabilitiesOptions,
@@ -85,8 +84,14 @@ import {
   type ComposerDraftKey,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
-import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
+import { dmKeys, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
+import {
+  conversationsOptions,
+  conversationDMs,
+  conversationGroupChannels,
+  flattenConversationPages,
+} from "@multica/core/conversations";
 import { ApiError, api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -964,11 +969,23 @@ export function ChannelsPage({
   // otherwise base-route restoration would immediately reopen the channel.
   const suppressBaseRouteRestoreRef = useRef(false);
 
-  const {
-    data: channels = [],
-    isPending: channelsPending,
-    isSuccess: channelsLoaded,
-  } = useQuery(channelsOptions(wsId));
+  // LRM-1399 — CHANNELS + DIRECT MESSAGES share ONE `GET /api/conversations`
+  // read as the single Messages sidebar data source. The server returns a
+  // globally ordered (pinned → updated_at → id) page of group channels and
+  // DMs; we split it back into the two familiar region arrays (native shapes
+  // preserved) so every downstream render/mutation path is unchanged while the
+  // two regions share one pending/error boundary (LRM-1367 AC). Destructure
+  // only the consumed fields so TanStack Query subscribes narrowly.
+  const { data: conversationsData, isPending: conversationsPending, isSuccess: conversationsSuccess, refetch: refetchConversations } =
+    useInfiniteQuery(conversationsOptions(wsId));
+  const conversationItems = useMemo(
+    () => flattenConversationPages(conversationsData ?? { pages: [], pageParams: [] }),
+    [conversationsData],
+  );
+  const channels = useMemo(() => conversationGroupChannels(conversationItems), [conversationItems]);
+  const dms = useMemo(() => conversationDMs(conversationItems), [conversationItems]);
+  const channelsPending = conversationsPending;
+  const channelsLoaded = conversationsSuccess;
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
   const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -996,7 +1013,7 @@ export function ChannelsPage({
   // Mobile is list-first: `active` resolves only from an explicit selection
   // (click or ?channel= deep link), so the list shows until the user opens a
   // channel and the Back button (which clears activeId) returns to it.
-  const { data: dms = [], refetch: refetchDms } = useQuery(dmListOptions(wsId));
+  const refetchDms = refetchConversations;
   const bubbleActivityByAgent = useAgentBubbleActivityByAgent(wsId);
   const lastSelectedChannelId = useLastSelectedChannelStore(
     (state) => state.lastSelectedChannelId,
@@ -3440,6 +3457,8 @@ export function ChannelsPage({
               currentUserName={currentUserName}
               searchQuery={search}
               onSelect={selectDm}
+              dms={dms}
+              dmsPending={channelsPending}
             />
             {/* CHANNELS section — collapsible, mirrors DIRECT MESSAGES layout */}
             <div className="mt-1">

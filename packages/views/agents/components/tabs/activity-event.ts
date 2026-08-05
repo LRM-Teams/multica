@@ -55,7 +55,7 @@ export type ActivityLabelKey =
   | "completed"
   | "working"
   | "idle"
-  | "restarted"
+  | "restart_prepared"
   | "disconnected"
   | "failed"
   | "waiting"
@@ -121,7 +121,7 @@ export const ACTIVITY_LABEL_EN: Record<ActivityLabelKey, string> = {
   completed: "Completed",
   working: "Working",
   idle: "Idle",
-  restarted: "Restarted",
+  restart_prepared: "Restart prepared",
   disconnected: "Disconnected",
   failed: "Failed",
   waiting: "Waiting",
@@ -701,9 +701,9 @@ export function activityPresentation(event: ActivityEvent): ActivityPresentation
           : { labelKey: "working", tone: "active" };
       }
       if (event.detail_kind === "agent_lifecycle_succeeded") {
-        // Positive business event after restart/reset completes — label only,
-        // no "Working · Restarted" subtext noise.
-        return { labelKey: "restarted", tone: "neutral" };
+        // The old resident runtime has been invalidated, but the replacement is
+        // created lazily on the next dispatch. Do not claim it is already online.
+        return { labelKey: "restart_prepared", tone: "neutral" };
       }
       if (event.detail_kind.includes("subagent")) {
         // Prefer the daemon's own subagent detail text; fall back to a fixed label.

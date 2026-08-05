@@ -858,11 +858,13 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
 
 - [ ] 把当前 V1–V5 计划、证据、报告、评审、重试、取消和恢复行为做成 golden fixtures。
 - [ ] 从已出现的生产失败中提取脱敏回归：重复节点、403 task result、dispatch_failed 扩散、报告过早、评审意见丢失、低价值信息收益。
-- [ ] 建立 canonical state hash 和 Event replay 工具。
+- [x] 建立 canonical state hash 和 Event replay 工具：`CanonicalState` 对同一 Run 的 V1–V5 规范表计算确定性哈希，`ListRunEvents` / `ReplayRunEvents` 按 workspace 和连续 sequence 重放投影 Event，拒绝冲突重复与序号缺口。
 - [ ] 建立最小系统评测框架、固定语料和 grader Interface。
 - [ ] 为自主组队、冲突讨论升级、图投影重建、递归 Insight、反茧房 Divergence、同类结果 Assimilation 和无限画布续传/大图分片建立上述七个见红 fixture。
 
 退出条件：旧运行回放一致；故障注入后能比较状态；后续每项改动都有可见的基线差异。
+
+A1 边界：当前 `research_run_event` 是 committed state 到投影的日志，不包含从零重建全部规范表所需的完整 payload。Canonical state hash 用于比较同一 Run 在重试、恢复和故障注入前后的持久状态；Event replay 用于验证投影顺序和幂等。除非后续补齐所有状态转换的完整事件数据和重建验证，不得把它描述为完整 event sourcing。
 
 ### B. 深化 Module，缩小修改面
 
@@ -1044,6 +1046,7 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
 - [x] 定义冲突 Agent 讨论、deadlock 与 Research Director 自动升级。
 - [x] 定义稳定 Graph Projection、递归 Insight Derivation 和 Divergence Policy。
 - [x] 定义无限画布 Snapshot/Delta 续传、大图 Slice、动画语义与前后端职责。
+- [x] A1 实现 V1–V5 canonical state hash、workspace-bound Event 读取和连续 replay；单测与真实 PostgreSQL `server/internal/researchrun` 回归通过。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

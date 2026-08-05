@@ -20,10 +20,6 @@ const (
 	researchAssessmentDetour        = "detour"
 )
 
-func mapNodes(rows []db.ResearchGraphNode) []ResearchGraphNodeResp {
-	return mapGraphNodes(rows, nil)
-}
-
 func mapGraphNodes(rows []db.ResearchGraphNode, edges []db.ResearchGraphEdge) []ResearchGraphNodeResp {
 	parentOf, childrenOf := buildResearchTreeIndex(edges)
 

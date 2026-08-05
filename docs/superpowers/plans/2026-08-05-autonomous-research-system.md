@@ -55,7 +55,7 @@
 13. Contract 要求持续监测时，首次交付后进入持久 monitoring 状态；来源变化只在达到物质性阈值后开启增量研究，未变化也有可审计记录。
 14. Research Director 能依据新方向、能力缺口、独立性要求或新颖视角创建受预算和权限约束的 Agent；每次组队、失败和退出都有持久记录。
 15. 产出冲突的 Agent 会进入有轮次上限的 Research Deliberation；无实质进展时自动升级给 Research Director，Director 只能基于证据解决、拆分范围、创建区分任务或保留未解决状态。
-16. 每个 Research Task、Attempt、Result Artifact、Query、Source、Observation、Claim、Hypothesis、Insight、Integration Contribution、Dispute、Deliberation/Turn、Decision、Team Formation/Membership、Divergence Pass、Integration Round、Monitoring Cycle、Episode 和 Report Revision 都有稳定 Projection Node 与有类型的关系，支持前端重建、增量动画和完整详情。
+16. 每个 Research Task、Attempt、Result Artifact、Query、Source、Observation、Claim、Hypothesis、Insight、Integration Contribution、Dispute、Deliberation/Turn、Decision、Team Formation/Membership、Divergence Pass、Integration Round、Monitoring Cycle、Episode 和 Report Revision 都有稳定 Projection Node 与有类型的关系，支持前端分页重建、断线续传、增量动画、大图按需展开和完整详情。
 17. Integration Module 能把叶子结果递归归纳为多层 Insight Derivation DAG；输入失效会让所有受影响的高层 Insight 变为 stale，并触发重新整合。
 18. Exploration Module 在开局、重大意外、低收益停滞和交付前执行 Divergence Pass，为异质视角和反常方向保留受控预算；推测只能创建 Hypothesis/Branch，不能直接成为 Claim。
 19. 每个 accepted Task Result 都有 Assimilation Check Decision；存在相关同类结果时，原产出 Agent 提交 Integration Contribution 参与归纳，存在冲突时进入 Research Deliberation，没有相关结果时也明确记录等待后续整合。
@@ -385,6 +385,18 @@ V6 必须注册的 `node_kind` 至少包括：`task | attempt | result_artifact 
 - `staffed_by | created_for | retired_after`。
 
 Projection Module 提供全量 Snapshot 和按 event sequence 的增量 Delta。相同 canonical state 重建出的 Node/Edge 集合和内容 hash 必须一致。前端可以保存布局、折叠和动画状态，不能修改节点事实、层级或关系。
+
+### 7.2 无限画布投影协议
+
+Snapshot 必须包含 `snapshot_id`、`through_event_sequence`、`graph_content_hash` 和稳定分页游标。一次逻辑 Snapshot 的所有分页必须固定在相同 `snapshot_id` 与 event sequence；分页期间到达的新事件只能进入后续 Delta，不能让前后页来自不同状态。
+
+Delta 必须包含 `from_sequence_exclusive`、`through_sequence`、Node/Edge upsert、可见性 tombstone、受影响根节点和由 canonical Event 推导的 `transition_kind`。客户端按稳定 ID 幂等应用；重复 Delta 不产生重复节点，乱序 Delta 暂存到缺口补齐，缺口超时或服务端已清除所需历史时重新获取 Snapshot。WebSocket 重连必须携带最后成功应用的 event sequence，服务端只能连续续传或明确要求 resync，不能静默跳过事件。
+
+`transition_kind` 至少覆盖：`branch_spawned | task_dispatched | result_accepted | integration_formed | insight_staled | dispute_opened | deliberation_progressed | lead_escalated | team_membership_changed | report_revised`。它只表达已经提交的语义变化和关联实体，不包含坐标、动画时长或视觉样式。前端据此表现扩散、融合、冲突、升级、失效和修订，但不能用动画事件推进研究状态。
+
+大图不能要求浏览器一次载入整个 Run。Projection Module 提供有界 `Projection Slice`，至少支持 root node、方向、relation types、max depth、status、importance floor、cursor 和 limit；节点同时给出未加载邻居数、后代数和可继续展开标记。节点详情按稳定 ID 单独读取。相同 Snapshot 下相同 Slice 参数必须返回稳定顺序和内容。
+
+前端可以把屏幕外或低层节点折叠成纯显示分组，也可以保存用户布局；显示分组不是 Research Insight，不能写回 canonical Graph。真正的节点融合只能由已验收 Insight Derivation 创建新 Insight，并保留所有输入节点和 `derived_from | integrates` 边。真正的扩散只能由 Question/Hypothesis/Branch/Task/Team Formation 等后端状态变化创建。
 
 ## 8. 每批结果后的主动研究算法
 
@@ -780,6 +792,7 @@ Research Director 可以提出“自己的想法”，但必须具体化为 Ques
 4. 四个叶子结果先形成两个一级 Insight，再形成二级 Insight；一个叶子被 refuted 后，相关一级和二级 Insight 变 stale，重新整合后报告更新。
 5. 初始来源全部来自同一观点生态：Divergence Pass 在隔离上下文中发现预埋的异质来源或利益相关者方向，并创建有界 probe；该方向未验证前不能进入报告 Claim。
 6. 三个 Agent 完成同类小目标：每个结果写 Assimilation Check；三个原 Agent 提交非空 Integration Contribution；共同结果形成一级 Insight；其中两项冲突时自动转入 Research Deliberation。
+7. 一个至少一万节点的 Run 使用分页 Snapshot 和多个 Slice 打开；客户端重放重复、乱序、断线续传和历史缺口场景，最终 hash 与服务端一致，重复节点为零，历史缺口会明确 resync，单次响应不要求返回全图。
 
 评测指标：
 
@@ -798,7 +811,7 @@ Research Director 可以提出“自己的想法”，但必须具体化为 Ques
 
 确定性不变量要求 100% 通过：租户隔离、身份绑定、幂等、DAG、版本固定、exact quote、访问级别、stale result 拒绝、取消和 crash replay。
 
-以下自主行为也属于 100% 确定性门禁：Run 固定 Director 身份、非 Director 提交组队或裁决被拒绝、Director 改派只能来自用户并留下版本化 Decision、未授权 Agent 创建拒绝、重复 Team Formation Proposal 复用、每个 accepted Result 都有 Assimilation Check、相关原 Agent 的 Integration Contribution 不可被静默跳过、Deliberation deadlock 自动升级、Research Director 不能越过 Evidence Standard、Projection 重建 hash 一致、Insight stale 传递、无语义收益的高层节点拒绝、交付前 Divergence Pass 存在。
+以下自主行为也属于 100% 确定性门禁：Run 固定 Director 身份、非 Director 提交组队或裁决被拒绝、Director 改派只能来自用户并留下版本化 Decision、未授权 Agent 创建拒绝、重复 Team Formation Proposal 复用、每个 accepted Result 都有 Assimilation Check、相关原 Agent 的 Integration Contribution 不可被静默跳过、Deliberation deadlock 自动升级、Research Director 不能越过 Evidence Standard、Projection 重建 hash 一致、Delta 重复/乱序/断线重放一致、事件缺口强制 resync、Insight stale 传递、无语义收益的高层节点拒绝、交付前 Divergence Pass 存在。
 
 以下数字是本产品的首个生产验收门槛，不是外部项目的公开基准。基线建立后允许上调；下调必须有新的评测证据和明确批准记录。
 
@@ -847,7 +860,7 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
 - [ ] 从已出现的生产失败中提取脱敏回归：重复节点、403 task result、dispatch_failed 扩散、报告过早、评审意见丢失、低价值信息收益。
 - [ ] 建立 canonical state hash 和 Event replay 工具。
 - [ ] 建立最小系统评测框架、固定语料和 grader Interface。
-- [ ] 为自主组队、冲突讨论升级、图投影重建、递归 Insight、反茧房 Divergence 和同类结果 Assimilation 建立上述六个见红 fixture。
+- [ ] 为自主组队、冲突讨论升级、图投影重建、递归 Insight、反茧房 Divergence、同类结果 Assimilation 和无限画布续传/大图分片建立上述七个见红 fixture。
 
 退出条件：旧运行回放一致；故障注入后能比较状态；后续每项改动都有可见的基线差异。
 
@@ -970,6 +983,9 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
 - [ ] 为历史 V1–V5 Run 建立只读投影和可恢复路径；不伪造历史 Inquiry/Search/Dispute 数据。
 - [ ] 更新 Run Snapshot，使前端能展示 Question、Hypothesis、Branch、Integration、Dispute、Search 和修订详情。
 - [ ] 实现稳定 Graph Projection Node/Edge schema、Snapshot/Delta、完整节点详情和重建 hash 测试。
+- [ ] 实现固定 Snapshot 分页、Projection Slice、详情按需读取、WebSocket event sequence 续传和缺口 resync。
+- [ ] 实现前端 Delta 幂等消费、乱序暂存、融合/扩散/冲突/失效 transition 映射、视口裁剪和显示分组；显示分组不得写回 canonical Graph。
+- [ ] 使用至少一万节点 fixture 验证分页、Slice、重连、重复/乱序 Delta、缺口重建和浏览器不全量载入。
 - [ ] 运行全文所列系统评测、故障注入、安全测试、完整 Go 验证和生产影子流量对照。
 - [ ] 更新内置 Skill、source map、后端设计、工程原则、指标和运维说明。
 
@@ -1027,6 +1043,7 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
 - [x] 定义 Research Director 自主组队和受控 Agent 生命周期。
 - [x] 定义冲突 Agent 讨论、deadlock 与 Research Director 自动升级。
 - [x] 定义稳定 Graph Projection、递归 Insight Derivation 和 Divergence Policy。
+- [x] 定义无限画布 Snapshot/Delta 续传、大图 Slice、动画语义与前后端职责。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

@@ -222,4 +222,6 @@ canvas, process cards, presence, source list, and report are projections. A
 projection may be rebuilt without changing canonical task or evidence state.
 Every canonical research entity has a stable typed node, typed edges, complete
 detail data, and event-sequenced deltas so a client can render hierarchy,
-discussion, conflict, provenance, and change without parsing Agent prose.
+discussion, conflict, provenance, and change without parsing Agent prose. A
+snapshot is pinned to one event sequence; reconnecting clients resume after that
+sequence or reload a snapshot when the retained delta range has expired.

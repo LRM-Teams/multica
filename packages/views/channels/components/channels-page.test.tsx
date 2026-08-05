@@ -867,9 +867,16 @@ describe("voice send failure leaves a durable record (#838)", () => {
     await screen.findByTestId("composer");
     // PROBE: does the thread composer mount at all when the deep link is
     // present from the very first render?
-    const fireA = await screen.findByTestId("fire-voice-thread");
+    // Wait on the pinned ROOT TEXT — the deterministic per-thread evidence —
+    // never on `fire-voice-thread`: that testid appears only after the async
+    // deep-link → route-reconcile → ThreadPanel mount chain resolves, so
+    // awaiting it with the default 1s findBy budget flakes under CPU/CI
+    // contention (LRM-1445). Root text is on the same mount, and once it is
+    // in the DOM the thread composer is present synchronously (openThread
+    // relies on the same guarantee).
     void view;
     await screen.findByText("THREADROOTONE");
+    const fireA = screen.getByTestId("fire-voice-thread");
     threadSendSpy().mockRejectedValueOnce(new Error("boom-thread-a"));
     fireEvent.click(fireA);
     await waitFor(() => {
@@ -920,8 +927,10 @@ describe("voice send failure leaves a durable record (#838)", () => {
     navState.search = new URLSearchParams("thread=root-1");
     const view = renderPage("chan-random");
     await screen.findByTestId("composer");
-    const fireA = await screen.findByTestId("fire-voice-thread");
+    // See the probe in "thread A→B" above: gate on the pinned root text, not
+    // on the load-sensitive `fire-voice-thread` findBy (LRM-1445).
     await screen.findByText("THREADROOTONE");
+    const fireA = screen.getByTestId("fire-voice-thread");
     threadSendSpy().mockRejectedValueOnce(new Error("boom-thread-a"));
     fireEvent.click(fireA);
     await waitFor(() => {

@@ -1483,6 +1483,129 @@ func TestEvaluateGateIgnoresReportFromPriorPlanVersion(t *testing.T) {
 	}
 }
 
+func TestEvaluateGateProjectsActionableEvaluationFeedback(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	if _, _, err = store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Revise from reviewer evidence",
+		Title: "Evaluation feedback", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard")); err != nil {
+		t.Fatal(err)
+	}
+	reportID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_report (
+		  id, workspace_id, session_id, revision, content_md, structured,
+		  goal_version, plan_version, author_agent_id
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, '# Report', '{}'::jsonb, 1, 1, $4::uuid)
+	`, reportID, fixture.workspaceID, fixture.sessionID, fixture.reporterID); err != nil {
+		t.Fatal(err)
+	}
+	evaluation := EvaluationProposal{
+		Passed: false, FactualGrounding: 0.45, Coverage: 0.6, AnalyticalDepth: 0.9,
+		SourceQuality: 0.9, ContradictionHandling: 0.9, InstructionAdherence: 0.9, Readability: 0.9,
+		DimensionFindings: e2eDimensionFindings(),
+		Findings:          []string{"The executive summary overstates claim-alpha beyond its cited observation."},
+		ReviewedClaimKeys: []string{"claim-alpha"}, ReviewedSectionIDs: []string{"executive-summary"},
+	}
+	evaluation.DimensionFindings["factual_grounding"] = "Claim alpha is stated categorically although the cited observation supports only a bounded conditional result."
+	evaluation.DimensionFindings["coverage"] = "The report omits the required boundary condition from the executive summary and conclusion."
+	outcome, err := json.Marshal(evaluation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisionID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_decision (
+		  id, workspace_id, session_id, decision_kind, actor_type, actor_id,
+		  goal_version, plan_version, inputs, outcome, rationale
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'quality_gate', 'agent', $4::uuid,
+		          1, 1, jsonb_build_object('report_id', $5::text), $6::jsonb, $7)
+	`, decisionID, fixture.workspaceID, fixture.sessionID, fixture.validatorID, reportID, outcome, evaluation.Findings[0]); err != nil {
+		t.Fatal(err)
+	}
+	citationDecisionID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_decision (
+		  id, workspace_id, session_id, decision_kind, actor_type, actor_id,
+		  goal_version, plan_version, inputs, outcome, rationale
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'citation_audit', 'agent', $4::uuid,
+		          1, 1, jsonb_build_object('report_id', $5::text), $6::jsonb, $7)
+	`, citationDecisionID, fixture.workspaceID, fixture.sessionID, fixture.validatorID, reportID, outcome, evaluation.Findings[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var qualityFinding GateFinding
+	for _, finding := range gate.Findings {
+		if finding.Code == "quality_evaluation_failed" {
+			qualityFinding = finding
+			break
+		}
+	}
+	if qualityFinding.Code == "" || qualityFinding.Metadata["evaluation_decision_id"] != decisionID ||
+		qualityFinding.Metadata["report_id"] != reportID || qualityFinding.Metadata["reviewer_agent_id"] != fixture.validatorID {
+		t.Fatalf("quality finding=%+v", qualityFinding)
+	}
+	failed, ok := qualityFinding.Metadata["failed_dimensions"].([]map[string]any)
+	if !ok || len(failed) != 2 || failed[0]["dimension"] != "factual_grounding" || failed[1]["dimension"] != "coverage" {
+		t.Fatalf("failed dimensions=%#v", qualityFinding.Metadata["failed_dimensions"])
+	}
+	var citationFinding GateFinding
+	for _, finding := range gate.Findings {
+		if finding.Code == "citation_audit_failed" {
+			citationFinding = finding
+			break
+		}
+	}
+	if citationFinding.Code == "" || citationFinding.Metadata["evaluation_decision_id"] != citationDecisionID ||
+		citationFinding.Metadata["report_id"] != reportID || citationFinding.Metadata["reviewer_agent_id"] != fixture.validatorID {
+		t.Fatalf("citation finding=%+v", citationFinding)
+	}
+	control := remediationTask(GateResult{Findings: []GateFinding{qualityFinding, citationFinding}})
+	if control.Kind != TaskKindSynthesize || !strings.Contains(control.Objective, "overstates claim-alpha") || !strings.Contains(control.Objective, "factual_grounding") {
+		t.Fatalf("control=%+v", control)
+	}
+	control.SessionID = fixture.sessionID
+	revisionTask, _, err := store.CreateControlTask(ctx, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var criteria struct {
+		Remediation struct {
+			FindingCodes   []string      `json:"finding_codes"`
+			TargetFindings []GateFinding `json:"target_findings"`
+		} `json:"remediation"`
+	}
+	if err = json.Unmarshal(revisionTask.AcceptanceCriteria, &criteria); err != nil {
+		t.Fatal(err)
+	}
+	if len(criteria.Remediation.TargetFindings) != 2 ||
+		criteria.Remediation.TargetFindings[0].Metadata["evaluation_decision_id"] != decisionID ||
+		criteria.Remediation.TargetFindings[1].Metadata["evaluation_decision_id"] != citationDecisionID {
+		t.Fatalf("acceptance criteria=%s", revisionTask.AcceptanceCriteria)
+	}
+}
+
 func TestEvaluateGateBlocksUnreportedRequiredAnswerAndAuthorSelfReview(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {

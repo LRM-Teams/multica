@@ -389,7 +389,8 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInp
 	acceptanceCriteria, _ := json.Marshal(map[string]any{
 		"schema_version": resultSchemaVersionForOrchestrator(orchestratorVersion),
 		"remediation": map[string]any{
-			"finding_codes": findingCodes, "question_id": in.QuestionID, "question_key": questionKey,
+			"finding_codes": findingCodes, "target_findings": in.Findings,
+			"question_id": in.QuestionID, "question_key": questionKey,
 		},
 	})
 	var taskID string

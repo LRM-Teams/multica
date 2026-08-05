@@ -307,6 +307,29 @@ func TestTaskPromptV4CarriesClaimLevelEvidenceStandards(t *testing.T) {
 		"Source class is descriptive and has no global credibility score",
 		"verify/counter_search=research_evidence_v4",
 		"source count, source class, or depth tier alone never establishes sufficiency",
+		"each failed finding names the affected Claim keys and section IDs",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("prompt missing %q:\n%s", required, prompt)
+		}
+	}
+}
+
+func TestTaskPromptV4RequiresTargetedEvaluationRepair(t *testing.T) {
+	run := Run{SessionID: "session-4", Goal: "Produce an evidence-backed decision", GoalVersion: 1, PlanVersion: 1, DepthTier: "standard", OrchestratorVersion: OrchestratorVersionV4}
+	task := Task{
+		ID: "task-revision", Kind: TaskKindSynthesize, Objective: "Repair the reviewed report",
+		RequiredCapability: "reporter", ExpectedResult: "research_report_v4", GoalVersion: 1, PlanVersion: 1,
+		AcceptanceCriteria: []byte(`{"failed_dimensions":[{"dimension":"factual_grounding","rationale":"claim-a overstates source-1"}],"reviewed_claim_keys":["claim-a"],"reviewed_section_ids":["section-a"]}`),
+	}
+	prompt, err := buildTaskPrompt(run, task, Attempt{ID: "attempt-revision", DispatchKey: "dispatch-revision"}, RunSnapshot{Contract: ResearchContract{Language: "zh"}}, []FleetMember{{Role: "reporter", Status: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"claim-a overstates source-1",
+		"reviewed_claim_keys",
+		"repair every failed dimension and explicit finding against the named Claims and sections",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("prompt missing %q:\n%s", required, prompt)

@@ -450,7 +450,12 @@ citation decisions store their reviewer actor. A passing score from the report
 author is rejected, and a passing evaluation must enumerate every Claim and
 section in the latest revision. A failed quality review schedules a new
 `synthesize` task and report revision; a succeeded delivery task is never
-reused as the remediation task.
+reused as the remediation task. The failed Decision is projected into bounded
+Gate metadata containing the evaluation, report, and reviewer IDs; failed
+dimensions and rationales; explicit findings; and reviewed Claim/section keys.
+That projection is preserved in the revision task objective and acceptance
+criteria so the reporter repairs the named defects instead of receiving a
+generic rewrite request.
 
 A `quality_gate` task is assigned to a verifier that did not author the report.
 It scores factual grounding, coverage, analytical depth, source quality,

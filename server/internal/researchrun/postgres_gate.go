@@ -75,6 +75,9 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		budgetExhausted     int
 	}
 	var counts gateCounts
+	var qualityDecisionID, qualityReportID, qualityReviewerID string
+	var citationDecisionID, citationReportID, citationReviewerID string
+	var qualityOutcome, citationOutcome []byte
 	err = s.pool.QueryRow(ctx, `
 		WITH current_claims AS (
 		  SELECT c.id, c.significance, c.resolution
@@ -105,13 +108,13 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		  WHERE e.session_id = $1::uuid AND e.relation = 'contradicts'
 		    AND e.verification_status = 'verified'
 		), latest_quality AS (
-		  SELECT actor_id, outcome FROM research_decision
+		  SELECT id, actor_id, inputs, outcome FROM research_decision
 		  WHERE session_id = $1::uuid AND decision_kind = 'quality_gate'
 		    AND goal_version = $2 AND plan_version = $3
 		    AND inputs->>'report_id' = (SELECT id::text FROM latest_report)
 		  ORDER BY created_at DESC LIMIT 1
 		), latest_citation AS (
-		  SELECT actor_id, outcome FROM research_decision
+		  SELECT id, actor_id, inputs, outcome FROM research_decision
 		  WHERE session_id = $1::uuid AND decision_kind = 'citation_audit'
 		    AND goal_version = $2 AND plan_version = $3
 		    AND inputs->>'report_id' = (SELECT id::text FROM latest_report)
@@ -200,7 +203,15 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		       COALESCE((citation.outcome->>'readability')::double precision, 0)
 		     ) >= $4::double precision),
 		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid
-		     AND decision_kind = 'budget_exhausted' AND goal_version = $2 AND plan_version = $3)
+		     AND decision_kind = 'budget_exhausted' AND goal_version = $2 AND plan_version = $3),
+		  COALESCE((SELECT id::text FROM latest_quality), ''),
+		  COALESCE((SELECT inputs->>'report_id' FROM latest_quality), ''),
+		  COALESCE((SELECT actor_id::text FROM latest_quality), ''),
+		  COALESCE((SELECT outcome FROM latest_quality), '{}'::jsonb),
+		  COALESCE((SELECT id::text FROM latest_citation), ''),
+		  COALESCE((SELECT inputs->>'report_id' FROM latest_citation), ''),
+		  COALESCE((SELECT actor_id::text FROM latest_citation), ''),
+		  COALESCE((SELECT outcome FROM latest_citation), '{}'::jsonb)
 	`, sessionID, run.GoalVersion, run.PlanVersion, minimumEvaluationScore, minimumMajorClaimSources).Scan(
 		&counts.planSucceeded, &counts.unfinishedTasks, &counts.blockedTasks,
 		&counts.requiredQuestions, &counts.unansweredRequired,
@@ -211,6 +222,8 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		&counts.qualityEvaluations, &counts.qualityPassed, &counts.qualityIndependent,
 		&counts.citationEvaluations, &counts.citationPassed, &counts.citationIndependent,
 		&counts.budgetExhausted,
+		&qualityDecisionID, &qualityReportID, &qualityReviewerID, &qualityOutcome,
+		&citationDecisionID, &citationReportID, &citationReviewerID, &citationOutcome,
 	)
 	if err != nil {
 		return GateResult{}, err
@@ -324,14 +337,16 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	if counts.qualityEvaluations == 0 {
 		add("quality_evaluation_missing", "The latest report has not passed an independent quality evaluation.", nil)
 	} else if counts.qualityPassed == 0 {
-		add("quality_evaluation_failed", "The latest independent quality evaluation failed or fell below the depth-tier score floor.", map[string]any{"minimum_score": minimumEvaluationScore})
+		add("quality_evaluation_failed", "The latest independent quality evaluation failed or fell below the depth-tier score floor.",
+			evaluationFeedbackMetadata(qualityDecisionID, qualityReportID, qualityReviewerID, qualityOutcome, minimumEvaluationScore))
 	} else if usesStructuredResultContract(run.OrchestratorVersion) && counts.qualityIndependent == 0 {
 		add("quality_evaluation_not_independent", "The latest quality evaluation was submitted by the report author.", nil)
 	}
 	if counts.citationEvaluations == 0 {
 		add("citation_audit_missing", "The latest report has not passed a citation audit.", nil)
 	} else if counts.citationPassed == 0 {
-		add("citation_audit_failed", "The latest citation audit failed or fell below the depth-tier score floor.", map[string]any{"minimum_score": minimumEvaluationScore})
+		add("citation_audit_failed", "The latest citation audit failed or fell below the depth-tier score floor.",
+			evaluationFeedbackMetadata(citationDecisionID, citationReportID, citationReviewerID, citationOutcome, minimumEvaluationScore))
 	} else if usesStructuredResultContract(run.OrchestratorVersion) && counts.citationIndependent == 0 {
 		add("citation_audit_not_independent", "The latest citation audit was submitted by the report author.", nil)
 	}
@@ -344,6 +359,58 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		})
 	}
 	return GateResult{Passed: len(findings) == 0, Findings: findings}, nil
+}
+
+func evaluationFeedbackMetadata(decisionID, reportID, reviewerID string, raw []byte, minimumScore float64) map[string]any {
+	metadata := map[string]any{
+		"evaluation_decision_id": decisionID,
+		"report_id":              reportID,
+		"reviewer_agent_id":      reviewerID,
+		"minimum_score":          minimumScore,
+	}
+	var evaluation EvaluationProposal
+	if err := json.Unmarshal(raw, &evaluation); err != nil {
+		metadata["feedback_unavailable"] = "stored evaluation outcome could not be decoded"
+		return metadata
+	}
+	scores := map[string]float64{
+		"factual_grounding":      evaluation.FactualGrounding,
+		"coverage":               evaluation.Coverage,
+		"analytical_depth":       evaluation.AnalyticalDepth,
+		"source_quality":         evaluation.SourceQuality,
+		"contradiction_handling": evaluation.ContradictionHandling,
+		"instruction_adherence":  evaluation.InstructionAdherence,
+		"readability":            evaluation.Readability,
+	}
+	failedDimensions := make([]map[string]any, 0, len(evaluationDimensionNames))
+	for _, dimension := range evaluationDimensionNames {
+		score := scores[dimension]
+		if score >= minimumScore {
+			continue
+		}
+		failedDimensions = append(failedDimensions, map[string]any{
+			"dimension": dimension,
+			"score":     score,
+			"rationale": truncateBytes(evaluation.DimensionFindings[dimension], 1024),
+		})
+	}
+	metadata["passed"] = evaluation.Passed
+	metadata["failed_dimensions"] = failedDimensions
+	metadata["findings"] = boundedEvaluationStrings(evaluation.Findings, 8, 1024)
+	metadata["reviewed_claim_keys"] = boundedEvaluationStrings(evaluation.ReviewedClaimKeys, 64, 160)
+	metadata["reviewed_section_ids"] = boundedEvaluationStrings(evaluation.ReviewedSectionIDs, 64, 160)
+	return metadata
+}
+
+func boundedEvaluationStrings(values []string, maxItems, maxBytes int) []string {
+	if len(values) > maxItems {
+		values = values[:maxItems]
+	}
+	bounded := make([]string, 0, len(values))
+	for _, value := range values {
+		bounded = append(bounded, truncateBytes(value, maxBytes))
+	}
+	return bounded
 }
 
 func (s *PostgresStore) loadTopUnansweredRequiredQuestion(ctx context.Context, sessionID string, goalVersion, planVersion int) (map[string]any, bool, error) {

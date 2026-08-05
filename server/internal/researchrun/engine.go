@@ -979,12 +979,12 @@ func buildTaskPromptV4(run Run, task Task, attempt Attempt, snapshot RunSnapshot
 	b.WriteString("9. A report uses the existing reader schema exactly: report={content_md,structured,claims}; structured={schema_version:1,title,outline:[{id,title,level,children}],sections:[{id,title,level,markdown,citation_ids}],citations:[{id,index,source_id,label,quote,locator}],sources:[{source_id,title,url,credibility_weight,source_class}],gaps,conclusion}; claims=[{claim_key,section_id,anchor_quote}]. Every report Claim must cite verified evidence that passes its accepted standard.\n")
 	policy := reportPolicyForDepth(run.DepthTier)
 	fmt.Fprintf(&b, "10. This %s run requires at least %d sections, %d substantive characters per section, and %d in the conclusion to reject placeholders. These prose floors do not alter Claim-level evidence standards.\n", run.DepthTier, policy.MinimumSections, policy.MinimumSectionCharacters, policy.MinimumConclusionCharacters)
-	b.WriteString("11. A quality or citation evaluation reviews a report written by another Agent. Return all v2 evaluation fields and fail when a Claim uses the wrong standard, a Source trait is unsupported by its Snapshot, link scores are inflated, counterevidence work is absent, or any material defect remains.\n")
+	b.WriteString("11. A quality or citation evaluation reviews a report written by another Agent. Return all v2 evaluation fields; each failed finding names the affected Claim keys and section IDs. Fail when a Claim uses the wrong standard, a Source trait is unsupported by its Snapshot, link scores are inflated, counterevidence work is absent, or any material defect remains.\n")
 	switch task.Kind {
 	case TaskKindVerify, TaskKindCounterSearch:
 		b.WriteString("12. Include every source, observation, Claim, and Evidence Link being verified. Reuse stable keys and exact ledger content. Set directness and method_fit from this Claim–Observation relation, not from the source reputation. Counter-search records contrary evidence and unresolved conflicts without forcing a contradiction to exist.\n")
 	case TaskKindSynthesize:
-		b.WriteString("12. Cover every required answer Claim and supported high-significance Claim. Explain the Method, evidence standards, contrary evidence, limitations, unresolved gaps, and decision consequences.\n")
+		b.WriteString("12. Cover every required answer Claim and supported high-significance Claim. When acceptance criteria contain evaluation feedback, repair every failed dimension and explicit finding against the named Claims and sections. Explain the Method, evidence standards, contrary evidence, limitations, unresolved gaps, and decision consequences.\n")
 	case TaskKindQualityGate, TaskKindCitationAudit:
 		b.WriteString("12. Audit the latest report, current evidence ledger, accepted Method, Evidence Standards, Source traits, and link scores independently. Do not add evidence or manufacture passing scores.\n")
 	default:

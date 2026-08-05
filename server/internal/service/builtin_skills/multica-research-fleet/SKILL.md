@@ -98,7 +98,15 @@ chat before `task-result` succeeds.
   provide substantive findings for all seven score dimensions and enumerate
   every reviewed report Claim and section. Fail when any material claim is
   unsupported, stale, misquoted, omitted, hides unresolved contradiction, or
-  departs from the accepted Method or, in V4, its evidence standards.
+  departs from the accepted Method or, in V4, its evidence standards. Each
+  finding names the affected Claim keys and section IDs.
+
+Failed quality and citation Decisions remain executable feedback. Gate findings
+carry bounded evaluation Decision, report, and reviewer IDs; failed dimensions
+with scores and rationales; explicit findings; and reviewed Claim/section keys
+into the revision task. The reporter repairs each item against those named
+artifacts. It must not replace the feedback with a generic rewrite or discard
+already accepted evidence.
 
 The server decides readiness, retries, timeouts, concurrency, diminishing
 information gain, remediation, replans, and final delivery. Remediation is

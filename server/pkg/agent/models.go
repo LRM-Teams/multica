@@ -255,9 +255,11 @@ func claudeModelsWithFallback(ctx context.Context, executablePath string) ([]Mod
 func claudeStaticModels() []Model {
 	return []Model{
 		{ID: "sonnet", Label: "Sonnet 5", Provider: "anthropic", Default: true},
-		{ID: "opus", Label: "Opus", Provider: "anthropic"},
+		{ID: "opus", Label: "Opus 5", Provider: "anthropic"},
 		{ID: "haiku", Label: "Haiku", Provider: "anthropic"},
 		{ID: "claude-fable-5", Label: "Fable 5", Provider: "anthropic"},
+		{ID: "claude-sonnet-5", Label: "Sonnet 5 (pin)", Provider: "anthropic"},
+		{ID: "claude-opus-5", Label: "Opus 5 (pin)", Provider: "anthropic"},
 	}
 }
 
@@ -273,6 +275,8 @@ func claudeCompatibilityModels() []Model {
 		{ID: "claude-haiku-4-5-20251001", Provider: "anthropic"},
 		{ID: "claude-opus-4-6", Provider: "anthropic"},
 		{ID: "claude-sonnet-4-5", Provider: "anthropic"},
+		{ID: "claude-sonnet-5", Provider: "anthropic"},
+		{ID: "claude-opus-5", Provider: "anthropic"},
 	}
 }
 

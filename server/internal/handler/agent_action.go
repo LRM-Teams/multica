@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +30,7 @@ const (
 	agentActionStatusPrepared  = "prepared"
 	agentActionStatusDone      = "done"
 	agentActionStatusDismissed = "dismissed"
+	agentActionStatusExecuted  = "executed"
 
 	agentActionLookupOK          = "ok"
 	agentActionLookupNotFound    = "agent_action_not_found"
@@ -190,6 +192,14 @@ func (h *Handler) AgentTransportPrepareAction(w http.ResponseWriter, r *http.Req
 				channelID = mid
 			}
 		}
+		// LRM-2343 S2: seed the canonical commit state keyed by the Message id.
+		// The legacy agent_action_card row below remains only for rollback of the
+		// old two-step path; the canonical path's prepared/executed + snapshots
+		// now live here (agent_action) so CreateAgent can commit atomically.
+		if err := h.seedAgentActionMessage(r.Context(), origin.workspaceID, result.Message.ID, task.AgentID, name, description, req.PreferredComputer); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record agent:create action")
+			return
+		}
 	}
 
 	payloadBytes, err := json.Marshal(agentActionCreatePayload{Name: name, Description: description})
@@ -332,6 +342,30 @@ func (h *Handler) loadActionCard(r *http.Request, workspaceID string, cardID pgt
 	}, agentActionLookupOK
 }
 
+// extractActionMessageID reads the optional canonical action_message_id from
+// CreateAgent raw JSON (LRM-2343 S2). Unlike the legacy action_card_id, this is
+// the canonical channel_message id that carries the agent:create action part.
+func extractActionMessageID(rawFields map[string]json.RawMessage) (pgtype.UUID, bool, error) {
+	var empty pgtype.UUID
+	raw, ok := rawFields["action_message_id"]
+	if !ok {
+		return empty, false, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return empty, true, fmt.Errorf("action_message_id must be a UUID")
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return empty, false, nil
+	}
+	id, err := util.ParseUUID(s)
+	if err != nil || !id.Valid {
+		return empty, true, fmt.Errorf("action_message_id must be a UUID")
+	}
+	return id, true, nil
+}
+
 // extractActionCardID reads optional action_card_id from CreateAgent raw JSON.
 func extractActionCardID(rawFields map[string]json.RawMessage) (pgtype.UUID, bool, error) {
 	var empty pgtype.UUID
@@ -471,4 +505,39 @@ func actionPartPayloadMatches(parts []protocol.MessagePart, name, description st
 // kept in lock-step with the UTF-16 anchor computed by agentActionMessagePart.
 func buildActionCardContent(name string) string {
 	return "[agent:create proposal] " + name
+}
+
+// seedAgentActionMessage records the canonical agent:create action commit state
+// keyed by the prepared channel_message id when prepare created a Message
+// (LRM-2343 S2). The proposed payload is the non-sensitive proposal snapshot
+// (name/description/preferred Computer); status starts at prepared and is CAS'd
+// to executed by CreateAgent inside the same commit transaction.
+func (h *Handler) seedAgentActionMessage(ctx context.Context, workspaceID pgtype.UUID, messageID string, preparedByAgentID pgtype.UUID, name, description string, preferredComputer *string) error {
+	proposed := map[string]any{
+		"name":        name,
+		"description": description,
+	}
+	if preferredComputer != nil && strings.TrimSpace(*preferredComputer) != "" {
+		proposed["preferred_computer"] = strings.TrimSpace(*preferredComputer)
+	}
+	proposedRaw, err := json.Marshal(proposed)
+	if err != nil {
+		return err
+	}
+	mid, err := util.ParseUUID(messageID)
+	if err != nil || !mid.Valid {
+		return fmt.Errorf("invalid channel_message id %q", messageID)
+	}
+	wsID := workspaceID
+	if !wsID.Valid {
+		return fmt.Errorf("invalid workspace id")
+	}
+	_, err = h.DB.Exec(ctx, `
+		INSERT INTO agent_action (
+			channel_message_id, workspace_id, action_type, status,
+			proposed_payload, prepared_by_agent_id, prepared_at
+		) VALUES ($1, $2, $3, $4, $5::jsonb, $6, now())
+		ON CONFLICT (channel_message_id) DO NOTHING`,
+		mid, wsID, agentActionTypeCreate, agentActionStatusPrepared, proposedRaw, nullableUUID(preparedByAgentID))
+	return err
 }

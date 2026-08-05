@@ -1089,6 +1089,18 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// LRM-2343 S2: canonical Message-backed commit seam. The agent:create
+	// proposal lives on a channel_message; CreateAgent carries its id and the
+	// whole commit (CAS prepared->executed + Agent + snapshots) is one tx.
+	actionMessageID, hasActionMessageID, err := extractActionMessageID(rawFields)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if hasActionMessageID && hasActionCardID {
+		writeError(w, http.StatusBadRequest, "action_message_id and action_card_id are mutually exclusive")
+		return
+	}
 	// Research / legacy seed only: draft_id still loads initial notes/memory when
 	// present. Agent hire must not use drafts (agent draft create is 410).
 	draftID, hasDraftID, err := extractDraftID(rawFields)
@@ -1098,6 +1110,10 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if hasDraftID && hasActionCardID {
 		writeError(w, http.StatusBadRequest, "action_card_id and draft_id are mutually exclusive")
+		return
+	}
+	if hasDraftID && hasActionMessageID {
+		writeError(w, http.StatusBadRequest, "action_message_id and draft_id are mutually exclusive")
 		return
 	}
 	initialNotes := cleanInitialContextMap(req.InitialNotes, allowedInitialNoteSeedPath)
@@ -1153,7 +1169,26 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	applyCreateAgentAvatar(&createParams, avatar)
 
 	var created db.Agent
-	if req.Username != nil {
+	createdViaActionMessage := false
+	if hasActionMessageID {
+		// LRM-2343 S2: commit the prepared proposal Message atomically. This path
+		// creates the Agent, adds the system #general membership and CAS's the
+		// action prepared->executed all in one transaction, with action_message_id
+		// + final-payload-hash idempotency (same replay -> same Agent; different
+		// -> 409). It returns early here; the shared post-commit side effects
+		// (skill suggestions, reconcile, events, reminder) run below.
+		created, err = h.createAgentFromActionMessage(r.Context(), wsUUID, parseUUID(ownerID), actionMessageID, createParams, displayName)
+		if err != nil {
+			var cErr *codedActionCommitError
+			if errors.As(err, &cErr) {
+				writeCodedError(w, cErr.status, cErr.code, cErr.msg)
+			} else {
+				writeError(w, http.StatusInternalServerError, "failed to create agent from proposal: "+err.Error())
+			}
+			return
+		}
+		createdViaActionMessage = true
+	} else if req.Username != nil {
 		if err := validateIdentityHandle(*req.Username); err != nil {
 			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
 			return
@@ -1182,7 +1217,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
-	if hasActionCardID {
+	if !createdViaActionMessage && hasActionCardID {
 		code, markErr := h.markActionCardDone(r, workspaceID, actionCardID, parseUUID(ownerID), created.ID)
 		if markErr != nil {
 			slog.Warn("mark action card done failed", append(logger.RequestAttrs(r), "error", markErr, "action_card_id", uuidToString(actionCardID))...)
@@ -1201,7 +1236,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	if len(initialNotes) > 0 || len(initialMemory) > 0 {
 		h.seedAgentInitialContext(r, created, initialNotes, initialMemory)
 	}
-
 	h.refreshAgentSkillSuggestions(r.Context(), created)
 
 	if runtime.Status == "online" {

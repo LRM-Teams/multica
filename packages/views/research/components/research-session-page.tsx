@@ -475,7 +475,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   const evidenceRevision = evidenceRevisionKey(sourceStrategy, humanBoundary);
   const hideEvidenceCards =
     evidenceOverview === "error" || evidenceOverview === "permission";
-  const canvasMode = resolveCanvasBodyMode(data.nodes.length, session.status);
+  const canvasMode = resolveCanvasBodyMode({
+    nodes: data.nodes,
+    edges: data.edges,
+    sessionStatus: session.status,
+  });
   const canConfirm = session.status === "awaiting_user_confirm" || session.status === "running";
   const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
   const canStop = isResearchSessionStoppable(session.status);
@@ -678,7 +682,15 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
               onLocate={locateExecutionAgent}
             />
           </div>
-          {canvasMode === "forming" ? <ResearchCanvasForming /> : null}
+          {canvasMode === "forming" || canvasMode === "stalled" ? (
+            <ResearchCanvasForming
+              mode={canvasMode}
+              stage={session.current_stage}
+              members={fleet.members}
+              tasks={data.run?.tasks ?? []}
+              messages={messages}
+            />
+          ) : null}
           {canvasMode === "empty" ? <ResearchCanvasEmptyState /> : null}
 
           <ResearchAuxDrawer

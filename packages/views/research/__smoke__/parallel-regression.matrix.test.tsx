@@ -14,7 +14,7 @@
  * - 1105 helpers (#1952) + role=application (1091) + Home/End via resolveCanvasKeyEvent — hard
  * - 1109 meta-menu md: (#1947) — hard; template chip-row sm: still `it.fails`
  * - 1091 planar layout + arrow/Enter/Esc/F10 + retry status gate — hard;
- *   dedicated --branch-* tokens + destructive confirm/undo still `it.fails`
+ *   dedicated --branch-* tokens + destructive confirm/undo — hard
  */
 // @vitest-environment jsdom
 import fs from "node:fs";
@@ -799,8 +799,9 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
       created_at: "2026-07-31T00:00:00Z",
       updated_at: "2026-07-31T00:00:00Z",
     });
+    const activeRetry = active.find((a) => a.id === "retry");
     expect(
-      active.find((a) => a.id === "retry")?.disabled,
+      !activeRetry || activeRetry.disabled === true,
       failHint(SMOKE_ISSUES.canvasPlanar, "active probe should not expose live retry"),
     ).toBe(true);
     expect(
@@ -810,8 +811,8 @@ describe(`Smoke · canvas planar / actions (${SMOKE_ISSUES.canvasPlanar})`, () =
     expect(ACTION_VISIBILITY_CONTRACT.destructiveActionIds.length).toBeGreaterThan(0);
   });
 
-  // Destructive confirm/undo hook still missing on ring/canvas after #1956.
-  it.fails(
+  // Ring recover actions now advertise confirm (reassign); keep as a hard gate.
+  it(
     `${SMOKE_ISSUES.canvasPlanar}: destructive ring/canvas path has confirm/undo hook`,
     () => {
       const ringSrc = readResearchSource("lib/node-action-ring.ts");

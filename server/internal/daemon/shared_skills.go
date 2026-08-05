@@ -228,10 +228,12 @@ func sharedSkillScanRoot(cfg Config, provider string) (string, bool) {
 	}
 }
 
-// multicaAgentRoot is the authoritative on-disk root for one Multica agent.
-// It is keyed only by workspace + agent ID (LRM-955): switching coding harness /
-// provider / runtime on the same machine must keep reading and writing this
-// same tree. The tree is also the Agent's durable execution cwd.
+// The authoritative on-disk root for one Multica agent is now resolved through
+// execenv (PredictAgentRootDir / ResolveAgentWorkspaceLayout), keyed only by
+// workspace + agent ID (LRM-955): switching coding harness / provider / runtime
+// on the same machine must keep reading and writing this same tree. The tree is
+// also the Agent's durable execution cwd. The agentRoot helpers below operate
+// on an already-resolved root.
 func agentSyncQueueDir(agentRoot string) string { return filepath.Join(agentRoot, "sync_queue") }
 func agentSkillDraftsDir(agentRoot string) string {
 	return filepath.Join(agentRoot, "skills", "drafts")

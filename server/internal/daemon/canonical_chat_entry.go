@@ -146,7 +146,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 		return nil, nil, nil, false, fmt.Errorf("acquire canonical runtime: %w", err)
 	}
 	if mode == canonicalRuntimeResident {
-		created, err := d.ensureIdleMessageCoordinator(agentID, task.RuntimeID, turn.Workspace.RootDir)
+		created, err := d.ensureIdleMessageCoordinator(agentID, task.RuntimeID, turn.Workspace.AgentRoot)
 		if err != nil {
 			lease.release(false)
 			return nil, nil, nil, false, fmt.Errorf("register idle Message coordinator: %w", err)

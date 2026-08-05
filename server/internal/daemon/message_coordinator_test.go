@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -79,7 +80,7 @@ func TestDaemonAgentLifecycleRegistersCoordinatorAtAgentRoot(t *testing.T) {
 	if coordinator == nil || registeredRuntimeID != runtimeID {
 		t.Fatalf("coordinator=%v runtime_id=%q", coordinator, registeredRuntimeID)
 	}
-	wantRoot := multicaAgentRoot(daemon.cfg, workspaceID, agentID)
+	wantRoot := agentworkspace.Root(daemon.cfg.WorkspacesRoot, workspaceID, agentID)
 	if coordinator.root != wantRoot {
 		t.Fatalf("coordinator root = %q, want Agent root %q", coordinator.root, wantRoot)
 	}

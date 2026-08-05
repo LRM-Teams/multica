@@ -872,11 +872,21 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
   - `testdata/corpus_v1.json` 固定八种研究模式，并覆盖隐藏高价值事实、镜像重复、错误权威来源、时间版本冲突、定义冲突、同数据不同解释、检索失败、provider 故障和 prompt injection。
   - `FactConflictGrader`、`TraceabilityGrader`、`SourceDisciplineGrader` 分开判断事实/冲突、报告 Claim 出处和来源筛选；任一 grader 失败都会使 trial 失败。
   - Runner 按多个 seed 重复执行，执行错误按零分失败样本计入，输出按 trial/grader/overall 聚合的版本化 Report；Report 比较只允许相同 Corpus version，grader 缺失或任一分项退化即判退化。
-- [ ] 为自主组队、冲突讨论升级、图投影重建、递归 Insight、反茧房 Divergence、同类结果 Assimilation 和无限画布续传/大图分片建立上述七个见红 fixture。
+- [x] 为自主组队、冲突讨论升级、图投影重建、递归 Insight、反茧房 Divergence、同类结果 Assimilation 和无限画布续传/大图分片建立上述七个见红 fixture。
+  - `autonomy-team-formation` 固定 Director actor、组队授权、重复提案复用、Membership 激活/退出和越权禁止动作。
+  - `autonomy-conflict-deliberation` 固定原作者讨论、无 canonical delta 的 deadlock、自动升级、区分任务和禁止身份覆盖 Evidence Standard。
+  - `autonomy-projection-rebuild` 固定 7.1 的 30 种节点、typed edge、Snapshot/Delta hash 一致和每个节点 14 项实际详情字段，不能用 `details_complete=true` 自报通过。
+  - `autonomy-recursive-insight` 固定四个叶子、两个一级 Insight、一个二级 Insight、输入 refuted 后的祖先 stale、最小范围重新整合和报告修订。
+  - `autonomy-divergence` 固定隔离上下文、异质候选、有界 probe 和未验证方向只能成为 Hypothesis/Branch。
+  - `autonomy-assimilation` 固定每 Result 的 Assimilation Check、三个原作者 Contribution、一级 Insight 和冲突转 Deliberation。
+  - `autonomy-infinite-canvas` 固定一万节点、500 节点最大分页、重复/乱序 Delta、断线续传、历史缺口 resync、节点唯一和最终 hash。
+  - `AutonomyGrader` 按 actor/kind/target/outcome、Node/Edge、实际详情字段和 Projection 测量评分；完整 fixture 在三个 seed 下通过，越权动作、缺边、缺详情和重复投影节点的反例均精确失败。
 
 退出条件：旧运行回放一致；故障注入后能比较状态；后续每项改动都有可见的基线差异。
 
 A1 边界：当前 `research_run_event` 是 committed state 到投影的日志，不包含从零重建全部规范表所需的完整 payload。Canonical state hash 用于比较同一 Run 在重试、恢复和故障注入前后的持久状态；Event replay 用于验证投影顺序和幂等。除非后续补齐所有状态转换的完整事件数据和重建验证，不得把它描述为完整 event sourcing。
+
+A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约，`fixtureExecutor` 只验证评测器能识别完整正例和缺陷反例。生产 Research Run 尚未实现这些 V6 状态，也没有生产 Executor Adapter 接入该 Corpus；因此本项完成表示验收标准可执行，不表示七项生产能力已经完成。后续实现必须让真实生产 Adapter 生成同一 Artifact 并通过同一隐藏 Oracle，不能另写放宽版验收。
 
 ### B. 深化 Module，缩小修改面
 
@@ -1063,6 +1073,7 @@ A1 边界：当前 `research_run_event` 是 committed state 到投影的日志�
 - [x] A2b 实现当前状态机行为 golden manifest；证据接纳、报告物化、结构化评审缺陷传递、有界重试、取消确认和结果幂等恢复均由真实 PostgreSQL 场景固定。测试发现任务自身永久失败被错误写为 `blocked`，已改为 `failed`；只有依赖终态导致的任务使用 `blocked/dependency_terminal`。历史 V1–V5 的协议边界由 A2a 分版本固定。
 - [x] A3 把六类已发生生产故障映射到脱敏可执行回归；新增画布 Projection 内部身份唯一断言和真实 PostgreSQL 重复证据饱和测试，其余四类复用并标注现有生产路径回归。测试输入不含线上 workspace、Run、Agent、来源或用户内容。
 - [x] A4 实现 `internal/researcheval` 评测契约、八模式固定受控语料、三个确定性 grader、重复 seed Runner、版本化聚合 Report 和同语料对照。当前装置是离线评测基础，不宣称已把生产 Research Run 自动执行器、LLM judge、Episode 或 Strategy Promotion 接入；这些仍属于 M。
+- [x] A5 实现七个自主行为固定场景和 `AutonomyGrader`：Oracle 同时约束动作执行者、必需/禁用行为、30 种 Projection Node、typed edge、14 项节点详情、递归 stale、异质 probe、原作者 Contribution、一万节点分页及 gap resync。`go test ./internal/researcheval -count=1` 与 `go vet ./internal/researcheval` 通过；生产 Adapter 尚未接入，不能把 fixture 正例当作生产验收结果。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

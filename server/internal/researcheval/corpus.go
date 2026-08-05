@@ -102,7 +102,7 @@ func validateCase(evaluationCase Case, modes map[ResearchMode]struct{}) error {
 		}
 	}
 	oracle := evaluationCase.Oracle
-	if len(oracle.RequiredFacts)+len(oracle.ForbiddenFactKeys)+len(oracle.RequiredConflicts)+len(oracle.RequiredReportClaims) == 0 {
+	if len(oracle.RequiredFacts)+len(oracle.ForbiddenFactKeys)+len(oracle.RequiredConflicts)+len(oracle.RequiredReportClaims)+autonomyCriteria(oracle.Autonomy) == 0 {
 		return errors.New("oracle has no scored outcomes")
 	}
 	factKeys := map[string]struct{}{}
@@ -180,7 +180,101 @@ func validateCase(evaluationCase Case, modes map[ResearchMode]struct{}) error {
 			}
 		}
 	}
+	return validateAutonomyOracle(oracle.Autonomy)
+}
+
+func validateAutonomyOracle(oracle *AutonomyOracle) error {
+	if oracle == nil {
+		return nil
+	}
+	requiredActions := map[string]struct{}{}
+	for _, action := range oracle.RequiredActions {
+		key, err := expectedActionKey(action)
+		if err != nil {
+			return err
+		}
+		if _, duplicate := requiredActions[key]; duplicate {
+			return fmt.Errorf("duplicate required action %q", key)
+		}
+		requiredActions[key] = struct{}{}
+	}
+	forbiddenActions := map[string]struct{}{}
+	for _, action := range oracle.ForbiddenActions {
+		key, err := expectedActionKey(action)
+		if err != nil {
+			return err
+		}
+		if _, duplicate := forbiddenActions[key]; duplicate {
+			return fmt.Errorf("duplicate forbidden action %q", key)
+		}
+		for _, required := range oracle.RequiredActions {
+			if expectedActionsOverlap(required, action) {
+				return fmt.Errorf("action %q is both required and forbidden", key)
+			}
+		}
+		forbiddenActions[key] = struct{}{}
+	}
+	nodes := map[string]struct{}{}
+	for _, node := range oracle.RequiredNodes {
+		if strings.TrimSpace(node.Key) == "" || strings.TrimSpace(node.Kind) == "" || strings.TrimSpace(node.Status) == "" || node.Level < 0 {
+			return errors.New("required graph node key, kind, non-negative level, and status are required")
+		}
+		if _, duplicate := nodes[node.Key]; duplicate {
+			return fmt.Errorf("duplicate required graph node %q", node.Key)
+		}
+		nodes[node.Key] = struct{}{}
+	}
+	edges := map[string]struct{}{}
+	for _, edge := range oracle.RequiredEdges {
+		if strings.TrimSpace(edge.FromKey) == "" || strings.TrimSpace(edge.ToKey) == "" || strings.TrimSpace(edge.Type) == "" {
+			return errors.New("required graph edge endpoints and type are required")
+		}
+		if _, exists := nodes[edge.FromKey]; !exists {
+			return fmt.Errorf("required graph edge references unknown from node %q", edge.FromKey)
+		}
+		if _, exists := nodes[edge.ToKey]; !exists {
+			return fmt.Errorf("required graph edge references unknown to node %q", edge.ToKey)
+		}
+		key := edge.FromKey + "\x00" + edge.ToKey + "\x00" + edge.Type
+		if _, duplicate := edges[key]; duplicate {
+			return fmt.Errorf("duplicate required graph edge %q", key)
+		}
+		edges[key] = struct{}{}
+	}
+	if projection := oracle.Projection; projection != nil {
+		if projection.MinimumTotalNodes < 0 || projection.MaximumPageNodes < 0 {
+			return errors.New("projection node limits cannot be negative")
+		}
+		if projection.MinimumTotalNodes > 0 && projection.MaximumPageNodes == 0 {
+			return errors.New("projection page limit is required for a bounded large-graph fixture")
+		}
+	}
 	return nil
+}
+
+func autonomyCriteria(oracle *AutonomyOracle) int {
+	if oracle == nil {
+		return 0
+	}
+	total := len(oracle.RequiredActions) + len(oracle.ForbiddenActions) + len(oracle.RequiredNodes) + len(oracle.RequiredEdges)
+	if oracle.Projection != nil {
+		total++
+	}
+	return total
+}
+
+func expectedActionKey(action ExpectedAction) (string, error) {
+	if strings.TrimSpace(action.Kind) == "" {
+		return "", errors.New("expected action kind is required")
+	}
+	return action.Kind + "\x00" + action.Actor + "\x00" + action.Target + "\x00" + action.Outcome, nil
+}
+
+func expectedActionsOverlap(left, right ExpectedAction) bool {
+	return left.Kind == right.Kind &&
+		(left.Actor == "" || right.Actor == "" || left.Actor == right.Actor) &&
+		(left.Target == "" || right.Target == "" || left.Target == right.Target) &&
+		(left.Outcome == "" || right.Outcome == "" || left.Outcome == right.Outcome)
 }
 
 func requireDocumentRefs(label string, ids []string, documents map[string]Document) error {

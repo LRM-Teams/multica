@@ -183,6 +183,63 @@ func ValidateArtifact(evaluationCase Case, artifact Artifact) error {
 			}
 		}
 	}
+	actions := map[string]struct{}{}
+	for _, action := range artifact.Actions {
+		if strings.TrimSpace(action.Kind) == "" {
+			return fmt.Errorf("%w: artifact action kind is required", ErrInvalidEvaluation)
+		}
+		key := action.Kind + "\x00" + action.Actor + "\x00" + action.Target + "\x00" + action.Outcome
+		if _, duplicate := actions[key]; duplicate {
+			return fmt.Errorf("%w: duplicate artifact action %q", ErrInvalidEvaluation, key)
+		}
+		actions[key] = struct{}{}
+	}
+	nodeIDs := map[string]struct{}{}
+	nodeKeys := map[string]struct{}{}
+	for _, node := range artifact.GraphNodes {
+		if strings.TrimSpace(node.ID) == "" || strings.TrimSpace(node.Key) == "" || strings.TrimSpace(node.Kind) == "" || strings.TrimSpace(node.Status) == "" || node.Level < 0 {
+			return fmt.Errorf("%w: graph node identity, kind, non-negative level, and status are required", ErrInvalidEvaluation)
+		}
+		if _, duplicate := nodeIDs[node.ID]; duplicate {
+			return fmt.Errorf("%w: duplicate graph node ID %q", ErrInvalidEvaluation, node.ID)
+		}
+		if _, duplicate := nodeKeys[node.Key]; duplicate {
+			return fmt.Errorf("%w: duplicate graph node key %q", ErrInvalidEvaluation, node.Key)
+		}
+		for detailKey, value := range node.Details {
+			if strings.TrimSpace(detailKey) == "" || strings.TrimSpace(value) == "" {
+				return fmt.Errorf("%w: graph node %q has an empty detail key or value", ErrInvalidEvaluation, node.ID)
+			}
+		}
+		nodeIDs[node.ID] = struct{}{}
+		nodeKeys[node.Key] = struct{}{}
+	}
+	edgeIDs := map[string]struct{}{}
+	for _, edge := range artifact.GraphEdges {
+		if strings.TrimSpace(edge.ID) == "" || strings.TrimSpace(edge.Type) == "" {
+			return fmt.Errorf("%w: graph edge identity and type are required", ErrInvalidEvaluation)
+		}
+		if _, duplicate := edgeIDs[edge.ID]; duplicate {
+			return fmt.Errorf("%w: duplicate graph edge ID %q", ErrInvalidEvaluation, edge.ID)
+		}
+		if _, exists := nodeIDs[edge.FromNodeID]; !exists {
+			return fmt.Errorf("%w: graph edge %q references unknown from node", ErrInvalidEvaluation, edge.ID)
+		}
+		if _, exists := nodeIDs[edge.ToNodeID]; !exists {
+			return fmt.Errorf("%w: graph edge %q references unknown to node", ErrInvalidEvaluation, edge.ID)
+		}
+		edgeIDs[edge.ID] = struct{}{}
+	}
+	if projection := artifact.Projection; projection != nil {
+		if projection.TotalNodes < 0 || projection.LargestPageNodes < 0 || projection.LargestPageNodes > projection.TotalNodes {
+			return fmt.Errorf("%w: invalid projection node counts", ErrInvalidEvaluation)
+		}
+		for _, id := range projection.ObservedNodeIDs {
+			if strings.TrimSpace(id) == "" {
+				return fmt.Errorf("%w: projection observed an empty node ID", ErrInvalidEvaluation)
+			}
+		}
+	}
 	return nil
 }
 

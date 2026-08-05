@@ -3,21 +3,13 @@
 import {
   useCallback,
   useEffect,
-  useEffectEvent,
   useId,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import {
-  Copy,
-  Eye,
-  LocateFixed,
-  MoreHorizontal,
-  RotateCcw,
-  Sparkles,
-} from "lucide-react";
+import { Copy, Eye, GitFork, LocateFixed, Play, RotateCcw, UserRoundCog } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import type { ResearchGraphNode } from "@multica/core/types";
 import { useT } from "../../i18n/use-t";
@@ -34,12 +26,14 @@ function ActionIcon({ id }: { id: NodeRingAction }) {
       return <LocateFixed className="size-4" aria-hidden />;
     case "copy_prompt":
       return <Copy className="size-4" aria-hidden />;
+    case "continue":
+      return <Play className="size-4" aria-hidden />;
+    case "fork":
+      return <GitFork className="size-4" aria-hidden />;
     case "retry":
       return <RotateCcw className="size-4" aria-hidden />;
-    case "dig_deeper":
-      return <Sparkles className="size-4" aria-hidden />;
-    case "more":
-      return <MoreHorizontal className="size-4" aria-hidden />;
+    case "reassign":
+      return <UserRoundCog className="size-4" aria-hidden />;
   }
 }
 
@@ -104,12 +98,16 @@ export function ResearchNodeActionRing({
   mode,
   onAction,
   onClose,
+  pendingAction = null,
+  error = null,
 }: {
   node: ResearchGraphNode;
   /** Desktop floating grid vs narrow bottom sheet. */
   mode: "ring" | "sheet";
   onAction: (action: NodeRingAction) => void;
   onClose: () => void;
+  pendingAction?: NodeRingAction | null;
+  error?: string | null;
 }) {
   const { t } = useT("research");
   const actions = ringActionsForNode(node);
@@ -128,16 +126,15 @@ export function ResearchNodeActionRing({
     else dialog.setAttribute("open", "");
   }, []);
 
-  const onEscapeClose = useEffectEvent(() => {
-    onClose();
-  });
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (mode === "sheet") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onEscapeClose();
+        onCloseRef.current();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -157,12 +154,14 @@ export function ResearchNodeActionRing({
         return t(($) => $.ring.locate_source);
       case "copy_prompt":
         return t(($) => $.ring.copy_prompt);
+      case "continue":
+        return t(($) => $.ring.continue);
+      case "fork":
+        return t(($) => $.ring.fork);
       case "retry":
         return t(($) => $.ring.retry);
-      case "dig_deeper":
-        return t(($) => $.ring.dig_deeper);
-      case "more":
-        return t(($) => $.ring.more);
+      case "reassign":
+        return t(($) => $.ring.reassign);
     }
   };
 
@@ -208,6 +207,7 @@ export function ResearchNodeActionRing({
       <dialog
         ref={bindDialog}
         aria-label={t(($) => $.ring.title)}
+        aria-busy={!!pendingAction || undefined}
         className="fixed inset-x-0 bottom-0 z-20 m-0 max-h-[38%] w-full max-w-none rounded-t-2xl border-0 border-t bg-card p-0 px-4 pb-5 pt-2 shadow-[0_-12px_32px_oklch(0_0_0_/_0.35)] open:block"
         onCancel={(event) => {
           event.preventDefault();
@@ -241,7 +241,7 @@ export function ResearchNodeActionRing({
                 itemRefs.current[index] = el;
               }}
               onFocusIndex={() => setFocusIndex(index)}
-              onActivate={() => onAction(a.id)}
+              onActivate={() => { if (!pendingAction) onAction(a.id); }}
               className={cn(
                 "flex h-11 items-center gap-3 rounded-lg px-1 text-sm text-foreground",
                 a.candidate && "text-warning",
@@ -264,6 +264,7 @@ export function ResearchNodeActionRing({
             />
           ))}
         </div>
+        {error ? <p role="alert" className="mt-2 text-xs text-destructive">{error}</p> : null}
       </dialog>
     );
   }
@@ -274,6 +275,7 @@ export function ResearchNodeActionRing({
       id={menuId}
       tabIndex={-1}
       aria-label={t(($) => $.ring.title)}
+        aria-busy={!!pendingAction || undefined}
       className="relative z-20 grid animate-in fade-in zoom-in-95 grid-cols-3 gap-x-1.5 gap-y-2 rounded-[14px] border bg-card/95 p-2.5 shadow-lg backdrop-blur-md duration-150"
       style={{
         // NodeToolbar owns placement; size stays fixed 2×3 grid.
@@ -291,7 +293,7 @@ export function ResearchNodeActionRing({
             itemRefs.current[index] = el;
           }}
           onFocusIndex={() => setFocusIndex(index)}
-          onActivate={() => onAction(a.id)}
+          onActivate={() => { if (!pendingAction) onAction(a.id); }}
           className={cn("ar flex flex-col items-center gap-1", a.candidate && "text-warning")}
           iconClassName={cn(
             "flex size-[38px] items-center justify-center rounded-full bg-muted text-foreground",
@@ -307,6 +309,7 @@ export function ResearchNodeActionRing({
           )}
         />
       ))}
+      {error ? <p role="alert" className="col-span-3 text-xs text-destructive">{error}</p> : null}
       <p className="col-span-3 mt-0.5 border-t pt-1.5 text-center text-[9.5px] text-muted-foreground">
         {t(($) => $.ring.esc_hint)}
       </p>

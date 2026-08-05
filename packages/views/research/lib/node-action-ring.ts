@@ -11,9 +11,10 @@ export type NodeRingAction =
   | "detail"
   | "locate_source"
   | "copy_prompt"
+  | "continue"
+  | "fork"
   | "retry"
-  | "dig_deeper"
-  | "more";
+  | "reassign";
 
 /** LRM-981 — dead-end / refuted / failed nodes offer a scannable retry entry. */
 export function nodeOffersRetry(node: ResearchGraphNode): boolean {
@@ -22,25 +23,28 @@ export function nodeOffersRetry(node: ResearchGraphNode): boolean {
   return s === "failed" || s === "error";
 }
 
-export function ringActionsForNode(node: ResearchGraphNode): {
-  id: NodeRingAction;
-  primary?: boolean;
-  disabled?: boolean;
-  candidate?: boolean;
-}[] {
+export type NodeRingGroup = "primary" | "explore" | "recover" | "view";
+export type NodeRingItem = { id: NodeRingAction; group: NodeRingGroup; primary?: boolean; confirm?: boolean; disabled?: boolean; candidate?: boolean };
+
+export function ringActionsForNode(node: ResearchGraphNode): NodeRingItem[] {
   const retryable = nodeOffersRetry(node);
+  const status = (node.status || "").toLowerCase();
+  const running = ["active", "running", "in_progress", "queued", "pending"].includes(status);
+  const terminal = ["done", "completed", "success", "succeeded"].includes(status);
+  const commandAnchor = !SYSTEM_NODE_TYPES.has(node.node_type);
   const hasSource =
     node.node_type === "finding" &&
     !!node.payload &&
     typeof node.payload === "object" &&
     "source_id" in (node.payload as object);
 
-  return [
-    { id: retryable ? "retry" : "detail", primary: true },
-    { id: "locate_source", disabled: !hasSource },
-    { id: "copy_prompt" },
-    { id: retryable ? "detail" : "retry", disabled: !retryable },
-    { id: "dig_deeper", candidate: true, disabled: true },
-    { id: "more" },
-  ];
+  const items: NodeRingItem[] = [];
+  if (commandAnchor && terminal) items.push({ id: "continue", group: "primary", primary: true });
+  if (commandAnchor && !running && !retryable) items.push({ id: "fork", group: "explore" });
+  if (retryable) items.push({ id: "retry", group: "recover", primary: true });
+  if (commandAnchor && (running || retryable)) items.push({ id: "reassign", group: "recover", confirm: true });
+  items.push({ id: "detail", group: "view", primary: items.length === 0 });
+  if (hasSource) items.push({ id: "locate_source", group: "view" });
+  items.push({ id: "copy_prompt", group: "view" });
+  return items;
 }

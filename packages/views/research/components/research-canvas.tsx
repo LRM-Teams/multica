@@ -19,6 +19,7 @@ import type {
   ResearchFleetMember,
   ResearchGraphEdge,
   ResearchGraphNode,
+  ResearchNodeCommandAction,
   ResearchRunSnapshot,
   ResearchSource,
 } from "@multica/core/types";
@@ -137,6 +138,7 @@ function ResearchCanvasInner({
   selectedId,
   onSelect,
   onRetry,
+  onNodeCommand,
   onOpenDelivery,
   onOpenChat,
   chatOpen = false,
@@ -156,6 +158,7 @@ function ResearchCanvasInner({
   selectedId?: string | null;
   onSelect?: (node: ResearchGraphNode | null) => void;
   onRetry?: (node: ResearchGraphNode) => void;
+  onNodeCommand?: (node: ResearchGraphNode, action: ResearchNodeCommandAction) => Promise<void>;
   onOpenDelivery?: () => void;
   onOpenChat?: () => void;
   chatOpen?: boolean;
@@ -296,6 +299,7 @@ function ResearchCanvasInner({
                 ? 1
                 : 0,
             onRetry: onRetry ?? undefined,
+            onNodeCommand: onNodeCommand ?? undefined,
             onViewDetail: (node) => {
               if (isLogicEndNode(node)) {
                 onOpenDelivery?.();
@@ -323,6 +327,7 @@ function ResearchCanvasInner({
     setRfEdges,
     presence,
     onRetry,
+    onNodeCommand,
     menuNodeId,
     detailPlacement,
     onOpenDetail,
@@ -556,6 +561,7 @@ function ResearchCanvasInner({
             onSelect={onSelect}
             onOpenDelivery={onOpenDelivery}
             onRetry={onRetry}
+            onNodeCommand={onNodeCommand}
             onOpenDetail={(node) => {
               if (detailPlacement === "drawer") onOpenDetail?.(node);
               else dispatch({ type: "pin", nodeId: node.id });
@@ -771,6 +777,7 @@ export function ResearchCanvas(props: {
   selectedId?: string | null;
   onSelect?: (node: ResearchGraphNode | null) => void;
   onRetry?: (node: ResearchGraphNode) => void;
+  onNodeCommand?: (node: ResearchGraphNode, action: ResearchNodeCommandAction) => Promise<void>;
   onOpenDelivery?: () => void;
   onOpenChat?: () => void;
   chatOpen?: boolean;

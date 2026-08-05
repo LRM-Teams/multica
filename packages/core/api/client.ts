@@ -4371,6 +4371,21 @@ export class ApiClient {
     return { ...parsed, session_id: parsed.session_id || id };
   }
 
+  async postResearchNodeCommand(
+    sessionId: string,
+    nodeId: string,
+    data: import("../types/research").ResearchNodeCommandRequest,
+  ): Promise<import("../types/research").ResearchNodeCommandResponse> {
+    const { ResearchNodeCommandResponseSchema, EMPTY_RESEARCH_NODE_COMMAND } = await import("../research/schemas");
+    const raw = await this.fetch(`/api/research/sessions/${sessionId}/nodes/${nodeId}/commands`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, ResearchNodeCommandResponseSchema, EMPTY_RESEARCH_NODE_COMMAND, {
+      endpoint: "POST /api/research/sessions/:id/nodes/:nodeId/commands",
+    });
+  }
+
   async postResearchMessage(
     id: string,
     data: { body: string; target_agent_id?: string },

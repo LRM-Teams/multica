@@ -51,22 +51,22 @@ export function cardMenuItemsForNode(
     {
       id: "fork_from",
       enabled: false,
-      disabledReason: "Fork-from-here API is not available yet",
+      disabledReason: "当前节点不可创建探索分支，请选择已完成的研究节点",
     },
     {
       id: "retry_failed",
       enabled: retryable && canWrite,
       disabledReason: !retryable
-        ? "Retry is only available on failed / dead-end nodes"
+        ? "仅失败或无结果的节点可重试"
         : !canWrite
-          ? "Read-only — no write permission"
+          ? "当前账号无写入权限，请联系工作区管理员"
           : undefined,
     },
     {
       id: "reassign",
       enabled: false,
       needConfirm: true,
-      disabledReason: "Reassign API is not available on graph nodes yet",
+      disabledReason: "当前节点不可改派，请等待任务开始或失败后再试",
     },
     {
       id: "cancel_run",
@@ -74,8 +74,8 @@ export function cardMenuItemsForNode(
       danger: true,
       needConfirm: true,
       disabledReason: running
-        ? "Cancel-run API is not available on graph nodes yet"
-        : "Node is not running",
+        ? "请在会话顶部停止整个调研"
+        : "节点当前未在执行",
     },
   ];
 }

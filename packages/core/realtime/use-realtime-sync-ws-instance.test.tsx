@@ -219,6 +219,15 @@ describe("useRealtimeSync — ws instance change", () => {
         .getQueryData<InfiniteData<ChannelMessagesPage>>(channelKeys.messagesPage("channel-1"))
         ?.pages[0]?.messages.map((message) => message.id),
     ).toEqual(["root-old", "root-new"]);
+    // A full canonical payload is immediately visible, and the normal
+    // channel timeline React Query refresh follows so realtime data never
+    // becomes the durable client-side truth.
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: channelKeys.messages("channel-1"),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: channelKeys.messagesPage("channel-1"),
+    });
 
     const invalidateBeforeThreadReply = invalidateSpy.mock.calls.length;
     channelMessageHandler?.(channelMessage("reply-1", { thread_root_message_id: "root-old" }));

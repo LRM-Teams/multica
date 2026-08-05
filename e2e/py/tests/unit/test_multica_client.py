@@ -16,7 +16,7 @@ def _client() -> MulticaClient:
     return MulticaClient(
         base_url="http://server",
         api_key="token",
-        squad_id="squad-1",
+        agent_id="agent-1",
         base_env_id="env-base",
         workspace_id="workspace-1",
     )
@@ -113,7 +113,7 @@ def test_dispatch_scratch_sends_source_identity_without_inline_issue(
             "domain": "swe_lego",
             "dispatch_type": "issue",
             "group_size": 1,
-            "squad_id": "squad-1",
+            "agent_id": "agent-1",
             "training_mode": False,
             "source_task_id": "source-1",
         }

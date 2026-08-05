@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactElement } from "react";
 import { TriangleAlert } from "lucide-react";
 import { useMyAttentionRuntimeSummary } from "@multica/core/runtimes/hooks";
 import {
@@ -10,6 +11,11 @@ import {
 import { useWorkspacePaths } from "@multica/core/paths";
 import { AppLink } from "../navigation/app-link";
 import { useT } from "../i18n";
+
+type RuntimeAttentionAlertProps = {
+  wsId: string | undefined;
+  trigger?: ReactElement;
+};
 
 /**
  * Task #9 (2026-07-31, Frank DM): replaces the modal "your daemon needs an
@@ -36,26 +42,31 @@ import { useT } from "../i18n";
  * already excludes them (isSandboxRuntime, #1643) — a sandbox user can't
  * self-update, so the icon must never light up for them.
  */
-export function RuntimeAttentionAlert({ wsId }: { wsId: string | undefined }) {
+export function RuntimeAttentionAlert({
+  wsId,
+  trigger,
+}: RuntimeAttentionAlertProps) {
   const { t } = useT("layout");
   const paths = useWorkspacePaths();
   const { count, firstRuntimeId } = useMyAttentionRuntimeSummary(wsId);
 
   if (count === 0 || !firstRuntimeId) return null;
 
+  const triggerLabel = t(($) => $.runtime_attention.trigger_label, { count });
+
   return (
     <Popover>
       <PopoverTrigger
-        aria-label={t(($) => $.runtime_attention.trigger_label, { count })}
-        className="ml-auto inline-flex items-center justify-center rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        // The sidebar row this renders inside is itself one big link
-        // (SidebarMenuButton's `render={<AppLink .../>}`) — without both of
-        // these, a click on just this icon would open the popover AND
-        // navigate the row to /computers.
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-        }}
+        render={
+          trigger ?? (
+            <button
+              type="button"
+              className="inline-flex items-center justify-center rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              aria-label={triggerLabel}
+            />
+          )
+        }
+        aria-label={triggerLabel}
       >
         <TriangleAlert className="size-3.5 text-warning" />
       </PopoverTrigger>

@@ -328,27 +328,6 @@ func ChatMessageSent(userID, workspaceID, chatSessionID, taskID, agentID, runtim
 	}
 }
 
-// AutopilotAssignee describes the autopilot's configured target.
-type AutopilotAssignee struct {
-	AgentID      string
-	AssigneeType string // "agent"
-}
-
-func AutopilotRunCompleted(actorID, workspaceID, autopilotID, runID, cadence string, assignee AutopilotAssignee, triggerSource string, durationMS int64) Event {
-	return autopilotRunEvent(EventAutopilotRunCompleted, actorID, workspaceID, autopilotID, runID, cadence, assignee, triggerSource, map[string]any{
-		"duration_ms": durationMS,
-	})
-}
-
-func AutopilotRunFailed(actorID, workspaceID, autopilotID, runID, cadence string, assignee AutopilotAssignee, triggerSource, failureReason, errorType string, willRetry bool, durationMS int64) Event {
-	return autopilotRunEvent(EventAutopilotRunFailed, actorID, workspaceID, autopilotID, runID, cadence, assignee, triggerSource, map[string]any{
-		"duration_ms":    durationMS,
-		"failure_reason": failureReason,
-		"error_type":     errorType,
-		"will_retry":     willRetry,
-	})
-}
-
 // TeamInviteSent fires when a workspace admin creates an invitation.
 // inviteMethod is "email" for now; future non-email invite flows can pass
 // their own value to keep this stable.
@@ -593,34 +572,6 @@ func ContactSalesSubmitted(inquiryID, companySize, countryRegion, useCase, formS
 		Properties: withCoreProperties(props, CoreProperties{
 			Source: "marketing_contact_sales",
 		}),
-	}
-}
-
-func autopilotRunEvent(name, actorID, workspaceID, autopilotID, runID, cadence string, assignee AutopilotAssignee, triggerSource string, extra map[string]any) Event {
-	if extra == nil {
-		extra = map[string]any{}
-	}
-	extra["trigger_source"] = triggerSource
-	extra["trigger_kind"] = triggerSource
-	if cadence != "" {
-		extra["cadence"] = cadence
-	}
-	props := withCoreProperties(extra, CoreProperties{
-		UserID:         nonAgentUserID(actorID),
-		WorkspaceID:    workspaceID,
-		AgentID:        assignee.AgentID,
-		AutopilotRunID: runID,
-		Source:         SourceAutopilot,
-	})
-	props["autopilot_id"] = autopilotID
-	if assignee.AssigneeType != "" {
-		props["assignee_type"] = assignee.AssigneeType
-	}
-	return Event{
-		Name:        name,
-		DistinctID:  actorID,
-		WorkspaceID: workspaceID,
-		Properties:  props,
 	}
 }
 

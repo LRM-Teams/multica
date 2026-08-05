@@ -50,7 +50,6 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     owner_id: ME,
-    visibility: "private",
     computer_connected: true,
     ...overrides,
   } as AgentRuntime;

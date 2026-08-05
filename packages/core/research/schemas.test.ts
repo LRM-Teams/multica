@@ -4,6 +4,8 @@ import {
   ListResearchSessionsResponseSchema,
   ResearchSessionSnapshotSchema,
   ResearchPresenceResponseSchema,
+  ResearchNodeCommandResponseSchema,
+  EMPTY_RESEARCH_NODE_COMMAND,
   SteerResearchRunResponseSchema,
 } from "./schemas";
 import { parseWithFallback } from "../api/schema";
@@ -260,5 +262,15 @@ describe("research schemas", () => {
         { endpoint: "test" },
       ),
     ).toBe(fallback);
+  });
+
+  it("falls back when a node command response drifts", () => {
+    const parsed = parseWithFallback(
+      { command_id: null, action: "future_action" },
+      ResearchNodeCommandResponseSchema,
+      EMPTY_RESEARCH_NODE_COMMAND,
+      { endpoint: "test" },
+    );
+    expect(parsed).toBe(EMPTY_RESEARCH_NODE_COMMAND);
   });
 });

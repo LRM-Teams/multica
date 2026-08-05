@@ -13,6 +13,10 @@ import {
   filterSpokenChannelMessages,
   spokenMessagePreviewText,
 } from "./spoken-channel-message";
+import {
+  THREAD_PREVIEW_QUERY_LIMIT,
+  THREAD_PREVIEW_STALE_TIME_MS,
+} from "../hooks/use-prefetch-thread-previews";
 
 const PREVIEW_LIMIT = 3;
 
@@ -36,9 +40,11 @@ export function ThreadReplyPreview({
   const enabled = !!channelId && !!rootId && hintCount > 0 && !message.thread_root_message_id;
 
   const { data, isLoading, isError, refetch } = useQuery({
-    ...channelMessageThreadOptions(channelId, rootId, { limit: 100 }),
+    ...channelMessageThreadOptions(channelId, rootId, {
+      limit: THREAD_PREVIEW_QUERY_LIMIT,
+    }),
     enabled,
-    staleTime: 30_000,
+    staleTime: THREAD_PREVIEW_STALE_TIME_MS,
   });
 
   const spoken = useMemo(() => {

@@ -258,55 +258,6 @@ func TestRunAgentMessageSendIncludesSeenUpToSeqFromInboxEnv(t *testing.T) {
 	}
 }
 
-func TestRunAgentMessageSendDraftPostsSendDraftOnly(t *testing.T) {
-	var body map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent/messages/send" {
-			http.NotFound(w, r)
-			return
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode body: %v", err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"action":  "message_send",
-			"created": true,
-			"message": map[string]any{"id": "msg-1"},
-		})
-	}))
-	defer srv.Close()
-
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
-
-	cmd := newMessageSendCmd()
-	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("send-draft", "true")
-	if err := runAgentMessageSend(cmd, nil); err != nil {
-		t.Fatalf("runAgentMessageSend send-draft: %v", err)
-	}
-	if body["target"] != "#multica" || body["send_draft"] != true {
-		t.Fatalf("draft body target/send_draft = %#v", body)
-	}
-	for _, field := range []string{"content", "parts", "client_message_id", "seen_up_to_seq"} {
-		if _, ok := body[field]; ok {
-			t.Fatalf("draft body unexpectedly includes %s: %#v", field, body)
-		}
-	}
-}
-
-func TestRunAgentMessageSendDraftRejectsContentFlags(t *testing.T) {
-	cmd := newMessageSendCmd()
-	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("send-draft", "true")
-	_ = cmd.Flags().Set("message", "do not combine")
-	err := runAgentMessageSend(cmd, nil)
-	if err == nil || !strings.Contains(err.Error(), "--send-draft cannot be combined") {
-		t.Fatalf("error = %v, want send-draft combination rejection", err)
-	}
-}
-
 func TestAgentMessageSendTextFallbackReportsHeld(t *testing.T) {
 	got := agentMessageSendTextFallback(map[string]any{
 		"state": "held",
@@ -314,27 +265,24 @@ func TestAgentMessageSendTextFallbackReportsHeld(t *testing.T) {
 			"olderBoundary": "No older.",
 			"newerBoundary": "No newer.",
 		},
-		"decisionCommands": map[string]any{
-			"revisedSend": "multica message send --target \"#multica\" --message-stdin --seen-up-to-seq 42 --client-message-id \"freshness-revised:fact\"",
-			"sendDraft":   "multica message send --send-draft --target \"#multica\"",
-		},
 	})
 	if !strings.Contains(got, "Message held by freshness check") {
 		t.Fatalf("fallback = %q, want held freshness text", got)
 	}
-	if !strings.Contains(got, "exits non-zero") || !strings.Contains(got, "same turn") {
-		t.Fatalf("fallback = %q, want non-zero exit + same-turn decision guidance", got)
+	if !strings.Contains(got, "exits non-zero") || !strings.Contains(got, "Do not automatically retry") {
+		t.Fatalf("fallback = %q, want non-zero exit + no-auto-retry guidance", got)
 	}
 	for _, want := range []string{
 		"No older.",
 		"No newer.",
-		"multica message send --target \"#multica\" --message-stdin --seen-up-to-seq 42 --client-message-id \"freshness-revised:fact\"",
-		"multica message send --send-draft --target \"#multica\"",
-		"Do not send: choose not to send anything.",
+		"compose and send a new message",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("fallback = %q, want %q", got, want)
 		}
+	}
+	if strings.Contains(got, "multica message send") {
+		t.Fatalf("fallback = %q, must not expose an executable resend command", got)
 	}
 	if strings.Contains(got, "--abandon-draft") {
 		t.Fatalf("fallback = %q, must not invent an abandon command", got)

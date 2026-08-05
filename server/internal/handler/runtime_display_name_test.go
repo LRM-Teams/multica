@@ -16,7 +16,7 @@ func TestUpdateAgentRuntime_DisplayNamePatchAndClear(t *testing.T) {
 		t.Skip("database not available")
 	}
 
-	runtimeID, runtimeOwnerID, plainMemberID := runtimeVisibilityFixture(t)
+	runtimeID, runtimeOwnerID, plainMemberID := runtimeVisibilityRetirementFixture(t)
 
 	// Owner sets a custom display_name.
 	w := httptest.NewRecorder()
@@ -102,7 +102,7 @@ func TestDaemonRegister_PreservesUserDisplayName(t *testing.T) {
 
 	// First register as the workspace member so owner_id is set (daemon-token
 	// register leaves owner NULL and the private runtime would be invisible
-	// to ListVisibleAgentRuntimes).
+	// to ListAgentRuntimes).
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/daemon/register", map[string]any{
 		"workspace_id": testWorkspaceID,

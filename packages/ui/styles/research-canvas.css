@@ -1,0 +1,85 @@
+/* LRM-1406: framework-free research canvas tokens and utilities. */
+:root, .light {
+  --research-phase-plan: var(--research-stage-define);
+  --research-phase-search: var(--research-stage-explore);
+  --research-phase-verify: var(--research-stage-verify);
+  --research-phase-delivery: var(--research-stage-deliver);
+  --research-state-queued: #5f6368;
+  --research-state-running: #075d94;
+  --research-state-succeeded: #026a4f;
+  --research-state-failed: #a01040;
+  --research-state-stale: #665c54;
+  --research-path-main: var(--ink);
+  --research-path-detour: #76520b;
+  --research-path-conflict: var(--research-state-failed);
+  --research-glow-running: color-mix(in oklab, var(--research-state-running) 28%, transparent);
+  --research-layer-canvas: 0;
+  --research-layer-edge: 10;
+  --research-layer-node: 20;
+  --research-layer-active: 30;
+  --research-layer-overlay: 40;
+  --motion-fast: 120ms;
+  --motion-normal: 240ms;
+  --motion-structural: 420ms;
+  --ease-research-standard: cubic-bezier(.2, 0, 0, 1);
+  --ease-research-emphasized: cubic-bezier(.2, 0, 0, 1.2);
+}
+
+.dark {
+  --research-state-queued: #c1c3c7;
+  --research-state-running: #74c7f2;
+  --research-state-succeeded: #78ddb4;
+  --research-state-failed: #ff9ab7;
+  --research-state-stale: #c9bdb2;
+  --research-path-main: var(--foreground);
+  --research-path-detour: #f4c66d;
+  --research-path-conflict: var(--research-state-failed);
+  --research-glow-running: color-mix(in oklab, var(--research-state-running) 24%, transparent);
+}
+
+@keyframes research-edge-flow { to { background-position: 12px 0; } }
+
+.research-canvas-state {
+  --state: var(--research-state-queued);
+  position: relative;
+  z-index: var(--research-layer-node);
+  border: 2px dotted var(--state);
+  background: var(--card);
+  color: var(--foreground);
+  transition: border-color var(--motion-fast) var(--ease-research-standard), box-shadow var(--motion-normal) var(--ease-research-standard), transform var(--motion-structural) var(--ease-research-emphasized);
+}
+.research-canvas-state::before {
+  content: "…";
+  position: absolute; inset-block-start: 8px; inset-inline-end: 8px;
+  display: grid; place-items: center; width: 1.25rem; height: 1.25rem;
+  border: 1px solid currentColor; border-radius: 50%; color: var(--state);
+  font: 700 .6875rem/1 var(--font-sans);
+}
+.research-canvas-state[data-state="running"] { --state: var(--research-state-running); z-index: var(--research-layer-active); border-style: dashed; box-shadow: 0 0 0 3px var(--research-glow-running); }
+.research-canvas-state[data-state="running"]::before { content: "▶"; }
+.research-canvas-state[data-state="succeeded"] { --state: var(--research-state-succeeded); border-style: double; }
+.research-canvas-state[data-state="succeeded"]::before { content: "✓"; }
+.research-canvas-state[data-state="failed"] { --state: var(--research-state-failed); border-style: solid; box-shadow: inset 4px 0 0 var(--state); }
+.research-canvas-state[data-state="failed"]::before { content: "×"; }
+.research-canvas-state[data-state="stale"] { --state: var(--research-state-stale); border-style: dashed; background-image: repeating-linear-gradient(-45deg, transparent 0 8px, color-mix(in oklab, var(--state) 8%, transparent) 8px 10px); }
+.research-canvas-state[data-state="stale"]::before { content: "◷"; }
+
+.research-canvas-edge { z-index: var(--research-layer-edge); height: 2px; background: var(--research-path-main); }
+.research-canvas-edge[data-path="detour"] { height: 3px; background: repeating-linear-gradient(90deg, var(--research-path-detour) 0 6px, transparent 6px 10px); }
+.research-canvas-edge[data-path="conflict"] { height: 4px; background: repeating-linear-gradient(135deg, var(--research-path-conflict) 0 4px, transparent 4px 8px); }
+.research-canvas-edge[data-active="true"] { background-size: 12px 100%; animation: research-edge-flow var(--motion-structural) linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion-fast: 1ms; --motion-normal: 1ms; --motion-structural: 1ms; --ease-research-standard: linear; --ease-research-emphasized: linear; }
+  .research-canvas-state, .research-canvas-edge { animation: none; transition-duration: 1ms; }
+  .research-canvas-edge[data-active="true"] { outline: 1px solid var(--research-state-running); outline-offset: 2px; }
+}
+
+@media (forced-colors: active) {
+  .research-canvas-state { --state: CanvasText; background: Canvas; color: CanvasText; box-shadow: none; }
+  .research-canvas-state[data-state="running"] { outline: 3px double Highlight; }
+  .research-canvas-state[data-state="failed"] { border-inline-start-width: 6px; }
+  .research-canvas-edge { background: CanvasText; }
+  .research-canvas-edge[data-path="detour"] { border-block-start: 3px dashed CanvasText; background: none; }
+  .research-canvas-edge[data-path="conflict"] { border-block-start: 4px double CanvasText; background: none; }
+}

@@ -277,6 +277,11 @@
     "answered_option": "선택: {{label}}",
     "skipped": "건너뜀 · 세션 계속"
   },
+  "run_v2": {
+    "delivery_blocked": "Delivery blocked",
+    "syncing_title": "Execution data is still syncing",
+    "syncing_body": "The run ledger is available, but its canvas projection has not arrived yet. Existing canvas data remains visible."
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",
@@ -440,6 +445,13 @@
     "detail": "상세",
     "locate_source": "출처",
     "copy_prompt": "복사",
+    "continue": "계속",
+    "fork": "분기 탐색",
+    "reassign": "재할당",
+    "reassign_confirm": "다른 멤버에게 재할당할까요?",
+    "pending": "실행 중…",
+    "success": "작업이 접수되었습니다",
+    "failure": "작업에 실패했습니다. 다시 시도하세요.",
     "retry": "재시도",
     "dig_deeper": "심층",
     "more": "더보기",

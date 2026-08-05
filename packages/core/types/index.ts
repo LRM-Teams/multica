@@ -326,6 +326,9 @@ export type {
   CreateResearchSessionResponse,
   ResearchHandoffRequest,
   ListResearchSessionsResponse,
+  ResearchNodeCommandAction,
+  ResearchNodeCommandRequest,
+  ResearchNodeCommandResponse,
 } from "./research";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {

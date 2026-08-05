@@ -65,6 +65,17 @@ vi.mock("../../i18n/use-t", () => ({
           canvas_forming_title: "Canvas forming",
           canvas_forming_hint: "Nodes arriving…",
         },
+        status: {
+          paused: "Paused",
+        },
+        step_card: {
+          standby: "Standing by",
+          status: {
+            waiting: "Waiting",
+            running: "Running",
+            failed: "Failed",
+          },
+        },
       }),
   }),
 }));
@@ -95,9 +106,9 @@ describe("research F-state a11y static contract (LRM-1192)", () => {
     );
   });
 
-  it("source: canvas forming exposes aria-busy + aria-live=polite", () => {
+  it("source: canvas forming exposes mode-aware aria-busy + aria-live=polite", () => {
     const src = readSrc("research-canvas-forming.tsx");
-    expect(src).toMatch(/aria-busy=["']true["']/);
+    expect(src).toMatch(/aria-busy=\{mode === ["']forming["']\}/);
     expect(src).toMatch(/aria-live=["']polite["']/);
   });
 
@@ -164,10 +175,16 @@ describe("research F-state a11y static contract (LRM-1192)", () => {
     expect(failed.tagName.toLowerCase()).toBe("output");
   });
 
-  it("render: canvas forming announces busy politely", () => {
-    render(<ResearchCanvasForming />);
-    const el = screen.getByTestId("research-session-canvas-forming");
-    expect(el.getAttribute("aria-busy")).toBe("true");
-    expect(el.getAttribute("aria-live")).toBe("polite");
+  it("render: canvas forming announces busy politely while stalled is not busy", () => {
+    const { unmount } = render(<ResearchCanvasForming />);
+    const forming = screen.getByTestId("research-session-canvas-forming");
+    expect(forming.getAttribute("aria-busy")).toBe("true");
+    expect(forming.getAttribute("aria-live")).toBe("polite");
+    unmount();
+
+    render(<ResearchCanvasForming mode="stalled" />);
+    const stalled = screen.getByTestId("research-session-canvas-forming");
+    expect(stalled.getAttribute("aria-busy")).toBe("false");
+    expect(stalled.getAttribute("aria-live")).toBe("polite");
   });
 });

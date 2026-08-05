@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { Archive, ArrowLeft, ChevronDown, ChevronUp, Eye, Paperclip, Search, X } from "lucide-react";
-import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import {
   channelMessageThreadOptions,
   channelMessagesPageOptions,
@@ -49,6 +49,7 @@ import type {
 import { useWSEvent } from "@multica/core/realtime";
 import type {
   ChannelMessage,
+  ChannelMessagesPage,
   ChannelMessageSearchResult,
 } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
@@ -73,6 +74,7 @@ import {
 import { useT } from "../../i18n/use-t";
 import { DmAgentVoiceCall } from "../../voice-calls";
 import { composePayloadKey } from "../hooks/use-compose-send-intent";
+import { isDmTimelineBehindPreview } from "../lib/dm-timeline-freshness";
 import { useComposerSend } from "../hooks/use-composer-send";
 import { useComposerSendRestore } from "../hooks/use-composer-send-restore";
 import { ComposerSendErrorBar } from "./composer-send-error-bar";
@@ -84,6 +86,7 @@ import { useComposerDraftHydrateSignal } from "../hooks/use-composer-draft-hydra
 import { useEntryReadCursor } from "../hooks/use-entry-read-cursor";
 import { useEntryAnchor } from "../hooks/use-entry-around-seq";
 import { useJumpNotFoundToast } from "../hooks/use-jump-not-found-toast";
+import { usePrefetchThreadPreviews } from "../hooks/use-prefetch-thread-previews";
 import {
   buildRecordedVoiceMessageParts,
   type VoiceRecordingAttachment,
@@ -675,6 +678,19 @@ function DmChannelConversation({
   // ensure-message-loaded can page older toward the target (no newer cursor).
   const hasConversationDeepLink = !!(deepLinkMessageId || threadDeepLinkId);
   const deepLinkAroundSeq = hasConversationDeepLink ? null : entryAnchor.aroundSeq;
+  const messagePageOptions = channelMessagesPageOptions(channelId, {
+    aroundSeq: deepLinkAroundSeq,
+  });
+  const cachedMessagePages = qc.getQueryData<InfiniteData<ChannelMessagesPage>>(
+    channelKeys.messagesPage(channelId),
+  );
+  // LRM-1433: preserve cached bubbles for instant switch-back, but when the DM
+  // row preview proves that cache is behind, reconcile the active timeline in
+  // the background even though its normal staleTime is Infinity.
+  const shouldReconcilePreview = isDmTimelineBehindPreview(
+    cachedMessagePages,
+    dm.last_message?.created_at,
+  );
   const {
     data: messagePages,
     isLoading: messagesLoading,
@@ -684,10 +700,12 @@ function DmChannelConversation({
     fetchNextPage: fetchOlderMessages,
     hasNextPage: hasOlderMessages,
     isFetchingNextPage: isFetchingOlderMessages,
-  } = useInfiniteQuery(
-    channelMessagesPageOptions(channelId, { aroundSeq: deepLinkAroundSeq }),
-  );
+  } = useInfiniteQuery({
+    ...messagePageOptions,
+    refetchOnMount: shouldReconcilePreview ? "always" : false,
+  });
   const messages = useMemo(() => flattenChannelMessagePages(messagePages), [messagePages]);
+  usePrefetchThreadPreviews(messages);
   const messagesFirstItemIndex = useMemo(
     () => channelMessagesFirstItemIndex(messagePages, messages.length > 0),
     [messagePages, messages.length],

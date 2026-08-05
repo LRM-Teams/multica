@@ -21,7 +21,7 @@ ASSEMBLED_DAG = {"segments": [{"closing_event": "e1"}], "edges": []}
 def _config(negative_control: bool = False) -> HarnessConfig:
     return HarnessConfig(
         base_url="http://server",
-        squad_id="squad-1",
+        agent_id="agent-1",
         base_env_id="env-base",
         cube_proxy_url="http://cube-proxy",
         negative_control=negative_control,

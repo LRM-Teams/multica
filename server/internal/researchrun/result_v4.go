@@ -11,10 +11,22 @@ func (r *ResultEnvelope) validateV4(task Task, cfg RunConfig) error {
 	if r.SchemaVersion != 4 {
 		return fmt.Errorf("%w: research-run-v4 requires schema_version 4", ErrInvalidResult)
 	}
+	if hasStructuredEvaluationDefects(*r) {
+		return fmt.Errorf("%w: structured evaluation defects require schema_version 5", ErrInvalidResult)
+	}
 	if err := validateV4TaskContract(task); err != nil {
 		return err
 	}
 	if err := validateV4TaskContracts(*r); err != nil {
+		return err
+	}
+	for _, proposed := range r.ProposedTasks {
+		switch proposed.Kind {
+		case TaskKindSynthesize, TaskKindQualityGate, TaskKindCitationAudit:
+			return fmt.Errorf("%w: v4 delivery tasks must be part of the validated plan graph, not proposed follow-up work", ErrInvalidResult)
+		}
+	}
+	if err := validateV4QuestionExpansion(*r); err != nil {
 		return err
 	}
 
@@ -38,6 +50,9 @@ func (r *ResultEnvelope) validateV4(task Task, cfg RunConfig) error {
 		}
 		if requiresCounterevidenceTask(standards) && !planContainsTaskKind(*r.Plan, TaskKindCounterSearch) {
 			return fmt.Errorf("%w: v4 plan requires a counter_search task for its evidence standards", ErrInvalidResult)
+		}
+		if err = validateV4PlanExecution(*r.Plan); err != nil {
+			return err
 		}
 	}
 
@@ -65,6 +80,107 @@ func (r *ResultEnvelope) validateV4(task Task, cfg RunConfig) error {
 		}
 	}
 	return nil
+}
+
+func validateV4QuestionExpansion(result ResultEnvelope) error {
+	requiredQuestions := map[string]struct{}{}
+	for _, question := range result.Questions {
+		if question.Required {
+			requiredQuestions[question.ClientKey] = struct{}{}
+		}
+	}
+	if len(requiredQuestions) == 0 {
+		return nil
+	}
+	for _, task := range result.ProposedTasks {
+		if task.Kind == TaskKindVerify {
+			delete(requiredQuestions, task.QuestionKey)
+		}
+	}
+	for questionKey := range requiredQuestions {
+		return fmt.Errorf("%w: v4 required follow-up question %q requires a question-bound verify task", ErrInvalidResult, questionKey)
+	}
+	return nil
+}
+
+func validateV4PlanExecution(plan PlanProposal) error {
+	tasks := make(map[string]TaskProposal, len(plan.Tasks))
+	requiredQuestions := map[string]struct{}{}
+	verificationByQuestion := map[string]bool{}
+	evidenceTaskKeys := make([]string, 0)
+	for _, question := range plan.Questions {
+		if question.Required {
+			requiredQuestions[question.ClientKey] = struct{}{}
+		}
+	}
+	for _, task := range plan.Tasks {
+		tasks[task.ClientKey] = task
+		if isEvidenceTask(task.Kind) {
+			evidenceTaskKeys = append(evidenceTaskKeys, task.ClientKey)
+		}
+		if task.Kind == TaskKindVerify {
+			if _, required := requiredQuestions[task.QuestionKey]; required {
+				verificationByQuestion[task.QuestionKey] = true
+			}
+		}
+	}
+	for questionKey := range requiredQuestions {
+		if !verificationByQuestion[questionKey] {
+			return fmt.Errorf("%w: v4 required question %q requires a question-bound verify task", ErrInvalidResult, questionKey)
+		}
+	}
+	deliverySynthesis := map[string]struct{}{}
+	for _, task := range plan.Tasks {
+		if task.Kind != TaskKindSynthesize {
+			continue
+		}
+		ready := true
+		for _, evidenceTaskKey := range evidenceTaskKeys {
+			if !taskTransitivelyDependsOn(task, evidenceTaskKey, tasks, map[string]bool{}) {
+				ready = false
+				break
+			}
+		}
+		if ready {
+			deliverySynthesis[task.ClientKey] = struct{}{}
+		}
+	}
+	if len(deliverySynthesis) == 0 {
+		return fmt.Errorf("%w: v4 plan requires a synthesize task downstream of all evidence tasks", ErrInvalidResult)
+	}
+	for _, task := range plan.Tasks {
+		if task.Kind != TaskKindQualityGate && task.Kind != TaskKindCitationAudit {
+			continue
+		}
+		validDeliveryDependency := false
+		for _, dependency := range task.DependsOn {
+			if _, ok := deliverySynthesis[dependency]; ok {
+				validDeliveryDependency = true
+				break
+			}
+		}
+		if !validDeliveryDependency {
+			return fmt.Errorf("%w: %s task %q must depend on a delivery-ready synthesize task", ErrInvalidResult, task.Kind, task.ClientKey)
+		}
+	}
+	return nil
+}
+
+func taskTransitivelyDependsOn(task TaskProposal, target string, tasks map[string]TaskProposal, visiting map[string]bool) bool {
+	if visiting[task.ClientKey] {
+		return false
+	}
+	visiting[task.ClientKey] = true
+	defer delete(visiting, task.ClientKey)
+	for _, dependency := range task.DependsOn {
+		if dependency == target {
+			return true
+		}
+		if nested, ok := tasks[dependency]; ok && taskTransitivelyDependsOn(nested, target, tasks, visiting) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateEvidenceStandards(values []EvidenceStandard) (map[string]EvidenceStandard, error) {

@@ -12,7 +12,9 @@ func researchDomainPlaybooks() map[string]string {
 - Choice: constraint comparison, trade-off analysis, sensitivity tests, and failure cases.
 - Measurement: define numerator, denominator, population, time, and uncertainty before collecting values.
 - Explanation: compare mechanisms, chronology, process evidence, and negative cases.
-- Exploration: map the space, record unknowns, then replan with narrower questions.
+- Exploration: map the space, rank decision-relevant unknowns, then create
+  targeted question-bound discovery or verification. Replan only when the
+  accepted question, scope, method, or evidence standards must change.
 
 ## Evidence fitness
 - Define a Claim-specific evidence standard before collection: required traits, independence, directness, method fit, and counter-search need.
@@ -195,7 +197,12 @@ Research loop
    an acyclic task graph. Define machine-checkable evidence standards for each
    planned Claim type: purpose, required source traits, independence,
    strength, directness, method fit, and counter-search requirement. Academic
-   protocols apply only to academic goals that need them.
+   protocols apply only to academic goals that need them. Every required
+   Question has a question-bound verify task. The delivery synthesis is
+   downstream of every discover, deep-read, verify, and counter-search task,
+   and both audits depend on that delivery synthesis. Every new required
+   follow-up Question includes question-bound verification; dynamic evidence
+   and replan work must finish before delivery.
 2. Execute: let the server dispatch dependency-ready work. Match evidence to
    the Claim it can establish. Source Snapshots declare evidence traits; Claims
    reference accepted evidence standards; Evidence Links score directness and
@@ -206,10 +213,13 @@ Research loop
 4. Evaluate: synthesize against the accepted Method. Independent validators
    audit every report Claim and section. Failed evaluation creates explicit
    remediation; it never manufactures a passing score.
-5. Replan or stop: replan when observations invalidate the Method, its evidence
-   standards, or a high-value gap remains. Stop only when required questions,
-   Claim-level standards, counterevidence, deterministic gates, and
-   information-gain conditions pass.
+5. Remediate, replan, or stop: use targeted discovery, verification,
+   counter-search, synthesis, or audit for local gaps. Replan only when
+   observations invalidate the question, scope, Method, evidence standards, or
+   executable task graph. Stop only when required questions, Claim-level
+   standards, counterevidence, deterministic gates, and server-measured
+   information-gain conditions pass. Never inflate gain with duplicate keys or
+   self-reported coverage.
 
 Roster authority (maximum within fleet)
 

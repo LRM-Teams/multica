@@ -367,7 +367,7 @@ SELECT
   status,
   CASE
     WHEN run_initialized_at IS NULL THEN 'legacy'
-    WHEN orchestrator_version IN ('research-run-v1', 'research-run-v2', 'research-run-v3', 'research-run-v4') THEN orchestrator_version
+    WHEN orchestrator_version IN ('research-run-v1', 'research-run-v2', 'research-run-v3', 'research-run-v4', 'research-run-v5') THEN orchestrator_version
     ELSE 'other'
   END,
   count(*) AS n

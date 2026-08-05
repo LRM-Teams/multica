@@ -23,8 +23,10 @@ authoritative when a playbook example differs from it.
 - What happened: chronology, source provenance, and contradiction resolution.
 - Risk or due diligence: exposure, likelihood, consequence, controls, and
   disconfirming cases.
-- Broad discovery: exploratory mapping followed by a versioned replan with
-  narrower questions and explicit evidence requirements.
+- Broad discovery: exploratory mapping followed by targeted question-bound
+  discovery or deep reading. Create a versioned replan only when the mapping
+  shows that the accepted question, scope, method, or evidence standards must
+  change.
 
 ## Judge evidence fitness
 
@@ -44,6 +46,9 @@ authoritative when a playbook example differs from it.
 
 - Plan the method and dependency graph; execute only ready work; observe
   normalized sources, observations, Claims, conflicts, failures, and gaps.
+- Give every required Question a verification path. Keep delivery synthesis
+  downstream of all planned discovery, deep-read, verification, and
+  counter-search work.
 - Evaluate required answers and report Claims against the accepted method and
   evidence standards. Create targeted remediation tasks for unmet standards.
 - Replan when observations invalidate the question, scope, method, or evidence

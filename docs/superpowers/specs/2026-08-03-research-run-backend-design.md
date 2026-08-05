@@ -388,11 +388,13 @@ After each accepted result, the Module:
 2. recalculates the Research Frontier;
 3. activates dependency-ready tasks;
 4. materializes valid proposed follow-up tasks;
-5. creates a `replan` task when progress stalls, contradictions remain, or the
-   plan no longer covers the highest-value frontier items;
-6. checks new observations against the accepted Method and creates a versioned
-   `replan` when the method or scope is invalidated;
-7. creates synthesis and independent validation work when evidence is ready;
+5. routes the highest-priority unmet Gate finding to the smallest typed task:
+   question-bound `discover`, Claim-targeted `verify` or `counter_search`, report
+   `synthesize`, or independent quality/citation audit;
+6. creates a versioned `replan` only when the question, scope, accepted Method,
+   evidence standards, or executable task graph is invalidated;
+7. records every routing choice, finding set, target, task, and rationale in the
+   Decision Log atomically with control-task creation;
 8. evaluates stopping against the accepted stopping conditions and deterministic
    evidence gates only when no higher-priority work is runnable.
 
@@ -401,13 +403,23 @@ missing coverage, contradiction severity, expected information gain, and
 estimated cost. Task priority is persisted; gate, replan, exhaustion, and
 delivery decisions are persisted in Research Decisions.
 
+The server ranks unresolved required Questions deterministically from priority,
+impact, uncertainty, novelty, missing coverage, and a contradiction/gap boost.
+The selected Question ID, score, answer Claim, verified-support state, and
+incomplete reasons are part of the Gate finding. An existing answer without
+verified support routes to verification; a missing or incomplete answer routes
+to discovery.
+
 ### 6.6 Wide, deep, adversarial, synthesis
 
 The planner begins with independent perspectives and broad discovery. Strong
 sources produce `deep_read` tasks. High-significance Claims produce independent
-`verify` or `counter_search` tasks. Synthesis runs incrementally after useful
-evidence batches, not only at the end. Unsupported report sections generate new
-frontier items.
+`verify` or `counter_search` tasks. Non-delivery synthesis may run incrementally
+after useful evidence batches; the delivery synthesis is transitively downstream
+of every planned evidence task. Unsupported report sections generate new frontier
+items. V4 required follow-up Questions must include question-bound verification.
+Evidence-result follow-up tasks depend on their producer; dynamic evidence and
+replan work also become dependencies of pending delivery synthesis.
 
 ## 7. Quality gates
 
@@ -415,8 +427,9 @@ Deterministic gates reject delivery when:
 
 - a required Research Question is still open or in progress;
 - a required Research Question's answer Claim lacks verified support;
-- a high-significance Claim lacks the configured number of independent support
-  families;
+- a current V4 required/report Claim fails its referenced EvidenceStandard's
+  source-trait, independence, strength, directness, method-fit, or counter-search
+  requirement (legacy versions retain their pinned independent-source rubric);
 - a disputed Claim is presented without an explicit unresolved marker;
 - an Observation quote is absent from its Source Snapshot;
 - a report Claim link does not resolve through verified Evidence and an
@@ -425,6 +438,8 @@ Deterministic gates reject delivery when:
   report;
 - the latest report is structurally incomplete, contains placeholder prose,
   or lacks durable author attribution;
+- the latest report predates a later Information Gain Decision whose canonical
+  graph state actually changed;
 - a report presents a high-significance Claim without a report-claim link;
 - a running, ready, dispatching, or retryable task remains;
 - result, task, or source limits were bypassed;
@@ -435,7 +450,21 @@ citation decisions store their reviewer actor. A passing score from the report
 author is rejected, and a passing evaluation must enumerate every Claim and
 section in the latest revision. A failed quality review schedules a new
 `synthesize` task and report revision; a succeeded delivery task is never
-reused as the remediation task.
+reused as the remediation task. The failed Decision is projected into bounded
+Gate metadata containing the evaluation, report, and reviewer IDs; failed
+dimensions and rationales; explicit findings; and reviewed Claim/section keys.
+That projection is preserved in the revision task objective and acceptance
+criteria so the reporter repairs the named defects instead of receiving a
+generic rewrite request.
+
+V5 evaluations replace free-text-only repair semantics with stable structured
+defects. Each defect records its evaluated dimension, blocking or advisory
+severity, problem, required change, and target Claim/section keys. The server
+rejects targets absent from the latest report, passing reviews with any
+defects, failed reviews without a below-floor dimension, and any below-floor
+dimension without a same-dimension blocking defect. Legacy `findings` is the
+ordered problem projection; an independently authored second list cannot
+disagree with the structured defects.
 
 A `quality_gate` task is assigned to a verifier that did not author the report.
 It scores factual grounding, coverage, analytical depth, source quality,
@@ -453,6 +482,15 @@ returns it to `running`.
 The Module may propose delivery when required coverage, evidence, validation,
 and citation gates pass and marginal information gain has remained below the
 configured threshold for consecutive completed work batches.
+
+Marginal gain is calculated from the current goal/plan's canonical evidence
+graph before and after each accepted evidence result. Verified answer coverage,
+answer transitions, independent verified evidence, verified Evidence Links,
+counterevidence, Claim resolution, and verified Claim adjudication carry most of
+the score. New raw graph entities contribute diminishing novelty as the graph
+grows. Duplicate content, Agent confidence, and unverified self-reported coverage
+do not create measured gain. The complete calculation and canonical-change flag
+are stored as an `information_gain` Decision.
 
 Hard limits exist to prevent runaway autonomous execution: total tasks,
 attempts per task, parallel tasks, task and run wall time, result payload bytes,
@@ -551,8 +589,9 @@ The bounded-cardinality Prometheus sampler exposes:
 - sampler query duration and error counters.
 
 The Decision Log and ordered run-event sequence are the per-run trace for
-steering, dispatch, retry, result acceptance, budget exhaustion, gates, and
-terminal transitions. Task and Attempt timestamps retain dispatch/start/result
+steering, dispatch, retry, result acceptance, Gate observations, typed
+remediation routing, budget exhaustion, and terminal transitions. Task and
+Attempt timestamps retain dispatch/start/result
 latency for SQL diagnostics without adding per-run Prometheus labels. Projection
 errors and retry counters remain on each event; projection failure never rolls
 back canonical accepted evidence.
@@ -564,7 +603,7 @@ revision 1 backfill but retain a null `run_initialized_at`, so their existing
 legacy execution path continues unchanged. The metrics Adapter reports those
 sessions as `legacy`. The server does not silently convert an in-progress legacy
 session into a Research Run. New sessions initialize the durable task/evidence
-ledgers and use `research-run-v3`.
+ledgers and use `research-run-v5`.
 
 Old desktop clients continue consuming the existing session snapshot fields.
 New response fields are additive and schema-parsed with defaults. The existing
@@ -575,10 +614,10 @@ Running Research Runs retain their orchestrator, result schema, prompt, and
 gate rubric versions across deploys. New server code must continue processing
 those versions until no active run references them.
 
-Existing `research-run-v1` and `research-run-v2` runs remain on their pinned
-prompts and result contracts. They are not silently rewritten or re-evaluated
-under v3. Existing
-HTTP and WebSocket report response shapes are unchanged; author, task,
+Existing `research-run-v1` through `research-run-v4` runs remain on their pinned
+prompts, result contracts, and versioned Gate rules. They are not silently
+rewritten or re-evaluated under V5. HTTP and WebSocket report response shapes
+are unchanged; author, task,
 attempt, and report-claim anchors are internal provenance fields.
 
 ## 15. Verification contract
@@ -588,8 +627,10 @@ Tests cross the ResearchRun Interface and its production persistence Adapter.
 The repository test suite covers:
 
 - plan validation, dependency ordering, and cycle rejection;
-- v3 method validation, persistence, task-context inheritance, replan history,
-  and v1/v2 compatibility;
+- v3/v4 method and EvidenceStandard validation, persistence, task-context
+  inheritance, replan history, and v1/v2 compatibility;
+- typed remediation precedence, question-target binding, routing Decision
+  persistence, target-aware idempotency, and stale/cross-session target rejection;
 - capability routing and concurrency limits;
 - duplicate dispatch and duplicate result replay;
 - quote/snapshot, claim/evidence, independence, and citation validation;

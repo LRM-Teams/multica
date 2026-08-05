@@ -37,14 +37,12 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 			return GateResult{}, fmt.Errorf("decode run stats: %w", err)
 		}
 	}
-	minimumEvaluationScore := 0.75
+	minimumEvaluationScore := minimumEvaluationScoreForDepth(run.DepthTier)
 	minimumMajorClaimSources := 2
 	switch run.DepthTier {
 	case "shallow":
-		minimumEvaluationScore = 0.65
 		minimumMajorClaimSources = 1
 	case "deep":
-		minimumEvaluationScore = 0.8
 		minimumMajorClaimSources = 3
 	}
 
@@ -57,6 +55,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		verifiedSources     int
 		independentSources  int
 		reportCount         int
+		reportFresh         int
 		reportClaimCount    int
 		reportAuthorCount   int
 		unreportedRequired  int
@@ -74,13 +73,16 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		budgetExhausted     int
 	}
 	var counts gateCounts
+	var qualityDecisionID, qualityReportID, qualityReviewerID string
+	var citationDecisionID, citationReportID, citationReviewerID string
+	var qualityOutcome, citationOutcome []byte
 	err = s.pool.QueryRow(ctx, `
 		WITH current_claims AS (
 		  SELECT c.id, c.significance, c.resolution
 		  FROM research_claim c
 		  WHERE c.session_id = $1::uuid AND c.goal_version = $2 AND c.plan_version = $3
 		), latest_report AS (
-		  SELECT id, author_agent_id FROM research_report
+		  SELECT id, author_agent_id, created_at FROM research_report
 		  WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3
 		  ORDER BY revision DESC LIMIT 1
 		), report_claims AS (
@@ -104,13 +106,13 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		  WHERE e.session_id = $1::uuid AND e.relation = 'contradicts'
 		    AND e.verification_status = 'verified'
 		), latest_quality AS (
-		  SELECT actor_id, outcome FROM research_decision
+		  SELECT id, actor_id, inputs, outcome FROM research_decision
 		  WHERE session_id = $1::uuid AND decision_kind = 'quality_gate'
 		    AND goal_version = $2 AND plan_version = $3
 		    AND inputs->>'report_id' = (SELECT id::text FROM latest_report)
 		  ORDER BY created_at DESC LIMIT 1
 		), latest_citation AS (
-		  SELECT actor_id, outcome FROM research_decision
+		  SELECT id, actor_id, inputs, outcome FROM research_decision
 		  WHERE session_id = $1::uuid AND decision_kind = 'citation_audit'
 		    AND goal_version = $2 AND plan_version = $3
 		    AND inputs->>'report_id' = (SELECT id::text FROM latest_report)
@@ -128,6 +130,14 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		  (SELECT count(DISTINCT source_id)::int FROM supported),
 		  (SELECT count(DISTINCT independence_key)::int FROM supported),
 		  (SELECT count(*)::int FROM latest_report),
+		  (SELECT count(*)::int FROM latest_report report
+		   WHERE NOT EXISTS (
+		     SELECT 1 FROM research_decision gain
+		     WHERE gain.session_id = $1::uuid AND gain.decision_kind = 'information_gain'
+		       AND gain.goal_version = $2 AND gain.plan_version = $3
+		       AND COALESCE((gain.outcome->>'canonical_changed')::boolean, false)
+		       AND gain.created_at > report.created_at
+		   )),
 		  (SELECT count(*)::int FROM report_claims),
 		  (SELECT count(*)::int FROM latest_report WHERE author_agent_id IS NOT NULL),
 		  (SELECT count(*)::int FROM research_question question
@@ -191,17 +201,27 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		       COALESCE((citation.outcome->>'readability')::double precision, 0)
 		     ) >= $4::double precision),
 		  (SELECT count(*)::int FROM research_decision WHERE session_id = $1::uuid
-		     AND decision_kind = 'budget_exhausted' AND goal_version = $2 AND plan_version = $3)
+		     AND decision_kind = 'budget_exhausted' AND goal_version = $2 AND plan_version = $3),
+		  COALESCE((SELECT id::text FROM latest_quality), ''),
+		  COALESCE((SELECT inputs->>'report_id' FROM latest_quality), ''),
+		  COALESCE((SELECT actor_id::text FROM latest_quality), ''),
+		  COALESCE((SELECT outcome FROM latest_quality), '{}'::jsonb),
+		  COALESCE((SELECT id::text FROM latest_citation), ''),
+		  COALESCE((SELECT inputs->>'report_id' FROM latest_citation), ''),
+		  COALESCE((SELECT actor_id::text FROM latest_citation), ''),
+		  COALESCE((SELECT outcome FROM latest_citation), '{}'::jsonb)
 	`, sessionID, run.GoalVersion, run.PlanVersion, minimumEvaluationScore, minimumMajorClaimSources).Scan(
 		&counts.planSucceeded, &counts.unfinishedTasks, &counts.blockedTasks,
 		&counts.requiredQuestions, &counts.unansweredRequired,
 		&counts.verifiedSources, &counts.independentSources,
-		&counts.reportCount, &counts.reportClaimCount, &counts.reportAuthorCount, &counts.unreportedRequired,
+		&counts.reportCount, &counts.reportFresh, &counts.reportClaimCount, &counts.reportAuthorCount, &counts.unreportedRequired,
 		&counts.wrongVersionClaims, &counts.unsupportedClaims, &counts.weakMajorClaims,
 		&counts.unresolvedConflicts, &counts.unlinkedMajorClaims,
 		&counts.qualityEvaluations, &counts.qualityPassed, &counts.qualityIndependent,
 		&counts.citationEvaluations, &counts.citationPassed, &counts.citationIndependent,
 		&counts.budgetExhausted,
+		&qualityDecisionID, &qualityReportID, &qualityReviewerID, &qualityOutcome,
+		&citationDecisionID, &citationReportID, &citationReviewerID, &citationOutcome,
 	)
 	if err != nil {
 		return GateResult{}, err
@@ -215,6 +235,19 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 			  AND goal_version = $2 AND plan_version = $3
 		`, sessionID, run.GoalVersion, run.PlanVersion).Scan(&methodCount); err != nil {
 			return GateResult{}, err
+		}
+	}
+	var unansweredQuestion map[string]any
+	if counts.unansweredRequired > 0 {
+		var found bool
+		unansweredQuestion, found, err = s.loadTopUnansweredRequiredQuestion(ctx, sessionID, run.GoalVersion, run.PlanVersion)
+		if err != nil {
+			return GateResult{}, err
+		}
+		if !found {
+			// Result acceptance can finish a question between the aggregate gate
+			// read and this targeted read. Do not create stale unbound work.
+			counts.unansweredRequired = 0
 		}
 	}
 	var reportStructureErr error
@@ -252,14 +285,18 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	if counts.requiredQuestions == 0 {
 		add("required_questions_missing", "The plan contains no required research questions.", nil)
 	} else if counts.unansweredRequired > 0 {
-		add("required_questions_unanswered", "Required questions lack an accepted answer and sufficient coverage.", map[string]any{"count": counts.unansweredRequired})
+		unansweredQuestion["count"] = counts.unansweredRequired
+		add("required_questions_unanswered", "Required questions lack an accepted answer and sufficient coverage.", unansweredQuestion)
 	}
-	if run.OrchestratorVersion != OrchestratorVersionV4 && counts.independentSources < minimumIndependentSources {
+	if !usesEvidenceFitnessContract(run.OrchestratorVersion) && counts.independentSources < minimumIndependentSources {
 		add("independent_sources_insufficient", "Verified evidence does not span enough independent sources.", map[string]any{"actual": counts.independentSources, "required": minimumIndependentSources})
 	}
 	if counts.reportCount == 0 {
 		add("report_missing", "No report revision exists for delivery.", nil)
 	} else {
+		if counts.reportFresh == 0 {
+			add("report_stale_after_evidence", "The latest report predates accepted evidence work in the current plan.", nil)
+		}
 		if reportStructureErr != nil {
 			add("report_structure_incomplete", "The latest report does not satisfy the durable structure and prose-coverage contract.", map[string]any{"reason": reportStructureErr.Error()})
 		}
@@ -275,10 +312,10 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		if counts.wrongVersionClaims > 0 {
 			add("report_claims_stale", "The latest report cites claims from an earlier goal or plan version.", map[string]any{"count": counts.wrongVersionClaims})
 		}
-		if run.OrchestratorVersion != OrchestratorVersionV4 && counts.unsupportedClaims > 0 {
+		if !usesEvidenceFitnessContract(run.OrchestratorVersion) && counts.unsupportedClaims > 0 {
 			add("report_claims_unsupported", "Report claims lack verified supporting evidence.", map[string]any{"count": counts.unsupportedClaims})
 		}
-		if run.OrchestratorVersion != OrchestratorVersionV4 && counts.weakMajorClaims > 0 {
+		if !usesEvidenceFitnessContract(run.OrchestratorVersion) && counts.weakMajorClaims > 0 {
 			add("major_claim_sources_insufficient", "High-significance report claims lack enough independent verified source families.", map[string]any{"count": counts.weakMajorClaims, "required_per_claim": minimumMajorClaimSources})
 		}
 		if counts.unresolvedConflicts > 0 {
@@ -288,7 +325,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 			add("major_claims_unlinked", "Supported high-significance claims are absent from the latest report.", map[string]any{"count": counts.unlinkedMajorClaims})
 		}
 	}
-	if run.OrchestratorVersion == OrchestratorVersionV4 && methodCount > 0 {
+	if usesEvidenceFitnessContract(run.OrchestratorVersion) && methodCount > 0 {
 		fitnessFindings, fitnessErr := s.evaluateEvidenceFitnessV4(ctx, sessionID, run.GoalVersion, run.PlanVersion)
 		if fitnessErr != nil {
 			return GateResult{}, fitnessErr
@@ -298,14 +335,16 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	if counts.qualityEvaluations == 0 {
 		add("quality_evaluation_missing", "The latest report has not passed an independent quality evaluation.", nil)
 	} else if counts.qualityPassed == 0 {
-		add("quality_evaluation_failed", "The latest independent quality evaluation failed or fell below the depth-tier score floor.", map[string]any{"minimum_score": minimumEvaluationScore})
+		add("quality_evaluation_failed", "The latest independent quality evaluation failed or fell below the depth-tier score floor.",
+			evaluationFeedbackMetadata(qualityDecisionID, qualityReportID, qualityReviewerID, qualityOutcome, minimumEvaluationScore))
 	} else if usesStructuredResultContract(run.OrchestratorVersion) && counts.qualityIndependent == 0 {
 		add("quality_evaluation_not_independent", "The latest quality evaluation was submitted by the report author.", nil)
 	}
 	if counts.citationEvaluations == 0 {
 		add("citation_audit_missing", "The latest report has not passed a citation audit.", nil)
 	} else if counts.citationPassed == 0 {
-		add("citation_audit_failed", "The latest citation audit failed or fell below the depth-tier score floor.", map[string]any{"minimum_score": minimumEvaluationScore})
+		add("citation_audit_failed", "The latest citation audit failed or fell below the depth-tier score floor.",
+			evaluationFeedbackMetadata(citationDecisionID, citationReportID, citationReviewerID, citationOutcome, minimumEvaluationScore))
 	} else if usesStructuredResultContract(run.OrchestratorVersion) && counts.citationIndependent == 0 {
 		add("citation_audit_not_independent", "The latest citation audit was submitted by the report author.", nil)
 	}
@@ -318,6 +357,143 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		})
 	}
 	return GateResult{Passed: len(findings) == 0, Findings: findings}, nil
+}
+
+func evaluationFeedbackMetadata(decisionID, reportID, reviewerID string, raw []byte, minimumScore float64) map[string]any {
+	metadata := map[string]any{
+		"evaluation_decision_id": decisionID,
+		"report_id":              reportID,
+		"reviewer_agent_id":      reviewerID,
+		"minimum_score":          minimumScore,
+	}
+	var evaluation EvaluationProposal
+	if err := json.Unmarshal(raw, &evaluation); err != nil {
+		metadata["feedback_unavailable"] = "stored evaluation outcome could not be decoded"
+		return metadata
+	}
+	scores := map[string]float64{
+		"factual_grounding":      evaluation.FactualGrounding,
+		"coverage":               evaluation.Coverage,
+		"analytical_depth":       evaluation.AnalyticalDepth,
+		"source_quality":         evaluation.SourceQuality,
+		"contradiction_handling": evaluation.ContradictionHandling,
+		"instruction_adherence":  evaluation.InstructionAdherence,
+		"readability":            evaluation.Readability,
+	}
+	failedDimensions := make([]map[string]any, 0, len(evaluationDimensionNames))
+	for _, dimension := range evaluationDimensionNames {
+		score := scores[dimension]
+		if score >= minimumScore {
+			continue
+		}
+		failedDimensions = append(failedDimensions, map[string]any{
+			"dimension": dimension,
+			"score":     score,
+			"rationale": truncateBytes(evaluation.DimensionFindings[dimension], 1024),
+		})
+	}
+	metadata["passed"] = evaluation.Passed
+	metadata["failed_dimensions"] = failedDimensions
+	metadata["findings"] = boundedEvaluationStrings(evaluation.Findings, 8, 1024)
+	metadata["reviewed_claim_keys"] = boundedEvaluationStrings(evaluation.ReviewedClaimKeys, 64, 160)
+	metadata["reviewed_section_ids"] = boundedEvaluationStrings(evaluation.ReviewedSectionIDs, 64, 160)
+	metadata["defects"] = boundedEvaluationDefects(evaluation.Defects)
+	return metadata
+}
+
+func minimumEvaluationScoreForDepth(depthTier string) float64 {
+	switch depthTier {
+	case "shallow":
+		return 0.65
+	case "deep":
+		return 0.8
+	default:
+		return 0.75
+	}
+}
+
+func boundedEvaluationDefects(values []EvaluationDefect) []EvaluationDefect {
+	if len(values) > maxEvaluationDefects {
+		values = values[:maxEvaluationDefects]
+	}
+	bounded := make([]EvaluationDefect, 0, len(values))
+	for _, value := range values {
+		value.ClientKey = truncateBytes(value.ClientKey, 160)
+		value.Problem = truncateBytes(value.Problem, maxEvaluationDefectTextBytes)
+		value.RequiredChange = truncateBytes(value.RequiredChange, maxEvaluationDefectTextBytes)
+		value.ClaimKeys = boundedEvaluationStrings(value.ClaimKeys, maxEvaluationDefectTargets, 160)
+		value.SectionIDs = boundedEvaluationStrings(value.SectionIDs, maxEvaluationDefectTargets, 160)
+		bounded = append(bounded, value)
+	}
+	return bounded
+}
+
+func boundedEvaluationStrings(values []string, maxItems, maxBytes int) []string {
+	if len(values) > maxItems {
+		values = values[:maxItems]
+	}
+	bounded := make([]string, 0, len(values))
+	for _, value := range values {
+		bounded = append(bounded, truncateBytes(value, maxBytes))
+	}
+	return bounded
+}
+
+func (s *PostgresStore) loadTopUnansweredRequiredQuestion(ctx context.Context, sessionID string, goalVersion, planVersion int) (map[string]any, bool, error) {
+	var id, clientKey, question, status, answerClaimID, answerClaimKey string
+	var priority, impact, uncertainty, novelty, coverage, frontierScore float64
+	var hasVerifiedSupport bool
+	err := s.pool.QueryRow(ctx, `
+		WITH supported AS (
+		  SELECT DISTINCT evidence.claim_id
+		  FROM research_claim_evidence evidence
+		  JOIN research_observation observation ON observation.id = evidence.observation_id
+		  JOIN research_source_snapshot source ON source.id = observation.source_snapshot_id
+		  WHERE evidence.session_id = $1::uuid AND evidence.relation = 'supports'
+		    AND evidence.verification_status = 'verified'
+		    AND observation.verification_status = 'verified'
+		    AND source.verification_status = 'verified'
+		)
+		SELECT q.id::text, q.client_key, q.question, q.status,
+		       q.priority, q.impact, q.uncertainty, q.novelty, q.coverage,
+		       COALESCE(q.answer_claim_id::text, ''), COALESCE(claim.client_key, ''),
+		       COALESCE(q.answer_claim_id IN (SELECT claim_id FROM supported), false),
+		       LEAST(1, 0.30*q.priority + 0.30*q.impact + 0.20*q.uncertainty +
+		                0.10*q.novelty + 0.10*(1-q.coverage) +
+		                CASE q.kind WHEN 'contradiction' THEN 0.10 WHEN 'gap' THEN 0.05 ELSE 0 END) AS frontier_score
+		FROM research_question q
+		LEFT JOIN research_claim claim ON claim.id = q.answer_claim_id
+		WHERE q.session_id = $1::uuid AND q.goal_version = $2 AND q.plan_version = $3 AND q.required
+		  AND (q.status <> 'answered' OR q.coverage < 0.8 OR q.answer_claim_id IS NULL
+		       OR NOT EXISTS (SELECT 1 FROM supported WHERE supported.claim_id = q.answer_claim_id))
+		ORDER BY frontier_score DESC, q.priority DESC, q.created_at, q.id
+		LIMIT 1
+	`, sessionID, goalVersion, planVersion).Scan(
+		&id, &clientKey, &question, &status, &priority, &impact, &uncertainty, &novelty, &coverage,
+		&answerClaimID, &answerClaimKey, &hasVerifiedSupport, &frontierScore,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	reasons := make([]string, 0, 3)
+	if answerClaimID == "" {
+		reasons = append(reasons, "answer_claim_missing")
+	}
+	if coverage < 0.8 {
+		reasons = append(reasons, "coverage_below_threshold")
+	}
+	if answerClaimID != "" && !hasVerifiedSupport {
+		reasons = append(reasons, "verified_support_missing")
+	}
+	return map[string]any{
+		"question_id": id, "question_key": clientKey, "question": question, "status": status,
+		"priority": priority, "impact": impact, "uncertainty": uncertainty, "novelty": novelty, "coverage": coverage,
+		"frontier_score": frontierScore, "incomplete_reasons": reasons,
+		"answer_claim_id": answerClaimID, "answer_claim_key": answerClaimKey, "has_verified_support": hasVerifiedSupport,
+	}, true, nil
 }
 
 func (s *PostgresStore) loadLatestReportForGate(ctx context.Context, sessionID string, goalVersion, planVersion int) (ReportProposal, error) {

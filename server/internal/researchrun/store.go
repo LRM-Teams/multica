@@ -39,6 +39,22 @@ type AttemptFailure struct {
 	Retryable    bool
 }
 
+// ControlTaskInput is the durable output of the runtime's delivery-gate
+// routing decision. QuestionID is an entity binding, not prompt decoration.
+type ControlTaskInput struct {
+	SessionID  string
+	Kind       TaskKind
+	Objective  string
+	Capability string
+	Priority   float64
+	QuestionID string
+	// Findings are the defects assigned to this task. ObservedFindings retains
+	// the complete Gate observation used to choose them.
+	Findings         []GateFinding
+	ObservedFindings []GateFinding
+	Rationale        string
+}
+
 type Store interface {
 	CreateRun(context.Context, StartInput, RunConfig) (Run, RunEvent, error)
 	InitializeRun(context.Context, StartInput, RunConfig) (Run, RunEvent, error)
@@ -66,7 +82,7 @@ type Store interface {
 	AttachInboxTask(context.Context, string, string) (Attempt, RunEvent, error)
 	FailAttempt(context.Context, AttemptFailure) (RunEvent, error)
 	AcceptResult(context.Context, AcceptResultInput) (AcceptResultOutcome, error)
-	CreateControlTask(context.Context, string, TaskKind, string, string, float64) (Task, RunEvent, error)
+	CreateControlTask(context.Context, ControlTaskInput) (Task, RunEvent, error)
 	NodeCommand(context.Context, NodeCommandInput) (NodeCommandOutcome, error)
 	SetAwaitingConfirmation(context.Context, string, GateResult) (Run, RunEvent, error)
 	Complete(context.Context, string, string, string) (Run, RunEvent, error)

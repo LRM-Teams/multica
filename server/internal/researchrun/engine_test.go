@@ -69,17 +69,70 @@ func TestMissingResultCapabilitiesAcceptsActiveSpecialistRole(t *testing.T) {
 	}
 }
 
-func TestRemediationRoutesMarginalGainToEvidenceReplan(t *testing.T) {
-	kind, objective, capability := remediationTask(GateResult{Findings: []GateFinding{{Code: "marginal_gain_not_saturated"}}})
-	if kind != TaskKindReplan || capability != "lead" || !strings.Contains(objective, "smallest evidence-producing") {
-		t.Fatalf("kind=%s capability=%s objective=%q", kind, capability, objective)
+func TestRemediationRoutesFindingsToSmallestAction(t *testing.T) {
+	tests := []struct {
+		name       string
+		findings   []GateFinding
+		kind       TaskKind
+		capability string
+		questionID string
+	}{
+		{name: "method defect", findings: []GateFinding{{Code: "research_method_missing"}}, kind: TaskKindReplan, capability: "lead"},
+		{name: "counterevidence", findings: []GateFinding{{Code: "claim_counterevidence_search_missing"}}, kind: TaskKindCounterSearch, capability: "validator"},
+		{name: "question target", findings: []GateFinding{{Code: "required_questions_unanswered", Metadata: map[string]any{"question_id": "question-1"}}}, kind: TaskKindDiscover, capability: "scout", questionID: "question-1"},
+		{name: "claim fitness", findings: []GateFinding{{Code: "claim_evidence_standard_unmet"}}, kind: TaskKindVerify, capability: "validator"},
+		{name: "stale report", findings: []GateFinding{{Code: "report_claims_stale"}}, kind: TaskKindSynthesize, capability: "reporter"},
+		{name: "quality audit", findings: []GateFinding{{Code: "quality_evaluation_missing"}}, kind: TaskKindQualityGate, capability: "validator"},
+		{name: "citation audit", findings: []GateFinding{{Code: "citation_audit_missing"}}, kind: TaskKindCitationAudit, capability: "validator"},
+		{name: "information gain", findings: []GateFinding{{Code: "marginal_gain_not_saturated"}}, kind: TaskKindDiscover, capability: "scout"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := remediationTask(GateResult{Findings: test.findings})
+			if got.Kind != test.kind || got.Capability != test.capability || got.QuestionID != test.questionID || got.Priority != 1 || !strings.Contains(got.Objective, test.findings[0].Code) {
+				t.Fatalf("control=%+v", got)
+			}
+		})
 	}
 }
 
-func TestRemediationRoutesReportQualityFailureToSynthesis(t *testing.T) {
-	kind, objective, capability := remediationTask(GateResult{Findings: []GateFinding{{Code: "quality_evaluation_failed"}}})
-	if kind != TaskKindSynthesize || capability != "reporter" || !strings.Contains(objective, "report") {
-		t.Fatalf("kind=%s capability=%s objective=%q", kind, capability, objective)
+func TestRemediationPrefersEvidenceRepairBeforeReportRevision(t *testing.T) {
+	got := remediationTask(GateResult{Findings: []GateFinding{
+		{Code: "report_missing"},
+		{Code: "claim_evidence_standard_unmet"},
+		{Code: "marginal_gain_not_saturated"},
+	}})
+	if got.Kind != TaskKindVerify || got.Capability != "validator" || len(got.Findings) != 1 || strings.Contains(got.Objective, "report_missing") {
+		t.Fatalf("control=%+v", got)
+	}
+}
+
+func TestRemediationAssignsOneClaimFitnessDefectPerVerificationTask(t *testing.T) {
+	got := remediationTask(GateResult{Findings: []GateFinding{
+		{Code: "claim_evidence_standard_unmet", Metadata: map[string]any{"claim_key": "claim-a"}},
+		{Code: "claim_evidence_standard_unmet", Metadata: map[string]any{"claim_key": "claim-b"}},
+	}})
+	if len(got.Findings) != 1 || findingMetadataString(got.Findings, "claim_evidence_standard_unmet", "claim_key") != "claim-a" || strings.Contains(got.Objective, "claim-b") {
+		t.Fatalf("control=%+v", got)
+	}
+}
+
+func TestRemediationVerifiesExistingUnverifiedQuestionAnswer(t *testing.T) {
+	got := remediationTask(GateResult{Findings: []GateFinding{{
+		Code: "required_questions_unanswered",
+		Metadata: map[string]any{
+			"question_id": "question-id", "answer_claim_id": "claim-id", "has_verified_support": false,
+		},
+	}}})
+	if got.Kind != TaskKindVerify || got.Capability != "validator" || got.QuestionID != "question-id" {
+		t.Fatalf("control=%+v", got)
+	}
+}
+
+func TestRemediationRevisesReportThatPredatesEvidence(t *testing.T) {
+	got := remediationTask(GateResult{Findings: []GateFinding{{Code: "report_stale_after_evidence"}}})
+	if got.Kind != TaskKindSynthesize || got.Capability != "reporter" {
+		t.Fatalf("control=%+v", got)
 	}
 }
 
@@ -254,9 +307,66 @@ func TestTaskPromptV4CarriesClaimLevelEvidenceStandards(t *testing.T) {
 		"Source class is descriptive and has no global credibility score",
 		"verify/counter_search=research_evidence_v4",
 		"source count, source class, or depth tier alone never establishes sufficiency",
+		"each failed finding names the affected Claim keys and section IDs",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("prompt missing %q:\n%s", required, prompt)
+		}
+	}
+}
+
+func TestTaskPromptV4RequiresTargetedEvaluationRepair(t *testing.T) {
+	run := Run{SessionID: "session-4", Goal: "Produce an evidence-backed decision", GoalVersion: 1, PlanVersion: 1, DepthTier: "standard", OrchestratorVersion: OrchestratorVersionV4}
+	task := Task{
+		ID: "task-revision", Kind: TaskKindSynthesize, Objective: "Repair the reviewed report",
+		RequiredCapability: "reporter", ExpectedResult: "research_report_v4", GoalVersion: 1, PlanVersion: 1,
+		AcceptanceCriteria: []byte(`{"failed_dimensions":[{"dimension":"factual_grounding","rationale":"claim-a overstates source-1"}],"reviewed_claim_keys":["claim-a"],"reviewed_section_ids":["section-a"]}`),
+	}
+	prompt, err := buildTaskPrompt(run, task, Attempt{ID: "attempt-revision", DispatchKey: "dispatch-revision"}, RunSnapshot{Contract: ResearchContract{Language: "zh"}}, []FleetMember{{Role: "reporter", Status: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"claim-a overstates source-1",
+		"reviewed_claim_keys",
+		"repair every failed dimension and explicit finding against the named Claims and sections",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("prompt missing %q:\n%s", required, prompt)
+		}
+	}
+}
+
+func TestTaskPromptV5CarriesStructuredEvaluationDefects(t *testing.T) {
+	run := Run{SessionID: "session-5", Goal: "Audit and repair the report", GoalVersion: 1, PlanVersion: 1, DepthTier: "deep", OrchestratorVersion: OrchestratorVersionV5}
+	attempt := Attempt{ID: "attempt-5", DispatchKey: "dispatch-5"}
+	qualityPrompt, err := buildTaskPrompt(run, Task{
+		ID: "quality-5", Kind: TaskKindQualityGate, Objective: "Audit report", RequiredCapability: "validator",
+		ExpectedResult: "research_quality_evaluation_v5", GoalVersion: 1, PlanVersion: 1,
+	}, attempt, RunSnapshot{Contract: ResearchContract{Language: "zh"}}, []FleetMember{{Role: "validator", Status: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"schema_version=5", "research_quality_evaluation_v5",
+		"defects=[{client_key,dimension,severity,problem,required_change,claim_keys,section_ids}]",
+		"Every below-floor dimension has a blocking defect",
+	} {
+		if !strings.Contains(qualityPrompt, required) {
+			t.Fatalf("quality prompt missing %q:\n%s", required, qualityPrompt)
+		}
+	}
+	revisionPrompt, err := buildTaskPrompt(run, Task{
+		ID: "revision-5", Kind: TaskKindSynthesize, Objective: "Repair report", RequiredCapability: "reporter",
+		ExpectedResult: "research_report_v5", GoalVersion: 1, PlanVersion: 1,
+		AcceptanceCriteria: []byte(`{"remediation":{"target_findings":[{"metadata":{"defects":[{"client_key":"defect-grounding-alpha","required_change":"retain the operating boundary"}]}}]}}`),
+	}, attempt, RunSnapshot{Contract: ResearchContract{Language: "zh"}}, []FleetMember{{Role: "reporter", Status: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"defect-grounding-alpha", "retain the operating boundary", "repair every structured blocking defect"} {
+		if !strings.Contains(revisionPrompt, required) {
+			t.Fatalf("revision prompt missing %q:\n%s", required, revisionPrompt)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -295,9 +296,12 @@ func taskRetryBackoff(attemptNumber int) time.Duration {
 	return time.Duration(5*(1<<min(attemptNumber-1, 6))) * time.Second
 }
 
-func (s *PostgresStore) CreateControlTask(ctx context.Context, sessionID string, kind TaskKind, objective, capability string, priority float64) (Task, RunEvent, error) {
-	if !validTaskKind(kind) || kind == TaskKindPlan {
+func (s *PostgresStore) CreateControlTask(ctx context.Context, in ControlTaskInput) (Task, RunEvent, error) {
+	if !validTaskKind(in.Kind) || in.Kind == TaskKindPlan {
 		return Task{}, RunEvent{}, fmt.Errorf("%w: invalid control task kind", ErrInvalidTransition)
+	}
+	if strings.TrimSpace(in.SessionID) == "" || strings.TrimSpace(in.Objective) == "" || !validCapability(in.Capability) || in.Priority < 0 || in.Priority > 1 {
+		return Task{}, RunEvent{}, fmt.Errorf("%w: invalid control task input", ErrInvalidTransition)
 	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -313,57 +317,115 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, sessionID string,
 		       COALESCE((run_config->>'max_attempts_per_task')::int, 3),
 		       COALESCE((run_config->>'task_timeout_seconds')::int, 1800)
 		FROM research_session WHERE id = $1::uuid FOR UPDATE
-	`, sessionID).Scan(&workspaceID, &goalVersion, &planVersion, &status, &orchestratorVersion, &maxTasks, &maxAttempts, &timeout)
+	`, in.SessionID).Scan(&workspaceID, &goalVersion, &planVersion, &status, &orchestratorVersion, &maxTasks, &maxAttempts, &timeout)
 	if err != nil {
 		return Task{}, RunEvent{}, err
 	}
 	if status != string(RunStatusRunning) {
 		return Task{}, RunEvent{}, fmt.Errorf("%w: run is not running", ErrInvalidTransition)
 	}
-	var count int
-	if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid`, sessionID).Scan(&count); err != nil {
-		return Task{}, RunEvent{}, err
-	}
-	if count >= maxTasks {
-		return Task{}, RunEvent{}, fmt.Errorf("%w: run task budget exhausted", ErrBudgetExhausted)
+	var questionArg any
+	questionKey := ""
+	if strings.TrimSpace(in.QuestionID) != "" {
+		if in.Kind != TaskKindDiscover && in.Kind != TaskKindDeepRead && in.Kind != TaskKindVerify && in.Kind != TaskKindCounterSearch {
+			return Task{}, RunEvent{}, fmt.Errorf("%w: control task kind cannot target a question", ErrInvalidTransition)
+		}
+		err = tx.QueryRow(ctx, `
+			WITH supported AS (
+			  SELECT DISTINCT evidence.claim_id
+			  FROM research_claim_evidence evidence
+			  JOIN research_observation observation ON observation.id = evidence.observation_id
+			  JOIN research_source_snapshot source ON source.id = observation.source_snapshot_id
+			  WHERE evidence.session_id = $2::uuid AND evidence.relation = 'supports'
+			    AND evidence.verification_status = 'verified'
+			    AND observation.verification_status = 'verified'
+			    AND source.verification_status = 'verified'
+			)
+			SELECT question.client_key
+			FROM research_question question
+			WHERE question.id = $1::uuid AND question.session_id = $2::uuid
+			  AND question.goal_version = $3 AND question.plan_version = $4 AND question.required
+			  AND (question.status <> 'answered' OR question.coverage < 0.8 OR question.answer_claim_id IS NULL
+			       OR NOT EXISTS (SELECT 1 FROM supported WHERE supported.claim_id = question.answer_claim_id))
+			FOR UPDATE
+		`, in.QuestionID, in.SessionID, goalVersion, planVersion).Scan(&questionKey)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Task{}, RunEvent{}, fmt.Errorf("%w: question is absent, stale, or already answered", ErrControlTargetChanged)
+		}
+		if err != nil {
+			return Task{}, RunEvent{}, err
+		}
+		questionArg = in.QuestionID
 	}
 	row := tx.QueryRow(ctx, taskSelectSQL+`
 		WHERE t.session_id = $1::uuid AND t.goal_version = $2 AND t.plan_version = $3
-		  AND t.kind = $4 AND t.status IN ('pending', 'ready', 'dispatching', 'running')
+		  AND t.kind = $4 AND t.objective = $5
+		  AND (($6::uuid IS NULL AND t.question_id IS NULL) OR t.question_id = $6::uuid)
+		  AND t.status IN ('pending', 'ready', 'dispatching', 'running')
 		ORDER BY t.created_at DESC LIMIT 1
-	`, sessionID, goalVersion, planVersion, kind)
+	`, in.SessionID, goalVersion, planVersion, in.Kind, in.Objective, questionArg)
 	if existing, scanErr := scanTask(row); scanErr == nil {
 		return existing, RunEvent{}, tx.Commit(ctx)
 	} else if !errors.Is(scanErr, pgx.ErrNoRows) {
 		return Task{}, RunEvent{}, scanErr
 	}
+	var count int
+	if err = tx.QueryRow(ctx, `SELECT count(*)::int FROM research_task WHERE session_id = $1::uuid`, in.SessionID).Scan(&count); err != nil {
+		return Task{}, RunEvent{}, err
+	}
+	if count >= maxTasks {
+		return Task{}, RunEvent{}, fmt.Errorf("%w: run task budget exhausted", ErrBudgetExhausted)
+	}
 	var kindSequence int
 	if err = tx.QueryRow(ctx, `
 		SELECT count(*)::int + 1 FROM research_task
 		WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3 AND kind = $4
-	`, sessionID, goalVersion, planVersion, kind).Scan(&kindSequence); err != nil {
+	`, in.SessionID, goalVersion, planVersion, in.Kind).Scan(&kindSequence); err != nil {
 		return Task{}, RunEvent{}, err
 	}
-	clientKey := fmt.Sprintf("control:%s:%d:%d:%d", kind, goalVersion, planVersion, kindSequence)
-	expected := expectedResultForTaskVersion(orchestratorVersion, kind)
-	acceptanceCriteria, _ := json.Marshal(map[string]any{"schema_version": resultSchemaVersionForOrchestrator(orchestratorVersion)})
+	clientKey := fmt.Sprintf("control:%s:%d:%d:%d", in.Kind, goalVersion, planVersion, kindSequence)
+	expected := expectedResultForTaskVersion(orchestratorVersion, in.Kind)
+	findingCodes := sortedFindingCodes(in.Findings)
+	acceptanceCriteria, _ := json.Marshal(map[string]any{
+		"schema_version": resultSchemaVersionForOrchestrator(orchestratorVersion),
+		"remediation": map[string]any{
+			"finding_codes": findingCodes, "target_findings": in.Findings,
+			"question_id": in.QuestionID, "question_key": questionKey,
+		},
+	})
 	var taskID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO research_task (
-			workspace_id, session_id, client_key, kind, objective,
+			workspace_id, session_id, question_id, client_key, kind, objective,
 			required_capability, expected_result, acceptance_criteria, priority,
 			status, goal_version, plan_version, max_attempts, timeout_seconds, ready_at
-			) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7,
-			          $8, $9, 'ready', $10, $11, $12, $13, now())
+			) VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8,
+			          $9, $10, 'ready', $11, $12, $13, $14, now())
 		RETURNING id::text
-		`, workspaceID, sessionID, clientKey, kind, objective, capability, expected, acceptanceCriteria,
-		priority, goalVersion, planVersion, maxAttempts, timeout).Scan(&taskID)
+		`, workspaceID, in.SessionID, questionArg, clientKey, in.Kind, in.Objective, in.Capability, expected, acceptanceCriteria,
+		in.Priority, goalVersion, planVersion, maxAttempts, timeout).Scan(&taskID)
 	if err != nil {
 		return Task{}, RunEvent{}, err
 	}
-	event, err := appendEvent(ctx, tx, workspaceID, sessionID, "control_task_created", "control-task:"+taskID, "system", "", map[string]any{
-		"task_id": taskID, "kind": kind, "objective": objective,
-		"required_capability": capability, "expected_result": expected,
+	decisionInputs, _ := json.Marshal(map[string]any{
+		"observed_findings": in.ObservedFindings, "target_findings": in.Findings,
+	})
+	decisionOutcome, _ := json.Marshal(map[string]any{
+		"task_id": taskID, "task_kind": in.Kind, "required_capability": in.Capability,
+		"question_id": in.QuestionID, "question_key": questionKey, "finding_codes": findingCodes,
+	})
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO research_decision (
+		  workspace_id, session_id, decision_kind, actor_type, goal_version, plan_version,
+		  inputs, outcome, rationale
+		) VALUES ($1::uuid, $2::uuid, 'remediation_routing', 'system', $3, $4, $5::jsonb, $6::jsonb, $7)
+	`, workspaceID, in.SessionID, goalVersion, planVersion, decisionInputs, decisionOutcome, in.Rationale); err != nil {
+		return Task{}, RunEvent{}, err
+	}
+	event, err := appendEvent(ctx, tx, workspaceID, in.SessionID, "control_task_created", "control-task:"+taskID, "system", "", map[string]any{
+		"task_id": taskID, "kind": in.Kind, "objective": in.Objective,
+		"required_capability": in.Capability, "expected_result": expected,
+		"question_id": in.QuestionID, "question_key": questionKey, "finding_codes": findingCodes,
 	})
 	if err != nil {
 		return Task{}, RunEvent{}, err
@@ -371,8 +433,23 @@ func (s *PostgresStore) CreateControlTask(ctx context.Context, sessionID string,
 	if err = tx.Commit(ctx); err != nil {
 		return Task{}, RunEvent{}, err
 	}
-	task, err := s.GetTask(ctx, taskID, sessionID)
+	task, err := s.GetTask(ctx, taskID, in.SessionID)
 	return task, event, err
+}
+
+func sortedFindingCodes(findings []GateFinding) []string {
+	seen := make(map[string]struct{}, len(findings))
+	for _, finding := range findings {
+		if code := strings.TrimSpace(finding.Code); code != "" {
+			seen[code] = struct{}{}
+		}
+	}
+	codes := make([]string, 0, len(seen))
+	for code := range seen {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	return codes
 }
 
 func (s *PostgresStore) SetAwaitingConfirmation(ctx context.Context, sessionID string, gate GateResult) (Run, RunEvent, error) {
@@ -689,6 +766,8 @@ func expectedResultForTaskVersion(version string, kind TaskKind) string {
 		suffix = "v3"
 	} else if version == OrchestratorVersionV4 {
 		suffix = "v4"
+	} else if version == OrchestratorVersionV5 {
+		suffix = "v5"
 	}
 	switch kind {
 	case TaskKindPlan, TaskKindReplan:
@@ -711,6 +790,8 @@ func resultSchemaVersionForOrchestrator(version string) int {
 		return 3
 	} else if version == OrchestratorVersionV4 {
 		return 4
+	} else if version == OrchestratorVersionV5 {
+		return 5
 	}
 	return 1
 }

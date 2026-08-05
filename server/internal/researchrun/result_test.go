@@ -233,6 +233,77 @@ func TestResearchRunV4RequiresClaimLevelEvidenceFitness(t *testing.T) {
 	}
 }
 
+func TestResearchRunV4RequiresVerifiedDeliveryPathForEveryRequiredQuestion(t *testing.T) {
+	result := validV4PlanResult(t)
+	result.Plan.Tasks = result.Plan.Tasks[:len(result.Plan.Tasks)-1]
+	raw, _ := json.Marshal(result)
+	_, _, err := DecodeAndValidateResultForVersion(OrchestratorVersionV4, raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v4",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "question-bound verify") {
+		t.Fatalf("error=%v, want missing question verification rejection", err)
+	}
+
+	result = validV4PlanResult(t)
+	for i := range result.Plan.Tasks {
+		if result.Plan.Tasks[i].Kind == TaskKindSynthesize {
+			result.Plan.Tasks[i].DependsOn = []string{"discover-1"}
+		}
+	}
+	raw, _ = json.Marshal(result)
+	_, _, err = DecodeAndValidateResultForVersion(OrchestratorVersionV4, raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v4",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "downstream of all evidence") {
+		t.Fatalf("error=%v, want premature synthesis rejection", err)
+	}
+
+	result = validV4PlanResult(t)
+	result.Plan.Tasks = append(result.Plan.Tasks, TaskProposal{
+		ClientKey: "parallel-deep-read", QuestionKey: "question-1", Kind: TaskKindDeepRead,
+		Objective: "Inspect a material source that can change the answer", RequiredCapability: "analyst",
+		ExpectedResult: "research_evidence_v4", Priority: 0.75, DependsOn: []string{"discover-1"},
+	})
+	raw, _ = json.Marshal(result)
+	_, _, err = DecodeAndValidateResultForVersion(OrchestratorVersionV4, raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v4",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "downstream of all evidence") {
+		t.Fatalf("error=%v, want omitted deep-read rejection", err)
+	}
+}
+
+func TestResearchRunV4RejectsDeliveryTaskOutsideValidatedPlanGraph(t *testing.T) {
+	result := authoritativeRecordEvidenceV4()
+	result.ProposedTasks = []TaskProposal{{
+		ClientKey: "premature-report", Kind: TaskKindSynthesize, Objective: "Write report before verification",
+		RequiredCapability: "reporter", ExpectedResult: "research_report_v4", Priority: 1,
+	}}
+	raw, _ := json.Marshal(result)
+	_, _, err := DecodeAndValidateResultForVersion(OrchestratorVersionV4, raw, Task{
+		Kind: TaskKindDiscover, QuestionID: "question-1", RequiredCapability: "scout", ExpectedResult: "research_evidence_v4",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "validated plan graph") {
+		t.Fatalf("error=%v, want out-of-plan delivery rejection", err)
+	}
+}
+
+func TestResearchRunV4RequiresVerificationPathForRequiredFollowUpQuestion(t *testing.T) {
+	result := authoritativeRecordEvidenceV4()
+	result.Questions = []QuestionProposal{{
+		ClientKey: "decision-reversing-follow-up", Kind: QuestionKindGap,
+		Text: "Could a boundary condition reverse the answer?", Required: true,
+		Priority: 0.9, Impact: 1, Uncertainty: 0.8, Novelty: 0.8,
+	}}
+	raw, _ := json.Marshal(result)
+	_, _, err := DecodeAndValidateResultForVersion(OrchestratorVersionV4, raw, Task{
+		Kind: TaskKindDiscover, QuestionID: "question-1", RequiredCapability: "scout", ExpectedResult: "research_evidence_v4",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "required follow-up question") {
+		t.Fatalf("error=%v, want missing follow-up verification rejection", err)
+	}
+}
+
 func TestResearchRunV4ValidatesEvidenceAgainstDeclaredStandards(t *testing.T) {
 	now := time.Now().UTC()
 	result := ResultEnvelope{
@@ -288,15 +359,6 @@ func TestCanonicalURLNormalizesWithoutLosingQuery(t *testing.T) {
 	}
 	if got != "https://example.com/path?q=1" {
 		t.Fatalf("CanonicalURL=%q", got)
-	}
-}
-
-func TestMeasuredInformationGainUsesOnlyNewNormalizedEvidence(t *testing.T) {
-	if got := measuredInformationGain(AcceptResultOutcome{SourcesCreated: 1, ObservationsCreated: 2, ClaimsCreated: 1}); got != 0.06 {
-		t.Fatalf("measuredInformationGain=%v, want 0.06", got)
-	}
-	if got := measuredInformationGain(AcceptResultOutcome{SourcesCreated: 100}); got != 1 {
-		t.Fatalf("capped measuredInformationGain=%v, want 1", got)
 	}
 }
 
@@ -357,6 +419,16 @@ func validV4PlanResult(t *testing.T) ResultEnvelope {
 		MinimumIndependentSources: 1, RequiredSourceTraits: []string{"official_record"},
 		MinimumStrength: 0.8, MinimumDirectness: 0.9, MinimumMethodFit: 0.9,
 	}}
+	result.Plan.Tasks = append(result.Plan.Tasks, TaskProposal{
+		ClientKey: "verify-1", QuestionKey: "question-1", Kind: TaskKindVerify,
+		Objective: "Verify the required answer against its evidence standard", RequiredCapability: "validator",
+		ExpectedResult: "research_evidence_v3", Priority: 0.8, DependsOn: []string{"discover-1"},
+	})
+	for i := range result.Plan.Tasks {
+		if result.Plan.Tasks[i].Kind == TaskKindSynthesize {
+			result.Plan.Tasks[i].DependsOn = []string{"verify-1"}
+		}
+	}
 	for i := range result.Plan.Tasks {
 		result.Plan.Tasks[i].ExpectedResult = translateResultKind(result.Plan.Tasks[i].ExpectedResult, "_v3", "_v4")
 	}

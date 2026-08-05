@@ -24,7 +24,6 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     update_state: "idle",
     runtime_health: "update_available",
     owner_id: "user-1",
-    visibility: "private",
     last_seen_at: "2026-07-03T00:00:00Z",
     created_at: "2026-07-03T00:00:00Z",
     updated_at: "2026-07-03T00:00:00Z",

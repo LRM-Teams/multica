@@ -57,6 +57,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
@@ -732,10 +733,13 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                       >
                         <item.icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
-                        {item.key === "computers" && (
-                          <RuntimeAttentionAlert wsId={wsId} />
-                        )}
                       </SidebarMenuButton>
+                      {item.key === "computers" && (
+                        <RuntimeAttentionAlert
+                          wsId={wsId}
+                          trigger={<SidebarMenuAction />}
+                        />
+                      )}
                     </SidebarMenuItem>
                   );
                 })}

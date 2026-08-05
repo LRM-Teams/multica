@@ -57,6 +57,7 @@ vi.mock("@multica/ui/components/ui/sidebar", () => ({
   SidebarGroupLabel: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarHeader: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SidebarMenuAction: () => <button type="button" />,
   SidebarMenuButton: ({ children, render }: { children: React.ReactNode; render?: React.ReactElement }) =>
     isValidElement(render) ? cloneElement(render, undefined, children) : <button type="button">{children}</button>,
   SidebarMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,

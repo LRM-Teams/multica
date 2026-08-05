@@ -120,7 +120,6 @@ function makeRuntime(overrides: Partial<RuntimeDevice>): RuntimeDevice {
     update_state: "idle",
     runtime_health: "ok",
     owner_id: ME,
-    visibility: "private",
     last_seen_at: "2026-04-27T11:59:50Z",
     created_at: "2026-04-01T00:00:00Z",
     updated_at: "2026-04-01T00:00:00Z",
@@ -181,188 +180,54 @@ function renderDialog(runtimes: RuntimeDevice[], template?: Agent) {
   return { onCreate, onClose };
 }
 
-describe("CreateAgentDialog runtime visibility gate", () => {
+describe("CreateAgentDialog workspace runtime selection", () => {
   beforeEach(() => vi.clearAllMocks());
-  // Base UI Dialog renders into a portal on document.body and leaves
-  // focus-guard / inert wrapper divs around after the React tree unmounts.
-  // The auto-cleanup from @testing-library/react drops the container but
-  // not the portal residue, so two-tests-in-a-row queries see double
-  // matches ("All", "My Runtime"). Force cleanup + wipe body between tests.
   afterEach(() => {
     cleanup();
     document.body.innerHTML = "";
   });
 
-  it("excludes another member's private runtime from the picker entirely", () => {
+  it("lets a member pick a teammate runtime", () => {
     const mine = makeRuntime({
       id: "rt-mine",
       name: "My Runtime",
       provider: "claude",
       owner_id: ME,
-      visibility: "private",
     });
-    const othersPrivate = makeRuntime({
-      id: "rt-others-private",
-      name: "Others Private",
+    const teammate = makeRuntime({
+      id: "rt-teammate",
+      name: "Teammate Runtime",
       provider: "cursor",
       owner_id: OTHER,
-      visibility: "private",
     });
-    renderDialog([mine, othersPrivate]);
-
-    // Open the picker.
-    fireEvent.click(
-      screen.getByText("Claude Code", { selector: "span.truncate" }),
-    );
-
-    // Not shown-disabled — not shown at all. A private runtime that isn't
-    // mine has nothing for me to do with it.
-    expect(screen.queryByText("Cursor")).toBeNull();
-    // No mine/all toggle to reveal it, either.
-    expect(screen.queryByText("All")).toBeNull();
-    expect(screen.queryByText("Mine")).toBeNull();
-  });
-
-  it("shows empty copy when the computer has no usable runtime", () => {
-    const othersPrivate = makeRuntime({
-      id: "rt-others-private",
-      name: "Others Private",
-      provider: "cursor",
-      owner_id: OTHER,
-      visibility: "private",
-    });
-    renderDialog([othersPrivate]);
-
-    // Open the runtime popover from its labeled trigger (no usable seed).
-    const runtimeLabel = screen.getByText("Runtime", {
-      selector: "label",
-    });
-    const trigger = runtimeLabel
-      .closest("div")
-      ?.parentElement
-      ?.querySelector("button");
-    expect(trigger).toBeTruthy();
-    fireEvent.click(trigger!);
-    expect(screen.getByTestId("runtime-picker-empty")).toHaveTextContent(
-      /No usable runtime on this computer/i,
-    );
-  });
-
-  it("lets a plain member pick another member's public runtime", () => {
-    const mine = makeRuntime({
-      id: "rt-mine",
-      name: "My Runtime",
-      provider: "claude",
-      owner_id: ME,
-      visibility: "private",
-    });
-    const othersPublic = makeRuntime({
-      id: "rt-others-public",
-      name: "Others Public",
-      provider: "cursor",
-      owner_id: OTHER,
-      visibility: "public",
-    });
-    renderDialog([mine, othersPublic]);
+    renderDialog([mine, teammate]);
 
     fireEvent.click(
       screen.getByText("Claude Code", { selector: "span.truncate" }),
     );
-
-    const publicRow = screen
-      .getByText("Cursor")
-      .closest("button") as HTMLButtonElement;
-    expect(publicRow).not.toBeNull();
-    expect(publicRow.disabled).toBe(false);
+    const teammateRow = screen.getByText("Cursor").closest("button") as HTMLButtonElement;
+    expect(teammateRow).not.toBeNull();
+    expect(teammateRow.disabled).toBe(false);
   });
 
-  it("defaults the selected runtime to a usable one, not a locked private", () => {
-    const othersPrivate = makeRuntime({
-      id: "rt-others-private",
-      name: "Others Private",
+  it("preserves a teammate runtime when duplicating an agent", async () => {
+    const teammate = makeRuntime({
+      id: "rt-teammate",
+      name: "Teammate Runtime",
       provider: "cursor",
       owner_id: OTHER,
-      visibility: "private",
     });
-    const mine = makeRuntime({
-      id: "rt-mine",
-      name: "My Runtime",
-      provider: "claude",
-      owner_id: ME,
-      visibility: "private",
-    });
-    renderDialog([othersPrivate, mine]);
+    const template = makeTemplate(teammate.id);
+    const { onCreate } = renderDialog([teammate], template);
 
-    // The trigger label shows the brand. The picker must not seed with the
-    // other-owned private runtime even if it sorted first in the input list.
-    expect(screen.queryByText("Cursor", { selector: "span.truncate" })).toBeNull();
-    expect(screen.getByText("Claude Code", { selector: "span.truncate" })).toBeInTheDocument();
-  });
-
-  it("in duplicate mode, does not pre-fill the template's runtime when it's now locked", async () => {
-    // Template runtime is owned by someone else and now private — the
-    // duplicate flow used to seed with it anyway, leaving the user with
-    // a Create button that 403s server-side. Now we fall back to the
-    // first usable runtime instead.
-    const othersPrivate = makeRuntime({
-      id: "rt-others-private",
-      name: "Others Private",
-      provider: "cursor",
-      owner_id: OTHER,
-      visibility: "private",
-    });
-    const mine = makeRuntime({
-      id: "rt-mine",
-      name: "My Runtime",
-      provider: "claude",
-      owner_id: ME,
-      visibility: "private",
-    });
-    const template = makeTemplate("rt-others-private");
-    const { onCreate } = renderDialog([othersPrivate, mine], template);
-
-    expect(
-      screen.getByText("Claude Code", { selector: "span.truncate" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("Cursor", { selector: "span.truncate" }),
-    ).toBeNull();
-
-    // Sanity check: with a usable selection seeded, Create should submit.
+    expect(screen.getByText("Cursor", { selector: "span.truncate" })).toBeInTheDocument();
     await waitFor(() => {
-      const createBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Create") as HTMLButtonElement | undefined;
-      expect(createBtn?.disabled).toBe(false);
+      const createBtn = screen.getAllByRole("button").find((b) => b.textContent === "Create");
+      expect((createBtn as HTMLButtonElement | undefined)?.disabled).toBe(false);
     });
     fireEvent.click(screen.getByText("Create"));
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
-    expect(onCreate.mock.calls[0]?.[0].runtime_id).toBe("rt-mine");
-    expect(onCreate.mock.calls[0]?.[0].model).toBe("composer-1.5");
-  });
-
-  it("disables Create when the selected runtime is locked (template + no usable fallback)", () => {
-    // Edge case: template points at a locked runtime AND the workspace
-    // has no usable alternatives in scope. The defense-in-depth gate on
-    // the Create button must keep the user from submitting a 403.
-    const onlyOthersPrivate = makeRuntime({
-      id: "rt-only-others-private",
-      name: "Only Others Private",
-      owner_id: OTHER,
-      visibility: "private",
-    });
-    // The only runtime in scope is locked (someone else's private one),
-    // so the seed search finds nothing usable and Create must stay
-    // disabled rather than let the user submit a runtime it can't select.
-    const template = makeTemplate("rt-only-others-private");
-    renderDialog([onlyOthersPrivate], template);
-
-    // The Create button is rendered by lucide-free CTA text "Create".
-    const createBtn = screen
-      .getAllByRole("button")
-      .find((b) => b.textContent === "Create");
-    expect(createBtn).toBeDefined();
-    expect((createBtn as HTMLButtonElement).disabled).toBe(true);
+    expect(onCreate.mock.calls[0]?.[0].runtime_id).toBe(teammate.id);
   });
 
   it("scopes the code-agent picker to the selected computer only", () => {
@@ -372,7 +237,6 @@ describe("CreateAgentDialog runtime visibility gate", () => {
       daemon_id: "daemon-s144",
       display_name: "s144",
       owner_id: ME,
-      visibility: "private",
       provider: "cursor",
       device_info: "s144",
     });
@@ -382,7 +246,6 @@ describe("CreateAgentDialog runtime visibility gate", () => {
       daemon_id: "daemon-s144",
       display_name: "s144",
       owner_id: ME,
-      visibility: "private",
       provider: "pi",
       device_info: "s144",
     });
@@ -392,7 +255,6 @@ describe("CreateAgentDialog runtime visibility gate", () => {
       daemon_id: "daemon-other",
       display_name: "other-box",
       owner_id: ME,
-      visibility: "private",
       provider: "cursor",
       device_info: "other-box",
     });
@@ -415,7 +277,6 @@ describe("CreateAgentDialog runtime visibility gate", () => {
       daemon_id: "daemon-s144",
       display_name: "s144",
       owner_id: ME,
-      visibility: "private",
       provider: "cursor",
       device_info: "s144",
     });
@@ -425,7 +286,6 @@ describe("CreateAgentDialog runtime visibility gate", () => {
       daemon_id: "daemon-other",
       display_name: "other-box",
       owner_id: ME,
-      visibility: "private",
       provider: "pi",
       device_info: "other-box",
     });

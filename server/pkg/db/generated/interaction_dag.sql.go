@@ -152,7 +152,7 @@ func (q *Queries) FailInteractionDAGDiagnosisRun(ctx context.Context, arg FailIn
 }
 
 const getInteractionDAGDiagnosisRun = `-- name: GetInteractionDAGDiagnosisRun :one
-SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode, sandbox_mode
 FROM interaction_dag_diagnosis_run
 WHERE run_id = $1
 `
@@ -176,6 +176,7 @@ func (q *Queries) GetInteractionDAGDiagnosisRun(ctx context.Context, runID strin
 		&i.SandboxInstanceID,
 		&i.CapabilityTokenHash,
 		&i.ExecutionMode,
+		&i.SandboxMode,
 	)
 	return i, err
 }
@@ -370,7 +371,7 @@ func (q *Queries) GetLastEndSeqForAgentRun(ctx context.Context, agentRunID strin
 }
 
 const getLatestCompletedInteractionDAGDiagnosisRun = `-- name: GetLatestCompletedInteractionDAGDiagnosisRun :one
-SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode, sandbox_mode
 FROM interaction_dag_diagnosis_run
 WHERE project_id = $1 AND task_id = $2 AND status = 'completed'
 ORDER BY completed_at DESC, updated_at DESC
@@ -403,12 +404,13 @@ func (q *Queries) GetLatestCompletedInteractionDAGDiagnosisRun(ctx context.Conte
 		&i.SandboxInstanceID,
 		&i.CapabilityTokenHash,
 		&i.ExecutionMode,
+		&i.SandboxMode,
 	)
 	return i, err
 }
 
 const getLatestInteractionDAGDiagnosisRunForProject = `-- name: GetLatestInteractionDAGDiagnosisRunForProject :one
-SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode, sandbox_mode
 FROM interaction_dag_diagnosis_run
 WHERE project_id = $1
 ORDER BY updated_at DESC
@@ -436,12 +438,13 @@ func (q *Queries) GetLatestInteractionDAGDiagnosisRunForProject(ctx context.Cont
 		&i.SandboxInstanceID,
 		&i.CapabilityTokenHash,
 		&i.ExecutionMode,
+		&i.SandboxMode,
 	)
 	return i, err
 }
 
 const getResumableInteractionDAGDiagnosisRun = `-- name: GetResumableInteractionDAGDiagnosisRun :one
-SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode
+SELECT run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, current_segment_ordinal, pi_session_id, last_error, created_at, updated_at, completed_at, sandbox_instance_id, capability_token_hash, execution_mode, sandbox_mode
 FROM interaction_dag_diagnosis_run
 WHERE project_id = $1 AND task_id = $2 AND status IN ('provisioning', 'running', 'compacting')
 ORDER BY updated_at DESC
@@ -476,6 +479,7 @@ func (q *Queries) GetResumableInteractionDAGDiagnosisRun(ctx context.Context, ar
 		&i.SandboxInstanceID,
 		&i.CapabilityTokenHash,
 		&i.ExecutionMode,
+		&i.SandboxMode,
 	)
 	return i, err
 }
@@ -905,7 +909,8 @@ func (q *Queries) ListLatestCompletedInteractionDAGDiagnosisTargetsForProject(ct
 
 const setInteractionDAGDiagnosisRunSandbox = `-- name: SetInteractionDAGDiagnosisRunSandbox :exec
 UPDATE interaction_dag_diagnosis_run
-SET sandbox_instance_id = $2, capability_token_hash = $3, execution_mode = $4, updated_at = now()
+SET sandbox_instance_id = $2, capability_token_hash = $3, execution_mode = $4,
+    sandbox_mode = $5, updated_at = now()
 WHERE run_id = $1
 `
 
@@ -914,6 +919,7 @@ type SetInteractionDAGDiagnosisRunSandboxParams struct {
 	SandboxInstanceID   pgtype.Text `json:"sandbox_instance_id"`
 	CapabilityTokenHash pgtype.Text `json:"capability_token_hash"`
 	ExecutionMode       pgtype.Text `json:"execution_mode"`
+	SandboxMode         pgtype.Text `json:"sandbox_mode"`
 }
 
 // Records the dedicated sandbox, per-run capability token hash, and execution
@@ -924,6 +930,7 @@ func (q *Queries) SetInteractionDAGDiagnosisRunSandbox(ctx context.Context, arg 
 		arg.SandboxInstanceID,
 		arg.CapabilityTokenHash,
 		arg.ExecutionMode,
+		arg.SandboxMode,
 	)
 	return err
 }

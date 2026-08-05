@@ -839,6 +839,9 @@ func (h *Handler) CompleteAgentInboxEvent(w http.ResponseWriter, r *http.Request
 	// T022: a terminal sandboxed diagnosis task maps onto its diagnosis run
 	// (no-op for non-diagnosis tasks).
 	h.mapDiagnosisInboxCompletion(r.Context(), event)
+	// Non-diagnosis shared-dispatch business tasks may now have crossed the
+	// all-terminal barrier; this is a no-op until every business task is done.
+	go h.maybeStartSharedDispatchDiagnosis(context.Background(), event)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
 		"acked_seq":        ackedSeq,
@@ -1280,12 +1283,14 @@ func (h *Handler) finishFailedAgentInboxEvent(
 		h.publishAgentInboxTaskLifecycle(protocol.EventTaskCompleted, event, runtimeID, "completed")
 		// T022: a replied diagnosis task is a completion-equivalent terminal.
 		h.mapDiagnosisInboxCompletion(r.Context(), event)
+		go h.maybeStartSharedDispatchDiagnosis(context.Background(), event)
 	} else {
 		h.publishAgentInboxTaskLifecycle(protocol.EventTaskFailed, event, runtimeID, "failed")
 		h.recordAgentInboxFailureActivity(r.Context(), event, deliveryID, errText, failureReason, reasonCode)
 		// T022: a terminal sandboxed diagnosis task failure maps onto its run
 		// with a classified cause (no-op for non-diagnosis tasks).
 		h.mapDiagnosisInboxFailure(r.Context(), event, errText, failureReason, reasonCode)
+		go h.maybeStartSharedDispatchDiagnosis(context.Background(), event)
 	}
 	h.recordAgentInboxStatusActivity(r.Context(), event, runtimeID, deliveryID, agentInboxStatusActivityIdle)
 	terminalOutcome := "failed"

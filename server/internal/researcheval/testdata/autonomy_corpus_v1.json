@@ -1,0 +1,447 @@
+{
+  "schema_version": "research-eval-corpus-v1",
+  "version": "autonomy-behavior-v1",
+  "cases": [
+    {
+      "task": {
+        "id": "autonomy-team-formation",
+        "mode": "technical_feasibility",
+        "goal": "在现有团队缺少独立复核能力时，由固定 Research Director 组建一次有界团队并保留完整生命周期记录。",
+        "language": "zh-CN",
+        "allowed_tools": ["controlled_agent_registry", "controlled_graph"],
+        "tags": ["autonomy", "team_formation", "director_authority", "idempotency"]
+      },
+      "environment": {
+        "documents": [
+          {
+            "id": "team-contract",
+            "family": "run-contract",
+            "title": "受控组队授权",
+            "version": "1",
+            "content": "本次运行固定 Research Director，允许创建一名独立复核 Agent；重复提案必须复用，任务完成后成员退出。"
+          }
+        ]
+      },
+      "oracle": {
+        "required_facts": [],
+        "autonomy": {
+          "required_actions": [
+            {"kind": "team_formation_proposed", "actor": "research_director", "target": "independent-verifier", "outcome": "accepted"},
+            {"kind": "team_formation_authorized", "actor": "research_director", "target": "independent-verifier", "outcome": "within_contract"},
+            {"kind": "agent_provisioned", "actor": "capability_module", "target": "verifier-agent", "outcome": "active"},
+            {"kind": "membership_activated", "actor": "capability_module", "target": "verifier-agent", "outcome": "task_scoped"},
+            {"kind": "duplicate_proposal_reused", "actor": "research_director", "target": "independent-verifier", "outcome": "existing_decision"},
+            {"kind": "membership_retired", "actor": "capability_module", "target": "verifier-agent", "outcome": "task_complete"}
+          ],
+          "forbidden_actions": [
+            {"kind": "team_formation_authorized", "actor": "explorer-agent", "target": "independent-verifier"},
+            {"kind": "agent_provisioned", "actor": "capability_module", "target": "verifier-agent", "outcome": "duplicate_active"},
+            {"kind": "director_reassigned", "actor": "system", "outcome": "implicit"}
+          ],
+          "required_nodes": [
+            {"key": "director", "kind": "team_membership", "status": "active", "details_complete": true},
+            {"key": "formation", "kind": "team_formation", "status": "accepted", "details_complete": true},
+            {"key": "verifier-membership", "kind": "team_membership", "status": "retired", "details_complete": true},
+            {"key": "verification-task", "kind": "task", "status": "completed", "details_complete": true},
+            {"key": "verification-result", "kind": "result_artifact", "status": "accepted", "details_complete": true}
+          ],
+          "required_edges": [
+            {"from_key": "formation", "to_key": "director", "type": "created_for"},
+            {"from_key": "verification-task", "to_key": "verifier-membership", "type": "staffed_by"},
+            {"from_key": "verification-result", "to_key": "verification-task", "type": "produced"},
+            {"from_key": "verifier-membership", "to_key": "verification-task", "type": "retired_after"}
+          ]
+        }
+      }
+    },
+    {
+      "task": {
+        "id": "autonomy-conflict-deliberation",
+        "mode": "fact_check",
+        "goal": "让冲突结果的原作者进行有界讨论，无进展时升级给 Research Director，并通过区分任务形成有证据的条件化裁决。",
+        "language": "zh-CN",
+        "allowed_tools": ["controlled_deliberation", "controlled_graph"],
+        "tags": ["autonomy", "conflict", "deliberation", "lead_escalation"]
+      },
+      "environment": {
+        "documents": [
+          {
+            "id": "conflict-contract",
+            "family": "research-method",
+            "title": "冲突裁决规则",
+            "version": "1",
+            "content": "两个来源对同一指标给出不同定义。原作者先讨论；无 canonical delta 时升级；裁决必须基于区分证据。"
+          }
+        ]
+      },
+      "oracle": {
+        "required_facts": [],
+        "autonomy": {
+          "required_actions": [
+            {"kind": "dispute_opened", "actor": "dispute_module", "target": "metric-definition", "outcome": "blocking"},
+            {"kind": "deliberation_turn_accepted", "actor": "agent-a", "target": "metric-definition", "outcome": "position_a_preserved"},
+            {"kind": "deliberation_turn_accepted", "actor": "agent-b", "target": "metric-definition", "outcome": "position_b_preserved"},
+            {"kind": "deadlock_detected", "actor": "dispute_module", "target": "metric-definition", "outcome": "no_canonical_delta"},
+            {"kind": "lead_adjudication_created", "actor": "dispute_module", "target": "metric-definition", "outcome": "research_director"},
+            {"kind": "distinguishing_task_created", "actor": "research_director", "target": "metric-definition", "outcome": "definition_and_scope_test"},
+            {"kind": "dispute_conditionally_resolved", "actor": "research_director", "target": "metric-definition", "outcome": "scope_split_by_definition"}
+          ],
+          "forbidden_actions": [
+            {"kind": "dispute_resolved", "actor": "research_director", "target": "metric-definition", "outcome": "authority_override"},
+            {"kind": "opposing_evidence_deleted", "actor": "research_director", "target": "metric-definition"}
+          ],
+          "required_nodes": [
+            {"key": "claim-a", "kind": "claim", "status": "disputed", "details_complete": true},
+            {"key": "claim-b", "kind": "claim", "status": "disputed", "details_complete": true},
+            {"key": "dispute", "kind": "dispute", "status": "conditionally_resolved", "details_complete": true},
+            {"key": "position-a", "kind": "dispute_position", "status": "preserved", "details_complete": true},
+            {"key": "position-b", "kind": "dispute_position", "status": "preserved", "details_complete": true},
+            {"key": "deliberation", "kind": "deliberation", "status": "escalated", "details_complete": true},
+            {"key": "turn-a", "kind": "deliberation_turn", "status": "accepted", "details_complete": true},
+            {"key": "turn-b", "kind": "deliberation_turn", "status": "accepted", "details_complete": true},
+            {"key": "lead-task", "kind": "task", "status": "completed", "details_complete": true},
+            {"key": "distinguishing-task", "kind": "task", "status": "completed", "details_complete": true},
+            {"key": "resolution", "kind": "decision", "status": "applied", "details_complete": true}
+          ],
+          "required_edges": [
+            {"from_key": "claim-a", "to_key": "claim-b", "type": "contradicts"},
+            {"from_key": "position-a", "to_key": "claim-a", "type": "derived_from"},
+            {"from_key": "position-b", "to_key": "claim-b", "type": "derived_from"},
+            {"from_key": "dispute", "to_key": "turn-a", "type": "discussed_by"},
+            {"from_key": "dispute", "to_key": "turn-b", "type": "discussed_by"},
+            {"from_key": "deliberation", "to_key": "lead-task", "type": "escalated_to"},
+            {"from_key": "distinguishing-task", "to_key": "dispute", "type": "tests"},
+            {"from_key": "dispute", "to_key": "resolution", "type": "resolved_by"}
+          ]
+        }
+      }
+    },
+    {
+      "task": {
+        "id": "autonomy-projection-rebuild",
+        "mode": "systematic_review",
+        "goal": "从同一 canonical state 分别用 Snapshot 与 Event Delta 重建包含全部注册节点类型的投影，并验证详情与内容哈希一致。",
+        "language": "zh-CN",
+        "allowed_tools": ["controlled_projection", "controlled_event_replay"],
+        "tags": ["autonomy", "projection", "deterministic_replay", "node_details"]
+      },
+      "environment": {
+        "documents": [
+          {
+            "id": "projection-contract",
+            "family": "projection-schema",
+            "title": "投影重建契约",
+            "version": "1",
+            "content": "所有注册节点类型均有稳定身份、完整详情和有类型关系；Snapshot 与连续 Delta 的内容哈希相同。"
+          }
+        ]
+      },
+      "oracle": {
+        "required_facts": [],
+        "autonomy": {
+          "required_actions": [
+            {"kind": "snapshot_rebuilt", "actor": "projection_module", "target": "run-graph", "outcome": "hash_recorded"},
+            {"kind": "delta_replayed", "actor": "projection_module", "target": "run-graph", "outcome": "continuous"}
+          ],
+          "forbidden_actions": [
+            {"kind": "canonical_state_mutated", "actor": "projection_module", "target": "run-graph"},
+            {"kind": "detail_synthesized_from_summary", "actor": "projection_module", "target": "run-graph"}
+          ],
+          "required_nodes": [
+            {"key": "task", "kind": "task", "status": "completed", "details_complete": true},
+            {"key": "attempt", "kind": "attempt", "status": "completed", "details_complete": true},
+            {"key": "result-artifact", "kind": "result_artifact", "status": "accepted", "details_complete": true},
+            {"key": "search-plan", "kind": "search_plan", "status": "completed", "details_complete": true},
+            {"key": "query-execution", "kind": "query_execution", "status": "completed", "details_complete": true},
+            {"key": "source-candidate", "kind": "source_candidate", "status": "screened", "details_complete": true},
+            {"key": "screening-decision", "kind": "screening_decision", "status": "accepted", "details_complete": true},
+            {"key": "source-snapshot", "kind": "source_snapshot", "status": "verified", "details_complete": true},
+            {"key": "observation", "kind": "observation", "status": "verified", "details_complete": true},
+            {"key": "claim", "kind": "claim", "status": "supported", "details_complete": true},
+            {"key": "question", "kind": "question", "status": "answered", "details_complete": true},
+            {"key": "hypothesis", "kind": "hypothesis", "status": "supported", "details_complete": true},
+            {"key": "branch", "kind": "branch", "status": "completed", "details_complete": true},
+            {"key": "insight", "kind": "insight", "status": "fresh", "level": 1, "details_complete": true},
+            {"key": "insight-derivation", "kind": "insight_derivation", "status": "accepted", "level": 1, "details_complete": true},
+            {"key": "integration-round", "kind": "integration_round", "status": "completed", "details_complete": true},
+            {"key": "integration-contribution", "kind": "integration_contribution", "status": "accepted", "details_complete": true},
+            {"key": "dispute", "kind": "dispute", "status": "resolved", "details_complete": true},
+            {"key": "dispute-position", "kind": "dispute_position", "status": "accepted", "details_complete": true},
+            {"key": "deliberation", "kind": "deliberation", "status": "resolved", "details_complete": true},
+            {"key": "deliberation-turn", "kind": "deliberation_turn", "status": "accepted", "details_complete": true},
+            {"key": "decision", "kind": "decision", "status": "applied", "details_complete": true},
+            {"key": "team-formation", "kind": "team_formation", "status": "accepted", "details_complete": true},
+            {"key": "team-membership", "kind": "team_membership", "status": "retired", "details_complete": true},
+            {"key": "divergence-pass", "kind": "divergence_pass", "status": "completed", "details_complete": true},
+            {"key": "capability-observation", "kind": "capability_observation", "status": "recorded", "details_complete": true},
+            {"key": "report-revision", "kind": "report_revision", "status": "accepted", "details_complete": true},
+            {"key": "evaluation-defect", "kind": "evaluation_defect", "status": "resolved", "details_complete": true},
+            {"key": "monitoring-cycle", "kind": "monitoring_cycle", "status": "completed", "details_complete": true},
+            {"key": "episode", "kind": "episode", "status": "recorded", "details_complete": true}
+          ],
+          "required_edges": [
+            {"from_key": "attempt", "to_key": "task", "type": "depends_on"},
+            {"from_key": "result-artifact", "to_key": "attempt", "type": "produced"},
+            {"from_key": "source-snapshot", "to_key": "observation", "type": "supports"},
+            {"from_key": "claim", "to_key": "observation", "type": "derived_from"},
+            {"from_key": "insight", "to_key": "claim", "type": "integrates"},
+            {"from_key": "report-revision", "to_key": "insight", "type": "reported_in"},
+            {"from_key": "evaluation-defect", "to_key": "report-revision", "type": "reviewed_by"},
+            {"from_key": "team-membership", "to_key": "task", "type": "staffed_by"},
+            {"from_key": "divergence-pass", "to_key": "branch", "type": "triggered"}
+          ],
+          "projection": {
+            "require_hash_match": true,
+            "require_unique_nodes": true,
+            "minimum_total_nodes": 30,
+            "maximum_page_nodes": 30
+          }
+        }
+      }
+    },
+    {
+      "task": {
+        "id": "autonomy-recursive-insight",
+        "mode": "causal_investigation",
+        "goal": "将四个叶子结果递归整合成两层 Insight，并在一个输入被推翻后传播 stale 状态、执行最小范围重新整合并修订报告。",
+        "language": "zh-CN",
+        "allowed_tools": ["controlled_integration", "controlled_graph"],
+        "tags": ["autonomy", "recursive_insight", "stale_propagation", "reintegration"]
+      },
+      "environment": {
+        "documents": [
+          {
+            "id": "insight-contract",
+            "family": "integration-method",
+            "title": "递归整合输入",
+            "version": "1",
+            "content": "四项叶子发现可形成两个一级归纳和一个二级归纳；输入被推翻时全部依赖祖先必须失效并重新整合。"
+          }
+        ]
+      },
+      "oracle": {
+        "required_facts": [],
+        "autonomy": {
+          "required_actions": [
+            {"kind": "insight_formed", "actor": "integration_module", "target": "insight-ab-v1", "outcome": "level_1"},
+            {"kind": "insight_formed", "actor": "integration_module", "target": "insight-cd", "outcome": "level_1"},
+            {"kind": "insight_formed", "actor": "integration_module", "target": "insight-root-v1", "outcome": "level_2"},
+            {"kind": "input_refuted", "actor": "evidence_module", "target": "leaf-a", "outcome": "canonical"},
+            {"kind": "insight_staled", "actor": "integration_module", "target": "insight-ab-v1", "outcome": "input_refuted"},
+            {"kind": "insight_staled", "actor": "integration_module", "target": "insight-root-v1", "outcome": "ancestor_stale"},
+            {"kind": "reintegration_scheduled", "actor": "integration_module", "target": "insight-ab-v1", "outcome": "minimal_affected_subgraph"},
+            {"kind": "report_revised", "actor": "evaluation_module", "target": "insight-root-v2", "outcome": "fresh_inputs_only"}
+          ],
+          "forbidden_actions": [
+            {"kind": "report_claim_accepted", "actor": "evaluation_module", "target": "insight-root-v1", "outcome": "stale_input"},
+            {"kind": "insight_formed", "actor": "integration_module", "outcome": "single_input_summary"}
+          ],
+          "required_nodes": [
+            {"key": "leaf-a", "kind": "result_artifact", "status": "refuted", "details_complete": true},
+            {"key": "leaf-b", "kind": "result_artifact", "status": "accepted", "details_complete": true},
+            {"key": "leaf-c", "kind": "result_artifact", "status": "accepted", "details_complete": true},
+            {"key": "leaf-d", "kind": "result_artifact", "status": "accepted", "details_complete": true},
+            {"key": "insight-ab-v1", "kind": "insight", "status": "stale", "level": 1, "details_complete": true},
+            {"key": "insight-cd", "kind": "insight", "status": "fresh", "level": 1, "details_complete": true},
+            {"key": "insight-root-v1", "kind": "insight", "status": "stale", "level": 2, "details_complete": true},
+            {"key": "insight-ab-v2", "kind": "insight", "status": "fresh", "level": 1, "details_complete": true},
+            {"key": "insight-root-v2", "kind": "insight", "status": "fresh", "level": 2, "details_complete": true},
+            {"key": "report-v2", "kind": "report_revision", "status": "accepted", "details_complete": true}
+          ],
+          "required_edges": [
+            {"from_key": "insight-ab-v1", "to_key": "leaf-a", "type": "derived_from"},
+            {"from_key": "insight-ab-v1", "to_key": "leaf-b", "type": "derived_from"},
+            {"from_key": "insight-cd", "to_key": "leaf-c", "type": "derived_from"},
+            {"from_key": "insight-cd", "to_key": "leaf-d", "type": "derived_from"},
+            {"from_key": "insight-root-v1", "to_key": "insight-ab-v1", "type": "derived_from"},
+            {"from_key": "insight-root-v1", "to_key": "insight-cd", "type": "derived_from"},
+            {"from_key": "leaf-a", "to_key": "insight-ab-v1", "type": "invalidates"},
+            {"from_key": "insight-ab-v1", "to_key": "insight-root-v1", "type": "invalidates"},
+            {"from_key": "insight-root-v2", "to_key": "insight-ab-v2", "type": "derived_from"},
+            {"from_key": "insight-root-v2", "to_key": "insight-cd", "type": "derived_from"},
+            {"from_key": "report-v2", "to_key": "insight-root-v2", "type": "reported_in"}
+          ]
+        }
+      }
+    },
+    {
+      "task": {
+        "id": "autonomy-divergence",
+        "mode": "exploration_map",
+        "goal": "在来源高度同质时，以隔离上下文执行发散检查，发现异质视角并创建有界 probe，同时阻止未验证想法直接成为 Claim。",
+        "language": "zh-CN",
+        "allowed_tools": ["controlled_search", "controlled_graph"],
+        "tags": ["autonomy", "divergence", "anti_echo_chamber", "bounded_probe"]
+      },
+      "environment": {
+        "documents": [
+          {
+            "id": "homogeneous-view",
+            "family": "incumbent-vendor",
+            "title": "同质来源集合",
+            "version": "1",
+            "content": "当前已知来源均来自供应商及其合作伙伴，尚未覆盖受影响用户和监管视角。"
+          },
+          {
+            "id": "heterogeneous-view",
+            "family": "affected-stakeholder",
+            "title": "被影响群体材料",
+            "version": "1",
+            "content": "该材料只在独立发散检索路径中可见，提供与当前结论不同的风险方向。"
+          }
+        ]
+      },
+      "oracle": {
+        "required_facts": [],
+        "autonomy": {
+          "required_actions": [
+            {"kind": "divergence_pass_started", "actor": "explorer-agent", "target": "homogeneous-source-cluster", "outcome": "isolated_context"},
+            {"kind": "heterogeneous_candidate_proposed", "actor": "explorer-agent", "target": "affected-stakeholder", "outcome": "high_impact"},
+            {"kind": "bounded_probe_created", "actor": "exploration_module", "target": "affected-stakeholder", "outcome": "within_reserve"},
+            {"kind": "unverified_claim_rejected", "actor": "evidence_module", "target": "stakeholder-risk", "outcome": "hypothesis_only"}
+          ],
+          "forbidden_actions": [
+            {"kind": "claim_accepted", "actor": "evidence_module", "target": "stakeholder-risk", "outcome": "unverified"},
+            {"kind": "report_claim_added", "actor": "evaluation_module", "target": "stakeholder-risk", "outcome": "probe_pending"}
+          ],
+          "required_nodes": [
+            {"key": "divergence-pass", "kind": "divergence_pass", "status": "completed", "details_complete": true},
+            {"key": "heterogeneous-branch", "kind": "branch", "status": "active", "details_complete": true},
+            {"key": "risk-hypothesis", "kind": "hypothesis", "status": "unverified", "details_complete": true},
+            {"key": "risk-question", "kind": "question", "status": "open", "details_complete": true},
+            {"key": "probe-task", "kind": "task", "status": "active", "details_complete": true},
+            {"key": "stakeholder-source", "kind": "source_candidate", "status": "pending_verification", "details_complete": true}
+          ],
+          "required_edges": [
+            {"from_key": "divergence-pass", "to_key": "heterogeneous-branch", "type": "triggered"},
+            {"from_key": "heterogeneous-branch", "to_key": "risk-hypothesis", "type": "decomposes"},
+            {"from_key": "probe-task", "to_key": "risk-hypothesis", "type": "tests"},
+            {"from_key": "probe-task", "to_key": "stakeholder-source", "type": "consumed"}
+          ]
+        }
+      }
+    },
+    {
+      "task": {
+        "id": "autonomy-assimilation",
+        "mode": "comparative_decision",
+        "goal": "三个 Agent 完成同类小目标后逐项检查可整合性，由原作者提交贡献，形成归纳 Insight，并把不兼容结果转为讨论。",
+        "language": "zh-CN",
+        "allowed_tools": ["controlled_integration", "controlled_deliberation"],
+        "tags": ["autonomy", "assimilation", "peer_synthesis", "conflict_routing"]
+      },
+      "environment": {
+        "documents": [
+          {
+            "id": "assimilation-contract",
+            "family": "integration-method",
+            "title": "同类结果整合规则",
+            "version": "1",
+            "content": "每个 accepted Result 都要检查相关结果；相关原作者提交贡献；共同发现归纳；不兼容 Claim 进入争议讨论。"
+          }
+        ]
+      },
+      "oracle": {
+        "required_facts": [],
+        "autonomy": {
+          "required_actions": [
+            {"kind": "assimilation_check_recorded", "actor": "agent-a", "target": "result-a", "outcome": "related_cluster"},
+            {"kind": "assimilation_check_recorded", "actor": "agent-b", "target": "result-b", "outcome": "related_cluster"},
+            {"kind": "assimilation_check_recorded", "actor": "agent-c", "target": "result-c", "outcome": "related_cluster"},
+            {"kind": "integration_contribution_submitted", "actor": "agent-a", "target": "round-1", "outcome": "non_empty"},
+            {"kind": "integration_contribution_submitted", "actor": "agent-b", "target": "round-1", "outcome": "non_empty"},
+            {"kind": "integration_contribution_submitted", "actor": "agent-c", "target": "round-1", "outcome": "non_empty"},
+            {"kind": "insight_formed", "actor": "integration_module", "target": "shared-insight", "outcome": "level_1"},
+            {"kind": "dispute_opened", "actor": "dispute_module", "target": "result-a-result-b", "outcome": "incompatible_claims"},
+            {"kind": "deliberation_opened", "actor": "dispute_module", "target": "result-a-result-b", "outcome": "original_authors_invited"}
+          ],
+          "forbidden_actions": [
+            {"kind": "integration_contribution_synthesized", "actor": "integration_module", "outcome": "author_skipped"},
+            {"kind": "conflicting_results_merged", "actor": "integration_module", "target": "result-a-result-b", "outcome": "without_dispute"}
+          ],
+          "required_nodes": [
+            {"key": "result-a", "kind": "result_artifact", "status": "accepted", "details_complete": true},
+            {"key": "result-b", "kind": "result_artifact", "status": "accepted", "details_complete": true},
+            {"key": "result-c", "kind": "result_artifact", "status": "accepted", "details_complete": true},
+            {"key": "check-a", "kind": "decision", "status": "applied", "details_complete": true},
+            {"key": "check-b", "kind": "decision", "status": "applied", "details_complete": true},
+            {"key": "check-c", "kind": "decision", "status": "applied", "details_complete": true},
+            {"key": "contribution-a", "kind": "integration_contribution", "status": "accepted", "details_complete": true},
+            {"key": "contribution-b", "kind": "integration_contribution", "status": "accepted", "details_complete": true},
+            {"key": "contribution-c", "kind": "integration_contribution", "status": "accepted", "details_complete": true},
+            {"key": "round-1", "kind": "integration_round", "status": "completed", "details_complete": true},
+            {"key": "shared-insight", "kind": "insight", "status": "fresh", "level": 1, "details_complete": true},
+            {"key": "result-dispute", "kind": "dispute", "status": "discussing", "details_complete": true},
+            {"key": "result-deliberation", "kind": "deliberation", "status": "discussing", "details_complete": true}
+          ],
+          "required_edges": [
+            {"from_key": "check-a", "to_key": "result-a", "type": "reviewed_by"},
+            {"from_key": "check-b", "to_key": "result-b", "type": "reviewed_by"},
+            {"from_key": "check-c", "to_key": "result-c", "type": "reviewed_by"},
+            {"from_key": "contribution-a", "to_key": "result-a", "type": "derived_from"},
+            {"from_key": "contribution-b", "to_key": "result-b", "type": "derived_from"},
+            {"from_key": "contribution-c", "to_key": "result-c", "type": "derived_from"},
+            {"from_key": "shared-insight", "to_key": "contribution-a", "type": "integrates"},
+            {"from_key": "shared-insight", "to_key": "contribution-b", "type": "integrates"},
+            {"from_key": "shared-insight", "to_key": "contribution-c", "type": "integrates"},
+            {"from_key": "result-dispute", "to_key": "result-deliberation", "type": "discussed_by"}
+          ]
+        }
+      }
+    },
+    {
+      "task": {
+        "id": "autonomy-infinite-canvas",
+        "mode": "temporal_monitoring",
+        "goal": "对至少一万节点的运行图执行固定 Snapshot 分页、Slice 展开、重复和乱序 Delta、断线续传及历史缺口恢复。",
+        "language": "zh-CN",
+        "allowed_tools": ["controlled_projection", "controlled_websocket_replay"],
+        "tags": ["autonomy", "infinite_canvas", "large_graph", "resume_and_resync"]
+      },
+      "environment": {
+        "documents": [
+          {
+            "id": "large-graph-contract",
+            "family": "projection-schema",
+            "title": "大图续传输入",
+            "version": "1",
+            "content": "受控运行图包含至少一万节点；分页固定 Snapshot；重复 Delta 幂等；乱序有界暂存；缺口无法补齐时明确 resync。"
+          }
+        ]
+      },
+      "oracle": {
+        "required_facts": [],
+        "autonomy": {
+          "required_actions": [
+            {"kind": "duplicate_delta_ignored", "actor": "projection_client", "target": "large-run", "outcome": "idempotent"},
+            {"kind": "out_of_order_delta_buffered", "actor": "projection_client", "target": "large-run", "outcome": "gap_bounded"},
+            {"kind": "websocket_resume_requested", "actor": "projection_client", "target": "large-run", "outcome": "last_applied_sequence"},
+            {"kind": "history_gap_detected", "actor": "projection_module", "target": "large-run", "outcome": "cannot_replay"},
+            {"kind": "snapshot_resync_requested", "actor": "projection_client", "target": "large-run", "outcome": "explicit"},
+            {"kind": "projection_slice_expanded", "actor": "projection_client", "target": "large-run", "outcome": "bounded_page"}
+          ],
+          "forbidden_actions": [
+            {"kind": "sequence_gap_skipped", "actor": "projection_client", "target": "large-run"},
+            {"kind": "full_graph_single_response", "actor": "projection_module", "target": "large-run"}
+          ],
+          "required_nodes": [
+            {"key": "large-run-root", "kind": "monitoring_cycle", "status": "active", "details_complete": true},
+            {"key": "slice-task", "kind": "task", "status": "completed", "details_complete": true},
+            {"key": "resync-decision", "kind": "decision", "status": "applied", "details_complete": true}
+          ],
+          "required_edges": [
+            {"from_key": "slice-task", "to_key": "large-run-root", "type": "depends_on"},
+            {"from_key": "resync-decision", "to_key": "large-run-root", "type": "triggered"}
+          ],
+          "projection": {
+            "require_hash_match": true,
+            "require_gap_resync": true,
+            "require_unique_nodes": true,
+            "minimum_total_nodes": 10000,
+            "maximum_page_nodes": 500
+          }
+        }
+      }
+    }
+  ]
+}

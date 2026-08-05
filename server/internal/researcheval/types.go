@@ -28,6 +28,62 @@ var AllResearchModes = []ResearchMode{
 	ModeTemporalMonitoring,
 }
 
+// RequiredProjectionDetailFields is the minimum stable detail contract for an
+// observable research graph node. A value such as "not_applicable" is still
+// required when a field does not apply, so the UI never has to infer omission.
+var RequiredProjectionDetailFields = []string{
+	"purpose",
+	"objective",
+	"entry_condition",
+	"method",
+	"input_artifacts",
+	"actions_taken",
+	"actor",
+	"result",
+	"evidence",
+	"decision",
+	"failure",
+	"recovery",
+	"upstream",
+	"downstream",
+}
+
+// RequiredProjectionNodeKinds freezes the V6 node coverage expected from the
+// production projection adapter. Future kinds may use generic rendering, but
+// removing one of these kinds is a regression.
+var RequiredProjectionNodeKinds = []string{
+	"task",
+	"attempt",
+	"result_artifact",
+	"search_plan",
+	"query_execution",
+	"source_candidate",
+	"screening_decision",
+	"source_snapshot",
+	"observation",
+	"claim",
+	"question",
+	"hypothesis",
+	"branch",
+	"insight",
+	"insight_derivation",
+	"integration_round",
+	"integration_contribution",
+	"dispute",
+	"dispute_position",
+	"deliberation",
+	"deliberation_turn",
+	"decision",
+	"team_formation",
+	"team_membership",
+	"divergence_pass",
+	"capability_observation",
+	"report_revision",
+	"evaluation_defect",
+	"monitoring_cycle",
+	"episode",
+}
+
 type Corpus struct {
 	SchemaVersion string `json:"schema_version"`
 	Version       string `json:"version"`
@@ -77,6 +133,7 @@ type Oracle struct {
 	ForbiddenDocumentIDs []string              `json:"forbidden_document_ids,omitempty"`
 	MaxAcceptedPerFamily map[string]int        `json:"max_accepted_per_family,omitempty"`
 	RequiredReportClaims []ExpectedReportClaim `json:"required_report_claims,omitempty"`
+	Autonomy             *AutonomyOracle       `json:"autonomy,omitempty"`
 }
 
 type ExpectedFact struct {
@@ -95,6 +152,43 @@ type ExpectedReportClaim struct {
 	RequiredFactKeys []string `json:"required_fact_keys"`
 }
 
+type AutonomyOracle struct {
+	RequiredActions  []ExpectedAction    `json:"required_actions,omitempty"`
+	ForbiddenActions []ExpectedAction    `json:"forbidden_actions,omitempty"`
+	RequiredNodes    []ExpectedGraphNode `json:"required_nodes,omitempty"`
+	RequiredEdges    []ExpectedGraphEdge `json:"required_edges,omitempty"`
+	Projection       *ExpectedProjection `json:"projection,omitempty"`
+}
+
+type ExpectedAction struct {
+	Kind    string `json:"kind"`
+	Actor   string `json:"actor,omitempty"`
+	Target  string `json:"target,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
+}
+
+type ExpectedGraphNode struct {
+	Key             string `json:"key"`
+	Kind            string `json:"kind"`
+	Status          string `json:"status"`
+	Level           int    `json:"level,omitempty"`
+	DetailsComplete bool   `json:"details_complete"`
+}
+
+type ExpectedGraphEdge struct {
+	FromKey string `json:"from_key"`
+	ToKey   string `json:"to_key"`
+	Type    string `json:"type"`
+}
+
+type ExpectedProjection struct {
+	RequireHashMatch   bool `json:"require_hash_match"`
+	RequireGapResync   bool `json:"require_gap_resync"`
+	RequireUniqueNodes bool `json:"require_unique_nodes"`
+	MinimumTotalNodes  int  `json:"minimum_total_nodes,omitempty"`
+	MaximumPageNodes   int  `json:"maximum_page_nodes,omitempty"`
+}
+
 // SubjectInput deliberately excludes Oracle. Executors receive the task and
 // controlled environment, while graders retain hidden expected outcomes.
 type SubjectInput struct {
@@ -107,12 +201,15 @@ func (evaluationCase Case) SubjectInput() SubjectInput {
 }
 
 type Artifact struct {
-	Sources   []ArtifactSource   `json:"sources"`
-	Facts     []ArtifactFact     `json:"facts"`
-	Claims    []ArtifactClaim    `json:"claims"`
-	Conflicts []ArtifactConflict `json:"conflicts"`
-	Actions   []ArtifactAction   `json:"actions,omitempty"`
-	ReportMD  string             `json:"report_md,omitempty"`
+	Sources    []ArtifactSource    `json:"sources"`
+	Facts      []ArtifactFact      `json:"facts"`
+	Claims     []ArtifactClaim     `json:"claims"`
+	Conflicts  []ArtifactConflict  `json:"conflicts"`
+	Actions    []ArtifactAction    `json:"actions,omitempty"`
+	GraphNodes []ArtifactGraphNode `json:"graph_nodes,omitempty"`
+	GraphEdges []ArtifactGraphEdge `json:"graph_edges,omitempty"`
+	Projection *ArtifactProjection `json:"projection,omitempty"`
+	ReportMD   string              `json:"report_md,omitempty"`
 }
 
 type ArtifactSource struct {
@@ -143,8 +240,35 @@ type ArtifactConflict struct {
 
 type ArtifactAction struct {
 	Kind    string `json:"kind"`
+	Actor   string `json:"actor,omitempty"`
 	Target  string `json:"target,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
+}
+
+type ArtifactGraphNode struct {
+	ID      string            `json:"id"`
+	Key     string            `json:"key"`
+	Kind    string            `json:"kind"`
+	Status  string            `json:"status"`
+	Level   int               `json:"level,omitempty"`
+	Details map[string]string `json:"details,omitempty"`
+}
+
+type ArtifactGraphEdge struct {
+	ID         string `json:"id"`
+	FromNodeID string `json:"from_node_id"`
+	ToNodeID   string `json:"to_node_id"`
+	Type       string `json:"type"`
+}
+
+type ArtifactProjection struct {
+	SnapshotHash     string   `json:"snapshot_hash"`
+	ReplayHash       string   `json:"replay_hash"`
+	ObservedNodeIDs  []string `json:"observed_node_ids"`
+	TotalNodes       int      `json:"total_nodes"`
+	LargestPageNodes int      `json:"largest_page_nodes"`
+	GapDetected      bool     `json:"gap_detected"`
+	ResyncRequested  bool     `json:"resync_requested"`
 }
 
 type Executor interface {

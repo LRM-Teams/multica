@@ -61,8 +61,10 @@ function ExecutionRow({ agent, onLocate, copy }: {
   const StatusIcon = presentation.Icon;
   const canLocate = Boolean(agent.currentNodeId && onLocate);
   const activate = () => {
+    // 保持 LRM-1380 的单次 select/focus 请求；同时即使可定位也允许展开失败详情,
+    // 让已渲染的 Chevron/aria-expanded 与实际展开态一致（鼠标/Enter/Space 等价）。
     if (canLocate) onLocate?.(agent);
-    else setExpanded(true);
+    setExpanded((prev) => !prev);
   };
 
   return (

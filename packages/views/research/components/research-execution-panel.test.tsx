@@ -66,6 +66,36 @@ describe("ResearchExecutionPanel", () => {
     expect(document.activeElement).toBe(idle);
   });
 
+  it("expands a locatable failed row to read failure detail while still locating once", async () => {
+    const user = userEvent.setup();
+    const onLocate = vi.fn();
+    render(<ResearchExecutionPanel agents={agents} onLocate={onLocate} />);
+    const failed = screen.getByRole("button", { name: "定位Owen当前节点" });
+    expect(failed).toHaveAttribute("aria-expanded", "false");
+
+    // 鼠标点击：既定位一次，又展开失败详情
+    failed.focus();
+    fireEvent.click(failed);
+    expect(onLocate).toHaveBeenCalledTimes(1);
+    expect(onLocate.mock.calls[0]?.[0].currentNodeId).toBe("node-failed");
+    expect(screen.getByText("无法识别日期列格式。请清洗输入后重试。")).toBeTruthy();
+    expect(failed).toHaveAttribute("aria-expanded", "true");
+    expect(document.activeElement).toBe(failed);
+
+    // 再点击：展开态收起，但不会再次触发定位
+    fireEvent.click(failed);
+    expect(onLocate).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("无法识别日期列格式。请清洗输入后重试。")).toBeNull();
+    expect(failed).toHaveAttribute("aria-expanded", "false");
+
+    // 键盘 Enter 同样可展开并保持焦点
+    failed.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText("无法识别日期列格式。请清洗输入后重试。")).toBeTruthy();
+    expect(failed).toHaveAttribute("aria-expanded", "true");
+    expect(document.activeElement).toBe(failed);
+  });
+
   it("renders an empty roster and a focus-stable retryable error", () => {
     const retry = vi.fn();
     const { rerender } = render(<ResearchExecutionPanel agents={[]} />);

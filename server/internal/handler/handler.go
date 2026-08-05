@@ -328,6 +328,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
 	}
 	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit
+	taskSvc.OnTaskTerminal = h.maybeStartAutomaticSharedDiagnosis
 	h.wireHonorUnlockEvents()
 	h.wireAgentHonorEvents()
 	return h

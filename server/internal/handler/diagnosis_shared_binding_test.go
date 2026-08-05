@@ -233,38 +233,54 @@ func TestChannelCleanupWaitsForSharedDiagnosis(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, w2.Code, "body=%s", w2.Body.String())
 }
 
-func TestGetLatestEnvDispatchDiagnosisExposesSandboxMode(t *testing.T) {
+func TestProjectCleanupWaitsForActiveDiagnosis(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	projectID, rootTaskID := seedHandlerDagNonTrainingCompletedRoot(t, ctx, testWorkspaceID)
-	var envID string
-	require.NoError(t, testPool.QueryRow(ctx, `
-		INSERT INTO environment (workspace_id, sandbox_ids, mode)
-		VALUES ($1, '{}', 'scratch')
-		RETURNING id`, testWorkspaceID).Scan(&envID))
-	_, err := testPool.Exec(ctx, `UPDATE project SET env_id = $2 WHERE id = $1`, projectID, envID)
+	_, projectID, _, _ := setupEnvDispatchChannelRolloutFixture(t)
+	runID := "diag-project-cleanup-" + uuid.NewString()
+	_, err := testPool.Exec(ctx, `
+		INSERT INTO interaction_dag_diagnosis_run (
+			run_id, project_id, task_id, topology_hash, ordered_segment_ids, status,
+			sandbox_instance_id, capability_token_hash, execution_mode, sandbox_mode
+		) VALUES (
+			$1, $2, $3, 'topo', '["seg-1"]'::jsonb, 'running',
+			$4, 'hash-not-a-token', 'sandbox', 'shared'
+		)`, runID, projectID, uuid.NewString(), uuid.NewString())
 	require.NoError(t, err)
-	var channelID string
-	require.NoError(t, testPool.QueryRow(ctx, `
-		INSERT INTO channel (workspace_id, name, kind, project_id, created_by)
-		VALUES ($1, $2, 'group', $3, $4)
-		RETURNING id`, testWorkspaceID, "diagnosis-latest-"+uuid.NewString(), projectID, testUserID).Scan(&channelID))
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM channel WHERE id = $1`, channelID)
-		testPool.Exec(ctx, `DELETE FROM env_dispatch_run WHERE project_id = $1`, projectID)
-		testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, projectID)
-		testPool.Exec(ctx, `DELETE FROM environment WHERE id = $1`, envID)
+		testPool.Exec(context.Background(), `DELETE FROM interaction_dag_diagnosis_run WHERE run_id = $1`, runID)
 	})
 
-	teamSandboxID := uuid.NewString()
+	w := httptest.NewRecorder()
+	testHandler.DeleteEnvDispatchProject(w, authedChannelRequest(
+		http.MethodDelete, "/api/v1/env-dispatch/"+projectID, "projectID", projectID))
+	require.Equal(t, http.StatusConflict, w.Code, "body=%s", w.Body.String())
+	assert.Contains(t, w.Body.String(), `"error":"diagnosis_in_progress"`)
+
+	var projectAlive bool
+	require.NoError(t, testPool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM project WHERE id = $1)`, projectID).Scan(&projectAlive))
+	assert.True(t, projectAlive, "active diagnosis must keep the dispatch project alive")
+}
+
+func TestGetLatestEnvDispatchDiagnosisExposesSharedExecutionTriple(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	envID, projectID, channelID, agentID := setupEnvDispatchChannelRolloutFixture(t)
+	teamSandboxID, runtimeID := seedSharedBindingTargets(t)
+	daemonID := uuid.NewString()
+	seedReadySharedBinding(t, envID, agentID, teamSandboxID, runtimeID, daemonID)
+
 	runID := "diag-latest-" + uuid.NewString()
 	store := service.NewDiagnosisStateStore(testHandler.Queries)
-	_, err = store.CreateRun(ctx, service.DiagnosisRunCheckpoint{
+	_, err := store.CreateRun(ctx, service.DiagnosisRunCheckpoint{
 		RunID:             runID,
 		ProjectID:         projectID,
-		TaskID:            rootTaskID,
+		TaskID:            uuid.NewString(),
 		TopologyHash:      "topo-latest",
 		OrderedSegmentIDs: []string{"seg-latest-1"},
 	})
@@ -286,6 +302,8 @@ func TestGetLatestEnvDispatchDiagnosisExposesSandboxMode(t *testing.T) {
 	assert.Equal(t, "sandbox", body["execution_mode"])
 	assert.Equal(t, "shared", body["sandbox_mode"])
 	assert.Equal(t, teamSandboxID, body["sandbox_instance_id"])
+	assert.Equal(t, runtimeID, body["runtime_id"])
+	assert.Equal(t, daemonID, body["daemon_id"])
 	encoded := w.Body.String()
 	assert.NotContains(t, encoded, "hash-not-a-token")
 	assert.NotContains(t, strings.ToLower(encoded), "capability_token")

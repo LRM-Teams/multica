@@ -90,6 +90,12 @@ type TaskService struct {
 		message CanonicalChannelMessage,
 	) (afterCommit func(context.Context), err error)
 
+	// OnTaskTerminal runs after the terminal task's business DAG segment is
+	// closed. Handler wiring uses it to evaluate the automatic diagnosis
+	// barrier; diagnosis tasks themselves are excluded from business DAG
+	// membership below.
+	OnTaskTerminal func(ctx context.Context, task db.AgentInboxEvent)
+
 	// Training, when non-nil, enables the RL session-open hook at task
 	// creation (see maybeOpenTrainingSession). Nil = training not configured
 	// for this deployment; the hook is then a no-op. Wired in Task 8 (config).
@@ -2339,16 +2345,27 @@ func extractEphemeralSandbox(raw []byte) (*EphemeralSandboxMarker, bool) {
 //
 // Each step self-gates: tasks outside a project, without areal_proxy context,
 // or without an ephemeral sandbox marker are no-ops here.
+func shouldCloseBusinessDAGSegment(task db.AgentInboxEvent) bool {
+	return DiagnosisRunIDFromTaskContext(task.Context) == ""
+}
+
 func (s *TaskService) FinalizeTerminalTaskSideEffects(ctx context.Context, task db.AgentInboxEvent) {
 	// Message dispatch roots carry their project through chat_session rather
-	// than issue_id, so resolve both task shapes before recording.
-	if projectID, err := s.terminalTaskProjectID(ctx, task); err != nil {
-		slog.Warn("interaction_dag: terminal task project lookup failed",
-			"task_id", util.UUIDToString(task.ID), "error", err)
-	} else if projectID.Valid {
-		s.closeSegmentForTerminal(ctx, task, util.UUIDToString(projectID), s.leanEnvSnapshot(ctx, projectID))
+	// than issue_id, so resolve both task shapes before recording. The
+	// internal non-roster diagnosis task is transport-only and must never
+	// become a business DAG segment.
+	if shouldCloseBusinessDAGSegment(task) {
+		if projectID, err := s.terminalTaskProjectID(ctx, task); err != nil {
+			slog.Warn("interaction_dag: terminal task project lookup failed",
+				"task_id", util.UUIDToString(task.ID), "error", err)
+		} else if projectID.Valid {
+			s.closeSegmentForTerminal(ctx, task, util.UUIDToString(projectID), s.leanEnvSnapshot(ctx, projectID))
+		}
 	}
 	s.RouteTerminalTrainingTask(ctx, task)
+	if s.OnTaskTerminal != nil {
+		s.OnTaskTerminal(ctx, task)
+	}
 	s.maybeCleanupEphemeralSandbox(ctx, task)
 }
 

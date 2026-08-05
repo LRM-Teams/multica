@@ -257,6 +257,15 @@ func (h *Handler) DeleteEnvDispatchProject(w http.ResponseWriter, r *http.Reques
 	if _, ok := parseUUIDOrBadRequest(w, projectID, "projectID"); !ok {
 		return
 	}
+	inProgress, err := h.dispatchDiagnosisInProgress(r.Context(), projectID, workspaceID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "lookup diagnosis run")
+		return
+	}
+	if inProgress {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "diagnosis_in_progress"})
+		return
+	}
 	svc := newEnvDispatchService(h, 8)
 	if err := svc.DeleteProject(r.Context(), projectID, workspaceID); err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())

@@ -636,14 +636,18 @@ function DetailBody({
           </section>
         ) : null}
 
-        {runContext.nextStep ? (
-          <section>
-            <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-              {t(($) => $.node.next_step)}
-            </h3>
-            <p className="text-sm leading-relaxed">{t(($) => $.node.next_steps[runContext.nextStep])}</p>
-          </section>
-        ) : null}
+        {(() => {
+          const step = runContext.nextStep;
+          if (!step) return null;
+          return (
+            <section>
+              <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                {t(($) => $.node.next_step)}
+              </h3>
+              <p className="text-sm leading-relaxed">{t(($) => $.node.next_steps[step])}</p>
+            </section>
+          );
+        })()}
 
         {runContext.producedClaims.length > 0 ||
         runContext.createdQuestions.length > 0 ? (

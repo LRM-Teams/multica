@@ -95,6 +95,7 @@ type Config struct {
 	CLIVersion                      string                // multica CLI version (e.g. "0.1.13")
 	LaunchedBy                      string                // "desktop" when spawned by the Electron app, empty for standalone
 	Profile                         string                // profile name (empty = default)
+	WorkspaceID                     string                // the one workspace this daemon registers for
 	Agents                          map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity, grok
 	WorkspacesRoot                  string                // base path for execution envs (default: ~/multica_workspaces)
 	KeepEnvAfterTask                bool                  // preserve env after task for debugging
@@ -199,12 +200,14 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// file should not prevent daemon startup, since the daemon can still run
 	// purely from env-var configuration. We log a warning and proceed with
 	// no overrides.
+	workspaceID := ""
 	if cliCfg, err := cli.LoadCLIConfigForProfile(overrides.Profile); err != nil {
 		slog.Warn("could not load CLI config for daemon overrides; proceeding without",
 			"profile", overrides.Profile, "err", err)
 		applyProxyConfig(nil)
 	} else {
 		applyProxyConfig(cliCfg.Proxy)
+		workspaceID = strings.TrimSpace(cliCfg.WorkspaceID)
 		if oc := openclawOverrideFrom(cliCfg); oc != nil {
 			applyOpenclawOverride(oc)
 		}
@@ -628,6 +631,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		DeviceName:                      deviceName,
 		RuntimeName:                     runtimeName,
 		Profile:                         profile,
+		WorkspaceID:                     workspaceID,
 		Agents:                          agents,
 		WorkspacesRoot:                  workspacesRoot,
 		KeepEnvAfterTask:                keepEnv,

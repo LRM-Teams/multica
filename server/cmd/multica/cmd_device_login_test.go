@@ -14,7 +14,7 @@ import (
 )
 
 // newAutoWatchTestCmd builds a standalone cobra command with the flags
-// autoWatchWorkspaces reads, mirroring newWorkspaceSwitchTestCmd's rationale
+// configureSelectedWorkspace reads, mirroring newWorkspaceSwitchTestCmd's rationale
 // (cmd_workspace_test.go) — the real loginCmd carries a parent root's flags
 // we can't easily replicate here.
 func newAutoWatchTestCmd() *cobra.Command {
@@ -28,7 +28,7 @@ func newAutoWatchTestCmd() *cobra.Command {
 
 // TestApplyWorkspacePositional locks the `multica setup <workspace>` /
 // `--workspace` interplay: the positional sets the same flag
-// autoWatchWorkspaces reads, but an explicitly-passed flag always wins over
+// configureSelectedWorkspace reads, but an explicitly-passed flag always wins over
 // the positional (flag is the more specific signal).
 func TestApplyWorkspacePositional(t *testing.T) {
 	newCmd := func() *cobra.Command {
@@ -48,10 +48,8 @@ func TestApplyWorkspacePositional(t *testing.T) {
 		}
 	})
 
-	// Task #32 follow-up: `multica setup /<workspace>` aligns the command
-	// shape with Raft's `raft-computer setup /<server-slug>`. The leading
-	// slash is optional sugar stripped before hitting the flag — the bare
-	// form above must keep working unchanged for existing scripts/docs.
+	// The slash is required by the product command shape and stripped before
+	// resolving the selected workspace.
 	t.Run("leading slash is stripped (Raft-aligned form)", func(t *testing.T) {
 		cmd := newCmd()
 		if err := applyWorkspacePositional(cmd, []string{"/my-workspace"}); err != nil {
@@ -88,6 +86,26 @@ func TestApplyWorkspacePositional(t *testing.T) {
 	})
 }
 
+func TestRequireWorkspacePath(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "workspace path", args: []string{"/my-workspace"}, want: true},
+		{name: "bare setup", args: nil},
+		{name: "bare slug", args: []string{"my-workspace"}},
+		{name: "root only", args: []string{"/"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := requireWorkspacePath(nil, tc.args)
+			if (err == nil) != tc.want {
+				t.Fatalf("requireWorkspacePath(%v) error = %v, want success=%v", tc.args, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestAutoWatchWorkspaces_WorkspaceFlagPinsBySlugOrID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/workspaces" {
@@ -110,8 +128,8 @@ func TestAutoWatchWorkspaces_WorkspaceFlagPinsBySlugOrID(t *testing.T) {
 		if err := cmd.Flags().Set("workspace", "beta"); err != nil {
 			t.Fatal(err)
 		}
-		if err := autoWatchWorkspaces(cmd); err != nil {
-			t.Fatalf("autoWatchWorkspaces: %v", err)
+		if err := configureSelectedWorkspace(cmd); err != nil {
+			t.Fatalf("configureSelectedWorkspace: %v", err)
 		}
 		cfg, err := cli.LoadCLIConfig()
 		if err != nil {
@@ -127,8 +145,8 @@ func TestAutoWatchWorkspaces_WorkspaceFlagPinsBySlugOrID(t *testing.T) {
 		if err := cmd.Flags().Set("workspace", "11111111-1111-1111-1111-111111111111"); err != nil {
 			t.Fatal(err)
 		}
-		if err := autoWatchWorkspaces(cmd); err != nil {
-			t.Fatalf("autoWatchWorkspaces: %v", err)
+		if err := configureSelectedWorkspace(cmd); err != nil {
+			t.Fatalf("configureSelectedWorkspace: %v", err)
 		}
 		cfg, err := cli.LoadCLIConfig()
 		if err != nil {
@@ -144,22 +162,15 @@ func TestAutoWatchWorkspaces_WorkspaceFlagPinsBySlugOrID(t *testing.T) {
 		if err := cmd.Flags().Set("workspace", "does-not-exist"); err != nil {
 			t.Fatal(err)
 		}
-		if err := autoWatchWorkspaces(cmd); err == nil {
+		if err := configureSelectedWorkspace(cmd); err == nil {
 			t.Fatal("expected error for unknown workspace, got nil")
 		}
 	})
 
-	t.Run("empty flag falls back to auto-picking the first workspace", func(t *testing.T) {
+	t.Run("empty flag requires an explicit workspace", func(t *testing.T) {
 		cmd := newAutoWatchTestCmd()
-		if err := autoWatchWorkspaces(cmd); err != nil {
-			t.Fatalf("autoWatchWorkspaces: %v", err)
-		}
-		cfg, err := cli.LoadCLIConfig()
-		if err != nil {
-			t.Fatalf("LoadCLIConfig: %v", err)
-		}
-		if cfg.WorkspaceID != "11111111-1111-1111-1111-111111111111" {
-			t.Errorf("workspace_id = %q, want Alpha's id (first in list)", cfg.WorkspaceID)
+		if err := configureSelectedWorkspace(cmd); err == nil {
+			t.Fatal("expected an error when no workspace is selected")
 		}
 	})
 }

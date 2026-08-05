@@ -1,0 +1,58 @@
+{
+  "schema_version": "research-behavior-goldens-v1",
+  "scenarios": {
+    "cancellation": {
+      "run_status": "paused",
+      "attempt_status": "cancelled",
+      "pending_cancellations": 0,
+      "cancelled_inbox_tasks": 1
+    },
+    "evidence_acceptance": {
+      "accepted_results": 4,
+      "sources": 4,
+      "observations": 4,
+      "claims": [
+        {
+          "client_key": "answer-claim",
+          "status": "supported",
+          "evidence_links": 4
+        }
+      ],
+      "answer_question_status": "answered"
+    },
+    "report_materialization": {
+      "revision": 1,
+      "author_role": "reporter",
+      "claim_key": "answer-claim",
+      "section_id": "finding",
+      "content_sha256": "88255a6fe2289924788818e71851fc522e6993098619afa904e8370f9719a628"
+    },
+    "result_recovery": {
+      "replayed": true,
+      "accepted_results": 1,
+      "questions": 2,
+      "tasks": 6,
+      "accepted_events": 1
+    },
+    "review_remediation": {
+      "finding_code": "quality_evaluation_failed",
+      "defect_key": "defect-grounding-alpha",
+      "claim_keys": ["claim-alpha"],
+      "section_ids": ["section-alpha"],
+      "revision_task_kind": "synthesize",
+      "objective_retains_defect": true,
+      "criteria_retains_required_change": true
+    },
+    "retry_exhaustion": {
+      "parent_status": "failed",
+      "parent_attempt_count": 2,
+      "attempts": [
+        {"number": 1, "status": "failed", "failure_class": "transient_test_failure"},
+        {"number": 2, "status": "failed", "failure_class": "permanent_test_failure"}
+      ],
+      "child_status": "blocked",
+      "child_terminal_reason": "dependency_terminal",
+      "blocked_events": 1
+    }
+  }
+}

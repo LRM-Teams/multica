@@ -1,6 +1,6 @@
 # 自主调研系统：目标架构与严格实现路径
 
-状态：设计完成，尚未开始本规格的实现
+状态：实现中；A1、A2 已完成
 
 日期：2026-08-05
 
@@ -856,9 +856,9 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
 
 ### A. 固定基线与可重复验收
 
-- [ ] 把当前 V1–V5 计划、证据、报告、评审、重试、取消和恢复行为做成 golden fixtures。
+- [x] 把当前 V1–V5 计划、证据、报告、评审、重试、取消和恢复行为做成 golden fixtures。
   - [x] A2a：统一 manifest 冻结 V1–V5 完整 Task Prompt 哈希、可接受 Plan Result 哈希和新 schema 拒绝行为。
-  - [ ] A2b：补齐 evidence、report、review、retry、cancel 和 recovery 的 canonical state golden。
+  - [x] A2b：补齐 evidence、report、review、retry、cancel 和 recovery 的稳定语义 golden；跨运行随机 UUID、数据库时间和调度字段不进入比较。
 - [ ] 从已出现的生产失败中提取脱敏回归：重复节点、403 task result、dispatch_failed 扩散、报告过早、评审意见丢失、低价值信息收益。
 - [x] 建立 canonical state hash 和 Event replay 工具：`CanonicalState` 对同一 Run 的 V1–V5 规范表计算确定性哈希，`ListRunEvents` / `ReplayRunEvents` 按 workspace 和连续 sequence 重放投影 Event，拒绝冲突重复与序号缺口。
 - [ ] 建立最小系统评测框架、固定语料和 grader Interface。
@@ -1050,6 +1050,7 @@ A1 边界：当前 `research_run_event` 是 committed state 到投影的日志�
 - [x] 定义无限画布 Snapshot/Delta 续传、大图 Slice、动画语义与前后端职责。
 - [x] A1 实现 V1–V5 canonical state hash、workspace-bound Event 读取和连续 replay；单测与真实 PostgreSQL `server/internal/researchrun` 回归通过。
 - [x] A2a 实现 V1–V5 orchestrator contract golden manifest；五个版本的完整 Prompt、可接受 Plan 和新 schema 拒绝均有固定回归。
+- [x] A2b 实现当前状态机行为 golden manifest；证据接纳、报告物化、结构化评审缺陷传递、有界重试、取消确认和结果幂等恢复均由真实 PostgreSQL 场景固定。测试发现任务自身永久失败被错误写为 `blocked`，已改为 `failed`；只有依赖终态导致的任务使用 `blocked/dependency_terminal`。历史 V1–V5 的协议边界由 A2a 分版本固定。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

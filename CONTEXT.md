@@ -16,7 +16,19 @@ handoff. The HTTP routes continue to use `research session` for compatibility.
 The durable execution of one Research Session. A Research Run owns the current
 Research Contract version, plan version, task and progress ledgers, evidence,
 decisions, checkpoints, budgets, and recovery state. A process restart or Agent
-failure must not create a new Research Run or discard accepted work.
+failure must not create a new Research Run or discard accepted work. At start it
+pins the Research Fleet lead as `research_director_agent_id`; changing the Fleet
+lead later does not silently change an active Run.
+
+### Research Director
+
+The lead Agent responsible for interpreting the current Contract and Method,
+proposing the next research portfolio, forming the run-scoped team, and
+adjudicating escalated disputes. A Research Director proposes actions but cannot
+override server evidence, permission, budget, or delivery invariants. In the
+sealed Research Fleet this identity is Ronaldo. Only the pinned Director may
+submit team-formation or lead-adjudication decisions. A human may explicitly
+replace an unavailable Director; the replacement is versioned and audited.
 
 ### Research Contract
 
@@ -56,6 +68,13 @@ its questions, hypotheses, disputes, or next work. Every Research Insight cites
 accepted input entities. Integrator prose without valid references is not an
 Insight.
 
+### Insight Derivation
+
+The directed acyclic provenance of one Research Insight. It records input
+Claims and lower-level Insights, server-computed level, integration round,
+semantic value, and freshness. Invalidating an input makes every dependent
+Insight stale until reintegration.
+
 ### Research Task
 
 A durable unit of delegated research work with an objective, kind, required
@@ -68,6 +87,19 @@ add a new graph version without deleting historical tasks.
 One dispatch of a Research Task to an Agent. It links the task to the canonical
 Agent inbox execution and records assignment, retry number, result identity,
 failure classification, timing, and terminal outcome.
+
+### Team Formation Decision
+
+A durable Research Director decision to add an Agent because of a capability
+gap, capacity need, independence requirement, novel perspective, or new Branch.
+It records the target, role, permissions, budget, expected artifact, lifecycle,
+and why the current team is insufficient.
+
+### Research Team Membership
+
+The run-scoped relationship between an Agent and a Research Run. It records the
+formation decision, authorized role and capabilities, join and leave times, and
+terminal reason without deleting historical Agent attribution.
 
 ### Source Snapshot
 
@@ -128,12 +160,26 @@ A durable integration of a fixed set of accepted artifacts. It may propose
 Insights, inquiry changes, disputes, branch changes, and follow-up work. The
 Research Run validates every reference and transition before applying it.
 
+### Integration Contribution
+
+A producing Agent's structured comparison of its accepted result with related
+artifacts in one Integration Round. It records agreements, unique findings,
+conflicts, scope, omissions, and proposed higher-level Insights. It is an input
+to integration and cannot mutate canonical Claims or Insights by itself.
+
 ### Research Dispute
 
 A durable disagreement between scoped positions or Claims. It records the
 conflict type, severity, evidence, investigation tasks, adjudication, residual
 uncertainty, and delivery obligation. Contradicting prose alone does not resolve
 a Research Dispute.
+
+### Research Deliberation
+
+A bounded, structured discussion among Agents holding positions in a Research
+Dispute. Turns cite evidence and record challenges, concessions, scope changes,
+and server-observed progress. Deadlock escalates to the Research Director;
+messages alone cannot resolve the dispute.
 
 ### Capability Observation
 
@@ -162,8 +208,18 @@ Research Run. Monitoring Cycles reuse versioned Search Plans. A no-change cycle
 records a Decision; a material change creates incremental inquiry, integration,
 and report work without overwriting the baseline Report.
 
+### Divergence Pass
+
+A bounded exploration performed with an intentionally isolated context to find
+missing perspectives, stakeholders, source ecosystems, methods, anomalies,
+counterevidence, and cross-domain analogies. It can propose Questions,
+Hypotheses, Branches, and probe Tasks but cannot create verified Claims.
+
 ### Research Projection
 
 A user-facing view derived from Research Run state and events. The existing
 canvas, process cards, presence, source list, and report are projections. A
 projection may be rebuilt without changing canonical task or evidence state.
+Every canonical research entity has a stable typed node, typed edges, complete
+detail data, and event-sequenced deltas so a client can render hierarchy,
+discussion, conflict, provenance, and change without parsing Agent prose.

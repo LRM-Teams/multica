@@ -53,6 +53,12 @@
 11. 系统级评测在受控语料中证明主动发现、冲突发现、结果整合、报告可追溯和崩溃恢复达到本文门槛。
 12. 本文实现清单、数据库迁移、内置 Research Fleet Skill、source map、权威后端设计和工程原则保持一致。
 13. Contract 要求持续监测时，首次交付后进入持久 monitoring 状态；来源变化只在达到物质性阈值后开启增量研究，未变化也有可审计记录。
+14. Research Director 能依据新方向、能力缺口、独立性要求或新颖视角创建受预算和权限约束的 Agent；每次组队、失败和退出都有持久记录。
+15. 产出冲突的 Agent 会进入有轮次上限的 Research Deliberation；无实质进展时自动升级给 Research Director，Director 只能基于证据解决、拆分范围、创建区分任务或保留未解决状态。
+16. 每个 Research Task、Attempt、Result Artifact、Query、Source、Observation、Claim、Hypothesis、Insight、Integration Contribution、Dispute、Deliberation/Turn、Decision、Team Formation/Membership、Divergence Pass、Integration Round、Monitoring Cycle、Episode 和 Report Revision 都有稳定 Projection Node 与有类型的关系，支持前端重建、增量动画和完整详情。
+17. Integration Module 能把叶子结果递归归纳为多层 Insight Derivation DAG；输入失效会让所有受影响的高层 Insight 变为 stale，并触发重新整合。
+18. Exploration Module 在开局、重大意外、低收益停滞和交付前执行 Divergence Pass，为异质视角和反常方向保留受控预算；推测只能创建 Hypothesis/Branch，不能直接成为 Claim。
+19. 每个 accepted Task Result 都有 Assimilation Check Decision；存在相关同类结果时，原产出 Agent 提交 Integration Contribution 参与归纳，存在冲突时进入 Research Deliberation，没有相关结果时也明确记录等待后续整合。
 
 ## 4. 研究模式不是固定模板
 
@@ -131,6 +137,14 @@
 
 保存触发原因、输入状态版本、输入工件集合、整合结果、服务器接受的状态变化、被拒绝的提议、负责 Agent、开始结束时间和幂等键。
 
+#### Integration Contribution
+
+保存某个原产出 Agent 对同一 Integration Round 的结构化贡献：已比较的工件、共同结论、独有发现、冲突、适用范围、遗漏、建议高层 Insight 和后续问题。它不能直接创建 Insight 或改变 Claim；Integrator 和服务端验收后才能应用。
+
+#### Insight Derivation
+
+保存一个高层 Research Insight 使用的输入 Claim/Insight、派生关系、层级、聚类指纹、整合轮次、价值变化和当前 freshness。Insight 层级由输入 DAG 计算，不能由 Agent 自报。任一输入被 refuted、superseded 或发生适用范围变化时，受影响的上层 Insight 进入 `stale` 并等待重新整合。
+
 #### Research Dispute
 
 保存争议问题、影响范围、严重度、冲突类型、各立场、相关 Claim/Evidence、当前状态和交付义务。状态为 `open | investigating | conditionally_resolved | resolved | irreducible | obsolete`。
@@ -141,11 +155,23 @@
 
 保存一个可核验立场、关联 Claim、适用条件、提出者和当前证据充分度。裁决不能直接改写原 Claim；它通过 Claim 状态、Evidence Link 和 Dispute Decision 更新规范事实。
 
+#### Research Deliberation
+
+保存一个 Dispute 中的参与 Agent、结构化轮次、立场变化、证据引用、质疑、让步条件、范围拆分提议、进展水位、成本和升级原因。状态为 `pending | discussing | converged | deadlocked | escalated | resolved | unresolved | cancelled`。消息可以作为投影显示，但只有验收后的 Deliberation Turn 能改变进展水位。
+
 ### 5.5 新增运行能力与经验实体
 
 #### Capability Observation
 
 以 Task Attempt 为最小单位记录所需能力、Agent、模型、provider、工具/检索 Adapter、任务模式、领域标签、成功、质量、成本、时延、重复度、失败分类和评审结果。该记录描述一次观测，不等于永久能力评级。
+
+#### Team Formation Decision
+
+保存 Research Director 因 `capability_gap | parallel_capacity | independence | novel_perspective | new_branch` 提出的组队判断。它绑定目标 Question/Branch/Dispute、所需能力、角色说明、工具和来源权限、预算、并发、预期工件、停止条件、Agent 保留策略和选择理由。状态为 `proposed | authorized | provisioning | active | blocked | failed | retiring | retired`。
+
+#### Research Team Membership
+
+保存 Agent 加入本次 Run 的原因、角色、授权范围、来源 Team Formation Decision、开始/结束时间和退出原因。底层 Agent 删除或离开后，Membership 和历史归属仍然保留。
 
 #### Research Episode
 
@@ -162,6 +188,10 @@ Run 完成一次交付周期或进入终态后生成的只读摘要，引用 Con
 #### Research Monitor
 
 保存用户批准的监测问题、复用的 Search Plan、频率、触发条件、物质性阈值、当前 baseline Report、下次执行时间和状态。首次报告交付后，有 Monitor 的 Run 进入 `monitoring`；每次检查形成 Monitoring Cycle。无变化写 Decision，有物质变化时创建增量 Question/Task/Integration/Report Revision，不能覆盖 baseline 历史。
+
+#### Divergence Pass
+
+保存一次主动发散检查的触发原因、隔离上下文、视角候选、领域外类比、遗漏的利益相关者/地区/时间/方法、反常证据方向、建议 Hypothesis/Branch、被选择的探测任务和拒绝理由。状态为 `pending | running | accepted | partially_accepted | failed | obsolete`。
 
 ### 5.6 工件护照
 
@@ -188,19 +218,22 @@ flowchart TB
     Q[Question] <--> H[Hypothesis]
     Q --> B[Branch]
     H --> B
-    I[Insight] --> Q
-    I --> H
+    I1[Level N Insight] --> I2[Level N+1 Insight]
+    I2 --> Q
+    I2 --> H
     D[Dispute] --> Q
     D --> H
   end
 
   subgraph CTRL[主动探索控制]
     IR[Integration Round]
+    DP[Divergence Pass]
     CG[候选工作生成]
     PS[Portfolio Selection]
     SCH[Scheduler]
     G[Delivery Gate]
     IR --> CG --> PS --> SCH
+    DP --> CG
     G -->|存在缺口| CG
   end
 
@@ -208,6 +241,10 @@ flowchart TB
     TG[Task DAG]
     A[Attempt]
     AR[Agent Runtime]
+    RD[Research Director]
+    TF[Team Formation Decision]
+    TM[Research Team Membership]
+    RD --> TF --> TM --> AR
     TG --> A --> AR
   end
 
@@ -228,6 +265,8 @@ flowchart TB
   subgraph REVIEW[争议与评审]
     CL --> DD[Dispute Detection]
     DD --> D
+    D --> DEL[Research Deliberation]
+    DEL -->|deadlocked| RD
     D --> ADJ[Independent Adjudication]
     R --> QA[Quality Evaluation]
     R --> CA[Citation Audit]
@@ -245,6 +284,7 @@ flowchart TB
   AR --> REVIEW
   IR --> IQ
   IR --> KNOW
+  IQ --> DP
   R --> G
   QA --> G
   CA --> G
@@ -265,6 +305,19 @@ flowchart TB
   G --> EP
   SV --> M
   SV --> CTRL
+
+  subgraph PROJ[Graph Projection]
+    PN[Typed Nodes]
+    PE[Typed Edges]
+    PD[Event Deltas]
+    PN --> PE --> PD
+  end
+
+  Q --> PN
+  TG --> PN
+  SP --> PN
+  CL --> PN
+  DEL --> PN
 ```
 
 这些关系使用 PostgreSQL 规范表、外键、唯一约束和事务实现。没有证据证明独立图数据库能改善当前查询或一致性，因此不引入第二套状态存储。
@@ -308,6 +361,30 @@ flowchart TB
 4. 事务内更新 canonical state，提交后执行外部动作；每个外部动作都有 outbox 事实或可由状态重新推导。
 
 Projection 的后端读模型必须给每个节点提供：节点用途、绑定的小目标、进入条件、方法、输入工件、实际动作、执行 Agent/Attempt、结构化结果、证据、Decision、失败分类、重试/替代动作、上游依赖和下游影响。前端只决定布局和文案，不能从摘要文本猜这些字段。
+
+### 7.1 Graph Projection Contract
+
+每个 canonical 实体使用稳定 `(run_id, entity_kind, entity_id)` 形成 Projection Node ID。节点必须包含：
+
+- `node_kind`、`node_subtype`、schema version；
+- title、bounded summary、status、importance、freshness；
+- contract/plan/strategy version；
+- actor Agent、Task、Attempt、时间和成本；
+- detail payload 与 canonical entity reference；
+- created/updated/terminal event sequence。
+
+V6 必须注册的 `node_kind` 至少包括：`task | attempt | result_artifact | search_plan | query_execution | source_candidate | screening_decision | source_snapshot | observation | claim | question | hypothesis | branch | insight | insight_derivation | integration_round | integration_contribution | dispute | dispute_position | deliberation | deliberation_turn | decision | team_formation | team_membership | divergence_pass | capability_observation | report_revision | evaluation_defect | monitoring_cycle | episode`。未知未来类型必须能以 generic node 降级显示，不能让旧客户端崩溃。
+
+稳定边类型至少包括：
+
+- `decomposes | tests | depends_on | triggered`；
+- `produced | consumed | derived_from | integrates`；
+- `supports | contradicts | refines | supersedes | invalidates`；
+- `discussed_by | challenged_by | escalated_to | resolved_by`；
+- `reported_in | reviewed_by | revised_by`；
+- `staffed_by | created_for | retired_after`。
+
+Projection Module 提供全量 Snapshot 和按 event sequence 的增量 Delta。相同 canonical state 重建出的 Node/Edge 集合和内容 hash 必须一致。前端可以保存布局、折叠和动画状态，不能修改节点事实、层级或关系。
 
 ## 8. 每批结果后的主动研究算法
 
@@ -398,6 +475,30 @@ Integration Round 状态为 `pending | running | partially_accepted | accepted |
 
 评分公式是版本化策略，不宣称为真实概率。每次选择保存候选全集、分项、硬约束、选择结果和理由，允许离线重放比较新策略。
 
+### 8.6 Divergence Policy
+
+Divergence Pass 在以下时点强制执行：
+
+- 初始 Method 接受后、第一批大规模任务创建前；
+- 高影响意外、Hypothesis 被推翻或新 Dispute 建立后；
+- 连续低信息收益、Frontier 同质化或来源集中度过高时；
+- Gate 准备接受停止条件、Reporter 开始最终报告前；
+- 用户要求扩大视角时。
+
+执行 Divergence Pass 的 Agent 只读取 Contract、Method、明确安全/预算限制和有限已知事实，不读取多数结论、当前排名和其他 Agent 的评价。这样保留独立推理，降低锚定。它必须从以下维度提出候选：
+
+- 未代表的利益相关者和反方激励；
+- 不同地区、语言、时间窗、人群和版本；
+- 不同来源生态与 independence family；
+- 替代测量、方法和因果解释；
+- 异常值、失败案例和否证方向；
+- 领域外类比及其适用/失效条件；
+- 用户没有提出但可能改变决策的问题。
+
+Strategy Version 为发散探测保留有界 `exploration_reserve`。探索型 Run 的 reserve 必须大于零；用户可在 Contract 中显式设为零。Portfolio Selection 对具有合理影响路径的高新颖度候选至少选择一个有界 probe，除非权限、安全或剩余预算不允许，并保存拒绝理由。
+
+Divergence Result 只能创建或建议 Hypothesis、Branch、Question 和 probe Task。未验证想法不能创建 supported Claim、解决 Dispute 或进入 Report。交付 Gate 要求当前 Contract/Plan 已完成交付前 Divergence Pass，并处理所有高影响候选或记录可审计的排除理由。
+
 ## 9. 动态结合多 Agent 结果
 
 Agent 之间不以私聊内容作为 canonical 协作输入。每个任务输入包含：
@@ -408,6 +509,17 @@ Agent 之间不以私聊内容作为 canonical 协作输入。每个任务输入
 - 与目标相关的 Claim、Evidence、Insight 和未解决争议；
 - 明确排除的重复工作；
 - 输出 schema、接受条件、工具/来源权限、预算和停止条件。
+
+每个 accepted Task Result 都先执行 Assimilation Check：
+
+1. 按目标 Question/Hypothesis/Branch/Dispute、实体、范围、时间、方法和语义近似查找已接受结果。
+2. 没有相关结果时写 `assimilation_routing=no_related_artifacts` Decision，并把结果放入待整合水位；后续相关结果到达时重新触发。
+3. 存在同类或互补结果时创建 `peer_synthesis` Integration Round，邀请原产出 Agent 提交 Integration Contribution。
+4. 存在不兼容 Claim 时先建立 Dispute，再让原产出 Agent 作为 Position 参与者进入 Research Deliberation。
+5. 原 Agent 已离线、退出或无权读取某项工件时，不伪造其 Contribution；记录缺席原因，由 Integrator 使用其已验收 Result Artifact 继续。
+6. Research Team Membership 只有在该 Agent 的待处理 Contribution/Deliberation 和活跃 Attempt 全部结束后才能 retiring。
+
+Integration Contribution 必须列出它实际比较的工件、相同点、差异、独有信息、适用范围和建议关系。原 Agent 不能仅回复“同意”或复述自己的旧结果。
 
 Integration Agent 的严格输出必须包括：
 
@@ -433,6 +545,21 @@ Integration Agent 的严格输出必须包括：
 Claim 和 Insight 不做破坏性合并。语义重复通过 `equivalent_to | refines | supersedes` 关系和 canonical selection Decision 表示，原实体、证据和作者归属永久保留。
 
 例子：三个 Agent 分别发现“官方价格低”“迁移成本高”“某地区条款禁止目标业务”。Integration Round 会生成“标价优势不能代表目标地区总成本”的 Insight，建立地区范围 Question，削弱“供应商 A 成本最低”的 Hypothesis，并创建条款核验和迁移成本敏感性分析任务。后续任务读取三项输入，不会再次从原目标开始泛搜。
+
+### 9.1 Recursive Integration
+
+Integration Module 在一个 Round 中执行以下递归过程：
+
+1. 按 Question、实体、范围、时间、方法和语义关系把新 Claim/Insight 放入候选 cluster。
+2. 两个以上来自不同 Task 或 Branch 的输入可以形成一级 Insight；单一结果仍保留为 Claim，不能伪装成归纳。
+3. 多个一级 Insight 可以形成跨主题二级 Insight；后续层级按同一规则继续，不设固定层数。
+4. 每个新 Insight 必须产生至少一种可观察价值：新增解释或决策关系、消除有证据的重复、条件化/解决冲突、改变 Hypothesis、改变 Frontier、改变报告结论或压缩上下文且完整保留派生关系。
+5. 只有文字更短或表达更抽象的候选以 `no_semantic_gain` 拒绝，不能制造装饰性“大节点”。
+6. 递归在没有合格 cluster、无新增语义价值、预算耗尽或命中 Contract 停止条件时结束。
+
+Insight Derivation 形成 DAG。层级由 `1 + max(input insight level)` 计算，Claim 视为 level 0。相同输入 hash、scope 和 relation 的候选按幂等键复用。任何输入被 refuted、superseded、范围改变或访问权限撤销时，依赖它的所有祖先 Insight 进入 `stale`；stale Insight 不能进入新 Task Context 或 Report，并创建最小范围的重新整合工作。
+
+Projection Module 可以把 Claim/Observation 显示为叶子节点，把逐层 Insight 显示为越来越大的归纳节点。层级、父子关系、贡献 Agent 和失效传播来自后端事实，前端不推断。
 
 ## 10. 争议处理协议
 
@@ -462,6 +589,35 @@ Embedding 相似度只提供候选，不能直接宣布冲突成立。
 
 阻断级 `open | investigating` Dispute 禁止交付。`conditionally_resolved | irreducible` 必须在报告中展示条件、残余不确定性和影响。
 
+### 10.4 Research Deliberation 与升级
+
+Dispute 绑定到两个以上 Position 后，Dispute Module 创建 Research Deliberation，并优先邀请产生冲突 Claim 的 Agent。每一轮只接受结构化 Deliberation Turn：
+
+- 当前 Position 与适用范围；
+- 新增或重解释的 Evidence IDs；
+- 对某个 Position/Evidence 的具体 challenge；
+- concession 或条件化成立范围；
+- 建议的范围拆分、区分查询、实验或复现；
+- `position_changed | evidence_added | scope_refined | no_change` 进展标记及服务端可验证依据。
+
+服务端按 Position/Evidence/scope 的 canonical delta 计算进展，Agent 自报 `position_changed` 不能单独算进展。达到以下任一条件时停止同级讨论：
+
+- 各方提交同一 Resolution Proposal；
+- 连续策略规定轮次没有 canonical delta；
+- 达到轮次、时间、token 或工具预算；
+- 发现需要新外部证据，当前讨论无法继续；
+- 参与 Agent 不可用或权限不再满足。
+
+共识提议仍需服务端 Evidence Standard 和状态机验证。无进展形成 `deadlocked`，自动创建绑定 Research Director 的 `lead_adjudication` Task 并写 `escalated_to` 边。Research Director 只能选择：
+
+1. 接受有充分 verified Evidence 的 Resolution Proposal；
+2. 按定义、时间、地区、人群、版本或方法拆分 Position；
+3. 创建最能区分各立场的新研究任务；
+4. 将 Dispute 标为 `conditionally_resolved` 或 `irreducible` 并说明残余影响；
+5. Contract 要求人类承担决定时，暂停相关分支并请求用户。
+
+Research Director 不能用身份覆盖 Evidence Standard、删除反方证据或把缺证争议标为 resolved。讨论消息、轮次、升级和裁决都作为稳定节点和边投影给前端。
+
 ## 11. 动态团队与工具路由
 
 角色是任务责任，不是固定人数。一次 Run 只实例化需要的角色：
@@ -485,6 +641,35 @@ Embedding 相似度只提供候选，不能直接宣布冲突成立。
 4. Agent 不具备所需能力时，创建显式 capability gap。只有现有产品允许招聘或配置 Agent 时才执行；否则向用户报告阻塞，不虚构能力。
 5. 一个 Agent 的失败不能立即判定永久不适合；至少按任务类型、领域、工具和样本量分组。
 6. Agent Reach 或其他检索项目只能作为 Retrieval Adapter 接入。只有在目标来源可达性、可复现性、权限和成本评测优于现有 Adapter 时才启用，不能成为调研状态机的依赖。
+
+### 11.1 Research Director 自主组队协议
+
+`StartRun` 必须把该 Session 所属 Research Fleet 的 `lead_agent_id` 复制到 Run 的 `research_director_agent_id` 并固定身份版本；当前产品的 sealed Research Fleet lead 是罗纳尔多。只有身份与该字段相同且 Membership 有效的 Agent principal 能提交 Team Formation Proposal 或处理 `lead_adjudication`。普通 Agent 不能通过 Prompt、自报角色或消息内容获得 Director 权限。
+
+运行开始后修改 Fleet lead 不得静默改写已有 Run。Director 不可用时，依赖 Director 的组队和裁决操作进入 `blocked` 并暴露原因；系统不能自动挑选另一 Agent 冒充。只有用户显式改派有效 Agent，服务端写入版本化 Director Reassignment Decision 后，新的身份才可执行后续 Director 操作，历史 Decision 仍归属于原 Director。
+
+Research Contract 增加组队授权：
+
+- `allow_agent_creation`；
+- Agent 数、并发、token、工具和外部费用上限；
+- 允许的工具/来源权限；
+- 默认保留策略 `run_scoped | retain_for_user_review`。
+
+Research Director 可以在新 Branch、新高影响 Question、capability gap、独立复核要求或当前团队容量不足时提交 Team Formation Proposal。Proposal 必须包含 Team Formation Decision 的全部字段，并给出现有成员不适合的可检查理由。
+
+Capability Module 按以下顺序处理：
+
+1. 检查 Contract 授权、workspace 权限、预算和安全策略；
+2. 检查当前 Fleet 是否已有等价能力和空闲容量；
+3. 检查待创建角色与现有任务/Agent 的重复度；
+4. 选择现有招聘/配置 Interface 的 Adapter 创建 Agent；
+5. Agent 可用后创建 Research Team Membership，再允许 Execution Module 分派；
+6. provisioning 失败写分类诊断，不复制 Proposal 或假装 Agent 已加入；
+7. 所有绑定任务结束、分支终止、Run 取消或预算撤销后进入 retiring；完成活跃 Attempt 处理后 retired。
+
+`allow_agent_creation=false` 或缺少权限时，Decision 进入 `blocked` 并向用户展示所需授权；Research Director 不能绕过现有 Agent 权限。相同 target、capability、independence requirement 和 active lifecycle 的 Proposal 按幂等键复用。
+
+Research Director 可以提出“自己的想法”，但必须具体化为 Question/Hypothesis/Branch、能力理由和预期工件。未经验证的想法不能成为招聘事实之外的研究结论。
 
 ## 12. 失败处理与运行健康
 
@@ -544,7 +729,10 @@ Embedding 相似度只提供候选，不能直接宣布冲突成立。
 7. Citation Auditor 的 Claim/section 全量审查；
 8. 作者、Reviewer 和 Auditor 满足独立性要求；
 9. 没有过期结果、未完成取消或未决高收益工作；
-10. 用户确认只用于 Contract 规定的人类决定，不能代替质量检查。
+10. 所有 Report 使用的 Insight Derivation 都是 fresh，递归整合已达到当前停止条件；
+11. 阻断级 Research Deliberation 没有停在 `discussing | deadlocked | escalated`；
+12. 当前 Contract/Plan 已完成交付前 Divergence Pass，高影响候选已调查或有可审计排除理由；
+13. 用户确认只用于 Contract 规定的人类决定，不能代替质量检查。
 
 每次报告修改都产生新 Revision。修改任务必须逐项引用 Evaluation Defect、Dispute 或 stale-graph 原因；不能只收到“重新写得更深入”。
 
@@ -555,6 +743,10 @@ Embedding 相似度只提供候选，不能直接宣布冲突成立。
 每个 Run 至少记录：
 
 - Frontier 大小、分支数、争议数和状态变化；
+- Team Formation Proposal、Agent 创建/失败/退出和 capability gap；
+- Deliberation 轮次、canonical delta、deadlock、升级和解决时长；
+- Insight 层级、cluster、递归深度、stale 传播和 `no_semantic_gain` 拒绝；
+- Divergence Pass 候选、被选择 probe、来源/视角集中度和拒绝理由；
 - 接受/拒绝的 Result 与原因；
 - 信息收益分项和重复任务比例；
 - Search 查询、候选、筛除、全文获取和 Snapshot 成功率；
@@ -580,6 +772,15 @@ Embedding 相似度只提供候选，不能直接宣布冲突成立。
 
 受控语料要预埋：隐藏的高价值事实、重复镜像、错误权威来源、时间版本冲突、定义冲突、同一数据的不同解释、检索失败、provider 故障和 prompt injection。每项任务包含环境、允许工具、预期结构和可计算 grader。
 
+自主行为评测必须包括：
+
+1. 新 Branch 需要当前 Fleet 不具备的能力：固定的 Research Director（当前产品为罗纳尔多）创建一个非重复 Agent，Agent 完成目标，Membership 可追溯并按策略退出；其他 Agent 使用相同 Proposal 时服务端拒绝。
+2. 两个生产 Agent 给出冲突 Claim：系统邀请原作者讨论；无 canonical delta 后自动升级；Research Director 创建区分任务；新证据解决或条件化争议。
+3. 一个 Run 覆盖 7.1 注册的全部 `node_kind`：全量 Snapshot 与 Event Delta 重建得到相同 Projection hash，每个节点详情字段完整，Team Formation、Integration Contribution、Deliberation Turn 和 Divergence Pass 不得退化成摘要消息。
+4. 四个叶子结果先形成两个一级 Insight，再形成二级 Insight；一个叶子被 refuted 后，相关一级和二级 Insight 变 stale，重新整合后报告更新。
+5. 初始来源全部来自同一观点生态：Divergence Pass 在隔离上下文中发现预埋的异质来源或利益相关者方向，并创建有界 probe；该方向未验证前不能进入报告 Claim。
+6. 三个 Agent 完成同类小目标：每个结果写 Assimilation Check；三个原 Agent 提交非空 Integration Contribution；共同结果形成一级 Insight；其中两项冲突时自动转入 Research Deliberation。
+
 评测指标：
 
 - 必答结论覆盖率；
@@ -596,6 +797,8 @@ Embedding 相似度只提供候选，不能直接宣布冲突成立。
 - 成本、时延和 token。
 
 确定性不变量要求 100% 通过：租户隔离、身份绑定、幂等、DAG、版本固定、exact quote、访问级别、stale result 拒绝、取消和 crash replay。
+
+以下自主行为也属于 100% 确定性门禁：Run 固定 Director 身份、非 Director 提交组队或裁决被拒绝、Director 改派只能来自用户并留下版本化 Decision、未授权 Agent 创建拒绝、重复 Team Formation Proposal 复用、每个 accepted Result 都有 Assimilation Check、相关原 Agent 的 Integration Contribution 不可被静默跳过、Deliberation deadlock 自动升级、Research Director 不能越过 Evidence Standard、Projection 重建 hash 一致、Insight stale 传递、无语义收益的高层节点拒绝、交付前 Divergence Pass 存在。
 
 以下数字是本产品的首个生产验收门槛，不是外部项目的公开基准。基线建立后允许上调；下调必须有新的评测证据和明确批准记录。
 
@@ -644,6 +847,7 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
 - [ ] 从已出现的生产失败中提取脱敏回归：重复节点、403 task result、dispatch_failed 扩散、报告过早、评审意见丢失、低价值信息收益。
 - [ ] 建立 canonical state hash 和 Event replay 工具。
 - [ ] 建立最小系统评测框架、固定语料和 grader Interface。
+- [ ] 为自主组队、冲突讨论升级、图投影重建、递归 Insight、反茧房 Divergence 和同类结果 Assimilation 建立上述六个见红 fixture。
 
 退出条件：旧运行回放一致；故障注入后能比较状态；后续每项改动都有可见的基线差异。
 
@@ -695,37 +899,43 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
 
 - [ ] 实现 E 中已冻结的 V6 Integration Result schema 和严格校验，不在 G 中改写协议。
 - [ ] 实现触发策略、固定输入版本、幂等执行和状态变化应用。
+- [ ] 实现每 Result 的 Assimilation Check、peer_synthesis、原 Agent Integration Contribution 和离线/退出参与者处理。
 - [ ] 实现 Claim/Question/Hypothesis 近重复候选、合并建议和拒绝理由。
+- [ ] 实现 Insight Derivation DAG、服务端层级计算、递归整合停止条件和 stale 向祖先传播。
 - [ ] 后续任务 Context 读取跨 Agent 的最新 Integration Snapshot。
 
-退出条件：两个以上 Agent 的结果会产生可引用 Insight、更新 Frontier 并生成组合后的新工作；Integrator prose 不能绕过服务端状态转换。
+退出条件：两个以上 Agent 的结果会产生可引用的多层 Insight、更新 Frontier 并生成组合后的新工作；输入失效会使祖先 Insight 过期；Integrator prose 不能绕过服务端状态转换。
 
 ### H. Dispute Graph 与独立裁决
 
 - [ ] 实现 Dispute、Position、类型、严重度、状态机和交付义务。
 - [ ] 实现确定性冲突检测和 Agent 冲突候选协议。
 - [ ] 实现盲复核、Methodologist、区分任务和 Adjudicator 输入隔离。
+- [ ] 实现 Research Deliberation Turn、进展水位、轮次/成本限制、deadlock 和 Research Director 自动升级。
 - [ ] Gate 阻止未处理的阻断级争议，报告展示条件化和不可消解争议。
 
-退出条件：固定冲突语料中能建立、调查、分类、裁决并在报告中追溯；不同范围的表面冲突不会被错误二选一。
+退出条件：固定冲突语料中能建立、讨论、deadlock 升级、调查、分类、裁决并在报告中追溯；不同范围的表面冲突不会被错误二选一，Research Director 不能无证据覆盖立场。
 
 ### I. Exploration Portfolio
 
 - [ ] 实现候选任务生成器和分项评分策略版本。
 - [ ] 实现多候选组合选择、重复惩罚、来源/方法多样性和预算预留。
 - [ ] 实现动态分支扩展、终止、饱和探测和停止判断。
+- [ ] 实现 Divergence Pass 隔离上下文、触发器、exploration reserve、异质视角候选和交付门禁。
 - [ ] 每次选择写 Candidate Set、分项、硬约束、Decision 和 Event。
 
-退出条件：系统能基于新 Insight/Dispute 主动生成深挖、独立核验、反证或区分任务；重复 Task 指标达到评测门槛。
+退出条件：系统能基于新 Insight/Dispute 主动生成深挖、独立核验、反证或区分任务，并能在同质来源条件下主动创建异质 probe；重复 Task 指标达到评测门槛。
 
 ### J. 动态团队和工具适配
 
 - [ ] 实现 Capability Observation，记录 Agent/model/provider/tool/Adapter 的分组结果。
 - [ ] 路由同时考虑能力要求、权限、独立性、可用性、成本和足够样本的历史表现。
 - [ ] 实现 capability gap 和现有招聘/配置功能的 Adapter；不可满足时显式阻塞。
+- [ ] 实现 Run 固定 Director 身份、Agent principal 授权检查、用户改派 Decision 和错误身份拒绝测试。
+- [ ] 实现 Contract 组队授权、Team Formation Decision、Research Team Membership、创建幂等和 Agent 退出处理。
 - [ ] 对 Agent Reach 等外部项目做离线 Adapter 对照评测，通过后才接生产流量。
 
-退出条件：任务路由理由可审计；不能因一次成功自封能力；需要独立复核时能证明执行者或工具的差异。
+退出条件：固定的 Research Director 能因新方向或自己的 Question/Hypothesis 创建受约束 Agent；非 Director 和未授权 Director 操作均被服务端拒绝；任务路由和 Agent 生命周期可审计；不能因一次成功自封能力；需要独立复核时能证明执行者或工具的差异。
 
 ### K. 报告整合、修订谱系与交付 Gate
 
@@ -759,10 +969,11 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
 - [ ] 每个 schema 改动都有 up/down migration、新库迁移和 down/up 回放。
 - [ ] 为历史 V1–V5 Run 建立只读投影和可恢复路径；不伪造历史 Inquiry/Search/Dispute 数据。
 - [ ] 更新 Run Snapshot，使前端能展示 Question、Hypothesis、Branch、Integration、Dispute、Search 和修订详情。
+- [ ] 实现稳定 Graph Projection Node/Edge schema、Snapshot/Delta、完整节点详情和重建 hash 测试。
 - [ ] 运行全文所列系统评测、故障注入、安全测试、完整 Go 验证和生产影子流量对照。
 - [ ] 更新内置 Skill、source map、后端设计、工程原则、指标和运维说明。
 
-退出条件：完成定义 1–13 全部有测试或运行证据；生产默认切换有回退版本；不存在仅靠文档宣称已完成的条目。
+退出条件：完成定义 1–19 全部有测试或运行证据；生产默认切换有回退版本；不存在仅靠文档宣称已完成的条目。
 
 ## 17. 每个 PR 的固定验收格式
 
@@ -813,6 +1024,9 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
 - [x] 核对 Anthropic multi-agent research、STORM/Co-STORM、PaperQA2 和 Agent eval 公开资料。
 - [x] 定义目标领域模型、关系图、Module、状态机和不变量。
 - [x] 定义主动探索、多 Agent 整合、争议裁决和动态团队策略。
+- [x] 定义 Research Director 自主组队和受控 Agent 生命周期。
+- [x] 定义冲突 Agent 讨论、deadlock 与 Research Director 自动升级。
+- [x] 定义稳定 Graph Projection、递归 Insight Derivation 和 Divergence Policy。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

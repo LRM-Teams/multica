@@ -289,6 +289,13 @@
 ### 4.18 主动调研必须通过可寻址状态持续整合与解决争议 — `仅文档`（目标已定，Implementation 尚未落地）
 - 目标协议见 `docs/superpowers/plans/2026-08-05-autonomous-research-system.md`。新能力必须把 Hypothesis、Branch、Insight、Search/Corpus 谱系、Integration Round、Dispute、Research Monitor、Capability Observation、Episode 和 Strategy Version 变成服务端可验证事实；增加 Agent 角色或 Prompt 文字不能算完成。
 - 每批可信结果都必须能够触发固定输入版本的整合、争议检测、候选工作生成和有分项理由的组合选择。Integrator 只能提议，Evidence、Inquiry、Dispute、Task 和 Gate 状态仍由 Research Run 验证后更新。
+- 每个 accepted Task Result 都必须写 Assimilation Check Decision。存在相关同类结果时，原产出 Agent 必须提交有工件引用的 Integration Contribution；存在冲突时转入 Research Deliberation；没有相关结果时记录等待水位，后续结果到达后重检。Agent 不可用必须保留缺席原因，不能伪造 Contribution。
+- Research Run 创建时必须把当前 Research Fleet lead 固定为 `research_director_agent_id`；现有产品中该 Agent 是罗纳尔多。只有该身份能提交 Team Formation 或 lead adjudication。运行中 Fleet lead 变化不能暗改 Director；只能由用户显式改派并写版本化 Decision。
+- Research Director 自主创建 Agent 必须经过 Contract 授权、Team Formation Decision、预算/权限/重复检查和 Research Team Membership；失败和退出必须保留事实。没有这些对象的“hire Agent”消息不能改变 Fleet。
+- 冲突 Agent 的讨论必须写 Research Deliberation Turn 并由 canonical Position/Evidence/scope delta 衡量进展；deadlock 自动升级给 Research Director。Director 只能按证据解决、拆分范围、创建区分任务或保留未解决状态，不能用身份覆盖 Evidence Standard。
+- Research Insight 必须有非破坏性的 Insight Derivation DAG。层级由服务端计算；无语义收益的递归摘要拒绝；任一输入失效必须使祖先 Insight stale 并阻止其进入新 Task Context 和 Report。
+- Research Projection 必须为每个 canonical 研究实体提供稳定 typed Node/Edge、完整详情和可重建 Delta，包括组队、Membership、Task/Attempt/Result、Search/Source、Observation/Claim、Question/Hypothesis/Branch、Integration Contribution/Insight Derivation、Dispute/Deliberation、Divergence、Decision、Evaluation 和 Report；前端布局不能回写 canonical 关系。
+- 每个交付必须有当前 Contract/Plan 的 Divergence Pass。该 Pass 使用隔离上下文和有界 exploration reserve 提出异质视角 probe；推测只能创建 Question/Hypothesis/Branch/Task，不能直接成为 Claim。
 - 生产 Strategy 不得在线自改。Episode 只能产生候选；候选经过固定评测集、历史回放、安全不变量、非退化检查和 Promotion Decision 后，才对新 Run 生效。已有 Run 固定旧版本，且保留 previous version 回退。
 - 本条在 schema、状态机、迁移、回放、故障注入和系统评测均见红并通过前保持 `仅文档`；实施 PR 必须逐项把约束升级为类型、唯一约束、事务或测试，并在本条记录具体装置。
 

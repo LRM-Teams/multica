@@ -1400,8 +1400,7 @@ func (d *Daemon) tryRenewToken(ctx context.Context) {
 	}
 }
 
-// workspaceSyncLoop periodically fetches the user's workspaces from the API
-// and registers runtimes for any new ones.
+// workspaceSyncLoop periodically refreshes the selected workspace from the API.
 func (d *Daemon) workspaceSyncLoop(ctx context.Context) {
 	ticker := time.NewTicker(DefaultWorkspaceSyncInterval)
 	defer ticker.Stop()
@@ -1418,9 +1417,8 @@ func (d *Daemon) workspaceSyncLoop(ctx context.Context) {
 	}
 }
 
-// syncWorkspacesFromAPI fetches all workspaces the user belongs to and
-// registers runtimes for any that aren't already tracked. Workspaces the user
-// has left are cleaned up.
+// syncWorkspacesFromAPI fetches the user's workspace membership, then registers
+// and refreshes only the workspace selected by `multica setup /<slug>`.
 func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 	d.reloading.Lock()
 	defer d.reloading.Unlock()
@@ -1432,11 +1430,24 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list workspaces: %w", err)
 	}
-	d.logger.Debug("workspace sync: fetched workspaces", "count", len(workspaces))
+	if len(workspaces) == 0 {
+		return nil
+	}
+	selectedID := strings.TrimSpace(d.cfg.WorkspaceID)
+	if selectedID == "" {
+		return fmt.Errorf("workspace is required; run `multica setup /<workspace-slug>`")
+	}
+	d.logger.Debug("workspace sync: fetched workspaces", "count", len(workspaces), "selected_workspace_id", selectedID)
 
 	apiIDs := make(map[string]string, len(workspaces)) // id -> name
 	for _, ws := range workspaces {
-		apiIDs[ws.ID] = ws.Name
+		if ws.ID == selectedID {
+			apiIDs[ws.ID] = ws.Name
+			break
+		}
+	}
+	if len(apiIDs) == 0 {
+		return fmt.Errorf("selected workspace %q not found among your workspaces; run `multica setup /<workspace-slug>`", selectedID)
 	}
 
 	d.mu.Lock()
@@ -1542,8 +1553,8 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 		d.notifyRuntimeSetChanged()
 	}
 
-	if len(d.allRuntimeIDs()) == 0 && registered == 0 && len(workspaces) > 0 {
-		return fmt.Errorf("failed to register runtimes for any of the %d workspace(s)", len(workspaces))
+	if len(d.allRuntimeIDs()) == 0 && registered == 0 {
+		return fmt.Errorf("failed to register runtimes for selected workspace %q", selectedID)
 	}
 	if registered > 0 || removed > 0 {
 		d.logger.Debug("workspace sync done", "registered", registered, "removed", removed, "tracked", len(apiIDs))

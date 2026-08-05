@@ -26,14 +26,14 @@ survives terminal close and restarts after upgrade.
 
 If a configuration already exists, you will be prompted before overwriting.
 
-Pass a workspace id or slug to set it as the default in this one step
-(equivalent to --workspace): multica setup /my-workspace
+Pass exactly one workspace path to connect this computer in that workspace:
+multica setup /my-workspace
 
 Use 'multica setup self-host' to connect to a self-hosted server instead.
 
 Use --profile to create an isolated configuration for a separate environment:
   multica setup self-host --profile staging --server-url https://api-staging.co`,
-	Args: cobra.MaximumNArgs(1),
+	Args: requireWorkspacePath,
 	RunE: runSetupCloud,
 }
 
@@ -43,7 +43,7 @@ var setupCloudCmd = &cobra.Command{
 	Long: `Explicitly configures the CLI to connect to Multica Cloud (multica.ai).
 
 This is equivalent to running 'multica setup' without a subcommand.`,
-	Args: cobra.MaximumNArgs(1),
+	Args: requireWorkspacePath,
 	RunE: runSetupCloud,
 }
 
@@ -73,15 +73,15 @@ Examples:
 
 func init() {
 	setupCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
-	setupCmd.Flags().String("workspace", "", "Set the default workspace by id or slug in this one step, instead of auto-picking the first one (env: MULTICA_WORKSPACE).")
+	setupCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
 	setupCloudCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
-	setupCloudCmd.Flags().String("workspace", "", "Set the default workspace by id or slug in this one step, instead of auto-picking the first one (env: MULTICA_WORKSPACE).")
+	setupCloudCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
 	setupSelfHostCmd.Flags().String("server-url", "", "Backend server URL (e.g. https://api.internal.co) (env: MULTICA_SERVER_URL)")
 	setupSelfHostCmd.Flags().String("app-url", "", "Frontend app URL (e.g. https://app.internal.co) (env: MULTICA_APP_URL)")
 	setupSelfHostCmd.Flags().Int("port", 8080, "Backend server port (used when --server-url is not set)")
 	setupSelfHostCmd.Flags().Int("frontend-port", 3000, "Frontend port (used when --app-url is not set)")
 	setupSelfHostCmd.Flags().String(callbackHostFlag, "", "Host the OAuth callback URL points at (auto-detected when empty). Use this for Windows WSL / reverse-proxy setups.")
-	setupSelfHostCmd.Flags().String("workspace", "", "Set the default workspace by id or slug in this one step, instead of auto-picking the first one (env: MULTICA_WORKSPACE).")
+	setupSelfHostCmd.Flags().String("workspace", "", "Set the workspace by id or slug (env: MULTICA_WORKSPACE).")
 
 	setupCmd.AddCommand(setupCloudCmd)
 	setupCmd.AddCommand(setupSelfHostCmd)
@@ -130,7 +130,7 @@ func confirmOverwrite(profile string) (bool, error) {
 }
 
 // applyWorkspacePositional wires `multica setup /<workspace>` onto the same
-// --workspace flag autoWatchWorkspaces already reads, so there is exactly
+// --workspace flag configureSelectedWorkspace reads, so there is exactly
 // one place that resolves the id-or-slug against the workspace list. Does
 // nothing if the flag was already set explicitly (flag wins) or no
 // positional was given.
@@ -147,11 +147,36 @@ func applyWorkspacePositional(cmd *cobra.Command, args []string) error {
 	return cmd.Flags().Set("workspace", strings.TrimPrefix(args[0], "/"))
 }
 
+// requireWorkspacePath keeps setup scoped to exactly one workspace. The slash
+// distinguishes this product command from the retired bare setup form.
+func requireWorkspacePath(_ *cobra.Command, args []string) error {
+	if len(args) != 1 || !strings.HasPrefix(args[0], "/") || len(args[0]) == 1 {
+		return fmt.Errorf("setup requires one workspace path: multica setup /<workspace-slug>")
+	}
+	return nil
+}
+
+// configureWorkspaceDaemonProfile gives each cloud workspace its own daemon
+// service and state directory. An explicit profile remains an advanced override.
+func configureWorkspaceDaemonProfile(cmd *cobra.Command, args []string) (string, error) {
+	if profile := resolveProfile(cmd); profile != "" {
+		return profile, nil
+	}
+	profile := "workspace-" + strings.TrimPrefix(args[0], "/")
+	if err := cmd.Flags().Set("profile", profile); err != nil {
+		return "", fmt.Errorf("set workspace daemon profile: %w", err)
+	}
+	return profile, nil
+}
+
 func runSetupCloud(cmd *cobra.Command, args []string) error {
 	if err := applyWorkspacePositional(cmd, args); err != nil {
 		return err
 	}
-	profile := resolveProfile(cmd)
+	profile, err := configureWorkspaceDaemonProfile(cmd, args)
+	if err != nil {
+		return err
+	}
 
 	ok, err := confirmOverwrite(profile)
 	if err != nil {

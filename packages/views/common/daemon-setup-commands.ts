@@ -31,30 +31,18 @@ export function normalizeCommandURL(url: string | undefined) {
 }
 
 export function daemonSetupCommands(
-  serverUrl: string | undefined,
-  appUrl: string | undefined,
   mode: DaemonSetupMode,
+  workspaceSlug?: string,
 ): DaemonSetupCommands {
-  const normalizedServerUrl = normalizeCommandURL(serverUrl);
-  const normalizedAppUrl = normalizeCommandURL(appUrl);
   const installCmd =
     mode === "windows-powershell"
       ? POWERSHELL_INSTALL_COMMAND
       : MULTICA_INSTALL_COMMAND;
 
-  if (normalizedServerUrl && normalizedAppUrl) {
-    return {
-      installCmd,
-      setupCmd: [
-        "multica setup self-host",
-        `--server-url ${normalizedServerUrl}`,
-        `--app-url ${normalizedAppUrl}`,
-      ].join(" "),
-    };
-  }
-
   return {
     installCmd,
-    setupCmd: "multica setup",
+    // Scope setup to the workspace currently open in the dialog.  A bare
+    // command can select a different workspace, and self-host is not this flow.
+    setupCmd: `multica setup /${workspaceSlug || "<workspace-slug>"}`,
   };
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -7387,11 +7388,29 @@ func (h *Handler) findUserChannelMessageByClientID(ctx context.Context, workspac
 	return msg, true, nil
 }
 
+// messagePartsSemanticallyEqual compares two message part slices as JSON,
+// ignoring object-key ordering. This is required because PostgreSQL jsonb
+// round-trips object keys in canonical length-then-byte order while Go's
+// json.Marshal sorts keys lexicographically, so structured parts carrying a
+// Params/EventParams map never byte-match across a store-and-reload cycle.
+func messagePartsSemanticallyEqual(a, b []protocol.MessagePart) bool {
+	ja, errA := json.Marshal(a)
+	jb, errB := json.Marshal(b)
+	if errA != nil || errB != nil {
+		return string(messageparts.MustJSON(a)) == string(messageparts.MustJSON(b))
+	}
+	var va, vb any
+	if json.Unmarshal(ja, &va) != nil || json.Unmarshal(jb, &vb) != nil {
+		return false
+	}
+	return reflect.DeepEqual(va, vb)
+}
+
 func (h *Handler) matchesChannelMessageIdempotencyPayload(ctx context.Context, existing ChannelMessageResponse, in channelMessageInsertInput, attachmentIDs []pgtype.UUID) (bool, error) {
 	if existing.Content != in.Content {
 		return false, nil
 	}
-	if string(messageparts.MustJSON(existing.Parts)) != string(messageparts.MustJSON(in.Parts)) {
+	if !messagePartsSemanticallyEqual(existing.Parts, in.Parts) {
 		return false, nil
 	}
 	if !sameNullableUUID(existing.ReplyToMessageID, in.ReplyToMessageID) || !sameNullableUUID(existing.QuoteMessageID, in.QuoteMessageID) || !sameNullableUUID(existing.ThreadRootMessageID, in.ThreadRootMessageID) {

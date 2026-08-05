@@ -68,22 +68,23 @@ func TestClaudeStaticModelsExposeOnlyCurrentCleanLineup(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"sonnet", "opus", "haiku"} {
+	for _, want := range []string{"sonnet", "opus", "haiku", "claude-fable-5"} {
 		if _, ok := ids[want]; !ok {
 			t.Errorf("missing Claude model %q in: %+v", want, models)
 		}
 	}
 	for id, wantLabel := range map[string]string{
-		"sonnet": "Sonnet 5",
-		"opus":   "Opus",
-		"haiku":  "Haiku",
+		"sonnet":          "Sonnet 5",
+		"opus":            "Opus",
+		"haiku":           "Haiku",
+		"claude-fable-5":  "Fable 5",
 	} {
 		if got := ids[id].Label; got != wantLabel {
 			t.Errorf("visible label for %q = %q, want %q", id, got, wantLabel)
 		}
 	}
-	if len(models) != 3 {
-		t.Fatalf("visible Claude lineup = %+v, want exactly the three official aliases", models)
+	if len(models) != 4 {
+		t.Fatalf("visible Claude lineup = %+v, want exactly the three official aliases plus Fable 5", models)
 	}
 	if defaults != 1 || !ids["sonnet"].Default {
 		t.Errorf("expected Sonnet to remain the sole default, got defaults=%d models=%+v", defaults, models)
@@ -996,7 +997,7 @@ func TestParseCodexDebugModelsCatalog_ListOnly(t *testing.T) {
 	}
 }
 
-func TestDiscoverClaudeModels_NoStaticFallback(t *testing.T) {
+func TestDiscoverClaudeModels_FallsBackToStatic(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	modelCacheMu.Lock()
@@ -1004,16 +1005,22 @@ func TestDiscoverClaudeModels_NoStaticFallback(t *testing.T) {
 	delete(modelCache, "claude:/nonexistent/claude")
 	modelCacheMu.Unlock()
 	got, err := ListModels(ctx, "claude", "/nonexistent/claude")
-	if err == nil {
-		t.Fatal("expected error when Claude cannot list models")
+	if err != nil {
+		t.Fatalf("expected static fallback (no error) when Claude cannot list models, got %v", err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("expected empty list on failure, got %+v", got)
+	if len(got) == 0 {
+		t.Fatal("expected static fallback lineup when Claude cannot list models, got empty list")
 	}
-	if !strings.Contains(err.Error(), "cannot list models") && !strings.Contains(err.Error(), "unable") {
-		// accept either phrasing
-		if !strings.Contains(strings.ToLower(err.Error()), "claude") {
-			t.Fatalf("error should mention Claude: %v", err)
+	ids := map[string]bool{}
+	for _, m := range got {
+		if m.ID == "" {
+			t.Errorf("fallback model has empty ID: %+v", m)
+		}
+		ids[m.ID] = true
+	}
+	for _, want := range []string{"sonnet", "opus", "haiku", "claude-fable-5"} {
+		if !ids[want] {
+			t.Errorf("static fallback missing %q: %+v", want, got)
 		}
 	}
 }

@@ -1,6 +1,6 @@
 # 自主调研系统：目标架构与严格实现路径
 
-状态：实现中；A1、A2 已完成
+状态：实现中；A1–A4 已完成
 
 日期：2026-08-05
 
@@ -867,7 +867,11 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
   - 评审意见丢失：`TestV5EvaluationDefectsPersistAndReachRemediation` 固定 defect 从 Decision/Gate 到 revision objective/acceptance criteria 的完整传递。
   - 低价值信息收益：`TestProductionRegressionDuplicateEvidenceReachesMarginalGainSaturation` 在真实 Store 连续提交相同证据，固定零图增长、连续低收益计数和停止条件。
 - [x] 建立 canonical state hash 和 Event replay 工具：`CanonicalState` 对同一 Run 的 V1–V5 规范表计算确定性哈希，`ListRunEvents` / `ReplayRunEvents` 按 workspace 和连续 sequence 重放投影 Event，拒绝冲突重复与序号缺口。
-- [ ] 建立最小系统评测框架、固定语料和 grader Interface。
+- [x] 建立最小系统评测框架、固定语料和 grader Interface。
+  - `internal/researcheval` 将 Case 分成可见的 Task/Environment 与隐藏 Oracle；Executor 只接收 `SubjectInput`，不能读取 grader 期望。
+  - `testdata/corpus_v1.json` 固定八种研究模式，并覆盖隐藏高价值事实、镜像重复、错误权威来源、时间版本冲突、定义冲突、同数据不同解释、检索失败、provider 故障和 prompt injection。
+  - `FactConflictGrader`、`TraceabilityGrader`、`SourceDisciplineGrader` 分开判断事实/冲突、报告 Claim 出处和来源筛选；任一 grader 失败都会使 trial 失败。
+  - Runner 按多个 seed 重复执行，执行错误按零分失败样本计入，输出按 trial/grader/overall 聚合的版本化 Report；Report 比较只允许相同 Corpus version，grader 缺失或任一分项退化即判退化。
 - [ ] 为自主组队、冲突讨论升级、图投影重建、递归 Insight、反茧房 Divergence、同类结果 Assimilation 和无限画布续传/大图分片建立上述七个见红 fixture。
 
 退出条件：旧运行回放一致；故障注入后能比较状态；后续每项改动都有可见的基线差异。
@@ -1058,6 +1062,7 @@ A1 边界：当前 `research_run_event` 是 committed state 到投影的日志�
 - [x] A2a 实现 V1–V5 orchestrator contract golden manifest；五个版本的完整 Prompt、可接受 Plan 和新 schema 拒绝均有固定回归。
 - [x] A2b 实现当前状态机行为 golden manifest；证据接纳、报告物化、结构化评审缺陷传递、有界重试、取消确认和结果幂等恢复均由真实 PostgreSQL 场景固定。测试发现任务自身永久失败被错误写为 `blocked`，已改为 `failed`；只有依赖终态导致的任务使用 `blocked/dependency_terminal`。历史 V1–V5 的协议边界由 A2a 分版本固定。
 - [x] A3 把六类已发生生产故障映射到脱敏可执行回归；新增画布 Projection 内部身份唯一断言和真实 PostgreSQL 重复证据饱和测试，其余四类复用并标注现有生产路径回归。测试输入不含线上 workspace、Run、Agent、来源或用户内容。
+- [x] A4 实现 `internal/researcheval` 评测契约、八模式固定受控语料、三个确定性 grader、重复 seed Runner、版本化聚合 Report 和同语料对照。当前装置是离线评测基础，不宣称已把生产 Research Run 自动执行器、LLM judge、Episode 或 Strategy Promotion 接入；这些仍属于 M。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

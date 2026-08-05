@@ -46,6 +46,14 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 			return AcceptResultOutcome{}, err
 		}
 	}
+	measureGain := isEvidenceTask(state.task.Kind) && !state.stale
+	var graphBefore researchGraphState
+	if measureGain {
+		graphBefore, err = s.loadResearchGraphState(ctx, tx, state.run.SessionID, state.run.GoalVersion, state.targetPlan)
+		if err != nil {
+			return AcceptResultOutcome{}, err
+		}
+	}
 
 	outcome := AcceptResultOutcome{
 		TaskID:      state.task.ID,
@@ -106,7 +114,17 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	if err = updateQuestionProgress(ctx, tx, state, in.Result, claimIDs); err != nil {
 		return AcceptResultOutcome{}, err
 	}
-	measuredGain := measuredInformationGain(outcome)
+	var gain informationGainBreakdown
+	if measureGain {
+		graphAfter, loadErr := s.loadResearchGraphState(ctx, tx, state.run.SessionID, state.run.GoalVersion, state.targetPlan)
+		if loadErr != nil {
+			return AcceptResultOutcome{}, loadErr
+		}
+		gain = measuredInformationGain(graphBefore, graphAfter, state.task.Kind)
+		if err = recordInformationGain(ctx, tx, state, in, graphBefore, graphAfter, gain); err != nil {
+			return AcceptResultOutcome{}, err
+		}
+	}
 
 	resultJSON, err := json.Marshal(in.Result)
 	if err != nil {
@@ -158,8 +176,8 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		      'evidence_batches', COALESCE((run_stats->>'evidence_batches')::int, 0) + CASE WHEN $5::boolean THEN 1 ELSE 0 END,
 		      'low_gain_streak', CASE WHEN NOT $5::boolean THEN COALESCE((run_stats->>'low_gain_streak')::int, 0)
 		                              WHEN $6::double precision < $7::double precision THEN COALESCE((run_stats->>'low_gain_streak')::int, 0) + 1 ELSE 0 END,
-		      'last_coverage_delta', $3::double precision,
-		      'last_measured_gain', $6::double precision,
+			  'last_coverage_delta', CASE WHEN $5::boolean THEN $3::double precision ELSE COALESCE((run_stats->>'last_coverage_delta')::double precision, 0) END,
+			  'last_measured_gain', CASE WHEN $5::boolean THEN $6::double precision ELSE COALESCE((run_stats->>'last_measured_gain')::double precision, 0) END,
 		      'last_confidence', $4::double precision,
 		      'sources_created', COALESCE((run_stats->>'sources_created')::int, 0) + $8::int,
 		      'observations_created', COALESCE((run_stats->>'observations_created')::int, 0) + $9::int,
@@ -168,7 +186,7 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		    updated_at = now()
 		WHERE id = $1::uuid
 	`, in.SessionID, stage, in.Result.CoverageDelta, in.Result.Confidence,
-		isEvidenceTask(state.task.Kind) && !state.stale, measuredGain, state.run.Config.MarginalGainThreshold,
+		measureGain, gain.Score, state.run.Config.MarginalGainThreshold,
 		outcome.SourcesCreated, outcome.ObservationsCreated, outcome.ClaimsCreated); err != nil {
 		return AcceptResultOutcome{}, err
 	}
@@ -186,7 +204,9 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		"observations_created": outcome.ObservationsCreated,
 		"claims_created":       outcome.ClaimsCreated,
 		"report_id":            outcome.ReportID,
-		"measured_gain":        measuredGain,
+		"gain_measured":        measureGain,
+		"measured_gain":        gain.Score,
+		"gain_breakdown":       gain,
 	})
 	if err != nil {
 		return AcceptResultOutcome{}, err
@@ -252,14 +272,6 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 	`, state.workspaceID, state.run.SessionID, agentID, state.run.GoalVersion,
 		state.targetPlan, inputs, outcome, truncateBytes(method.MethodRationale, 8192))
 	return err
-}
-
-func measuredInformationGain(outcome AcceptResultOutcome) float64 {
-	gain := float64(outcome.SourcesCreated)*0.02 + float64(outcome.ObservationsCreated)*0.01 + float64(outcome.ClaimsCreated)*0.02
-	if gain > 1 {
-		return 1
-	}
-	return gain
 }
 
 func isEvidenceTask(kind TaskKind) bool {
@@ -586,12 +598,83 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 			}
 		}
 	}
+	if state.run.OrchestratorVersion == OrchestratorVersionV4 {
+		for _, proposal := range result.ProposedTasks {
+			if _, err = tx.Exec(ctx, `
+				INSERT INTO research_task_dependency (task_id, depends_on_task_id)
+				VALUES ($1::uuid, $2::uuid) ON CONFLICT DO NOTHING
+			`, taskIDs[proposal.ClientKey], state.task.ID); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if state.run.OrchestratorVersion == OrchestratorVersionV4 && isEvidenceTask(state.task.Kind) {
+		if err = attachV4ProposedWorkToDelivery(ctx, tx, state, result.ProposedTasks, taskIDs); err != nil {
+			return 0, err
+		}
+	}
 	if cyclic, err := taskGraphHasCycle(ctx, tx, state.run.SessionID); err != nil {
 		return 0, err
 	} else if cyclic {
 		return 0, fmt.Errorf("%w: persisted task dependency graph contains a cycle", ErrInvalidResult)
 	}
 	return created, nil
+}
+
+func attachV4ProposedWorkToDelivery(ctx context.Context, tx pgx.Tx, state acceptedResultState, proposals []TaskProposal, taskIDs map[string]string) error {
+	blockingTaskIDs := make([]string, 0, len(proposals))
+	for _, proposal := range proposals {
+		if isEvidenceTask(proposal.Kind) || proposal.Kind == TaskKindReplan {
+			blockingTaskIDs = append(blockingTaskIDs, taskIDs[proposal.ClientKey])
+		}
+	}
+	if len(blockingTaskIDs) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT DISTINCT synthesis.id::text
+		FROM research_task synthesis
+		JOIN research_task_dependency audit_dependency ON audit_dependency.depends_on_task_id = synthesis.id
+		JOIN research_task audit ON audit.id = audit_dependency.task_id
+		WHERE synthesis.session_id = $1::uuid
+		  AND synthesis.goal_version = $2 AND synthesis.plan_version = $3
+		  AND synthesis.kind = 'synthesize' AND synthesis.status IN ('pending', 'ready')
+		  AND audit.kind IN ('quality_gate', 'citation_audit')
+	`, state.run.SessionID, state.run.GoalVersion, state.targetPlan)
+	if err != nil {
+		return err
+	}
+	deliveryTaskIDs := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		deliveryTaskIDs = append(deliveryTaskIDs, id)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, deliveryTaskID := range deliveryTaskIDs {
+		for _, blockingTaskID := range blockingTaskIDs {
+			if _, err = tx.Exec(ctx, `
+				INSERT INTO research_task_dependency (task_id, depends_on_task_id)
+				VALUES ($1::uuid, $2::uuid) ON CONFLICT DO NOTHING
+			`, deliveryTaskID, blockingTaskID); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_task SET status = 'pending', ready_at = NULL, updated_at = now()
+			WHERE id = $1::uuid AND status = 'ready'
+		`, deliveryTaskID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func loadTaskIDs(ctx context.Context, tx pgx.Tx, sessionID string, goalVersion, planVersion int) (map[string]string, error) {
@@ -787,6 +870,7 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		if status == "" {
 			status = ClaimStatusProposed
 		}
+		adjudicated := (state.task.Kind == TaskKindVerify || state.task.Kind == TaskKindCounterSearch) && claim.Status != ""
 		var id string
 		var existed bool
 		if err := tx.QueryRow(ctx, `
@@ -805,16 +889,17 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 			ON CONFLICT (session_id, goal_version, plan_version, client_key)
 			DO UPDATE SET
 			  evidence_standard_key = CASE WHEN research_claim.evidence_standard_key = '' THEN EXCLUDED.evidence_standard_key ELSE research_claim.evidence_standard_key END,
-			  confidence = GREATEST(research_claim.confidence, EXCLUDED.confidence),
-			  status = CASE WHEN research_claim.status = 'proposed' THEN EXCLUDED.status ELSE research_claim.status END,
-			  resolution = CASE WHEN research_claim.resolution = '' THEN EXCLUDED.resolution ELSE research_claim.resolution END,
+			  confidence = CASE WHEN $13::boolean THEN EXCLUDED.confidence ELSE GREATEST(research_claim.confidence, EXCLUDED.confidence) END,
+			  status = CASE WHEN $13::boolean OR research_claim.status = 'proposed' THEN EXCLUDED.status ELSE research_claim.status END,
+			  resolution = CASE WHEN $13::boolean AND EXCLUDED.resolution <> '' THEN EXCLUDED.resolution
+			                    WHEN research_claim.resolution = '' THEN EXCLUDED.resolution ELSE research_claim.resolution END,
 			  updated_at = now()
 			WHERE research_claim.claim_text = EXCLUDED.claim_text
 			  AND (research_claim.evidence_standard_key = '' OR EXCLUDED.evidence_standard_key = '' OR research_claim.evidence_standard_key = EXCLUDED.evidence_standard_key)
 			RETURNING id::text
 		`, state.workspaceID, state.run.SessionID, state.task.ID, claim.ClientKey,
 			claim.EvidenceStandardKey, strings.TrimSpace(claim.Text), claim.Significance, claim.Confidence, status,
-			state.task.GoalVersion, state.targetPlan, truncateBytes(claim.Resolution, 8192)).Scan(&id)
+			state.task.GoalVersion, state.targetPlan, truncateBytes(claim.Resolution, 8192), adjudicated).Scan(&id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, 0, fmt.Errorf("%w: claim key %q was reused for different text", ErrResultConflict, claim.ClientKey)
 		}

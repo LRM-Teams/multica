@@ -88,8 +88,9 @@ func TestResearchSeedRolesIncludeLead(t *testing.T) {
 			if r.Instructions == "" || len(r.Instructions) < 200 {
 				t.Fatal("ronaldo instructions must be detailed")
 			}
-			for _, required := range []string{"accepted Method", "multica research task-result", "do not use a universal source hierarchy", "evidence standards", "directness", "method fit"} {
-				if !strings.Contains(r.Instructions, required) {
+			normalizedInstructions := strings.ToLower(strings.Join(strings.Fields(r.Instructions), " "))
+			for _, required := range []string{"accepted Method", "multica research task-result", "do not use a universal source hierarchy", "evidence standards", "directness", "method fit", "question-bound verify", "every discover", "required follow-up", "server-measured"} {
+				if !strings.Contains(normalizedInstructions, strings.ToLower(required)) {
 					t.Fatalf("ronaldo instructions missing durable research rule %q", required)
 				}
 			}

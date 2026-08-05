@@ -659,10 +659,19 @@ func remediationTask(gate GateResult) ControlTaskInput {
 			"claim_counterevidence_search_missing", "report_conflicts_unresolved")
 	}
 	if codes["required_questions_unanswered"] {
+		questionID := findingMetadataString(gate.Findings, "required_questions_unanswered", "question_id")
+		if findingMetadataString(gate.Findings, "required_questions_unanswered", "answer_claim_id") != "" &&
+			!findingMetadataBool(gate.Findings, "required_questions_unanswered", "has_verified_support") {
+			out := control(TaskKindVerify, "validator", "The highest-value required Question has an answer Claim but lacks verified support.",
+				"Verify the bound Question's existing answer Claim against the accepted Evidence Standard. Reuse its stable Claim key, add exact verified support, and update coverage only from the verified result.",
+				"required_questions_unanswered")
+			out.QuestionID = questionID
+			return out
+		}
 		out := control(TaskKindDiscover, "scout", "The highest-priority required question still lacks an accepted evidence-backed answer.",
 			"Answer the bound required question with new, directly relevant evidence. Return an answer Claim and a measured coverage increase; do not broaden the plan.",
 			"required_questions_unanswered")
-		out.QuestionID = findingMetadataString(gate.Findings, "required_questions_unanswered", "question_id")
+		out.QuestionID = questionID
 		return out
 	}
 	if codes["independent_sources_insufficient"] || codes["claim_evidence_standard_missing"] ||
@@ -673,10 +682,10 @@ func remediationTask(gate GateResult) ControlTaskInput {
 	}
 	if codes["report_missing"] || codes["report_claims_missing"] || codes["major_claims_unlinked"] ||
 		codes["required_answers_unreported"] || codes["report_structure_incomplete"] || codes["report_author_missing"] ||
-		codes["report_claims_stale"] || codes["quality_evaluation_failed"] || codes["citation_audit_failed"] {
+		codes["report_claims_stale"] || codes["report_stale_after_evidence"] || codes["quality_evaluation_failed"] || codes["citation_audit_failed"] {
 		return control(TaskKindSynthesize, "reporter", "The evidence ledger is usable but the current report does not represent it correctly.",
 			"Revise the report from the current normalized Claims and verified evidence. Repair every stated structure, coverage, quality, citation, or version defect without changing the research plan.",
-			"report_missing", "report_claims_missing", "major_claims_unlinked", "required_answers_unreported", "report_structure_incomplete", "report_author_missing", "report_claims_stale", "quality_evaluation_failed", "citation_audit_failed")
+			"report_missing", "report_claims_missing", "major_claims_unlinked", "required_answers_unreported", "report_structure_incomplete", "report_author_missing", "report_claims_stale", "report_stale_after_evidence", "quality_evaluation_failed", "citation_audit_failed")
 	}
 	if codes["quality_evaluation_missing"] || codes["quality_evaluation_not_independent"] {
 		return control(TaskKindQualityGate, "validator", "The current report lacks a valid independent quality evaluation.",
@@ -731,6 +740,18 @@ func findingMetadataString(findings []GateFinding, code, key string) string {
 		}
 	}
 	return ""
+}
+
+func findingMetadataBool(findings []GateFinding, code, key string) bool {
+	for _, finding := range findings {
+		if finding.Code != code || finding.Metadata == nil {
+			continue
+		}
+		if value, ok := finding.Metadata[key].(bool); ok {
+			return value
+		}
+	}
+	return false
 }
 
 func gateObjective(prefix string, gate GateResult) string {
@@ -953,7 +974,7 @@ func buildTaskPromptV4(run Run, task Task, attempt Attempt, snapshot RunSnapshot
 	b.WriteString("4. Every source supplies evidence_traits describing what the captured Snapshot can establish, such as official_record, direct_measurement, first_party_statement, independent_evaluation, reproducible_artifact, expert_interview, or user_report. Source class is descriptive and has no global credibility score. Preserve bounded retrieved text, provenance, publisher, retrieval time, and a truthful independence_key.\n")
 	b.WriteString("5. Every Claim supplies evidence_standard_key. Every Evidence Link supplies observation_key, relation, strength, directness, method_fit, and a substantive rationale. Directness measures how directly the Observation establishes this Claim; method_fit measures whether it satisfies the accepted analysis method. A validator must resubmit the exact artifacts to mark them verified.\n")
 	b.WriteString("6. Source fields are client_key,url,title,publisher,source_class,evidence_traits,independence_key,retrieved_at,snapshot_text,metadata. Observation fields are client_key,source_key,quote,datum,locator,interpretation. Claim fields are client_key,evidence_standard_key,text,significance,confidence,status,resolution,evidence. Every Observation quote must occur exactly in its Snapshot.\n")
-	b.WriteString("7. Every proposed task uses an active fleet role and this exact expected_result mapping: plan/replan=research_plan_v4; discover/deep_read/verify/counter_search=research_evidence_v4; synthesize=research_report_v4; quality_gate=research_quality_evaluation_v4; citation_audit=research_citation_audit_v4. Delivery roles are fixed: synthesize=reporter; quality_gate=validator; citation_audit=validator. Every plan includes all three delivery tasks, and both audit tasks directly depend on synthesis.\n")
+	b.WriteString("7. Every proposed task uses an active fleet role and this exact expected_result mapping: plan/replan=research_plan_v4; discover/deep_read/verify/counter_search=research_evidence_v4; synthesize=research_report_v4; quality_gate=research_quality_evaluation_v4; citation_audit=research_citation_audit_v4. Delivery roles are fixed: synthesize=reporter; quality_gate=validator; citation_audit=validator. Every required Question, including a new required follow-up Question, has a question-bound verify task. At least one delivery-ready synthesize task is downstream of every discover, deep_read, verify, and counter_search task, and both audits directly depend on that synthesis task. Dynamic evidence and replan work blocks pending delivery. Delivery tasks belong in the validated plan graph and cannot be introduced as proposed follow-up work.\n")
 	b.WriteString("8. A question-scoped evidence result that increases coverage supplies answer_claim_key pointing to one Claim in that result. Evidence is sufficient only when the Claim-level standard passes; source count, source class, or depth tier alone never establishes sufficiency.\n")
 	b.WriteString("9. A report uses the existing reader schema exactly: report={content_md,structured,claims}; structured={schema_version:1,title,outline:[{id,title,level,children}],sections:[{id,title,level,markdown,citation_ids}],citations:[{id,index,source_id,label,quote,locator}],sources:[{source_id,title,url,credibility_weight,source_class}],gaps,conclusion}; claims=[{claim_key,section_id,anchor_quote}]. Every report Claim must cite verified evidence that passes its accepted standard.\n")
 	policy := reportPolicyForDepth(run.DepthTier)

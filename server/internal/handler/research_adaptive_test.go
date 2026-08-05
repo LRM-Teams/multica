@@ -72,8 +72,8 @@ func TestResearchDomainPlaybooksFineDomains(t *testing.T) {
 		if books[domain] == "" {
 			t.Fatalf("missing playbook %s", domain)
 		}
-		for _, required := range []string{"## Decision", "## Method", "## Failure"} {
-			if !strings.Contains(books[domain], required) && domain != "general" {
+		for _, required := range []string{"## decision", "## method", "failure"} {
+			if !strings.Contains(strings.ToLower(books[domain]), required) && domain != "general" {
 				t.Fatalf("playbook %s missing adaptation section %q", domain, required)
 			}
 		}

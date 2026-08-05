@@ -403,13 +403,23 @@ missing coverage, contradiction severity, expected information gain, and
 estimated cost. Task priority is persisted; gate, replan, exhaustion, and
 delivery decisions are persisted in Research Decisions.
 
+The server ranks unresolved required Questions deterministically from priority,
+impact, uncertainty, novelty, missing coverage, and a contradiction/gap boost.
+The selected Question ID, score, answer Claim, verified-support state, and
+incomplete reasons are part of the Gate finding. An existing answer without
+verified support routes to verification; a missing or incomplete answer routes
+to discovery.
+
 ### 6.6 Wide, deep, adversarial, synthesis
 
 The planner begins with independent perspectives and broad discovery. Strong
 sources produce `deep_read` tasks. High-significance Claims produce independent
-`verify` or `counter_search` tasks. Synthesis runs incrementally after useful
-evidence batches, not only at the end. Unsupported report sections generate new
-frontier items.
+`verify` or `counter_search` tasks. Non-delivery synthesis may run incrementally
+after useful evidence batches; the delivery synthesis is transitively downstream
+of every planned evidence task. Unsupported report sections generate new frontier
+items. V4 required follow-up Questions must include question-bound verification.
+Evidence-result follow-up tasks depend on their producer; dynamic evidence and
+replan work also become dependencies of pending delivery synthesis.
 
 ## 7. Quality gates
 
@@ -428,6 +438,8 @@ Deterministic gates reject delivery when:
   report;
 - the latest report is structurally incomplete, contains placeholder prose,
   or lacks durable author attribution;
+- the latest report predates a later Information Gain Decision whose canonical
+  graph state actually changed;
 - a report presents a high-significance Claim without a report-claim link;
 - a running, ready, dispatching, or retryable task remains;
 - result, task, or source limits were bypassed;
@@ -456,6 +468,15 @@ returns it to `running`.
 The Module may propose delivery when required coverage, evidence, validation,
 and citation gates pass and marginal information gain has remained below the
 configured threshold for consecutive completed work batches.
+
+Marginal gain is calculated from the current goal/plan's canonical evidence
+graph before and after each accepted evidence result. Verified answer coverage,
+answer transitions, independent verified evidence, verified Evidence Links,
+counterevidence, Claim resolution, and verified Claim adjudication carry most of
+the score. New raw graph entities contribute diminishing novelty as the graph
+grows. Duplicate content, Agent confidence, and unverified self-reported coverage
+do not create measured gain. The complete calculation and canonical-change flag
+are stored as an `information_gain` Decision.
 
 Hard limits exist to prevent runaway autonomous execution: total tasks,
 attempts per task, parallel tasks, task and run wall time, result payload bytes,

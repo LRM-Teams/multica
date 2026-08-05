@@ -117,6 +117,25 @@ func TestRemediationAssignsOneClaimFitnessDefectPerVerificationTask(t *testing.T
 	}
 }
 
+func TestRemediationVerifiesExistingUnverifiedQuestionAnswer(t *testing.T) {
+	got := remediationTask(GateResult{Findings: []GateFinding{{
+		Code: "required_questions_unanswered",
+		Metadata: map[string]any{
+			"question_id": "question-id", "answer_claim_id": "claim-id", "has_verified_support": false,
+		},
+	}}})
+	if got.Kind != TaskKindVerify || got.Capability != "validator" || got.QuestionID != "question-id" {
+		t.Fatalf("control=%+v", got)
+	}
+}
+
+func TestRemediationRevisesReportThatPredatesEvidence(t *testing.T) {
+	got := remediationTask(GateResult{Findings: []GateFinding{{Code: "report_stale_after_evidence"}}})
+	if got.Kind != TaskKindSynthesize || got.Capability != "reporter" {
+		t.Fatalf("control=%+v", got)
+	}
+}
+
 func TestTerminalRemediationFailureStopsAfterInitialPlanExhaustsAttempts(t *testing.T) {
 	run := Run{GoalVersion: 1, PlanVersion: 1}
 	tasks := []Task{{

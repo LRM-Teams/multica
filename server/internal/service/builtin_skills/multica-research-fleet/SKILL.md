@@ -66,7 +66,15 @@ chat before `task-result` succeeds.
   types: stable key, purpose, source traits, minimum independent sources,
   strength, directness, method fit, and counter-search requirement. Choose a
   method that fits the question; academic publication protocols apply only
-  when the Research Contract requires them.
+  when the Research Contract requires them. Every required Question has a
+  question-bound `verify` task. The delivery synthesis is transitively
+  downstream of every `discover`, `deep_read`, `verify`, and `counter_search`
+  task; both audits depend on that delivery synthesis, so unfinished evidence
+  work cannot reach report delivery.
+  Delivery tasks are part of this validated plan graph; later evidence results
+  must not introduce synthesis or audits as proposed follow-up tasks. Every new
+  required follow-up Question includes a question-bound `verify`; dynamic
+  evidence and `replan` work blocks pending delivery.
 - `discover` / `deep_read`: source snapshots, exact observations, supported or
   disputed claims, and evidence-producing follow-up tasks where needed. A V4
   source declares evidence traits and each Claim declares its accepted evidence
@@ -100,7 +108,10 @@ counter-search, and report defects route to synthesis. Replan is reserved for
 an invalid method, scope, or task graph. Follow the assigned task and its
 remediation acceptance criteria; do not turn a local evidence gap into an
 unrequested method change. Never manufacture a passing evaluation to stop the
-run.
+run. Information gain comes from server-observed evidence-graph changes:
+verified answer coverage, verification, independent evidence, counterevidence,
+resolution, and diminishing graph novelty. Do not inflate it by minting new
+keys for duplicate content or by self-reporting coverage.
 
 Every `required_capability` in a proposed task must exactly match an active
 fleet role. When a real specialty is missing, the lead must hire it, optimize

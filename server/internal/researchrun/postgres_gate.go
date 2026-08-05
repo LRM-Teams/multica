@@ -57,6 +57,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		verifiedSources     int
 		independentSources  int
 		reportCount         int
+		reportFresh         int
 		reportClaimCount    int
 		reportAuthorCount   int
 		unreportedRequired  int
@@ -80,7 +81,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		  FROM research_claim c
 		  WHERE c.session_id = $1::uuid AND c.goal_version = $2 AND c.plan_version = $3
 		), latest_report AS (
-		  SELECT id, author_agent_id FROM research_report
+		  SELECT id, author_agent_id, created_at FROM research_report
 		  WHERE session_id = $1::uuid AND goal_version = $2 AND plan_version = $3
 		  ORDER BY revision DESC LIMIT 1
 		), report_claims AS (
@@ -128,6 +129,14 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		  (SELECT count(DISTINCT source_id)::int FROM supported),
 		  (SELECT count(DISTINCT independence_key)::int FROM supported),
 		  (SELECT count(*)::int FROM latest_report),
+		  (SELECT count(*)::int FROM latest_report report
+		   WHERE NOT EXISTS (
+		     SELECT 1 FROM research_decision gain
+		     WHERE gain.session_id = $1::uuid AND gain.decision_kind = 'information_gain'
+		       AND gain.goal_version = $2 AND gain.plan_version = $3
+		       AND COALESCE((gain.outcome->>'canonical_changed')::boolean, false)
+		       AND gain.created_at > report.created_at
+		   )),
 		  (SELECT count(*)::int FROM report_claims),
 		  (SELECT count(*)::int FROM latest_report WHERE author_agent_id IS NOT NULL),
 		  (SELECT count(*)::int FROM research_question question
@@ -196,7 +205,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		&counts.planSucceeded, &counts.unfinishedTasks, &counts.blockedTasks,
 		&counts.requiredQuestions, &counts.unansweredRequired,
 		&counts.verifiedSources, &counts.independentSources,
-		&counts.reportCount, &counts.reportClaimCount, &counts.reportAuthorCount, &counts.unreportedRequired,
+		&counts.reportCount, &counts.reportFresh, &counts.reportClaimCount, &counts.reportAuthorCount, &counts.unreportedRequired,
 		&counts.wrongVersionClaims, &counts.unsupportedClaims, &counts.weakMajorClaims,
 		&counts.unresolvedConflicts, &counts.unlinkedMajorClaims,
 		&counts.qualityEvaluations, &counts.qualityPassed, &counts.qualityIndependent,
@@ -274,6 +283,9 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 	if counts.reportCount == 0 {
 		add("report_missing", "No report revision exists for delivery.", nil)
 	} else {
+		if counts.reportFresh == 0 {
+			add("report_stale_after_evidence", "The latest report predates accepted evidence work in the current plan.", nil)
+		}
 		if reportStructureErr != nil {
 			add("report_structure_incomplete", "The latest report does not satisfy the durable structure and prose-coverage contract.", map[string]any{"reason": reportStructureErr.Error()})
 		}
@@ -335,8 +347,9 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 }
 
 func (s *PostgresStore) loadTopUnansweredRequiredQuestion(ctx context.Context, sessionID string, goalVersion, planVersion int) (map[string]any, bool, error) {
-	var id, clientKey, question, status string
-	var priority, impact, uncertainty, coverage float64
+	var id, clientKey, question, status, answerClaimID, answerClaimKey string
+	var priority, impact, uncertainty, novelty, coverage, frontierScore float64
+	var hasVerifiedSupport bool
 	err := s.pool.QueryRow(ctx, `
 		WITH supported AS (
 		  SELECT DISTINCT evidence.claim_id
@@ -349,15 +362,22 @@ func (s *PostgresStore) loadTopUnansweredRequiredQuestion(ctx context.Context, s
 		    AND source.verification_status = 'verified'
 		)
 		SELECT q.id::text, q.client_key, q.question, q.status,
-		       q.priority, q.impact, q.uncertainty, q.coverage
+		       q.priority, q.impact, q.uncertainty, q.novelty, q.coverage,
+		       COALESCE(q.answer_claim_id::text, ''), COALESCE(claim.client_key, ''),
+		       COALESCE(q.answer_claim_id IN (SELECT claim_id FROM supported), false),
+		       LEAST(1, 0.30*q.priority + 0.30*q.impact + 0.20*q.uncertainty +
+		                0.10*q.novelty + 0.10*(1-q.coverage) +
+		                CASE q.kind WHEN 'contradiction' THEN 0.10 WHEN 'gap' THEN 0.05 ELSE 0 END) AS frontier_score
 		FROM research_question q
+		LEFT JOIN research_claim claim ON claim.id = q.answer_claim_id
 		WHERE q.session_id = $1::uuid AND q.goal_version = $2 AND q.plan_version = $3 AND q.required
 		  AND (q.status <> 'answered' OR q.coverage < 0.8 OR q.answer_claim_id IS NULL
 		       OR NOT EXISTS (SELECT 1 FROM supported WHERE supported.claim_id = q.answer_claim_id))
-		ORDER BY q.priority DESC, q.impact DESC, q.uncertainty DESC, q.created_at, q.id
+		ORDER BY frontier_score DESC, q.priority DESC, q.created_at, q.id
 		LIMIT 1
 	`, sessionID, goalVersion, planVersion).Scan(
-		&id, &clientKey, &question, &status, &priority, &impact, &uncertainty, &coverage,
+		&id, &clientKey, &question, &status, &priority, &impact, &uncertainty, &novelty, &coverage,
+		&answerClaimID, &answerClaimKey, &hasVerifiedSupport, &frontierScore,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, nil
@@ -365,9 +385,21 @@ func (s *PostgresStore) loadTopUnansweredRequiredQuestion(ctx context.Context, s
 	if err != nil {
 		return nil, false, err
 	}
+	reasons := make([]string, 0, 3)
+	if answerClaimID == "" {
+		reasons = append(reasons, "answer_claim_missing")
+	}
+	if coverage < 0.8 {
+		reasons = append(reasons, "coverage_below_threshold")
+	}
+	if answerClaimID != "" && !hasVerifiedSupport {
+		reasons = append(reasons, "verified_support_missing")
+	}
 	return map[string]any{
 		"question_id": id, "question_key": clientKey, "question": question, "status": status,
-		"priority": priority, "impact": impact, "uncertainty": uncertainty, "coverage": coverage,
+		"priority": priority, "impact": impact, "uncertainty": uncertainty, "novelty": novelty, "coverage": coverage,
+		"frontier_score": frontierScore, "incomplete_reasons": reasons,
+		"answer_claim_id": answerClaimID, "answer_claim_key": answerClaimKey, "has_verified_support": hasVerifiedSupport,
 	}, true, nil
 }
 

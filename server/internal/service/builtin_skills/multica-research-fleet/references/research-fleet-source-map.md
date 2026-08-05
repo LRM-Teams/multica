@@ -4,10 +4,10 @@
 | --- | --- |
 | HTTP routes under `/api/research` | `server/cmd/server/router.go` Research Fleet block |
 | Durable Run HTTP and task-bound result authorization | `server/internal/handler/research_run_http.go`, `server/cmd/server/router.go` |
-| Run scheduler, leases, retries, recovery, typed remediation routing, question targeting, marginal-gain and delivery decisions | `server/internal/researchrun/engine.go`, `store.go`, `postgres_tasks.go`, `postgres_gate.go`, `postgres_gate_v4.go`, `server/internal/scheduler/jobs_research_run.go` |
+| Run scheduler, leases, retries, recovery, typed remediation routing, ranked question frontier, canonical information gain, marginal-gain and delivery decisions | `server/internal/researchrun/engine.go`, `store.go`, `postgres_tasks.go`, `postgres_gate.go`, `postgres_gate_v4.go`, `information_gain.go`, `server/internal/scheduler/jobs_research_run.go` |
 | Canonical task/progress/evidence/event ledgers | migrations `274_research_run_backend`, `276_research_report_quality`, `284_research_evidence_fitness`; `server/internal/researchrun/postgres*.go` |
 | Current contract and accepted Research Method read model, plus validated steering limits | `server/internal/researchrun/config.go`, `postgres.go`, `postgres_result.go`, `postgres_tasks.go` |
-| Strict structured result envelope, pinned v1-v3 behavior, V4 Method/evidence-standard contract, and Claim-level evidence-fitness Gate | `server/internal/researchrun/result.go`, `result_v2.go`, `result_v3.go`, `result_v4.go`, `result_test.go`, `postgres_result.go`, `postgres_gate.go`, `postgres_gate_v4.go` |
+| Strict structured result envelope, pinned v1-v3 behavior, V4 Method/evidence-standard and executable delivery-path contract, and Claim-level evidence-fitness Gate | `server/internal/researchrun/result.go`, `result_v2.go`, `result_v3.go`, `result_v4.go`, `result_test.go`, `postgres_result.go`, `postgres_gate.go`, `postgres_gate_v4.go` |
 | Inbox dispatch idempotency and event projection | `server/internal/handler/research_run_adapter.go` |
 | Legacy authoritative mutations rejected for initialized runs | `server/internal/handler/research_run_guard.go` plus guarded handlers in `research_ops.go` and `research_product_rounds.go` |
 | Fleet ensure + seed roles | `server/internal/handler/research_fleet.go`, `research_templates.go` |

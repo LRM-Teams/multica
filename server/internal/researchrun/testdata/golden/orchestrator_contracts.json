@@ -1,0 +1,32 @@
+[
+  {
+    "version": "research-run-v1",
+    "prompt_sha256": "451bbad2a0db8e85118c6471174cbbd2c544ff1f73115583bf60f4ebe9bcafbe",
+    "accepted_plan_sha256": "ae77329a217ba77914769db7c2a08de67d969c556dc5367a6a77a9cf105896a9",
+    "newer_schema_error_text": "unsupported schema_version 2"
+  },
+  {
+    "version": "research-run-v2",
+    "prompt_sha256": "5b22ca564063daa1dedeac8e6b9c1ea65525cb1f4607091b4b2f5ed5b9445fa5",
+    "accepted_plan_sha256": "d6f6a88033bc0870d39563a49bd1927955217bf64b252a043477d7584e226a78",
+    "newer_schema_error_text": "research-run-v2 requires schema_version 2"
+  },
+  {
+    "version": "research-run-v3",
+    "prompt_sha256": "084c6ce648dcde602f7e633c2f1131a087de718ca4875b9527bd90db193ea1f2",
+    "accepted_plan_sha256": "58066f8aa0831c3ba8ede2783790e9b323467101848d31e8df5c4015151717d3",
+    "newer_schema_error_text": "research-run-v3 requires schema_version 3"
+  },
+  {
+    "version": "research-run-v4",
+    "prompt_sha256": "6c057f7af7729a59e66ecba704948c26a0f14094cba5569c1f0528ed99cf1ce1",
+    "accepted_plan_sha256": "ea105ac8c077208ab2f5f40b41abe6d105f455de8c61b585ff437437c484876b",
+    "newer_schema_error_text": "research-run-v4 requires schema_version 4"
+  },
+  {
+    "version": "research-run-v5",
+    "prompt_sha256": "9e108700a0caafa529ac964b113abf9db44d48f18b3850d931571838c8706842",
+    "accepted_plan_sha256": "09f4d3d08e462b8b27a3f473ca5a39976d141546c685f55a15a00cb83236acfc",
+    "newer_schema_error_text": "research-run-v5 requires schema_version 5"
+  }
+]

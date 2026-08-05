@@ -277,6 +277,11 @@
     "answered_option": "已选：{{label}}",
     "skipped": "已跳过 · 会话继续"
   },
+  "run_v2": {
+    "delivery_blocked": "交付受阻",
+    "syncing_title": "执行数据仍在同步",
+    "syncing_body": "运行账本已可用，但画布投影尚未到达；现有画布内容会继续显示。"
+  },
   "node": {
     "goal": "目标",
     "subquestion": "子问题",

@@ -71,6 +71,7 @@ import {
   resolveEvidenceOverviewMode,
 } from "../lib/m2-visibility";
 import { isResearchSessionStoppable } from "../lib/research-stream";
+import { buildRunV2CanvasViewModel } from "../lib/run-v2-canvas-view-model";
 import {
   RESEARCH_STAGE_ORDER,
   resolveStageStepState,
@@ -318,6 +319,11 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
   );
 
   // LRM-824 — anchor targets (hooks must stay above the early returns below).
+  const runCanvas = useMemo(
+    () => buildRunV2CanvasViewModel(data?.nodes ?? [], data?.run, data?.fleet.members ?? []),
+    [data?.nodes, data?.run, data?.fleet.members],
+  );
+
   const stageFirstMessageId = useMemo(
     () => buildStageMessageAnchors(data?.messages ?? []),
     [data?.messages],
@@ -643,11 +649,13 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
           data-testid="research-session-canvas-host"
         >
           <ResearchCanvas
-            nodes={data.nodes}
+            nodes={runCanvas.nodes}
             edges={data.edges}
             sources={sources}
             members={fleet.members}
             run={data.run}
+            runBlockers={runCanvas.blockers}
+            runDegraded={runCanvas.degraded}
             sessionStatus={session.status}
             presence={presence}
             selectedId={selectedNode?.id}

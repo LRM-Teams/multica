@@ -277,6 +277,11 @@
     "answered_option": "Selected: {{label}}",
     "skipped": "Skipped — session continues"
   },
+  "run_v2": {
+    "delivery_blocked": "Delivery blocked",
+    "syncing_title": "Execution data is still syncing",
+    "syncing_body": "The run ledger is available, but its canvas projection has not arrived yet. Existing canvas data remains visible."
+  },
   "node": {
     "goal": "Goal",
     "subquestion": "Sub-question",

@@ -213,6 +213,8 @@ func (d *recordingCancellationDispatcher) Cancel(_ context.Context, ids []string
 	return nil
 }
 
+// Production regression: a deterministic SQL/adapter dispatch defect created
+// dozens of attempts and replans without producing research output.
 func TestNonRetryableDispatchFailureStopsRunWithoutRemediationLoop(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -258,6 +260,9 @@ func TestNonRetryableDispatchFailureStopsRunWithoutRemediationLoop(t *testing.T)
 	}
 	if len(tasks) != 1 || len(attempts) != 1 {
 		t.Fatalf("tasks=%d attempts=%d, want one initial plan and one attempt", len(tasks), len(attempts))
+	}
+	if tasks[0].Status != TaskStatusFailed || tasks[0].TerminalReason != "dispatch_failed" {
+		t.Fatalf("terminal plan task=%+v", tasks[0])
 	}
 	if attempts[0].FailureClass != "dispatch_failed" || attempts[0].Status != AttemptStatusFailed {
 		t.Fatalf("attempt=%+v", attempts[0])
@@ -1212,6 +1217,90 @@ func TestInformationGainTracksCanonicalVerificationUpgrade(t *testing.T) {
 	}
 }
 
+// Production regression: repeated evidence used to create visible work while
+// adding no canonical knowledge. Two consecutive zero-gain batches must satisfy
+// the configured saturation condition without growing the evidence graph.
+func TestProductionRegressionDuplicateEvidenceReachesMarginalGainSaturation(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	config := DefaultRunConfig("standard")
+	run, _, err := store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Stop after repeated evidence adds no information",
+		Title: "Duplicate evidence saturation", DepthTier: "standard", Language: "English",
+	}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := e2eDeliveryPlan()
+	plan.ClientRequestID = "duplicate-evidence-plan"
+	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
+
+	evidence := upgradeResultToV5(e2eVerifiedEvidenceV4())
+	evidence.AnswerClaimKey = "answer-claim"
+	evidence.CoverageDelta = 0.8
+	for index, taskKey := range []string{"verify-1", "verify-2", "verify-3"} {
+		evidence.ClientRequestID = fmt.Sprintf("duplicate-evidence-%d", index+1)
+		submitStoreTask(t, ctx, pool, store, fixture, taskKey, evidence, run.Config)
+	}
+
+	run, err = store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources, err := store.ListSourceSnapshots(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observations, err := store.ListObservations(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := store.ListClaims(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Stats.LowGainStreak != config.MarginalGainRounds || run.Stats.LastMeasuredGain != 0 ||
+		len(sources) != 3 || len(observations) != 3 || len(claims) != 1 || len(claims[0].Evidence) != 3 {
+		t.Fatalf("run stats=%+v sources=%d observations=%d claims=%+v", run.Stats, len(sources), len(observations), claims)
+	}
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasGateFinding(gate, "marginal_gain_not_saturated") {
+		t.Fatalf("duplicate evidence did not satisfy saturation: %+v", gate.Findings)
+	}
+	var lowGain, unchanged int
+	if err = pool.QueryRow(ctx, `
+		SELECT
+		  count(*) FILTER (WHERE (outcome->>'low_gain')::boolean)::int,
+		  count(*) FILTER (WHERE NOT (outcome->>'canonical_changed')::boolean)::int
+		FROM research_decision
+		WHERE session_id = $1::uuid AND decision_kind = 'information_gain'
+	`, fixture.sessionID).Scan(&lowGain, &unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if lowGain != config.MarginalGainRounds || unchanged != config.MarginalGainRounds {
+		t.Fatalf("low-gain decisions=%d unchanged decisions=%d want=%d", lowGain, unchanged, config.MarginalGainRounds)
+	}
+}
+
 func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -1240,38 +1329,7 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := ResultEnvelope{
-		SchemaVersion: 5, ClientRequestID: "e2e-plan", Summary: "dependency-safe plan", Confidence: 0.8,
-		Plan: &PlanProposal{
-			Method: &MethodProposal{
-				DecisionQuestion:     "What value is supported by comparable independent measurements?",
-				MethodRationale:      "Triangulate equivalent measurements and challenge the result with independent repeats.",
-				AnalysisMethods:      []string{"Cross-source measurement comparison"},
-				EvidenceRequirements: []string{"Three traceable independent measurements"},
-				EvidenceStandards: []EvidenceStandard{{
-					ClientKey: "independent-measurements", Purpose: "Establish a measured value from comparable independent measurements.",
-					MinimumIndependentSources: 3, RequiredSourceTraits: []string{"direct_measurement"},
-					MinimumStrength: 0.8, MinimumDirectness: 0.8, MinimumMethodFit: 0.8,
-				}},
-				CounterevidenceStrategy: []string{"Search for independently measured conflicting values"},
-				StoppingConditions:      []string{"The required answer is verified and repeated work produces negligible information gain"},
-			},
-			Questions: []QuestionProposal{{
-				ClientKey: "answer-question", Kind: QuestionKindDimension, Text: "What is the measured value?",
-				Required: true, Priority: 1, Impact: 1, Uncertainty: 0.8, Novelty: 0.5,
-			}},
-			Tasks: []TaskProposal{
-				{ClientKey: "verify-1", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Triangulate three independent measurements", RequiredCapability: "validator", ExpectedResult: "research_evidence_v5", Priority: 1},
-				{ClientKey: "verify-2", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Repeat verification for marginal-gain measurement", RequiredCapability: "validator", ExpectedResult: "research_evidence_v5", Priority: 0.9, DependsOn: []string{"verify-1"}},
-				{ClientKey: "verify-3", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Confirm saturation", RequiredCapability: "validator", ExpectedResult: "research_evidence_v5", Priority: 0.8, DependsOn: []string{"verify-2"}},
-				{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write evidence-linked report", RequiredCapability: "reporter", ExpectedResult: "research_report_v5", Priority: 0.7, DependsOn: []string{"verify-3"}},
-				{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Evaluate report quality", RequiredCapability: "validator", ExpectedResult: "research_quality_evaluation_v5", Priority: 0.6, DependsOn: []string{"synthesize"}},
-				{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit report citations", RequiredCapability: "validator", ExpectedResult: "research_citation_audit_v5", Priority: 0.6, DependsOn: []string{"synthesize"}},
-			},
-			InclusionCriteria: []string{"Primary evidence"}, ExclusionCriteria: []string{"Unverifiable summaries"},
-			SourceStrategy: []string{"Independent source families"}, Uncertainties: []string{"Measurement context"}, PlanningRisks: []string{"Source disagreement"},
-		},
-	}
+	plan := e2eDeliveryPlan()
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
 
 	evidence := upgradeResultToV5(e2eVerifiedEvidenceV4())
@@ -1724,6 +1782,8 @@ func TestEvaluateGateProjectsActionableEvaluationFeedback(t *testing.T) {
 	}
 }
 
+// Production regression: addressable review defects must survive Gate routing
+// and remain present in the exact report revision task acceptance criteria.
 func TestV5EvaluationDefectsPersistAndReachRemediation(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -2004,6 +2064,41 @@ func submitStoreTask(t *testing.T, ctx context.Context, pool *pgxpool.Pool, stor
 		InboxTaskID: inboxID, Raw: raw, Result: validated, Hash: hash,
 	}); err != nil {
 		t.Fatalf("accept %s: %v", clientKey, err)
+	}
+}
+
+func e2eDeliveryPlan() ResultEnvelope {
+	return ResultEnvelope{
+		SchemaVersion: 5, ClientRequestID: "e2e-plan", Summary: "dependency-safe plan", Confidence: 0.8,
+		Plan: &PlanProposal{
+			Method: &MethodProposal{
+				DecisionQuestion:     "What value is supported by comparable independent measurements?",
+				MethodRationale:      "Triangulate equivalent measurements and challenge the result with independent repeats.",
+				AnalysisMethods:      []string{"Cross-source measurement comparison"},
+				EvidenceRequirements: []string{"Three traceable independent measurements"},
+				EvidenceStandards: []EvidenceStandard{{
+					ClientKey: "independent-measurements", Purpose: "Establish a measured value from comparable independent measurements.",
+					MinimumIndependentSources: 3, RequiredSourceTraits: []string{"direct_measurement"},
+					MinimumStrength: 0.8, MinimumDirectness: 0.8, MinimumMethodFit: 0.8,
+				}},
+				CounterevidenceStrategy: []string{"Search for independently measured conflicting values"},
+				StoppingConditions:      []string{"The required answer is verified and repeated work produces negligible information gain"},
+			},
+			Questions: []QuestionProposal{{
+				ClientKey: "answer-question", Kind: QuestionKindDimension, Text: "What is the measured value?",
+				Required: true, Priority: 1, Impact: 1, Uncertainty: 0.8, Novelty: 0.5,
+			}},
+			Tasks: []TaskProposal{
+				{ClientKey: "verify-1", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Triangulate three independent measurements", RequiredCapability: "validator", ExpectedResult: "research_evidence_v5", Priority: 1},
+				{ClientKey: "verify-2", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Repeat verification for marginal-gain measurement", RequiredCapability: "validator", ExpectedResult: "research_evidence_v5", Priority: 0.9, DependsOn: []string{"verify-1"}},
+				{ClientKey: "verify-3", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Confirm saturation", RequiredCapability: "validator", ExpectedResult: "research_evidence_v5", Priority: 0.8, DependsOn: []string{"verify-2"}},
+				{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write evidence-linked report", RequiredCapability: "reporter", ExpectedResult: "research_report_v5", Priority: 0.7, DependsOn: []string{"verify-3"}},
+				{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Evaluate report quality", RequiredCapability: "validator", ExpectedResult: "research_quality_evaluation_v5", Priority: 0.6, DependsOn: []string{"synthesize"}},
+				{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit report citations", RequiredCapability: "validator", ExpectedResult: "research_citation_audit_v5", Priority: 0.6, DependsOn: []string{"synthesize"}},
+			},
+			InclusionCriteria: []string{"Primary evidence"}, ExclusionCriteria: []string{"Unverifiable summaries"},
+			SourceStrategy: []string{"Independent source families"}, Uncertainties: []string{"Measurement context"}, PlanningRisks: []string{"Source disagreement"},
+		},
 	}
 }
 

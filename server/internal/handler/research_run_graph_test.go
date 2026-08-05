@@ -12,12 +12,12 @@ import (
 func TestProjectRunV2GraphZeroTasks(t *testing.T) {
 	snap := researchrun.RunSnapshot{
 		Run: researchrun.Run{
-			SessionID:    "11111111-1111-1111-1111-111111111111",
-			Title:        "决策：是否进入东南亚",
-			Goal:         "评估东南亚市场进入时机",
-			Status:       researchrun.RunStatusRunning,
-			CurrentStage: "s1_plan",
-			StateVersion: 3,
+			SessionID:      "11111111-1111-1111-1111-111111111111",
+			Title:          "决策：是否进入东南亚",
+			Goal:           "评估东南亚市场进入时机",
+			Status:         researchrun.RunStatusRunning,
+			CurrentStage:   "s1_plan",
+			StateVersion:   3,
 			LastProgressAt: time.Unix(1_700_000_000, 0).UTC(),
 		},
 		Contract: researchrun.ResearchContract{Goal: "评估东南亚市场进入时机"},
@@ -143,10 +143,15 @@ func TestProjectRunV2GraphRetryAndFailedAttempt(t *testing.T) {
 	}
 }
 
+// Production regression: repeated failure events once expanded into many
+// visually duplicated canvas nodes. Canonical projection must be unique and
+// byte-stable when the same snapshot is replayed.
 func TestProjectRunV2GraphDeterministicReplay(t *testing.T) {
 	snap := fixtureSevenQuestionSession()
 	aNodes, aEdges := projectRunV2Graph(snap)
 	bNodes, bEdges := projectRunV2Graph(snap)
+	assertUniqueGraphIdentities(t, aNodes, aEdges)
+	assertUniqueGraphIdentities(t, bNodes, bEdges)
 	if len(aNodes) != len(bNodes) || len(aEdges) != len(bEdges) {
 		t.Fatalf("replay size mismatch nodes %d/%d edges %d/%d", len(aNodes), len(bNodes), len(aEdges), len(bEdges))
 	}
@@ -162,6 +167,30 @@ func TestProjectRunV2GraphDeterministicReplay(t *testing.T) {
 		if aEdges[i] != bEdges[i] {
 			t.Fatalf("edge[%d] mismatch: %+v vs %+v", i, aEdges[i], bEdges[i])
 		}
+	}
+}
+
+func assertUniqueGraphIdentities(t *testing.T, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) {
+	t.Helper()
+	nodeIDs := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		if node.ID == "" {
+			t.Fatal("projected graph contains an empty node ID")
+		}
+		if _, duplicate := nodeIDs[node.ID]; duplicate {
+			t.Fatalf("projected graph contains duplicate node ID %q", node.ID)
+		}
+		nodeIDs[node.ID] = struct{}{}
+	}
+	edgeIDs := make(map[string]struct{}, len(edges))
+	for _, edge := range edges {
+		if edge.ID == "" {
+			t.Fatal("projected graph contains an empty edge ID")
+		}
+		if _, duplicate := edgeIDs[edge.ID]; duplicate {
+			t.Fatalf("projected graph contains duplicate edge ID %q", edge.ID)
+		}
+		edgeIDs[edge.ID] = struct{}{}
 	}
 }
 

@@ -233,6 +233,8 @@ func TestResearchRunV4RequiresClaimLevelEvidenceFitness(t *testing.T) {
 	}
 }
 
+// Production regression: report work must not become runnable before every
+// required answer has a verification path in the validated plan DAG.
 func TestResearchRunV4RequiresVerifiedDeliveryPathForEveryRequiredQuestion(t *testing.T) {
 	result := validV4PlanResult(t)
 	result.Plan.Tasks = result.Plan.Tasks[:len(result.Plan.Tasks)-1]

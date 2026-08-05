@@ -52,54 +52,9 @@ func (e *Engine) Start(ctx context.Context, in StartInput) (Run, error) {
 }
 
 func (e *Engine) SubmitResult(ctx context.Context, sessionID, workspaceID, taskID, attemptID, agentID, inboxTaskID string, raw json.RawMessage) (AcceptResultOutcome, error) {
-	run, err := e.store.GetRun(ctx, sessionID, workspaceID)
-	if err != nil {
-		return AcceptResultOutcome{}, err
-	}
-	task, err := e.store.GetTask(ctx, taskID, sessionID)
-	if err != nil {
-		return AcceptResultOutcome{}, err
-	}
-	attempts, err := e.store.ListAttempts(ctx, sessionID)
-	if err != nil {
-		return AcceptResultOutcome{}, err
-	}
-	found := false
-	for _, attempt := range attempts {
-		if attempt.ID == attemptID && attempt.TaskID == taskID {
-			found = true
-			if attempt.InboxTaskID == "" || attempt.InboxTaskID != inboxTaskID {
-				return AcceptResultOutcome{}, ErrAttemptNotAssigned
-			}
-			break
-		}
-	}
-	if !found {
-		return AcceptResultOutcome{}, ErrRunNotFound
-	}
-	result, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, task, run.Config)
-	if err != nil {
-		return AcceptResultOutcome{}, err
-	}
-	members, err := e.store.ListFleetMembers(ctx, sessionID, workspaceID)
-	if err != nil {
-		return AcceptResultOutcome{}, err
-	}
-	if missing := missingResultCapabilities(result, members); len(missing) > 0 {
-		return AcceptResultOutcome{}, fmt.Errorf(
-			"%w: no active fleet member has role(s) %s; the lead must hire, optimize, and activate those specialties before retrying the same result",
-			ErrCapabilityUnavailable,
-			strings.Join(missing, ", "),
-		)
-	}
-	outcome, err := e.store.AcceptResult(ctx, AcceptResultInput{
-		SessionID:   sessionID,
-		AttemptID:   attemptID,
-		AgentID:     agentID,
-		InboxTaskID: inboxTaskID,
-		Raw:         raw,
-		Result:      result,
-		Hash:        hash,
+	outcome, err := (resultAcceptanceModule{store: e.store}).Accept(ctx, resultSubmission{
+		SessionID: sessionID, WorkspaceID: workspaceID, TaskID: taskID,
+		AttemptID: attemptID, AgentID: agentID, InboxTaskID: inboxTaskID, Raw: raw,
 	})
 	if err != nil {
 		return AcceptResultOutcome{}, err
@@ -547,34 +502,6 @@ func roleForTask(task Task) string {
 	default:
 		return "lead"
 	}
-}
-
-func missingResultCapabilities(result ResultEnvelope, members []FleetMember) []string {
-	active := map[string]struct{}{}
-	for _, member := range members {
-		if member.Status == "active" {
-			active[strings.ToLower(strings.TrimSpace(member.Role))] = struct{}{}
-		}
-	}
-	missing := map[string]struct{}{}
-	check := func(tasks []TaskProposal) {
-		for _, task := range tasks {
-			capability := strings.ToLower(strings.TrimSpace(task.RequiredCapability))
-			if _, ok := active[capability]; !ok {
-				missing[capability] = struct{}{}
-			}
-		}
-	}
-	if result.Plan != nil {
-		check(result.Plan.Tasks)
-	}
-	check(result.ProposedTasks)
-	out := make([]string, 0, len(missing))
-	for capability := range missing {
-		out = append(out, capability)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func hasActiveCurrentWork(run Run, tasks []Task) bool {

@@ -27,7 +27,9 @@ describe("buildRunV2CanvasViewModel", () => {
     const nodes = [baseNode("root", "root", "session"), baseNode("question", "question", "q1"), baseNode("task", "task", "t1")];
     const model = buildRunV2CanvasViewModel(nodes, run, [{ agent_id: "agent-1", display_name: "Lin" } as never], Date.parse("2026-08-04T00:09:00Z"));
     expect(model.nodes[0]).toBe(nodes[0]);
-    expect(model.nodes[2].payload).toMatchObject({ execution: { agent: "Lin", status: "failed", duration: "8 min", failure: "source timed out" } });
+    const taskNode = model.nodes[2];
+    if (!taskNode) throw new Error("expected task node at index 2");
+    expect(taskNode.payload).toMatchObject({ execution: { agent: "Lin", status: "failed", duration: "8 min", failure: "source timed out" } });
     expect(model.blockers).toEqual([{ id: "tasks_incomplete:0", label: "16 tasks incomplete", targetNodeId: "task" }]);
     expect(model.degraded).toBe(false);
   });

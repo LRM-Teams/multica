@@ -137,6 +137,12 @@ const (
 	EventDaemonAgentStart        = "agent:start"
 	EventDaemonAgentStop         = "agent:stop"
 	EventDaemonAgentLifecycleReq = "agent:lifecycle.request"
+
+	// Direct Agent Message delivery (Raft-style, T1 idle chain).
+	EventAgentDeliver          = "agent:deliver"
+	EventAgentDeliverAck       = "agent:deliver:ack"
+	EventAgentDeliverHandoff   = "agent:deliver:handoff"
+	EventAgentDeliverHandoffAck = "agent:deliver:handoff_ack"
 	EventDaemonAgentLifecycleEnd = "agent:lifecycle.replay_end"
 	EventDaemonAgentLifecycleAck = "agent:lifecycle.ack"
 	EventReminderUpsert          = "reminder.upsert"

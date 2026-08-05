@@ -20,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/internal/delivery"
 	"github.com/multica-ai/multica/server/internal/secretscoped"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 	"github.com/multica-ai/multica/server/internal/turntransport"
@@ -143,6 +144,9 @@ type Daemon struct {
 	reminderWSDone                   <-chan struct{}
 	reminderClose                    func() error
 	reminderGateMu                   sync.Mutex
+
+	deliveryMu        sync.Mutex
+	deliveryReceivers map[string]*delivery.Receiver
 	reminderLifecycleReplayInFlight  bool
 	reminderReplayComplete           bool
 	reminderProjectionReplayInFlight bool
@@ -322,6 +326,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	d.reminderCache = newReminderCache(nil, logger, d.onReminderTimer)
 	d.reminderCache.setPersistence(cfg.WorkspacesRoot)
 	d.reminderAgents = newReminderAgentManager(cfg.WorkspacesRoot, logger)
+	d.deliveryReceivers = make(map[string]*delivery.Receiver)
 	d.runUpdateFn = d.runUpdate
 	d.verifyUpdatedBinaryFn = d.verifyUpdatedBinary
 	return d

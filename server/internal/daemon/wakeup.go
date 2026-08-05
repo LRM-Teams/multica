@@ -622,6 +622,20 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				continue
 			}
 			d.handleSeedAgentContextRequest(req, writes)
+		case protocol.EventAgentDeliver:
+			var p protocol.AgentDeliverPayload
+			if err := json.Unmarshal(msg.Payload, &p); err != nil {
+				d.logger.Debug("agent deliver invalid payload", "error", err)
+				continue
+			}
+			d.handleAgentDeliver(p, writes)
+		case protocol.EventAgentDeliverHandoff:
+			var p protocol.AgentDeliverHandoffPayload
+			if err := json.Unmarshal(msg.Payload, &p); err != nil {
+				d.logger.Debug("agent deliver handoff invalid payload", "error", err)
+				continue
+			}
+			d.handleAgentDeliverHandoff(p, writes)
 		}
 	}
 }

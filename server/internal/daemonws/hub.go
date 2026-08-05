@@ -121,6 +121,9 @@ type Hub struct {
 	onReminderProjection    ReminderProjectionHandler
 	onReminderProjectionAck ReminderProjectionAckHandler
 
+	deliveryMu       sync.RWMutex
+	agentDeliverAck  AgentDeliverAckHandler
+
 	kindMu       sync.RWMutex
 	kindRecorder MessageKindRecorder
 
@@ -458,6 +461,22 @@ func (h *Hub) DeliverDaemonRuntime(scopeID string, frame []byte, eventID string)
 			return
 		}
 		runtimeID = payload.RuntimeID
+	case protocol.EventAgentDeliver:
+		var p protocol.AgentDeliverPayload
+		if err := json.Unmarshal(msg.Payload, &p); err != nil || p.RuntimeID == "" {
+			slog.Debug("daemon websocket relay: invalid agent:deliver payload", "error", err, "scope_id", scopeID, "event_id", eventID)
+			M.WakeupDeliveredMiss.Add(1)
+			return
+		}
+		runtimeID = p.RuntimeID
+	case protocol.EventAgentDeliverHandoff:
+		var p protocol.AgentDeliverHandoffPayload
+		if err := json.Unmarshal(msg.Payload, &p); err != nil || p.RuntimeID == "" {
+			slog.Debug("daemon websocket relay: invalid agent:deliver:handoff payload", "error", err, "scope_id", scopeID, "event_id", eventID)
+			M.WakeupDeliveredMiss.Add(1)
+			return
+		}
+		runtimeID = p.RuntimeID
 	case protocol.EventReminderUpsert, protocol.EventReminderCancel, protocol.EventDaemonAgentStart, protocol.EventDaemonAgentStop:
 		runtimeID = scopeID
 	default:
@@ -651,6 +670,10 @@ func (c *client) handleFrame(raw []byte) {
 		c.handleReminderProjectionRequest(msg.Payload)
 	case protocol.EventReminderProjectionAck:
 		c.handleReminderProjectionAck(msg.Payload)
+	case protocol.EventAgentDeliverAck:
+		c.hub.handleAgentDeliverAck(msg.Payload)
+	case protocol.EventAgentDeliverHandoffAck:
+		c.hub.deliverResponse(handoffAckRequestID(msg.Payload), msg.Payload)
 	default:
 		// Unknown app messages are intentionally ignored for forward
 		// compatibility with future daemon → server message types.

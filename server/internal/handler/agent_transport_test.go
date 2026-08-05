@@ -2206,7 +2206,7 @@ func TestAgentTransportUnfollowDMThreadTarget(t *testing.T) {
 	assertAgentTransportAuditCount(t, taskID, agentTransportActionThreadUnfollow, 2)
 }
 
-func TestDMThreadDeliveryHonorsFollowUnfollowMentionAndAgentPost(t *testing.T) {
+func TestDMThreadDeliveryHonorsFollowUnfollowAndAgentPost(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2290,15 +2290,15 @@ func TestDMThreadDeliveryHonorsFollowUnfollowMentionAndAgentPost(t *testing.T) {
 		RefID:      agentID,
 		Label:      "@" + agentHandle,
 	}
-	firstMention := sendHumanReply("@"+agentHandle+" first dm thread mention", mentionPart)
-	assertWakeCount(firstMention.ID, 1)
-	assertChannelAgentWakeReasonPriority(t, dmChannel.ID, agentID, firstMention.ID, "mention", channelDirectedWakePriority)
+	firstReply := sendHumanReply("first dm thread reply")
+	assertWakeCount(firstReply.ID, 1)
+	assertChannelAgentWakeReasonPriority(t, dmChannel.ID, agentID, firstReply.ID, "thread_reply", channelThreadReplyPriority)
 	assertFollowState(true, "active")
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_inbox_event
 		SET status = 'acked', acked_at = now(), terminal_outcome = 'no_reply', retryable = false, terminal_at = now(), updated_at = now()
-		WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3`, dmChannel.ID, agentID, firstMention.ID); err != nil {
-		t.Fatalf("ack first mention wake: %v", err)
+		WHERE channel_id = $1 AND agent_id = $2 AND source_message_id = $3`, dmChannel.ID, agentID, firstReply.ID); err != nil {
+		t.Fatalf("ack first thread reply wake: %v", err)
 	}
 
 	ordinary := sendHumanReply("ordinary followed reply " + uuid.NewString())
@@ -2310,9 +2310,8 @@ func TestDMThreadDeliveryHonorsFollowUnfollowMentionAndAgentPost(t *testing.T) {
 	assertWakeCount(ignored.ID, 0)
 	assertFollowState(false, "unfollowed")
 
-	mentioned := sendHumanReply("@"+agentHandle+" explicit dm thread mention after unfollow", mentionPart)
-	assertWakeCount(mentioned.ID, 1)
-	assertChannelAgentWakeReasonPriority(t, dmChannel.ID, agentID, mentioned.ID, "mention", channelDirectedWakePriority)
+	mentioned := sendHumanReply("@"+agentHandle+" attempted dm thread mention after unfollow", mentionPart)
+	assertWakeCount(mentioned.ID, 0)
 	assertFollowState(false, "unfollowed")
 
 	post := agentTransportSendForTest(t, taskID, agentID, map[string]any{

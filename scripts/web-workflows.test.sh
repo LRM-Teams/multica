@@ -37,6 +37,7 @@ for required in \
   'legacy_prefix="${RELEASE_PREFIX}/${TAG_NAME}"' \
   '"${canonical_prefix}/manifest.json" "${legacy_prefix}/release.json"' \
   'for name in manifest.json latest.json' \
+  'aliyun --config-path "$config" \' \
   'cdn RefreshObjectCaches' \
   'Verify the published feed through the public CDN'; do
   if ! grep -Fq -- "$required" <<<"$release_workflow"; then
@@ -44,6 +45,11 @@ for required in \
     exit 1
   fi
 done
+
+if grep -Fq -- '--profile release-cdn' <<<"$release_workflow"; then
+  echo "Aliyun CLI cannot create a named profile with configure set in a fresh config file"
+  exit 1
+fi
 
 if grep -Fq -- 'runs-on: [self-hosted, aliyun]' <<<"$release_workflow"; then
   echo "Release publishing must not depend on the Aliyun host runner"

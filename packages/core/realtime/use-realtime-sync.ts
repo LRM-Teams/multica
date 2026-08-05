@@ -1267,7 +1267,11 @@ export function useRealtimeSync(
     const unsubChannelMessage = ws.on("channel:message", (p) => {
       const payload = p as ChannelMessage;
       if (payload.channel_id && payload.id && !payload.thread_root_message_id) {
+        // Show the committed canonical row without waiting for a refetch, then
+        // invalidate the channel's two timeline projections. The refetch keeps
+        // sparse realtime payloads from becoming the long-lived source of truth.
         upsertChannelMessageInCache(qc, payload);
+        invalidateChannelMessages(qc, payload.channel_id);
       } else if (payload.channel_id) {
         invalidateChannelMessages(qc, payload.channel_id);
       }

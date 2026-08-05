@@ -228,7 +228,7 @@ func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedRes
 	if err := validateV3PlanMethodLists(plan); err != nil {
 		return err
 	}
-	if state.run.OrchestratorVersion == OrchestratorVersionV4 {
+	if usesEvidenceFitnessContract(state.run.OrchestratorVersion) {
 		if _, err := validateEvidenceStandards(plan.Method.EvidenceStandards); err != nil {
 			return err
 		}
@@ -598,7 +598,7 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 			}
 		}
 	}
-	if state.run.OrchestratorVersion == OrchestratorVersionV4 {
+	if usesEvidenceFitnessContract(state.run.OrchestratorVersion) {
 		for _, proposal := range result.ProposedTasks {
 			if _, err = tx.Exec(ctx, `
 				INSERT INTO research_task_dependency (task_id, depends_on_task_id)
@@ -608,7 +608,7 @@ func materializeTasks(ctx context.Context, tx pgx.Tx, state acceptedResultState,
 			}
 		}
 	}
-	if state.run.OrchestratorVersion == OrchestratorVersionV4 && isEvidenceTask(state.task.Kind) {
+	if usesEvidenceFitnessContract(state.run.OrchestratorVersion) && isEvidenceTask(state.task.Kind) {
 		if err = attachV4ProposedWorkToDelivery(ctx, tx, state, result.ProposedTasks, taskIDs); err != nil {
 			return 0, err
 		}
@@ -851,7 +851,7 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 	ids := map[string]string{}
 	created := 0
 	standards := map[string]EvidenceStandard{}
-	if state.run.OrchestratorVersion == OrchestratorVersionV4 && len(result.Claims) > 0 {
+	if usesEvidenceFitnessContract(state.run.OrchestratorVersion) && len(result.Claims) > 0 {
 		method, err := loadResearchMethodVersion(ctx, tx, state.run.SessionID, state.task.GoalVersion, state.targetPlan)
 		if err != nil {
 			return nil, 0, err
@@ -861,7 +861,7 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 		}
 	}
 	for _, claim := range result.Claims {
-		if state.run.OrchestratorVersion == OrchestratorVersionV4 {
+		if usesEvidenceFitnessContract(state.run.OrchestratorVersion) {
 			if _, ok := standards[claim.EvidenceStandardKey]; !ok {
 				return nil, 0, fmt.Errorf("%w: claim %q references unknown evidence standard %q", ErrInvalidResult, claim.ClientKey, claim.EvidenceStandardKey)
 			}
@@ -938,7 +938,7 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				  updated_at = now()
 			`, state.workspaceID, state.run.SessionID, id, observationID, evidence.Relation,
 				evidence.Strength, evidence.Directness, evidence.MethodFit, verificationStatus, verifiedBy,
-				truncateBytes(evidence.Rationale, 4096), state.run.OrchestratorVersion == OrchestratorVersionV4); err != nil {
+				truncateBytes(evidence.Rationale, 4096), usesEvidenceFitnessContract(state.run.OrchestratorVersion)); err != nil {
 				return nil, 0, err
 			}
 		}
@@ -1095,6 +1095,11 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 		if !sameUniqueStringSet(evaluation.ReviewedClaimKeys, claimKeys) || !sameUniqueStringSet(evaluation.ReviewedSectionIDs, sectionIDs) {
 			return fmt.Errorf("%w: evaluation review coverage does not match the latest report", ErrInvalidResult)
 		}
+		if state.run.OrchestratorVersion == OrchestratorVersionV5 {
+			if err := validateEvaluationDefectsAgainstReport(evaluation, claimKeys, sectionIDs, minimumEvaluationScoreForDepth(state.run.DepthTier)); err != nil {
+				return err
+			}
+		}
 	}
 	inputs, err := json.Marshal(map[string]any{"task_id": state.task.ID, "task_kind": state.task.Kind, "report_id": reportID})
 	if err != nil {
@@ -1201,7 +1206,7 @@ func sourceClassWeight(class string) float64 {
 }
 
 func sourceProjectionWeight(orchestratorVersion, class string) float64 {
-	if orchestratorVersion == OrchestratorVersionV4 {
+	if usesEvidenceFitnessContract(orchestratorVersion) {
 		return 0.5
 	}
 	return sourceClassWeight(class)

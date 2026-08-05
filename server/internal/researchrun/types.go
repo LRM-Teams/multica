@@ -10,7 +10,8 @@ const (
 	OrchestratorVersionV2 = "research-run-v2"
 	OrchestratorVersionV3 = "research-run-v3"
 	OrchestratorVersionV4 = "research-run-v4"
-	OrchestratorVersion   = OrchestratorVersionV4
+	OrchestratorVersionV5 = "research-run-v5"
+	OrchestratorVersion   = OrchestratorVersionV5
 )
 
 type RunStatus string

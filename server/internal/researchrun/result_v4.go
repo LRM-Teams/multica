@@ -11,6 +11,9 @@ func (r *ResultEnvelope) validateV4(task Task, cfg RunConfig) error {
 	if r.SchemaVersion != 4 {
 		return fmt.Errorf("%w: research-run-v4 requires schema_version 4", ErrInvalidResult)
 	}
+	if hasStructuredEvaluationDefects(*r) {
+		return fmt.Errorf("%w: structured evaluation defects require schema_version 5", ErrInvalidResult)
+	}
 	if err := validateV4TaskContract(task); err != nil {
 		return err
 	}

@@ -387,7 +387,7 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 		t.Fatalf("AttachInboxTask: %v", err)
 	}
 
-	result := validV4PlanResult(t)
+	result := upgradeResultToV5(validV4PlanResult(t))
 	raw, _ := json.Marshal(result)
 	validated, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, tasks[0], run.Config)
 	if err != nil {
@@ -591,7 +591,7 @@ func TestPostgresStoreReplanVersionsResearchMethod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := validV4PlanResult(t)
+	initial := upgradeResultToV5(validV4PlanResult(t))
 	initial.ClientRequestID = "method-plan-initial"
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", initial, run.Config)
 
@@ -601,7 +601,7 @@ func TestPostgresStoreReplanVersionsResearchMethod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replanned := validV4PlanResult(t)
+	replanned := upgradeResultToV5(validV4PlanResult(t))
 	replanned.ClientRequestID = "method-plan-replanned"
 	replanned.Plan.Method.DecisionQuestion = "Which operating model meets the revised scope and failure constraints?"
 	replanned.Plan.Method.MethodRationale = "Compare the revised operating boundary and explicitly test failure scenarios omitted by the first plan."
@@ -892,7 +892,7 @@ func TestControlTaskBindsGateQuestionAndRecordsRoutingDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := validV4PlanResult(t)
+	plan := upgradeResultToV5(validV4PlanResult(t))
 	plan.ClientRequestID = "targeted-control-plan"
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
 
@@ -991,7 +991,7 @@ func TestGateRanksRequiredQuestionFrontierByExpectedValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := validV4PlanResult(t)
+	plan := upgradeResultToV5(validV4PlanResult(t))
 	plan.ClientRequestID = "frontier-ranking-plan"
 	plan.Plan.Questions[0].Priority = 1
 	plan.Plan.Questions[0].Impact = 0.1
@@ -1004,7 +1004,7 @@ func TestGateRanksRequiredQuestionFrontierByExpectedValue(t *testing.T) {
 	plan.Plan.Tasks = append(plan.Plan.Tasks, TaskProposal{
 		ClientKey: "verify-decision-gap", QuestionKey: "decision-reversing-gap", Kind: TaskKindVerify,
 		Objective: "Resolve the decision-reversing gap", RequiredCapability: "validator",
-		ExpectedResult: "research_evidence_v4", Priority: 0.9,
+		ExpectedResult: "research_evidence_v5", Priority: 0.9,
 	})
 	for i := range plan.Plan.Tasks {
 		if plan.Plan.Tasks[i].Kind == TaskKindSynthesize {
@@ -1058,10 +1058,10 @@ func TestInformationGainTracksCanonicalVerificationUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := validV4PlanResult(t)
+	plan := upgradeResultToV5(validV4PlanResult(t))
 	plan.ClientRequestID = "canonical-gain-plan"
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
-	discovery := authoritativeRecordEvidenceV4()
+	discovery := upgradeResultToV5(authoritativeRecordEvidenceV4())
 	discovery.ClientRequestID = "canonical-gain-discovery"
 	discovery.Claims[0].Status = ClaimStatusDisputed
 	discovery.Claims[0].Confidence = 0.95
@@ -1069,7 +1069,7 @@ func TestInformationGainTracksCanonicalVerificationUpgrade(t *testing.T) {
 	discovery.ProposedTasks = []TaskProposal{{
 		ClientKey: "follow-up-deep-read", QuestionKey: "question-1", Kind: TaskKindDeepRead,
 		Objective: "Inspect the controlling record's material context", RequiredCapability: "analyst",
-		ExpectedResult: "research_evidence_v4", Priority: 0.8,
+		ExpectedResult: "research_evidence_v5", Priority: 0.8,
 	}}
 	submitStoreTask(t, ctx, pool, store, fixture, "discover-1", discovery, run.Config)
 	var dynamicDeliveryEdges, dynamicParentEdges int
@@ -1096,7 +1096,7 @@ func TestInformationGainTracksCanonicalVerificationUpgrade(t *testing.T) {
 	if control.Kind != TaskKindVerify || control.QuestionID == "" {
 		t.Fatalf("unverified answer control=%+v gate=%+v", control, gate)
 	}
-	verification := authoritativeRecordEvidenceV4()
+	verification := upgradeResultToV5(authoritativeRecordEvidenceV4())
 	verification.ClientRequestID = "canonical-gain-verification"
 	verification.Claims[0].Confidence = 0.72
 	verification.Claims[0].Resolution = "The controlling record resolves the disputed answer with verified support."
@@ -1188,7 +1188,7 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := ResultEnvelope{
-		SchemaVersion: 4, ClientRequestID: "e2e-plan", Summary: "dependency-safe plan", Confidence: 0.8,
+		SchemaVersion: 5, ClientRequestID: "e2e-plan", Summary: "dependency-safe plan", Confidence: 0.8,
 		Plan: &PlanProposal{
 			Method: &MethodProposal{
 				DecisionQuestion:     "What value is supported by comparable independent measurements?",
@@ -1208,12 +1208,12 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 				Required: true, Priority: 1, Impact: 1, Uncertainty: 0.8, Novelty: 0.5,
 			}},
 			Tasks: []TaskProposal{
-				{ClientKey: "verify-1", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Triangulate three independent measurements", RequiredCapability: "validator", ExpectedResult: "research_evidence_v4", Priority: 1},
-				{ClientKey: "verify-2", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Repeat verification for marginal-gain measurement", RequiredCapability: "validator", ExpectedResult: "research_evidence_v4", Priority: 0.9, DependsOn: []string{"verify-1"}},
-				{ClientKey: "verify-3", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Confirm saturation", RequiredCapability: "validator", ExpectedResult: "research_evidence_v4", Priority: 0.8, DependsOn: []string{"verify-2"}},
-				{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write evidence-linked report", RequiredCapability: "reporter", ExpectedResult: "research_report_v4", Priority: 0.7, DependsOn: []string{"verify-3"}},
-				{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Evaluate report quality", RequiredCapability: "validator", ExpectedResult: "research_quality_evaluation_v4", Priority: 0.6, DependsOn: []string{"synthesize"}},
-				{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit report citations", RequiredCapability: "validator", ExpectedResult: "research_citation_audit_v4", Priority: 0.6, DependsOn: []string{"synthesize"}},
+				{ClientKey: "verify-1", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Triangulate three independent measurements", RequiredCapability: "validator", ExpectedResult: "research_evidence_v5", Priority: 1},
+				{ClientKey: "verify-2", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Repeat verification for marginal-gain measurement", RequiredCapability: "validator", ExpectedResult: "research_evidence_v5", Priority: 0.9, DependsOn: []string{"verify-1"}},
+				{ClientKey: "verify-3", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Confirm saturation", RequiredCapability: "validator", ExpectedResult: "research_evidence_v5", Priority: 0.8, DependsOn: []string{"verify-2"}},
+				{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write evidence-linked report", RequiredCapability: "reporter", ExpectedResult: "research_report_v5", Priority: 0.7, DependsOn: []string{"verify-3"}},
+				{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Evaluate report quality", RequiredCapability: "validator", ExpectedResult: "research_quality_evaluation_v5", Priority: 0.6, DependsOn: []string{"synthesize"}},
+				{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit report citations", RequiredCapability: "validator", ExpectedResult: "research_citation_audit_v5", Priority: 0.6, DependsOn: []string{"synthesize"}},
 			},
 			InclusionCriteria: []string{"Primary evidence"}, ExclusionCriteria: []string{"Unverifiable summaries"},
 			SourceStrategy: []string{"Independent source families"}, Uncertainties: []string{"Measurement context"}, PlanningRisks: []string{"Source disagreement"},
@@ -1221,7 +1221,7 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 	}
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
 
-	evidence := e2eVerifiedEvidenceV4()
+	evidence := upgradeResultToV5(e2eVerifiedEvidenceV4())
 	evidence.AnswerClaimKey = "answer-claim"
 	evidence.ClientRequestID = "e2e-evidence-1"
 	evidence.CoverageDelta = 0.8
@@ -1247,7 +1247,7 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 
 	report := e2eStructuredReport(t, ctx, pool, fixture.sessionID)
 	submitStoreTask(t, ctx, pool, store, fixture, "synthesize", ResultEnvelope{
-		SchemaVersion: 4, ClientRequestID: "e2e-report", Summary: "report", Confidence: 0.9,
+		SchemaVersion: 5, ClientRequestID: "e2e-report", Summary: "report", Confidence: 0.9,
 		Report: &report,
 	}, run.Config)
 	evaluation := EvaluationProposal{
@@ -1257,10 +1257,10 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 		ReviewedSectionIDs: []string{"executive-summary", "method", "finding", "limitations", "conclusion"},
 	}
 	submitStoreTask(t, ctx, pool, store, fixture, "quality", ResultEnvelope{
-		SchemaVersion: 4, ClientRequestID: "e2e-quality", Summary: "quality passed", Confidence: 0.9, Evaluation: &evaluation,
+		SchemaVersion: 5, ClientRequestID: "e2e-quality", Summary: "quality passed", Confidence: 0.9, Evaluation: &evaluation,
 	}, run.Config)
 	submitStoreTask(t, ctx, pool, store, fixture, "citations", ResultEnvelope{
-		SchemaVersion: 4, ClientRequestID: "e2e-citations", Summary: "citations passed", Confidence: 0.9, Evaluation: &evaluation,
+		SchemaVersion: 5, ClientRequestID: "e2e-citations", Summary: "citations passed", Confidence: 0.9, Evaluation: &evaluation,
 	}, run.Config)
 	runAfterDelivery, err := store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || math.Abs(runAfterDelivery.Stats.LastMeasuredGain-runAfterEvidence.Stats.LastMeasuredGain) > 1e-9 {
@@ -1332,7 +1332,7 @@ func TestPostgresStoreV4EvidenceFitnessAcceptsOneControllingRecordAtDeepTier(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := validV4PlanResult(t)
+	plan := upgradeResultToV5(validV4PlanResult(t))
 	plan.ClientRequestID = "authoritative-record-plan"
 	plan.Plan.Questions[0].Text = "What value is recorded in the controlling registry?"
 	plan.Plan.Tasks[0].ClientKey = "verify-record"
@@ -1347,7 +1347,7 @@ func TestPostgresStoreV4EvidenceFitnessAcceptsOneControllingRecordAtDeepTier(t *
 	}
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
 
-	evidence := authoritativeRecordEvidenceV4()
+	evidence := upgradeResultToV5(authoritativeRecordEvidenceV4())
 	submitStoreTask(t, ctx, pool, store, fixture, "verify-record", evidence, run.Config)
 
 	findings, err := store.evaluateEvidenceFitnessV4(ctx, fixture.sessionID, 1, 1)
@@ -1398,17 +1398,17 @@ func TestPostgresStoreV4RequiresCounterSearchForTheTargetClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := validV4PlanResult(t)
+	plan := upgradeResultToV5(validV4PlanResult(t))
 	plan.ClientRequestID = "counter-search-plan"
 	plan.Plan.Method.EvidenceStandards[0].CounterevidenceRequired = true
 	plan.Plan.Tasks[0] = TaskProposal{
 		ClientKey: "verify-record", QuestionKey: "question-1", Kind: TaskKindVerify,
-		Objective: "Verify the controlling record", RequiredCapability: "validator", ExpectedResult: "research_evidence_v4", Priority: 1,
+		Objective: "Verify the controlling record", RequiredCapability: "validator", ExpectedResult: "research_evidence_v5", Priority: 1,
 	}
 	plan.Plan.Tasks = append(plan.Plan.Tasks, TaskProposal{
 		ClientKey: "challenge-record", QuestionKey: "question-1", Kind: TaskKindCounterSearch,
 		Objective: "Search for a superseding or conflicting controlling record", RequiredCapability: "validator",
-		ExpectedResult: "research_evidence_v4", Priority: 0.9, DependsOn: []string{"verify-record"},
+		ExpectedResult: "research_evidence_v5", Priority: 0.9, DependsOn: []string{"verify-record"},
 	})
 	for i := 1; i < len(plan.Plan.Tasks)-1; i++ {
 		for dependencyIndex, dependency := range plan.Plan.Tasks[i].DependsOn {
@@ -1419,7 +1419,7 @@ func TestPostgresStoreV4RequiresCounterSearchForTheTargetClaim(t *testing.T) {
 	}
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
 
-	evidence := authoritativeRecordEvidenceV4()
+	evidence := upgradeResultToV5(authoritativeRecordEvidenceV4())
 	submitStoreTask(t, ctx, pool, store, fixture, "verify-record", evidence, run.Config)
 	findings, err := store.evaluateEvidenceFitnessV4(ctx, fixture.sessionID, 1, 1)
 	if err != nil || !hasFindingCode(findings, "claim_counterevidence_search_missing") {
@@ -1603,6 +1603,142 @@ func TestEvaluateGateProjectsActionableEvaluationFeedback(t *testing.T) {
 		criteria.Remediation.TargetFindings[0].Metadata["evaluation_decision_id"] != decisionID ||
 		criteria.Remediation.TargetFindings[1].Metadata["evaluation_decision_id"] != citationDecisionID {
 		t.Fatalf("acceptance criteria=%s", revisionTask.AcceptanceCriteria)
+	}
+}
+
+func TestV5EvaluationDefectsPersistAndReachRemediation(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	run, _, err := store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Repair exact reviewed defects",
+		Title: "Structured evaluation defects", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.OrchestratorVersion != OrchestratorVersionV5 {
+		t.Fatalf("orchestrator=%s", run.OrchestratorVersion)
+	}
+	claimID := uuid.NewString()
+	reportID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_claim (
+		  id, workspace_id, session_id, client_key, claim_text, significance,
+		  confidence, status, goal_version, plan_version
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 'claim-alpha', 'The measured result applies inside the operating boundary.', 'high', 0.9, 'supported', 1, 1)
+	`, claimID, fixture.workspaceID, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	structured := `{"schema_version":1,"title":"Reviewed report","outline":[{"id":"section-alpha","title":"Result","level":1,"children":[]}],"sections":[{"id":"section-alpha","title":"Result","level":1,"markdown":"The measured result applies everywhere without qualification.","citation_ids":[]}],"citations":[],"sources":[],"gaps":[],"conclusion":"The measured result applies everywhere without qualification."}`
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_report (
+		  id, workspace_id, session_id, revision, content_md, structured,
+		  goal_version, plan_version, author_agent_id
+		) VALUES ($1::uuid, $2::uuid, $3::uuid, 1, '# Reviewed report', $4::jsonb, 1, 1, $5::uuid)
+	`, reportID, fixture.workspaceID, fixture.sessionID, structured, fixture.reporterID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO research_report_claim (report_id, claim_id, section_id, anchor_quote)
+		VALUES ($1::uuid, $2::uuid, 'section-alpha', 'The measured result applies everywhere without qualification.')
+	`, reportID, claimID); err != nil {
+		t.Fatal(err)
+	}
+	qualityTask, _, err := store.CreateControlTask(ctx, ControlTaskInput{
+		SessionID: fixture.sessionID, Kind: TaskKindQualityGate, Capability: "validator", Priority: 1,
+		Objective: "Evaluate the current report with addressable defects.", Findings: []GateFinding{{Code: "quality_evaluation_missing"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluation := validV5EvaluationResult(false)
+	submitStoreTask(t, ctx, pool, store, fixture, qualityTask.ClientKey, ResultEnvelope{
+		SchemaVersion: 5, ClientRequestID: "v5-structured-quality", Summary: "The report overstates the supported scope.",
+		Confidence: 0.9, Evaluation: &evaluation,
+	}, DefaultRunConfig("standard"))
+
+	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finding GateFinding
+	for _, candidate := range gate.Findings {
+		if candidate.Code == "quality_evaluation_failed" {
+			finding = candidate
+			break
+		}
+	}
+	defects, ok := finding.Metadata["defects"].([]EvaluationDefect)
+	if finding.Code == "" || !ok || len(defects) != 1 || defects[0].ClientKey != "defect-grounding-alpha" ||
+		defects[0].RequiredChange != evaluation.Defects[0].RequiredChange {
+		t.Fatalf("quality finding=%+v defects=%#v", finding, finding.Metadata["defects"])
+	}
+	control := remediationTask(GateResult{Findings: []GateFinding{finding}})
+	control.SessionID = fixture.sessionID
+	revisionTask, _, err := store.CreateControlTask(ctx, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(revisionTask.Objective, "defect-grounding-alpha") ||
+		!strings.Contains(string(revisionTask.AcceptanceCriteria), "retain the measured boundary") {
+		t.Fatalf("revision objective=%s criteria=%s", revisionTask.Objective, revisionTask.AcceptanceCriteria)
+	}
+	invalidTask, _, err := store.CreateControlTask(ctx, ControlTaskInput{
+		SessionID: fixture.sessionID, Kind: TaskKindCitationAudit, Capability: "validator", Priority: 1,
+		Objective: "Reject a defect that points outside the reviewed report.", Findings: []GateFinding{{Code: "citation_audit_missing"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, _, err := store.CreateAttempt(ctx, fixture.sessionID, invalidTask.ID, fixture.validatorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inboxID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'draining')
+	`, inboxID, fixture.workspaceID, fixture.validatorID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.AttachInboxTask(ctx, attempt.ID, inboxID); err != nil {
+		t.Fatal(err)
+	}
+	invalidEvaluation := validV5EvaluationResult(false)
+	invalidEvaluation.Defects[0].ClaimKeys = []string{"claim-outside-report"}
+	raw, err := json.Marshal(ResultEnvelope{
+		SchemaVersion: 5, ClientRequestID: "v5-invalid-target", Summary: "Invalid target", Confidence: 0.9,
+		Evaluation: &invalidEvaluation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validated, hash, err := DecodeAndValidateResultForVersion(OrchestratorVersionV5, raw, invalidTask, run.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.AcceptResult(ctx, AcceptResultInput{
+		SessionID: fixture.sessionID, AttemptID: attempt.ID, AgentID: fixture.validatorID,
+		InboxTaskID: inboxID, Raw: raw, Result: validated, Hash: hash,
+	})
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "unknown report Claim") {
+		t.Fatalf("invalid target err=%v", err)
 	}
 }
 
@@ -1809,6 +1945,17 @@ func authoritativeRecordEvidenceV4() ResultEnvelope {
 		}},
 		AnswerClaimKey: "registered-value", CoverageDelta: 0.9,
 	}
+}
+
+func upgradeResultToV5(result ResultEnvelope) ResultEnvelope {
+	result.SchemaVersion = 5
+	result.ProposedTasks = translateTaskResultKinds(result.ProposedTasks, "_v4", "_v5")
+	if result.Plan != nil {
+		plan := *result.Plan
+		plan.Tasks = translateTaskResultKinds(result.Plan.Tasks, "_v4", "_v5")
+		result.Plan = &plan
+	}
+	return result
 }
 
 func hasFindingCode(findings []GateFinding, code string) bool {

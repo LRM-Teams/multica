@@ -71,6 +71,8 @@ func DecodeAndValidateResultForVersion(version string, raw json.RawMessage, task
 		return decodeAndValidateResult(raw, task, config, (*ResultEnvelope).validateV3)
 	case OrchestratorVersionV4:
 		return decodeAndValidateResult(raw, task, config, (*ResultEnvelope).validateV4)
+	case OrchestratorVersionV5:
+		return decodeAndValidateResult(raw, task, config, (*ResultEnvelope).validateV5)
 	default:
 		return ResultEnvelope{}, "", fmt.Errorf("%w: %q", ErrUnsupportedVersion, version)
 	}
@@ -78,7 +80,7 @@ func DecodeAndValidateResultForVersion(version string, raw json.RawMessage, task
 
 func ensureSupportedOrchestratorVersion(version string) error {
 	switch version {
-	case OrchestratorVersionV1, OrchestratorVersionV2, OrchestratorVersionV3, OrchestratorVersionV4:
+	case OrchestratorVersionV1, OrchestratorVersionV2, OrchestratorVersionV3, OrchestratorVersionV4, OrchestratorVersionV5:
 		return nil
 	default:
 		return fmt.Errorf("%w: %q", ErrUnsupportedVersion, version)
@@ -86,11 +88,15 @@ func ensureSupportedOrchestratorVersion(version string) error {
 }
 
 func usesStructuredResultContract(version string) bool {
-	return version == OrchestratorVersionV2 || version == OrchestratorVersionV3 || version == OrchestratorVersionV4
+	return version == OrchestratorVersionV2 || version == OrchestratorVersionV3 || version == OrchestratorVersionV4 || version == OrchestratorVersionV5
 }
 
 func usesResearchMethodContract(version string) bool {
-	return version == OrchestratorVersionV3 || version == OrchestratorVersionV4
+	return version == OrchestratorVersionV3 || version == OrchestratorVersionV4 || version == OrchestratorVersionV5
+}
+
+func usesEvidenceFitnessContract(version string) bool {
+	return version == OrchestratorVersionV4 || version == OrchestratorVersionV5
 }
 
 type PlanProposal struct {
@@ -198,19 +204,30 @@ type ReportProposal struct {
 }
 
 type EvaluationProposal struct {
-	Passed                bool              `json:"passed"`
-	FactualGrounding      float64           `json:"factual_grounding"`
-	Coverage              float64           `json:"coverage"`
-	AnalyticalDepth       float64           `json:"analytical_depth"`
-	SourceQuality         float64           `json:"source_quality"`
-	ContradictionHandling float64           `json:"contradiction_handling"`
-	InstructionAdherence  float64           `json:"instruction_adherence"`
-	Readability           float64           `json:"readability"`
-	Findings              []string          `json:"findings"`
-	DimensionFindings     map[string]string `json:"dimension_findings,omitempty"`
-	ReviewedClaimKeys     []string          `json:"reviewed_claim_keys,omitempty"`
-	ReviewedSectionIDs    []string          `json:"reviewed_section_ids,omitempty"`
-	Metadata              map[string]any    `json:"metadata,omitempty"`
+	Passed                bool               `json:"passed"`
+	FactualGrounding      float64            `json:"factual_grounding"`
+	Coverage              float64            `json:"coverage"`
+	AnalyticalDepth       float64            `json:"analytical_depth"`
+	SourceQuality         float64            `json:"source_quality"`
+	ContradictionHandling float64            `json:"contradiction_handling"`
+	InstructionAdherence  float64            `json:"instruction_adherence"`
+	Readability           float64            `json:"readability"`
+	Findings              []string           `json:"findings"`
+	DimensionFindings     map[string]string  `json:"dimension_findings,omitempty"`
+	ReviewedClaimKeys     []string           `json:"reviewed_claim_keys,omitempty"`
+	ReviewedSectionIDs    []string           `json:"reviewed_section_ids,omitempty"`
+	Defects               []EvaluationDefect `json:"defects,omitempty"`
+	Metadata              map[string]any     `json:"metadata,omitempty"`
+}
+
+type EvaluationDefect struct {
+	ClientKey      string   `json:"client_key"`
+	Dimension      string   `json:"dimension"`
+	Severity       string   `json:"severity"`
+	Problem        string   `json:"problem"`
+	RequiredChange string   `json:"required_change"`
+	ClaimKeys      []string `json:"claim_keys"`
+	SectionIDs     []string `json:"section_ids"`
 }
 
 func DecodeAndValidateResult(raw []byte, task Task, cfg RunConfig) (ResultEnvelope, string, error) {
@@ -267,6 +284,9 @@ func (r *ResultEnvelope) Validate(task Task, cfg RunConfig) error {
 	}
 	if hasEvidenceFitnessFields(*r) {
 		return fmt.Errorf("%w: evidence fitness fields require schema_version 4", ErrInvalidResult)
+	}
+	if hasStructuredEvaluationDefects(*r) {
+		return fmt.Errorf("%w: structured evaluation defects require schema_version 5", ErrInvalidResult)
 	}
 	if err := validateKey("client_request_id", r.ClientRequestID); err != nil {
 		return err

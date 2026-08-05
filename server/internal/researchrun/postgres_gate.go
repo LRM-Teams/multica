@@ -37,14 +37,12 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 			return GateResult{}, fmt.Errorf("decode run stats: %w", err)
 		}
 	}
-	minimumEvaluationScore := 0.75
+	minimumEvaluationScore := minimumEvaluationScoreForDepth(run.DepthTier)
 	minimumMajorClaimSources := 2
 	switch run.DepthTier {
 	case "shallow":
-		minimumEvaluationScore = 0.65
 		minimumMajorClaimSources = 1
 	case "deep":
-		minimumEvaluationScore = 0.8
 		minimumMajorClaimSources = 3
 	}
 
@@ -290,7 +288,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		unansweredQuestion["count"] = counts.unansweredRequired
 		add("required_questions_unanswered", "Required questions lack an accepted answer and sufficient coverage.", unansweredQuestion)
 	}
-	if run.OrchestratorVersion != OrchestratorVersionV4 && counts.independentSources < minimumIndependentSources {
+	if !usesEvidenceFitnessContract(run.OrchestratorVersion) && counts.independentSources < minimumIndependentSources {
 		add("independent_sources_insufficient", "Verified evidence does not span enough independent sources.", map[string]any{"actual": counts.independentSources, "required": minimumIndependentSources})
 	}
 	if counts.reportCount == 0 {
@@ -314,10 +312,10 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 		if counts.wrongVersionClaims > 0 {
 			add("report_claims_stale", "The latest report cites claims from an earlier goal or plan version.", map[string]any{"count": counts.wrongVersionClaims})
 		}
-		if run.OrchestratorVersion != OrchestratorVersionV4 && counts.unsupportedClaims > 0 {
+		if !usesEvidenceFitnessContract(run.OrchestratorVersion) && counts.unsupportedClaims > 0 {
 			add("report_claims_unsupported", "Report claims lack verified supporting evidence.", map[string]any{"count": counts.unsupportedClaims})
 		}
-		if run.OrchestratorVersion != OrchestratorVersionV4 && counts.weakMajorClaims > 0 {
+		if !usesEvidenceFitnessContract(run.OrchestratorVersion) && counts.weakMajorClaims > 0 {
 			add("major_claim_sources_insufficient", "High-significance report claims lack enough independent verified source families.", map[string]any{"count": counts.weakMajorClaims, "required_per_claim": minimumMajorClaimSources})
 		}
 		if counts.unresolvedConflicts > 0 {
@@ -327,7 +325,7 @@ func (s *PostgresStore) EvaluateGate(ctx context.Context, sessionID string) (Gat
 			add("major_claims_unlinked", "Supported high-significance claims are absent from the latest report.", map[string]any{"count": counts.unlinkedMajorClaims})
 		}
 	}
-	if run.OrchestratorVersion == OrchestratorVersionV4 && methodCount > 0 {
+	if usesEvidenceFitnessContract(run.OrchestratorVersion) && methodCount > 0 {
 		fitnessFindings, fitnessErr := s.evaluateEvidenceFitnessV4(ctx, sessionID, run.GoalVersion, run.PlanVersion)
 		if fitnessErr != nil {
 			return GateResult{}, fitnessErr
@@ -399,7 +397,35 @@ func evaluationFeedbackMetadata(decisionID, reportID, reviewerID string, raw []b
 	metadata["findings"] = boundedEvaluationStrings(evaluation.Findings, 8, 1024)
 	metadata["reviewed_claim_keys"] = boundedEvaluationStrings(evaluation.ReviewedClaimKeys, 64, 160)
 	metadata["reviewed_section_ids"] = boundedEvaluationStrings(evaluation.ReviewedSectionIDs, 64, 160)
+	metadata["defects"] = boundedEvaluationDefects(evaluation.Defects)
 	return metadata
+}
+
+func minimumEvaluationScoreForDepth(depthTier string) float64 {
+	switch depthTier {
+	case "shallow":
+		return 0.65
+	case "deep":
+		return 0.8
+	default:
+		return 0.75
+	}
+}
+
+func boundedEvaluationDefects(values []EvaluationDefect) []EvaluationDefect {
+	if len(values) > maxEvaluationDefects {
+		values = values[:maxEvaluationDefects]
+	}
+	bounded := make([]EvaluationDefect, 0, len(values))
+	for _, value := range values {
+		value.ClientKey = truncateBytes(value.ClientKey, 160)
+		value.Problem = truncateBytes(value.Problem, maxEvaluationDefectTextBytes)
+		value.RequiredChange = truncateBytes(value.RequiredChange, maxEvaluationDefectTextBytes)
+		value.ClaimKeys = boundedEvaluationStrings(value.ClaimKeys, maxEvaluationDefectTargets, 160)
+		value.SectionIDs = boundedEvaluationStrings(value.SectionIDs, maxEvaluationDefectTargets, 160)
+		bounded = append(bounded, value)
+	}
+	return bounded
 }
 
 func boundedEvaluationStrings(values []string, maxItems, maxBytes int) []string {

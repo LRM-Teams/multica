@@ -27,12 +27,12 @@ The snapshot's `run.contract`, `run.method`, `run.sources`,
 `run.observations`, and `run.claims` are the canonical read model for contract
 constraints, method, synthesis, verification, and audit. Source text is
 represented by a bounded excerpt plus content hash; exact Observation quotes
-were already checked against the immutable full snapshot at ingestion. V3 and
-V4 non-plan tasks inherit the accepted Method for the current goal/plan
-version. V4 also exposes the accepted Claim-level evidence standards.
+were already checked against the immutable full snapshot at ingestion. V3–V5
+non-plan tasks inherit the accepted Method for the current goal/plan version.
+V4/V5 also expose the accepted Claim-level evidence standards.
 
 2. Perform the assigned investigation according to `run.method`. Explore
-beyond the first plausible answer. For V4, each Claim references an accepted
+beyond the first plausible answer. For V4/V5, each Claim references an accepted
 `evidence_standard_key`; every Source Snapshot records evidence traits and every
 Evidence Link records directness and method fit. Evaluate those fields against
 the Claim, not a universal source hierarchy. Preserve retrieved source text in
@@ -61,7 +61,7 @@ chat before `task-result` succeeds.
 - `plan` / `replan`: required questions, an explicit decision question and
   method rationale, analysis methods, evidence requirements, inclusion and
   exclusion criteria, source and counterevidence strategies, stopping
-  conditions, uncertainties, risks, and an acyclic dependency graph. V4 plans
+  conditions, uncertainties, risks, and an acyclic dependency graph. V4/V5 plans
   also define machine-checkable evidence standards for the planned Claim
   types: stable key, purpose, source traits, minimum independent sources,
   strength, directness, method fit, and counter-search requirement. Choose a
@@ -76,7 +76,7 @@ chat before `task-result` succeeds.
   required follow-up Question includes a question-bound `verify`; dynamic
   evidence and `replan` work blocks pending delivery.
 - `discover` / `deep_read`: source snapshots, exact observations, supported or
-  disputed claims, and evidence-producing follow-up tasks where needed. A V4
+  disputed claims, and evidence-producing follow-up tasks where needed. A V4/V5
   source declares evidence traits and each Claim declares its accepted evidence
   standard. A question-scoped result that increases coverage sets
   `answer_claim_key` to a Claim included in that result.
@@ -84,29 +84,33 @@ chat before `task-result` succeeds.
   evidence, and explicit claim resolutions. Agreement without source evidence
   is not verification. Include the source, observation, claim, and evidence
   objects being verified in the result; stable content deduplicates against the
-  ledger and upgrades verification state transactionally. V4 links score
+  ledger and upgrades verification state transactionally. V4/V5 links score
   strength, directness, and method fit against the referenced standard.
 - `synthesize`: only the `reporter` role. A structured report uses the full existing
   reader structure (outline, sections, citations, sources, gaps, conclusion),
   repeats every section and conclusion exactly in `content_md`, and links
   normalized Claim keys to section IDs with exact `anchor_quote` prose. Each
   linked section cites a stored source that verifiably supports that Claim. A
-  V3/V4 report explains the applied Method, counterevidence, limitations,
+  V3–V5 report explains the applied Method, counterevidence, limitations,
   unresolved gaps, and decision consequence.
 - `quality_gate` / `citation_audit`: independent evaluation of the latest report
   revision by a `validator` Agent other than the report author. Structured evaluations
   provide substantive findings for all seven score dimensions and enumerate
   every reviewed report Claim and section. Fail when any material claim is
   unsupported, stale, misquoted, omitted, hides unresolved contradiction, or
-  departs from the accepted Method or, in V4, its evidence standards. Each
-  finding names the affected Claim keys and section IDs.
+  departs from the accepted Method or, in V4/V5, its evidence standards. V5
+  emits stable structured defects with dimension, blocking/advisory severity,
+  problem, required change, and existing target Claim/section keys. Every
+  below-floor dimension has a blocking defect; a passing evaluation has no
+  defects.
 
 Failed quality and citation Decisions remain executable feedback. Gate findings
 carry bounded evaluation Decision, report, and reviewer IDs; failed dimensions
-with scores and rationales; explicit findings; and reviewed Claim/section keys
-into the revision task. The reporter repairs each item against those named
-artifacts. It must not replace the feedback with a generic rewrite or discard
-already accepted evidence.
+with scores and rationales; V5 structured defects; explicit findings; and
+reviewed Claim/section keys into the revision task. The reporter repairs each
+blocking defect against the named artifacts and satisfies its `required_change`.
+It must not replace the feedback with a generic rewrite or discard already
+accepted evidence.
 
 The server decides readiness, retries, timeouts, concurrency, diminishing
 information gain, remediation, replans, and final delivery. Remediation is

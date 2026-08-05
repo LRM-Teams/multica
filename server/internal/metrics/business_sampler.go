@@ -448,7 +448,7 @@ func normalizeResearchRunStatus(raw string) string {
 
 func normalizeResearchOrchestratorVersion(raw string) string {
 	switch raw {
-	case "research-run-v1", "research-run-v2", "research-run-v3", "research-run-v4", "legacy":
+	case "research-run-v1", "research-run-v2", "research-run-v3", "research-run-v4", "research-run-v5", "legacy":
 		return raw
 	default:
 		return "other"

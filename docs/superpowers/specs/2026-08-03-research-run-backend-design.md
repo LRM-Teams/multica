@@ -457,6 +457,15 @@ That projection is preserved in the revision task objective and acceptance
 criteria so the reporter repairs the named defects instead of receiving a
 generic rewrite request.
 
+V5 evaluations replace free-text-only repair semantics with stable structured
+defects. Each defect records its evaluated dimension, blocking or advisory
+severity, problem, required change, and target Claim/section keys. The server
+rejects targets absent from the latest report, passing reviews with any
+defects, failed reviews without a below-floor dimension, and any below-floor
+dimension without a same-dimension blocking defect. Legacy `findings` is the
+ordered problem projection; an independently authored second list cannot
+disagree with the structured defects.
+
 A `quality_gate` task is assigned to a verifier that did not author the report.
 It scores factual grounding, coverage, analytical depth, source quality,
 contradiction handling, instruction adherence, and readability against a rubric
@@ -594,7 +603,7 @@ revision 1 backfill but retain a null `run_initialized_at`, so their existing
 legacy execution path continues unchanged. The metrics Adapter reports those
 sessions as `legacy`. The server does not silently convert an in-progress legacy
 session into a Research Run. New sessions initialize the durable task/evidence
-ledgers and use `research-run-v4`.
+ledgers and use `research-run-v5`.
 
 Old desktop clients continue consuming the existing session snapshot fields.
 New response fields are additive and schema-parsed with defaults. The existing
@@ -605,10 +614,10 @@ Running Research Runs retain their orchestrator, result schema, prompt, and
 gate rubric versions across deploys. New server code must continue processing
 those versions until no active run references them.
 
-Existing `research-run-v1` through `research-run-v3` runs remain on their pinned
+Existing `research-run-v1` through `research-run-v4` runs remain on their pinned
 prompts, result contracts, and versioned Gate rules. They are not silently
-rewritten or re-evaluated under v4. Existing
-HTTP and WebSocket report response shapes are unchanged; author, task,
+rewritten or re-evaluated under V5. HTTP and WebSocket report response shapes
+are unchanged; author, task,
 attempt, and report-claim anchors are internal provenance fields.
 
 ## 15. Verification contract

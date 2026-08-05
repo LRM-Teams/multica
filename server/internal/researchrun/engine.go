@@ -769,6 +769,8 @@ func buildTaskPrompt(run Run, task Task, attempt Attempt, snapshot RunSnapshot, 
 		return buildTaskPromptV3(run, task, attempt, snapshot, members), nil
 	case OrchestratorVersionV4:
 		return buildTaskPromptV4(run, task, attempt, snapshot, members), nil
+	case OrchestratorVersionV5:
+		return buildTaskPromptV5(run, task, attempt, snapshot, members), nil
 	default:
 		return "", fmt.Errorf("%w: %q", ErrUnsupportedVersion, run.OrchestratorVersion)
 	}
@@ -994,6 +996,21 @@ func buildTaskPromptV4(run Run, task Task, attempt Attempt, snapshot RunSnapshot
 	fmt.Fprintf(&b, "```bash\nmultica research task-result %s %s %s --file /absolute/path/research-result.json\n```\n", run.SessionID, task.ID, attempt.ID)
 	b.WriteString("\nDo not use graph-append, source-upsert, report-patch, or stage-eval for this task. Do not claim completion in chat before task-result succeeds.\n")
 	return b.String()
+}
+
+// buildTaskPromptV5 inherits the immutable V4 evidence contract and replaces
+// only versioned result identifiers plus the structured evaluation-defect
+// contract. Exact replacements are covered by prompt regressions.
+func buildTaskPromptV5(run Run, task Task, attempt Attempt, snapshot RunSnapshot, members []FleetMember) string {
+	prompt := buildTaskPromptV4(run, task, attempt, snapshot, members)
+	return strings.NewReplacer(
+		"schema_version=4", "schema_version=5",
+		"_v4", "_v5",
+		"11. A quality or citation evaluation reviews a report written by another Agent. Return all v2 evaluation fields; each failed finding names the affected Claim keys and section IDs. Fail when a Claim uses the wrong standard, a Source trait is unsupported by its Snapshot, link scores are inflated, counterevidence work is absent, or any material defect remains.",
+		"11. A quality or citation evaluation reviews a report written by another Agent. Return all v2 evaluation fields plus defects=[{client_key,dimension,severity,problem,required_change,claim_keys,section_ids}]. Use only blocking or advisory severity. Every below-floor dimension has a blocking defect; every defect targets an existing latest-report Claim or section. A passing evaluation has defects=[]; findings, when present, exactly matches the ordered defect problem list. Fail when a Claim uses the wrong standard, a Source trait is unsupported by its Snapshot, link scores are inflated, counterevidence work is absent, or any material defect remains.",
+		"12. Cover every required answer Claim and supported high-significance Claim. When acceptance criteria contain evaluation feedback, repair every failed dimension and explicit finding against the named Claims and sections. Explain the Method, evidence standards, contrary evidence, limitations, unresolved gaps, and decision consequences.",
+		"12. Cover every required answer Claim and supported high-significance Claim. When acceptance criteria contain evaluation feedback, repair every structured blocking defect against its named Claims and sections, preserving accepted evidence and explicitly satisfying required_change. Explain the Method, evidence standards, contrary evidence, limitations, unresolved gaps, and decision consequences.",
+	).Replace(prompt)
 }
 
 func (e *Engine) projectPending(ctx context.Context, sessionID string) error {

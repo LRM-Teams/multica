@@ -337,6 +337,40 @@ func TestTaskPromptV4RequiresTargetedEvaluationRepair(t *testing.T) {
 	}
 }
 
+func TestTaskPromptV5CarriesStructuredEvaluationDefects(t *testing.T) {
+	run := Run{SessionID: "session-5", Goal: "Audit and repair the report", GoalVersion: 1, PlanVersion: 1, DepthTier: "deep", OrchestratorVersion: OrchestratorVersionV5}
+	attempt := Attempt{ID: "attempt-5", DispatchKey: "dispatch-5"}
+	qualityPrompt, err := buildTaskPrompt(run, Task{
+		ID: "quality-5", Kind: TaskKindQualityGate, Objective: "Audit report", RequiredCapability: "validator",
+		ExpectedResult: "research_quality_evaluation_v5", GoalVersion: 1, PlanVersion: 1,
+	}, attempt, RunSnapshot{Contract: ResearchContract{Language: "zh"}}, []FleetMember{{Role: "validator", Status: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"schema_version=5", "research_quality_evaluation_v5",
+		"defects=[{client_key,dimension,severity,problem,required_change,claim_keys,section_ids}]",
+		"Every below-floor dimension has a blocking defect",
+	} {
+		if !strings.Contains(qualityPrompt, required) {
+			t.Fatalf("quality prompt missing %q:\n%s", required, qualityPrompt)
+		}
+	}
+	revisionPrompt, err := buildTaskPrompt(run, Task{
+		ID: "revision-5", Kind: TaskKindSynthesize, Objective: "Repair report", RequiredCapability: "reporter",
+		ExpectedResult: "research_report_v5", GoalVersion: 1, PlanVersion: 1,
+		AcceptanceCriteria: []byte(`{"remediation":{"target_findings":[{"metadata":{"defects":[{"client_key":"defect-grounding-alpha","required_change":"retain the operating boundary"}]}}]}}`),
+	}, attempt, RunSnapshot{Contract: ResearchContract{Language: "zh"}}, []FleetMember{{Role: "reporter", Status: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"defect-grounding-alpha", "retain the operating boundary", "repair every structured blocking defect"} {
+		if !strings.Contains(revisionPrompt, required) {
+			t.Fatalf("revision prompt missing %q:\n%s", required, revisionPrompt)
+		}
+	}
+}
+
 func TestTaskPromptRejectsUnsupportedOrchestratorVersion(t *testing.T) {
 	_, err := buildTaskPrompt(Run{OrchestratorVersion: "research-run-v999"}, Task{}, Attempt{}, RunSnapshot{}, nil)
 	if !errors.Is(err, ErrUnsupportedVersion) {

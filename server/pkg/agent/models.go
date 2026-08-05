@@ -249,6 +249,12 @@ func claudeStaticModels() []Model {
 		{ID: "sonnet", Label: "Sonnet 5", Provider: "anthropic", Default: true},
 		{ID: "opus", Label: "Opus", Provider: "anthropic"},
 		{ID: "haiku", Label: "Haiku", Provider: "anthropic"},
+		// Latest flagship, pinned for explicit requestability (Frank 2026-08-05:
+		// configure the newest models so they can reach a model). Claude's CLI
+		// accepts a full model name via --model, and claude-fable-5 is our latest
+		// flagship in the pricing + validation catalogs. Kept as a full pinned ID
+		// (not an alias) because `fable` is not a documented stable CLI alias.
+		{ID: "claude-fable-5", Label: "Fable 5", Provider: "anthropic"},
 	}
 }
 

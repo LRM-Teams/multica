@@ -12,6 +12,7 @@ import {
   Bell,
   Plug,
   Medal,
+  Box,
 } from "lucide-react";
 import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multica/ui/components/ui/tabs";
@@ -29,15 +30,24 @@ import { GitHubTab } from "./github-tab";
 import { IntegrationsTab } from "./integrations-tab";
 import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
+import { SandboxesPage } from "../../sandboxes";
 import { useT } from "../../i18n";
 
-const ACCOUNT_TAB_KEYS = ["profile", "honor", "preferences", "notifications", "tokens"] as const;
+const ACCOUNT_TAB_KEYS = [
+  "profile",
+  "honor",
+  "preferences",
+  "notifications",
+  "tokens",
+  "sandboxes",
+] as const;
 const ACCOUNT_TAB_ICONS = {
   profile: User,
   honor: Medal,
   preferences: SlidersHorizontal,
   notifications: Bell,
   tokens: Key,
+  sandboxes: Box,
 } as const;
 
 const WORKSPACE_TAB_KEYS = [
@@ -188,9 +198,10 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
         <div
           className={cn(
             "mx-auto w-full p-4 md:p-6",
-            activeTab === "honor"
+            activeTab === "honor" || activeTab === "sandboxes"
               ? "max-w-none xl:px-8 2xl:px-10"
               : "max-w-3xl",
+            activeTab === "sandboxes" && "flex min-h-[min(70vh,720px)] flex-col p-0 md:p-0",
           )}
         >
           <TabsContent value="profile"><AccountTab /></TabsContent>
@@ -198,6 +209,9 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="preferences"><PreferencesTab /></TabsContent>
           <TabsContent value="notifications"><NotificationsTab /></TabsContent>
           <TabsContent value="tokens"><TokensTab /></TabsContent>
+          <TabsContent value="sandboxes" className="mt-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden">
+            <SandboxesPage />
+          </TabsContent>
           <TabsContent value="workspace"><WorkspaceTab /></TabsContent>
           <TabsContent value="repositories"><RepositoriesTab /></TabsContent>
           <TabsContent value="github"><GitHubTab /></TabsContent>

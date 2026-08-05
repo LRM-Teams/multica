@@ -24,7 +24,6 @@ import {
   LayoutDashboard,
   Bot,
   Monitor,
-  Box,
   ChevronDown,
   ChevronRight,
   Settings,
@@ -125,7 +124,6 @@ type NavKey =
   | "wiki"
   | "planBilling"
   | "computers"
-  | "sandboxes"
   | "skills"
   | "settings";
 
@@ -143,7 +141,6 @@ type NavLabelKey =
   | "knowledge"
   | "plan_billing"
   | "computers"
-  | "sandboxes"
   | "skills"
   | "settings";
 
@@ -168,7 +165,6 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity 
 
 const configureNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity }[] = [
   { key: "computers", labelKey: "computers", icon: Monitor },
-  { key: "sandboxes", labelKey: "sandboxes", icon: Box },
   { key: "skills", labelKey: "skills", icon: BookOpenText },
   { key: "settings", labelKey: "settings", icon: Settings },
 ];
@@ -722,7 +718,11 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
               <SidebarMenu className="gap-0.5">
                 {configureNav.map((item) => {
                   const href = p[item.key]();
-                  const isActive = isNavActive(pathname, href);
+                  const isActive =
+                    item.key === "settings"
+                      ? isNavActive(pathname, href) ||
+                        isNavActive(pathname, p.sandboxes())
+                      : isNavActive(pathname, href);
                   return (
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton

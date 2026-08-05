@@ -58,6 +58,7 @@ import {
 import { channelGoalKeys } from "../channels/goal";
 import { messageMentionsViewer } from "../channels/mentions-viewer";
 import { dmKeys } from "../dm/queries";
+import { conversationKeys } from "../conversations";
 import { applyResearchWSEvent } from "../research/ws-updaters";
 import type { WSMessage } from "../types/events";
 import { voiceCallKeys } from "../voice-calls/queries";
@@ -1019,6 +1020,9 @@ export function useRealtimeSync(
       // The Messages view unions legacy chat_sessions into its DM list, so any
       // chat lifecycle change can affect a row preview, unread badge, or order.
       qc.invalidateQueries({ queryKey: dmKeys.list(id) });
+      // LRM-1399 — the unified Conversations list is the page's single source
+      // for CHANNELS + DMs; keep it fresh on the same chat lifecycle events.
+      qc.invalidateQueries({ queryKey: conversationKeys.list(id) });
     };
 
     const unsubChatMessage = ws.on("chat:message", (p) => {
@@ -1282,6 +1286,7 @@ export function useRealtimeSync(
       }
       const id = getCurrentWsId();
       if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
+      if (id) qc.invalidateQueries({ queryKey: conversationKeys.list(id) });
       void handleChannelMessageNotification(qc, payload, authStore.getState().user?.id);
     });
 
@@ -1299,6 +1304,7 @@ export function useRealtimeSync(
       }
       const id = getCurrentWsId();
       if (id) qc.invalidateQueries({ queryKey: channelKeys.list(id) });
+      if (id) qc.invalidateQueries({ queryKey: conversationKeys.list(id) });
     });
 
     // #689 perf audit: a reaction touches one field on one row. Invalidating
@@ -1353,6 +1359,7 @@ export function useRealtimeSync(
       const id = getCurrentWsId();
       // Include archived-list (archive/restore) — list alone leaves Archived stale.
       if (id) qc.invalidateQueries({ queryKey: channelKeys.all(id) });
+      if (id) qc.invalidateQueries({ queryKey: conversationKeys.list(id) });
       qc.invalidateQueries({ queryKey: channelGoalKeys.all() });
     });
 

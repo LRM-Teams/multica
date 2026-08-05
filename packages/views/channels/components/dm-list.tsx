@@ -5,7 +5,6 @@ import { Bell, BellOff, ChevronDown, ChevronRight, Loader2, Mail, MoreHorizontal
 import { useQuery } from "@tanstack/react-query";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import {
-  dmListOptions,
   useSetDMPinned,
   useMarkDMUnread,
   useCloseDM,
@@ -104,6 +103,8 @@ export function DmList({
   currentUserName,
   searchQuery = "",
   onSelect,
+  dms = [],
+  dmsPending = false,
 }: {
   /** Currently open conversation id (DM or group) — drives row highlight. */
   activeId: string | null;
@@ -112,13 +113,20 @@ export function DmList({
   /** Parent Messages sidebar query. Filters conversations only, never message bodies. */
   searchQuery?: string;
   onSelect: (dm: DMItem) => void;
+  /**
+   * LRM-1399 — the DM slice of the unified `GET /api/conversations` list,
+   * provided by the parent (ChannelsPage). This region no longer fires its own
+   * `GET /api/dm` list request, so both sidebar regions share one loading
+   * boundary and one data source.
+   */
+  dms?: DMItem[];
+  dmsPending?: boolean;
 }) {
   const { t } = useT("channels");
   const isMobile = useIsMobile();
   const wsId = useWorkspaceId();
-  // LRM-459: gate on isPending so disabled / pre-fetch idle never paints empty
-  // CTA (isLoading is false when isPending && !isFetching).
-  const { data: dms = [], isPending: dmsPending } = useQuery(dmListOptions(wsId));
+  // LRM-1399 — list now arrives from the parent via the conversations query.
+  // (agents/members still load locally for identity resolution.)
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const bubbleActivityByAgent = useAgentBubbleActivityByAgent(wsId);

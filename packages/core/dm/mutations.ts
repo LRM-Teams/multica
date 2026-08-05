@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { dmKeys } from "./queries";
+import { invalidateConversations } from "../conversations";
 import type { CreateOrFindDMBody, DMItem } from "./types";
 
 /**
@@ -30,6 +31,9 @@ export function useCreateOrFindDM() {
         old ? (old.some((d) => d.id === dm.id) ? old : [dm, ...old]) : [dm],
       );
       qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+      // LRM-1399 — the unified Conversations list is the page's single source;
+      // keep it fresh alongside the legacy key that other consumers still read.
+      invalidateConversations(qc, wsId);
     },
   });
 }
@@ -48,7 +52,10 @@ export function useSetDMPinned() {
   return useMutation({
     mutationFn: ({ source, id, pinned }: DMRef & { pinned: boolean }) =>
       pinned ? api.pinDM(source, id) : api.unpinDM(source, id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: dmKeys.list(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+      invalidateConversations(qc, wsId);
+    },
   });
 }
 
@@ -58,7 +65,10 @@ export function useSetDMMuted() {
   return useMutation({
     mutationFn: ({ source, id, muted }: DMRef & { muted: boolean }) =>
       muted ? api.muteDM(source, id) : api.unmuteDM(source, id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: dmKeys.list(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+      invalidateConversations(qc, wsId);
+    },
   });
 }
 
@@ -73,7 +83,10 @@ export function useMarkDMUnread() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: ({ source, id }: DMRef) => api.markDMUnread(source, id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: dmKeys.list(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+      invalidateConversations(qc, wsId);
+    },
   });
 }
 
@@ -87,7 +100,10 @@ export function useCloseDM() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: ({ source, id }: DMRef) => api.closeDM(source, id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: dmKeys.list(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+      invalidateConversations(qc, wsId);
+    },
   });
 }
 
@@ -101,6 +117,9 @@ export function useMuteDM() {
   return useMutation({
     mutationFn: ({ source, id, muted }: DMRef & { muted: boolean }) =>
       muted ? api.muteDM(source, id) : api.unmuteDM(source, id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: dmKeys.list(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: dmKeys.list(wsId) });
+      invalidateConversations(qc, wsId);
+    },
   });
 }

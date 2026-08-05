@@ -4,13 +4,15 @@ import { useMemo, useReducer, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Agent } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
 import {
   useDeleteRuntimesByDaemon,
   useRemoveAgentsByDaemon,
 } from "@multica/core/runtimes/mutations";
+import { useDeleteSandboxMutation } from "@multica/core/sandboxes/mutations";
+import { runtimeKeys } from "@multica/core/runtimes/queries";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { useWorkspacePresenceMap } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -27,10 +29,15 @@ import { Input } from "@multica/ui/components/ui/input";
 import { AgentActivityListItem } from "../../agents/components/agent-activity-list-item";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
-import type { RuntimeMachine } from "./runtime-machines";
+import {
+  canDeleteCloudComputerMachine,
+  isCloudComputerMachine,
+  type RuntimeMachine,
+} from "./runtime-machines";
 import { knownProviderLabel } from "./provider-logo";
 import {
   missingDaemonIdConflict,
+  missingSandboxIdConflict,
   parseComputerDeleteConflict,
   type ComputerDeleteConflict,
 } from "./delete-computer-conflict";
@@ -64,12 +71,15 @@ export function MachineDeleteControl({
   const [open, setOpen] = useState(false);
 
   const canDelete = useMemo(() => {
+    if (isCloudComputerMachine(machine)) {
+      return canDeleteCloudComputerMachine(machine, user?.id);
+    }
     return (
       machine.runtimes.length > 0 &&
       !!user &&
       machine.runtimes.every((r) => r.owner_id === user.id)
     );
-  }, [machine.runtimes, user]);
+  }, [machine, user]);
 
   if (!canDelete) return null;
 
@@ -200,23 +210,34 @@ export function DeleteComputerDialog({
 
   // Seed closed so mount-with-open=true still resets (missing daemon id).
   const prevOpenRef = useRef(false);
+  const isCloud = isCloudComputerMachine(machine);
   if (open !== prevOpenRef.current) {
     prevOpenRef.current = open;
     if (open) {
-      dispatch({
-        type: "reset",
-        conflict: machine.daemonId
-          ? null
-          : missingDaemonIdConflict(
+      const missingDaemon =
+        !isCloud && !machine.daemonId
+          ? missingDaemonIdConflict(
               t(($) => $.machine.delete_computer.blocked_missing_daemon.description, {
                 name: machine.title,
               }),
-            ),
+            )
+          : isCloud && !machine.sandboxInstanceId
+            ? missingSandboxIdConflict(
+                t(($) => $.machine.delete_computer.blocked_missing_sandbox.description, {
+                  name: machine.title,
+                }),
+              )
+            : null;
+      dispatch({
+        type: "reset",
+        conflict: missingDaemon,
       });
     }
   }
 
+  const queryClient = useQueryClient();
   const deleteMutation = useDeleteRuntimesByDaemon(wsId);
+  const deleteSandboxMutation = useDeleteSandboxMutation(wsId);
   const removeAgentsMutation = useRemoveAgentsByDaemon(wsId);
   const affectedAgentCount = useMemo(() => {
     const runtimeIds = new Set(machine.runtimes.map((runtime) => runtime.id));
@@ -233,6 +254,64 @@ export function DeleteComputerDialog({
       showErrorToast(t(($) => $.list.delete_permission_hint));
       return;
     }
+
+    if (isCloud) {
+      const sandboxId = machine.sandboxInstanceId?.trim();
+      if (!sandboxId) {
+        dispatch({
+          type: "conflict",
+          conflict: missingSandboxIdConflict(
+            t(($) => $.machine.delete_computer.blocked_missing_sandbox.description, {
+              name: machine.title,
+            }),
+          ),
+        });
+        return;
+      }
+
+      dispatch({ type: "submitting", value: true });
+      try {
+        // Registered cloud computers: clear runtimes first so active-agent
+        // conflicts surface before we tear down the container.
+        if (machine.daemonId && machine.runtimes.length > 0) {
+          const result = await deleteMutation.mutateAsync({
+            daemonId: machine.daemonId,
+            runtimeMode: machine.mode,
+          });
+          if (result.status !== "ok" || result.daemon_id !== machine.daemonId) {
+            throw new Error(t(($) => $.machine.delete_computer.operation_failed.title));
+          }
+        }
+
+        await deleteSandboxMutation.mutateAsync(sandboxId);
+        void queryClient.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+        toast.success(
+          t(($) => $.machine.delete_computer.toast_deleted_cloud, {
+            name: machine.title,
+          }),
+        );
+        onDeleted();
+      } catch (err) {
+        const parsed = parseComputerDeleteConflict(err);
+        if (parsed) {
+          dispatch({ type: "conflict", conflict: parsed });
+          return;
+        }
+        const message =
+          err instanceof Error && err.message
+            ? err.message
+            : t(($) => $.machine.delete_computer.operation_failed.title);
+        showErrorToast(message, {
+          description: t(($) => $.machine.delete_computer.operation_failed.description, {
+            name: machine.title,
+          }),
+        });
+      } finally {
+        dispatch({ type: "submitting", value: false });
+      }
+      return;
+    }
+
     if (!machine.daemonId) {
       dispatch({
         type: "conflict",
@@ -405,10 +484,15 @@ export function DeleteComputerDialog({
                 {t(($) => $.machine.delete_computer.confirm.title)}
               </AlertDialogTitle>
               <AlertDialogDescription className="mt-1 text-sm leading-5 text-muted-foreground">
-                {t(($) => $.machine.delete_computer.confirm.description, {
-                  name: machine.title,
-                  count: affectedAgentCount,
-                })}
+                {isCloud
+                  ? t(($) => $.machine.delete_computer.confirm.description_cloud, {
+                      name: machine.title,
+                      count: affectedAgentCount,
+                    })
+                  : t(($) => $.machine.delete_computer.confirm.description, {
+                      name: machine.title,
+                      count: affectedAgentCount,
+                    })}
               </AlertDialogDescription>
               <label className="mt-4 block text-xs font-medium text-foreground">
                 {t(($) => $.machine.delete_computer.confirm.type_to_confirm, {
@@ -498,6 +582,13 @@ function BlockedBody({
       title = t(($) => $.machine.delete_computer.blocked_missing_daemon.title);
       description = t(
         ($) => $.machine.delete_computer.blocked_missing_daemon.description,
+        { name: machineTitle },
+      );
+      break;
+    case "missing_sandbox_id":
+      title = t(($) => $.machine.delete_computer.blocked_missing_sandbox.title);
+      description = t(
+        ($) => $.machine.delete_computer.blocked_missing_sandbox.description,
         { name: machineTitle },
       );
       break;

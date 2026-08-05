@@ -18,36 +18,43 @@ const TEST_RESOURCES = {
   en: { common: enCommon, runtimes: enRuntimes, agents: enAgents },
 };
 
-const { ApiError, apiDeleteByDaemon, apiRemoveByDaemon, apiListAgents } =
-  vi.hoisted(() => {
-    class ApiError extends Error {
-      status: number;
-      statusText: string;
-      body: unknown;
-      constructor(
-        message: string,
-        status: number,
-        statusText: string,
-        body: unknown,
-      ) {
-        super(message);
-        this.status = status;
-        this.statusText = statusText;
-        this.body = body;
-      }
+const {
+  ApiError,
+  apiDeleteByDaemon,
+  apiRemoveByDaemon,
+  apiDeleteSandbox,
+  apiListAgents,
+} = vi.hoisted(() => {
+  class ApiError extends Error {
+    status: number;
+    statusText: string;
+    body: unknown;
+    constructor(
+      message: string,
+      status: number,
+      statusText: string,
+      body: unknown,
+    ) {
+      super(message);
+      this.status = status;
+      this.statusText = statusText;
+      this.body = body;
     }
-    return {
-      ApiError,
-      apiDeleteByDaemon: vi.fn(),
-      apiRemoveByDaemon: vi.fn(),
-      apiListAgents: vi.fn(async (_params: unknown): Promise<unknown[]> => []),
-    };
-  });
+  }
+  return {
+    ApiError,
+    apiDeleteByDaemon: vi.fn(),
+    apiRemoveByDaemon: vi.fn(),
+    apiDeleteSandbox: vi.fn(),
+    apiListAgents: vi.fn(async (_params: unknown): Promise<unknown[]> => []),
+  };
+});
 
 vi.mock("@multica/core/api", () => ({
   api: {
     deleteRuntimesByDaemon: (...args: unknown[]) => apiDeleteByDaemon(...args),
     removeAgentsByDaemon: (...args: unknown[]) => apiRemoveByDaemon(...args),
+    deleteSandbox: (...args: unknown[]) => apiDeleteSandbox(...args),
     listAgents: (...args: unknown[]) => apiListAgents(args[0]),
     listMembers: vi.fn(async () => []),
   },
@@ -67,6 +74,13 @@ vi.mock("@multica/core/runtimes/mutations", () => ({
   useRemoveAgentsByDaemon: () => ({
     isPending: false,
     mutateAsync: (...args: unknown[]) => apiRemoveByDaemon(...args),
+  }),
+}));
+
+vi.mock("@multica/core/sandboxes/mutations", () => ({
+  useDeleteSandboxMutation: () => ({
+    isPending: false,
+    mutateAsync: (...args: unknown[]) => apiDeleteSandbox(...args),
   }),
 }));
 
@@ -242,6 +256,7 @@ describe("DeleteComputerDialog", () => {
   beforeEach(() => {
     apiDeleteByDaemon.mockReset();
     apiRemoveByDaemon.mockReset();
+    apiDeleteSandbox.mockReset();
     apiListAgents.mockReset();
     apiListAgents.mockResolvedValue([]);
   });
@@ -390,5 +405,122 @@ describe("DeleteComputerDialog", () => {
     renderDialog({ machine: makeMachine({ daemonId: null }) });
     expect(screen.getByText(/no daemon id/i)).toBeTruthy();
     expect(apiDeleteByDaemon).not.toHaveBeenCalled();
+  });
+
+  it("deletes pending cloud computers via deleteSandbox only (no by-daemon)", async () => {
+    apiDeleteSandbox.mockResolvedValue(undefined);
+    const onDeleted = vi.fn();
+    renderDialog({
+      onDeleted,
+      machine: makeMachine({
+        id: "pending-cloud:sb-1",
+        daemonId: null,
+        title: "my-docker",
+        runtimes: [],
+        pendingCloud: true,
+        sandboxInstanceId: "sb-1",
+        ownerUserId: "user-me",
+      }),
+    });
+
+    expect(
+      screen.getByText(/cloud container will be permanently deleted/i),
+    ).toBeTruthy();
+
+    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
+      target: { value: "my-docker" },
+    });
+    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
+
+    await waitFor(() => {
+      expect(apiDeleteSandbox).toHaveBeenCalledTimes(1);
+      expect(apiDeleteSandbox).toHaveBeenCalledWith("sb-1");
+    });
+    expect(apiDeleteByDaemon).not.toHaveBeenCalled();
+    expect(onDeleted).toHaveBeenCalled();
+  });
+
+  it("deletes registered cloud computers: by-daemon then deleteSandbox", async () => {
+    apiDeleteByDaemon.mockResolvedValue({
+      status: "ok",
+      daemon_id: "daemon-cloud-1",
+      deleted_count: 1,
+      deleted_runtime_ids: ["rt-1"],
+    });
+    apiDeleteSandbox.mockResolvedValue(undefined);
+    const onDeleted = vi.fn();
+    renderDialog({
+      onDeleted,
+      machine: makeMachine({
+        id: "local:daemon-cloud-1",
+        daemonId: "daemon-cloud-1",
+        title: "cloud-box",
+        sandboxInstanceId: "sb-reg-1",
+        runtimes: [
+          makeRuntime({
+            id: "rt-1",
+            daemon_id: "daemon-cloud-1",
+            name: "Claude (cloud-box)",
+          }),
+        ],
+      }),
+    });
+
+    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
+      target: { value: "cloud-box" },
+    });
+    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
+
+    await waitFor(() => {
+      expect(apiDeleteByDaemon).toHaveBeenCalledWith({
+        daemonId: "daemon-cloud-1",
+        runtimeMode: "local",
+      });
+      expect(apiDeleteSandbox).toHaveBeenCalledWith("sb-reg-1");
+    });
+    expect(onDeleted).toHaveBeenCalled();
+  });
+
+  it("blocks cloud computers without sandbox id without calling APIs", () => {
+    renderDialog({
+      machine: makeMachine({
+        daemonId: null,
+        runtimes: [],
+        pendingCloud: true,
+        sandboxInstanceId: null,
+        ownerUserId: "user-me",
+      }),
+    });
+    expect(screen.getByText(/missing its sandbox id/i)).toBeTruthy();
+    expect(apiDeleteByDaemon).not.toHaveBeenCalled();
+    expect(apiDeleteSandbox).not.toHaveBeenCalled();
+  });
+});
+
+describe("MachineDeleteControl (cloud)", () => {
+  it("shows delete for pending cloud computers owned by the caller", () => {
+    renderControl(
+      makeMachine({
+        daemonId: null,
+        runtimes: [],
+        pendingCloud: true,
+        sandboxInstanceId: "sb-1",
+        ownerUserId: "user-me",
+      }),
+    );
+    expect(screen.getByTestId("delete-computer-button")).toBeInTheDocument();
+  });
+
+  it("hides delete for pending cloud computers owned by someone else", () => {
+    renderControl(
+      makeMachine({
+        daemonId: null,
+        runtimes: [],
+        pendingCloud: true,
+        sandboxInstanceId: "sb-1",
+        ownerUserId: "user-other",
+      }),
+    );
+    expect(screen.queryByTestId("delete-computer-button")).toBeNull();
   });
 });

@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  useCreateSandboxMutation,
   useCreateSandboxTemplateMutation,
   useDeleteSandboxMutation,
   useResumeSandboxMutation,
@@ -28,19 +27,12 @@ import {
   sandboxBindingListOptions,
   sandboxKeys,
   sandboxListOptions,
-  sandboxNodeDockerImagesOptions,
-  sandboxNodeTemplatesOptions,
 } from "@multica/core/sandboxes/queries";
 import {
-  buildSandboxRuntimePayload,
-  defaultSandboxName,
   defaultSandboxSnapshotName,
-  emptySandboxRuntimeForm,
-  resolveCreateSandboxTemplate,
   sandboxDisplayName,
-  type SandboxRuntimeFormState,
 } from "@multica/core/sandboxes/utils";
-import type { DockerImage, SandboxBinding, SandboxInstance, SandboxSnapshot } from "@multica/core/types";
+import type { SandboxBinding, SandboxInstance, SandboxSnapshot } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -70,7 +62,6 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@multica/ui/components/ui/resizable";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@multica/ui/components/ui/select";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
@@ -82,61 +73,27 @@ import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n/use-t";
-import { SandboxRuntimeForm } from "./sandbox-runtime-form";
 import { NodeTemplatesPanel } from "./node-templates-panel";
 import { NodeSnapshotsPanel } from "./node-snapshots-panel";
+import {
+  CreateSandboxDialog,
+  buildCreateSandboxFormFromSnapshot,
+  buildDefaultCreateSandboxForm,
+  type CreateSandboxFormState,
+} from "./create-sandbox-dialog";
+import { CreateDockerContainerDialog } from "./create-docker-container-dialog";
 
 type NodeDetailTab = "sandboxes" | "docker" | "templates" | "snapshots";
 
 const EMPTY_SANDBOX_INSTANCES: SandboxInstance[] = [];
 const EMPTY_SANDBOX_BINDINGS: SandboxBinding[] = [];
 
-type DockerContainerCreateRequest = {
-  name: string;
-  nodeId: string;
-  image: string;
-  runtime: SandboxRuntimeFormState;
-};
-
-type CreateFormState = {
-  name: string;
-  nodeId: string;
-  /** "default" = node configured template; otherwise an explicit Cube template id. */
-  templateId: string;
-  /** When true, template (and node) are fixed — e.g. create from a snapshot. */
-  templateLocked: boolean;
-  lockedTemplateLabel: string;
-  runtime: SandboxRuntimeFormState;
-};
-
-function buildDefaultCreateForm(nodeId: string): CreateFormState {
-  return {
-    name: defaultSandboxName(),
-    nodeId,
-    templateId: "default",
-    templateLocked: false,
-    lockedTemplateLabel: "",
-    runtime: emptySandboxRuntimeForm(),
-  };
-}
-
-function buildCreateFormFromSnapshot(snapshot: SandboxSnapshot): CreateFormState {
-  return {
-    name: defaultSandboxName(),
-    nodeId: snapshot.node_id,
-    templateId: snapshot.cube_snapshot_id.trim(),
-    templateLocked: true,
-    lockedTemplateLabel: snapshot.name.trim() || snapshot.cube_snapshot_id,
-    runtime: emptySandboxRuntimeForm(),
-  };
-}
-
 type PageUiState = {
   nodeSearch: string;
   selectedNodeId: string | null;
   createDialogOpen: boolean;
   dockerCreateOpen: boolean;
-  createForm: CreateFormState;
+  createForm: CreateSandboxFormState;
   deleteConfirmInstance: SandboxInstance | null;
   snapshotInstance: SandboxInstance | null;
   snapshotName: string;
@@ -147,10 +104,9 @@ type PageUiState = {
 type PageUiAction =
   | { type: "set_node_search"; value: string }
   | { type: "set_selected_node"; value: string | null }
-  | { type: "open_create"; form: CreateFormState }
+  | { type: "open_create"; form: CreateSandboxFormState }
   | { type: "set_create_open"; open: boolean }
   | { type: "set_docker_create_open"; open: boolean }
-  | { type: "patch_create_form"; patch: Partial<CreateFormState> }
   | { type: "set_delete_confirm"; instance: SandboxInstance | null }
   | { type: "open_snapshot"; instance: SandboxInstance }
   | { type: "close_snapshot" }
@@ -170,8 +126,6 @@ function pageUiReducer(state: PageUiState, action: PageUiAction): PageUiState {
       return { ...state, createDialogOpen: action.open };
     case "set_docker_create_open":
       return { ...state, dockerCreateOpen: action.open };
-    case "patch_create_form":
-      return { ...state, createForm: { ...state.createForm, ...action.patch } };
     case "set_delete_confirm":
       return { ...state, deleteConfirmInstance: action.instance };
     case "open_snapshot":
@@ -199,7 +153,7 @@ const initialPageUiState: PageUiState = {
   selectedNodeId: null,
   createDialogOpen: false,
   dockerCreateOpen: false,
-  createForm: buildDefaultCreateForm(""),
+  createForm: buildDefaultCreateSandboxForm(""),
   deleteConfirmInstance: null,
   snapshotInstance: null,
   snapshotName: "",
@@ -317,12 +271,6 @@ export function SandboxesPage() {
     ? (instancesByNode.get(selectedBinding.node_id) ?? [])
     : [];
 
-  const canCreate =
-    createForm.name.trim().length > 0 &&
-    createForm.nodeId.length > 0 &&
-    (!createForm.templateLocked || createForm.templateId.length > 0);
-
-  const create = useCreateSandboxMutation(wsId);
   const stop = useStopSandboxMutation(wsId);
   const resume = useResumeSandboxMutation(wsId);
   const del = useDeleteSandboxMutation(wsId);
@@ -351,32 +299,17 @@ export function SandboxesPage() {
     }
   };
 
-  const {
-    data: createTemplatesData,
-    isLoading: createTemplatesLoading,
-    error: createTemplatesError,
-  } = useQuery({
-    ...sandboxNodeTemplatesOptions(createForm.nodeId),
-    enabled: createDialogOpen && !!createForm.nodeId,
-    // Keep the create dialog's Select stable; template list polls when closed.
-    refetchInterval: createDialogOpen ? false : 10_000,
-  });
-  const createDefaultTemplateId = createTemplatesData?.default_template_id?.trim() ?? "";
-  const createTemplateOptions = useMemo(() => {
-    const templates = createTemplatesData?.templates ?? [];
-    if (!createDefaultTemplateId) return templates;
-    return templates.filter((item) => item.template_id !== createDefaultTemplateId);
-  }, [createTemplatesData?.templates, createDefaultTemplateId]);
-
   const openCreateDialog = () => {
     dispatch({
       type: "open_create",
-      form: buildDefaultCreateForm(selectedBinding?.node_id ?? connectedBindings[0]?.node_id ?? ""),
+      form: buildDefaultCreateSandboxForm(
+        selectedBinding?.node_id ?? connectedBindings[0]?.node_id ?? "",
+      ),
     });
   };
 
   const openCreateFromSnapshot = (snapshot: SandboxSnapshot) => {
-    dispatch({ type: "open_create", form: buildCreateFormFromSnapshot(snapshot) });
+    dispatch({ type: "open_create", form: buildCreateSandboxFormFromSnapshot(snapshot) });
   };
 
   const handleAddNode = async () => {
@@ -406,48 +339,6 @@ export function SandboxesPage() {
     }
   };
 
-  const handleCreateSandbox = async () => {
-    if (!canCreate) return;
-    try {
-      const runtime = buildSandboxRuntimePayload(createForm.runtime);
-      await create.mutateAsync({
-        name: createForm.name.trim(),
-        node_id: createForm.nodeId,
-        template: resolveCreateSandboxTemplate(createForm.templateId),
-        ...(runtime ? { runtime } : {}),
-      });
-      dispatch({ type: "set_create_open", open: false });
-      dispatch({ type: "set_selected_node", value: createForm.nodeId });
-      toast.success(t(($) => $.sandboxes_page.create_success));
-    } catch (e) {
-      showErrorToast(e instanceof Error ? e.message : t(($) => $.sandboxes_page.create_failed));
-    }
-  };
-
-  const handleCreateDockerContainer = async ({
-    name,
-    nodeId,
-    image,
-    runtime,
-  }: DockerContainerCreateRequest) => {
-    try {
-      const runtimePayload = buildSandboxRuntimePayload(runtime);
-      await create.mutateAsync({
-        name: name.trim(),
-        node_id: nodeId,
-        docker_image: image,
-        ...(runtimePayload ? { runtime: runtimePayload } : {}),
-      });
-      dispatch({ type: "set_selected_node", value: nodeId });
-      toast.success(t(($) => $.sandboxes_page.docker_create_success));
-    } catch (e) {
-      showErrorToast(
-        e instanceof Error ? e.message : t(($) => $.sandboxes_page.docker_create_failed),
-      );
-      throw e;
-    }
-  };
-
   if (showInitialLoading) {
     return <SandboxesPageSkeleton />;
   }
@@ -456,11 +347,11 @@ export function SandboxesPage() {
     binding: selectedBinding,
     instances: selectedInstances,
     onCreate: openCreateDialog,
-    onCreateDockerContainer: handleCreateDockerContainer,
-    creatingDockerContainer: create.isPending,
     dockerCreateOpen,
     onDockerCreateOpenChange: (open: boolean) =>
       dispatch({ type: "set_docker_create_open", open }),
+    onDockerCreated: (nodeId: string) =>
+      dispatch({ type: "set_selected_node", value: nodeId }),
     onCreateFromSnapshot: openCreateFromSnapshot,
     onViewSetup: () => {
       if (selectedBinding) navigation.push(paths.sandboxNodeSetup(selectedBinding.node_id));
@@ -545,141 +436,13 @@ export function SandboxesPage() {
         </div>
       )}
 
-      <Dialog
+      <CreateSandboxDialog
         open={createDialogOpen}
         onOpenChange={(open) => dispatch({ type: "set_create_open", open })}
-      >
-        <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>
-              {createForm.templateLocked
-                ? t(($) => $.sandboxes_page.create_from_snapshot_dialog_title)
-                : t(($) => $.sandboxes_page.create_dialog_title)}
-            </DialogTitle>
-            <DialogDescription>
-              {createForm.templateLocked
-                ? t(($) => $.sandboxes_page.create_from_snapshot_dialog_description)
-                : t(($) => $.sandboxes_page.create_dialog_description)}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="sandbox-name">{t(($) => $.sandboxes_page.name_label)}</Label>
-              <Input
-                id="sandbox-name"
-                value={createForm.name}
-                onChange={(e) =>
-                  dispatch({ type: "patch_create_form", patch: { name: e.target.value } })
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>{t(($) => $.sandboxes_page.node_label)}</Label>
-              {createForm.templateLocked ? (
-                <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-                  {connectedBindings.find((b) => b.node_id === createForm.nodeId)?.node_name ??
-                    createForm.nodeId}
-                </div>
-              ) : (
-                <Select
-                  value={createForm.nodeId}
-                  onValueChange={(value) =>
-                    dispatch({
-                      type: "patch_create_form",
-                      patch: { nodeId: value ?? "", templateId: "default" },
-                    })
-                  }
-                >
-                  <SelectTrigger className="h-9 w-full min-w-0">
-                    <SelectValue placeholder={t(($) => $.sandboxes_page.select_node_placeholder)} />
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger className="min-w-(--anchor-width)">
-                    {connectedBindings.map((binding) => (
-                      <SelectItem key={binding.id} value={binding.node_id}>
-                        {binding.node_name} ({binding.node_status})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label>{t(($) => $.sandboxes_page.create_template_label)}</Label>
-              {createForm.templateLocked ? (
-                <div className="space-y-1">
-                  <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-                    <div className="font-medium">{createForm.lockedTemplateLabel}</div>
-                    <div className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
-                      {createForm.templateId}
-                    </div>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {t(($) => $.sandboxes_page.create_from_snapshot_template_hint)}
-                  </p>
-                </div>
-              ) : createTemplatesLoading ? (
-                <Skeleton className="h-9 w-full" />
-              ) : (
-                <Select
-                  value={createForm.templateId}
-                  onValueChange={(value) =>
-                    dispatch({
-                      type: "patch_create_form",
-                      patch: { templateId: value ?? "default" },
-                    })
-                  }
-                >
-                  <SelectTrigger className="h-9 w-full min-w-0">
-                    <SelectValue placeholder={t(($) => $.sandboxes_page.create_template_placeholder)} />
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger className="min-w-(--anchor-width)">
-                    <SelectItem value="default">
-                      {createDefaultTemplateId
-                        ? t(($) => $.sandboxes_page.create_template_default_option, {
-                            id: createDefaultTemplateId,
-                          })
-                        : t(($) => $.sandboxes_page.create_template_default_option_unset)}
-                    </SelectItem>
-                    {createTemplateOptions.map((template) => (
-                      <SelectItem key={template.template_id} value={template.template_id}>
-                        <span className="font-mono text-xs">{template.template_id}</span>
-                        {template.status ? (
-                          <span className="ml-2 text-muted-foreground">({template.status})</span>
-                        ) : null}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-              {!createForm.templateLocked && createTemplatesError ? (
-                <p className="text-xs text-destructive">
-                  {createTemplatesError instanceof Error
-                    ? createTemplatesError.message
-                    : t(($) => $.sandboxes_page.templates_load_failed)}
-                </p>
-              ) : null}
-            </div>
-            <SandboxRuntimeForm
-              value={createForm.runtime}
-              onChange={(runtime) =>
-                dispatch({ type: "patch_create_form", patch: { runtime } })
-              }
-            />
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => dispatch({ type: "set_create_open", open: false })}
-            >
-              {t(($) => $.sandboxes_page.cancel_action)}
-            </Button>
-            <Button onClick={() => void handleCreateSandbox()} disabled={!canCreate || create.isPending}>
-              {create.isPending ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-              {t(($) => $.sandboxes_page.create_action)}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        bindings={connectedBindings}
+        initialForm={createForm}
+        onCreated={(nodeId) => dispatch({ type: "set_selected_node", value: nodeId })}
+      />
 
       <Dialog
         open={!!snapshotInstance}
@@ -868,10 +631,9 @@ function NodeDetail(props: {
   binding: SandboxBinding | null;
   instances: SandboxInstance[];
   onCreate: () => void;
-  onCreateDockerContainer: (request: DockerContainerCreateRequest) => Promise<void>;
-  creatingDockerContainer: boolean;
   dockerCreateOpen: boolean;
   onDockerCreateOpenChange: (open: boolean) => void;
+  onDockerCreated: (nodeId: string) => void;
   onCreateFromSnapshot: (snapshot: SandboxSnapshot) => void;
   onViewSetup: () => void;
   stoppingId?: string;
@@ -975,10 +737,9 @@ function NodeDetailContent({
   binding,
   instances,
   onCreate,
-  onCreateDockerContainer,
-  creatingDockerContainer,
   dockerCreateOpen,
   onDockerCreateOpenChange,
+  onDockerCreated,
   onCreateFromSnapshot,
   onViewSetup,
   stoppingId,
@@ -994,10 +755,9 @@ function NodeDetailContent({
   binding: SandboxBinding;
   instances: SandboxInstance[];
   onCreate: () => void;
-  onCreateDockerContainer: (request: DockerContainerCreateRequest) => Promise<void>;
-  creatingDockerContainer: boolean;
   dockerCreateOpen: boolean;
   onDockerCreateOpenChange: (open: boolean) => void;
+  onDockerCreated: (nodeId: string) => void;
   onCreateFromSnapshot: (snapshot: SandboxSnapshot) => void;
   onViewSetup: () => void;
   stoppingId?: string;
@@ -1092,16 +852,15 @@ function NodeDetailContent({
       <div className="min-h-0 flex-1 overflow-auto">
         {activeTab === "docker" ? (
           <DockerContainersPanel
-            nodeId={binding.node_id}
+            binding={binding}
             nodeOnline={online}
             instances={dockerInstances}
-            creating={creatingDockerContainer}
             dialogOpen={dockerCreateOpen}
             onDialogOpenChange={onDockerCreateOpenChange}
+            onCreated={onDockerCreated}
             stoppingId={stoppingId}
             resumingId={resumingId}
             deletingId={deletingId}
-            onCreate={onCreateDockerContainer}
             onOpen={onOpen}
             onStop={onStop}
             onResume={onResume}
@@ -1150,81 +909,36 @@ function NodeDetailContent({
   );
 }
 
-function dockerImageLabel(image: DockerImage): string {
-  return image.image_ref || [image.repository, image.tag].filter(Boolean).join(":");
-}
-
-function defaultDockerContainerName(): string {
-  return `docker-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 function DockerContainersPanel({
-  nodeId,
+  binding,
   nodeOnline,
   instances,
-  creating,
   dialogOpen,
   onDialogOpenChange,
+  onCreated,
   stoppingId,
   resumingId,
   deletingId,
-  onCreate,
   onOpen,
   onStop,
   onResume,
   onDelete,
 }: {
-  nodeId: string;
+  binding: SandboxBinding;
   nodeOnline: boolean;
   instances: SandboxInstance[];
-  creating: boolean;
   dialogOpen: boolean;
   onDialogOpenChange: (open: boolean) => void;
+  onCreated: (nodeId: string) => void;
   stoppingId?: string;
   resumingId?: string;
   deletingId?: string;
-  onCreate: (request: DockerContainerCreateRequest) => Promise<void>;
   onOpen: (instanceId: string) => void;
   onStop: (instanceId: string) => void;
   onResume: (instanceId: string) => void;
   onDelete: (instance: SandboxInstance) => void;
 }) {
   const { t } = useT("layout");
-  const [name, setName] = useState(defaultDockerContainerName);
-  const [selectedImageRef, setSelectedImageRef] = useState("");
-  const [runtime, setRuntime] = useState(emptySandboxRuntimeForm);
-  const { data, isLoading, error, refetch } = useQuery({
-    ...sandboxNodeDockerImagesOptions(nodeId),
-    enabled: dialogOpen && !!nodeId,
-    refetchInterval: dialogOpen ? false : 10_000,
-  });
-
-  const images = useMemo(
-    () => (data?.images ?? []).filter((image) => dockerImageLabel(image).trim().length > 0),
-    [data?.images],
-  );
-  const selectedImage =
-    images.find((image) => dockerImageLabel(image) === selectedImageRef) ?? images[0] ?? null;
-  const image = selectedImage ? dockerImageLabel(selectedImage) : "";
-  const dockerImagesError = data?.error?.trim() ?? "";
-  const canCreate = nodeOnline && !creating && !!selectedImage && name.trim().length > 0;
-
-  const openDialog = () => {
-    setName(defaultDockerContainerName());
-    setSelectedImageRef("");
-    setRuntime(emptySandboxRuntimeForm());
-    onDialogOpenChange(true);
-  };
-
-  const submit = async () => {
-    if (!canCreate || !selectedImage) return;
-    try {
-      await onCreate({ name, nodeId, image, runtime });
-      onDialogOpenChange(false);
-    } catch {
-      // The caller owns toast/error presentation; keep the dialog open for retry.
-    }
-  };
 
   return (
     <div className="flex min-h-full flex-col">
@@ -1235,7 +949,12 @@ function DockerContainersPanel({
             {t(($) => $.sandboxes_page.docker_description)}
           </p>
         </div>
-        <Button type="button" size="sm" onClick={openDialog} disabled={!nodeOnline}>
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => onDialogOpenChange(true)}
+          disabled={!nodeOnline}
+        >
           <Plus className="h-3 w-3" />
           {t(($) => $.sandboxes_page.docker_create_action)}
         </Button>
@@ -1254,7 +973,13 @@ function DockerContainersPanel({
           <p className="mt-1 max-w-sm text-sm text-muted-foreground">
             {t(($) => $.sandboxes_page.docker_empty_description)}
           </p>
-          <Button type="button" size="sm" className="mt-4" onClick={openDialog} disabled={!nodeOnline}>
+          <Button
+            type="button"
+            size="sm"
+            className="mt-4"
+            onClick={() => onDialogOpenChange(true)}
+            disabled={!nodeOnline}
+          >
             <Plus className="h-3 w-3" />
             {t(($) => $.sandboxes_page.docker_create_action)}
           </Button>
@@ -1277,91 +1002,14 @@ function DockerContainersPanel({
         </div>
       )}
 
-      <Dialog open={dialogOpen} onOpenChange={onDialogOpenChange}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>{t(($) => $.sandboxes_page.docker_create_dialog_title)}</DialogTitle>
-            <DialogDescription>
-              {t(($) => $.sandboxes_page.docker_create_dialog_description)}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="docker-container-name">
-                {t(($) => $.sandboxes_page.docker_name_label)}
-              </Label>
-              <Input
-                id="docker-container-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder={t(($) => $.sandboxes_page.docker_name_placeholder)}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>{t(($) => $.sandboxes_page.docker_image_label)}</Label>
-              {isLoading ? (
-                <Skeleton className="h-9 w-full" />
-              ) : error || dockerImagesError ? (
-                <div className="flex flex-col items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
-                  <div className="text-sm font-medium text-destructive">
-                    {t(($) => $.sandboxes_page.docker_images_load_failed)}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {error instanceof Error
-                      ? error.message
-                      : dockerImagesError || t(($) => $.sandboxes_page.templates_load_failed)}
-                  </p>
-                  <Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>
-                    {t(($) => $.sandboxes_page.templates_retry)}
-                  </Button>
-                </div>
-              ) : images.length === 0 ? (
-                <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-                  {t(($) => $.sandboxes_page.docker_images_empty_description)}
-                </div>
-              ) : (
-                <Select
-                  value={selectedImage ? dockerImageLabel(selectedImage) : ""}
-                  onValueChange={(value) => {
-                    if (typeof value === "string") setSelectedImageRef(value);
-                  }}
-                >
-                  <SelectTrigger className="h-9 w-full min-w-0">
-                    <SelectValue placeholder={t(($) => $.sandboxes_page.docker_image_placeholder)} />
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger className="min-w-(--anchor-width)">
-                    {images.map((item) => {
-                      const ref = dockerImageLabel(item);
-                      return (
-                        <SelectItem key={ref} value={ref}>
-                          <span className="truncate">{ref}</span>
-                          {item.size ? <span className="ml-2 text-muted-foreground">{item.size}</span> : null}
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectContent>
-                </Select>
-              )}
-              <p className="text-xs text-muted-foreground">
-                {t(($) => $.sandboxes_page.docker_image_hint)}
-              </p>
-            </div>
-
-            <SandboxRuntimeForm value={runtime} onChange={setRuntime} />
-
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => onDialogOpenChange(false)}>
-              {t(($) => $.sandboxes_page.cancel_action)}
-            </Button>
-            <Button onClick={() => void submit()} disabled={!canCreate}>
-              {creating ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-              {t(($) => $.sandboxes_page.docker_create_action)}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CreateDockerContainerDialog
+        open={dialogOpen}
+        onOpenChange={onDialogOpenChange}
+        bindings={[binding]}
+        initialNodeId={binding.node_id}
+        nodeLocked
+        onCreated={(instance) => onCreated(instance.node_id)}
+      />
     </div>
   );
 }

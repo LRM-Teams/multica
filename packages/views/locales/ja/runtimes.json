@@ -114,6 +114,7 @@
     "delete_computer": {
       "button": "コンピューターを削除",
       "toast_deleted": "「{{name}}」を完全に削除しました。",
+      "toast_deleted_cloud": "クラウドコンピュータ「{{name}}」とそのコンテナを削除しました。",
       "operation_failed": {
         "title": "操作に失敗しました。変更はありません。",
         "description": "「{{name}}」は削除されず、エージェントも変更されていません。後でもう一度お試しください。"
@@ -121,6 +122,7 @@
       "confirm": {
         "title": "このコンピューターを完全に削除しますか？",
         "description": "この操作は元に戻せません。「{{name}}」、このコンピューター上のアーカイブ済みエージェント全件（計 {{count}} 件）、その履歴とメッセージを完全に削除し、以後 Multica に接続できなくなります。",
+        "description_cloud": "この操作は元に戻せません。「{{name}}」とそのクラウドコンテナ、アーカイブ済みエージェント（計 {{count}} 件）とその履歴を完全に削除します。",
         "type_to_confirm": "確認のためコンピューター名「{{name}}」を入力してください。",
         "cancel": "キャンセル",
         "confirm": "完全に削除",
@@ -152,6 +154,10 @@
       "blocked_missing_daemon": {
         "title": "このコンピュータは削除できません",
         "description": "「{{name}}」にはコンピューター識別子がないため、完全に削除できません。"
+      },
+      "blocked_missing_sandbox": {
+        "title": "このクラウドコンピュータは削除できません",
+        "description": "「{{name}}」にはサンドボックス ID がないため、ここからコンテナを削除できません。"
       }
     },
     "daemon_version_chip": "daemon v{{version}}",
@@ -186,7 +192,8 @@
     },
     "danger_zone": {
       "title": "危険ゾーン",
-      "description": "このコンピュータとランタイムをワークスペースから完全に削除します。"
+      "description": "このコンピュータとランタイムをワークスペースから完全に削除します。",
+      "description_cloud": "このクラウドコンピュータ、そのコンテナ、およびランタイムをワークスペースから完全に削除します。"
     },
     "agents_select": "選択",
     "agents_create": "作成",
@@ -271,10 +278,18 @@
     "your_computer": "自分のコンピュータ",
     "your_computer_hint": "自分で管理するコンピュータでエージェントを実行します。",
     "cloud": "クラウド コンピュータ",
-    "cloud_hint": "マネージドコンピュータはまだ利用できません。",
+    "cloud_hint": "接続済みのサンドボックスノード上に Docker コンテナを作成します。",
     "cloud_coming_soon": "近日公開",
     "next": "次へ",
     "cancel": "キャンセル"
+  },
+  "create_cloud_computer": {
+    "title": "クラウド コンピュータを作成",
+    "description": "名前・サンドボックスノード・Docker イメージを選んで作成します。ランタイムモデルは作成後に編集できます。",
+    "submit": "作成",
+    "toast_created": "クラウド コンピュータの作成を開始しました",
+    "toast_create_failed": "クラウド コンピュータの作成に失敗しました",
+    "provisioning_hint": "クラウド コンピュータを起動しています。デーモンが登録されると接続済みになります。"
   },
   "connect": {
     "title": "コンピュータを接続",

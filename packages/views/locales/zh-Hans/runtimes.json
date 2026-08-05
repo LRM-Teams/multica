@@ -114,6 +114,7 @@
     "delete_computer": {
       "button": "永久删除此电脑",
       "toast_deleted": "已永久删除「{{name}}」。",
+      "toast_deleted_cloud": "已删除云端电脑「{{name}}」及其容器。",
       "operation_failed": {
         "title": "操作失败，没有任何改动。",
         "description": "「{{name}}」未被删除，agent 保持原样。请稍后重试。"
@@ -121,6 +122,7 @@
       "confirm": {
         "title": "永久删除此电脑？",
         "description": "此操作不可撤销。「{{name}}」、以及它上面已归档的全部 agent（共 {{count}} 个）及其历史和消息将被永久删除、无法恢复，之后无法再连接到 Multica。",
+        "description_cloud": "此操作不可撤销。「{{name}}」及其云端容器将被永久删除，其上已归档 agent（共 {{count}} 个）与历史也会一并清除。",
         "type_to_confirm": "请输入电脑名「{{name}}」以确认。",
         "cancel": "取消",
         "confirm": "永久删除",
@@ -152,6 +154,10 @@
       "blocked_missing_daemon": {
         "title": "无法删除这台电脑",
         "description": "「{{name}}」缺少电脑标识，无法永久删除。"
+      },
+      "blocked_missing_sandbox": {
+        "title": "无法删除这台云端电脑",
+        "description": "「{{name}}」缺少沙箱标识，无法从这里删除云端容器。"
       }
     },
     "daemon_version_chip": "daemon v{{version}}",
@@ -186,7 +192,8 @@
     },
     "danger_zone": {
       "title": "危险区",
-      "description": "从工作区永久删除此电脑及其全部 Runtime。"
+      "description": "从工作区永久删除此电脑及其全部 Runtime。",
+      "description_cloud": "从工作区永久删除此云端电脑、其容器及其全部 Runtime。"
     },
     "agents_select": "选择",
     "agents_create": "创建",
@@ -271,10 +278,18 @@
     "your_computer": "你的电脑",
     "your_computer_hint": "在你控制的电脑上运行智能体。",
     "cloud": "云端电脑",
-    "cloud_hint": "托管电脑暂未开放。",
+    "cloud_hint": "在已连接的沙箱节点上创建 Docker 容器。",
     "cloud_coming_soon": "即将推出",
     "next": "下一步",
     "cancel": "取消"
+  },
+  "create_cloud_computer": {
+    "title": "创建云端电脑",
+    "description": "填写名称，选择运行节点和 Docker 镜像即可创建。运行时模型可在创建后编辑。",
+    "submit": "创建",
+    "toast_created": "云端电脑创建请求已提交",
+    "toast_create_failed": "创建云端电脑失败",
+    "provisioning_hint": "正在启动云端电脑。守护进程注册成功后会显示为已连接。"
   },
   "connect": {
     "title": "连接电脑",

@@ -9,7 +9,8 @@ import type { Agent } from "@multica/core/types";
 export type ComputerDeleteConflictCode =
   | "computer_has_active_agents"
   | "computer_agent_plan_changed"
-  | "missing_daemon_id";
+  | "missing_daemon_id"
+  | "missing_sandbox_id";
 
 export interface ComputerDeleteConflict {
   code: ComputerDeleteConflictCode;
@@ -21,6 +22,7 @@ const CONFLICT_CODES = new Set<string>([
   "computer_has_active_agents",
   "computer_agent_plan_changed",
   "missing_daemon_id",
+  "missing_sandbox_id",
 ]);
 
 export function parseComputerDeleteConflict(
@@ -63,6 +65,14 @@ export function parseComputerDeleteConflict(
 export function missingDaemonIdConflict(message: string): ComputerDeleteConflict {
   return {
     code: "missing_daemon_id",
+    activeAgents: [],
+    message,
+  };
+}
+
+export function missingSandboxIdConflict(message: string): ComputerDeleteConflict {
+  return {
+    code: "missing_sandbox_id",
     activeAgents: [],
     message,
   };

@@ -32,6 +32,7 @@ import {
   useDeleteRuntimeAgentWorkspace,
   useRuntimeAgentWorkspaces,
 } from "@multica/core/runtimes/mutations";
+import { sandboxListOptions, sandboxKeys } from "@multica/core/sandboxes/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import {
   agentListOptions,
@@ -40,7 +41,13 @@ import {
 } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { resolveActorDisplayName } from "@multica/core/identity";
-import type { Agent, AgentRuntime, AgentTask, CreateAgentRequest } from "@multica/core/types";
+import type {
+  Agent,
+  AgentRuntime,
+  AgentTask,
+  CreateAgentRequest,
+  SandboxInstance,
+} from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import {
@@ -57,6 +64,7 @@ import { CreateAgentDialog } from "../../agents/components/create-agent-dialog";
 import { api } from "@multica/core/api";
 import { AddComputerDialog } from "./add-computer-dialog";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
+import { CreateCloudComputerDialog } from "./create-cloud-computer-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
 import { buildWorkloadIndex } from "./runtime-list";
 import {
@@ -65,6 +73,10 @@ import {
   isMineMachine,
   machineHostname,
   machinePrimaryRuntimeId,
+  mergePendingCloudComputers,
+  decorateCloudComputerMachines,
+  pendingCloudComputerMachineId,
+  resolveCloudComputerSelectionId,
   shortDaemonId,
   splitRuntimeName,
   type RuntimeMachine,
@@ -160,7 +172,7 @@ export function attentionMachineIdFromRuntime(
 }
 
 /** Mutually exclusive Computers overlays — one discriminant (prefer-useReducer). */
-type PageOverlay = null | "add-chooser" | "connect" | "cloud";
+type PageOverlay = null | "add-chooser" | "connect" | "cloud-computer" | "cloud";
 
 /**
  * LRM-863 — Runtimes per **v8c** freeze (Frank 2026-07-31):
@@ -191,6 +203,7 @@ export function RuntimesPage({
   const { data: runtimes = [], isLoading: fetching } = useQuery(
     runtimeListOptions(wsId),
   );
+  const { data: sandboxInstances = [] } = useQuery(sandboxListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
 
@@ -209,16 +222,23 @@ export function RuntimesPage({
 
   const machines = useMemo(
     () =>
-      buildRuntimeMachines(runtimes, {
-        now,
-        localDaemonId,
-        localMachineName,
-        currentUserId,
-        workloadByRuntimeId: workloadIndex,
-        ensureLocalMachine: hasLocalMachine,
-      }),
+      decorateCloudComputerMachines(
+        mergePendingCloudComputers(
+          buildRuntimeMachines(runtimes, {
+            now,
+            localDaemonId,
+            localMachineName,
+            currentUserId,
+            workloadByRuntimeId: workloadIndex,
+            ensureLocalMachine: hasLocalMachine,
+          }),
+          sandboxInstances,
+        ),
+        sandboxInstances,
+      ),
     [
       runtimes,
+      sandboxInstances,
       now,
       localDaemonId,
       localMachineName,
@@ -232,6 +252,7 @@ export function RuntimesPage({
     RUNTIME_ATTENTION_RUNTIME_QUERY,
   );
   const searchParamsString = searchParams.toString();
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- consume one-shot URL deep-link into selection; no user event owns this
   useEffect(() => {
     if (!attentionRuntimeId || fetching || isLoading) return;
 
@@ -263,14 +284,20 @@ export function RuntimesPage({
     searchParamsString,
   ]);
 
+  // Pending cloud id → registered daemon id; keep using resolved value (no mirror effect).
+  const resolvedUserPickId = resolveCloudComputerSelectionId(
+    machines,
+    userPickId,
+  );
+
   const userPickValid =
-    !!userPickId && machines.some((m) => m.id === userPickId);
+    !!resolvedUserPickId && machines.some((m) => m.id === resolvedUserPickId);
 
   // LRM-1094: desktop default = isCurrent → Mine[0]; never Team machines[0].
   const selectedMachineId = isMobile
-    ? userPickId
+    ? resolvedUserPickId
     : userPickValid
-      ? userPickId
+      ? resolvedUserPickId
       : defaultDesktopSelectedMachineId(machines, currentUserId ?? null);
 
   const selectedMachine =
@@ -294,12 +321,32 @@ export function RuntimesPage({
     () => setPageOverlay("connect"),
     [],
   );
+  const openCloudComputerFromChooser = useCallback(
+    () => setPageOverlay("cloud-computer"),
+    [],
+  );
   const openCloudRuntime = useCallback(() => setPageOverlay("cloud"), []);
+
+  const handleCloudComputerCreated = useCallback(
+    (instance: SandboxInstance) => {
+      // Seed the React Query cache so the pending sidebar row appears before refetch.
+      qc.setQueryData<SandboxInstance[]>(sandboxKeys.list(wsId), (prev) => {
+        const list = prev ?? [];
+        if (list.some((item) => item.id === instance.id)) return list;
+        return [instance, ...list];
+      });
+      void qc.invalidateQueries({ queryKey: sandboxKeys.all(wsId) });
+      setUserPickId(pendingCloudComputerMachineId(instance.id));
+      setMobileDetailOpen(true);
+      setPageOverlay(null);
+    },
+    [qc, wsId],
+  );
 
   if (isLoading || fetching) return <RuntimesPageSkeleton isMobile={isMobile} />;
 
-  const totalCount = runtimes.length;
-  const showEmpty = totalCount === 0 && !bootstrapping && !hasLocalMachine;
+  const showEmpty =
+    machines.length === 0 && !bootstrapping && !hasLocalMachine;
 
   if (showEmpty) {
     return (
@@ -317,10 +364,17 @@ export function RuntimesPage({
           <AddComputerDialog
             onClose={closeOverlay}
             onChooseYourComputer={openConnectFromChooser}
+            onChooseCloud={openCloudComputerFromChooser}
           />
         )}
         {pageOverlay === "connect" && (
           <ConnectRemoteDialog onClose={closeOverlay} />
+        )}
+        {pageOverlay === "cloud-computer" && (
+          <CreateCloudComputerDialog
+            onClose={closeOverlay}
+            onCreated={handleCloudComputerCreated}
+          />
         )}
       </div>
     );
@@ -405,10 +459,17 @@ export function RuntimesPage({
         <AddComputerDialog
           onClose={closeOverlay}
           onChooseYourComputer={openConnectFromChooser}
+          onChooseCloud={openCloudComputerFromChooser}
         />
       )}
       {pageOverlay === "connect" && (
         <ConnectRemoteDialog onClose={closeOverlay} />
+      )}
+      {pageOverlay === "cloud-computer" && (
+        <CreateCloudComputerDialog
+          onClose={closeOverlay}
+          onCreated={handleCloudComputerCreated}
+        />
       )}
       {cloudRuntimeEnabled && pageOverlay === "cloud" && (
         <CloudRuntimeDialog onClose={closeOverlay} />
@@ -1142,6 +1203,11 @@ function MachineDetailView({
       {!machine.runtimes.length && bootstrapping && (
         <div className="px-6 py-8 text-center text-sm text-muted-foreground">
           {t(($) => $.page.bootstrapping.hint)}
+        </div>
+      )}
+      {!machine.runtimes.length && machine.pendingCloud && (
+        <div className="px-6 py-8 text-center text-sm text-muted-foreground">
+          {t(($) => $.create_cloud_computer.provisioning_hint)}
         </div>
       )}
     </div>

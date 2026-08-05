@@ -39,7 +39,14 @@ export function MachineNameEditor({
   const inputRef = useRef<HTMLInputElement>(null);
   const hostname = machineHostname(machine) ?? machine.title;
   const savedName = optimistic ?? currentDisplayName(machine);
-  const visibleName = savedName || hostname;
+  // Cloud computers: prefer the create-time sandbox name (machine.title) over
+  // daemon device_name / short daemon id so pending and connected labels match.
+  // Regular "your computer" rows keep the previous hostname-first behavior.
+  const cloudCreateName =
+    !savedName && (machine.pendingCloud || !!machine.sandboxInstanceId)
+      ? machine.title.trim() || null
+      : null;
+  const visibleName = savedName || cloudCreateName || hostname;
   const isPlaceholder = !savedName;
   const canEdit = machine.runtimes.length > 0;
 

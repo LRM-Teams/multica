@@ -195,4 +195,22 @@ describe("MachineDangerZone (LRM-1071 / v5)", () => {
       /Delete computer/i,
     );
   });
+
+  it("shows delete for pending cloud computers owned by the caller", () => {
+    wrap(
+      <MachineDangerZone
+        machine={makeMachine({
+          daemonId: null,
+          runtimes: [],
+          pendingCloud: true,
+          sandboxInstanceId: "sb-1",
+          ownerUserId: "user-mine",
+          title: "cloud-pending",
+        })}
+      />,
+    );
+    expect(screen.getByTestId("machine-danger-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("machine-danger-delete")).not.toBeDisabled();
+    expect(screen.getByText(/cloud computer, its container/i)).toBeTruthy();
+  });
 });

@@ -9,38 +9,55 @@ import { AddComputerDialog } from "./add-computer-dialog";
 
 const TEST_RESOURCES = { en: { common: enCommon, runtimes: enRuntimes } };
 
-function renderChooser(onChooseYourComputer = vi.fn(), onClose = vi.fn()) {
+function renderChooser(
+  onChooseYourComputer = vi.fn(),
+  onChooseCloud = vi.fn(),
+  onClose = vi.fn(),
+) {
   render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <AddComputerDialog
         onClose={onClose}
         onChooseYourComputer={onChooseYourComputer}
+        onChooseCloud={onChooseCloud}
       />
     </I18nProvider>,
   );
-  return { onChooseYourComputer, onClose };
+  return { onChooseYourComputer, onChooseCloud, onClose };
 }
 
 describe("AddComputerDialog — LRM-1141 Step A", () => {
-  it("shows Your computer and disabled Cloud Coming soon", () => {
+  it("shows Your computer and selectable Cloud computer", () => {
     renderChooser();
     expect(screen.getByText("Your computer")).toBeInTheDocument();
     expect(screen.getByText("Cloud computer")).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Cloud computer/i })).toBeDisabled();
-    expect(screen.getByText("Managed computers are not available yet.")).toBeInTheDocument();
-    expect(screen.getAllByText("Coming soon").length).toBeGreaterThan(0);
+    expect(screen.getByRole("radio", { name: /Cloud computer/i })).not.toBeDisabled();
+    expect(
+      screen.getByText("Create a Docker container on a connected sandbox node."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
   });
 
-  it("Next advances to Your computer path", () => {
-    const { onChooseYourComputer } = renderChooser();
+  it("Next advances to Your computer path by default", () => {
+    const { onChooseYourComputer, onChooseCloud } = renderChooser();
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(onChooseYourComputer).toHaveBeenCalledTimes(1);
+    expect(onChooseCloud).not.toHaveBeenCalled();
+  });
+
+  it("Next advances to Cloud path when Cloud is selected", () => {
+    const { onChooseYourComputer, onChooseCloud } = renderChooser();
+    fireEvent.click(screen.getByRole("radio", { name: /Cloud computer/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(onChooseCloud).toHaveBeenCalledTimes(1);
+    expect(onChooseYourComputer).not.toHaveBeenCalled();
   });
 
   it("Cancel closes without advancing", () => {
-    const { onChooseYourComputer, onClose } = renderChooser();
+    const { onChooseYourComputer, onChooseCloud, onClose } = renderChooser();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onChooseYourComputer).not.toHaveBeenCalled();
+    expect(onChooseCloud).not.toHaveBeenCalled();
   });
 });

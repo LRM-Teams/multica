@@ -2,19 +2,30 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRuntime } from "@multica/core/types";
 import {
+  buildPendingCloudComputerMachine,
   buildRuntimeMachines,
+  decorateCloudComputerMachines,
   defaultDesktopSelectedMachineId,
   filterRuntimeMachines,
   filterRuntimesOnBoundComputer,
   headerRuntimeHealthBadge,
+  isDockerCloudComputerInstance,
+  isMineMachine,
   machineDeviceName,
+  machineHostname,
+  mergePendingCloudComputers,
+  pendingCloudComputerMachineId,
+  resolveCloudComputerSelectionId,
   runtimeComputerLabel,
   runtimeDisplayLabel,
   runtimeMachineCounts,
   runtimeMachineKey,
   runtimesShareMachine,
   splitRuntimeName,
+  canDeleteCloudComputerMachine,
+  isCloudComputerMachine,
 } from "./runtime-machines";
+import type { SandboxInstance } from "@multica/core/types";
 
 const NOW = new Date("2026-05-17T12:00:00Z").getTime();
 
@@ -791,5 +802,198 @@ describe("runtimeDisplayLabel", () => {
     expect(
       runtimeDisplayLabel(makeRuntime({ display_name: "   ", name: "Claude (dev.local)" })),
     ).toBe("Claude (dev.local)");
+  });
+});
+
+function makeSandboxInstance(
+  overrides: Partial<SandboxInstance> = {},
+): SandboxInstance {
+  return {
+    id: "sb-1",
+    workspace_id: "ws-1",
+    creator_user_id: "user-1",
+    node_id: "node-1",
+    status: "pending",
+    template: "docker:ubuntu:22.04",
+    local_ref: null,
+    endpoint_info: { kind: "docker" },
+    limits: {},
+    metadata: {
+      name: "my-cloud-box",
+      creation_mode: "docker_container",
+      docker_image: "ubuntu:22.04",
+      runtime_env: { MULTICA_DAEMON_ID: "daemon-cloud-1" },
+    },
+    error: null,
+    created_at: "2026-05-17T11:00:00Z",
+    updated_at: "2026-05-17T11:00:00Z",
+    ...overrides,
+  };
+}
+
+describe("pending cloud computers", () => {
+  it("detects docker cloud computer instances", () => {
+    expect(isDockerCloudComputerInstance(makeSandboxInstance())).toBe(true);
+    expect(
+      isDockerCloudComputerInstance(
+        makeSandboxInstance({
+          template: "default",
+          endpoint_info: {},
+          metadata: { name: "cube-only" },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("builds an offline pending row without green connectivity", () => {
+    const machine = buildPendingCloudComputerMachine(makeSandboxInstance());
+    expect(machine).toMatchObject({
+      id: pendingCloudComputerMachineId("sb-1"),
+      title: "my-cloud-box",
+      health: "offline",
+      pendingCloud: true,
+      sandboxInstanceId: "sb-1",
+      ownerUserId: "user-1",
+      isCurrent: false,
+      runtimes: [],
+    });
+    expect(isMineMachine(machine, "user-1")).toBe(true);
+    expect(isMineMachine(machine, "user-2")).toBe(false);
+  });
+
+  it("merges pending docker instances until a matching runtime registers", () => {
+    const existing = buildRuntimeMachines(
+      [makeRuntime({ id: "rt-local", daemon_id: "daemon-local", owner_id: "user-1" })],
+      { now: NOW },
+    );
+    const pending = makeSandboxInstance({ id: "sb-pending" });
+    const merged = mergePendingCloudComputers(existing, [pending]);
+    expect(merged.some((m) => m.id === pendingCloudComputerMachineId("sb-pending"))).toBe(
+      true,
+    );
+    expect(merged.find((m) => m.pendingCloud)?.health).toBe("offline");
+  });
+
+  it("drops pending row once a runtime claims the sandbox_instance_id", () => {
+    const registered = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-cloud",
+          daemon_id: "daemon-cloud-1",
+          metadata: {
+            cli_version: "0.3.0",
+            sandbox_instance_id: "sb-1",
+          },
+          computer_connected: true,
+        }),
+      ],
+      { now: NOW },
+    );
+    const merged = mergePendingCloudComputers(registered, [makeSandboxInstance()]);
+    expect(merged.some((m) => m.pendingCloud)).toBe(false);
+    expect(merged[0]?.health).toBe("online");
+  });
+
+  it("resolves selection from pending id to registered machine id", () => {
+    const registered = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-cloud",
+          daemon_id: "daemon-cloud-1",
+          metadata: {
+            cli_version: "0.3.0",
+            sandbox_instance_id: "sb-1",
+          },
+        }),
+      ],
+      { now: NOW },
+    );
+    const pendingId = pendingCloudComputerMachineId("sb-1");
+    expect(resolveCloudComputerSelectionId(registered, pendingId)).toBe(
+      registered[0]?.id,
+    );
+  });
+
+  it("does not invent a current-machine placeholder for cloud pending rows", () => {
+    const machines = mergePendingCloudComputers(
+      buildRuntimeMachines([], { now: NOW, ensureLocalMachine: true, localDaemonId: "local-d" }),
+      [makeSandboxInstance()],
+    );
+    const current = machines.find((m) => m.isCurrent);
+    const pending = machines.find((m) => m.pendingCloud);
+    expect(current?.id).toBe("local:local-d");
+    expect(pending?.isCurrent).toBe(false);
+  });
+
+  it("keeps create-time sandbox name after daemon connects (no display_name)", () => {
+    const instance = makeSandboxInstance({
+      id: "sb-1",
+      metadata: {
+        name: "create-time-name",
+        creation_mode: "docker_container",
+        runtime_env: { MULTICA_DAEMON_ID: "daemon-cloud-1" },
+      },
+    });
+    const registered = buildRuntimeMachines(
+      [
+        makeRuntime({
+          id: "rt-cloud",
+          daemon_id: "daemon-cloud-1",
+          device_name: "container-hostname",
+          metadata: {
+            cli_version: "0.3.0",
+            sandbox_instance_id: "sb-1",
+            device_name: "container-hostname",
+          },
+          computer_connected: true,
+        }),
+      ],
+      { now: NOW },
+    );
+    const decorated = decorateCloudComputerMachines(
+      mergePendingCloudComputers(registered, [instance]),
+      [instance],
+    );
+    expect(decorated).toHaveLength(1);
+    expect(decorated[0]?.pendingCloud).toBeFalsy();
+    expect(decorated[0]?.title).toBe("create-time-name");
+    expect(decorated[0]?.sandboxInstanceId).toBe("sb-1");
+  });
+
+  it("pending cloud hostname falls back so list can show create-time title", () => {
+    const pending = buildPendingCloudComputerMachine(makeSandboxInstance());
+    expect(machineHostname(pending)).toBeNull();
+  });
+
+  it("isCloudComputerMachine / canDeleteCloudComputerMachine for pending and registered", () => {
+    const pending = buildPendingCloudComputerMachine(
+      makeSandboxInstance({ creator_user_id: "user-me" }),
+    );
+    expect(isCloudComputerMachine(pending)).toBe(true);
+    expect(canDeleteCloudComputerMachine(pending, "user-me")).toBe(true);
+    expect(canDeleteCloudComputerMachine(pending, "user-other")).toBe(false);
+
+    const registered = buildRuntimeMachines(
+      [
+        makeRuntime({
+          daemon_id: "d-1",
+          owner_id: "user-me",
+          metadata: { sandbox_instance_id: "sb-1" },
+        }),
+      ],
+      { now: NOW },
+    )[0]!;
+    const withSandbox = { ...registered, sandboxInstanceId: "sb-1" };
+    expect(isCloudComputerMachine(withSandbox)).toBe(true);
+    expect(canDeleteCloudComputerMachine(withSandbox, "user-me")).toBe(true);
+    expect(
+      canDeleteCloudComputerMachine(
+        {
+          ...withSandbox,
+          runtimes: [{ ...withSandbox.runtimes[0]!, owner_id: "user-other" }],
+        },
+        "user-me",
+      ),
+    ).toBe(false);
   });
 });

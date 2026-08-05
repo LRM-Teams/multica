@@ -308,6 +308,47 @@ func TestMessageCoordinatorTreatsMalformedBoundaryAsUnknownCoverage(t *testing.T
 	}
 }
 
+func TestMessageCoordinatorDeletedBoundaryReplaysConservatively(t *testing.T) {
+	root := t.TempDir()
+	// A prior run had durably advanced coverage; the file is then deleted
+	// (unstable volume, manual removal, or partial restore). Deletion must be
+	// treated as unknown coverage, never as permission to skip context.
+	boundaryPath := filepath.Join(root, consumedSeqsFileName)
+	if err := os.WriteFile(boundaryPath, []byte(`{"channel-1":5}`), 0o600); err != nil {
+		t.Fatalf("write prior boundary: %v", err)
+	}
+	if err := os.Remove(boundaryPath); err != nil {
+		t.Fatalf("delete boundary: %v", err)
+	}
+	var handedOff []protocol.AgentMessageProjection
+	coordinator, err := NewMessageCoordinator(root, func(_ context.Context, messages []protocol.AgentMessageProjection) error {
+		handedOff = append(handedOff, messages...)
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	if got := coordinator.Boundaries(); len(got) != 0 {
+		t.Fatalf("boundaries after deletion = %v, want unknown empty coverage", got)
+	}
+	if _, ok := coordinator.ContextBoundary("channel-1"); ok {
+		t.Fatal("boundary available before recovery after deletion")
+	}
+	request := coordinator.BeginRecovery("agent-1", 2)
+	message := protocol.AgentMessageProjection{ID: "message-6", Target: "channel-1", Seq: 6, Content: "replayed-after-deletion"}
+	if err := coordinator.MergeRecoveryPage(protocol.AgentRecoveryPage{
+		AgentID: "agent-1", RecoveryID: request.RecoveryID, SnapshotID: "restart", HighWatermark: "restart", Messages: []protocol.AgentMessageProjection{message},
+	}); err != nil {
+		t.Fatalf("MergeRecoveryPage: %v", err)
+	}
+	if err := coordinator.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if len(handedOff) != 1 || handedOff[0].ID != message.ID || coordinator.Boundaries()[message.Target] != message.Seq {
+		t.Fatalf("handoff=%+v boundaries=%v after deletion recovery", handedOff, coordinator.Boundaries())
+	}
+}
+
 func TestMessageCoordinatorLowerBoundaryConservativelyReplays(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, consumedSeqsFileName), []byte(`{"channel-1":1}`), 0o600); err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -297,4 +298,224 @@ func seedIdleMessageAcceptanceBoundaries(ctx context.Context, pool *pgxpool.Pool
 		return err
 	}
 	return writeConsumedSeqs(filepath.Join(root, consumedSeqsFileName), boundaries)
+}
+
+// recordingResidentMessage delegates native idle Message input to an injected
+// backend and remembers every batch the Agent runtime actually accepted, so a
+// test can distinguish "handoff completed" from "handoff was attempted but the
+// coordinator crashed inside the pre-persist window".
+type recordingResidentMessage struct {
+	agent.Backend
+	mu      sync.Mutex
+	batches [][]agent.ResidentMessage
+}
+
+func (r *recordingResidentMessage) AcceptMessageBatch(ctx context.Context, messages []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	r.mu.Lock()
+	r.batches = append(r.batches, append([]agent.ResidentMessage(nil), messages...))
+	r.mu.Unlock()
+	return r.Backend.(agent.ResidentMessageInput).AcceptMessageBatch(ctx, messages)
+}
+
+func (r *recordingResidentMessage) snapshot() [][]agent.ResidentMessage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([][]agent.ResidentMessage(nil), r.batches...)
+}
+
+// failingResidentMessageRuntime simulates a coordinator killed inside the
+// pre-handoff window: the Server-side delivery was acknowledged but the
+// concrete body handoff fails and the Context Boundary never advances.
+type failingResidentMessageRuntime struct{}
+
+func (failingResidentMessageRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (failingResidentMessageRuntime) AcceptMessageBatch(context.Context, []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
+	return agent.ResidentMessageAcceptance{}, errors.New("runtime Message handoff unavailable (simulated crash window)")
+}
+
+// TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage models the
+// T3 crash acceptance (#7): a canonical Message is server-acked, the
+// coordinator is then killed before the runtime handoff / boundary persist, and
+// a fresh coordinator on the same Agent root completes recovery and hands the
+// Message over instead of losing it.
+func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.T) {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
+	}
+	pool, err := pgxpool.New(context.Background(), dbURL)
+	if err != nil || pool.Ping(context.Background()) != nil {
+		t.Skip("acceptance database is unavailable")
+	}
+	defer pool.Close()
+	workspaceID, userID, runtimeID, agentID, channelID, member := seedIdleMessageAcceptanceFixture(t, pool)
+
+	root := t.TempDir()
+	if err := seedIdleMessageAcceptanceBoundaries(context.Background(), pool, root, workspaceID, agentID); err != nil {
+		t.Fatalf("seed initial Context Boundaries: %v", err)
+	}
+
+	hub := daemonws.NewHub()
+	eventBus := events.New()
+	eventBus.SubscribeAll(func(event events.Event) {
+		if event.RealtimeDeliveryAck != nil {
+			event.RealtimeDeliveryAck(nil)
+		}
+	})
+	serverHandler := serverhandler.New(
+		db.New(pool), pool, realtime.NewHub(), eventBus, service.NewEmailService(), nil, nil,
+		analytics.NoopClient{}, serverhandler.Config{}, hub,
+	)
+	serverHandler.AgentDeliveryNotifier = hub
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{WorkspaceID: workspaceID, RuntimeIDs: []string{runtimeID}})
+	}))
+	defer server.Close()
+
+	target := "channel:" + channelID
+	readBoundary := func() map[string]int64 {
+		raw, err := os.ReadFile(filepath.Join(root, consumedSeqsFileName))
+		if err != nil {
+			return map[string]int64{}
+		}
+		var boundaries map[string]int64
+		if err := json.Unmarshal(raw, &boundaries); err != nil {
+			return map[string]int64{}
+		}
+		return boundaries
+	}
+
+	// connect wires one Daemon to a fresh websocket on the same Agent root and
+	// returns the daemon, its observation channels, the runtime batch recorder,
+	// and a teardown that drops the websocket exactly like a process crash.
+	connect := func(backend agent.Backend) (
+		d *Daemon,
+		acks chan protocol.AgentDeliverAckPayload,
+		batches func() [][]agent.ResidentMessage,
+		teardown func(),
+	) {
+		normal := &recordingResidentMessage{Backend: backend}
+		d = &Daemon{
+			logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+			messageCoordinators: make(map[string]*MessageCoordinator),
+			canonicalRuntimes:   newCanonicalAgentRuntimePool(),
+		}
+		d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
+			mode: canonicalRuntimeResident, backend: normal,
+		}
+		if _, err := d.ensureIdleMessageCoordinator(agentID, runtimeID, root); err != nil {
+			t.Fatalf("ensureIdleMessageCoordinator: %v", err)
+		}
+		acks = make(chan protocol.AgentDeliverAckPayload, 2)
+		recoveryReqs := make(chan protocol.AgentRecoveryRequest, 2)
+		hub.SetAgentDeliveryAckHandler(func(ctx context.Context, identity daemonws.ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
+			acks <- ack
+			return serverHandler.HandleAgentDeliveryAck(ctx, identity, ack)
+		})
+		hub.SetAgentRecoveryHandler(func(ctx context.Context, identity daemonws.ClientIdentity, request protocol.AgentRecoveryRequest) (protocol.AgentRecoveryPage, error) {
+			recoveryReqs <- request
+			return serverHandler.HandleAgentMessageRecovery(ctx, identity, request)
+		})
+		conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+		if err != nil {
+			t.Fatalf("dial daemon websocket: %v", err)
+		}
+		writes := make(chan []byte, 16)
+		writerDone := make(chan struct{})
+		go d.runWSWriter(conn, writes, writerDone)
+		d.setReminderWS(writes, writerDone, conn.Close)
+		readDone := make(chan error, 1)
+		go func() { readDone <- d.readTaskWakeupMessages(conn, make(chan taskWakeup, 1), writes, nil) }()
+		teardown = func() {
+			d.clearReminderWS(writes)
+			_ = conn.Close()
+			<-readDone
+			close(writes)
+			<-writerDone
+		}
+		d.beginMessageRecovery(writes)
+		select {
+		case request := <-recoveryReqs:
+			if request.AgentID != agentID || request.RecoveryID == "" {
+				t.Fatalf("recovery request = %+v", request)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("startup recovery request was not observed")
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for !d.messageCoordinators[agentID].FreshnessKnown() && time.Now().Before(deadline) {
+			runtime.Gosched()
+		}
+		return d, acks, normal.snapshot, teardown
+	}
+
+	postMessage := func() (string, int64) {
+		body, _ := json.Marshal(map[string]any{"content": "crash-me", "client_message_id": uuid.NewString()})
+		req := httptest.NewRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", bytes.NewReader(body))
+		req.Header.Set("X-User-ID", userID)
+		routeCtx := chi.NewRouteContext()
+		routeCtx.URLParams.Add("channelId", channelID)
+		ctx := context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx)
+		ctx = middleware.SetMemberContext(ctx, workspaceID, member)
+		ctx = middleware.WithHumanPrincipal(ctx, middleware.HumanPrincipal{UserID: userID})
+		req = req.WithContext(ctx)
+		recorder := httptest.NewRecorder()
+		serverHandler.SendChannelMessage(recorder, req)
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("create canonical Message: status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		var created struct {
+			ID  string `json:"id"`
+			Seq int64  `json:"seq"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &created); err != nil || created.ID == "" || created.Seq <= 0 {
+			t.Fatalf("decode canonical Message: %v body=%s", err, recorder.Body.String())
+		}
+		return created.ID, created.Seq
+	}
+	waitAck := func(acks chan protocol.AgentDeliverAckPayload, wantSeq int64) {
+		select {
+		case ack := <-acks:
+			if ack.AgentID != agentID || ack.Seq != wantSeq || ack.DeliveryID == "" {
+				t.Fatalf("ack = %+v, want seq %d", ack, wantSeq)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("canonical delivery was not acknowledged")
+		}
+	}
+
+	// Phase A — crashed coordinator. Recovery completes, a canonical Message is
+	// server-acked, then the runtime handoff fails inside the pre-persist
+	// window: the durable boundary never advances and the runtime never holds
+	// a completed handoff.
+	dA, acksA, batchesA, teardownA := connect(failingResidentMessageRuntime{})
+	idA, seqA := postMessage()
+	waitAck(acksA, seqA)
+	// The Message was server-acked but never durably consumed: the runtime
+	// handoff failed inside the pre-persist window, so the boundary for this
+	// target must still be below the Message's own sequence even though the
+	// runtime saw a handoff attempt for it.
+	if got := batchesA(); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
+		t.Fatalf("pre-crash runtime handoff attempt = %+v, want %s", got, idA)
+	}
+	if got := readBoundary(); got[target] >= seqA {
+		t.Fatalf("boundary advanced to %d before handoff (seq=%d): %v", got[target], seqA, got)
+	}
+	// Crash: abandon the daemon without completing the flush.
+	teardownA()
+	_ = dA
+
+	// Phase B — fresh daemon, same Agent root. Recovery must re-read the acked
+	// Message (the boundary never advanced) and hand it over: nothing lost.
+	_, _, batchesB, teardownB := connect(&idleMessageFakeRuntime{})
+	if got := batchesB(); len(got) != 1 || len(got[0]) != 1 || got[0][0].ID != idA {
+		t.Fatalf("restarted runtime batches = %+v, want canonical Message %s handed off", got, idA)
+	}
+	if got := readBoundary(); got[target] != seqA {
+		t.Fatalf("restarted boundary = %v, want %d", got, seqA)
+	}
+	teardownB()
 }

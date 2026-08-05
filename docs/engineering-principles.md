@@ -272,6 +272,11 @@
 - 代理 URL 可能携带凭据：持久配置仍走原子 `0600` config；CLI show/set receipt 只能显示 presence，禁止回显原值。没有真实 caller 的“image pull”等能力不得虚报覆盖；新增 subprocess caller 只有继承 canonical daemon env 才自动纳入。
 - **物**：`applyProxyConfig` 的 env-over-config、大小写归一、NO_PROXY 去重+loopback 回归；`taskWakeupDialer` 必须使用 `http.ProxyFromEnvironment`。双向 mutation gate 固定为：配置 `HTTP_PROXY` 时 proxy decision 必须非空（删 Proxy hook 即红）；目标命中 `NO_PROXY` 时 decision 必须为空（强制走 proxy 即红）。
 
+### 4.15 Agent 重启控制面直接替换为 Raft 风格组合 — `仅文档`（新协议尚未落地）
+- 舍弃现有 `agent_lifecycle_operation` 编排，不做适配、双写或兼容层。服务端按 Raft 的边界组合 stop / session reset / workspace reset / start，机器继续用 status / session / Activity 事件表达运行时事实，不另建 phase-event ledger。
+- 复用 Raft 架构不等于继承其丢失窗口：每条命令必须有稳定 ID，破坏性命令必须幂等，Machine Service 必须持久保留终态并重试到 server ACK；start ACK 只代表受理，ready 只能由后续 status/session 证明。Full Reset 必须先取得 runtime 已停止且 provider lease 已释放的可靠证据，之后才能删除并重建完整 Agent Workspace。
+- Activity 沿用 Raft 的 `Stopped` / `Starting` / `Working` 叙事；stop 事件附带 restart mode 与是否强制中断 active turn，不再发明 request/phase/completion 三套 Activity。三种模式和完整理由见 `docs/adr/0009-three-agent-restart-modes.md`。
+
 ### 4.16 调研进度只认服务端账本，Agent prose 不得推进状态 — `可执行`（① canonical ledger + ② strict envelope + ③单一调度器 + ⑤迁移/幂等回归；owner: @Codex ✅ 已签）
 - Research Run Module 拥有目标/计划版本、问题前沿、任务及尝试、来源快照、Observation、Claim/Evidence、Decision、事件序列和交付门槛。Agent 只实现有界 Research Task Interface；聊天、画布节点和旧版报告接口都是 projection 或兼容入口，不能成为 canonical progress。普通群聊仍按消息驱动，不能宣称具备 Research Run 的恢复、证据和交付语义。
 - 分派以 `(session, task, attempt)` 生成唯一 dispatch key；结果必须由对应 inbox task 的 task-scoped credential 提交 strict JSON envelope。重复的 request ID + 相同 payload 幂等回放；相同 ID + 不同 payload、错 Agent、错 inbox task、跨 workspace、未知字段、循环依赖、snapshot 中不存在的 quote 全部 fail closed。

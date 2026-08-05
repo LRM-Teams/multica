@@ -3,6 +3,94 @@
 This file names the domain concepts that implementations, tests, and design
 documents use. It records product meaning, not package layout.
 
+## Local Agent Execution
+
+### Workspace
+
+The collaboration boundary in which human members and Agents work together.
+Its immutable `workspace_id` scopes memberships, Agents, and local execution
+bindings. A Workspace is not an individual Agent's filesystem working
+directory.
+_Avoid_: Agent workdir, machine directory
+
+### Machine Service
+
+The single machine-local authority for supervising Multica execution under one
+OS user environment. It connects to the Multica service at the canonical
+server origin `https://leagent.me` and may manage Workspace Execution Bindings
+for multiple Workspaces.
+_Avoid_: Profile daemon, Workspace daemon
+
+### Workspace Execution Binding
+
+A durable authorization relationship that permits one machine to execute
+Agents for one Workspace. A Workspace may have bindings to multiple machines;
+the binding is not Workspace membership or exclusive ownership. Discovering a
+Workspace membership does not create a binding: the user creates it explicitly
+with `multica setup /<workspace>`. If that user's membership is revoked, the
+service revokes the corresponding Binding and its execution credential without
+deleting the local Agent Roots.
+_Avoid_: Workspace attachment, local Workspace
+
+### Workspace Discovery
+
+The Machine Service's view of Workspaces that the signed-in user may access.
+Discovery follows membership changes but does not authorize local Agent
+execution or start a Workspace Runner.
+_Avoid_: Workspace synchronization, automatic binding
+
+### Workspace Runner
+
+The machine-local execution owner for one Workspace Execution Binding. At most
+one Workspace Runner is active for a binding, while the same Workspace may have
+other Workspace Runners on other machines.
+_Avoid_: Workspace owner, global Workspace runner
+
+### Agent Workspace (Agent Root)
+
+The canonical persistent local working directory for one Agent in one
+Workspace on one machine:
+`~/.multica/workspaces/<workspace_id>/agents/<agent_id>`. It is keyed only by
+immutable domain IDs and remains stable across runtime or harness changes.
+Production uses this canonical root; a WorkspacesRoot override exists only for
+development and tests. Binding, Runner, login, and membership lifecycle changes
+do not delete it.
+_Avoid_: Runtime root, profile Agent directory, slug-based Agent path
+
+### Local Agent Workspace Deletion
+
+A user-confirmed, machine-scoped destructive operation initiated from the
+frontend. The user first selects one machine, then requests deletion of one
+Agent Workspace at
+`~/.multica/workspaces/<workspace_id>/agents/<agent_id>`. It does not delete the
+Multica Workspace, sibling Agent Workspaces, or data on any other machine.
+The whole Agent Workspace is the deletion unit, including its local memory,
+sessions, skills, runtime state, and working files.
+_Avoid_: Multica Workspace deletion, Binding revocation cleanup, global machine cleanup
+
+### Agent Deletion
+
+The server-side removal of an Agent identity. It stops and prevents further
+execution for that Agent but does not itself delete any Agent Workspace from a
+machine. Local files remain available until a separate Local Agent Workspace
+Deletion is explicitly requested for a selected machine.
+_Avoid_: Agent Workspace deletion, full reset
+
+### Agent Restart Mode
+
+One of three explicit ways to restart an Agent runtime:
+
+- `restart` stops and starts the runtime while preserving its model session and
+  complete Agent Workspace.
+- `reset_session_restart` discards the model session and context, preserves the
+  complete Agent Workspace, and starts a fresh model session.
+- `full_reset_restart` discards the model session, removes and reprovisions the
+  complete Agent Workspace, then starts the Agent fresh.
+
+All three preserve the server-side Agent identity, configuration, chat history,
+and Issues.
+_Avoid_: Restart boolean, session reset as workspace reset, full reset as Agent deletion
+
 ## Research
 
 ### Research Session

@@ -295,6 +295,7 @@
 - 冲突 Agent 的讨论必须写 Research Deliberation Turn 并由 canonical Position/Evidence/scope delta 衡量进展；deadlock 自动升级给 Research Director。Director 只能按证据解决、拆分范围、创建区分任务或保留未解决状态，不能用身份覆盖 Evidence Standard。
 - Research Insight 必须有非破坏性的 Insight Derivation DAG。层级由服务端计算；无语义收益的递归摘要拒绝；任一输入失效必须使祖先 Insight stale 并阻止其进入新 Task Context 和 Report。
 - Research Projection 必须为每个 canonical 研究实体提供稳定 typed Node/Edge、完整详情和可重建 Delta，包括组队、Membership、Task/Attempt/Result、Search/Source、Observation/Claim、Question/Hypothesis/Branch、Integration Contribution/Insight Derivation、Dispute/Deliberation、Divergence、Decision、Evaluation 和 Report；前端布局不能回写 canonical 关系。
+- 无限画布必须从同一 `snapshot_id + through_event_sequence` 的分页 Snapshot 开始，随后按连续 event sequence 幂等应用 Delta。重复 Delta 不得产生重复节点；序号缺口或保留期过期必须重新取 Snapshot。大图通过有界 Slice、邻接计数和按需详情读取，不能要求浏览器一次载入全部 Run。语义融合只能来自后端 Insight Derivation；前端视觉聚类不能写回研究结论。
 - 每个交付必须有当前 Contract/Plan 的 Divergence Pass。该 Pass 使用隔离上下文和有界 exploration reserve 提出异质视角 probe；推测只能创建 Question/Hypothesis/Branch/Task，不能直接成为 Claim。
 - 生产 Strategy 不得在线自改。Episode 只能产生候选；候选经过固定评测集、历史回放、安全不变量、非退化检查和 Promotion Decision 后，才对新 Run 生效。已有 Run 固定旧版本，且保留 previous version 回退。
 - 本条在 schema、状态机、迁移、回放、故障注入和系统评测均见红并通过前保持 `仅文档`；实施 PR 必须逐项把约束升级为类型、唯一约束、事务或测试，并在本条记录具体装置。

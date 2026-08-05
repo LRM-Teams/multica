@@ -1989,7 +1989,7 @@ func (h *Handler) agentTransportFreshnessDecisionWithSeen(ctx context.Context, e
 	if seenUpToSeq <= 0 {
 		return agentTransportFreshnessDecision{SeenUpToSeq: seenUpToSeq}, nil
 	}
-	latestSeq, totalNewer, err := h.agentTransportNewerMessageStats(ctx, exec, target, seenUpToSeq)
+	latestSeq, totalNewer, err := h.agentTransportNewerMessageStats(ctx, exec, source, target, seenUpToSeq)
 	if err != nil || totalNewer <= 0 {
 		return agentTransportFreshnessDecision{SeenUpToSeq: seenUpToSeq, LatestSeq: latestSeq}, err
 	}
@@ -1999,7 +1999,7 @@ func (h *Handler) agentTransportFreshnessDecisionWithSeen(ctx context.Context, e
 	} else if found && draft.HeldToSeq > showAfterSeq {
 		showAfterSeq = draft.HeldToSeq
 	}
-	messages, err := h.readAgentTransportMessagesAfterSeq(ctx, target, showAfterSeq, agentTransportFreshnessHoldLimit)
+	messages, err := h.readAgentTransportMessagesAfterSeq(ctx, source, target, showAfterSeq, agentTransportFreshnessHoldLimit)
 	if err != nil {
 		return agentTransportFreshnessDecision{}, err
 	}
@@ -2067,7 +2067,7 @@ func (h *Handler) latestAgentTransportReadSeenSeq(ctx context.Context, source ag
 	return seq, true, nil
 }
 
-func (h *Handler) agentTransportNewerMessageStats(ctx context.Context, exec dbExecutor, target agentTransportTarget, seenUpToSeq int64) (int64, int64, error) {
+func (h *Handler) agentTransportNewerMessageStats(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, seenUpToSeq int64) (int64, int64, error) {
 	var latestSeq, count int64
 	err := exec.QueryRow(ctx, `
 		SELECT COALESCE(MAX(seq), 0), COUNT(*)
@@ -2076,15 +2076,16 @@ func (h *Handler) agentTransportNewerMessageStats(ctx context.Context, exec dbEx
 		  AND workspace_id = $2
 		  AND deleted_at IS NULL
 		  AND seq > $3
+		  AND NOT (author_type = 'agent' AND author_id = $5)
 		  AND (
 		    ($4::uuid IS NOT NULL AND (id = $4 OR thread_root_message_id = $4))
 		    OR ($4::uuid IS NULL AND thread_root_message_id IS NULL)
 		  )`,
-		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), seenUpToSeq, nullableUUID(target.threadRootMessageID)).Scan(&latestSeq, &count)
+		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), seenUpToSeq, nullableUUID(target.threadRootMessageID), source.origin.agentID).Scan(&latestSeq, &count)
 	return latestSeq, count, err
 }
 
-func (h *Handler) readAgentTransportMessagesAfterSeq(ctx context.Context, target agentTransportTarget, afterSeq int64, limit int) ([]ChannelMessageResponse, error) {
+func (h *Handler) readAgentTransportMessagesAfterSeq(ctx context.Context, source agentTransportSource, target agentTransportTarget, afterSeq int64, limit int) ([]ChannelMessageResponse, error) {
 	rows, err := h.DB.Query(ctx, `
 		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM (
@@ -2094,6 +2095,7 @@ func (h *Handler) readAgentTransportMessagesAfterSeq(ctx context.Context, target
 			  AND workspace_id = $2
 			  AND deleted_at IS NULL
 			  AND seq > $3
+			  AND NOT (author_type = 'agent' AND author_id = $6)
 			  AND (
 			    ($4::uuid IS NOT NULL AND (id = $4 OR thread_root_message_id = $4))
 			    OR ($4::uuid IS NULL AND thread_root_message_id IS NULL)
@@ -2102,7 +2104,7 @@ func (h *Handler) readAgentTransportMessagesAfterSeq(ctx context.Context, target
 			LIMIT $5
 		) newer
 		ORDER BY seq ASC`,
-		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), afterSeq, nullableUUID(target.threadRootMessageID), limit)
+		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), afterSeq, nullableUUID(target.threadRootMessageID), limit, source.origin.agentID)
 	if err != nil {
 		return nil, err
 	}

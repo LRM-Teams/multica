@@ -800,6 +800,30 @@ func TestAgentTransportSendFreshnessHoldSavesDraftAndDoesNotWriteMessage(t *test
 	assertAgentTransportVisibleOutputAuditCount(t, taskID, 1)
 }
 
+func TestAgentTransportFreshnessIgnoresOwnVisibleProgressMessage(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	taskID, channelID := createChannelCompletionTask(t, "group")
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	seen, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "request before progress "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0)
+	if err != nil {
+		t.Fatalf("seed seen message: %v", err)
+	}
+	if _, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "agent", parseUUID(agentID), "Agent", "visible progress "+uuid.NewString(), "multica", nil, pgtype.UUID{}, pgtype.UUID{}, nil, 0); err != nil {
+		t.Fatalf("seed own progress message: %v", err)
+	}
+	finalContent := "final after own progress " + uuid.NewString()
+	rec := agentTransportSendForTest(t, taskID, agentID, map[string]any{"target": target, "content": finalContent, "client_message_id": "after-progress-" + uuid.NewString(), "seen_up_to_seq": seen.Seq})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("send after own progress: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertChannelMessageContentCount(t, channelID, finalContent, 1)
+	assertAgentTransportVisibleOutputAuditCount(t, taskID, 1)
+}
+
 func TestAgentTransportFirstFreshnessHoldCannotCrossSourceCompletionFence(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -14,13 +14,13 @@ func TestRuntimeReadyOmitsUnmeasuredDuration(t *testing.T) {
 	}
 }
 
-func TestFailedEventsUseWillRetry(t *testing.T) {
-	runEv := AutopilotRunFailed("user-1", "workspace-1", "autopilot-1", "run-1", "manual", AutopilotAssignee{AgentID: "agent-1", AssigneeType: "agent"}, "manual", "task failed", "task_error", false, 10)
-	if got := runEv.Properties["will_retry"]; got != false {
-		t.Fatalf("autopilot will_retry = %v, want false", got)
+func TestFailedEventsUseRecoverable(t *testing.T) {
+	runEv := RuntimeFailed("user-1", "workspace-1", "daemon-1", "codex", "task failed", "task_error", false)
+	if got := runEv.Properties["recoverable"]; got != false {
+		t.Fatalf("runtime recoverable = %v, want false", got)
 	}
-	if _, ok := runEv.Properties["recoverable"]; ok {
-		t.Fatalf("autopilot failure should not emit recoverable")
+	if _, ok := runEv.Properties["will_retry"]; ok {
+		t.Fatalf("runtime failure should not emit will_retry")
 	}
 }
 

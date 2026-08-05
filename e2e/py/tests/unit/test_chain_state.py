@@ -32,7 +32,7 @@ ASSEMBLED_DAG = {"segments": [{"closing_event": "e1"}], "edges": [], "score_max"
 def _config() -> HarnessConfig:
     return HarnessConfig(
         base_url="http://server",
-        squad_id="squad-1",
+        agent_id="agent-1",
         base_env_id="env-base",
         cube_proxy_url="http://cube-proxy",
     )

@@ -3,6 +3,7 @@ import {
   EMPTY_RESEARCH_SNAPSHOT,
   ListResearchSessionsResponseSchema,
   ResearchSessionSnapshotSchema,
+  ResearchPresenceResponseSchema,
   ResearchNodeCommandResponseSchema,
   EMPTY_RESEARCH_NODE_COMMAND,
   SteerResearchRunResponseSchema,
@@ -174,6 +175,17 @@ describe("research schemas", () => {
     });
     expect(parsed.messages[0]?.card_kind).toBe("process");
     expect((parsed.messages[0]?.meta as { op?: string })?.op).toBe("session_kickoff");
+  });
+  it("falls back when the presence roster has the wrong shape", () => {
+    const fallback = { session_id: "s1", presence: {} };
+    expect(
+      parseWithFallback(
+        { session_id: "s1", presence: null },
+        ResearchPresenceResponseSchema,
+        fallback,
+        { endpoint: "test" },
+      ),
+    ).toBe(fallback);
   });
 
   it("falls back when a node command response drifts", () => {

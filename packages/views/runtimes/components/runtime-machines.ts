@@ -131,7 +131,7 @@ export function isMineMachine(
 
 /**
  * LRM-1094 — desktop detail default: isCurrent → first Mine machine.
- * Never fall back to Team public `machines[0]`.
+ * Never fall back to Team `machines[0]`.
  */
 export function defaultDesktopSelectedMachineId(
   machines: RuntimeMachine[],

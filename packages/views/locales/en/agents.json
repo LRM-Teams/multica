@@ -274,7 +274,6 @@
     "runtime_none": "No runtime available",
     "runtime_empty": "No usable runtime on this computer. Pick another computer, or ask the owner to make a runtime public.",
     "runtime_cloud_badge": "Cloud",
-    "runtime_private_locked_tooltip": "Private runtime — only its owner or a workspace admin can create agents on it. Ask the owner to switch it to Public to share.",
     "duplicate_copy_suffix": " (Copy)",
     "create": "Create",
     "creating": "Creating...",

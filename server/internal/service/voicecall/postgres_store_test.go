@@ -819,6 +819,18 @@ func (queries *fakeVoiceCallQueries) MarkVoiceCallEnded(
 	return queries.session, nil
 }
 
+func (queries *fakeVoiceCallQueries) FailVoiceCallSessionsForActivePair(
+	_ context.Context,
+	params db.FailVoiceCallSessionsForActivePairParams,
+) ([]db.VoiceCallSession, error) {
+	_ = params
+	if queries.session.Status == "ended" || queries.session.Status == "failed" {
+		return nil, nil
+	}
+	queries.session.Status = "failed"
+	return []db.VoiceCallSession{queries.session}, nil
+}
+
 func testDBVoiceCallSession() db.VoiceCallSession {
 	startedAt := time.Date(2026, time.July, 23, 10, 0, 0, 0, time.UTC)
 	return db.VoiceCallSession{

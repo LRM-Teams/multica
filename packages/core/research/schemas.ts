@@ -62,6 +62,34 @@ const ResearchSessionSchema = z
   })
   .passthrough();
 
+export const ResearchPresenceResponseSchema = z
+  .object({
+    session_id: z.string().optional().default(""),
+    presence: z
+      .record(
+        z.string(),
+        z
+          .object({
+            activity: z.string().optional(),
+            updated_at: z.number().optional(),
+            updatedAt: z.number().optional(),
+            phase: z.string().optional(),
+            role: z.string().optional(),
+            fleet_member_id: z.string().nullable().optional(),
+            task_id: z.string().nullable().optional(),
+            node_id: z.string().nullable().optional(),
+            branch_id: z.string().nullable().optional(),
+            stage: z.string().nullable().optional(),
+            expires_at: z.number().nullable().optional(),
+            stale_reason: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .optional()
+      .default({}),
+  })
+  .passthrough();
+
 export const ResearchNodeCommandResponseSchema = z.object({
   command_id: z.string(),
   action: z.enum(["continue", "fork", "retry", "reassign"]),

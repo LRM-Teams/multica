@@ -7,12 +7,10 @@ export const MULTICA_RELEASES_URL = `${MULTICA_GITHUB_URL}/releases`;
 // so a brand-new user's first command failed. No relation to
 // MULTICA_REPOSITORY.
 //
-// Temporarily pointed at the OSS mirror instead of cdn.leagent.me/computer
-// (cdn.leagent.me is currently blocked for some users) — mirrors the same
-// switch in scripts/install.sh's MANIFEST_BASE_URL. Flip this one constant
-// back to "https://cdn.leagent.me/computer" once the domain is unblocked.
+// CDN release feed: this is the public endpoint used by the installer and
+// the Connect Computer dialog. Keep it aligned with scripts/install.sh.
 const MULTICA_RELEASE_CDN_BASE_URL =
-  "https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases";
+  "https://cdn.leagent.me/computer";
 export const MULTICA_INSTALL_SCRIPT_URL =
   `${MULTICA_RELEASE_CDN_BASE_URL}/install.sh`;
 export const MULTICA_INSTALL_COMMAND =

@@ -249,7 +249,6 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 			}
 		case activity := <-semanticActivityCh:
 			lastSemanticActivityDescription = activity
-			resetTimer(semanticTimer, semanticInactivityTimeout)
 			if activity == "status:running" && !firstTurnStarted {
 				firstTurnStarted = true
 				firstTurnNoProgressTimer = time.NewTimer(firstTurnNoProgressTimeout)
@@ -258,6 +257,7 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 				firstTurnProgressObserved = true
 				stopFirstTurnNoProgressTimer()
 			}
+			resetTimer(semanticTimer, semanticInactivityTimeout)
 		case <-firstTurnNoProgressTimerC:
 			waitingForTurn = false
 			finalStatus = "timeout"
@@ -279,15 +279,21 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 		case <-semanticTimer.C:
 			waitingForTurn = false
 			finalStatus = "timeout"
+			timeoutKind := codexTimeoutSemanticInactivity
+			timeoutMarker := CodexSemanticInactivityMarker
+			if firstTurnStarted && !firstTurnProgressObserved {
+				timeoutKind = codexTimeoutFirstTurnNoProgress
+				timeoutMarker = CodexFirstTurnNoProgressMarker
+			}
 			timeoutDiagnostic = codexTimeoutDiagnostic{
-				Kind:         codexTimeoutSemanticInactivity,
+				Kind:         timeoutKind,
 				Timeout:      semanticInactivityTimeout,
 				LastActivity: lastSemanticActivityDescription,
 				ThreadID:     threadID,
 				TurnID:       p.client.turnID,
 				Model:        opts.Model,
 			}
-			b.cfg.Logger.Warn(CodexSemanticInactivityMarker,
+			b.cfg.Logger.Warn(timeoutMarker,
 				"pid", p.cmd.Process.Pid,
 				"thread_id", threadID,
 				"turn_id", p.client.turnID,

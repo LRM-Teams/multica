@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown, Cloud, Loader2 } from "lucide-react";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -49,26 +49,13 @@ export function RuntimePicker({
     return members.find((m) => m.user_id === ownerId) ?? null;
   };
 
-  // Others' private runtimes are excluded outright, not shown-disabled —
-  // a private runtime that isn't mine has nothing for me to do with it.
-  const visibleRuntimes = useMemo(
-    // react-doctor-disable-next-line react-doctor/no-event-handler -- flags the useEffect below that seeds selection from this list; it reacts to `runtimes` arriving from the parent's query/WS subscription, not a local user event this component can hook a handler into.
+  const sortedRuntimes = useMemo(
     () => sortRuntimesForPicker(runtimes, currentUserId),
     [runtimes, currentUserId],
   );
 
   const selectedRuntime =
     runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
-
-  // Sole source of truth for seeding the parent's selection when it's empty
-  // — first mount with no template runtime, or runtimes arriving later over
-  // WS. Only fires when `selectedRuntimeId === ""` so a duplicate-mode
-  // pre-fill (template runtime) is never silently overwritten.
-  useEffect(() => {
-    if (selectedRuntimeId !== "") return;
-    const firstUsable = visibleRuntimes[0];
-    if (firstUsable) onSelect(firstUsable.id);
-  }, [visibleRuntimes, selectedRuntimeId, onSelect]);
 
   const selectedOwner = selectedRuntime
     ? getOwnerMember(selectedRuntime.owner_id)
@@ -78,7 +65,7 @@ export function RuntimePicker({
     !!currentUserId &&
     selectedRuntime.owner_id === currentUserId;
   const selectedHost = selectedRuntime
-    ? runtimePickerHostSubtitle(selectedRuntime, visibleRuntimes)
+    ? runtimePickerHostSubtitle(selectedRuntime, sortedRuntimes)
     : null;
 
   return (
@@ -136,7 +123,7 @@ export function RuntimePicker({
           align="start"
           className="w-[var(--anchor-width)] p-1 max-h-60 overflow-y-auto"
         >
-          {visibleRuntimes.length === 0 ? (
+          {sortedRuntimes.length === 0 ? (
             <p
               className="px-3 py-2.5 text-center text-xs text-muted-foreground"
               data-testid="runtime-picker-empty"
@@ -144,11 +131,11 @@ export function RuntimePicker({
               {t(($) => $.create_dialog.runtime_empty)}
             </p>
           ) : (
-            visibleRuntimes.map((device) => {
+            sortedRuntimes.map((device) => {
               const ownerMember = getOwnerMember(device.owner_id);
               const isMine =
                 !!currentUserId && device.owner_id === currentUserId;
-              const host = runtimePickerHostSubtitle(device, visibleRuntimes);
+              const host = runtimePickerHostSubtitle(device, sortedRuntimes);
               const showOwner = !isMine && !!ownerMember;
               return (
                 <button
@@ -212,30 +199,15 @@ export function RuntimePicker({
   );
 }
 
-// Visibility gate exposed so the parent can defend Create against a locked
-// selection (e.g. duplicate of an agent whose runtime is now private).
-export function isRuntimeUsableForUser(
-  r: RuntimeDevice,
-  currentUserId: string | null,
-): boolean {
-  if (!currentUserId) return true;
-  if (r.owner_id === currentUserId) return true;
-  return r.visibility === "public";
-}
-
-// Others' private runtimes are excluded, not shown-disabled — a private
-// runtime that isn't mine and isn't public has nothing for me to do with it.
 function sortRuntimesForPicker(
   runtimes: RuntimeDevice[],
   currentUserId: string | null,
 ): RuntimeDevice[] {
-  return runtimes
-    .filter((r) => isRuntimeUsableForUser(r, currentUserId))
-    .toSorted((a, b) => {
-      const aMine = a.owner_id === currentUserId;
-      const bMine = b.owner_id === currentUserId;
-      if (aMine && !bMine) return -1;
-      if (!aMine && bMine) return 1;
-      return 0;
-    });
+  return runtimes.toSorted((a, b) => {
+    const aMine = a.owner_id === currentUserId;
+    const bMine = b.owner_id === currentUserId;
+    if (aMine && !bMine) return -1;
+    if (!aMine && bMine) return 1;
+    return 0;
+  });
 }

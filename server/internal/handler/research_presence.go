@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/researchrun"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -29,6 +30,7 @@ const (
 
 // ResearchPresenceEntry is one agent's live presence for a session (LRM-1377).
 // Legacy clients read activity + updated_at; new fields are additive.
+// Presence is a derived view — run.tasks/attempts remain the execution SoT.
 type ResearchPresenceEntry struct {
 	Activity      string  `json:"activity"`
 	UpdatedAt     int64   `json:"updated_at"` // unix ms; 0 when never observed
@@ -38,6 +40,8 @@ type ResearchPresenceEntry struct {
 	TaskID        *string `json:"task_id"`
 	NodeID        *string `json:"node_id"`
 	BranchID      *string `json:"branch_id"`
+	Stage         *string `json:"stage"`
+	ExpiresAt     *int64  `json:"expires_at"` // unix ms; null when unknown
 	StaleReason   *string `json:"stale_reason"`
 }
 
@@ -53,18 +57,21 @@ const (
 	presenceSignalGeneric presenceSignalKind = iota + 1
 	presenceSignalActivity
 	presenceSignalExplicit // payload.phase == "presence"
+	presenceSignalAttempt  // run-v2 attempt/task ledger (preferred lifecycle SoT)
 	presenceSignalDone
 	presenceSignalFailed
 )
 
 type presenceSignal struct {
-	Kind      presenceSignalKind
-	Activity  string
-	UpdatedAt int64
-	TaskID    string
-	NodeID    string
-	BranchID  string
-	PhaseHint string // queued|running|done|failed when known from event
+	Kind        presenceSignalKind
+	Activity    string
+	UpdatedAt   int64
+	TaskID      string
+	NodeID      string
+	BranchID    string
+	Stage       string
+	ExpiresAtMs int64
+	PhaseHint   string // queued|running|done|failed|idle when known
 }
 
 // buildResearchPresenceMap rebuilds ephemeral presence from the latest
@@ -97,10 +104,24 @@ func buildResearchPresenceMap(nodes []db.ResearchGraphNode) map[string]ResearchP
 }
 
 // buildResearchPresenceRoster returns one presence entry per active fleet
-// member, merging graph activity with explicit priority rules (LRM-1377).
+// member, merging graph activity with run-v2 attempt/task projections (LRM-1377).
+// When tasks/attempts are provided they are the preferred lifecycle source;
+// graph captions may still enrich activity text.
 func buildResearchPresenceRoster(
 	members []researchPresenceMember,
 	nodes []db.ResearchGraphNode,
+	now time.Time,
+) map[string]ResearchPresenceEntry {
+	return buildResearchPresenceRosterWithRun(members, nodes, nil, nil, "", "", now)
+}
+
+func buildResearchPresenceRosterWithRun(
+	members []researchPresenceMember,
+	nodes []db.ResearchGraphNode,
+	tasks []researchrun.Task,
+	attempts []researchrun.Attempt,
+	sessionID string,
+	runStage string,
 	now time.Time,
 ) map[string]ResearchPresenceEntry {
 	byAgent := map[string][]presenceSignal{}
@@ -110,6 +131,9 @@ func buildResearchPresenceRoster(
 			continue
 		}
 		byAgent[agentID] = append(byAgent[agentID], sig)
+	}
+	for agentID, sigs := range presenceSignalsFromRun(sessionID, runStage, tasks, attempts) {
+		byAgent[agentID] = append(byAgent[agentID], sigs...)
 	}
 
 	out := make(map[string]ResearchPresenceEntry, len(members))
@@ -125,6 +149,238 @@ func buildResearchPresenceRoster(
 	return out
 }
 
+// presenceSignalsFromRun projects execution presence from the durable run
+// ledger. Attempts are the source of truth; tasks cover assigned-but-not-yet-
+// attempted dispatch states. node_id is the deterministic canvas task node.
+func presenceSignalsFromRun(
+	sessionID, runStage string,
+	tasks []researchrun.Task,
+	attempts []researchrun.Attempt,
+) map[string][]presenceSignal {
+	if len(tasks) == 0 && len(attempts) == 0 {
+		return nil
+	}
+	taskByID := make(map[string]researchrun.Task, len(tasks))
+	for _, t := range tasks {
+		id := strings.TrimSpace(t.ID)
+		if id == "" {
+			continue
+		}
+		taskByID[id] = t
+	}
+
+	byAgentAttempts := map[string][]researchrun.Attempt{}
+	for _, a := range attempts {
+		aid := strings.TrimSpace(a.AssignedAgentID)
+		if aid == "" {
+			continue
+		}
+		byAgentAttempts[aid] = append(byAgentAttempts[aid], a)
+	}
+
+	out := map[string][]presenceSignal{}
+	for agentID, list := range byAgentAttempts {
+		best := selectCurrentAttempt(list)
+		if best == nil {
+			continue
+		}
+		task := taskByID[strings.TrimSpace(best.TaskID)]
+		out[agentID] = append(out[agentID], presenceSignalFromAttempt(sessionID, runStage, task, *best))
+	}
+
+	// Assigned tasks with no attempt yet (dispatching / running row only).
+	for _, t := range tasks {
+		aid := strings.TrimSpace(t.AssignedAgentID)
+		if aid == "" {
+			continue
+		}
+		if _, hasAttempt := byAgentAttempts[aid]; hasAttempt {
+			continue
+		}
+		switch t.Status {
+		case researchrun.TaskStatusDispatching, researchrun.TaskStatusRunning:
+			out[aid] = append(out[aid], presenceSignalFromTask(sessionID, runStage, t))
+		}
+	}
+	return out
+}
+
+func selectCurrentAttempt(list []researchrun.Attempt) *researchrun.Attempt {
+	if len(list) == 0 {
+		return nil
+	}
+	var open *researchrun.Attempt
+	var terminal *researchrun.Attempt
+	for i := range list {
+		a := &list[i]
+		ts := attemptUpdatedAtMs(*a)
+		switch a.Status {
+		case researchrun.AttemptStatusDispatching, researchrun.AttemptStatusRunning:
+			if open == nil ||
+				a.AttemptNumber > open.AttemptNumber ||
+				(a.AttemptNumber == open.AttemptNumber && ts >= attemptUpdatedAtMs(*open)) {
+				open = a
+			}
+		default:
+			if terminal == nil ||
+				a.AttemptNumber > terminal.AttemptNumber ||
+				(a.AttemptNumber == terminal.AttemptNumber && ts >= attemptUpdatedAtMs(*terminal)) {
+				terminal = a
+			}
+		}
+	}
+	if open != nil {
+		return open
+	}
+	return terminal
+}
+
+func presenceSignalFromAttempt(sessionID, runStage string, task researchrun.Task, a researchrun.Attempt) presenceSignal {
+	activity := strings.TrimSpace(task.Objective)
+	if activity == "" {
+		activity = strings.TrimSpace(string(task.Kind))
+	}
+	taskID := firstNonEmpty(strings.TrimSpace(a.TaskID), strings.TrimSpace(task.ID))
+	nodeID := ""
+	if sessionID != "" && taskID != "" {
+		nodeID = runGraphNodeID(sessionID, runGraphKindTask, taskID)
+	}
+	sig := presenceSignal{
+		Activity:    activity,
+		UpdatedAt:   attemptUpdatedAtMs(a),
+		TaskID:      taskID,
+		NodeID:      nodeID,
+		Stage:       strings.TrimSpace(runStage),
+		ExpiresAtMs: attemptExpiresAtMs(task, a),
+	}
+	switch a.Status {
+	case researchrun.AttemptStatusDispatching:
+		sig.Kind = presenceSignalAttempt
+		sig.PhaseHint = ResearchPresencePhaseQueued
+		if sig.Activity == "" {
+			sig.Activity = researchPresenceGenericDispatchTitle
+		}
+	case researchrun.AttemptStatusRunning:
+		sig.Kind = presenceSignalAttempt
+		sig.PhaseHint = ResearchPresencePhaseRunning
+		if sig.Activity == "" {
+			sig.Activity = researchPresenceGenericStartedTitle
+		}
+	case researchrun.AttemptStatusSucceeded:
+		sig.Kind = presenceSignalDone
+		sig.PhaseHint = ResearchPresencePhaseDone
+		if sig.Activity == "" {
+			sig.Activity = "调研结果已入账"
+		}
+	case researchrun.AttemptStatusFailed, researchrun.AttemptStatusLost:
+		sig.Kind = presenceSignalFailed
+		sig.PhaseHint = ResearchPresencePhaseFailed
+		if fail := strings.TrimSpace(a.FailureClass); fail != "" {
+			sig.Activity = fail
+		} else if diag := strings.TrimSpace(a.Diagnostics); diag != "" {
+			sig.Activity = diag
+		} else if sig.Activity == "" {
+			sig.Activity = "调研任务尝试失败"
+		}
+	case researchrun.AttemptStatusCancelled:
+		sig.Kind = presenceSignalAttempt
+		sig.PhaseHint = ResearchPresencePhaseIdle
+		sig.Activity = ""
+		sig.TaskID = ""
+		sig.NodeID = ""
+		sig.ExpiresAtMs = 0
+	default:
+		sig.Kind = presenceSignalAttempt
+		sig.PhaseHint = ResearchPresencePhaseRunning
+	}
+	return sig
+}
+
+func presenceSignalFromTask(sessionID, runStage string, task researchrun.Task) presenceSignal {
+	activity := strings.TrimSpace(task.Objective)
+	if activity == "" {
+		activity = strings.TrimSpace(string(task.Kind))
+	}
+	taskID := strings.TrimSpace(task.ID)
+	nodeID := ""
+	if sessionID != "" && taskID != "" {
+		nodeID = runGraphNodeID(sessionID, runGraphKindTask, taskID)
+	}
+	sig := presenceSignal{
+		Kind:      presenceSignalAttempt,
+		Activity:  activity,
+		UpdatedAt: taskUpdatedAtMs(task),
+		TaskID:    taskID,
+		NodeID:    nodeID,
+		Stage:     strings.TrimSpace(runStage),
+	}
+	switch task.Status {
+	case researchrun.TaskStatusDispatching:
+		sig.PhaseHint = ResearchPresencePhaseQueued
+		if sig.Activity == "" {
+			sig.Activity = researchPresenceGenericDispatchTitle
+		}
+	default:
+		sig.PhaseHint = ResearchPresencePhaseRunning
+		if sig.Activity == "" {
+			sig.Activity = researchPresenceGenericStartedTitle
+		}
+	}
+	if task.TimeoutSeconds > 0 {
+		start := task.StartedAt
+		if start == nil {
+			start = task.ReadyAt
+		}
+		if start != nil && !start.IsZero() {
+			sig.ExpiresAtMs = start.Add(time.Duration(task.TimeoutSeconds) * time.Second).UnixMilli()
+		}
+	}
+	return sig
+}
+
+func attemptUpdatedAtMs(a researchrun.Attempt) int64 {
+	if a.CompletedAt != nil && !a.CompletedAt.IsZero() {
+		return a.CompletedAt.UnixMilli()
+	}
+	if a.ResultSubmittedAt != nil && !a.ResultSubmittedAt.IsZero() {
+		return a.ResultSubmittedAt.UnixMilli()
+	}
+	if a.StartedAt != nil && !a.StartedAt.IsZero() {
+		return a.StartedAt.UnixMilli()
+	}
+	if !a.DispatchedAt.IsZero() {
+		return a.DispatchedAt.UnixMilli()
+	}
+	return 0
+}
+
+func taskUpdatedAtMs(t researchrun.Task) int64 {
+	if t.CompletedAt != nil && !t.CompletedAt.IsZero() {
+		return t.CompletedAt.UnixMilli()
+	}
+	if t.StartedAt != nil && !t.StartedAt.IsZero() {
+		return t.StartedAt.UnixMilli()
+	}
+	if t.ReadyAt != nil && !t.ReadyAt.IsZero() {
+		return t.ReadyAt.UnixMilli()
+	}
+	return 0
+}
+
+func attemptExpiresAtMs(task researchrun.Task, a researchrun.Attempt) int64 {
+	if task.TimeoutSeconds <= 0 {
+		return 0
+	}
+	start := a.DispatchedAt
+	if a.StartedAt != nil && !a.StartedAt.IsZero() {
+		start = *a.StartedAt
+	}
+	if start.IsZero() {
+		return 0
+	}
+	return start.Add(time.Duration(task.TimeoutSeconds) * time.Second).UnixMilli()
+}
+
 func mergePresenceSignals(signals []presenceSignal, now time.Time) ResearchPresenceEntry {
 	if len(signals) == 0 {
 		return ResearchPresenceEntry{
@@ -134,6 +390,8 @@ func mergePresenceSignals(signals []presenceSignal, now time.Time) ResearchPrese
 			TaskID:      nil,
 			NodeID:      nil,
 			BranchID:    nil,
+			Stage:       nil,
+			ExpiresAt:   nil,
 			StaleReason: nil,
 		}
 	}
@@ -153,7 +411,7 @@ func mergePresenceSignals(signals []presenceSignal, now time.Time) ResearchPrese
 			if latestTerminal == nil || s.UpdatedAt >= latestTerminal.UpdatedAt {
 				latestTerminal = s
 			}
-		case presenceSignalExplicit, presenceSignalActivity:
+		case presenceSignalExplicit, presenceSignalActivity, presenceSignalAttempt:
 			if bestSpecific == nil ||
 				s.Kind > bestSpecific.Kind ||
 				(s.Kind == bestSpecific.Kind && s.UpdatedAt >= bestSpecific.UpdatedAt) {
@@ -180,9 +438,31 @@ func mergePresenceSignals(signals []presenceSignal, now time.Time) ResearchPrese
 		}
 	}
 
-	// Specific presence/activity is preferred over newer generic titles.
+	// Attempt ledger / specific presence preferred over newer generic titles.
 	if bestSpecific != nil {
 		entry := *bestSpecific
+		// Prefer concrete graph caption onto attempt lifecycle when both exist.
+		if entry.Kind == presenceSignalAttempt {
+			var caption *presenceSignal
+			for i := range signals {
+				s := &signals[i]
+				if s.Kind == presenceSignalExplicit || s.Kind == presenceSignalActivity {
+					if caption == nil || s.UpdatedAt >= caption.UpdatedAt {
+						caption = s
+					}
+				}
+			}
+			if caption != nil && strings.TrimSpace(caption.Activity) != "" &&
+				!isGenericResearchPresenceActivity(caption.Activity, "") {
+				entry.Activity = caption.Activity
+				if caption.NodeID != "" && entry.NodeID == "" {
+					entry.NodeID = caption.NodeID
+				}
+				if caption.BranchID != "" && entry.BranchID == "" {
+					entry.BranchID = caption.BranchID
+				}
+			}
+		}
 		// Enrich phase/task/node from a newer generic lifecycle without
 		// replacing the concrete activity text.
 		if latestGeneric != nil && latestGeneric.UpdatedAt >= bestSpecific.UpdatedAt {
@@ -223,7 +503,7 @@ func finalizePresenceEntry(sig presenceSignal, now time.Time) ResearchPresenceEn
 			phase = ResearchPresencePhaseDone
 		case presenceSignalFailed:
 			phase = ResearchPresencePhaseFailed
-		case presenceSignalGeneric:
+		case presenceSignalGeneric, presenceSignalAttempt:
 			phase = ResearchPresencePhaseRunning
 		default:
 			phase = ResearchPresencePhaseRunning
@@ -231,13 +511,18 @@ func finalizePresenceEntry(sig presenceSignal, now time.Time) ResearchPresenceEn
 	}
 
 	var staleReason *string
-	if (phase == ResearchPresencePhaseQueued || phase == ResearchPresencePhaseRunning) &&
-		sig.UpdatedAt > 0 {
-		age := now.Sub(time.UnixMilli(sig.UpdatedAt))
-		if age >= researchPresenceStaleAfter {
+	if phase == ResearchPresencePhaseQueued || phase == ResearchPresencePhaseRunning {
+		if sig.ExpiresAtMs > 0 && now.UnixMilli() >= sig.ExpiresAtMs {
 			phase = ResearchPresencePhaseStale
-			reason := "presence_expired"
+			reason := "attempt_expired"
 			staleReason = &reason
+		} else if sig.UpdatedAt > 0 {
+			age := now.Sub(time.UnixMilli(sig.UpdatedAt))
+			if age >= researchPresenceStaleAfter {
+				phase = ResearchPresencePhaseStale
+				reason := "presence_expired"
+				staleReason = &reason
+			}
 		}
 	}
 
@@ -248,8 +533,17 @@ func finalizePresenceEntry(sig presenceSignal, now time.Time) ResearchPresenceEn
 		TaskID:      stringPtrOrNil(sig.TaskID),
 		NodeID:      stringPtrOrNil(sig.NodeID),
 		BranchID:    stringPtrOrNil(sig.BranchID),
+		Stage:       stringPtrOrNil(sig.Stage),
+		ExpiresAt:   int64PtrOrNil(sig.ExpiresAtMs),
 		StaleReason: staleReason,
 	}
+}
+
+func int64PtrOrNil(v int64) *int64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
 }
 
 func presenceSignalFromNode(n db.ResearchGraphNode) (presenceSignal, string, bool) {
@@ -498,4 +792,30 @@ func researchPresenceMembersFromFleet(members []db.ResearchFleetMember) []resear
 		})
 	}
 	return ordered
+}
+
+// researchPresenceMembersFromRunFleet uses the session-bound fleet roster
+// (same table, scoped via session.fleet_id). Dedupes by agent_id only so
+// scout/validator style roles are not collapsed away.
+func researchPresenceMembersFromRunFleet(members []researchrun.FleetMember) []researchPresenceMember {
+	out := make([]researchPresenceMember, 0, len(members))
+	seen := map[string]struct{}{}
+	for _, m := range members {
+		if strings.EqualFold(strings.TrimSpace(m.Status), "archived") {
+			continue
+		}
+		aid := strings.TrimSpace(m.AgentID)
+		if aid == "" {
+			continue
+		}
+		if _, ok := seen[aid]; ok {
+			continue
+		}
+		seen[aid] = struct{}{}
+		out = append(out, researchPresenceMember{
+			AgentID: aid,
+			Role:    m.Role,
+		})
+	}
+	return out
 }

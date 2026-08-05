@@ -3,15 +3,6 @@ SELECT * FROM agent_runtime
 WHERE workspace_id = $1
 ORDER BY created_at ASC;
 
--- name: ListVisibleAgentRuntimes :many
--- Privacy-scoped list: a member sees their own runtimes plus every public
--- runtime; another member's private runtime is never returned. There is NO
--- owner/admin override here — visibility is per-user even for workspace
--- admins (the unscoped ListAgentRuntimes stays for internal callers).
-SELECT * FROM agent_runtime
-WHERE workspace_id = $1 AND (owner_id = $2 OR visibility = 'public')
-ORDER BY created_at ASC;
-
 -- name: GetAgentRuntime :one
 SELECT * FROM agent_runtime
 WHERE id = $1;
@@ -165,16 +156,6 @@ INSERT INTO agent_runtime (
     last_seen_at
 ) VALUES ($1, $2, $3, 'local', $4, 'offline', '', '{}', $5, now())
 RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility;
-
--- name: UpdateAgentRuntimeVisibility :one
--- Toggles a runtime between 'private' (only owner can bind agents) and
--- 'public' (any workspace member can). Default for new rows is 'private'
--- (see migration 083). Gated at the handler layer to owner / workspace
--- admin only.
-UPDATE agent_runtime
-SET visibility = @visibility, updated_at = now()
-WHERE id = @id
-RETURNING *;
 
 -- name: UpdateAgentRuntimeDisplayName :one
 -- Sets the user-editable machine label. Empty string clears the override so

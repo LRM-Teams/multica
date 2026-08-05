@@ -82,8 +82,8 @@ export function useArchiveAgentsAndDeleteRuntime(wsId: string) {
   });
 }
 
-// useUpdateRuntime patches editable fields on a runtime (visibility, display_name).
-// Invalidates the runtime list so the picker disabled-state recomputes.
+// useUpdateRuntime patches the user-editable runtime display name.
+// Invalidates runtime and agent projections that render the machine label.
 export function useUpdateRuntime(wsId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -93,7 +93,6 @@ export function useUpdateRuntime(wsId: string) {
     }: {
       runtimeId: string;
       patch: {
-        visibility?: "private" | "public";
         display_name?: string | null;
       };
     }) => api.updateRuntime(runtimeId, patch),

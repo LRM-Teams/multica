@@ -8,8 +8,27 @@ import {
 import { ResearchExecutionPanel } from "./research-execution-panel";
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: Record<string, unknown>) => unknown, values?: { location?: string }) =>
-      String(fn({ panel: { execution: { title: "执行动态", locatable: "可定位至 {{location}}", locate: "定位至 {{location}}", unavailable: "暂无可定位节点", load_failed: "执行状态加载失败", retry: "重试", empty: "暂无执行成员" } } })).replace("{{location}}", values?.location ?? ""),
+    t: (fn: (dict: Record<string, unknown>) => unknown, values?: { location?: string; name?: string; count?: number }) =>
+      String(fn({ panel: { execution: {
+        title: "执行动态",
+        locatable: "可定位至 {{location}}",
+        locate: "定位至 {{location}}",
+        unavailable: "暂无可定位节点",
+        load_failed: "执行状态加载失败",
+        retry: "重试",
+        empty: "暂无执行成员",
+        active_count: "{{count}} 个智能体执行中",
+        no_active: "暂无智能体执行",
+        locate_aria: "定位{{name}}当前节点",
+        view_aria: "查看{{name}}最近活动",
+        status: { queued: "排队", running: "执行中", done: "完成", failed: "失败", stale: "停滞", idle: "空闲" },
+        action: { waiting: "等待开始当前任务", working: "正在执行当前任务", recent_done: "最近任务已完成", recent_failed: "最近任务执行失败", stale: "执行状态已过期", idle: "当前没有可领取的小任务" },
+        time: { queued: "排队中", running: "执行中", recent: "最近更新", failed: "执行失败", stale: "长时间未更新", idle: "空闲" },
+        failed_reason: "任务未完成，可查看最近活动后重试。",
+      } } }))
+        .replace("{{location}}", values?.location ?? "")
+        .replace("{{name}}", values?.name ?? "")
+        .replace("{{count}}", String(values?.count ?? "")),
   }),
 }));
 

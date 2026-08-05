@@ -180,3 +180,75 @@ func TestGetDag_DiagnosisStepRewardsTransparentAcrossExecutionModes(t *testing.T
 	assert.Equal(t, 20, sandboxModeDag.ScoreMax, "score_max stamped from DIAGNOSIS_AGENT_SCORE_MAX")
 	require.Len(t, sandboxModeDag.StepRewards, 2, "rewards persisted via the sandbox transport must be served")
 }
+
+func TestDiagnosisLatestResponseIncludesSandboxMode(t *testing.T) {
+	encoded, err := json.Marshal(diagnosisLatestResponse{
+		SandboxMode: service.DiagnosisSandboxModeShared,
+		RuntimeID:   "runtime-1",
+		DaemonID:    "daemon-1",
+	})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"run_id":"","status":"","segments":null,"fetched_message_count":0,"expected_message_count":0,"recorded_reward_count":0,"expected_reward_count":0,"sandbox_mode":"shared","runtime_id":"runtime-1","daemon_id":"daemon-1"}`, string(encoded))
+}
+
+func TestGetLatestEnvDispatchChannelDiagnosisMissingChannelReturns404(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	channelID := "00000000-0000-0000-0000-000000000099"
+	w := httptest.NewRecorder()
+	testHandler.GetLatestEnvDispatchChannelDiagnosis(w, authedChannelRequest(http.MethodGet, "/api/v1/env-dispatch/channels/"+channelID+"/diagnosis/latest", "channelID", channelID))
+	assert.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
+}
+
+func TestDiagnosisRunAlreadyLaunchedPreventsDuplicateTask(t *testing.T) {
+	assert.False(t, diagnosisRunAlreadyLaunched(service.DiagnosisRunCheckpoint{Status: service.DiagnosisRunRunning}))
+	assert.True(t, diagnosisRunAlreadyLaunched(service.DiagnosisRunCheckpoint{Status: service.DiagnosisRunProvisioning}))
+	assert.True(t, diagnosisRunAlreadyLaunched(service.DiagnosisRunCheckpoint{Status: service.DiagnosisRunRunning, ExecutionMode: service.DiagnosisExecutionModeSandbox}))
+	assert.True(t, diagnosisRunAlreadyLaunched(service.DiagnosisRunCheckpoint{Status: service.DiagnosisRunRunning, SandboxInstanceID: "sandbox-1"}))
+}
+
+func TestEnvDispatchBusinessTasksTerminalBarrierExcludesDiagnosisTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	_, projectID, _, _ := setupEnvDispatchChannelRolloutFixture(t)
+	agentID, runtimeID := setupBoundRuntimeAgent(t, "pi")
+	session, err := testHandler.Queries.CreateChatSessionForProject(ctx, db.CreateChatSessionForProjectParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		ProjectID:   parseUUID(projectID),
+		AgentID:     parseUUID(agentID),
+		CreatorID:   parseUUID(testUserID),
+		Title:       "automatic diagnosis barrier",
+	})
+	require.NoError(t, err)
+	createTask := func(taskContext []byte) db.AgentInboxEvent {
+		t.Helper()
+		task, err := testHandler.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
+			AgentID:         parseUUID(agentID),
+			RuntimeID:       parseUUID(runtimeID),
+			Priority:        envDispatchTaskPriority,
+			ChatSessionID:   session.ID,
+			InitiatorUserID: parseUUID(testUserID),
+			Context:         taskContext,
+		})
+		require.NoError(t, err)
+		return task
+	}
+	first, second := createTask(nil), createTask(nil)
+
+	terminal, err := testHandler.envDispatchBusinessTasksTerminal(ctx, projectID)
+	require.NoError(t, err)
+	assert.False(t, terminal, "pending business tasks must hold the barrier")
+	_, err = testPool.Exec(ctx, `UPDATE agent_inbox_event SET status = 'acked' WHERE id IN ($1, $2)`, first.ID, second.ID)
+	require.NoError(t, err)
+	terminal, err = testHandler.envDispatchBusinessTasksTerminal(ctx, projectID)
+	require.NoError(t, err)
+	assert.True(t, terminal)
+
+	_ = createTask([]byte(`{"diagnosis_run_id":"diag-barrier"}`))
+	terminal, err = testHandler.envDispatchBusinessTasksTerminal(ctx, projectID)
+	require.NoError(t, err)
+	assert.True(t, terminal, "pending internal diagnosis task must not re-open the business barrier")
+}

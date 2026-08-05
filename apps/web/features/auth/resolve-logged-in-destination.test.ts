@@ -24,7 +24,6 @@ function ws(slug: string, lastActiveAt: string | null = null): Workspace {
     description: null,
     context: null,
     settings: {},
-    repos: [],
     issue_prefix: slug,
     avatar_url: null,
     last_active_at: lastActiveAt,

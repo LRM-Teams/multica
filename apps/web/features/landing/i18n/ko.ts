@@ -540,7 +540,7 @@ export function createKoDict(allowSignup: boolean): LandingDict {
           features: [
             "처음으로 실제 사용 가능한 모바일 클라이언트인 Multica for iOS가 출시되어, 로그인·워크스페이스·인박스·이슈·프로젝트·채팅·댓글·실시간 업데이트를 모두 지원합니다.",
             "셀프 호스팅 팀은 이제 Helm 차트로 Kubernetes에 배포할 수 있고, Docker 설치 시 포트와 URL 설정도 한층 명확해졌습니다.",
-            "프로젝트 리소스 선택기에 저장소 검색이 추가되었고, 런타임 사용량은 주요 모델 비용을 더 정확히 집계합니다.",
+            "런타임 사용량은 주요 모델 비용을 더 정확히 집계합니다.",
           ],
           improvements: [
           ],
@@ -776,10 +776,9 @@ export function createKoDict(allowSignup: boolean): LandingDict {
         {
           version: "0.2.24",
           date: "2026-05-03",
-          title: "Repo checkout --ref와 Hermes 재생 수정",
+          title: "Hermes 재생 수정",
           changes: [],
           features: [
-            "`multica repo checkout --ref`가 브랜치, 태그, 특정 커밋을 대상으로 저장소를 가져올 수 있습니다.",
             "`multica agent avatar`가 CLI에서 에이전트 아바타를 직접 업로드합니다.",
             "인박스 Done 작업에 보관 버튼이 추가되고 중복 mark-as-done hover 버튼은 제거되었습니다.",
           ],

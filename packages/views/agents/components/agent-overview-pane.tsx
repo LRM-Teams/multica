@@ -32,6 +32,7 @@ import { ActivityTab } from "./tabs/activity-tab";
 import { InstructionsTab } from "./tabs/instructions-tab";
 import { SkillsTab } from "./tabs/skills-tab";
 import { MemoryTab } from "./tabs/memory-tab";
+import { AgentFilesPanel } from "../../channels/components/agent-files-panel";
 import { EnvTab } from "./tabs/env-tab";
 import { CustomArgsTab } from "./tabs/custom-args-tab";
 import { McpConfigTab } from "./tabs/mcp-config-tab";
@@ -258,7 +259,20 @@ export function AgentOverviewPane({
         )}
         {effectiveTab === "memory" && (
           <TabContent>
-            <MemoryTab agent={agent} />
+            <div className="flex h-full min-h-0 flex-col gap-4">
+              <div className="min-h-72 flex-1 overflow-hidden rounded-lg border">
+                <AgentFilesPanel
+                  agent={agent}
+                  currentUserId={null}
+                  members={[]}
+                  canReadFiles={canManage}
+                  canEditFiles={false}
+                  onClose={() => undefined}
+                  hideHeader
+                />
+              </div>
+              <MemoryTab agent={agent} />
+            </div>
           </TabContent>
         )}
         {effectiveTab === "honor" && (

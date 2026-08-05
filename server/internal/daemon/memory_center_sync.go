@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/memorysync"
 )
 
@@ -20,7 +21,7 @@ func (d *Daemon) syncAgentMemoryCenter(ctx context.Context, task Task, _ []memor
 	if workspaceID == "" || agentID == "" {
 		return
 	}
-	agentRoot := multicaAgentRoot(d.cfg, workspaceID, agentID)
+	agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, workspaceID, agentID)
 	if err := d.reconcileAgentMemoryCenter(ctx, workspaceID, agentID, task.RuntimeID, task.ID, agentRoot); err != nil {
 		d.logger.Warn("memory center sync deferred", "agent_id", agentID, "runtime_id", task.RuntimeID, "error", err)
 	}

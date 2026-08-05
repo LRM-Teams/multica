@@ -421,15 +421,6 @@ jobs:
             "${DEPLOY_DIR}" \
             "${RUNNER_TEMP}/multica-deploy-bundle"
 
-      # Caddy's Compose service bind-mounts ${DEPLOY_DIR}/releases read-only
-      # (deploy/aliyun/Caddyfile handle_path /computer/*). If that host path
-      # does not exist yet, Docker auto-creates it as root when the container
-      # starts — leaving the release workflow's own `dev`-user `install -d`
-      # unable to chmod it (#1475/v0.3.82 hit exactly this). Create it here,
-      # as `dev`, before Caddy ever gets a chance to.
-      - name: Ensure release feed directory exists with correct ownership
-        run: install -d -m 0755 "${DEPLOY_DIR}/releases"
-
       - name: Pull & restart backend + frontend + Caddy
         run: |
           set -euo pipefail

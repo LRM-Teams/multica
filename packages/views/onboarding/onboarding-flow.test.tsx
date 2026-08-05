@@ -64,7 +64,6 @@ const WS = {
   description: null,
   context: null,
   settings: {},
-  repos: [],
   issue_prefix: "ACME",
   avatar_url: null,
   last_active_at: null,

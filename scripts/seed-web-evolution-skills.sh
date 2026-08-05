@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Download public skills (SKILL.md-only bundles) into Pi agent runtime dirs for evolution E2E testing.
+# Download public skills (SKILL.md-only bundles) into canonical Agent roots for evolution E2E testing.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WS_ROOT="${MULTICA_WORKSPACES_ROOT:-$HOME/multica_workspaces}"
+WS_ROOT="${MULTICA_WORKSPACES_ROOT:-$HOME/.multica/workspaces}"
 WS_ID="f1b514db-54f1-48ec-b1a7-a5ac6d128977"
-AGENTS_BASE="$WS_ROOT/$WS_ID/.pi/agents"
+AGENTS_BASE="$WS_ROOT/$WS_ID/agents"
 
 AGENT_CODE_REVIEW="78e90451-507e-4db9-86c5-a43e7d70d053"
 AGENT_PI_CHAIN="dfb06fb1-d79e-4b23-b63c-451ff6ccad23"
@@ -14,7 +14,7 @@ AGENT_TEST2="215b8de7-1f95-46d1-9603-d7c80099b072"
 
 ensure_agent_root() {
   local root="$1"
-  mkdir -p "$root"/{memory/daily,memory/audit,skills/drafts,skills/generated,skills/enabled,inbox/memory,inbox/skills,shared-cache/memory,shared-cache/skills,profile,feedback,sync_queue}
+  mkdir -p "$root"/{memory/daily,memory/audit,skills/drafts,skills/enabled,inbox/memory,inbox/skills,shared-cache/memory,shared-cache/skills,profile,feedback,sync_queue}
 }
 
 download_skill_md_only() {
@@ -39,7 +39,7 @@ write_skill_candidate() {
   printf '%s\n' "$json_line" >>"$root/sync_queue/skill-candidates.jsonl"
 }
 
-echo "==> Downloading public skills (SKILL.md only) into Pi agent runtime drafts"
+echo "==> Downloading public skills (SKILL.md only) into Agent skill drafts"
 
 for agent_id in "$AGENT_CODE_REVIEW" "$AGENT_PI_CHAIN" "$AGENT_TEST" "$AGENT_TEST2"; do
   ensure_agent_root "$AGENTS_BASE/$agent_id"

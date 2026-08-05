@@ -3,6 +3,7 @@ package doubaodialog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,11 +16,19 @@ type MulticaExecutor interface {
 	Delegate(ctx context.Context, request string) (resultSpeech string, err error)
 }
 
+type channelContextExecutor interface {
+	ChannelContext(ctx context.Context, action, channelID, query string) (string, error)
+}
+
 // RecordingExecutor records delegate calls and returns a fixed spoken result.
 type RecordingExecutor struct {
 	Result string
 	mu     sync.Mutex
 	Calls  []string
+}
+
+func (e *RecordingExecutor) ChannelContext(_ context.Context, action, channelID, query string) (string, error) {
+	return strings.TrimSpace(strings.Join([]string{action, channelID, query}, " ")), nil
 }
 
 func (e *RecordingExecutor) Delegate(_ context.Context, request string) (string, error) {
@@ -81,6 +90,12 @@ type webFetchArguments struct {
 	URL string `json:"url"`
 }
 
+type channelContextArguments struct {
+	Action    string `json:"action"`
+	ChannelID string `json:"channel_id"`
+	Query     string `json:"query"`
+}
+
 // HandleServerEvent processes one inbound Duplex event.
 // Returns true when the event was a known function call that was handled.
 func (b *MulticaToolBridge) HandleServerEvent(ctx context.Context, event ServerEvent) (bool, error) {
@@ -140,6 +155,18 @@ func (b *MulticaToolBridge) handleFunctionCall(ctx context.Context, call Functio
 				return "", fmt.Errorf("%s query is required", WebSearchToolName)
 			}
 			return b.web.Search(ctx, query)
+		})
+	case MulticaChannelContextToolName:
+		return b.runAndReturn(ctx, callID, name, func() (string, error) {
+			var args channelContextArguments
+			if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
+				return "", fmt.Errorf("parse %s arguments: %w", name, err)
+			}
+			executor, ok := b.executor.(channelContextExecutor)
+			if !ok {
+				return "", errors.New("Multica channel context is unavailable")
+			}
+			return executor.ChannelContext(ctx, strings.TrimSpace(args.Action), strings.TrimSpace(args.ChannelID), strings.TrimSpace(args.Query))
 		})
 	case WebFetchToolName:
 		return b.runAndReturn(ctx, callID, name, func() (string, error) {

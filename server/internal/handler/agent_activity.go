@@ -1848,7 +1848,7 @@ func agentActivityDisplayLabelKey(row agentActivityRawRow, detailKind string, to
 			}
 			return "working"
 		case agentLifecycleSucceededActivityEventType:
-			return "restarted"
+			return "restart_prepared"
 		case "radar_action_failed":
 			return "failed"
 		case "radar_action_executed":
@@ -1978,7 +1978,7 @@ var agentActivityDisplayLabels = map[string]string{
 	"radar_executed":         "Radar",
 	"working":                "Working",
 	"idle":                   "Idle",
-	"restarted":              "Restarted",
+	"restart_prepared":       "Restart prepared",
 	"failed":                 "Failed",
 	"waiting":                "Waiting",
 	"cancelled":              "Cancelled",

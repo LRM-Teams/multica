@@ -72,7 +72,7 @@ func TestReportAgentLifecycleOperationResultUpdatesOperationStatus(t *testing.T)
 	if err != nil {
 		t.Fatalf("success activity event: %v", err)
 	}
-	if eventType != agentLifecycleSucceededActivityEventType || message != "Restarted" {
+	if eventType != agentLifecycleSucceededActivityEventType || message != "Restart prepared" {
 		t.Fatalf("activity event = type=%q message=%q", eventType, message)
 	}
 	if visibility != "user_facing" {

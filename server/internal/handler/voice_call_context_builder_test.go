@@ -58,6 +58,13 @@ func TestVoiceCallContextBuilderUsesCanonicalIdentityAndBoundedProjectContext(t 
 	ctx := context.Background()
 	agentID := createHandlerTestAgent(t, "贝克汉姆通话测试", []byte("[]"))
 	dmChannelID := seedAgentDMChannel(t, agentID)
+	relatedChannelID := seedChannelForTest(t, "语音发布协调-"+uuid.NewString()[:8], testUserID)
+	unrelatedChannelID := seedChannelForTest(t, "语音无权群-"+uuid.NewString()[:8], testUserID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_member (channel_id, workspace_id, member_type, member_id, role)
+		VALUES ($1, $2, 'agent', $3, 'manager')`, relatedChannelID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("join voice call related channel: %v", err)
+	}
 
 	var projectID, otherProjectID string
 	if err := testPool.QueryRow(ctx, `
@@ -253,6 +260,7 @@ func TestVoiceCallContextBuilderUsesCanonicalIdentityAndBoundedProjectContext(t 
 		"## Reviewed memory",
 		"## Recent DM context",
 		"## Current project state",
+		"## Related group channels",
 		"## Voice conversation behavior",
 	}
 	if len(callContext.SystemMessages) != len(wantPrefixes) {
@@ -276,6 +284,7 @@ func TestVoiceCallContextBuilderUsesCanonicalIdentityAndBoundedProjectContext(t 
 		"上一轮我问了项目进度",
 		"我会先核对当前 issue",
 		"修复通话延迟",
+		"语音发布协调",
 		"Speak in Simplified Chinese throughout the call",
 		"Never claim that code, files, issues, or external systems changed",
 	} {
@@ -283,7 +292,7 @@ func TestVoiceCallContextBuilderUsesCanonicalIdentityAndBoundedProjectContext(t 
 			t.Fatalf("voice call context missing %q:\n%s", want, all)
 		}
 	}
-	for _, forbidden := range []string{"其他项目", "其他项目机密事项"} {
+	for _, forbidden := range []string{"其他项目", "其他项目机密事项", "语音无权群", unrelatedChannelID} {
 		if strings.Contains(all, forbidden) {
 			t.Fatalf("voice call context leaked cross-project text %q:\n%s", forbidden, all)
 		}
@@ -293,6 +302,17 @@ func TestVoiceCallContextBuilderUsesCanonicalIdentityAndBoundedProjectContext(t 
 	}
 	if !strings.Contains(callContext.WelcomeMessage, "贝克汉姆通话测试") {
 		t.Fatalf("welcome message = %q, want canonical Agent name", callContext.WelcomeMessage)
+	}
+}
+
+func TestVoiceCallChannelsBodyTreatsMembershipIndexAsRecords(t *testing.T) {
+	got := voiceCallChannelsBody([]voiceCallChannelSummary{{
+		ID: "channel-1", Name: "发布协调", Role: "manager", ProjectID: "project-1",
+	}})
+	for _, want := range []string{"discoverable channel records", `"name":"发布协调"`, `"role":"manager"`, "Use the channel context tool"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("channel body missing %q: %s", want, got)
+		}
 	}
 }
 

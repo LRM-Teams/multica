@@ -28,11 +28,11 @@ Changing Codex ↔ Claude ↔ Pi (or similar) must **not** require rewriting the
 | Asset | Follows | After switch |
 | --- | --- | --- |
 | Multica agent memory tree (`MULTICA_AGENT_ROOT`) | Agent ID | **Preserved** (one authoritative root per agent on the machine) |
-| Provider session / task workdir | Task / runtime | May discard and rebuild |
+| Provider session | Task / runtime | May discard and rebuild |
 
 Rules:
 
-1. Memory root is `WorkspacesRoot/<workspace>/.multica/agents/<agentId>` — never keyed by runtime or provider.
+1. Agent root and working directory are `~/.multica/workspaces/<workspace_id>/agents/<agent_id>` — never keyed by task, runtime, or provider.
 2. Multiple runtimes may coexist; durable writes go to the same Agent root.
 3. Harness-private caches are scratch paper, not canonical memory.
 4. Scope layering (member / channel / project / agent) is unchanged by a harness swap.
@@ -40,4 +40,4 @@ Rules:
 ## Acceptance / regression
 
 - Unit: `TestMulticaAgentRootStableAcrossHarnessSwitch` in `server/internal/daemon`.
-- Manual: bind the same agent to two providers on one daemon; write a durable note under `MULTICA_AGENT_MEMORY_DIR`; switch provider; confirm the note is still present at the same path and `MULTICA_AGENT_ROOT` is unchanged.
+- Manual: bind the same agent to two providers on one daemon; write a durable note under `$MULTICA_AGENT_ROOT/memory`; switch provider; confirm the note is still present at the same path and `MULTICA_AGENT_ROOT` is unchanged.

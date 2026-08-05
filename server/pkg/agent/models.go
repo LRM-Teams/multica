@@ -94,19 +94,15 @@ const modelCacheTTL = 10 * time.Minute
 func ListModels(ctx context.Context, providerType, executablePath string) ([]Model, error) {
 	switch providerType {
 	case "claude":
-		// Claude Code has no `models list` subcommand on any shipping CLI —
-		// `--model` takes stable aliases (sonnet/opus/haiku) that resolve to
-		// the latest model, or a full model name. The CLI never enumerates
-		// what a given account can actually reach, so dynamic discovery fails
-		// closed and the picker would be empty ("Claude Code 无法选择模型").
-		//
-		// Fix: try dynamic discovery first (forward-compatible if a future
-		// CLI adds a list command), and on any failure or empty result fall
-		// back to the statically-configured aliases so the picker always has
-		// selectable rows whose IDs resolve to the latest model the user's
-		// account supports. See Frank directive 2026-08-05: static config so
-		// requests can reach models.
-		return claudeModelsWithFallback(ctx, executablePath)
+		// Frank 2026-08-05: dynamic first, static fallback. Claude Code CLI has
+		// no models-list subcommand on current releases, but it may gain one
+		// later; when that lands, surfaced rows win. If discovery fails or is
+		// empty, fall back to the static alias lineup so the picker never goes
+		// blank (sonnet/opus/haiku are stable aliases that resolve to the
+		// latest model).
+		return cachedDiscovery(discoveryCacheKey(providerType, executablePath), func() ([]Model, error) {
+			return claudeModelsWithFallback(ctx, executablePath)
+		})
 	case "codex":
 		// Frank 2026-08-03: dynamic only from `codex debug models`.
 		// Picker rows are visibility=list; thinking catalog is filled
@@ -240,41 +236,31 @@ func discoveryCacheKey(providerType, executablePath string) string {
 
 // ── Static catalogs ──
 
+// claudeModelsWithFallback tries live CLI discovery first so a future
+// Claude Code with a models-list subcommand surfaces real account rows;
+// any failure or empty result falls back to the static alias lineup so the
+// picker always has rows.
+func claudeModelsWithFallback(ctx context.Context, executablePath string) ([]Model, error) {
+	models, err := discoverClaudeModels(ctx, executablePath)
+	if err == nil && len(models) > 0 {
+		return models, nil
+	}
+	return claudeStaticModels(), nil
+}
+
 // claudeStaticModels is the current, user-visible Claude lineup. The runtime
-// aliases stay stable so the installed Claude CLI can resolve them. Compatibility IDs deliberately
-// stay out of this picker; persisted agents still resolve them through
-// claudeCompatibilityModels below.
+// aliases stay stable so the installed Claude CLI can resolve them.
+// Compatibility IDs deliberately stay out of this picker; persisted agents
+// still resolve them through claudeCompatibilityModels below.
 func claudeStaticModels() []Model {
 	return []Model{
 		{ID: "sonnet", Label: "Sonnet 5", Provider: "anthropic", Default: true},
-		{ID: "opus", Label: "Opus", Provider: "anthropic"},
+		{ID: "opus", Label: "Opus 5", Provider: "anthropic"},
 		{ID: "haiku", Label: "Haiku", Provider: "anthropic"},
-		// Latest flagship, pinned for explicit requestability (Frank 2026-08-05:
-		// configure the newest models so they can reach a model). Claude's CLI
-		// accepts a full model name via --model, and claude-fable-5 is our latest
-		// flagship in the pricing + validation catalogs. Kept as a full pinned ID
-		// (not an alias) because `fable` is not a documented stable CLI alias.
 		{ID: "claude-fable-5", Label: "Fable 5", Provider: "anthropic"},
+		{ID: "claude-sonnet-5", Label: "Sonnet 5 (pin)", Provider: "anthropic"},
+		{ID: "claude-opus-5", Label: "Opus 5 (pin)", Provider: "anthropic"},
 	}
-}
-
-// claudeModelsWithFallback returns the Claude model catalog the picker
-// shows. It tries dynamic discovery first and falls back to the static
-// alias lineup (sonnet/opus/haiku) whenever discovery fails or yields
-// nothing, then annotates each entry with its thinking-level picker. The
-// static aliases are always resolvable by the installed CLI and resolve
-// to the latest models, so this guarantees a usable, requestable picker.
-func claudeModelsWithFallback(ctx context.Context, executablePath string) ([]Model, error) {
-	models, err := cachedDiscovery(discoveryCacheKey("claude", executablePath), func() ([]Model, error) {
-		return discoverClaudeModels(ctx, executablePath)
-	})
-	if err != nil || len(models) == 0 {
-		models = claudeStaticModels()
-	}
-	if Capabilities("claude").ThinkingDiscovery {
-		annotateClaudeThinking(ctx, models, executablePath)
-	}
-	return models, nil
 }
 
 // claudeCompatibilityModels keeps historical, persisted model IDs valid for
@@ -289,6 +275,8 @@ func claudeCompatibilityModels() []Model {
 		{ID: "claude-haiku-4-5-20251001", Provider: "anthropic"},
 		{ID: "claude-opus-4-6", Provider: "anthropic"},
 		{ID: "claude-sonnet-4-5", Provider: "anthropic"},
+		{ID: "claude-sonnet-5", Provider: "anthropic"},
+		{ID: "claude-opus-5", Provider: "anthropic"},
 	}
 }
 

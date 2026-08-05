@@ -43,19 +43,6 @@ func TestAgentWorkspaceOrphan(t *testing.T) {
 	}
 }
 
-func TestAgentsRootRelPath(t *testing.T) {
-	got := agentsRootRelPath("ws-1")
-	want := "ws-1/.multica/agents"
-	if got != want {
-		t.Fatalf("got %q want %q", got, want)
-	}
-	got = agentWorkspaceRelPath("ws-1", "agent-1")
-	want = "ws-1/.multica/agents/agent-1"
-	if got != want {
-		t.Fatalf("got %q want %q", got, want)
-	}
-}
-
 func TestListRuntimeAgentWorkspaces_MemberOKOffline(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

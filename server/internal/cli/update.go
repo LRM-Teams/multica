@@ -27,11 +27,9 @@ const DefaultUpdateDownloadTimeout = 120 * time.Second
 // unauthenticated GitHub Releases API/asset request from a bare install
 // always 404s.
 //
-// Primary release feed on the filed custom domain (cdn.leagent.me).
-// OSS mirror remains available via MULTICA_RELEASE_MANIFEST_BASE_URL for
-// emergency redirect; see release.yml publish-downloads-feed-oss.
-// 2026-08-04: ICP/备案 cleared — verified leagent.me + cdn.leagent.me/computer
-// from s144 (CN) and desktop; no Aliyun block page.
+// release.yml publishes the feed to OSS and verifies the same bytes through
+// this CDN URL before completing a release. Consumers never depend on the
+// storage provider's bucket hostname.
 const DefaultReleaseManifestBaseURL = "https://cdn.leagent.me/computer"
 
 // ReleaseManifestBaseURLEnv overrides DefaultReleaseManifestBaseURL when set,
@@ -82,11 +80,10 @@ func ReleaseWebURL() string {
 // (daemon/config.go's officialCloudHost mirrors this) and for `multica
 // setup`'s default ServerURL (cmd_setup.go). Task #29 (domain unification,
 // 2026-07-31) found no Caddy/infra routing anywhere in this repo for
-// api.leagent.me, and Aliyun's block on leagent.me (the same block that
-// forced the install/release feed onto an OSS mirror, #prj-daemon
-// 2026-07-31) is still open — flipping this before the backend is actually
-// reachable there would break `multica setup` for every new install. Flip
-// this one constant to "api.leagent.me" once infra confirms it's routed and
+// api.leagent.me, and the backend is still not reachable there. Flipping this
+// before the backend is actually routed would break `multica setup` for every
+// new install. Flip this one constant to "api.leagent.me" once infra confirms
+// it's routed and
 // has a valid cert; every caller picks it up automatically.
 const OfficialCloudAPIHost = "api.multica.ai"
 

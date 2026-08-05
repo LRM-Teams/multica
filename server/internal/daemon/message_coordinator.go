@@ -1,0 +1,385 @@
+package daemon
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/pkg/protocol"
+)
+
+// consumedSeqsFileName is intentionally the only durable receive-side state.
+// Pending Message bodies remain a rebuildable in-memory projection.
+const consumedSeqsFileName = "consumed-seqs.json"
+
+// RuntimeMessageHandoff is the explicit boundary at which concrete Message
+// bodies enter an Agent runtime. Returning nil means the runtime accepted the
+// full batch; only then may the Context Boundary advance.
+type RuntimeMessageHandoff func(context.Context, []protocol.AgentMessageProjection) error
+
+// MessageReceivedActivity observes one successful daemon-to-runtime body batch.
+// It is deliberately best effort and never participates in delivery state.
+type MessageReceivedActivity func([]protocol.AgentMessageProjection)
+
+// MessageCoordinator owns the receive-side state for one Workspace/Agent root.
+// Its callers send agent:deliver:ack only after Accept returns successfully.
+type MessageCoordinator struct {
+	mu              sync.Mutex
+	root            string
+	boundaries      map[string]int64
+	pending         map[string]map[int64]protocol.AgentMessageProjection
+	accepted        map[string]struct{}
+	handoff         RuntimeMessageHandoff
+	activity        MessageReceivedActivity
+	recovery        messageRecoveryState
+	handedOff       *acceptedRuntimeHandoff
+	boundaryHealthy bool
+}
+
+type acceptedRuntimeHandoff struct {
+	messages        []protocol.AgentMessageProjection
+	nextBoundaries  map[string]int64
+	activityEmitted bool
+}
+
+type messageRecoveryState struct {
+	status        string
+	agentID       string
+	recoveryID    string
+	snapshotID    string
+	highWatermark string
+	nextCursor    string
+}
+
+const (
+	messageFreshnessUnknown  = "unknown"
+	messageFreshnessComplete = "complete"
+	messageFreshnessFailed   = "failed"
+)
+
+func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, activity MessageReceivedActivity) (*MessageCoordinator, error) {
+	if strings.TrimSpace(agentRoot) == "" {
+		return nil, errors.New("agent root is required")
+	}
+	if handoff == nil {
+		return nil, errors.New("runtime message handoff is required")
+	}
+	boundaries, healthy, err := loadConsumedSeqs(filepath.Join(agentRoot, consumedSeqsFileName))
+	if err != nil {
+		return nil, err
+	}
+	return &MessageCoordinator{
+		root: agentRoot, boundaries: boundaries,
+		pending:  make(map[string]map[int64]protocol.AgentMessageProjection),
+		accepted: make(map[string]struct{}), handoff: handoff, activity: activity,
+		recovery:        messageRecoveryState{status: messageFreshnessUnknown},
+		boundaryHealthy: healthy,
+	}, nil
+}
+
+// BeginRecovery resets freshness on startup and every websocket reconnect.
+func (c *MessageCoordinator) BeginRecovery(agentID string, limit int) protocol.AgentRecoveryRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	recoveryID := uuid.NewString()
+	c.recovery = messageRecoveryState{status: messageFreshnessUnknown, agentID: agentID, recoveryID: recoveryID}
+	return protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: recoveryID, Boundaries: cloneBoundaries(c.boundaries), Limit: limit}
+}
+
+// RecoveryRequest returns the next stateless page request.
+func (c *MessageCoordinator) RecoveryRequest(agentID string, limit int) protocol.AgentRecoveryRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	return protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: c.recovery.recoveryID, Boundaries: cloneBoundaries(c.boundaries), SnapshotID: c.recovery.snapshotID, Cursor: c.recovery.nextCursor, Limit: limit}
+}
+
+// MergeRecoveryPage validates the snapshot fence and merges recovered Messages
+// with concurrent live Deliveries by canonical identity and target sequence.
+func (c *MessageCoordinator) MergeRecoveryPage(page protocol.AgentRecoveryPage) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fail := func(err error) error {
+		c.recovery.status = messageFreshnessFailed
+		return err
+	}
+	if page.AgentID == "" || page.AgentID != c.recovery.agentID {
+		return fail(errors.New("recovery page agent does not match request"))
+	}
+	if page.RecoveryID == "" || page.RecoveryID != c.recovery.recoveryID {
+		// A page from the previous websocket generation may arrive after a
+		// reconnect. Ignore it without poisoning the active recovery attempt.
+		return errors.New("recovery page id does not match active recovery")
+	}
+	if page.SnapshotID == "" || page.HighWatermark == "" {
+		return fail(errors.New("recovery page missing snapshot fence"))
+	}
+	if c.recovery.snapshotID != "" && (page.SnapshotID != c.recovery.snapshotID || page.HighWatermark != c.recovery.highWatermark) {
+		return fail(errors.New("recovery snapshot fence changed between pages"))
+	}
+	if page.HasMore && page.NextCursor == "" {
+		return fail(errors.New("recovery page has_more without next cursor"))
+	}
+	if page.HasMore && page.NextCursor == c.recovery.nextCursor {
+		return fail(errors.New("recovery cursor did not advance"))
+	}
+	if !page.HasMore && page.NextCursor != "" {
+		return fail(errors.New("terminal recovery page has next cursor"))
+	}
+	c.recovery.snapshotID = page.SnapshotID
+	c.recovery.highWatermark = page.HighWatermark
+	for _, message := range page.Messages {
+		delivery := protocol.AgentDeliverPayload{AgentID: page.AgentID, Target: message.Target, Seq: message.Seq, DeliveryID: "recovery:" + page.SnapshotID + ":" + message.ID, Message: message}
+		if _, err := c.acceptLocked(delivery); err != nil {
+			return fail(err)
+		}
+	}
+	c.recovery.nextCursor = page.NextCursor
+	if page.HasMore {
+		c.recovery.status = messageFreshnessUnknown
+	} else {
+		c.recovery.status = messageFreshnessComplete
+		// A complete snapshot rebuilds conservative coverage even when the file
+		// was previously missing or malformed.
+		c.boundaryHealthy = true
+	}
+	return nil
+}
+
+func (c *MessageCoordinator) FailRecovery() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recovery.status = messageFreshnessFailed
+}
+
+func (c *MessageCoordinator) FreshnessKnown() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.recovery.status == messageFreshnessComplete
+}
+
+// ContextBoundary is the minimum Credential Proxy integration. Freshness-
+// sensitive sends fail closed until the recovery fence completes.
+func (c *MessageCoordinator) ContextBoundary(target string) (int64, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.recovery.status != messageFreshnessComplete || !c.boundaryHealthy || len(c.pending[target]) > 0 {
+		return 0, false
+	}
+	return c.boundaries[target], true
+}
+
+// Accept installs a Delivery into Pending. It returns false for a duplicate;
+// both a new acceptance and a duplicate are valid reasons for the caller to
+// acknowledge the Delivery, but neither changes Context Boundary state.
+func (c *MessageCoordinator) Accept(_ context.Context, delivery protocol.AgentDeliverPayload) (bool, error) {
+	if err := validateAgentDelivery(delivery); err != nil {
+		return false, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.acceptLocked(delivery)
+}
+
+func (c *MessageCoordinator) acceptLocked(delivery protocol.AgentDeliverPayload) (bool, error) {
+	key := messageIdentityKey(delivery.Message)
+	if _, ok := c.accepted[key]; ok {
+		return false, nil
+	}
+	if delivery.Seq <= c.boundaries[delivery.Target] {
+		return false, nil
+	}
+	bySequence := c.pending[delivery.Target]
+	if bySequence == nil {
+		bySequence = make(map[int64]protocol.AgentMessageProjection)
+		c.pending[delivery.Target] = bySequence
+	}
+	if existing, ok := bySequence[delivery.Seq]; ok && existing.ID != delivery.Message.ID {
+		return false, fmt.Errorf("target %q sequence %d maps to conflicting Messages", delivery.Target, delivery.Seq)
+	}
+	bySequence[delivery.Seq] = delivery.Message
+	c.accepted[key] = struct{}{}
+	return true, nil
+}
+
+// Flush hands all currently Pending bodies to an idle runtime in target-sequence
+// order. The boundary file is atomically replaced before Pending is forgotten.
+func (c *MessageCoordinator) Flush(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.recovery.status != messageFreshnessComplete {
+		return errors.New("Message freshness is unknown until recovery completes")
+	}
+	for {
+		if c.handedOff == nil {
+			batch := c.pendingBatchLocked()
+			if len(batch) == 0 {
+				return nil
+			}
+			if err := c.handoff(ctx, batch); err != nil {
+				return fmt.Errorf("runtime Message handoff: %w", err)
+			}
+			next := cloneBoundaries(c.boundaries)
+			for _, message := range batch {
+				if message.Seq > next[message.Target] {
+					next[message.Target] = message.Seq
+				}
+			}
+			c.handedOff = &acceptedRuntimeHandoff{messages: batch, nextBoundaries: next}
+		}
+		handoff := c.handedOff
+		if !handoff.activityEmitted && c.activity != nil {
+			c.activity(handoff.messages)
+			handoff.activityEmitted = true
+		}
+		if err := writeConsumedSeqs(filepath.Join(c.root, consumedSeqsFileName), handoff.nextBoundaries); err != nil {
+			// Keep the accepted in-memory receipt so a same-process retry persists
+			// the boundary without handing the concrete bodies to the runtime twice.
+			// A process crash may conservatively replay because bodies are forbidden
+			// from durable local state; it may never skip them.
+			c.boundaryHealthy = false
+			return fmt.Errorf("persist Context Boundary after runtime handoff: %w", err)
+		}
+		c.boundaries = handoff.nextBoundaries
+		c.boundaryHealthy = true
+		for _, message := range handoff.messages {
+			delete(c.pending[message.Target], message.Seq)
+			delete(c.accepted, messageIdentityKey(message))
+			if len(c.pending[message.Target]) == 0 {
+				delete(c.pending, message.Target)
+			}
+		}
+		c.handedOff = nil
+	}
+}
+
+func messageIdentityKey(message protocol.AgentMessageProjection) string {
+	return message.ID + "\x00" + message.Target + "\x00" + fmt.Sprint(message.Seq)
+}
+
+func (c *MessageCoordinator) Boundaries() map[string]int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return cloneBoundaries(c.boundaries)
+}
+
+// Acknowledgement returns the wire receipt permitted after Accept succeeds.
+// It intentionally has no boundary, runtime, or execution fields.
+func (c *MessageCoordinator) Acknowledgement(delivery protocol.AgentDeliverPayload) protocol.AgentDeliverAckPayload {
+	return protocol.AgentDeliverAckPayload{
+		AgentID: delivery.AgentID, Seq: delivery.Seq, DeliveryID: delivery.DeliveryID, Traceparent: delivery.Traceparent,
+	}
+}
+
+func (c *MessageCoordinator) pendingBatchLocked() []protocol.AgentMessageProjection {
+	targets := make([]string, 0, len(c.pending))
+	for target := range c.pending {
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	var batch []protocol.AgentMessageProjection
+	for _, target := range targets {
+		sequences := make([]int64, 0, len(c.pending[target]))
+		for sequence := range c.pending[target] {
+			sequences = append(sequences, sequence)
+		}
+		sort.Slice(sequences, func(i, j int) bool { return sequences[i] < sequences[j] })
+		for _, sequence := range sequences {
+			batch = append(batch, c.pending[target][sequence])
+		}
+	}
+	return batch
+}
+
+func validateAgentDelivery(delivery protocol.AgentDeliverPayload) error {
+	if strings.TrimSpace(delivery.AgentID) == "" || strings.TrimSpace(delivery.DeliveryID) == "" {
+		return errors.New("agent_id and delivery_id are required")
+	}
+	if strings.TrimSpace(delivery.Target) == "" || delivery.Seq <= 0 {
+		return errors.New("target and positive seq are required")
+	}
+	if strings.TrimSpace(delivery.Message.ID) == "" {
+		return errors.New("Message id is required")
+	}
+	if delivery.Message.Target != delivery.Target || delivery.Message.Seq != delivery.Seq {
+		return errors.New("Message target and seq must match delivery envelope")
+	}
+	return nil
+}
+
+func loadConsumedSeqs(path string) (map[string]int64, bool, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]int64{}, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read consumed sequences: %w", err)
+	}
+	boundaries := map[string]int64{}
+	if err := json.Unmarshal(data, &boundaries); err != nil {
+		// Corruption is unknown coverage, never permission to skip context.
+		return map[string]int64{}, false, nil
+	}
+	for target, sequence := range boundaries {
+		if strings.TrimSpace(target) == "" || sequence < 0 {
+			return map[string]int64{}, false, nil
+		}
+	}
+	return boundaries, true, nil
+}
+
+func writeConsumedSeqs(path string, boundaries map[string]int64) error {
+	data, err := json.Marshal(boundaries)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".consumed-seqs-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+func cloneBoundaries(boundaries map[string]int64) map[string]int64 {
+	copy := make(map[string]int64, len(boundaries))
+	for target, sequence := range boundaries {
+		copy[target] = sequence
+	}
+	return copy
+}

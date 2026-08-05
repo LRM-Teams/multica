@@ -109,11 +109,9 @@ func assertSnapshotEqual(t *testing.T, label string, want, got workdirSnapshot) 
 	}
 }
 
-// runPrepareLikeCycle replays the daemon's local_directory path against the
-// supplied workDir and envRoot: writes context files (with manifest tracking),
-// injects the runtime brief, then runs the matching cleanups. Tests use this
-// to assert byte-exact reversibility without booting the full Prepare/Reuse
-// pipeline (which would need a WorkspacesRoot, GC plumbing, etc.).
+// runPrepareLikeCycle writes context files with manifest tracking and then
+// cleans those sidecars. Runtime briefs are durable AgentRoot content and are
+// intentionally outside this sidecar rollback test.
 func runPrepareLikeCycle(t *testing.T, workDir, envRoot, provider string, ctx TaskContextForEnv) {
 	t.Helper()
 	manifest := &sidecarManifest{}
@@ -122,15 +120,6 @@ func runPrepareLikeCycle(t *testing.T, workDir, envRoot, provider string, ctx Ta
 	}
 	if err := writeSidecarManifest(envRoot, manifest); err != nil {
 		t.Fatalf("writeSidecarManifest(%s): %v", provider, err)
-	}
-	if _, err := InjectRuntimeConfig(workDir, provider, ctx); err != nil {
-		t.Fatalf("InjectRuntimeConfig(%s): %v", provider, err)
-	}
-	// Mirror daemon.go ordering: runtime config first, sidecars second. The
-	// order is incidental — neither cleanup touches the other's paths — but
-	// pinning the same order in tests catches an accidental coupling.
-	if err := CleanupRuntimeConfig(workDir, provider); err != nil {
-		t.Fatalf("CleanupRuntimeConfig(%s): %v", provider, err)
 	}
 	if err := CleanupSidecars(envRoot); err != nil {
 		t.Fatalf("CleanupSidecars(%s): %v", provider, err)
@@ -361,39 +350,6 @@ func TestPrepareThenCleanupSidecarsRepeatedCycles(t *testing.T) {
 				after := snapshot(t, workDir)
 				assertSnapshotEqual(t, provider, before, after)
 			}
-		})
-	}
-}
-
-// TestPrepareThenCleanupSidecarsWithProjectResources extends the
-// round-trip to the .multica/project/resources.json branch — a separate
-// sidecar write that creates its own intermediate directory tree.
-func TestPrepareThenCleanupSidecarsWithProjectResources(t *testing.T) {
-	t.Parallel()
-	for _, provider := range allFileBasedProviders {
-		provider := provider
-		t.Run(provider, func(t *testing.T) {
-			t.Parallel()
-			workDir := t.TempDir()
-			envRoot := t.TempDir()
-			before := snapshot(t, workDir)
-
-			ctx := TaskContextForEnv{
-				IssueID:      "11111111-2222-3333-4444-555555555555",
-				ProjectID:    "proj-1",
-				ProjectTitle: "Demo project",
-				ProjectResources: []ProjectResourceForEnv{
-					{
-						ID:           "res-1",
-						ResourceType: "github_repo",
-						ResourceRef:  []byte(`{"url":"https://github.com/example/repo"}`),
-					},
-				},
-			}
-			runPrepareLikeCycle(t, workDir, envRoot, provider, ctx)
-
-			after := snapshot(t, workDir)
-			assertSnapshotEqual(t, provider, before, after)
 		})
 	}
 }
@@ -750,59 +706,6 @@ func TestPrepareThenCleanupSidecarsIssueContextCollisionPerProvider(t *testing.T
 			}
 			if string(got) != userBody {
 				t.Errorf("user issue_context.md mutated\n want: %q\n  got: %q", userBody, string(got))
-			}
-		})
-	}
-}
-
-// TestPrepareThenCleanupSidecarsProjectResourcesCollisionPerProvider
-// is the matching byte-exact matrix for `.multica/project/
-// resources.json` — the other Multica-only namespace file. Same
-// invariant: pre-existing user content survives the round-trip
-// untouched even when the task ships project resources of its own.
-func TestPrepareThenCleanupSidecarsProjectResourcesCollisionPerProvider(t *testing.T) {
-	t.Parallel()
-	for _, provider := range allFileBasedProviders {
-		provider := provider
-		t.Run(provider, func(t *testing.T) {
-			t.Parallel()
-			workDir := t.TempDir()
-			envRoot := t.TempDir()
-
-			if err := os.MkdirAll(filepath.Join(workDir, ".multica", "project"), 0o755); err != nil {
-				t.Fatalf("seed dir: %v", err)
-			}
-			userBody := `{"user":"owns this file"}`
-			userPath := filepath.Join(workDir, ".multica", "project", "resources.json")
-			if err := os.WriteFile(userPath, []byte(userBody), 0o644); err != nil {
-				t.Fatalf("seed user file: %v", err)
-			}
-
-			before := snapshot(t, workDir)
-
-			ctx := TaskContextForEnv{
-				IssueID:      "11111111-2222-3333-4444-555555555555",
-				ProjectID:    "proj-1",
-				ProjectTitle: "Demo",
-				ProjectResources: []ProjectResourceForEnv{
-					{
-						ID:           "res-1",
-						ResourceType: "github_repo",
-						ResourceRef:  []byte(`{"url":"https://github.com/example/repo"}`),
-					},
-				},
-			}
-			runPrepareLikeCycle(t, workDir, envRoot, provider, ctx)
-
-			after := snapshot(t, workDir)
-			assertSnapshotEqual(t, provider, before, after)
-
-			got, err := os.ReadFile(userPath)
-			if err != nil {
-				t.Fatalf("user resources.json went missing: %v", err)
-			}
-			if string(got) != userBody {
-				t.Errorf("user resources.json mutated\n want: %q\n  got: %q", userBody, string(got))
 			}
 		})
 	}

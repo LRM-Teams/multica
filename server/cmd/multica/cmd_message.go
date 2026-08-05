@@ -47,9 +47,7 @@ func newMessageSendCmd() *cobra.Command {
 	cmd.Flags().Bool("voice", false, "Deliver the message text as synthesized speech and an accessible transcript")
 	cmd.Flags().StringSlice("attachment-id", nil, "Attachment id to link (repeatable). Get one from `multica attachment upload`")
 	cmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
-	cmd.Flags().Int64("seen-up-to-seq", 0, "Last channel message sequence the agent reviewed before composing")
 	cmd.Flags().String("output", "json", "Output format: json or text")
-	_ = cmd.Flags().MarkHidden("seen-up-to-seq")
 	return cmd
 }
 
@@ -264,9 +262,6 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		"target":            target,
 		"client_message_id": clientMessageIDFlag(cmd),
 	}
-	if seenUpToSeq := seenUpToSeqForMessageSend(cmd, client); seenUpToSeq > 0 {
-		body["seen_up_to_seq"] = seenUpToSeq
-	}
 	if text != "" {
 		body["content"] = content
 	}
@@ -284,13 +279,6 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("send message: %w", err)
 	}
 	return printAgentTransportOutput(cmd, out, agentMessageSendTextFallback(out))
-}
-
-func seenUpToSeqForMessageSend(cmd *cobra.Command, client *cli.APIClient) int64 {
-	if seq, _ := cmd.Flags().GetInt64("seen-up-to-seq"); seq > 0 {
-		return seq
-	}
-	return client.AgentInboxSeqTo
 }
 
 func agentMessageSendTextFallback(out map[string]any) string {
@@ -438,9 +426,6 @@ func runAgentMessageAskChoice(cmd *cobra.Command, _ []string) error {
 	}
 	if text != "" {
 		body["content"] = text
-	}
-	if seenUpToSeq := seenUpToSeqForMessageSend(cmd, client); seenUpToSeq > 0 {
-		body["seen_up_to_seq"] = seenUpToSeq
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
 	defer cancel()

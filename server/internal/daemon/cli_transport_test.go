@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
 func TestPrepareTaskCLITransportWritesPerRunWrapperAndTokenFile(t *testing.T) {
@@ -30,7 +32,7 @@ func TestPrepareTaskCLITransportWritesPerRunWrapperAndTokenFile(t *testing.T) {
 		t.Fatalf("prepareTaskCLITransport: %v", err)
 	}
 
-	wantDir := filepath.Join(root, "workspace-1", ".multica", "agents", "agent-1", "runtime", "cli-transport", "run-1")
+	wantDir := filepath.Join(agentworkspace.Root(root, "workspace-1", "agent-1"), "runtime", "cli-transport", "run-1")
 	if wrapperDir != wantDir {
 		t.Fatalf("wrapperDir = %q, want %q", wrapperDir, wantDir)
 	}
@@ -88,7 +90,7 @@ func TestPrepareStableAgentCLITransportUsesAgentScopedFixedPath(t *testing.T) {
 		t.Fatalf("prepareStableAgentCLITransport: %v", err)
 	}
 
-	wantRoot := filepath.Join(root, "workspace-1", ".multica", "agents", "agent-1", "runtime", "cli-transport")
+	wantRoot := filepath.Join(agentworkspace.Root(root, "workspace-1", "agent-1"), "runtime", "cli-transport")
 	if transport.Root() != wantRoot {
 		t.Fatalf("transport root = %q, want %q", transport.Root(), wantRoot)
 	}

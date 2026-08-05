@@ -15,6 +15,7 @@ import (
 
 	"github.com/mattn/go-shellwords"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/cli"
 )
 
@@ -51,11 +52,7 @@ const (
 	DefaultRuntimeName              = "Local Agent"
 	DefaultWorkspaceSyncInterval    = 30 * time.Second
 	DefaultHealthPort               = 19514
-	DefaultGCInterval               = 1 * time.Hour
-	DefaultGCTTL                    = 24 * time.Hour // 1 day — AI-coding issues rarely stay open long
-	DefaultGCOrphanTTL              = 72 * time.Hour // 3 days — orphans with no meta (crashes, pre-GC leftovers)
-	DefaultGCArtifactTTL            = 12 * time.Hour // 12h — drop regenerable artifacts on completed but still-open issues
-	DefaultAutoUpdateCheckInterval  = 6 * time.Hour  // how often the daemon polls GitHub for a newer CLI release
+	DefaultAutoUpdateCheckInterval  = 6 * time.Hour // how often the daemon polls GitHub for a newer CLI release
 	DefaultSharedSkillsSyncInterval = 60 * time.Second
 	DefaultMemoryCurationRunTimeout = 10 * time.Minute
 	// DefaultMemoryCurationL3ReviewTimeout is the per-invocation wall clock for
@@ -65,63 +62,41 @@ const (
 	DefaultGrokPersistentIdleTTL         = 15 * time.Minute
 	DefaultPiPersistentIdleTTL           = 15 * time.Minute
 	raftLoopbackNoProxy                  = "127.0.0.1,localhost"
-	// DefaultAgentWorkspaceRetentionInterval: task #96 destroys an archived
-	// agent's .multica/agents/<id> workspace 30 days after deletion — a
-	// day-granularity job needs no faster a cadence than this.
-	DefaultAgentWorkspaceRetentionInterval = 24 * time.Hour
 	// DefaultInboundWatchdog: see inbound_watchdog.go (Raft-aligned 70s).
 
-	// DefaultAgentWorkspaceQuotaBytes: per-agent cap on .multica/agents/<id>.
+	// DefaultAgentWorkspaceQuotaBytes: per-agent cap on <workspace-id>/agents/<agent-id>.
 	// 0 = unlimited (LRM-1047: prior 2GiB default was blocking real agents;
 	// re-enable a cap via MULTICA_AGENT_WORKSPACE_QUOTA_BYTES=<positive>).
 	DefaultAgentWorkspaceQuotaBytes int64 = 0
 )
 
-// DefaultGCArtifactPatterns lists basename matches that the GC loop treats as
-// regenerable build artifacts. Kept conservative: only directories that are
-// always cheap to recreate (`pnpm install`, `next build`, `turbo build`). Things
-// like `dist/`, `build/`, `.cache/` or `.venv/` may legitimately hold source or
-// release output in some repos and are NOT included by default — set
-// MULTICA_GC_ARTIFACT_PATTERNS to extend the list per deployment.
-var DefaultGCArtifactPatterns = []string{"node_modules", ".next", ".turbo"}
-
 // Config holds all daemon configuration.
 type Config struct {
-	ServerBaseURL                   string
-	DaemonID                        string
-	LegacyDaemonIDs                 []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
-	DeviceName                      string
-	RuntimeName                     string
-	CLIVersion                      string                // multica CLI version (e.g. "0.1.13")
-	LaunchedBy                      string                // "desktop" when spawned by the Electron app, empty for standalone
-	Profile                         string                // profile name (empty = default)
-	WorkspaceID                     string                // the one workspace this daemon registers for
-	Agents                          map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity, grok
-	WorkspacesRoot                  string                // base path for execution envs (default: ~/multica_workspaces)
-	KeepEnvAfterTask                bool                  // preserve env after task for debugging
-	HealthPort                      int                   // local HTTP port for health checks (default: 19514)
-	GCEnabled                       bool                  // enable periodic workspace garbage collection (default: true)
-	GCInterval                      time.Duration         // how often the GC loop runs (default: 1h)
-	GCTTL                           time.Duration         // clean dirs whose issue is done/cancelled and updated_at < now()-TTL (default: 24h)
-	GCOrphanTTL                     time.Duration         // clean orphan dirs with no meta, or dirs whose issue gc-check returns 404, once they exceed this age (default: 72h). The 404 path uses the same TTL — a scoped-down token can't instantly wipe live workspaces.
-	GCArtifactTTL                   time.Duration         // when a task has been completed for at least this long but its issue is still open, drop regenerable artifacts (default: 12h, set 0 to disable)
-	GCArtifactPatterns              []string              // basename patterns whose subtrees are removed during artifact cleanup (default: node_modules, .next, .turbo)
-	AgentWorkspaceRetentionEnabled  bool                  // enable the periodic agent-workspace retention job (task #96, default: true)
-	AgentWorkspaceRetentionInterval time.Duration         // how often the retention job runs (default: 24h)
-	AgentWorkspaceRetentionDryRun   bool                  // when true (default), only log which .multica/agents/<id> dirs WOULD be destroyed — never touches disk. Must be explicitly disabled (MULTICA_AGENT_WORKSPACE_RETENTION_DRY_RUN=false) to perform real deletions; Parker's hard requirement (task #96, 2026-08-02) is that the first real-delete run only happens after a human reviews a dry-run list.
-	AgentWorkspaceQuotaBytes        int64                 // per-agent cap on .multica/agents/<id> total size, checked at turn-start; 0 = unlimited (default)
-	AutoUpdateEnabled               bool                  // periodically check for a newer CLI release and self-update when idle (default: true, both Multica Cloud and self-host)
-	AutoUpdateConfigSource          string                // resolved source: official_host_default, self_host_default, env_enabled, env_disabled, or cli_disabled
-	AutoUpdateCheckInterval         time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
-	PinnedVersion                   string                // when non-empty, the daemon stays on this version and never auto-upgrades (env: MULTICA_PINNED_VERSION)
-	UpdateObservationPath           string                // daemon-local durable update truth; empty is in-memory only for explicitly constructed test configs
-	SharedSkillsDir                 string                // optional global override; when empty each provider uses its own shared root
-	SharedSkillsSyncInterval        time.Duration         // how often to scan and sync SharedSkillsDir
-	MemoryCurationL3ReviewEnabled   bool                  // run the local Pi L3 reviewer during daemon-side curation
-	MemoryCurationL3ReviewTimeout   time.Duration         // per-agent L3 reviewer timeout
-	MemoryCurationRunTimeout        time.Duration         // wall-clock timeout for one daemon-claimed curation run
-	GrokPersistentIdleTTL           time.Duration         // 0 disables idle chat-session eviction
-	PiPersistentIdleTTL             time.Duration         // 0 disables idle Pi chat-session eviction
+	ServerBaseURL                 string
+	DaemonID                      string
+	LegacyDaemonIDs               []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
+	DeviceName                    string
+	RuntimeName                   string
+	CLIVersion                    string                // multica CLI version (e.g. "0.1.13")
+	LaunchedBy                    string                // "desktop" when spawned by the Electron app, empty for standalone
+	Profile                       string                // profile name (empty = default)
+	WorkspaceID                   string                // the one workspace this daemon registers for
+	Agents                        map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro, antigravity, grok
+	WorkspacesRoot                string                // base path containing workspace directories (default: ~/.multica/workspaces)
+	HealthPort                    int                   // local HTTP port for health checks (default: 19514)
+	AgentWorkspaceQuotaBytes      int64                 // per-agent cap on <workspace-id>/agents/<agent-id> total size, checked at turn-start; 0 = unlimited (default)
+	AutoUpdateEnabled             bool                  // periodically check for a newer CLI release and self-update when idle (default: true, both Multica Cloud and self-host)
+	AutoUpdateConfigSource        string                // resolved source: official_host_default, self_host_default, env_enabled, env_disabled, or cli_disabled
+	AutoUpdateCheckInterval       time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
+	PinnedVersion                 string                // when non-empty, the daemon stays on this version and never auto-upgrades (env: MULTICA_PINNED_VERSION)
+	UpdateObservationPath         string                // daemon-local durable update truth; empty is in-memory only for explicitly constructed test configs
+	SharedSkillsDir               string                // optional global override; when empty each provider uses its own shared root
+	SharedSkillsSyncInterval      time.Duration         // how often to scan and sync SharedSkillsDir
+	MemoryCurationL3ReviewEnabled bool                  // run the local Pi L3 reviewer during daemon-side curation
+	MemoryCurationL3ReviewTimeout time.Duration         // per-agent L3 reviewer timeout
+	MemoryCurationRunTimeout      time.Duration         // wall-clock timeout for one daemon-claimed curation run
+	GrokPersistentIdleTTL         time.Duration         // 0 disables idle chat-session eviction
+	PiPersistentIdleTTL           time.Duration         // 0 disables idle Pi chat-session eviction
 	// MaxAgentProcesses bounds distinct agents with a live resident provider
 	// process on this daemon (#35). 0 = unlimited. Default = f(NumCPU) clamped
 	// FLOOR/CEIL; override with MULTICA_MAX_AGENT_PROCESSES.
@@ -455,8 +430,8 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		runtimeName = overrides.RuntimeName
 	}
 
-	// Workspaces root: override > env > default (~/multica_workspaces or ~/multica_workspaces_<profile>)
-	workspacesRoot, err := ResolveWorkspacesRoot(profile, overrides.WorkspacesRoot)
+	// Workspaces root: override > env > default (~/.multica/workspaces).
+	workspacesRoot, err := ResolveWorkspacesRoot(overrides.WorkspacesRoot)
 	if err != nil {
 		return Config{}, err
 	}
@@ -465,48 +440,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	healthPort := DefaultHealthPort
 	if overrides.HealthPort > 0 {
 		healthPort = overrides.HealthPort
-	}
-
-	// Keep env after task: env > default (false)
-	keepEnv := os.Getenv("MULTICA_KEEP_ENV_AFTER_TASK") == "true" || os.Getenv("MULTICA_KEEP_ENV_AFTER_TASK") == "1"
-
-	// GC config: env > defaults
-	gcEnabled := true
-	if v := os.Getenv("MULTICA_GC_ENABLED"); v == "false" || v == "0" {
-		gcEnabled = false
-	}
-	gcInterval, err := durationFromEnv("MULTICA_GC_INTERVAL", DefaultGCInterval)
-	if err != nil {
-		return Config{}, err
-	}
-	gcTTL, err := durationFromEnv("MULTICA_GC_TTL", DefaultGCTTL)
-	if err != nil {
-		return Config{}, err
-	}
-	gcOrphanTTL, err := durationFromEnv("MULTICA_GC_ORPHAN_TTL", DefaultGCOrphanTTL)
-	if err != nil {
-		return Config{}, err
-	}
-	gcArtifactTTL, err := durationFromEnv("MULTICA_GC_ARTIFACT_TTL", DefaultGCArtifactTTL)
-	if err != nil {
-		return Config{}, err
-	}
-	gcArtifactPatterns := patternsFromEnv("MULTICA_GC_ARTIFACT_PATTERNS", DefaultGCArtifactPatterns)
-
-	// Agent workspace retention config (task #96): env > defaults. Dry-run
-	// defaults to true — real deletion is destructive and must be an
-	// explicit opt-in, never a silent default.
-	agentWorkspaceRetentionEnabled := true
-	if v := os.Getenv("MULTICA_AGENT_WORKSPACE_RETENTION_ENABLED"); v == "false" || v == "0" {
-		agentWorkspaceRetentionEnabled = false
-	}
-	agentWorkspaceRetentionInterval, err := durationFromEnv("MULTICA_AGENT_WORKSPACE_RETENTION_INTERVAL", DefaultAgentWorkspaceRetentionInterval)
-	if err != nil {
-		return Config{}, err
-	}
-	agentWorkspaceRetentionDryRun := true
-	if v := os.Getenv("MULTICA_AGENT_WORKSPACE_RETENTION_DRY_RUN"); v == "false" || v == "0" {
-		agentWorkspaceRetentionDryRun = false
 	}
 
 	agentWorkspaceQuotaBytes := DefaultAgentWorkspaceQuotaBytes
@@ -625,50 +558,40 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	}
 
 	return Config{
-		ServerBaseURL:                   serverBaseURL,
-		DaemonID:                        daemonID,
-		LegacyDaemonIDs:                 legacyDaemonIDs,
-		DeviceName:                      deviceName,
-		RuntimeName:                     runtimeName,
-		Profile:                         profile,
-		WorkspaceID:                     workspaceID,
-		Agents:                          agents,
-		WorkspacesRoot:                  workspacesRoot,
-		KeepEnvAfterTask:                keepEnv,
-		GCEnabled:                       gcEnabled,
-		GCInterval:                      gcInterval,
-		GCTTL:                           gcTTL,
-		GCOrphanTTL:                     gcOrphanTTL,
-		GCArtifactTTL:                   gcArtifactTTL,
-		GCArtifactPatterns:              gcArtifactPatterns,
-		AgentWorkspaceRetentionEnabled:  agentWorkspaceRetentionEnabled,
-		AgentWorkspaceRetentionInterval: agentWorkspaceRetentionInterval,
-		AgentWorkspaceRetentionDryRun:   agentWorkspaceRetentionDryRun,
-		AgentWorkspaceQuotaBytes:        agentWorkspaceQuotaBytes,
-		AutoUpdateEnabled:               autoUpdateEnabled,
-		AutoUpdateConfigSource:          autoUpdateConfigSource,
-		AutoUpdateCheckInterval:         autoUpdateInterval,
-		PinnedVersion:                   pinnedVersion,
-		UpdateObservationPath:           updateObservationPath,
-		SharedSkillsDir:                 sharedSkillsDir,
-		SharedSkillsSyncInterval:        sharedSkillsInterval,
-		MemoryCurationL3ReviewEnabled:   memoryCurationL3ReviewEnabled,
-		MemoryCurationL3ReviewTimeout:   memoryCurationL3ReviewTimeout,
-		MemoryCurationRunTimeout:        memoryCurationRunTimeout,
-		GrokPersistentIdleTTL:           grokPersistentIdleTTL,
-		PiPersistentIdleTTL:             piPersistentIdleTTL,
-		MaxAgentProcesses:               maxAgentProcesses,
-		HealthPort:                      healthPort,
-		PollInterval:                    pollInterval,
-		HeartbeatInterval:               heartbeatInterval,
-		InboundWatchdog:                 inboundWatchdog,
-		AgentTimeout:                    agentTimeout,
-		CodexSemanticInactivityTimeout:  codexSemanticInactivityTimeout,
-		AgentIdleWatchdog:               agentIdleWatchdog,
-		AgentToolWatchdog:               agentToolWatchdog,
-		ClaudeArgs:                      claudeArgs,
-		CodexArgs:                       codexArgs,
-		CodebuddyArgs:                   codebuddyArgs,
+		ServerBaseURL:                  serverBaseURL,
+		DaemonID:                       daemonID,
+		LegacyDaemonIDs:                legacyDaemonIDs,
+		DeviceName:                     deviceName,
+		RuntimeName:                    runtimeName,
+		Profile:                        profile,
+		WorkspaceID:                    workspaceID,
+		Agents:                         agents,
+		WorkspacesRoot:                 workspacesRoot,
+		AgentWorkspaceQuotaBytes:       agentWorkspaceQuotaBytes,
+		AutoUpdateEnabled:              autoUpdateEnabled,
+		AutoUpdateConfigSource:         autoUpdateConfigSource,
+		AutoUpdateCheckInterval:        autoUpdateInterval,
+		PinnedVersion:                  pinnedVersion,
+		UpdateObservationPath:          updateObservationPath,
+		SharedSkillsDir:                sharedSkillsDir,
+		SharedSkillsSyncInterval:       sharedSkillsInterval,
+		MemoryCurationL3ReviewEnabled:  memoryCurationL3ReviewEnabled,
+		MemoryCurationL3ReviewTimeout:  memoryCurationL3ReviewTimeout,
+		MemoryCurationRunTimeout:       memoryCurationRunTimeout,
+		GrokPersistentIdleTTL:          grokPersistentIdleTTL,
+		PiPersistentIdleTTL:            piPersistentIdleTTL,
+		MaxAgentProcesses:              maxAgentProcesses,
+		HealthPort:                     healthPort,
+		PollInterval:                   pollInterval,
+		HeartbeatInterval:              heartbeatInterval,
+		InboundWatchdog:                inboundWatchdog,
+		AgentTimeout:                   agentTimeout,
+		CodexSemanticInactivityTimeout: codexSemanticInactivityTimeout,
+		AgentIdleWatchdog:              agentIdleWatchdog,
+		AgentToolWatchdog:              agentToolWatchdog,
+		ClaudeArgs:                     claudeArgs,
+		CodexArgs:                      codexArgs,
+		CodebuddyArgs:                  codebuddyArgs,
 	}, nil
 }
 
@@ -720,11 +643,8 @@ func NormalizeServerBaseURL(raw string) (string, error) {
 
 // ResolveWorkspacesRoot returns the absolute path that the daemon and CLI
 // should treat as the workspaces root. Resolution order: explicit override >
-// MULTICA_WORKSPACES_ROOT env > default ($HOME/multica_workspaces, or
-// $HOME/multica_workspaces_<profile> for a named profile). Read-only callers
-// (e.g. `multica daemon disk-usage`) use this directly so they pick the same
-// directory the running daemon would have picked.
-func ResolveWorkspacesRoot(profile, override string) (string, error) {
+// MULTICA_WORKSPACES_ROOT env > default ($HOME/.multica/workspaces).
+func ResolveWorkspacesRoot(override string) (string, error) {
 	root := strings.TrimSpace(os.Getenv("MULTICA_WORKSPACES_ROOT"))
 	if override != "" {
 		root = override
@@ -734,48 +654,13 @@ func ResolveWorkspacesRoot(profile, override string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("resolve home directory: %w (set MULTICA_WORKSPACES_ROOT to override)", err)
 		}
-		if profile != "" {
-			root = filepath.Join(home, "multica_workspaces_"+profile)
-		} else {
-			root = filepath.Join(home, "multica_workspaces")
-		}
+		root = agentworkspace.DefaultWorkspacesRoot(home)
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return "", fmt.Errorf("resolve absolute workspaces root: %w", err)
 	}
 	return abs, nil
-}
-
-// ArtifactPatternsFromEnv returns the configured artifact patternSet — the
-// same list the GC loop consults when it runs the artifact-only cleanup. The
-// disk-usage CLI uses this to make sure the "artifact size" it reports
-// matches what the GC would actually reclaim.
-func ArtifactPatternsFromEnv() []string {
-	return patternsFromEnv("MULTICA_GC_ARTIFACT_PATTERNS", DefaultGCArtifactPatterns)
-}
-
-// patternsFromEnv reads a comma-separated list from env. Patterns containing
-// path separators are silently dropped — the GC artifact cleanup only matches
-// directory basenames, never paths, so a pattern like "foo/bar" is meaningless
-// and accepting it would just be a footgun.
-func patternsFromEnv(name string, defaults []string) []string {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		out := make([]string, len(defaults))
-		copy(out, defaults)
-		return out
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" || strings.ContainsAny(p, "/\\") {
-			continue
-		}
-		out = append(out, p)
-	}
-	return out
 }
 
 func shellArgsFromEnv(name string) ([]string, error) {

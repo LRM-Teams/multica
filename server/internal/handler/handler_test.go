@@ -184,7 +184,6 @@ func ensureAgentInboxTestFixtureDefaults(ctx context.Context, pool *pgxpool.Pool
 		    WHEN 'queued' THEN 'pending'
 		    WHEN 'dispatched' THEN 'draining'
 		    WHEN 'running' THEN 'draining'
-		    WHEN 'waiting_local_directory' THEN 'draining'
 		    WHEN 'completed' THEN 'acked'
 		    WHEN 'cancelled' THEN 'suppressed'
 		    ELSE NEW.status
@@ -1906,16 +1905,6 @@ func TestDaemonDeregisterRejectsMalformedRuntimeID(t *testing.T) {
 	testHandler.DaemonDeregister(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("DaemonDeregister: expected 400 for malformed runtime_ids, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestGetIssueGCCheckRejectsMalformedIssueID(t *testing.T) {
-	w := httptest.NewRecorder()
-	req := newRequest("GET", "/api/daemon/issues/not-a-uuid/gc-check", nil)
-	req = withURLParam(req, "issueId", "not-a-uuid")
-	testHandler.GetIssueGCCheck(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("GetIssueGCCheck: expected 400 for malformed issueId, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

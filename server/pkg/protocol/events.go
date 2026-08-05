@@ -32,18 +32,17 @@ const (
 	// subscribes by `task:` prefix and invalidates the workspace task
 	// snapshot, so the granularity here is "what does the user want to see
 	// change" — not "every internal status flip".
-	EventTaskQueued                = "task:queued"                  // ∅ → queued (enqueue / retry create)
-	EventTaskDispatch              = "task:dispatch"                // queued → dispatched (daemon claim)
-	EventTaskRunning               = "task:running"                 // dispatched → running (daemon started)
-	EventTaskWaitingLocalDirectory = "task:waiting_local_directory" // dispatched → waiting_local_directory (daemon parked on a busy local_directory path)
-	EventTaskProgress              = "task:progress"
-	EventTaskCompleted             = "task:completed" // running → completed
-	EventTaskFailed                = "task:failed"    // running → failed
-	EventTaskMessage               = "task:message"
-	EventAgentActivityStep         = "agent_activity:step"
-	EventAgentActivityEvent        = "agent_activity:event"
-	EventAgentMemoryUpdated        = "agent.memory_updated"
-	EventTaskCancelled             = "task:cancelled" // * → cancelled
+	EventTaskQueued         = "task:queued"   // ∅ → queued (enqueue / retry create)
+	EventTaskDispatch       = "task:dispatch" // queued → dispatched (daemon claim)
+	EventTaskRunning        = "task:running"  // dispatched → running (daemon started)
+	EventTaskProgress       = "task:progress"
+	EventTaskCompleted      = "task:completed" // running → completed
+	EventTaskFailed         = "task:failed"    // running → failed
+	EventTaskMessage        = "task:message"
+	EventAgentActivityStep  = "agent_activity:step"
+	EventAgentActivityEvent = "agent_activity:event"
+	EventAgentMemoryUpdated = "agent.memory_updated"
+	EventTaskCancelled      = "task:cancelled" // * → cancelled
 
 	// Inbox events
 	EventInboxNew           = "inbox:new"
@@ -130,11 +129,19 @@ const (
 	EventAutopilotRunDone  = "autopilot:run_done"
 
 	// Daemon events
-	EventDaemonHeartbeat         = "daemon:heartbeat"
-	EventDaemonHeartbeatAck      = "daemon:heartbeat_ack"
-	EventDaemonRegister          = "daemon:register"
-	EventDaemonRuntimeUpdated    = "daemon:runtime_updated"
-	EventDaemonTaskAvailable     = "daemon:task_available"
+	EventDaemonHeartbeat      = "daemon:heartbeat"
+	EventDaemonHeartbeatAck   = "daemon:heartbeat_ack"
+	EventDaemonRegister       = "daemon:register"
+	EventDaemonRuntimeUpdated = "daemon:runtime_updated"
+	EventDaemonTaskAvailable  = "daemon:task_available"
+	// EventAgentDeliver is the at-least-once server-to-machine transport for a
+	// canonical Message. Its acknowledgement is strictly a coordinator receipt:
+	// neither event implies runtime handoff or Context Boundary advancement.
+	EventAgentDeliver            = "agent:deliver"
+	EventAgentDeliverAck         = "agent:deliver:ack"
+	EventAgentRecoveryRequest    = "agent:recovery:request"
+	EventAgentRecoveryPage       = "agent:recovery:page"
+	EventAgentMessageHandoff     = "agent:message_handoff"
 	EventDaemonAgentStart        = "agent:start"
 	EventDaemonAgentStop         = "agent:stop"
 	EventDaemonAgentLifecycleReq = "agent:lifecycle.request"

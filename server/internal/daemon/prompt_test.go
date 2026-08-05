@@ -865,10 +865,8 @@ func TestBuildPromptWithoutChannelGoalKeepsOrdinaryChatUnchanged(t *testing.T) {
 	}
 }
 
-// TestWriteAgentRootSection asserts the layered layout: the three primary
-// surfaces (memory, skills, notes) get their own detailed line, the remaining
-// managed subdirs collapse into a single "Other local dirs" line, and an empty
-// root omits the section entirely.
+// TestWriteAgentRootSection asserts the lazy persistence contract under the
+// canonical AgentRoot. An empty root omits the section entirely.
 func TestWriteAgentRootSection(t *testing.T) {
 	t.Run("empty root is omitted", func(t *testing.T) {
 		var b strings.Builder
@@ -878,35 +876,34 @@ func TestWriteAgentRootSection(t *testing.T) {
 		}
 	})
 
-	const root = "/tmp/multica/ws-1/.multica/agents/agent-1"
+	const root = "/tmp/multica/workspace-1/agents/agent-1"
 	var b strings.Builder
 	writeAgentRootSection(&b, root)
 	out := b.String()
 
-	// Three primary surfaces, each with its own line + absolute path.
 	for _, want := range []string{
-		"Your personal workspace directory (one per agent, persists across runs):",
-		root + "/",
-		"- memory: " + root + "/memory/  (MEMORY.md, STATE.md, REVIEW.md, daily/)",
-		"- scoped: " + root + "/users/<member-id>/  (USER.md, RELATIONSHIP.md); projects/<project-id>/; channels/<channel-id>/CONTEXT.md",
-		"- skills: " + root + "/skills/  (drafts/, generated/, enabled/)",
-		"- notes:  " + root + "/notes/  (agents.md, channels.md, project-map.md, relationship-map.md, role-playbook.md, work-log.md, decisions.md)",
-		"When asked where your memory or files live, give these absolute paths.",
+		"Persistent memory (create files only when writing real content):",
+		root + "/memory/MEMORY.md",
+		root + "/memory/STATE.md",
+		root + "/memory/daily/YYYY-MM-DD.md",
+		root + "/users/<member-id>/USER.md or RELATIONSHIP.md",
+		root + "/projects/<project-id>/MEMORY.md, STATE.md, or DECISIONS.md",
+		root + "/channels/<channel-id>/CONTEXT.md",
+		"Keep agent, member, project, and channel scopes separate.",
+		"Do not create empty files, placeholder templates, directories for unused scopes, or parallel memory files.",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("prompt missing %q:\n%s", want, out)
 		}
 	}
 
-	// Collapsed "other local dirs" line names every remaining managed subdir
-	// without spending a full line on each.
-	for _, sub := range []string{
+	for _, legacy := range []string{
 		"Other local dirs",
-		"projects/", "repos/", "sessions/", "runtime/", "profile/",
-		"feedback/", "sync_queue/", "inbox/", "shared-cache/",
+		"repos/",
+		"- memory: " + root,
 	} {
-		if !strings.Contains(out, sub) {
-			t.Errorf("collapsed other-dirs line missing %q:\n%s", sub, out)
+		if strings.Contains(out, legacy) {
+			t.Errorf("prompt still enumerates legacy directory %q:\n%s", legacy, out)
 		}
 	}
 }

@@ -65,7 +65,7 @@ Multica manages the full agent lifecycle: from task assignment to execution moni
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 ```
 
 The script installs the Multica CLI from the current Multica release source.
@@ -73,7 +73,7 @@ The script installs the Multica CLI from the current Multica release source.
 ### Windows (PowerShell)
 
 ```powershell
-irm https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.ps1 | iex
+irm https://cdn.leagent.me/computer/install.ps1 | iex
 ```
 
 Then configure, authenticate, and install the supervised daemon service in one command:
@@ -85,7 +85,7 @@ multica setup          # Connect to Multica Cloud, log in, install daemon servic
 > **Self-hosting?** Add `--with-server` to deploy a full Multica server on your machine:
 >
 > ```bash
-> curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash -s -- --with-server
+> curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --with-server
 > multica setup self-host
 > ```
 >

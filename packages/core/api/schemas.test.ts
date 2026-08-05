@@ -25,6 +25,11 @@ import {
   RuntimeUsageByAgentListSchema,
   RuntimeUsageByHourListSchema,
   RuntimeUsageListSchema,
+  WorkspaceSchema,
+  WorkspaceListSchema,
+  EMPTY_WORKSPACE,
+  RuntimeAgentWorkspacesResponseSchema,
+  EMPTY_RUNTIME_AGENT_WORKSPACES_RESPONSE,
   StickerCatalogResponseSchema,
   UserSchema,
   SandboxNodeTemplatesResponseSchema,
@@ -587,6 +592,69 @@ describe("dashboard + runtime usage schema drift", () => {
       { date: "2026-05-19", region: "us-east" },
     ]);
     expect((parsed[0] as Record<string, unknown>).region).toBe("us-east");
+  });
+});
+
+describe("RuntimeAgentWorkspacesResponseSchema", () => {
+  it("parses the canonical agent workspace response", () => {
+    const parsed = RuntimeAgentWorkspacesResponseSchema.parse({
+      runtime_id: "runtime-1",
+      status: "ok",
+      items: [
+        {
+          dir_name: "agent-1",
+          rel_path: "workspace-1/agents/agent-1",
+          agent_id: "agent-1",
+          agent_name: "Alice",
+          orphan: false,
+        },
+      ],
+    });
+    expect(parsed.items[0]?.rel_path).toBe("workspace-1/agents/agent-1");
+  });
+
+  it("falls back when required response fields are malformed", () => {
+    expect(
+      parseWithFallback(
+        { runtime_id: "runtime-1", status: "ok", items: null },
+        RuntimeAgentWorkspacesResponseSchema,
+        EMPTY_RUNTIME_AGENT_WORKSPACES_RESPONSE,
+        { endpoint: "test runtime agent workspaces" },
+      ),
+    ).toEqual(EMPTY_RUNTIME_AGENT_WORKSPACES_RESPONSE);
+  });
+});
+
+describe("WorkspaceSchema", () => {
+  const workspace = {
+    id: "workspace-1",
+    name: "Multica",
+    slug: "multica",
+    description: null,
+    context: null,
+    settings: {},
+    issue_prefix: "MUL",
+    avatar_url: null,
+    created_at: "2026-08-05T00:00:00Z",
+    updated_at: "2026-08-05T00:00:00Z",
+  };
+
+  it("parses workspace responses without repository metadata", () => {
+    expect(WorkspaceSchema.parse(workspace)).toEqual(workspace);
+    expect(WorkspaceListSchema.parse([workspace])).toEqual([workspace]);
+  });
+
+  it("falls back when a workspace response is malformed", () => {
+    expect(
+      parseWithFallback({ ...workspace, id: 42 }, WorkspaceSchema, EMPTY_WORKSPACE, {
+        endpoint: "test workspace",
+      }),
+    ).toEqual(EMPTY_WORKSPACE);
+    expect(
+      parseWithFallback({ workspaces: [] }, WorkspaceListSchema, [], {
+        endpoint: "test workspace list",
+      }),
+    ).toEqual([]);
   });
 });
 

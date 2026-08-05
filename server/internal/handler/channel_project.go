@@ -3,16 +3,12 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/daemonws"
-	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -45,62 +41,6 @@ func (h *Handler) GetChannelProject(w http.ResponseWriter, r *http.Request) {
 		out = uuidToString(pid)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"project_id": out})
-}
-
-// resolveProjectWorkdirRuntime finds the online runtime that hosts a project's
-// managed working directory.
-//
-// The managed workdir lives on whichever daemon provisioned it. On a shared /
-// cloud runtime that daemon is NOT owned by the viewer, so resolving "the
-// viewer's own runtime" (the old behavior) wrongly reports offline. We instead
-// resolve the daemon recorded on the project's managed local_directory resource
-// and look up its online runtime, falling back to the viewer's own daemon for
-// the single-user local model. Returns ok=false when no reachable online
-// runtime exists.
-func (h *Handler) resolveProjectWorkdirRuntime(ctx context.Context, workspaceID, userID, projectID string) (pgtype.UUID, bool) {
-	var runtimeID pgtype.UUID
-	if h.DaemonHub == nil {
-		return runtimeID, false
-	}
-	wsID := parseUUID(workspaceID)
-
-	staleSecs := service.AgentHealthStaleThreshold.Seconds()
-
-	// Primary: the daemon that registered the project's managed workdir. This
-	// is where the files actually are — including a shared/public runtime.
-	var daemonID string
-	_ = h.DB.QueryRow(ctx, `
-		SELECT resource_ref->>'daemon_id'
-		FROM project_resource
-		WHERE project_id = $1 AND resource_type = 'local_directory'
-		  AND COALESCE((resource_ref->>'managed')::boolean, false) = true
-		  AND resource_ref->>'daemon_id' IS NOT NULL
-		ORDER BY created_at DESC
-		LIMIT 1`, parseUUID(projectID)).Scan(&daemonID)
-	if daemonID != "" {
-		if err := h.DB.QueryRow(ctx, `
-			SELECT id FROM agent_runtime
-			WHERE workspace_id = $1 AND daemon_id = $2 AND status = 'online'
-			  AND last_seen_at IS NOT NULL
-			  AND last_seen_at >= now() - make_interval(secs => $3::double precision)
-			ORDER BY last_seen_at DESC NULLS LAST
-			LIMIT 1`, wsID, daemonID, staleSecs).Scan(&runtimeID); err == nil && runtimeID.Valid {
-			return runtimeID, true
-		}
-	}
-
-	// Fallback: the viewer's own online runtime (local single-daemon model,
-	// where each user keeps their own copy of the managed workdir).
-	if err := h.DB.QueryRow(ctx, `
-		SELECT id FROM agent_runtime
-		WHERE workspace_id = $1 AND owner_id = $2 AND status = 'online'
-		  AND last_seen_at IS NOT NULL
-		  AND last_seen_at >= now() - make_interval(secs => $3::double precision)
-		ORDER BY last_seen_at DESC NULLS LAST
-		LIMIT 1`, wsID, parseUUID(userID), staleSecs).Scan(&runtimeID); err == nil && runtimeID.Valid {
-		return runtimeID, true
-	}
-	return runtimeID, false
 }
 
 // ChannelProjectFilesResponse is the file-tree listing for a channel's bound
@@ -160,38 +100,9 @@ func (h *Handler) ListChannelProjectFiles(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Otherwise: resolve the runtime that hosts the managed workdir (the shared/
-	// cloud daemon on the server, the viewer's own daemon locally).
-	runtimeID, ok := h.resolveProjectWorkdirRuntime(r.Context(), workspaceID, userID, projectID)
-	if !ok {
-		reply("offline", nil, false, projectID)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
-	defer cancel()
-	resp, err := h.DaemonHub.RequestWorkdirFiles(ctx, protocol.ListWorkdirFilesRequestPayload{
-		RequestID: uuid.NewString(),
-		RuntimeID: uuidToString(runtimeID),
-		RelPath:   managedWorkdirRelPath(projectID),
-	})
-	if err != nil {
-		if errors.Is(err, daemonws.ErrRuntimeOffline) {
-			reply("offline", nil, false, projectID)
-			return
-		}
-		reply("error", nil, false, projectID)
-		return
-	}
-	if resp.Missing {
-		reply("missing", nil, false, projectID)
-		return
-	}
-	if resp.Error != "" {
-		reply("error", nil, false, projectID)
-		return
-	}
-	reply("ok", resp.Nodes, resp.Truncated, projectID)
+	// Project resources are metadata only. Multica does not provision a
+	// shared workdir or inspect an Agent's private workspace for this view.
+	reply("offline", nil, false, projectID)
 }
 
 // ChannelProjectFileContentResponse is a single file's preview content. For
@@ -251,44 +162,7 @@ func (h *Handler) GetChannelProjectFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	runtimeID, ok := h.resolveProjectWorkdirRuntime(r.Context(), workspaceID, userID, projectID)
-	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "runtime offline")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
-	defer cancel()
-	resp, err := h.DaemonHub.RequestReadFile(ctx, protocol.ReadWorkdirFileRequestPayload{
-		RequestID: uuid.NewString(),
-		RuntimeID: uuidToString(runtimeID),
-		RelPath:   managedWorkdirRelPath(projectID),
-		FilePath:  filePath,
-	})
-	if err != nil {
-		if errors.Is(err, daemonws.ErrRuntimeOffline) {
-			writeError(w, http.StatusServiceUnavailable, "runtime offline")
-			return
-		}
-		writeError(w, http.StatusGatewayTimeout, "failed to read file")
-		return
-	}
-	if resp.Missing {
-		writeError(w, http.StatusNotFound, "file not found")
-		return
-	}
-	if resp.Error != "" {
-		writeError(w, http.StatusBadGateway, "failed to read file")
-		return
-	}
-	writeJSON(w, http.StatusOK, ChannelProjectFileContentResponse{
-		Content:   resp.Content,
-		Encoding:  resp.Encoding,
-		MimeType:  resp.MimeType,
-		Truncated: resp.Truncated,
-		TooLarge:  resp.TooLarge,
-		Binary:    resp.Binary,
-	})
+	writeError(w, http.StatusServiceUnavailable, "project files are not managed by Multica")
 }
 
 type setChannelProjectRequest struct {

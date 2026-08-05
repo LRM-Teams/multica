@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -73,7 +74,6 @@ func (d *Daemon) tryCanonicalChatBackend(
 		MulticaBinary:          selfBin,
 		Token:                  agentToken,
 		Environment:            stripProviderCredentialTransport(agentEnv),
-		SharedWorkdirEnvID:     task.SharedWorkdirEnvID,
 	})
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("canonical turn begin: %w", err)
@@ -127,7 +127,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 		Factory:            factory,
 		BeforeCreate: func() error {
 			// ledgerRoot unused; pass agent root sibling for API compat only.
-			ledgerRoot := execenv.CanonicalTurnLedgerRoot(turn.Workspace.RootDir)
+			ledgerRoot := execenv.CanonicalTurnLedgerRoot(turn.Workspace.AgentRoot)
 			brief, receipt, err := execenv.MaterializeCanonicalTurnContextB(workDir, ledgerRoot, provider, taskCtxCopy)
 			if err != nil {
 				return fmt.Errorf("materialize canonical AGENTS: %w", err)
@@ -144,6 +144,16 @@ func (d *Daemon) tryCanonicalChatBackend(
 	})
 	if err != nil {
 		return nil, nil, nil, false, fmt.Errorf("acquire canonical runtime: %w", err)
+	}
+	if mode == canonicalRuntimeResident {
+		created, err := d.ensureIdleMessageCoordinator(agentID, task.RuntimeID, turn.Workspace.AgentRoot)
+		if err != nil {
+			lease.release(false)
+			return nil, nil, nil, false, fmt.Errorf("register idle Message coordinator: %w", err)
+		}
+		if created {
+			d.beginAgentMessageRecovery(agentID, nil)
+		}
 	}
 
 	releaseTurn = false
@@ -170,6 +180,11 @@ func (d *Daemon) tryCanonicalChatBackend(
 			lease.release(false)
 		}
 		_ = turn.Close()
+		if healthy {
+			if err := d.flushIdleAgentDelivery(context.Background(), agentID); err != nil && taskLog != nil {
+				taskLog.Debug("idle Message flush deferred", "error", err)
+			}
+		}
 	}, turn, true, nil
 }
 

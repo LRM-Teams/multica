@@ -515,7 +515,6 @@
     "queued": "待機中",
     "dispatched": "起動中",
     "running": "考え中",
-    "waiting_local_directory": "ローカルディレクトリを待機中",
     "stop": "停止",
     "stop_named": "{{name}}を停止",
     "stop_aria": "{{name}}の現在のタスクを停止",

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,12 @@ func fakePiRPCProcessScript() string {
 	turn=0
 	while IFS= read -r line; do
 	  case "$line" in
+	    *'"id":"multica-message-input"'*)
+	      if [ -n "$PI_RPC_TEST_MESSAGE_INPUT" ]; then printf '%s' "$line" > "$PI_RPC_TEST_MESSAGE_INPUT"; fi
+	      printf '{"id":"multica-message-input","type":"response","command":"prompt","success":true}\n'
+	      printf '{"type":"agent_start"}\n'
+	      printf '{"type":"agent_end","messages":[]}\n'
+	      ;;
 	    *'"type":"prompt"'*)
 	      turn=$((turn + 1))
 	      printf '{"id":"multica-turn","type":"response","command":"prompt","success":true}\n'
@@ -42,6 +49,46 @@ func fakePiRPCProcessScript() string {
 	  esac
 	done
 	`
+}
+
+func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	inputPath := filepath.Join(dir, "message-input.json")
+	b := newPiRPCBackend(Config{ExecutablePath: path, Env: map[string]string{
+		"PI_RPC_TEST_STARTS":        filepath.Join(dir, "starts"),
+		"PI_RPC_TEST_MESSAGE_INPUT": inputPath,
+	}})
+	t.Cleanup(b.Close)
+
+	session, err := b.Execute(context.Background(), "initialize", ExecOptions{Cwd: dir, ResumeSessionID: filepath.Join(dir, "session.jsonl")})
+	if err != nil {
+		t.Fatalf("initialize Pi RPC: %v", err)
+	}
+	waitPiRPCResult(t, session, filepath.Join(dir, "session.jsonl"))
+	acceptance, err := b.AcceptMessageBatch(context.Background(), []ResidentMessage{{
+		ID: "message-1", Target: "channel:one", Seq: 7, Content: "concrete body", PartsJSON: json.RawMessage(`[{"type":"text","text":"concrete body"}]`),
+	}})
+	if err != nil {
+		t.Fatalf("AcceptMessageBatch: %v", err)
+	}
+	if acceptance.Done == nil {
+		t.Fatal("AcceptMessageBatch returned no native turn completion receipt")
+	}
+	if err := <-acceptance.Done; err != nil {
+		t.Fatalf("native Message turn completion: %v", err)
+	}
+	waitForPiRPCTestPath(t, inputPath)
+	raw, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"multica-message-input", "message-1", "channel:one", "concrete body"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("native Pi input %s does not contain %q", raw, want)
+		}
+	}
 }
 
 func TestPiRPCBackendReusesOneChildForCompatibleTurns(t *testing.T) {

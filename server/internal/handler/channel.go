@@ -3541,7 +3541,7 @@ func channelThreadWakeAnnotationState(memberType, taskStatus, terminalOutcome st
 	switch taskStatus {
 	case "queued", "pending":
 		return "pending", nil, true
-	case "dispatched", "running", "waiting_local_directory", "draining":
+	case "dispatched", "running", "draining":
 		return "delivered", nil, true
 	case "acked":
 		return "acked", nil, true
@@ -5873,11 +5873,12 @@ func (h *Handler) enqueueOrCoalesceChannelMessageWakeWithTx(ctx context.Context,
 
 func (h *Handler) recordChannelAgentPromptWake(ctx context.Context, ch ChannelResponse, agent db.Agent, trigger ChannelMessageResponse, reason string, result channelAgentPromptTxResult) {
 	h.publishAgentInboxTaskLifecycle(protocol.EventTaskQueued, result.Event, agent.RuntimeID, "queued")
-	// Record a wake-trigger activity event so the agent's Activity timeline
-	// shows why this session needs to drain.
+	// Record why scheduling happened without claiming that Message bodies have
+	// crossed the runtime input boundary. Only agent:message_handoff emits the
+	// wake_attempt that the UI labels "Message received".
 	h.recordAgentActivityEvent(ctx, h.DB,
 		parseUUID(ch.WorkspaceID), agent.ID, agent.RuntimeID, pgtype.UUID{},
-		activityKindWakeAttempt, "task_dispatched", "info",
+		activityKindTransport, "task_dispatched", "info",
 		"channel", parseUUID(ch.ID), ch.Name,
 		reason, "Agent woken by "+reason,
 		map[string]any{
@@ -6004,6 +6005,7 @@ func (h *Handler) publishChannelToMembers(ctx context.Context, eventType, worksp
 	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
 	h.publishToUsers(eventType, workspaceID, actorType, actorID, recipientIDs, payload)
 	h.observeChannelAgentTriggerDepth(eventType, payload)
+	h.scheduleCanonicalMessageDelivery(ctx, eventType, payload)
 	if eventType != protocol.EventChannelMessage || h.DB == nil {
 		return
 	}
@@ -6079,7 +6081,11 @@ func (h *Handler) runAfterChannelMessageAck(ctx context.Context, fn func(context
 
 func (h *Handler) publishChannelToMembersWithID(ctx context.Context, eventType, workspaceID, actorType, actorID string, channelID pgtype.UUID, payload any, realtimeEventID string) error {
 	recipientIDs := recipientUserIDsFromSet(h.channelHumanMemberIDs(ctx, workspaceID, uuidToString(channelID)))
-	return h.publishToUsersWithID(eventType, workspaceID, actorType, actorID, recipientIDs, payload, realtimeEventID)
+	if err := h.publishToUsersWithID(eventType, workspaceID, actorType, actorID, recipientIDs, payload, realtimeEventID); err != nil {
+		return err
+	}
+	h.scheduleCanonicalMessageDelivery(ctx, eventType, payload)
+	return nil
 }
 
 func (h *Handler) publishChannelAgentTyping(ctx context.Context, ch ChannelResponse, agent db.Agent, isTyping bool) {

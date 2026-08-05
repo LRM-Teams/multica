@@ -373,7 +373,7 @@ func TestAgentActivityEvents_FileToolUsesTopLevelPathFacts(t *testing.T) {
 	}
 
 	agentID := createWorkspaceVisibleActivityAgent(t, "activity-file-tool-agent")
-	const filePath = "/Users/frank/multica_workspaces/ws/.multica/agents/agent/hello_world_2.txt"
+	const filePath = "/Users/frank/.multica/workspaces/ws/agents/agent/hello_world_2.txt"
 	ctx := context.Background()
 
 	var eventID string
@@ -1265,7 +1265,7 @@ func TestAgentActivitySafeToolTargetForTool_NonFileToolsKeepSafeSummary(t *testi
 	}
 
 	argvTarget, argvKind := agentActivitySafeToolTargetForTool("", map[string]any{
-		"command": "multica repo checkout https://github.com/LRM-Teams/multica.git",
+		"command": "git status --short",
 	})
 	if argvTarget != "" || argvKind != "" {
 		t.Fatalf("unknown command target=(%q,%q), want no argv0-derived target", argvTarget, argvKind)

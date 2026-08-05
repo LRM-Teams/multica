@@ -20,9 +20,10 @@ import (
 var ErrRuntimeOffline = errors.New("runtime offline")
 
 const (
-	writeWait  = 10 * time.Second
-	pongWait   = 60 * time.Second
-	pingPeriod = (pongWait * 9) / 10
+	writeWait                  = 10 * time.Second
+	pongWait                   = 60 * time.Second
+	pingPeriod                 = (pongWait * 9) / 10
+	agentDeliveryRetryInterval = time.Second
 )
 
 // ClientIdentity captures the already-authenticated daemon connection scope.
@@ -85,6 +86,9 @@ type ReminderOwnerLifecycleHandler func(ctx context.Context, identity ClientIden
 type ReminderOwnerLifecycleAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.DaemonAgentLifecycleAckPayload) error
 type ReminderProjectionHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderProjectionRequestPayload) ([]protocol.ReminderProjectionEvent, protocol.ReminderProjectionReplayEndPayload, error)
 type ReminderProjectionAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.ReminderProjectionAckPayload) error
+type AgentDeliveryAckHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentDeliverAckPayload) error
+type AgentRecoveryHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentRecoveryRequest) (protocol.AgentRecoveryPage, error)
+type AgentMessageHandoffHandler func(ctx context.Context, identity ClientIdentity, payload protocol.AgentMessageHandoffPayload) error
 
 type ReminderOwnerGoneError struct {
 	AgentID             string
@@ -120,6 +124,14 @@ type Hub struct {
 	onReminderLifecycleAck  ReminderOwnerLifecycleAckHandler
 	onReminderProjection    ReminderProjectionHandler
 	onReminderProjectionAck ReminderProjectionAckHandler
+	deliveryMu              sync.RWMutex
+	onAgentDeliveryAck      AgentDeliveryAckHandler
+	onAgentRecovery         AgentRecoveryHandler
+	onAgentMessageHandoff   AgentMessageHandoffHandler
+
+	agentDeliveryMu            sync.Mutex
+	pendingAgentDeliveries     map[string]*pendingAgentDelivery
+	scheduleAgentDeliveryRetry func(time.Duration, func())
 
 	kindMu       sync.RWMutex
 	kindRecorder MessageKindRecorder
@@ -129,6 +141,90 @@ type Hub struct {
 	// channel; the caller unmarshals into the response type it expects.
 	pendMu  sync.Mutex
 	pending map[string]chan json.RawMessage
+}
+
+type pendingAgentDelivery struct {
+	runtimeID      string
+	payload        protocol.AgentDeliverPayload
+	frame          []byte
+	retryScheduled bool
+}
+
+// SetAgentDeliveryAckHandler installs the server-side receipt consumer for
+// agent:deliver:ack frames. The handler owns authorization and idempotency;
+// the hub only authenticates the daemon websocket identity.
+func (h *Hub) SetAgentDeliveryAckHandler(fn AgentDeliveryAckHandler) {
+	if h == nil {
+		return
+	}
+	h.deliveryMu.Lock()
+	h.onAgentDeliveryAck = fn
+	h.deliveryMu.Unlock()
+}
+
+func (h *Hub) SetAgentRecoveryHandler(fn AgentRecoveryHandler) {
+	if h == nil {
+		return
+	}
+	h.deliveryMu.Lock()
+	h.onAgentRecovery = fn
+	h.deliveryMu.Unlock()
+}
+
+func (h *Hub) SetAgentMessageHandoffHandler(fn AgentMessageHandoffHandler) {
+	if h == nil {
+		return
+	}
+	h.deliveryMu.Lock()
+	h.onAgentMessageHandoff = fn
+	h.deliveryMu.Unlock()
+}
+
+func (h *Hub) agentDeliveryAckHandler() AgentDeliveryAckHandler {
+	h.deliveryMu.RLock()
+	defer h.deliveryMu.RUnlock()
+	return h.onAgentDeliveryAck
+}
+
+func (h *Hub) agentRecoveryHandler() AgentRecoveryHandler {
+	h.deliveryMu.RLock()
+	defer h.deliveryMu.RUnlock()
+	return h.onAgentRecovery
+}
+
+func (h *Hub) agentMessageHandoffHandler() AgentMessageHandoffHandler {
+	h.deliveryMu.RLock()
+	defer h.deliveryMu.RUnlock()
+	return h.onAgentMessageHandoff
+}
+
+// NotifyAgentDelivery sends one canonical Message delivery to a daemon runtime.
+// The runtime route is deliberately outside the envelope: it is transport
+// placement, not Message or Context Boundary state.
+func (h *Hub) NotifyAgentDelivery(runtimeID string, payload protocol.AgentDeliverPayload) bool {
+	return h.notifyAgentDelivery(runtimeID, payload, "")
+}
+
+func (h *Hub) notifyAgentDelivery(runtimeID string, payload protocol.AgentDeliverPayload, eventID string) bool {
+	if h == nil || runtimeID == "" {
+		return false
+	}
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliver, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return false
+	}
+	if !h.stageAgentDelivery(runtimeID, payload, frame) {
+		return false
+	}
+	// A retry deliberately reuses delivery_id. Hub-level event dedup would
+	// suppress that retry before the coordinator can acknowledge it again.
+	delivered, _ := h.notifyFrame(runtimeID, frame, eventID)
+	if delivered {
+		h.activateAgentDeliveryRetry(payload.DeliveryID)
+	} else {
+		h.dropAgentDelivery(payload.DeliveryID)
+	}
+	return delivered
 }
 
 func NewHub() *Hub {
@@ -141,10 +237,101 @@ func NewHub() *Hub {
 			// grows cookie fallback.
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
-		clients:   make(map[*client]bool),
-		byRuntime: make(map[string]map[*client]bool),
-		pending:   make(map[string]chan json.RawMessage),
+		clients:                make(map[*client]bool),
+		byRuntime:              make(map[string]map[*client]bool),
+		pending:                make(map[string]chan json.RawMessage),
+		pendingAgentDeliveries: make(map[string]*pendingAgentDelivery),
+		scheduleAgentDeliveryRetry: func(delay time.Duration, retry func()) {
+			time.AfterFunc(delay, retry)
+		},
 	}
+}
+
+func (h *Hub) stageAgentDelivery(runtimeID string, payload protocol.AgentDeliverPayload, frame []byte) bool {
+	if h == nil || strings.TrimSpace(runtimeID) == "" || strings.TrimSpace(payload.DeliveryID) == "" {
+		return false
+	}
+	h.agentDeliveryMu.Lock()
+	defer h.agentDeliveryMu.Unlock()
+	if existing := h.pendingAgentDeliveries[payload.DeliveryID]; existing != nil {
+		return existing.runtimeID == runtimeID &&
+			existing.payload.AgentID == payload.AgentID &&
+			existing.payload.Seq == payload.Seq
+	}
+	h.pendingAgentDeliveries[payload.DeliveryID] = &pendingAgentDelivery{
+		runtimeID: runtimeID,
+		payload:   payload,
+		frame:     append([]byte(nil), frame...),
+	}
+	return true
+}
+
+func (h *Hub) activateAgentDeliveryRetry(deliveryID string) {
+	if h == nil {
+		return
+	}
+	h.agentDeliveryMu.Lock()
+	pending := h.pendingAgentDeliveries[deliveryID]
+	if pending == nil || pending.retryScheduled {
+		h.agentDeliveryMu.Unlock()
+		return
+	}
+	pending.retryScheduled = true
+	schedule := h.scheduleAgentDeliveryRetry
+	h.agentDeliveryMu.Unlock()
+	if schedule != nil {
+		schedule(agentDeliveryRetryInterval, func() { h.retryAgentDelivery(deliveryID) })
+	}
+}
+
+func (h *Hub) retryAgentDelivery(deliveryID string) {
+	if h == nil {
+		return
+	}
+	h.agentDeliveryMu.Lock()
+	pending := h.pendingAgentDeliveries[deliveryID]
+	if pending == nil {
+		h.agentDeliveryMu.Unlock()
+		return
+	}
+	pending.retryScheduled = false
+	runtimeID := pending.runtimeID
+	frame := append([]byte(nil), pending.frame...)
+	h.agentDeliveryMu.Unlock()
+
+	delivered, _ := h.notifyFrame(runtimeID, frame, "")
+	if !delivered {
+		// Once the live connection is gone, reconnect recovery is the durable
+		// correctness path. Do not retain an unbounded in-memory retry ledger.
+		h.dropAgentDelivery(deliveryID)
+		return
+	}
+	h.activateAgentDeliveryRetry(deliveryID)
+}
+
+func (h *Hub) acknowledgeAgentDelivery(c *client, ack protocol.AgentDeliverAckPayload) {
+	if h == nil || c == nil {
+		return
+	}
+	h.agentDeliveryMu.Lock()
+	defer h.agentDeliveryMu.Unlock()
+	pending := h.pendingAgentDeliveries[ack.DeliveryID]
+	if pending == nil || pending.payload.AgentID != ack.AgentID || pending.payload.Seq != ack.Seq {
+		return
+	}
+	if _, authorizedRuntime := c.runtimes[pending.runtimeID]; !authorizedRuntime {
+		return
+	}
+	delete(h.pendingAgentDeliveries, ack.DeliveryID)
+}
+
+func (h *Hub) dropAgentDelivery(deliveryID string) {
+	if h == nil {
+		return
+	}
+	h.agentDeliveryMu.Lock()
+	delete(h.pendingAgentDeliveries, deliveryID)
+	h.agentDeliveryMu.Unlock()
 }
 
 // requestDaemon pushes a request frame to the daemon watching runtimeID and
@@ -449,6 +636,7 @@ func (h *Hub) DeliverDaemonRuntime(scopeID string, frame []byte, eventID string)
 		return
 	}
 	runtimeID := ""
+	var agentDelivery *protocol.AgentDeliverPayload
 	switch msg.Type {
 	case protocol.EventDaemonTaskAvailable:
 		var payload protocol.TaskAvailablePayload
@@ -460,11 +648,31 @@ func (h *Hub) DeliverDaemonRuntime(scopeID string, frame []byte, eventID string)
 		runtimeID = payload.RuntimeID
 	case protocol.EventReminderUpsert, protocol.EventReminderCancel, protocol.EventDaemonAgentStart, protocol.EventDaemonAgentStop:
 		runtimeID = scopeID
+	case protocol.EventAgentDeliver:
+		var payload protocol.AgentDeliverPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil || payload.DeliveryID == "" {
+			slog.Debug("daemon websocket relay: invalid agent delivery payload", "error", err, "scope_id", scopeID, "event_id", eventID)
+			M.WakeupDeliveredMiss.Add(1)
+			return
+		}
+		runtimeID = scopeID
+		agentDelivery = &payload
 	default:
 		M.WakeupDeliveredMiss.Add(1)
 		return
 	}
+	if agentDelivery != nil && !h.stageAgentDelivery(runtimeID, *agentDelivery, frame) {
+		M.WakeupDeliveredMiss.Add(1)
+		return
+	}
 	delivered, deduped := h.notifyFrame(runtimeID, frame, eventID)
+	if agentDelivery != nil {
+		if delivered {
+			h.activateAgentDeliveryRetry(agentDelivery.DeliveryID)
+		} else if !deduped {
+			h.dropAgentDelivery(agentDelivery.DeliveryID)
+		}
+	}
 	if delivered {
 		M.WakeupDeliveredHit.Add(1)
 	} else if !deduped {
@@ -651,6 +859,56 @@ func (c *client) handleFrame(raw []byte) {
 		c.handleReminderProjectionRequest(msg.Payload)
 	case protocol.EventReminderProjectionAck:
 		c.handleReminderProjectionAck(msg.Payload)
+	case protocol.EventAgentDeliverAck:
+		handler := c.hub.agentDeliveryAckHandler()
+		if handler == nil {
+			return
+		}
+		var payload protocol.AgentDeliverAckPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			return
+		}
+		if err := handler(context.Background(), c.identity, payload); err != nil {
+			slog.Warn("agent delivery acknowledgement rejected", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID, "delivery_id", payload.DeliveryID)
+			return
+		}
+		c.hub.acknowledgeAgentDelivery(c, payload)
+	case protocol.EventAgentRecoveryRequest:
+		recoveryHandler := c.hub.agentRecoveryHandler()
+		if recoveryHandler == nil {
+			return
+		}
+		var request protocol.AgentRecoveryRequest
+		if err := json.Unmarshal(msg.Payload, &request); err != nil {
+			return
+		}
+		page, err := recoveryHandler(context.Background(), c.identity, request)
+		if err != nil {
+			slog.Warn("agent recovery request failed", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", request.AgentID)
+			return
+		}
+		frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentRecoveryPage, Payload: mustMarshalRaw(page)})
+		if err != nil {
+			return
+		}
+		select {
+		case c.send <- frame:
+		default:
+			c.hub.unregister(c)
+			_ = c.conn.Close()
+		}
+	case protocol.EventAgentMessageHandoff:
+		handler := c.hub.agentMessageHandoffHandler()
+		if handler == nil {
+			return
+		}
+		var payload protocol.AgentMessageHandoffPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			return
+		}
+		if err := handler(context.Background(), c.identity, payload); err != nil {
+			slog.Warn("agent Message handoff Activity rejected", "error", err, "daemon_id", c.identity.DaemonID, "agent_id", payload.AgentID, "handoff_id", payload.HandoffID)
+		}
 	default:
 		// Unknown app messages are intentionally ignored for forward
 		// compatibility with future daemon → server message types.

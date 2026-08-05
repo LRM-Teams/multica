@@ -515,7 +515,6 @@
     "queued": "Queued",
     "dispatched": "Starting up",
     "running": "Thinking",
-    "waiting_local_directory": "Waiting for local directory",
     "stop": "Stop",
     "stop_named": "Stop {{name}}",
     "stop_aria": "Stop {{name}}'s current task",

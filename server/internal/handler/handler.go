@@ -117,6 +117,7 @@ type Handler struct {
 	Hub                         *realtime.Hub
 	DaemonHub                   *daemonws.Hub
 	ReminderNotifier            daemonws.ReminderNotifier
+	AgentDeliveryNotifier       daemonws.AgentDeliveryNotifier
 	SandboxHub                  *sandboxws.Hub
 	Bus                         *events.Bus
 	TaskService                 *service.TaskService
@@ -328,6 +329,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
 	}
 	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit
+	taskSvc.OnTaskTerminal = h.maybeStartAutomaticSharedDiagnosis
 	h.wireHonorUnlockEvents()
 	h.wireAgentHonorEvents()
 	return h

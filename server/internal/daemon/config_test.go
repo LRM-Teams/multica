@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -20,29 +19,6 @@ func TestLatencyDefaults(t *testing.T) {
 	}
 	if taskMessageFlushInterval != 200*time.Millisecond {
 		t.Fatalf("taskMessageFlushInterval = %s, want 200ms", taskMessageFlushInterval)
-	}
-}
-
-func TestPatternsFromEnv_DefaultsWhenUnset(t *testing.T) {
-	t.Setenv("MULTICA_GC_ARTIFACT_PATTERNS", "")
-	defaults := []string{"node_modules", ".next", ".turbo"}
-	got := patternsFromEnv("MULTICA_GC_ARTIFACT_PATTERNS", defaults)
-	if !reflect.DeepEqual(got, defaults) {
-		t.Fatalf("expected defaults %v, got %v", defaults, got)
-	}
-	// Ensure callers get a copy, not a shared backing array.
-	got[0] = "mutated"
-	if defaults[0] == "mutated" {
-		t.Fatal("patternsFromEnv must not return a slice aliased with defaults")
-	}
-}
-
-func TestPatternsFromEnv_DropsSeparatorBearingEntries(t *testing.T) {
-	t.Setenv("MULTICA_GC_ARTIFACT_PATTERNS", "node_modules, .next ,foo/bar, ../etc, ,target")
-	got := patternsFromEnv("MULTICA_GC_ARTIFACT_PATTERNS", nil)
-	want := []string{"node_modules", ".next", "target"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("expected %v, got %v", want, got)
 	}
 }
 
@@ -263,6 +239,21 @@ func stageFakeAgent(t *testing.T) string {
 // external fork users), and version pin (#57) plus post-upgrade cleanup
 // (#55) now make opt-in safe, so self-host now defaults to the same
 // enabled-by-default value as Multica Cloud.
+func TestResolveWorkspacesRootDefaultsToMulticaHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("MULTICA_WORKSPACES_ROOT", "")
+
+	got, err := ResolveWorkspacesRoot("")
+	if err != nil {
+		t.Fatalf("ResolveWorkspacesRoot: %v", err)
+	}
+	want := filepath.Join(home, ".multica", "workspaces")
+	if got != want {
+		t.Fatalf("ResolveWorkspacesRoot = %q, want %q", got, want)
+	}
+}
+
 func TestLoadConfig_AutoUpdateDefault_SelfHostOn(t *testing.T) {
 	stageFakeAgent(t)
 	cfg, err := LoadConfig(Overrides{

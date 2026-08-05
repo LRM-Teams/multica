@@ -1,11 +1,10 @@
 package daemon
 
 import (
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
@@ -14,31 +13,19 @@ func TestCanonicalAgentWorkspaceLayoutMatchesExistingAgentRoot(t *testing.T) {
 	workspaceID := uuid.NewString()
 	agentID := uuid.NewString()
 
-	want := multicaAgentRoot(cfg, workspaceID, agentID)
+	want := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
 	got := execenv.PredictAgentRootDir(cfg.WorkspacesRoot, workspaceID, agentID)
 	if got != want {
 		t.Fatalf("D2 agent root %q diverges from existing agent root %q", got, want)
 	}
 }
 
-func TestD2WorkspaceContractsRemainInertUntilHardCutover(t *testing.T) {
-	for _, fileName := range []string{"daemon.go", "health.go"} {
-		raw, err := os.ReadFile(fileName)
-		if err != nil {
-			t.Fatalf("read %s: %v", fileName, err)
-		}
-		source := string(raw)
-		for _, dormantCall := range []string{
-			"PredictAgentRootDir(",
-			"ProvisionAgentWorkspace(",
-			"ProvisionAgentTurn(",
-			"MaterializeAgentRepo(",
-			"CleanupAgentTurn(",
-			"RemoveAgentWorkspace(",
-		} {
-			if strings.Contains(source, dormantCall) {
-				t.Errorf("%s activates dormant D2 call %q before D6", fileName, dormantCall)
-			}
-		}
+func TestCanonicalAgentWorkspaceIsTheWorkingDirectory(t *testing.T) {
+	layout, err := execenv.ResolveAgentWorkspaceLayout(t.TempDir(), uuid.NewString(), uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout.AgentRoot == "" {
+		t.Fatal("agent root is empty")
 	}
 }

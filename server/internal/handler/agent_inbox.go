@@ -2662,17 +2662,6 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 		}
 	}
 
-	loadWorkspaceRepos := func() {
-		if len(resp.Repos) > 0 || resp.ProvisionManagedWorkdir {
-			return
-		}
-		if workspace, err := h.Queries.GetWorkspace(ctx, event.WorkspaceID); err == nil && workspace.Repos != nil {
-			var repos []RepoData
-			if json.Unmarshal(workspace.Repos, &repos) == nil {
-				resp.Repos = repos
-			}
-		}
-	}
 	loadProject := func(projectID pgtype.UUID) {
 		if !projectID.Valid {
 			return
@@ -2680,13 +2669,6 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 		resp.ProjectID = uuidToString(projectID)
 		if project, err := h.Queries.GetProject(ctx, projectID); err == nil {
 			resp.ProjectTitle = project.Title
-		}
-		resources, repos := h.mapProjectResources(ctx, projectID)
-		resp.ProjectResources = resources
-		resp.Repos = repos
-		if len(resources) == 0 {
-			resp.ProvisionManagedWorkdir = true
-			resp.ManagedWorkdirRelPath = managedWorkdirRelPath(resp.ProjectID)
 		}
 	}
 
@@ -2776,14 +2758,12 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 				}
 			}
 		}
-		loadWorkspaceRepos()
 		return true
 	}
 
 	// Autopilot runtime tables dropped (LRM-1051). Historical AutopilotRunID
 	// cannot hydrate title/payload; fall through to other task kinds.
 	if event.AutopilotRunID.Valid {
-		loadWorkspaceRepos()
 		return true
 	}
 
@@ -2819,7 +2799,6 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 			loadProject(projectID)
 		}
 		resp.ParentIssueID = quickCreate.ParentIssueID
-		loadWorkspaceRepos()
 		return strings.TrimSpace(resp.QuickCreatePrompt) != ""
 	}
 
@@ -2827,7 +2806,6 @@ func (h *Handler) populateAgentInboxWorkContext(ctx context.Context, runtime db.
 	// wake kinds carry their exact prompt/config in the canonical context.
 	resp.Kind = event.Reason
 	resp.ThreadName = event.TriggerSummary.String
-	loadWorkspaceRepos()
 	return len(event.Context) > 0 || len(event.ExecutionConfig) > 0
 }
 
@@ -2880,17 +2858,6 @@ func (h *Handler) populateAgentInboxChannelWakeContext(ctx context.Context, even
 		resp.ProjectID = uuidToString(channelProjectID)
 		if project, err := h.Queries.GetProject(ctx, channelProjectID); err == nil {
 			resp.ProjectTitle = project.Title
-		}
-		resources, repos := h.mapProjectResources(ctx, channelProjectID)
-		resp.ProjectResources = resources
-		resp.Repos = repos
-	}
-	if len(resp.Repos) == 0 {
-		if workspace, err := h.Queries.GetWorkspace(ctx, event.WorkspaceID); err == nil && workspace.Repos != nil {
-			var repos []RepoData
-			if json.Unmarshal(workspace.Repos, &repos) == nil {
-				resp.Repos = repos
-			}
 		}
 	}
 	references := h.hydrateReferencedEntities(
@@ -2947,24 +2914,6 @@ func (h *Handler) populateAgentInboxChatContext(ctx context.Context, event db.Ag
 		resp.ProjectID = uuidToString(chatProjectID)
 		if proj, err := h.Queries.GetProject(ctx, chatProjectID); err == nil {
 			resp.ProjectTitle = proj.Title
-		}
-		resources, projectRepos := h.mapProjectResources(ctx, chatProjectID)
-		if len(resources) > 0 {
-			resp.ProjectResources = resources
-			if len(projectRepos) > 0 {
-				resp.Repos = projectRepos
-			}
-		} else {
-			resp.ProvisionManagedWorkdir = true
-			resp.ManagedWorkdirRelPath = managedWorkdirRelPath(resp.ProjectID)
-		}
-	}
-	if len(resp.Repos) == 0 && !resp.ProvisionManagedWorkdir {
-		if ws, err := h.Queries.GetWorkspace(ctx, cs.WorkspaceID); err == nil && ws.Repos != nil {
-			var repos []RepoData
-			if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
-				resp.Repos = repos
-			}
 		}
 	}
 	runtimeMatches := func(runtimeID pgtype.UUID) bool {

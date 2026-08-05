@@ -68,23 +68,25 @@ func TestClaudeStaticModelsExposeOnlyCurrentCleanLineup(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"sonnet", "opus", "haiku", "claude-fable-5"} {
+	for _, want := range []string{"sonnet", "opus", "haiku", "claude-fable-5", "claude-sonnet-5", "claude-opus-5"} {
 		if _, ok := ids[want]; !ok {
 			t.Errorf("missing Claude model %q in: %+v", want, models)
 		}
 	}
 	for id, wantLabel := range map[string]string{
 		"sonnet":         "Sonnet 5",
-		"opus":           "Opus",
+		"opus":           "Opus 5",
 		"haiku":          "Haiku",
 		"claude-fable-5": "Fable 5",
+		"claude-sonnet-5": "Sonnet 5 (pin)",
+		"claude-opus-5":   "Opus 5 (pin)",
 	} {
 		if got := ids[id].Label; got != wantLabel {
 			t.Errorf("visible label for %q = %q, want %q", id, got, wantLabel)
 		}
 	}
-	if len(models) != 4 {
-		t.Fatalf("visible Claude lineup = %+v, want the three official aliases plus latest Fable", models)
+	if len(models) != 6 {
+		t.Fatalf("visible Claude lineup = %+v, want the three official aliases plus Fable 5 and pinned Sonnet 5/Opus 5", models)
 	}
 	if defaults != 1 || !ids["sonnet"].Default {
 		t.Errorf("expected Sonnet to remain the sole default, got defaults=%d models=%+v", defaults, models)
@@ -997,28 +999,30 @@ func TestParseCodexDebugModelsCatalog_ListOnly(t *testing.T) {
 	}
 }
 
-func TestDiscoverClaudeModels_StaticFallbackWhenNoListCommand(t *testing.T) {
+func TestDiscoverClaudeModels_FallsBackToStatic(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	modelCacheMu.Lock()
 	delete(modelCache, "claude")
 	delete(modelCache, "claude:/nonexistent/claude")
 	modelCacheMu.Unlock()
-	// Claude Code has no `models list` subcommand, so with a missing/unusable
-	// CLI dynamic discovery fails. ListModels must fall back to the static
-	// alias lineup so the picker always has selectable, requestable models
-	// (Frank 2026-08-05: static config so requests can reach models).
 	got, err := ListModels(ctx, "claude", "/nonexistent/claude")
 	if err != nil {
-		t.Fatalf("expected no error with static fallback, got %v", err)
+		t.Fatalf("expected static fallback (no error) when Claude cannot list models, got %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("expected static fallback lineup when Claude cannot list models, got empty list")
 	}
 	ids := map[string]bool{}
 	for _, m := range got {
+		if m.ID == "" {
+			t.Errorf("fallback model has empty ID: %+v", m)
+		}
 		ids[m.ID] = true
 	}
-	for _, want := range []string{"sonnet", "opus", "haiku"} {
+	for _, want := range []string{"sonnet", "opus", "haiku", "claude-fable-5"} {
 		if !ids[want] {
-			t.Errorf("static fallback missing model %q in: %+v", want, got)
+			t.Errorf("static fallback missing %q: %+v", want, got)
 		}
 	}
 }

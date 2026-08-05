@@ -1731,7 +1731,7 @@ func (h *Handler) insertAgentTransportFreshnessResolutionActivityWithExec(
 		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
 		activityKindText, "send_freshness_resolved", "info",
 		"channel", parseUUID(target.channel.ID), target.raw,
-		"", "Freshness hold resolved", details,
+		"", "Freshness-held draft was abandoned and not sent", details,
 	)
 	if !inserted {
 		return pgtype.UUID{}, errors.New("failed to persist freshness resolution activity")

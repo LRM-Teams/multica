@@ -1671,6 +1671,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		WHERE workspace_id = $1
 		  AND agent_id = $2
 		  AND event_type = 'send_freshness_resolved'
+		  AND message = 'Freshness-held draft was abandoned and not sent'
 		  AND details->>'producer_fact_id' = $3
 		  AND details->>'outcome' = 'abandoned'
 		  AND NOT (details ? 'message_id')`,

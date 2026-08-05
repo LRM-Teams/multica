@@ -232,3 +232,103 @@ func TestCreateAgent_RequiresManageAgents(t *testing.T) {
 	}
 }
 
+// TestAgentTransportPrepareAction_CreatesCanonicalMessage verifies LRM-2343
+// S1: prepare with a target already creates the canonical channel_message
+// carrying the agent:create action part and returns message_id (story 2/3),
+// and that client_request_id idempotency returns the same message_id on
+// repeat while a changed proposal with the same key returns 409 (stories 4-6).
+func TestAgentTransportPrepareAction_CreatesCanonicalMessage(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", nil)
+	agentID := agentIDForTask(t, taskID)
+	target := "#" + channelNameForTransportTest(t, channelID)
+	clientID := "prepare-" + uuid.NewString()
+
+	prepare := func(cid, name, desc string) *httptest.ResponseRecorder {
+		req := agentTransportRequest(t, http.MethodPost, "/api/agent/actions/prepare", taskID, agentID, map[string]any{
+			"action_type":       "agent:create",
+			"name":              name,
+			"description":       desc,
+			"target":            target,
+			"client_request_id": cid,
+		})
+		rec := httptest.NewRecorder()
+		testHandler.AgentTransportPrepareAction(rec, req)
+		return rec
+	}
+
+	rec := prepare(clientID, "Canonical Bot", "created via message")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("prepare status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp agentActionCardResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.MessageID == nil || *resp.MessageID == "" {
+		t.Fatalf("response missing message_id: %+v", resp)
+	}
+	messageID := *resp.MessageID
+
+	// The canonical channel_message must exist and carry the agent:create part.
+	var authorType string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT author_type FROM channel_message WHERE id = $1`, messageID).Scan(&authorType); err != nil {
+		t.Fatalf("load message: %v", err)
+	}
+	if authorType != "agent" {
+		t.Fatalf("expected agent-authored canonical message, got %q", authorType)
+	}
+	var partsRaw string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COALESCE(parts::text, '') FROM channel_message WHERE id = $1`, messageID).Scan(&partsRaw); err != nil {
+		t.Fatalf("load message parts: %v", err)
+	}
+	if !strings.Contains(partsRaw, "agent:create") {
+		t.Fatalf("message parts missing agent:create action: %s", partsRaw)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM channel_message WHERE id = $1`, messageID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_action_card WHERE id = $1`, resp.ID)
+	})
+
+	// Same client_request_id + same proposal -> same message_id.
+	rec2 := prepare(clientID, "Canonical Bot", "created via message")
+	if rec2.Code != http.StatusCreated {
+		t.Fatalf("repeat prepare status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	var resp2 agentActionCardResponse
+	_ = json.NewDecoder(rec2.Body).Decode(&resp2)
+	if resp2.MessageID == nil || *resp2.MessageID != messageID {
+		t.Fatalf("idempotent retry returned different message_id: %v vs %s", resp2.MessageID, messageID)
+	}
+
+	// Same client_request_id + different proposal -> 409.
+	rec3 := prepare(clientID, "Different Bot", "changed")
+	if rec3.Code != http.StatusConflict {
+		t.Fatalf("conflicting reuse status=%d body=%s", rec3.Code, rec3.Body.String())
+	}
+}
+
+// TestAgentTransportPrepareAction_RequiresClientRequestIDWhenTargeted verifies
+// that a targeted prepare without a client_request_id is rejected.
+func TestAgentTransportPrepareAction_RequiresClientRequestIDWhenTargeted(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	taskID, channelID := createChannelCompletionTaskWithCapabilities(t, "group", nil)
+	agentID := agentIDForTask(t, taskID)
+	req := agentTransportRequest(t, http.MethodPost, "/api/agent/actions/prepare", taskID, agentID, map[string]any{
+		"action_type": "agent:create",
+		"name":        "No CID",
+		"description": "x",
+		"target":      "#" + channelNameForTransportTest(t, channelID),
+	})
+	rec := httptest.NewRecorder()
+	testHandler.AgentTransportPrepareAction(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%s", rec.Code, rec.Body.String())
+	}
+}

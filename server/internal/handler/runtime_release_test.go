@@ -23,8 +23,8 @@ func TestCachedRuntimeReleaseSourceUsesServerDispatchedBaseURL(t *testing.T) {
 		},
 	}
 	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/latest.json" {
-			t.Errorf("release feed path = %q, want /latest.json", r.URL.Path)
+		if r.URL.Path != "/manifest.json" {
+			t.Errorf("release feed path = %q, want /manifest.json", r.URL.Path)
 			http.NotFound(w, r)
 			return
 		}

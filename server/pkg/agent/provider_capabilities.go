@@ -99,7 +99,7 @@ var forceRestartResidentConstructors = map[string]func(Config) Backend{
 	"opencode": func(cfg Config) Backend { return newOpenCodeServeBackend(cfg) },
 	"kiro":     func(cfg Config) Backend { return newKiroACPBackend(cfg) },
 	"codex":    func(cfg Config) Backend { return newCodexAppServerBackend(cfg) },
-	"claude":   func(cfg Config) Backend { return newClaudeACPBackend(cfg) },
+	"claude":   func(cfg Config) Backend { return newClaudeStreamJSONBackend(cfg) },
 }
 
 func init() {

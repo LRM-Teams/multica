@@ -24,6 +24,7 @@ var ErrCodexResidentTurnBusy = errors.New("codex app-server turn busy")
 // config mismatch, and unhealthy release.
 type CodexAppServerBackend interface {
 	Backend
+	ResidentPendingNoticeInput
 	Close()
 }
 
@@ -147,8 +148,7 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 	p.client.usageMu.Lock()
 	p.client.usage = TokenUsage{}
 	p.client.usageMu.Unlock()
-	p.client.turnStarted = false
-	p.client.turnID = ""
+	p.client.setActiveTurn(false, "")
 	p.client.completedTurnIDs = make(map[string]bool)
 
 	semanticActivityCh := make(chan string, 256)
@@ -266,13 +266,13 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 				Timeout:      firstTurnNoProgressTimeout,
 				LastActivity: lastSemanticActivityDescription,
 				ThreadID:     threadID,
-				TurnID:       p.client.turnID,
+				TurnID:       p.client.activeTurnID(),
 				Model:        opts.Model,
 			}
 			b.cfg.Logger.Warn(CodexFirstTurnNoProgressMarker,
 				"pid", p.cmd.Process.Pid,
 				"thread_id", threadID,
-				"turn_id", p.client.turnID,
+				"turn_id", p.client.activeTurnID(),
 				"timeout", firstTurnNoProgressTimeout.String(),
 				"last_activity", lastSemanticActivityDescription,
 			)
@@ -290,13 +290,13 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 				Timeout:      semanticInactivityTimeout,
 				LastActivity: lastSemanticActivityDescription,
 				ThreadID:     threadID,
-				TurnID:       p.client.turnID,
+				TurnID:       p.client.activeTurnID(),
 				Model:        opts.Model,
 			}
 			b.cfg.Logger.Warn(timeoutMarker,
 				"pid", p.cmd.Process.Pid,
 				"thread_id", threadID,
-				"turn_id", p.client.turnID,
+				"turn_id", p.client.activeTurnID(),
 				"timeout", semanticInactivityTimeout.String(),
 				"last_activity", lastSemanticActivityDescription,
 			)
@@ -370,6 +370,36 @@ func (b *codexAppServerBackend) executeTurn(ctx context.Context, prompt string, 
 		SessionID: threadID,
 		Usage:     usageMap,
 	}
+}
+
+// AcceptPendingNotice steers a content-free Notice into the active Codex turn.
+// expectedTurnId fences a late write from landing in a newer turn after the
+// daemon observed the busy slot.
+func (b *codexAppServerBackend) AcceptPendingNotice(ctx context.Context, notice ResidentPendingNotice) error {
+	if !b.running.Load() {
+		return errors.New("Codex Pending Notice requires an active turn")
+	}
+	p := b.process.Load()
+	if p == nil {
+		return errors.New("Codex Pending Notice requires a live app-server")
+	}
+	turnID := p.client.activeTurnID()
+	if turnID == "" {
+		return errors.New("Codex Pending Notice requires an accepted active turn")
+	}
+	prompt, err := formatResidentPendingNotice(notice)
+	if err != nil {
+		return err
+	}
+	_, err = p.client.request(ctx, "turn/steer", map[string]any{
+		"threadId":       p.threadID,
+		"expectedTurnId": turnID,
+		"input":          []map[string]any{{"type": "text", "text": prompt}},
+	})
+	if err != nil {
+		return fmt.Errorf("Codex Pending Notice: %w", err)
+	}
+	return nil
 }
 
 func (b *codexAppServerBackend) ensureProcess(ctx context.Context, opts ExecOptions) (*codexAppServerProcess, error) {

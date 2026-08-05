@@ -21,6 +21,7 @@ var ErrGrokACPTurnBusy = errors.New("grok ACP turn busy")
 // turn; leaving a child alive after those boundaries would leak chat context.
 type GrokACPBackend interface {
 	Backend
+	ResidentPendingNoticeInput
 	Close()
 }
 
@@ -110,6 +111,32 @@ func (b *grokACPBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 // poll process liveness between turns, not just during an in-flight one.
 func (b *grokACPBackend) RuntimeAlive() (bool, bool) {
 	return b.runtimeAlive()
+}
+
+// AcceptPendingNotice uses Grok's native interjection request. The response is
+// the provider receipt for the content-free write; it does not consume any
+// Pending Message body or advance a Context Boundary.
+func (b *grokACPBackend) AcceptPendingNotice(ctx context.Context, notice ResidentPendingNotice) error {
+	if !b.running.Load() {
+		return errors.New("Grok Pending Notice requires an active turn")
+	}
+	p := b.process.Load()
+	if p == nil || strings.TrimSpace(p.sessionID) == "" {
+		return errors.New("Grok Pending Notice requires a live session")
+	}
+	prompt, err := formatResidentPendingNotice(notice)
+	if err != nil {
+		return err
+	}
+	_, err = p.client.request(ctx, "_x.ai/interject", map[string]any{
+		"sessionId":      p.sessionID,
+		"text":           prompt,
+		"interjectionId": fmt.Sprintf("multica-%d", time.Now().UnixNano()),
+	})
+	if err != nil {
+		return fmt.Errorf("Grok Pending Notice: %w", err)
+	}
+	return nil
 }
 
 func (b *grokACPBackend) runtimeAlive() (bool, bool) {

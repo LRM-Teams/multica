@@ -517,6 +517,29 @@ func (c *hermesClient) writeLine(data []byte) error {
 }
 
 func (c *hermesClient) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	id, result, err := c.beginRequest(method, params)
+	if err != nil {
+		return nil, err
+	}
+	return c.awaitRequest(ctx, id, result)
+}
+
+func (c *hermesClient) awaitRequest(ctx context.Context, id int, result <-chan rpcResult) (json.RawMessage, error) {
+	select {
+	case res := <-result:
+		return res.result, res.err
+	case <-ctx.Done():
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+		return nil, ctx.Err()
+	}
+}
+
+// beginRequest writes one JSON-RPC request and returns its eventual response
+// channel. Resident adapters use the successful native write as the bounded
+// handoff receipt when the provider protocol only answers at end-of-turn.
+func (c *hermesClient) beginRequest(method string, params any) (int, <-chan rpcResult, error) {
 	c.mu.Lock()
 	id := c.nextID
 	c.nextID++
@@ -535,25 +558,16 @@ func (c *hermesClient) request(ctx context.Context, method string, params any) (
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
-		return nil, err
+		return 0, nil, err
 	}
 	data = append(data, '\n')
 	if err := c.writeLine(data); err != nil {
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
-		return nil, fmt.Errorf("write %s: %w", method, err)
+		return 0, nil, fmt.Errorf("write %s: %w", method, err)
 	}
-
-	select {
-	case res := <-pr.ch:
-		return res.result, res.err
-	case <-ctx.Done():
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
-		return nil, ctx.Err()
-	}
+	return id, pr.ch, nil
 }
 
 func (c *hermesClient) closeAllPending(err error) {

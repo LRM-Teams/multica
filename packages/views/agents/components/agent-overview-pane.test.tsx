@@ -37,6 +37,12 @@ vi.mock("./tabs/integrations-tab", () => ({
 vi.mock("./tabs/agent-honor-tab", () => ({
   AgentHonorTab: () => <div data-testid="agent-honor-tab">agent-honor-tab</div>,
 }));
+vi.mock("./tabs/memory-tab", () => ({
+  MemoryTab: () => <div data-testid="synced-memory-tab">synced-memory-tab</div>,
+}));
+vi.mock("../../channels/components/agent-files-panel", () => ({
+  AgentFilesPanel: () => <div data-testid="local-agent-files">local-agent-files</div>,
+}));
 vi.mock("../../common/actor-issues-panel", () => ({
   ActorIssuesPanel: () => <div>actor-issues-panel</div>,
 }));
@@ -106,7 +112,7 @@ function makeRuntime(provider: string): AgentRuntime {
   };
 }
 
-function renderPane(runtimes: AgentRuntime[], initialTab?: "honor") {
+function renderPane(runtimes: AgentRuntime[], initialTab?: "honor" | "memory") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -175,6 +181,14 @@ describe("AgentOverviewPane initial tab", () => {
       "data-active",
       "true",
     );
+  });
+});
+
+describe("AgentOverviewPane Memory tab", () => {
+  it("shows local runtime files alongside synced memories", () => {
+    renderPane([makeRuntime("codex")], "memory");
+    expect(screen.getByTestId("local-agent-files")).toBeInTheDocument();
+    expect(screen.getByTestId("synced-memory-tab")).toBeInTheDocument();
   });
 });
 

@@ -483,7 +483,7 @@
       }
     },
     "memory": {
-      "intro": "Runtime-synced memories for this agent. They are saved in Multica so the agent keeps context when it moves to another runtime.",
+      "intro": "Local runtime files are shown first; runtime-synced memories remain below so the agent keeps context when it moves to another runtime.",
       "loading": "Loading memories…",
       "empty_title": "No memories synced",
       "empty_hint": "Memory files from this agent runtime will appear here after the next sync.",

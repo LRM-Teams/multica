@@ -25,7 +25,9 @@ describe("cardMenuItemsForNode", () => {
     const okItems = cardMenuItemsForNode(ok);
     expect(failItems.find((i) => i.id === "retry_failed")?.enabled).toBe(true);
     expect(okItems.find((i) => i.id === "retry_failed")?.enabled).toBe(false);
-    expect(failItems.find((i) => i.id === "fork_from")?.disabledReason).toMatch(/not available/i);
+    expect(failItems.find((i) => i.id === "fork_from")?.disabledReason).toMatch(
+      /not available|不可创建探索分支/i,
+    );
     expect(failItems.find((i) => i.id === "reassign")?.enabled).toBe(false);
     expect(failItems.find((i) => i.id === "cancel_run")?.enabled).toBe(false);
   });

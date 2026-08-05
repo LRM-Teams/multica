@@ -153,7 +153,9 @@ describe("research empty/permission a11y static contract (LRM-1197)", () => {
     const items = cardMenuItemsForNode(failed, { canWrite: false });
     const retry = items.find((i) => i.id === "retry_failed");
     expect(retry?.enabled).toBe(false);
-    expect(retry?.disabledReason).toMatch(/read-only|no write permission/i);
+    expect(retry?.disabledReason).toMatch(
+      /read-only|no write permission|无写入权限/i,
+    );
 
     const cancel = items.find((i) => i.id === "cancel_run");
     expect(cancel?.enabled).toBe(false);
@@ -203,7 +205,7 @@ describe("research empty/permission a11y static contract (LRM-1197)", () => {
     );
     const fork = screen.getByRole("menuitem", { name: /Fork from here/i });
     expect(fork).toBeDisabled();
-    expect(fork.getAttribute("title")).toMatch(/not available/i);
-    expect(fork.textContent).toMatch(/not available/i);
+    expect(fork.getAttribute("title")).toMatch(/not available|不可创建探索分支/i);
+    expect(fork.textContent).toMatch(/not available|不可创建探索分支/i);
   });
 });

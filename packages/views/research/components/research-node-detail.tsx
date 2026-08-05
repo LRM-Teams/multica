@@ -399,6 +399,7 @@ function DetailBody({
   const executor = actorLabel(runContext.actor, runContext.actorID);
   const expectedResult = expectedResultLabelFor(runContext.task?.expected_result, t);
   const durationMinutes = elapsedMinutes(runContext.startedAt, runContext.completedAt);
+  const nextStep = runContext.nextStep;
 
   // Only explicitly associated sources (source_id / source_ids). Never fall
   // back to session-wide sources — that would attribute other nodes' evidence
@@ -636,18 +637,14 @@ function DetailBody({
           </section>
         ) : null}
 
-        {(() => {
-          const step = runContext.nextStep;
-          if (!step) return null;
-          return (
-            <section>
-              <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-                {t(($) => $.node.next_step)}
-              </h3>
-              <p className="text-sm leading-relaxed">{t(($) => $.node.next_steps[step])}</p>
-            </section>
-          );
-        })()}
+        {nextStep ? (
+          <section>
+            <h3 className="mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {t(($) => $.node.next_step)}
+            </h3>
+            <p className="text-sm leading-relaxed">{t(($) => $.node.next_steps[nextStep])}</p>
+          </section>
+        ) : null}
 
         {runContext.producedClaims.length > 0 ||
         runContext.createdQuestions.length > 0 ? (

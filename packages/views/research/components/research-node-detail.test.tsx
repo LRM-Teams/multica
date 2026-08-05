@@ -330,7 +330,7 @@ describe("ResearchNodeDetail (LRM-797 / LRM-826)", () => {
           kind: "discover",
           objective: "Collect two independent primary sources for transaction prices.",
           required_capability: "scout",
-          expected_result: "research_evidence_v2",
+          expected_result: "research_evidence_v3",
           acceptance_criteria: { schema_version: 2, minimum_independent_sources: 2 },
           status: "succeeded",
           assigned_agent_id: "agent-1",

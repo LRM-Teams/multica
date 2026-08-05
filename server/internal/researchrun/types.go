@@ -8,7 +8,8 @@ import (
 const (
 	OrchestratorVersionV1 = "research-run-v1"
 	OrchestratorVersionV2 = "research-run-v2"
-	OrchestratorVersion   = OrchestratorVersionV2
+	OrchestratorVersionV3 = "research-run-v3"
+	OrchestratorVersion   = OrchestratorVersionV3
 )
 
 type RunStatus string
@@ -142,6 +143,28 @@ type ResearchContract struct {
 	RunLimits    json.RawMessage `json:"run_limits"`
 	Reason       string          `json:"reason"`
 	CreatedAt    time.Time       `json:"created_at"`
+}
+
+// ResearchMethod is the accepted, versioned method shared by every task in a
+// plan. It is derived from a v3 plan result and stored in the append-only
+// decision ledger; Agents cannot supply its attribution or version fields.
+type ResearchMethod struct {
+	GoalVersion             int       `json:"goal_version"`
+	PlanVersion             int       `json:"plan_version"`
+	DecisionQuestion        string    `json:"decision_question"`
+	MethodRationale         string    `json:"method_rationale"`
+	AnalysisMethods         []string  `json:"analysis_methods"`
+	EvidenceRequirements    []string  `json:"evidence_requirements"`
+	InclusionCriteria       []string  `json:"inclusion_criteria"`
+	ExclusionCriteria       []string  `json:"exclusion_criteria"`
+	SourceStrategy          []string  `json:"source_strategy"`
+	CounterevidenceStrategy []string  `json:"counterevidence_strategy"`
+	StoppingConditions      []string  `json:"stopping_conditions"`
+	Uncertainties           []string  `json:"uncertainties"`
+	PlanningRisks           []string  `json:"planning_risks"`
+	CreatedByTaskID         string    `json:"created_by_task_id"`
+	CreatedByAgentID        string    `json:"created_by_agent_id"`
+	CreatedAt               time.Time `json:"created_at"`
 }
 
 type Run struct {
@@ -381,6 +404,7 @@ type GateResult struct {
 type RunSnapshot struct {
 	Run          Run                  `json:"run"`
 	Contract     ResearchContract     `json:"contract"`
+	Method       *ResearchMethod      `json:"method,omitempty"`
 	Questions    []Question           `json:"questions"`
 	Tasks        []Task               `json:"tasks"`
 	Attempts     []Attempt            `json:"attempts"`

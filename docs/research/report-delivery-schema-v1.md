@@ -91,7 +91,7 @@ Upgrade path:
 - Future `schema_version: 2+` must remain readable via `content_md`; unknown
   versions are treated as read-only markdown (see below). The legacy report
   endpoint continues to accept opaque/empty `structured` for compatibility.
-  Durable `research-run-v2` synthesis hard-validates the complete v1 shape,
+  Durable `research-run-v2` and `research-run-v3` synthesis hard-validates the complete v1 shape,
   exact section/conclusion presence in `content_md`, citation/source
   references, and normalized Claim anchors before creating a report revision.
 

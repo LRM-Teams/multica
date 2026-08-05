@@ -457,6 +457,25 @@ export interface ResearchRunContract {
   created_at: string;
 }
 
+export interface ResearchRunMethod {
+  goal_version: number;
+  plan_version: number;
+  decision_question: string;
+  method_rationale: string;
+  analysis_methods: string[];
+  evidence_requirements: string[];
+  inclusion_criteria: string[];
+  exclusion_criteria: string[];
+  source_strategy: string[];
+  counterevidence_strategy: string[];
+  stopping_conditions: string[];
+  uncertainties: string[];
+  planning_risks: string[];
+  created_by_task_id: string;
+  created_by_agent_id: string;
+  created_at: string;
+}
+
 export interface ResearchRunQuestion {
   id: string;
   parent_question_id?: string;
@@ -577,6 +596,7 @@ export interface ResearchRunGateFinding {
 export interface ResearchRunSnapshot {
   run: ResearchRun;
   contract: ResearchRunContract;
+  method?: ResearchRunMethod;
   questions: ResearchRunQuestion[];
   tasks: ResearchRunTask[];
   attempts: ResearchRunAttempt[];

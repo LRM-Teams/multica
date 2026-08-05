@@ -66,6 +66,8 @@ func DecodeAndValidateResultForVersion(version string, raw json.RawMessage, task
 		return DecodeAndValidateResult(raw, task, config)
 	case OrchestratorVersionV2:
 		return decodeAndValidateResult(raw, task, config, (*ResultEnvelope).validateV2)
+	case OrchestratorVersionV3:
+		return decodeAndValidateResult(raw, task, config, (*ResultEnvelope).validateV3)
 	default:
 		return ResultEnvelope{}, "", fmt.Errorf("%w: %q", ErrUnsupportedVersion, version)
 	}
@@ -73,21 +75,38 @@ func DecodeAndValidateResultForVersion(version string, raw json.RawMessage, task
 
 func ensureSupportedOrchestratorVersion(version string) error {
 	switch version {
-	case OrchestratorVersionV1, OrchestratorVersionV2:
+	case OrchestratorVersionV1, OrchestratorVersionV2, OrchestratorVersionV3:
 		return nil
 	default:
 		return fmt.Errorf("%w: %q", ErrUnsupportedVersion, version)
 	}
 }
 
+func usesStructuredResultContract(version string) bool {
+	return version == OrchestratorVersionV2 || version == OrchestratorVersionV3
+}
+
 type PlanProposal struct {
 	Questions         []QuestionProposal `json:"questions"`
 	Tasks             []TaskProposal     `json:"tasks"`
+	Method            *MethodProposal    `json:"method,omitempty"`
 	InclusionCriteria []string           `json:"inclusion_criteria"`
 	ExclusionCriteria []string           `json:"exclusion_criteria"`
 	SourceStrategy    []string           `json:"source_strategy"`
 	Uncertainties     []string           `json:"uncertainties"`
 	PlanningRisks     []string           `json:"planning_risks"`
+}
+
+// MethodProposal contains only Agent-authored method choices. Goal/plan
+// versions and attribution are assigned by the ResearchRun Module when the
+// plan is accepted.
+type MethodProposal struct {
+	DecisionQuestion        string   `json:"decision_question"`
+	MethodRationale         string   `json:"method_rationale"`
+	AnalysisMethods         []string `json:"analysis_methods"`
+	EvidenceRequirements    []string `json:"evidence_requirements"`
+	CounterevidenceStrategy []string `json:"counterevidence_strategy"`
+	StoppingConditions      []string `json:"stopping_conditions"`
 }
 
 type QuestionProposal struct {
@@ -230,6 +249,9 @@ func (r *ResultEnvelope) Validate(task Task, cfg RunConfig) error {
 	}
 	if r.Evaluation != nil && (len(r.Evaluation.DimensionFindings) > 0 || len(r.Evaluation.ReviewedClaimKeys) > 0 || len(r.Evaluation.ReviewedSectionIDs) > 0) {
 		return fmt.Errorf("%w: structured review coverage requires schema_version 2", ErrInvalidResult)
+	}
+	if r.Plan != nil && r.Plan.Method != nil {
+		return fmt.Errorf("%w: plan method requires schema_version 3", ErrInvalidResult)
 	}
 	if err := validateKey("client_request_id", r.ClientRequestID); err != nil {
 		return err

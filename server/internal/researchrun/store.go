@@ -44,6 +44,7 @@ type Store interface {
 	InitializeRun(context.Context, StartInput, RunConfig) (Run, RunEvent, error)
 	GetRun(context.Context, string, string) (Run, error)
 	GetCurrentContract(context.Context, string, string) (ResearchContract, error)
+	GetCurrentMethod(context.Context, string, string) (*ResearchMethod, error)
 	ListQuestions(context.Context, string) ([]Question, error)
 	ListTasks(context.Context, string) ([]Task, error)
 	ListAttempts(context.Context, string) ([]Attempt, error)

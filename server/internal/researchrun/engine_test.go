@@ -188,6 +188,44 @@ func TestTaskPromptV2CarriesAndPinsReportQualityContract(t *testing.T) {
 	}
 }
 
+func TestTaskPromptV3CarriesAcceptedGeneralResearchMethod(t *testing.T) {
+	run := Run{SessionID: "session-3", Goal: "Choose a deployment architecture", GoalVersion: 1, PlanVersion: 2, DepthTier: "standard", OrchestratorVersion: OrchestratorVersionV3}
+	task := Task{ID: "task-3", Kind: TaskKindCounterSearch, Objective: "Find evidence that reverses the current ranking", RequiredCapability: "validator", ExpectedResult: "research_evidence_v3", GoalVersion: 1, PlanVersion: 2}
+	attempt := Attempt{ID: "attempt-3", DispatchKey: "dispatch-3"}
+	method := &ResearchMethod{
+		GoalVersion: 1, PlanVersion: 2,
+		DecisionQuestion:        "Which architecture meets the workload and recovery constraints?",
+		MethodRationale:         "Compare measured behavior under the same workload and test failure assumptions.",
+		AnalysisMethods:         []string{"Controlled comparison", "Failure-mode analysis"},
+		EvidenceRequirements:    []string{"Comparable workload measurements"},
+		InclusionCriteria:       []string{"Same workload boundary"},
+		ExclusionCriteria:       []string{"Unreproducible anecdotes"},
+		SourceStrategy:          []string{"Measurements and operational records"},
+		CounterevidenceStrategy: []string{"Search for recovery failures that reverse the ranking"},
+		StoppingConditions:      []string{"Material failure modes are verified or unresolved explicitly"},
+		Uncertainties:           []string{"Future traffic distribution"},
+		PlanningRisks:           []string{"Benchmark mismatch"},
+	}
+	prompt, err := buildTaskPrompt(run, task, attempt, RunSnapshot{Contract: ResearchContract{Language: "zh"}, Method: method}, []FleetMember{{Role: "validator", Status: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"schema_version=3",
+		"plan.method={decision_question,method_rationale,analysis_methods,evidence_requirements,counterevidence_strategy,stopping_conditions}",
+		"Which architecture meets the workload and recovery constraints?",
+		"Controlled comparison",
+		"Every non-plan task inherits the accepted method exactly",
+		"Do not impose academic publication protocols",
+		"counter_search=research_evidence_v3",
+		"Counter-search follows the accepted falsification conditions",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("prompt missing %q:\n%s", required, prompt)
+		}
+	}
+}
+
 func TestTaskPromptRejectsUnsupportedOrchestratorVersion(t *testing.T) {
 	_, err := buildTaskPrompt(Run{OrchestratorVersion: "research-run-v999"}, Task{}, Attempt{}, RunSnapshot{}, nil)
 	if !errors.Is(err, ErrUnsupportedVersion) {

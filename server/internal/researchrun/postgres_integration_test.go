@@ -370,6 +370,7 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	if err != nil || len(tasks) != 1 || tasks[0].Kind != TaskKindPlan {
 		t.Fatalf("ListTasks=%+v err=%v", tasks, err)
 	}
+	planTaskID := tasks[0].ID
 	attempt, _, err := store.CreateAttempt(ctx, fixture.sessionID, tasks[0].ID, fixture.agentID)
 	if err != nil {
 		t.Fatalf("CreateAttempt: %v", err)
@@ -385,9 +386,9 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 		t.Fatalf("AttachInboxTask: %v", err)
 	}
 
-	result := validPlanResult(t)
+	result := validV3PlanResult(t)
 	raw, _ := json.Marshal(result)
-	validated, hash, err := DecodeAndValidateResult(raw, tasks[0], run.Config)
+	validated, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, tasks[0], run.Config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +399,7 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcceptResult: %v", err)
 	}
-	if outcome.QuestionsCreated != 1 || outcome.TasksCreated != 1 || outcome.Event.Type != "task_result_accepted" {
+	if outcome.QuestionsCreated != 1 || outcome.TasksCreated != 4 || outcome.Event.Type != "task_result_accepted" {
 		t.Fatalf("outcome=%+v", outcome)
 	}
 	replayed, err := store.AcceptResult(ctx, AcceptResultInput{
@@ -417,7 +418,7 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	for _, task := range tasks {
 		discoverReady = discoverReady || task.Kind == TaskKindDiscover && task.Status == TaskStatusReady
 	}
-	if err != nil || len(tasks) != 2 || !discoverReady {
+	if err != nil || len(tasks) != 5 || !discoverReady {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
 	}
 	run, err = store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
@@ -435,6 +436,14 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 			discoverTask = candidate
 			break
 		}
+	}
+	method, err := store.GetCurrentMethod(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil || method == nil || method.DecisionQuestion != result.Plan.Method.DecisionQuestion || method.PlanVersion != run.PlanVersion {
+		t.Fatalf("method=%+v err=%v", method, err)
+	}
+	snapshot, err := store.TaskContext(ctx, discoverTask.ID, fixture.workspaceID)
+	if err != nil || snapshot.Method == nil || snapshot.Method.CreatedByTaskID != planTaskID {
+		t.Fatalf("snapshot method=%+v err=%v", snapshot.Method, err)
 	}
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -547,6 +556,74 @@ func TestPostgresStoreSteerPreservesContractAndValidatesRunLimits(t *testing.T) 
 	after, err := store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
 	if err != nil || after.GoalVersion != 2 || after.Goal != "Compare the evidence in China" {
 		t.Fatalf("run changed after invalid steering: %+v err=%v", after, err)
+	}
+}
+
+func TestPostgresStoreReplanVersionsResearchMethod(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	run, _, err := store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Choose an operating model",
+		Title: "Operating model", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := validV3PlanResult(t)
+	initial.ClientRequestID = "method-plan-initial"
+	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", initial, run.Config)
+
+	replanTask, _, err := store.CreateControlTask(ctx, fixture.sessionID, TaskKindReplan, "Replace the method after a scope mismatch", "lead", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replanned := validV3PlanResult(t)
+	replanned.ClientRequestID = "method-plan-replanned"
+	replanned.Plan.Method.DecisionQuestion = "Which operating model meets the revised scope and failure constraints?"
+	replanned.Plan.Method.MethodRationale = "Compare the revised operating boundary and explicitly test failure scenarios omitted by the first plan."
+	submitStoreTask(t, ctx, pool, store, fixture, replanTask.ClientKey, replanned, run.Config)
+
+	run, err = store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil || run.PlanVersion != 2 {
+		t.Fatalf("run=%+v err=%v", run, err)
+	}
+	current, err := store.GetCurrentMethod(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil || current == nil || current.PlanVersion != 2 || current.DecisionQuestion != replanned.Plan.Method.DecisionQuestion {
+		t.Fatalf("current method=%+v err=%v", current, err)
+	}
+	var methodCount int
+	if err = pool.QueryRow(ctx, `
+		SELECT count(*)::int FROM research_decision
+		WHERE session_id = $1::uuid AND decision_kind = 'research_method'
+	`, fixture.sessionID).Scan(&methodCount); err != nil || methodCount != 2 {
+		t.Fatalf("method history count=%d err=%v", methodCount, err)
+	}
+	var initialOutcome []byte
+	if err = pool.QueryRow(ctx, `
+		SELECT outcome FROM research_decision
+		WHERE session_id = $1::uuid AND decision_kind = 'research_method' AND plan_version = 1
+	`, fixture.sessionID).Scan(&initialOutcome); err != nil {
+		t.Fatal(err)
+	}
+	var preserved ResearchMethod
+	if err = json.Unmarshal(initialOutcome, &preserved); err != nil || preserved.DecisionQuestion != initial.Plan.Method.DecisionQuestion {
+		t.Fatalf("preserved method=%+v err=%v", preserved, err)
 	}
 }
 
@@ -806,19 +883,27 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := ResultEnvelope{
-		SchemaVersion: 2, ClientRequestID: "e2e-plan", Summary: "dependency-safe plan", Confidence: 0.8,
+		SchemaVersion: 3, ClientRequestID: "e2e-plan", Summary: "dependency-safe plan", Confidence: 0.8,
 		Plan: &PlanProposal{
+			Method: &MethodProposal{
+				DecisionQuestion:        "What value is supported by comparable independent measurements?",
+				MethodRationale:         "Triangulate equivalent measurements and challenge the result with independent repeats.",
+				AnalysisMethods:         []string{"Cross-source measurement comparison"},
+				EvidenceRequirements:    []string{"Three traceable independent measurements"},
+				CounterevidenceStrategy: []string{"Search for independently measured conflicting values"},
+				StoppingConditions:      []string{"The required answer is verified and repeated work produces negligible information gain"},
+			},
 			Questions: []QuestionProposal{{
 				ClientKey: "answer-question", Kind: QuestionKindDimension, Text: "What is the measured value?",
 				Required: true, Priority: 1, Impact: 1, Uncertainty: 0.8, Novelty: 0.5,
 			}},
 			Tasks: []TaskProposal{
-				{ClientKey: "verify-1", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Triangulate three primary sources", RequiredCapability: "validator", ExpectedResult: "research_evidence_v2", Priority: 1},
-				{ClientKey: "verify-2", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Repeat verification for marginal-gain measurement", RequiredCapability: "validator", ExpectedResult: "research_evidence_v2", Priority: 0.9, DependsOn: []string{"verify-1"}},
-				{ClientKey: "verify-3", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Confirm saturation", RequiredCapability: "validator", ExpectedResult: "research_evidence_v2", Priority: 0.8, DependsOn: []string{"verify-2"}},
-				{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write evidence-linked report", RequiredCapability: "reporter", ExpectedResult: "research_report_v2", Priority: 0.7, DependsOn: []string{"verify-3"}},
-				{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Evaluate report quality", RequiredCapability: "validator", ExpectedResult: "research_quality_evaluation_v2", Priority: 0.6, DependsOn: []string{"synthesize"}},
-				{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit report citations", RequiredCapability: "validator", ExpectedResult: "research_citation_audit_v2", Priority: 0.6, DependsOn: []string{"synthesize"}},
+				{ClientKey: "verify-1", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Triangulate three primary sources", RequiredCapability: "validator", ExpectedResult: "research_evidence_v3", Priority: 1},
+				{ClientKey: "verify-2", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Repeat verification for marginal-gain measurement", RequiredCapability: "validator", ExpectedResult: "research_evidence_v3", Priority: 0.9, DependsOn: []string{"verify-1"}},
+				{ClientKey: "verify-3", QuestionKey: "answer-question", Kind: TaskKindVerify, Objective: "Confirm saturation", RequiredCapability: "validator", ExpectedResult: "research_evidence_v3", Priority: 0.8, DependsOn: []string{"verify-2"}},
+				{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write evidence-linked report", RequiredCapability: "reporter", ExpectedResult: "research_report_v3", Priority: 0.7, DependsOn: []string{"verify-3"}},
+				{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Evaluate report quality", RequiredCapability: "validator", ExpectedResult: "research_quality_evaluation_v3", Priority: 0.6, DependsOn: []string{"synthesize"}},
+				{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit report citations", RequiredCapability: "validator", ExpectedResult: "research_citation_audit_v3", Priority: 0.6, DependsOn: []string{"synthesize"}},
 			},
 			InclusionCriteria: []string{"Primary evidence"}, ExclusionCriteria: []string{"Unverifiable summaries"},
 			SourceStrategy: []string{"Independent source families"}, Uncertainties: []string{"Measurement context"}, PlanningRisks: []string{"Source disagreement"},
@@ -827,7 +912,7 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 	submitStoreTask(t, ctx, pool, store, fixture, "plan:1", plan, run.Config)
 
 	evidence := e2eVerifiedEvidence()
-	evidence.SchemaVersion = 2
+	evidence.SchemaVersion = 3
 	evidence.AnswerClaimKey = "answer-claim"
 	evidence.ClientRequestID = "e2e-evidence-1"
 	evidence.CoverageDelta = 0.8
@@ -840,7 +925,7 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 
 	report := e2eStructuredReport(t, ctx, pool, fixture.sessionID)
 	submitStoreTask(t, ctx, pool, store, fixture, "synthesize", ResultEnvelope{
-		SchemaVersion: 2, ClientRequestID: "e2e-report", Summary: "report", Confidence: 0.9,
+		SchemaVersion: 3, ClientRequestID: "e2e-report", Summary: "report", Confidence: 0.9,
 		Report: &report,
 	}, run.Config)
 	evaluation := EvaluationProposal{
@@ -850,10 +935,10 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 		ReviewedSectionIDs: []string{"executive-summary", "method", "finding", "limitations", "conclusion"},
 	}
 	submitStoreTask(t, ctx, pool, store, fixture, "quality", ResultEnvelope{
-		SchemaVersion: 2, ClientRequestID: "e2e-quality", Summary: "quality passed", Confidence: 0.9, Evaluation: &evaluation,
+		SchemaVersion: 3, ClientRequestID: "e2e-quality", Summary: "quality passed", Confidence: 0.9, Evaluation: &evaluation,
 	}, run.Config)
 	submitStoreTask(t, ctx, pool, store, fixture, "citations", ResultEnvelope{
-		SchemaVersion: 2, ClientRequestID: "e2e-citations", Summary: "citations passed", Confidence: 0.9, Evaluation: &evaluation,
+		SchemaVersion: 3, ClientRequestID: "e2e-citations", Summary: "citations passed", Confidence: 0.9, Evaluation: &evaluation,
 	}, run.Config)
 
 	gate, err := store.EvaluateGate(ctx, fixture.sessionID)

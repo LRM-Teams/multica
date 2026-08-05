@@ -53,6 +53,14 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		GoalVersion: state.task.GoalVersion,
 		PlanVersion: state.targetPlan,
 	}
+	if !state.stale && (state.task.Kind == TaskKindPlan || state.task.Kind == TaskKindReplan) && state.run.OrchestratorVersion == OrchestratorVersionV3 {
+		if in.Result.Plan == nil || in.Result.Plan.Method == nil {
+			return AcceptResultOutcome{}, fmt.Errorf("%w: v3 plan requires a research method", ErrInvalidResult)
+		}
+		if err = materializeResearchMethod(ctx, tx, state, *in.Result.Plan, in.AgentID); err != nil {
+			return AcceptResultOutcome{}, err
+		}
+	}
 	questionIDs := map[string]string{}
 	created := 0
 	if !state.stale {
@@ -188,6 +196,56 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 		return AcceptResultOutcome{}, err
 	}
 	return outcome, nil
+}
+
+func materializeResearchMethod(ctx context.Context, tx pgx.Tx, state acceptedResultState, plan PlanProposal, agentID string) error {
+	if plan.Method == nil {
+		return fmt.Errorf("%w: v3 plan requires a research method", ErrInvalidResult)
+	}
+	if err := validateMethodProposal(*plan.Method); err != nil {
+		return err
+	}
+	if err := validateV3PlanMethodLists(plan); err != nil {
+		return err
+	}
+	method := ResearchMethod{
+		GoalVersion:             state.run.GoalVersion,
+		PlanVersion:             state.targetPlan,
+		DecisionQuestion:        strings.TrimSpace(plan.Method.DecisionQuestion),
+		MethodRationale:         strings.TrimSpace(plan.Method.MethodRationale),
+		AnalysisMethods:         plan.Method.AnalysisMethods,
+		EvidenceRequirements:    plan.Method.EvidenceRequirements,
+		InclusionCriteria:       plan.InclusionCriteria,
+		ExclusionCriteria:       plan.ExclusionCriteria,
+		SourceStrategy:          plan.SourceStrategy,
+		CounterevidenceStrategy: plan.Method.CounterevidenceStrategy,
+		StoppingConditions:      plan.Method.StoppingConditions,
+		Uncertainties:           plan.Uncertainties,
+		PlanningRisks:           plan.PlanningRisks,
+		CreatedByTaskID:         state.task.ID,
+		CreatedByAgentID:        agentID,
+	}
+	outcome, err := json.Marshal(method)
+	if err != nil {
+		return err
+	}
+	inputs, err := json.Marshal(map[string]any{
+		"attempt_id": state.attemptID,
+		"task_id":    state.task.ID,
+		"task_kind":  state.task.Kind,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO research_decision (
+			workspace_id, session_id, decision_kind, actor_type, actor_id,
+			goal_version, plan_version, inputs, outcome, rationale
+		) VALUES ($1::uuid, $2::uuid, 'research_method', 'agent', $3::uuid,
+		          $4, $5, $6, $7, $8)
+	`, state.workspaceID, state.run.SessionID, agentID, state.run.GoalVersion,
+		state.targetPlan, inputs, outcome, truncateBytes(method.MethodRationale, 8192))
+	return err
 }
 
 func measuredInformationGain(outcome AcceptResultOutcome) float64 {
@@ -772,7 +830,7 @@ func materializeClaims(ctx context.Context, tx pgx.Tx, state acceptedResultState
 func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState, report ReportProposal, resultClaimIDs map[string]string) (string, error) {
 	var structuredReport reportStructuredV1
 	var err error
-	if state.run.OrchestratorVersion == OrchestratorVersionV2 {
+	if usesStructuredResultContract(state.run.OrchestratorVersion) {
 		structuredReport, err = validateStructuredReportV2(report, reportPolicyForDepth(state.run.DepthTier))
 		if err != nil {
 			return "", err
@@ -799,7 +857,7 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 	}
 	sections := map[string]reportStructuredSection{}
 	citations := map[string]reportStructuredCitation{}
-	if state.run.OrchestratorVersion == OrchestratorVersionV2 {
+	if usesStructuredResultContract(state.run.OrchestratorVersion) {
 		for _, section := range structuredReport.Sections {
 			sections[section.ID] = section
 		}
@@ -820,7 +878,7 @@ func materializeReport(ctx context.Context, tx pgx.Tx, state acceptedResultState
 				return "", err
 			}
 		}
-		if state.run.OrchestratorVersion == OrchestratorVersionV2 {
+		if usesStructuredResultContract(state.run.OrchestratorVersion) {
 			section := sections[link.SectionID]
 			sourceIDs := make([]string, 0, len(section.CitationIDs))
 			for _, citationID := range section.CitationIDs {
@@ -876,7 +934,7 @@ func materializeEvaluation(ctx context.Context, tx pgx.Tx, state acceptedResultS
 		}
 		return err
 	}
-	if state.run.OrchestratorVersion == OrchestratorVersionV2 {
+	if usesStructuredResultContract(state.run.OrchestratorVersion) {
 		if reportAuthorID == "" || reportAuthorID == state.task.AssignedAgentID {
 			return fmt.Errorf("%w: report evaluation must be submitted by an agent other than the report author", ErrInvalidResult)
 		}
@@ -939,7 +997,7 @@ func updateQuestionProgress(ctx context.Context, tx pgx.Tx, state acceptedResult
 		return nil
 	}
 	answerClaimID := ""
-	if state.run.OrchestratorVersion == OrchestratorVersionV2 {
+	if usesStructuredResultContract(state.run.OrchestratorVersion) {
 		answerClaimID = claimIDs[result.AnswerClaimKey]
 	} else {
 		for _, claim := range result.Claims {

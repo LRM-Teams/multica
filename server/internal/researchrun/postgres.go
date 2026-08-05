@@ -226,6 +226,43 @@ func (s *PostgresStore) GetCurrentContract(ctx context.Context, sessionID, works
 	return contract, err
 }
 
+func (s *PostgresStore) GetCurrentMethod(ctx context.Context, sessionID, workspaceID string) (*ResearchMethod, error) {
+	var outcome []byte
+	var createdAt time.Time
+	var goalVersion, planVersion int
+	var actorID, taskID string
+	err := s.pool.QueryRow(ctx, `
+		SELECT decision.outcome, decision.goal_version, decision.plan_version,
+		       COALESCE(decision.actor_id::text, ''), COALESCE(decision.inputs->>'task_id', ''),
+		       decision.created_at
+		FROM research_decision decision
+		JOIN research_session session ON session.id = decision.session_id
+		WHERE decision.session_id = $1::uuid
+		  AND decision.workspace_id = $2::uuid
+		  AND decision.decision_kind = 'research_method'
+		  AND decision.goal_version = session.goal_version
+		  AND decision.plan_version = session.plan_version
+		ORDER BY decision.created_at DESC, decision.id DESC
+		LIMIT 1
+	`, sessionID, workspaceID).Scan(&outcome, &goalVersion, &planVersion, &actorID, &taskID, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var method ResearchMethod
+	if err = json.Unmarshal(outcome, &method); err != nil {
+		return nil, fmt.Errorf("decode current research method: %w", err)
+	}
+	method.GoalVersion = goalVersion
+	method.PlanVersion = planVersion
+	method.CreatedByAgentID = actorID
+	method.CreatedByTaskID = taskID
+	method.CreatedAt = createdAt
+	return &method, nil
+}
+
 func loadRunForUpdate(ctx context.Context, tx pgx.Tx, sessionID, workspaceID string) (Run, error) {
 	return loadRun(ctx, tx, sessionID, workspaceID, true)
 }
@@ -427,6 +464,10 @@ func (s *PostgresStore) TaskContext(ctx context.Context, taskID, workspaceID str
 	if err != nil {
 		return RunSnapshot{}, err
 	}
+	method, err := s.GetCurrentMethod(ctx, sessionID, workspaceID)
+	if err != nil {
+		return RunSnapshot{}, err
+	}
 	questions, err := s.ListQuestions(ctx, sessionID)
 	if err != nil {
 		return RunSnapshot{}, err
@@ -456,7 +497,7 @@ func (s *PostgresStore) TaskContext(ctx context.Context, taskID, workspaceID str
 		return RunSnapshot{}, err
 	}
 	return RunSnapshot{
-		Run: run, Contract: contract, Questions: questions, Tasks: tasks, Attempts: attempts,
+		Run: run, Contract: contract, Method: method, Questions: questions, Tasks: tasks, Attempts: attempts,
 		Sources: sources, Observations: observations, Claims: claims, Gate: gate,
 	}, nil
 }

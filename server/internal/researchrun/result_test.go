@@ -129,6 +129,77 @@ func TestResearchRunV1ContractRemainsAccepted(t *testing.T) {
 	}
 }
 
+func TestResearchRunV3RequiresCompleteGeneralResearchMethod(t *testing.T) {
+	result := validV3PlanResult(t)
+	result.Plan.Method = nil
+	raw, _ := json.Marshal(result)
+	_, _, err := DecodeAndValidateResultForVersion(OrchestratorVersionV3, raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v3",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "research method") {
+		t.Fatalf("error=%v, want missing method rejection", err)
+	}
+
+	result = validV3PlanResult(t)
+	result.Plan.Method.CounterevidenceStrategy = nil
+	raw, _ = json.Marshal(result)
+	_, _, err = DecodeAndValidateResultForVersion(OrchestratorVersionV3, raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v3",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "counterevidence_strategy") {
+		t.Fatalf("error=%v, want incomplete method rejection", err)
+	}
+}
+
+func TestResearchRunV3AcceptsNonAcademicMethodAndPinsOlderContracts(t *testing.T) {
+	result := validV3PlanResult(t)
+	raw, _ := json.Marshal(result)
+	decoded, _, err := DecodeAndValidateResultForVersion(OrchestratorVersionV3, raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v3",
+	}, DefaultRunConfig("standard"))
+	if err != nil {
+		t.Fatalf("v3 method rejected: %v", err)
+	}
+	if decoded.Plan.Method.DecisionQuestion != "Which option best satisfies the operating constraints?" {
+		t.Fatalf("decoded method=%+v", decoded.Plan.Method)
+	}
+
+	v2 := validPlanResult(t)
+	v2.SchemaVersion = 2
+	v2.Plan.Tasks[0].ExpectedResult = "research_evidence_v2"
+	v2.Plan.Tasks = append(v2.Plan.Tasks,
+		TaskProposal{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write report", RequiredCapability: "reporter", ExpectedResult: "research_report_v2", Priority: 0.7},
+		TaskProposal{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Review report", RequiredCapability: "validator", ExpectedResult: "research_quality_evaluation_v2", Priority: 0.6, DependsOn: []string{"synthesize"}},
+		TaskProposal{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit citations", RequiredCapability: "validator", ExpectedResult: "research_citation_audit_v2", Priority: 0.6, DependsOn: []string{"synthesize"}},
+	)
+	v2Raw, _ := json.Marshal(v2)
+	if _, _, err = DecodeAndValidateResultForVersion(OrchestratorVersionV2, v2Raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v2",
+	}, DefaultRunConfig("standard")); err != nil {
+		t.Fatalf("v2 contract changed: %v", err)
+	}
+
+	v2.Plan.Method = result.Plan.Method
+	v2Raw, _ = json.Marshal(v2)
+	if _, _, err = DecodeAndValidateResultForVersion(OrchestratorVersionV2, v2Raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v2",
+	}, DefaultRunConfig("standard")); !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "schema_version 3") {
+		t.Fatalf("v2 accepted v3 method: %v", err)
+	}
+}
+
+func TestResearchRunV3RejectsV2TaskResultKinds(t *testing.T) {
+	result := validV3PlanResult(t)
+	result.Plan.Tasks[0].ExpectedResult = "research_evidence_v2"
+	raw, _ := json.Marshal(result)
+	_, _, err := DecodeAndValidateResultForVersion(OrchestratorVersionV3, raw, Task{
+		Kind: TaskKindPlan, RequiredCapability: "lead", ExpectedResult: "research_plan_v3",
+	}, DefaultRunConfig("standard"))
+	if !errors.Is(err, ErrInvalidResult) || !strings.Contains(err.Error(), "research_evidence_v3") {
+		t.Fatalf("error=%v, want v3 result-kind rejection", err)
+	}
+}
+
 func TestCanonicalURLNormalizesWithoutLosingQuery(t *testing.T) {
 	got, err := CanonicalURL("HTTPS://Example.COM:443/path?q=1#fragment")
 	if err != nil {
@@ -173,4 +244,25 @@ func validPlanResult(t *testing.T) ResultEnvelope {
 		CoverageDelta: 0,
 		Confidence:    0.7,
 	}
+}
+
+func validV3PlanResult(t *testing.T) ResultEnvelope {
+	t.Helper()
+	result := validPlanResult(t)
+	result.SchemaVersion = 3
+	result.Plan.Method = &MethodProposal{
+		DecisionQuestion:        "Which option best satisfies the operating constraints?",
+		MethodRationale:         "Compare observed outcomes against explicit constraints and test the assumptions that could reverse the decision.",
+		AnalysisMethods:         []string{"Constraint-based comparison", "Risk and sensitivity analysis"},
+		EvidenceRequirements:    []string{"Comparable measurements for each option", "Traceable evidence for material risks"},
+		CounterevidenceStrategy: []string{"Search for failure cases and evidence that reverses the ranking"},
+		StoppingConditions:      []string{"Every required question has verified support and material counterevidence is resolved"},
+	}
+	result.Plan.Tasks[0].ExpectedResult = "research_evidence_v3"
+	result.Plan.Tasks = append(result.Plan.Tasks,
+		TaskProposal{ClientKey: "synthesize", Kind: TaskKindSynthesize, Objective: "Write decision report", RequiredCapability: "reporter", ExpectedResult: "research_report_v3", Priority: 0.7, DependsOn: []string{"discover-1"}},
+		TaskProposal{ClientKey: "quality", Kind: TaskKindQualityGate, Objective: "Review report", RequiredCapability: "validator", ExpectedResult: "research_quality_evaluation_v3", Priority: 0.6, DependsOn: []string{"synthesize"}},
+		TaskProposal{ClientKey: "citations", Kind: TaskKindCitationAudit, Objective: "Audit evidence links", RequiredCapability: "validator", ExpectedResult: "research_citation_audit_v3", Priority: 0.6, DependsOn: []string{"synthesize"}},
+	)
+	return result
 }

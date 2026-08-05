@@ -177,7 +177,11 @@ and rationale. The claim/observation/relation tuple is unique.
 ### `research_decision`
 
 Stores decision kind, actor, plan version, inputs, outcome, rationale, and
-timestamp. It is append-only.
+timestamp. It is append-only. A `research_method` Decision stores the accepted
+method for one goal/plan version: decision question, rationale, analysis
+methods, evidence requirements, inclusion/exclusion criteria, source strategy,
+counterevidence strategy, stopping conditions, uncertainties, risks, and
+server-assigned task/Agent attribution.
 
 ### `research_report`
 
@@ -228,12 +232,19 @@ The planner returns a structured plan containing:
 - tasks with stable client keys;
 - task dependencies by client key;
 - capability and expected result for every task;
+- a decision question and rationale for the chosen method;
+- analysis methods and evidence requirements selected for that question;
 - inclusion and exclusion criteria;
 - source strategy;
+- counterevidence strategy and stopping conditions;
 - stated uncertainties and planning risks.
 
 The server validates limits, keys, dependencies, allowed task kinds, required
-questions, and acyclicity before materializing a new plan version.
+questions, method completeness, and acyclicity before materializing a new plan
+version. Acceptance writes the Method, Questions, Tasks, and result in one
+transaction. Every later task reads the current Method from the canonical
+snapshot. A task may request replanning when evidence invalidates the Method;
+it cannot silently replace scope, analysis, evidence, or stopping rules.
 
 ### 6.3 Dispatch
 
@@ -355,6 +366,20 @@ dimensions plus `reviewed_claim_keys` and `reviewed_section_ids`. Persistence
 rejects an evaluation from the report author's Agent ID or a review set that
 does not exactly cover the latest report.
 
+`research-run-v3` retains all v2 evidence, report, author-attribution, and
+independent-review rules and upgrades the task-result envelope to
+`schema_version = 3`. Plan and replan results additionally require
+`plan.method` with a decision question, method rationale, analysis methods,
+evidence requirements, counterevidence strategy, and stopping conditions. The
+existing inclusion/exclusion criteria, source strategy, uncertainties, and
+planning risks are non-empty parts of the same accepted Research Method.
+
+The Method is domain-neutral. The planner selects comparison, measurement,
+mechanism analysis, time series, case analysis, fact checking, risk analysis,
+or a justified combination according to the Research Contract. Academic
+protocols such as FINER, IRB, PRISMA, CONSORT, STROBE, journal formats, and
+publication-specific identifiers apply only when the goal requires them.
+
 ### 6.5 Adaptive loop
 
 After each accepted result, the Module:
@@ -365,8 +390,11 @@ After each accepted result, the Module:
 4. materializes valid proposed follow-up tasks;
 5. creates a `replan` task when progress stalls, contradictions remain, or the
    plan no longer covers the highest-value frontier items;
-6. creates synthesis and independent validation work when evidence is ready;
-7. evaluates stopping only when no higher-priority work is runnable.
+6. checks new observations against the accepted Method and creates a versioned
+   `replan` when the method or scope is invalidated;
+7. creates synthesis and independent validation work when evidence is ready;
+8. evaluates stopping against the accepted stopping conditions and deterministic
+   evidence gates only when no higher-priority work is runnable.
 
 Planner-assigned frontier priority may use impact, uncertainty, novelty,
 missing coverage, contradiction severity, expected information gain, and
@@ -535,8 +563,8 @@ The schema change is additive. Existing Research Sessions receive a contract
 revision 1 backfill but retain a null `run_initialized_at`, so their existing
 legacy execution path continues unchanged. The metrics Adapter reports those
 sessions as `legacy`. The server does not silently convert an in-progress legacy
-session into a Research Run. Sessions started through the new start operation
-initialize the durable task/evidence ledgers and use `research-run-v2`.
+session into a Research Run. New sessions initialize the durable task/evidence
+ledgers and use `research-run-v3`.
 
 Old desktop clients continue consuming the existing session snapshot fields.
 New response fields are additive and schema-parsed with defaults. The existing
@@ -547,8 +575,9 @@ Running Research Runs retain their orchestrator, result schema, prompt, and
 gate rubric versions across deploys. New server code must continue processing
 those versions until no active run references them.
 
-Existing `research-run-v1` runs remain on the pinned v1 prompt and result
-contract. They are not silently rewritten or re-evaluated under v2. Existing
+Existing `research-run-v1` and `research-run-v2` runs remain on their pinned
+prompts and result contracts. They are not silently rewritten or re-evaluated
+under v3. Existing
 HTTP and WebSocket report response shapes are unchanged; author, task,
 attempt, and report-claim anchors are internal provenance fields.
 
@@ -559,6 +588,8 @@ Tests cross the ResearchRun Interface and its production persistence Adapter.
 The repository test suite covers:
 
 - plan validation, dependency ordering, and cycle rejection;
+- v3 method validation, persistence, task-context inheritance, replan history,
+  and v1/v2 compatibility;
 - capability routing and concurrency limits;
 - duplicate dispatch and duplicate result replay;
 - quote/snapshot, claim/evidence, independence, and citation validation;

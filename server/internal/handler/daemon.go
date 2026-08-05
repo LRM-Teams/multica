@@ -2180,6 +2180,9 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 			if eventKind, eventType, message, ok := taskMessageCompactionActivity(msg.Type); ok {
 				targetKind, targetID, targetSlug := h.taskActivityTarget(r.Context(), task)
 				details := map[string]any{"task_message_id": uuidToString(created.ID), "seq": msg.Seq}
+				if msg.Type == "compaction_finished" && strings.TrimSpace(msg.Content) != "" {
+					details["checkpoint_summary"] = msg.Content
+				}
 				// LRM-985: attach active channel goal so compaction can be
 				// audited against the Goal anchor (resume evidence).
 				if task.ChannelID.Valid {

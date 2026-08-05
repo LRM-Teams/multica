@@ -21,6 +21,10 @@ import (
 // server work behind an active conversation.
 var ErrPiRPCTurnBusy = errors.New("pi RPC turn busy")
 
+const proactiveContextCompactionPercent = 60.0
+
+const proactiveContextCompactionInstructions = `Preserve a structured checkpoint of the current conversation. Retain user intent, decisions, constraints, unresolved questions, active work, external side effects, changed files, test results, and source references. Distinguish verified facts from assumptions. Keep the checkpoint concise and sufficient for the next turn.`
+
 // PiRPCBackend is the daemon-owned lifecycle surface for chat sessions. Close
 // is required after a failed turn, identity mismatch, idle eviction, or daemon
 // shutdown so no stale native context is retained.
@@ -271,9 +275,18 @@ func (b *piRPCBackend) runtimeAlive() (bool, bool) {
 }
 
 func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts ExecOptions, msgCh chan<- Message) Result {
+	hadResidentProcess := b.hasProcess()
 	p, err := b.ensureProcess(opts)
 	if err != nil {
 		return Result{Status: "failed", Error: err.Error()}
+	}
+	if hadResidentProcess && shouldProactivelyCompact(p.queryRuntimeStats(ctx, nil, opts.Model)) {
+		trySend(msgCh, Message{Type: MessageCompactionStarted})
+		if compacted, err := b.Compact(ctx, proactiveContextCompactionInstructions); err != nil {
+			b.cfg.Logger.Warn("proactive Pi context compaction failed; continuing turn", "error", err)
+		} else {
+			trySend(msgCh, Message{Type: MessageCompactionFinished, Content: compacted.Summary})
+		}
 	}
 
 	var output strings.Builder
@@ -339,6 +352,25 @@ func (b *piRPCBackend) executeTurn(ctx context.Context, prompt string, opts Exec
 		b.dispose(p)
 		return piRPCContextResult(ctx)
 	}
+}
+
+func (b *piRPCBackend) hasProcess() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.process != nil
+}
+
+func shouldProactivelyCompact(stats *RuntimeTokenStats) bool {
+	if stats == nil {
+		return false
+	}
+	if stats.ContextPercent != nil {
+		return *stats.ContextPercent >= proactiveContextCompactionPercent
+	}
+	if stats.ContextTokens == nil || stats.ContextWindow == nil || *stats.ContextWindow <= 0 {
+		return false
+	}
+	return float64(*stats.ContextTokens)*100/float64(*stats.ContextWindow) >= proactiveContextCompactionPercent
 }
 
 func piRPCContextResult(ctx context.Context) Result {

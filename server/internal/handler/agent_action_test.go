@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestAgentTransportPrepareAction_AgentCreateCard(t *testing.T) {
@@ -200,3 +202,33 @@ func TestMarkActionCardDone_ViaCreateAgent(t *testing.T) {
 		t.Fatalf("committed_agent_id empty")
 	}
 }
+
+// TestCreateAgent_RequiresManageAgents verifies LRM-2343's unified
+// manageAgents gate: a plain workspace member (no owner/admin role) is
+// rejected from agent creation and the Proposal stays prepared. The gate is
+// enforced server-side; UI disable is never the only defense.
+func TestCreateAgent_RequiresManageAgents(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	plainMemberID := createWorkspaceMemberUser(t, "Plain Create Member", "plain-create-"+strings.ReplaceAll(uuid.NewString(), "-", "")+"@multica.test")
+	ct := context.Background()
+	var runtimeID string
+	if err := testPool.QueryRow(ct, `
+		SELECT id FROM agent_runtime WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&runtimeID); err != nil {
+		t.Skipf("no runtime fixture available: %v", err)
+	}
+
+	body := map[string]any{
+		"display_name": "Rejected Member Agent",
+		"description":  "",
+		"runtime_id":   runtimeID,
+		"model":        "gpt-4o-mini",
+	}
+	w := httptest.NewRecorder()
+	testHandler.CreateAgent(w, newRequestAs(plainMemberID, http.MethodPost, "/api/agents", body))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("CreateAgent by plain member: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+

@@ -978,6 +978,12 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// LRM-2343: agent creation (both Proposal commit and bare manual create)
+	// is gated behind the unified `manageAgents` capability (workspace
+	// owner/admin, human only). UI enable/disable is never the only defense.
+	if _, ok := h.requireManageAgents(w, r, workspaceID, "workspace not found"); !ok {
+		return
+	}
 
 	displayName := strings.TrimSpace(req.DisplayName)
 	if displayName == "" && req.Username == nil {

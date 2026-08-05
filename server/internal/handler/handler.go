@@ -757,6 +757,15 @@ func (h *Handler) requireWorkspaceRole(w http.ResponseWriter, r *http.Request, w
 	return member, true
 }
 
+// requireManageAgents gates a route behind the unified `manageAgents`
+// capability (LRM-2343). Currently that capability is held by workspace
+// owner/admin members; it is never granted to Agent principals. Every human
+// agent-creation surface (Proposal commit and bare manual create) must go
+// through this single gate so UI enable/disable is never the only defense.
+func (h *Handler) requireManageAgents(w http.ResponseWriter, r *http.Request, workspaceID, notFoundMsg string) (db.Member, bool) {
+	return h.requireWorkspaceRole(w, r, workspaceID, notFoundMsg, "owner", "admin")
+}
+
 // isWorkspaceEntity checks whether a user_id belongs to the given workspace,
 // as either a member or an agent depending on userType.
 func (h *Handler) isWorkspaceEntity(ctx context.Context, userType, userID, workspaceID string) bool {

@@ -73,6 +73,33 @@ type ResidentRuntimeForceKillable interface {
 	ForceKill() error
 }
 
+// ResidentMessage is one canonical Message body handed to a resident runtime.
+// It is agent-package owned so provider adapters do not depend on daemon wire
+// envelopes. PartsJSON preserves structured Message parts without making the
+// provider layer an alternate owner of their schema.
+type ResidentMessage struct {
+	ID        string
+	Target    string
+	Seq       int64
+	Content   string
+	PartsJSON json.RawMessage
+}
+
+// ResidentMessageInput is an optional capability for resident backends that
+// can prove a concrete batch crossed their native input boundary while idle.
+// Implementations must not report success merely because a goroutine or turn
+// was scheduled; success means the provider-native input accepted the batch.
+type ResidentMessageInput interface {
+	AcceptMessageBatch(context.Context, []ResidentMessage) (ResidentMessageAcceptance, error)
+}
+
+// ResidentMessageAcceptance separates native input acceptance from the
+// provider turn it may start. Done reports that the runtime is idle again;
+// callers must keep turn admission closed until it resolves.
+type ResidentMessageAcceptance struct {
+	Done <-chan error
+}
+
 // ExecOptions configures a single execution.
 type ExecOptions struct {
 	Cwd   string

@@ -17,12 +17,41 @@ type ReminderNotifier interface {
 	NotifyReminderOwnerRemoved(runtimeID string, payload protocol.DaemonAgentStopPayload)
 }
 
+// AgentDeliveryNotifier is the server-side transport boundary for canonical
+// Agent Message deliveries. It intentionally exposes no task/lease concepts.
+type AgentDeliveryNotifier interface {
+	NotifyAgentDelivery(runtimeID string, payload protocol.AgentDeliverPayload) bool
+}
+
 // RelayNotifier sends task wakeups to the local daemon hub and, when Redis is
 // configured, publishes the same wakeup through the shared realtime relay so
 // every API node can attempt local delivery.
 type RelayNotifier struct {
 	local *Hub
 	relay realtime.RelayPublisher
+}
+
+func (n *RelayNotifier) NotifyAgentDelivery(runtimeID string, payload protocol.AgentDeliverPayload) bool {
+	if runtimeID == "" {
+		return false
+	}
+	frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliver, Payload: mustMarshalRaw(payload)})
+	if err != nil {
+		return false
+	}
+	delivered := false
+	eventID := ulid.Make().String()
+	if n.local != nil {
+		delivered = n.local.notifyAgentDelivery(runtimeID, payload, eventID)
+	}
+	if n.relay != nil {
+		if err := n.relay.PublishWithID(realtime.ScopeDaemonRuntime, runtimeID, "", frame, eventID); err != nil {
+			slog.Warn("agent delivery relay publish failed", "error", err, "runtime_id", runtimeID, "delivery_id", payload.DeliveryID)
+		} else {
+			delivered = true
+		}
+	}
+	return delivered
 }
 
 func NewRelayNotifier(local *Hub, relay realtime.RelayPublisher) *RelayNotifier {

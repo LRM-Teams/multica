@@ -130,11 +130,19 @@ const (
 	EventAutopilotRunDone  = "autopilot:run_done"
 
 	// Daemon events
-	EventDaemonHeartbeat         = "daemon:heartbeat"
-	EventDaemonHeartbeatAck      = "daemon:heartbeat_ack"
-	EventDaemonRegister          = "daemon:register"
-	EventDaemonRuntimeUpdated    = "daemon:runtime_updated"
-	EventDaemonTaskAvailable     = "daemon:task_available"
+	EventDaemonHeartbeat      = "daemon:heartbeat"
+	EventDaemonHeartbeatAck   = "daemon:heartbeat_ack"
+	EventDaemonRegister       = "daemon:register"
+	EventDaemonRuntimeUpdated = "daemon:runtime_updated"
+	EventDaemonTaskAvailable  = "daemon:task_available"
+	// EventAgentDeliver is the at-least-once server-to-machine transport for a
+	// canonical Message. Its acknowledgement is strictly a coordinator receipt:
+	// neither event implies runtime handoff or Context Boundary advancement.
+	EventAgentDeliver            = "agent:deliver"
+	EventAgentDeliverAck         = "agent:deliver:ack"
+	EventAgentRecoveryRequest    = "agent:recovery:request"
+	EventAgentRecoveryPage       = "agent:recovery:page"
+	EventAgentMessageHandoff     = "agent:message_handoff"
 	EventDaemonAgentStart        = "agent:start"
 	EventDaemonAgentStop         = "agent:stop"
 	EventDaemonAgentLifecycleReq = "agent:lifecycle.request"

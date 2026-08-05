@@ -117,6 +117,7 @@ type Handler struct {
 	Hub                         *realtime.Hub
 	DaemonHub                   *daemonws.Hub
 	ReminderNotifier            daemonws.ReminderNotifier
+	AgentDeliveryNotifier       daemonws.AgentDeliveryNotifier
 	SandboxHub                  *sandboxws.Hub
 	Bus                         *events.Bus
 	TaskService                 *service.TaskService

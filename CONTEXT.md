@@ -21,6 +21,14 @@ server origin `https://leagent.me` and may manage Workspace Execution Bindings
 for multiple Workspaces.
 _Avoid_: Profile daemon, Workspace daemon
 
+### Credential Proxy
+
+The machine-local HTTP boundary through which an Agent CLI reaches the Multica
+service without receiving long-lived service credentials. It owns credential
+injection, Draft interception, freshness coordination, and response
+consumption; it does not assemble canonical Message Parts.
+_Avoid_: API gateway, Message store, runtime proxy
+
 ### Workspace Execution Binding
 
 A durable authorization relationship that permits one machine to execute
@@ -90,6 +98,101 @@ One of three explicit ways to restart an Agent runtime:
 All three preserve the server-side Agent identity, configuration, chat history,
 and Issues.
 _Avoid_: Restart boolean, session reset as workspace reset, full reset as Agent deletion
+
+## Agent Message Delivery
+
+### Message
+
+The canonical Workspace-scoped communication fact addressed to a channel, DM,
+or thread. A Message has a stable identity, target sequence, and structured
+Parts independent of whether any Agent is online or has processed it; it exists
+only on the service as the communication source of truth.
+_Avoid_: Inbox task, execution request, wake job
+
+### Message Part
+
+One typed element of a Message's canonical content, such as text, attachment,
+voice, reference, or system event. Agent CLI attachment flags are send intent;
+the service validates them and assembles the resulting Message Parts.
+_Avoid_: Attachment sidecar, markdown-only payload
+
+### Delivery
+
+An at-least-once transfer attempt of one Message to the Machine Service
+currently responsible for an Agent. Replaying the same `delivery_id` is the
+same Delivery; acceptance means the local coordinator accepted it, not that a
+runtime saw it or that a second canonical Message copy was persisted locally.
+_Avoid_: Inbox lease, task claim, execution
+
+### Pending Message
+
+A Message in a machine-local coordinator projection that has not yet crossed
+into an Agent runtime's context. Pending is rebuildable from service-side
+canonical Messages and is not a second durable message ledger.
+_Avoid_: Received message, seen message, held response
+
+### Context-covered Message
+
+A Message whose body crossed an explicit Agent context boundary through an
+initial prompt, successful runtime input, `message check`, `message read`, or
+freshness-hold context. A transport Notice or Delivery acknowledgement never
+makes a Message context-covered.
+_Avoid_: Seen Message, WebSocket receipt, wake attempt
+
+### Context Boundary
+
+The monotonic, target-scoped sequence through which the local coordinator will
+not block a send for older context. It is computed locally from explicit
+context handoffs, may advance across bounded held-context omissions recoverable
+with `message read`, and is never supplied or controlled by the Agent process.
+_Avoid_: Visible Boundary, Seen cursor, Agent cursor, delivery acknowledgement sequence
+
+### Notice
+
+A content-free, target-scoped, coalescible signal that Pending Messages are
+available. A Notice does not advance the Context Boundary or produce a
+`Message received` Activity.
+_Avoid_: Message event, Delivery, read receipt
+
+### Message Received Activity
+
+A user-facing Activity label shown once for a daemon-to-runtime body handoff
+batch. The label does not define the internal event name, enum, trace key, or
+wire protocol. The underlying observation is best effort and never participates
+in Message state transitions. Notice delivery does not emit this label. Agent
+message tools have their own Activity projections: `message check` shows
+`Checking messages`, `message read` shows `Reading history`, and `message
+search` shows `Searching messages`.
+_Avoid_: Per-message read receipt, Delivery acknowledgement
+
+### Message Draft
+
+One locally saved, unsent Agent send intent scoped by Workspace, Agent, and
+target. It contains the text, attachment IDs, and stable internal idempotency
+identity; it expires ten minutes after its latest save or freshness hold and is
+never resent automatically.
+_Avoid_: Pending Message, server Message, retry queue
+
+### Freshness Hold
+
+A send outcome stating that newer target context must be handed to the Agent
+before the saved Message Draft may be sent explicitly. It does not commit a
+Message and never triggers an automatic retry.
+_Avoid_: Send failure, Pending Message, automatic continuation
+
+### Attachment
+
+A Workspace-scoped uploaded file resource that a Message references through an
+attachment Message Part. Uploading an Attachment does not itself create or
+deliver a Message.
+_Avoid_: Message file, inline Message bytes
+
+### Attachment Upload Session
+
+A service-authorized, expiring attempt to upload one Attachment directly to
+object storage. The Attachment becomes sendable only after the service verifies
+the uploaded object and completes the session.
+_Avoid_: Message send, presigned URL
 
 ## Research
 

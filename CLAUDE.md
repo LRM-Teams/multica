@@ -7,6 +7,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **`docs/engineering-principles.md`** — team rules/contracts index with the 可执行/仅文档 label system. Every new ruling/contract must land here (or a doc it points to) the same day it is decided; chat threads are not storage.
 - **`docs/issue-display-contract.md`** — the issue display contract (enums, ordering, reference mechanics, property grammar) that FE/BE code against.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the canonical triage label vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single root domain context. See `docs/agents/domain.md`.
+
 ## Conventions reference
 
 The single source of truth for **code naming, the i18n translation glossary, and the Chinese voice guide** is the docs site:

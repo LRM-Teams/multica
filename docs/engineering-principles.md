@@ -376,6 +376,18 @@
 - Agent 可切换到另一台电脑的 runtime；跨机目标 daemon 必须显式上报 `memory_cross_device_sync_v2`，否则服务端 fail closed。同机 runtime 切换不需要该能力。切换只迁移 portable memory 与服务端任务状态，不声称迁移本地工作目录、provider 登录态或 device-local 状态。
 - **物**：migration `278_agent_memory_cross_device_sync`；`memory_center_replication.go`；`memorysync.PortabilityReason`；`memory_center_replication_test.go`、`compare_test.go`、runtime memory-scope contract tests；完整产品模型见 `docs/agent-memory-model.md` §8.1。
 
+### 4.19 Agent 消息链路硬切到 Raft 风格 coordinator — `仅文档`（新协议尚未落地）
+
+- Server canonical `Message` 是唯一通信真相；机器侧 `Delivery/Pending/Context Boundary` 只负责 at-least-once 传输、可重建待处理投影和上下文 freshness，不再引入 Inbox Event、Task、lease 或 `agent_execution` 身份。Notice 无正文、可合并，不推进 boundary，也不产生前端 `Message received` Activity；该文案不是内部 event/enum/trace/wire 名称合同。
+- 机器传输事件名和 envelope 对齐 Raft：Server→machine 使用 `agent:deliver`，machine→Server 使用 `agent:deliver:ack`；ACK 固定携带 `agentId/seq/deliveryId`（可选 `traceparent`），只证明 coordinator 已受理或识别重复 Delivery，不证明 Message 已读、正文已进入 runtime 或 Context Boundary 已推进。
+- Credential Proxy 拥有内部 `seenUpToSeq` 注入、本地/服务端 held 消费和十分钟本地 Draft；首次发送前生成并随 Draft 保留内部 `idempotencyKey`，显式重放由 Server 返回原 Message 或拒绝不同 payload，不能重复插入。Agent 不控制 cursor/idempotency key，hold 不自动重发。CLI 硬切为 `message send/check/read/search/resolve/react`，参数和行为以 Raft canonical command 为准，不保留 Multica 兼容别名。
+- 首版不为理论上的同 Agent/target 并发发送增加锁、持久队列或新错误码；Proxy 只在实际重叠时写 `agent_message_send_overlap` 结构化 warning，日志不得包含正文、附件名或 credential。是否串行化必须由真实重叠数据和故障证据驱动。
+- 本地只用 `<agent_root>/consumed-seqs.json` 保存 target Context Boundary；Pending 正文始终从 Server canonical Message 重建，禁止本地第二份 durable message ledger。boundary 文件缺失/损坏/写失败时保守按未知 coverage 处理，允许重投上下文但禁止跳过；boundary 只能在正文 handoff/read 成功后记录。
+- coordinator 启动和每次 machine reconnect 都必须携带本地 target Context Boundary map 做内部 recovery sync；Server 不保存该 map，只分页返回各 boundary 之后及 map 中缺失 target 的 canonical Messages，本地按 `message_id + target seq` 与实时 Delivery 合并。所有页合并前 freshness 未知；可继续受理 Delivery，但依赖 freshness 的 send 必须 fail closed 到 held/error，禁止把空内存 Pending 当成没有新消息。该同步不是公共 cursor，也不得恢复 server-side `seen_up_to_seq`。
+- busy Notice 在 3 秒窗口内合并，只投影总 Pending 数、changed targets、每 target 数量/短消息 ID/最新发送者/mention flag/可选 attention hint，绝不携带正文或附件；同 session Pending 指纹不变则去重，失败 debt 15 秒后重试。idle 直接交付正文，Notice 成功也不消费 Pending、不推进 boundary、不发 `Message received`。Activity 按 Raft 的阶段语义分别投影：正文交给 runtime 显示 `Message received`，`message check` 显示 `Checking messages`，`message read` 显示 `Reading history`，`message search` 显示 `Searching messages`。
+- 附件上传基础设施对齐 Raft Upload Session/direct upload/完成验证；Agent send DTO 提交正文和 attachment IDs，Server 校验后组装 Multica canonical `parts`。Proxy 不理解或构造 Message Parts。
+- 完整术语、状态、Activity 时机、bounded held context、Draft 和命令契约见 [`docs/adr/0010-direct-message-delivery-lifecycle.md`](adr/0010-direct-message-delivery-lifecycle.md)。该 ADR 落地后取代 4.2 等旧 task/lease 消息路径；切换前不得把目标态写成已完成能力。
+
 ---
 
 ### 4.15 Agent 临时协作空间必须保留人类所有权与幂等来源 — `可执行`（①数据库约束 + ③Agent 专用入口 + ⑤合同测试；owner: @Codex）

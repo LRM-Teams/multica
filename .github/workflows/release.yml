@@ -84,137 +84,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # The CLI/daemon and install script cannot read GitHub Releases themselves:
-  # an unauthenticated request to the private LRM-Teams/multica repo's API or
-  # asset host always 404s (no credential the CLI/daemon binary can carry).
-  # This job re-publishes the same GoReleaser archives, plus a manifest CI
-  # derives from checksums.txt, to a public read-only path on the Aliyun host
-  # that Caddy serves on its own subdomain, cdn.leagent.me/computer/*
-  # (deploy/aliyun/Caddyfile). It only reads from the just-created GitHub
-  # release with the CI token and
-  # writes to /data/multica/releases — it never touches /data/multica broadly
-  # (the app's .env, database, etc.) and never mutates a running container.
-  publish-downloads-feed:
-    needs: [verify, release]
-    if: github.repository == 'LRM-Teams/multica'
-    runs-on: [self-hosted, aliyun]
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    env:
-      RUNNER_EXPECTED_USER: dev
-      RELEASES_DIR: /data/multica/releases
-      MANIFEST_BASE_URL: https://cdn.leagent.me/computer
-      TAG_NAME: ${{ needs.verify.outputs.tag_name }}
-      IS_STABLE: ${{ needs.verify.outputs.is_stable }}
-    steps:
-      - name: Preflight runner identity
-        run: |
-          set -euo pipefail
-          actual_user="$(id -un)"
-          if [ "$actual_user" != "$RUNNER_EXPECTED_USER" ]; then
-            echo "::error title=Unexpected runner identity::expected=${RUNNER_EXPECTED_USER} actual=${actual_user}"
-            exit 1
-          fi
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download release archives + checksums from GitHub
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/release-assets"
-          release_json="$(curl -fsSL \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${TAG_NAME}")"
-          echo "$release_json" |
-            jq -c '.assets[] | select(.name == "checksums.txt" or (.name | test("^multica-cli-.*\\.(tar\\.gz|zip)$")))' |
-            while IFS= read -r asset; do
-              name="$(jq -r '.name' <<<"$asset")"
-              url="$(jq -r '.url' <<<"$asset")"
-              echo "Downloading ${name}"
-              curl -fsSL \
-                -H "Authorization: Bearer ${GH_TOKEN}" \
-                -H "Accept: application/octet-stream" \
-                -o "${RUNNER_TEMP}/release-assets/${name}" \
-                "$url"
-            done
-          test -f "${RUNNER_TEMP}/release-assets/checksums.txt"
-          ls -la "${RUNNER_TEMP}/release-assets"
-
-      - name: Build release manifest
-        run: |
-          set -euo pipefail
-          version="${TAG_NAME#v}"
-          bash scripts/publish-release-manifest.sh \
-            "${TAG_NAME}" "${version}" \
-            "${MANIFEST_BASE_URL}/${TAG_NAME}" \
-            "${RUNNER_TEMP}/release-assets/checksums.txt" \
-            "${RUNNER_TEMP}/release-assets" \
-            >"${RUNNER_TEMP}/release.json"
-          cat "${RUNNER_TEMP}/release.json"
-
-      - name: Prepare releases directory
-        run: install -d -m 0755 "${RELEASES_DIR}"
-
-      - name: Publish immutable per-version directory
-        run: |
-          set -euo pipefail
-          version_dir="${RELEASES_DIR}/${TAG_NAME}"
-          if [ -e "$version_dir" ]; then
-            echo "::error title=Immutable release directory already exists::${version_dir}"
-            exit 1
-          fi
-          staging_dir="$(mktemp -d "${RELEASES_DIR}/.staging-${TAG_NAME}-XXXXXX")"
-          shopt -s nullglob
-          for f in "${RUNNER_TEMP}/release-assets"/multica-cli-*.tar.gz "${RUNNER_TEMP}/release-assets"/multica-cli-*.zip; do
-            install -m 0644 "$f" "$staging_dir/"
-          done
-          install -m 0644 "${RUNNER_TEMP}/release-assets/checksums.txt" "$staging_dir/checksums.txt"
-          install -m 0644 "${RUNNER_TEMP}/release.json" "$staging_dir/release.json"
-          mv -T "$staging_dir" "$version_dir"
-          echo "Published immutable release directory: $version_dir"
-
-      - name: Publish install scripts + docs (stable path, not per-version)
-        run: |
-          set -euo pipefail
-          install -m 0755 scripts/install.sh "${RELEASES_DIR}/install.sh.next"
-          mv -f "${RELEASES_DIR}/install.sh.next" "${RELEASES_DIR}/install.sh"
-          install -m 0755 scripts/install.ps1 "${RELEASES_DIR}/install.ps1.next"
-          mv -f "${RELEASES_DIR}/install.ps1.next" "${RELEASES_DIR}/install.ps1"
-          install -m 0644 CLI_INSTALL.md "${RELEASES_DIR}/CLI_INSTALL.md.next"
-          mv -f "${RELEASES_DIR}/CLI_INSTALL.md.next" "${RELEASES_DIR}/CLI_INSTALL.md"
-
-      - name: Atomically promote latest.json
-        if: env.IS_STABLE == 'true'
-        run: |
-          set -euo pipefail
-          install -m 0644 "${RUNNER_TEMP}/release.json" "${RELEASES_DIR}/latest.json.next"
-          mv -f "${RELEASES_DIR}/latest.json.next" "${RELEASES_DIR}/latest.json"
-          echo "Promoted ${TAG_NAME} to latest.json"
-
-  # Fallback publish target alongside cdn.leagent.me/computer (unchanged by
-  # this job): the Aliyun host serving that domain sits behind a network path
-  # that silently blocks curl-class HTTP clients for reasons still under
-  # investigation (#prj-daemon, 2026-07-30) — real browsers are unaffected,
-  # but that's exactly the client our own install.sh/CLI update path uses.
-  # OSS's own bucket domain doesn't require mainland China ICP filing and
-  # doesn't sit behind that path, so it's a distribution point a stuck
-  # machine can be pointed at via MULTICA_RELEASE_MANIFEST_BASE_URL /
-  # --release-manifest-base-url (#1526) without waiting on that
-  # investigation to resolve. This job never touches the Aliyun host or the
-  # existing publish-downloads-feed job's output; a plain hosted runner is
-  # enough since it never writes to `/data/multica`.
+  # The CLI/daemon and install script cannot read this private repository's
+  # GitHub Release assets without credentials. Publish one canonical feed to
+  # the leagent OSS bucket under computer/, the exact namespace accelerated by
+  # cdn.leagent.me/computer. There is deliberately no second bucket, direct OSS
+  # URL, or Caddy/local-disk copy: upload, cache refresh, and consumer-visible
+  # verification are one release gate.
   #
-  # Aliyun OSS compatibility gotchas: see the canonical list at the top of
-  # the "S3 / CloudFront" section in .env.example (bucket must pre-exist /
-  # addressing style / checksum trailers) before changing anything below —
-  # this job and migrate-uploads-to-s3 have each independently hit all
-  # three; don't make it a fourth rediscovery.
-  publish-downloads-feed-oss:
+  # RELEASES_OSS_* belongs to a dedicated RAM identity. Its policy must allow
+  # writes only below oss://leagent/computer/ and CDN RefreshObjectCaches for
+  # cdn.leagent.me. Aliyun OSS compatibility details remain documented in the
+  # S3 section of .env.example.
+  publish-downloads-feed:
     needs: [verify, release]
     if: github.repository == 'LRM-Teams/multica'
     runs-on: ubuntu-latest
@@ -234,12 +115,11 @@ jobs:
       AWS_REQUEST_CHECKSUM_CALCULATION: when_required
       AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
       OSS_ENDPOINT_URL: https://oss-cn-beijing.aliyuncs.com
-      OSS_BUCKET: lrm-2-0-release
-      # Public HTTPS base objects are readable at. Not a secret (it's the
-      # bucket's own public domain) — kept as one literal here, not derived,
-      # since bucket-domain construction rules vary by provider/CDN and a
-      # mismatch would silently break every install/update pointed at it.
-      OSS_PUBLIC_BASE_URL: https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases
+      OSS_BUCKET: leagent
+      RELEASE_PREFIX: computer
+      PUBLIC_BASE_URL: https://cdn.leagent.me/computer
+      ALIYUN_CLI_VERSION: 3.4.11
+      ALIYUN_CLI_SHA256: a7e3df497db14c10d4d7587795e9fa7849b0c51dfce02908b9de5a41fe717d5c
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -278,25 +158,23 @@ jobs:
           test -f "${RUNNER_TEMP}/release-assets/checksums.txt"
           ls -la "${RUNNER_TEMP}/release-assets"
 
-      - name: Build release manifest (OSS base URL)
+      - name: Build release manifest
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"
           bash scripts/publish-release-manifest.sh \
             "${TAG_NAME}" "${version}" \
-            "${OSS_PUBLIC_BASE_URL}/${TAG_NAME}" \
+            "${PUBLIC_BASE_URL}/${TAG_NAME}" \
             "${RUNNER_TEMP}/release-assets/checksums.txt" \
             "${RUNNER_TEMP}/release-assets" \
-            >"${RUNNER_TEMP}/release-oss.json"
-          cat "${RUNNER_TEMP}/release-oss.json"
+            >"${RUNNER_TEMP}/release.json"
+          cat "${RUNNER_TEMP}/release.json"
 
       - name: Publish immutable per-version objects
         run: |
           set -euo pipefail
-          prefix="releases/${TAG_NAME}"
-          # A single object PUT is atomic; refuse to silently overwrite an
-          # already-published immutable version (mirrors the local-disk
-          # job's own directory-exists guard).
+          prefix="${RELEASE_PREFIX}/${TAG_NAME}"
+          # Refuse to overwrite an immutable release manifest.
           if aws s3api head-object \
             --endpoint-url "$OSS_ENDPOINT_URL" --bucket "$OSS_BUCKET" --key "${prefix}/release.json" \
             >/dev/null 2>&1; then
@@ -305,56 +183,106 @@ jobs:
           fi
           shopt -s nullglob
           for f in "${RUNNER_TEMP}/release-assets"/multica-cli-*.tar.gz "${RUNNER_TEMP}/release-assets"/multica-cli-*.zip; do
-            aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" "$f" "s3://${OSS_BUCKET}/${prefix}/$(basename "$f")"
+            aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
+              --cache-control "public,max-age=31536000,immutable" \
+              "$f" "s3://${OSS_BUCKET}/${prefix}/$(basename "$f")"
           done
           aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
+            --cache-control "public,max-age=31536000,immutable" \
             "${RUNNER_TEMP}/release-assets/checksums.txt" "s3://${OSS_BUCKET}/${prefix}/checksums.txt"
           aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
-            "${RUNNER_TEMP}/release-oss.json" "s3://${OSS_BUCKET}/${prefix}/release.json"
+            --cache-control "public,max-age=31536000,immutable" \
+            "${RUNNER_TEMP}/release.json" "s3://${OSS_BUCKET}/${prefix}/release.json"
           echo "Published immutable release objects: s3://${OSS_BUCKET}/${prefix}/"
 
       - name: Publish install scripts + docs (stable path, not per-version)
         run: |
           set -euo pipefail
-          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" scripts/install.sh "s3://${OSS_BUCKET}/releases/install.sh"
-          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" scripts/install.ps1 "s3://${OSS_BUCKET}/releases/install.ps1"
-          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" CLI_INSTALL.md "s3://${OSS_BUCKET}/releases/CLI_INSTALL.md"
+          for file in scripts/install.sh scripts/install.ps1 CLI_INSTALL.md; do
+            aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
+              --cache-control "no-cache,max-age=0,must-revalidate" \
+              "$file" "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/$(basename "$file")"
+          done
 
       - name: Promote latest.json
         if: env.IS_STABLE == 'true'
         run: |
           set -euo pipefail
-          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" "${RUNNER_TEMP}/release-oss.json" "s3://${OSS_BUCKET}/releases/latest.json"
-          echo "Promoted ${TAG_NAME} to s3://${OSS_BUCKET}/releases/latest.json"
+          aws s3 cp --endpoint-url "$OSS_ENDPOINT_URL" \
+            --cache-control "no-cache,max-age=0,must-revalidate" \
+            "${RUNNER_TEMP}/release.json" "s3://${OSS_BUCKET}/${RELEASE_PREFIX}/latest.json"
+          echo "Promoted ${TAG_NAME} to s3://${OSS_BUCKET}/${RELEASE_PREFIX}/latest.json"
 
-      # "Upload succeeded" is not "installable" — task #187 was exactly this
-      # shape (update request 200, nothing actually changed) and #15's s144
-      # incident was a silent-404 variant of the same failure. Prove the
-      # published bytes are the same bytes a real install/update would fetch
-      # over HTTPS, not just that the OSS API accepted the PUT.
-      - name: Verify the published feed is actually publicly downloadable
+      - name: Install pinned Aliyun CLI
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/aliyun-cli.tgz"
+          curl -fsSL \
+            "https://github.com/aliyun/aliyun-cli/releases/download/v${ALIYUN_CLI_VERSION}/aliyun-cli-linux-${ALIYUN_CLI_VERSION}-amd64.tgz" \
+            -o "$archive"
+          printf '%s  %s\n' "$ALIYUN_CLI_SHA256" "$archive" | sha256sum --check --strict
+          mkdir -p "${RUNNER_TEMP}/aliyun-cli" "${RUNNER_TEMP}/bin"
+          tar -xzf "$archive" -C "${RUNNER_TEMP}/aliyun-cli"
+          install -m 0755 "${RUNNER_TEMP}/aliyun-cli/aliyun" "${RUNNER_TEMP}/bin/aliyun"
+          echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
+
+      - name: Refresh mutable CDN objects
+        env:
+          CDN_ACCESS_KEY_ID: ${{ secrets.RELEASES_OSS_ACCESS_KEY_ID }}
+          CDN_ACCESS_KEY_SECRET: ${{ secrets.RELEASES_OSS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          config="${RUNNER_TEMP}/aliyun-config.json"
+          aliyun configure set \
+            --config-path "$config" \
+            --profile release-cdn \
+            --mode AK \
+            --region cn-hangzhou \
+            --access-key-id "$CDN_ACCESS_KEY_ID" \
+            --access-key-secret "$CDN_ACCESS_KEY_SECRET"
+          printf -v object_paths '%s\n%s\n%s' \
+            "${PUBLIC_BASE_URL}/install.sh" \
+            "${PUBLIC_BASE_URL}/install.ps1" \
+            "${PUBLIC_BASE_URL}/CLI_INSTALL.md"
+          if [ "$IS_STABLE" = "true" ]; then
+            object_paths+=$'\n'"${PUBLIC_BASE_URL}/latest.json"
+          fi
+          aliyun --config-path "$config" --profile release-cdn \
+            cdn RefreshObjectCaches \
+            --ObjectType File \
+            --ObjectPath "$object_paths"
+
+      # Verify the consumer-facing CDN, not the OSS API or bucket domain. The
+      # retry absorbs propagation after RefreshObjectCaches; exhausting it is
+      # a release failure, never a warning.
+      - name: Verify the published feed through the public CDN
         run: |
           set -euo pipefail
           verify_matches() {
             local url="$1" want_file="$2" label="$3"
-            local got_file
+            local got_file attempt
             got_file="$(mktemp)"
-            curl -fsSL "$url" -o "$got_file"
-            if ! cmp -s "$want_file" "$got_file"; then
-              echo "::error title=Published object does not match uploaded content::${label} (${url})"
-              exit 1
-            fi
+            for attempt in $(seq 1 12); do
+              if curl -fsSL "$url" -o "$got_file" && cmp -s "$want_file" "$got_file"; then
+                rm -f "$got_file"
+                return 0
+              fi
+              echo "Waiting for CDN propagation: ${label} (${attempt}/12)"
+              sleep 5
+            done
             rm -f "$got_file"
+            echo "::error title=CDN object does not match uploaded content::${label} (${url})"
+            exit 1
           }
-          verify_matches "${OSS_PUBLIC_BASE_URL}/${TAG_NAME}/checksums.txt" \
+          verify_matches "${PUBLIC_BASE_URL}/${TAG_NAME}/checksums.txt" \
             "${RUNNER_TEMP}/release-assets/checksums.txt" "checksums.txt"
-          verify_matches "${OSS_PUBLIC_BASE_URL}/${TAG_NAME}/release.json" \
-            "${RUNNER_TEMP}/release-oss.json" "release.json"
+          verify_matches "${PUBLIC_BASE_URL}/${TAG_NAME}/release.json" \
+            "${RUNNER_TEMP}/release.json" "release.json"
           if [ "$IS_STABLE" = "true" ]; then
-            verify_matches "${OSS_PUBLIC_BASE_URL}/latest.json" \
-              "${RUNNER_TEMP}/release-oss.json" "latest.json"
+            verify_matches "${PUBLIC_BASE_URL}/latest.json" \
+              "${RUNNER_TEMP}/release.json" "latest.json"
           fi
-          echo "Verified: published objects are byte-identical when re-downloaded over HTTPS from the public OSS feed."
+          echo "Verified: public CDN bytes match the canonical release feed."
 
   # The web-only release policy publishes Linux amd64 images only. The served
   # deployment target is amd64. Daemon archives are handled by the release job

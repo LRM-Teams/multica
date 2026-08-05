@@ -24,6 +24,13 @@ func TestReleaseManifestBaseURLIsNotGitHub(t *testing.T) {
 	}
 }
 
+func TestReleaseManifestBaseURLUsesCanonicalCDN(t *testing.T) {
+	const want = "https://cdn.leagent.me/computer"
+	if DefaultReleaseManifestBaseURL != want {
+		t.Fatalf("DefaultReleaseManifestBaseURL = %q, want %q", DefaultReleaseManifestBaseURL, want)
+	}
+}
+
 // TestReleaseManifestBaseURLEnvOverride proves a machine can redirect the
 // release feed without a new release — e.g. the default address gets blocked
 // on some network's edge layer (2026-07-30 incident) and needs an immediate,

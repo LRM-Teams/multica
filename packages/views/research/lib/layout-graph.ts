@@ -1,5 +1,5 @@
 import type { Edge, Node } from "@xyflow/react";
-import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
+import type { ResearchGraphEdge, ResearchGraphNode, ResearchNodeCommandAction } from "@multica/core/types";
 import {
   branchIdForLane,
   colorForLane,

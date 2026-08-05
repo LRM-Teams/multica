@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import type { ResearchGraphEdge, ResearchGraphNode } from "@multica/core/types";
+import type { ResearchGraphEdge, ResearchGraphNode, ResearchNodeCommandAction } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { MoreHorizontal } from "lucide-react";
 import { useT } from "../../i18n/use-t";
@@ -38,7 +38,7 @@ export function ResearchGitList({
   selectedId,
   onSelect,
   onOpenDelivery,
-  onRetry,
+  onRetry: _onRetry,
   onNodeCommand,
   onOpenDetail,
   liveMessage,

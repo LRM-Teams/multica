@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useMemo, useReducer, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Square } from "lucide-react";
 import { toast } from "sonner";
@@ -26,6 +26,7 @@ import type {
   ResearchProductRoundCard,
 } from "@multica/core/types";
 import { memberListOptions } from "@multica/core/workspace/queries";
+import { createSafeId } from "@multica/core/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";

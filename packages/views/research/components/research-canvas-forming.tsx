@@ -14,22 +14,28 @@ type Props = {
 
 const QUEUED_STATUSES = new Set(["pending", "ready", "queued", "dispatched"]);
 
+const EMPTY_MEMBERS: ResearchFleetMember[] = [];
+const EMPTY_TASKS: ResearchRunTask[] = [];
+const EMPTY_MESSAGES: ResearchMessage[] = [];
+
 export function ResearchCanvasForming({
   mode = "forming",
   stage,
-  members = [],
-  tasks = [],
-  messages = [],
+  members = EMPTY_MEMBERS,
+  tasks = EMPTY_TASKS,
+  messages = EMPTY_MESSAGES,
 }: Props) {
   const { t } = useT("research");
   const running = tasks.filter((task) => task.status === "running");
   const queued = tasks.filter((task) => QUEUED_STATUSES.has(task.status)).length;
   const failed = tasks.filter((task) => task.status === "failed").length;
-  const workingIds = new Set(running.map((task) => task.assigned_agent_id).filter(Boolean));
+  const workingIds = new Set(running.flatMap((task) => task.assigned_agent_id ? [task.assigned_agent_id] : []));
   const working = members.filter((member) => workingIds.has(member.agent_id));
-  const latest = [...messages]
-    .filter((message) => message.body?.trim())
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+  const latest = messages.reduce<ResearchMessage | undefined>((best, msg) => {
+    if (!msg.body?.trim()) return best;
+    if (!best || msg.created_at.localeCompare(best.created_at) > 0) return msg;
+    return best;
+  }, undefined);
   const stageLabel = stage
     ? t(($) => $.stage[stage as keyof typeof $.stage] ?? stage)
     : t(($) => $.session_page.canvas_forming_title);

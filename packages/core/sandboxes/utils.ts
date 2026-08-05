@@ -35,6 +35,40 @@ export function sandboxDisplayName(instance: SandboxInstance): string {
   return instance.template;
 }
 
+/** Stable service links derived from sandboxd endpoint_info. */
+export type SandboxEndpointLinkKind = "term" | "pi_web" | "novnc" | "code";
+
+export type SandboxEndpointLink = {
+  kind: SandboxEndpointLinkKind;
+  url: string;
+};
+
+const ENDPOINT_LINK_KEYS: Array<{ kind: SandboxEndpointLinkKind; key: string }> = [
+  { kind: "term", key: "term_url" },
+  { kind: "pi_web", key: "pi_web_url" },
+  { kind: "novnc", key: "novnc_url" },
+  { kind: "code", key: "code_url" },
+];
+
+/**
+ * Extract clickable service URLs from endpoint_info. Missing / non-string
+ * values are skipped so older sandbox rows without terminal links still render.
+ */
+export function sandboxEndpointLinks(
+  endpointInfo: Record<string, unknown> | null | undefined,
+): SandboxEndpointLink[] {
+  if (!endpointInfo || typeof endpointInfo !== "object") return [];
+  const links: SandboxEndpointLink[] = [];
+  for (const { kind, key } of ENDPOINT_LINK_KEYS) {
+    const raw = endpointInfo[key];
+    if (typeof raw !== "string") continue;
+    const url = raw.trim();
+    if (!url) continue;
+    links.push({ kind, url });
+  }
+  return links;
+}
+
 /** Common Pi provider names offered in the sandbox runtime form. */
 export const SANDBOX_RUNTIME_PROVIDER_PRESETS = ["openai", "anthropic", "google"] as const;
 

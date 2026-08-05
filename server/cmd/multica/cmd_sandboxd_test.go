@@ -92,6 +92,9 @@ func TestBuildStartRuntimeInCubeCodeResetsFrozenDaemonIdentity(t *testing.T) {
 
 func TestDockerRuntimeEntrypointKeepsContainerAlive(t *testing.T) {
 	script := dockerRuntimeEntrypointScript()
+	if !strings.Contains(script, "/etc/cont-init.d/99-browser-vnc") {
+		t.Fatalf("entrypoint missing browser/VNC/pi-web init:\n%s", script)
+	}
 	if !strings.Contains(script, "/usr/local/bin/start-multica-runtime.sh") {
 		t.Fatalf("entrypoint missing runtime start:\n%s", script)
 	}
@@ -100,6 +103,48 @@ func TestDockerRuntimeEntrypointKeepsContainerAlive(t *testing.T) {
 	}
 	if strings.Contains(script, "exit 1") {
 		t.Fatalf("entrypoint must not exit when daemon stops:\n%s", script)
+	}
+}
+
+func TestParseDockerPublishedPort(t *testing.T) {
+	cases := map[string]string{
+		"0.0.0.0:32768\n":           "32768",
+		"0.0.0.0:32768\n[::]:32768": "32768",
+		"[::]:40123\n":              "40123",
+		"127.0.0.1:8080":            "8080",
+		"":                          "",
+	}
+	for in, want := range cases {
+		if got := parseDockerPublishedPort(in); got != want {
+			t.Fatalf("parseDockerPublishedPort(%q)=%q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestBuildDockerEndpointInfoIncludesServiceURLs(t *testing.T) {
+	endpoint := buildDockerEndpointInfo("cid", "multica-abc", "img:latest", "10.0.0.8", map[string]string{
+		"6079": "32768",
+		"6080": "32769",
+	})
+	if endpoint["kind"] != "docker" {
+		t.Fatalf("kind = %v", endpoint["kind"])
+	}
+	if endpoint["pi_web_url"] != "http://10.0.0.8:32768/" {
+		t.Fatalf("pi_web_url = %v", endpoint["pi_web_url"])
+	}
+	if endpoint["term_url"] != "http://10.0.0.8:32768/term" {
+		t.Fatalf("term_url = %v", endpoint["term_url"])
+	}
+	if endpoint["novnc_url"] != "http://10.0.0.8:32769/" {
+		t.Fatalf("novnc_url = %v", endpoint["novnc_url"])
+	}
+}
+
+func TestEnsureDockerDesktopEnvDefaults(t *testing.T) {
+	env := map[string]string{"MULTICA_TOKEN": "tok"}
+	ensureDockerDesktopEnv(env)
+	if env["DISPLAY"] != ":0" || env["PI_WEB_PORT"] != "6079" || env["NOVNC_PORT"] != "6080" {
+		t.Fatalf("desktop env = %#v", env)
 	}
 }
 

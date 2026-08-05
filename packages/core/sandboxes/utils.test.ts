@@ -11,9 +11,33 @@ import {
   SANDBOX_NODE_STALE_MS,
   SANDBOXD_PLACEHOLDER_TEMPLATE_ID,
   sanitizeSandboxdConfigSegment,
+  sandboxEndpointLinks,
   sandboxRuntimeForm,
 } from "./utils";
 import type { SandboxInstance } from "../types";
+
+describe("sandboxEndpointLinks", () => {
+  it("returns ordered service links and skips empty values", () => {
+    expect(
+      sandboxEndpointLinks({
+        kind: "docker",
+        term_url: "http://10.0.0.8:32768/term",
+        pi_web_url: "http://10.0.0.8:32768/",
+        novnc_url: " http://10.0.0.8:32769/ ",
+        code_url: "",
+      }),
+    ).toEqual([
+      { kind: "term", url: "http://10.0.0.8:32768/term" },
+      { kind: "pi_web", url: "http://10.0.0.8:32768/" },
+      { kind: "novnc", url: "http://10.0.0.8:32769/" },
+    ]);
+  });
+
+  it("returns empty for missing endpoint_info", () => {
+    expect(sandboxEndpointLinks(undefined)).toEqual([]);
+    expect(sandboxEndpointLinks({})).toEqual([]);
+  });
+});
 
 describe("resolveCreateSandboxTemplate", () => {
   it("maps empty and default to default", () => {

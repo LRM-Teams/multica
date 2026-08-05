@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -32,18 +33,19 @@ var sandboxdCmd = &cobra.Command{
 }
 
 type sandboxdConfig struct {
-	ServerURL     string        `json:"server_url"`
-	NodeToken     string        `json:"node_token"`
-	NodeKey       string        `json:"node_key"`
-	Name          string        `json:"name"`
-	OwnerUserID   string        `json:"owner_user_id"`
-	SandboxServer string        `json:"sandbox_server"`
-	CubeProxyHTTP string        `json:"cube_proxy_http"`
-	CubeDomain    string        `json:"cube_domain"`
-	TemplateID    string        `json:"cube_template_id"`
-	Concurrency   int           `json:"concurrency"`
-	PollInterval  time.Duration `json:"-"`
-	PollIntervalS string        `json:"poll_interval"`
+	ServerURL        string        `json:"server_url"`
+	NodeToken        string        `json:"node_token"`
+	NodeKey          string        `json:"node_key"`
+	Name             string        `json:"name"`
+	OwnerUserID      string        `json:"owner_user_id"`
+	SandboxServer    string        `json:"sandbox_server"`
+	CubeProxyHTTP    string        `json:"cube_proxy_http"`
+	CubeDomain       string        `json:"cube_domain"`
+	TemplateID       string        `json:"cube_template_id"`
+	DockerPublicHost string        `json:"docker_public_host"`
+	Concurrency      int           `json:"concurrency"`
+	PollInterval     time.Duration `json:"-"`
+	PollIntervalS    string        `json:"poll_interval"`
 }
 
 type sandboxdClient struct {
@@ -136,6 +138,7 @@ func init() {
 	f.String("cube-proxy-http", "", "Cube proxy HTTP URL for /execute (overrides config)")
 	f.String("cube-domain", "", "Cube sandbox domain (overrides config)")
 	f.String("cube-template-id", "", "Default Cube template id (overrides config)")
+	f.String("docker-public-host", "", "Host/IP used in Docker sandbox service URLs (overrides config docker_public_host)")
 	f.Int("concurrency", 1, "Max jobs claimed per poll")
 	f.Duration("poll-interval", 5*time.Second, "Fallback job poll interval")
 }
@@ -154,6 +157,7 @@ func runSandboxd(cmd *cobra.Command, _ []string) error {
 	overrideStringFlag(cmd, "cube-proxy-http", &cfg.CubeProxyHTTP)
 	overrideStringFlag(cmd, "cube-domain", &cfg.CubeDomain)
 	overrideStringFlag(cmd, "cube-template-id", &cfg.TemplateID)
+	overrideStringFlag(cmd, "docker-public-host", &cfg.DockerPublicHost)
 	if cmd.Flags().Changed("concurrency") {
 		cfg.Concurrency = sandboxFlagInt(cmd, "concurrency")
 	}
@@ -667,13 +671,25 @@ func (c *sandboxdClient) createDockerContainer(ctx context.Context, job sandboxJ
 	if len(runtimeEnv) == 0 || runtimeEnvToken(runtimeEnv) == "" {
 		return nil, fmt.Errorf("runtime_env missing MULTICA_TOKEN")
 	}
-	runtimeEnv["PATH"] = firstNonEmpty(runtimeEnv["PATH"], "/home/user/.npm-global/bin:/home/user/.bun/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin")
+	runtimeEnv["PATH"] = firstNonEmpty(runtimeEnv["PATH"], "/root/.local/bin:/root/.npm-global/bin:/root/.bun/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin")
+	ensureDockerDesktopEnv(runtimeEnv)
 	name := dockerContainerName(job.InstanceID)
 	if existing, ok := c.findDockerContainerByInstance(ctx, job.InstanceID); ok {
-		endpoint := dockerEndpointInfo(existing, name, image)
+		endpoint := c.dockerEndpointInfo(ctx, existing, name, image)
 		return map[string]any{"local_ref": existing, "endpoint_info": endpoint, "result": map[string]any{"container_id": existing, "container_name": name, "image": image, "reused": true}}, nil
 	}
-	args := []string{"run", "-d", "--name", name, "--restart", "unless-stopped", "--label", "multica.sandbox_instance_id=" + job.InstanceID, "--label", "multica.workspace_id=" + job.WorkspaceID, "--entrypoint", "/bin/sh"}
+	args := []string{
+		"run", "-d",
+		"--name", name,
+		"--restart", "unless-stopped",
+		"--shm-size", "2g",
+		"--label", "multica.sandbox_instance_id=" + job.InstanceID,
+		"--label", "multica.workspace_id=" + job.WorkspaceID,
+		// Dynamic host ports so multiple containers on one node do not collide.
+		"-p", "0:6079",
+		"-p", "0:6080",
+		"--entrypoint", "/bin/sh",
+	}
 	for k, v := range runtimeEnv {
 		if strings.TrimSpace(k) == "" {
 			continue
@@ -690,7 +706,7 @@ func (c *sandboxdClient) createDockerContainer(ctx context.Context, job sandboxJ
 	if containerID == "" {
 		return nil, fmt.Errorf("docker run returned empty container id")
 	}
-	endpoint := dockerEndpointInfo(containerID, name, image)
+	endpoint := c.dockerEndpointInfo(ctx, containerID, name, image)
 	return map[string]any{
 		"local_ref":     containerID,
 		"endpoint_info": endpoint,
@@ -707,21 +723,144 @@ func (c *sandboxdClient) createDockerContainer(ctx context.Context, job sandboxJ
 }
 
 func dockerRuntimeEntrypointScript() string {
-	// Keep PID 1 alive after the initial runtime start so reconfigure can
-	// restart the Multica daemon in-place via docker exec. Docker container
-	// env is immutable after create; updated Pi/model config is applied by
-	// restartRuntimeInDocker, not by docker rm/run.
-	return `/usr/local/bin/start-multica-runtime.sh
+	// Start VNC/noVNC + Pi web (incl. /term) before the Multica daemon, then
+	// keep PID 1 alive so reconfigure can restart the daemon in-place via
+	// docker exec. Docker container env is immutable after create; updated
+	// Pi/model config is applied by restartRuntimeInDocker, not docker rm/run.
+	return `/etc/cont-init.d/99-browser-vnc || true
+/usr/local/bin/start-multica-runtime.sh
 exec tail -f /dev/null`
 }
 
-func dockerEndpointInfo(containerID, name, image string) map[string]any {
-	return map[string]any{
+func ensureDockerDesktopEnv(runtimeEnv map[string]string) {
+	if runtimeEnv == nil {
+		return
+	}
+	if strings.TrimSpace(runtimeEnv["DISPLAY"]) == "" {
+		runtimeEnv["DISPLAY"] = ":0"
+	}
+	if strings.TrimSpace(runtimeEnv["PI_WEB_HOST"]) == "" {
+		runtimeEnv["PI_WEB_HOST"] = "0.0.0.0"
+	}
+	if strings.TrimSpace(runtimeEnv["PI_WEB_PORT"]) == "" {
+		runtimeEnv["PI_WEB_PORT"] = "6079"
+	}
+	if strings.TrimSpace(runtimeEnv["PI_WEB_WORKSPACE"]) == "" {
+		runtimeEnv["PI_WEB_WORKSPACE"] = "/workspace"
+	}
+	if strings.TrimSpace(runtimeEnv["NOVNC_PORT"]) == "" {
+		runtimeEnv["NOVNC_PORT"] = "6080"
+	}
+	if strings.TrimSpace(runtimeEnv["VNC_PORT"]) == "" {
+		runtimeEnv["VNC_PORT"] = "5901"
+	}
+}
+
+func (c *sandboxdClient) dockerEndpointInfo(ctx context.Context, containerID, name, image string) map[string]any {
+	publicHost := resolveDockerPublicHost(c.cfg.DockerPublicHost)
+	ports := c.inspectDockerPublishedPorts(ctx, containerID, "6079", "6080")
+	return buildDockerEndpointInfo(containerID, name, image, publicHost, ports)
+}
+
+func buildDockerEndpointInfo(containerID, name, image, publicHost string, ports map[string]string) map[string]any {
+	endpoint := map[string]any{
 		"kind":           "docker",
 		"container_id":   containerID,
 		"container_name": name,
 		"image":          image,
 	}
+	if publicHost != "" {
+		endpoint["public_host"] = publicHost
+	}
+	if hostPort := strings.TrimSpace(ports["6079"]); hostPort != "" {
+		endpoint["pi_web_port"] = hostPort
+		if publicHost != "" {
+			base := fmt.Sprintf("http://%s:%s", publicHost, hostPort)
+			endpoint["pi_web_url"] = base + "/"
+			endpoint["term_url"] = base + "/term"
+		}
+	}
+	if hostPort := strings.TrimSpace(ports["6080"]); hostPort != "" {
+		endpoint["novnc_port"] = hostPort
+		if publicHost != "" {
+			endpoint["novnc_url"] = fmt.Sprintf("http://%s:%s/", publicHost, hostPort)
+		}
+	}
+	return endpoint
+}
+
+func (c *sandboxdClient) inspectDockerPublishedPorts(ctx context.Context, containerID string, containerPorts ...string) map[string]string {
+	out := make(map[string]string, len(containerPorts))
+	for _, containerPort := range containerPorts {
+		cmd := dockerCommand(ctx, "port", containerID, containerPort)
+		raw, err := cmd.CombinedOutput()
+		if err != nil {
+			continue
+		}
+		if hostPort := parseDockerPublishedPort(string(raw)); hostPort != "" {
+			out[containerPort] = hostPort
+		}
+	}
+	return out
+}
+
+// parseDockerPublishedPort extracts the host port from `docker port` output.
+// Examples: "0.0.0.0:32768", "[::]:32768".
+func parseDockerPublishedPort(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			if idx := strings.LastIndex(line, "]:"); idx >= 0 {
+				port := strings.TrimSpace(line[idx+2:])
+				if port != "" {
+					return port
+				}
+			}
+			continue
+		}
+		if idx := strings.LastIndex(line, ":"); idx >= 0 {
+			port := strings.TrimSpace(line[idx+1:])
+			if port != "" {
+				return port
+			}
+		}
+	}
+	return ""
+}
+
+func resolveDockerPublicHost(configured string) string {
+	if host := strings.TrimSpace(configured); host != "" {
+		return host
+	}
+	if host := strings.TrimSpace(os.Getenv("SANDBOXD_DOCKER_PUBLIC_HOST")); host != "" {
+		return host
+	}
+	if host := primaryNonLoopbackIPv4(); host != "" {
+		return host
+	}
+	return "127.0.0.1"
+}
+
+func primaryNonLoopbackIPv4() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok || ipNet.IP == nil || ipNet.IP.IsLoopback() {
+			continue
+		}
+		ip := ipNet.IP.To4()
+		if ip == nil {
+			continue
+		}
+		return ip.String()
+	}
+	return ""
 }
 
 func (c *sandboxdClient) findDockerContainerByInstance(ctx context.Context, instanceID string) (string, bool) {
@@ -846,7 +985,7 @@ func (c *sandboxdClient) reconfigureDockerContainer(ctx context.Context, job san
 		image = stringFromRawObject(payload.EndpointInfo, "image")
 	}
 	name := firstNonEmpty(stringFromRawObject(payload.EndpointInfo, "container_name"), dockerContainerName(job.InstanceID))
-	endpoint := dockerEndpointInfo(id, name, image)
+	endpoint := c.dockerEndpointInfo(ctx, id, name, image)
 	return map[string]any{
 		"local_ref":     id,
 		"endpoint_info": endpoint,
@@ -922,6 +1061,8 @@ func (c *sandboxdClient) createCubeSandbox(ctx context.Context, job sandboxJob, 
 		"kind":       "cube",
 		"sandbox_id": cube.SandboxID,
 		"novnc_url":  fmt.Sprintf("http://6080-%s.%s/vnc.html?autoconnect=1&encrypt=0", cube.SandboxID, c.cfg.CubeDomain),
+		"pi_web_url": fmt.Sprintf("http://6079-%s.%s/", cube.SandboxID, c.cfg.CubeDomain),
+		"term_url":   fmt.Sprintf("http://6079-%s.%s/term", cube.SandboxID, c.cfg.CubeDomain),
 		"code_url":   fmt.Sprintf("http://49999-%s.%s", cube.SandboxID, c.cfg.CubeDomain),
 		"proxy":      c.cfg.CubeProxyHTTP,
 	}

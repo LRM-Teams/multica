@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -746,7 +747,7 @@ func (d *Daemon) handleDaemonAgentStart(payload protocol.DaemonAgentStartPayload
 		return err
 	}
 	if accepted {
-		agentRoot := multicaAgentRoot(d.cfg, payload.WorkspaceID, payload.AgentID)
+		agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, payload.WorkspaceID, payload.AgentID)
 		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 			return fmt.Errorf("create Agent root for Message coordinator: %w", err)
 		}

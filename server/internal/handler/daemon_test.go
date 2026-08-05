@@ -1330,7 +1330,7 @@ func TestDaemonHeartbeat_ReleaseManifestBaseURLFromServerEnv(t *testing.T) {
 
 	runtimeID := createRuntimeLocalSkillTestRuntime(t, testUserID)
 
-	t.Setenv("MULTICA_SERVER_RELEASE_MANIFEST_BASE_URL", "https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases")
+	t.Setenv("MULTICA_SERVER_RELEASE_MANIFEST_BASE_URL", "https://releases.example.com/computer")
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/heartbeat", map[string]any{
@@ -1346,7 +1346,7 @@ func TestDaemonHeartbeat_ReleaseManifestBaseURLFromServerEnv(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &ack); err != nil {
 		t.Fatalf("decode ack: %v", err)
 	}
-	if ack.ReleaseManifestBaseURL != "https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases" {
+	if ack.ReleaseManifestBaseURL != "https://releases.example.com/computer" {
 		t.Fatalf("ReleaseManifestBaseURL = %q, want the server env value", ack.ReleaseManifestBaseURL)
 	}
 }

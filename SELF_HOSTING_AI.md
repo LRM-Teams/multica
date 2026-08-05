@@ -11,7 +11,7 @@ This document is designed for AI agents to execute. Follow these steps exactly t
 
 ```bash
 # Install CLI + provision self-host server
-curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash -s -- --with-server
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash -s -- --with-server
 
 # Configure CLI for localhost, authenticate, and start daemon
 multica setup self-host
@@ -30,7 +30,7 @@ Wait for the server output `✓ Multica server is running and CLI is ready!` bef
 git clone https://github.com/LRM-Teams/multica.git
 cd multica
 make selfhost
-curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 multica setup self-host
 ```
 

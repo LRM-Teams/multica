@@ -27,21 +27,10 @@ const DefaultUpdateDownloadTimeout = 120 * time.Second
 // unauthenticated GitHub Releases API/asset request from a bare install
 // always 404s.
 //
-// Primary release feed is the OSS bucket that release.yml's
-// publish-downloads-feed-oss job writes every release (verified byte-identical
-// on publish). Since v0.4.4 the cdn.leagent.me/computer path that the
-// self-hosted publish-downloads-feed job writes has been silently blocked for
-// curl-class HTTP clients and its latest.json stalled (2026-07-30 #prj-daemon),
-// which left every consumer that resolved the compiled default against a stale
-// feed — the server's computer-page read model projected no update_available
-// even when a newer release existed. OSS is reachable from bare installs,
-// hasn't sat behind that broken path, and its feed is current, so it is now
-// the compiled default.
-//
-// cdn.leagent.me/computer remains reachable via MULTICA_RELEASE_MANIFEST_BASE_URL
-// for hosts that must stay on the custom domain (see the ReleaseManifestBaseURLEnv
-// comment); flipping the default does not remove that override.
-const DefaultReleaseManifestBaseURL = "https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases"
+// release.yml publishes the feed to OSS and verifies the same bytes through
+// this CDN URL before completing a release. Consumers never depend on the
+// storage provider's bucket hostname.
+const DefaultReleaseManifestBaseURL = "https://cdn.leagent.me/computer"
 
 // ReleaseManifestBaseURLEnv overrides DefaultReleaseManifestBaseURL when set,
 // with no rebuild/release required. Exists because the default address is a
@@ -91,11 +80,10 @@ func ReleaseWebURL() string {
 // (daemon/config.go's officialCloudHost mirrors this) and for `multica
 // setup`'s default ServerURL (cmd_setup.go). Task #29 (domain unification,
 // 2026-07-31) found no Caddy/infra routing anywhere in this repo for
-// api.leagent.me, and Aliyun's block on leagent.me (the same block that
-// forced the install/release feed onto an OSS mirror, #prj-daemon
-// 2026-07-31) is still open — flipping this before the backend is actually
-// reachable there would break `multica setup` for every new install. Flip
-// this one constant to "api.leagent.me" once infra confirms it's routed and
+// api.leagent.me, and the backend is still not reachable there. Flipping this
+// before the backend is actually routed would break `multica setup` for every
+// new install. Flip this one constant to "api.leagent.me" once infra confirms
+// it's routed and
 // has a valid cert; every caller picks it up automatically.
 const OfficialCloudAPIHost = "api.multica.ai"
 

@@ -7,7 +7,7 @@
 Give this instruction to your AI agent:
 
 ```
-Fetch https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/CLI_INSTALL.md and follow the instructions to install Multica CLI, log in, and start the daemon on this machine.
+Fetch https://cdn.leagent.me/computer/CLI_INSTALL.md and follow the instructions to install Multica CLI, log in, and start the daemon on this machine.
 ```
 
 ---
@@ -37,7 +37,7 @@ printf 'Multica path: %s\n' "${CLI_PATH:-not installed}"
 Run:
 
 ```bash
-curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 ```
 
 Then verify:
@@ -65,7 +65,7 @@ fi
 PLATFORM="${OS}-${ARCH}"
 
 # Fetch the release manifest
-curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/latest.json -o /tmp/latest.json
+curl -fsSL https://cdn.leagent.me/computer/latest.json -o /tmp/latest.json
 LATEST=$(jq -r '.tag' /tmp/latest.json)
 URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/latest.json)
 SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/latest.json)
@@ -168,7 +168,7 @@ Do not restart while an agent task is active. Adoption is complete when
 Run in PowerShell (no admin required):
 
 ```powershell
-irm https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.ps1 | iex
+irm https://cdn.leagent.me/computer/install.ps1 | iex
 ```
 
 This downloads the latest Windows binary from the release feed, installs it to `%USERPROFILE%\.multica\bin\`, and adds it to your user PATH.

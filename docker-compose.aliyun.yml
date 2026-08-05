@@ -53,12 +53,6 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-      # Public, read-only CLI/daemon release feed (see deploy/aliyun/Caddyfile
-      # cdn.leagent.me handle_path /computer/*). Mounted read-only into
-      # Caddy; `/data/multica/releases` is written only by the release
-      # workflow's publish-downloads-feed job on the aliyun runner, never by
-      # this deploy job or the app containers.
-      - /data/multica/releases:/srv/multica-releases:ro
     restart: unless-stopped
 
 volumes:

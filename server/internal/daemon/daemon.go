@@ -3419,7 +3419,6 @@ func (d *Daemon) reportTaskResultForTask(ctx context.Context, task Task, result 
 				d.evictPersistentChatRuntime(task)
 			}
 			if result.Status == "completed" {
-				d.maybeAppendDailyCloseoutStub(task, result)
 				d.reportAgentMemoryWrites(ctx, task)
 			}
 			return

@@ -5,12 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/multica-ai/multica/server/internal/memorysignal"
 )
@@ -195,144 +193,6 @@ func diffAgentMemoryWrites(agentRoot string, prior memoryWriteSnapshot) (memoryW
 		})
 	}
 	return next, changes, nil
-}
-
-func (d *Daemon) maybeAppendDailyCloseoutStub(task Task, result TaskResult) {
-	if d == nil || !taskHasSubstantiveCloseoutSignal(task, result) {
-		return
-	}
-	workspaceID := strings.TrimSpace(task.WorkspaceID)
-	agentID := strings.TrimSpace(task.AgentID)
-	if workspaceID == "" || agentID == "" {
-		return
-	}
-	now := time.Now().UTC()
-	agentRoot := multicaAgentRoot(d.cfg, workspaceID, agentID)
-	rel := filepath.ToSlash(filepath.Join("memory", "daily", now.Format("2006-01-02")+".md"))
-	prior, err := loadMemoryWriteSnapshot(agentRoot)
-	if err != nil {
-		return
-	}
-	abs := filepath.Join(agentRoot, filepath.FromSlash(rel))
-	current, readErr := os.ReadFile(abs)
-	if readErr != nil && !os.IsNotExist(readErr) {
-		return
-	}
-	if strings.TrimSpace(string(current)) != "" {
-		currentHash := hashFileContent(current)
-		if prior.Files[rel] == "" || prior.Files[rel] != currentHash {
-			return
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return
-	}
-	f, err := os.OpenFile(abs, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	if len(current) > 0 && !strings.HasSuffix(string(current), "\n") {
-		_, _ = f.WriteString("\n")
-	}
-	_, _ = f.WriteString(renderDailyCloseoutStub(task, result, now, len(current) == 0))
-}
-
-func taskHasSubstantiveCloseoutSignal(task Task, result TaskResult) bool {
-	chatMessage := strings.TrimSpace(task.ChatMessage)
-	if chatMessage != "" && isSimpleSocialMessage(chatMessage) && !resultHasSubstantiveSignal(result) {
-		return false
-	}
-	if resultHasSubstantiveSignal(result) {
-		return true
-	}
-	if strings.TrimSpace(task.IssueID) != "" || strings.TrimSpace(task.AutopilotRunID) != "" || strings.TrimSpace(task.AutopilotID) != "" || strings.TrimSpace(task.QuickCreatePrompt) != "" || strings.TrimSpace(task.TriggerCommentID) != "" {
-		return true
-	}
-	msg := strings.TrimSpace(task.ChatMessage)
-	return msg != "" && !isSimpleSocialMessage(msg)
-}
-
-func resultHasSubstantiveSignal(result TaskResult) bool {
-	if strings.TrimSpace(result.BranchName) != "" || strings.TrimSpace(result.WorkDir) != "" || len(result.Parts) > 0 || len(result.Usage) > 0 || result.RuntimeStats != nil {
-		return true
-	}
-	action := strings.ToLower(strings.TrimSpace(result.Action))
-	return action != "" && action != "no_reply"
-}
-
-func isSimpleSocialMessage(message string) bool {
-	msg := strings.ToLower(strings.TrimSpace(message))
-	msg = strings.Trim(msg, " \t\r\n.!?。！？~～")
-	if msg == "" {
-		return true
-	}
-	switch msg {
-	case "hi", "hello", "hey", "yo", "thanks", "thank you", "thx", "谢谢", "谢谢你", "感谢", "辛苦了", "贴纸", "sticker":
-		return true
-	}
-	return false
-}
-
-func renderDailyCloseoutStub(task Task, result TaskResult, now time.Time, includeHeader bool) string {
-	var b strings.Builder
-	if includeHeader {
-		b.WriteString("# Daily Memory - ")
-		b.WriteString(now.Format("2006-01-02"))
-		b.WriteString("\n\n")
-	}
-	b.WriteString("## Auto Closeout - ")
-	b.WriteString(now.Format(time.RFC3339))
-	b.WriteString("\n")
-	b.WriteString("- Substantive work completed, but no fresh daily write was detected; the daemon recorded this conservative closeout stub.\n")
-	b.WriteString("- Task kind: ")
-	b.WriteString(closeoutTaskKind(task))
-	if detail := closeoutSignalDetail(task, result); detail != "" {
-		b.WriteString("\n- Signal: ")
-		b.WriteString(detail)
-	}
-	b.WriteString("\n")
-	return b.String()
-}
-
-func closeoutTaskKind(task Task) string {
-	switch {
-	case strings.TrimSpace(task.IssueID) != "":
-		return "issue"
-	case strings.TrimSpace(task.AutopilotRunID) != "" || strings.TrimSpace(task.AutopilotID) != "":
-		return "autopilot"
-	case strings.TrimSpace(task.QuickCreatePrompt) != "":
-		return "quick_create"
-	case strings.TrimSpace(task.ChatSessionID) != "":
-		return "chat"
-	default:
-		return "task"
-	}
-}
-
-func closeoutSignalDetail(task Task, result TaskResult) string {
-	parts := []string{}
-	if v := compactCloseoutValue(result.BranchName); v != "" {
-		parts = append(parts, "branch="+v)
-	}
-	if v := compactCloseoutValue(result.Action); v != "" {
-		parts = append(parts, "action="+v)
-	}
-	if strings.TrimSpace(task.ProjectID) != "" {
-		parts = append(parts, "project_id="+compactCloseoutValue(task.ProjectID))
-	}
-	if len(result.Usage) > 0 {
-		parts = append(parts, fmt.Sprintf("usage_entries=%d", len(result.Usage)))
-	}
-	return strings.Join(parts, ", ")
-}
-
-func compactCloseoutValue(value string) string {
-	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
-	if len(value) > 120 {
-		return value[:120] + "..."
-	}
-	return value
 }
 
 const memorySignalQueueRel = "sync_queue/memory-signal.jsonl"

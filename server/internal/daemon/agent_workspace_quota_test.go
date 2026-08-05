@@ -323,6 +323,9 @@ func TestHandleSeedAgentContextRequest_RefusesWhenAgentWorkspaceOverCapacity(t *
 	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 		t.Fatalf("ensure root: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(agentRoot, "notes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	// Fill over the 10-byte cap.
 	if err := os.WriteFile(filepath.Join(agentRoot, "notes", "work-log.md"), []byte("already-over-ten"), 0o644); err != nil {
 		t.Fatalf("seed oversized file: %v", err)
@@ -360,6 +363,9 @@ func TestHandleSeedAgentContextRequest_AllowsWhenUnderCapacity(t *testing.T) {
 	}
 	// Whitelisted seed files must already exist for appendSeedContextFile.
 	notePath := filepath.Join(agentRoot, "notes", "work-log.md")
+	if err := os.MkdirAll(filepath.Dir(notePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(notePath, []byte("# log\n"), 0o644); err != nil {
 		t.Fatalf("seed note: %v", err)
 	}

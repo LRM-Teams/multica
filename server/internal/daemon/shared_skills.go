@@ -290,96 +290,9 @@ func ensurePiAgentRoot(root string) error {
 }
 
 func ensureMulticaAgentRoot(root string) error {
-	dirs := []string{
-		filepath.Join(root, "memory", "daily"),
-		filepath.Join(root, "memory", "audit"),
-		filepath.Join(root, "notes"),
-		filepath.Join(root, "projects"),
-		filepath.Join(root, "users"),
-		filepath.Join(root, "channels"),
-		filepath.Join(root, "runtime", "pi"),
-		filepath.Join(root, "runtime", "openclaw"),
-		filepath.Join(root, "runtime", "codex"),
-		filepath.Join(root, "runtime", "claude"),
-		filepath.Join(root, "devices"),
-		filepath.Join(root, "skills", "drafts"),
-		filepath.Join(root, "skills", "generated"),
-		filepath.Join(root, "skills", "enabled"),
-		filepath.Join(root, "inbox", "memory"),
-		filepath.Join(root, "inbox", "skills"),
-		filepath.Join(root, "shared-cache", "memory"),
-		filepath.Join(root, "shared-cache", "skills"),
-		filepath.Join(root, "profile"),
-		filepath.Join(root, "feedback"),
-		filepath.Join(root, "sync_queue"),
-		filepath.Join(root, "sessions"),
-		filepath.Join(root, "repos"),
-	}
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-	}
-	files := map[string]string{
-		filepath.Join(root, "memory", "MEMORY.md"):          "# Agent Memory\n\nSource of truth: Multica agent settings. This file supplements live agent instructions; it does not override them.\n",
-		filepath.Join(root, "memory", "USER.md"):            "# User Preferences\n\nDurable user preferences relevant to this Multica agent.\n",
-		filepath.Join(root, "memory", "STATE.md"):           "# Agent State\n\nCurrent dated state, temporary facts, and active initiatives.\n",
-		filepath.Join(root, "memory", "REVIEW.md"):          "# Memory Review\n\nPending memory candidates, conflicts, and curator review notes.\n",
-		filepath.Join(root, "memory", "SCRATCHPAD.md"):      "# Scratchpad\n\nTransient notes that should not be treated as durable memory.\n",
-		filepath.Join(root, "notes", "agent-plan.md"):       defaultAgentPlanTemplate(),
-		filepath.Join(root, "notes", "agents.md"):           "# Agents\n\nKnown teammates, roles, and collaboration boundaries.\n",
-		filepath.Join(root, "notes", "channels.md"):         "# Channels\n\nChannel and DM purpose, participants, language, and routing context.\n",
-		filepath.Join(root, "notes", "project-map.md"):      "# Project Map\n\nWorkspace/project orientation, repos, commands, risks, and conventions.\n",
-		filepath.Join(root, "notes", "relationship-map.md"): "# Relationship Map\n\nDurable collaboration preferences and relationship context.\n",
-		filepath.Join(root, "notes", "role-playbook.md"):    "# Role Playbook\n\nRole-specific operating methods. Live Multica agent instructions remain authoritative.\n",
-		filepath.Join(root, "notes", "work-log.md"):         "# Work Log\n\nConcise task history and handoffs.\n",
-		filepath.Join(root, "notes", "decisions.md"):        "# Decisions\n\nDurable decisions relevant to this agent.\n",
-	}
-	for path, content := range files {
-		if err := ensureFile(path, content); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func defaultAgentPlanTemplate() string {
-	return `# Agent Plan
-
-Source of truth: Multica agent settings and live user instructions. This file is the agent's long-lived operating plan for proactive work; it supplements memory and must not override instructions.
-
-## Mission
-- What this agent is responsible for over time.
-- What successful work looks like.
-
-## Ownership
-- Projects, modules, directories, channels, issue types, or domains this agent should watch.
-
-## Current Project State
-- Current understanding of project progress, risks, and recent changes.
-
-## Active Work
-- Work this agent is currently driving or should keep following.
-
-## Watchlist
-- Code, issues, PRs, CI signals, user feedback, or technical debt to inspect periodically.
-
-## Completed Work
-- Important completed work, decisions, outcomes, and remaining follow-ups.
-
-## Future Bets
-- Ideas or hypotheses worth revisiting when there is new evidence.
-
-## Collaboration Map
-- Humans and agents this agent should coordinate with, including ownership boundaries.
-
-## Initiative Rules
-- Speak up when there is new evidence tied to this plan, a meaningful blocker, a risk, or a concrete next step.
-- Stay silent when there is no new evidence, the issue is already being handled, or the action would only add noise.
-
-## Last Checks
-- Record recent radar checks, actions taken, and no-action reasons to avoid repeated noise.
-`
+	// Writers create their own memory, skill, cache, and runtime paths. Keeping
+	// initialization lazy avoids a forest of empty folders and template files.
+	return os.MkdirAll(root, 0o755)
 }
 
 func ensureFile(path, content string) error {

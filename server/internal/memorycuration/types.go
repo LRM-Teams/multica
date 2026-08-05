@@ -43,18 +43,27 @@ type StageAgent interface {
 }
 
 type StageAgentInput struct {
-	Stage         Stage             `json:"stage"`
-	WorkspaceID   string            `json:"workspace_id"`
-	AgentID       string            `json:"agent_id"`
-	AgentRoot     string            `json:"agent_root"`
-	DateFrom      string            `json:"date_from"`
-	DateTo        string            `json:"date_to"`
-	Timezone      string            `json:"timezone"`
-	Mode          string            `json:"mode,omitempty"`
-	DryRun        bool              `json:"dry_run"`
-	LocalFiles    map[string]string `json:"local_files"`
-	DBEvidence    []EvidenceItem    `json:"db_evidence"`
-	ReviewEntries []L3ReviewEntry   `json:"review_entries,omitempty"`
+	Stage          Stage                 `json:"stage"`
+	WorkspaceID    string                `json:"workspace_id"`
+	AgentID        string                `json:"agent_id"`
+	AgentRoot      string                `json:"agent_root"`
+	DateFrom       string                `json:"date_from"`
+	DateTo         string                `json:"date_to"`
+	Timezone       string                `json:"timezone"`
+	Mode           string                `json:"mode,omitempty"`
+	DryRun         bool                  `json:"dry_run"`
+	LocalFiles     map[string]string     `json:"local_files"`
+	DBEvidence     []EvidenceItem        `json:"db_evidence"`
+	ReviewEntries  []L3ReviewEntry       `json:"review_entries,omitempty"`
+	OversizedFiles []OversizedMemoryFile `json:"oversized_files,omitempty"`
+}
+
+// OversizedMemoryFile asks background self-review to compact a canonical
+// memory file using full-file tools instead of relying on truncated context.
+type OversizedMemoryFile struct {
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes"`
+	SoftLimit int64  `json:"soft_limit_bytes"`
 }
 
 type StageAgentOutput struct {

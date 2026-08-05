@@ -30,6 +30,7 @@ var ErrCursorACPAuthRequired = errors.New(ProviderAuthRequiredMarker + ": cursor
 // agent×runtime pool (not a chatSession-keyed third pool).
 type CursorACPBackend interface {
 	Backend
+	ResidentPendingNoticeInput
 	Close()
 }
 
@@ -75,6 +76,14 @@ type cursorACPProcess struct {
 
 	stateMu sync.Mutex
 	message func(Message)
+
+	// noticeMu fences terminal turn cleanup against a native follow-up write.
+	// Cursor ACP accepts a second session/prompt while the first is active and
+	// reports the original prompt as cancelled; keep the outer resident turn
+	// alive until that native follow-up finishes.
+	noticeMu   sync.Mutex
+	noticeOpen bool
+	noticeDone <-chan rpcResult
 
 	// disposeOnce guards the actual Kill+Wait teardown (see disposeProcess).
 	// Publishing the process before the handshake completes means Close(),
@@ -166,6 +175,44 @@ func (b *cursorACPBackend) RuntimeAlive() (bool, bool) {
 	return b.runtimeAlive()
 }
 
+// AcceptPendingNotice uses Cursor's native ACP follow-up path. Cursor's ACP
+// v1 response is an end-of-turn receipt, so the successful serialized stdin
+// write is the handoff receipt and executeTurn owns the eventual response.
+func (b *cursorACPBackend) AcceptPendingNotice(ctx context.Context, notice ResidentPendingNotice) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !b.running.Load() {
+		return errors.New("Cursor Pending Notice requires an active turn")
+	}
+	p := b.process.Load()
+	if p == nil || strings.TrimSpace(p.sessionID) == "" {
+		return errors.New("Cursor Pending Notice requires a live ACP session")
+	}
+	prompt, err := formatResidentPendingNotice(notice)
+	if err != nil {
+		return err
+	}
+
+	p.noticeMu.Lock()
+	defer p.noticeMu.Unlock()
+	if !p.noticeOpen {
+		return errors.New("Cursor Pending Notice is waiting for the next active turn")
+	}
+	if p.noticeDone != nil {
+		return errors.New("Cursor Pending Notice follow-up is already active")
+	}
+	_, done, err := p.client.beginRequest("session/prompt", map[string]any{
+		"sessionId": p.sessionID,
+		"prompt":    []map[string]any{{"type": "text", "text": prompt}},
+	})
+	if err != nil {
+		return fmt.Errorf("Cursor Pending Notice: %w", err)
+	}
+	p.noticeDone = done
+	return nil
+}
+
 func (b *cursorACPBackend) runtimeAlive() (bool, bool) {
 	p := b.process.Load()
 	if p == nil {
@@ -196,12 +243,41 @@ func (b *cursorACPBackend) executeTurn(ctx context.Context, prompt string, opts 
 		trySend(msgCh, msg)
 	}
 	p.stateMu.Unlock()
-
+	p.noticeMu.Lock()
+	p.noticeDone = nil
 	p.client.resetToolCallFailure()
-	_, err = p.client.request(ctx, "session/prompt", map[string]any{
+	primaryID, primaryDone, err := p.client.beginRequest("session/prompt", map[string]any{
 		"sessionId": p.sessionID,
 		"prompt":    []map[string]any{{"type": "text", "text": prompt}},
 	})
+	if err == nil {
+		// The primary prompt is now on Cursor's serialized ACP wire. Only this
+		// native admission proof opens the follow-up gate.
+		p.noticeOpen = true
+	}
+	p.noticeMu.Unlock()
+	if err == nil {
+		_, err = p.client.awaitRequest(ctx, primaryID, primaryDone)
+	}
+	p.noticeMu.Lock()
+	p.noticeOpen = false
+	noticeDone := p.noticeDone
+	p.noticeMu.Unlock()
+	if noticeDone != nil {
+		select {
+		case noticeResult := <-noticeDone:
+			if noticeResult.err != nil {
+				err = fmt.Errorf("Cursor Pending Notice: %w", noticeResult.err)
+			}
+		case <-ctx.Done():
+			err = ctx.Err()
+		}
+		p.noticeMu.Lock()
+		if p.noticeDone == noticeDone {
+			p.noticeDone = nil
+		}
+		p.noticeMu.Unlock()
+	}
 	p.stateMu.Lock()
 	p.message = nil
 	p.stateMu.Unlock()

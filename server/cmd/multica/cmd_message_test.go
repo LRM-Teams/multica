@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +25,62 @@ func TestMessageSendHasNoAgentControlledCursorFlag(t *testing.T) {
 			t.Errorf("message send exposes cursor flag %q", flag.Name)
 		}
 	})
+}
+
+func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/credential-proxy/messages/check" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"messages": []map[string]any{{
+				"id": "message-1", "target": "channel:one", "seq": 1, "content": "new context",
+			}},
+			"has_more": true, "remaining": 1, "status": "more",
+		})
+	}))
+	defer srv.Close()
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("server port: %v", err)
+	}
+	t.Setenv("MULTICA_DAEMON_PORT", port)
+	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+	t.Setenv("MULTICA_TASK_ID", "task-1")
+
+	readOut, writeOut, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	oldOut := os.Stdout
+	os.Stdout = writeOut
+	err = runAgentMessageCheck(newMessageCheckCmd(), nil)
+	writeOut.Close()
+	os.Stdout = oldOut
+	output, readErr := io.ReadAll(readOut)
+	readOut.Close()
+	if err != nil {
+		t.Fatalf("runAgentMessageCheck: %v", err)
+	}
+	if readErr != nil {
+		t.Fatalf("read stdout: %v", readErr)
+	}
+	if body["agent_id"] != "agent-1" || body["task_id"] != "task-1" {
+		t.Fatalf("Credential Proxy body = %+v", body)
+	}
+	for _, want := range []string{"channel:one", "new context", "run `multica message check` again"} {
+		if !strings.Contains(string(output), want) {
+			t.Errorf("output %q missing %q", output, want)
+		}
+	}
+	if _, ok := body["limit"]; ok {
+		t.Fatalf("Agent-controlled limit leaked into request: %+v", body)
+	}
 }
 
 func TestBuildAgentSendPartsIncludesAttachmentParts(t *testing.T) {

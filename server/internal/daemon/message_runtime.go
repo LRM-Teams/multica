@@ -18,8 +18,11 @@ func (d *Daemon) ensureIdleMessageCoordinator(agentID, runtimeID, agentRoot stri
 	}
 	d.messageCoordinatorMu.Lock()
 	defer d.messageCoordinatorMu.Unlock()
-	if existing := d.messageCoordinators[agentID]; existing != nil && (d.messageRuntimeIDs[agentID] == "" || d.messageRuntimeIDs[agentID] == runtimeID) {
-		return false, nil
+	if existing := d.messageCoordinators[agentID]; existing != nil {
+		if d.messageRuntimeIDs[agentID] == "" || d.messageRuntimeIDs[agentID] == runtimeID {
+			return false, nil
+		}
+		existing.Close()
 	}
 	coordinator, err := NewMessageCoordinator(agentRoot, func(ctx context.Context, messages []protocol.AgentMessageProjection) error {
 		return d.canonicalRuntimes.handoffIdleMessages(ctx, agentID, runtimeID, messages)
@@ -29,6 +32,9 @@ func (d *Daemon) ensureIdleMessageCoordinator(agentID, runtimeID, agentRoot stri
 	if err != nil {
 		return false, err
 	}
+	coordinator.ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot) error {
+		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot)
+	}, 0, 0)
 	if d.messageCoordinators == nil {
 		d.messageCoordinators = make(map[string]*MessageCoordinator)
 	}
@@ -84,4 +90,17 @@ func (p *CredentialProxy) SeenUpToSeq(agentID, target string) (int64, error) {
 		return 0, errors.New("Message freshness is unknown")
 	}
 	return seq, nil
+}
+
+func (p *CredentialProxy) CheckMessages(agentID string) (MessageCheckResult, error) {
+	if p == nil || p.daemon == nil {
+		return MessageCheckResult{}, errors.New("Credential Proxy is unavailable")
+	}
+	p.daemon.messageCoordinatorMu.RLock()
+	defer p.daemon.messageCoordinatorMu.RUnlock()
+	coordinator := p.daemon.messageCoordinators[strings.TrimSpace(agentID)]
+	if coordinator == nil {
+		return MessageCheckResult{}, errors.New("Message coordinator is unavailable")
+	}
+	return coordinator.Check(messageCheckDefaultLimit)
 }

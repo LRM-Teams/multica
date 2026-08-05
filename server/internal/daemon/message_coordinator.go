@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,14 +11,35 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // consumedSeqsFileName is intentionally the only durable receive-side state.
 // Pending Message bodies remain a rebuildable in-memory projection.
 const consumedSeqsFileName = "consumed-seqs.json"
+
+const (
+	pendingNoticeCoalesceWindow = 3 * time.Second
+	pendingNoticeRetryDelay     = 15 * time.Second
+	pendingNoticeWriteTimeout   = 5 * time.Second
+	messageCheckDefaultLimit    = 3
+	messageCheckMaxLimit        = 3
+	messageCheckStatusComplete  = "complete"
+	messageCheckStatusMore      = "more"
+)
+
+// MessageCheckResult is the bounded concrete-body projection returned through
+// the machine-local Credential Proxy.
+type MessageCheckResult struct {
+	Messages  []protocol.AgentMessageProjection `json:"messages"`
+	HasMore   bool                              `json:"has_more"`
+	Remaining int                               `json:"remaining"`
+	Status    string                            `json:"status"`
+}
 
 // RuntimeMessageHandoff is the explicit boundary at which concrete Message
 // bodies enter an Agent runtime. Returning nil means the runtime accepted the
@@ -27,6 +49,19 @@ type RuntimeMessageHandoff func(context.Context, []protocol.AgentMessageProjecti
 // MessageReceivedActivity observes one successful daemon-to-runtime body batch.
 // It is deliberately best effort and never participates in delivery state.
 type MessageReceivedActivity func([]protocol.AgentMessageProjection)
+
+// PendingNoticeSnapshot is the content-free projection of current Pending.
+// The runtime seam owns same-session suppression because only it knows when a
+// provider session is replaced.
+type PendingNoticeSnapshot struct {
+	Notice             agent.ResidentPendingNotice
+	Fingerprint        string
+	TargetFingerprints map[string]string
+}
+
+// RuntimePendingNoticeHandoff writes one content-free Pending Notice into a
+// busy runtime session.
+type RuntimePendingNoticeHandoff func(context.Context, PendingNoticeSnapshot) error
 
 // MessageCoordinator owns the receive-side state for one Workspace/Agent root.
 // Its callers send agent:deliver:ack only after Accept returns successfully.
@@ -41,6 +76,11 @@ type MessageCoordinator struct {
 	recovery        messageRecoveryState
 	handedOff       *acceptedRuntimeHandoff
 	boundaryHealthy bool
+	noticeHandoff   RuntimePendingNoticeHandoff
+	noticeCoalesce  time.Duration
+	noticeRetry     time.Duration
+	noticeTimer     *time.Timer
+	closed          bool
 }
 
 type acceptedRuntimeHandoff struct {
@@ -81,7 +121,35 @@ func NewMessageCoordinator(agentRoot string, handoff RuntimeMessageHandoff, acti
 		accepted: make(map[string]struct{}), handoff: handoff, activity: activity,
 		recovery:        messageRecoveryState{status: messageFreshnessUnknown},
 		boundaryHealthy: healthy,
+		noticeCoalesce:  pendingNoticeCoalesceWindow,
+		noticeRetry:     pendingNoticeRetryDelay,
 	}, nil
+}
+
+// ConfigurePendingNotices installs the busy-runtime Notice seam. Durations are
+// configurable for deterministic acceptance tests; production uses 3s/15s.
+func (c *MessageCoordinator) ConfigurePendingNotices(handoff RuntimePendingNoticeHandoff, coalesce, retry time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.noticeHandoff = handoff
+	if coalesce > 0 {
+		c.noticeCoalesce = coalesce
+	}
+	if retry > 0 {
+		c.noticeRetry = retry
+	}
+}
+
+// Close stops future Notice attempts. Pending remains rebuildable from the
+// canonical service and is intentionally not persisted during shutdown.
+func (c *MessageCoordinator) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	if c.noticeTimer != nil {
+		c.noticeTimer.Stop()
+		c.noticeTimer = nil
+	}
 }
 
 // BeginRecovery resets freshness on startup and every websocket reconnect.
@@ -217,8 +285,75 @@ func (c *MessageCoordinator) acceptLocked(delivery protocol.AgentDeliverPayload)
 // Flush hands all currently Pending bodies to an idle runtime in target-sequence
 // order. The boundary file is atomically replaced before Pending is forgotten.
 func (c *MessageCoordinator) Flush(ctx context.Context) error {
+	return c.flush(ctx, true)
+}
+
+// Check non-blockingly moves one bounded Pending window into the current
+// Agent turn. It persists the Context Boundary before removing Pending and
+// never emits the daemon-to-runtime Message received Activity.
+func (c *MessageCoordinator) Check(limit int) (MessageCheckResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return MessageCheckResult{}, errors.New("Message coordinator is closed")
+	}
+	if c.recovery.status != messageFreshnessComplete {
+		return MessageCheckResult{}, errors.New("Message freshness is unknown until recovery completes")
+	}
+	if c.handedOff != nil {
+		return MessageCheckResult{}, errors.New("runtime Message handoff boundary is unsettled")
+	}
+	if limit <= 0 {
+		limit = messageCheckDefaultLimit
+	}
+	if limit > messageCheckMaxLimit {
+		limit = messageCheckMaxLimit
+	}
+	batch := c.pendingBatchLocked()
+	if len(batch) > limit {
+		batch = batch[:limit]
+	}
+	if batch == nil {
+		batch = []protocol.AgentMessageProjection{}
+	}
+	remaining := c.pendingCountLocked() - len(batch)
+	result := MessageCheckResult{
+		Messages: batch, HasMore: remaining > 0, Remaining: remaining, Status: messageCheckStatusComplete,
+	}
+	if result.HasMore {
+		result.Status = messageCheckStatusMore
+	}
+	if len(batch) == 0 {
+		return result, nil
+	}
+	next := cloneBoundaries(c.boundaries)
+	for _, message := range batch {
+		if message.Seq > next[message.Target] {
+			next[message.Target] = message.Seq
+		}
+	}
+	if err := writeConsumedSeqs(filepath.Join(c.root, consumedSeqsFileName), next); err != nil {
+		c.boundaryHealthy = false
+		return MessageCheckResult{}, fmt.Errorf("persist Context Boundary after message check: %w", err)
+	}
+	c.boundaries = next
+	c.boundaryHealthy = true
+	for _, message := range batch {
+		delete(c.pending[message.Target], message.Seq)
+		delete(c.accepted, messageIdentityKey(message))
+		if len(c.pending[message.Target]) == 0 {
+			delete(c.pending, message.Target)
+		}
+	}
+	return result, nil
+}
+
+func (c *MessageCoordinator) flush(ctx context.Context, scheduleBusyNotice bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errors.New("Message coordinator is closed")
+	}
 	if c.recovery.status != messageFreshnessComplete {
 		return errors.New("Message freshness is unknown until recovery completes")
 	}
@@ -229,6 +364,9 @@ func (c *MessageCoordinator) Flush(ctx context.Context) error {
 				return nil
 			}
 			if err := c.handoff(ctx, batch); err != nil {
+				if scheduleBusyNotice && errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+					c.schedulePendingNoticeLocked(c.noticeCoalesce)
+				}
 				return fmt.Errorf("runtime Message handoff: %w", err)
 			}
 			next := cloneBoundaries(c.boundaries)
@@ -262,6 +400,86 @@ func (c *MessageCoordinator) Flush(ctx context.Context) error {
 			}
 		}
 		c.handedOff = nil
+	}
+}
+
+func (c *MessageCoordinator) schedulePendingNoticeLocked(delay time.Duration) {
+	if c.closed || c.noticeHandoff == nil || c.noticeTimer != nil || len(c.pending) == 0 {
+		return
+	}
+	if delay <= 0 {
+		delay = c.noticeCoalesce
+	}
+	c.noticeTimer = time.AfterFunc(delay, c.runPendingNoticeAttempt)
+}
+
+func (c *MessageCoordinator) runPendingNoticeAttempt() {
+	c.mu.Lock()
+	c.noticeTimer = nil
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), pendingNoticeWriteTimeout)
+	defer cancel()
+	err := c.flush(ctx, false)
+	if err == nil {
+		return
+	}
+	if errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		err = c.deliverPendingNotice(ctx)
+	}
+	if err != nil {
+		c.mu.Lock()
+		c.schedulePendingNoticeLocked(c.noticeRetry)
+		c.mu.Unlock()
+	}
+}
+
+func (c *MessageCoordinator) deliverPendingNotice(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.noticeHandoff == nil {
+		return errors.New("Pending Notice handoff is unavailable")
+	}
+	snapshot := c.pendingNoticeLocked()
+	if snapshot.Notice.TotalPending == 0 {
+		return nil
+	}
+	return c.noticeHandoff(ctx, snapshot)
+}
+
+func (c *MessageCoordinator) pendingNoticeLocked() PendingNoticeSnapshot {
+	targets := make([]string, 0, len(c.pending))
+	for target := range c.pending {
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	notice := agent.ResidentPendingNotice{ChangedTargets: make([]agent.ResidentPendingTarget, 0, len(targets))}
+	identities := make([]string, 0)
+	targetFingerprints := make(map[string]string, len(targets))
+	for _, target := range targets {
+		sequences := make([]int64, 0, len(c.pending[target]))
+		for sequence := range c.pending[target] {
+			sequences = append(sequences, sequence)
+		}
+		sort.Slice(sequences, func(i, j int) bool { return sequences[i] < sequences[j] })
+		notice.ChangedTargets = append(notice.ChangedTargets, agent.ResidentPendingTarget{Target: target, PendingCount: len(sequences)})
+		notice.TotalPending += len(sequences)
+		targetIdentities := make([]string, 0, len(sequences))
+		for _, sequence := range sequences {
+			identity := messageIdentityKey(c.pending[target][sequence])
+			identities = append(identities, identity)
+			targetIdentities = append(targetIdentities, identity)
+		}
+		targetSum := sha256.Sum256([]byte(strings.Join(targetIdentities, "\x01")))
+		targetFingerprints[target] = fmt.Sprintf("%x", targetSum[:])
+	}
+	sum := sha256.Sum256([]byte(strings.Join(identities, "\x01")))
+	return PendingNoticeSnapshot{
+		Notice: notice, Fingerprint: fmt.Sprintf("%x", sum[:]), TargetFingerprints: targetFingerprints,
 	}
 }
 
@@ -301,6 +519,14 @@ func (c *MessageCoordinator) pendingBatchLocked() []protocol.AgentMessageProject
 		}
 	}
 	return batch
+}
+
+func (c *MessageCoordinator) pendingCountLocked() int {
+	total := 0
+	for _, messages := range c.pending {
+		total += len(messages)
+	}
+	return total
 }
 
 func validateAgentDelivery(delivery protocol.AgentDeliverPayload) error {

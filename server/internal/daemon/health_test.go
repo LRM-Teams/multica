@@ -1,14 +1,18 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestHealthHandlerReportsCLIVersionAndActiveTaskCount(t *testing.T) {
@@ -171,6 +175,52 @@ func TestShutdownHandlerRejectsNonPost(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	if cancelled {
 		t.Fatal("GET request should not trigger cancellation")
+	}
+}
+
+func TestCredentialProxyMessageCheckRequiresCurrentTurnAndDrainsCoordinator(t *testing.T) {
+	root := t.TempDir()
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	for i := int64(1); i <= 4; i++ {
+		delivery := testDelivery(fmt.Sprintf("message-%d", i), "channel:one", i, fmt.Sprintf("delivery-%d", i))
+		if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
+			t.Fatalf("Accept: %v", err)
+		}
+	}
+	d := &Daemon{
+		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
+		agentRuntimeTurns:   newAgentRuntimeTurnCoordinator(Config{}, slog.Default()),
+	}
+	key := agentRuntimeTurnSlotKey{AgentID: "agent-1", RuntimeID: "runtime-1"}
+	if !d.agentRuntimeTurns.reserve(key, "task-1") {
+		t.Fatal("reserve active turn")
+	}
+	t.Cleanup(func() { d.agentRuntimeTurns.release(key, "task-1") })
+	handler := d.credentialProxyMessageCheckHandler()
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"stale-task"}`)))
+	if unauthorized.Code != http.StatusForbidden {
+		t.Fatalf("stale turn status = %d, want 403", unauthorized.Code)
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("message check status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var result MessageCheckResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode message check: %v", err)
+	}
+	if len(result.Messages) != messageCheckDefaultLimit || !result.HasMore || result.Remaining != 1 {
+		t.Fatalf("message check result = %+v", result)
 	}
 }
 

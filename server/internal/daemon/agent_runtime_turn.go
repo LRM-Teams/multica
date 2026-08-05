@@ -210,6 +210,25 @@ func (c *agentRuntimeTurnCoordinator) hasActiveTurn(agentID, runtimeID string) b
 	return ok
 }
 
+func (c *agentRuntimeTurnCoordinator) hasActiveAgentTurn(agentID, turnID string) bool {
+	if c == nil {
+		return false
+	}
+	agentID = strings.TrimSpace(agentID)
+	turnID = strings.TrimSpace(turnID)
+	if agentID == "" || turnID == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, activeTurnID := range c.active {
+		if key.AgentID == agentID && activeTurnID == turnID {
+			return true
+		}
+	}
+	return false
+}
+
 func validateAgentRuntimeTurnRequest(request agentRuntimeTurnRequest) error {
 	for name, value := range map[string]string{
 		"workspace_id": request.WorkspaceID,

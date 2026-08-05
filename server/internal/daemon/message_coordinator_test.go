@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +30,28 @@ func (r *blockingResidentMessageRuntime) Execute(context.Context, string, agent.
 
 func (r *blockingResidentMessageRuntime) AcceptMessageBatch(context.Context, []agent.ResidentMessage) (agent.ResidentMessageAcceptance, error) {
 	return agent.ResidentMessageAcceptance{Done: r.done}, nil
+}
+
+type pendingNoticeRuntime struct {
+	mu      sync.Mutex
+	notices []agent.ResidentPendingNotice
+}
+
+func (r *pendingNoticeRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
+	return nil, nil
+}
+
+func (r *pendingNoticeRuntime) AcceptPendingNotice(_ context.Context, notice agent.ResidentPendingNotice) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.notices = append(r.notices, notice)
+	return nil
+}
+
+func (r *pendingNoticeRuntime) snapshot() []agent.ResidentPendingNotice {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]agent.ResidentPendingNotice(nil), r.notices...)
 }
 
 func TestRuntimePoolRetainsAdmissionUntilAcceptedMessageTurnCompletes(t *testing.T) {
@@ -57,6 +81,315 @@ func TestRuntimePoolRetainsAdmissionUntilAcceptedMessageTurnCompletes(t *testing
 			t.Fatal("runtime pool did not release admission after native turn completion")
 		}
 		runtime.Gosched()
+	}
+}
+
+func TestRuntimePoolSuppressesUnchangedSameSessionNoticeAndReportsOnlyChangedTargets(t *testing.T) {
+	backend := &pendingNoticeRuntime{}
+	pool := newCanonicalAgentRuntimePool()
+	pool.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode: canonicalRuntimeResident, backend: backend, running: true,
+	}
+	first := PendingNoticeSnapshot{
+		Notice: agent.ResidentPendingNotice{TotalPending: 2, ChangedTargets: []agent.ResidentPendingTarget{
+			{Target: "channel:one", PendingCount: 1},
+			{Target: "dm:two", PendingCount: 1},
+		}},
+		Fingerprint:        "all-v1",
+		TargetFingerprints: map[string]string{"channel:one": "one-v1", "dm:two": "two-v1"},
+	}
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first); err != nil {
+		t.Fatalf("first Notice: %v", err)
+	}
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", first); err != nil {
+		t.Fatalf("duplicate Notice: %v", err)
+	}
+	second := PendingNoticeSnapshot{
+		Notice: agent.ResidentPendingNotice{TotalPending: 3, ChangedTargets: []agent.ResidentPendingTarget{
+			{Target: "channel:one", PendingCount: 2},
+			{Target: "dm:two", PendingCount: 1},
+		}},
+		Fingerprint:        "all-v2",
+		TargetFingerprints: map[string]string{"channel:one": "one-v2", "dm:two": "two-v1"},
+	}
+	if err := pool.handoffBusyNotice(context.Background(), "agent-1", "runtime-1", second); err != nil {
+		t.Fatalf("changed Notice: %v", err)
+	}
+	got := backend.snapshot()
+	if len(got) != 2 {
+		t.Fatalf("runtime Notices = %+v, want first plus one changed Notice", got)
+	}
+	if !reflect.DeepEqual(got[0].ChangedTargets, first.Notice.ChangedTargets) {
+		t.Fatalf("first changed targets = %+v", got[0].ChangedTargets)
+	}
+	if want := []agent.ResidentPendingTarget{{Target: "channel:one", PendingCount: 2}}; !reflect.DeepEqual(got[1].ChangedTargets, want) {
+		t.Fatalf("second changed targets = %+v, want %+v", got[1].ChangedTargets, want)
+	}
+}
+
+func TestMessageCoordinatorCoalescesContentFreeBusyNoticeWithoutConsumption(t *testing.T) {
+	root := t.TempDir()
+	var mu sync.Mutex
+	var notices []agent.ResidentPendingNotice
+	activityCount := 0
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+		return ErrCanonicalAgentRuntimeBusy
+	}, func([]protocol.AgentMessageProjection) {
+		activityCount++
+	})
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot) error {
+		mu.Lock()
+		defer mu.Unlock()
+		notices = append(notices, snapshot.Notice)
+		return nil
+	}, 25*time.Millisecond, 40*time.Millisecond)
+	t.Cleanup(coordinator.Close)
+	completeCoordinatorRecovery(t, coordinator)
+
+	deliveries := []protocol.AgentDeliverPayload{
+		testDelivery("message-1", "channel:one", 1, "delivery-1"),
+		testDelivery("message-2", "channel:one", 2, "delivery-2"),
+		testDelivery("message-3", "dm:two", 1, "delivery-3"),
+	}
+	deliveries[0].Message.Content = "secret body one"
+	deliveries[1].Message.Content = "secret body two"
+	deliveries[2].Message.Parts = []protocol.MessagePart{{Type: protocol.MessagePartTypeAttachment, AttachmentID: "attachment-secret"}}
+	for _, delivery := range deliveries {
+		if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
+			t.Fatalf("Accept: %v", err)
+		}
+		if err := coordinator.Flush(context.Background()); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+			t.Fatalf("busy Flush error = %v", err)
+		}
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		count := len(notices)
+		mu.Unlock()
+		if count == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("busy Notice count = %d, want 1", count)
+		}
+		runtime.Gosched()
+	}
+	mu.Lock()
+	notice := notices[0]
+	mu.Unlock()
+	if notice.TotalPending != 3 || !reflect.DeepEqual(notice.ChangedTargets, []agent.ResidentPendingTarget{
+		{Target: "channel:one", PendingCount: 2},
+		{Target: "dm:two", PendingCount: 1},
+	}) {
+		t.Fatalf("Notice = %+v", notice)
+	}
+	raw, err := json.Marshal(notice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"secret body", "attachment-secret", `"parts"`, `"content"`} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("Notice leaked %q: %s", forbidden, raw)
+		}
+	}
+	if activityCount != 0 {
+		t.Fatalf("Message received Activity count = %d, want 0", activityCount)
+	}
+	if got := coordinator.Boundaries(); len(got) != 0 {
+		t.Fatalf("Notice advanced Context Boundaries: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, consumedSeqsFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Notice persisted Context Boundary, stat error = %v", err)
+	}
+}
+
+func TestMessageCoordinatorRetriesFailedBusyNoticeWithoutLosingDebt(t *testing.T) {
+	root := t.TempDir()
+	var mu sync.Mutex
+	attempts := 0
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+		return ErrCanonicalAgentRuntimeBusy
+	}, func([]protocol.AgentMessageProjection) {
+		t.Fatal("Pending Notice must not emit Message received Activity")
+	})
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	coordinator.ConfigurePendingNotices(func(_ context.Context, snapshot PendingNoticeSnapshot) error {
+		mu.Lock()
+		defer mu.Unlock()
+		attempts++
+		if snapshot.Notice.TotalPending != 1 {
+			t.Errorf("Notice total = %d, want 1", snapshot.Notice.TotalPending)
+		}
+		if attempts == 1 {
+			return errors.New("unsafe provider receipt")
+		}
+		return nil
+	}, 20*time.Millisecond, 30*time.Millisecond)
+	t.Cleanup(coordinator.Close)
+	completeCoordinatorRecovery(t, coordinator)
+
+	delivery := testDelivery("message-1", "channel:one", 1, "delivery-1")
+	if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if err := coordinator.Flush(context.Background()); !errors.Is(err, ErrCanonicalAgentRuntimeBusy) {
+		t.Fatalf("busy Flush error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		gotAttempts := attempts
+		mu.Unlock()
+		if gotAttempts >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Notice attempts = %d, want retry", gotAttempts)
+		}
+		runtime.Gosched()
+	}
+	if _, err := os.Stat(filepath.Join(root, consumedSeqsFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("boundary file after Notice retry: %v", err)
+	}
+	coordinator.mu.Lock()
+	got := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if len(got) != 1 || got[0].ID != delivery.Message.ID {
+		t.Fatalf("Pending after Notice retry = %+v", got)
+	}
+}
+
+func TestClosedMessageCoordinatorRejectsPendingWork(t *testing.T) {
+	handoffs := 0
+	coordinator, err := NewMessageCoordinator(t.TempDir(), func(context.Context, []protocol.AgentMessageProjection) error {
+		handoffs++
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	if _, err := coordinator.Accept(context.Background(), testDelivery("message-1", "channel:one", 1, "delivery-1")); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	coordinator.Close()
+	if err := coordinator.Flush(context.Background()); err == nil {
+		t.Fatal("Flush succeeded after Close")
+	}
+	if result, err := coordinator.Check(0); err == nil {
+		t.Fatalf("Check succeeded after Close: %+v", result)
+	}
+	if handoffs != 0 {
+		t.Fatalf("runtime handoffs after Close = %d", handoffs)
+	}
+}
+
+func TestMessageCoordinatorCheckReturnsBoundedPendingAndAdvancesOnlyReturnedBoundaries(t *testing.T) {
+	root := t.TempDir()
+	activityCount := 0
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+		t.Fatal("message check must not use idle runtime handoff")
+		return nil
+	}, func([]protocol.AgentMessageProjection) {
+		activityCount++
+	})
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	for _, delivery := range []protocol.AgentDeliverPayload{
+		testDelivery("message-1", "channel:one", 1, "delivery-1"),
+		testDelivery("message-2", "channel:one", 2, "delivery-2"),
+		testDelivery("message-3", "dm:two", 1, "delivery-3"),
+	} {
+		if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
+			t.Fatalf("Accept: %v", err)
+		}
+	}
+
+	result, err := coordinator.Check(2)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if got := []string{result.Messages[0].ID, result.Messages[1].ID}; !reflect.DeepEqual(got, []string{"message-1", "message-2"}) {
+		t.Fatalf("checked Messages = %v", got)
+	}
+	if !result.HasMore || result.Remaining != 1 || result.Status != messageCheckStatusMore {
+		t.Fatalf("first Check result = %+v", result)
+	}
+	if got := coordinator.Boundaries(); !reflect.DeepEqual(got, map[string]int64{"channel:one": 2}) {
+		t.Fatalf("boundaries after bounded Check = %+v", got)
+	}
+	if activityCount != 0 {
+		t.Fatalf("Message received Activity count = %d, want 0", activityCount)
+	}
+
+	result, err = coordinator.Check(2)
+	if err != nil {
+		t.Fatalf("second Check: %v", err)
+	}
+	if len(result.Messages) != 1 || result.Messages[0].ID != "message-3" || result.HasMore || result.Remaining != 0 || result.Status != messageCheckStatusComplete {
+		t.Fatalf("second Check result = %+v", result)
+	}
+	if got := coordinator.Boundaries(); !reflect.DeepEqual(got, map[string]int64{"channel:one": 2, "dm:two": 1}) {
+		t.Fatalf("final boundaries = %+v", got)
+	}
+}
+
+func TestMessageCoordinatorCheckRetainsPendingWhenBoundaryWriteFails(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "agent-root")
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	delivery := testDelivery("message-1", "channel:one", 1, "delivery-1")
+	if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	if err := os.WriteFile(root, []byte("blocks agent root directory"), 0o600); err != nil {
+		t.Fatalf("block agent root: %v", err)
+	}
+
+	result, err := coordinator.Check(0)
+	if err == nil {
+		t.Fatalf("Check result = %+v, want boundary failure", result)
+	}
+	coordinator.mu.Lock()
+	pending := coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if len(pending) != 1 || pending[0].ID != delivery.Message.ID {
+		t.Fatalf("Pending after boundary failure = %+v", pending)
+	}
+	if got := coordinator.Boundaries(); len(got) != 0 {
+		t.Fatalf("boundaries after failure = %+v", got)
+	}
+
+	if err := os.Remove(root); err != nil {
+		t.Fatalf("unblock agent root: %v", err)
+	}
+	result, err = coordinator.Check(0)
+	if err != nil {
+		t.Fatalf("retry Check: %v", err)
+	}
+	if len(result.Messages) != 1 || result.Messages[0].ID != delivery.Message.ID {
+		t.Fatalf("retry result = %+v", result)
+	}
+	coordinator.mu.Lock()
+	pending = coordinator.pendingBatchLocked()
+	coordinator.mu.Unlock()
+	if len(pending) != 0 {
+		t.Fatalf("Pending after successful retry = %+v", pending)
 	}
 }
 

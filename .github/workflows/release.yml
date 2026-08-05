@@ -247,7 +247,6 @@ jobs:
           config="${RUNNER_TEMP}/aliyun-config.json"
           aliyun configure set \
             --config-path "$config" \
-            --profile release-cdn \
             --mode AK \
             --region cn-hangzhou \
             --access-key-id "$CDN_ACCESS_KEY_ID" \
@@ -263,7 +262,7 @@ jobs:
             object_paths+=$'\n'"${PUBLIC_BASE_URL}/manifest.json"
             object_paths+=$'\n'"${PUBLIC_BASE_URL}/latest.json"
           fi
-          aliyun --config-path "$config" --profile release-cdn \
+          aliyun --config-path "$config" \
             cdn RefreshObjectCaches \
             --ObjectType File \
             --ObjectPath "$object_paths"

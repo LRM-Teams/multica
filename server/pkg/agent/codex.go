@@ -762,13 +762,13 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 					Timeout:      firstTurnNoProgressTimeout,
 					LastActivity: lastSemanticActivityDescription,
 					ThreadID:     threadID,
-					TurnID:       c.turnID,
+					TurnID:       c.activeTurnID(),
 					Model:        opts.Model,
 				}
 				b.cfg.Logger.Warn(CodexFirstTurnNoProgressMarker,
 					"pid", cmd.Process.Pid,
 					"thread_id", threadID,
-					"turn_id", c.turnID,
+					"turn_id", c.activeTurnID(),
 					"timeout", firstTurnNoProgressTimeout.String(),
 					"last_activity", lastSemanticActivityDescription,
 				)
@@ -786,13 +786,13 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 					Timeout:      semanticInactivityTimeout,
 					LastActivity: lastSemanticActivityDescription,
 					ThreadID:     threadID,
-					TurnID:       c.turnID,
+					TurnID:       c.activeTurnID(),
 					Model:        opts.Model,
 				}
 				b.cfg.Logger.Warn(timeoutMarker,
 					"pid", cmd.Process.Pid,
 					"thread_id", threadID,
-					"turn_id", c.turnID,
+					"turn_id", c.activeTurnID(),
 					"timeout", semanticInactivityTimeout.String(),
 					"last_activity", lastSemanticActivityDescription,
 					"idle_for", time.Since(lastSemanticActivity).Round(time.Millisecond).String(),
@@ -1149,6 +1149,7 @@ func describeCodexSemanticActivity(msg Message) string {
 type codexClient struct {
 	cfg                Config
 	stdin              interface{ Write([]byte) (int, error) }
+	writeMu            sync.Mutex
 	mu                 sync.Mutex
 	nextID             int
 	pending            map[int]*pendingRPC
@@ -1167,6 +1168,37 @@ type codexClient struct {
 
 	turnErrorMu sync.Mutex
 	turnError   string // captured from turn/completed status=failed or terminal error notifications
+
+	stateMu sync.RWMutex
+}
+
+func (c *codexClient) setActiveTurn(started bool, turnID string) {
+	c.stateMu.Lock()
+	c.turnStarted = started
+	c.turnID = turnID
+	c.stateMu.Unlock()
+}
+
+func (c *codexClient) activeTurnID() string {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	if !c.turnStarted {
+		return ""
+	}
+	return c.turnID
+}
+
+func (c *codexClient) turnIsActive() bool {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.turnStarted
+}
+
+func (c *codexClient) writeLine(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	_, err := c.stdin.Write(data)
+	return err
 }
 
 func (c *codexClient) setTurnError(msg string) {
@@ -1224,7 +1256,7 @@ func (c *codexClient) request(ctx context.Context, method string, params any) (j
 		return nil, err
 	}
 	data = append(data, '\n')
-	if _, err := c.stdin.Write(data); err != nil {
+	if err := c.writeLine(data); err != nil {
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
@@ -1256,7 +1288,7 @@ func (c *codexClient) notify(method string) {
 	}
 	data, _ := json.Marshal(msg)
 	data = append(data, '\n')
-	_, _ = c.stdin.Write(data)
+	_ = c.writeLine(data)
 }
 
 func (c *codexClient) respond(id int, result any) {
@@ -1267,7 +1299,7 @@ func (c *codexClient) respond(id int, result any) {
 	}
 	data, _ := json.Marshal(msg)
 	data = append(data, '\n')
-	_, _ = c.stdin.Write(data)
+	_ = c.writeLine(data)
 }
 
 func (c *codexClient) respondError(id int, code int, message string) {
@@ -1281,7 +1313,7 @@ func (c *codexClient) respondError(id int, code int, message string) {
 	}
 	data, _ := json.Marshal(msg)
 	data = append(data, '\n')
-	_, _ = c.stdin.Write(data)
+	_ = c.writeLine(data)
 }
 
 func (c *codexClient) closeAllPending(err error) {
@@ -1415,7 +1447,7 @@ func (c *codexClient) handleEvent(msg map[string]any) {
 
 	switch msgType {
 	case "task_started":
-		c.turnStarted = true
+		c.setActiveTurn(true, "")
 		if c.onMessage != nil {
 			c.onMessage(Message{Type: MessageStatus, Status: "running", SessionID: c.threadID})
 		}
@@ -1465,12 +1497,14 @@ func (c *codexClient) handleEvent(msg map[string]any) {
 			})
 		}
 	case "task_complete":
+		c.setActiveTurn(false, "")
 		// Extract usage from legacy task_complete if present.
 		c.extractUsageFromMap(msg)
 		if c.onTurnDone != nil {
 			c.onTurnDone(false)
 		}
 	case "turn_aborted":
+		c.setActiveTurn(false, "")
 		if c.onTurnDone != nil {
 			c.onTurnDone(true)
 		}
@@ -1493,10 +1527,7 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 
 	switch method {
 	case "turn/started":
-		c.turnStarted = true
-		if turnID := extractNestedString(params, "turn", "id"); turnID != "" {
-			c.turnID = turnID
-		}
+		c.setActiveTurn(true, extractNestedString(params, "turn", "id"))
 		if c.onMessage != nil {
 			c.onMessage(Message{Type: MessageStatus, Status: "running", SessionID: c.threadID})
 		}
@@ -1506,6 +1537,7 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 		status := extractNestedString(params, "turn", "status")
 		threadID, _ := params["threadId"].(string)
 		c.cfg.Logger.Info("codex turn/completed received", "thread_id", threadID, "turn_id", turnID, "status", status)
+		c.setActiveTurn(false, "")
 		aborted := status == "cancelled" || status == "canceled" ||
 			status == "aborted" || status == "interrupted"
 
@@ -1566,7 +1598,7 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 
 	case "thread/status/changed":
 		statusType := extractNestedString(params, "status", "type")
-		if statusType == "idle" && c.turnStarted {
+		if statusType == "idle" && c.turnIsActive() {
 			if c.onTurnDone != nil {
 				c.onTurnDone(false)
 			}
@@ -1647,7 +1679,7 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 			c.onMessage(Message{Type: MessageText, Content: text})
 		}
 		phase, _ := item["phase"].(string)
-		if phase == "final_answer" && c.turnStarted {
+		if phase == "final_answer" && c.turnIsActive() {
 			if c.onTurnDone != nil {
 				c.onTurnDone(false)
 			}

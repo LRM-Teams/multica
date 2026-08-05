@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -36,6 +37,14 @@ import (
 type idleMessageFakeRuntime struct {
 	mu      sync.Mutex
 	batches [][]agent.ResidentMessage
+	notices []agent.ResidentPendingNotice
+}
+
+func (r *idleMessageFakeRuntime) AcceptPendingNotice(_ context.Context, notice agent.ResidentPendingNotice) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.notices = append(r.notices, notice)
+	return nil
 }
 
 func (r *idleMessageFakeRuntime) Execute(context.Context, string, agent.ExecOptions) (*agent.Session, error) {
@@ -57,7 +66,13 @@ func (r *idleMessageFakeRuntime) snapshot() [][]agent.ResidentMessage {
 	return append([][]agent.ResidentMessage(nil), r.batches...)
 }
 
-func TestIdleMessageRealWebSocketCoordinatorProxyRuntimeAcceptance(t *testing.T) {
+func (r *idleMessageFakeRuntime) noticeSnapshot() []agent.ResidentPendingNotice {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]agent.ResidentPendingNotice(nil), r.notices...)
+}
+
+func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
@@ -66,7 +81,7 @@ func TestIdleMessageRealWebSocketCoordinatorProxyRuntimeAcceptance(t *testing.T)
 	if err != nil || pool.Ping(context.Background()) != nil {
 		t.Skip("acceptance database is unavailable")
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	workspaceID, userID, runtimeID, agentID, channelID, member := seedIdleMessageAcceptanceFixture(t, pool)
 
 	root := t.TempDir()
@@ -78,6 +93,7 @@ func TestIdleMessageRealWebSocketCoordinatorProxyRuntimeAcceptance(t *testing.T)
 		logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		messageCoordinators: make(map[string]*MessageCoordinator),
 		canonicalRuntimes:   newCanonicalAgentRuntimePool(),
+		agentRuntimeTurns:   newAgentRuntimeTurnCoordinator(Config{}, slog.Default()),
 	}
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: fakeRuntime,
@@ -85,6 +101,9 @@ func TestIdleMessageRealWebSocketCoordinatorProxyRuntimeAcceptance(t *testing.T)
 	if _, err := d.ensureIdleMessageCoordinator(agentID, runtimeID, root); err != nil {
 		t.Fatalf("ensureIdleMessageCoordinator: %v", err)
 	}
+	d.messageCoordinators[agentID].ConfigurePendingNotices(func(ctx context.Context, snapshot PendingNoticeSnapshot) error {
+		return d.canonicalRuntimes.handoffBusyNotice(ctx, agentID, runtimeID, snapshot)
+	}, 20*time.Millisecond, 30*time.Millisecond)
 
 	hub := daemonws.NewHub()
 	eventBus := events.New()
@@ -221,10 +240,95 @@ func TestIdleMessageRealWebSocketCoordinatorProxyRuntimeAcceptance(t *testing.T)
 		t.Fatalf("Message received Activity count = %d, err=%v", activityCount, err)
 	}
 
+	// A second canonical Message arrives while the same runtime session is
+	// busy. The Machine acknowledges transport acceptance, coalesces a
+	// content-free Notice, and does not advance the boundary or Activity.
+	slot := d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID]
+	slot.mu.Lock()
+	slot.running = true
+	slot.mu.Unlock()
+	busyBody, _ := json.Marshal(map[string]any{"content": "busy secret", "client_message_id": uuid.NewString()})
+	busyReq := httptest.NewRequest(http.MethodPost, "/api/channels/"+channelID+"/messages", bytes.NewReader(busyBody))
+	busyReq.Header.Set("X-User-ID", userID)
+	busyRouteCtx := chi.NewRouteContext()
+	busyRouteCtx.URLParams.Add("channelId", channelID)
+	busyCtx := context.WithValue(busyReq.Context(), chi.RouteCtxKey, busyRouteCtx)
+	busyCtx = middleware.SetMemberContext(busyCtx, workspaceID, member)
+	busyCtx = middleware.WithHumanPrincipal(busyCtx, middleware.HumanPrincipal{UserID: userID})
+	busyRecorder := httptest.NewRecorder()
+	serverHandler.SendChannelMessage(busyRecorder, busyReq.WithContext(busyCtx))
+	if busyRecorder.Code != http.StatusCreated {
+		t.Fatalf("create busy canonical Message: status=%d body=%s", busyRecorder.Code, busyRecorder.Body.String())
+	}
+	var busyCreated struct {
+		ID  string `json:"id"`
+		Seq int64  `json:"seq"`
+	}
+	if err := json.Unmarshal(busyRecorder.Body.Bytes(), &busyCreated); err != nil || busyCreated.ID == "" {
+		t.Fatalf("decode busy Message: %v body=%s", err, busyRecorder.Body.String())
+	}
+	select {
+	case ack := <-acks:
+		if ack.AgentID != agentID || ack.Seq != busyCreated.Seq {
+			t.Fatalf("busy ack = %+v", ack)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("busy canonical delivery was not acknowledged")
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for len(fakeRuntime.noticeSnapshot()) == 0 && time.Now().Before(deadline) {
+		runtime.Gosched()
+	}
+	notices := fakeRuntime.noticeSnapshot()
+	if len(notices) != 1 || notices[0].TotalPending != 1 || len(notices[0].ChangedTargets) != 1 || notices[0].ChangedTargets[0].Target != target {
+		t.Fatalf("busy runtime Notices = %+v", notices)
+	}
+	if got := d.messageCoordinators[agentID].Boundaries()[target]; got != created.Seq {
+		t.Fatalf("boundary after busy Notice = %d, want %d", got, created.Seq)
+	}
+	select {
+	case duplicate := <-activities:
+		t.Fatalf("busy Notice emitted Message received Activity = %+v", duplicate)
+	default:
+	}
+
+	turnKey := agentRuntimeTurnSlotKey{AgentID: agentID, RuntimeID: runtimeID}
+	if !d.agentRuntimeTurns.reserve(turnKey, "task-busy") {
+		t.Fatal("reserve busy turn")
+	}
+	checkRecorder := httptest.NewRecorder()
+	checkRequest := httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(
+		fmt.Sprintf(`{"agent_id":%q,"task_id":"task-busy"}`, agentID),
+	))
+	d.credentialProxyMessageCheckHandler().ServeHTTP(checkRecorder, checkRequest)
+	d.agentRuntimeTurns.release(turnKey, "task-busy")
+	if checkRecorder.Code != http.StatusOK {
+		t.Fatalf("Credential Proxy check: status=%d body=%s", checkRecorder.Code, checkRecorder.Body.String())
+	}
+	var checked MessageCheckResult
+	if err := json.Unmarshal(checkRecorder.Body.Bytes(), &checked); err != nil {
+		t.Fatalf("decode checked Messages: %v", err)
+	}
+	if len(checked.Messages) != 1 || checked.Messages[0].ID != busyCreated.ID || checked.Messages[0].Content != "busy secret" || checked.HasMore {
+		t.Fatalf("checked Messages = %+v", checked)
+	}
+	if got := d.messageCoordinators[agentID].Boundaries()[target]; got != busyCreated.Seq {
+		t.Fatalf("boundary after check = %d, want %d", got, busyCreated.Seq)
+	}
+	if seq, err := d.CredentialProxy().SeenUpToSeq(agentID, target); err != nil || seq != busyCreated.Seq {
+		t.Fatalf("Credential Proxy boundary after check = %d, %v", seq, err)
+	}
+	if batches := fakeRuntime.snapshot(); len(batches) != 1 {
+		t.Fatalf("message check duplicated runtime body handoff: %+v", batches)
+	}
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM agent_activity_event WHERE workspace_id=$1 AND agent_id=$2 AND event_type='message_received'`, workspaceID, agentID).Scan(&activityCount); err != nil || activityCount != 1 {
+		t.Fatalf("Message received Activity after check = %d, err=%v", activityCount, err)
+	}
+
 	d.beginMessageRecovery(writes)
 	select {
 	case request := <-recoveryRequests:
-		if request.AgentID != agentID || request.RecoveryID == "" || request.Boundaries[target] != created.Seq {
+		if request.AgentID != agentID || request.RecoveryID == "" || request.Boundaries[target] != busyCreated.Seq {
 			t.Fatalf("reconnect recovery request = %+v", request)
 		}
 	case <-time.After(2 * time.Second):

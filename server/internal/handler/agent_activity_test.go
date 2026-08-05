@@ -918,7 +918,7 @@ func TestResolveRaftCLIInvocation_MapsMessageCommands(t *testing.T) {
 		t.Fatalf("full redacted command must be retained for full activity detail: %+v", invocation.Details)
 	}
 
-	check, ok := resolveRaftCLIInvocation("bash", map[string]any{"command": "raft message check"})
+	check, ok := resolveRaftCLIInvocation("bash", map[string]any{"command": "multica message check"})
 	if !ok || check.Tool != "check_messages" || check.ToolTarget != "" || check.SummaryKind != "none" {
 		t.Fatalf("message check invocation = %+v ok=%v, want check_messages without target", check, ok)
 	}

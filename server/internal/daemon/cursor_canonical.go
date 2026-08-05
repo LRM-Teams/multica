@@ -53,9 +53,10 @@ func newCanonicalCodexResidentBackend(cfg agent.Config) (agent.Backend, func(), 
 	return backend, backend.Close, nil
 }
 
-// newCanonicalClaudeResidentBackend builds the resident Claude ACP adapter
-// (claude-agent-acp stdio). Close is mandatory on eviction and unhealthy release.
+// newCanonicalClaudeResidentBackend builds the resident raw Claude stream-json
+// adapter. It intentionally avoids claude-agent-acp and gates busy input on
+// provider-observed safe boundaries.
 func newCanonicalClaudeResidentBackend(cfg agent.Config) (agent.Backend, func(), error) {
-	backend := agent.NewClaudeACPBackend(cfg)
+	backend := agent.NewClaudeStreamJSONBackend(cfg)
 	return backend, backend.Close, nil
 }

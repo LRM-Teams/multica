@@ -17,6 +17,13 @@ func fakePiRPCProcessScript() string {
 	turn=0
 	while IFS= read -r line; do
 	  case "$line" in
+	    *'"id":"multica-message-notice"'*)
+	      if [ -n "$PI_RPC_TEST_NOTICE_INPUT" ]; then printf '%s' "$line" > "$PI_RPC_TEST_NOTICE_INPUT"; fi
+	      printf '{"id":"multica-message-notice","type":"response","command":"prompt","success":true}\n'
+	      if [ -n "$PI_RPC_TEST_NOTICE_MODE" ]; then
+	        printf '{"type":"agent_end","messages":[{"role":"assistant","model":"test-pi","usage":{"input":2,"output":3}}]}\n'
+	      fi
+	      ;;
 	    *'"id":"multica-message-input"'*)
 	      if [ -n "$PI_RPC_TEST_MESSAGE_INPUT" ]; then printf '%s' "$line" > "$PI_RPC_TEST_MESSAGE_INPUT"; fi
 	      printf '{"id":"multica-message-input","type":"response","command":"prompt","success":true}\n'
@@ -30,6 +37,7 @@ func fakePiRPCProcessScript() string {
 	      printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Pi reply"}}\n'
 	      if [ "$turn" -eq 2 ] && [ -n "$PI_RPC_TEST_SECOND_STARTED" ]; then
 	        : > "$PI_RPC_TEST_SECOND_STARTED"
+	        if [ -n "$PI_RPC_TEST_NOTICE_MODE" ]; then continue; fi
 	        while [ ! -f "$PI_RPC_TEST_RELEASE_SECOND" ]; do sleep 0.01; done
 	      fi
 	      printf '{"type":"agent_end","messages":[{"role":"assistant","model":"test-pi","usage":{"input":2,"output":3}}]}\n'
@@ -87,6 +95,70 @@ func TestPiRPCBackendAcceptsIdleMessageBatchAtNativePromptBoundary(t *testing.T)
 	for _, want := range []string{"multica-message-input", "message-1", "channel:one", "concrete body"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("native Pi input %s does not contain %q", raw, want)
+		}
+	}
+}
+
+func TestPiRPCBackendQueuesContentFreeNoticeAtBusySafePoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pi")
+	writeTestExecutable(t, path, []byte(fakePiRPCProcessScript()))
+	noticePath := filepath.Join(dir, "message-notice.json")
+	secondStarted := filepath.Join(dir, "second-started")
+	b := newPiRPCBackend(Config{ExecutablePath: path, Env: map[string]string{
+		"PI_RPC_TEST_STARTS":         filepath.Join(dir, "starts"),
+		"PI_RPC_TEST_NOTICE_INPUT":   noticePath,
+		"PI_RPC_TEST_NOTICE_MODE":    "1",
+		"PI_RPC_TEST_SECOND_STARTED": secondStarted,
+	}})
+	t.Cleanup(b.Close)
+
+	first, err := b.Execute(context.Background(), "initialize", ExecOptions{Cwd: dir, ResumeSessionID: filepath.Join(dir, "session.jsonl")})
+	if err != nil {
+		t.Fatalf("initialize Pi RPC: %v", err)
+	}
+	waitPiRPCResult(t, first, filepath.Join(dir, "session.jsonl"))
+	busy, err := b.Execute(context.Background(), "busy turn", ExecOptions{Cwd: dir, ResumeSessionID: filepath.Join(dir, "session.jsonl")})
+	if err != nil {
+		t.Fatalf("start busy Pi RPC turn: %v", err)
+	}
+	waitForPiRPCTestPath(t, secondStarted)
+
+	err = b.AcceptPendingNotice(context.Background(), ResidentPendingNotice{
+		TotalPending: 3,
+		ChangedTargets: []ResidentPendingTarget{
+			{Target: "channel:one", PendingCount: 2},
+			{Target: "dm:two", PendingCount: 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AcceptPendingNotice: %v", err)
+	}
+	waitPiRPCResult(t, busy, filepath.Join(dir, "session.jsonl"))
+	waitForPiRPCTestPath(t, noticePath)
+	raw, err := os.ReadFile(noticePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var command struct {
+		ID                string `json:"id"`
+		StreamingBehavior string `json:"streamingBehavior"`
+		Message           string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &command); err != nil {
+		t.Fatalf("decode native Pi Notice: %v", err)
+	}
+	if command.ID != "multica-message-notice" || command.StreamingBehavior != "steer" {
+		t.Fatalf("native Pi Notice command = %+v", command)
+	}
+	for _, want := range []string{`"total_pending":3`, `"changed_targets"`, `"pending_count":2`, "channel:one", "dm:two"} {
+		if !strings.Contains(command.Message, want) {
+			t.Fatalf("native Pi Notice %s does not contain %q", command.Message, want)
+		}
+	}
+	for _, forbidden := range []string{"secret body", `"parts"`, `"attachment"`} {
+		if strings.Contains(command.Message, forbidden) {
+			t.Fatalf("native Pi Notice leaked forbidden content %q: %s", forbidden, command.Message)
 		}
 	}
 }

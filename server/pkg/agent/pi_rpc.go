@@ -27,6 +27,7 @@ var ErrPiRPCTurnBusy = errors.New("pi RPC turn busy")
 type PiRPCBackend interface {
 	Backend
 	ResidentMessageInput
+	ResidentPendingNoticeInput
 	Close()
 	// Compact explicitly compacts the Pi session context with custom instructions.
 	// Returns the compaction summary and before/after token counts.
@@ -326,6 +327,60 @@ func (b *piRPCBackend) AcceptMessageBatch(ctx context.Context, messages []Reside
 	releaseAdmission = false
 	go b.finishIdleMessageInput(p, idleInput)
 	return ResidentMessageAcceptance{Done: idleInput.turnDone}, nil
+}
+
+// AcceptPendingNotice queues a content-free steering input while Pi is busy.
+// Pi delivers a steer after the current tool call reaches its safe boundary and
+// before the next model call. The native success response is the Notice write
+// receipt; it never represents concrete Message context coverage.
+func (b *piRPCBackend) AcceptPendingNotice(ctx context.Context, notice ResidentPendingNotice) error {
+	if !b.running.Load() {
+		return errors.New("Pi RPC Pending Notice requires an active turn")
+	}
+	p, err := b.getProcess()
+	if err != nil {
+		return err
+	}
+	prompt, err := formatResidentPendingNotice(notice)
+	if err != nil {
+		return err
+	}
+	response, err := b.sendControlCommand(ctx, p, "multica-message-notice", map[string]any{
+		"type": "prompt", "message": prompt, "streamingBehavior": "steer",
+	})
+	if err != nil {
+		return fmt.Errorf("Pi RPC Pending Notice: %w", err)
+	}
+	if !response.Success {
+		return fmt.Errorf("Pi RPC Pending Notice: %s", response.Error)
+	}
+	return nil
+}
+
+func formatResidentPendingNotice(notice ResidentPendingNotice) (string, error) {
+	if notice.TotalPending <= 0 || len(notice.ChangedTargets) == 0 {
+		return "", errors.New("Pending Notice requires a positive total and changed targets")
+	}
+	count := 0
+	seen := make(map[string]struct{}, len(notice.ChangedTargets))
+	for _, target := range notice.ChangedTargets {
+		if strings.TrimSpace(target.Target) == "" || target.PendingCount <= 0 {
+			return "", errors.New("Pending Notice target and positive count are required")
+		}
+		if _, duplicate := seen[target.Target]; duplicate {
+			return "", errors.New("Pending Notice targets must be unique")
+		}
+		seen[target.Target] = struct{}{}
+		count += target.PendingCount
+	}
+	if count > notice.TotalPending {
+		return "", errors.New("Pending Notice target counts exceed total")
+	}
+	raw, err := json.Marshal(notice)
+	if err != nil {
+		return "", fmt.Errorf("marshal Pending Notice: %w", err)
+	}
+	return "Content-free Message Notice. Concrete bodies remain Pending. Run `multica message check` at a natural breakpoint to inspect them:\n" + string(raw), nil
 }
 
 func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCIdleInput) {

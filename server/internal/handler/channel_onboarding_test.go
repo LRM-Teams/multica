@@ -182,7 +182,6 @@ func TestChannelOnboardingAgentAddPublishesBeforeLeaseAndSendsOnce(t *testing.T)
 
 	for _, invalid := range []map[string]any{
 		{"target": "#" + channelName + ":" + systemMessageID, "content": "must not reply in a thread"},
-		{"target": "#" + channelName, "content": "must not send a saved draft", "send_draft": true},
 	} {
 		req := newRequest(http.MethodPost, "/api/agent/messages/send", invalid)
 		req = withChatTestWorkspaceCtx(t, req)

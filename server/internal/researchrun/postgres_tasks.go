@@ -263,7 +263,7 @@ func (s *PostgresStore) FailAttempt(ctx context.Context, in AttemptFailure) (Run
 	`, in.AttemptID, truncateBytes(in.FailureClass, 160), diagnostics); err != nil {
 		return RunEvent{}, err
 	}
-	nextStatus := TaskStatusBlocked
+	nextStatus := TaskStatusFailed
 	retryAt := time.Now().UTC()
 	if in.Retryable && attemptNumber < maxAttempts {
 		nextStatus = TaskStatusReady
@@ -271,7 +271,8 @@ func (s *PostgresStore) FailAttempt(ctx context.Context, in AttemptFailure) (Run
 	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_task SET status = $2, ready_at = CASE WHEN $2 = 'ready' THEN $4 ELSE ready_at END,
-		       terminal_reason = $3, updated_at = now(), completed_at = CASE WHEN $2 = 'blocked' THEN now() ELSE NULL END
+		       terminal_reason = $3, updated_at = now(),
+		       completed_at = CASE WHEN $2 IN ('blocked', 'failed') THEN now() ELSE NULL END
 		WHERE id = $1::uuid
 	`, taskID, nextStatus, truncateBytes(in.FailureClass, 160), retryAt); err != nil {
 		return RunEvent{}, err

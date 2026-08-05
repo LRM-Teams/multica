@@ -160,6 +160,16 @@ func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *test
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("pending after cancellation=%+v err=%v", pending, err)
 	}
+	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
+	if err != nil || len(attempts) != 1 {
+		t.Fatalf("attempts after cancellation=%+v err=%v", attempts, err)
+	}
+	assertResearchBehaviorGolden(t, "cancellation", map[string]any{
+		"run_status":            run.Status,
+		"attempt_status":        attempts[0].Status,
+		"pending_cancellations": len(pending),
+		"cancelled_inbox_tasks": len(dispatcher.cancelled),
+	})
 }
 
 type recordingCancellationDispatcher struct {
@@ -426,6 +436,20 @@ func TestPostgresStorePersistsPlanAndReplaysResult(t *testing.T) {
 	if err != nil || run.Stats.AcceptedResults != 1 {
 		t.Fatalf("run stats=%+v err=%v", run.Stats, err)
 	}
+	var acceptedEvents int
+	if err = pool.QueryRow(ctx, `
+		SELECT count(*)::int FROM research_run_event
+		WHERE session_id = $1::uuid AND event_type = 'task_result_accepted'
+	`, fixture.sessionID).Scan(&acceptedEvents); err != nil {
+		t.Fatal(err)
+	}
+	assertResearchBehaviorGolden(t, "result_recovery", map[string]any{
+		"replayed":         replayed.Replayed,
+		"accepted_results": run.Stats.AcceptedResults,
+		"questions":        len(questions),
+		"tasks":            len(tasks),
+		"accepted_events":  acceptedEvents,
+	})
 	gate, err := store.EvaluateGate(ctx, fixture.sessionID)
 	if err != nil || gate.Passed || !hasGateFinding(gate, "required_questions_unanswered") {
 		t.Fatalf("gate=%+v err=%v", gate, err)
@@ -816,6 +840,35 @@ func TestPostgresStoreBlocksTasksWhoseDependencyIsTerminal(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT count(*)::int FROM research_run_event WHERE session_id = $1::uuid AND event_type = 'task_blocked'`, fixture.sessionID).Scan(&blockedEvents); err != nil || blockedEvents != 1 {
 		t.Fatalf("blocked events=%d err=%v", blockedEvents, err)
 	}
+	parent, err := store.GetTask(ctx, parentID, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type retryAttemptGolden struct {
+		Number       int           `json:"number"`
+		Status       AttemptStatus `json:"status"`
+		FailureClass string        `json:"failure_class"`
+	}
+	retryAttempts := make([]retryAttemptGolden, 0, 2)
+	for _, candidate := range attempts {
+		if candidate.TaskID == parentID {
+			retryAttempts = append(retryAttempts, retryAttemptGolden{
+				Number: candidate.AttemptNumber, Status: candidate.Status, FailureClass: candidate.FailureClass,
+			})
+		}
+	}
+	assertResearchBehaviorGolden(t, "retry_exhaustion", map[string]any{
+		"parent_status":         parent.Status,
+		"parent_attempt_count":  parent.AttemptCount,
+		"attempts":              retryAttempts,
+		"child_status":          child.Status,
+		"child_terminal_reason": child.TerminalReason,
+		"blocked_events":        blockedEvents,
+	})
 }
 
 func TestCreateControlTaskDoesNotReuseSucceededDeliveryTask(t *testing.T) {
@@ -1244,12 +1297,77 @@ func TestPostgresStoreRunsFromPlanThroughConfirmedDelivery(t *testing.T) {
 	if err != nil || runAfterEvidence.Stats.LastMeasuredGain <= 0 {
 		t.Fatalf("run after evidence stats=%+v err=%v", runAfterEvidence.Stats, err)
 	}
+	sourcesAfterEvidence, err := store.ListSourceSnapshots(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observationsAfterEvidence, err := store.ListObservations(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimsAfterEvidence, err := store.ListClaims(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	questionsAfterEvidence, err := store.ListQuestions(ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answerQuestionStatus := QuestionStatus("")
+	for _, question := range questionsAfterEvidence {
+		if question.ClientKey == "answer-question" {
+			answerQuestionStatus = question.Status
+		}
+	}
+	type evidenceClaimGolden struct {
+		ClientKey     string      `json:"client_key"`
+		Status        ClaimStatus `json:"status"`
+		EvidenceLinks int         `json:"evidence_links"`
+	}
+	claimGoldens := make([]evidenceClaimGolden, 0, len(claimsAfterEvidence))
+	for _, claim := range claimsAfterEvidence {
+		claimGoldens = append(claimGoldens, evidenceClaimGolden{
+			ClientKey: claim.ClientKey, Status: claim.Status, EvidenceLinks: len(claim.Evidence),
+		})
+	}
+	assertResearchBehaviorGolden(t, "evidence_acceptance", map[string]any{
+		"accepted_results":       runAfterEvidence.Stats.AcceptedResults,
+		"sources":                len(sourcesAfterEvidence),
+		"observations":           len(observationsAfterEvidence),
+		"claims":                 claimGoldens,
+		"answer_question_status": answerQuestionStatus,
+	})
 
 	report := e2eStructuredReport(t, ctx, pool, fixture.sessionID)
 	submitStoreTask(t, ctx, pool, store, fixture, "synthesize", ResultEnvelope{
 		SchemaVersion: 5, ClientRequestID: "e2e-report", Summary: "report", Confidence: 0.9,
 		Report: &report,
 	}, run.Config)
+	var reportRevision int
+	var reportContent, reportAuthorID, reportClaimKey, reportSectionID string
+	if err = pool.QueryRow(ctx, `
+		SELECT report.revision, report.content_md, report.author_agent_id::text,
+		       claim.client_key, report_claim.section_id
+		FROM research_report report
+		JOIN research_report_claim report_claim ON report_claim.report_id = report.id
+		JOIN research_claim claim ON claim.id = report_claim.claim_id
+		WHERE report.session_id = $1::uuid
+		ORDER BY report.revision DESC
+		LIMIT 1
+	`, fixture.sessionID).Scan(&reportRevision, &reportContent, &reportAuthorID, &reportClaimKey, &reportSectionID); err != nil {
+		t.Fatal(err)
+	}
+	reportAuthorRole := "unknown"
+	if reportAuthorID == fixture.reporterID {
+		reportAuthorRole = "reporter"
+	}
+	assertResearchBehaviorGolden(t, "report_materialization", map[string]any{
+		"revision":       reportRevision,
+		"author_role":    reportAuthorRole,
+		"claim_key":      reportClaimKey,
+		"section_id":     reportSectionID,
+		"content_sha256": researchBehaviorContentHash(reportContent),
+	})
 	evaluation := EvaluationProposal{
 		Passed: true, FactualGrounding: 0.9, Coverage: 0.9, AnalyticalDepth: 0.9,
 		SourceQuality: 0.9, ContradictionHandling: 0.9, InstructionAdherence: 0.9, Readability: 0.9,
@@ -1699,6 +1817,15 @@ func TestV5EvaluationDefectsPersistAndReachRemediation(t *testing.T) {
 		!strings.Contains(string(revisionTask.AcceptanceCriteria), "retain the measured boundary") {
 		t.Fatalf("revision objective=%s criteria=%s", revisionTask.Objective, revisionTask.AcceptanceCriteria)
 	}
+	assertResearchBehaviorGolden(t, "review_remediation", map[string]any{
+		"finding_code":                     finding.Code,
+		"defect_key":                       defects[0].ClientKey,
+		"claim_keys":                       defects[0].ClaimKeys,
+		"section_ids":                      defects[0].SectionIDs,
+		"revision_task_kind":               revisionTask.Kind,
+		"objective_retains_defect":         strings.Contains(revisionTask.Objective, defects[0].ClientKey),
+		"criteria_retains_required_change": strings.Contains(string(revisionTask.AcceptanceCriteria), defects[0].RequiredChange),
+	})
 	invalidTask, _, err := store.CreateControlTask(ctx, ControlTaskInput{
 		SessionID: fixture.sessionID, Kind: TaskKindCitationAudit, Capability: "validator", Priority: 1,
 		Objective: "Reject a defect that points outside the reviewed report.", Findings: []GateFinding{{Code: "citation_audit_missing"}},

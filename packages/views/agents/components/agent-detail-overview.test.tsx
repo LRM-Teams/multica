@@ -72,6 +72,7 @@ const fleet: AgentFleetRank = {
   fleet_rank: 3,
   fleet_size: 12,
   sample_tasks: 24,
+  min_sample_tasks: 5,
   sample_sufficient: true,
   frozen: false,
   pillars: {
@@ -168,6 +169,18 @@ describe("AgentDetailOverview", () => {
       ),
     ).toBe(false);
     expect(screen.getByTestId("fleet-rank-badge")).toHaveTextContent("Cruiser");
+  });
+
+  it("renders the configured fleet warm-up threshold", () => {
+    renderOverview(makeTask("queued"), vi.fn(), {
+      ...fleet,
+      sample_tasks: 4,
+      min_sample_tasks: 12,
+      sample_sufficient: false,
+    });
+
+    expect(screen.getByText("Warming up · 4/12 tasks")).toBeInTheDocument();
+    expect(screen.queryByText("Warming up · 4/5 tasks")).not.toBeInTheDocument();
   });
 
   it("exposes a Message DM entry on the detail header", () => {

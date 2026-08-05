@@ -63,6 +63,19 @@ func TestFleetScoreWeightsSum(t *testing.T) {
 	}
 }
 
+func TestSnapshotToViewIncludesConfiguredMinimumSample(t *testing.T) {
+	t.Parallel()
+
+	view := snapshotToView(db.AgentFleetSnapshot{SampleTasks: 4}, 12)
+
+	if view.MinSampleTasks != 12 {
+		t.Fatalf("minimum sample tasks = %d, want 12", view.MinSampleTasks)
+	}
+	if view.SampleSufficient {
+		t.Fatal("four samples must remain insufficient when the configured minimum is twelve")
+	}
+}
+
 func TestRefreshWorkspaceAfterArchiveAsyncReturnsImmediatelyAndCoalesces(t *testing.T) {
 	workspaceID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
 	started := make(chan struct{})

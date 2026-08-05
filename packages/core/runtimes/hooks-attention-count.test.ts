@@ -4,6 +4,7 @@ import type { AgentRuntime } from "../types";
 import {
   attentionMachineKey,
   countMyAttentionMachines,
+  summarizeMyAttentionMachines,
 } from "./hooks";
 
 function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
@@ -23,7 +24,6 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     update_state: "idle",
     runtime_health: "update_available",
     owner_id: "user-1",
-    visibility: "private",
     last_seen_at: "2026-07-03T00:00:00Z",
     created_at: "2026-07-03T00:00:00Z",
     updated_at: "2026-07-03T00:00:00Z",
@@ -69,6 +69,18 @@ describe("countMyAttentionMachines (task #31)", () => {
         "user-1",
       ),
     ).toBe(2);
+  });
+
+  it("links to the first owned attention runtime, never another owner's", () => {
+    expect(
+      summarizeMyAttentionMachines(
+        [
+          makeRuntime({ id: "rt-other", owner_id: "user-other" }),
+          makeRuntime({ id: "rt-mine", daemon_id: "daemon-mine" }),
+        ],
+        "user-1",
+      ),
+    ).toEqual({ count: 1, firstRuntimeId: "rt-mine" });
   });
 
   it("attentionMachineKey prefers daemon_id", () => {

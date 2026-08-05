@@ -40,9 +40,15 @@ func NewCachedRuntimeReleaseSource(ttl time.Duration) *CachedRuntimeReleaseSourc
 		ttl = DefaultRuntimeReleaseCacheTTL
 	}
 	return &CachedRuntimeReleaseSource{
-		ttl:   ttl,
-		now:   time.Now,
-		fetch: cli.FetchLatestRelease,
+		ttl: ttl,
+		now: time.Now,
+		fetch: func() (*cli.ReleaseManifest, error) {
+			// Keep the server-side computer read model on the same release feed
+			// that heartbeat dispatches to daemons. Otherwise the daemon can see
+			// a promoted release while /api/runtimes silently falls back to the
+			// compiled default feed and projects no available update.
+			return cli.FetchLatestReleaseWithOverride(serverDispatchedReleaseManifestBaseURL())
+		},
 	}
 }
 

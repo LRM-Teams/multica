@@ -47,7 +47,6 @@ describe("isSelfHealingRuntime", () => {
       update_state: "idle",
       runtime_health: "ok",
       owner_id: null,
-      visibility: "private",
       last_seen_at: new Date(NOW - 1_000).toISOString(),
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",

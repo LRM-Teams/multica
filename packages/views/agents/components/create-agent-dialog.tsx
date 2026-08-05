@@ -6,11 +6,11 @@ import { ModelDropdown } from "./model-dropdown";
 import { ThinkingDropdown } from "./thinking-dropdown";
 import { ComputerPicker } from "./computer-picker";
 import {
-  firstUsableMachine,
-  firstUsableRuntimeIdOnMachine,
+  firstRuntimeMachine,
+  firstRuntimeIdOnMachine,
   machineForRuntime,
 } from "./computer-picker-utils";
-import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
+import { RuntimePicker } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker, type AvatarPickerSelection } from "./avatar-picker";
@@ -137,8 +137,7 @@ export function CreateAgentDialog({
   const [creating, setCreating] = useState(false);
 
   // Computer → runtime selection (Frank 2026-08-01). Duplicate mode seeds
-  // from the template's computer+runtime when still usable; otherwise the
-  // parent derives the first usable machine (no effect-based seeding).
+  // from the template's workspace runtime; otherwise use the first machine.
   const initialMachines = buildRuntimeMachines(runtimes, {
     now: Date.now(),
     currentUserId,
@@ -147,27 +146,24 @@ export function CreateAgentDialog({
     const templateRuntime = template?.runtime_id
       ? runtimes.find((r) => r.id === template.runtime_id)
       : undefined;
-    if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
+    if (templateRuntime) {
       return machineForRuntime(templateRuntime, initialMachines)?.id ?? "";
     }
     if (defaultMachineId && initialMachines.some((m) => m.id === defaultMachineId)) {
       return defaultMachineId;
     }
-    const usableRuntime = runtimes.find((r) =>
-      isRuntimeUsableForUser(r, currentUserId),
-    );
-    return machineForRuntime(usableRuntime, initialMachines)?.id ?? "";
+    return machineForRuntime(runtimes[0], initialMachines)?.id ?? "";
   });
   const [selectedRuntimeId, setSelectedRuntimeId] = useState(() => {
     const templateRuntime = template?.runtime_id
       ? runtimes.find((r) => r.id === template.runtime_id)
       : undefined;
-    if (templateRuntime && isRuntimeUsableForUser(templateRuntime, currentUserId)) {
+    if (templateRuntime) {
       return templateRuntime.id;
     }
     const machine =
       initialMachines.find((m) => m.id === selectedMachineId) ?? null;
-    return firstUsableRuntimeIdOnMachine(machine, currentUserId);
+    return firstRuntimeIdOnMachine(machine);
   });
 
   const machines = useMemo(
@@ -176,7 +172,7 @@ export function CreateAgentDialog({
   );
   const effectiveMachineId =
     selectedMachineId ||
-    firstUsableMachine(machines, currentUserId)?.id ||
+    firstRuntimeMachine(machines)?.id ||
     "";
   const selectedMachine =
     machines.find((m) => m.id === effectiveMachineId) ?? null;
@@ -185,13 +181,13 @@ export function CreateAgentDialog({
   const machineRuntimes = selectedMachine?.runtimes ?? [];
   const effectiveRuntimeId =
     selectedRuntimeId ||
-    firstUsableRuntimeIdOnMachine(selectedMachine, currentUserId);
+    firstRuntimeIdOnMachine(selectedMachine);
 
   const handleMachineSelect = (machineId: string) => {
     if (machineId === selectedMachineId) return;
     setSelectedMachineId(machineId);
     const next = machines.find((m) => m.id === machineId) ?? null;
-    setSelectedRuntimeId(firstUsableRuntimeIdOnMachine(next, currentUserId));
+    setSelectedRuntimeId(firstRuntimeIdOnMachine(next));
   };
 
   const selectedRuntime = runtimes.find((d) => d.id === effectiveRuntimeId) ?? null;
@@ -200,17 +196,8 @@ export function CreateAgentDialog({
   // app). Computed once so both dropdowns below agree.
   const selectedRuntimeOnline =
     !!selectedRuntime && deriveRuntimeHealth(selectedRuntime, Date.now()) === "online";
-  // Defense-in-depth: even if a locked runtime somehow ends up selected
-  // (e.g. duplicate of an agent whose template runtime is now locked, and
-  // the workspace has no usable fallback), gate Create on it so we don't
-  // submit a request the backend will reject with 403.
-  const selectedRuntimeLocked =
-    selectedRuntime != null &&
-    !isRuntimeUsableForUser(selectedRuntime, currentUserId);
-
-
   const handleSubmit = async () => {
-    if (!name.trim() || !selectedRuntime || selectedRuntimeLocked) return;
+    if (!name.trim() || !selectedRuntime) return;
     const trimmedModel = model.trim();
     if (!trimmedModel) {
       showErrorToast(t(($) => $.model_dropdown.select_required));
@@ -436,15 +423,12 @@ export function CreateAgentDialog({
               creating ||
               !name.trim() ||
               !selectedRuntime ||
-              selectedRuntimeLocked ||
               !model.trim()
             }
             title={
-              selectedRuntimeLocked
-                ? t(($) => $.create_dialog.runtime_private_locked_tooltip)
-                : !model.trim()
-                  ? t(($) => $.model_dropdown.select_required)
-                  : undefined
+              !model.trim()
+                ? t(($) => $.model_dropdown.select_required)
+                : undefined
             }
           >
             {creating ? t(($) => $.create_dialog.creating) : t(($) => $.create_dialog.create)}

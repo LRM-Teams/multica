@@ -486,6 +486,19 @@ func hasActiveCapability(task Task, members []FleetMember) bool {
 
 func selectAgent(task Task, members []FleetMember, active map[string]int) string {
 	role := roleForTask(task)
+	if pref := strings.TrimSpace(task.AssignedAgentID); pref != "" {
+		for _, member := range members {
+			if member.AgentID != pref || member.Status != "active" {
+				continue
+			}
+			if active[pref] > 0 {
+				break
+			}
+			// Prefer sticky/reassigned agent when idle; role match preferred but not required
+			// for explicit reassign overrides already validated upstream.
+			return pref
+		}
+	}
 	candidates := make([]FleetMember, 0, len(members))
 	for _, member := range members {
 		if member.Status != "active" || !strings.EqualFold(strings.TrimSpace(member.Role), role) {
@@ -888,6 +901,12 @@ func (e *Engine) Snapshot(ctx context.Context, sessionID, workspaceID string) (R
 	}, nil
 }
 
+// ListFleetMembers returns the session-bound research fleet roster used for
+// presence/dispatch (LRM-1377 follow-up).
+func (e *Engine) ListFleetMembers(ctx context.Context, sessionID, workspaceID string) ([]FleetMember, error) {
+	return e.store.ListFleetMembers(ctx, sessionID, workspaceID)
+}
+
 func compactJSON(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return "{}"
@@ -915,4 +934,30 @@ func (e *Engine) Steer(ctx context.Context, in SteerInput) (Run, error) {
 		return run, err
 	}
 	return run, e.ReconcileSession(ctx, in.SessionID)
+}
+
+// NodeCommand applies continue|fork|retry|reassign from a canvas node, then
+// reconciles so ready tasks can dispatch (LRM-1413 / LRM-1408).
+func (e *Engine) NodeCommand(ctx context.Context, in NodeCommandInput) (NodeCommandOutcome, error) {
+	outcome, err := e.store.NodeCommand(ctx, in)
+	if err != nil {
+		return NodeCommandOutcome{}, err
+	}
+	if !outcome.Replayed {
+		if recErr := e.ReconcileSession(ctx, in.SessionID); recErr != nil {
+			// Command already committed; surface reconcile failure without rolling back.
+			return outcome, recErr
+		}
+	}
+	if outcome.Task != nil {
+		if latest, getErr := e.store.GetTask(ctx, outcome.Task.ID, in.SessionID); getErr == nil {
+			outcome.Task = &latest
+			if aid := strings.TrimSpace(latest.AssignedAgentID); aid != "" {
+				outcome.Assigned = &aid
+			}
+			outcome.Queued = latest.Status == TaskStatusReady || latest.Status == TaskStatusPending ||
+				latest.Status == TaskStatusDispatching || latest.Status == TaskStatusRunning
+		}
+	}
+	return outcome, nil
 }

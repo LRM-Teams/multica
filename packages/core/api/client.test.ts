@@ -6,6 +6,25 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  it("requests presence for the exact session and safely falls back on malformed data", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ session_id: "session-1", presence: null }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getResearchPresence("session-1")).resolves.toEqual({
+      session_id: "session-1",
+      presence: {},
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/api/research/sessions/session-1/presence",
+    );
+  });
+
   it("removes the exact confirmed agent set from a computer", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
@@ -76,7 +95,6 @@ describe("ApiClient", () => {
         update_state: "idle",
         runtime_health: "ok",
         owner_id: "user-1",
-        visibility: "private",
         last_seen_at: "2026-07-27T00:00:00Z",
         created_at: "2026-07-27T00:00:00Z",
         updated_at: "2026-07-27T00:00:00Z",

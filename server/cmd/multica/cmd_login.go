@@ -28,8 +28,8 @@ func tryResolveAppURL(cmd *cobra.Command) string {
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
-	Short: "Authenticate and set up workspaces",
-	Long:  "Log in to Multica, then automatically discover and watch all your workspaces.",
+	Short: "Authenticate and configure one workspace",
+	Long:  "Log in to Multica, then configure the workspace selected by multica setup /<workspace>.",
 	// Up to one positional is accepted so `--token mul_...` / `--token mcn_...`
 	// (space form) can recover the token in runAuthLogin even though pflag
 	// won't bind it.
@@ -60,10 +60,12 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Auto-discover and watch all workspaces.
-	if err := autoWatchWorkspaces(cmd); err != nil {
-		fmt.Fprintf(os.Stderr, "\nCould not auto-configure workspaces: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Run 'multica workspace list' and 'multica workspace watch <id>' to set up manually.\n")
+	// Resolve and persist exactly the workspace requested by setup. The legacy
+	// path discovered every membership and made the connected computer appear in
+	// unrelated workspaces.
+	if err := configureSelectedWorkspace(cmd); err != nil {
+		fmt.Fprintf(os.Stderr, "\nCould not configure the selected workspace: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Run 'multica workspace list' and re-run 'multica setup /<workspace-slug>'.\n")
 		return nil
 	}
 
@@ -71,7 +73,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func autoWatchWorkspaces(cmd *cobra.Command) error {
+func configureSelectedWorkspace(cmd *cobra.Command) error {
 	serverURL := resolveServerURL(cmd)
 	token := resolveToken(cmd)
 	if token == "" {
@@ -109,44 +111,31 @@ func autoWatchWorkspaces(cmd *cobra.Command) error {
 		return err
 	}
 
-	// --workspace pins the default to a specific workspace by id or slug
-	// instead of auto-picking the first one — task #36 (`multica setup
-	// --workspace <id-or-slug>`, one step instead of setup then `workspace
-	// switch`).
-	if want := strings.TrimSpace(cli.FlagOrEnv(cmd, "workspace", "MULTICA_WORKSPACE", "")); want != "" {
-		matched := false
-		for _, ws := range workspaces {
-			if ws.ID == want || ws.Slug == want {
-				cfg.WorkspaceID = ws.ID
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return fmt.Errorf("workspace %q not found among your workspaces — run `multica workspace list` to see available ids/slugs", want)
+	want := strings.TrimSpace(cli.FlagOrEnv(cmd, "workspace", "MULTICA_WORKSPACE", ""))
+	if want == "" {
+		return fmt.Errorf("workspace is required; use `multica setup /<workspace-slug>`")
+	}
+	var selected *struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+	}
+	for i := range workspaces {
+		if workspaces[i].ID == want || workspaces[i].Slug == want {
+			selected = &workspaces[i]
+			break
 		}
 	}
-
-	// Set default workspace if not set.
-	if cfg.WorkspaceID == "" {
-		cfg.WorkspaceID = workspaces[0].ID
+	if selected == nil {
+		return fmt.Errorf("workspace %q not found among your workspaces — run `multica workspace list` to see available ids/slugs", want)
 	}
+	cfg.WorkspaceID = selected.ID
 
 	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "\nFound %d workspace(s):\n", len(workspaces))
-	for _, ws := range workspaces {
-		marker := "  "
-		if ws.ID == cfg.WorkspaceID {
-			marker = "* "
-		}
-		fmt.Fprintf(os.Stderr, "%s%s (%s)\n", marker, ws.Name, ws.ID)
-	}
-	if len(workspaces) > 1 {
-		fmt.Fprintln(os.Stderr, "\nUse 'multica workspace switch <id|slug>' to change the default workspace.")
-	}
+	fmt.Fprintf(os.Stderr, "\nConfigured workspace: %s (%s)\n", selected.Name, selected.ID)
 
 	return nil
 }

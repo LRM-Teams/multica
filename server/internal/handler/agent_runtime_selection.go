@@ -8,22 +8,19 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// pickVisibleAgentRuntime chooses a runtime for platform-created agents:
+// pickAgentRuntime chooses a workspace runtime for platform-created agents:
 // prefer a heartbeat-fresh online runtime owned by the initiating user,
 // then any fresh online runtime. Returns false when none are pickable.
 //
 // Task #123 / stability L1: never trust agent_runtime.status alone — the
 // column can still read "online" for ~150s after the daemon went silent
-// (sweeper lag). Do not fall back to a random first visible row (that was
+// (sweeper lag). Do not fall back to a random first row (that was
 // a ghost-machine bind).
-func (h *Handler) pickVisibleAgentRuntime(
+func (h *Handler) pickAgentRuntime(
 	ctx context.Context,
 	workspaceID, userID pgtype.UUID,
 ) (db.AgentRuntime, bool) {
-	runtimes, err := h.Queries.ListVisibleAgentRuntimes(ctx, db.ListVisibleAgentRuntimesParams{
-		WorkspaceID: workspaceID,
-		OwnerID:     userID,
-	})
+	runtimes, err := h.Queries.ListAgentRuntimes(ctx, workspaceID)
 	if err != nil || len(runtimes) == 0 {
 		return db.AgentRuntime{}, false
 	}

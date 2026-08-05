@@ -57,6 +57,7 @@ vi.mock("@multica/ui/components/ui/sidebar", () => ({
   SidebarGroupLabel: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarHeader: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SidebarMenuAction: () => <button type="button" />,
   SidebarMenuButton: ({ children, render }: { children: React.ReactNode; render?: React.ReactElement }) =>
     isValidElement(render) ? cloneElement(render, undefined, children) : <button type="button">{children}</button>,
   SidebarMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -149,7 +150,9 @@ vi.mock("@multica/core/modals", () => ({ useModalStore: { getState: () => ({ mod
 vi.mock("@multica/core/pins/mutations", () => ({ useDeletePin: () => ({ mutate: deletePin }), useReorderPins: () => ({ mutate: vi.fn() }) }));
 vi.mock("@multica/core/pins/queries", () => ({ pinListOptions: () => ({ queryKey: ["pins"] }) }));
 vi.mock("@multica/core/projects/queries", () => ({ projectDetailOptions: () => ({ queryKey: ["project"] }) }));
-vi.mock("@multica/core/runtimes/hooks", () => ({ useMyAttentionRuntimeCount: () => 0 }));
+vi.mock("@multica/core/runtimes/hooks", () => ({
+  useMyAttentionRuntimeSummary: () => ({ count: 0, firstRuntimeId: null }),
+}));
 vi.mock("@multica/core/workspace/queries", () => ({
   myInvitationListOptions: () => ({ queryKey: ["invitations"] }),
   workspaceKeys: { myInvitations: () => ["invitations"] },

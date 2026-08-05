@@ -2,7 +2,7 @@
 
 Status: implemented
 Date: 2026-07-30
-Last updated: 2026-07-31 (24 name tiers + 51-badge catalog + profile peek)
+Last updated: 2026-08-04 (reachable 80-level progression)
 
 ## Product summary
 
@@ -16,6 +16,20 @@ Global forum/QQ-style honor mechanics with a **sci-fi cosmic IP** skin:
 
 The catalog now contains 24 visible name tiers and 51 badges. New definitions
 remain data-driven so later catalog additions do not change the XP ledger.
+
+## Level progression
+
+Levels 1-20 retain the original onboarding thresholds. Levels 21-80 use four
+piecewise-linear increment bands so the tail remains progressively harder
+without exponential runaway. The current milestones are 874 XP at level 20,
+7,474 at level 40, 31,774 at level 60, 68,024 at level 70, and 140,524 at
+level 80. Every new threshold is less than or equal to the previous rule, so a
+rules deployment cannot demote an existing user.
+
+The server publishes all 80 cumulative thresholds through the rules API.
+Clients consume that table and do not reproduce the formula. Migration 283
+recalculates stored levels and grants newly reached level-gated styles and
+badges during deployment.
 
 ---
 

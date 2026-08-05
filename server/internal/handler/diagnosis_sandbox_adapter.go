@@ -290,6 +290,11 @@ func (r diagnosisSandboxReclaimer) ReclaimDiagnosisSandbox(ctx context.Context, 
 // row does not carry it) and never blocks the caller on reclaim failures —
 // they are logged for the leak audit instead.
 func (h *Handler) reclaimDiagnosisRunSandbox(ctx context.Context, run service.DiagnosisRunCheckpoint) {
+	if run.SandboxMode == service.DiagnosisSandboxModeShared {
+		// The env-dispatch channel cleanup owns the team sandbox and runs only
+		// after this shared diagnosis reaches a terminal state.
+		return
+	}
 	if run.ExecutionMode != service.DiagnosisExecutionModeSandbox || run.SandboxInstanceID == "" {
 		return
 	}

@@ -1020,6 +1020,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/steer", h.SteerResearchRun)
 					r.Post("/stop", h.StopResearchSession)
 					r.Post("/graph/nodes", h.AppendResearchGraphNode)
+					r.Post("/nodes/{nodeId}/commands", h.PostResearchNodeCommand)
 					r.Post("/sources", h.UpsertResearchSourceHandler)
 					r.Post("/report", h.PatchResearchReport)
 					r.Post("/presence", h.PostResearchPresence)
@@ -1236,6 +1237,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// project internally. Project-first routes above remain available.
 			r.Get("/api/v1/env-dispatch/channels/{channelID}/dag", h.GetEnvDispatchChannelDag)
 			r.Post("/api/v1/env-dispatch/channels/{channelID}/diagnosis", h.DiagnoseEnvDispatchChannel)
+			r.Get("/api/v1/env-dispatch/channels/{channelID}/diagnosis/latest", h.GetLatestEnvDispatchChannelDiagnosis)
 			r.Delete("/api/v1/env-dispatch/channels/{channelID}", h.DeleteEnvDispatchChannel)
 			r.Get("/api/v1/channels/{channelID}/env-checkpoints", h.ListChannelEnvCheckpoints)
 
@@ -1352,6 +1354,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Post("/messages", h.PostAgentResearchMessage)
 						r.Put("/messages/{messageId}/match-decision", h.PutAgentResearchMessageMatchDecision)
 						r.Post("/graph/nodes", h.AppendAgentResearchGraphNode)
+						r.Post("/nodes/{nodeId}/commands", h.PostAgentResearchNodeCommand)
 						r.Post("/sources", h.UpsertAgentResearchSource)
 						r.Post("/report", h.PatchAgentResearchReport)
 						r.Post("/presence", h.PostAgentResearchPresence)

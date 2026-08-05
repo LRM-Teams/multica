@@ -253,7 +253,6 @@ WHERE id = sqlc.arg('id')
   AND status IN ('ending', 'ended', 'failed')
 RETURNING *;
 
-
 -- name: FailVoiceCallSessionsStartedBefore :many
 -- A backend restart cannot safely resume provider work that this process no
 -- longer owns. Mark only sessions created before this boot as terminal so they
@@ -267,4 +266,26 @@ SET
   updated_at = now()
 WHERE status IN ('starting', 'connecting', 'active', 'reconnecting', 'ending')
   AND started_at < sqlc.arg('started_before')
+RETURNING *;
+
+-- Reclaim rows that still hold voice_call_session_active_pair_idx after a
+-- process restart / failed duplex hangup (in-memory DuplexGateway.Has is gone).
+-- name: FailVoiceCallSessionsForActivePair :many
+UPDATE voice_call_session
+SET
+  status = 'failed',
+  ended_at = COALESCE(ended_at, now()),
+  end_reason = CASE
+    WHEN btrim(end_reason) = '' THEN sqlc.arg('end_reason')
+    ELSE end_reason
+  END,
+  error_code = CASE
+    WHEN btrim(error_code) = '' THEN sqlc.arg('error_code')
+    ELSE error_code
+  END,
+  updated_at = now()
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND user_id = sqlc.arg('user_id')
+  AND agent_id = sqlc.arg('agent_id')
+  AND status NOT IN ('ended', 'failed')
 RETURNING *;

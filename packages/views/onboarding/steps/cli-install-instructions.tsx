@@ -67,7 +67,7 @@ function Step({ n, label, cmd }: { n: number; label: string; cmd: string }) {
 /**
  * CLI install instructions — two copy-and-run commands. Hardcoded because
  * there's nothing environmental to infer: step 1 is the public install
- * script, step 2 is the cloud `multica setup` which the CLI itself knows
+ * script, step 2 is the cloud `multica setup /<workspace-slug>` command
  * the endpoints for. Local development tests a self-host variant by
  * typing the extended command directly in the terminal; no need to
  * thread env vars through React.
@@ -90,7 +90,7 @@ export function CliInstallInstructions({
     }
     onModeChange?.(nextMode);
   };
-  const { installCmd, setupCmd } = daemonSetupCommands(undefined, undefined, mode);
+  const { installCmd, setupCmd } = daemonSetupCommands(mode);
   return (
     <Card className="w-full">
       <CardContent className="space-y-4 pt-4">

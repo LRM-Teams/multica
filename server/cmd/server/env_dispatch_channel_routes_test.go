@@ -25,11 +25,14 @@ func TestEnvDispatchChannelFirstAndProjectFirstRoutesRegistered(t *testing.T) {
 	}{
 		// Channel-first facades.
 		{http.MethodGet, "/api/v1/env-dispatch/channels/" + id + "/dag", ""},
+		{http.MethodPost, "/api/v1/env-dispatch/channels/" + id + "/diagnosis", "{}"},
+		{http.MethodGet, "/api/v1/env-dispatch/channels/" + id + "/diagnosis/latest", ""},
 		{http.MethodDelete, "/api/v1/env-dispatch/channels/" + id, ""},
 		{http.MethodGet, "/api/v1/channels/" + id + "/env-checkpoints", ""},
 		// Project-first routes remain available (issue dispatch + compatibility).
 		{http.MethodDelete, "/api/v1/env-dispatch/" + id, ""},
 		{http.MethodGet, "/api/v1/env-dispatch/" + id + "/dag", ""},
+		{http.MethodGet, "/api/v1/env-dispatch/" + id + "/diagnosis/latest", ""},
 	}
 	client := &http.Client{}
 	for _, c := range cases {

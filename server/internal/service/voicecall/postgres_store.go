@@ -55,6 +55,10 @@ type VoiceCallQueries interface {
 		ctx context.Context,
 		params db.MarkVoiceCallEndedParams,
 	) (db.VoiceCallSession, error)
+	FailVoiceCallSessionsForActivePair(
+		ctx context.Context,
+		params db.FailVoiceCallSessionsForActivePairParams,
+	) ([]db.VoiceCallSession, error)
 }
 
 type PostgresStore struct {
@@ -412,6 +416,47 @@ func (store *PostgresStore) BeginEnding(
 		Session:              session,
 		ProviderStopRequired: row.ProviderStopRequired,
 	}, nil
+}
+
+func (store *PostgresStore) FailActivePair(
+	ctx context.Context,
+	workspaceID string,
+	userID string,
+	agentID string,
+	endReason string,
+	errorCode string,
+) (int, error) {
+	parsedWorkspaceID, err := parseVoiceCallUUID("workspace_id", workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	parsedUserID, err := parseVoiceCallUUID("user_id", userID)
+	if err != nil {
+		return 0, err
+	}
+	parsedAgentID, err := parseVoiceCallUUID("agent_id", agentID)
+	if err != nil {
+		return 0, err
+	}
+	endReason = strings.TrimSpace(endReason)
+	errorCode = strings.TrimSpace(errorCode)
+	if endReason == "" || errorCode == "" {
+		return 0, errors.New("voice call end_reason and error_code are required")
+	}
+	rows, err := store.queries.FailVoiceCallSessionsForActivePair(
+		ctx,
+		db.FailVoiceCallSessionsForActivePairParams{
+			EndReason:   endReason,
+			ErrorCode:   errorCode,
+			WorkspaceID: parsedWorkspaceID,
+			UserID:      parsedUserID,
+			AgentID:     parsedAgentID,
+		},
+	)
+	if err != nil {
+		return 0, fmt.Errorf("fail active voice call pair: %w", err)
+	}
+	return len(rows), nil
 }
 
 func (store *PostgresStore) MarkEnded(

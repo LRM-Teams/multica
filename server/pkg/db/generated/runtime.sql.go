@@ -876,61 +876,6 @@ func (q *Queries) ListArchivedAgentIDsByRuntime(ctx context.Context, runtimeID p
 	return items, nil
 }
 
-const listVisibleAgentRuntimes = `-- name: ListVisibleAgentRuntimes :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version FROM agent_runtime
-WHERE workspace_id = $1 AND (owner_id = $2 OR visibility = 'public')
-ORDER BY created_at ASC
-`
-
-type ListVisibleAgentRuntimesParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	OwnerID     pgtype.UUID `json:"owner_id"`
-}
-
-// Privacy-scoped list: a member sees their own runtimes plus every public
-// runtime; another member's private runtime is never returned. There is NO
-// owner/admin override here — visibility is per-user even for workspace
-// admins (the unscoped ListAgentRuntimes stays for internal callers).
-func (q *Queries) ListVisibleAgentRuntimes(ctx context.Context, arg ListVisibleAgentRuntimesParams) ([]AgentRuntime, error) {
-	rows, err := q.db.Query(ctx, listVisibleAgentRuntimes, arg.WorkspaceID, arg.OwnerID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []AgentRuntime{}
-	for rows.Next() {
-		var i AgentRuntime
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.DaemonID,
-			&i.Name,
-			&i.RuntimeMode,
-			&i.Provider,
-			&i.Status,
-			&i.DeviceInfo,
-			&i.Metadata,
-			&i.LastSeenAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.OwnerID,
-			&i.LegacyDaemonID,
-			&i.Visibility,
-			&i.DisplayName,
-			&i.OfflineReason,
-			&i.StartingSince,
-			&i.PinnedVersion,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const lockAgentRuntime = `-- name: LockAgentRuntime :one
 SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version FROM agent_runtime
 WHERE id = $1
@@ -1335,49 +1280,6 @@ func (q *Queries) TouchAgentRuntimesLastSeenBatch(ctx context.Context, ids []pgt
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const updateAgentRuntimeVisibility = `-- name: UpdateAgentRuntimeVisibility :one
-UPDATE agent_runtime
-SET visibility = $1, updated_at = now()
-WHERE id = $2
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, display_name, offline_reason, starting_since, pinned_version
-`
-
-type UpdateAgentRuntimeVisibilityParams struct {
-	Visibility string      `json:"visibility"`
-	ID         pgtype.UUID `json:"id"`
-}
-
-// Toggles a runtime between 'private' (only owner can bind agents) and
-// 'public' (any workspace member can). Default for new rows is 'private'
-// (see migration 083). Gated at the handler layer to owner / workspace
-// admin only.
-func (q *Queries) UpdateAgentRuntimeVisibility(ctx context.Context, arg UpdateAgentRuntimeVisibilityParams) (AgentRuntime, error) {
-	row := q.db.QueryRow(ctx, updateAgentRuntimeVisibility, arg.Visibility, arg.ID)
-	var i AgentRuntime
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.DaemonID,
-		&i.Name,
-		&i.RuntimeMode,
-		&i.Provider,
-		&i.Status,
-		&i.DeviceInfo,
-		&i.Metadata,
-		&i.LastSeenAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.OwnerID,
-		&i.LegacyDaemonID,
-		&i.Visibility,
-		&i.DisplayName,
-		&i.OfflineReason,
-		&i.StartingSince,
-		&i.PinnedVersion,
-	)
-	return i, err
 }
 
 const updateAgentRuntimeDisplayName = `-- name: UpdateAgentRuntimeDisplayName :one

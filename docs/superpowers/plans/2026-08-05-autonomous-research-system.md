@@ -859,7 +859,13 @@ LLM 行为评测至少运行多个种子。确定性 CI 门禁与非确定性离
 - [x] 把当前 V1–V5 计划、证据、报告、评审、重试、取消和恢复行为做成 golden fixtures。
   - [x] A2a：统一 manifest 冻结 V1–V5 完整 Task Prompt 哈希、可接受 Plan Result 哈希和新 schema 拒绝行为。
   - [x] A2b：补齐 evidence、report、review、retry、cancel 和 recovery 的稳定语义 golden；跨运行随机 UUID、数据库时间和调度字段不进入比较。
-- [ ] 从已出现的生产失败中提取脱敏回归：重复节点、403 task result、dispatch_failed 扩散、报告过早、评审意见丢失、低价值信息收益。
+- [x] 从已出现的生产失败中提取脱敏回归：重复节点、403 task result、dispatch_failed 扩散、报告过早、评审意见丢失、低价值信息收益。
+  - 重复节点：`TestProjectRunV2GraphDeterministicReplay` 固定同一 Snapshot 的节点/边 ID 唯一、顺序和内容重放一致。
+  - 403 task result：`TestResolveResearchResultInboxTaskIDAllowsActiveAgentCredentialDelivery` 使用真实 Agent credential lease 与 Research Attempt context 验证正常提交不被拒绝。
+  - dispatch_failed 扩散：`TestNonRetryableDispatchFailureStopsRunWithoutRemediationLoop` 固定一个失败 Run、一个 `failed` plan Task、一个失败 Attempt 和零 replan。
+  - 报告过早：`TestResearchRunV4RequiresVerifiedDeliveryPathForEveryRequiredQuestion` 与 `TestResearchRunV4RejectsDeliveryTaskOutsideValidatedPlanGraph` 拒绝绕过 required verification 的 synthesis。
+  - 评审意见丢失：`TestV5EvaluationDefectsPersistAndReachRemediation` 固定 defect 从 Decision/Gate 到 revision objective/acceptance criteria 的完整传递。
+  - 低价值信息收益：`TestProductionRegressionDuplicateEvidenceReachesMarginalGainSaturation` 在真实 Store 连续提交相同证据，固定零图增长、连续低收益计数和停止条件。
 - [x] 建立 canonical state hash 和 Event replay 工具：`CanonicalState` 对同一 Run 的 V1–V5 规范表计算确定性哈希，`ListRunEvents` / `ReplayRunEvents` 按 workspace 和连续 sequence 重放投影 Event，拒绝冲突重复与序号缺口。
 - [ ] 建立最小系统评测框架、固定语料和 grader Interface。
 - [ ] 为自主组队、冲突讨论升级、图投影重建、递归 Insight、反茧房 Divergence、同类结果 Assimilation 和无限画布续传/大图分片建立上述七个见红 fixture。
@@ -1051,6 +1057,7 @@ A1 边界：当前 `research_run_event` 是 committed state 到投影的日志�
 - [x] A1 实现 V1–V5 canonical state hash、workspace-bound Event 读取和连续 replay；单测与真实 PostgreSQL `server/internal/researchrun` 回归通过。
 - [x] A2a 实现 V1–V5 orchestrator contract golden manifest；五个版本的完整 Prompt、可接受 Plan 和新 schema 拒绝均有固定回归。
 - [x] A2b 实现当前状态机行为 golden manifest；证据接纳、报告物化、结构化评审缺陷传递、有界重试、取消确认和结果幂等恢复均由真实 PostgreSQL 场景固定。测试发现任务自身永久失败被错误写为 `blocked`，已改为 `failed`；只有依赖终态导致的任务使用 `blocked/dependency_terminal`。历史 V1–V5 的协议边界由 A2a 分版本固定。
+- [x] A3 把六类已发生生产故障映射到脱敏可执行回归；新增画布 Projection 内部身份唯一断言和真实 PostgreSQL 重复证据饱和测试，其余四类复用并标注现有生产路径回归。测试输入不含线上 workspace、Run、Agent、来源或用户内容。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

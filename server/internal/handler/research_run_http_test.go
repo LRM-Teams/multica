@@ -48,6 +48,8 @@ func TestDecodeResearchJSON(t *testing.T) {
 	}
 }
 
+// Production regression: a correctly leased research Agent used to receive a
+// 403 while submitting its structured task result through the Agent route.
 func TestResolveResearchResultInboxTaskIDAllowsActiveAgentCredentialDelivery(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

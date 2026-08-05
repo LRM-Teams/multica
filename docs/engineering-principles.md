@@ -305,6 +305,7 @@
 - 无限画布必须从同一 `snapshot_id + through_event_sequence` 的分页 Snapshot 开始，随后按连续 event sequence 幂等应用 Delta。重复 Delta 不得产生重复节点；序号缺口或保留期过期必须重新取 Snapshot。大图通过有界 Slice、邻接计数和按需详情读取，不能要求浏览器一次载入全部 Run。语义融合只能来自后端 Insight Derivation；前端视觉聚类不能写回研究结论。
 - A1 已由 `server/internal/researchrun/canonical_state.go` 建立可执行基线：`CanonicalState` 对同一 Run 的 V1–V5 规范表做确定性哈希，排除 lease、调度时间、行维护时间和投影重试字段；`ListRunEvents` 与 `ReplayRunEvents` 按 workspace、连续 sequence 和重复一致性重放 committed Event。当前 Event 只保证投影重放，不包含从零恢复全部规范表所需的完整数据，不能宣称系统已经采用 event sourcing。
 - A2a 已由 `orchestrator_golden_test.go` 和 `testdata/golden/orchestrator_contracts.json` 冻结 V1–V5 的完整 Task Prompt 哈希、可接受 Plan Result 哈希和新 schema 拒绝行为。修改旧版本协议必须让 golden 失败；真实语义变化只能新增 orchestrator version，不能更新旧 hash 来掩盖不兼容。
+- V1–V5 Research Task Prompt 的版本选择和渲染由 `taskPromptModule` 独占；Engine 与 dispatch 只提交 Run、Task、Attempt、Snapshot 和 Fleet 输入，不能拼接或修改 Prompt。历史 builder 保持不可变，新语义只能新增 orchestrator version，并继续由完整 Prompt hash 验证。
 - A2b 已由 `behavior_golden_test.go` 和 `testdata/golden/research_behaviors.json` 冻结证据接纳、报告物化、评审缺陷传递、有界重试、取消确认和结果幂等恢复的用户可观察语义。跨运行随机 UUID、数据库时间和 scheduler 字段不属于行为 golden；同一 Run 的崩溃前后完整状态比较继续使用 A1 canonical hash。golden 变化必须说明协议或状态机原因，不能直接重录期望值。
 - Research Task 自身的 Attempt 永久失败或耗尽预算后必须进入 `failed` 并记录 failure class；`blocked` 只表示任务尚未执行但因依赖终态等外部前置条件无法继续。两者都属于终态，但投影、详情和失败分析不得混用。
 - 已发生的 Research 生产故障必须保留脱敏、可执行回归和明确 oracle。当前集合覆盖画布重复节点、合法 task result 被 403、永久 dispatch 失败扩散、报告绕过验证、评审缺陷丢失和重复证据低收益；测试与症状的权威映射记录在自主调研实现计划 A3。只写事故描述或只断言 HTTP/任务数量之一均不能替代端到端状态断言。

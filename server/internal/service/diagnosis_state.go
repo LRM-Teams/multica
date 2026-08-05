@@ -577,6 +577,43 @@ func (s *DiagnosisStateStore) SetRunSandbox(ctx context.Context, runID, sandboxI
 	})
 }
 
+// ClaimRunProvisioning atomically claims the launch boundary for a handler.
+// Exactly one caller can transition an active run into provisioning; callers
+// observing (or losing a race to) provisioning return claimed=false without
+// starting another worker. MarkRunProvisioning remains idempotent for the
+// winning worker's orchestrator path.
+func (s *DiagnosisStateStore) ClaimRunProvisioning(ctx context.Context, runID string) (bool, error) {
+	run, err := s.GetRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	if run.Status == DiagnosisRunProvisioning {
+		return false, nil
+	}
+	if run.Status != DiagnosisRunRunning && run.Status != DiagnosisRunCompacting {
+		return false, fmt.Errorf("%w: run %s is %s", ErrDiagnosisInvalidTransition, runID, run.Status)
+	}
+	applied, err := s.q.SetInteractionDAGDiagnosisRunStatus(ctx, db.SetInteractionDAGDiagnosisRunStatusParams{
+		RunID:    runID,
+		Status:   string(DiagnosisRunProvisioning),
+		Status_2: string(run.Status),
+	})
+	if err != nil {
+		return false, err
+	}
+	if applied == 0 {
+		latest, getErr := s.GetRun(ctx, runID)
+		if getErr != nil {
+			return false, getErr
+		}
+		if latest.Status == DiagnosisRunProvisioning || latest.Status == DiagnosisRunCompleted || latest.Status == DiagnosisRunFailed {
+			return false, nil
+		}
+		return false, fmt.Errorf("%w: run %s changed during provisioning claim", ErrDiagnosisInvalidTransition, runID)
+	}
+	return true, nil
+}
+
 // MarkRunProvisioning transitions an active run (running/compacting) to
 // provisioning while its sandbox is being set up. The compare-and-set fails
 // for terminal or already-provisioning runs.

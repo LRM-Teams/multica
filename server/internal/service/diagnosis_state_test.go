@@ -652,6 +652,19 @@ func TestDiagnosisStateProvisioningLifecycle(t *testing.T) {
 	require.ErrorIs(t, store.ActivateRun(context.Background(), "run-1"), ErrDiagnosisInvalidTransition)
 }
 
+func TestDiagnosisStateClaimRunProvisioningOnlyOneCallerWins(t *testing.T) {
+	store, _ := newTestDiagnosisStore(t)
+	createTestDiagnosisRun(t, store, "run-claim", "seg-a")
+
+	claimed, err := store.ClaimRunProvisioning(context.Background(), "run-claim")
+	require.NoError(t, err)
+	assert.True(t, claimed)
+
+	claimed, err = store.ClaimRunProvisioning(context.Background(), "run-claim")
+	require.NoError(t, err)
+	assert.False(t, claimed, "an already-provisioning run must not launch a second worker")
+}
+
 func TestDiagnosisStateLoadLatestRunForProject(t *testing.T) {
 	store, fake := newTestDiagnosisStore(t)
 	createTestDiagnosisRun(t, store, "run-1", "seg-a")

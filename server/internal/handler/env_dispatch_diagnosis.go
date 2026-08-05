@@ -305,6 +305,25 @@ func (h *Handler) diagnoseEnvDispatchProjectSandbox(w http.ResponseWriter, r *ht
 	})
 }
 
+// mergeSharedDiagnosisBinding validates one persisted binding row and folds it
+// into the canonical shared sandbox/runtime triple. Keeping this validation at
+// the row boundary lets tests cover corrupt/incomplete query results without
+// violating the stronger ready-row invariant enforced by PostgreSQL.
+func mergeSharedDiagnosisBinding(canonical *service.DiagnosisSharedSandboxRef, instanceID, runtimeID, daemonID *string) (*service.DiagnosisSharedSandboxRef, error) {
+	if instanceID == nil || runtimeID == nil || daemonID == nil ||
+		*instanceID == "" || *runtimeID == "" || *daemonID == "" {
+		return nil, fmt.Errorf("provisioning_binding: shared sandbox binding is incomplete")
+	}
+	candidate := service.DiagnosisSharedSandboxRef{InstanceID: *instanceID, RuntimeID: *runtimeID, DaemonID: *daemonID}
+	if canonical == nil {
+		return &candidate, nil
+	}
+	if *canonical != candidate {
+		return nil, fmt.Errorf("provisioning_binding: shared sandbox bindings are divergent")
+	}
+	return canonical, nil
+}
+
 // resolveSharedDiagnosisBinding returns the sole ready shared sandbox/runtime
 // triple for a non-training env-dispatch project. No qualifying binding means
 // this is not a shared dispatch; incomplete or divergent bindings are unsafe
@@ -329,17 +348,9 @@ WHERE p.id = $1
 		if err := rows.Scan(&instanceID, &runtimeID, &daemonID); err != nil {
 			return nil, fmt.Errorf("provisioning_binding: scan shared sandbox binding: %w", err)
 		}
-		if instanceID == nil || runtimeID == nil || daemonID == nil ||
-			*instanceID == "" || *runtimeID == "" || *daemonID == "" {
-			return nil, fmt.Errorf("provisioning_binding: shared sandbox binding is incomplete")
-		}
-		candidate := service.DiagnosisSharedSandboxRef{InstanceID: *instanceID, RuntimeID: *runtimeID, DaemonID: *daemonID}
-		if canonical == nil {
-			canonical = &candidate
-			continue
-		}
-		if *canonical != candidate {
-			return nil, fmt.Errorf("provisioning_binding: shared sandbox bindings are divergent")
+		canonical, err = mergeSharedDiagnosisBinding(canonical, instanceID, runtimeID, daemonID)
+		if err != nil {
+			return nil, err
 		}
 	}
 	if err := rows.Err(); err != nil {

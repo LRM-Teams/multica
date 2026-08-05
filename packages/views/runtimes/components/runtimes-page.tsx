@@ -199,10 +199,6 @@ export function RuntimesPage({
   const [userPickId, setUserPickId] = useState<string | null>(null);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
   const [pageOverlay, setPageOverlay] = useState<PageOverlay>(null);
-  /** Instant sidebar rows after Create cloud computer, before sandbox list refetch. */
-  const [optimisticCloudInstances, setOptimisticCloudInstances] = useState<
-    SandboxInstance[]
-  >([]);
 
   const { data: runtimes = [], isLoading: fetching } = useQuery(
     runtimeListOptions(wsId),
@@ -224,23 +220,6 @@ export function RuntimesPage({
     [agents, snapshot],
   );
 
-  const cloudSandboxInstances = useMemo(() => {
-    const byId = new Map<string, SandboxInstance>();
-    for (const instance of sandboxInstances) byId.set(instance.id, instance);
-    for (const instance of optimisticCloudInstances) {
-      if (!byId.has(instance.id)) byId.set(instance.id, instance);
-    }
-    return Array.from(byId.values());
-  }, [sandboxInstances, optimisticCloudInstances]);
-
-  useEffect(() => {
-    if (optimisticCloudInstances.length === 0) return;
-    const known = new Set(sandboxInstances.map((instance) => instance.id));
-    setOptimisticCloudInstances((prev) =>
-      prev.filter((instance) => !known.has(instance.id)),
-    );
-  }, [sandboxInstances, optimisticCloudInstances.length]);
-
   const machines = useMemo(
     () =>
       decorateCloudComputerMachines(
@@ -253,13 +232,13 @@ export function RuntimesPage({
             workloadByRuntimeId: workloadIndex,
             ensureLocalMachine: hasLocalMachine,
           }),
-          cloudSandboxInstances,
+          sandboxInstances,
         ),
-        cloudSandboxInstances,
+        sandboxInstances,
       ),
     [
       runtimes,
-      cloudSandboxInstances,
+      sandboxInstances,
       now,
       localDaemonId,
       localMachineName,
@@ -273,6 +252,7 @@ export function RuntimesPage({
     RUNTIME_ATTENTION_RUNTIME_QUERY,
   );
   const searchParamsString = searchParams.toString();
+  // react-doctor-disable-next-line react-doctor/no-event-handler -- consume one-shot URL deep-link into selection; no user event owns this
   useEffect(() => {
     if (!attentionRuntimeId || fetching || isLoading) return;
 
@@ -304,15 +284,11 @@ export function RuntimesPage({
     searchParamsString,
   ]);
 
+  // Pending cloud id → registered daemon id; keep using resolved value (no mirror effect).
   const resolvedUserPickId = resolveCloudComputerSelectionId(
     machines,
     userPickId,
   );
-  useEffect(() => {
-    if (resolvedUserPickId && resolvedUserPickId !== userPickId) {
-      setUserPickId(resolvedUserPickId);
-    }
-  }, [resolvedUserPickId, userPickId]);
 
   const userPickValid =
     !!resolvedUserPickId && machines.some((m) => m.id === resolvedUserPickId);
@@ -335,7 +311,6 @@ export function RuntimesPage({
   const handleMobileBack = useCallback(() => setMobileDetailOpen(false), []);
 
   const handleComputerDeleted = useCallback(() => {
-    setOptimisticCloudInstances([]);
     setUserPickId(null);
     setMobileDetailOpen(false);
   }, []);
@@ -354,9 +329,11 @@ export function RuntimesPage({
 
   const handleCloudComputerCreated = useCallback(
     (instance: SandboxInstance) => {
-      setOptimisticCloudInstances((prev) => {
-        if (prev.some((item) => item.id === instance.id)) return prev;
-        return [instance, ...prev];
+      // Seed the React Query cache so the pending sidebar row appears before refetch.
+      qc.setQueryData<SandboxInstance[]>(sandboxKeys.list(wsId), (prev) => {
+        const list = prev ?? [];
+        if (list.some((item) => item.id === instance.id)) return list;
+        return [instance, ...list];
       });
       void qc.invalidateQueries({ queryKey: sandboxKeys.all(wsId) });
       setUserPickId(pendingCloudComputerMachineId(instance.id));

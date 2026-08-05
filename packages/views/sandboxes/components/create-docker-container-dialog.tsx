@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -42,6 +42,20 @@ export function dockerImageLabel(image: DockerImage): string {
 
 export function defaultDockerContainerName(): string {
   return `docker-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function preferredDockerNodeId(
+  bindings: SandboxBinding[],
+  initialNodeId: string,
+): string {
+  return (
+    (initialNodeId && bindings.some((b) => b.node_id === initialNodeId)
+      ? initialNodeId
+      : null) ??
+    bindings.find((b) => b.node_status === "online")?.node_id ??
+    bindings[0]?.node_id ??
+    ""
+  );
 }
 
 export type CreateDockerContainerDialogLabels = {
@@ -86,36 +100,24 @@ export function CreateDockerContainerDialog({
   const [nodeId, setNodeId] = useState(initialNodeId);
   const [selectedImageRef, setSelectedImageRef] = useState("");
   const [runtime, setRuntime] = useState<SandboxRuntimeFormState>(emptySandboxRuntimeForm);
-  const wasOpenRef = useRef(false);
 
-  useEffect(() => {
-    if (open && !wasOpenRef.current) {
+  // Reset form on open transition during render (no stale frame via useEffect).
+  const prevOpenRef = useRef(false);
+  if (open !== prevOpenRef.current) {
+    prevOpenRef.current = open;
+    if (open) {
       setName(defaultDockerContainerName());
       setSelectedImageRef("");
       setRuntime(emptySandboxRuntimeForm());
-      const preferred =
-        (initialNodeId && bindings.some((b) => b.node_id === initialNodeId)
-          ? initialNodeId
-          : null) ??
-        bindings.find((b) => b.node_status === "online")?.node_id ??
-        bindings[0]?.node_id ??
-        "";
-      setNodeId(preferred);
+      setNodeId(preferredDockerNodeId(bindings, initialNodeId));
     }
-    wasOpenRef.current = open;
-  }, [open, initialNodeId, bindings]);
+  }
 
   // Bindings may arrive after open — fill node once if still empty.
-  useEffect(() => {
-    if (!open || nodeId) return;
-    const preferred =
-      (initialNodeId && bindings.some((b) => b.node_id === initialNodeId)
-        ? initialNodeId
-        : null) ??
-      bindings.find((b) => b.node_status === "online")?.node_id ??
-      bindings[0]?.node_id;
+  if (open && !nodeId) {
+    const preferred = preferredDockerNodeId(bindings, initialNodeId);
     if (preferred) setNodeId(preferred);
-  }, [open, nodeId, initialNodeId, bindings]);
+  }
 
   const selectedBinding = bindings.find((b) => b.node_id === nodeId) ?? null;
   const nodeOnline = selectedBinding?.node_status === "online";

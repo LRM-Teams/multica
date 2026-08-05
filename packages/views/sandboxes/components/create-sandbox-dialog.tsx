@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -112,17 +112,27 @@ export function CreateSandboxDialog({
   const create = useCreateSandboxMutation(wsId);
   const [form, setForm] = useState<CreateSandboxFormState>(initialForm);
 
-  useEffect(() => {
-    if (open) setForm(initialForm);
-  }, [open, initialForm]);
+  // Reset on open / when the caller supplies a new initialForm for this open.
+  const prevOpenRef = useRef(false);
+  const prevInitialFormRef = useRef(initialForm);
+  if (open !== prevOpenRef.current) {
+    prevOpenRef.current = open;
+    if (open) {
+      setForm(initialForm);
+      prevInitialFormRef.current = initialForm;
+    }
+  } else if (open && initialForm !== prevInitialFormRef.current) {
+    prevInitialFormRef.current = initialForm;
+    setForm(initialForm);
+  }
 
-  // If the dialog opened before bindings arrived, fill in the preferred node once.
-  useEffect(() => {
-    if (!open || form.nodeId || form.templateLocked) return;
+  // If the dialog opened before bindings arrived, fill preferred node once.
+  if (open && !form.nodeId && !form.templateLocked) {
     const preferred =
-      bindings.find((b) => b.node_status === "online")?.node_id ?? bindings[0]?.node_id;
-    if (preferred) setForm((prev) => ({ ...prev, nodeId: preferred }));
-  }, [open, form.nodeId, form.templateLocked, bindings]);
+      bindings.find((b) => b.node_status === "online")?.node_id ??
+      bindings[0]?.node_id;
+    if (preferred) setForm({ ...form, nodeId: preferred });
+  }
 
   const patchForm = (patch: Partial<CreateSandboxFormState>) => {
     setForm((prev) => ({ ...prev, ...patch }));

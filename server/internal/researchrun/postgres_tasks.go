@@ -97,6 +97,9 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		strings.TrimSpace(in.TaskID) == "" || strings.TrimSpace(in.AgentID) == "" {
 		return Attempt{}, RunEvent{}, fmt.Errorf("%w: incomplete dispatch intent", ErrInvalidTransition)
 	}
+	if len(in.ProbeTargets) > 0 && in.ProbeLeaseDuration <= 0 {
+		return Attempt{}, RunEvent{}, fmt.Errorf("%w: probe lease duration must be positive", ErrInvalidTransition)
+	}
 	target := in.Target
 	if target == (ExecutionTarget{}) {
 		target = ExecutionTarget{Adapter: "agent_inbox", AgentID: in.AgentID}
@@ -242,6 +245,15 @@ func (s *PostgresStore) CreateDispatchIntent(ctx context.Context, in CreateDispa
 		return Attempt{}, RunEvent{}, err
 	}
 	attempt.ExecutionTarget.AgentID = attempt.AssignedAgentID
+	probeTargets, err := normalizeAttemptProbeTargets(target, in.ProbeTargets)
+	if err != nil {
+		return Attempt{}, RunEvent{}, err
+	}
+	for _, probeTarget := range probeTargets {
+		if _, err = claimCircuitProbeForAttemptTx(ctx, tx, workspaceID, in.SessionID, attempt.ID, probeTarget, in.ProbeLeaseDuration); err != nil {
+			return Attempt{}, RunEvent{}, err
+		}
+	}
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO research_dispatch_outbox (
 			workspace_id, session_id, task_id, attempt_id, dispatch_key,
@@ -427,6 +439,9 @@ func failAttemptTx(ctx context.Context, tx pgx.Tx, in AttemptFailure) (RunEvent,
 		       completed_at = CASE WHEN $2 IN ('blocked', 'failed') THEN now() ELSE NULL END
 		WHERE id = $1::uuid
 	`, taskID, nextStatus, truncateBytes(in.FailureClass, 160), retryAt); err != nil {
+		return RunEvent{}, err
+	}
+	if err = settleAttemptCircuitFailureTx(ctx, tx, in); err != nil {
 		return RunEvent{}, err
 	}
 	event, err := appendEvent(ctx, tx, workspaceID, sessionID, "task_attempt_failed", "attempt-failed:"+in.AttemptID, "system", "", map[string]any{
@@ -761,6 +776,9 @@ func (s *PostgresStore) transitionRun(ctx context.Context, sessionID, workspaceI
 		inboxIDs = append(inboxIDs, id)
 	}
 	rows.Close()
+	if err = abandonSessionCircuitProbesTx(ctx, tx, sessionID); err != nil {
+		return Run{}, RunEvent{}, nil, err
+	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_task_attempt attempt
 		SET cancellation_completed_at = now(), updated_at = now()
@@ -910,6 +928,9 @@ func (s *PostgresStore) Steer(ctx context.Context, in SteerInput) (Run, RunEvent
 	if in.AllowRunningFinish {
 		cancelIDs = nil
 	} else {
+		if err = abandonSessionCircuitProbesTx(ctx, tx, in.SessionID); err != nil {
+			return Run{}, RunEvent{}, nil, err
+		}
 		if _, err = tx.Exec(ctx, `
 			UPDATE research_task_attempt attempt
 			SET cancellation_completed_at = now(), updated_at = now()

@@ -38,8 +38,17 @@ func TestMigration296DownUpRestoresFrozenExecutionTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	down298SQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "298_research_attempt_circuit_probe.down.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	up298SQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "298_research_attempt_circuit_probe.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	reapplied296 := false
 	reapplied297 := false
+	reapplied298 := false
 	defer func() {
 		if !reapplied296 {
 			_, _ = pool.Exec(context.Background(), string(upSQL))
@@ -47,7 +56,13 @@ func TestMigration296DownUpRestoresFrozenExecutionTarget(t *testing.T) {
 		if !reapplied297 {
 			_, _ = pool.Exec(context.Background(), string(up297SQL))
 		}
+		if !reapplied298 {
+			_, _ = pool.Exec(context.Background(), string(up298SQL))
+		}
 	}()
+	if _, err = pool.Exec(ctx, string(down298SQL)); err != nil {
+		t.Fatalf("apply migration 298 down before 296 rollback: %v", err)
+	}
 	if _, err = pool.Exec(ctx, string(down297SQL)); err != nil {
 		t.Fatalf("apply migration 297 down before 296 rollback: %v", err)
 	}
@@ -77,4 +92,8 @@ func TestMigration296DownUpRestoresFrozenExecutionTarget(t *testing.T) {
 		t.Fatalf("restore migration 297 after 296 rollback test: %v", err)
 	}
 	reapplied297 = true
+	if _, err = pool.Exec(ctx, string(up298SQL)); err != nil {
+		t.Fatalf("restore migration 298 after 296 rollback test: %v", err)
+	}
+	reapplied298 = true
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -285,6 +286,451 @@ func TestExecutionCircuitIsIsolatedByWorkspace(t *testing.T) {
 	}
 }
 
+func TestExecutionTargetHealthBlocksOpenCircuitAndExposesDueProbe(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchCircuitFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	target, tasks := initializeCircuitFixture(t, ctx, store, fixture, 2)
+	attempt := createCircuitAttempt(t, ctx, store, fixture, tasks[0], target)
+	opened, _, err := store.RecordCircuitFailure(ctx, CircuitFailureInput{
+		WorkspaceID: fixture.workspaceID, SessionID: fixture.sessionID, AttemptID: attempt.ID,
+		Target: target, Disposition: failureDisposition(FailureCredential), SourceReason: "agent_provider_auth_or_access",
+	})
+	if err != nil || opened.State != CircuitOpen || opened.NextProbeAt == nil {
+		t.Fatalf("opened=%+v err=%v", opened, err)
+	}
+	members, err := store.ListFleetMembers(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	health, err := store.EvaluateExecutionTargets(ctx, fixture.workspaceID, members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked := health[fixture.agentID]
+	if blocked.Dispatchable || blocked.RetryAt == nil || len(blocked.Blocking) != 1 || blocked.Blocking[0].Scope != CircuitProvider {
+		t.Fatalf("blocked health=%+v", blocked)
+	}
+	waitEvent, err := store.DeferTaskForExecutionTarget(ctx, fixture.sessionID, tasks[1].ID, blocked.RetryAt, []ExecutionTargetHealth{blocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayedWait, err := store.DeferTaskForExecutionTarget(ctx, fixture.sessionID, tasks[1].ID, blocked.RetryAt, []ExecutionTargetHealth{blocked})
+	if err != nil || replayedWait.ID != waitEvent.ID {
+		t.Fatalf("wait event=%+v replay=%+v err=%v", waitEvent, replayedWait, err)
+	}
+	deferredTask, err := store.GetTask(ctx, tasks[1].ID, fixture.sessionID)
+	if err != nil || deferredTask.ReadyAt == nil || blocked.RetryAt == nil || deferredTask.ReadyAt.Sub(*blocked.RetryAt).Abs() > time.Millisecond {
+		t.Fatalf("deferred task=%+v blocked=%+v err=%v", deferredTask, blocked, err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_execution_circuit SET next_probe_at = now() - interval '1 second' WHERE id = $1::uuid`, opened.ID); err != nil {
+		t.Fatal(err)
+	}
+	health, err = store.EvaluateExecutionTargets(ctx, fixture.workspaceID, members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	due := health[fixture.agentID]
+	if !due.Dispatchable || len(due.ProbeTargets) != 1 || due.ProbeTargets[0].Scope != CircuitProvider || len(due.Blocking) != 0 {
+		t.Fatalf("due health=%+v", due)
+	}
+	members[0].ProviderBlockDetail = "provider credentials require attention"
+	members[0].ProviderBlockedUntil = nil
+	health, err = store.EvaluateExecutionTargets(ctx, fixture.workspaceID, members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := health[fixture.agentID]
+	if locked.Dispatchable || locked.BlockedReason != "provider_blocked" || len(locked.ProbeTargets) != 0 || locked.RetryAt != nil {
+		t.Fatalf("provider-locked health=%+v", locked)
+	}
+}
+
+func TestAttemptProbeBindingCommitsAtomicallyAndSuccessClosesCircuit(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchCircuitFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	target, tasks := initializeCircuitFixture(t, ctx, store, fixture, 2)
+	sourceAttempt := createCircuitAttempt(t, ctx, store, fixture, tasks[1], target)
+	opened, _, err := store.RecordCircuitFailure(ctx, CircuitFailureInput{
+		WorkspaceID: fixture.workspaceID, SessionID: fixture.sessionID, AttemptID: sourceAttempt.ID,
+		Target: target, Disposition: failureDisposition(FailureCredential), SourceReason: "agent_provider_auth_or_access",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_execution_circuit SET next_probe_at = now() - interval '1 second' WHERE id = $1::uuid`, opened.ID); err != nil {
+		t.Fatal(err)
+	}
+	providerTarget, err := CircuitTargetForExecution(target, CircuitProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeAttempt := createCircuitProbeAttempt(t, ctx, store, fixture, tasks[0], target, []CircuitTarget{providerTarget})
+	var bindingStatus string
+	if err = pool.QueryRow(ctx, `
+		SELECT status FROM research_attempt_circuit_probe
+		WHERE attempt_id = $1::uuid AND circuit_id = $2::uuid
+	`, probeAttempt.ID, opened.ID).Scan(&bindingStatus); err != nil || bindingStatus != "active" {
+		t.Fatalf("binding status=%q err=%v", bindingStatus, err)
+	}
+	_, mutationErr := pool.Exec(ctx, `
+		UPDATE research_attempt_circuit_probe SET generation = generation + 1
+		WHERE attempt_id = $1::uuid
+	`, probeAttempt.ID)
+	var pgErr *pgconn.PgError
+	if !errors.As(mutationErr, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "research_attempt_circuit_probe_identity_immutable_check" {
+		t.Fatalf("mutable probe identity err=%v", mutationErr)
+	}
+	_, ownerErr := pool.Exec(ctx, `
+		INSERT INTO research_attempt_circuit_probe (
+		  workspace_id, session_id, attempt_id, circuit_id, scope,
+		  probe_token, generation, config_fingerprint, lease_expires_at
+		)
+		SELECT workspace_id, session_id, attempt_id, circuit_id, scope,
+		       gen_random_uuid(), generation, config_fingerprint, lease_expires_at
+		FROM research_attempt_circuit_probe WHERE attempt_id = $1::uuid
+	`, probeAttempt.ID)
+	if !errors.As(ownerErr, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "research_attempt_circuit_probe_owner_check" {
+		t.Fatalf("invalid probe owner err=%v", ownerErr)
+	}
+	inboxID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'draining')
+	`, inboxID, fixture.workspaceID, fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.AttachInboxTask(ctx, probeAttempt.ID, inboxID); err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := upgradeResultToV5(validV4PlanResult(t))
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validated, hash, err := DecodeAndValidateResultForVersion(run.OrchestratorVersion, raw, tasks[0], run.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.AcceptResult(ctx, AcceptResultInput{
+		SessionID: fixture.sessionID, AttemptID: probeAttempt.ID, AgentID: fixture.agentID,
+		InboxTaskID: inboxID, Raw: raw, Result: validated, Hash: hash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := store.GetExecutionCircuit(ctx, fixture.workspaceID, providerTarget)
+	if err != nil || closed.State != CircuitClosed || closed.ConsecutiveFailures != 0 {
+		t.Fatalf("closed circuit=%+v err=%v", closed, err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT status FROM research_attempt_circuit_probe WHERE attempt_id = $1::uuid`, probeAttempt.ID).Scan(&bindingStatus); err != nil || bindingStatus != "succeeded" {
+		t.Fatalf("settled binding status=%q err=%v", bindingStatus, err)
+	}
+}
+
+func TestAttemptProbeFailureIsScopedAndConcurrentClaimRollsBackAttempt(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchCircuitFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	target, tasks := initializeCircuitFixture(t, ctx, store, fixture, 4)
+	providerSource := createCircuitAttempt(t, ctx, store, fixture, tasks[0], target)
+	providerCircuit, _, err := store.RecordCircuitFailure(ctx, CircuitFailureInput{
+		WorkspaceID: fixture.workspaceID, SessionID: fixture.sessionID, AttemptID: providerSource.ID,
+		Target: target, Disposition: failureDisposition(FailureCredential), SourceReason: "agent_provider_auth_or_access",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentSource := createCircuitAttempt(t, ctx, store, fixture, tasks[1], target)
+	agentCircuit, _, err := store.RecordCircuitFailure(ctx, CircuitFailureInput{
+		WorkspaceID: fixture.workspaceID, SessionID: fixture.sessionID, AttemptID: agentSource.ID,
+		Target: target, Disposition: failureDisposition(FailureConfiguration), SourceReason: "agent_missing_config",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `
+		UPDATE research_execution_circuit SET next_probe_at = now() - interval '1 second'
+		WHERE id = ANY($1::uuid[])
+	`, []string{providerCircuit.ID, agentCircuit.ID}); err != nil {
+		t.Fatal(err)
+	}
+	providerTarget, _ := CircuitTargetForExecution(target, CircuitProvider)
+	agentTarget, _ := CircuitTargetForExecution(target, CircuitAgent)
+	probes := []CircuitTarget{providerTarget, agentTarget}
+	probeAttempt := createCircuitProbeAttempt(t, ctx, store, fixture, tasks[2], target, probes)
+
+	failedAttemptID := uuid.NewString()
+	run, err := store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := DispatchRequest{Run: run, Task: tasks[3], AttemptID: failedAttemptID, AgentID: fixture.agentID,
+		Target: target, Prompt: "must roll back", Key: "research-circuit:" + failedAttemptID}
+	request.RequestHash, _ = HashDispatchRequest(request)
+	_, _, err = store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
+		AttemptID: failedAttemptID, SessionID: fixture.sessionID, TaskID: tasks[3].ID,
+		AgentID: fixture.agentID, Target: target, ProbeTargets: probes, ProbeLeaseDuration: time.Hour,
+		ExpectedStateVersion: run.StateVersion, Request: request,
+	})
+	if !errors.Is(err, ErrCircuitUnavailable) {
+		t.Fatalf("second probe claim err=%v", err)
+	}
+	var attempts, outboxes int
+	if err = pool.QueryRow(ctx, `SELECT count(*)::int FROM research_task_attempt WHERE id = $1::uuid`, failedAttemptID).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*)::int FROM research_dispatch_outbox WHERE attempt_id = $1::uuid`, failedAttemptID).Scan(&outboxes); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 || outboxes != 0 {
+		t.Fatalf("rolled-back attempt=%d outbox=%d", attempts, outboxes)
+	}
+
+	if _, err = store.FailAttempt(ctx, AttemptFailure{
+		AttemptID: probeAttempt.ID, FailureClass: string(FailureProvider),
+		SourceReason: "agent_provider_server_error", Diagnostics: "probe provider failed", Retryable: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[string]string{}
+	rows, err := pool.Query(ctx, `SELECT scope, status FROM research_attempt_circuit_probe WHERE attempt_id = $1::uuid`, probeAttempt.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var scope, status string
+		if err = rows.Scan(&scope, &status); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		statuses[scope] = status
+	}
+	rows.Close()
+	if statuses[string(CircuitProvider)] != "failed" || statuses[string(CircuitAgent)] != "inconclusive" {
+		t.Fatalf("binding statuses=%v", statuses)
+	}
+	providerAfter, err := store.GetExecutionCircuit(ctx, fixture.workspaceID, providerTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentAfter, err := store.GetExecutionCircuit(ctx, fixture.workspaceID, agentTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providerAfter.ConsecutiveFailures != providerCircuit.ConsecutiveFailures+1 || agentAfter.ConsecutiveFailures != agentCircuit.ConsecutiveFailures ||
+		providerAfter.State != CircuitOpen || agentAfter.State != CircuitOpen {
+		t.Fatalf("provider=%+v agent=%+v", providerAfter, agentAfter)
+	}
+}
+
+func TestRunPauseAbandonsOwnedAttemptProbeWithoutRecordingFailure(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchCircuitFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	target, tasks := initializeCircuitFixture(t, ctx, store, fixture, 2)
+	sourceAttempt := createCircuitAttempt(t, ctx, store, fixture, tasks[0], target)
+	opened, _, err := store.RecordCircuitFailure(ctx, CircuitFailureInput{
+		WorkspaceID: fixture.workspaceID, SessionID: fixture.sessionID, AttemptID: sourceAttempt.ID,
+		Target: target, Disposition: failureDisposition(FailureConfiguration), SourceReason: "agent_missing_config",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_execution_circuit SET next_probe_at = now() - interval '1 second' WHERE id = $1::uuid`, opened.ID); err != nil {
+		t.Fatal(err)
+	}
+	agentTarget, _ := CircuitTargetForExecution(target, CircuitAgent)
+	probeAttempt := createCircuitProbeAttempt(t, ctx, store, fixture, tasks[1], target, []CircuitTarget{agentTarget})
+	if _, _, _, err = store.Pause(ctx, fixture.sessionID, fixture.workspaceID, fixture.userID); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err = pool.QueryRow(ctx, `SELECT status FROM research_attempt_circuit_probe WHERE attempt_id = $1::uuid`, probeAttempt.ID).Scan(&status); err != nil || status != "abandoned" {
+		t.Fatalf("binding status=%q err=%v", status, err)
+	}
+	after, err := store.GetExecutionCircuit(ctx, fixture.workspaceID, agentTarget)
+	if err != nil || after.State != CircuitOpen || after.ConsecutiveFailures != opened.ConsecutiveFailures || after.NextProbeAt == nil || after.NextProbeAt.After(time.Now().UTC().Add(time.Second)) {
+		t.Fatalf("abandoned circuit=%+v err=%v", after, err)
+	}
+}
+
+func TestNodeReassignAbandonsOwnedAttemptProbeWithoutRecordingFailure(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchCircuitFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	target, tasks := initializeCircuitFixture(t, ctx, store, fixture, 2)
+	sourceAttempt := createCircuitAttempt(t, ctx, store, fixture, tasks[0], target)
+	opened, _, err := store.RecordCircuitFailure(ctx, CircuitFailureInput{
+		WorkspaceID: fixture.workspaceID, SessionID: fixture.sessionID, AttemptID: sourceAttempt.ID,
+		Target: target, Disposition: failureDisposition(FailureConfiguration), SourceReason: "agent_missing_config",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_execution_circuit SET next_probe_at = now() - interval '1 second' WHERE id = $1::uuid`, opened.ID); err != nil {
+		t.Fatal(err)
+	}
+	agentTarget, err := CircuitTargetForExecution(target, CircuitAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeAttempt := createCircuitProbeAttempt(t, ctx, store, fixture, tasks[1], target, []CircuitTarget{agentTarget})
+	outcome, err := store.NodeCommand(ctx, NodeCommandInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID,
+		NodeID: "task:" + tasks[1].ID, Action: NodeActionReassign,
+		ClientRequestID: uuid.NewString(), ActorType: "user", ActorID: fixture.userID,
+		TargetAgentID: fixture.reporterID, AnchorKind: "task", AnchorTaskID: tasks[1].ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Reassign == nil || outcome.Reassign.ToAgentID != fixture.reporterID {
+		t.Fatalf("reassign outcome=%+v", outcome)
+	}
+	var bindingStatus, attemptStatus, assignedAgentID string
+	if err = pool.QueryRow(ctx, `
+		SELECT binding.status, attempt.status, task.assigned_agent_id::text
+		FROM research_attempt_circuit_probe binding
+		JOIN research_task_attempt attempt ON attempt.id = binding.attempt_id
+		JOIN research_task task ON task.id = attempt.task_id
+		WHERE binding.attempt_id = $1::uuid
+	`, probeAttempt.ID).Scan(&bindingStatus, &attemptStatus, &assignedAgentID); err != nil {
+		t.Fatal(err)
+	}
+	if bindingStatus != "abandoned" || attemptStatus != string(AttemptStatusCancelled) || assignedAgentID != fixture.reporterID {
+		t.Fatalf("binding=%q attempt=%q assigned=%q", bindingStatus, attemptStatus, assignedAgentID)
+	}
+	after, err := store.GetExecutionCircuit(ctx, fixture.workspaceID, agentTarget)
+	if err != nil || after.State != CircuitOpen || after.ConsecutiveFailures != opened.ConsecutiveFailures || after.NextProbeAt == nil || after.NextProbeAt.After(time.Now().UTC().Add(time.Second)) {
+		t.Fatalf("reassigned circuit=%+v err=%v", after, err)
+	}
+}
+
+func TestExpiredAttemptProbeCannotMutateSuccessorCircuit(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer cleanupResearchCircuitFixture(pool, fixture)
+	store := NewPostgresStore(pool)
+	target, tasks := initializeCircuitFixture(t, ctx, store, fixture, 3)
+	sourceAttempt := createCircuitAttempt(t, ctx, store, fixture, tasks[0], target)
+	opened, _, err := store.RecordCircuitFailure(ctx, CircuitFailureInput{
+		WorkspaceID: fixture.workspaceID, SessionID: fixture.sessionID, AttemptID: sourceAttempt.ID,
+		Target: target, Disposition: failureDisposition(FailureCredential), SourceReason: "agent_provider_auth_or_access",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `UPDATE research_execution_circuit SET next_probe_at = now() - interval '1 second' WHERE id = $1::uuid`, opened.ID); err != nil {
+		t.Fatal(err)
+	}
+	providerTarget, _ := CircuitTargetForExecution(target, CircuitProvider)
+	oldAttempt := createCircuitProbeAttempt(t, ctx, store, fixture, tasks[1], target, []CircuitTarget{providerTarget})
+	if _, err = pool.Exec(ctx, `UPDATE research_execution_circuit SET probe_lease_expires_at = now() - interval '1 second' WHERE id = $1::uuid`, opened.ID); err != nil {
+		t.Fatal(err)
+	}
+	newAttempt := createCircuitProbeAttempt(t, ctx, store, fixture, tasks[2], target, []CircuitTarget{providerTarget})
+	successor, err := store.GetExecutionCircuit(ctx, fixture.workspaceID, providerTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.FailAttempt(ctx, AttemptFailure{
+		AttemptID: oldAttempt.ID, FailureClass: string(FailureProvider),
+		SourceReason: "agent_provider_server_error", Diagnostics: "late stale failure", Retryable: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.GetExecutionCircuit(ctx, fixture.workspaceID, providerTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.State != CircuitHalfOpen || after.Generation != successor.Generation || after.ProbeToken != successor.ProbeToken || after.LastAttemptID == oldAttempt.ID {
+		t.Fatalf("successor mutated before=%+v after=%+v", successor, after)
+	}
+	var oldStatus, newStatus, attemptStatus string
+	if err = pool.QueryRow(ctx, `SELECT status FROM research_attempt_circuit_probe WHERE attempt_id = $1::uuid`, oldAttempt.ID).Scan(&oldStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT status FROM research_attempt_circuit_probe WHERE attempt_id = $1::uuid`, newAttempt.ID).Scan(&newStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT status FROM research_task_attempt WHERE id = $1::uuid`, oldAttempt.ID).Scan(&attemptStatus); err != nil {
+		t.Fatal(err)
+	}
+	if oldStatus != "lost" || newStatus != "active" || attemptStatus != string(AttemptStatusFailed) {
+		t.Fatalf("old binding=%q new binding=%q old attempt=%q", oldStatus, newStatus, attemptStatus)
+	}
+}
+
 func initializeCircuitFixture(t *testing.T, ctx context.Context, store *PostgresStore, fixture researchRunFixture, taskCount int) (ExecutionTarget, []Task) {
 	t.Helper()
 	if _, _, err := store.InitializeRun(ctx, StartInput{
@@ -334,6 +780,32 @@ func createCircuitAttempt(t *testing.T, ctx context.Context, store *PostgresStor
 	attempt, _, err := store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
 		AttemptID: attemptID, SessionID: fixture.sessionID, TaskID: task.ID,
 		AgentID: fixture.agentID, Target: target, ExpectedStateVersion: run.StateVersion, Request: request,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return attempt
+}
+
+func createCircuitProbeAttempt(t *testing.T, ctx context.Context, store *PostgresStore, fixture researchRunFixture, task Task, target ExecutionTarget, probes []CircuitTarget) Attempt {
+	t.Helper()
+	run, err := store.GetRun(ctx, fixture.sessionID, fixture.workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attemptID := uuid.NewString()
+	request := DispatchRequest{
+		Run: run, Task: task, AttemptID: attemptID, AgentID: fixture.agentID,
+		Target: target, Prompt: "test bound probe", Key: "research-circuit-probe:" + attemptID,
+	}
+	request.RequestHash, err = HashDispatchRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, _, err := store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
+		AttemptID: attemptID, SessionID: fixture.sessionID, TaskID: task.ID,
+		AgentID: fixture.agentID, Target: target, ProbeTargets: probes, ProbeLeaseDuration: time.Hour,
+		ExpectedStateVersion: run.StateVersion, Request: request,
 	})
 	if err != nil {
 		t.Fatal(err)

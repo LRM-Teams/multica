@@ -1298,7 +1298,7 @@ export class ApiClient {
   /**
    * Workspace-level agent authority (`member` | `admin`). Separate from
    * PUT /api/agents/:id — that endpoint rejects `workspace_role`.
-   * Human route only; currently owner-gated server-side (admin gate TBD / Vera).
+   * Human route only; workspace owners and admins are authorized server-side.
    */
   async updateAgentWorkspaceRole(
     workspaceId: string,

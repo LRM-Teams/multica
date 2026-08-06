@@ -53,7 +53,7 @@ import {
   type FleetStepCardModel,
 } from "../lib/fleet-step-cards";
 import { resolveCanvasBodyMode } from "../lib/canvas-body-mode";
-import { buildResearchExecutionAgents } from "../lib/research-execution-panel-view-model";
+import { buildExecutionOverlayRows } from "../execution-overlay/index";
 import { resolveChatDrawerMode } from "../lib/chat-drawer-mode";
 import {
   dismissCompletionGuide,
@@ -90,7 +90,7 @@ import { ExplorationRail } from "./exploration-rail";
 import { HumanBoundaryCard } from "./human-boundary-card";
 import { ResearchAuxDrawer } from "./research-aux-drawer";
 import { ResearchEvidencePulse } from "./research-evidence-pulse";
-import { ResearchExecutionPanel } from "./research-execution-panel";
+import { ExecutionOverlayPanel } from "../execution-overlay/index";
 import { ResearchCanvas } from "./research-canvas";
 import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
 import { ResearchCanvasForming } from "./research-canvas-forming";
@@ -211,6 +211,7 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     isError: isPresenceError,
     isFetching: isPresenceFetching,
     refetch: refetchPresence,
+    dataUpdatedAt: presenceSyncTime,
   } = useQuery(researchPresenceOptions(wsId, sessionId));
   const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
   const [ui, dispatch] = useReducer(uiReducer, initialUi);
@@ -466,14 +467,25 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
     : linkedNodeId
       ? data.nodes.find((node) => node.id === linkedNodeId) ?? null
       : null;
-  const executionAgents = buildResearchExecutionAgents(fleet.members, presence, data.nodes);
-  const locateExecutionAgent = (agent: (typeof executionAgents)[number]) => {
+  const executionRows = buildExecutionOverlayRows({
+    members: fleet.members,
+    presence,
+    nodes: data.nodes,
+    run: data.run,
+  });
+  const locateExecutionAgent = (agent: (typeof executionRows)[number]) => {
     const node = agent.currentNodeId
       ? data.nodes.find((candidate) => candidate.id === agent.currentNodeId)
       : undefined;
     if (!node) return;
     dispatch({ type: "select", node });
   };
+  // Bidirectional locate: when a canvas node is selected, highlight the agent
+  // row that owns it (node → agent), alongside agent → node (locate button).
+  const highlightAgentId =
+    selectedNode && selectedNode.id
+      ? (executionRows.find((row) => row.currentNodeId === selectedNode.id)?.id ?? null)
+      : null;
   // LRM-1329 — drawer overview owns error/permission; cards stay fact-only.
   // Signal error with a non-empty token only — never pass raw API strings into
   // the drawer (safe copy lives in EvidencePulse i18n / role=alert).
@@ -684,13 +696,19 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
             }}
           />
           <div className="pointer-events-none absolute right-3 top-3 z-20 w-[min(22rem,calc(100%-1.5rem))]">
-            <ResearchExecutionPanel
-              agents={executionAgents}
+            <ExecutionOverlayPanel
+              rows={executionRows}
               className="pointer-events-auto max-h-[min(32rem,calc(100vh-12rem))] overflow-y-auto"
-              error={isPresenceError ? "presence_unavailable" : null}
-              isRetrying={isPresenceFetching}
-              onRetry={() => { void refetchPresence(); }}
+              sync={{
+                disconnected: isPresenceError,
+                lastSyncedAt: presenceSyncTime,
+                onRetry: () => {
+                  void refetchPresence();
+                },
+                isRetrying: isPresenceFetching,
+              }}
               onLocate={locateExecutionAgent}
+              highlightAgentId={highlightAgentId}
             />
           </div>
           {canvasMode === "forming" || canvasMode === "stalled" ? (
@@ -752,6 +770,21 @@ export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
                   </>
                 )}
               </div>
+            ) : null}
+            {auxPanel === "execution" ? (
+              <ExecutionOverlayPanel
+                rows={executionRows}
+                sync={{
+                  disconnected: isPresenceError,
+                  lastSyncedAt: presenceSyncTime,
+                  onRetry: () => {
+                    void refetchPresence();
+                  },
+                  isRetrying: isPresenceFetching,
+                }}
+                onLocate={locateExecutionAgent}
+                highlightAgentId={highlightAgentId}
+              />
             ) : null}
             {auxPanel === "detail" ? (
               selectedNode ? (

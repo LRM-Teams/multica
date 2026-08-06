@@ -1,14 +1,15 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import {
-  researchExecutionPanelFixture,
-  type ResearchExecutionStatus,
-} from "../lib/research-execution-panel-fixture";
+import { researchExecutionPanelFixture } from "../lib/research-execution-panel-fixture";
 import { ResearchExecutionPanel } from "./research-execution-panel";
+
+// LRM-1479 — ResearchExecutionPanel now delegates to ExecutionOverlayPanel.
+// The mock mirrors the overlay `panel.execution` bundle so chrome is fully
+// translated; statuses are asserted by 8-state mapping.
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: Record<string, unknown>) => unknown, values?: { location?: string; name?: string; count?: number }) =>
+    t: (fn: (dict: Record<string, unknown>) => unknown, values?: { location?: string; name?: string; count?: number; time?: string }) =>
       String(fn({ panel: { execution: {
         title: "执行动态",
         locatable: "可定位至 {{location}}",
@@ -21,14 +22,38 @@ vi.mock("../../i18n/use-t", () => ({
         no_active: "暂无智能体执行",
         locate_aria: "定位{{name}}当前节点",
         view_aria: "查看{{name}}最近活动",
-        status: { queued: "排队", running: "执行中", done: "完成", failed: "失败", stale: "停滞", idle: "空闲" },
-        action: { waiting: "等待开始当前任务", working: "正在执行当前任务", recent_done: "最近任务已完成", recent_failed: "最近任务执行失败", stale: "执行状态已过期", idle: "当前没有可领取的小任务" },
-        time: { queued: "排队中", running: "执行中", recent: "最近更新", failed: "执行失败", stale: "长时间未更新", idle: "空闲" },
-        failed_reason: "任务未完成，可查看最近活动后重试。",
+        expand_aria: "展开{{name}}详情",
+        recent_result: "最近已验收产出",
+        started: "开始",
+        updated: "更新",
+        duration: "已持续",
+        stage: "阶段",
+        wait_reason: "等待原因",
+        stale_reason: "过期原因",
+        task: "任务",
+        attempt: "尝试",
+        waiting_reason: "已排队或等待名额，暂无执行信号。",
+        offline_reason: "该成员暂无实时在场信号，视为未在岗。",
+        unknown_reason: "无法从投影判定执行状态。",
+        clock_time: "{{time}}",
+        elapsed_sec: "{{count}} 秒",
+        elapsed_min: "{{count}} 分钟",
+        elapsed_hour: "{{count}} 小时",
+        disconnected: "连接已断开 · 保留最后数据",
+        data_expired: "数据可能已过期",
+        synced: "实时",
+        last_sync: "同步于 {{time}}",
+        group_active: "执行中",
+        group_waiting: "等待中",
+        group_finished: "已完成",
+        group_idle: "空闲",
+        status: { waiting: "等待中", running: "执行中", done: "完成", failed: "失败", retrying: "重试中", stale: "停滞", offline: "离线", unknown: "未知" },
+        action: { waiting: "等待开始当前任务", working: "正在执行当前任务", recent_done: "最近任务已完成", recent_failed: "最近任务执行失败", retrying: "正在重试当前任务", stale: "执行状态已过期", offline: "无实时信号，视为未在岗", unknown: "执行状态未知" },
       } } }))
         .replace("{{location}}", values?.location ?? "")
         .replace("{{name}}", values?.name ?? "")
-        .replace("{{count}}", String(values?.count ?? "")),
+        .replace("{{count}}", String(values?.count ?? ""))
+        .replace("{{time}}", values?.time ?? ""),
   }),
 }));
 
@@ -39,16 +64,17 @@ const agents = researchExecutionPanelFixture.map((agent) =>
     : agent,
 );
 
+// Legacy fixture statuses → 8-state overlay mapping (queued/idle → waiting).
 describe("ResearchExecutionPanel", () => {
-  it("shows the mixed status roster", () => {
+  it("shows the mixed roster upgraded to the 8-state overlay", () => {
     render(<ResearchExecutionPanel agents={agents} />);
     expect(screen.getByText("1 个智能体执行中")).toBeTruthy();
     const statuses = new Set(
-      screen.getAllByTestId("research-execution-row").map(
-        (row) => row.getAttribute("data-status") as ResearchExecutionStatus,
+      screen.getAllByTestId("execution-overlay-row").map(
+        (row) => row.getAttribute("data-status") as string,
       ),
     );
-    expect(statuses).toEqual(new Set(["queued", "running", "done", "failed", "stale", "idle"]));
+    expect(statuses).toEqual(new Set(["waiting", "running", "done", "failed", "stale"]));
   });
 
   it("sends one locate request from click, Enter, or Space and keeps the last selection", async () => {
@@ -76,7 +102,7 @@ describe("ResearchExecutionPanel", () => {
   it("expands recent activity and explains an unlocatable worker", () => {
     const onLocate = vi.fn();
     render(<ResearchExecutionPanel agents={agents} onLocate={onLocate} />);
-    const idle = screen.getByRole("button", { name: "查看苏澄最近活动" });
+    const idle = screen.getAllByRole("button", { name: /查看苏澄最近活动/ })[0]!;
     idle.focus();
     fireEvent.click(idle);
     expect(screen.getByText("当前没有可领取的小任务。")).toBeTruthy();
@@ -102,7 +128,7 @@ describe("ResearchExecutionPanel", () => {
 
   it("keeps reduced-motion and narrow-layout guards", () => {
     const { container } = render(<ResearchExecutionPanel agents={agents} />);
-    const running = screen.getAllByTestId("research-execution-row").find((row) => row.dataset.status === "running");
+    const running = screen.getAllByTestId("execution-overlay-row").find((row) => row.dataset.status === "running");
     expect(running?.querySelector(".animate-nav-progress-sweep")?.className).toContain("motion-reduce:hidden");
     expect(container.firstElementChild?.className).toContain("min-w-0");
     expect(container.querySelector(".grid-cols-\\[auto_minmax\\(0\\,1fr\\)_auto\\]")).toBeTruthy();

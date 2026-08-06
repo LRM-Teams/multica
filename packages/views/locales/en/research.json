@@ -216,7 +216,11 @@
         "done": "Done",
         "failed": "Failed",
         "stale": "Stale",
-        "idle": "Idle"
+        "idle": "Idle",
+        "waiting": "Waiting",
+        "retrying": "Retrying",
+        "offline": "Offline",
+        "unknown": "Unknown"
       },
       "action": {
         "waiting": "Waiting for the current task to start",
@@ -224,7 +228,10 @@
         "recent_done": "Recent task completed",
         "recent_failed": "Recent task failed",
         "stale": "Execution state is stale",
-        "idle": "No small task available to pick up"
+        "idle": "No small task available to pick up",
+        "retrying": "Retrying the current task",
+        "offline": "No live signal; not at post",
+        "unknown": "Execution state unknown"
       },
       "time": {
         "queued": "Queued",
@@ -232,15 +239,45 @@
         "recent": "Recently updated",
         "failed": "Execution failed",
         "stale": "No updates for a while",
-        "idle": "Idle"
+        "idle": "Idle",
+        "offline": "No live signal",
+        "unknown": "Unknown",
+        "retrying": "Retrying"
       },
       "failed_reason": "The task did not finish; review recent activity and retry.",
       "active_count": "{{count}} agents working",
       "no_active": "No agents working",
       "locate_aria": "Locate {{name}}'s current node",
-      "view_aria": "View {{name}}'s recent activity"
+      "view_aria": "View {{name}}'s recent activity",
+      "recent_result": "Last accepted output",
+      "started": "Started",
+      "updated": "Updated",
+      "duration": "Elapsed",
+      "stage": "Stage",
+      "wait_reason": "Waiting reason",
+      "stale_reason": "Stale reason",
+      "task": "Task",
+      "attempt": "Attempt",
+      "waiting_reason": "Enqueued or waiting for a slot; no running signal yet.",
+      "offline_reason": "No live presence for this member; treat as not at post.",
+      "unknown_reason": "Cannot resolve an execution state from the projection.",
+      "clock_time": "{{time}}",
+      "elapsed_sec": "{{count}}s",
+      "elapsed_min": "{{count}}m",
+      "elapsed_hour": "{{count}}h",
+      "disconnected": "Connection lost · keeping last data",
+      "data_expired": "Data may be stale",
+      "synced": "Live",
+      "last_sync": "synced {{time}}",
+      "group_active": "Active",
+      "group_waiting": "Waiting",
+      "group_finished": "Finished",
+      "group_idle": "Idle",
+      "expand_aria": "Expand {{name}}'s detail"
     },
-    "aux_close_sources": "Close evidence & collaboration"
+    "aux_close_sources": "Close evidence & collaboration",
+    "module_execution": "Execution",
+    "module_execution_ico": "Run"
   },
   "chat": {
     "you": "You",

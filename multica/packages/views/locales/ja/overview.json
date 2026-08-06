@@ -1,0 +1,42 @@
+{
+  "page": {
+    "title": "Agent 概要"
+  },
+  "kpi": {
+    "active_agents": "アクティブな Agent",
+    "active_agents_detail": "{{idle}}個アイドル、{{error}}個エラー",
+    "tasks_done": "タスク完了",
+    "tasks_failed_detail": "{{count}}件失敗",
+    "success_rate": "タスク成功率",
+    "spend": "コスト",
+    "budget_detail": "当日予算：{{budget}}",
+    "pending_approval": "承認待ち",
+    "longest_wait_detail": "最長待機 {{wait}}",
+    "vs_yesterday": "前日比"
+  },
+  "my_tasks": {
+    "title": "自分に関連するイシュー・メッセージ",
+    "empty": "対応が必要な項目はありません",
+    "review_badge": "レビュー",
+    "channel_mention": "{{actor}} が #{{channel}} であなたにメンションしました"
+  },
+  "agent_status": {
+    "title": "自分の Agent の稼働状況",
+    "empty": "Agent のアクティビティはまだありません",
+    "status": {
+      "running": "実行中",
+      "waiting": "待機中",
+      "done": "完了",
+      "failed": "失敗",
+      "cancelled": "キャンセル"
+    },
+    "fallback_task": "タスク"
+  },
+  "priority": {
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+    "mention": "@"
+  },
+  "placeholder_badge": "サンプルデータ"
+}

@@ -1,0 +1,52 @@
+{
+  "role": {
+    "owner": "所有者",
+    "admin": "管理员",
+    "member": "成员"
+  },
+  "card": {
+    "unavailable": "成员信息不可用",
+    "agents_section": "智能体（{{count}}）",
+    "detail_link": "详情 →",
+    "more_agents_other": "另有 {{count}} 个智能体"
+  },
+  "panel": {
+    "description": "简介",
+    "no_description": "暂无简介",
+    "description_placeholder": "写一段简短介绍…",
+    "info": "信息",
+    "role": "角色",
+    "email": "邮箱",
+    "joined": "加入",
+    "created_agents": "创建的智能体",
+    "no_agents": "尚未创建智能体",
+    "message_aria": "发送消息",
+    "you_suffix": "(你)",
+    "edit_profile": "编辑资料",
+    "name_label": "名称",
+    "name_placeholder": "输入你的名字",
+    "name_required": "名字不能为空",
+    "change_avatar_aria": "更换头像",
+    "avatar_updated_toast": "头像已更新",
+    "avatar_upload_failed": "头像上传失败，请重试",
+    "avatar_err_type": "仅支持 PNG 或 JPG 图片",
+    "avatar_err_size": "图片不能超过 5 MB",
+    "avatar_err_dimensions": "图片尺寸至少 256×256",
+    "honor_title": "荣誉",
+    "honor_completion": "{{unlocked}} / {{total}} 徽章",
+    "honor_stats": "{{unlocked}}/{{total}} · Lv.{{level}}",
+    "honor_showcase": "展示徽章",
+    "honor_recent": "最近解锁",
+    "honor_compare": "与你对比",
+    "honor_shared": "共同徽章",
+    "honor_you_only": "仅你有",
+    "honor_them_only": "仅对方有"
+  },
+  "detail": {
+    "workspace_fallback": "工作区",
+    "members_breadcrumb": "成员",
+    "breadcrumb_fallback": "成员",
+    "not_found_title": "未找到该成员",
+    "not_found_description": "该成员可能已经离开工作区。"
+  }
+}

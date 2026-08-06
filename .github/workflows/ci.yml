@@ -8,8 +8,7 @@ on:
   # request; the only scope every PR can read is the base branch. With
   # pull_request as the sole trigger nothing ever wrote a current dev-scoped
   # entry, so every PR restored a stale one (the live entry dated from
-  # 2026-07-28) and turbo reported 0 of 9 tasks cached. Tests are skipped on
-  # this trigger — see the frontend-test job's `if`.
+  # 2026-07-28) and turbo reported 0 of 9 tasks cached.
   push:
     branches: [dev]
 
@@ -131,79 +130,17 @@ jobs:
         #   yourself; CI won't.
         run: pnpm exec turbo build typecheck lint --filter='@multica/web...'
 
-  frontend-test:
-    # The test half of the old single frontend job, split out (2026-08-06) so
-    # build/typecheck/lint and the test suite run on two runners in parallel:
-    # wall time becomes max(build job, test job) instead of their sum. This is
-    # NOT the rejected test-sharding — no suite is split, and the split landed
-    # only after the suite itself was cut ~40% (happy-dom + threads, #2394),
-    # so it is not "adding runners without reducing work". Billed minutes are
-    # roughly unchanged: the same work runs, plus one duplicated setup
-    # (checkout + install, ~1m30s).
-    #
-    # PR-only, mirroring the old Test step's `if`: the dev push exists only to
-    # publish a base-branch Turbo cache for build/typecheck/lint, and
-    # re-running the suite after a merge produces no information the pull
-    # request did not already give.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Restore Turbo cache
-        # Same restore-keys as the frontend job (the key-matching essay lives
-        # there — read it before changing these). The exact key gets a `-test`
-        # suffix so both jobs can save their own entry for the same sha; the
-        # shared prefixes mean this job still restores whatever the build job
-        # or dev push saved, which is what makes the `test` task's
-        # `dependsOn: ^typecheck` usually a cache hit instead of a re-run.
-        uses: actions/cache@v4
-        with:
-          path: .turbo/cache
-          key: ${{ runner.os }}-turbo-${{ github.workflow }}-${{ github.ref_name }}-${{ github.sha }}-test
-          restore-keys: |
-            ${{ runner.os }}-turbo-${{ github.workflow }}-${{ github.ref_name }}-
-            ${{ runner.os }}-turbo-${{ github.workflow }}-
-            ${{ runner.os }}-turbo-
-
-      - name: Report runner size
-        # One line, so the runner's core count is a measurement in the log
-        # rather than an assumption about GitHub's published spec. Vitest sizes
-        # its worker pool from this number (see packages/views/vitest.config.ts).
-        run: |
-          echo "nproc=$(nproc) availableParallelism=$(node -p 'require("node:os").availableParallelism()')"
-          echo "mem=$(free -g | awk '/^Mem:/{print $2}')GiB"
-
-      - name: Test
-        # `test` is a separate turbo invocation pinned to one outer task at a
-        # time (#853/#855). Previously all four tasks shared one command, so
-        # turbo ran several packages' `test` concurrently and each spawned its
-        # own pool of Vitest file workers: outer concurrency x inner workers.
-        # That oversubscribed the runner and starved whichever test was mid-
-        # `waitFor`, reddening PRs whose diffs never touched views (#1243,
-        # #1232). `--concurrency=1` bounds only the OUTER task graph; each
-        # package keeps its own file workers, so views' files stay parallel.
-        #
-        # Deliberately NOT done here: raising any timeout. That would hide the
-        # symptom and turn a stable red into an intermittent one.
-        run: pnpm exec turbo test --filter='@multica/web...' --concurrency=1
+      # No Test step and no frontend-test job (Frank, 2026-08-06): the entire
+      # frontend test system — unit suites, the Playwright e2e/ suite, and
+      # the short-lived parallel frontend-test job from #2402 — was removed
+      # wholesale. After cutting the suite's cost ~35% (#2394/#2401,
+      # happy-dom + threads) the 10-minute wall target was still out of reach
+      # without deleting most page coverage anyway, so testing restarts from
+      # scratch under an explicit budget. Frontend correctness gates are
+      # build/typecheck/lint + React Doctor above. The rebuild covenant lives
+      # in docs/frontend-testing.md — read it before adding any test back.
   backend:
-    # Also runs on the dev push (unlike the frontend-test job above, which
-    # stays PR-only — it's the expensive half of the frontend work and shares
-    # no cache with push). "The pull request already proved it" assumes no merge combination
+    # Also runs on the dev push. "The pull request already proved it" assumes no merge combination
     # can break tests both branches passed individually; #1457/#1459/#1455 hit
     # exactly that (2026-07-30): dev push had skipped backend since a day
     # earlier, so a bad merge sat undetected until an unrelated PR's CI hit it.

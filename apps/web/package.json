@@ -9,7 +9,6 @@
     "start": "next start",
     "typecheck": "pnpm run mdx:generate && next typegen && tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run",
     "postinstall": "pnpm run mdx:generate",
     "mdx:generate": "node --input-type=module -e \"import { start } from 'fumadocs-mdx/next'; await start(false, 'source.config.ts', '.source');\""
   },
@@ -76,15 +75,9 @@
   "devDependencies": {
     "@multica/eslint-config": "workspace:*",
     "@tailwindcss/postcss": "catalog:",
-    "@testing-library/jest-dom": "catalog:",
-    "@testing-library/react": "catalog:",
-    "@testing-library/user-event": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "@vitejs/plugin-react": "catalog:",
-    "happy-dom": "catalog:",
     "tailwindcss": "catalog:",
-    "typescript": "catalog:",
-    "vitest": "catalog:"
+    "typescript": "catalog:"
   }
 }

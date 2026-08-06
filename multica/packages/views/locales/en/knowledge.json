@@ -1,0 +1,75 @@
+{
+  "nav": {
+    "title": "Knowledge"
+  },
+  "page": {
+    "title": "Knowledge",
+    "tagline": "Member-readable wiki pages and explicit links — open one page at a time, never dump the whole library.",
+    "tabs": {
+      "all": "All",
+      "topic": "Topics",
+      "decision": "Decisions",
+      "goal": "Goals"
+    },
+    "kind": {
+      "context": "Topic · CONTEXT",
+      "decision": "Decision · DECISION",
+      "goal": "Goal · GOAL",
+      "other": "Page"
+    },
+    "empty_title": "No knowledge pages yet",
+    "empty_body": "Promote an Issue or channel conclusion to CONTEXT / DECISION to create the first page.",
+    "empty_goal_title": "No goal pages yet",
+    "empty_goal_body": "Goal wiki pages align with channel Goals when linked. Open a channel Goal, or promote related CONTEXT first.",
+    "open_channels": "Open channels",
+    "loading": "Loading knowledge…",
+    "forbidden": "You don’t have permission to view this knowledge page.",
+    "not_found_title": "This knowledge page doesn’t exist",
+    "not_found_body": "It may have been archived or the link is wrong.",
+    "back_to_list": "Back to Knowledge",
+    "updated": "Updated {{time}}",
+    "contacts": "Links",
+    "contacts_empty_title": "No links on this page yet",
+    "contacts_empty_body": "Promote or edit to add about / shared_to and other edges.",
+    "body": "Body",
+    "edge": {
+      "derived_from": "derived_from",
+      "about": "about",
+      "shared_to": "shared_to",
+      "supersedes": "supersedes",
+      "owned_by": "owned_by",
+      "open": "Open",
+      "back_source": "Source"
+    },
+    "node": {
+      "issue": "Issue",
+      "channel": "Channel",
+      "project": "Project",
+      "agent": "Agent",
+      "member": "Member",
+      "team_knowledge": "Knowledge page",
+      "unknown": "Linked item"
+    }
+  },
+  "promote": {
+    "context": "Promote to CONTEXT…",
+    "decision": "Promote to DECISION…",
+    "dialog_title_context": "Promote to CONTEXT",
+    "dialog_title_decision": "Promote to DECISION",
+    "dialog_description": "Creates a member-readable wiki page and an automatic derived_from link back to the source.",
+    "title_label": "Title",
+    "content_label": "Content",
+    "subject_label_context": "Channel (optional subject)",
+    "subject_label_decision": "Project (optional subject)",
+    "subject_placeholder": "UUID optional",
+    "submit": "Promote",
+    "submitting": "Promoting…",
+    "cancel": "Cancel",
+    "success": "Promoted, and derived_from was created",
+    "error": "Promote failed"
+  },
+  "drill": {
+    "open_wiki": "Open in Knowledge",
+    "related": "Related knowledge"
+  }
+}

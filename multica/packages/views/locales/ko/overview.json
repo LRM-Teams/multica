@@ -1,0 +1,42 @@
+{
+  "page": {
+    "title": "Agent 개요"
+  },
+  "kpi": {
+    "active_agents": "활성 Agent",
+    "active_agents_detail": "{{idle}}개 유휴, {{error}}개 오류",
+    "tasks_done": "작업 완료",
+    "tasks_failed_detail": "{{count}}개 실패",
+    "success_rate": "작업 성공률",
+    "spend": "비용",
+    "budget_detail": "당일 예산: {{budget}}",
+    "pending_approval": "승인 대기",
+    "longest_wait_detail": "최장 대기 {{wait}}",
+    "vs_yesterday": "어제 대비"
+  },
+  "my_tasks": {
+    "title": "나와 관련된 이슈 및 메시지",
+    "empty": "처리할 항목이 없습니다",
+    "review_badge": "검토",
+    "channel_mention": "{{actor}}님이 #{{channel}}에서 당신을 멘션했습니다"
+  },
+  "agent_status": {
+    "title": "내 Agent 작업 상태",
+    "empty": "아직 Agent 활동이 없습니다",
+    "status": {
+      "running": "진행 중",
+      "waiting": "대기 중",
+      "done": "완료",
+      "failed": "실패",
+      "cancelled": "취소됨"
+    },
+    "fallback_task": "작업"
+  },
+  "priority": {
+    "high": "높음",
+    "medium": "중간",
+    "low": "낮음",
+    "mention": "@"
+  },
+  "placeholder_badge": "샘플 데이터"
+}

@@ -200,7 +200,7 @@ stop: ## Stop backend and frontend processes for the current checkout
 			echo "✓ App processes stopped. Remote PostgreSQL was not affected." ;; \
 	esac
 
-check: ## Run typecheck, TS tests, Go tests, and Playwright E2E for the current checkout
+check: ## Run typecheck and Go tests for the current checkout (frontend tests reset 2026-08-06 — docs/frontend-testing.md)
 	$(REQUIRE_ENV)
 	@ENV_FILE="$(ENV_FILE)" bash scripts/check.sh
 

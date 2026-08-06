@@ -1,0 +1,647 @@
+name: Deploy
+
+# Continuous deployment to the Aliyun host (101.200.210.144, runner label
+# `aliyun`). Images build on self-hosted CI runners and push to GHCR; the
+# Aliyun runner pulls images and restarts Compose locally.
+#
+# Test gate: the CI workflow runs on every PR into `dev`. The team's workflow is
+# feature branch → PR → merge to `dev`, which builds images and deploys
+# to the Aliyun host.
+# `main` is left as the upstream-tracking branch and never deploys via this
+# workflow.
+#
+# Host layout: deploy/runner user `dev`, stack under `/data/multica`. The
+# protected `aliyun-dev` Environment is the deployment boundary. Database
+# identity stays in the host-owned `/data/multica/.env`; the speech API key is
+# injected from that Environment so host migrations cannot silently disable
+# voice.
+
+on:
+  # Deploy only from the `dev` integration branch, after a PR has already been
+  # merged. PR events must not deploy to the shared Aliyun/dev environment;
+  # they can build/test in CI, but that host must always represent `dev` or an
+  # explicit manual dispatch from `dev`. Rollback dispatches must name an
+  # existing image tag.
+  # Docs-only changes (#354 bug) are excluded — they don't change any code, so
+  # triggering a backend rebuild/restart would disconnect all WS connections
+  # for zero benefit.
+  push:
+    branches: [dev]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "**/*.md"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Existing image tag to (re)deploy for rollback, e.g. sha-abc1234. Leave blank to build the current commit."
+        required: false
+        default: ""
+
+# Never run two deploys at once; never cancel an in-flight one mid-restart.
+concurrency:
+  group: deploy-aliyun
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    # Package the exact committed deployment contract on a self-hosted CI runner.
+    # The Aliyun runner deliberately does not git-fetch the repository: mainland
+    # GitHub fetches are slow and unreliable, and a deploy checkout is an unsafe
+    # place for operators or privileged commands to reuse as a worktree.
+    if: >-
+      github.repository_owner == 'LRM-Teams' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev'))
+    # Hosted minutes blocked by org spending limit; prepare on self-hosted ci.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage immutable deploy bundle
+        run: |
+          set -euo pipefail
+          bundle="${RUNNER_TEMP}/multica-deploy-bundle"
+          install -d "${bundle}/deploy/aliyun" "${bundle}/scripts"
+          install -m 0644 docker-compose.selfhost.yml "${bundle}/docker-compose.selfhost.yml"
+          install -m 0644 docker-compose.aliyun.yml "${bundle}/docker-compose.aliyun.yml"
+          install -m 0644 docker-compose.oss.yml "${bundle}/docker-compose.oss.yml"
+          install -m 0644 deploy/aliyun/Caddyfile "${bundle}/deploy/aliyun/Caddyfile"
+          install -m 0644 scripts/assert-runner-workspace-ownership.sh "${bundle}/scripts/assert-runner-workspace-ownership.sh"
+          install -m 0644 scripts/assert-served-app-image-provenance.sh "${bundle}/scripts/assert-served-app-image-provenance.sh"
+          install -m 0644 scripts/compose-environment-value.sh "${bundle}/scripts/compose-environment-value.sh"
+          install -m 0755 scripts/run-aliyun-backend-migration.sh "${bundle}/scripts/run-aliyun-backend-migration.sh"
+          install -m 0644 scripts/validate-rtc-environment.sh "${bundle}/scripts/validate-rtc-environment.sh"
+          install -m 0755 scripts/assert-oss-compose-credentials.sh "${bundle}/scripts/assert-oss-compose-credentials.sh"
+
+      - name: Validate deploy bundle
+        run: |
+          set -euo pipefail
+          bundle="${RUNNER_TEMP}/multica-deploy-bundle"
+          docker compose \
+            --project-name multica \
+            --project-directory "$bundle" \
+            --env-file .env.example \
+            -f "${bundle}/docker-compose.selfhost.yml" \
+            -f "${bundle}/docker-compose.aliyun.yml" \
+            -f "${bundle}/docker-compose.oss.yml" \
+            config -q
+          docker run --rm \
+            -v "${bundle}/deploy/aliyun/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9 \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Upload deploy bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-bundle-${{ github.sha }}
+          path: ${{ runner.temp }}/multica-deploy-bundle
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    # Only build/deploy from the team fork — never upstream or other forks.
+    # On manual dispatch with an image_tag we skip building and redeploy that tag.
+    # Empty-tag manual builds must also target dev; this lane never builds a feature ref.
+    if: >-
+      github.repository_owner == 'LRM-Teams' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/dev' &&
+        github.event.inputs.image_tag == ''))
+    # Hosted minutes blocked by org spending limit; build on self-hosted ci.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.prep.outputs.tag }}
+      backend_image: ${{ steps.prep.outputs.backend_image }}
+      web_image: ${{ steps.prep.outputs.web_image }}
+      db_bridge_image: ${{ steps.prep.outputs.db_bridge_image }}
+    steps:
+      # On dev push or manual dev dispatch, build the committed dev head.
+      - uses: actions/checkout@v4
+
+      # GHCR paths must be lowercase, but github.repository_owner preserves the
+      # org's display case (e.g. "LRM-Teams"). Lowercase it here. The tag is the
+      # short SHA of the checked-out commit — the real dev commit being deployed.
+      - name: Compute image refs + tag
+        id: prep
+        run: |
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          sha="$(git rev-parse --short=7 HEAD)"
+          {
+            echo "backend_image=ghcr.io/${owner_lc}/multica-backend"
+            echo "web_image=ghcr.io/${owner_lc}/multica-web"
+            echo "db_bridge_image=ghcr.io/${owner_lc}/multica-db-bridge"
+            echo "tag=sha-${sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          # The docker-container driver does not inherit the host daemon's
+          # registry mirrors. Docker Hub is unreachable from the Aliyun runner,
+          # so configure the two host-verified mirrors in BuildKit itself.
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["docker.m.daocloud.io", "docker.1ms.run"]
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Deploy host is x86_64, so amd64-only — no QEMU, no multi-arch manifest merge.
+      - name: Build & push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.backend_image }}:latest
+            ${{ steps.prep.outputs.backend_image }}:${{ steps.prep.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.prep.outputs.tag }}
+            COMMIT=${{ github.sha }}
+          # BuildKit cache lives in GHCR (free under GitHub's 2026-07 policy;
+          # re-evaluate this backend if GitHub starts charging for GHCR).
+          cache-from: type=registry,ref=${{ steps.prep.outputs.backend_image }}:buildcache-dev-amd64
+          cache-to: type=registry,ref=${{ steps.prep.outputs.backend_image }}:buildcache-dev-amd64,mode=max
+
+      - name: Build & push web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.web
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.web_image }}:latest
+            ${{ steps.prep.outputs.web_image }}:${{ steps.prep.outputs.tag }}
+          build-args: |
+            REMOTE_API_URL=http://backend:8080
+            NEXT_PUBLIC_APP_VERSION=${{ steps.prep.outputs.tag }}
+          cache-from: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-dev-amd64
+          cache-to: type=registry,ref=${{ steps.prep.outputs.web_image }}:buildcache-dev-amd64,mode=max
+
+      - name: Build & push db-bridge
+        # The multica-side bridge server image. Context is the db_bridge/
+        # subproject (own pyproject + Dockerfile); file defaults to
+        # db_bridge/Dockerfile. The Dockerfile's default CMD (run_stub --side
+        # multica) is the multica-side gateway stub; the executor service
+        # overrides it to run_executor --side multica at deploy time. (The
+        # public run_multica server is no longer deployed - no external LLM
+        # relay is needed.)
+        uses: docker/build-push-action@v6
+        with:
+          context: db_bridge
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.db_bridge_image }}:latest
+            ${{ steps.prep.outputs.db_bridge_image }}:${{ steps.prep.outputs.tag }}
+          cache-from: type=registry,ref=${{ steps.prep.outputs.db_bridge_image }}:buildcache-dev-amd64
+          cache-to: type=registry,ref=${{ steps.prep.outputs.db_bridge_image }}:buildcache-dev-amd64,mode=max
+
+  deploy:
+    needs: [prepare, build]
+    # The Environment is the protected Aliyun deployment boundary. Runtime
+    # secrets remain host-local and are validated before any container changes.
+    environment: aliyun-dev
+    # Run after a successful build (push / dispatch-without-tag), OR straight
+    # away on a dev dispatch that names an existing tag to roll back to.
+    if: >-
+      always() &&
+      github.repository_owner == 'LRM-Teams' &&
+      needs.prepare.result == 'success' &&
+      (needs.build.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/dev' &&
+        github.event.inputs.image_tag != ''))
+    runs-on: [self-hosted, aliyun]
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      packages: read
+    env:
+      DEPLOY_DIR: /data/multica
+      RUNNER_EXPECTED_USER: dev
+      # Secret values are never copied into the host dotenv. Compose propagates
+      # this ambient value into the backend container.
+      DOUBAO_SPEECH_API_KEY: ${{ secrets.DOUBAO_SPEECH_API_KEY }}
+      # Doubao Realtime Duplex / Dialog (LRM-945). Ambient only — optional until
+      # the duplex voice path is productized; missing value must not block deploy.
+      DOUBAO_DIALOG_API_KEY: ${{ secrets.DOUBAO_DIALOG_API_KEY }}
+      # Aliyun OSS (S3-compatible). Ambient only — never write into host .env.
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      VOLCENGINE_RTC_APP_ID: ${{ secrets.VOLCENGINE_RTC_APP_ID }}
+      VOLCENGINE_RTC_APP_KEY: ${{ secrets.VOLCENGINE_RTC_APP_KEY }}
+      VOLCENGINE_RTC_ACCESS_KEY_ID: ${{ secrets.VOLCENGINE_RTC_ACCESS_KEY_ID }}
+      VOLCENGINE_RTC_SECRET_ACCESS_KEY: ${{ secrets.VOLCENGINE_RTC_SECRET_ACCESS_KEY }}
+      VOLCENGINE_RTC_SESSION_TOKEN: ${{ secrets.VOLCENGINE_RTC_SESSION_TOKEN }}
+      VOLCENGINE_RTC_API_VERSION: ${{ vars.VOLCENGINE_RTC_API_VERSION }}
+      VOLCENGINE_RTC_ARK_ENDPOINT_ID: ${{ secrets.VOLCENGINE_RTC_ARK_ENDPOINT_ID }}
+      VOLCENGINE_RTC_ASR_APP_ID: ${{ vars.VOLCENGINE_RTC_ASR_APP_ID }}
+      VOLCENGINE_RTC_TTS_APP_ID: ${{ vars.VOLCENGINE_RTC_TTS_APP_ID }}
+      VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN: ${{ secrets.VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN }}
+      VOLCENGINE_RTC_CALLBACK_SIGNATURE: ${{ secrets.VOLCENGINE_RTC_CALLBACK_SIGNATURE }}
+      # The tag to deploy: a rollback input if given, otherwise the freshly built one.
+      IMAGE_TAG: >-
+        ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.image_tag != '')
+            && github.event.inputs.image_tag
+            || needs.build.outputs.tag }}
+    steps:
+      # This runs before any artifact extraction. It catches contamination left
+      # by a previous job or host-side command at the first observable phase.
+      - name: Preflight runner work root ownership
+        run: |
+          set -euo pipefail
+          phase=pre-artifact
+          actual_user="$(id -un)"
+          if [ "$actual_user" != "$RUNNER_EXPECTED_USER" ]; then
+            echo "::error title=Unexpected runner identity::phase=${phase} expected=${RUNNER_EXPECTED_USER} actual=${actual_user}"
+            exit 1
+          fi
+          runner_work_root="$(dirname -- "$RUNNER_WORKSPACE")"
+          ownership_report="$(mktemp "${RUNNER_TEMP}/runner-ownership-preflight.XXXXXX")"
+          find_errors="$(mktemp "${RUNNER_TEMP}/runner-ownership-preflight-errors.XXXXXX")"
+          trap 'rm -f "$ownership_report" "$find_errors"' EXIT
+          cd /
+          find_status=0
+          if find "$runner_work_root" -xdev ! -user "$RUNNER_EXPECTED_USER" -print0 >"$ownership_report" 2>"$find_errors"; then
+            :
+          else
+            find_status=$?
+          fi
+          offender_count=0
+          while IFS= read -r -d '' path; do
+            metadata="$(stat -c '%U:%G mode=%a' -- "$path")"
+            echo "::error title=Runner workspace ownership violation::phase=${phase} owner=${metadata} path=${path}"
+            offender_count=$((offender_count + 1))
+          done <"$ownership_report"
+          if [ "$find_status" -ne 0 ]; then
+            echo "::error title=Runner ownership scan failed::phase=${phase} root=${runner_work_root}"
+            sed 's/^/  /' "$find_errors"
+            exit 1
+          fi
+          if [ "$offender_count" -gt 0 ]; then
+            echo "::error title=Runner workspace ownership violation::phase=${phase} root=${runner_work_root} expected_owner=${RUNNER_EXPECTED_USER} offenders=${offender_count}"
+            exit 1
+          fi
+          echo "Runner workspace ownership OK: phase=${phase} root=${runner_work_root} owner=${RUNNER_EXPECTED_USER}"
+
+      - name: Download immutable deploy bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: deploy-bundle-${{ github.sha }}
+          path: ${{ runner.temp }}/multica-deploy-bundle
+
+      - name: Verify runner ownership after artifact extraction
+        id: ownership_after_artifact
+        run: bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-runner-workspace-ownership.sh" post-artifact
+
+      - name: Log in to GHCR
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+      - name: Validate host config + database + Caddy
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
+          export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
+          export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
+          export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
+          # Aliyun/dev is the shared integration environment; keep this off by
+          # default in docker-compose.selfhost.yml and opt in only for this lane.
+          export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
+          if [ ! -r "${DEPLOY_DIR}/.env" ]; then
+            echo "::error::${DEPLOY_DIR}/.env is not readable by deploy user $(id -un)."
+            exit 1
+          fi
+          compose() {
+            # Compose gives ambient process variables precedence over --env-file.
+            # Keep the DB identity in one namespace: the host dotenv (plus the
+            # explicit defaults below) is authoritative for both preflight and
+            # every runtime mutation.
+            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+              docker compose \
+              --project-name multica \
+              --project-directory "${DEPLOY_DIR}" \
+              --env-file "${DEPLOY_DIR}/.env" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" "$@"
+          }
+          bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/validate-rtc-environment.sh"
+          compose_environment="$(compose config --environment)"
+          compose_env_value() {
+            printf '%s\n' "$compose_environment" |
+              bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/compose-environment-value.sh" "$@"
+          }
+          # These defaults exactly match docker-compose.selfhost.yml. The
+          # password intentionally has no production default and must exist in
+          # the host dotenv.
+          db_user="$(compose_env_value POSTGRES_USER multica)"
+          db_name="$(compose_env_value POSTGRES_DB multica)"
+          db_password="$(compose_env_value POSTGRES_PASSWORD)"
+          voice_api_key="$(compose_env_value DOUBAO_SPEECH_API_KEY)"
+          rtc_speech_access_token="$(compose_env_value VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN)"
+          # Fail closed before any runtime mutation when OSS lacks AWS keys (LRM-766).
+          # Must run while compose_environment is still set (or re-render via compose).
+          printf '%s\n' "$compose_environment" |
+            bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-oss-compose-credentials.sh"
+          unset compose_environment
+          if [ -z "$db_user" ] || [ -z "$db_name" ] || [ -z "$db_password" ]; then
+            echo "::error::POSTGRES_USER, POSTGRES_DB, and POSTGRES_PASSWORD must all be non-empty in ${DEPLOY_DIR}/.env. Aborting before runtime changes."
+            exit 1
+          fi
+          if [ -z "$voice_api_key" ]; then
+            echo "::error::DOUBAO_SPEECH_API_KEY must be configured in the aliyun-dev Environment. Aborting before runtime changes."
+            exit 1
+          fi
+          if [ -z "$rtc_speech_access_token" ]; then
+            echo "::error::VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN must be configured in the aliyun-dev Environment. Aborting before runtime changes."
+            exit 1
+          fi
+          postgres_id="$(compose ps -q postgres)"
+          if [ -z "$postgres_id" ]; then
+            echo "::error::PostgreSQL container is not running. Aborting before runtime changes."
+            exit 1
+          fi
+          if ! printf '%s\n%s\n%s\n' "$db_user" "$db_name" "$db_password" |
+            docker exec -i "$postgres_id" sh -ceu '
+              IFS= read -r target_user
+              IFS= read -r target_db
+              IFS= read -r target_password
+              PGPASSWORD="$target_password" psql \
+                -h 127.0.0.1 \
+                -U "$target_user" \
+                -d "$target_db" \
+              -Atqc "SELECT 1"
+            ' >/dev/null; then
+            echo "::error::Host PostgreSQL user/database/password failed an authenticated TCP query. Aborting before runtime changes."
+            exit 1
+          fi
+          unset db_user db_name db_password voice_api_key rtc_speech_access_token
+          echo "Host-local database identity and protected speech/RTC configuration preflight passed."
+          # Validate the immutable artifact source before touching the runtime
+          # file. A bad config must not be left behind for the next host restart.
+          docker run --rm \
+            -v "${RUNNER_TEMP}/multica-deploy-bundle/deploy/aliyun/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9 \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      # Run the new image's migration binary before changing any runtime
+      # container or the live Caddyfile. A failure is therefore reported as a
+      # migration failure and leaves the currently served stack untouched.
+      - name: Run database migration
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
+          export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
+          export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
+          export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
+          export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
+          bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/run-aliyun-backend-migration.sh" \
+            "${DEPLOY_DIR}" \
+            "${RUNNER_TEMP}/multica-deploy-bundle"
+
+      # Caddy's Compose service bind-mounts ${DEPLOY_DIR}/releases read-only
+      # (deploy/aliyun/Caddyfile handle_path /computer/*). If that host path
+      # does not exist yet, Docker auto-creates it as root when the container
+      # starts — leaving the release workflow's own `dev`-user `install -d`
+      # unable to chmod it (#1475/v0.3.82 hit exactly this). Create it here,
+      # as `dev`, before Caddy ever gets a chance to.
+      - name: Ensure release feed directory exists with correct ownership
+        run: install -d -m 0755 "${DEPLOY_DIR}/releases"
+
+      - name: Pull & restart backend + frontend + Caddy
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          export MULTICA_BACKEND_IMAGE="ghcr.io/${owner_lc}/multica-backend"
+          export MULTICA_WEB_IMAGE="ghcr.io/${owner_lc}/multica-web"
+          export MULTICA_DB_BRIDGE_IMAGE="ghcr.io/${owner_lc}/multica-db-bridge"
+          export MULTICA_IMAGE_TAG="${IMAGE_TAG}"
+          # Aliyun/dev is the shared integration environment; keep this off by
+          # default in docker-compose.selfhost.yml and opt in only for this lane.
+          export MULTICA_DEV_AGENT_PROFILE_ACCESS=true
+          if [ ! -r "${DEPLOY_DIR}/.env" ]; then
+            echo "::error::${DEPLOY_DIR}/.env is not readable by deploy user $(id -un)."
+            exit 1
+          fi
+          compose() {
+            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+              docker compose \
+              --project-name multica \
+              --project-directory "${DEPLOY_DIR}" \
+              --env-file "${DEPLOY_DIR}/.env" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" "$@"
+          }
+          echo "Deploying ${MULTICA_BACKEND_IMAGE}:${MULTICA_IMAGE_TAG} (+ web) on $(hostname)"
+          # The runtime path is stable; the Actions artifact is ephemeral.
+          # Install through a sibling file and rename it atomically.
+          install -m 0644 "${RUNNER_TEMP}/multica-deploy-bundle/deploy/aliyun/Caddyfile" "${DEPLOY_DIR}/Caddyfile.next"
+          mv -f "${DEPLOY_DIR}/Caddyfile.next" "${DEPLOY_DIR}/Caddyfile"
+          # The backend entrypoint keeps its migration for Compose/Helm callers.
+          # Here it is a safe version-ledger no-op because the independent
+          # migration step above already advanced the database.
+          compose pull frontend backend
+          # Defense in depth: same OSS credential gate as preflight (LRM-766).
+          compose config --environment |
+            bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-oss-compose-credentials.sh"
+          # Start frontend before backend so Caddy can resolve the frontend DNS name
+          # before the backend health check begins — avoids the container-restart
+          # DNS race that caused intermittent 'no such host' errors (#324).
+          compose up -d frontend
+          compose up -d backend
+          # Adopt the one legacy proxy container created before Caddy became a
+          # Compose service. Resolve both its exact name and ownership label
+          # before removal; certificate/config volumes are preserved.
+          if docker container inspect multica-caddy >/dev/null 2>&1; then
+            caddy_service="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' multica-caddy 2>/dev/null || true)"
+            if [ "${caddy_service}" != "caddy" ]; then
+              docker rm -f multica-caddy
+            fi
+          fi
+          # The Caddyfile is a single-file bind mount. Atomic rename changes its
+          # inode, so recreate only Caddy to remount the new file; reload alone
+          # would keep reading the old inode.
+          compose up -d --no-deps --force-recreate caddy
+          # The retained multica-side bridge stub is profile-gated, so naming it
+          # explicitly starts it. AReaL calls Multica directly; the obsolete
+          # multica-side executor was removed in 501dc2861. The pull remains
+          # best-effort so rollback tags predating the bridge image do not abort
+          # an otherwise healthy backend/frontend roll.
+          if compose pull db-bridge-stub-multica; then
+            # Gateway stub for multica -> AReaL RL calls (start_session /
+            # set_reward / close_segment / chat_completions); run_stub --side
+            # multica. Best-effort: a stub failure must not roll back the
+            # backend/frontend that already succeeded - warn and leave any
+            # existing stub container running.
+            compose up -d db-bridge-stub-multica || echo "::warning::db-bridge-stub-multica failed to start; multica -> AReaL RL calls will fail until it runs."
+          else
+            echo "::warning::db-bridge image not found at tag ${MULTICA_IMAGE_TAG}; skipping bridge roll (existing containers, if any, keep running). Use a tag built with the db-bridge CD change for a full bridge rollback."
+          fi
+          # Prune unused Docker images to prevent disk from filling up (#327).
+          docker image prune -af
+
+      # Run even when the deploy step failed. The deploy user owns both the
+      # runner work root and /data; any unexpected owner in _work is a hard
+      # boundary violation, not something for a later checkout to discover.
+      - name: Verify runner ownership after deploy step
+        id: ownership_after_deploy
+        if: always() && steps.ownership_after_artifact.outcome == 'success'
+        run: bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-runner-workspace-ownership.sh" post-deploy
+
+      - name: Verify served app image provenance before health checks
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-served-app-image-provenance.sh" \
+            pre-health \
+            "${DEPLOY_DIR}" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" \
+            "ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}" \
+            "ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"
+
+      - name: Verify app containers + Caddy HTTP and HTTPS proxies
+        run: |
+          set -euo pipefail
+
+          compose() {
+            env -u POSTGRES_USER -u POSTGRES_DB -u POSTGRES_PASSWORD \
+              docker compose \
+              --project-name multica \
+              --project-directory "${DEPLOY_DIR}" \
+              --env-file "${DEPLOY_DIR}/.env" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+              -f "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" "$@"
+          }
+
+          # Caddy reaches both app services only through their Docker service
+          # names. These probes therefore validate the running container,
+          # Compose DNS, Caddy upstream routing, and the externally served dev
+          # listeners as one boundary. The HTTPS probe connects to loopback
+          # while retaining leagent.me as the TLS identity, avoiding dependence
+          # on provider NAT hairpin behavior.
+          for i in $(seq 1 45); do
+            frontend_id="$(compose ps -q frontend)"
+            backend_id="$(compose ps -q backend)"
+            caddy_id="$(compose ps -q caddy)"
+            frontend_status="$(docker inspect --format '{{.State.Status}}' "$frontend_id" 2>/dev/null || true)"
+            frontend_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$frontend_id" 2>/dev/null || true)"
+            backend_status="$(docker inspect --format '{{.State.Status}}' "$backend_id" 2>/dev/null || true)"
+            backend_voice_configured="$(
+              (docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$backend_id" 2>/dev/null || true) |
+                awk -F= '$1 == "DOUBAO_SPEECH_API_KEY" && length($2) > 0 { print "true"; exit }'
+            )"
+            backend_rtc_speech_configured="$(
+              (docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$backend_id" 2>/dev/null || true) |
+                awk -F= '$1 == "VOLCENGINE_RTC_SPEECH_ACCESS_TOKEN" && length($2) > 0 { print "true"; exit }'
+            )"
+            caddy_status="$(docker inspect --format '{{.State.Status}}' "$caddy_id" 2>/dev/null || true)"
+            if [ "$frontend_status" = running ] && [ "$frontend_health" = healthy ] && [ "$backend_status" = running ] && [ "$backend_voice_configured" = true ] && [ "$backend_rtc_speech_configured" = true ] && [ "$caddy_status" = running ] && \
+              curl -fsS --max-time 5 http://127.0.0.1:8090/ >/dev/null 2>&1 && \
+              curl -fsS --max-time 5 http://127.0.0.1:8090/healthz >/dev/null 2>&1 && \
+              curl -fsS --max-time 5 http://127.0.0.1:8090/health >/dev/null 2>&1 && \
+              [ "$(curl -fsS -o /dev/null -w '%{redirect_url}' --max-time 5 -H 'Accept: text/html' http://127.0.0.1:8090/)" = "https://leagent.me/" ] && \
+              curl --resolve leagent.me:443:127.0.0.1 -fsS --max-time 5 https://leagent.me/healthz >/dev/null 2>&1 && \
+              curl --resolve leagent.me:443:127.0.0.1 -fsS --max-time 5 https://leagent.me/health >/dev/null 2>&1; then
+              echo "Frontend, backend, Caddy HTTP, and leagent.me HTTPS healthy after $((i * 2))s."
+              exit 0
+            fi
+            echo "waiting for frontend/backend/Caddy/HTTPS readiness... ($i/45) frontend=${frontend_status}/${frontend_health:-none} backend=${backend_status:-none} voice_configured=${backend_voice_configured:-false} caddy=${caddy_status:-none}"
+            sleep 2
+          done
+          echo "::error::frontend/backend/Caddy HTTP redirect + leagent.me HTTPS did not pass within 90s."
+          compose ps frontend backend caddy || true
+          docker logs --tail 100 multica-caddy || true
+          docker logs --tail 80 multica-frontend-1 || true
+          docker logs --tail 80 multica-backend-1 || true
+          exit 1
+
+      - name: Health check (/readyz)
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
+              echo "Backend healthy after $((i * 2))s."
+              exit 0
+            fi
+            echo "waiting for backend readiness... ($i/30)"
+            sleep 2
+          done
+          echo "::error::Backend did not pass /readyz within 60s — deploy likely broken."
+          docker logs --tail 80 multica-backend-1 || true
+          exit 1
+
+      - name: Health check (db-bridge-stub-multica /healthz)
+        # The multica-side gateway stub (multica -> AReaL RL direction). It is
+        # an auxiliary bridge service, so a stub health failure is surfaced as a
+        # warning rather than failing the whole deploy (which would mark
+        # backend/frontend rolls red for a service unrelated to them). Skipped
+        # when no stub container is running.
+        if: always()
+        run: |
+          set -uo pipefail
+          if ! docker ps --format '{{.Names}}' | grep -q '^multica-db-bridge-stub-multica-1$'; then
+            echo "db-bridge-stub-multica container not running - skipping /healthz check."
+            exit 0
+          fi
+          port="$(
+            docker inspect \
+              --format '{{with (index .NetworkSettings.Ports "9100/tcp")}}{{(index . 0).HostPort}}{{end}}' \
+              multica-db-bridge-stub-multica-1
+          )"
+          if [ -z "$port" ]; then
+            echo "::warning::db-bridge-stub-multica has no published 9100/tcp host port; skipping /healthz check."
+            exit 0
+          fi
+          for i in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
+              echo "db-bridge-stub-multica healthy after $((i * 2))s."
+              exit 0
+            fi
+            echo "waiting for db-bridge-stub-multica readiness... ($i/30)"
+            sleep 2
+          done
+          echo "::warning::db-bridge-stub-multica did not pass /healthz within 60s - investigate the stub container."
+          docker logs --tail 80 multica-db-bridge-stub-multica-1 || true
+
+      - name: Verify served app image provenance after health checks
+        run: |
+          set -euo pipefail
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-served-app-image-provenance.sh" \
+            post-health \
+            "${DEPLOY_DIR}" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.selfhost.yml" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.aliyun.yml" \
+            "${RUNNER_TEMP}/multica-deploy-bundle/docker-compose.oss.yml" \
+            "ghcr.io/${owner_lc}/multica-backend:${IMAGE_TAG}" \
+            "ghcr.io/${owner_lc}/multica-web:${IMAGE_TAG}"
+
+      - name: Final runner ownership postflight
+        if: always() && steps.ownership_after_artifact.outcome == 'success'
+        run: bash "${RUNNER_TEMP}/multica-deploy-bundle/scripts/assert-runner-workspace-ownership.sh" final

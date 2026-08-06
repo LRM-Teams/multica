@@ -1,0 +1,1411 @@
+{
+  "_comment": "Source of truth for the agent sticker library. Images live in ./assets/<file> and are embedded into the Go binary (see stickers.go), served at /api/stickers/<id>. Messages reference stickers through structured message parts using sticker_id. Tags are bilingual (the zh caption + en gloss) so search works in both languages. Assets are from getActivity/EmojiPackage (Apache-2.0) — see ./NOTICE.",
+  "license": "Apache-2.0",
+  "source": "getActivity/EmojiPackage",
+  "stickers": [
+    {
+      "id": "perfect",
+      "name": "完美",
+      "name_en": "Perfect",
+      "emotion": "praise",
+      "file": "perfect.png",
+      "tags": [
+        "完美",
+        "perfect",
+        "praise"
+      ]
+    },
+    {
+      "id": "excellent",
+      "name": "优秀",
+      "name_en": "Excellent",
+      "emotion": "praise",
+      "file": "excellent.jpg",
+      "tags": [
+        "优秀",
+        "厉害",
+        "excellent",
+        "praise"
+      ]
+    },
+    {
+      "id": "666",
+      "name": "666",
+      "name_en": "666",
+      "emotion": "praise",
+      "file": "666.jpg",
+      "tags": [
+        "666",
+        "厉害",
+        "awesome",
+        "praise"
+      ]
+    },
+    {
+      "id": "impressive",
+      "name": "厉害了",
+      "name_en": "Impressive",
+      "emotion": "praise",
+      "file": "impressive.gif",
+      "tags": [
+        "厉害了",
+        "厉害",
+        "impressive",
+        "praise"
+      ]
+    },
+    {
+      "id": "applause",
+      "name": "鼓掌",
+      "name_en": "Applause",
+      "emotion": "celebrate",
+      "file": "applause.gif",
+      "tags": [
+        "鼓掌",
+        "掌声",
+        "clap",
+        "applause",
+        "celebrate"
+      ]
+    },
+    {
+      "id": "thumbs-up",
+      "name": "点赞",
+      "name_en": "Thumbs up",
+      "emotion": "approve",
+      "file": "thumbs-up.jpg",
+      "tags": [
+        "点赞",
+        "赞",
+        "like",
+        "approve"
+      ]
+    },
+    {
+      "id": "full-marks",
+      "name": "满分",
+      "name_en": "Full marks",
+      "emotion": "praise",
+      "file": "full-marks.jpg",
+      "tags": [
+        "满分",
+        "100",
+        "full marks",
+        "praise"
+      ]
+    },
+    {
+      "id": "nice-analysis",
+      "name": "分析得漂亮",
+      "name_en": "Nicely analyzed",
+      "emotion": "praise",
+      "file": "nice-analysis.jpg",
+      "tags": [
+        "分析得漂亮",
+        "分析",
+        "漂亮",
+        "analysis",
+        "praise"
+      ]
+    },
+    {
+      "id": "small-progress",
+      "name": "小细节，大进步",
+      "name_en": "Small detail big progress",
+      "emotion": "praise",
+      "file": "small-progress.jpg",
+      "tags": [
+        "小细节，大进步",
+        "进步",
+        "细节",
+        "progress",
+        "praise"
+      ]
+    },
+    {
+      "id": "flower-for-you",
+      "name": "小花花送给你",
+      "name_en": "A flower for you",
+      "emotion": "praise",
+      "file": "flower-for-you.jpg",
+      "tags": [
+        "小花花送给你",
+        "花",
+        "奖励",
+        "reward",
+        "praise"
+      ]
+    },
+    {
+      "id": "got-it-good",
+      "name": "懂了，优秀",
+      "name_en": "Got it, excellent",
+      "emotion": "praise",
+      "file": "got-it-good.jpg",
+      "tags": [
+        "懂了，优秀",
+        "懂了",
+        "优秀",
+        "praise"
+      ]
+    },
+    {
+      "id": "ok-flawless",
+      "name": "OK，没毛病",
+      "name_en": "OK, flawless",
+      "emotion": "approve",
+      "file": "ok-flawless.png",
+      "tags": [
+        "OK，没毛病",
+        "没毛病",
+        "ok",
+        "approve"
+      ]
+    },
+    {
+      "id": "ok",
+      "name": "OK",
+      "name_en": "OK",
+      "emotion": "ok",
+      "file": "ok.jpg",
+      "tags": [
+        "OK",
+        "ok",
+        "好的"
+      ]
+    },
+    {
+      "id": "fine",
+      "name": "好",
+      "name_en": "Fine",
+      "emotion": "ok",
+      "file": "fine.jpg",
+      "tags": [
+        "好",
+        "ok"
+      ]
+    },
+    {
+      "id": "i-got-it",
+      "name": "好了好了，我知道了",
+      "name_en": "Ok ok I get it",
+      "emotion": "perfunctory",
+      "file": "i-got-it.jpg",
+      "tags": [
+        "好了好了，我知道了",
+        "知道了",
+        "敷衍",
+        "perfunctory"
+      ]
+    },
+    {
+      "id": "youre-right",
+      "name": "嗯嗯，你说的都对",
+      "name_en": "Yeah you're right",
+      "emotion": "perfunctory",
+      "file": "youre-right.gif",
+      "tags": [
+        "嗯嗯，你说的都对",
+        "都对",
+        "whatever",
+        "敷衍",
+        "perfunctory"
+      ]
+    },
+    {
+      "id": "go-on",
+      "name": "继续继续",
+      "name_en": "Go on",
+      "emotion": "perfunctory",
+      "file": "go-on.jpg",
+      "tags": [
+        "继续继续",
+        "继续",
+        "go on",
+        "perfunctory"
+      ]
+    },
+    {
+      "id": "im-listening",
+      "name": "说吧，我听着呢",
+      "name_en": "I'm listening",
+      "emotion": "perfunctory",
+      "file": "im-listening.jpg",
+      "tags": [
+        "说吧，我听着呢",
+        "听着",
+        "listening",
+        "perfunctory"
+      ]
+    },
+    {
+      "id": "whatever-makes-you-happy",
+      "name": "你开心就好",
+      "name_en": "Whatever makes you happy",
+      "emotion": "perfunctory",
+      "file": "whatever-makes-you-happy.jpg",
+      "tags": [
+        "你开心就好",
+        "开心就好",
+        "whatever",
+        "perfunctory"
+      ]
+    },
+    {
+      "id": "no",
+      "name": "不可以",
+      "name_en": "No",
+      "emotion": "refuse",
+      "file": "no.jpg",
+      "tags": [
+        "不可以",
+        "no",
+        "拒绝",
+        "refuse"
+      ]
+    },
+    {
+      "id": "no-way",
+      "name": "不行不行，这个真的不行",
+      "name_en": "No way",
+      "emotion": "refuse",
+      "file": "no-way.gif",
+      "tags": [
+        "不行不行，这个真的不行",
+        "不行",
+        "no way",
+        "refuse"
+      ]
+    },
+    {
+      "id": "nope",
+      "name": "不存在的",
+      "name_en": "Nope",
+      "emotion": "refuse",
+      "file": "nope.jpg",
+      "tags": [
+        "不存在的",
+        "不存在",
+        "nope",
+        "refuse"
+      ]
+    },
+    {
+      "id": "in-your-dreams",
+      "name": "你想得美",
+      "name_en": "In your dreams",
+      "emotion": "refuse",
+      "file": "in-your-dreams.jpg",
+      "tags": [
+        "你想得美",
+        "想得美",
+        "dream on",
+        "refuse"
+      ]
+    },
+    {
+      "id": "not-listening",
+      "name": "我不听",
+      "name_en": "I'm not listening",
+      "emotion": "refuse",
+      "file": "not-listening.jpg",
+      "tags": [
+        "我不听",
+        "不听",
+        "not listening",
+        "refuse"
+      ]
+    },
+    {
+      "id": "bold-idea",
+      "name": "一个大胆的想法忽然出现",
+      "name_en": "A bold idea appears",
+      "emotion": "think",
+      "file": "bold-idea.jpg",
+      "tags": [
+        "一个大胆的想法忽然出现",
+        "想法",
+        "idea",
+        "bold",
+        "think"
+      ]
+    },
+    {
+      "id": "inspiration",
+      "name": "灵机一动",
+      "name_en": "Sudden inspiration",
+      "emotion": "think",
+      "file": "inspiration.jpg",
+      "tags": [
+        "灵机一动",
+        "idea",
+        "inspire",
+        "think"
+      ]
+    },
+    {
+      "id": "looking-forward",
+      "name": "期待",
+      "name_en": "Looking forward",
+      "emotion": "expect",
+      "file": "looking-forward.jpg",
+      "tags": [
+        "期待",
+        "expect"
+      ]
+    },
+    {
+      "id": "give-example",
+      "name": "举个例子？",
+      "name_en": "Give an example?",
+      "emotion": "doubt",
+      "file": "give-example.jpg",
+      "tags": [
+        "举个例子？",
+        "例子",
+        "example",
+        "doubt"
+      ]
+    },
+    {
+      "id": "didnt-expect",
+      "name": "想不到吧",
+      "name_en": "Didn't expect that",
+      "emotion": "surprise",
+      "file": "didnt-expect.jpg",
+      "tags": [
+        "想不到吧",
+        "想不到",
+        "surprise"
+      ]
+    },
+    {
+      "id": "surprise",
+      "name": "惊不惊喜，意不意外",
+      "name_en": "Surprise!",
+      "emotion": "surprise",
+      "file": "surprise.jpg",
+      "tags": [
+        "惊不惊喜，意不意外",
+        "惊喜",
+        "意外",
+        "surprise"
+      ]
+    },
+    {
+      "id": "shocked",
+      "name": "震惊",
+      "name_en": "Shocked",
+      "emotion": "surprise",
+      "file": "shocked.jpg",
+      "tags": [
+        "震惊",
+        "shocked",
+        "surprise"
+      ]
+    },
+    {
+      "id": "astonished",
+      "name": "吃惊",
+      "name_en": "Astonished",
+      "emotion": "surprise",
+      "file": "astonished.jpg",
+      "tags": [
+        "吃惊",
+        "astonished",
+        "surprise"
+      ]
+    },
+    {
+      "id": "interesting",
+      "name": "有意思",
+      "name_en": "Interesting",
+      "emotion": "amused",
+      "file": "interesting.gif",
+      "tags": [
+        "有意思",
+        "interesting",
+        "amused"
+      ]
+    },
+    {
+      "id": "getting-interesting",
+      "name": "事情似乎变得有趣起来",
+      "name_en": "Getting interesting",
+      "emotion": "amused",
+      "file": "getting-interesting.jpg",
+      "tags": [
+        "事情似乎变得有趣起来",
+        "有趣",
+        "interesting",
+        "amused"
+      ]
+    },
+    {
+      "id": "whoa-move",
+      "name": "还有这种操作A",
+      "name_en": "There's such a move?",
+      "emotion": "surprise",
+      "file": "whoa-move.jpg",
+      "tags": [
+        "还有这种操作A",
+        "操作",
+        "whoa",
+        "move",
+        "surprise"
+      ]
+    },
+    {
+      "id": "breathtaking-move",
+      "name": "令人窒息的操作",
+      "name_en": "Breathtaking move",
+      "emotion": "surprise",
+      "file": "breathtaking-move.jpg",
+      "tags": [
+        "令人窒息的操作",
+        "操作",
+        "breathtaking",
+        "surprise"
+      ]
+    },
+    {
+      "id": "thats-it",
+      "name": "就这？",
+      "name_en": "That's it?",
+      "emotion": "doubt",
+      "file": "thats-it.png",
+      "tags": [
+        "就这？",
+        "就这",
+        "unimpressed",
+        "doubt"
+      ]
+    },
+    {
+      "id": "oh-really",
+      "name": "哦，是吗",
+      "name_en": "Oh really?",
+      "emotion": "doubt",
+      "file": "oh-really.jpg",
+      "tags": [
+        "哦，是吗",
+        "是吗",
+        "really",
+        "doubt"
+      ]
+    },
+    {
+      "id": "huh-what",
+      "name": "啊？啥？",
+      "name_en": "Huh? What?",
+      "emotion": "confused",
+      "file": "huh-what.jpg",
+      "tags": [
+        "啊？啥？",
+        "啊",
+        "啥",
+        "confused"
+      ]
+    },
+    {
+      "id": "you-know",
+      "name": "你懂我意思吧",
+      "name_en": "You get what I mean?",
+      "emotion": "doubt",
+      "file": "you-know.gif",
+      "tags": [
+        "你懂我意思吧",
+        "懂我意思",
+        "you know",
+        "doubt"
+      ]
+    },
+    {
+      "id": "why",
+      "name": "为什么",
+      "name_en": "Why",
+      "emotion": "confused",
+      "file": "why.jpg",
+      "tags": [
+        "为什么",
+        "why",
+        "confused"
+      ]
+    },
+    {
+      "id": "totally-confused",
+      "name": "一脸懵逼",
+      "name_en": "Totally confused",
+      "emotion": "confused",
+      "file": "totally-confused.jpg",
+      "tags": [
+        "一脸懵逼",
+        "懵逼",
+        "confused"
+      ]
+    },
+    {
+      "id": "speechless",
+      "name": "一时语塞",
+      "name_en": "Speechless",
+      "emotion": "speechless",
+      "file": "speechless.jpg",
+      "tags": [
+        "一时语塞",
+        "语塞",
+        "speechless"
+      ]
+    },
+    {
+      "id": "no-words",
+      "name": "他说的好有道理，我竟无言以对",
+      "name_en": "So right I'm speechless",
+      "emotion": "speechless",
+      "file": "no-words.png",
+      "tags": [
+        "他说的好有道理，我竟无言以对",
+        "无言以对",
+        "speechless"
+      ]
+    },
+    {
+      "id": "blind-spot",
+      "name": "这就触及到我的知识盲区了",
+      "name_en": "Beyond my knowledge",
+      "emotion": "confused",
+      "file": "blind-spot.jpg",
+      "tags": [
+        "这就触及到我的知识盲区了",
+        "知识盲区",
+        "blind spot",
+        "confused"
+      ]
+    },
+    {
+      "id": "didnt-get-it",
+      "name": "完全没搞懂",
+      "name_en": "Totally didn't get it",
+      "emotion": "confused",
+      "file": "didnt-get-it.jpg",
+      "tags": [
+        "完全没搞懂",
+        "没搞懂",
+        "confused"
+      ]
+    },
+    {
+      "id": "scared",
+      "name": "怕了怕了",
+      "name_en": "Scared",
+      "emotion": "scare",
+      "file": "scared.jpg",
+      "tags": [
+        "怕了怕了",
+        "怕了",
+        "scared",
+        "scare"
+      ]
+    },
+    {
+      "id": "afraid",
+      "name": "害怕",
+      "name_en": "Afraid",
+      "emotion": "scare",
+      "file": "afraid.gif",
+      "tags": [
+        "害怕",
+        "afraid",
+        "scare"
+      ]
+    },
+    {
+      "id": "creepy",
+      "name": "细思极恐",
+      "name_en": "Creepy the more you think",
+      "emotion": "scare",
+      "file": "creepy.gif",
+      "tags": [
+        "细思极恐",
+        "creepy",
+        "scare"
+      ]
+    },
+    {
+      "id": "back-down",
+      "name": "秒怂",
+      "name_en": "Instantly back down",
+      "emotion": "scare",
+      "file": "back-down.jpg",
+      "tags": [
+        "秒怂",
+        "back down",
+        "scare"
+      ]
+    },
+    {
+      "id": "you-scare-me",
+      "name": "你正常点，我害怕",
+      "name_en": "Act normal, you scare me",
+      "emotion": "scare",
+      "file": "you-scare-me.gif",
+      "tags": [
+        "你正常点，我害怕",
+        "你正常点",
+        "scary",
+        "scare"
+      ]
+    },
+    {
+      "id": "crying",
+      "name": "委屈地哭了起来",
+      "name_en": "Crying",
+      "emotion": "sad",
+      "file": "crying.jpg",
+      "tags": [
+        "委屈地哭了起来",
+        "委屈",
+        "哭",
+        "sad"
+      ]
+    },
+    {
+      "id": "want-to-cry",
+      "name": "欲哭无泪",
+      "name_en": "Want to cry but can't",
+      "emotion": "sad",
+      "file": "want-to-cry.jpg",
+      "tags": [
+        "欲哭无泪",
+        "sad"
+      ]
+    },
+    {
+      "id": "hurt-silent",
+      "name": "宝宝委屈，但宝宝不说",
+      "name_en": "Hurt but won't say",
+      "emotion": "sad",
+      "file": "hurt-silent.jpg",
+      "tags": [
+        "宝宝委屈，但宝宝不说",
+        "委屈",
+        "sad"
+      ]
+    },
+    {
+      "id": "wipe-tears",
+      "name": "我擦泪",
+      "name_en": "Wiping tears",
+      "emotion": "sad",
+      "file": "wipe-tears.jpg",
+      "tags": [
+        "我擦泪",
+        "擦泪",
+        "tears",
+        "sad"
+      ]
+    },
+    {
+      "id": "a-hug",
+      "name": "来，抱一下，不准哭了",
+      "name_en": "Come here, a hug",
+      "emotion": "comfort",
+      "file": "a-hug.jpg",
+      "tags": [
+        "来，抱一下，不准哭了",
+        "抱抱",
+        "hug",
+        "comfort"
+      ]
+    },
+    {
+      "id": "hug",
+      "name": "抱抱",
+      "name_en": "Hug",
+      "emotion": "comfort",
+      "file": "hug.gif",
+      "tags": [
+        "抱抱",
+        "hug",
+        "comfort"
+      ]
+    },
+    {
+      "id": "huaji",
+      "name": "滑稽",
+      "name_en": "Huaji grin",
+      "emotion": "laugh",
+      "file": "huaji.png",
+      "tags": [
+        "滑稽",
+        "funny",
+        "grin",
+        "laugh"
+      ]
+    },
+    {
+      "id": "almost-lol",
+      "name": "我差点笑出声",
+      "name_en": "Almost laughed out loud",
+      "emotion": "laugh",
+      "file": "almost-lol.jpg",
+      "tags": [
+        "我差点笑出声",
+        "笑出声",
+        "lol",
+        "laugh"
+      ]
+    },
+    {
+      "id": "evil-grin",
+      "name": "邪恶的笑",
+      "name_en": "Evil grin",
+      "emotion": "laugh",
+      "file": "evil-grin.jpg",
+      "tags": [
+        "邪恶的笑",
+        "邪恶",
+        "grin",
+        "sly",
+        "laugh"
+      ]
+    },
+    {
+      "id": "watching",
+      "name": "看戏",
+      "name_en": "Watching the show",
+      "emotion": "watch",
+      "file": "watching.gif",
+      "tags": [
+        "看戏",
+        "popcorn",
+        "watching",
+        "watch"
+      ]
+    },
+    {
+      "id": "slacking",
+      "name": "摸鱼",
+      "name_en": "Slacking off",
+      "emotion": "slack",
+      "file": "slacking.gif",
+      "tags": [
+        "摸鱼",
+        "slack"
+      ]
+    },
+    {
+      "id": "surrender",
+      "name": "投降",
+      "name_en": "Surrender",
+      "emotion": "surrender",
+      "file": "surrender.jpg",
+      "tags": [
+        "投降",
+        "surrender",
+        "give up"
+      ]
+    },
+    {
+      "id": "i-concede",
+      "name": "技不如人，甘拜下风",
+      "name_en": "You win, I concede",
+      "emotion": "concede",
+      "file": "i-concede.jpg",
+      "tags": [
+        "技不如人，甘拜下风",
+        "甘拜下风",
+        "concede"
+      ]
+    },
+    {
+      "id": "love-work",
+      "name": "我爱工作",
+      "name_en": "I love work",
+      "emotion": "work",
+      "file": "love-work.jpg",
+      "tags": [
+        "我爱工作",
+        "工作",
+        "love work",
+        "work"
+      ]
+    },
+    {
+      "id": "grind",
+      "name": "搬砖",
+      "name_en": "Grinding",
+      "emotion": "work",
+      "file": "grind.jpg",
+      "tags": [
+        "搬砖",
+        "grind",
+        "work"
+      ]
+    },
+    {
+      "id": "grind-happy",
+      "name": "搬砖使我快乐",
+      "name_en": "Grinding makes me happy",
+      "emotion": "work",
+      "file": "grind-happy.jpg",
+      "tags": [
+        "搬砖使我快乐",
+        "搬砖",
+        "grind",
+        "work"
+      ]
+    },
+    {
+      "id": "overtime",
+      "name": "加班",
+      "name_en": "Overtime",
+      "emotion": "work",
+      "file": "overtime.gif",
+      "tags": [
+        "加班",
+        "overtime",
+        "work"
+      ]
+    },
+    {
+      "id": "bug-fixed",
+      "name": "BUG修完了吗",
+      "name_en": "Bug fixed yet?",
+      "emotion": "code",
+      "file": "bug-fixed.jpg",
+      "tags": [
+        "BUG修完了吗",
+        "bug",
+        "debug",
+        "修bug",
+        "code"
+      ]
+    },
+    {
+      "id": "no-bugs-bless",
+      "name": "佛祖保佑，永无BUG",
+      "name_en": "Bless, no bugs",
+      "emotion": "code",
+      "file": "no-bugs-bless.png",
+      "tags": [
+        "佛祖保佑，永无BUG",
+        "bug",
+        "无bug",
+        "bless",
+        "code"
+      ]
+    },
+    {
+      "id": "no-new-bug",
+      "name": "保证不生成新Bug",
+      "name_en": "Promise no new bugs",
+      "emotion": "code",
+      "file": "no-new-bug.jpg",
+      "tags": [
+        "保证不生成新Bug",
+        "bug",
+        "no new bug",
+        "code"
+      ]
+    },
+    {
+      "id": "typing-code",
+      "name": "敲代码",
+      "name_en": "Typing code",
+      "emotion": "code",
+      "file": "typing-code.gif",
+      "tags": [
+        "敲代码",
+        "coding",
+        "code"
+      ]
+    },
+    {
+      "id": "here-to-code",
+      "name": "我来写代码了",
+      "name_en": "Here to write code",
+      "emotion": "code",
+      "file": "here-to-code.jpg",
+      "tags": [
+        "我来写代码了",
+        "写代码",
+        "coding",
+        "code"
+      ]
+    },
+    {
+      "id": "love-coding",
+      "name": "我爱编程，编程使我快乐",
+      "name_en": "I love coding",
+      "emotion": "code",
+      "file": "love-coding.jpg",
+      "tags": [
+        "我爱编程，编程使我快乐",
+        "编程",
+        "coding",
+        "love",
+        "code"
+      ]
+    },
+    {
+      "id": "bald-stronger",
+      "name": "我秃了，也变强了",
+      "name_en": "Balding but stronger",
+      "emotion": "code",
+      "file": "bald-stronger.jpg",
+      "tags": [
+        "我秃了，也变强了",
+        "秃",
+        "变强",
+        "coding",
+        "code"
+      ]
+    },
+    {
+      "id": "npe",
+      "name": "空指针异常",
+      "name_en": "Null pointer exception",
+      "emotion": "code",
+      "file": "npe.jpg",
+      "tags": [
+        "空指针异常",
+        "空指针",
+        "NPE",
+        "exception",
+        "code"
+      ]
+    },
+    {
+      "id": "threw-exception",
+      "name": "对方不想和你说话，并向你抛出了一个异常",
+      "name_en": "Threw an exception at you",
+      "emotion": "code",
+      "file": "threw-exception.jpg",
+      "tags": [
+        "对方不想和你说话，并向你抛出了一个异常",
+        "异常",
+        "exception",
+        "code"
+      ]
+    },
+    {
+      "id": "just-a-bug-guy",
+      "name": "我只是个 BUG 仔",
+      "name_en": "Just a bug guy",
+      "emotion": "code",
+      "file": "just-a-bug-guy.jpg",
+      "tags": [
+        "我只是个 BUG 仔",
+        "bug仔",
+        "bug",
+        "code"
+      ]
+    },
+    {
+      "id": "teach-me-code",
+      "name": "教我写代码",
+      "name_en": "Teach me to code",
+      "emotion": "code",
+      "file": "teach-me-code.jpg",
+      "tags": [
+        "教我写代码",
+        "教我",
+        "learn code",
+        "code"
+      ]
+    },
+    {
+      "id": "is-it-done",
+      "name": "程序写完了吗",
+      "name_en": "Is it done yet?",
+      "emotion": "code",
+      "file": "is-it-done.jpg",
+      "tags": [
+        "程序写完了吗",
+        "写完了吗",
+        "done",
+        "code"
+      ]
+    },
+    {
+      "id": "ill-take-blame",
+      "name": "这锅我背",
+      "name_en": "I'll take the blame",
+      "emotion": "blame",
+      "file": "ill-take-blame.jpg",
+      "tags": [
+        "这锅我背",
+        "背锅",
+        "my fault",
+        "blame"
+      ]
+    },
+    {
+      "id": "less-talk-more-blame",
+      "name": "少说话，多背锅",
+      "name_en": "Less talk, more blame",
+      "emotion": "blame",
+      "file": "less-talk-more-blame.jpg",
+      "tags": [
+        "少说话，多背锅",
+        "背锅",
+        "blame"
+      ]
+    },
+    {
+      "id": "not-my-blame",
+      "name": "这个锅我不背，不背",
+      "name_en": "Not taking this blame",
+      "emotion": "blame",
+      "file": "not-my-blame.jpg",
+      "tags": [
+        "这个锅我不背，不背",
+        "不背锅",
+        "not my fault",
+        "blame"
+      ]
+    },
+    {
+      "id": "caught",
+      "name": "当场抓获",
+      "name_en": "Caught red-handed",
+      "emotion": "caught",
+      "file": "caught.jpg",
+      "tags": [
+        "当场抓获",
+        "抓获",
+        "caught"
+      ]
+    },
+    {
+      "id": "sleepy-night",
+      "name": "我突然困了，晚安",
+      "name_en": "Suddenly sleepy, night",
+      "emotion": "sleep",
+      "file": "sleepy-night.jpg",
+      "tags": [
+        "我突然困了，晚安",
+        "困",
+        "晚安",
+        "sleepy",
+        "sleep"
+      ]
+    },
+    {
+      "id": "drained",
+      "name": "感觉身体被掏空",
+      "name_en": "Feel drained",
+      "emotion": "tired",
+      "file": "drained.jpg",
+      "tags": [
+        "感觉身体被掏空",
+        "掏空",
+        "drained",
+        "tired"
+      ]
+    },
+    {
+      "id": "foxi-combo",
+      "name": "佛系三连",
+      "name_en": "Buddhist triple",
+      "emotion": "combo",
+      "file": "foxi-combo.jpg",
+      "tags": [
+        "佛系三连",
+        "三连",
+        "佛系",
+        "combo"
+      ]
+    },
+    {
+      "id": "dalao-combo",
+      "name": "大佬三连",
+      "name_en": "Big-shot triple",
+      "emotion": "combo",
+      "file": "dalao-combo.gif",
+      "tags": [
+        "大佬三连",
+        "三连",
+        "大佬",
+        "combo"
+      ]
+    },
+    {
+      "id": "respect-combo",
+      "name": "佩服三连",
+      "name_en": "Respect triple",
+      "emotion": "combo",
+      "file": "respect-combo.jpg",
+      "tags": [
+        "佩服三连",
+        "三连",
+        "佩服",
+        "combo"
+      ]
+    },
+    {
+      "id": "open-mindset",
+      "name": "格局打开",
+      "name_en": "Open your mindset",
+      "emotion": "mindset",
+      "file": "open-mindset.jpg",
+      "tags": [
+        "格局打开",
+        "格局",
+        "mindset",
+        "big picture"
+      ]
+    },
+    {
+      "id": "big-mindset",
+      "name": "格局大了",
+      "name_en": "Big mindset",
+      "emotion": "mindset",
+      "file": "big-mindset.jpg",
+      "tags": [
+        "格局大了",
+        "格局",
+        "mindset"
+      ]
+    },
+    {
+      "id": "narrow-mindset",
+      "name": "格局小了",
+      "name_en": "Small mindset",
+      "emotion": "mindset",
+      "file": "narrow-mindset.jpg",
+      "tags": [
+        "格局小了",
+        "格局",
+        "narrow",
+        "mindset"
+      ]
+    },
+    {
+      "id": "on-it",
+      "name": "安排",
+      "name_en": "I'll handle it",
+      "emotion": "handle",
+      "file": "on-it.jpg",
+      "tags": [
+        "安排",
+        "handle",
+        "on it"
+      ]
+    },
+    {
+      "id": "right-away",
+      "name": "马上安排",
+      "name_en": "On it right away",
+      "emotion": "handle",
+      "file": "right-away.jpg",
+      "tags": [
+        "马上安排",
+        "安排",
+        "right away",
+        "handle"
+      ]
+    },
+    {
+      "id": "sorted",
+      "name": "被安排的明明白白",
+      "name_en": "Handled perfectly",
+      "emotion": "handle",
+      "file": "sorted.jpg",
+      "tags": [
+        "被安排的明明白白",
+        "安排",
+        "sorted",
+        "handle"
+      ]
+    },
+    {
+      "id": "big-shot",
+      "name": "大佬大佬",
+      "name_en": "Big shot!",
+      "emotion": "respect",
+      "file": "big-shot.jpg",
+      "tags": [
+        "大佬大佬",
+        "大佬",
+        "boss",
+        "respect"
+      ]
+    },
+    {
+      "id": "bow-to-boss",
+      "name": "向大佬低头",
+      "name_en": "Bow to the big shot",
+      "emotion": "respect",
+      "file": "bow-to-boss.gif",
+      "tags": [
+        "向大佬低头",
+        "大佬",
+        "bow",
+        "respect"
+      ]
+    },
+    {
+      "id": "carry-me",
+      "name": "大佬带我，带我",
+      "name_en": "Big shot carry me",
+      "emotion": "respect",
+      "file": "carry-me.jpg",
+      "tags": [
+        "大佬带我，带我",
+        "大佬",
+        "carry me",
+        "respect"
+      ]
+    },
+    {
+      "id": "newbie-trembling",
+      "name": "萌新瑟瑟发抖",
+      "name_en": "Newbie trembling",
+      "emotion": "timid",
+      "file": "newbie-trembling.gif",
+      "tags": [
+        "萌新瑟瑟发抖",
+        "萌新",
+        "timid"
+      ]
+    },
+    {
+      "id": "broke",
+      "name": "我没钱啊",
+      "name_en": "I'm broke",
+      "emotion": "money",
+      "file": "broke.jpg",
+      "tags": [
+        "我没钱啊",
+        "没钱",
+        "broke",
+        "money"
+      ]
+    },
+    {
+      "id": "rich-is-nice",
+      "name": "有钱真好",
+      "name_en": "Being rich is nice",
+      "emotion": "money",
+      "file": "rich-is-nice.png",
+      "tags": [
+        "有钱真好",
+        "有钱",
+        "rich",
+        "money"
+      ]
+    },
+    {
+      "id": "gotta-pay",
+      "name": "得加钱",
+      "name_en": "Gotta pay more",
+      "emotion": "money",
+      "file": "gotta-pay.jpg",
+      "tags": [
+        "得加钱",
+        "加钱",
+        "pay more",
+        "money"
+      ]
+    },
+    {
+      "id": "hi",
+      "name": "你在干嘛鸭",
+      "name_en": "Hi there",
+      "emotion": "greeting",
+      "file": "hi.jpg",
+      "tags": [
+        "你在干嘛鸭",
+        "你好",
+        "hi",
+        "在吗",
+        "嗨",
+        "hello",
+        "打招呼",
+        "greeting"
+      ]
+    },
+    {
+      "id": "got-it",
+      "name": "恍然大悟",
+      "name_en": "Got it",
+      "emotion": "acknowledge",
+      "file": "got-it.jpg",
+      "tags": [
+        "恍然大悟",
+        "收到",
+        "明白",
+        "懂了",
+        "了解",
+        "get it",
+        "understood",
+        "acknowledge"
+      ]
+    },
+    {
+      "id": "nod-yes",
+      "name": "忍不住点头",
+      "name_en": "Nodding yes",
+      "emotion": "agree",
+      "file": "nod-yes.gif",
+      "tags": [
+        "忍不住点头",
+        "同意",
+        "点头",
+        "收到",
+        "对",
+        "没问题",
+        "agree",
+        "yes",
+        "nod"
+      ]
+    },
+    {
+      "id": "thanks",
+      "name": "谢谢",
+      "name_en": "Thanks",
+      "emotion": "thanks",
+      "file": "thanks.jpg",
+      "tags": [
+        "谢谢",
+        "感谢",
+        "多谢",
+        "thanks",
+        "thank you"
+      ]
+    },
+    {
+      "id": "heart-hands",
+      "name": "比心",
+      "name_en": "Heart hands",
+      "emotion": "love",
+      "file": "heart-hands.jpg",
+      "tags": [
+        "比心",
+        "爱",
+        "喜欢",
+        "么么",
+        "love",
+        "heart"
+      ]
+    },
+    {
+      "id": "wow-nice",
+      "name": "绝赞",
+      "name_en": "Awesome",
+      "emotion": "praise",
+      "file": "wow-nice.jpg",
+      "tags": [
+        "绝赞",
+        "厉害",
+        "牛逼",
+        "赞",
+        "绝了",
+        "awesome",
+        "amazing",
+        "praise"
+      ]
+    }
+  ]
+}

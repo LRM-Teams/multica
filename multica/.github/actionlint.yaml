@@ -1,0 +1,8 @@
+# Custom labels for self-hosted runners, so actionlint doesn't flag them as
+# unknown. `ci` selects the generic build/test lane; `aliyun` remains
+# registered for the protected production deploy job.
+self-hosted-runner:
+  labels:
+    - aliyun
+    - ci
+    - s89

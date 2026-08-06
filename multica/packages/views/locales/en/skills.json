@@ -1,0 +1,461 @@
+{
+  "page": {
+    "title": "Skills",
+    "tagline": "Instructions any agent in this workspace can use.",
+    "learn_more": "Learn more →",
+    "new_skill": "New skill",
+    "search_placeholder": "Search skills…",
+    "scopes": {
+      "all": {
+        "label": "All",
+        "description": "All skills in this workspace"
+      },
+      "used": {
+        "label": "In use",
+        "description": "Skills assigned to at least one agent"
+      },
+      "unused": {
+        "label": "Unused",
+        "description": "Skills not assigned to any agent"
+      },
+      "mine": {
+        "label": "Created by me",
+        "description": "Skills you created"
+      }
+    },
+    "empty": {
+      "title": "No skills yet",
+      "description": "Create your first skill, import one from a URL, or copy one from a connected runtime — and every agent in the workspace can use it."
+    },
+    "no_matches": {
+      "title": "No matches",
+      "with_query": "No skills match \"{{query}}\"{{filterSuffix}}.",
+      "with_query_filter_suffix": " in this filter",
+      "filter_only": "No skills match this filter.",
+      "try_different": " Try a different query."
+    },
+    "intro_banner": {
+      "title": "Shared with your workspace.",
+      "body": "Anyone can create a skill, import one from a URL, or copy one from their local runtime — and every agent can use it.",
+      "highlight": "Local runtime skills stay private until you copy one here."
+    },
+    "list_error": {
+      "title": "Couldn't load skills",
+      "fallback": "Something went wrong fetching the skill list.",
+      "retry": "Try again"
+    },
+    "supporting_data_warning": "Some workspace data failed to load. Creator attribution, runtime names, or edit permissions may appear incomplete.",
+    "review_queue": {
+      "label": "Review queue",
+      "description": "Review generated memories and skills before promotion."
+    }
+  },
+  "table": {
+    "name": "Name",
+    "used_by": "Used by",
+    "source": "Source · Added by",
+    "updated": "Updated",
+    "no_description": "No description",
+    "lock_tooltip": "Read-only — only creator or admin can edit",
+    "unused": "— unused",
+    "by_creator": "by {{name}}",
+    "source_manual": "Created manually",
+    "source_runtime_named": "From {{name}}",
+    "source_runtime_provider": "From {{provider}} runtime",
+    "source_runtime_unknown": "From a runtime",
+    "source_runtime_shared_named": "Synced from {{name}}",
+    "source_runtime_shared_provider": "Synced from {{provider}} shared folder",
+    "source_runtime_shared_unknown": "Synced from shared folder",
+    "source_clawhub": "From ClawHub",
+    "source_skills_sh": "From Skills.sh",
+    "source_github": "From GitHub",
+    "source_platform": "From Multica"
+  },
+  "detail": {
+    "all_skills": "All skills",
+    "read_only": "Read-only",
+    "delete_aria": "Delete skill",
+    "delete_tooltip": "Delete skill",
+    "supporting_data_warning": "Some workspace data failed to load. Creator attribution, runtime names, or edit permissions may appear incomplete until the next refresh.",
+    "files_label": "Files · {{count}}",
+    "add_file_aria": "Add file",
+    "add_file_tooltip": "Add file",
+    "delete_file": "Delete file",
+    "name_aria": "Skill name",
+    "name_placeholder": "skill-name",
+    "description_label": "Description",
+    "description_placeholder": "One sentence describing when an agent should use this skill…",
+    "subline": {
+      "origin_runtime_named": "Local runtime · {{name}}",
+      "origin_runtime_provider": "Local runtime · {{provider}}",
+      "origin_runtime_unknown": "Local runtime",
+      "origin_runtime_shared_named": "Shared folder · {{name}}",
+      "origin_runtime_shared_provider": "Shared folder · {{provider}}",
+      "origin_runtime_shared_unknown": "Shared folder",
+      "origin_clawhub": "Imported · ClawHub",
+      "origin_skills_sh": "Imported · Skills.sh",
+      "origin_github": "Imported · GitHub",
+      "origin_workspace": "Workspace",
+      "updated_label": "Updated {{when}}",
+      "by_creator": "by {{name}}",
+      "origin_platform": "Multica platform"
+    },
+    "conflict_banner": {
+      "title": "Someone else updated this skill",
+      "body": "Your edits are preserved. Discard to pull their changes, or Save to overwrite."
+    },
+    "save_bar": {
+      "unsaved": "Unsaved changes — will overwrite the live skill on save",
+      "discard": "Discard",
+      "save": "Save changes",
+      "saving": "Saving…"
+    },
+    "sidebar": {
+      "metadata": "Metadata",
+      "created": "Created",
+      "updated": "Updated",
+      "created_by": "Created by",
+      "files": "Files",
+      "id": "ID",
+      "origin": "Origin",
+      "used_by_one": "Used by {{count}} agent",
+      "used_by_other": "Used by {{count}} agents",
+      "permissions": "Permissions",
+      "permissions_owner": "You can edit and delete this skill. Changes take effect on the next agent run.",
+      "permissions_locked_creator": "Only the creator ({{name}}) or a workspace admin can edit this skill.",
+      "permissions_locked": "Only the creator or a workspace admin can edit this skill.",
+      "used_by_empty": "Not assigned to any agent yet. Open an agent's Skills tab to assign."
+    },
+    "origin_card": {
+      "imported_runtime": "Imported from local runtime",
+      "imported_runtime_shared": "Synced from shared runtime folder",
+      "imported_clawhub": "Imported from ClawHub",
+      "imported_skills_sh": "Imported from Skills.sh",
+      "imported_github": "Imported from GitHub",
+      "provider": "provider · {{provider}}",
+      "imported_platform": "From Multica platform"
+    },
+    "not_found": {
+      "title": "Skill not found",
+      "fallback": "This skill may have been deleted or you lost access.",
+      "back": "Back to Skills"
+    },
+    "toast_saved": "Skill saved",
+    "toast_save_failed": "Failed to save skill",
+    "toast_deleted": "Skill deleted",
+    "toast_delete_failed": "Failed to delete skill",
+    "delete_dialog": {
+      "title": "Delete skill?",
+      "description_with_agents_one": "This will permanently delete \"{{name}}\" and remove it from {{count}} agent currently using it.",
+      "description_with_agents_other": "This will permanently delete \"{{name}}\" and remove it from {{count}} agents currently using it.",
+      "description_no_agents": "This will permanently delete \"{{name}}\" and remove it from all agents.",
+      "warning": "This action cannot be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete permanently",
+      "deleting": "Deleting…"
+    },
+    "add_file": {
+      "placeholder": "templates/review.md",
+      "add": "Add",
+      "cancel": "Cancel",
+      "errors": {
+        "empty": "Path cannot be empty.",
+        "absolute": "Absolute paths are not allowed.",
+        "double_dot": "Paths cannot contain \"..\".",
+        "reserved": "SKILL.md is reserved for the main file.",
+        "exists": "A file at this path already exists."
+      }
+    },
+    "grant": {
+      "title": "Grant level",
+      "level_agent": "Agent (L1)",
+      "level_channel": "Channel (L2)",
+      "level_workspace": "Workspace (L3)",
+      "hint": "Imports start at Agent. Promote to a channel or the whole workspace when you need wider access.",
+      "promote_channel": "Authorize to channel",
+      "promote_workspace": "Promote to workspace default",
+      "audit_title": "Promotion history",
+      "audit_loading": "Loading promotion history…",
+      "audit_unavailable": "Promotion history isn’t available yet on this server.",
+      "audit_empty": "No promotions yet.",
+      "actor_unknown": "Unknown actor",
+      "channel_fallback": "Channel",
+      "channel_dialog_title": "Authorize skill to a channel",
+      "channel_dialog_body": "Channel owners and managers can grant this skill to agents in the selected channel.",
+      "channel_label": "Channel",
+      "channel_placeholder": "Select a channel",
+      "channel_empty": "No group channels available",
+      "cancel": "Cancel",
+      "confirm_channel": "Authorize",
+      "promoting": "Promoting…",
+      "toast_promoted_channel": "Skill authorized to channel",
+      "toast_promoted_workspace": "Skill promoted to workspace default",
+      "toast_promote_failed": "Couldn’t promote skill"
+    }
+  },
+  "create": {
+    "back": "Back",
+    "back_aria": "Back to method chooser",
+    "close": "Close",
+    "close_aria": "Close",
+    "method": {
+      "chooser": {
+        "title": "New skill",
+        "desc": "Choose how you want to add a skill to this workspace."
+      },
+      "manual": {
+        "title": "Create manually",
+        "desc": "Write a new SKILL.md from scratch."
+      },
+      "url": {
+        "title": "Import from URL",
+        "desc": "Fetch a published skill by URL. Files are pulled server-side."
+      },
+      "runtime": {
+        "title": "Copy from runtime",
+        "desc": "Scan a local runtime and promote one of its on-disk skills into this workspace."
+      },
+      "platform": {
+        "title": "Install platform workflow",
+        "desc": "Add a Multica-maintained migration skill to this workspace."
+      }
+    },
+    "method_card": {
+      "manual_title": "Create manually",
+      "manual_desc": "Start from a blank SKILL.md and write your own instructions.",
+      "url_title": "Import from URL",
+      "url_desc": "Pull a published skill from ClawHub or Skills.sh.",
+      "runtime_title": "Copy from runtime",
+      "runtime_desc": "Promote a skill already installed on your local runtime.",
+      "platform_title": "Memory migration workflow",
+      "platform_desc": "Install Multica's staged semantic migration skill, then assign it to agents that need to migrate old memory."
+    },
+    "manual": {
+      "name_label": "Name",
+      "name_placeholder": "e.g. review-helper",
+      "name_hint": "Must be unique within the workspace.",
+      "description_label": "Description",
+      "description_placeholder": "One sentence on when to assign this skill to an agent.",
+      "name_conflict_hint": " Try a different name and submit again.",
+      "fallback_error": "Failed to create skill",
+      "cancel": "Cancel",
+      "submit": "Create skill",
+      "submitting": "Creating…",
+      "toast_created": "Skill created"
+    },
+    "url": {
+      "url_label": "Skill URL",
+      "supported_sources": "Supported sources",
+      "import": "Import",
+      "importing": "Importing…",
+      "importing_clawhub": "Importing from ClawHub…",
+      "importing_skills_sh": "Importing from Skills.sh…",
+      "importing_github": "Importing from GitHub…",
+      "name_conflict_hint": " The imported skill's name already exists — delete the existing one before retrying.",
+      "fallback_error": "Import failed",
+      "cancel": "Cancel",
+      "toast_imported": "Skill imported"
+    },
+    "platform": {
+      "skill_title": "multica-memory-migration",
+      "skill_desc": "Adds a guided workflow for semantic migration from old agent folders: inventory, alias mapping, candidate extraction, REVIEW.md triage, safe writes, and a final report.",
+      "cancel": "Cancel",
+      "install": "Install skill",
+      "installing": "Installing...",
+      "toast_installed": "Installed migration skill",
+      "fallback_error": "Failed to install platform skill"
+    }
+  },
+  "runtime_import": {
+    "runtime_label": "Runtime",
+    "runtime_placeholder": "Select a local runtime",
+    "no_local_runtimes_title": "No local runtimes available",
+    "no_local_runtimes_hint": "Connect a local runtime to browse and import its local skills.",
+    "choose_runtime": "Choose a runtime to continue",
+    "must_be_online": "Runtime must be online to browse local skills.",
+    "load_failed": "Failed to load runtime local skills",
+    "not_supported": "This runtime provider does not expose local skill inventory yet.",
+    "no_skills_title": "No local skills found",
+    "no_skills_hint": "This runtime does not have any discoverable local skills yet.",
+    "ignored_files_hint": "Symlinks, unreadable files, oversized files, and very large bundles are ignored during import.",
+    "ready": "Ready to import",
+    "into_workspace": "into this workspace.",
+    "select_skill": "Select a skill to continue.",
+    "import_button": "Import to Workspace",
+    "importing": "Importing…",
+    "skill_files_one": "{{count}} file",
+    "skill_files_other": "{{count}} files",
+    "skill_name_label": "Workspace skill name",
+    "skill_description_label": "Description",
+    "skill_description_placeholder": "Optional — describe when an agent should use this skill.",
+    "toast_imported": "Skill imported",
+    "toast_import_failed": "Failed to import skill",
+    "select_all": "Select all ({{count}})",
+    "bulk_ready": "{{count}} skills selected",
+    "bulk_import_button": "Import {{count}} Skills",
+    "bulk_progress": "Importing {{completed}} / {{total}}…",
+    "bulk_cancel_button": "Cancel",
+    "bulk_complete_hint": "Import complete.",
+    "bulk_cancelled_hint": "Import cancelled.",
+    "bulk_done_button": "Done",
+    "bulk_summary_created": "Created",
+    "bulk_summary_updated": "Updated",
+    "bulk_summary_conflicts": "Conflicts",
+    "bulk_summary_skipped": "Skipped",
+    "bulk_summary_failed": "Failed",
+    "conflict_single_title": "A skill with this name already exists",
+    "conflict_bulk_title": "{{count}} skills need a decision",
+    "conflict_hint": "Choose whether to overwrite the existing workspace skill, import with a new name, or skip it.",
+    "conflict_locked_creator": "This skill was created by {{creator}}. Only the creator can overwrite it from local import; edit it from the Skill detail page if you need to change it.",
+    "conflict_locked": "Only the creator can overwrite this skill from local import; edit it from the Skill detail page if you need to change it.",
+    "conflict_overwrite": "Overwrite",
+    "conflict_rename": "Rename",
+    "conflict_skip": "Skip",
+    "conflict_cancel": "Cancel",
+    "conflict_overwrite_all": "Overwrite all",
+    "conflict_skip_all": "Skip all",
+    "conflict_rename_label": "New skill name",
+    "conflict_footer": "{{count}} conflict decisions pending.",
+    "conflict_apply_button": "Apply decisions",
+    "conflict_missing_resolution": "Choose how to resolve this conflict.",
+    "conflict_name_still_exists": "That name already exists. Choose another name or skip."
+  },
+  "file_tree": {
+    "no_files": "No files"
+  },
+  "file_viewer": {
+    "edit_tooltip": "Edit",
+    "preview_tooltip": "Preview",
+    "no_content": "*No content yet*",
+    "markdown_placeholder": "Write markdown content...",
+    "raw_placeholder": "File content..."
+  },
+  "evolution_review": {
+    "title": "Evolution Review Queue",
+    "description": "Review agent-submitted memories and skills that need a human decision before they are promoted into the workspace catalog.",
+    "status_filter": "Submission status",
+    "refresh": "Refresh",
+    "refreshing": "Refreshing...",
+    "loading": "Loading review queue...",
+    "empty_title": "No submissions in this queue",
+    "empty_description": "Reviewer decisions that need attention will appear here.",
+    "toast_promoted": "Submission promoted",
+    "toast_rejected": "Submission rejected",
+    "toast_failed": "Failed to update submission",
+    "untitled": "Untitled submission",
+    "unknown": "Unknown",
+    "none": "None",
+    "no_summary": "No summary provided.",
+    "no_review_reason": "No review rationale provided.",
+    "no_content": "No content provided.",
+    "decision": "Decision",
+    "confidence": "Reviewer confidence",
+    "sensitivity": "Sensitivity",
+    "updated": "Updated",
+    "review_reason": "Review rationale",
+    "content": "Content preview",
+    "files": "Files",
+    "reason_label": "Decision reason",
+    "reason_placeholder": "Optional note for the audit trail",
+    "reject": "Reject",
+    "promote": "Promote",
+    "decision_disabled_hint": "Only submissions currently in needs_review can be promoted or rejected.",
+    "statuses": {
+      "needs_review": "Needs review",
+      "rejected": "Rejected",
+      "promoted": "Promoted",
+      "candidate": "Candidate"
+    },
+    "unit_types": {
+      "memory": "Memory",
+      "skill": "Skill",
+      "workflow": "Workflow",
+      "tool_pattern": "Tool pattern",
+      "preference": "Preference"
+    },
+    "delivery_types": {
+      "generated": "Generated skill",
+      "inbox": "Inbox",
+      "recommendation": "Recommendation",
+      "shared_cache": "Shared cache"
+    },
+    "promotion_outcomes": {
+      "skill": "Workspace skill + agent suggestions",
+      "memory": "Shared evolution unit only"
+    },
+    "review_decisions": {
+      "promote": "Promote",
+      "needs_review": "Needs review",
+      "reject": "Reject"
+    },
+    "confidence_levels": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High"
+    },
+    "sensitivity_levels": {
+      "none": "None",
+      "local_path": "Local path",
+      "personal": "Personal",
+      "secret": "Secret",
+      "unknown": "Unknown"
+    },
+    "metadata_sources": {
+      "manual_seed": "Manual seed",
+      "human_review": "Human review",
+      "deterministic_rules": "Rules engine",
+      "evolution_reviewer": "Evolution reviewer",
+      "agent_reviewer": "Agent reviewer",
+      "llm_reviewer": "LLM reviewer"
+    },
+    "risks": {
+      "low": "Low risk",
+      "medium": "Medium risk",
+      "high": "High risk",
+      "unknown": "Unknown risk"
+    },
+    "source_agent": "Source agent",
+    "submission_confidence": "Submission confidence",
+    "audit_summary": "Audit summary",
+    "metadata_source": "Source",
+    "metadata_provider": "Provider",
+    "metadata_model": "Model",
+    "metadata_session": "Session",
+    "metadata_rationale": "Rationale",
+    "metadata_risks": "Risks",
+    "delivery_preview": "Delivery preview",
+    "promotion_preview": "Promotion preview",
+    "delivery_type": "Delivery type",
+    "promotion_outcome": "Promotion outcome",
+    "delivery_target": "Target",
+    "source_agent_label": "Source agent",
+    "promoted_unit": "Promoted unit",
+    "promoted_result": "Promoted",
+    "pending_result": "Not promoted yet",
+    "promotion_result_hint": "Promotion created a shared evolution unit and queued delivery for the source agent.",
+    "promotion_result_hint_skill": "Promotion materialized a workspace skill and queued binding suggestions for matching agents.",
+    "promotion_result_hint_memory": "Promotion stored a shared evolution unit. Memory is not auto-assigned to agents.",
+    "review_metadata": "Raw review metadata",
+    "apply_suggestions": "Apply reviewer suggestions",
+    "apply_suggestions_hint": "Use reviewer title, summary, tags, task types, and scope when promoting.",
+    "no_suggestions_hint": "This review did not include normalization suggestions.",
+    "metadata_prompt_version": "Prompt version",
+    "candidate_evidence": "Candidate evidence",
+    "skill_draft": "Generated skill draft",
+    "source_agent_missing": "Source agent is unavailable",
+    "skill_assignment_updated": "Skill assignment updated",
+    "disable_for_source": "Disable for source agent",
+    "enable_for_source": "Enable for source agent",
+    "reuse_feedback": "Reuse feedback",
+    "reuse_used": "Uses",
+    "reuse_success_rate": "Success rate",
+    "reuse_success": "Success",
+    "reuse_failure": "Failure",
+    "reuse_ignored": "Ignored",
+    "reuse_conflicts": "Conflicts",
+    "insufficient_permissions": "You need workspace admin permission for this action.",
+    "evidence_source": "Evidence source",
+    "evidence_source_date": "Source date",
+    "evidence_refs": "Reference types"
+  }
+}

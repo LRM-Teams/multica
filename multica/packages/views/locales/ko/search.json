@@ -1,0 +1,97 @@
+{
+  "title": "검색",
+  "description": "페이지, 이슈, 프로젝트, 멤버를 검색합니다",
+  "placeholder": "명령어를 입력하거나 검색하세요...",
+  "groups": {
+    "pages": "페이지",
+    "commands": "명령어",
+    "members": "멤버",
+    "agents": "에이전트",
+    "projects": "프로젝트",
+    "issues": "이슈",
+    "recent": "최근 항목"
+  },
+  "actions": {
+    "send_message": "메시지 보내기"
+  },
+  "pages": {
+    "inbox": "활동",
+    "my_issues": "내 이슈",
+    "issues": "이슈",
+    "projects": "프로젝트",
+    "agents": "에이전트",
+    "computers": "컴퓨터",
+    "skills": "스킬",
+    "settings": "설정"
+  },
+  "commands": {
+    "current_theme_aria": "현재 테마",
+    "new_issue": "새 이슈",
+    "new_project": "새 프로젝트",
+    "copy_issue_link": "이슈 링크 복사",
+    "copy_identifier": "식별자 복사 ({{identifier}})",
+    "switch_to_light": "라이트 테마로 전환",
+    "switch_to_dark": "다크 테마로 전환",
+    "use_system_theme": "시스템 테마 사용"
+  },
+  "toast": {
+    "link_copied": "링크를 복사했습니다",
+    "copied_identifier": "{{identifier}}를 복사했습니다"
+  },
+  "empty": {
+    "no_results": "검색 결과가 없습니다.",
+    "type_to_search": "이슈와 프로젝트를 검색해 보세요"
+  },
+  "trigger": {
+    "label": "검색..."
+  },
+  "globalSearch": {
+    "title": "전역 검색",
+    "description": "채널·DM·메시지·멤버를 검색합니다",
+    "placeholder": "채널·DM·메시지를 검색…",
+    "from_placeholder": "키워드 추가（선택）…",
+    "from_chip": "from:{{label}}",
+    "remove_from_filter": "작성자 필터 제거",
+    "range_channel": "이 채널",
+    "range_workspace": "워크스페이스",
+    "include_thread": "스레드 포함",
+    "mainline_only": "메인만",
+    "scope": {
+      "all": "전체",
+      "messages": "메시지",
+      "channels": "채널",
+      "dms": "DM",
+      "people": "멤버"
+    },
+    "groups": {
+      "channels": "채널",
+      "dms": "다이렉트 메시지",
+      "messages": "메시지",
+      "people": "멤버"
+    },
+    "states": {
+      "recent": "최근 검색",
+      "jump_to": "이동",
+      "empty": "“{{query}}”에 대한 결과가 없습니다. 더 짧은 키워드로 시도하거나 필터를 조정해 보세요.",
+      "denied_title": "이 범위는 검색할 수 없습니다.",
+      "denied_body": "일치하는 항목을 볼 수 있는 권한이 없습니다(예: 가입하지 않은 비공개 채널). 다른 키워드를 시도하거나 제한된 필터를 제거하세요.",
+      "error_title": "검색에 실패했습니다.",
+      "retry": "다시 시도",
+      "loading": "검색 중…"
+    },
+    "row": {
+      "thread_hits": "THREAD · {{count}}건 일치",
+      "mainline": "메인",
+      "in_thread": "스레드",
+      "members": "{{count}}명",
+      "joined": "참여 중",
+      "dm_placeholder": "다이렉트 메시지"
+    },
+    "actions": {
+      "open_channel": "채널 열기",
+      "open_dm": "DM 열기",
+      "open_message": "메시지 열기",
+      "view_profile": "프로필 보기"
+    }
+  }
+}

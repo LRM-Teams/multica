@@ -1,0 +1,66 @@
+# The dev deployment on 101.200.210.144 is served through leagent.me by the
+# repository-managed Caddy service. Keep application ports private to the host
+# or Compose network; only Caddy exposes the public HTTP/HTTPS entrypoints.
+#
+# Aliyun OSS credentials / SDK workarounds live in docker-compose.oss.yml —
+# deploy.yml always stacks selfhost + aliyun + oss (see LRM-766).
+services:
+  backend:
+    ports: !override
+      - "127.0.0.1:${BACKEND_PORT:-${API_PORT:-${SERVER_PORT:-${PORT:-8080}}}}:8080"
+    environment:
+      FRONTEND_ORIGIN: https://leagent.me
+      GOOGLE_REDIRECT_URI: https://leagent.me/auth/callback
+      MULTICA_APP_URL: https://leagent.me
+      MULTICA_PUBLIC_URL: https://leagent.me
+      # LLM proxy base_url injected into env-dispatch training sandboxes. Must be
+      # the address the cube sandbox VM can actually route to. The training pi
+      # agent runs inside a cube microVM on the 192.168.0.0/18 network whose
+      # gateway is the host's cube-dev bridge 192.168.0.1; the VM cannot reach the
+      # host's LAN IP 10.110.158.143 (different interface, egress default-deny).
+      # The db_bridge chat stub binds 0.0.0.0:9100 so it also listens on
+      # 192.168.0.1:9100, which the sandbox reaches via its gateway (port 9100 is
+      # egress-allowlisted). NO /v1 suffix: the stub serves "/chat/completions".
+      # From there it bridges over the shared Supabase to the DeepSeek gateway.
+      AREAL_PROXY_URL: http://10.110.158.143:9100
+
+  frontend:
+    ports: !reset []
+
+  # The Aliyun host has no local Supabase/PostgREST (only raw postgres on 5432)
+  # and no tunnel on 54321, so the deploy .env's SUPABASE_URL=http://127.0.0.1:54321
+  # is dead — the db_bridge stub gets httpx.ConnectError and every RL request
+  # (start_session/close_segment/set_reward/end_session) returns 500. SUPABASE_URL
+  # is consumed ONLY by this stub, and it must point at the SAME shared Supabase
+  # the AReaL-side executor polls. Pin it here (overrides the .env value; verified
+  # reachable from this host with the deployed service-role key + RL schema).
+  db-bridge-stub-multica:
+    environment:
+      SUPABASE_URL: http://82.157.184.89:54321
+
+  caddy:
+    image: caddy:2.11.3@sha256:ec18ee54aab3315c22e25f3b2babda73ff8007d39b13b3bd1bfffa2f0444c7d9
+    container_name: multica-caddy
+    depends_on:
+      - frontend
+      - backend
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+      - "0.0.0.0:443:443/udp"
+      - "0.0.0.0:8090:8090"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      # Public, read-only CLI/daemon release feed (see deploy/aliyun/Caddyfile
+      # cdn.leagent.me handle_path /computer/*). Mounted read-only into
+      # Caddy; `/data/multica/releases` is written only by the release
+      # workflow's publish-downloads-feed job on the aliyun runner, never by
+      # this deploy job or the app containers.
+      - /data/multica/releases:/srv/multica-releases:ro
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

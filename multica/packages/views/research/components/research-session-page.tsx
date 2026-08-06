@@ -1,0 +1,995 @@
+"use client";
+
+import { useCallback, useMemo, useReducer, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertCircle, Square } from "lucide-react";
+import { toast } from "sonner";
+import { api } from "@multica/core/api";
+import { useAuthStore } from "@multica/core/auth";
+import type {
+  AgentPanelIdentitySnapshot,
+  OpenAgentPanelFn,
+} from "@multica/core/agents";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { useWorkspacePaths } from "@multica/core/paths";
+import {
+  dedupeResearchFleetMembers,
+  researchKeys,
+  researchPresenceOptions,
+  researchProductRoundsOptions,
+  researchSessionSnapshotOptions,
+  useResearchUiStore,
+} from "@multica/core/research";
+import type {
+  ResearchClarificationQuestion,
+  ResearchGraphNode,
+  ResearchProductRoundCard,
+} from "@multica/core/types";
+import { memberListOptions } from "@multica/core/workspace/queries";
+import { Button } from "@multica/ui/components/ui/button";
+import { Textarea } from "@multica/ui/components/ui/textarea";
+import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { AgentPanelProvider } from "../../common/agent-panel-context";
+import { ResolvedAgentSidePanel } from "../../common/resolved-agent-side-panel";
+import { useT } from "../../i18n/use-t";
+import {
+  CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY,
+  useProfilePanelWidth,
+} from "../../layout/use-profile-panel-width";
+import { useNavigation } from "../../navigation/context";
+import {
+  formatClarificationFormReply,
+  formatClarificationOptionReply,
+  formatClarificationSkipReply,
+} from "../lib/clarification-question";
+import {
+  buildFleetChatFeed,
+  nextStageWaitingCard,
+  presenceRunningCards,
+  type FleetStepCardModel,
+} from "../lib/fleet-step-cards";
+import { resolveCanvasBodyMode } from "../lib/canvas-body-mode";
+import { resolveChatDrawerMode } from "../lib/chat-drawer-mode";
+import {
+  dismissCompletionGuide,
+  isCompletionGuideDismissed,
+  resolveCompletionGuideKind,
+} from "../lib/completion-guide";
+import { deliveryContentCount } from "../lib/delivery-mode";
+import {
+  buildExplorationDimensions,
+  buildHumanBoundary,
+  buildSourceStrategy,
+  dimensionFamilyOf,
+} from "../lib/m2-visibility";
+import { isResearchSessionStoppable } from "../lib/research-stream";
+import {
+  RESEARCH_STAGE_ORDER,
+  resolveStageStepState,
+  stageAnchorId,
+  stageAnchorTargetId,
+  buildStageMessageAnchors,
+} from "../lib/research-stages";
+import {
+  isPostRetryWakeFailure,
+  resolveSessionInterrupt,
+} from "../lib/session-interrupt";
+import { isServerError } from "../lib/network-status";
+import { formatStageGateRejectReply } from "../lib/stage-gate-confirm";
+import { useBrowserOnline } from "../lib/use-browser-online";
+import { ExplorationRail } from "./exploration-rail";
+import { HumanBoundaryCard } from "./human-boundary-card";
+import { ResearchCanvas } from "./research-canvas";
+import { ResearchCanvasEmptyState } from "./research-canvas-empty-state";
+import { ResearchCanvasForming } from "./research-canvas-forming";
+import { ResearchChatCard } from "./research-chat-card";
+import { ResearchChatDrawer } from "./research-chat-drawer";
+import {
+  ResearchChatModeBody,
+  ResearchChatModeChip,
+} from "./research-chat-mode-body";
+import { ResearchCompletionCard } from "./research-completion-card";
+import { ResearchConnectivityShell } from "./research-connectivity-shell";
+import { ResearchDeliveryDrawer } from "./research-delivery-drawer";
+import { ResearchFleetStepCard } from "./research-fleet-step-card";
+import { ResearchLiveStream } from "./research-live-stream";
+import { ResearchProductRoundCardView } from "./research-product-round-card";
+import { ResearchServerErrorPage } from "./research-server-error-page";
+import { ResearchSessionChrome } from "./research-session-chrome";
+import {
+  ResearchSessionInterruptBanner,
+  type InterruptBannerPhase,
+} from "./research-session-interrupt-banner";
+import { ResearchSessionPageSkeleton } from "./research-session-page-skeleton";
+import { ResearchShellAtmosphere } from "./research-shell-atmosphere";
+import {
+  ResearchStageChatMarker,
+  ResearchStageTimeline,
+} from "./research-stage-timeline";
+import { SourceStrategyStrip } from "./source-strategy-strip";
+import { VisibilityTabs } from "./visibility-tabs";
+
+type UiState = {
+  selected: ResearchGraphNode | null;
+  body: string;
+  createProject: boolean;
+  createChannel: boolean;
+  deliveryOpen: boolean;
+  selectedFamily: string | null;
+};
+
+type UiAction =
+  | { type: "select"; node: ResearchGraphNode | null }
+  | { type: "setBody"; body: string }
+  | { type: "setCreateProject"; value: boolean }
+  | { type: "setCreateChannel"; value: boolean }
+  | { type: "setDeliveryOpen"; value: boolean }
+  | { type: "setFamily"; family: string | null }
+  | { type: "clearBody" };
+
+const initialUi: UiState = {
+  selected: null,
+  body: "",
+  createProject: true,
+  createChannel: true,
+  deliveryOpen: false,
+  selectedFamily: null,
+};
+
+function uiReducer(state: UiState, action: UiAction): UiState {
+  switch (action.type) {
+    case "select":
+      return {
+        ...state,
+        selected: action.node,
+        selectedFamily: action.node ? dimensionFamilyOf(action.node) : state.selectedFamily,
+      };
+    case "setBody":
+      return { ...state, body: action.body };
+    case "setCreateProject":
+      return { ...state, createProject: action.value };
+    case "setCreateChannel":
+      return { ...state, createChannel: action.value };
+    case "setDeliveryOpen":
+      return { ...state, deliveryOpen: action.value };
+    case "setFamily":
+      return { ...state, selectedFamily: action.family };
+    case "clearBody":
+      return { ...state, body: "" };
+    default:
+      return state;
+  }
+}
+
+function mutationErrorToast(fallback: string, err: unknown) {
+  showErrorToast(err instanceof Error && err.message ? err.message : fallback);
+}
+
+export function ResearchSessionPage({ sessionId }: { sessionId: string }) {
+  const { t } = useT("research");
+  const { t: tAgents } = useT("agents");
+  const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
+  const nav = useNavigation();
+  const qc = useQueryClient();
+  const isMobile = useIsMobile();
+  const currentUserId = useAuthStore((s) => s.user?.id ?? null);
+  const chatOpen = useResearchUiStore((s) => s.chatDrawerOpen);
+  const setChatOpen = useResearchUiStore((s) => s.setChatDrawerOpen);
+  // LRM-832 — dismiss is per-session (localStorage + in-memory for this visit).
+  const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
+  const completionDismissed =
+    dismissedSessionId === sessionId || isCompletionGuideDismissed(sessionId);
+  const dismissCompletion = useCallback(() => {
+    dismissCompletionGuide(sessionId);
+    setDismissedSessionId(sessionId);
+  }, [sessionId]);
+  const online = useBrowserOnline();
+  const { data, isLoading, isFetching, isError, error, refetch } = useQuery(
+    researchSessionSnapshotOptions(wsId, sessionId),
+  );
+  const { data: presence = {} } = useQuery(researchPresenceOptions(wsId, sessionId));
+  const { data: productRounds } = useQuery(researchProductRoundsOptions(wsId, sessionId));
+  const [ui, dispatch] = useReducer(uiReducer, initialUi);
+  // LRM-776 — dock Agent side panel like channels/DM (local AgentPanelProvider).
+  const [agentDock, setAgentDock] = useState<{
+    agentId: string;
+    snapshot: AgentPanelIdentitySnapshot | null;
+  } | null>(null);
+  const handleOpenAgentPanel = useCallback<OpenAgentPanelFn>((agentId, snapshot) => {
+    setAgentDock({ agentId, snapshot: snapshot ?? null });
+  }, []);
+  const { data: workspaceMembers = [] } = useQuery({
+    ...memberListOptions(wsId),
+    enabled: !!agentDock,
+  });
+  const {
+    width: agentSideWidth,
+    onResizePointerDown: onAgentSideResizePointerDown,
+  } = useProfilePanelWidth(CHANNEL_DETAIL_SIDE_WIDTH_STORAGE_KEY);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  // Stick-to-bottom while content grows (live stream / new cards); releases if
+  // the user scrolls up to read history — no jump-scroll (LRM-820).
+  useAutoScroll(chatScrollRef, chatOpen);
+
+  const send = useMutation({
+    mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
+    onSuccess: () => {
+      dispatch({ type: "clearBody" });
+      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.productRounds(wsId, sessionId) });
+    },
+    onError: (err) => mutationErrorToast(t(($) => $.session_page.send_failed), err),
+  });
+
+  const stop = useMutation({
+    mutationFn: () => api.stopResearchSession(sessionId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.presence(wsId, sessionId) });
+      toast.success(t(($) => $.actions.stop_done));
+    },
+    onError: (err) =>
+      showErrorToast(err instanceof Error ? err.message : String(err)),
+  });
+
+  const confirm = useMutation({
+    mutationFn: () => api.confirmResearchSession(sessionId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+      toast.success(t(($) => $.session_page.confirm_done));
+    },
+    onError: (err) => mutationErrorToast(t(($) => $.session_page.confirm_failed), err),
+  });
+
+  // LRM-840 — reject stage-gate confirm: tip → agent + status resumes via BE.
+  const rejectConfirm = useMutation({
+    mutationFn: (body: string) => api.postResearchMessage(sessionId, { body }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+      void qc.invalidateQueries({ queryKey: researchKeys.sessions(wsId) });
+      toast.success(t(($) => $.session_page.reject_done));
+    },
+    onError: (err) => mutationErrorToast(t(($) => $.session_page.reject_failed), err),
+  });
+
+  const handoff = useMutation({
+    mutationFn: () =>
+      api.researchSessionHandoff(sessionId, {
+        create_project: ui.createProject,
+        create_channel: ui.createChannel,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) });
+    },
+    onError: (err) => mutationErrorToast(t(($) => $.session_page.handoff_failed), err),
+  });
+
+  // LRM-890 M2 visibility models — derived from graph nodes / sources / report.
+  const explorationDims = useMemo(
+    () => buildExplorationDimensions(data?.nodes ?? []),
+    [data?.nodes],
+  );
+  const sourceStrategy = useMemo(
+    () => buildSourceStrategy(data?.sources ?? []),
+    [data?.sources],
+  );
+  const humanBoundary = useMemo(
+    () => buildHumanBoundary(data?.nodes ?? [], data?.report),
+    [data?.nodes, data?.report],
+  );
+
+  // LRM-824 — anchor targets (hooks must stay above the early returns below).
+  const stageFirstMessageId = useMemo(
+    () => buildStageMessageAnchors(data?.messages ?? []),
+    [data?.messages],
+  );
+  const anchorTarget = useCallback((el: HTMLElement | null) => {
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    el.classList.add("research-anchor-flash");
+    window.setTimeout(() => el.classList.remove("research-anchor-flash"), 1000);
+  }, []);
+  const handleSelectStage = useCallback(
+    (stage: string) => {
+      setChatOpen(true);
+      // Wait a frame so the chat pane mounts before scrolling.
+      requestAnimationFrame(() => {
+        const firstMessageId = stageFirstMessageId.get(stage);
+        const el =
+          (firstMessageId
+            ? document.getElementById(stageAnchorTargetId(firstMessageId))
+            : null) ??
+          document.getElementById(stageAnchorId(stage)) ??
+          chatScrollRef.current?.querySelector(`[data-research-stage="${stage}"]`) ??
+          null;
+        anchorTarget(el as HTMLElement | null);
+      });
+    },
+    [anchorTarget, setChatOpen, stageFirstMessageId],
+  );
+
+  // LRM-823 — session interrupt banner (wake_failed / disconnect). Hooks stay
+  // above early returns; banner auto-hides when the tip process event recovers.
+  const sessionInterrupt = useMemo(
+    () => resolveSessionInterrupt(data?.messages ?? []),
+    [data?.messages],
+  );
+  const interruptId = sessionInterrupt?.messageId ?? null;
+  const [interruptPhase, setInterruptPhase] = useState<InterruptBannerPhase>("idle");
+  const interruptSyncIdRef = useRef<string | null>(interruptId);
+  const interruptRetryPriorIdRef = useRef<string | null>(null);
+  // Adjust phase when the tip interrupt identity changes (no useEffect — react-doctor).
+  if (interruptId !== interruptSyncIdRef.current) {
+    interruptSyncIdRef.current = interruptId;
+    if (!interruptId) {
+      interruptRetryPriorIdRef.current = null;
+      setInterruptPhase("idle");
+    } else if (
+      isPostRetryWakeFailure(data?.messages ?? [], interruptRetryPriorIdRef.current)
+    ) {
+      setInterruptPhase("retry_failed");
+    }
+  }
+
+  const retrySessionInterrupt = useCallback(() => {
+    if (!sessionInterrupt) return;
+    const reason = sessionInterrupt.reason
+      ? `（reason=${sessionInterrupt.reason}）`
+      : "";
+    const body = `请重试刚才失败的唤醒${reason}：${sessionInterrupt.headline}。配置根因仍走运维/LRM-858；本条只请求再试一次。`;
+    interruptRetryPriorIdRef.current = sessionInterrupt.messageId;
+    setInterruptPhase("pending");
+    void api
+      .postResearchMessage(sessionId, { body })
+      .then(() =>
+        qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
+      )
+      .then(() => {
+        // Request accepted — keep banner until tip process recovers; secondary
+        // feedback only when a newer wake_failed lands (sync above).
+        setInterruptPhase((phase) => (phase === "retry_failed" ? phase : "idle"));
+      })
+      .catch((err) => {
+        setInterruptPhase("retry_failed");
+        mutationErrorToast(t(($) => $.session_page.send_failed), err);
+      });
+  }, [sessionInterrupt, sessionId, qc, wsId, t]);
+
+  // LRM-799: never keep a permanent skeleton on failure — only while loading.
+  // LRM-781 / LRM-979: skeleton mirrors chrome + canvas shell so first paint does not flash blank.
+  // LRM-833: offline with no cache keeps skeleton under the connectivity banner (no white screen).
+  if (isLoading || (isFetching && !data) || (!data && !online)) {
+    return (
+      <ResearchConnectivityShell>
+        <ResearchSessionPageSkeleton />
+      </ResearchConnectivityShell>
+    );
+  }
+
+  // LRM-833 — 5xx with no cache: dedicated error page + retry.
+  if (!data && isError && isServerError(error)) {
+    return (
+      <ResearchConnectivityShell>
+        <ResearchServerErrorPage
+          onRetry={() => {
+            void refetch();
+          }}
+          message={error instanceof Error ? error.message : null}
+          retrying={isFetching}
+        />
+      </ResearchConnectivityShell>
+    );
+  }
+
+  // Keep successful snapshot on refetch failure so Delivery can show its error
+  // surface (LRM-993) instead of blanking the whole session shell.
+  if (!data) {
+    return (
+      <ResearchConnectivityShell>
+        <div
+          role="alert"
+          data-testid="research-session-load-error"
+          className="flex h-full flex-col items-center justify-center gap-3 px-6 py-12 text-center"
+        >
+          <AlertCircle className="size-6 text-destructive" aria-hidden />
+          <p className="text-sm text-destructive">
+            {error instanceof Error && error.message
+              ? error.message
+              : t(($) => $.session_page.load_failed)}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void refetch();
+            }}
+          >
+            {t(($) => $.session_page.retry)}
+          </Button>
+        </div>
+      </ResearchConnectivityShell>
+    );
+  }
+
+  const { session, messages, report, sources } = data;
+  const fleetMembers = dedupeResearchFleetMembers(data.fleet.members);
+  const fleet = { ...data.fleet, members: fleetMembers };
+  const canvasMode = resolveCanvasBodyMode(data.nodes.length, session.status);
+  const canConfirm = session.status === "awaiting_user_confirm" || session.status === "running";
+  const canHandoff = session.status === "completed" || session.status === "awaiting_user_confirm";
+  const canStop = isResearchSessionStoppable(session.status);
+  const isPaused = session.status === "paused";
+  const completionKind = resolveCompletionGuideKind(session.status);
+  const showCompletionGuide = Boolean(completionKind) && !completionDismissed;
+  const startedStages = RESEARCH_STAGE_ORDER.filter(
+    (stage) =>
+      resolveStageStepState(stage, session.current_stage, session.status) !== "upcoming",
+  );
+  const latestRound: ResearchProductRoundCard | undefined = productRounds?.rounds?.[
+    (productRounds.rounds.length ?? 0) - 1
+  ];
+
+  const postUser = (body: string) => send.mutate(body);
+
+  const onClarificationOption = (
+    question: ResearchClarificationQuestion,
+    optionId: string,
+  ) => {
+    const option = question.options.find((o) => o.id === optionId);
+    if (!option) return;
+    postUser(formatClarificationOptionReply(question, option));
+  };
+
+  const onClarificationForm = (
+    question: ResearchClarificationQuestion,
+    values: Record<string, string>,
+  ) => {
+    postUser(formatClarificationFormReply(question, values));
+  };
+
+  const onClarificationSkip = (question: ResearchClarificationQuestion) => {
+    // Skip posts a user tip so the fleet can continue — never blocks the session.
+    postUser(formatClarificationSkipReply(question));
+  };
+
+  const chatFeed = buildFleetChatFeed(messages);
+  const runningCards = presenceRunningCards(presence, fleet.members);
+  const waitingCard = nextStageWaitingCard(session.current_stage, session.status);
+  const showStop = canStop || runningCards.length > 0;
+  // LRM-992 — drawer/FAB four-state mode (align with fleet strip language).
+  // Live stream / stop chrome counts as in-progress activity (not empty stub).
+  const chatHasFeed =
+    chatFeed.length > 0 ||
+    runningCards.length > 0 ||
+    !!waitingCard ||
+    showStop;
+  const chatMode = resolveChatDrawerMode(chatHasFeed ? 1 : 0, session.status, {
+    loading: send.isPending && !chatHasFeed,
+    error: send.isError
+      ? send.error instanceof Error
+        ? send.error.message
+        : t(($) => $.session_page.send_failed)
+      : null,
+  });
+  const chatErrorMessage =
+    send.error instanceof Error ? send.error.message : null;
+
+  const postFleetAction = (body: string) => {
+    void api
+      .postResearchMessage(sessionId, { body })
+      .then(() =>
+        qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
+      );
+  };
+
+  const onStepRetry = (card: FleetStepCardModel) => {
+    const reason = card.reason ? `（reason=${card.reason}）` : "";
+    postFleetAction(
+      `请重试刚才失败的唤醒${reason}：${card.summaryHeadline}。配置根因仍走运维/LRM-858；本条只请求再试一次。`,
+    );
+  };
+
+  const onStepReassign = (card: FleetStepCardModel) => {
+    postFleetAction(
+      `请将唤醒失败的任务改派给其他活跃成员：${card.title} · ${card.summaryHeadline}`,
+    );
+  };
+
+  const agentPanelNode = agentDock ? (
+    <ResolvedAgentSidePanel
+      agentId={agentDock.agentId}
+      identitySnapshot={agentDock.snapshot}
+      currentUserId={currentUserId}
+      members={workspaceMembers}
+      onClose={() => setAgentDock(null)}
+      variant={isMobile ? "page" : "panel"}
+      doneLabel={
+        isMobile ? tAgents(($) => $.side_panel.back_to_messages) : undefined
+      }
+    />
+  ) : null;
+
+  const sessionBody = (
+    <div
+      className="relative flex h-full min-h-0 flex-col bg-background"
+      data-testid="research-session-page"
+    >
+      {/* LRM-971: homepage-family shell atmosphere behind chrome + canvas. */}
+      <ResearchShellAtmosphere heightClassName="h-[320px]" />
+      <ResearchSessionChrome
+        session={session}
+        canConfirm={canConfirm}
+        canHandoff={canHandoff}
+        createProject={ui.createProject}
+        createChannel={ui.createChannel}
+        onCreateProjectChange={(value) => dispatch({ type: "setCreateProject", value })}
+        onCreateChannelChange={(value) => dispatch({ type: "setCreateChannel", value })}
+        onConfirm={() => confirm.mutate()}
+        onReject={(reason) =>
+          rejectConfirm.mutate(formatStageGateRejectReply(reason))
+        }
+        onHandoff={() => handoff.mutate()}
+        confirmPending={confirm.isPending}
+        rejectPending={rejectConfirm.isPending}
+        handoffPending={handoff.isPending}
+        onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
+        members={fleet.members}
+        sources={sources}
+        onSelectStage={handleSelectStage}
+        pendingSubstantiveGoal={
+          latestRound?.goal_patch_proposal?.trim()
+            ? latestRound.goal_patch_proposal
+            : null
+        }
+        onConfirmSubstantiveGoal={(proposal) =>
+          postUser(`确认将调研最终目标更新为：${proposal}`)
+        }
+      />
+
+      {sessionInterrupt ? (
+        <ResearchSessionInterruptBanner
+          interrupt={sessionInterrupt}
+          phase={interruptPhase}
+          onRetry={retrySessionInterrupt}
+        />
+      ) : null}
+
+      <ResearchStageTimeline
+        currentStage={session.current_stage}
+        sessionStatus={session.status}
+        onSelectStage={handleSelectStage}
+      />
+
+      <VisibilityTabs
+        dimensions={explorationDims}
+        strategy={sourceStrategy}
+        boundary={humanBoundary}
+        sessionStatus={session.status}
+        selectedFamily={ui.selectedFamily}
+        selectedQuestionId={ui.selected?.id}
+        onSelectFamily={(family) => dispatch({ type: "setFamily", family })}
+        onSelectQuestion={(id) => {
+          const node = data.nodes.find((n) => n.id === id) ?? null;
+          dispatch({ type: "select", node });
+        }}
+      />
+
+      <div className="hidden border-b sm:block">
+        <SourceStrategyStrip
+          model={sourceStrategy}
+          sessionStatus={session.status}
+        />
+      </div>
+
+      <div className="flex min-h-0 flex-1">
+        <ExplorationRail
+          className="hidden sm:flex"
+          dimensions={explorationDims}
+          sessionStatus={session.status}
+          selectedFamily={ui.selectedFamily}
+          selectedQuestionId={ui.selected?.id}
+          onSelectFamily={(family) => dispatch({ type: "setFamily", family })}
+          onSelectQuestion={(id) => {
+            const node = data.nodes.find((n) => n.id === id) ?? null;
+            dispatch({ type: "select", node });
+          }}
+        />
+        <section className="relative z-[1] min-h-0 min-w-0 flex-1">
+          <ResearchCanvas
+            nodes={data.nodes}
+            edges={data.edges}
+            sources={sources}
+            members={fleet.members}
+            sessionStatus={session.status}
+            presence={presence}
+            selectedId={ui.selected?.id}
+            onSelect={(node) => dispatch({ type: "select", node })}
+            onOpenDelivery={() => dispatch({ type: "setDeliveryOpen", value: true })}
+            onOpenChat={() => setChatOpen(true)}
+            chatOpen={chatOpen}
+            chatMode={chatMode}
+            onRetry={(node) => {
+              // LRM-848 entry → LRM-828 retry path. Until a dedicated BE API lands,
+              // ask the fleet lead to re-explore from this dead_end via chat.
+              const body = t(($) => $.ring.retry_message, {
+                title: node.title || node.node_type,
+                id: node.id,
+              });
+              void api
+                .postResearchMessage(sessionId, { body })
+                .then(() =>
+                  qc.invalidateQueries({ queryKey: researchKeys.snapshot(wsId, sessionId) }),
+                );
+            }}
+          />
+          {canvasMode === "forming" ? <ResearchCanvasForming /> : null}
+          {canvasMode === "empty" ? <ResearchCanvasEmptyState /> : null}
+        </section>
+
+        <aside
+          data-testid="research-boundary-aside"
+          className="relative z-[1] hidden w-[280px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-border/55 bg-background/55 p-3 backdrop-blur-sm lg:flex"
+        >
+          <HumanBoundaryCard
+            model={humanBoundary}
+            sessionStatus={session.status}
+          />
+        </aside>
+
+        <ResearchChatDrawer open={chatOpen} onClose={() => setChatOpen(false)}>
+            <div
+              className="flex items-center justify-between gap-2 border-b px-3 py-2.5"
+              data-testid="research-chat-header"
+              data-chat-mode={chatMode}
+            >
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <div className="text-sm font-semibold text-foreground">
+                  {t(($) => $.panel.chat)}
+                </div>
+                <ResearchChatModeChip mode={chatMode} />
+              </div>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setChatOpen(false)}>
+                {t(($) => $.panel.hide_chat)}
+              </Button>
+            </div>
+            <div className="border-b p-3 lg:hidden">
+              <HumanBoundaryCard
+                model={humanBoundary}
+                sessionStatus={session.status}
+              />
+            </div>
+            <div className="border-b px-3 py-2 text-[11px] text-muted-foreground">
+              {t(($) => $.panel.fleet)}:{" "}
+              {fleet.members
+                .filter((m) => m.status !== "archived")
+                .map((m) => m.display_name || m.name || m.role)
+                .join(" · ")}
+            </div>
+            {latestRound ? (
+              <div className="border-b px-3 py-2">
+                <ResearchProductRoundCardView
+                  card={latestRound}
+                  currentGoal={session.goal}
+                  compact
+                  pending={send.isPending}
+                  onAgree={() =>
+                    postUser(
+                      `同意罗纳尔多产品轮 Round ${latestRound.round_number} 裁定：${latestRound.decision}`,
+                    )
+                  }
+                  onRejectContinue={() => {
+                    void api.stopResearchSession(sessionId).then(() => {
+                      void qc.invalidateQueries({
+                        queryKey: researchKeys.snapshot(wsId, sessionId),
+                      });
+                    });
+                    postUser(
+                      `驳回 continue：请停止调研（Round ${latestRound.round_number}）。`,
+                    );
+                  }}
+                  onRejectStop={() =>
+                    postUser(
+                      `驳回 stop：请在预算内再开一轮加深（Round ${latestRound.round_number}，剩余 ${latestRound.budget_remaining}）。`,
+                    )
+                  }
+                  onConfirmGoalPatch={(text) =>
+                    postUser(`确认将调研最终目标更新为：${text}`)
+                  }
+                  onEditGoalPatch={(text) =>
+                    postUser(`请按以下文本更新调研最终目标：${text}`)
+                  }
+                  onRejectGoalPatch={() =>
+                    postUser(
+                      `拒绝本轮目标回灌提案（Round ${latestRound.round_number}），保持当前目标不变。`,
+                    )
+                  }
+                />
+              </div>
+            ) : null}
+            {Object.keys(presence).length > 0 ? (
+              <div className="flex flex-wrap gap-1.5 border-b px-3 py-2">
+                {fleet.members
+                  .filter((m) => presence[m.agent_id]?.activity)
+                  .map((m) => (
+                    <span
+                      key={m.agent_id}
+                      className="rounded-full border border-transparent bg-primary/10 px-2 py-0.5 text-[10.5px] font-medium text-primary"
+                    >
+                      {m.display_name || m.name || m.role}
+                      {" · "}
+                      {presence[m.agent_id]?.activity}
+                    </span>
+                  ))}
+                {fleet.members
+                  .filter(
+                    (m) =>
+                      m.status === "active" &&
+                      !presence[m.agent_id]?.activity,
+                  )
+                  .slice(0, 4)
+                  .map((m) => (
+                    <span
+                      key={`idle-${m.agent_id}`}
+                      className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10.5px] text-muted-foreground"
+                    >
+                      {m.display_name || m.name || m.role}
+                      {" · "}
+                      {t(($) => $.step_card.standby)}
+                    </span>
+                  ))}
+              </div>
+            ) : null}
+            <div
+              ref={chatScrollRef}
+              className="flex-1 space-y-2.5 overflow-y-auto p-3"
+              data-testid="research-chat-feed"
+              data-chat-mode={chatMode}
+            >
+              {/* LRM-824 — anchor once per stage: marker if that stage has no
+                  tagged message, else the first tagged message bubble. */}
+              {startedStages.map((stage) =>
+                stageFirstMessageId.get(stage) ? null : (
+                  <ResearchStageChatMarker
+                    key={stage}
+                    stage={stage}
+                    label={t(($) => $.stage[stage])}
+                  />
+                ),
+              )}
+              {chatMode === "empty" || chatMode === "loading" ? (
+                <ResearchChatModeBody mode={chatMode} />
+              ) : null}
+              {chatMode === "error" ? (
+                <ResearchChatModeBody
+                  mode="error"
+                  errorMessage={chatErrorMessage}
+                  onRetry={() => {
+                    if (ui.body.trim()) send.mutate(ui.body.trim());
+                    else void send.reset();
+                  }}
+                />
+              ) : null}
+              {chatMode === "running" || (chatMode === "error" && chatHasFeed) ? (
+                <>
+                  {chatFeed.map((item) =>
+                    item.kind === "chat" ? (
+                      <div
+                        key={item.message.id}
+                        id={stageAnchorTargetId(item.message.id)}
+                        className="scroll-mt-3"
+                      >
+                        <ResearchChatCard
+                          message={item.message}
+                          members={fleet.members}
+                          messages={messages}
+                          currentGoal={session.goal}
+                          roundPending={send.isPending}
+                          clarificationPending={send.isPending}
+                          onClarificationOption={onClarificationOption}
+                          onClarificationForm={onClarificationForm}
+                          onClarificationSkip={onClarificationSkip}
+                          onRoundAgree={(card) =>
+                            postUser(
+                              `同意罗纳尔多产品轮 Round ${card.round_number} 裁定：${card.decision}`,
+                            )
+                          }
+                          onRoundRejectContinue={(card) => {
+                            void api.stopResearchSession(sessionId).then(() => {
+                              void qc.invalidateQueries({
+                                queryKey: researchKeys.snapshot(wsId, sessionId),
+                              });
+                            });
+                            postUser(
+                              `驳回 continue：请停止调研（Round ${card.round_number}）。`,
+                            );
+                          }}
+                          onRoundRejectStop={(card) =>
+                            postUser(
+                              `驳回 stop：请在预算内再开一轮加深（Round ${card.round_number}，剩余 ${card.budget_remaining}）。`,
+                            )
+                          }
+                          onConfirmGoalPatch={(_card, text) =>
+                            postUser(`确认将调研最终目标更新为：${text}`)
+                          }
+                          onEditGoalPatch={(_card, text) =>
+                            postUser(`请按以下文本更新调研最终目标：${text}`)
+                          }
+                          onRejectGoalPatch={(card) =>
+                            postUser(
+                              `拒绝本轮目标回灌提案（Round ${card.round_number}），保持当前目标不变。`,
+                            )
+                          }
+                        />
+                      </div>
+                    ) : (
+                      <ResearchFleetStepCard
+                        key={item.id}
+                        card={item}
+                        onRetry={onStepRetry}
+                        onReassign={onStepReassign}
+                      />
+                    ),
+                  )}
+                  {runningCards.map((card) => (
+                    <ResearchFleetStepCard key={card.id} card={card} />
+                  ))}
+                  {waitingCard ? (
+                    <ResearchFleetStepCard key={waitingCard.id} card={waitingCard} />
+                  ) : null}
+                  {showStop ? <ResearchLiveStream sessionId={sessionId} /> : null}
+                </>
+              ) : null}
+            </div>
+            {isPaused ? (
+              <output
+                data-testid="research-paused-banner"
+                className="block border-t border-warning/25 bg-warning/10 px-3 py-2 text-[12px] leading-snug text-foreground"
+              >
+                <span className="font-medium">{t(($) => $.panel.paused_title)}</span>
+                {" · "}
+                <span className="text-muted-foreground">{t(($) => $.panel.paused_hint)}</span>
+              </output>
+            ) : null}
+            <div className="border-t bg-card p-3">
+              <div className="rounded-xl border border-border/80 bg-muted/25 p-2 shadow-sm focus-within:border-primary/35 focus-within:ring-2 focus-within:ring-primary/15">
+                <Textarea
+                  data-testid="research-chat-composer"
+                  rows={2}
+                  value={ui.body}
+                  onChange={(e) => dispatch({ type: "setBody", body: e.target.value })}
+                  onKeyDown={(e) => {
+                    // LRM-800 / cancelled LRM-782: Enter sends; Shift+Enter newline.
+                    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                    e.preventDefault();
+                    if (!ui.body.trim() || send.isPending) return;
+                    send.mutate(ui.body.trim());
+                  }}
+                  placeholder={
+                    isPaused
+                      ? t(($) => $.panel.chat_placeholder_paused)
+                      : t(($) => $.panel.chat_placeholder)
+                  }
+                  className="min-h-[56px] resize-none border-0 bg-transparent px-1 py-1 text-[13px] shadow-none focus-visible:ring-0"
+                />
+                <div className="mt-1.5 flex flex-col gap-1.5 px-0.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+                  <span
+                    data-testid="research-chat-composer-hint"
+                    className="min-w-0 text-[10px] leading-snug text-muted-foreground"
+                    title={t(($) => $.step_card.composer_hint)}
+                  >
+                    {t(($) => $.step_card.composer_hint)}
+                  </span>
+                  <div className="flex shrink-0 items-center justify-end gap-1.5">
+                    {showStop ? (
+                      <Button
+                        type="button"
+                        size="default"
+                        variant="outline"
+                        className="h-9 min-w-[88px] gap-1.5 px-3 text-[13px] font-semibold"
+                        disabled={stop.isPending}
+                        aria-label={t(($) => $.panel.stop_aria)}
+                        title={t(($) => $.panel.stop_tooltip)}
+                        onClick={() => stop.mutate()}
+                      >
+                        <Square className="h-3.5 w-3.5 fill-current" />
+                        {stop.isPending
+                          ? t(($) => $.panel.stopping)
+                          : t(($) => $.actions.stop)}
+                      </Button>
+                    ) : null}
+                    <Button
+                      type="button"
+                      size="default"
+                      className="h-9 min-w-[88px] px-4 text-[13px] font-semibold shadow-sm"
+                      disabled={!ui.body.trim() || send.isPending}
+                      onClick={() => send.mutate(ui.body.trim())}
+                    >
+                      {send.isPending
+                        ? t(($) => $.step_card.sending)
+                        : t(($) => $.panel.send)}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+        </ResearchChatDrawer>
+
+        {!isMobile && agentPanelNode ? (
+          <div
+            data-testid="research-agent-side-slot"
+            className="relative flex shrink-0 flex-col border-l border-border/30 bg-background"
+            style={{ width: agentSideWidth }}
+          >
+            <button
+              type="button"
+              data-testid="research-agent-side-resize"
+              aria-label={tAgents(($) => $.side_panel.resize_aria)}
+              className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize border-0 bg-transparent p-0 hover:bg-foreground/10"
+              onPointerDown={onAgentSideResizePointerDown}
+            />
+            {agentPanelNode}
+          </div>
+        ) : null}
+      </div>
+
+      {/* LRM-832 — terminal next-step guide (dismiss persists; below Delivery z-80). */}
+      {showCompletionGuide && completionKind ? (
+        <ResearchCompletionCard
+          kind={completionKind}
+          onViewReport={() => {
+            dismissCompletion();
+            dispatch({ type: "setDeliveryOpen", value: true });
+          }}
+          onNewResearch={() => {
+            dismissCompletion();
+            nav.push(paths.research());
+          }}
+          onHome={() => {
+            dismissCompletion();
+            nav.push(paths.root());
+          }}
+          onDismiss={dismissCompletion}
+        />
+      ) : null}
+
+      {/* Portal-friendly mount: keep delivery modal outside the canvas
+          `relative`/`overflow` section so it cannot collapse into a corner float. */}
+      <ResearchDeliveryDrawer
+        open={ui.deliveryOpen}
+        onClose={() => dispatch({ type: "setDeliveryOpen", value: false })}
+        report={report}
+        sources={sources}
+        titleFallback={session.title}
+        boundary={humanBoundary}
+        sessionStatus={session.status}
+        loading={
+          isFetching && deliveryContentCount(report, sources.length) <= 0
+        }
+        error={
+          isError
+            ? error instanceof Error && error.message
+              ? error.message
+              : t(($) => $.session_page.load_failed)
+            : null
+        }
+        onRetry={() => {
+          void refetch();
+        }}
+      />
+    </div>
+  );
+
+  return (
+    <ResearchConnectivityShell>
+      <AgentPanelProvider onOpenAgent={handleOpenAgentPanel}>
+        {isMobile && agentPanelNode ? agentPanelNode : sessionBody}
+      </AgentPanelProvider>
+    </ResearchConnectivityShell>
+  );
+}

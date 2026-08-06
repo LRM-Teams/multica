@@ -172,8 +172,8 @@ func TestExecutionModuleDispatchReadyCreatesRuntimeTaskAndAttachesIdentity(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dispatched != 1 {
-		t.Fatalf("dispatched=%d", dispatched)
+	if dispatched.Dispatched != 1 {
+		t.Fatalf("dispatch outcome=%+v", dispatched)
 	}
 	if store.createdInput.SessionID != "session-1" || store.createdInput.TaskID != "task-1" || store.createdInput.AgentID != "lead-1" || store.createdInput.ExpectedStateVersion != 7 {
 		t.Fatalf("created input=%+v", store.createdInput)
@@ -204,11 +204,185 @@ func TestExecutionModuleDispatchReadyLeavesExternalTaskForReplayWhenAcknowledgem
 	members := []FleetMember{{AgentID: "lead-1", Role: "lead", Status: "active", IsLead: true}}
 
 	dispatched, err := module.DispatchReady(context.Background(), run, []Task{task}, nil, members)
-	if dispatched != 1 || !errors.Is(err, acknowledgeErr) {
-		t.Fatalf("dispatched=%d error=%v", dispatched, err)
+	if dispatched.Dispatched != 1 || !errors.Is(err, acknowledgeErr) {
+		t.Fatalf("dispatch outcome=%+v error=%v", dispatched, err)
 	}
 	if len(dispatcher.cancelledIDs) != 0 {
 		t.Fatalf("recoverable external task was cancelled: %v", dispatcher.cancelledIDs)
+	}
+}
+
+func TestExecutionModuleWaitsWhenOldWorkConsumesCurrentTaskCapacity(t *testing.T) {
+	now := time.Date(2026, time.August, 6, 13, 30, 0, 0, time.UTC)
+	run := Run{SessionID: "session-1", WorkspaceID: "workspace-1", GoalVersion: 2, PlanVersion: 2,
+		OrchestratorVersion: OrchestratorVersionV1, Config: RunConfig{MaxParallelTasks: 1}}
+	currentTask := Task{ID: "current-ready", Status: TaskStatusReady, GoalVersion: 2, PlanVersion: 2}
+	oldAttempt := Attempt{ID: "old-running", AssignedAgentID: "lead-1", Status: AttemptStatusRunning}
+	store := &executionTestStore{}
+	module := executionModule{store: store, dispatcher: &executionTestDispatcher{}, clock: executionFixedClock{now: now}}
+
+	outcome, err := module.DispatchReady(context.Background(), run, []Task{currentTask}, []Attempt{oldAttempt}, nil)
+	retryAt := now.Add(10 * time.Second)
+	if err != nil || !outcome.Waiting || outcome.NextDispatchAt == nil || !outcome.NextDispatchAt.Equal(retryAt) {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+	if store.evaluateCalls != 0 {
+		t.Fatalf("target health evaluated without dispatch capacity: %d", store.evaluateCalls)
+	}
+}
+
+func TestExecutionModuleWaitsUntilTaskReadyAtBeforeGate(t *testing.T) {
+	now := time.Date(2026, time.August, 6, 13, 45, 0, 0, time.UTC)
+	readyAt := now.Add(3 * time.Minute)
+	run := Run{SessionID: "session-1", WorkspaceID: "workspace-1", GoalVersion: 1, PlanVersion: 1,
+		OrchestratorVersion: OrchestratorVersionV1, Config: RunConfig{MaxParallelTasks: 1}}
+	task := Task{ID: "backoff-task", Status: TaskStatusReady, ReadyAt: &readyAt, GoalVersion: 1, PlanVersion: 1}
+	store := &executionTestStore{}
+	module := executionModule{store: store, dispatcher: &executionTestDispatcher{}, clock: executionFixedClock{now: now}}
+
+	outcome, err := module.DispatchReady(context.Background(), run, []Task{task}, nil, nil)
+	if err != nil || !outcome.Waiting || outcome.NextDispatchAt == nil || !outcome.NextDispatchAt.Equal(readyAt) {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+	if store.evaluateCalls != 0 {
+		t.Fatalf("target health evaluated before task ready_at: %d", store.evaluateCalls)
+	}
+}
+
+func TestSelectCircuitAwareTargetPrefersHealthyAlternateOverBlockedStickyAgent(t *testing.T) {
+	task := Task{RequiredCapability: "scout", AssignedAgentID: "sticky"}
+	members := []FleetMember{
+		{AgentID: "sticky", Role: "scout", Status: "active"},
+		{AgentID: "healthy", Role: "scout", Status: "active"},
+	}
+	retryAt := time.Now().UTC().Add(time.Minute)
+	health := map[string]ExecutionTargetHealth{
+		"sticky":  {AgentID: "sticky", RetryAt: &retryAt},
+		"healthy": {AgentID: "healthy", Dispatchable: true},
+	}
+	selection := selectCircuitAwareTarget(task, members, map[string]int{}, health)
+	if selection.AgentID != "healthy" || len(selection.Blocked) != 0 {
+		t.Fatalf("selection=%+v", selection)
+	}
+}
+
+func TestSelectCircuitAwareTargetPrefersClosedTargetBeforeDueProbe(t *testing.T) {
+	probe := CircuitTarget{Scope: CircuitProvider, Key: "provider-probe"}
+	members := []FleetMember{
+		{AgentID: "probe-agent", Role: "reader", Status: "active", IsLead: true},
+		{AgentID: "closed-agent", Role: "reader", Status: "active"},
+	}
+	health := map[string]ExecutionTargetHealth{
+		"probe-agent":  {AgentID: "probe-agent", Dispatchable: true, ProbeTargets: []CircuitTarget{probe}},
+		"closed-agent": {AgentID: "closed-agent", Dispatchable: true},
+	}
+	selection := selectCircuitAwareTarget(Task{RequiredCapability: "reader"}, members, map[string]int{}, health)
+	if selection.AgentID != "closed-agent" || len(selection.ProbeTargets) != 0 {
+		t.Fatalf("selection=%+v", selection)
+	}
+}
+
+func TestSelectCircuitAwareTargetUsesDueProbeWhenNoClosedTargetExists(t *testing.T) {
+	probe := CircuitTarget{Scope: CircuitProvider, Key: "provider-probe"}
+	members := []FleetMember{{AgentID: "probe-agent", Role: "validator", Status: "active"}}
+	health := map[string]ExecutionTargetHealth{
+		"probe-agent": {AgentID: "probe-agent", Dispatchable: true, ProbeTargets: []CircuitTarget{probe}},
+	}
+	selection := selectCircuitAwareTarget(Task{RequiredCapability: "validator"}, members, map[string]int{}, health)
+	if selection.AgentID != "probe-agent" || !reflect.DeepEqual(selection.ProbeTargets, []CircuitTarget{probe}) {
+		t.Fatalf("selection=%+v", selection)
+	}
+}
+
+func TestExecutionModuleDefersReadyTaskUntilEarliestCircuitRecovery(t *testing.T) {
+	now := time.Date(2026, time.August, 6, 13, 0, 0, 0, time.UTC)
+	first := now.Add(2 * time.Minute)
+	second := now.Add(5 * time.Minute)
+	run := Run{SessionID: "session-1", WorkspaceID: "workspace-1", GoalVersion: 1, PlanVersion: 1,
+		OrchestratorVersion: OrchestratorVersionV1, Config: RunConfig{MaxParallelTasks: 1}}
+	task := Task{ID: "task-1", RequiredCapability: "scout", Status: TaskStatusReady, GoalVersion: 1, PlanVersion: 1}
+	members := []FleetMember{
+		{AgentID: "agent-a", Role: "scout", Status: "active"},
+		{AgentID: "agent-b", Role: "scout", Status: "active"},
+	}
+	store := &executionTestStore{targetHealth: map[string]ExecutionTargetHealth{
+		"agent-a": {AgentID: "agent-a", RetryAt: &second, BlockedReason: "provider_blocked"},
+		"agent-b": {AgentID: "agent-b", RetryAt: &first, Blocking: []CircuitBlock{{Scope: CircuitRuntime, State: CircuitOpen, RetryAt: &first}}},
+	}}
+	module := executionModule{store: store, dispatcher: &executionTestDispatcher{}, clock: executionFixedClock{now: now}}
+	outcome, err := module.DispatchReady(context.Background(), run, []Task{task}, nil, members)
+	if err != nil || outcome.Dispatched != 0 || !outcome.Waiting || outcome.NextDispatchAt == nil || !outcome.NextDispatchAt.Equal(first) {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+	if store.deferredTaskID != task.ID || store.deferredRetryAt == nil || !store.deferredRetryAt.Equal(first) || len(store.deferredHealth) != 2 {
+		t.Fatalf("deferred task=%q retry=%v health=%+v", store.deferredTaskID, store.deferredRetryAt, store.deferredHealth)
+	}
+}
+
+func TestExecutionModuleKeepsTaskReadyWhenHealthyCandidateIsBusy(t *testing.T) {
+	now := time.Date(2026, time.August, 6, 14, 0, 0, 0, time.UTC)
+	circuitRetryAt := now.Add(5 * time.Minute)
+	run := Run{SessionID: "session-1", WorkspaceID: "workspace-1", GoalVersion: 1, PlanVersion: 1,
+		OrchestratorVersion: OrchestratorVersionV1, Config: RunConfig{MaxParallelTasks: 2}}
+	task := Task{ID: "task-1", RequiredCapability: "scout", Status: TaskStatusReady, GoalVersion: 1, PlanVersion: 1}
+	members := []FleetMember{
+		{AgentID: "healthy-busy", Role: "scout", Status: "active"},
+		{AgentID: "blocked-idle", Role: "scout", Status: "active"},
+	}
+	store := &executionTestStore{targetHealth: map[string]ExecutionTargetHealth{
+		"healthy-busy": {AgentID: "healthy-busy", Dispatchable: true},
+		"blocked-idle": {AgentID: "blocked-idle", RetryAt: &circuitRetryAt, Blocking: []CircuitBlock{{Scope: CircuitProvider, State: CircuitOpen, RetryAt: &circuitRetryAt}}},
+	}}
+	module := executionModule{store: store, dispatcher: &executionTestDispatcher{}, clock: executionFixedClock{now: now}}
+	attempts := []Attempt{{ID: "running-attempt", AssignedAgentID: "healthy-busy", Status: AttemptStatusRunning}}
+	outcome, err := module.DispatchReady(context.Background(), run, []Task{task}, attempts, members)
+	capacityRetryAt := now.Add(10 * time.Second)
+	if err != nil || outcome.Dispatched != 0 || !outcome.Waiting || outcome.NextDispatchAt == nil || !outcome.NextDispatchAt.Equal(capacityRetryAt) {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+	if store.deferredTaskID != "" || store.deferredRetryAt != nil {
+		t.Fatalf("task incorrectly deferred to circuit: id=%q retry=%v", store.deferredTaskID, store.deferredRetryAt)
+	}
+}
+
+func TestExecutionModuleReevaluatesAndReroutesAfterProbeClaimRace(t *testing.T) {
+	now := time.Date(2026, time.August, 6, 15, 0, 0, 0, time.UTC)
+	retryAt := now.Add(time.Minute)
+	run := Run{SessionID: "session-1", WorkspaceID: "workspace-1", StateVersion: 4,
+		GoalVersion: 1, PlanVersion: 1, OrchestratorVersion: OrchestratorVersionV1,
+		Config: RunConfig{MaxParallelTasks: 1}}
+	task := Task{ID: "task-1", Kind: TaskKindDiscover, RequiredCapability: "scout",
+		Objective: "collect evidence", Status: TaskStatusReady, GoalVersion: 1, PlanVersion: 1}
+	probe := CircuitTarget{Scope: CircuitProvider, Key: "due-provider"}
+	store := &executionTestStore{
+		taskSnapshot: RunSnapshot{Run: run, Tasks: []Task{task}, Contract: ResearchContract{Language: "zh-CN"}},
+		createErrors: []error{ErrCircuitUnavailable, nil},
+		healthEvaluations: []map[string]ExecutionTargetHealth{
+			{
+				"probe-agent": {AgentID: "probe-agent", Dispatchable: true, ProbeTargets: []CircuitTarget{probe}},
+				"alternate":   {AgentID: "alternate", RetryAt: &retryAt},
+			},
+			{
+				"probe-agent": {AgentID: "probe-agent", RetryAt: &retryAt},
+				"alternate":   {AgentID: "alternate", Dispatchable: true},
+			},
+		},
+	}
+	dispatcher := &executionTestDispatcher{dispatchResult: DispatchResult{InboxTaskID: "inbox-1"}}
+	module := executionModule{store: store, dispatcher: dispatcher, clock: executionFixedClock{now: now}, prompts: taskPromptModule{}}
+	members := []FleetMember{
+		{AgentID: "probe-agent", Role: "scout", Status: "active", IsLead: true},
+		{AgentID: "alternate", Role: "scout", Status: "active"},
+	}
+	outcome, err := module.DispatchReady(context.Background(), run, []Task{task}, nil, members)
+	if err != nil || outcome.Dispatched != 1 || outcome.Waiting {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+	if store.evaluateCalls != 2 || len(store.createdInputs) != 2 || store.createdInputs[1].AgentID != "alternate" {
+		t.Fatalf("evaluations=%d created=%+v", store.evaluateCalls, store.createdInputs)
+	}
+	if len(dispatcher.dispatchRequests) != 1 || dispatcher.dispatchRequests[0].AgentID != "alternate" {
+		t.Fatalf("dispatches=%+v", dispatcher.dispatchRequests)
 	}
 }
 
@@ -286,6 +460,14 @@ type executionTestStore struct {
 	acknowledgedInboxTaskID string
 	rejectAcknowledgement   bool
 	acknowledgeErr          error
+	targetHealth            map[string]ExecutionTargetHealth
+	healthEvaluations       []map[string]ExecutionTargetHealth
+	evaluateCalls           int
+	deferredTaskID          string
+	deferredRetryAt         *time.Time
+	deferredHealth          []ExecutionTargetHealth
+	createErrors            []error
+	createdInputs           []CreateDispatchIntentInput
 }
 
 func (store *executionTestStore) ListAttempts(context.Context, string) ([]Attempt, error) {
@@ -319,8 +501,40 @@ func (store *executionTestStore) CompleteCancellations(_ context.Context, sessio
 	return nil, nil
 }
 
+func (store *executionTestStore) EvaluateExecutionTargets(_ context.Context, _ string, members []FleetMember) (map[string]ExecutionTargetHealth, error) {
+	if store.evaluateCalls < len(store.healthEvaluations) {
+		health := store.healthEvaluations[store.evaluateCalls]
+		store.evaluateCalls++
+		return health, nil
+	}
+	store.evaluateCalls++
+	if store.targetHealth != nil {
+		return store.targetHealth, nil
+	}
+	health := make(map[string]ExecutionTargetHealth, len(members))
+	for _, member := range members {
+		health[member.AgentID] = ExecutionTargetHealth{AgentID: member.AgentID, Dispatchable: true}
+	}
+	return health, nil
+}
+
+func (store *executionTestStore) DeferTaskForExecutionTarget(_ context.Context, _ string, taskID string, retryAt *time.Time, health []ExecutionTargetHealth) (RunEvent, error) {
+	store.deferredTaskID = taskID
+	store.deferredRetryAt = retryAt
+	store.deferredHealth = append([]ExecutionTargetHealth(nil), health...)
+	return RunEvent{}, nil
+}
+
 func (store *executionTestStore) CreateDispatchIntent(_ context.Context, in CreateDispatchIntentInput) (Attempt, RunEvent, error) {
 	store.createdInput = in
+	store.createdInputs = append(store.createdInputs, in)
+	if len(store.createErrors) > 0 {
+		err := store.createErrors[0]
+		store.createErrors = store.createErrors[1:]
+		if err != nil {
+			return Attempt{}, RunEvent{}, err
+		}
+	}
 	intent := DispatchIntent{ID: "intent-" + in.AttemptID, AttemptID: in.AttemptID, SessionID: in.SessionID, Request: in.Request, DeliveryAttempts: 1}
 	store.claimed = append(store.claimed, intent)
 	return Attempt{ID: in.AttemptID, SessionID: in.SessionID, TaskID: in.TaskID, AssignedAgentID: in.AgentID, DispatchKey: in.Request.Key}, RunEvent{}, nil

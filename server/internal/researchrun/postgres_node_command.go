@@ -379,7 +379,7 @@ func (s *PostgresStore) nodeCommandRetry(
 		UPDATE research_task
 		SET status = 'ready',
 		    ready_at = now(),
-		    terminal_reason = NULL,
+		    terminal_reason = '',
 		    completed_at = NULL,
 		    max_attempts = $2,
 		    acceptance_criteria = $3,
@@ -472,6 +472,9 @@ func (s *PostgresStore) nodeCommandReassign(
 
 	// Cancel in-flight attempt so a new assignee can take over; keep the row.
 	if hasLatest && (latest.Status == AttemptStatusDispatching || latest.Status == AttemptStatusRunning) {
+		if err = abandonAttemptCircuitProbesTx(ctx, tx, latest.ID); err != nil {
+			return NodeCommandOutcome{}, err
+		}
 		if _, err = tx.Exec(ctx, `
 			UPDATE research_task_attempt attempt
 			SET cancellation_completed_at = now(), updated_at = now()
@@ -574,7 +577,7 @@ func (s *PostgresStore) nodeCommandReassign(
 		SET status = 'ready',
 		    assigned_agent_id = $2::uuid,
 		    ready_at = now(),
-		    terminal_reason = NULL,
+		    terminal_reason = '',
 		    completed_at = NULL,
 		    acceptance_criteria = $3,
 		    goal_version = $4,

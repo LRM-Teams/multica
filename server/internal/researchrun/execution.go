@@ -21,6 +21,8 @@ type executionStore interface {
 	ListPendingCancellations(context.Context, string) ([]PendingCancellation, error)
 	MarkCancellationsRequested(context.Context, string, []CancellationRequest) error
 	CompleteCancellations(context.Context, string, []string) ([]RunEvent, error)
+	EvaluateExecutionTargets(context.Context, string, []FleetMember) (map[string]ExecutionTargetHealth, error)
+	DeferTaskForExecutionTarget(context.Context, string, string, *time.Time, []ExecutionTargetHealth) (RunEvent, error)
 	CreateDispatchIntent(context.Context, CreateDispatchIntentInput) (Attempt, RunEvent, error)
 	ClaimDispatchIntents(context.Context, string, string, time.Duration, int) ([]DispatchIntent, error)
 	RescheduleDispatchIntent(context.Context, string, string, string, time.Time) (bool, error)
@@ -241,9 +243,10 @@ func terminalInboxTaskState(status string) bool {
 	}
 }
 
-func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks []Task, attempts []Attempt, members []FleetMember) (int, error) {
+func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks []Task, attempts []Attempt, members []FleetMember) (DispatchOutcome, error) {
+	outcome := DispatchOutcome{}
 	if err := ensureSupportedOrchestratorVersion(run.OrchestratorVersion); err != nil {
-		return 0, err
+		return outcome, err
 	}
 	activeByAgent := map[string]int{}
 	activeAttempts := 0
@@ -255,16 +258,35 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 	}
 	available := run.Config.MaxParallelTasks - activeAttempts
 	if available <= 0 {
-		return 0, nil
+		var nextDispatchAt *time.Time
+		for _, task := range tasks {
+			if task.GoalVersion == run.GoalVersion && task.PlanVersion == run.PlanVersion && task.Status == TaskStatusReady {
+				retryAt := module.clock.Now().Add(10 * time.Second)
+				if task.ReadyAt != nil && task.ReadyAt.After(retryAt) {
+					retryAt = *task.ReadyAt
+				}
+				nextDispatchAt = earlierTime(nextDispatchAt, &retryAt)
+			}
+		}
+		if nextDispatchAt != nil {
+			outcome.Waiting = true
+			outcome.NextDispatchAt = nextDispatchAt
+		}
+		return outcome, nil
 	}
 	ready := make([]Task, 0, len(tasks))
 	for _, task := range tasks {
 		if task.Status == TaskStatusReady && task.GoalVersion == run.GoalVersion && task.PlanVersion == run.PlanVersion {
 			if task.ReadyAt != nil && task.ReadyAt.After(module.clock.Now()) {
+				outcome.Waiting = true
+				outcome.NextDispatchAt = earlierTime(outcome.NextDispatchAt, task.ReadyAt)
 				continue
 			}
 			ready = append(ready, task)
 		}
+	}
+	if len(ready) == 0 {
+		return outcome, nil
 	}
 	sort.SliceStable(ready, func(i, j int) bool {
 		if ready[i].Priority == ready[j].Priority {
@@ -278,74 +300,188 @@ func (module executionModule) DispatchReady(ctx context.Context, run Run, tasks 
 		}
 		return ready[i].Priority > ready[j].Priority
 	})
-	dispatched := 0
+	health, err := module.store.EvaluateExecutionTargets(ctx, run.WorkspaceID, members)
+	if err != nil {
+		return outcome, err
+	}
 	for _, task := range ready {
-		if dispatched >= available {
+		if outcome.Dispatched >= available {
 			break
 		}
-		agentID := selectAgent(task, members, activeByAgent)
-		if agentID == "" {
-			if hasActiveCapability(task, members) {
-				continue
-			}
-			return dispatched, fmt.Errorf("%w: no active fleet member has capability %q for task %s", ErrCapabilityUnavailable, roleForTask(task), task.ID)
-		}
-		snapshot, err := module.store.TaskContext(ctx, task.ID, run.WorkspaceID)
-		if err != nil {
-			return dispatched, err
-		}
-		var currentTask Task
-		for _, candidate := range snapshot.Tasks {
-			if candidate.ID == task.ID {
-				currentTask = candidate
+		maxSelectionAttempts := len(members) + 1
+		for selectionAttempt := 0; selectionAttempt < maxSelectionAttempts; selectionAttempt++ {
+			selection := selectCircuitAwareTarget(task, members, activeByAgent, health)
+			if selection.AgentID == "" {
+				if !hasActiveDispatchCandidate(task, members) {
+					return outcome, fmt.Errorf("%w: no active fleet member has capability %q for task %s", ErrCapabilityUnavailable, roleForTask(task), task.ID)
+				}
+				retryAt := selection.RetryAt
+				if selection.CapacityBlocked {
+					capacityRetryAt := module.clock.Now().Add(10 * time.Second)
+					retryAt = earlierTime(retryAt, &capacityRetryAt)
+				}
+				if len(selection.Blocked) > 0 && !selection.CapacityBlocked {
+					if _, err = module.store.DeferTaskForExecutionTarget(ctx, run.SessionID, task.ID, selection.RetryAt, selection.Blocked); err != nil {
+						return outcome, err
+					}
+				}
+				if len(selection.Blocked) > 0 || selection.CapacityBlocked {
+					outcome.Waiting = true
+					outcome.NextDispatchAt = earlierTime(outcome.NextDispatchAt, retryAt)
+				}
 				break
 			}
+			agentID := selection.AgentID
+			snapshot, snapshotErr := module.store.TaskContext(ctx, task.ID, run.WorkspaceID)
+			if snapshotErr != nil {
+				return outcome, snapshotErr
+			}
+			var currentTask Task
+			for _, candidate := range snapshot.Tasks {
+				if candidate.ID == task.ID {
+					currentTask = candidate
+					break
+				}
+			}
+			if currentTask.ID == "" || currentTask.Status != TaskStatusReady {
+				break
+			}
+			attemptID := uuid.NewString()
+			dispatchKey := fmt.Sprintf("research:%s:task:%s:attempt:%s", snapshot.Run.SessionID, currentTask.ID, attemptID)
+			target := selectedExecutionTarget(agentID, members)
+			attempt := Attempt{ID: attemptID, SessionID: snapshot.Run.SessionID, WorkspaceID: snapshot.Run.WorkspaceID,
+				TaskID: currentTask.ID, AssignedAgentID: agentID, ExecutionTarget: target,
+				DispatchKey: dispatchKey, Status: AttemptStatusDispatching}
+			prompt, promptErr := module.prompts.Build(snapshot.Run, currentTask, attempt, snapshot, members)
+			if promptErr != nil {
+				return outcome, promptErr
+			}
+			request := DispatchRequest{
+				Run: snapshot.Run, Task: currentTask, AttemptID: attempt.ID, AgentID: agentID,
+				Target: target, Key: attempt.DispatchKey, Prompt: prompt,
+			}
+			request.RequestHash, err = HashDispatchRequest(request)
+			if err != nil {
+				return outcome, err
+			}
+			_, _, err = module.store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
+				AttemptID: attemptID, SessionID: snapshot.Run.SessionID, TaskID: currentTask.ID,
+				AgentID: agentID, Target: target, ProbeTargets: selection.ProbeTargets,
+				ProbeLeaseDuration:   probeLeaseDuration(currentTask, snapshot.Run.Config),
+				ExpectedStateVersion: snapshot.Run.StateVersion, Request: request,
+			})
+			if errors.Is(err, ErrInvalidTransition) {
+				break
+			}
+			if errors.Is(err, ErrCircuitUnavailable) {
+				health, err = module.store.EvaluateExecutionTargets(ctx, run.WorkspaceID, members)
+				if err != nil {
+					return outcome, err
+				}
+				if selectionAttempt+1 == maxSelectionAttempts {
+					retryAt := module.clock.Now().Add(time.Second)
+					outcome.Waiting = true
+					outcome.NextDispatchAt = earlierTime(outcome.NextDispatchAt, &retryAt)
+				}
+				continue
+			}
+			if err != nil {
+				return outcome, err
+			}
+			activeByAgent[agentID]++
+			outcome.Dispatched++
+			break
 		}
-		if currentTask.ID == "" || currentTask.Status != TaskStatusReady {
+	}
+	if outcome.Dispatched > 0 {
+		if _, err := module.DeliverPending(ctx, run.SessionID, outcome.Dispatched); err != nil {
+			return outcome, err
+		}
+	}
+	return outcome, nil
+}
+
+type executionTargetSelection struct {
+	AgentID         string
+	ProbeTargets    []CircuitTarget
+	Blocked         []ExecutionTargetHealth
+	RetryAt         *time.Time
+	CapacityBlocked bool
+}
+
+func selectCircuitAwareTarget(task Task, members []FleetMember, active map[string]int, health map[string]ExecutionTargetHealth) executionTargetSelection {
+	role := roleForTask(task)
+	preferred := strings.TrimSpace(task.AssignedAgentID)
+	candidates := make([]FleetMember, 0, len(members))
+	seen := map[string]struct{}{}
+	for _, member := range members {
+		if member.AgentID == preferred && member.Status == "active" {
+			candidates = append(candidates, member)
+			seen[member.AgentID] = struct{}{}
+			break
+		}
+	}
+	for _, member := range members {
+		if member.Status != "active" || !strings.EqualFold(strings.TrimSpace(member.Role), role) {
 			continue
 		}
-		attemptID := uuid.NewString()
-		dispatchKey := fmt.Sprintf("research:%s:task:%s:attempt:%s", snapshot.Run.SessionID, currentTask.ID, attemptID)
-		target := selectedExecutionTarget(agentID, members)
-		attempt := Attempt{ID: attemptID, SessionID: snapshot.Run.SessionID, WorkspaceID: snapshot.Run.WorkspaceID,
-			TaskID: currentTask.ID, AssignedAgentID: agentID, ExecutionTarget: target,
-			DispatchKey: dispatchKey, Status: AttemptStatusDispatching}
-		prompt, err := module.prompts.Build(snapshot.Run, currentTask, attempt, snapshot, members)
-		if err != nil {
-			return dispatched, err
-		}
-		request := DispatchRequest{
-			Run:       snapshot.Run,
-			Task:      currentTask,
-			AttemptID: attempt.ID,
-			AgentID:   agentID,
-			Target:    target,
-			Key:       attempt.DispatchKey,
-			Prompt:    prompt,
-		}
-		request.RequestHash, err = HashDispatchRequest(request)
-		if err != nil {
-			return dispatched, err
-		}
-		_, _, err = module.store.CreateDispatchIntent(ctx, CreateDispatchIntentInput{
-			AttemptID: attemptID, SessionID: snapshot.Run.SessionID, TaskID: currentTask.ID,
-			AgentID: agentID, Target: target, ExpectedStateVersion: snapshot.Run.StateVersion, Request: request,
-		})
-		if errors.Is(err, ErrInvalidTransition) {
+		if _, exists := seen[member.AgentID]; exists {
 			continue
 		}
-		if err != nil {
-			return dispatched, err
-		}
-		activeByAgent[agentID]++
-		dispatched++
+		candidates = append(candidates, member)
+		seen[member.AgentID] = struct{}{}
 	}
-	if dispatched > 0 {
-		if _, err := module.DeliverPending(ctx, run.SessionID, dispatched); err != nil {
-			return dispatched, err
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left, right := health[candidates[i].AgentID], health[candidates[j].AgentID]
+		leftProbe, rightProbe := len(left.ProbeTargets) > 0, len(right.ProbeTargets) > 0
+		if left.Dispatchable != right.Dispatchable {
+			return left.Dispatchable
+		}
+		if leftProbe != rightProbe {
+			return !leftProbe
+		}
+		leftPreferred, rightPreferred := candidates[i].AgentID == preferred, candidates[j].AgentID == preferred
+		if leftPreferred != rightPreferred {
+			return leftPreferred
+		}
+		if candidates[i].IsLead != candidates[j].IsLead {
+			return candidates[i].IsLead
+		}
+		return candidates[i].AgentID < candidates[j].AgentID
+	})
+	selection := executionTargetSelection{}
+	for _, candidate := range candidates {
+		if active[candidate.AgentID] > 0 {
+			selection.CapacityBlocked = true
+			continue
+		}
+		candidateHealth, known := health[candidate.AgentID]
+		if known && candidateHealth.Dispatchable {
+			selection.AgentID = candidate.AgentID
+			selection.ProbeTargets = append([]CircuitTarget(nil), candidateHealth.ProbeTargets...)
+			return selection
+		}
+		if known {
+			selection.Blocked = append(selection.Blocked, candidateHealth)
+			selection.RetryAt = earlierTime(selection.RetryAt, candidateHealth.RetryAt)
 		}
 	}
-	return dispatched, nil
+	return selection
+}
+
+func probeLeaseDuration(task Task, config RunConfig) time.Duration {
+	timeout := task.TimeoutSeconds
+	if timeout <= 0 {
+		timeout = config.TaskTimeoutSeconds
+	}
+	if timeout <= 0 {
+		timeout = 30 * 60
+	}
+	stale := config.StaleAfterSeconds
+	if stale <= 0 {
+		stale = 15 * 60
+	}
+	return time.Duration(timeout+stale)*time.Second + dispatchLeaseDuration
 }
 
 func selectedExecutionTarget(agentID string, members []FleetMember) ExecutionTarget {
@@ -371,6 +507,16 @@ func hasActiveCapability(task Task, members []FleetMember) bool {
 		}
 	}
 	return false
+}
+
+func hasActiveDispatchCandidate(task Task, members []FleetMember) bool {
+	preferred := strings.TrimSpace(task.AssignedAgentID)
+	for _, member := range members {
+		if member.Status == "active" && member.AgentID == preferred {
+			return true
+		}
+	}
+	return hasActiveCapability(task, members)
 }
 
 func selectAgent(task Task, members []FleetMember, active map[string]int) string {
@@ -441,6 +587,6 @@ func (e *Engine) cancelPendingAttempts(ctx context.Context, run Run, reason stri
 	return e.executionModule().CancelPendingAttempts(ctx, run, reason)
 }
 
-func (e *Engine) dispatchReady(ctx context.Context, run Run, tasks []Task, attempts []Attempt, members []FleetMember) (int, error) {
+func (e *Engine) dispatchReady(ctx context.Context, run Run, tasks []Task, attempts []Attempt, members []FleetMember) (DispatchOutcome, error) {
 	return e.executionModule().DispatchReady(ctx, run, tasks, attempts, members)
 }

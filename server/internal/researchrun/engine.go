@@ -206,12 +206,12 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	if err != nil {
 		return err
 	}
-	dispatched, err := e.dispatchReady(ctx, run, tasks, attempts, members)
+	dispatchOutcome, err := e.dispatchReady(ctx, run, tasks, attempts, members)
 	if err != nil {
 		return e.failureModule().HandleDispatchFailure(ctx, sessionID, err)
 	}
-	if dispatched > 0 || hasActiveCurrentWork(run, tasks) {
-		next = e.clock.Now().Add(10 * time.Second)
+	if dispatchNext, wait := nextReconcileAfterDispatch(e.clock.Now(), dispatchOutcome, hasExecutingCurrentWork(run, tasks)); wait {
+		next = dispatchNext
 		return e.projectPending(ctx, sessionID)
 	}
 
@@ -236,20 +236,40 @@ func (e *Engine) ReconcileSession(ctx context.Context, sessionID string) (retErr
 	if err != nil {
 		return err
 	}
-	if _, err = e.dispatchReady(ctx, run, tasks, attempts, members); err != nil {
+	secondDispatch, err := e.dispatchReady(ctx, run, tasks, attempts, members)
+	if err != nil {
 		return e.failureModule().HandleDispatchFailure(ctx, sessionID, err)
 	}
 	next = e.clock.Now().Add(10 * time.Second)
+	if dispatchNext, wait := nextReconcileAfterDispatch(e.clock.Now(), secondDispatch, false); wait {
+		next = dispatchNext
+	}
 	return e.projectPending(ctx, sessionID)
 }
 
-func hasActiveCurrentWork(run Run, tasks []Task) bool {
+func nextReconcileAfterDispatch(now time.Time, outcome DispatchOutcome, executing bool) (time.Time, bool) {
+	if outcome.Dispatched > 0 || executing {
+		next := now.Add(10 * time.Second)
+		if outcome.NextDispatchAt != nil && outcome.NextDispatchAt.Before(next) {
+			next = *outcome.NextDispatchAt
+		}
+		return next, true
+	}
+	if !outcome.Waiting {
+		return time.Time{}, false
+	}
+	if outcome.NextDispatchAt != nil {
+		return *outcome.NextDispatchAt, true
+	}
+	return now.Add(5 * time.Minute), true
+}
+
+func hasExecutingCurrentWork(run Run, tasks []Task) bool {
 	for _, task := range tasks {
 		if task.GoalVersion != run.GoalVersion || task.PlanVersion != run.PlanVersion {
 			continue
 		}
-		switch task.Status {
-		case TaskStatusPending, TaskStatusReady, TaskStatusDispatching, TaskStatusRunning:
+		if task.Status == TaskStatusDispatching || task.Status == TaskStatusRunning {
 			return true
 		}
 	}

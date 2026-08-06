@@ -32,6 +32,28 @@ func TestBusyMatchingAgentIsCapacityPressureNotMissingCapability(t *testing.T) {
 	}
 }
 
+func TestNextReconcileAfterDispatchUsesExactCircuitRecovery(t *testing.T) {
+	now := time.Date(2026, time.August, 6, 14, 0, 0, 0, time.UTC)
+	recovery := now.Add(3 * time.Minute)
+	next, wait := nextReconcileAfterDispatch(now, DispatchOutcome{
+		Waiting: true, NextDispatchAt: &recovery,
+	}, false)
+	if !wait || !next.Equal(recovery) {
+		t.Fatalf("next=%s wait=%v", next, wait)
+	}
+	next, wait = nextReconcileAfterDispatch(now, DispatchOutcome{Waiting: true}, false)
+	if !wait || !next.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("unknown recovery next=%s wait=%v", next, wait)
+	}
+	earlier := now.Add(2 * time.Second)
+	next, wait = nextReconcileAfterDispatch(now, DispatchOutcome{
+		Dispatched: 1, Waiting: true, NextDispatchAt: &earlier,
+	}, true)
+	if !wait || !next.Equal(earlier) {
+		t.Fatalf("mixed work next=%s wait=%v", next, wait)
+	}
+}
+
 func TestProjectionRetryDelayUsesDurableAttemptCount(t *testing.T) {
 	if got := projectionRetryDelay(0); got != time.Second {
 		t.Fatalf("first delay=%s", got)

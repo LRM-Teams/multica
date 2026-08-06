@@ -2334,6 +2334,25 @@ func TestCodexSandboxPolicyFor(t *testing.T) {
 	}
 }
 
+func TestCodexSandboxPolicyForLinuxNamespaceFailure(t *testing.T) {
+	t.Parallel()
+	for _, failure := range []string{
+		"bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+		"bwrap: setting up uid map: Permission denied",
+	} {
+		policy := codexSandboxPolicyFor("linux", "0.146.0", failure)
+		if policy.Mode != "danger-full-access" {
+			t.Errorf("failure %q: mode = %q, want danger-full-access", failure, policy.Mode)
+		}
+		if policy.NetworkAccess {
+			t.Errorf("failure %q: network_access must not be emitted for danger-full-access", failure)
+		}
+		if !strings.Contains(policy.Reason, failure) {
+			t.Errorf("reason %q does not preserve probe failure %q", policy.Reason, failure)
+		}
+	}
+}
+
 func TestPrepareCodexHomeEnsuresNetworkAccess(t *testing.T) {
 	// Cannot use t.Parallel() with t.Setenv.
 
@@ -2388,13 +2407,9 @@ func TestPrepareCodexHomeAddsOnlyAgentWorkspaceWritableRoot(t *testing.T) {
 		t.Fatalf("config.toml not created: %v", err)
 	}
 	s := string(data)
-	if runtime.GOOS == "darwin" && !codexDarwinNetworkAccessFixed("") {
-		// Prepare follows the host platform. Until Codex fixes workspace-write
-		// network access on macOS, danger-full-access is intentional and an
-		// extra writable root would be meaningless.
-		if !strings.Contains(s, `sandbox_mode = "danger-full-access"`) {
-			t.Fatalf("config.toml missing macOS sandbox fallback: %s", s)
-		}
+	if strings.Contains(s, `sandbox_mode = "danger-full-access"`) {
+		// Prepare follows host capability. An extra writable root is meaningless
+		// under the macOS network fallback or Linux namespace fallback.
 		return
 	}
 	if !strings.Contains(s, "sandbox_workspace_write.writable_roots") {

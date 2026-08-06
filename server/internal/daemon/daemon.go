@@ -921,6 +921,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	taskWakeups := make(chan taskWakeup, 256)
 	go d.taskWakeupLoop(ctx, taskWakeups)
 	go d.workspaceRunnerLoop(ctx)
+	go d.lifecycleDiagnosticsCleanupLoop(ctx)
 	go d.heartbeatLoop(ctx)
 	go d.residentCrashWatchLoop(ctx)
 	go d.tokenRenewalLoop(ctx)

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -13,9 +14,10 @@ import (
 )
 
 const (
-	lifecycleDiagnosticFileBytes = 5 << 20
-	lifecycleDiagnosticRetention = 7 * 24 * time.Hour
-	lifecycleDiagnosticCapBytes  = 200 << 20
+	lifecycleDiagnosticFileBytes       = 5 << 20
+	lifecycleDiagnosticRetention       = 7 * 24 * time.Hour
+	lifecycleDiagnosticCapBytes        = 200 << 20
+	lifecycleDiagnosticCleanupInterval = 24 * time.Hour
 )
 
 // lifecycleDiagnosticWriter is deliberately local-only. Its record type has
@@ -90,6 +92,27 @@ func (w *lifecycleDiagnosticWriter) Cleanup() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.cleanupLocked()
+}
+
+// lifecycleDiagnosticsCleanupLoop repeats the constructor's best-effort
+// cleanup once a day. Diagnostic retention is never allowed to block daemon
+// startup, process management, or shutdown.
+func (d *Daemon) lifecycleDiagnosticsCleanupLoop(ctx context.Context) {
+	if d == nil || d.lifecycleDiagnostics == nil {
+		return
+	}
+	ticker := time.NewTicker(lifecycleDiagnosticCleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := d.lifecycleDiagnostics.Cleanup(); err != nil && d.logger != nil {
+				d.logger.Debug("lifecycle diagnostic cleanup failed", "error", err)
+			}
+		}
+	}
 }
 
 func (w *lifecycleDiagnosticWriter) rotateLocked(nextBytes int64) error {

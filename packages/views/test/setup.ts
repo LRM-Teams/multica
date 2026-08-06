@@ -1,5 +1,11 @@
 import { afterEach } from "vitest";
 
+// The suite default environment is happy-dom (see vitest.config.ts); a few
+// files opt into jsdom or node per file. The guards below are written against
+// whichever environment is active — each one probes for the API instead of
+// assuming a particular DOM, so "jsdom doesn't provide X" comments describe
+// where a gap was first hit, not a jsdom-only code path.
+//
 // This file also runs for `// @vitest-environment node` test files —
 // `setupFiles` run for every file regardless of that file's own environment.
 // Everything below touches `window`/`document`, so guard the whole body once

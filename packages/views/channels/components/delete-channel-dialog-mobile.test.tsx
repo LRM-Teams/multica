@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+// This file asserts getComputedStyle() cascade behavior (pointer-events under
+// Vaul's body lock), which happy-dom does not model — keep it on jsdom.
 import { type ReactNode, useState } from "react";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";

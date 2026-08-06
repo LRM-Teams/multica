@@ -151,6 +151,7 @@
     "@types/react-file-icon": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "eslint-plugin-i18next": "catalog:",
+    "happy-dom": "catalog:",
     "jsdom": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

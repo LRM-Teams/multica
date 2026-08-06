@@ -135,8 +135,8 @@ function renderMeta(node: ResearchV6ProjectionNode, show: boolean) {
     <>
       {parts.length > 0 && (
         <span data-testid="node-meta" className="flex items-center gap-1 text-muted-foreground">
-          {parts.map((p, i) => (
-            <span key={i} className="rounded bg-muted px-1">
+          {parts.map((p) => (
+            <span key={p} className="rounded bg-muted px-1">
               {p}
             </span>
           ))}

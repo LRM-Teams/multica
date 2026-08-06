@@ -51,6 +51,16 @@ export function GenericNodeCard({
       onClick={onOpen}
       role={onOpen ? "button" : undefined}
       tabIndex={onOpen ? 0 : undefined}
+      onKeyDown={
+        onOpen
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpen();
+              }
+            }
+          : undefined
+      }
       aria-label={`未知节点: ${title || nodeId}`}
     >
       <div data-testid="generic-accent-bar" className={cn("h-1 w-full", state.accentBarClass)} />

@@ -2,8 +2,8 @@
  * LRM-1475 AC2/AC1 — NodeRenderer renders every one of the 8 states and
  * degrades unknown kinds to GenericNodeCard without crashing.
  */
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ResearchV6UnknownKindDiagnostic } from "@multica/core/types/research-v6";
 import { NodeRenderer } from "./node-renderer";
 import type { ResearchV6ProjectionNode } from "@multica/core/types/research-v6";
@@ -90,6 +90,22 @@ describe("NodeRenderer — generic degradation (AC1)", () => {
     expect(screen.getByTestId("generic-node-card")).toBeTruthy();
     expect(screen.getByText("未来的节点")).toBeTruthy();
     expect(container.querySelector('[data-testid="node-card"]')).toBeNull();
+  });
+
+  it("generic card is keyboard-activatable (Enter opens inspector)", () => {
+    const diagnostics: ResearchV6UnknownKindDiagnostic[] = [];
+    const onOpen = vi.fn();
+    const { container } = render(
+      <NodeRenderer
+        node={node("pending", { node_kind: "some_future_kind" })}
+        diagnostics={diagnostics}
+        onOpen={onOpen}
+      />,
+    );
+    const generic = container.querySelector('[data-testid="generic-node-card"]') as HTMLElement;
+    expect(generic.getAttribute("role")).toBe("button");
+    fireEvent.keyDown(generic, { key: "Enter" });
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });
 

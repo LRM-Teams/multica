@@ -61,7 +61,6 @@ import type {
   UpdateAgentFileContentRequest,
   UpdateAgentFileContentResponse,
   AgentTask,
-  AgentActivityEventsPage,
   RunnerActivityResponse,
   AgentHealthResponse,
   AgentActivityBucket,
@@ -1258,29 +1257,6 @@ export class ApiClient {
 
   async getAgent(id: string): Promise<Agent> {
     return this.fetch(`/api/agents/${id}`);
-  }
-
-  // #302 Activity: REST first-paint for one agent's raw fact timeline. The BE
-  // supplies source facts (kind/text/reason/visibility/refs); live updates
-  // arrive over the `agent_activity:event` WS as full events the FE upserts by
-  // id. This route scopes the workspace via an explicit `workspace_slug` query
-  // param (not the X-Workspace-Slug header the other agent endpoints rely on)
-  // — without it the BE 400s and the timeline reads as empty. Mirror the same
-  // slug the header uses. The response is a pagination envelope
-  // (`{ events, limit, has_more, next_cursor }`), not a bare array — callers
-  // read `.events` (see `agentActivityEventsOptions`).
-  async getAgentActivityEvents(
-    agentId: string,
-    before?: string,
-  ): Promise<AgentActivityEventsPage> {
-    const search = new URLSearchParams();
-    const slug = getCurrentSlug();
-    if (slug) search.set("workspace_slug", slug);
-    // Cursor for the next (older) page — the BE returns it as `next_cursor` and
-    // reads it back from the `before` query param (an opaque encoded cursor).
-    if (before) search.set("before", before);
-    const suffix = search.toString() ? `?${search}` : "";
-    return this.fetch(`/api/agents/${agentId}/activity/events${suffix}`);
   }
 
   // #656 Agent Card Reminders tab: read-only, per the V2 product contract

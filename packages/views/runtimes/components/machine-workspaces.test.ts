@@ -39,11 +39,9 @@ describe("machine-workspaces helpers (LRM-1148)", () => {
   it("strips leading workspace UUID from rel_path", () => {
     expect(
       workspaceDisplayPath(
-        "7beafc96-3c51-4fcc-9fe7-8c36ceb482ff/.multica/agents/546d9101-bd59-4745-8771-48505c1556bf",
+        "7beafc96-3c51-4fcc-9fe7-8c36ceb482ff/agents/546d9101-bd59-4745-8771-48505c1556bf",
       ),
-    ).toBe(".multica/agents/546d9101-bd59-4745-8771-48505c1556bf");
-    expect(workspaceDisplayPath(".multica/agents/x")).toBe(
-      ".multica/agents/x",
-    );
+    ).toBe("agents/546d9101-bd59-4745-8771-48505c1556bf");
+    expect(workspaceDisplayPath("agent-id/x")).toBe("agent-id/x");
   });
 });

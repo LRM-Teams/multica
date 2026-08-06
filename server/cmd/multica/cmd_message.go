@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -47,26 +53,23 @@ func newMessageSendCmd() *cobra.Command {
 	cmd.Flags().Bool("voice", false, "Deliver the message text as synthesized speech and an accessible transcript")
 	cmd.Flags().StringSlice("attachment-id", nil, "Attachment id to link (repeatable). Get one from `multica attachment upload`")
 	cmd.Flags().String("client-message-id", "", "Idempotency key; generated automatically when omitted")
-	cmd.Flags().Int64("seen-up-to-seq", 0, "Last channel message sequence the agent reviewed before composing")
 	cmd.Flags().String("output", "json", "Output format: json or text")
-	_ = cmd.Flags().MarkHidden("seen-up-to-seq")
 	return cmd
 }
 
 func newMessageReactCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "react",
-		Short: "React to a channel or thread message from the running agent task",
-		Long: "Add a reaction from the running agent task to an explicit target. " +
-			"Target syntax: #channel, #channel:<threadId>, dm:@handle, " +
-			"or dm:@handle:<threadId>. Omit --message-id to react to the message " +
-			"that triggered the task when the task context provides one.",
+		Short: "React to one visible canonical message from the running agent task",
+		Long: "Add or remove the running agent task's reaction on one visible canonical " +
+			"message. Use a full message UUID or a unique short ID prefix; no target is " +
+			"accepted or inferred.",
+		Args: cobra.NoArgs,
 		RunE: runAgentMessageReact,
 	}
-	cmd.Flags().String("target", "", messageTargetFlagUsage())
-	cmd.Flags().String("message-id", "", "Message UUID to react to; omit to use the triggering message when available")
-	cmd.Flags().String("emoji", "", "Emoji reaction to add")
-	cmd.Flags().String("client-message-id", "", "Idempotency/audit key; generated automatically when omitted")
+	cmd.Flags().String("message-id", "", "Full message UUID or unique short ID prefix")
+	cmd.Flags().String("emoji", "", "Emoji reaction to add or remove")
+	cmd.Flags().Bool("remove", false, "Remove this reaction instead of adding it")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	return cmd
 }
@@ -119,7 +122,9 @@ var messageCmd = &cobra.Command{
 
 var messageReadCmd = newMessageReadCmd()
 var messageSearchCmd = newMessageSearchCmd()
+var messageResolveCmd = newMessageResolveCmd()
 var messageA2AControlCmd = newMessageA2AControlCmd()
+var messageCheckCmd = newMessageCheckCmd()
 
 func init() {
 	messageCmd.AddCommand(messageSendCmd)
@@ -127,16 +132,112 @@ func init() {
 	messageCmd.AddCommand(messageAskChoiceCmd)
 	messageCmd.AddCommand(messageReadCmd)
 	messageCmd.AddCommand(messageSearchCmd)
+	messageCmd.AddCommand(messageResolveCmd)
 	messageCmd.AddCommand(messageA2AControlCmd)
+	messageCmd.AddCommand(messageCheckCmd)
+}
+
+type messageCheckCLIResponse struct {
+	Messages  []protocol.AgentMessageProjection `json:"messages"`
+	HasMore   bool                              `json:"has_more"`
+	Remaining int                               `json:"remaining"`
+	Status    string                            `json:"status"`
+}
+
+func newMessageCheckCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "check",
+		Short: "Drain a bounded window of Pending messages",
+		Args:  cobra.NoArgs,
+		RunE:  runAgentMessageCheck,
+	}
+}
+
+func runAgentMessageCheck(_ *cobra.Command, _ []string) error {
+	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
+	taskID := strings.TrimSpace(os.Getenv("MULTICA_TASK_ID"))
+	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
+	if agentID == "" || taskID == "" {
+		return errors.New("message check requires an active daemon Agent turn")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return errors.New("message check requires a valid MULTICA_DAEMON_PORT")
+	}
+	body, err := json.Marshal(map[string]string{"agent_id": agentID, "task_id": taskID})
+	if err != nil {
+		return fmt.Errorf("encode message check request: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/credential-proxy/messages/check", portNumber), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("prepare message check: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+	if err != nil {
+		return fmt.Errorf("message check through Credential Proxy: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+		return fmt.Errorf("message check through Credential Proxy: %s: %s", response.Status, strings.TrimSpace(string(detail)))
+	}
+	var result messageCheckCLIResponse
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
+	if err := decoder.Decode(&result); err != nil {
+		return fmt.Errorf("decode message check response: %w", err)
+	}
+	return printMessageCheckResult(os.Stdout, result)
+}
+
+func printMessageCheckResult(w io.Writer, result messageCheckCLIResponse) error {
+	for _, message := range result.Messages {
+		if _, err := fmt.Fprintf(w, "Message %s (%s seq %d)\n", message.ID, message.Target, message.Seq); err != nil {
+			return err
+		}
+		if message.Content != "" {
+			if _, err := fmt.Fprintln(w, message.Content); err != nil {
+				return err
+			}
+		}
+		if len(message.Parts) > 0 {
+			parts, err := json.Marshal(message.Parts)
+			if err != nil {
+				return fmt.Errorf("encode Message parts: %w", err)
+			}
+			if _, err := fmt.Fprintf(w, "Parts: %s\n", parts); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+	}
+	if result.HasMore {
+		_, err := fmt.Fprintf(w, "More Pending messages remain (%d); run `multica message check` again.\n", result.Remaining)
+		return err
+	}
+	_, err := fmt.Fprintln(w, "Message check complete.")
+	return err
 }
 
 func newMessageReadCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "read",
-		Short: "Read recent messages from a targeted chat surface",
-		RunE:  runAgentMessageRead,
+		Short: "Read bounded canonical history from a targeted chat surface",
+		Long: "Read bounded canonical history from a targeted chat surface. " +
+			"Use at most one of --before, --after, or --around with a full message ID, a unique 8+ character ID prefix, or a positive target sequence. " +
+			"A digits-only anchor is interpreted as a target sequence. " +
+			"--before and --after exclude the anchor; --around includes it. Results are returned in ascending sequence order.",
+		RunE: runAgentMessageRead,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
+	cmd.Flags().String("before", "", "Read messages before a full id, unique short id, or target sequence")
+	cmd.Flags().String("after", "", "Read messages after a full id, unique short id, or target sequence")
+	cmd.Flags().String("around", "", "Read a window around a full id, unique short id, or target sequence")
 	cmd.Flags().Int("limit", 20, "Maximum messages to return")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	return cmd
@@ -153,6 +254,17 @@ func newMessageSearchCmd() *cobra.Command {
 	cmd.Flags().Int("limit", 50, "Maximum matches to return")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	return cmd
+}
+
+func newMessageResolveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "resolve <message-id>",
+		Short: "Resolve one canonical message by its full or unique short ID",
+		Long: "Resolve exactly one canonical message visible to the running agent. " +
+			"The identity may be a full UUID or a unique short UUID prefix.",
+		Args: cobra.ExactArgs(1),
+		RunE: runAgentMessageResolve,
+	}
 }
 
 func newMessageA2AControlCmd() *cobra.Command {
@@ -264,9 +376,6 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		"target":            target,
 		"client_message_id": clientMessageIDFlag(cmd),
 	}
-	if seenUpToSeq := seenUpToSeqForMessageSend(cmd, client); seenUpToSeq > 0 {
-		body["seen_up_to_seq"] = seenUpToSeq
-	}
 	if text != "" {
 		body["content"] = content
 	}
@@ -284,13 +393,6 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("send message: %w", err)
 	}
 	return printAgentTransportOutput(cmd, out, agentMessageSendTextFallback(out))
-}
-
-func seenUpToSeqForMessageSend(cmd *cobra.Command, client *cli.APIClient) int64 {
-	if seq, _ := cmd.Flags().GetInt64("seen-up-to-seq"); seq > 0 {
-		return seq
-	}
-	return client.AgentInboxSeqTo
 }
 
 func agentMessageSendTextFallback(out map[string]any) string {
@@ -356,28 +458,29 @@ func buildAgentSendParts(stickerID, text string, attachmentIDs []string, voice b
 }
 
 func runAgentMessageReact(cmd *cobra.Command, _ []string) error {
-	target, err := requiredMessageTarget(cmd)
-	if err != nil {
-		return err
+	messageID := strings.TrimSpace(flagString(cmd, "message-id"))
+	if messageID == "" {
+		return fmt.Errorf("message-id is required; pass --message-id")
 	}
 	emoji := strings.TrimSpace(flagString(cmd, "emoji"))
 	if emoji == "" {
 		return fmt.Errorf("emoji is required; pass --emoji")
 	}
+	remove, _ := cmd.Flags().GetBool("remove")
 	body := map[string]any{
-		"target":            target,
-		"message_id":        flagString(cmd, "message-id"),
-		"emoji":             emoji,
-		"client_message_id": clientMessageIDFlag(cmd),
+		"message_id": messageID,
+		"emoji":      emoji,
+		"remove":     remove,
 	}
 	var out map[string]any
-	if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
-		return err
-	}
 	if err := postAgentTransport(cmd, "/api/agent/messages/react", body, &out); err != nil {
 		return fmt.Errorf("react to message: %w", err)
 	}
-	return printAgentTransportOutput(cmd, out, "Reaction sent.")
+	fallback := "Reaction sent."
+	if remove {
+		fallback = "Reaction removed."
+	}
+	return printAgentTransportOutput(cmd, out, fallback)
 }
 
 func runAgentMessageAskChoice(cmd *cobra.Command, _ []string) error {
@@ -439,9 +542,6 @@ func runAgentMessageAskChoice(cmd *cobra.Command, _ []string) error {
 	if text != "" {
 		body["content"] = text
 	}
-	if seenUpToSeq := seenUpToSeqForMessageSend(cmd, client); seenUpToSeq > 0 {
-		body["seen_up_to_seq"] = seenUpToSeq
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
 	defer cancel()
 	var out map[string]any
@@ -497,11 +597,71 @@ func runAgentMessageRead(cmd *cobra.Command, _ []string) error {
 		"target": target,
 		"limit":  limit,
 	}
+	for _, name := range []string{"before", "after", "around"} {
+		if value := strings.TrimSpace(flagString(cmd, name)); value != "" {
+			body[name] = value
+		}
+	}
 	var out map[string]any
-	if err := postAgentTransport(cmd, "/api/agent/messages/read", body, &out); err != nil {
+	if err := postAgentMessageReadThroughCredentialProxy(body, &out); err != nil {
 		return fmt.Errorf("read messages: %w", err)
 	}
 	return printAgentTransportOutput(cmd, out, "")
+}
+
+func postAgentMessageReadThroughCredentialProxy(body map[string]any, out any) error {
+	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
+	taskID := strings.TrimSpace(os.Getenv("MULTICA_TASK_ID"))
+	workspaceID := strings.TrimSpace(os.Getenv("MULTICA_WORKSPACE_ID"))
+	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
+	if agentID == "" || taskID == "" || workspaceID == "" {
+		return errors.New("message read requires an active daemon Agent turn")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return errors.New("message read requires a valid MULTICA_DAEMON_PORT")
+	}
+	requestBody := make(map[string]any, len(body)+6)
+	for key, value := range body {
+		requestBody[key] = value
+	}
+	requestBody["agent_id"] = agentID
+	requestBody["task_id"] = taskID
+	requestBody["workspace_id"] = workspaceID
+	for env, field := range map[string]string{
+		"MULTICA_AGENT_INBOX_EVENT_ID":    "agent_inbox_event_id",
+		"MULTICA_AGENT_INBOX_DELIVERY_ID": "agent_inbox_delivery_id",
+		"MULTICA_AGENT_INBOX_LEASE_TOKEN": "agent_inbox_lease_token",
+	} {
+		if value := strings.TrimSpace(os.Getenv(env)); value != "" {
+			requestBody[field] = value
+		}
+	}
+	raw, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("encode message read request: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/credential-proxy/messages/read", portNumber), bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("prepare message read: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: cli.APITimeout()}).Do(request)
+	if err != nil {
+		return fmt.Errorf("message read through Credential Proxy: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+		return fmt.Errorf("message read through Credential Proxy: %s: %s", response.Status, strings.TrimSpace(string(detail)))
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out); err != nil {
+		return fmt.Errorf("decode message read response: %w", err)
+	}
+	return nil
 }
 
 func runAgentMessageSearch(cmd *cobra.Command, args []string) error {
@@ -520,6 +680,15 @@ func runAgentMessageSearch(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("search messages: %w", err)
 	}
 	return printAgentTransportOutput(cmd, out, "")
+}
+
+func runAgentMessageResolve(cmd *cobra.Command, args []string) error {
+	body := map[string]string{"message_id": strings.TrimSpace(args[0])}
+	var out map[string]any
+	if err := postAgentTransport(cmd, "/api/agent/messages/resolve", body, &out); err != nil {
+		return fmt.Errorf("resolve message: %w", err)
+	}
+	return cli.PrintJSON(os.Stdout, out)
 }
 
 func postAgentTransport(cmd *cobra.Command, path string, body any, out any) error {

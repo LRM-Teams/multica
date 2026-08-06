@@ -5,8 +5,8 @@
 - 参照: Raft agent workspace（本 PRD 作者每天就活在一个里：MEMORY.md/notes/artifacts 跨会话持久，owner 可通过 Workspace tab 浏览）
 - 关联: #188 PRD v2.3 §4.1（三存储层/workspace_file_ref/显式 Save）、§15（justification + 代码事实）
 
-## 0. 为什么要做（已核代码）
-Multica 今天**没有**持久 per-agent workspace：只有 per-run workdir（`/multica_workspaces/{ws}/{taskShort}/workdir`，GC 不复用）、project 绑定目录、`agent_memory` 表（runtime 同步的记忆记录，非可浏览文件区）。后果：**agent 每次 run 失忆，攒不出专长**；产出文件随 run 消失；用户看不到 agent 的"家"。Raft 证明了反面：agent 有持久 workspace 后能跨会话积累知识/工作副本，owner 可直接浏览（Frank 日常在用）。
+## 0. 为什么要做（历史基线）
+本 PRD 最初针对 per-run workdir 与 task GC 模型提出持久 Agent workspace。该旧模型已经被 `docs/engineering-principles.md` §4.18 的单一 AgentRoot 合同替代：新运行只使用 `~/.multica/workspaces/<workspace_id>/agents/<agent_id>/`，不再创建 per-run workdir，也不迁移或清理旧目录。
 
 ## 1. 模型
 **Agent Workspace = 每个 agent 一个持久、私有、受管的文件区。**
@@ -24,18 +24,17 @@ Multica 今天**没有**持久 per-agent workspace：只有 per-run workdir（`/
 | 层 | 定位 | 生命周期 |
 |---|---|---|
 | Product Attachment Store | 会话文件 source of truth | 跟随消息 |
-| Run Workspace | 每 run 临时工作区（附件 materialize、工具中间产物） | TTL/GC |
 | **Agent Workspace（本 PRD）** | agent 长期私有区 | 持久，仅显式 Save/agent 主动写入 |
 
 ## 2. 物理位置与访问（关键设计点，交 BE 评估）
-**推荐：workspace 落在 agent 所在 daemon host 上**，受管根如 `~/.multica/agents/{agent_id}/workspace/`（对齐 Raft 拓扑：我的 workspace 就在 Frank 的机器上，平台中介访问）。
+**推荐：workspace 落在 agent 所在 daemon host 上**，固定根目录为 `~/.multica/workspaces/<workspace_id>/agents/<agent_id>/`（对齐 Raft 拓扑：我的 workspace 就在 Frank 的机器上，平台中介访问）。
 - 服务端不复制全量文件；**浏览/下载经 daemon API 中介**，server 做权限裁决 + 审计。
 - **离线态**：daemon 离线 → workspace 显示"不可访问（主机离线）"，不是空目录（边界态显式）。
 - 备选（BE 权衡）：server 侧对象存储镜像/同步——成本高，v0 不推荐；`agent_memory` 表保持现状（结构化记忆记录），与文件 workspace 并存，后续再议统一。
 
 ## 3. 读写流（动作合约）
-- **agent 写**：run 中 agent 可直接读写自己 workspace（运行时挂载/路径注入）；run workdir 的产物要长期保留 = agent 显式移入 workspace（或用户点「Save to agent workspace」）。
-- **agent 读附件**：默认 fetch 到 Run Workspace（临时）；**只有显式 Save 才进 Agent Workspace**（#188 已锁，防变相囤积会话文件绕权限）。
+- **agent 写**：run 中 agent 直接在自己的持久 AgentRoot 工作；平台不规定其 Git/worktree 或文件组织方式。
+- **agent 读附件**：附件是否落盘由 Agent 自己决定，落盘目标始终在 AgentRoot 内。
 - **分享出去**：`Share as attachment`（upload→attachment_id→parts）或 `Share workspace file`（workspace_file_ref → 浏览视图）。裸 host path 不能当聊天链接（#188 已锁）。
 - **human 浏览**：agent 档案页 **Workspace tab**（对齐 Raft）：目录树/文件预览/下载/复制 workspace_file_ref。
 
@@ -64,7 +63,7 @@ daemon 离线→「主机离线」态｜配额超限→显式失败｜文件被 
 - **后续**：`agent_memory` 表与文件 workspace 的关系统一；MEMORY.md 约定进运行时提示词（让 Multica agent 像 Raft agent 一样"醒来先读索引"）。
 
 ## 9. 验收（v1）
-1. 同一 agent 跨 run/重启读到自己上次写的文件；run GC 不触碰 workspace。
+1. 同一 agent 跨 run/重启读到自己上次写的文件；不存在 task workspace GC。
 2. Workspace tab：owner/admin 可浏览/下载；普通成员不可见；ref 分享可用且可撤销。
 3. 附件 fetch 默认进 Run Workspace；只有显式 Save 进 Agent Workspace。
 4. 跨 agent 隔离：A 读不到 B 的 workspace（含 run 内路径逃逸防护）。

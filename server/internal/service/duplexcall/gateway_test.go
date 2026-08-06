@@ -133,7 +133,7 @@ func TestGatewayStartUsesPendingAgentInstructions(t *testing.T) {
 	if client.cfg.Model != "model-1" || client.cfg.Audio.Output.Voice != "voice-1" {
 		t.Fatalf("unexpected session config: %+v", client.cfg)
 	}
-	if len(client.cfg.Tools) != 3 {
+	if len(client.cfg.Tools) != 4 {
 		t.Fatalf("tools=%d want default dialog tools", len(client.cfg.Tools))
 	}
 }

@@ -357,31 +357,6 @@ func (c *Client) EnsureAgentCredential(ctx context.Context, runtimeID, agentID, 
 	return &resp, nil
 }
 
-// MarkTaskWaitingLocalDirectory parks a freshly-dispatched task in the
-// waiting_local_directory state on the server. The daemon calls this after
-// it has claimed a task whose project carries a local_directory resource
-// but the path mutex is held by another in-flight task. reason is a short
-// human-readable hint (e.g. "<path>") surfaced by the UI alongside the
-// status. Idempotent on the daemon's side — calling twice with the same
-// reason is a no-op once the row is already waiting_local_directory (the
-// underlying SQL filters on status='dispatched', so the second call is a
-// 400 the daemon swallows and proceeds to wait).
-func (c *Client) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID, reason string) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/wait-local-directory", taskID), map[string]any{
-		"reason": reason,
-	}, nil)
-}
-
-// RegisterManagedWorkdir tells the server the daemon has provisioned a managed
-// shared working directory for a project, so it's recorded as a managed
-// local_directory resource and reused by later tasks. Idempotent server-side.
-func (c *Client) RegisterManagedWorkdir(ctx context.Context, projectID, localPath, daemonID string) error {
-	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/projects/%s/managed-workdir", projectID), map[string]any{
-		"local_path": localPath,
-		"daemon_id":  daemonID,
-	}, nil)
-}
-
 func (c *Client) ReportProgress(ctx context.Context, taskID, summary string, step, total int) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/progress", taskID), map[string]any{
 		"summary": summary,
@@ -705,56 +680,6 @@ func (c *Client) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error) {
 	return workspaces, nil
 }
 
-// IssueGCStatus holds the minimal issue info returned by the GC check endpoint.
-type IssueGCStatus struct {
-	Status    string    `json:"status"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// GetIssueGCCheck returns the status and updated_at of an issue for GC decisions.
-func (c *Client) GetIssueGCCheck(ctx context.Context, issueID string) (*IssueGCStatus, error) {
-	var resp IssueGCStatus
-	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/issues/%s/gc-check", issueID), &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// ChatSessionGCStatus mirrors IssueGCStatus for chat sessions.
-type ChatSessionGCStatus struct {
-	Status    string    `json:"status"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// GetChatSessionGCCheck returns the status of a chat session for GC decisions.
-// A 404 from this endpoint indicates the session row was hard-deleted (the
-// user explicitly removed it), which the caller treats as an immediate-clean
-// signal.
-func (c *Client) GetChatSessionGCCheck(ctx context.Context, sessionID string) (*ChatSessionGCStatus, error) {
-	var resp ChatSessionGCStatus
-	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/chat-sessions/%s/gc-check", sessionID), &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// TaskGCStatus carries the agent_inbox_event status for quick-create cleanup.
-// Quick-create tasks have no separate parent record, so GC keys directly on
-// the task itself.
-type TaskGCStatus struct {
-	Status      string    `json:"status"`
-	CompletedAt time.Time `json:"completed_at"`
-}
-
-// GetTaskGCCheck returns the status of an agent task for GC decisions.
-func (c *Client) GetTaskGCCheck(ctx context.Context, taskID string) (*TaskGCStatus, error) {
-	var resp TaskGCStatus
-	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/gc-check", taskID), &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
 func (c *Client) Deregister(ctx context.Context, runtimeIDs []string) error {
 	return c.postJSON(ctx, "/api/daemon/deregister", map[string]any{
 		"runtime_ids": runtimeIDs,
@@ -778,8 +703,6 @@ func (c *Client) MarkStarting(ctx context.Context, workspaceID, daemonID string)
 // RegisterResponse holds the server's response to a daemon registration.
 type RegisterResponse struct {
 	Runtimes             []Runtime       `json:"runtimes"`
-	Repos                []RepoData      `json:"repos"`
-	ReposVersion         string          `json:"repos_version"`
 	Settings             json.RawMessage `json:"settings,omitempty"`
 	DaemonToken          string          `json:"daemon_token,omitempty"`
 	DaemonTokenExpiresAt string          `json:"daemon_token_expires_at,omitempty"`
@@ -796,44 +719,6 @@ func (c *Client) RegisterForWorkspace(ctx context.Context, workspaceID string, r
 		return nil, err
 	}
 	return &resp, nil
-}
-
-type WorkspaceReposResponse struct {
-	WorkspaceID  string          `json:"workspace_id"`
-	Repos        []RepoData      `json:"repos"`
-	ReposVersion string          `json:"repos_version"`
-	Settings     json.RawMessage `json:"settings,omitempty"`
-}
-
-func (c *Client) GetWorkspaceRepos(ctx context.Context, workspaceID string) (*WorkspaceReposResponse, error) {
-	var resp WorkspaceReposResponse
-	if err := c.getJSONWithToken(ctx, fmt.Sprintf("/api/daemon/workspaces/%s/repos", workspaceID), &resp, c.tokenForWorkspace(workspaceID)); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// agentWorkspaceRetentionCheckResponse mirrors the server's
-// CheckAgentWorkspaceRetention response body.
-type agentWorkspaceRetentionCheckResponse struct {
-	EligibleAgentIDs []string `json:"eligible_agent_ids"`
-}
-
-// CheckAgentWorkspaceRetention asks the server which of the given agent IDs
-// (agent IDs the daemon found a local .multica/agents/<id> directory for, in
-// this workspace) are archived long enough ago to be destroyed. The
-// retention threshold is server-owned; the daemon never sends one. Callers
-// must still re-validate every returned ID against the exact batch they
-// reported and the exact canonical on-disk path before deleting anything —
-// this call only answers the question, it never deletes.
-func (c *Client) CheckAgentWorkspaceRetention(ctx context.Context, workspaceID string, agentIDs []string) ([]string, error) {
-	var resp agentWorkspaceRetentionCheckResponse
-	err := c.postJSONWithToken(ctx, fmt.Sprintf("/api/daemon/workspaces/%s/agent-workspace-retention/check", workspaceID),
-		map[string]any{"agent_ids": agentIDs}, &resp, c.tokenForWorkspace(workspaceID))
-	if err != nil {
-		return nil, err
-	}
-	return resp.EligibleAgentIDs, nil
 }
 
 // defaultTerminalRetrySchedule is the backoff used by postJSONWithRetry for

@@ -1848,7 +1848,7 @@ func agentActivityDisplayLabelKey(row agentActivityRawRow, detailKind string, to
 			}
 			return "working"
 		case agentLifecycleSucceededActivityEventType:
-			return "restarted"
+			return "restart_prepared"
 		case "radar_action_failed":
 			return "failed"
 		case "radar_action_executed":
@@ -1978,7 +1978,7 @@ var agentActivityDisplayLabels = map[string]string{
 	"radar_executed":         "Radar",
 	"working":                "Working",
 	"idle":                   "Idle",
-	"restarted":              "Restarted",
+	"restart_prepared":       "Restart prepared",
 	"failed":                 "Failed",
 	"waiting":                "Waiting",
 	"cancelled":              "Cancelled",
@@ -2297,7 +2297,7 @@ func resolveRaftCLIInvocation(toolName string, input map[string]any) (raftCLIInv
 		invocation.SummaryKind = "none"
 	case "message read":
 		invocation.Tool = "read_history"
-		invocation.ToolTarget = firstNonEmptyActivityString(optionValue(rest, "--channel"), optionValue(rest, "--target"))
+		invocation.ToolTarget = optionValue(rest, "--target")
 	case "message search":
 		invocation.Tool = "search_messages"
 		invocation.ToolTarget = optionValue(rest, "--query")

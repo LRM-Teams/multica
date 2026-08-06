@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/turntransport"
 )
 
@@ -36,18 +37,13 @@ func TestAgentRuntimeTurnCoordinatorBindsCanonicalD1D2D3Contracts(t *testing.T) 
 		t.Fatalf("canonical runtime state = session %q generation %d",
 			turn.PriorSessionID, turn.RuntimeStateGeneration)
 	}
-	if got, want := turn.Workspace.WorkDir, filepath.Join(
-		root, request.WorkspaceID, ".multica", "agents", request.AgentID, "workspace",
-	); got != want {
+	if got, want := turn.Workspace.AgentRoot, agentworkspace.Root(root, request.WorkspaceID, request.AgentID); got != want {
 		t.Fatalf("workspace = %q, want %q", got, want)
 	}
-	if turn.WorkDir != turn.Workspace.WorkDir {
-		t.Fatalf("provider workdir = %q, want %q", turn.WorkDir, turn.Workspace.WorkDir)
+	if turn.WorkDir != turn.Workspace.AgentRoot {
+		t.Fatalf("provider workdir = %q, want %q", turn.WorkDir, turn.Workspace.AgentRoot)
 	}
-	if got, want := turn.Turn.RootDir, filepath.Join(turn.Workspace.TurnsDir, request.TurnID); got != want {
-		t.Fatalf("turn root = %q, want %q", got, want)
-	}
-	for _, path := range []string{turn.Workspace.WorkDir, turn.Turn.WorktreesDir, turn.Turn.ArtifactsDir} {
+	for _, path := range []string{turn.Workspace.AgentRoot} {
 		if info, statErr := os.Stat(path); statErr != nil || !info.IsDir() {
 			t.Fatalf("prepared directory %s: info=%v err=%v", path, info, statErr)
 		}
@@ -91,7 +87,7 @@ func TestAgentRuntimeTurnCoordinatorBindsCanonicalD1D2D3Contracts(t *testing.T) 
 		t.Fatalf("bound token read=%q err=%v", raw, readErr)
 	}
 
-	durableFile := filepath.Join(turn.Workspace.WorkDir, "MEMORY.md")
+	durableFile := filepath.Join(turn.Workspace.AgentRoot, "MEMORY.md")
 	if err := os.WriteFile(durableFile, []byte("durable"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -106,9 +102,6 @@ func TestAgentRuntimeTurnCoordinatorBindsCanonicalD1D2D3Contracts(t *testing.T) 
 	}
 	if _, err := os.Stat(tokenFile); !os.IsNotExist(err) {
 		t.Fatalf("token after close error = %v, want not exist", err)
-	}
-	if _, err := os.Stat(turn.Turn.RootDir); !os.IsNotExist(err) {
-		t.Fatalf("turn root after close error = %v, want not exist", err)
 	}
 	if raw, err := os.ReadFile(durableFile); err != nil || string(raw) != "durable" {
 		t.Fatalf("durable workspace read=%q err=%v", raw, err)
@@ -196,11 +189,11 @@ func TestAgentRuntimeTurnCoordinatorRejectsInvalidRequestWithoutOccupyingSlot(t 
 	}
 }
 
-func TestAgentRuntimeTurnCoordinatorFailedPrepareReleasesSlotAndTurn(t *testing.T) {
+func TestAgentRuntimeTurnCoordinatorFailedPrepareReleasesSlot(t *testing.T) {
 	root := t.TempDir()
 	coordinator := newAgentRuntimeTurnCoordinator(Config{WorkspacesRoot: root}, agentRuntimeTurnTestLogger())
 	request := testAgentRuntimeTurnRequest(t, root)
-	agentRoot := filepath.Join(root, request.WorkspaceID, ".multica", "agents", request.AgentID)
+	agentRoot := agentworkspace.Root(root, request.WorkspaceID, request.AgentID)
 	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -213,11 +206,6 @@ func TestAgentRuntimeTurnCoordinatorFailedPrepareReleasesSlotAndTurn(t *testing.
 		!strings.Contains(err.Error(), "prepare stable agent CLI transport") {
 		t.Fatalf("Begin(blocked transport) error = %v", err)
 	}
-	failedTurnRoot := filepath.Join(agentRoot, "turns", request.TurnID)
-	if _, err := os.Stat(failedTurnRoot); !os.IsNotExist(err) {
-		t.Fatalf("failed turn root error = %v, want not exist", err)
-	}
-
 	if err := os.Remove(blockingRuntimePath); err != nil {
 		t.Fatal(err)
 	}
@@ -334,26 +322,14 @@ func agentRuntimeTurnTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// TestAgentRuntimeTurnSharedWorkdirAnchor is the T009 daemon-side shared
-// workdir assertion (research D5, FR-008): when the claimed task carries the
-// shared_sandbox env anchor, the turn's provider workdir is the SAMPLE's
-// single shared workdir (<root>/<ws>/.multica/envs/<env>/workspace) instead of
-// the per-agent root, while the per-agent workspace (turn subtree, transport,
-// memory) is untouched. Without the anchor the workdir stays per-agent
-// (covered by TestAgentRuntimeTurnCoordinatorBindsCanonicalD1D2D3Contracts).
-func TestAgentRuntimeTurnSharedWorkdirAnchor(t *testing.T) {
+func TestAgentRuntimeTurnsUseDistinctAgentWorkdirs(t *testing.T) {
 	root := t.TempDir()
 	coordinator := newAgentRuntimeTurnCoordinator(Config{WorkspacesRoot: root}, agentRuntimeTurnTestLogger())
-	envID := uuid.NewString()
-
-	// Two agents of the same sample (shared env) must land in ONE workdir.
+	// Two Agents in the same workspace must retain distinct canonical cwd paths.
 	requestA := testAgentRuntimeTurnRequest(t, root)
 	requestB := testAgentRuntimeTurnRequest(t, root)
 	requestB.WorkspaceID = requestA.WorkspaceID
 	requestB.Environment["MULTICA_WORKSPACE_ID"] = requestA.WorkspaceID
-	requestA.SharedWorkdirEnvID = envID
-	requestB.SharedWorkdirEnvID = envID
-
 	turnA, err := coordinator.Begin(requestA)
 	if err != nil {
 		t.Fatalf("Begin(agent A): %v", err)
@@ -365,20 +341,15 @@ func TestAgentRuntimeTurnSharedWorkdirAnchor(t *testing.T) {
 	}
 	defer turnB.Close()
 
-	wantShared := filepath.Join(root, requestA.WorkspaceID, ".multica", "envs", envID, "workspace")
-	if turnA.WorkDir != wantShared {
-		t.Fatalf("agent A workdir = %q, want shared %q", turnA.WorkDir, wantShared)
+	wantA := agentworkspace.Root(root, requestA.WorkspaceID, requestA.AgentID)
+	if turnA.WorkDir != wantA {
+		t.Fatalf("agent A workdir = %q, want %q", turnA.WorkDir, wantA)
 	}
-	if turnB.WorkDir != wantShared {
-		t.Fatalf("agent B workdir = %q, want shared %q", turnB.WorkDir, wantShared)
+	wantB := agentworkspace.Root(root, requestB.WorkspaceID, requestB.AgentID)
+	if turnB.WorkDir != wantB {
+		t.Fatalf("agent B workdir = %q, want %q", turnB.WorkDir, wantB)
 	}
-	// Per-agent workspace roots (turns, transport, memory) stay agent-keyed.
-	if got, want := turnA.Workspace.WorkDir, filepath.Join(
-		root, requestA.WorkspaceID, ".multica", "agents", requestA.AgentID, "workspace",
-	); got != want {
-		t.Fatalf("agent A workspace = %q, want per-agent %q", got, want)
-	}
-	if info, statErr := os.Stat(wantShared); statErr != nil || !info.IsDir() {
-		t.Fatalf("shared workdir not provisioned: info=%v err=%v", info, statErr)
+	if turnA.WorkDir == turnB.WorkDir {
+		t.Fatalf("different Agents unexpectedly share cwd %q", turnA.WorkDir)
 	}
 }

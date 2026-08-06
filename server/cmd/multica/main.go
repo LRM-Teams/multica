@@ -40,7 +40,7 @@ func init() {
 
 	rootCmd.PersistentFlags().String("server-url", "", "Multica server URL (env: MULTICA_SERVER_URL)")
 	rootCmd.PersistentFlags().String("workspace-id", "", "Workspace ID (env: MULTICA_WORKSPACE_ID)")
-	rootCmd.PersistentFlags().String("profile", "", "Configuration profile name (e.g. dev) — isolates config, daemon state, and workspaces")
+	rootCmd.PersistentFlags().String("profile", "", "Configuration profile name (e.g. dev) — isolates config and daemon state")
 	rootCmd.PersistentFlags().BoolVar(&debugFlag, "debug", false, "Print full error details on failure (env: MULTICA_DEBUG)")
 
 	// Core commands
@@ -48,7 +48,6 @@ func init() {
 	projectCmd.GroupID = groupCore
 	labelCmd.GroupID = groupCore
 	workspaceCmd.GroupID = groupCore
-	repoCmd.GroupID = groupCore
 	skillCmd.GroupID = groupCore
 	memoryCmd.GroupID = groupCore
 	reactCmd.GroupID = groupCore
@@ -78,7 +77,6 @@ func init() {
 	rootCmd.AddCommand(researchCmd)
 	rootCmd.AddCommand(labelCmd)
 	rootCmd.AddCommand(workspaceCmd)
-	rootCmd.AddCommand(repoCmd)
 	rootCmd.AddCommand(skillCmd)
 	rootCmd.AddCommand(memoryCmd)
 	rootCmd.AddCommand(reactCmd)

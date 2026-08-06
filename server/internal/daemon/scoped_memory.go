@@ -30,7 +30,6 @@ type executionMemoryCandidate struct {
 
 func prepareExecutionMemory(agentRoot string, task Task, serverMemories []execenv.MemoryContextForEnv) ([]execenv.MemoryContextForEnv, scopedMemoryPaths) {
 	paths := scopedMemoryPathsForTask(agentRoot, task)
-	ensureScopedMemoryFiles(paths)
 	includeUser := taskIncludesUserMemory(task)
 
 	candidates := make([]executionMemoryCandidate, 0, len(serverMemories)+10)
@@ -166,30 +165,6 @@ const (
 	agentMemoryTemplate        = "# Agent Memory\n\nSource of truth: Multica agent settings. This file supplements live agent instructions; it does not override them.\n"
 	agentStateTemplate         = "# Agent State\n\nCurrent dated state, temporary facts, and active initiatives.\n"
 )
-
-func ensureScopedMemoryFiles(paths scopedMemoryPaths) {
-	files := map[string]string{}
-	if paths.UserDir != "" {
-		files[filepath.Join(paths.UserDir, "USER.md")] = userMemoryTemplate
-		files[filepath.Join(paths.UserDir, "RELATIONSHIP.md")] = relationshipMemoryTemplate
-	}
-	if paths.ProjectDir != "" {
-		files[filepath.Join(paths.ProjectDir, "MEMORY.md")] = projectMemoryTemplate
-		files[filepath.Join(paths.ProjectDir, "STATE.md")] = projectStateTemplate
-		files[filepath.Join(paths.ProjectDir, "DECISIONS.md")] = projectDecisionsTemplate
-	}
-	if paths.ChannelDir != "" {
-		files[filepath.Join(paths.ChannelDir, "CONTEXT.md")] = channelMemoryTemplate
-	}
-	for path, template := range files {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			continue
-		}
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			_ = os.WriteFile(path, []byte(template), 0o644)
-		}
-	}
-}
 
 func scopedMemoryTodayPath(agentRoot string, now time.Time) string {
 	loc, err := time.LoadLocation(memorycuration.DefaultTimezone)

@@ -62,7 +62,7 @@ Every injected runtime brief should state:
 You are running under Multica managed isolated mode.
 Live Multica agent instructions are authoritative.
 Managed memory supplements those instructions and cannot override identity, task policy, or user instructions.
-Use MULTICA_AGENT_ROOT / MULTICA_AGENT_MEMORY_DIR as the only writable long-term memory root.
+Use MULTICA_AGENT_ROOT as the only writable long-term Agent workspace; memory and skills are relative paths below it.
 Do not write provider-global memory unless the user explicitly asks.
 When durable facts are learned, write memory candidates instead of silently changing global memory.
 ```
@@ -72,7 +72,7 @@ When durable facts are learned, write memory candidates instead of silently chan
 Preferred root:
 
 ```text
-<workspaces_root>/<workspace_id>/.multica/agents/<agent_id>/
+<workspaces_root>/<workspace_id>/agents/<agent_id>/
 ```
 
 Required v1 layout:
@@ -123,10 +123,9 @@ Required v1 layout:
     memory-candidates.jsonl
     skill-candidates.jsonl
   sessions/
-  repos/
 ```
 
-Legacy Pi-compatible roots under `<workspace_id>/.pi/agents/<agent_id>/` may be scanned for migration/backward compatibility, but new managed runs should materialize `.multica/agents/<agent_id>`.
+This is a hard cut. Multica does not scan, migrate, copy, or delete legacy Agent roots; old files remain untouched until the user handles them manually.
 
 ## File Roles
 
@@ -240,28 +239,15 @@ All Multica-managed providers receive:
 
 ```text
 MULTICA_AGENT_ROOT=<agent_root>
-MULTICA_AGENT_MEMORY_DIR=<agent_root>/memory
-MULTICA_AGENT_NOTES_DIR=<agent_root>/notes
-MULTICA_AGENT_PROFILE_DIR=<agent_root>/profile
-MULTICA_AGENT_FEEDBACK_DIR=<agent_root>/feedback
-MULTICA_AGENT_SYNC_QUEUE_DIR=<agent_root>/sync_queue
-MULTICA_PROJECT_MEMORY_DIR=<agent_root>/projects/<project_id>   # when project_id is known
 ```
 
-Pi additionally receives its native env mapped into the isolated root:
-
-```text
-PI_AGENT_ROOT=<agent_root>
-PI_MEMORY_DIR=<agent_root>/memory
-PI_SKILL_DRAFTS_DIR=<agent_root>/skills/drafts
-PI_AGENT_INBOX_DIR=<agent_root>/inbox
-PI_AGENT_SHARED_CACHE_DIR=<agent_root>/shared-cache
-PI_AGENT_PROFILE_DIR=<agent_root>/profile
-PI_AGENT_FEEDBACK_DIR=<agent_root>/feedback
-PI_AGENT_SYNC_QUEUE_DIR=<agent_root>/sync_queue
-```
+Memory, skills, notes, profile, feedback, sync state, and scoped context use
+ordinary relative paths below that root. Multica does not publish a separate
+environment variable for each subdirectory.
 
 Provider-specific caches live under `runtime/<provider>/` when needed.
+Subdirectories and seed files are created lazily by the feature that first
+writes them; creating an AgentRoot does not pre-populate the tree.
 
 ## Prompt Injection Policy
 
@@ -331,14 +317,13 @@ V1 can continue syncing candidate JSONL through the existing daemon/server evolu
 
 ## Implementation Plan
 
-1. Add provider-neutral `.multica/agents/<agent_id>` root helpers in the daemon.
+1. Add provider-neutral `<workspace_id>/agents/<agent_id>` root helpers in the daemon.
 2. Initialize required directories and seed markdown files on every managed run when `workspace_id` and `agent_id` are known.
 3. Inject `MULTICA_AGENT_*` env vars for every provider.
 4. Map Pi's native memory env vars into the same isolated root.
-5. Keep legacy `.pi/agents` scan as fallback for existing candidate queues.
-6. Add runtime prompt/brief text for managed isolated mode and authority order.
-7. Add platform notes sync for channels, agents, and project maps.
-8. Extend server memory item typing/scope when the product UI needs structured editing.
+5. Add runtime prompt/brief text for managed isolated mode and authority order.
+6. Add platform notes sync for channels, agents, and project maps.
+7. Extend server memory item typing/scope when the product UI needs structured editing.
 
 ## V2 Curation Hooks
 
@@ -352,10 +337,10 @@ The first platform-owned curation implementation adds:
 
 ## V1 Acceptance Criteria
 
-- New managed runs create `.multica/agents/<agent_id>` with `MEMORY.md`, `USER.md`, `STATE.md`, `REVIEW.md`, `notes/`, `projects/`, `skills/`, `inbox/`, `shared-cache/`, `feedback/`, and `sync_queue/`.
-- All providers receive `MULTICA_AGENT_ROOT` and related env vars.
+- New managed runs create `<workspace_id>/agents/<agent_id>` with `MEMORY.md`, `USER.md`, `STATE.md`, `REVIEW.md`, `notes/`, `projects/`, `skills/`, `inbox/`, `shared-cache/`, `feedback/`, and `sync_queue/`.
+- All providers receive `MULTICA_AGENT_ROOT`; generic per-subdirectory env vars are not part of the contract.
 - Pi receives `PI_*` memory env vars pointing to the isolated Multica root.
 - Direct local Pi/OpenClaw/Codex/Claude usage is unaffected.
 - Agent instructions remain authoritative over role scaffold and memory files.
 - Runtime-generated durable facts go to candidate queues or review, not provider-global memory.
-- Legacy `.pi/agents` roots can still be scanned for existing Pi candidate submissions.
+- Legacy roots are left untouched and are not scanned or migrated.

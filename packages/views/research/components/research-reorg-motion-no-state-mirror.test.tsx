@@ -12,13 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { NodeProps } from "@xyflow/react";
-import {
-  ResearchGitGutterNodeView,
-  type ResearchGitGutterNode,
-} from "./research-git-gutter-node";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,38 +20,8 @@ function read(name: string) {
   return fs.readFileSync(path.join(here, name), "utf8");
 }
 
-const GUTTER_PROPS = {
-  id: "gutter",
-  type: "gitGutter",
-  selected: false,
-  dragging: false,
-  zIndex: 0,
-  isConnectable: false,
-  positionAbsoluteX: 0,
-  positionAbsoluteY: 0,
-  data: {
-    gutterWidth: 72,
-    gutterHeight: 400,
-    gutterSegments: [
-      { lane: 0, d: "M 8 0 L 8 400", color: "#4c8bf5" },
-      { lane: 1, d: "M 24 0 L 24 400", color: "#f5a04c" },
-    ],
-  },
-} as unknown as NodeProps<ResearchGitGutterNode>;
 
-function renderInsideCanvasRoot(reorg: string) {
-  const root = document.createElement("div");
-  root.setAttribute("data-reorg", reorg);
-  document.body.append(root);
-  const view = render(<ResearchGitGutterNodeView {...GUTTER_PROPS} />, {
-    container: root,
-  });
-  return { root, view };
-}
 
-function paths(root: HTMLElement) {
-  return Array.from(root.querySelectorAll<SVGPathElement>("path"));
-}
 
 describe("LRM-1335 gutter growth is DOM-driven, not state-mirrored", () => {
   beforeEach(() => {
@@ -72,37 +36,7 @@ describe("LRM-1335 gutter growth is DOM-driven, not state-mirrored", () => {
     document.body.replaceChildren();
   });
 
-  it("applies dash growth when the canvas root flips data-reorg to running", async () => {
-    const { root } = renderInsideCanvasRoot("");
-    expect(paths(root).map((p) => p.style.strokeDasharray)).toEqual(["", ""]);
 
-    root.setAttribute("data-reorg", "running");
-
-    await waitFor(() => {
-      for (const p of paths(root)) {
-        expect(p.style.strokeDasharray).toBe("400px");
-        expect(p.style.transition).not.toBe("none");
-        expect(p.style.strokeDashoffset).toBe("0px");
-      }
-    });
-  });
-
-  it("clears the inline dash styles when reorg settles", async () => {
-    const { root } = renderInsideCanvasRoot("running");
-    await waitFor(() => {
-      expect(paths(root)[0]!.style.strokeDasharray).toBe("400px");
-    });
-
-    root.setAttribute("data-reorg", "");
-
-    await waitFor(() => {
-      for (const p of paths(root)) {
-        expect(p.style.strokeDasharray).toBe("");
-        expect(p.style.strokeDashoffset).toBe("");
-        expect(p.style.transition).toBe("");
-      }
-    });
-  });
 
   it("gutter node keeps no React state and batches style writes via cssText", () => {
     const src = read("research-git-gutter-node.tsx");

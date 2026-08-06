@@ -521,10 +521,9 @@ func runWorkspaceMembers(cmd *cobra.Command, args []string) error {
 // the agent still has work on the plate. When present they suppress sticky
 // failure text (same rule as the FE presence snapshot).
 var workspaceInfoActiveTaskStatuses = map[string]bool{
-	"running":                 true,
-	"dispatched":              true,
-	"queued":                  true,
-	"waiting_local_directory": true,
+	"running":    true,
+	"dispatched": true,
+	"queued":     true,
 }
 
 // workspaceInfoAgentRow is one agent line in workspace info.

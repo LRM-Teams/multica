@@ -45,13 +45,9 @@ var turnEnvironmentKeys = map[string]struct{}{
 	"MULTICA_AGENT_INBOX_EVENT_ID":           {},
 	"MULTICA_AGENT_INBOX_DELIVERY_ID":        {},
 	"MULTICA_AGENT_INBOX_LEASE_TOKEN":        {},
-	"MULTICA_AGENT_INBOX_SEQ_TO":             {},
 	"MULTICA_MEMBER_ID":                      {},
 	"MULTICA_PROJECT_ID":                     {},
 	"MULTICA_CHANNEL_ID":                     {},
-	"MULTICA_USER_MEMORY_DIR":                {},
-	"MULTICA_PROJECT_MEMORY_DIR":             {},
-	"MULTICA_CHANNEL_MEMORY_DIR":             {},
 	"MULTICA_AUTOPILOT_RUN_ID":               {},
 	"MULTICA_AUTOPILOT_ID":                   {},
 	"MULTICA_QUICK_CREATE_TASK_ID":           {},
@@ -62,19 +58,12 @@ var turnEnvironmentKeys = map[string]struct{}{
 }
 
 var stableMulticaEnvironmentKeys = map[string]struct{}{
-	"MULTICA_SERVER_URL":           {},
-	"MULTICA_DAEMON_PORT":          {},
-	"MULTICA_WORKSPACE_ID":         {},
-	"MULTICA_AGENT_NAME":           {},
-	"MULTICA_AGENT_ID":             {},
-	"MULTICA_WORKSPACES_ROOT":      {},
-	"MULTICA_AGENT_ROOT":           {},
-	"MULTICA_AGENT_MEMORY_DIR":     {},
-	"MULTICA_DEVICE_MEMORY_DIR":    {},
-	"MULTICA_AGENT_NOTES_DIR":      {},
-	"MULTICA_AGENT_PROFILE_DIR":    {},
-	"MULTICA_AGENT_FEEDBACK_DIR":   {},
-	"MULTICA_AGENT_SYNC_QUEUE_DIR": {},
+	"MULTICA_SERVER_URL":   {},
+	"MULTICA_DAEMON_PORT":  {},
+	"MULTICA_WORKSPACE_ID": {},
+	"MULTICA_AGENT_NAME":   {},
+	"MULTICA_AGENT_ID":     {},
+	"MULTICA_AGENT_ROOT":   {},
 }
 
 var transportLocks sync.Map // absolute transport root -> *sync.Mutex

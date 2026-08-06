@@ -22,21 +22,6 @@ type Runtime struct {
 	Status      string `json:"status"`
 }
 
-// RepoData holds repository information from the workspace.
-type RepoData struct {
-	URL         string `json:"url"`
-	Description string `json:"description,omitempty"`
-}
-
-// ProjectResourceData mirrors handler.ProjectResourceData — a single project
-// resource as delivered to the daemon. resource_ref is type-specific JSON.
-type ProjectResourceData struct {
-	ID           string          `json:"id"`
-	ResourceType string          `json:"resource_type"`
-	ResourceRef  json.RawMessage `json:"resource_ref"`
-	Label        string          `json:"label,omitempty"`
-}
-
 // Task represents a claimed task from the server.
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
@@ -50,26 +35,18 @@ type Task struct {
 	// prompt set in Settings → General). Server populates this on every claim
 	// regardless of task kind so the daemon can inject `## Workspace Context`
 	// into the brief. Empty when the owner hasn't set one.
-	WorkspaceContext string                       `json:"workspace_context,omitempty"`
-	ThreadName       string                       `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
-	Agent            *AgentData                   `json:"agent,omitempty"`
-	Repos            []RepoData                   `json:"repos,omitempty"`
-	ProjectID        string                       `json:"project_id,omitempty"`        // issue's project, when present
-	ChannelID        string                       `json:"channel_id,omitempty"`        // exact DM/channel surface, when present
-	ChannelKind      string                       `json:"channel_kind,omitempty"`      // "dm" | "group" when ChannelID is set; drives personal-memory entry gate
+	WorkspaceContext string     `json:"workspace_context,omitempty"`
+	ThreadName       string     `json:"thread_name,omitempty"` // semantic title for provider-native session/thread history
+	Agent            *AgentData `json:"agent,omitempty"`
+	ProjectID        string     `json:"project_id,omitempty"`   // issue's project, when present
+	ChannelID        string     `json:"channel_id,omitempty"`   // exact DM/channel surface, when present
+	ChannelKind      string     `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; drives personal-memory entry gate
 	// ScopedSecrets are channel/project (and optionally agent) secrets injected
 	// after filtering by the current task channel/project (LRM-953). Agent
 	// custom_env remains separate and is treated as agent-scoped.
-	ScopedSecrets []ScopedSecret `json:"scoped_secrets,omitempty"`
-	ChannelGoal      *protocol.ChannelGoalContext `json:"channel_goal,omitempty"`      // active channel goal, refreshed on every claim
-	ProjectTitle     string                       `json:"project_title,omitempty"`     // human-readable project title for context injection
-	ProjectResources []ProjectResourceData        `json:"project_resources,omitempty"` // project-scoped resources to expose to the agent
-	// ProvisionManagedWorkdir / ManagedWorkdirRelPath: server asks the daemon to
-	// lazily create a managed shared working directory for this task's project
-	// (a project with no resource yet) at <WorkspacesRoot>/<rel>, run there, and
-	// self-register it so later tasks reuse it. Empty/false for old servers.
-	ProvisionManagedWorkdir  bool                               `json:"provision_managed_workdir,omitempty"`
-	ManagedWorkdirRelPath    string                             `json:"managed_workdir_rel_path,omitempty"`
+	ScopedSecrets            []ScopedSecret                     `json:"scoped_secrets,omitempty"`
+	ChannelGoal              *protocol.ChannelGoalContext       `json:"channel_goal,omitempty"`                // active channel goal, refreshed on every claim
+	ProjectTitle             string                             `json:"project_title,omitempty"`               // human-readable project title for context injection
 	PriorSessionID           string                             `json:"prior_session_id,omitempty"`            // Claude session ID from a previous task on this issue
 	PriorWorkDir             string                             `json:"prior_work_dir,omitempty"`              // work_dir from a previous task on this issue
 	RuntimeStateGeneration   int64                              `json:"runtime_state_generation,omitempty"`    // canonical runtime-state CAS generation; populated after D6 activates the cutover
@@ -128,12 +105,6 @@ type Task struct {
 	// the bridge. Nil for non-trained tasks (the vast majority); omitempty so
 	// old servers that never send it are handled transparently.
 	ArealProxy *ArealProxy `json:"areal_proxy,omitempty"`
-	// SharedWorkdirEnvID carries the shared_sandbox sample env id the server
-	// extracts from the task's context.shared_workdir at claim time (research
-	// D5, FR-008). When set, the canonical turn anchors the provider workdir
-	// to the sample env's single shared working directory instead of the
-	// per-agent root. Empty for non-shared tasks.
-	SharedWorkdirEnvID string `json:"shared_workdir_env_id,omitempty"`
 	// AuthToken is the bearer token the daemon writes into the spawned agent's
 	// MULTICA_TOKEN_FILE wrapper. Legacy queue runs bind it to a task; legacy
 	// inbox runs bind it to a single delivery. Credential-transport-capable
@@ -347,7 +318,6 @@ type TaskResult struct {
 	EnvType       string                        `json:"env_type,omitempty"`
 	SessionID     string                        `json:"session_id,omitempty"` // Claude session ID for future resumption
 	WorkDir       string                        `json:"work_dir,omitempty"`   // working directory used during execution
-	EnvRoot       string                        `json:"-"`                    // env root dir for writing GC metadata (not sent to server)
 	FailureReason string                        `json:"-"`                    // classifier forwarded to FailTask on the blocked path; empty falls back to 'agent_error'
 	Usage         []TaskUsageEntry              `json:"usage,omitempty"`      // per-model token usage
 	RuntimeStats  *protocol.RuntimeTokenStats   `json:"runtime_stats,omitempty"`

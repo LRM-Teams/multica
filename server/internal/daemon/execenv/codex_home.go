@@ -9,20 +9,20 @@ import (
 	"runtime"
 )
 
-// Directories to symlink from the shared ~/.codex/ into the per-task CODEX_HOME.
+// Directories to symlink from the shared ~/.codex/ into the Agent-scoped CODEX_HOME.
 // The shared directory is created if it doesn't exist, ensuring Codex session
 // logs are always written to the global home where users can find them.
 var codexSymlinkedDirs = []string{
 	"sessions",
 }
 
-// Files to symlink from the shared ~/.codex/ into the per-task CODEX_HOME.
+// Files to symlink from the shared ~/.codex/ into the Agent-scoped CODEX_HOME.
 // Symlinks share state (e.g. auth tokens) so changes propagate automatically.
 var codexSymlinkedFiles = []string{
 	"auth.json",
 }
 
-// Files to copy from the shared ~/.codex/ into the per-task CODEX_HOME.
+// Files to copy from the shared ~/.codex/ into the Agent-scoped CODEX_HOME.
 // Copies are isolated — changes don't affect the shared home.
 var codexCopiedFiles = []string{
 	"config.json",
@@ -31,7 +31,7 @@ var codexCopiedFiles = []string{
 }
 
 // CodexHomeOptions carries optional inputs for prepareCodexHomeWithOpts that
-// affect the generated per-task config.toml.
+// affect the generated Agent-scoped config.toml.
 type CodexHomeOptions struct {
 	// CodexVersion is the detected Codex CLI version (e.g. "0.121.0"). Empty
 	// means unknown; on macOS, unknown is treated as "probably broken" so the
@@ -44,7 +44,7 @@ type CodexHomeOptions struct {
 	GOOS string
 	// WritableRoots are extra paths Codex may write while sandboxed. Multica
 	// uses this to let Codex update the provider-neutral agent memory root,
-	// which lives outside the per-task workdir.
+	// which lives outside the Agent-scoped workdir.
 	WritableRoots []string
 	// LinuxSandboxFailure overrides the automatic bubblewrap capability probe.
 	// Nil runs the probe; a non-nil empty string forces workspace-write. Tests
@@ -61,9 +61,9 @@ func prepareCodexHome(codexHome string, logger *slog.Logger) error {
 	return prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{GOOS: "linux", LinuxSandboxFailure: &noFailure}, logger)
 }
 
-// prepareCodexHomeWithOpts creates a per-task CODEX_HOME directory and seeds
+// prepareCodexHomeWithOpts creates a Agent-scoped CODEX_HOME directory and seeds
 // it with config from the shared ~/.codex/ home. Auth is symlinked (shared),
-// config files are copied (isolated). The per-task config.toml gets a
+// config files are copied (isolated). The Agent-scoped config.toml gets a
 // daemon-managed sandbox block picked by codexSandboxPolicyFor.
 func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *slog.Logger) error {
 	sharedHome := resolveSharedCodexHome()
@@ -92,7 +92,7 @@ func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *s
 
 	// Surface the resulting auth.json state (file kind only, never contents)
 	// so operators diagnosing token-refresh failures can tell whether the
-	// per-task home is tracking the shared ~/.codex/auth.json or has drifted
+	// Agent-scoped home is tracking the shared ~/.codex/auth.json or has drifted
 	// into a stale local copy.
 	logCodexAuthState(filepath.Join(codexHome, "auth.json"), logger)
 
@@ -236,7 +236,7 @@ func ensureDirSymlink(src, dst string) error {
 // If dst is already a symlink pointing at src, it's a no-op. Otherwise — a
 // wrong-target symlink, a broken symlink, or a regular file left over from a
 // prior createFileLink copy fallback — dst is removed and recreated via
-// createFileLink so the per-task home doesn't drift from the shared source.
+// createFileLink so the Agent-scoped home doesn't drift from the shared source.
 //
 // The "regular file" branch matters on Windows: when os.Symlink fails (no
 // Developer Mode / not elevated), createFileLink falls back to copying the
@@ -264,10 +264,10 @@ func ensureSymlink(src, dst string) error {
 	return createFileLink(src, dst)
 }
 
-// logCodexAuthState records the kind of auth.json the per-task CODEX_HOME
+// logCodexAuthState records the kind of auth.json the Agent-scoped CODEX_HOME
 // ended up with — symlink (with target), regular file (with size + mtime),
 // or missing — so an operator chasing refresh_token_reused / token_expired
-// reports can immediately tell whether the per-task home is tracking the
+// reports can immediately tell whether the Agent-scoped home is tracking the
 // shared ~/.codex/auth.json or has drifted into a stale local copy.
 //
 // Never logs the file contents.
@@ -294,27 +294,27 @@ func logCodexAuthState(authPath string, logger *slog.Logger) {
 // codex_sandbox.go's ensureCodexSandboxConfig so they can be updated
 // idempotently without touching user-managed keys.)
 
-// syncCopiedFile mirrors a per-task dst onto the current state of the shared
-// src so the per-task copy tracks the shared source across Reuse() runs:
+// syncCopiedFile mirrors a Agent-scoped dst onto the current state of the shared
+// src so the Agent-scoped copy tracks the shared source across Reuse() runs:
 //
 //   - src present, dst absent:  copy src → dst
 //   - src present, dst present: drop dst and re-copy src → dst (refresh)
 //   - src absent,  dst present: drop dst (the shared source has been removed,
-//     so the per-task stale copy must not linger)
+//     so the Agent-scoped stale copy must not linger)
 //   - src absent,  dst absent:  no-op
 //
-// Regression for MUL-2646: the prior "don't overwrite" guard left per-task
+// Regression for MUL-2646: the prior "don't overwrite" guard left Agent-scoped
 // config.toml / config.json / instructions.md stuck on whatever snapshot they
 // were seeded with at first Prepare. A user who edited ~/.codex/config.toml
 // between runs — switching the active [model_providers.X] base_url, pointing
 // env_key at a freshly rotated API key, or removing the file outright to
-// drop a provider — kept hitting the stale per-task copy on session resume,
+// drop a provider — kept hitting the stale Agent-scoped copy on session resume,
 // with Codex calling the new URL using the old key (or replaying a provider
 // the user had since deleted from the shared config).
 //
 // For config.toml the subsequent ensureCodex{Sandbox,MultiAgent,Memory}Config
 // passes recreate the file from scratch when the shared source is gone, so
-// the per-task home keeps the daemon-managed defaults but loses every
+// the Agent-scoped home keeps the daemon-managed defaults but loses every
 // user-managed [model_providers.X] / model_provider line that no longer
 // exists in the shared config. For config.json / instructions.md there is
 // no daemon-managed default, so they simply disappear in lockstep with the

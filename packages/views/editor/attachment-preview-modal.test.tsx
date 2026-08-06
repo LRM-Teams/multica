@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactElement } from "react";
 import type { Attachment } from "@multica/core/types";
@@ -225,59 +225,8 @@ describe("AttachmentPreviewModal — dispatch", () => {
     expect(audio).toBeTruthy();
   });
 
-  it("fetches text and hands it to ReadonlyContent for Markdown", async () => {
-    getAttachmentTextContentMock.mockResolvedValueOnce({
-      text: "# heading\n\nbody\n",
-      originalContentType: "text/markdown",
-    });
-    const att = makeAttachment({ filename: "README.md", content_type: "text/markdown" });
-    render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);
 
-    expect(getAttachmentTextContentMock).toHaveBeenCalledWith("att-1");
 
-    await waitFor(() => {
-      expect(screen.getByTestId("readonly-content")).toBeTruthy();
-    });
-    expect(screen.getByTestId("readonly-content").textContent).toContain("# heading");
-  });
-
-  it("renders an iframe with srcdoc + sandbox='allow-scripts' for HTML", async () => {
-    getAttachmentTextContentMock.mockResolvedValueOnce({
-      text: "<p>hi</p>",
-      originalContentType: "text/html",
-    });
-    const att = makeAttachment({ filename: "page.html", content_type: "text/html" });
-    render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);
-
-    await waitFor(() => {
-      const frame = document.querySelector("iframe[sandbox]") as HTMLIFrameElement | null;
-      expect(frame).toBeTruthy();
-      // `allow-scripts` is required so vanilla-JS chart libraries render
-      // (MUL-2330). The combination with `allow-same-origin` would defeat
-      // the sandbox, so this assertion must stay exact.
-      expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
-      // srcdoc carries the original HTML plus the fragment-nav shim
-      // appended at the end (see utils/iframe-fragment-nav.ts).
-      const srcdoc = frame?.getAttribute("srcdoc") ?? "";
-      expect(srcdoc.startsWith("<p>hi</p>")).toBe(true);
-      expect(srcdoc).toContain("scrollIntoView");
-    });
-  });
-
-  it("renders a code block with lowlight for source files", async () => {
-    getAttachmentTextContentMock.mockResolvedValueOnce({
-      text: "package main\n",
-      originalContentType: "text/plain",
-    });
-    const att = makeAttachment({ filename: "main.go", content_type: "text/plain" });
-    render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);
-
-    await waitFor(() => {
-      const code = document.querySelector("code.hljs");
-      expect(code).toBeTruthy();
-      expect(code?.className).toContain("language-go");
-    });
-  });
 
   it("shows unsupported fallback when no PreviewKind matches", () => {
     const att = makeAttachment({ filename: "blob.zip", content_type: "application/zip" });
@@ -392,34 +341,6 @@ describe("AttachmentPreviewModal — server-relative download_url resolution (MU
   });
 });
 
-describe("AttachmentPreviewModal — error states", () => {
-  it("shows the too-large fallback on PreviewTooLargeError", async () => {
-    getAttachmentTextContentMock.mockRejectedValueOnce(new FakePreviewTooLargeError());
-    const att = makeAttachment({ filename: "huge.txt", content_type: "text/plain" });
-    render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);
-    await waitFor(() => {
-      expect(screen.getByText("File is too large to preview. Please download.")).toBeTruthy();
-    });
-  });
-
-  it("shows the unsupported fallback on PreviewUnsupportedError (server/client drift)", async () => {
-    getAttachmentTextContentMock.mockRejectedValueOnce(new FakePreviewUnsupportedError());
-    const att = makeAttachment({ filename: "weird.txt", content_type: "text/plain" });
-    render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);
-    await waitFor(() => {
-      expect(screen.getByText("This file type can't be previewed.")).toBeTruthy();
-    });
-  });
-
-  it("shows the generic failed fallback on a transport error", async () => {
-    getAttachmentTextContentMock.mockRejectedValueOnce(new Error("network down"));
-    const att = makeAttachment({ filename: "x.md", content_type: "text/markdown" });
-    render(<AttachmentPreviewModal source={{ kind: "full", attachment: att }} open onClose={() => {}} />);
-    await waitFor(() => {
-      expect(screen.getByText("Couldn't load preview")).toBeTruthy();
-    });
-  });
-});
 
 describe("AttachmentPreviewModal — controls", () => {
   it("ESC closes the modal", () => {

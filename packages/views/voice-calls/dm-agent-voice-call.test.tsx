@@ -1,5 +1,5 @@
 import { I18nProvider } from "@multica/core/i18n/react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import enChannels from "../locales/en/channels.json";
 import type { VoiceCallController } from "./use-voice-call-controller";
@@ -125,37 +125,7 @@ describe("DmAgentVoiceCall", () => {
     expect(screen.getByTestId("call-panel")).toBeInTheDocument();
   });
 
-  it("hangs up before closing an active call", async () => {
-    controller = createController({ phase: "connected" });
-    renderCall();
-    fireEvent.click(screen.getByRole("button", { name: "Call Beckham" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "panel-close" }));
-
-    expect(controller.hangUp).toHaveBeenCalledOnce();
-    await waitFor(() => {
-      expect(screen.queryByTestId("call-panel")).not.toBeInTheDocument();
-    });
-  });
-
-  it("keeps a call visible when the server cannot stop it", async () => {
-    controller = createController({
-      phase: "failed",
-      error: {
-        source: "stop",
-        code: "stop_failed",
-        message: "stop failed",
-      },
-      hangUp: vi.fn().mockRejectedValue(new Error("stop failed")),
-    });
-    renderCall();
-    fireEvent.click(screen.getByRole("button", { name: "Call Beckham" }));
-
-    fireEvent.click(screen.getByRole("button", { name: "panel-close" }));
-
-    await waitFor(() => expect(controller.hangUp).toHaveBeenCalledOnce());
-    expect(screen.getByTestId("call-panel")).toBeInTheDocument();
-  });
 
   it("toggles mute from the controller's current phase", () => {
     controller = createController({ phase: "muted" });

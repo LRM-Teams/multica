@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -158,6 +159,7 @@ func (d *Daemon) runTaskWakeupConnection(ctx context.Context, runtimeIDs []strin
 	go d.runWSWriter(conn, writes, writerDone)
 	d.setReminderWS(writes, writerDone, conn.Close)
 	d.requestAgentLifecycleReplay()
+	d.beginMessageRecovery(writes)
 
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
 	hbDone := make(chan struct{})
@@ -503,6 +505,39 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 			continue
 		}
 		switch msg.Type {
+		case protocol.EventAgentDeliver:
+			var delivery protocol.AgentDeliverPayload
+			if err := json.Unmarshal(msg.Payload, &delivery); err != nil {
+				d.logger.Debug("agent delivery invalid payload", "error", err)
+				continue
+			}
+			ack, err := d.acceptIdleAgentDelivery(context.Background(), delivery)
+			if err != nil {
+				d.logger.Warn("agent delivery not acknowledged", "error", err, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
+				continue
+			}
+			frame, err := json.Marshal(protocol.Message{Type: protocol.EventAgentDeliverAck, Payload: marshalRaw(ack)})
+			if err != nil {
+				d.logger.Warn("agent delivery acknowledgement marshal failed", "error", err, "agent_id", delivery.AgentID)
+				continue
+			}
+			select {
+			case writes <- frame:
+			default:
+				d.logger.Warn("agent delivery acknowledgement dropped", "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
+			}
+			if err := d.flushIdleAgentDelivery(context.Background(), delivery.AgentID); err != nil {
+				d.logger.Warn("idle agent Message handoff failed after delivery acknowledgement", "error", err, "agent_id", delivery.AgentID, "delivery_id", delivery.DeliveryID)
+			}
+		case protocol.EventAgentRecoveryPage:
+			var page protocol.AgentRecoveryPage
+			if err := json.Unmarshal(msg.Payload, &page); err != nil {
+				d.logger.Warn("agent Message recovery page invalid", "error", err)
+				continue
+			}
+			if err := d.handleMessageRecoveryPage(context.Background(), page, writes); err != nil {
+				d.logger.Warn("agent Message recovery failed", "error", err, "agent_id", page.AgentID, "snapshot_id", page.SnapshotID)
+			}
 		case protocol.EventDaemonTaskAvailable:
 			var payload protocol.TaskAvailablePayload
 			if len(msg.Payload) > 0 {
@@ -569,6 +604,9 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				d.logger.Warn("persist daemon agent start failed; reconnecting", "error", err, "agent_id", payload.AgentID)
 				return err
 			}
+			if !payload.Replay {
+				d.beginAgentMessageRecovery(payload.AgentID, writes)
+			}
 		case protocol.EventDaemonAgentLifecycleEnd:
 			var payload protocol.DaemonAgentLifecycleReplayEndPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
@@ -579,6 +617,7 @@ func (d *Daemon) readTaskWakeupMessages(conn *websocket.Conn, taskWakeups chan<-
 				d.logger.Warn("persist daemon lifecycle cursor failed; reconnecting", "error", err)
 				return err
 			}
+			d.beginMessageRecovery(writes)
 		case protocol.EventReminderProjectionEnd:
 			var payload protocol.ReminderProjectionReplayEndPayload
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
@@ -706,6 +745,15 @@ func (d *Daemon) handleDaemonAgentStart(payload protocol.DaemonAgentStartPayload
 	changed, accepted, err := d.reminderAgents.applyStart(payload.AgentID, payload.RuntimeID, payload.WorkspaceID, payload.PlacementGeneration)
 	if err != nil {
 		return err
+	}
+	if accepted {
+		agentRoot := agentworkspace.Root(d.cfg.WorkspacesRoot, payload.WorkspaceID, payload.AgentID)
+		if err := ensureMulticaAgentRoot(agentRoot); err != nil {
+			return fmt.Errorf("create Agent root for Message coordinator: %w", err)
+		}
+		if _, err := d.ensureIdleMessageCoordinator(payload.AgentID, payload.RuntimeID, agentRoot); err != nil {
+			return fmt.Errorf("register Agent Message coordinator: %w", err)
+		}
 	}
 	if accepted && changed && !payload.Replay {
 		d.requestReminderSnapshot(payload.AgentID)

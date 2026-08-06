@@ -332,9 +332,9 @@ Agent 是 Multica 的灵魂。几乎所有功能都围绕"如何让一个 agent 
 
 #### 安全边界
 
-- 每个任务一个**独立工作目录** `~/multica_workspaces/{ws}/{task_short_id}/workdir/`
+- 每个 Agent 一个**持久工作目录** `~/.multica/workspaces/{workspace_id}/agents/{agent_id}/`，跨 task 与 provider 复用
 - 环境变量**过滤**：阻止 agent 覆盖 daemon 的认证变量（`MULTICA_TOKEN` 等）
-- 仓库访问**白名单**：agent 只能 checkout workspace 配置的仓库
+- Git/repository 工作方式由 Agent 自己决定；Multica 不执行 clone/pull/reset/branch/worktree
 - Codex 有**版本相关的 sandbox 策略**
 
 #### 产品里的位置
@@ -623,12 +623,11 @@ Onboarding 是新用户能不能成功把 agent 跑起来的关键漏斗。任�
 
 - **General**：名字、描述、**Workspace Context**（agent 系统级提示）
 - **Members**：见 3.10
-- **Repositories**：GitHub 集成，连接仓库列表，agent 白名单
 - **Agents / Runtimes / Skills / Autopilots**：各自独立页面（实际上这些在侧边栏直接有入口，settings 里也有对应管理 tab）
 
 #### 产品里的位置
 
-Settings 是所有"配置即工作"动作的汇总：agent 的 prompt、workspace 的 context、仓库白名单、skill 的内容——都在这里。**对运营和文案来说最重要的一句话**：用户在 Multica 的 settings 页面做的配置，每一项都会影响 agent 实际执行时读到的上下文。
+Settings 是工作区和个人配置的汇总。Agent 的代码来源与 Git 工作方式不由 Settings 管理，也不会通过仓库 URL 注入执行上下文。
 
 ---
 
@@ -646,14 +645,13 @@ multica issue runs <id>                 # 查看任务执行历史
 multica issue run-messages <task-id>    # 查看某次执行的消息
 ```
 
-#### Agent / Skill / Reminder / Project / Repo
+#### Agent / Skill / Reminder / Project
 
 ```bash
 multica agent list | get | create | update | archive
 multica skill list | get | create | update | delete | import | files upsert
 multica reminder list | get | schedule | update | cancel
 multica project list | get | create | update
-multica repo list | add | update | delete
 ```
 
 #### Runtime

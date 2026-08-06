@@ -18,7 +18,7 @@ Multica 的记忆分成两层：
 每个 Multica agent 的持久根目录为：
 
 ```text
-<workspace>/.multica/agents/<agent-id>/
+~/.multica/workspaces/<workspace_id>/agents/<agent_id>/
 ```
 
 不同 agent 的目录互相隔离。Pi、Codex 等 provider 只是运行同一个 Multica agent 的不同执行工具；只要 Multica agent ID 相同，它们就使用同一套 agent 记忆和平台筛选后的记忆快照。provider 自己的全局目录（例如 `~/.codex/memories`）不属于 Multica agent 记忆。
@@ -247,7 +247,7 @@ curator 额外读取的 scoped context 最多 12 个文件、约 16 KiB；不会
 <agent-root>/devices/<daemon-id>/STATE.md
 ```
 
-运行时通过 `MULTICA_DEVICE_MEMORY_DIR` 暴露该目录。绝对路径、安装工具、端口、localhost 服务和其他机器特定状态写这里，不写 portable USER/MEMORY/project/channel 文件。
+运行时只暴露 `MULTICA_AGENT_ROOT`；设备目录按 `<agent-root>/devices/<daemon-id>/` 相对定位。绝对路径、安装工具、端口、localhost 服务和其他机器特定状态写这里，不写 portable USER/MEMORY/project/channel 文件。
 
 硬规则：
 

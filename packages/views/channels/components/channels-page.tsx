@@ -41,7 +41,6 @@ import {
   flattenChannelMessagePages,
   enrichChannelMessagesPreservingAvatars,
   useEnsureMessageLoaded,
-  channelsOptions,
   archivedChannelsOptions,
   channelMembersOptions,
   channelMemberManagementCapabilitiesOptions,
@@ -74,7 +73,6 @@ import {
   useSetChannelThreadFollowed,
   useSetChannelTyping,
   useComposerDraftStore,
-  useLastSelectedChannelStore,
   isImmutableSystemChannel,
   channelMemberBadge,
   channelMemberRole,
@@ -85,8 +83,14 @@ import {
   type ComposerDraftKey,
 } from "@multica/core/channels";
 import { useAuthStore } from "@multica/core/auth";
-import { dmKeys, dmListOptions, useCreateOrFindDM } from "@multica/core/dm";
+import { dmKeys, useCreateOrFindDM } from "@multica/core/dm";
 import type { DMItem } from "@multica/core/dm";
+import {
+  conversationsOptions,
+  conversationDMs,
+  conversationGroupChannels,
+  flattenConversationPages,
+} from "@multica/core/conversations";
 import { ApiError, api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -558,31 +562,6 @@ interface ChannelsPageProps {
   }) => void;
 }
 
-function mobileBaseRestoreSuppressionKey(workspaceId: string) {
-  return `multica:channels:skip-base-restore:${workspaceId}`;
-}
-
-function shouldSkipMobileBaseRestore(workspaceId: string) {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.sessionStorage.getItem(mobileBaseRestoreSuppressionKey(workspaceId)) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function setMobileBaseRestoreSuppression(workspaceId: string, suppressed: boolean) {
-  if (typeof window === "undefined") return;
-  try {
-    const key = mobileBaseRestoreSuppressionKey(workspaceId);
-    if (suppressed) window.sessionStorage.setItem(key, "1");
-    else window.sessionStorage.removeItem(key);
-  } catch {
-    // Storage may be unavailable in privacy-restricted browser contexts. The
-    // in-component ref still preserves Back when the route does not remount.
-  }
-}
-
 // ChannelsPage's many useState calls predate #309 — this routing change reduced
 // the count, it did not add to it. Consolidating them into useReducer is a
 // refactor of a ~2500-line component, out of scope for a URL-format change and
@@ -715,11 +694,6 @@ export function ChannelsPage({
   const [removeFailedKeys, setRemoveFailedKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  // A route transition can remount this page between `/channels/[id]` and the
-  // base `/channels` route. Preserve the mobile Back intent long enough for
-  // that destination mount, then clear it so a later reload still restores the
-  // user's saved group.
-  const [skipInitialBaseRestore] = useState(() => shouldSkipMobileBaseRestore(wsId));
   // Channel main-content view switch (#562): the channel area is a top-level
   // `Chat | Issues | Files` tab (LRM-675 added Files), same level as the
   // message list. Tasks renders a channel-scoped board full-width in the main
@@ -744,7 +718,6 @@ export function ChannelsPage({
   // ROUTE change, never on an optimistic in-page selection that momentarily runs
   // ahead of the async route commit. `undefined` = not yet reconciled.
   const reconciledRouteIdRef = useRef<string | undefined>(undefined);
-  const reconciledBaseRestoreIdRef = useRef<string | null>(null);
   // ?message= deep-links to a specific message (e.g. from an overview mention
   // or a Reminder anchor). We scroll to and briefly highlight it, then clear
   // so it fades out.
@@ -959,16 +932,24 @@ export function ChannelsPage({
   const [convSearchIndex, setConvSearchIndex] = useState(0);
   const [viewportReady, setViewportReady] = useState(false);
   const previousMobileRef = useRef<boolean | null>(null);
-  // Mobile's Back button intentionally returns to the list. Keep that local
-  // navigation decision until a reload or explicit conversation selection;
-  // otherwise base-route restoration would immediately reopen the channel.
-  const suppressBaseRouteRestoreRef = useRef(false);
 
-  const {
-    data: channels = [],
-    isPending: channelsPending,
-    isSuccess: channelsLoaded,
-  } = useQuery(channelsOptions(wsId));
+  // LRM-1399 — CHANNELS + DIRECT MESSAGES share ONE `GET /api/conversations`
+  // read as the single Messages sidebar data source. The server returns a
+  // globally ordered (pinned → updated_at → id) page of group channels and
+  // DMs; we split it back into the two familiar region arrays (native shapes
+  // preserved) so every downstream render/mutation path is unchanged while the
+  // two regions share one pending/error boundary (LRM-1367 AC). Destructure
+  // only the consumed fields so TanStack Query subscribes narrowly.
+  const { data: conversationsData, isPending: conversationsPending, isSuccess: conversationsSuccess, refetch: refetchConversations } =
+    useInfiniteQuery(conversationsOptions(wsId));
+  const conversationItems = useMemo(
+    () => flattenConversationPages(conversationsData ?? { pages: [], pageParams: [] }),
+    [conversationsData],
+  );
+  const channels = useMemo(() => conversationGroupChannels(conversationItems), [conversationItems]);
+  const dms = useMemo(() => conversationDMs(conversationItems), [conversationItems]);
+  const channelsPending = conversationsPending;
+  const channelsLoaded = conversationsSuccess;
   const { data: archivedChannels = [] } = useQuery(archivedChannelsOptions(wsId));
   const { data: workspaceMembers = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -996,17 +977,8 @@ export function ChannelsPage({
   // Mobile is list-first: `active` resolves only from an explicit selection
   // (click or ?channel= deep link), so the list shows until the user opens a
   // channel and the Back button (which clears activeId) returns to it.
-  const { data: dms = [], refetch: refetchDms } = useQuery(dmListOptions(wsId));
+  const refetchDms = refetchConversations;
   const bubbleActivityByAgent = useAgentBubbleActivityByAgent(wsId);
-  const lastSelectedChannelId = useLastSelectedChannelStore(
-    (state) => state.lastSelectedChannelId,
-  );
-  const setLastSelectedChannelId = useLastSelectedChannelStore(
-    (state) => state.setLastSelectedChannelId,
-  );
-  const clearLastSelectedChannelId = useLastSelectedChannelStore(
-    (state) => state.clearLastSelectedChannelId,
-  );
 
   // Reconcile the `/channels/[id]` route param into the active selection.
   // Adjusting state during render (not in an effect) keeps the reconciliation
@@ -1041,27 +1013,6 @@ export function ChannelsPage({
     // else: lists still loading — leave the ref unadvanced to retry.
   }
 
-  // Existing canonical navigation reacts to external URL/list readiness, not a user event.
-  // `embedded` counts as a route selection so Activity never restores a remembered
-  // /channels id into the right pane (LRM-238 / LRM-388).
-  // react-doctor-disable-next-line react-doctor/no-event-handler
-  const hasRouteSelection = Boolean(channelId || activeDmId || embedded);
-  const restoredBaseChannelId =
-    !hasRouteSelection &&
-    // Same render-time canonical-navigation reaction as above (#588 marker), kept
-    // adjacent to its own line so react-doctor's suppression check passes.
-    // react-doctor-disable-next-line react-doctor/no-event-handler
-    !skipInitialBaseRestore &&
-    !suppressBaseRouteRestoreRef.current &&
-    channelsLoaded &&
-    lastSelectedChannelId &&
-    channels.some((channel) => channel.id === lastSelectedChannelId)
-      ? lastSelectedChannelId
-      : null;
-  if (restoredBaseChannelId !== reconciledBaseRestoreIdRef.current) {
-    if (restoredBaseChannelId) setActiveId(restoredBaseChannelId);
-    reconciledBaseRestoreIdRef.current = restoredBaseChannelId;
-  }
   // Resolve the selected DM from the list. A DM selection takes priority over a
   // group selection (the two are mutually exclusive via the select handlers),
   // so when a DM is active we don't auto-resolve a group below.
@@ -1619,39 +1570,6 @@ export function ChannelsPage({
     [unpinnedChannels],
   );
 
-  // URL/list readiness is external, so direct-link persistence cannot move to a user event.
-  useEffect(() => {
-    // A direct group link is a real selection too. Remember it once list
-    // membership confirms it, while leaving direct-message routes out of this
-    // group-only preference.
-    // react-doctor-disable-next-line react-doctor/no-event-handler
-    if (channelId && channelsLoaded && channels.some((channel) => channel.id === channelId)) {
-      setLastSelectedChannelId(channelId);
-    }
-  }, [channelId, channels, channelsLoaded, setLastSelectedChannelId]);
-
-  useEffect(() => {
-    // A remounted base route consumes the marker via its initial state. When
-    // the component survives the route transition, the local ref above is the
-    // guard, so clear the marker after the route has actually become base.
-    if (skipInitialBaseRestore || (!channelId && suppressBaseRouteRestoreRef.current)) {
-      setMobileBaseRestoreSuppression(wsId, false);
-    }
-  }, [channelId, skipInitialBaseRestore, wsId]);
-
-  useEffect(() => {
-    // A removed channel (or a workspace membership change) must not keep a
-    // dead restore target around. The list is membership-filtered, so absence
-    // here covers both deleted and no-longer-authorized channels.
-    if (
-      channelsLoaded &&
-      lastSelectedChannelId &&
-      !channels.some((channel) => channel.id === lastSelectedChannelId)
-    ) {
-      clearLastSelectedChannelId();
-    }
-  }, [channels, channelsLoaded, clearLastSelectedChannelId, lastSelectedChannelId]);
-
   useEffect(() => {
     previousMobileRef.current =
       typeof window !== "undefined" ? window.innerWidth < 768 : false;
@@ -1695,26 +1613,15 @@ export function ChannelsPage({
     if (onMobileViewport && !transitionedToMobile) return;
     if (!channels[0]) return;
     // #642 — priority is deep-link > remembered > system #general > first
-    // channel. Deep-link and remembered both already set activeId before
-    // this effect runs (see the route-reconciliation and
-    // restoredBaseChannelId effects above), so reaching here with
-    // `!activeId` means neither fired — prefer #general over an arbitrary
+    // channel. Deep-link already set activeId before this effect runs (see
+    // the route-reconciliation above), so reaching here with `!activeId`
+    // means deep-link did not fire — prefer #general over an arbitrary
     // first channel. This is externally-driven default resolution (reacts
     // to async channel-list load / viewport becoming known), not a chain
     // of derived state — there's no event handler to move it into.
     // react-doctor-disable-next-line react-doctor/no-chain-state-updates, react-doctor/no-adjust-state-on-prop-change
     setActiveId((channels.find(isImmutableSystemChannel) ?? channels[0]).id);
   }, [viewportReady, isMobile, activeId, activeDmId, channels, embedded]);
-
-  useEffect(() => {
-    // Activity embed must never rewrite the browser URL to /channels/... —
-    // that jumps the user out of Activity into the Messages main column
-    // (Frank / LRM-388 AC: 禁止跳进频道主列).
-    if (embedded) return;
-    if (restoredBaseChannelId) {
-      replace(wsPaths.channelDetail(restoredBaseChannelId));
-    }
-  }, [embedded, replace, restoredBaseChannelId, wsPaths]);
 
   // Bottom-stick on new messages and open-at-latest on switch are handled by
   // ChannelMessageList (react-virtuoso followOutput + initialTopMostItemIndex).
@@ -2053,10 +1960,8 @@ export function ChannelsPage({
   // /channels/[id] from an embed (LRM-388 — stay on the Activity right pane).
   const selectChannel = (id: string) => {
     resetSidePanelState();
-    suppressBaseRouteRestoreRef.current = false;
     setActiveDmId(null);
     setActiveId(id);
-    setLastSelectedChannelId(id);
     if (!embedded) replace(wsPaths.channelDetail(id));
   };
 
@@ -2086,8 +1991,6 @@ export function ChannelsPage({
   // selections (so the list renders) and drops the deep-link param.
   const mobileBackToList = () => {
     resetSidePanelState();
-    suppressBaseRouteRestoreRef.current = true;
-    setMobileBaseRestoreSuppression(wsId, true);
     setActiveId(null);
     setActiveDmId(null);
     setMobilePanel(null);
@@ -3440,6 +3343,8 @@ export function ChannelsPage({
               currentUserName={currentUserName}
               searchQuery={search}
               onSelect={selectDm}
+              dms={dms}
+              dmsPending={channelsPending}
             />
             {/* CHANNELS section — collapsible, mirrors DIRECT MESSAGES layout */}
             <div className="mt-1">

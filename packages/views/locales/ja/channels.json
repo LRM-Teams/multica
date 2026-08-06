@@ -515,7 +515,6 @@
     "queued": "待機中",
     "dispatched": "起動中",
     "running": "考え中",
-    "waiting_local_directory": "ローカルディレクトリを待機中",
     "stop": "停止",
     "stop_named": "{{name}}を停止",
     "stop_aria": "{{name}}の現在のタスクを停止",
@@ -590,6 +589,7 @@
   "message": {
     "add_reaction": "リアクションを追加",
     "more_emojis": "その他の絵文字",
+    "loading_emojis": "絵文字を読み込み中…",
     "more_actions": "その他の操作",
     "actions_menu": "メッセージ操作",
     "copy_action": "コピー",

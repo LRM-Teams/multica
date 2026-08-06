@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
 func TestAgentCredentialCacheWrites0600AndReusesValidCredential(t *testing.T) {
@@ -37,7 +39,7 @@ func TestAgentCredentialCacheWrites0600AndReusesValidCredential(t *testing.T) {
 	}
 
 	path := agentCredentialCachePath(cfg, "workspace-1", "agent-1")
-	wantPath := filepath.Join(root, "workspace-1", ".multica", "agents", "agent-1", "runtime", "credentials", "current.json")
+	wantPath := filepath.Join(agentworkspace.Root(root, "workspace-1", "agent-1"), "runtime", "credentials", "current.json")
 	if path != wantPath {
 		t.Fatalf("cache path = %q, want %q", path, wantPath)
 	}

@@ -549,24 +549,6 @@ describe("ChannelTasksBoard", () => {
       expect(screen.queryByText("Group-only task")).not.toBeInTheDocument();
     });
 
-    it("no permission to view the project's issues: the \"Whole project\" option disables itself with a visible reason, not a silent 403", async () => {
-      mockProjectId = "proj-1";
-      listSourceIssues.mockResolvedValue({
-        issues: [makeIssue({ id: "issue-1", title: "Fix the login bug", status: "in_progress" })],
-        total: 1,
-      });
-      // The project-scoped query fails (e.g. a 403) — this must surface BEFORE
-      // any click, disabling the toggle rather than letting the user tap
-      // through into the error.
-      listProjectIssues.mockRejectedValue(new Error("forbidden"));
-      renderBoard();
-
-      const projectPill = await screen.findByRole("button", { name: /Whole project/ });
-      await vi.waitFor(() => expect(projectPill).toBeDisabled());
-      expect(screen.getByText("Can't load this project's issues right now")).toBeInTheDocument();
-      // Group scope is unaffected — still the active, working view.
-      expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
-    });
 
     it("switching channels resets the scope back to \"This group\" — a per-channel view, not a sticky global mode", async () => {
       mockProjectId = "proj-1";

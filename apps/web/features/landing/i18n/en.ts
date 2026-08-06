@@ -607,14 +607,12 @@ export function createEnDict(allowSignup: boolean): LandingDict {
         features: [
           "Multica for iOS is now available as our first official usable mobile client, covering login, workspaces, inbox, Issues, projects, chat, comments, reactions, presence, and live updates; it is not on the App Store yet, so users need to build and install it manually",
           "Self-hosted teams can now deploy Multica to Kubernetes with a Helm chart, while Docker-based installs keep clearer port and URL controls",
-          "Project resource pickers now include repository search, and workspace repository settings can store descriptions that help agents understand each codebase",
           "Runtime usage now recognizes DeepSeek, Kimi K2.6, Zhipu GLM, and long-context Claude Opus model costs more accurately",
           "The public site now supports use-case pages and a clearer path to Docs, Changelog, and getting started",
         ],
         improvements: [
           "Desktop tabs better preserve position in long Issues and chats when switching views, with navigation that avoids duplicate history entries",
           "Code and rich-text content are easier to read, with literal command text preserved and editor styling split into focused areas",
-          "Repository descriptions now travel with the workspace context given to agents, so assigned work can include more useful project background",
           "Documentation and README content now better reflect mobile support, automatic workflows, license details, and self-host options",
         ],
         fixes: [
@@ -1004,10 +1002,9 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       {
         version: "0.2.24",
         date: "2026-05-03",
-        title: "Repo Checkout `--ref`, Hermes Replay Fix & Multi-Replica Model Picker",
+        title: "Hermes Replay Fix & Multi-Replica Model Picker",
         changes: [],
         features: [
-          "`multica repo checkout --ref` targets a branch, tag, or specific commit when pulling a repo into the workspace",
           "`multica agent avatar` uploads an agent avatar straight from the CLI",
           "Inbox shows an archive button on done tasks; the redundant mark-as-done hover button is gone",
         ],
@@ -1559,7 +1556,6 @@ export function createEnDict(allowSignup: boolean): LandingDict {
           "@mention issues in comments with server-side auto-expansion",
           "@all mention to notify every workspace member",
           "Inbox auto-scrolls to the referenced comment from a notification",
-          "Repositories extracted into a standalone settings tab",
           "CLI update support from the web runtime page and direct download for non-Homebrew installs",
           "CLI commands for viewing issue execution runs and run messages",
           "Agent permission model — owners and admins manage agents, members manage skills on their own agents",
@@ -1593,7 +1589,6 @@ export function createEnDict(allowSignup: boolean): LandingDict {
           "Stream live agent output to issue detail page",
           "Rich text editor \u2014 mentions, link paste, emoji reactions, collapsible threads",
           "File upload with S3 + CloudFront signed URLs and attachment tracking",
-          "Agent-driven repo checkout with bare clone cache for task isolation",
           "Batch operations for issue list view",
           "Daemon authentication and security hardening",
         ],

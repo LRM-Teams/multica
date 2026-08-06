@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// openclawConfigFile is the per-task synthesized OpenClaw config the daemon
+// openclawConfigFile is the Agent-scoped synthesized OpenClaw config the daemon
 // points the openclaw CLI at via OPENCLAW_CONFIG_PATH. It sits in the env
 // root (alongside workdir/, output/, logs/) so the GC reaper sweeps it with
 // the rest of the task env.
@@ -62,12 +62,12 @@ type OpenclawConfigResult struct {
 	IncludeRoot string
 }
 
-// prepareOpenclawConfig writes a per-task OpenClaw config to envRoot and
+// prepareOpenclawConfig writes a Agent-scoped OpenClaw config to envRoot and
 // returns its absolute path along with the include root the daemon must
 // grant. The daemon sets OPENCLAW_CONFIG_PATH to the path on the spawned
 // openclaw subprocess so the CLI resolves its `agents.defaults.workspace`
-// (and every `agents.list[].workspace`) to the task workdir — which is
-// what makes OpenClaw's native skill scanner pick up the per-task skills
+// (and every `agents.list[].workspace`) to the Agent workspace — which is
+// what makes OpenClaw's native skill scanner pick up the Agent-scoped skills
 // we write under `<workDir>/skills/`.
 //
 // Strategy: delegate JSON5 / $include / env-substitution / state-dir
@@ -102,7 +102,7 @@ type OpenclawConfigResult struct {
 // `agents.list[id].workspace → agents.defaults.workspace → ~/.openclaw/
 // workspace`. Pinning only the default would let a per-agent workspace the
 // user configured at host scope silently re-route the scanner back to the
-// shared workspace, defeating the per-task skill discovery this whole flow
+// shared workspace, defeating the Agent-scoped skill discovery this whole flow
 // exists for. The cost is that any per-agent SOUL.md / MEMORY.md / standing
 // orders the user laid in `<host-agent-workspace>/` are NOT visible to the
 // in-task openclaw run — task isolation wins over host carry-over. The

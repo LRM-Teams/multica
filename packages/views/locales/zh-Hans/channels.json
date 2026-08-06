@@ -515,7 +515,6 @@
     "queued": "排队中",
     "dispatched": "启动中",
     "running": "思考中",
-    "waiting_local_directory": "等待本地目录释放",
     "stop": "停止",
     "stop_named": "停止 {{name}}",
     "stop_aria": "停止 {{name}} 当前任务",
@@ -590,6 +589,7 @@
   "message": {
     "add_reaction": "添加表情回应",
     "more_emojis": "更多表情",
+    "loading_emojis": "正在加载表情…",
     "more_actions": "更多操作",
     "actions_menu": "消息操作",
     "copy_action": "复制",

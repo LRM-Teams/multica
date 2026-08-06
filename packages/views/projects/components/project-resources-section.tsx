@@ -8,7 +8,6 @@ import {
   FolderOpen,
   Pencil,
   Plus,
-  Search,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -20,7 +19,6 @@ import {
   useUpdateProjectResource,
 } from "@multica/core/projects";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useCurrentWorkspace } from "@multica/core/paths";
 import type {
   GithubRepoResourceRef,
   LocalDirectoryResourceRef,
@@ -67,11 +65,9 @@ function isLocalDirectoryRef(r: ProjectResource): r is ProjectResource & {
 export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
-  const workspace = useCurrentWorkspace();
   const daemonStatus = useLocalDaemonStatus();
   const [open, setOpen] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
-  const [repoSearch, setRepoSearch] = useState("");
   const [picking, setPicking] = useState(false);
 
   const { data: resources = [] } = useQuery(
@@ -88,28 +84,16 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
   const desktopMode = isDesktopShell();
   const localDaemonId = daemonStatus.daemonId;
 
-  const attachedUrls = new Set(
-    resources.filter(isGithubRef).map((r) => r.resource_ref.url),
-  );
   const attachedLocalPaths = new Set(
     resources
       .filter(isLocalDirectoryRef)
       .filter((r) => r.resource_ref.daemon_id === localDaemonId)
       .map((r) => r.resource_ref.local_path),
   );
-  // Per (project, daemon) we allow at most one local_directory — the
-  // daemon-side resolver picks the first match by daemon_id, so two rows
-  // on the same daemon would silently route the agent into one of them.
-  // The server enforces this at the API boundary; the UI mirrors the
-  // restriction by hiding the "Add" affordance once a row exists for the
-  // current daemon, otherwise users would only discover the limit on a
-  // 409 toast.
+  // The server allows one machine-scoped metadata reference per project.
+  // Mirror that constraint in the UI so users do not discover it via 409.
   const hasLocalDirectoryForCurrentDaemon =
     localDaemonId !== null && attachedLocalPaths.size > 0;
-
-  const repoQuery = repoSearch.trim().toLowerCase();
-  const filteredRepos =
-    workspace?.repos?.filter((repo) => repo.url.toLowerCase().includes(repoQuery)) ?? [];
 
   const handleAttach = async (url: string) => {
     try {
@@ -265,10 +249,7 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
           )}
           <Popover
             open={addOpen}
-            onOpenChange={(v) => {
-              setAddOpen(v);
-              if (!v) setRepoSearch("");
-            }}
+            onOpenChange={setAddOpen}
           >
             <PopoverTrigger
               render={
@@ -286,63 +267,6 @@ export function ProjectResourcesSection({ projectId }: { projectId: string }) {
               <div className="text-xs font-medium text-muted-foreground">
                 {t(($) => $.resources.popover_title)}
               </div>
-              {workspace?.repos && workspace.repos.length > 0 && (
-                <>
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                    <input
-                      type="text"
-                      value={repoSearch}
-                      onChange={(e) => setRepoSearch(e.target.value)}
-                      aria-label={t(($) => $.resources.repos_search_placeholder)}
-                      placeholder={t(($) => $.resources.repos_search_placeholder)}
-                      className="h-8 w-full rounded-md border bg-transparent pl-7 pr-2 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring"
-                    />
-                  </div>
-                  <div className="max-h-48 space-y-1 overflow-y-auto">
-                    {filteredRepos.length === 0 && repoQuery && (
-                      <p className="py-2 text-center text-xs text-muted-foreground">
-                        {t(($) => $.resources.repos_search_empty)}
-                      </p>
-                    )}
-                    {filteredRepos.map((repo) => {
-                      const isAttached = attachedUrls.has(repo.url);
-                      const isDisabled = isAttached || createResource.isPending;
-                      return (
-                        // Use aria-disabled instead of the native `disabled` attribute so
-                        // hover events still reach the tooltip trigger on attached rows
-                        // (browsers suppress pointer events on disabled form controls).
-                        <button
-                          key={repo.url}
-                          type="button"
-                          aria-disabled={isDisabled}
-                          onClick={async () => {
-                            if (isDisabled) return;
-                            await handleAttach(repo.url);
-                            setAddOpen(false);
-                          }}
-                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left hover:bg-accent transition-colors aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent"
-                        >
-                          <FolderGit className="size-3.5" />
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={
-                                <span className="truncate flex-1">{repo.url}</span>
-                              }
-                            />
-                            <TooltipContent side="top">{repo.url}</TooltipContent>
-                          </Tooltip>
-                          {isAttached && (
-                            <span className="text-[10px] text-muted-foreground">
-                              {t(($) => $.resources.attached_badge)}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
               <CustomRepoForm
                 onSubmit={async (url) => {
                   await handleAttach(url);

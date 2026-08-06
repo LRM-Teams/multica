@@ -455,29 +455,20 @@ func buildCommentPrompt(task Task, provider string) string {
 	return b.String()
 }
 
-// writeAgentRootSection writes the agent's personal workspace directory into
-// the prompt so the agent can answer "where is my memory / work dir" with the
-// real absolute path the daemon writes to (PI_AGENT_ROOT / PI_MEMORY_DIR).
-//
-// Layout is layered: the three primary surfaces the agent actually reads and
-// writes during chat (memory, skills, notes) get their own line with sub-files;
-// the remaining subdirs created by ensureMulticaAgentRoot are collapsed into a
-// single "other local dirs" line to keep the prompt short. Full per-subdir
-// detail is intentionally omitted — they are either agent-managed caches
-// (runtime/, sessions/, repos/), team-sync plumbing (inbox/, shared-cache/,
-// sync_queue/, feedback/), or rarely used scratch space (projects/).
+// writeAgentRootSection exposes a short, explicit persistence contract. Paths
+// not used by the current turn stay lazy and do not need prompt space.
 func writeAgentRootSection(b *strings.Builder, agentRoot string) {
 	if strings.TrimSpace(agentRoot) == "" {
 		return
 	}
-	b.WriteString("Your personal workspace directory (one per agent, persists across runs):\n")
-	fmt.Fprintf(b, "%s/\n", agentRoot)
-	fmt.Fprintf(b, "- memory: %s/memory/  (MEMORY.md, STATE.md, REVIEW.md, daily/)\n", agentRoot)
-	fmt.Fprintf(b, "- scoped: %s/users/<member-id>/  (USER.md, RELATIONSHIP.md); projects/<project-id>/; channels/<channel-id>/CONTEXT.md\n", agentRoot)
-	fmt.Fprintf(b, "- skills: %s/skills/  (drafts/, generated/, enabled/)\n", agentRoot)
-	fmt.Fprintf(b, "- notes:  %s/notes/  (agents.md, channels.md, project-map.md, relationship-map.md, role-playbook.md, work-log.md, decisions.md)\n", agentRoot)
-	fmt.Fprintf(b, "Other local dirs (agent-managed caches & team-sync plumbing; not usually needed): projects/, repos/, sessions/, runtime/, profile/, feedback/, sync_queue/, inbox/, shared-cache/.\n")
-	b.WriteString("When asked where your memory or files live, give these absolute paths.\n\n")
+	b.WriteString("Persistent memory (create files only when writing real content):\n")
+	fmt.Fprintf(b, "- Durable cross-task knowledge: %s/memory/MEMORY.md\n", agentRoot)
+	fmt.Fprintf(b, "- Dated temporary state: %s/memory/STATE.md\n", agentRoot)
+	fmt.Fprintf(b, "- Today's concise work log: %s/memory/daily/YYYY-MM-DD.md\n", agentRoot)
+	fmt.Fprintf(b, "- Current member preferences/relationship: %s/users/<member-id>/USER.md or RELATIONSHIP.md\n", agentRoot)
+	fmt.Fprintf(b, "- Current project knowledge/state/decisions: %s/projects/<project-id>/MEMORY.md, STATE.md, or DECISIONS.md\n", agentRoot)
+	fmt.Fprintf(b, "- Current channel collaboration context: %s/channels/<channel-id>/CONTEXT.md\n", agentRoot)
+	b.WriteString("Keep agent, member, project, and channel scopes separate. Do not create empty files, placeholder templates, directories for unused scopes, or parallel memory files.\n\n")
 }
 
 // buildChatPrompt constructs a prompt for interactive chat tasks.
@@ -528,7 +519,7 @@ func buildChatPrompt(task Task, agentRoot string) string {
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread only. Do not assume visibility into other DMs, channels, issues, or threads unless the user explicitly references them and the Multica CLI allows access.\n")
 	b.WriteString("- For thread-triggered runs, the thread root and recent replies are the relevant conversation boundary; do not infer the entire parent channel/DM history.\n")
 	b.WriteString("- Channel/thread snippets are intentionally bounded. If the answer depends on omitted channel history, search or fetch more channel/thread messages via Multica before guessing.\n")
-	b.WriteString("- Full histories, issue timelines, attachments, repositories, and complete skill files are lazy context: load them only with the appropriate tool/CLI command when needed.\n\n")
+	b.WriteString("- Full histories, issue timelines, attachments, project metadata, and complete skill files are lazy context: load them only with the appropriate tool/CLI command when needed.\n\n")
 	if task.Agent != nil && len(task.Agent.Skills) > 0 {
 		refs := ExtractSlashSkills(task.ChatMessage)
 		if len(refs) > 0 {

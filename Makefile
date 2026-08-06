@@ -100,7 +100,7 @@ selfhost: ## Create .env if needed, then pull and start the official self-hosted
 		echo "        or read the generated code from backend logs when Resend is unset."; \
 		echo ""; \
 		echo "Next — install the CLI and connect your machine:"; \
-		echo "  curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash"; \
+		echo "  curl -fsSL https://cdn.leagent.me/computer/install.sh | bash"; \
 		echo "  multica setup self-host"; \
 	else \
 		echo ""; \
@@ -147,7 +147,7 @@ selfhost-build: ## Build backend/web from the current checkout and start the sel
 		echo "Local tags: multica-backend:dev and multica-web:dev."; \
 		echo ""; \
 		echo "Next — install the CLI and connect your machine:"; \
-		echo "  curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash"; \
+		echo "  curl -fsSL https://cdn.leagent.me/computer/install.sh | bash"; \
 		echo "  multica setup self-host"; \
 	else \
 		echo ""; \

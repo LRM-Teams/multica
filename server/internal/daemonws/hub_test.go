@@ -69,6 +69,108 @@ func TestNotifyTaskAvailable(t *testing.T) {
 	}
 }
 
+func TestAgentDeliveryRetriesUntilAuthorizedAcknowledgement(t *testing.T) {
+	hub := NewHub()
+	retries := make(chan func(), 4)
+	hub.scheduleAgentDeliveryRetry = func(_ time.Duration, retry func()) {
+		retries <- retry
+	}
+	hub.SetAgentDeliveryAckHandler(func(_ context.Context, identity ClientIdentity, ack protocol.AgentDeliverAckPayload) error {
+		if identity.WorkspaceID != "workspace-1" || ack.AgentID != "agent-1" || ack.Seq != 7 || ack.DeliveryID != "delivery-1" {
+			t.Fatalf("unexpected acknowledgement: identity=%+v ack=%+v", identity, ack)
+		}
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{WorkspaceID: "workspace-1", RuntimeIDs: []string{"runtime-1"}})
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for hub.RuntimeConnectionCount("runtime-1") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("runtime connection was not registered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 7, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 7, Content: "hello"},
+	}
+	if !hub.NotifyAgentDelivery("runtime-1", delivery) {
+		t.Fatal("initial delivery was not queued")
+	}
+	readAgentDelivery := func() protocol.AgentDeliverPayload {
+		t.Helper()
+		if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var envelope protocol.Message
+		if err := json.Unmarshal(raw, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.Type != protocol.EventAgentDeliver {
+			t.Fatalf("event type = %q", envelope.Type)
+		}
+		var got protocol.AgentDeliverPayload
+		if err := json.Unmarshal(envelope.Payload, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := readAgentDelivery(); got.DeliveryID != delivery.DeliveryID {
+		t.Fatalf("initial delivery = %+v", got)
+	}
+
+	firstRetry := <-retries
+	firstRetry()
+	if got := readAgentDelivery(); got.DeliveryID != delivery.DeliveryID {
+		t.Fatalf("retry delivery changed identity: %+v", got)
+	}
+	secondRetry := <-retries
+
+	ack, err := json.Marshal(protocol.Message{
+		Type: protocol.EventAgentDeliverAck,
+		Payload: mustMarshalRaw(protocol.AgentDeliverAckPayload{
+			AgentID: delivery.AgentID, Seq: delivery.Seq, DeliveryID: delivery.DeliveryID,
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, ack); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		hub.agentDeliveryMu.Lock()
+		pending := len(hub.pendingAgentDeliveries)
+		hub.agentDeliveryMu.Unlock()
+		if pending == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("authorized acknowledgement did not stop retry state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	secondRetry()
+	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("delivery retried after acknowledgement")
+	}
+}
+
 func TestRelayNotifierPublishesDaemonRuntimeScope(t *testing.T) {
 	M.Reset()
 	defer M.Reset()
@@ -140,6 +242,37 @@ func TestRelayNotifierDedupsLocalRedisLoopback(t *testing.T) {
 	}
 	if M.WakeupDeliveredMiss.Load() != 0 {
 		t.Fatalf("delivered miss metric after dedup = %d, want 0", M.WakeupDeliveredMiss.Load())
+	}
+}
+
+func TestAgentDeliveryRelayDedupsLocalRedisLoopbackWithoutDroppingRetry(t *testing.T) {
+	hub := NewHub()
+	hub.scheduleAgentDeliveryRetry = func(time.Duration, func()) {}
+	client := attachDaemonTestClient(hub, "runtime-1")
+	relay := &localFirstDaemonRelayPublisher{t: t, client: client}
+	notifier := NewRelayNotifier(hub, relay)
+	delivery := protocol.AgentDeliverPayload{
+		AgentID: "agent-1", Target: "channel:one", Seq: 1, DeliveryID: "delivery-1",
+		Message: protocol.AgentMessageProjection{ID: "message-1", Target: "channel:one", Seq: 1, Content: "hello"},
+	}
+	if !notifier.NotifyAgentDelivery("runtime-1", delivery) {
+		t.Fatal("delivery was not accepted by local/relay notifier")
+	}
+	if !relay.called || relay.eventID == "" {
+		t.Fatalf("relay publish = %+v", relay)
+	}
+
+	hub.DeliverDaemonRuntime("runtime-1", relay.frame, relay.eventID)
+	select {
+	case duplicate := <-client.send:
+		t.Fatalf("expected agent delivery redis loopback to be deduped, got %s", duplicate)
+	default:
+	}
+	hub.agentDeliveryMu.Lock()
+	pending := hub.pendingAgentDeliveries[delivery.DeliveryID]
+	hub.agentDeliveryMu.Unlock()
+	if pending == nil {
+		t.Fatal("deduped relay loopback dropped pending retry state")
 	}
 }
 

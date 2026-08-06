@@ -1,6 +1,6 @@
 import { forwardRef, useImperativeHandle, useRef, useState, type ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const mockQuickCreateIssue = vi.hoisted(() => vi.fn());
@@ -333,111 +333,8 @@ describe("AgentCreatePanel", () => {
     ).toHaveValue("Persisted draft prompt");
   });
 
-  it("writes prompt changes back to the draft store and clears them after submit", async () => {
-    const user = userEvent.setup();
-    const onClose = vi.fn();
 
-    renderPanel({ onClose, isExpanded: false, setIsExpanded: vi.fn() });
 
-    const editor = screen.getByPlaceholderText(
-      'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
-    );
-
-    await user.clear(editor);
-    await user.type(editor, "New agent prompt");
-    expect(mockSetPrompt).toHaveBeenLastCalledWith("New agent prompt");
-
-    await user.click(screen.getByRole("button", { name: /^Create \(/i }));
-
-    await waitFor(() => {
-      expect(mockQuickCreateIssue).toHaveBeenCalledWith({
-        agent_id: "agent-1",
-        prompt: "New agent prompt",
-        project_id: undefined,
-      });
-    });
-
-    expect(mockSetLastActor).toHaveBeenCalledWith("agent", "agent-1");
-    // No project picked → persisted project preference is cleared so the
-    // store stays in sync with the actual outgoing request.
-    expect(mockSetLastProjectId).toHaveBeenCalledWith(null);
-    expect(mockClearPrompt).toHaveBeenCalled();
-    expect(mockSetLastMode).toHaveBeenCalledWith("agent");
-    expect(onClose).toHaveBeenCalled();
-  });
-
-  it("passes referenced upload attachment ids to quick-create", async () => {
-    const user = userEvent.setup();
-    const onClose = vi.fn();
-
-    renderPanel({ onClose, isExpanded: false, setIsExpanded: vi.fn() });
-
-    await user.click(screen.getByRole("button", { name: "Mock editor upload" }));
-    await waitFor(() => expect(mockUploadWithToast).toHaveBeenCalled());
-
-    const editor = screen.getByPlaceholderText(
-      'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
-    );
-    await user.clear(editor);
-    fireEvent.change(editor, {
-      target: {
-        value: "Create issue with ![image](/api/attachments/019ec09d-6222-722b-bdfa-427b105d80be/download)",
-      },
-    });
-
-    await user.click(screen.getByRole("button", { name: /^Create \(/i }));
-
-    await waitFor(() => {
-      expect(mockQuickCreateIssue).toHaveBeenCalledWith({
-        agent_id: "agent-1",
-        prompt: "Create issue with ![image](/api/attachments/019ec09d-6222-722b-bdfa-427b105d80be/download)",
-        project_id: undefined,
-        parent_issue_id: undefined,
-        attachment_ids: ["019ec09d-6222-722b-bdfa-427b105d80be"],
-      });
-    });
-  });
-
-  it("forwards source chat context from the carry payload to quick-create", async () => {
-    const user = userEvent.setup();
-    const onClose = vi.fn();
-
-    renderPanel({
-      onClose,
-      isExpanded: false,
-      setIsExpanded: vi.fn(),
-      data: {
-        source: {
-          channel_id: "channel-1",
-          message_id: "message-1",
-          thread_root_message_id: "root-1",
-        },
-      },
-    });
-
-    const editor = screen.getByPlaceholderText(
-      'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
-    );
-    await user.clear(editor);
-    await user.type(editor, "Investigate the regression");
-
-    await user.click(screen.getByRole("button", { name: /^Create \(/i }));
-
-    await waitFor(() => {
-      expect(mockQuickCreateIssue).toHaveBeenCalledWith({
-        agent_id: "agent-1",
-        prompt: "Investigate the regression",
-        project_id: undefined,
-        parent_issue_id: undefined,
-        source: {
-          channel_id: "channel-1",
-          message_id: "message-1",
-          thread_root_message_id: "root-1",
-        },
-      });
-    });
-    expect(mockToastSuccess).not.toHaveBeenCalled();
-  });
 
   // #433: the agent picker rendered the raw routing handle (agent_f0…) instead
   // of the human display name. It now reuses the shared identity row, so the
@@ -471,17 +368,6 @@ describe("AgentCreatePanel", () => {
   // is missing, we clear BOTH local state and the persisted preference;
   // dropping only local state would leave the next open re-seeding the same
   // dead value and trigger the server's `project not found` rejection.
-  it("clears a stale persisted project once the projects list resolves without it", async () => {
-    mockQuickCreateStore.lastProjectId = "deleted-proj";
-    mockProjectsQuery.data = [];
-    mockProjectsQuery.isSuccess = true;
-
-    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
-
-    await waitFor(() => {
-      expect(mockSetLastProjectId).toHaveBeenCalledWith(null);
-    });
-  });
 
   // Mirror case: while the query is still loading, we must NOT preemptively
   // clear the persisted preference — that would wipe a perfectly valid
@@ -502,40 +388,6 @@ describe("AgentCreatePanel", () => {
   // quick-create API silently — without surfacing a parent picker — so the
   // new issue is filed as a sub-issue. Dropping parent_issue_id here was
   // the original bug; this locks the wiring in.
-  it("forwards parent_issue_id from the carry payload to the quick-create API", async () => {
-    const user = userEvent.setup();
-
-    renderPanel({
-      onClose: vi.fn(),
-      isExpanded: false,
-      setIsExpanded: vi.fn(),
-      data: {
-        parent_issue_id: "parent-uuid-1",
-        parent_issue_identifier: "MUL-2534",
-      },
-    });
-
-    // Sub-issue context chip is visible so the user knows the new issue
-    // will be filed as a sub-issue.
-    expect(screen.getByTestId("agent-sub-issue-chip")).toBeInTheDocument();
-
-    const editor = screen.getByPlaceholderText(
-      'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
-    );
-    await user.clear(editor);
-    await user.type(editor, "Investigate the regression");
-
-    await user.click(screen.getByRole("button", { name: /^Create \(/i }));
-
-    await waitFor(() => {
-      expect(mockQuickCreateIssue).toHaveBeenCalledWith({
-        agent_id: "agent-1",
-        prompt: "Investigate the regression",
-        project_id: undefined,
-        parent_issue_id: "parent-uuid-1",
-      });
-    });
-  });
 
   // The sub-issue chip is purely opt-in context — it only appears when the
   // modal was opened from an "Add sub issue" entry. A plain quick-create

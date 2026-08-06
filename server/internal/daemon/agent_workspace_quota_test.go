@@ -11,12 +11,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
+)
+
+const (
+	quotaTestWorkspaceID = "33333333-3333-3333-3333-333333333333"
+	quotaTestAgentID     = "44444444-4444-4444-4444-444444444444"
 )
 
 // TestRunTask_RefusesTurnWhenAgentWorkspaceOverCapacity is the direct
 // regression test for task #94: the agent's own tool calls write to
-// .multica/agents/<id> directly during a turn (bash/edit tools operating on
+// <workspace>/agents/<id> directly during a turn (bash/edit tools operating on
 // MULTICA_AGENT_ROOT), completely outside any daemon-mediated write path, so
 // there is no per-write byte to intercept. The only enforcement point is
 // turn-start: seed the workspace already over its cap, then confirm runTask
@@ -34,9 +40,9 @@ func TestRunTask_RefusesTurnWhenAgentWorkspaceOverCapacity(t *testing.T) {
 		},
 	}
 
-	const workspaceID = "ws-quota"
-	const agentID = "agent-quota"
-	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	const workspaceID = quotaTestWorkspaceID
+	const agentID = quotaTestAgentID
+	agentRoot := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
 	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
 		t.Fatalf("seed agent root: %v", err)
 	}
@@ -46,12 +52,11 @@ func TestRunTask_RefusesTurnWhenAgentWorkspaceOverCapacity(t *testing.T) {
 	}
 
 	d := &Daemon{
-		client:         NewClient("http://unused.invalid"),
-		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		workspaces:     make(map[string]*workspaceState),
-		runtimeIndex:   map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-		activeEnvRoots: make(map[string]int),
-		cfg:            cfg,
+		client:       NewClient("http://unused.invalid"),
+		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:   make(map[string]*workspaceState),
+		runtimeIndex: map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
+		cfg:          cfg,
 	}
 
 	result, err := d.runTask(context.Background(), canonicalInboxTaskForTest(Task{
@@ -85,9 +90,9 @@ func TestRunTask_AllowsTurnWhenAgentWorkspaceUnderCapacity(t *testing.T) {
 		},
 	}
 
-	const workspaceID = "ws-under-quota"
-	const agentID = "agent-under-quota"
-	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	const workspaceID = quotaTestWorkspaceID
+	const agentID = quotaTestAgentID
+	agentRoot := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
 	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
 		t.Fatalf("seed agent root: %v", err)
 	}
@@ -96,12 +101,11 @@ func TestRunTask_AllowsTurnWhenAgentWorkspaceUnderCapacity(t *testing.T) {
 	}
 
 	d := &Daemon{
-		client:         NewClient("http://unused.invalid"),
-		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		workspaces:     make(map[string]*workspaceState),
-		runtimeIndex:   map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-		activeEnvRoots: make(map[string]int),
-		cfg:            cfg,
+		client:       NewClient("http://unused.invalid"),
+		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:   make(map[string]*workspaceState),
+		runtimeIndex: map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
+		cfg:          cfg,
 	}
 
 	// This workspace is under capacity, so runTask proceeds past the quota
@@ -138,9 +142,9 @@ func TestRunTask_AllowsTurnWhenAgentWorkspaceQuotaDisabled(t *testing.T) {
 		},
 	}
 
-	const workspaceID = "ws-unlimited-quota"
-	const agentID = "agent-unlimited-quota"
-	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	const workspaceID = quotaTestWorkspaceID
+	const agentID = quotaTestAgentID
+	agentRoot := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
 	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
 		t.Fatalf("seed agent root: %v", err)
 	}
@@ -157,12 +161,11 @@ func TestRunTask_AllowsTurnWhenAgentWorkspaceQuotaDisabled(t *testing.T) {
 	}
 
 	d := &Daemon{
-		client:         NewClient("http://unused.invalid"),
-		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
-		workspaces:     make(map[string]*workspaceState),
-		runtimeIndex:   map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-		activeEnvRoots: make(map[string]int),
-		cfg:            cfg,
+		client:       NewClient("http://unused.invalid"),
+		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		workspaces:   make(map[string]*workspaceState),
+		runtimeIndex: map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
+		cfg:          cfg,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -215,9 +218,9 @@ func TestHandleWriteFileRequest_RefusesGrowingEditWhenAgentWorkspaceOverCapacity
 	workspacesRoot := t.TempDir()
 	cfg := Config{WorkspacesRoot: workspacesRoot, AgentWorkspaceQuotaBytes: 10}
 
-	const workspaceID = "ws-rpc-quota-grow"
-	const agentID = "agent-rpc-quota-grow"
-	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	const workspaceID = quotaTestWorkspaceID
+	const agentID = quotaTestAgentID
+	agentRoot := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
 	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
 		t.Fatalf("seed agent root: %v", err)
 	}
@@ -229,7 +232,7 @@ func TestHandleWriteFileRequest_RefusesGrowingEditWhenAgentWorkspaceOverCapacity
 	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	resp := writeFileRequestResult(t, d, protocol.WriteWorkdirFileRequestPayload{
 		RequestID: "req-grow",
-		RelPath:   filepath.ToSlash(filepath.Join(workspaceID, ".multica", "agents", agentID)),
+		RelPath:   agentworkspace.RootRelPath(workspaceID, agentID),
 		FilePath:  existingFile,
 		Content:   "this new content is longer than the sixteen-byte original file",
 	})
@@ -252,9 +255,9 @@ func TestHandleWriteFileRequest_AllowsShrinkingEditWhenAgentWorkspaceOverCapacit
 	workspacesRoot := t.TempDir()
 	cfg := Config{WorkspacesRoot: workspacesRoot, AgentWorkspaceQuotaBytes: 10}
 
-	const workspaceID = "ws-rpc-quota-shrink"
-	const agentID = "agent-rpc-quota-shrink"
-	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	const workspaceID = quotaTestWorkspaceID
+	const agentID = quotaTestAgentID
+	agentRoot := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
 	if err := os.MkdirAll(agentRoot, 0o755); err != nil {
 		t.Fatalf("seed agent root: %v", err)
 	}
@@ -276,7 +279,7 @@ func TestHandleWriteFileRequest_AllowsShrinkingEditWhenAgentWorkspaceOverCapacit
 	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	resp := writeFileRequestResult(t, d, protocol.WriteWorkdirFileRequestPayload{
 		RequestID: "req-shrink",
-		RelPath:   filepath.ToSlash(filepath.Join(workspaceID, ".multica", "agents", agentID)),
+		RelPath:   agentworkspace.RootRelPath(workspaceID, agentID),
 		FilePath:  existingFile,
 		Content:   "short",
 	})
@@ -317,21 +320,25 @@ func TestHandleSeedAgentContextRequest_RefusesWhenAgentWorkspaceOverCapacity(t *
 	workspacesRoot := t.TempDir()
 	cfg := Config{WorkspacesRoot: workspacesRoot, AgentWorkspaceQuotaBytes: 10}
 
-	const workspaceID = "ws-seed-quota"
-	const agentID = "agent-seed-quota"
-	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	const workspaceID = quotaTestWorkspaceID
+	const agentID = quotaTestAgentID
+	agentRoot := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
 	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 		t.Fatalf("ensure root: %v", err)
 	}
 	// Fill over the 10-byte cap.
-	if err := os.WriteFile(filepath.Join(agentRoot, "notes", "work-log.md"), []byte("already-over-ten"), 0o644); err != nil {
+	notePath := filepath.Join(agentRoot, "notes", "work-log.md")
+	if err := os.MkdirAll(filepath.Dir(notePath), 0o755); err != nil {
+		t.Fatalf("create note dir: %v", err)
+	}
+	if err := os.WriteFile(notePath, []byte("already-over-ten"), 0o644); err != nil {
 		t.Fatalf("seed oversized file: %v", err)
 	}
 
 	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	resp := seedAgentContextRequestResult(t, d, protocol.SeedAgentContextRequestPayload{
 		RequestID: "req-seed-over",
-		RelPath:   filepath.ToSlash(filepath.Join(workspaceID, ".multica", "agents", agentID)),
+		RelPath:   agentworkspace.RootRelPath(workspaceID, agentID),
 		InitialNotes: map[string]string{
 			"notes/work-log.md": "more context that would grow the workspace",
 		},
@@ -352,14 +359,17 @@ func TestHandleSeedAgentContextRequest_AllowsWhenUnderCapacity(t *testing.T) {
 	workspacesRoot := t.TempDir()
 	cfg := Config{WorkspacesRoot: workspacesRoot, AgentWorkspaceQuotaBytes: 2 << 20} // 2MiB
 
-	const workspaceID = "ws-seed-ok"
-	const agentID = "agent-seed-ok"
-	agentRoot := multicaAgentRoot(cfg, workspaceID, agentID)
+	const workspaceID = quotaTestWorkspaceID
+	const agentID = quotaTestAgentID
+	agentRoot := agentworkspace.Root(cfg.WorkspacesRoot, workspaceID, agentID)
 	if err := ensureMulticaAgentRoot(agentRoot); err != nil {
 		t.Fatalf("ensure root: %v", err)
 	}
 	// Whitelisted seed files must already exist for appendSeedContextFile.
 	notePath := filepath.Join(agentRoot, "notes", "work-log.md")
+	if err := os.MkdirAll(filepath.Dir(notePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(notePath, []byte("# log\n"), 0o644); err != nil {
 		t.Fatalf("seed note: %v", err)
 	}
@@ -367,7 +377,7 @@ func TestHandleSeedAgentContextRequest_AllowsWhenUnderCapacity(t *testing.T) {
 	d := &Daemon{cfg: cfg, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	resp := seedAgentContextRequestResult(t, d, protocol.SeedAgentContextRequestPayload{
 		RequestID: "req-seed-ok",
-		RelPath:   filepath.ToSlash(filepath.Join(workspaceID, ".multica", "agents", agentID)),
+		RelPath:   agentworkspace.RootRelPath(workspaceID, agentID),
 		InitialNotes: map[string]string{
 			"notes/work-log.md": "hello seed",
 		},

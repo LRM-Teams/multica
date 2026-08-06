@@ -19,7 +19,6 @@ const resolverListPageLimit = 50
 // uuidRegexp matches a canonical UUID (8-4-4-4-12 hex). Shared by CLI resolvers.
 var uuidRegexp = regexp.MustCompile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
-
 type resolvedID struct {
 	ID      string
 	Display string

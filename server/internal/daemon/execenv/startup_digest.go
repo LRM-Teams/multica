@@ -35,13 +35,8 @@ func StartupStaticContext(ctx TaskContextForEnv) TaskContextForEnv {
 		AgentID:           strings.TrimSpace(ctx.AgentID),
 		AgentName:         strings.TrimSpace(ctx.AgentName),
 		AgentInstructions: ctx.AgentInstructions,
-		// Multica-owned agent roots (durable, not user CWD)
-		AgentRoot:           strings.TrimSpace(ctx.AgentRoot),
-		AgentMemoryDir:      strings.TrimSpace(ctx.AgentMemoryDir),
-		DeviceMemoryDir:     strings.TrimSpace(ctx.DeviceMemoryDir),
-		AgentSkillDir:       strings.TrimSpace(ctx.AgentSkillDir),
-		AgentSkillDraftsDir: strings.TrimSpace(ctx.AgentSkillDraftsDir),
-		AgentSkills:         skills,
+		AgentRoot:         strings.TrimSpace(ctx.AgentRoot),
+		AgentSkills:       skills,
 		// Workspace-level standing context (not issue/chat turn)
 		WorkspaceContext: ctx.WorkspaceContext,
 		// ManagerChannels is intentionally excluded: it no longer renders into

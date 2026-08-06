@@ -22,7 +22,7 @@ import (
 // `no such host` errors when calling out (for example, `multica issue get`
 // hitting the Multica API). See upstream issue openai/codex#10390.
 //
-// Until a fixed Codex release ships, the per-task Codex config on macOS needs
+// Until a fixed Codex release ships, the Agent-scoped Codex config on macOS needs
 // to fall back to `sandbox_mode = "danger-full-access"` so the agent can
 // actually reach the Multica API. On Linux (and on macOS once the upstream
 // fix is released), the normal `workspace-write` + `network_access = true`
@@ -34,7 +34,7 @@ import (
 // release yet — always treat macOS Codex as broken for network access".
 const CodexDarwinNetworkAccessFixedVersion = ""
 
-// codexSandboxPolicy describes how the per-task Codex config.toml should
+// codexSandboxPolicy describes how the Agent-scoped Codex config.toml should
 // configure the sandbox.
 type codexSandboxPolicy struct {
 	// Mode is the value written as `sandbox_mode = "..."`.
@@ -42,7 +42,7 @@ type codexSandboxPolicy struct {
 	// NetworkAccess controls `[sandbox_workspace_write] network_access`.
 	// Only meaningful when Mode is "workspace-write".
 	NetworkAccess bool
-	// WritableRoots are additional writeable paths outside the task workdir.
+	// WritableRoots are additional writeable paths outside the Agent workspace.
 	// Only meaningful when Mode is "workspace-write".
 	WritableRoots []string
 	// Reason is a short human-readable label used in warn-level logs.
@@ -174,7 +174,7 @@ func codexSandboxFallbackHint(policy codexSandboxPolicy) string {
 }
 
 // multicaManagedBeginMarker / multicaManagedEndMarker delimit the block the
-// daemon writes into the per-task config.toml. Everything between the markers
+// daemon writes into the Agent-scoped config.toml. Everything between the markers
 // is owned by the daemon and will be rewritten idempotently; anything outside
 // the markers is preserved as-is.
 const (

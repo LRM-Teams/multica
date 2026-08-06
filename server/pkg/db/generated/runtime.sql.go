@@ -150,7 +150,7 @@ WHERE runtime_id = ANY($1::uuid[])
   AND status IN ('pending', 'draining', 'failed')
 `
 
-// Active (queued/dispatched/running/waiting_local_directory) tasks pinned to
+// Active tasks pinned to
 // any of the given runtimes. Used by computer-level bulk delete to refuse
 // with a structured 4xx when the machine still has live work (LRM-238 /
 // LRM-438) instead of silently leaving orphaned tasks.
@@ -286,9 +286,8 @@ WHERE status = 'draining'
 RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
-// Marks dispatched/running/waiting_local_directory tasks as failed when
-// their runtime is offline. This cleans up orphaned tasks after a daemon
-// crash or network partition.
+// Requeues in-flight tasks when their runtime is offline. This cleans up
+// orphaned tasks after a daemon crash or network partition.
 func (q *Queries) FailTasksForOfflineRuntimes(ctx context.Context) ([]AgentInboxEvent, error) {
 	rows, err := q.db.Query(ctx, failTasksForOfflineRuntimes)
 	if err != nil {

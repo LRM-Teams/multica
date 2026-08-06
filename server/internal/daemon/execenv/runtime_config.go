@@ -16,12 +16,10 @@ import (
 // inside the runtime config file (CLAUDE.md / AGENTS.md / GEMINI.md). The
 // markers exist so writeRuntimeConfigFile can:
 //
-//   - preserve user-authored content in the same file (the user's repo may
-//     already ship a CLAUDE.md / AGENTS.md when the agent is pointed at a
-//     local_directory project resource),
-//   - replace the brief idempotently on subsequent runs in the same workdir
+//   - preserve Agent-authored content in the same file,
+//   - replace the brief idempotently on subsequent runs in AgentRoot
 //     instead of appending duplicate copies, and
-//   - leave a precise excision target for a future cleanup pass.
+//   - keep the Multica-owned region explicit.
 //
 // HTML comments are used so the markers are inert in every Markdown renderer
 // and harmless when fed to the agent as instructions. Changing the marker
@@ -128,40 +126,6 @@ func sanitizeInlineCodeForBrief(value string) string {
 	return value
 }
 
-// formatProjectResource renders a single resource as a human-readable bullet.
-// Unknown resource types fall back to a JSON-encoded ref so the agent can
-// still read what the user attached. New resource types should add a case
-// here AND in the API validator (handler/project_resource.go).
-func formatProjectResource(r ProjectResourceForEnv) string {
-	label := r.Label
-	switch r.ResourceType {
-	case "github_repo":
-		var payload struct {
-			URL               string `json:"url"`
-			DefaultBranchHint string `json:"default_branch_hint,omitempty"`
-		}
-		_ = json.Unmarshal(r.ResourceRef, &payload)
-		out := fmt.Sprintf("**GitHub repo**: %s", payload.URL)
-		if payload.DefaultBranchHint != "" {
-			out += fmt.Sprintf(" (default branch: `%s`)", payload.DefaultBranchHint)
-		}
-		if label != "" {
-			out += " — " + label
-		}
-		return out
-	default:
-		ref := string(r.ResourceRef)
-		if ref == "" {
-			ref = "{}"
-		}
-		out := fmt.Sprintf("**%s**: `%s`", r.ResourceType, ref)
-		if label != "" {
-			out += " — " + label
-		}
-		return out
-	}
-}
-
 // InjectRuntimeConfig writes the meta skill content into the runtime-specific
 // config file so the agent discovers its environment through its native mechanism.
 //
@@ -169,7 +133,7 @@ func formatProjectResource(r ProjectResourceForEnv) string {
 // For Codex:    writes {workDir}/AGENTS.md  (skills discovered natively via CODEX_HOME)
 // For Copilot:  writes {workDir}/AGENTS.md  (skills discovered natively from .github/skills/)
 // For OpenCode: writes {workDir}/AGENTS.md  (skills discovered natively from .opencode/skills/)
-// For OpenClaw: writes {workDir}/AGENTS.md  (skills discovered natively from {workDir}/skills/ via per-task openclaw-config.json that pins agents.defaults.workspace)
+// For OpenClaw: writes {workDir}/AGENTS.md  (skills discovered natively from {workDir}/skills/ via Agent-scoped openclaw-config.json that pins agents.defaults.workspace)
 // For Hermes:   writes {workDir}/AGENTS.md  (skills fall back to .agent_context/skills/; AGENTS.md points there)
 // For Gemini:   writes {workDir}/GEMINI.md  (discovered natively by the Gemini CLI)
 // For Pi:       writes {workDir}/AGENTS.md  (skills discovered natively from .pi/skills/)
@@ -188,10 +152,8 @@ func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (strin
 	return content, writeRuntimeConfigFile(path, content)
 }
 
-// CanonicalTurnLedgerRoot returns the daemon-owned ledger directory for one
-// agent workspace. It lives under AgentWorkspaceLayout.RootDir (sibling of
-// WorkDir), never inside the provider CWD — agents must not be able to edit
-// absolute-path cleanup ledgers.
+// CanonicalTurnLedgerRoot returns the daemon ledger directory below the
+// canonical AgentRoot. AgentRoot is also the provider cwd.
 func CanonicalTurnLedgerRoot(agentRootDir string) string {
 	return filepath.Join(strings.TrimSpace(agentRootDir), "daemon", "canonical_turn_ledger")
 }
@@ -211,47 +173,6 @@ func validatePathUnderWorkDirNoSymlink(workDir, target string) error {
 		return fmt.Errorf("path escapes workdir: %s", target)
 	}
 	return validateNoSymlinkDescendants(absWork, absTarget)
-}
-
-// removeManagedSkillDirs removes only Multica-owned skill packages under the
-// provider-native skills parent (directories bearing managedSkillMarker).
-// Unmarked user/agent skill siblings are left intact (Tier A).
-func removeManagedSkillDirs(workDir, provider string) error {
-	skills := skillsDirPath(workDir, provider)
-	if skills == "" {
-		return nil
-	}
-	if err := validatePathUnderWorkDirNoSymlink(workDir, skills); err != nil {
-		if errors.Is(err, fs.ErrNotExist) || os.IsNotExist(err) {
-			return nil
-		}
-		if strings.Contains(err.Error(), "symlink") || strings.Contains(err.Error(), "escapes") {
-			return fmt.Errorf("refusing managed skill cleanup: %w", err)
-		}
-	}
-	entries, err := os.ReadDir(skills)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		dir := filepath.Join(skills, entry.Name())
-		if !isManagedSkillDir(dir) {
-			continue
-		}
-		if err := validatePathUnderWorkDirNoSymlink(workDir, dir); err != nil {
-			return fmt.Errorf("refusing managed skill dir cleanup: %w", err)
-		}
-		if err := os.RemoveAll(dir); err != nil {
-			return fmt.Errorf("remove managed skill dir %s: %w", dir, err)
-		}
-	}
-	return nil
 }
 
 // Ownership markers for fixed Multica sidecars under the provider CWD.
@@ -449,10 +370,7 @@ func runtimeConfigPath(workDir, provider string) string {
 //     the file unboundedly. The pre-block content (including any managed
 //     separator established by the first inject) is preserved verbatim.
 //
-// The previous implementation called os.WriteFile unconditionally, which
-// silently truncated a repository's CLAUDE.md / AGENTS.md / GEMINI.md the
-// first time the agent was pointed at the user's own directory via the
-// local_directory project resource flow. See MUL-2753.
+// Existing Agent-authored bytes outside the managed marker are preserved.
 func writeRuntimeConfigFile(path, brief string) error {
 	block := runtimeMarkerBegin + "\n" + strings.TrimRight(brief, "\n") + "\n" + runtimeMarkerEnd + "\n"
 
@@ -521,85 +439,6 @@ func locateMarkerBlock(content string) (start, end int, found bool) {
 		end++
 	}
 	return start, end, true
-}
-
-// CleanupRuntimeConfig excises the Multica marker block from the runtime
-// config file for the given provider and restores the file to its exact
-// pre-injection state, byte for byte. The cleanup is the second half of
-// the contract `writeRuntimeConfigFile` establishes: together they must
-// round-trip a user's local repository config across an arbitrary number
-// of Multica runs without ever touching a single non-managed byte.
-//
-// Behaviour, mirroring the three Inject states:
-//
-//   - file has no marker block → no-op (nothing was ever injected here);
-//   - block is at the start of the file with no preceding managed
-//     separator → the file was created by Inject from a missing-file
-//     state. Remove the file outright so the post-cleanup directory
-//     listing is byte-identical to the pre-Inject one.
-//   - block is preceded by the fixed managed separator → strip the
-//     separator together with the block; whatever remains (which may be
-//     an empty pre-existing file, a whitespace-only file, or arbitrary
-//     user content) is the user's original file, written back verbatim
-//     with NO trailing-newline normalisation and NO TrimSpace-based file
-//     removal heuristic. Both of those were sources of subtle diff in
-//     PR #3438 review feedback.
-//
-// Required for the local_directory flow (WorkDir is the user's own repo):
-// without this pass, a manual `claude` / `codex` / `gemini` run started by
-// the user inside the same directory after a Multica task would pick up
-// the stale brief and act on the previous task's issue id, trigger
-// comment id, and reply rules. Cloud workspace runs never trigger this
-// pollution because their workdir is daemon scratch that the GC loop
-// deletes wholesale; the daemon skips this Cleanup on those workdirs.
-//
-// Missing files, unknown providers, and files without a marker block are
-// no-ops — Cleanup is safe to call defensively.
-func CleanupRuntimeConfig(workDir, provider string) error {
-	path := runtimeConfigPath(workDir, provider)
-	if path == "" {
-		return nil
-	}
-	existing, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read runtime config %s: %w", path, err)
-	}
-	existingStr := string(existing)
-	start, end, ok := locateMarkerBlock(existingStr)
-	if !ok {
-		return nil
-	}
-	pre := existingStr[:start]
-	post := existingStr[end:]
-
-	// Detect — and strip — the fixed managed separator that Inject puts
-	// immediately before the block whenever it appended to a file that
-	// pre-existed. The absence of the separator is the marker that says
-	// "Inject created this file from scratch", which is the only case
-	// where Cleanup is allowed to delete the file.
-	hadManagedSeparator := strings.HasSuffix(pre, runtimeManagedSeparator)
-	if hadManagedSeparator {
-		pre = pre[:len(pre)-len(runtimeManagedSeparator)]
-	}
-	remainder := pre + post
-
-	if !hadManagedSeparator && remainder == "" {
-		// Inject created the file (no managed separator → block was the
-		// only content). Restore the missing-file state.
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("remove runtime config %s: %w", path, err)
-		}
-		return nil
-	}
-	// File pre-existed (possibly empty, possibly whitespace-only,
-	// possibly with user content) — write the remainder back exactly,
-	// without any normalisation. An empty `remainder` here means the
-	// user's original file was empty; we still write it (zero-byte file)
-	// so the file's existence is preserved.
-	return os.WriteFile(path, []byte(remainder), 0o644)
 }
 
 const executionDisciplineBrief = `## 运行规则 / 执行纪律
@@ -736,50 +575,17 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("\n\n")
 	}
 
-	if ctx.AgentRoot != "" || ctx.AgentMemoryDir != "" || ctx.AgentSkillDir != "" || ctx.AgentSkillDraftsDir != "" {
+	if ctx.AgentRoot != "" {
 		b.WriteString("## Multica Agent Memory Scope\n\n")
-		b.WriteString("You are running as a Multica-managed agent with isolated local memory and skill directories. Treat these as your own Multica agent-local paths. Live Multica agent instructions remain authoritative; managed memory supplements them and does not override task policy or user instructions.\n\n")
-		if ctx.AgentRoot != "" {
-			fmt.Fprintf(&b, "- Agent root (`MULTICA_AGENT_ROOT`): `%s`\n", ctx.AgentRoot)
-			if provider == "pi" {
-				fmt.Fprintf(&b, "- Pi agent root (`PI_AGENT_ROOT`): `%s`\n", ctx.AgentRoot)
-			}
-		}
-		if ctx.AgentMemoryDir != "" {
-			fmt.Fprintf(&b, "- Portable memory root (`MULTICA_AGENT_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
-			if provider == "pi" {
-				fmt.Fprintf(&b, "- Pi memory root (`PI_MEMORY_DIR`): `%s`\n", ctx.AgentMemoryDir)
-			}
-		}
-		if ctx.DeviceMemoryDir != "" {
-			fmt.Fprintf(&b, "- Device-local state (`MULTICA_DEVICE_MEMORY_DIR`): `%s`\n", ctx.DeviceMemoryDir)
-		}
-		if ctx.UserMemoryDir != "" {
-			fmt.Fprintf(&b, "- Current user memory (`MULTICA_USER_MEMORY_DIR`): `%s`\n", ctx.UserMemoryDir)
-		}
-		if ctx.ProjectMemoryDir != "" {
-			fmt.Fprintf(&b, "- Current project memory (`MULTICA_PROJECT_MEMORY_DIR`): `%s`\n", ctx.ProjectMemoryDir)
-		}
-		if ctx.ChannelMemoryDir != "" {
-			fmt.Fprintf(&b, "- Current channel context (`MULTICA_CHANNEL_MEMORY_DIR`): `%s`\n", ctx.ChannelMemoryDir)
-		}
-		if ctx.AgentSkillDir != "" {
-			fmt.Fprintf(&b, "- Skill root: `%s`\n", ctx.AgentSkillDir)
-		}
-		if ctx.AgentSkillDraftsDir != "" {
-			fmt.Fprintf(&b, "- Skill drafts root: `%s`\n", ctx.AgentSkillDraftsDir)
-			if provider == "pi" {
-				fmt.Fprintf(&b, "- Pi skill drafts root (`PI_SKILL_DRAFTS_DIR`): `%s`\n", ctx.AgentSkillDraftsDir)
-			}
-		}
-		b.WriteString("\nWhen asked where your memory or skills live, report these Multica agent paths, not host-global runtime paths. Write portable preferences, decisions, and durable facts under `MULTICA_AGENT_MEMORY_DIR` or the scoped user/project/channel directories. Write absolute paths, installed-tool state, loopback endpoints, ports, and other machine-specific facts under `MULTICA_DEVICE_MEMORY_DIR`; that directory is never replicated as portable center memory. Do not read or write `~/.pi/agent/memory`, `~/.codex/memories`, `~/.claude`, or other provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
+		b.WriteString("You are running in one durable workspace owned by this Agent ID. It is both your canonical root and your current working directory. Memory, skills, notes, project context, and other agent-owned state stay below it as ordinary relative paths; Multica does not expose a separate environment variable for every subdirectory. Live Multica agent instructions remain authoritative; managed memory supplements them and does not override task policy or user instructions.\n\n")
+		fmt.Fprintf(&b, "- Agent workspace (`MULTICA_AGENT_ROOT`): `%s`\n", ctx.AgentRoot)
+		b.WriteString("- Relative layout: `memory/`, `skills/`, `notes/`, `users/`, `projects/`, and `channels/`.\n")
+		b.WriteString("\nWhen asked where your memory or skills live, resolve those relative paths below `MULTICA_AGENT_ROOT`. Do not use provider-global memory directories as your own memory unless the task explicitly asks you to inspect host runtime configuration.\n\n")
 		b.WriteString("### Harness boundary (kernel vs shell)\n\n")
 		b.WriteString("- **Multica kernel (not swappable with the coding harness):** Issue status machine, Goal, channel permissions, group manager, daemon claim/inbox, audit.\n")
 		b.WriteString("- **Execution shell (swappable):** coding harness / provider (Codex, Claude, Pi, …), model choice, research backends.\n")
-		b.WriteString("- **Same-machine runtime switch:** Multica memory follows **Agent ID** (`MULTICA_AGENT_ROOT`); provider sessions and task workdirs may reset. Do not treat harness-private caches as canonical memory.\n\n")
-		if ctx.AgentRoot != "" || ctx.AgentMemoryDir != "" {
-			renderMemoryOperatingGuide(&b, ctx)
-		}
+		b.WriteString("- **Same-machine runtime switch:** the durable Agent workspace follows **Agent ID** (`MULTICA_AGENT_ROOT`); provider sessions may reset, but the working directory stays the same. Do not treat harness-private caches as canonical memory.\n\n")
+		renderMemoryOperatingGuide(&b, ctx)
 	}
 
 	b.WriteString(executionDisciplineBrief)
@@ -800,7 +606,6 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- `multica issue create --title \"...\" [--description \"...\" | --description-stdin | --description-file <path>] [--acceptance-criteria \"<criterion>\" ...] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--channel <group-id-or-name>] [--due-date <RFC3339>] [--source-channel <uuid> --source-message <uuid>] [--attachment-id <uuid>]` — `--project` and `--channel` are independent; use both source flags for discussion-derived work. From chat with images: always bind reference screenshots on the MAIN issue (`--attachment-id` and/or description embeds); never leave the main issue image-less with only an \"附件\" sub-issue.\n")
 	b.WriteString("- `multica issue channel <issue-id> <group-id-or-name>` / `multica issue channel <issue-id> --clear` — explicit group association; never inferred; project stays independent.\n")
 	b.WriteString("- `multica issue update <id> [--title X] [--description X | --description-stdin | --description-file <path>] [--acceptance-criteria \"<criterion>\" ...] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>]` — `--parent \"\"` clears parent.\n")
-	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>]` — checkout worktree; pin exact revision for review/QA.\n")
 	b.WriteString("- `multica issue status <id> <status>` — `todo|in_progress|in_review|done|blocked|backlog|cancelled`.\n")
 	// Available Commands lists `multica issue comment add` with all three input
 	// modes, but the menu entry now actively steers agents away from inlining
@@ -841,24 +646,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("Do not compress a multi-paragraph answer into one line and do not rely on `\\n` escapes.\n\n")
 	}
 
-	// Inject available repositories section.
-	if len(ctx.Repos) > 0 {
-		renderRuntimeSectionHeading(&b, "Repositories")
-		b.WriteString("The following code repositories are available in this workspace.\n")
-		b.WriteString("Use `multica repo checkout <url>` to check out a repository into your working directory. Add `--ref <branch-or-sha>` when you need an exact branch, tag, or commit.\n\n")
-		for _, repo := range ctx.Repos {
-			if repo.Description != "" {
-				fmt.Fprintf(&b, "- %s — %s\n", repo.URL, repo.Description)
-			} else {
-				fmt.Fprintf(&b, "- %s\n", repo.URL)
-			}
-		}
-		b.WriteString("\nThe checkout command creates a git worktree with a dedicated branch. You can check out one or more repos as needed, and can pass `--ref` for review/QA on a non-default branch or commit.\n\n")
-	}
-
-	// Inject project-scoped context (resources attached to the issue's project).
-	// The full structured payload is also available at .multica/project/resources.json
-	// so skills can consume it programmatically.
+	// Inject only the project identity. Resource URLs and local-path metadata
+	// are deliberately excluded from the Agent brief.
 	renderProjectContext(&b, ctx)
 
 	// Issue Metadata semantics — emitted only for tasks that operate on a real
@@ -987,14 +776,14 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("**Choosing `--status` when creating sub-issues.** `--status todo` = **start now** (the default — an agent assignee fires immediately). `--status backlog` = **wait** (assignee is set but no trigger fires; promote later with `multica issue status <child-id> todo`). Parallel children: all `--status todo`. Strict serial Step 1→2→3: only Step 1 is `todo`; Steps 2/3 are `--status backlog` from the start, promoted in turn.\n\n")
 	}
 
-	renderSkillIndexWithSlugs(&b, provider, ctx.AgentSkills, ctx.SkillDirSlugByName, ctx.AgentSkillDir)
+	renderSkillIndexWithSlugs(&b, provider, ctx.AgentSkills, ctx.SkillDirSlugByName, agentSkillDirForContext(ctx))
 
 	renderRuntimeSectionHeading(&b, "Attachments")
 	b.WriteString("Issues and comments may include file attachments (images, documents, etc.).\n")
 	b.WriteString("When a task includes attachment IDs and you need the files, inspect `multica attachment --help` and use the authenticated CLI path. Do not open Multica resource URLs directly.\n")
 	b.WriteString("If the issue carries image attachments — especially UI references, mockups, or design targets — fetch and actually look at them before doing UI/visual work: build to match the reference and diff your result against it. If you CANNOT render or interpret images, do NOT silently ignore the reference and guess from a text summary — say so explicitly and ask for the visual intent to be captured as concrete text acceptance criteria on the issue, then build to those. Dropping a provided visual reference and shipping a blind approximation is a defect.\n\n")
 
-	renderLazyReferences(&b, false, false, ctx.ProjectID != "" || len(ctx.ProjectResources) > 0, len(ctx.AgentSkills) > 0)
+	renderLazyReferences(&b, false, false, len(ctx.AgentSkills) > 0)
 
 	renderRuntimeSectionHeading(&b, "Important: Always Use the `multica` CLI")
 	b.WriteString("All interactions with Multica platform resources — including issues, comments, attachments, images, files, and any other platform data — **must** go through the `multica` CLI. ")
@@ -1102,25 +891,17 @@ func renderPinnedRules(b *strings.Builder, ctx TaskContextForEnv) {
 
 func renderMemoryOperatingGuide(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("### Memory Operating Guide (v0.11)\n\n")
-	b.WriteString("Use high-strength auto-write for human preferences and durable work arrangements, and medium-strength auto-write for other durable knowledge: record them without waiting for a separate request when they are specific, supported by the current interaction, likely to matter in a future run, and belong to this agent. During real work, treat **human speech and peer-agent durable statements** as high-signal by default — preferences, ownership, handoffs, process lessons, corrections, and \"who works with whom\" are almost never idle chatter whether they come from a member or another agent; only skip writing when the turn is clearly a test, greeting, thanks, ack-only loop, or throwaway joke. A verbal acknowledgment such as \"got it\" / \"记住了\" does not count as remembering; a durable file write must succeed before you claim it. You judge the right destination — `USER.md`, `RELATIONSHIP.md`, agent `memory/MEMORY.md`, `notes/*`, or project/channel files — based on what the fact governs. Do not record guesses, ephemeral execution noise (one-off file paths, transient logs), raw transcripts, secrets, or facts that are useful only for the current response. Prefer updating an existing entry over creating a duplicate.\n\n")
-	b.WriteString("- **Entry gates (platform-enforced)**: group-chat wakes do not inject personal (`USER.md` / user-scoped) memory by default; a clear bring-in phrase (e.g. \"带上我的个人偏好\" / \"use my personal memory\") can temporarily allow it. Project memory loads only when this task has a bound project. Historical formal memories without a scope tag belong in `REVIEW.md` for governance — do not pretend they are already layered.\n")
+	b.WriteString("All memory and skills move with this agent workspace. Resolve every path below relative to `MULTICA_AGENT_ROOT`; do not depend on separate memory, project, channel, user, device, or skill directory environment variables.\n\n")
+	b.WriteString("- **Write target map**: cross-project memory → `memory/MEMORY.md`; daily notes → `memory/daily/YYYY-MM-DD.md`; uncertain items → `memory/REVIEW.md`; user preferences → `users/<member-id>/USER.md` or `RELATIONSHIP.md`; project knowledge → `projects/<project-id>/MEMORY.md`, `STATE.md`, or `DECISIONS.md`; channel defaults → `channels/<channel-id>/CONTEXT.md`; peer-agent collaboration → `notes/agents.md` or `notes/relationship-map.md`; skills → `skills/`.\n")
+	b.WriteString("- **Scope and privacy**: source is provenance, not scope. Keep user, project, channel, and agent-wide facts separate. Never inspect another member's directory, invent IDs from display names, copy secrets, or broaden a private fact into shared memory. Project paths exist only for an explicitly bound project.\n")
 	if isChatLikeContext(ctx) && ctx.Directed {
-		b.WriteString("- **Recall before action**: the effective snapshot already contains only context selected for this member, project, and channel. Read the current user's isolated `USER.md` only through `MULTICA_USER_MEMORY_DIR`; never read another member directory.\n")
+		b.WriteString("- **Recall before action**: the effective snapshot already contains context selected for this member, project, and channel. Use only the current member ID supplied by the task when reading `users/<member-id>/`.\n")
 	}
-	b.WriteString("- **Source is not scope**: who said a memory is provenance, not its applicability. Do not make a rule user-scoped merely because Andong or another member stated it, and do not discard a rule merely because a peer agent stated it. Choose scope from what the memory governs: this member, this project, this channel, this agent everywhere, or the workspace/team.\n")
-	b.WriteString("- **Write target map**: use the current scoped directories, not guessed paths. Append substantive but low-level lessons, command attempts, transient findings, and closeout notes to `MULTICA_AGENT_MEMORY_DIR/daily/YYYY-MM-DD.md`. Promote only the most important long-lived cross-project rules to `MULTICA_AGENT_MEMORY_DIR/MEMORY.md`. Write project-specific facts, commands, deployment notes, decisions, and reusable troubleshooting to `MULTICA_PROJECT_MEMORY_DIR/MEMORY.md`, `STATE.md`, or `DECISIONS.md` when that directory is present. Write channel-only purpose/routing/defaults to `MULTICA_CHANNEL_MEMORY_DIR/CONTEXT.md`. Write current-human preferences and relationship facts to `MULTICA_USER_MEMORY_DIR/USER.md` or `RELATIONSHIP.md`. Keep project scope, channel scope, and user scope separate; do not widen a project fact into agent/global memory or a user preference into a team rule.\n")
-	b.WriteString("- **Durable facts and decisions**: write project-specific knowledge to `MULTICA_PROJECT_MEMORY_DIR/MEMORY.md` or `DECISIONS.md`. Use agent-global `memory/MEMORY.md` only for knowledge that genuinely applies across projects and should follow this agent into unrelated DMs, channels, and projects. If no project directory is present, do not create or infer one; keep project-looking observations in Daily or `memory/REVIEW.md` until the task has an explicit project scope.\n")
-	b.WriteString("- **User preferences and profile facts**: when `MULTICA_USER_MEMORY_DIR` is present, write the current member's durable preferences and standing working style to its `USER.md` immediately (how they want updates, review gates, language, risk tolerance, must-ask-before rules). Never put multiple members into one flat file or inspect another member directory. Project-limited preferences must also carry the current project ID in a governed candidate. If collective wording tells the agents addressed by the current message to remember a safe attributed preference, each recipient keeps its own user-scoped local entry; sharing the fact does not make the preference apply to other members. Do not add a workspace/shared candidate merely to fan the preference out to the current channel's agents.\n")
-	b.WriteString("- **Relationships, handoffs, and work arrangements**: whenever work reveals a durable collaboration fact — who owns what, who should对接/handoff to whom, reporting path, or how to work with a teammate — record it during the same run, not only at welcome/introduction. For a human member, write `users/<member-id>/RELATIONSHIP.md` under `MULTICA_AGENT_ROOT` (use `MULTICA_USER_MEMORY_DIR/RELATIONSHIP.md` only when that directory is already the subject's). For teammate agents, update `notes/agents.md` and/or `notes/relationship-map.md`. If the fact is channel routing/defaults only, update `MULTICA_CHANNEL_MEMORY_DIR/CONTEXT.md`. Pure social greetings (hi/你好/贴纸寒暄) with no reusable fact must not create memory. Never invent member/agent IDs from display names; use IDs supplied in context, or skip the ID-keyed write and put an uncertain note in `memory/REVIEW.md`.\n")
-	b.WriteString("- **Feedback from humans and peer agents**: treat corrections, rework requests, confirmations, repeated mistakes called out, standing process lessons, and explicit dissatisfaction as high-signal learning **whether the speaker is a human or another agent**. You decide whether the durable fact belongs in `USER.md`, `RELATIONSHIP.md`, agent `memory/MEMORY.md`, `notes/*`, or a project/channel file. Write it in the same turn. Do not hide repeated corrections in Daily only when they should change future behavior. Do not treat agent-to-agent talk as disposable chatter just because no human is in the thread.\n")
-	b.WriteString("- **Peer-agent messages can be remembered**: when another agent tells you a standing rule, handoff, ownership, reusable fix/checklist, or asks you to remember something, write a durable note in the same run — the same bar as human-sourced memory. Typical destinations: peer collaboration → `notes/agents.md` / `notes/relationship-map.md`; project ops → `MULTICA_PROJECT_MEMORY_DIR/*`; cross-project agent rules → `memory/MEMORY.md`. Skip only greetings, thanks, \"LGTM\", and ack-only loops with no reusable fact. Never copy another agent's private user files or secrets into your tree.\n")
-	b.WriteString("- **Claiming \"记住了\"**: only after a durable write succeeds somewhere appropriate (not Daily-only). If a human **or peer agent** asks to remember a standing rule or process lesson, judge the content yourself — do not wait for exact trigger phrases. Optionally append one JSON line to `MULTICA_AGENT_SYNC_QUEUE_DIR/memory-signal.jsonl` such as `{\"action\":\"write\",\"kind\":\"feedback\",\"scope\":\"agent\",\"topic\":\"mr_workflow\",\"summary\":\"...\"}` so the platform can detect misses; use `{\"action\":\"none\"}` when nothing durable should be stored. The Markdown/notes write remains authoritative.\n")
-	b.WriteString("- **After solving a problem, remember it yourself**: when you finish a real issue/bug/investigation/outage-style problem and the cause or fix is likely to matter again, write a short durable note in the same closeout — do not wait for anyone to say \"记住\". Put project-specific root-cause/fix/commands in `MULTICA_PROJECT_MEMORY_DIR/MEMORY.md` or `DECISIONS.md` when present; put cross-project reusable troubleshooting in agent `memory/MEMORY.md` or `notes/*`; keep one-off noise and transient logs in Daily only. You judge reusability. Closing with only \"fixed\" and no durable write is wrong when the lesson would prevent repeating the same failure.\n")
-	b.WriteString("- **Daily journal (hot path) vs self-review/curator (cold path)**: keep live-task memory cheap so short turns stay fast. On substantive closeout (code change, decision, issue progress, non-trivial investigation), append a few lines to `memory/daily/YYYY-MM-DD.md` — what happened, temporary conclusions, process notes, and minor reusable lessons. Do **not** run a full self-review or curator-style promotion inside every chat/task turn; that adds latency and feels like stuttering on greetings and one-line answers. Skip Daily for pure greetings, stickers, thanks, and throwaway tests. Preferences, handoffs, peer-agent durable lessons, and reusable problem-resolution lessons still write immediately to the right durable file (and project/channel files when scoped there). Only promote the most durable, broadly reusable facts out of Daily into `MEMORY.md`; project-specific durable facts belong in project files, not agent-global memory. Background L1 daily recording, L2 agent self-review, and team Curator (scheduled, active agents only) backfill Daily from evidence and promote/dedupe into formal files; they own the heavy path and must not block chat latency.\n")
-	b.WriteString("- **Current state and events**: write project-specific blockers and active work to `MULTICA_PROJECT_MEMORY_DIR/STATE.md`; write only cross-project state to `memory/STATE.md`. Include a date and, when applicable, status, TTL/expiry, or reset date.\n")
-	b.WriteString("- **Channel context**: keep only non-secret purpose, language, routing, and collaboration defaults in `MULTICA_CHANNEL_MEMORY_DIR/CONTEXT.md`. Do not copy chat transcripts or private user facts there.\n")
-	b.WriteString("- **Review candidates**: write uncertain, conflicting, sensitive, or destination-ambiguous items to `memory/REVIEW.md` instead of canonical memory. Use `MULTICA_AGENT_SYNC_QUEUE_DIR/memory-candidates.jsonl` only for governed sharing or platform curation, never to copy private memory across agents directly. A user-scoped candidate must include `subject_type: member`, `subject_id: $MULTICA_MEMBER_ID`, `source_user_id: $MULTICA_MEMBER_ID`, and `suggested_scope: user`; never infer these IDs from a display name.\n")
-	b.WriteString("- **Explicit remember direction**: if a human **or peer agent** clearly asks you to remember or persist something (including \"记住到 memory\" / \"write this down\"), treat that as a direct write request: choose the correct durable file, write it, then you may say you remembered. Platform phrase matching is only a cheap safety net for obvious cases — you must still judge softer corrections and process lessons yourself. Unless the content is clearly a personal profile/preference or explicitly limited to a project/channel, a safe operational fact or rule addressed to this agent defaults to agent-global `memory/MEMORY.md`, even though one member or peer agent supplied it. Member habits and how they want you to work with them usually go to that member's `USER.md` / `RELATIONSHIP.md`. Peer-agent collaboration defaults usually go to `notes/agents.md` / `notes/relationship-map.md`. Collective intent does not require the exact words \"all agents\": phrases such as \"you all remember this\", \"everyone note this\", Chinese \"都给我记住\" or \"你们记一下\", and equivalent wording mean every agent addressed by the current message should write its own local memory. For a non-directed group message, Multica already persists a separate inbox delivery for each eligible channel agent, including offline runtimes; do not create a workspace/shared candidate merely to redeliver the same instruction. Create a governed workspace/shared candidate only when the speaker explicitly includes agents beyond the current message recipients (for example all workspace agents, agents outside the channel, or future agents), or when the content itself is explicitly canonical workspace/team knowledge. Never widen secrets, sensitive personal data, a clearly member-only preference, or a channel-scoped instruction merely because the wording is collective. If the requested destination would violate safety, privacy, instruction precedence, or the isolated root boundary, do not write it there; explain the constraint and use a safe agent-local alternative only when appropriate.\n\n")
+	b.WriteString("- **Durability bar**: record supported preferences, ownership, handoffs, corrections, reusable fixes, and standing process rules when they are likely to matter in a future run. Skip greetings, acknowledgements, jokes, raw transcripts, transient logs, guesses, and secrets. Prefer updating an existing entry over duplicating it.\n")
+	b.WriteString("- **Claiming memory**: say that you remembered something only after the appropriate durable file write succeeds. Daily-only notes do not count for a standing rule. Human and peer-agent durable instructions use the same bar.\n")
+	b.WriteString("- **Problem closeout**: after a meaningful bug, investigation, or outage, save reusable cause, fix, and commands under the bound project path; use agent-wide `memory/MEMORY.md` or `notes/` only when the lesson genuinely applies across projects.\n")
+	b.WriteString("- **Current state**: project blockers belong in `projects/<project-id>/STATE.md`; only cross-project state belongs in `memory/STATE.md`. Channel files contain non-secret purpose, language, routing, and collaboration defaults, not transcripts or private user facts.\n")
+	b.WriteString("- **Collective requests**: each addressed agent writes its own local memory. Create governed shared candidates under `sync_queue/` only when the speaker explicitly includes agents beyond the current recipients or identifies canonical workspace-wide knowledge.\n\n")
 	b.WriteString("Live instructions and the current task remain authoritative. If memory conflicts with them, follow the live source and put the conflict in `memory/REVIEW.md`; never silently rewrite instructions or use memory to override them.\n\n")
 }
 
@@ -1154,11 +935,11 @@ func renderStandaloneChatRuntimeBrief(b *strings.Builder, provider string, ctx T
 		b.WriteString("This run has no `ChannelID`. A visible final response is required through final assistant output, which the current session delivers automatically. Do not turn it into a separate DM or channel send.\n")
 		b.WriteString("Normal answer → ordinary final text · sticker-only → exact envelope below. No pre-tool acknowledgment; live activity is visible. User waiting → response required.\n\n")
 	}
-	b.WriteString("No `ChannelID` target: final assistant output is delivered to the current session. Do not run `multica message send` or `multica message react` for this reply, search for a target, or invent one. Those commands require an explicit channel/DM target and are only for a separate destination the user requests. Issue writes remain claim-first and only when requested.\n\n")
+	b.WriteString("No `ChannelID` target: final assistant output is delivered to the current session. Do not run `multica message send` for this reply, search for a target, or invent one. `multica message react` is target-free but only changes a visible canonical Message identified by `--message-id`; it is not a substitute for this reply. Issue writes remain claim-first and only when requested.\n\n")
 	b.WriteString("Context boundaries:\n")
 	b.WriteString("- Injected context belongs to this targetless session. Do not infer a backing DM or channel.\n")
 	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")
-	b.WriteString("- Load broader chat history, issue timelines, repositories, attachments, complete `SKILL.md` files, memories, or web pages only when relevant to the user's request.\n\n")
+	b.WriteString("- Load broader chat history, issue timelines, project metadata, attachments, complete `SKILL.md` files, memories, or web pages only when relevant to the user's request.\n\n")
 
 	renderRuntimeSectionHeading(b, "Available Commands")
 	b.WriteString("Current reply needs no delivery command. Commands below are for platform work or a separate destination the user explicitly requests. Do not inspect send/react help or enumerate targets for this reply. Use help only for unfamiliar, low-frequency, or destructive flags missing here.\n\n")
@@ -1168,11 +949,11 @@ func renderStandaloneChatRuntimeBrief(b *strings.Builder, provider string, ctx T
 	b.WriteString("- Separate-destination chat output: only when the user explicitly asks you to contact a different channel, DM, or thread, use `multica message send --target <target>` with an explicit target (`#channel`, `#channel:<threadId>`, `dm:@handle`, or `dm:@handle:<threadId>`).\n")
 	b.WriteString("- Proactive human DM: use `multica message send --target dm:@<human-handle> --message-stdin`. The human handle is always explicit: there is no recipient fallback. Unknown or agent handles are rejected; to reach another agent, post in a group and @-mention it. Treat a DM as sent only after the command exits 0 and its JSON response contains `message.id`; a freshness `held` result exits non-zero and is not a sent message.\n")
 	b.WriteString("- Freshness holds: if `multica message send` returns `state`/`outcome` = `held` (CLI also exits non-zero) or text saying \"Message held by freshness check\", the platform saved the attempted message as an **unsent draft** because newer chat context arrived while you were composing. This is not delivery and terminates the current send attempt. Do **not** automatically retry it, execute a returned command, or let a recovery/retry path send it. The agent reviews the bounded `heldMessages` and `contextWindow`, then ends this send attempt. If a reply is still needed, compose and send a new response normally; the held draft is never retried or sent later. Do not claim you replied unless a send exits 0 with `message.id`.\n")
-	b.WriteString("- Chat reactions/history: use `multica message react --message-id <id> --emoji \"...\"`; use `multica message read [--target ...] [--limit N] --output json` or `multica message search \"query\" [--target ...] --output json` when more bounded chat context is needed.\n")
+	b.WriteString("- Chat reactions/history: use `multica message react --message-id <id> --emoji \"...\" [--remove]`; use `multica message read [--target ...] [--limit N] --output json`, `multica message search \"query\" [--target ...] --output json`, or `multica message resolve <message-id>` when more bounded chat context is needed.\n")
 	b.WriteString("- Reminders: schedule an anchored durable self-wake with `multica reminder schedule --title \"...\" (--delay-seconds N | --fire-at ISO | --repeat RULE) --message-id <id>`; always pass the explicit current message/thread anchor because Reminder does not infer one from task text. Repeat rules are `every:Nm|Nh|Nd`, `daily@HH:MM`, or `weekly:days@HH:MM`. Use all six operations `reminder schedule|list|snooze|update|cancel|log`; the server locks calendar timezone at schedule time. Use a reminder when this run cannot close the work now because it depends on a future time or external state, such as CI or deployment completion, a human reply, a daemon reconnect, a scheduled recheck, or a periodic report. Do not create one when the work can finish in the current run or the wait is likely to finish within about one minute; in that short case, briefly poll instead. The reminder must stay anchored to the current message or thread and owned by this agent. Prefer reminders over sleep or runtime cron.\n")
 	b.WriteString("- Issues/comments: `multica issue list|get|search|comment ...`; use `issue list --mine --output json` for assigned issues. Existing-issue writes require claim/ownership, must remain visible through message/system events, and must not self-approve `in_review -> done`.\n")
 	b.WriteString("- Issue metadata: `multica issue metadata list|set|delete ...` only for a durable high-signal issue fact; load exact flags when needed.\n")
-	b.WriteString("- Projects/repos: inspect project resources and use `multica repo checkout <url> [--ref <branch-or-sha>]` only when code access is relevant.\n")
+	b.WriteString("- Projects: inspect project details only when the request needs them.\n")
 	b.WriteString("- Attachments: `multica attachment view <id> --output <path>` for downloads; `multica attachment upload --path <file>` then pass `--attachment-id` when sending or creating. Chat→issue: bind every reference image on the MAIN issue (`issue create --attachment-id` and/or description embeds); do not use an \"附件\" sub-issue as the only place for screenshots.\n")
 	b.WriteString("- Workspace/channel: list or inspect only when the request needs those resources; use `channel mute|unmute` or `thread unfollow --target \"#channel:<threadId>\"` / `thread unfollow --target \"dm:@handle:<threadId>\"` only under the explicit thread-attention boundary pinned above.\n\n")
 	b.WriteString("Do not run issue commands just because you are in chat. Use them only when the user asks about an issue/task/project/repo or the answer needs that platform data.\n\n")
@@ -1203,7 +984,7 @@ func renderChannelChatRuntimeBrief(b *strings.Builder, provider string, ctx Task
 	b.WriteString("Context boundaries:\n")
 	b.WriteString("- Treat the injected conversation context as scoped to the current DM, channel, or thread surface. Do not use or infer other DMs, channels, issues, or threads unless the user explicitly references them and the CLI permits access.\n")
 	b.WriteString("- For thread-triggered runs, treat the thread root and recent replies as the natural boundary; do not load the entire parent channel/DM history by default.\n")
-	b.WriteString("- Load broader chat history, issue timelines, repositories, attachments, complete `SKILL.md` files, memories, or web pages only when relevant to the user's request.\n\n")
+	b.WriteString("- Load broader chat history, issue timelines, project metadata, attachments, complete `SKILL.md` files, memories, or web pages only when relevant to the user's request.\n\n")
 
 	renderRuntimeSectionHeading(b, "Available Commands")
 	b.WriteString("Common chat command forms are listed here so you can use them directly. Do NOT run `multica message send --help`, `multica message react --help`, or `multica sticker list` for ordinary replies, reactions, or common stickers. Use `multica --help`, `multica <command> --help`, or subcommand help only for unfamiliar, low-frequency, or destructive operations whose flags are not listed here. Prefer `--output json` when reading data.\n\n")
@@ -1215,11 +996,11 @@ func renderChannelChatRuntimeBrief(b *strings.Builder, provider string, ctx Task
 	b.WriteString("- Proactive human DM: use `multica message send --target dm:@<human-handle> --message-stdin`. The human handle is always explicit: there is no recipient fallback. Unknown or agent handles are rejected; to reach another agent, post in a group and @-mention it. Treat a DM as sent only after the command exits 0 and its JSON response contains `message.id`; a freshness `held` result exits non-zero and is not a sent message.\n")
 	b.WriteString("- Common sticker fast path: use stable ids directly without lookup — greeting `hi`, ok `ok`, received/understood `got-it`, agree `nod-yes`, praise `thumbs-up` or `impressive`, thanks `thanks`, on-it `on-it`, laughter `huaji`. Only for a rare, specific sticker, run one targeted `multica sticker search <query>`; do not list the whole sticker catalog.\n")
 	b.WriteString("- Freshness holds: if `multica message send` returns `state`/`outcome` = `held` (CLI also exits non-zero) or text saying \"Message held by freshness check\", the platform saved the attempted message as an **unsent draft** because newer chat context arrived while you were composing. This is not delivery and terminates the current send attempt. Do **not** automatically retry it, execute a returned command, or let a recovery/retry path send it. The agent reviews the bounded `heldMessages` and `contextWindow`, then ends this send attempt. If a reply is still needed, compose and send a new response normally; the held draft is never retried or sent later. Do not claim you replied unless a send exits 0 with `message.id`.\n")
-	b.WriteString("- Chat reactions/history: use `multica message react --message-id <id> --emoji \"...\"`; use `multica message read [--target ...] [--limit N] --output json` or `multica message search \"query\" [--target ...] --output json` when more bounded chat context is needed.\n")
+	b.WriteString("- Chat reactions/history: use `multica message react --message-id <id> --emoji \"...\" [--remove]`; use `multica message read [--target ...] [--limit N] --output json`, `multica message search \"query\" [--target ...] --output json`, or `multica message resolve <message-id>` when more bounded chat context is needed.\n")
 	b.WriteString("- Reminders: schedule an anchored durable self-wake with `multica reminder schedule --title \"...\" (--delay-seconds N | --fire-at ISO | --repeat RULE) --message-id <id>`; always pass the explicit current message/thread anchor because Reminder does not infer one from task text. Repeat rules are `every:Nm|Nh|Nd`, `daily@HH:MM`, or `weekly:days@HH:MM`. Use all six operations `reminder schedule|list|snooze|update|cancel|log`; the server locks calendar timezone at schedule time. Use a reminder when this run cannot close the work now because it depends on a future time or external state, such as CI or deployment completion, a human reply, a daemon reconnect, a scheduled recheck, or a periodic report. Do not create one when the work can finish in the current run or the wait is likely to finish within about one minute; in that short case, briefly poll instead. The reminder must stay anchored to the current message or thread and owned by this agent. Prefer reminders over sleep or runtime cron.\n")
 	b.WriteString("- Issues/comments: `multica issue list|get|search|comment ...`; use `issue list --mine --output json` for assigned issues. Existing-issue writes require claim/ownership, must remain visible through message/system events, and must not self-approve `in_review -> done`.\n")
 	b.WriteString("- Issue metadata: `multica issue metadata list|set|delete ...` only for a durable high-signal issue fact; load exact flags when needed.\n")
-	b.WriteString("- Projects/repos: inspect project resources and use `multica repo checkout <url> [--ref <branch-or-sha>]` only when code access is relevant.\n")
+	b.WriteString("- Projects: inspect project details only when the request needs them.\n")
 	b.WriteString("- Attachments: `multica attachment view <id> --output <path>` for downloads; `multica attachment upload --path <file>` then pass `--attachment-id` when sending or creating. Chat→issue: bind every reference image on the MAIN issue (`issue create --attachment-id` and/or description embeds); do not use an \"附件\" sub-issue as the only place for screenshots.\n")
 	b.WriteString("- Workspace/channel: list or inspect only when the request needs those resources; use `channel mute|unmute` or `thread unfollow --target \"#channel:<threadId>\"` / `thread unfollow --target \"dm:@handle:<threadId>\"` only under the explicit thread-attention boundary pinned above.\n\n")
 	b.WriteString("Do not run issue commands just because you are in chat. Use them only when the user asks about an issue/task/project/repo or the answer needs that platform data.\n\n")
@@ -1241,14 +1022,13 @@ func renderChannelChatRuntimeBrief(b *strings.Builder, provider string, ctx Task
 // these lines — a future new path or shared addition only needs one call
 // site updated here, not two copies kept in sync.
 func renderChatRuntimeSharedPlatformContext(b *strings.Builder, provider string, ctx TaskContextForEnv) {
-	renderRepositoryContext(b, ctx)
 	renderProjectContext(b, ctx)
-	renderSkillIndexWithSlugs(b, provider, chatRuntimeSkills(ctx), ctx.SkillDirSlugByName, ctx.AgentSkillDir)
+	renderSkillIndexWithSlugs(b, provider, chatRuntimeSkills(ctx), ctx.SkillDirSlugByName, agentSkillDirForContext(ctx))
 
 	renderRuntimeSectionHeading(b, "Attachments")
 	b.WriteString("When a message includes attachment IDs and you need the files, use the authenticated CLI path: `multica attachment view <id> --output <path>` (or inspect `multica attachment view --help`). Do not open Multica resource URLs directly.\n\n")
 
-	renderLazyReferences(b, true, true, ctx.ProjectID != "" || len(ctx.ProjectResources) > 0, len(ctx.AgentSkills) > 0)
+	renderLazyReferences(b, true, true, len(ctx.AgentSkills) > 0)
 
 	renderRuntimeSectionHeading(b, "Important: Always Use the `multica` CLI")
 	b.WriteString("All interactions with Multica platform resources — issues, comments, attachments, images, files, and platform data — must go through the `multica` CLI. Do NOT use `curl`, `wget`, or other HTTP clients to access Multica URLs or APIs directly.\n\n")
@@ -1258,28 +1038,12 @@ func chatRuntimeSkills(ctx TaskContextForEnv) []SkillContextForEnv {
 	return ctx.AgentSkills
 }
 
-func renderRepositoryContext(b *strings.Builder, ctx TaskContextForEnv) {
-	if len(ctx.Repos) == 0 {
-		return
-	}
-	renderRuntimeSectionHeading(b, "Repositories")
-	b.WriteString("Pinned repo handles available in this workspace. Use `multica repo checkout <url>` when code access is relevant. Add `--ref <branch-or-sha>` when a task or handoff names an exact revision.\n\n")
-	for _, repo := range ctx.Repos {
-		if repo.Description != "" {
-			fmt.Fprintf(b, "- %s — %s\n", repo.URL, repo.Description)
-		} else {
-			fmt.Fprintf(b, "- %s\n", repo.URL)
-		}
-	}
-	b.WriteString("\n")
-}
-
 func renderRuntimeSectionHeading(b *strings.Builder, title string) {
 	fmt.Fprintf(b, "## %s\n\n", title)
 }
 
 func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
-	if ctx.ProjectID == "" && len(ctx.ProjectResources) == 0 {
+	if ctx.ProjectID == "" {
 		return
 	}
 	b.WriteString("## Project Context\n\n")
@@ -1297,35 +1061,28 @@ func renderProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 			fmt.Fprintf(b, "This task is associated with **%s**.\n\n", ctx.ProjectTitle)
 		}
 	}
-	if len(ctx.ProjectResources) > 0 {
-		b.WriteString("Pinned project resources (full structured payload is in `.multica/project/resources.json`):\n\n")
-		for _, r := range ctx.ProjectResources {
-			fmt.Fprintf(b, "- %s\n", formatProjectResource(r))
-		}
-		b.WriteString("\nKeep these pointers visible because they often carry default repos/branches. Open resource details only when relevant. For `github_repo` resources, use `multica repo checkout <url>` to fetch code; add `--ref <branch-or-sha>` when a task, handoff, or default branch hint names an exact revision.\n\n")
-	} else {
-		b.WriteString("This project has no resources attached yet; `.multica/project/resources.json` is still the durable project-context reference when present.\n\n")
-	}
 }
 
-func renderLazyReferences(b *strings.Builder, isChat, chatCLIAvailable, hasProject, hasSkills bool) {
+func renderLazyReferences(b *strings.Builder, isChat, chatCLIAvailable, hasSkills bool) {
 	b.WriteString("## Lazy References\n\n")
-	b.WriteString("The prompt pins high-frequency rules and lightweight indexes only. Load larger context only when it is relevant to the current request:\n\n")
+	b.WriteString("Load larger context only when it is relevant to the current request:\n\n")
 	if isChat && chatCLIAvailable {
-		b.WriteString("- Chat history: use `multica message read` or `multica message search` only when the bounded DM/channel/thread context is insufficient.\n")
-	} else if isChat {
-		b.WriteString("- Chat history: rely on the injected bounded DM/channel/thread context unless the user explicitly provides or asks for more context.\n")
-	} else {
-		b.WriteString("- Issue history: use `multica issue comment list` paging/thread flags for the timeline you need instead of assuming injected snippets are complete.\n")
+		b.WriteString("- Chat history: use `multica message read` or `multica message search` when the bounded conversation context is insufficient.\n")
+	} else if !isChat {
+		b.WriteString("- Issue history: use `multica issue comment list` when the injected issue context is insufficient.\n")
 	}
-	b.WriteString("- CLI details: inspect `multica ... --help` for low-frequency flags instead of relying on this brief as a full manual.\n")
-	if hasProject {
-		b.WriteString("- Project resources: read `.multica/project/resources.json` or `multica project resource list <project-id> --output json` when labels, local paths, or full `resource_ref` fields matter.\n")
-	}
+	b.WriteString("- CLI details: inspect `multica ... --help` when a needed flag is not already shown.\n")
 	if hasSkills {
-		b.WriteString("- Skills: open the relevant `SKILL.md` only after its name/description matches the task; do not preload every skill.\n")
+		b.WriteString("- Skills: open a relevant `SKILL.md` when its name or description matches the task.\n")
 	}
-	b.WriteString("- Attachments, repositories, memories, session logs, and web pages: fetch them on demand, not speculatively.\n\n")
+	b.WriteString("- Attachments, memories, session logs, and web pages: load them when needed.\n\n")
+}
+
+func agentSkillDirForContext(ctx TaskContextForEnv) string {
+	if strings.TrimSpace(ctx.AgentRoot) == "" {
+		return ""
+	}
+	return filepath.Join(ctx.AgentRoot, "skills")
 }
 
 func renderSkillIndex(b *strings.Builder, provider string, skills []SkillContextForEnv) {

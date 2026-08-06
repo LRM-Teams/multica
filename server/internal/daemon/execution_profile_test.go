@@ -114,23 +114,19 @@ func TestRestrictTaskForExecutionProfileRemovesFullExecutionSurfaces(t *testing.
 		McpConfig:  []byte(`{"mcpServers":{"danger":{}}}`),
 	}
 	task := Task{
-		Agent:                   originalAgent,
-		Repos:                   []RepoData{{URL: "https://example.test/repo"}},
-		ProjectResources:        []ProjectResourceData{{ID: "resource-1"}},
-		ChatMessageAttachments:  []ChatAttachmentMeta{{ID: "attachment-1"}},
-		PriorSessionID:          "session-1",
-		PriorWorkDir:            "/repo",
-		WorkspaceContext:        "workspace context",
-		ProvisionManagedWorkdir: true,
-		ManagedWorkdirRelPath:   "managed/repo",
-		ArealProxy:              &ArealProxy{APIKey: "proxy-key"},
-		ChatContextSummary:      strings.Join([]string{"m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10"}, "\n"),
-		ChatMessage:             strings.Repeat("问", restrictedMessageBytes),
+		Agent:                  originalAgent,
+		ChatMessageAttachments: []ChatAttachmentMeta{{ID: "attachment-1"}},
+		PriorSessionID:         "session-1",
+		PriorWorkDir:           "/repo",
+		WorkspaceContext:       "workspace context",
+		ArealProxy:             &ArealProxy{APIKey: "proxy-key"},
+		ChatContextSummary:     strings.Join([]string{"m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10"}, "\n"),
+		ChatMessage:            strings.Repeat("问", restrictedMessageBytes),
 	}
 
 	got := restrictTaskForExecutionProfile(task, executionProfileProtocolTurn)
-	if len(got.Repos) != 0 || len(got.ProjectResources) != 0 || len(got.ChatMessageAttachments) != 0 {
-		t.Fatalf("restricted task retained repository/resource/attachment surfaces: %#v", got)
+	if len(got.ChatMessageAttachments) != 0 {
+		t.Fatalf("restricted task retained attachment surfaces: %#v", got)
 	}
 	if got.PriorSessionID != "" || got.PriorWorkDir != "" {
 		t.Fatalf("restricted task retained persistent session: %#v", got)
@@ -138,7 +134,7 @@ func TestRestrictTaskForExecutionProfileRemovesFullExecutionSurfaces(t *testing.
 	if got.WorkspaceContext != "" {
 		t.Fatalf("restricted task retained workspace context: %q", got.WorkspaceContext)
 	}
-	if got.ProvisionManagedWorkdir || got.ManagedWorkdirRelPath != "" || got.ArealProxy != nil {
+	if got.ArealProxy != nil {
 		t.Fatalf("restricted task retained execution overrides: %#v", got)
 	}
 	if got.Agent == originalAgent {

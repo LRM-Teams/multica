@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { createRef, type ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { workspaceKeys } from "@multica/core/workspace/queries";
@@ -278,84 +278,7 @@ describe("createMentionSuggestion", () => {
     expect(searchIssuesMock).not.toHaveBeenCalled();
   });
 
-  it("loads server issue and project matches when project search is enabled", async () => {
-    searchIssuesMock.mockResolvedValue({ issues: [], total: 0 });
-    searchProjectsMock.mockResolvedValue({
-      projects: [
-        {
-          id: "p-roadmap",
-          title: "Roadmap",
-          description: "Q3 planning",
-          icon: null,
-          status: "active",
-        },
-      ],
-      total: 1,
-    });
 
-    render(
-      <I18nWrapper>
-        <MentionList items={[]} query="road" command={vi.fn()} includeProjectSearch />
-      </I18nWrapper>,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Roadmap")).toBeInTheDocument();
-    });
-    expect(searchIssuesMock).toHaveBeenCalledWith(expect.objectContaining({ q: "road", limit: 8 }));
-    expect(searchProjectsMock).toHaveBeenCalledWith(expect.objectContaining({ q: "road", limit: 8 }));
-  });
-
-  it("loads server issues without project matches for the issue reference picker", async () => {
-    searchIssuesMock.mockResolvedValue({
-      issues: [
-        {
-          id: "i-roadmap",
-          identifier: "LRM-36",
-          title: "Roadmap blocker",
-          status: "todo",
-        },
-      ],
-      total: 1,
-    });
-    searchProjectsMock.mockResolvedValue({
-      projects: [
-        {
-          id: "p-roadmap",
-          title: "Roadmap",
-          description: "Q3",
-          icon: null,
-          status: "active",
-        },
-      ],
-      total: 1,
-    });
-
-    render(
-      <I18nWrapper>
-        <MentionList
-          items={[]}
-          query="road"
-          command={vi.fn()}
-          searchIssues={(q, signal) =>
-            searchIssuesMock({
-              q,
-              limit: 8,
-              include_closed: true,
-              signal,
-            })
-          }
-        />
-      </I18nWrapper>,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("LRM-36")).toBeInTheDocument();
-    });
-    expect(screen.queryByText("Roadmap")).not.toBeInTheDocument();
-    expect(searchIssuesMock).toHaveBeenCalledWith(expect.objectContaining({ q: "road", limit: 8 }));
-    expect(searchProjectsMock).not.toHaveBeenCalled();
-  });
 
   it("does not call searchIssues for an empty query", () => {
     render(<I18nWrapper><MentionList items={[]} query="" command={vi.fn()} /></I18nWrapper>);

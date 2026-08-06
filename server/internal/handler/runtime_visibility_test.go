@@ -117,6 +117,16 @@ func TestCreateAgent_AllowsAnyWorkspaceRuntime(t *testing.T) {
 	}
 
 	runtimeID, _, plainMemberID := runtimeVisibilityRetirementFixture(t)
+	// LRM-2343: agent creation is gated behind the unified `manageAgents`
+	// capability (workspace owner/admin). Promote the actor to owner so the
+	// test keeps exercising the original runtime-visibility intent: creating an
+	// agent on a teammate runtime is never blocked by the retired `visibility`
+	// column. A plain member is covered by TestCreateAgent_RequiresManageAgents.
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE member SET role = 'owner' WHERE workspace_id = $1 AND user_id = $2`,
+		testWorkspaceID, plainMemberID); err != nil {
+		t.Fatalf("promote create actor to owner: %v", err)
+	}
 	name := "visibility-retired-" + uuid.NewString()
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM agent WHERE workspace_id = $1 AND name = $2`, testWorkspaceID, name)

@@ -22,6 +22,10 @@ interface QuickEmojiPickerProps {
   emojis?: string[];
   showMore?: boolean;
   label?: ReactNode;
+  /** Caller-provided text for the "show full gallery" toggle (no business i18n in ui). */
+  moreLabel?: ReactNode;
+  /** Caller-provided text shown while the lazy full picker loads. */
+  loadingLabel?: ReactNode;
 }
 
 function QuickEmojiPicker({
@@ -35,6 +39,8 @@ function QuickEmojiPicker({
   emojis = QUICK_EMOJIS,
   showMore = true,
   label,
+  moreLabel = "More emojis",
+  loadingLabel = "Loading…",
 }: QuickEmojiPickerProps) {
   const [open, setOpen] = useState(false);
   const [showFull, setShowFull] = useState(false);
@@ -70,7 +76,13 @@ function QuickEmojiPicker({
       />
       <PopoverContent align={align} side={side} sideOffset={sideOffset} className={cn("w-auto p-0", contentClassName)}>
         {showFull ? (
-          <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading...</div>}>
+          <Suspense
+            fallback={
+              <output className="p-4 text-sm text-muted-foreground">
+                {loadingLabel}
+              </output>
+            }
+          >
             <EmojiPicker onSelect={handleSelect} />
           </Suspense>
         ) : (
@@ -80,6 +92,7 @@ function QuickEmojiPicker({
                 <button
                   key={emoji}
                   type="button"
+                  aria-label={emoji}
                   onClick={() => handleSelect(emoji)}
                   className="h-8 w-8 flex items-center justify-center rounded hover:bg-accent text-base transition-colors"
                 >
@@ -93,7 +106,7 @@ function QuickEmojiPicker({
                 onClick={() => setShowFull(true)}
                 className="mt-1.5 w-full text-xs text-muted-foreground hover:text-foreground text-center py-1 rounded hover:bg-accent transition-colors"
               >
-                More emojis...
+                {moreLabel}
               </button>
             )}
           </div>

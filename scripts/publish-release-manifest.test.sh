@@ -33,13 +33,13 @@ CCCC3333  multica-cli-0.3.81-darwin-arm64.tar.gz
 dddd4444  multica_linux_amd64.tar.gz
 EOF
 
-out="$(bash "$SCRIPT" v0.3.81 0.3.81 https://cdn.leagent.me/computer/v0.3.81 "$checksums" "$archive_dir")"
+out="$(bash "$SCRIPT" v0.3.81 0.3.81 https://cdn.leagent.me/computer/0.3.81 "$checksums" "$archive_dir")"
 
 echo "$out" | jq -e '.tag == "v0.3.81"' >/dev/null || fail "tag mismatch: $out"
 echo "$out" | jq -e '.version == "0.3.81"' >/dev/null || fail "version mismatch: $out"
 echo "$out" | jq -e '.platforms["linux-amd64"].sha256 == "aaaa1111"' >/dev/null ||
   fail "linux-amd64 sha256 mismatch: $out"
-echo "$out" | jq -e '.platforms["linux-amd64"].url == "https://cdn.leagent.me/computer/v0.3.81/multica-cli-0.3.81-linux-amd64.tar.gz"' >/dev/null ||
+echo "$out" | jq -e '.platforms["linux-amd64"].url == "https://cdn.leagent.me/computer/0.3.81/multica-cli-0.3.81-linux-amd64.tar.gz"' >/dev/null ||
   fail "linux-amd64 url mismatch: $out"
 echo "$out" | jq -e '.platforms["darwin-arm64"].sha256 == "cccc3333"' >/dev/null ||
   fail "darwin-arm64 sha256 must be lowercased: $out"

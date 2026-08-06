@@ -4,6 +4,7 @@ import type { Agent, Skill } from "../types";
 import { useCurrentMember } from "./use-current-member";
 import {
   canAssignAgentToIssue,
+  canChangeAgentWorkspaceRole,
   canDeleteSkill,
   canEditAgent,
   canEditSkill,
@@ -35,16 +36,23 @@ export function useAgentPermissions(
 ): {
   canEdit: Decision;
   canAssign: Decision;
+  canChangeRole: Decision;
   canViewSensitiveTabs: Decision;
 } {
   const { userId, role } = useCurrentMember(wsId);
   const ctx = { userId, role };
   if (agent === null) {
-    return { canEdit: PENDING, canAssign: PENDING, canViewSensitiveTabs: PENDING };
+    return {
+      canEdit: PENDING,
+      canAssign: PENDING,
+      canChangeRole: PENDING,
+      canViewSensitiveTabs: PENDING,
+    };
   }
   return {
     canEdit: canEditAgent(agent, ctx),
     canAssign: canAssignAgentToIssue(agent, ctx),
+    canChangeRole: canChangeAgentWorkspaceRole(ctx),
     canViewSensitiveTabs: canViewAgentSensitiveTabs(agent, ctx),
   };
 }

@@ -34,6 +34,7 @@ import type {
   ListIssuesResponse,
   TimelineEntry,
   User,
+  Workspace,
   UpdateAgentFileContentResponse,
   SandboxNodeDockerImagesResponse,
   SandboxNodeTemplatesResponse,
@@ -49,6 +50,7 @@ import type {
   VoiceCallDuplexAudioHint,
   VoiceCallDuplexEventHint,
   WorkspaceSearchResponse,
+  RuntimeAgentWorkspacesResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
@@ -1666,6 +1668,57 @@ const RuntimeUsageSchema = z.object({
 }).loose();
 
 export const RuntimeUsageListSchema = z.array(RuntimeUsageSchema);
+
+export const WorkspaceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  description: z.string().nullable().default(null),
+  context: z.string().nullable().default(null),
+  settings: z.record(z.string(), z.unknown()).default({}),
+  issue_prefix: z.string().default(""),
+  avatar_url: z.string().nullable().default(null),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+  last_active_at: z.string().nullable().optional(),
+}).loose();
+
+export const WorkspaceListSchema = z.array(WorkspaceSchema);
+
+export const EMPTY_WORKSPACE: Workspace = {
+  id: "",
+  name: "",
+  slug: "",
+  description: null,
+  context: null,
+  settings: {},
+  issue_prefix: "",
+  avatar_url: null,
+  created_at: "",
+  updated_at: "",
+};
+
+const RuntimeAgentWorkspaceSchema = z.object({
+  dir_name: z.string(),
+  rel_path: z.string(),
+  agent_id: z.string().nullable().optional(),
+  agent_name: z.string().nullable().optional(),
+  orphan: z.boolean(),
+  size_bytes: z.number().optional(),
+}).loose();
+
+export const RuntimeAgentWorkspacesResponseSchema = z.object({
+  runtime_id: z.string(),
+  status: z.string(),
+  items: z.array(RuntimeAgentWorkspaceSchema),
+  truncated: z.boolean().optional(),
+}).loose();
+
+export const EMPTY_RUNTIME_AGENT_WORKSPACES_RESPONSE: RuntimeAgentWorkspacesResponse = {
+  runtime_id: "",
+  status: "error",
+  items: [],
+};
 
 const AgentHealthSummarySchema = z.object({
   agent_id: z.string().default(""),

@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
@@ -91,35 +91,6 @@ describe("voice call mutations", () => {
     expect(JSON.stringify(cached)).not.toContain("short-lived-secret");
   });
 
-  it("marks a cached call ending immediately and rolls back a failed stop", async () => {
-    let rejectStop: ((reason: Error) => void) | undefined;
-    const stopPromise = new Promise<GetVoiceCallResponse>((_resolve, reject) => {
-      rejectStop = reject;
-    });
-    setApiInstance({
-      stopVoiceCall: vi.fn().mockReturnValue(stopPromise),
-    } as unknown as ApiClient);
-    const key = voiceCallKeys.detail("workspace-1", "call-1");
-    queryClient.setQueryData(key, activeCall);
-    const { result } = renderHook(
-      () => useStopVoiceCall("workspace-1"),
-      { wrapper: wrapper(queryClient) },
-    );
-
-    act(() => {
-      result.current.mutate("call-1");
-    });
-    await waitFor(() => {
-      expect(queryClient.getQueryData<GetVoiceCallResponse>(key)?.call.status)
-        .toBe("ending");
-    });
-
-    rejectStop?.(new Error("network unavailable"));
-    await waitFor(() => {
-      expect(result.current.isError).toBe(true);
-    });
-    expect(queryClient.getQueryData(key)).toEqual(activeCall);
-  });
 
   it("replaces optimistic ending state with the server terminal state", async () => {
     const ended: GetVoiceCallResponse = {

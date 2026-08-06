@@ -74,8 +74,6 @@
     "repos_pill_count_other": "저장소 {{count}}개",
     "repos_heading": "이 프로젝트에 GitHub 저장소 연결",
     "repos_empty": "아직 워크스페이스 수준 저장소가 없습니다. 아래에 URL을 붙여 넣어 임시로 연결하세요.",
-    "repos_search_placeholder": "저장소 검색...",
-    "repos_search_empty": "검색 결과와 일치하는 저장소가 없습니다.",
     "repos_url_placeholder": "https://github.com/owner/repo 또는 git@github.com:owner/repo.git",
     "repos_add": "추가",
     "repos_selected": "선택됨",

@@ -52,7 +52,7 @@ func TestBarryStartupStaticContextExcludesAllTurnScopedKinds(t *testing.T) {
 		AgentInstructions:        "durable-agent-instructions",
 		FreshSessionNoticeReason: "fresh-alpha-review-sentinel",
 		PriorSessionResumed:      true,
-		UserMemoryDir:            "/private/user-alpha-review-sentinel",
+		TriggerCommentID:         "private-alpha-review-sentinel",
 		AgentMemories: []MemoryContextForEnv{{
 			Name: "memory-alpha-review-sentinel", Content: "memory-alpha-review-sentinel",
 			Scope: "user", SubjectType: "member", SubjectID: "user-alpha",
@@ -69,7 +69,7 @@ func TestBarryStartupStaticContextExcludesAllTurnScopedKinds(t *testing.T) {
 	b := a
 	b.FreshSessionNoticeReason = "fresh-beta-review-sentinel"
 	b.PriorSessionResumed = false
-	b.UserMemoryDir = "/private/user-beta-review-sentinel"
+	b.TriggerCommentID = "private-beta-review-sentinel"
 	b.AgentMemories = []MemoryContextForEnv{{
 		Name: "memory-beta-review-sentinel", Content: "memory-beta-review-sentinel",
 		Scope: "user", SubjectType: "member", SubjectID: "user-beta",

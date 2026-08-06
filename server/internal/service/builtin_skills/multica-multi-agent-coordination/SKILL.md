@@ -82,6 +82,22 @@ Write requests with a concrete output:
 Avoid acknowledgement-only messages. A participant should add evidence,
 produce a deliverable, ask one blocking question, or stay silent.
 
+### Check Pending messages at a natural breakpoint
+
+A busy runtime can receive a content-free Notice that reports Pending counts
+without carrying Message bodies. At a natural breakpoint, inspect the concrete
+Messages through the machine-local coordinator:
+
+```bash
+multica message check
+```
+
+The command has no target, cursor, or limit option. It immediately drains at
+most three Pending Messages into the current Agent turn and advances context
+coverage only for those returned Messages. If the output says more remain, run
+the same command again; otherwise `Message check complete.` is the terminal
+marker. A Notice by itself does not mean the Messages were read.
+
 ## 4. Execute the selected mode
 
 ### Sequential

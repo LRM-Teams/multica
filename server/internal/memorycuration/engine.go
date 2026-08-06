@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
 type Engine struct {
@@ -331,7 +333,50 @@ func runStageAgent(opts Options, root agentRoot, stage Stage, localFiles map[str
 		Stage: stage, WorkspaceID: root.WorkspaceID, AgentID: root.AgentID, AgentRoot: root.Root,
 		DateFrom: formatDate(opts.Since), DateTo: formatDate(opts.Until), Timezone: opts.Timezone,
 		Mode: opts.Mode, DryRun: opts.DryRun, LocalFiles: localFiles, DBEvidence: evidence, ReviewEntries: reviewEntries,
+		OversizedFiles: detectOversizedMemoryFiles(root.Root),
 	})
+}
+
+const (
+	durableMemorySoftLimit = int64(16 * 1024)
+	stateMemorySoftLimit   = int64(8 * 1024)
+	dailyMemorySoftLimit   = int64(32 * 1024)
+)
+
+func detectOversizedMemoryFiles(root string) []OversizedMemoryFile {
+	var oversized []OversizedMemoryFile
+	for _, scopeDir := range []string{"memory", "users", "projects", "channels"} {
+		scanRoot := filepath.Join(root, scopeDir)
+		_ = filepath.WalkDir(scanRoot, func(path string, entry os.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return nil
+			}
+			rel = filepath.ToSlash(rel)
+			limit := int64(0)
+			base := filepath.Base(rel)
+			switch {
+			case strings.HasPrefix(rel, "memory/daily/") && strings.HasSuffix(base, ".md"):
+				limit = dailyMemorySoftLimit
+			case base == "STATE.md":
+				limit = stateMemorySoftLimit
+			case base == "MEMORY.md", base == "USER.md", base == "RELATIONSHIP.md", base == "DECISIONS.md", base == "CONTEXT.md", base == "REVIEW.md":
+				limit = durableMemorySoftLimit
+			default:
+				return nil
+			}
+			info, infoErr := entry.Info()
+			if infoErr == nil && info.Size() > limit {
+				oversized = append(oversized, OversizedMemoryFile{Path: rel, SizeBytes: info.Size(), SoftLimit: limit})
+			}
+			return nil
+		})
+	}
+	sort.Slice(oversized, func(i, j int) bool { return oversized[i].Path < oversized[j].Path })
+	return oversized
 }
 
 func (e *Engine) runAgentSelfReview(root agentRoot, opts Options) (AgentRunResult, error) {
@@ -369,7 +414,7 @@ func (e *Engine) runAgentSelfReview(root agentRoot, opts Options) (AgentRunResul
 }
 
 func (e *Engine) runTeamCuration(roots []agentRoot, opts Options) (AgentRunResult, error) {
-	ar := AgentRunResult{WorkspaceID: opts.WorkspaceID, AgentID: "team", Root: filepath.Join(opts.WorkspacesRoot, opts.WorkspaceID, ".multica", "agents")}
+	ar := AgentRunResult{WorkspaceID: opts.WorkspaceID, AgentID: "team", Root: agentworkspace.AgentsDir(opts.WorkspacesRoot, opts.WorkspaceID)}
 	if opts.StageAgent == nil {
 		return ar, fmt.Errorf("team curation requires a selected curator runtime and agent")
 	}

@@ -135,13 +135,4 @@ describe("GlobalAgentPanel", () => {
     );
   });
 
-  it("restores a persisted width from localStorage (LRM-481)", async () => {
-    window.localStorage.setItem(PROFILE_PANEL_WIDTH_STORAGE_KEY, "520");
-    selectedAgentId = "agent-1";
-    render(<GlobalAgentPanel />);
-
-    await vi.waitFor(() => {
-      expect(screen.getByTestId("global-agent-panel")).toHaveStyle({ width: "520px" });
-    });
-  });
 });

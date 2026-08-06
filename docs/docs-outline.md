@@ -789,7 +789,6 @@ multica issue assign <issue-id> --agent <agent-slug>
     - **Agent**：`agent list / get / create / update / archive / restore / tasks` + 嵌套 `agent skills`
     - **Skill**：`skill list / get / create / update / delete / import` + 嵌套 `skill files`
     - **Autopilot**（命令名保留，文档里叫 Routines）：`autopilot list / get / create / update / delete / runs` + 嵌套 `autopilot trigger`
-    - **Repo**：`repo checkout`
     - **Daemon**：`daemon install / login / start / stop / status / logs`
     - **Runtime**：`runtime list / usage / activity / ping / update`
     - **Misc**：`config / version / update / attachment view / attachment upload`
@@ -876,10 +875,9 @@ multica issue assign <issue-id> --agent <agent-slug>
   - 8.9 multica agent（+skills）详细
   - 8.10 multica skill 详细
   - 8.11 multica autopilot 详细
-  - 8.12 multica repo 详细
-  - 8.13 multica daemon 详细
-  - 8.14 multica runtime 详细
-  - 8.15 multica config / version / update / attachment 详细
+  - 8.12 multica daemon 详细
+  - 8.13 multica runtime 详细
+  - 8.14 multica config / version / update / attachment 详细
 
 ---
 

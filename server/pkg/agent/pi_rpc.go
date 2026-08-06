@@ -26,6 +26,8 @@ var ErrPiRPCTurnBusy = errors.New("pi RPC turn busy")
 // shutdown so no stale native context is retained.
 type PiRPCBackend interface {
 	Backend
+	ResidentMessageInput
+	ResidentPendingNoticeInput
 	Close()
 	// Compact explicitly compacts the Pi session context with custom instructions.
 	// Returns the compaction summary and before/after token counts.
@@ -155,10 +157,16 @@ type piRPCProcess struct {
 	sessionPath   string
 	mcpConfigPath string // temp file from agent.mcp_config; removed on dispose
 
-	writeMu sync.Mutex
-	stateMu sync.Mutex
-	turn    *piRPCTurn
-	pending map[string]chan piRPCResponse // request-ID keyed control responses
+	writeMu   sync.Mutex
+	stateMu   sync.Mutex
+	turn      *piRPCTurn
+	idleInput *piRPCIdleInput
+	pending   map[string]chan piRPCResponse // request-ID keyed control responses
+}
+
+type piRPCIdleInput struct {
+	done     chan piRPCCompletion
+	turnDone chan error
 }
 
 type piRPCTurn struct {
@@ -253,6 +261,172 @@ func (b *piRPCBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		}
 	}()
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
+}
+
+// AcceptMessageBatch crosses Pi's native RPC input boundary without waiting
+// for the resulting agent turn to finish. Pi's success response means the
+// prompt was accepted or queued; later provider failures remain native runtime
+// events and do not revoke that input receipt.
+func (b *piRPCBackend) AcceptMessageBatch(ctx context.Context, messages []ResidentMessage) (ResidentMessageAcceptance, error) {
+	if len(messages) == 0 {
+		done := make(chan error)
+		close(done)
+		return ResidentMessageAcceptance{Done: done}, nil
+	}
+	if !b.running.CompareAndSwap(false, true) {
+		return ResidentMessageAcceptance{}, fmt.Errorf("%w: idle Message input overlaps an active Pi RPC turn", ErrPiRPCTurnBusy)
+	}
+	releaseAdmission := true
+	defer func() {
+		if releaseAdmission {
+			b.running.Store(false)
+		}
+	}()
+
+	p, err := b.getProcess()
+	if err != nil {
+		return ResidentMessageAcceptance{}, err
+	}
+	idleInput := &piRPCIdleInput{done: make(chan piRPCCompletion, 1), turnDone: make(chan error, 1)}
+	p.stateMu.Lock()
+	if p.turn != nil || p.idleInput != nil {
+		p.stateMu.Unlock()
+		return ResidentMessageAcceptance{}, fmt.Errorf("%w: Pi RPC native input is active", ErrPiRPCTurnBusy)
+	}
+	p.idleInput = idleInput
+	p.stateMu.Unlock()
+	clearIdleInput := func() {
+		p.stateMu.Lock()
+		if p.idleInput == idleInput {
+			p.idleInput = nil
+		}
+		p.stateMu.Unlock()
+	}
+
+	prompt, err := formatResidentMessageBatch(messages)
+	if err != nil {
+		clearIdleInput()
+		return ResidentMessageAcceptance{}, err
+	}
+	response, err := b.sendControlCommand(ctx, p, "multica-message-input", map[string]any{
+		"type": "prompt", "message": prompt,
+	})
+	if err != nil {
+		clearIdleInput()
+		b.dispose(p)
+		return ResidentMessageAcceptance{}, fmt.Errorf("Pi RPC idle Message input: %w", err)
+	}
+	if !response.Success {
+		clearIdleInput()
+		return ResidentMessageAcceptance{}, fmt.Errorf("Pi RPC idle Message input: %s", response.Error)
+	}
+
+	// Keep native turn admission closed until Pi reports agent_end. The daemon
+	// has already obtained the provider-native input receipt and may persist its
+	// Context Boundary; a concurrent canonical turn must not overlap the Pi turn.
+	releaseAdmission = false
+	go b.finishIdleMessageInput(p, idleInput)
+	return ResidentMessageAcceptance{Done: idleInput.turnDone}, nil
+}
+
+// AcceptPendingNotice queues a content-free steering input while Pi is busy.
+// Pi delivers a steer after the current tool call reaches its safe boundary and
+// before the next model call. The native success response is the Notice write
+// receipt; it never represents concrete Message context coverage.
+func (b *piRPCBackend) AcceptPendingNotice(ctx context.Context, notice ResidentPendingNotice) error {
+	if !b.running.Load() {
+		return errors.New("Pi RPC Pending Notice requires an active turn")
+	}
+	p, err := b.getProcess()
+	if err != nil {
+		return err
+	}
+	prompt, err := formatResidentPendingNotice(notice)
+	if err != nil {
+		return err
+	}
+	response, err := b.sendControlCommand(ctx, p, "multica-message-notice", map[string]any{
+		"type": "prompt", "message": prompt, "streamingBehavior": "steer",
+	})
+	if err != nil {
+		return fmt.Errorf("Pi RPC Pending Notice: %w", err)
+	}
+	if !response.Success {
+		return fmt.Errorf("Pi RPC Pending Notice: %s", response.Error)
+	}
+	return nil
+}
+
+func formatResidentPendingNotice(notice ResidentPendingNotice) (string, error) {
+	if notice.TotalPending <= 0 || len(notice.ChangedTargets) == 0 {
+		return "", errors.New("Pending Notice requires a positive total and changed targets")
+	}
+	count := 0
+	seen := make(map[string]struct{}, len(notice.ChangedTargets))
+	for _, target := range notice.ChangedTargets {
+		if strings.TrimSpace(target.Target) == "" || target.PendingCount <= 0 {
+			return "", errors.New("Pending Notice target and positive count are required")
+		}
+		if _, duplicate := seen[target.Target]; duplicate {
+			return "", errors.New("Pending Notice targets must be unique")
+		}
+		seen[target.Target] = struct{}{}
+		count += target.PendingCount
+	}
+	if count > notice.TotalPending {
+		return "", errors.New("Pending Notice target counts exceed total")
+	}
+	raw, err := json.Marshal(notice)
+	if err != nil {
+		return "", fmt.Errorf("marshal Pending Notice: %w", err)
+	}
+	return "Content-free Message Notice. Concrete bodies remain Pending. Run `multica message check` at a natural breakpoint to inspect them:\n" + string(raw), nil
+}
+
+func (b *piRPCBackend) finishIdleMessageInput(p *piRPCProcess, idleInput *piRPCIdleInput) {
+	completion := <-idleInput.done
+	p.stateMu.Lock()
+	if p.idleInput == idleInput {
+		p.idleInput = nil
+	}
+	p.stateMu.Unlock()
+	var turnErr error
+	if completion.err != "" {
+		b.dispose(p)
+		turnErr = errors.New(completion.err)
+	}
+	// Dispose a failed native turn before reopening admission so a new Execute
+	// cannot obtain the process while it is being torn down.
+	b.running.Store(false)
+	idleInput.turnDone <- turnErr
+	close(idleInput.turnDone)
+}
+
+func formatResidentMessageBatch(messages []ResidentMessage) (string, error) {
+	type residentMessageInput struct {
+		ID      string          `json:"id"`
+		Target  string          `json:"target"`
+		Seq     int64           `json:"seq"`
+		Content string          `json:"content"`
+		Parts   json.RawMessage `json:"parts,omitempty"`
+	}
+	payload := make([]residentMessageInput, 0, len(messages))
+	for _, message := range messages {
+		if strings.TrimSpace(message.ID) == "" || strings.TrimSpace(message.Target) == "" || message.Seq <= 0 {
+			return "", errors.New("resident Message id, target, and positive seq are required")
+		}
+		if len(message.PartsJSON) > 0 && !json.Valid(message.PartsJSON) {
+			return "", errors.New("resident Message parts are invalid JSON")
+		}
+		payload = append(payload, residentMessageInput{
+			ID: message.ID, Target: message.Target, Seq: message.Seq, Content: message.Content, Parts: message.PartsJSON,
+		})
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal resident Message batch: %w", err)
+	}
+	return "Canonical Messages received while the runtime was idle. Treat these as Message context in target sequence order:\n" + string(raw), nil
 }
 
 // RuntimeAlive implements ResidentRuntimeLivenessChecker, letting a caller
@@ -474,14 +648,25 @@ func (b *piRPCBackend) readEvents(p *piRPCProcess, stdout io.Reader) {
 		}
 		p.stateMu.Lock()
 		turn := p.turn
+		idleInput := p.idleInput
 		p.stateMu.Unlock()
-		if turn == nil {
+		if turn == nil && idleInput == nil {
 			continue
 		}
-		piRPCDispatchEvent(event, turn)
+		if turn != nil {
+			piRPCDispatchEvent(event, turn)
+			continue
+		}
+		switch event.Type {
+		case "error":
+			trySendPiRPCCompletion(idleInput.done, piRPCCompletion{err: decodePiString(event.Message)})
+		case "agent_end":
+			trySendPiRPCCompletion(idleInput.done, piRPCCompletion{messages: event.Messages})
+		}
 	}
 	p.stateMu.Lock()
 	turn := p.turn
+	idleInput := p.idleInput
 	p.stateMu.Unlock()
 	if turn != nil {
 		exitErr := "Pi RPC process exited before agent_end"
@@ -489,6 +674,13 @@ func (b *piRPCBackend) readEvents(p *piRPCProcess, stdout io.Reader) {
 			exitErr = AgentForceKilledMarker + ": " + exitErr
 		}
 		trySendPiRPCCompletion(turn.done, piRPCCompletion{err: exitErr})
+	}
+	if idleInput != nil {
+		exitErr := "Pi RPC process exited before idle Message input completed"
+		if b.forceKilled.CompareAndSwap(true, false) {
+			exitErr = AgentForceKilledMarker + ": " + exitErr
+		}
+		trySendPiRPCCompletion(idleInput.done, piRPCCompletion{err: exitErr})
 	}
 }
 

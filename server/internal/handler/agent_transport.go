@@ -9,9 +9,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/messageparts"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -23,6 +27,7 @@ const (
 	agentTransportActionReact          = "message_react"
 	agentTransportActionRead           = "message_read"
 	agentTransportActionSearch         = "message_search"
+	agentTransportActionResolve        = "message_resolve"
 	agentTransportActionThreadUnfollow = "thread_unfollow"
 
 	agentTransportFreshnessHoldLimit = 5
@@ -80,33 +85,47 @@ type AgentTransportSendHeldResponse struct {
 }
 
 type AgentTransportReactRequest struct {
-	Target          string `json:"target"`
-	MessageID       string `json:"message_id"`
-	Emoji           string `json:"emoji"`
-	ClientMessageID string `json:"client_message_id"`
+	MessageID string `json:"message_id"`
+	Emoji     string `json:"emoji"`
+	Remove    bool   `json:"remove"`
 }
 
 type AgentTransportReactResponse struct {
-	Action      string                  `json:"action"`
-	Target      string                  `json:"target"`
-	Reaction    ChannelReactionResponse `json:"reaction"`
-	TransportID string                  `json:"transport_id"`
+	Action    string                   `json:"action"`
+	ChannelID string                   `json:"channel_id"`
+	MessageID string                   `json:"message_id"`
+	Emoji     string                   `json:"emoji"`
+	Added     bool                     `json:"added"`
+	Removed   bool                     `json:"removed"`
+	Reaction  *ChannelReactionResponse `json:"reaction,omitempty"`
 }
 
 type AgentTransportReadRequest struct {
 	Target string `json:"target"`
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
+	Around string `json:"around,omitempty"`
 	Limit  int    `json:"limit"`
 }
 
 type AgentTransportReadResponse struct {
-	Action      string                   `json:"action"`
-	Target      string                   `json:"target"`
-	ChannelID   string                   `json:"channel_id"`
-	Messages    []ChannelMessageResponse `json:"messages"`
-	Limit       int                      `json:"limit"`
-	SeenUpToSeq int64                    `json:"seenUpToSeq"`
-	TransportID string                   `json:"transport_id"`
+	Action        string                   `json:"action"`
+	Target        string                   `json:"target"`
+	ChannelID     string                   `json:"channel_id"`
+	ContextTarget string                   `json:"context_target"`
+	Messages      []ChannelMessageResponse `json:"messages"`
+	Limit         int                      `json:"limit"`
+	SeenUpToSeq   int64                    `json:"seenUpToSeq"`
+	TransportID   string                   `json:"transport_id"`
 }
+
+var (
+	errAgentTransportReadAnchorInvalid   = errors.New("invalid read anchor")
+	errAgentTransportReadAnchorNotFound  = errors.New("read anchor not found")
+	errAgentTransportReadAnchorAmbiguous = errors.New("read anchor is ambiguous")
+	decimalAgentMessageSequencePattern   = regexp.MustCompile(`^[0-9]+$`)
+	shortAgentMessageIDPattern           = regexp.MustCompile(`^[0-9a-fA-F]{8,35}$`)
+)
 
 type agentTransportDraft struct {
 	ID              pgtype.UUID
@@ -178,6 +197,21 @@ type AgentTransportSearchResponse struct {
 	Total       int                          `json:"total"`
 	Results     []ChannelMessageSearchResult `json:"results"`
 	TransportID string                       `json:"transport_id"`
+}
+
+type AgentTransportResolveRequest struct {
+	MessageID string `json:"message_id"`
+}
+
+type AgentTransportResolveTarget struct {
+	ChannelID           string  `json:"channel_id"`
+	ThreadRootMessageID *string `json:"thread_root_message_id,omitempty"`
+}
+
+type AgentTransportResolveResponse struct {
+	Action  string                      `json:"action"`
+	Target  AgentTransportResolveTarget `json:"target"`
+	Message ChannelMessageResponse      `json:"message"`
 }
 
 type AgentTransportThreadUnfollowRequest struct {
@@ -546,87 +580,46 @@ func (h *Handler) AgentTransportReactMessage(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	if err := h.requireAgentTransportPublicResponseMode(r.Context(), source); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
-		return
-	}
 	var req AgentTransportReactRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	emoji := strings.TrimSpace(req.Emoji)
-	if emoji == "" {
-		writeError(w, http.StatusBadRequest, "emoji is required")
-		return
-	}
-	clientMessageID := strings.TrimSpace(req.ClientMessageID)
-	if clientMessageID == "" {
-		writeError(w, http.StatusBadRequest, "client_message_id is required")
-		return
-	}
-	if len([]rune(clientMessageID)) > channelClientMessageIDMaxLen {
-		writeError(w, http.StatusBadRequest, "client_message_id is too long")
-		return
-	}
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
+	emoji, err := normalizeAgentTransportReactionEmoji(req.Emoji)
 	if err != nil {
-		if errors.Is(err, errReminderSendOutsideAnchor) {
-			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
-			return
-		}
-		writeError(w, http.StatusBadRequest, "invalid target")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	messageID := pgtype.UUID{}
-	if raw := strings.TrimSpace(req.MessageID); raw != "" && !strings.EqualFold(raw, "CURRENT_MESSAGE") {
-		parsed, ok := parseUUIDOrBadRequest(w, raw, "message_id")
-		if !ok {
+	message, err := h.resolveAgentTransportMessage(r.Context(), source, req.MessageID)
+	if err != nil {
+		h.writeAgentTransportMessageResolveError(w, source, err, "failed to react to message")
+		return
+	}
+	response := AgentTransportReactResponse{
+		Action:    agentTransportActionReact,
+		ChannelID: message.ChannelID,
+		MessageID: message.ID,
+		Emoji:     emoji,
+	}
+	if req.Remove {
+		removed, err := h.removeAgentTransportCanonicalReaction(r.Context(), source, message, emoji)
+		if err != nil {
+			h.writeAgentTransportMessageResolveError(w, source, err, "failed to react to message")
 			return
 		}
-		messageID = parsed
+		response.Removed = removed
 	} else {
-		messageID = h.channelReactionTargetFromPrompt(r.Context(), source.task.ChatSessionID, source.task.ID)
-		if !messageID.Valid {
-			messageID = target.threadRootMessageID
+		reaction, added, err := h.addAgentTransportCanonicalReaction(r.Context(), source, message, emoji)
+		if err != nil {
+			h.writeAgentTransportMessageResolveError(w, source, err, "failed to react to message")
+			return
 		}
+		response.Added = added
+		response.Reaction = &reaction
 	}
-	if !messageID.Valid {
-		writeError(w, http.StatusBadRequest, "message_id is required")
-		return
-	}
-	if err := h.requireAgentTransportVisibilityGrantActive(r.Context(), source); err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
-		return
-	}
-	reaction, transportID, err := h.createAgentTransportReaction(r.Context(), source, target, messageID, emoji, clientMessageID)
-	if err != nil {
-		slog.Warn("agent transport react failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to react to message")
-		return
-	}
-	if reaction.ID == "" {
-		writeError(w, http.StatusNotFound, "message not found")
-		return
-	}
-	writeJSON(w, http.StatusCreated, AgentTransportReactResponse{
-		Action:      agentTransportActionReact,
-		Target:      target.raw,
-		Reaction:    reaction,
-		TransportID: transportID,
-	})
-
-	// Record a reaction activity event (covers greeting/ack reaction-only replies).
-	h.recordAgentActivityEvent(r.Context(), h.DB,
-		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
-		activityKindCustom, "reaction_sent", "info",
-		"channel", parseUUID(target.channel.ID), target.raw,
-		"", "Reacted "+emoji+" to a message",
-		map[string]any{
-			"emoji":      emoji,
-			"message_id": uuidToString(messageID),
-		},
-	)
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Request) {
@@ -639,6 +632,11 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	anchorMode, anchorRaw, err := req.anchor()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	limit := clampAgentTransportLimit(req.Limit, 20)
 	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
 	if err != nil {
@@ -649,15 +647,31 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
-	messages := h.readAgentTransportMessages(r.Context(), target, limit)
+	messages, err := h.readAgentTransportMessages(r.Context(), target, anchorMode, anchorRaw, limit)
+	if err != nil {
+		switch {
+		case errors.Is(err, errAgentTransportReadAnchorInvalid):
+			writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, errAgentTransportReadAnchorNotFound):
+			writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, errAgentTransportReadAnchorAmbiguous):
+			writeError(w, http.StatusConflict, err.Error())
+		default:
+			slog.Warn("agent transport read failed", "task_id", uuidToString(source.task.ID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to read messages")
+		}
+		return
+	}
 	h.decorateAgentTransportMessages(r.Context(), target.channel.WorkspaceID, messages)
 	messageIDs := channelMessageIDs(messages)
 	seenUpToSeq := maxChannelMessageSeq(messages)
+	contextTarget := agentTransportCanonicalMessageTarget(target)
 	transportID, err := h.recordAgentTransportAudit(r.Context(), source, agentTransportActionRead, target.raw, parseUUID(target.channel.ID), pgtype.UUID{}, "", map[string]any{
 		"channel_id":      target.channel.ID,
 		"message_ids":     messageIDs,
 		"limit":           limit,
 		"seen_up_to_seq":  seenUpToSeq,
+		"context_target":  contextTarget,
 		"thread_root_id":  target.threadRootMessageID,
 		"target_snapshot": target.raw,
 	})
@@ -666,15 +680,17 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to record message read")
 		return
 	}
-	writeJSON(w, http.StatusOK, AgentTransportReadResponse{
-		Action:      agentTransportActionRead,
-		Target:      target.raw,
-		ChannelID:   target.channel.ID,
-		Messages:    messages,
-		Limit:       limit,
-		SeenUpToSeq: seenUpToSeq,
-		TransportID: transportID,
-	})
+	response := AgentTransportReadResponse{
+		Action:        agentTransportActionRead,
+		Target:        target.raw,
+		ChannelID:     target.channel.ID,
+		ContextTarget: contextTarget,
+		Messages:      messages,
+		Limit:         limit,
+		SeenUpToSeq:   seenUpToSeq,
+		TransportID:   transportID,
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // enforceAgentTransportVoiceReply preserves the delivery modality selected by
@@ -830,6 +846,233 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 		Results:     results,
 		TransportID: transportID,
 	})
+}
+
+var errAgentTransportMessageNotFound = errors.New("message not found")
+var errAgentTransportMessageAmbiguous = errors.New("message id prefix is ambiguous")
+var errAgentTransportMessageIDInvalid = errors.New("invalid message id")
+
+func (h *Handler) writeAgentTransportMessageResolveError(w http.ResponseWriter, source agentTransportSource, err error, failure string) {
+	switch {
+	case errors.Is(err, errAgentTransportMessageNotFound):
+		// The same response covers a missing Message and an inaccessible target.
+		writeError(w, http.StatusNotFound, "message not found")
+	case errors.Is(err, errAgentTransportMessageAmbiguous):
+		writeError(w, http.StatusConflict, "message id prefix is ambiguous; use more characters")
+	case errors.Is(err, errAgentTransportMessageIDInvalid):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
+		slog.Warn("agent transport canonical message lookup failed", "task_id", uuidToString(source.task.ID), "error", err)
+		writeError(w, http.StatusInternalServerError, failure)
+	}
+}
+
+func (h *Handler) AgentTransportResolveMessage(w http.ResponseWriter, r *http.Request) {
+	source, ok := h.requireAgentTransportSource(w, r)
+	if !ok {
+		return
+	}
+	var req AgentTransportResolveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	message, err := h.resolveAgentTransportMessage(r.Context(), source, req.MessageID)
+	if err != nil {
+		h.writeAgentTransportMessageResolveError(w, source, err, "failed to resolve message")
+		return
+	}
+	messages := []ChannelMessageResponse{message}
+	h.decorateAgentTransportMessages(r.Context(), message.WorkspaceID, messages)
+	message = messages[0]
+	writeJSON(w, http.StatusOK, AgentTransportResolveResponse{
+		Action: agentTransportActionResolve,
+		Target: AgentTransportResolveTarget{
+			ChannelID:           message.ChannelID,
+			ThreadRootMessageID: message.ThreadRootMessageID,
+		},
+		Message: message,
+	})
+}
+
+func (h *Handler) resolveAgentTransportMessage(ctx context.Context, source agentTransportSource, rawMessageID string) (ChannelMessageResponse, error) {
+	fullID, prefix, err := parseAgentTransportMessageID(rawMessageID)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	args := []any{source.origin.workspaceID, source.origin.agentID}
+	whereID := ""
+	if fullID != "" {
+		args = append(args, parseUUID(fullID))
+		whereID = fmt.Sprintf("m.id = $%d", len(args))
+	} else {
+		args = append(args, prefix)
+		whereID = fmt.Sprintf("replace(m.id::text, '-', '') LIKE $%d || '%%'", len(args))
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT `+channelMessageColumnList+`
+		FROM channel_message m
+		WHERE m.workspace_id = $1
+		  AND m.author_type IN ('user', 'agent')
+		  AND m.deleted_at IS NULL
+		  AND EXISTS (
+			SELECT 1
+			FROM channel_member visible
+			WHERE visible.workspace_id = m.workspace_id
+			  AND visible.channel_id = m.channel_id
+			  AND visible.member_type = 'agent'
+			  AND visible.member_id = $2
+		  )
+		  AND `+whereID+`
+		ORDER BY m.id ASC
+		LIMIT 2`, args...)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	defer rows.Close()
+	matches := make([]ChannelMessageResponse, 0, 2)
+	for rows.Next() {
+		message, err := scanChannelMessage(rows)
+		if err != nil {
+			return ChannelMessageResponse{}, err
+		}
+		matches = append(matches, message)
+	}
+	if err := rows.Err(); err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	switch len(matches) {
+	case 0:
+		return ChannelMessageResponse{}, errAgentTransportMessageNotFound
+	case 1:
+		return matches[0], nil
+	default:
+		return ChannelMessageResponse{}, errAgentTransportMessageAmbiguous
+	}
+}
+
+func parseAgentTransportMessageID(raw string) (fullID, prefix string, err error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", fmt.Errorf("%w: message id is required", errAgentTransportMessageIDInvalid)
+	}
+	if parsed, parseErr := uuid.Parse(raw); parseErr == nil {
+		return parsed.String(), "", nil
+	}
+	prefix = strings.ToLower(strings.ReplaceAll(raw, "-", ""))
+	if len(prefix) < 4 {
+		return "", "", fmt.Errorf("%w: message id must be a full UUID or at least 4 hex characters", errAgentTransportMessageIDInvalid)
+	}
+	for _, char := range prefix {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+			return "", "", fmt.Errorf("%w: message id must be a full UUID or at least 4 hex characters", errAgentTransportMessageIDInvalid)
+		}
+	}
+	return "", prefix, nil
+}
+
+func normalizeAgentTransportReactionEmoji(raw string) (string, error) {
+	emoji := strings.TrimSpace(raw)
+	switch strings.ToLower(emoji) {
+	case "+1":
+		emoji = "👍"
+	case "-1":
+		emoji = "👎"
+	}
+	// Text-style variation selectors make the same reaction look different
+	// across clients. Store the emoji-style form so add/remove share one key.
+	emoji = strings.ReplaceAll(emoji, "\ufe0e", "\ufe0f")
+	if !utf8.ValidString(emoji) || !validAgentTransportReactionEmoji(emoji) {
+		return "", errors.New("emoji must be a single valid emoji reaction")
+	}
+	return emoji, nil
+}
+
+func validAgentTransportReactionEmoji(emoji string) bool {
+	runes := []rune(emoji)
+	if len(runes) == 0 || len(runes) > 32 {
+		return false
+	}
+	if isAgentTransportKeycap(runes) {
+		return true
+	}
+
+	baseCount := 0
+	regionalCount := 0
+	afterJoiner := false
+	for _, r := range runes {
+		switch {
+		case isAgentTransportEmojiModifier(r):
+			if baseCount == 0 || afterJoiner {
+				return false
+			}
+		case r == '\ufe0f' || isAgentTransportEmojiTag(r):
+			if baseCount == 0 || afterJoiner {
+				return false
+			}
+		case r == '\u200d':
+			if baseCount == 0 || afterJoiner {
+				return false
+			}
+			afterJoiner = true
+		case isAgentTransportEmojiBase(r):
+			if baseCount > 0 && !afterJoiner {
+				if !(isAgentTransportRegionalIndicator(r) && regionalCount == 1 && baseCount == 1) {
+					return false
+				}
+			}
+			baseCount++
+			if isAgentTransportRegionalIndicator(r) {
+				regionalCount++
+			}
+			afterJoiner = false
+		default:
+			return false
+		}
+	}
+	return baseCount > 0 && !afterJoiner && (regionalCount == 0 || regionalCount == 2)
+}
+
+func isAgentTransportKeycap(runes []rune) bool {
+	if len(runes) == 2 {
+		return isAgentTransportKeycapBase(runes[0]) && runes[1] == '\u20e3'
+	}
+	return len(runes) == 3 && isAgentTransportKeycapBase(runes[0]) && runes[1] == '\ufe0f' && runes[2] == '\u20e3'
+}
+
+func isAgentTransportKeycapBase(r rune) bool {
+	return (r >= '0' && r <= '9') || r == '#' || r == '*'
+}
+
+func isAgentTransportEmojiModifier(r rune) bool {
+	return r >= 0x1f3fb && r <= 0x1f3ff
+}
+
+func isAgentTransportEmojiTag(r rune) bool {
+	return r >= 0xe0020 && r <= 0xe007f
+}
+
+func isAgentTransportRegionalIndicator(r rune) bool {
+	return r >= 0x1f1e6 && r <= 0x1f1ff
+}
+
+func isAgentTransportEmojiBase(r rune) bool {
+	switch {
+	case r >= 0x1f000 && r <= 0x1faff:
+		return true
+	case r >= 0x2194 && r <= 0x21ff:
+		return true
+	case r >= 0x2300 && r <= 0x27ff:
+		return true
+	case r >= 0x2934 && r <= 0x2935:
+		return true
+	case r >= 0x2b05 && r <= 0x2b55:
+		return true
+	case r == 0x00a9 || r == 0x00ae || r == 0x3030 || r == 0x303d || r == 0x3297 || r == 0x3299:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Handler) AgentTransportUnfollowThread(w http.ResponseWriter, r *http.Request) {
@@ -1716,6 +1959,7 @@ func (h *Handler) insertAgentTransportFreshnessResolutionActivityWithExec(
 	transportID string,
 	messageID pgtype.UUID,
 ) (pgtype.UUID, error) {
+	message := agentTransportFreshnessResolutionActivityMessage(resolution.Outcome)
 	details := map[string]any{
 		"producer_fact_id":                  resolution.ProducerFactID,
 		"outcome":                           resolution.Outcome,
@@ -1731,12 +1975,19 @@ func (h *Handler) insertAgentTransportFreshnessResolutionActivityWithExec(
 		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
 		activityKindText, "send_freshness_resolved", "info",
 		"channel", parseUUID(target.channel.ID), target.raw,
-		"", "Freshness hold resolved", details,
+		"", message, details,
 	)
 	if !inserted {
 		return pgtype.UUID{}, errors.New("failed to persist freshness resolution activity")
 	}
 	return eventID, nil
+}
+
+func agentTransportFreshnessResolutionActivityMessage(outcome string) string {
+	if outcome == "abandoned" {
+		return "Held message was not sent"
+	}
+	return "Freshness hold resolved"
 }
 
 func (h *Handler) publishAgentTransportFreshnessResolutionActivity(
@@ -1882,47 +2133,293 @@ func (h *Handler) findAgentChannelMessageByClientIDWithExec(ctx context.Context,
 	return msg, true, nil
 }
 
-func (h *Handler) createAgentTransportReaction(ctx context.Context, source agentTransportSource, target agentTransportTarget, messageID pgtype.UUID, emoji, clientMessageID string) (ChannelReactionResponse, string, error) {
-	tx, err := h.TxStarter.Begin(ctx)
+func (h *Handler) addAgentTransportCanonicalReaction(ctx context.Context, source agentTransportSource, message ChannelMessageResponse, emoji string) (ChannelReactionResponse, bool, error) {
+	channelID := parseUUID(message.ChannelID)
+	messageID := parseUUID(message.ID)
+	var id, returnedMessageID, actorID pgtype.UUID
+	var createdAt pgtype.Timestamptz
+	err := h.DB.QueryRow(ctx, `
+		INSERT INTO channel_message_reaction (channel_message_id, workspace_id, actor_type, actor_id, emoji)
+		SELECT cm.id, cm.workspace_id, 'agent', $3, $4
+		FROM channel_message cm
+		WHERE cm.id = $1
+		  AND cm.channel_id = $2
+		  AND cm.workspace_id = $5
+		  AND cm.author_type IN ('user', 'agent')
+		  AND cm.deleted_at IS NULL
+		ON CONFLICT (channel_message_id, actor_type, actor_id, emoji) DO NOTHING
+		RETURNING id, channel_message_id, actor_id, created_at`,
+		messageID, channelID, source.origin.agentID, emoji, source.origin.workspaceID,
+	).Scan(&id, &returnedMessageID, &actorID, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = h.DB.QueryRow(ctx, `
+			SELECT r.id, r.channel_message_id, r.actor_id, r.created_at
+			FROM channel_message_reaction r
+			JOIN channel_message cm ON cm.id = r.channel_message_id
+			WHERE r.channel_message_id = $1
+			  AND cm.channel_id = $2
+			  AND cm.workspace_id = $3
+			  AND cm.author_type IN ('user', 'agent')
+			  AND cm.deleted_at IS NULL
+			  AND r.actor_type = 'agent'
+			  AND r.actor_id = $4
+			  AND r.emoji = $5`,
+			messageID, channelID, source.origin.workspaceID, source.origin.agentID, emoji,
+		).Scan(&id, &returnedMessageID, &actorID, &createdAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ChannelReactionResponse{}, false, errAgentTransportMessageNotFound
+		}
+		if err != nil {
+			return ChannelReactionResponse{}, false, err
+		}
+		reaction := agentTransportCanonicalReactionResponse(channelID, id, returnedMessageID, actorID, emoji, createdAt)
+		return reaction, false, nil
+	}
 	if err != nil {
-		return ChannelReactionResponse{}, "", err
+		return ChannelReactionResponse{}, false, err
 	}
-	reaction, found, err := h.insertAgentChannelReaction(ctx, tx, parseUUID(target.channel.ID), source.origin.workspaceID, source.origin.agentID, messageID, emoji)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return ChannelReactionResponse{}, "", err
-	}
-	if !found {
-		_ = tx.Rollback(ctx)
-		return ChannelReactionResponse{}, "", nil
-	}
-	transportID, err := h.recordAgentTransportAuditExec(ctx, tx, source, agentTransportActionReact, target.raw, parseUUID(target.channel.ID), messageID, clientMessageID, map[string]any{
-		"channel_id":        target.channel.ID,
-		"message_id":        uuidToString(messageID),
-		"reaction_id":       reaction.ID,
-		"emoji":             emoji,
-		"client_message_id": clientMessageID,
+	reaction := agentTransportCanonicalReactionResponse(channelID, id, returnedMessageID, actorID, emoji, createdAt)
+	h.publishChannelToMembers(ctx, protocol.EventChannelReactionAdded, message.WorkspaceID, "agent", uuidToString(source.origin.agentID), channelID, map[string]any{
+		"reaction":   reaction,
+		"channel_id": message.ChannelID,
+		"message_id": message.ID,
 	})
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return ChannelReactionResponse{}, "", err
-	}
-	if err := consumeAgentTransportVisibilityGrantTx(ctx, tx, source, parseUUID(target.channel.ID), messageID); err != nil {
-		_ = tx.Rollback(ctx)
-		return ChannelReactionResponse{}, "", err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return ChannelReactionResponse{}, "", err
-	}
-	h.publishChannelToMembers(ctx, protocol.EventChannelReactionAdded, target.channel.WorkspaceID, "agent", uuidToString(source.origin.agentID), parseUUID(target.channel.ID), map[string]any{"reaction": reaction, "channel_id": target.channel.ID, "message_id": uuidToString(messageID)})
-	return reaction, transportID, nil
+	return reaction, true, nil
 }
 
-func (h *Handler) readAgentTransportMessages(ctx context.Context, target agentTransportTarget, limit int) []ChannelMessageResponse {
-	if target.threadRootMessageID.Valid {
-		return h.channelThreadContextMessages(ctx, target.channel.WorkspaceID, target.channel.ID, uuidToString(target.threadRootMessageID), limit)
+func (h *Handler) removeAgentTransportCanonicalReaction(ctx context.Context, source agentTransportSource, message ChannelMessageResponse, emoji string) (bool, error) {
+	channelID := parseUUID(message.ChannelID)
+	messageID := parseUUID(message.ID)
+	tag, err := h.DB.Exec(ctx, `
+		DELETE FROM channel_message_reaction r
+		USING channel_message cm
+		WHERE r.channel_message_id = cm.id
+		  AND r.channel_message_id = $1
+		  AND cm.channel_id = $2
+		  AND cm.workspace_id = $3
+		  AND cm.author_type IN ('user', 'agent')
+		  AND cm.deleted_at IS NULL
+		  AND r.actor_type = 'agent'
+		  AND r.actor_id = $4
+		  AND r.emoji = $5`,
+		messageID, channelID, source.origin.workspaceID, source.origin.agentID, emoji,
+	)
+	if err != nil {
+		return false, err
 	}
-	return h.recentChannelMessages(ctx, target.channel.WorkspaceID, target.channel.ID, limit)
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	h.publishChannelToMembers(ctx, protocol.EventChannelReactionRemoved, message.WorkspaceID, "agent", uuidToString(source.origin.agentID), channelID, map[string]any{
+		"channel_id": message.ChannelID,
+		"message_id": message.ID,
+		"emoji":      emoji,
+		"actor_type": "agent",
+		"actor_id":   uuidToString(source.origin.agentID),
+	})
+	return true, nil
+}
+
+func agentTransportCanonicalReactionResponse(channelID, id, messageID, actorID pgtype.UUID, emoji string, createdAt pgtype.Timestamptz) ChannelReactionResponse {
+	return ChannelReactionResponse{
+		ID:        uuidToString(id),
+		ChannelID: uuidToString(channelID),
+		MessageID: uuidToString(messageID),
+		ActorType: "agent",
+		ActorID:   uuidToString(actorID),
+		Emoji:     emoji,
+		CreatedAt: timestampToString(createdAt),
+	}
+}
+
+func (req AgentTransportReadRequest) anchor() (mode, raw string, err error) {
+	anchors := []struct {
+		mode string
+		raw  string
+	}{
+		{mode: "before", raw: strings.TrimSpace(req.Before)},
+		{mode: "after", raw: strings.TrimSpace(req.After)},
+		{mode: "around", raw: strings.TrimSpace(req.Around)},
+	}
+	for _, candidate := range anchors {
+		if candidate.raw == "" {
+			continue
+		}
+		if mode != "" {
+			return "", "", errors.New("only one of before, after, or around may be set")
+		}
+		mode, raw = candidate.mode, candidate.raw
+	}
+	return mode, raw, nil
+}
+
+func agentTransportCanonicalMessageTarget(target agentTransportTarget) string {
+	if target.threadRootMessageID.Valid {
+		return "thread:" + uuidToString(target.threadRootMessageID)
+	}
+	return "channel:" + target.channel.ID
+}
+
+func (h *Handler) readAgentTransportMessages(ctx context.Context, target agentTransportTarget, mode, rawAnchor string, limit int) ([]ChannelMessageResponse, error) {
+	if mode == "" {
+		return h.readAgentTransportMessageWindow(ctx, target, "recent", 0, limit)
+	}
+	anchor, err := h.resolveAgentTransportReadAnchor(ctx, target, rawAnchor)
+	if err != nil {
+		return nil, err
+	}
+	switch mode {
+	case "before":
+		return h.readAgentTransportMessageWindow(ctx, target, "before", anchor.Seq, limit)
+	case "after":
+		return h.readAgentTransportMessageWindow(ctx, target, "after", anchor.Seq, limit)
+	case "around":
+		beforeLimit := (limit - 1) / 2
+		before, err := h.readAgentTransportMessageWindow(ctx, target, "before", anchor.Seq, beforeLimit)
+		if err != nil {
+			return nil, err
+		}
+		after, err := h.readAgentTransportMessageWindow(ctx, target, "after", anchor.Seq, limit-1-len(before))
+		if err != nil {
+			return nil, err
+		}
+		return append(append(before, anchor), after...), nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported window", errAgentTransportReadAnchorInvalid)
+	}
+}
+
+func (h *Handler) resolveAgentTransportReadAnchor(ctx context.Context, target agentTransportTarget, raw string) (ChannelMessageResponse, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ChannelMessageResponse{}, fmt.Errorf("%w: anchor is required", errAgentTransportReadAnchorInvalid)
+	}
+	if decimalAgentMessageSequencePattern.MatchString(raw) {
+		sequence, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return ChannelMessageResponse{}, fmt.Errorf("%w: sequence is out of range", errAgentTransportReadAnchorInvalid)
+		}
+		if sequence <= 0 {
+			return ChannelMessageResponse{}, fmt.Errorf("%w: sequence must be positive", errAgentTransportReadAnchorInvalid)
+		}
+		messages, err := h.findAgentTransportReadAnchors(ctx, target, `m.seq = $4`, sequence)
+		if err != nil {
+			return ChannelMessageResponse{}, err
+		}
+		return oneAgentTransportReadAnchor(messages)
+	}
+	if id, err := uuid.Parse(raw); err == nil {
+		messages, err := h.findAgentTransportReadAnchors(ctx, target, `m.id = $4`, id)
+		if err != nil {
+			return ChannelMessageResponse{}, err
+		}
+		return oneAgentTransportReadAnchor(messages)
+	}
+	if !shortAgentMessageIDPattern.MatchString(raw) {
+		return ChannelMessageResponse{}, fmt.Errorf("%w: use a full message id, a unique 8+ character short id, or a positive sequence", errAgentTransportReadAnchorInvalid)
+	}
+	messages, err := h.findAgentTransportReadAnchors(ctx, target, `LOWER(m.id::text) LIKE LOWER($4) || '%'`, raw)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	return oneAgentTransportReadAnchor(messages)
+}
+
+func (h *Handler) findAgentTransportReadAnchors(ctx context.Context, target agentTransportTarget, predicate string, value any) ([]ChannelMessageResponse, error) {
+	query := `SELECT ` + agentTransportReadMessageColumns + `
+		FROM channel_message m
+		WHERE ` + agentTransportReadTargetPredicate + ` AND ` + predicate + `
+		ORDER BY m.seq ASC
+		LIMIT $5`
+	return h.readAgentTransportMessageRows(ctx, target, query, value, 2)
+}
+
+func oneAgentTransportReadAnchor(messages []ChannelMessageResponse) (ChannelMessageResponse, error) {
+	switch len(messages) {
+	case 0:
+		return ChannelMessageResponse{}, errAgentTransportReadAnchorNotFound
+	case 1:
+		return messages[0], nil
+	default:
+		return ChannelMessageResponse{}, errAgentTransportReadAnchorAmbiguous
+	}
+}
+
+const agentTransportReadMessageColumns = `m.id, m.channel_id, m.workspace_id, m.author_type, m.author_id, m.author_name, m.content, m.parts, m.source, m.external_message_id, m.client_message_id, m.reply_to_message_id, m.quote_message_id, m.quote_snapshot, m.thread_root_message_id, m.thread_id, m.trigger_depth, m.seq, m.created_at, m.edited_at, m.deleted_at`
+
+const agentTransportReadTargetPredicate = `
+		m.channel_id = $1
+		AND m.workspace_id = $2
+		AND m.deleted_at IS NULL
+		AND (
+			($3::uuid IS NULL AND m.thread_root_message_id IS NULL)
+			OR ($3::uuid IS NOT NULL AND (m.id = $3 OR m.thread_root_message_id = $3))
+		)`
+
+func (h *Handler) readAgentTransportMessageWindow(ctx context.Context, target agentTransportTarget, direction string, sequence int64, limit int) ([]ChannelMessageResponse, error) {
+	if limit <= 0 {
+		return []ChannelMessageResponse{}, nil
+	}
+	var query string
+	var args []any
+	switch direction {
+	case "recent":
+		query = `SELECT * FROM (
+			SELECT ` + agentTransportReadMessageColumns + `
+			FROM channel_message m
+			WHERE ` + agentTransportReadTargetPredicate + `
+			ORDER BY m.seq DESC
+			LIMIT $4
+		) recent
+		ORDER BY seq ASC`
+		args = []any{limit}
+	case "before":
+		query = `SELECT * FROM (
+			SELECT ` + agentTransportReadMessageColumns + `
+			FROM channel_message m
+			WHERE ` + agentTransportReadTargetPredicate + ` AND m.seq < $4
+			ORDER BY m.seq DESC
+			LIMIT $5
+		) before_window
+		ORDER BY seq ASC`
+		args = []any{sequence, limit}
+	case "after":
+		query = `SELECT ` + agentTransportReadMessageColumns + `
+			FROM channel_message m
+			WHERE ` + agentTransportReadTargetPredicate + ` AND m.seq > $4
+			ORDER BY m.seq ASC
+			LIMIT $5`
+		args = []any{sequence, limit}
+	default:
+		return nil, fmt.Errorf("unknown read direction %q", direction)
+	}
+	return h.readAgentTransportMessageRows(ctx, target, query, args...)
+}
+
+func (h *Handler) readAgentTransportMessageRows(ctx context.Context, target agentTransportTarget, query string, extra ...any) ([]ChannelMessageResponse, error) {
+	args := []any{
+		parseUUID(target.channel.ID),
+		parseUUID(target.channel.WorkspaceID),
+		nullableUUID(target.threadRootMessageID),
+	}
+	args = append(args, extra...)
+	rows, err := h.DB.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var messages []ChannelMessageResponse
+	for rows.Next() {
+		message, err := scanChannelMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
 
 func (h *Handler) decorateAgentTransportMessages(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {
@@ -1989,7 +2486,7 @@ func (h *Handler) agentTransportFreshnessDecisionWithSeen(ctx context.Context, e
 	if seenUpToSeq <= 0 {
 		return agentTransportFreshnessDecision{SeenUpToSeq: seenUpToSeq}, nil
 	}
-	latestSeq, totalNewer, err := h.agentTransportNewerMessageStats(ctx, exec, target, seenUpToSeq)
+	latestSeq, totalNewer, err := h.agentTransportNewerMessageStats(ctx, exec, source, target, seenUpToSeq)
 	if err != nil || totalNewer <= 0 {
 		return agentTransportFreshnessDecision{SeenUpToSeq: seenUpToSeq, LatestSeq: latestSeq}, err
 	}
@@ -1999,7 +2496,7 @@ func (h *Handler) agentTransportFreshnessDecisionWithSeen(ctx context.Context, e
 	} else if found && draft.HeldToSeq > showAfterSeq {
 		showAfterSeq = draft.HeldToSeq
 	}
-	messages, err := h.readAgentTransportMessagesAfterSeq(ctx, target, showAfterSeq, agentTransportFreshnessHoldLimit)
+	messages, err := h.readAgentTransportMessagesAfterSeq(ctx, source, target, showAfterSeq, agentTransportFreshnessHoldLimit)
 	if err != nil {
 		return agentTransportFreshnessDecision{}, err
 	}
@@ -2067,7 +2564,7 @@ func (h *Handler) latestAgentTransportReadSeenSeq(ctx context.Context, source ag
 	return seq, true, nil
 }
 
-func (h *Handler) agentTransportNewerMessageStats(ctx context.Context, exec dbExecutor, target agentTransportTarget, seenUpToSeq int64) (int64, int64, error) {
+func (h *Handler) agentTransportNewerMessageStats(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, seenUpToSeq int64) (int64, int64, error) {
 	var latestSeq, count int64
 	err := exec.QueryRow(ctx, `
 		SELECT COALESCE(MAX(seq), 0), COUNT(*)
@@ -2076,15 +2573,16 @@ func (h *Handler) agentTransportNewerMessageStats(ctx context.Context, exec dbEx
 		  AND workspace_id = $2
 		  AND deleted_at IS NULL
 		  AND seq > $3
+		  AND NOT (author_type = 'agent' AND author_id = $5)
 		  AND (
 		    ($4::uuid IS NOT NULL AND (id = $4 OR thread_root_message_id = $4))
 		    OR ($4::uuid IS NULL AND thread_root_message_id IS NULL)
 		  )`,
-		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), seenUpToSeq, nullableUUID(target.threadRootMessageID)).Scan(&latestSeq, &count)
+		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), seenUpToSeq, nullableUUID(target.threadRootMessageID), source.origin.agentID).Scan(&latestSeq, &count)
 	return latestSeq, count, err
 }
 
-func (h *Handler) readAgentTransportMessagesAfterSeq(ctx context.Context, target agentTransportTarget, afterSeq int64, limit int) ([]ChannelMessageResponse, error) {
+func (h *Handler) readAgentTransportMessagesAfterSeq(ctx context.Context, source agentTransportSource, target agentTransportTarget, afterSeq int64, limit int) ([]ChannelMessageResponse, error) {
 	rows, err := h.DB.Query(ctx, `
 		SELECT id, channel_id, workspace_id, author_type, author_id, author_name, content, parts, source, external_message_id, client_message_id, reply_to_message_id, quote_message_id, quote_snapshot, thread_root_message_id, thread_id, trigger_depth, seq, created_at, edited_at, deleted_at
 		FROM (
@@ -2094,6 +2592,7 @@ func (h *Handler) readAgentTransportMessagesAfterSeq(ctx context.Context, target
 			  AND workspace_id = $2
 			  AND deleted_at IS NULL
 			  AND seq > $3
+			  AND NOT (author_type = 'agent' AND author_id = $6)
 			  AND (
 			    ($4::uuid IS NOT NULL AND (id = $4 OR thread_root_message_id = $4))
 			    OR ($4::uuid IS NULL AND thread_root_message_id IS NULL)
@@ -2102,7 +2601,7 @@ func (h *Handler) readAgentTransportMessagesAfterSeq(ctx context.Context, target
 			LIMIT $5
 		) newer
 		ORDER BY seq ASC`,
-		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), afterSeq, nullableUUID(target.threadRootMessageID), limit)
+		parseUUID(target.channel.ID), parseUUID(target.channel.WorkspaceID), afterSeq, nullableUUID(target.threadRootMessageID), limit, source.origin.agentID)
 	if err != nil {
 		return nil, err
 	}

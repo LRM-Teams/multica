@@ -429,6 +429,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.HandleDaemonReminderProjection,
 		h.HandleDaemonReminderProjectionAck,
 	)
+	daemonHub.SetAgentDeliveryAckHandler(h.HandleAgentDeliveryAck)
+	daemonHub.SetAgentRecoveryHandler(h.HandleAgentMessageRecovery)
+	daemonHub.SetAgentMessageHandoffHandler(h.HandleAgentMessageHandoff)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()
@@ -558,9 +561,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/starting", h.DaemonMarkStarting)
 		r.Post("/heartbeat", h.DaemonHeartbeat)
 		r.Get("/ws", h.DaemonWebSocket)
-		r.Get("/workspaces/{workspaceId}/repos", h.GetDaemonWorkspaceRepos)
-		r.Post("/workspaces/{workspaceId}/agent-workspace-retention/check", h.CheckAgentWorkspaceRetention)
-
 		r.Post("/runtimes/{runtimeId}/agent-inbox/drain", h.DrainAgentInboxByRuntime)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/credential", h.EnsureDaemonAgentCredential)
 		r.Post("/runtimes/{runtimeId}/agents/{agentId}/crashed", h.ReportAgentProviderCrashed)
@@ -579,7 +579,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/agent-memory-center/hydrate", h.HydrateAgentMemoryCenter)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
-		r.Post("/tasks/{taskId}/wait-local-directory", h.MarkTaskWaitingLocalDirectory)
 		r.Post("/tasks/{taskId}/progress", h.ReportTaskProgress)
 		r.Post("/tasks/{taskId}/messages", h.ReportTaskMessages)
 		r.Get("/tasks/{taskId}/messages", h.ListTaskMessages)
@@ -590,12 +589,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/agent-inbox/events/{eventId}/messages", h.ReportAgentInboxMessages)
 		r.Post("/agent-inbox/events/{eventId}/complete", h.CompleteAgentInboxEvent)
 		r.Post("/agent-inbox/events/{eventId}/fail", h.FailAgentInboxEvent)
-
-		r.Post("/projects/{projectId}/managed-workdir", h.RegisterManagedWorkdir)
-
-		r.Get("/issues/{issueId}/gc-check", h.GetIssueGCCheck)
-		r.Get("/chat-sessions/{sessionId}/gc-check", h.GetChatSessionGCCheck)
-		r.Get("/tasks/{taskId}/gc-check", h.GetTaskGCCheck)
 
 		r.Post("/runtimes/{runtimeId}/recover-orphans", h.RecoverOrphanedTasks)
 		r.Post("/tasks/{taskId}/session", h.PinTaskSession)
@@ -1367,6 +1360,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/api/agent/messages/react", h.AgentTransportReactMessage)
 			r.Post("/api/agent/messages/read", h.AgentTransportReadMessages)
 			r.Post("/api/agent/messages/search", h.AgentTransportSearchMessages)
+			r.Post("/api/agent/messages/resolve", h.AgentTransportResolveMessage)
 			r.Post("/api/agent/threads/unfollow", h.AgentTransportUnfollowThread)
 			r.Post("/api/agent/reminders/schedule", h.AgentTransportScheduleReminder)
 			r.Post("/api/agent/reminders/list", h.AgentTransportListReminders)

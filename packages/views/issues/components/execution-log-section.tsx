@@ -80,10 +80,6 @@ export function ExecutionLogSection({ issueId }: ExecutionLogSectionProps) {
         (t) =>
           t.status === "queued" ||
           t.status === "dispatched" ||
-          // Daemon-parked task on a busy local_directory — still active
-          // (waiting on a path lock), not terminal. Surfacing it here is
-          // what tells the user the agent is alive and will resume.
-          t.status === "waiting_local_directory" ||
           t.status === "running",
       ),
     [tasks],
@@ -194,9 +190,6 @@ export function ExecutionLogSection({ issueId }: ExecutionLogSectionProps) {
 const STATUS_TONE: Record<AgentTask["status"], string> = {
   queued: "text-warning",
   dispatched: "text-warning",
-  // Same tone as queued/dispatched — visually "stopped" so users see the
-  // task is parked, but distinguished by the status label.
-  waiting_local_directory: "text-warning",
   running: "text-brand",
   completed: "text-success",
   failed: "text-destructive",
@@ -232,8 +225,6 @@ function useStatusLabel(status: AgentTask["status"]): string {
   switch (status) {
     case "queued": return t(($) => $.execution_log.status_queued);
     case "dispatched": return t(($) => $.execution_log.status_dispatched);
-    case "waiting_local_directory":
-      return t(($) => $.execution_log.status_waiting_local_directory);
     case "running": return t(($) => $.execution_log.status_running);
     case "completed": return t(($) => $.execution_log.status_completed);
     case "failed": return t(($) => $.execution_log.status_failed);
@@ -241,7 +232,7 @@ function useStatusLabel(status: AgentTask["status"]): string {
   }
 }
 
-// One active (running / queued / dispatched / parked) task row. Running rows
+// One active (running / queued / dispatched) task row. Running rows
 // keep status to a single live elapsed timer; transcript and stop stay available
 // as hover actions. Transcript content lazy-loads on click via TranscriptButton,
 // so the row no longer fetches task messages just to render a count.
@@ -275,10 +266,8 @@ export function ActiveTaskRow({
         )
       : "";
 
-  // Transcript only meaningful once messages exist — pure-queued and
-  // waiting_local_directory tasks haven't streamed any agent output yet.
-  const showTranscript =
-    task.status !== "queued" && task.status !== "waiting_local_directory";
+  // Transcript is only meaningful once a task has entered execution.
+  const showTranscript = task.status !== "queued";
 
   const handleCancel = async () => {
     if (cancelling) return;
@@ -345,8 +334,7 @@ export function ActiveTaskRow({
         onConfirm={() => void handleCancel()}
         showRunningNote={
           task.status === "running" ||
-          task.status === "dispatched" ||
-          task.status === "waiting_local_directory"
+          task.status === "dispatched"
         }
       />
     </RowShell>

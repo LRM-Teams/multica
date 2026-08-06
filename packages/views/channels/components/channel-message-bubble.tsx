@@ -1005,6 +1005,7 @@ export const ChannelMessageBubble = memo(function ChannelMessageBubble({
                 sideOffset={4}
                 emojis={quickReactionEmojis}
                 showMore={false}
+                loadingLabel={t(($) => $.message.loading_emojis)}
                 contentClassName="rounded-md border border-border/70 bg-popover/95 shadow-none ring-0"
               />
             )}

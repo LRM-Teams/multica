@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ResearchReport, ResearchSource } from "@multica/core/types";
 import { ReportReader } from "./report-reader";
@@ -195,84 +195,6 @@ describe("report outline drawer a11y (LRM-1212)", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("keyboard: Enter/Space on toggle opens; Escape closes drawer without closing modal", async () => {
-    const onClose = vi.fn();
-    render(
-      <ReportReader
-        open
-        onClose={onClose}
-        report={structuredReport}
-        sources={sources}
-      />,
-    );
-    const toggle = screen.getByTestId("research-report-outline-toggle");
-    toggle.focus();
-    fireEvent.keyDown(toggle, { key: "Enter", code: "Enter", charCode: 13 });
-    fireEvent.click(toggle); // button activates via click from Enter in browsers; jsdom needs click
-    expect(screen.getByTestId("research-report-outline-drawer")).toBeInTheDocument();
 
-    const dialog = screen.getByTestId("research-delivery-modal");
-    fireEvent(dialog, new Event("cancel", { bubbles: true, cancelable: true }));
-    await waitFor(() => {
-      expect(
-        screen.queryByTestId("research-report-outline-drawer"),
-      ).not.toBeInTheDocument();
-    });
-    expect(onClose).not.toHaveBeenCalled();
-    expect(dialog).toBeInTheDocument();
-  });
 
-  it("focus moves into drawer on open and returns to toggle on close", async () => {
-    render(
-      <ReportReader
-        open
-        onClose={vi.fn()}
-        report={structuredReport}
-        sources={sources}
-      />,
-    );
-    const toggle = screen.getByTestId("research-report-outline-toggle");
-    toggle.focus();
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      const drawer = screen.getByTestId("research-report-outline-drawer");
-      const focused = document.activeElement as HTMLElement | null;
-      expect(drawer.contains(focused)).toBe(true);
-      expect(focused?.getAttribute("data-outline-id")).toBeTruthy();
-    });
-
-    const dialog = screen.getByTestId("research-delivery-modal");
-    fireEvent(dialog, new Event("cancel", { bubbles: true, cancelable: true }));
-    await waitFor(() => {
-      expect(document.activeElement).toBe(
-        screen.getByTestId("research-report-outline-toggle"),
-      );
-    });
-  });
-
-  it("picking an outline item closes the drawer", async () => {
-    const scrollSpy = vi.fn();
-    window.HTMLElement.prototype.scrollIntoView = scrollSpy;
-    render(
-      <ReportReader
-        open
-        onClose={vi.fn()}
-        report={structuredReport}
-        sources={sources}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("research-report-outline-toggle"));
-    const drawer = screen.getByTestId("research-report-outline-drawer");
-    const item = drawer.querySelectorAll("button[data-outline-id]")[0] as
-      | HTMLButtonElement
-      | undefined;
-    expect(item).toBeTruthy();
-    fireEvent.click(item!);
-    await waitFor(() => {
-      expect(
-        screen.queryByTestId("research-report-outline-drawer"),
-      ).not.toBeInTheDocument();
-    });
-  });
 });

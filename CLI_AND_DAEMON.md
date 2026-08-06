@@ -7,7 +7,7 @@ The `multica` CLI connects your local machine to Multica. It handles authenticat
 ### Install Script (macOS/Linux)
 
 ```bash
-curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 ```
 
 ### Build from Source
@@ -179,7 +179,7 @@ You need at least one installed. The daemon registers each detected CLI as an av
 
 1. On start, the daemon detects installed agent CLIs and registers a runtime for each agent in each watched workspace
 2. It polls the server at a configurable interval (default: 2s) for claimed tasks
-3. When a task arrives, it creates an isolated workspace directory, spawns the agent CLI, and streams results back
+3. When a task arrives, it reuses the Agent's durable workspace, spawns the agent CLI with that directory as cwd, and streams results back
 4. Heartbeats are sent periodically (default: 15s) so the server knows the daemon is alive
 5. On shutdown, all runtimes are deregistered
 
@@ -197,23 +197,9 @@ Daemon behavior is configured via flags or environment variables:
 | Daemon ID | `--daemon-id` | `MULTICA_DAEMON_ID` | hostname |
 | Device name | `--device-name` | `MULTICA_DAEMON_DEVICE_NAME` | hostname |
 | Runtime name | `--runtime-name` | `MULTICA_AGENT_RUNTIME_NAME` | `Local Agent` |
-| Workspaces root | — | `MULTICA_WORKSPACES_ROOT` | `~/multica_workspaces` |
-| GC enabled | — | `MULTICA_GC_ENABLED` | `true` (set `false`/`0` to disable) |
-| GC scan interval | — | `MULTICA_GC_INTERVAL` | `1h` |
-| GC TTL (done/cancelled issues) | — | `MULTICA_GC_TTL` | `24h` |
-| GC orphan TTL (no `.gc_meta.json`) | — | `MULTICA_GC_ORPHAN_TTL` | `72h` |
-| GC artifact TTL (open issues) | — | `MULTICA_GC_ARTIFACT_TTL` | `12h` (set `0` to disable) |
-| GC artifact patterns | — | `MULTICA_GC_ARTIFACT_PATTERNS` | `node_modules,.next,.turbo` |
+| Workspaces root | — | `MULTICA_WORKSPACES_ROOT` | `~/.multica/workspaces` |
 
-#### Workspace garbage collection
-
-The daemon periodically scans `MULTICA_WORKSPACES_ROOT` and reclaims disk space in three modes:
-
-- **Full task cleanup** — when an issue's status is `done` or `cancelled` and has been idle for `MULTICA_GC_TTL`, the entire task directory is removed.
-- **Orphan cleanup** — task directories with no `.gc_meta.json` (e.g. left over from a daemon crash) are removed once they exceed `MULTICA_GC_ORPHAN_TTL`.
-- **Artifact-only cleanup** — when a task has been completed for at least `MULTICA_GC_ARTIFACT_TTL` but the issue is still open, regenerable build outputs whose directory basename matches `MULTICA_GC_ARTIFACT_PATTERNS` are removed; the rest of the workdir (source, `.git`, `output/`, `logs/`, `.gc_meta.json`) is preserved so the agent can resume the same workdir on the next task.
-
-Patterns are basename-only — entries containing `/` or `\` are silently dropped — and `.git` subtrees are never descended into. The default list (`node_modules`, `.next`, `.turbo`) is intentionally narrow; extend it per deployment if your repos consistently produce other regenerable directories (for example, `MULTICA_GC_ARTIFACT_PATTERNS=node_modules,.next,.turbo,target,__pycache__`). To disable artifact cleanup entirely, set `MULTICA_GC_ARTIFACT_TTL=0`.
+Each Agent uses `<workspaces-root>/<workspace-id>/agents/<agent-id>/` as both its durable root and subprocess cwd. Multica does not create per-task workspaces or garbage-collect Agent workspace contents.
 
 Agent-specific overrides:
 

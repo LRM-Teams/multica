@@ -96,6 +96,20 @@ func (h *Handler) ListChannelEnvCheckpoints(w http.ResponseWriter, r *http.Reque
 	h.listEnvCheckpointsForProject(w, r, projectID)
 }
 
+func (h *Handler) dispatchDiagnosisInProgress(ctx context.Context, projectID, workspaceID string) (bool, error) {
+	var inProgress bool
+	err := h.DB.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM interaction_dag_diagnosis_run d
+  JOIN project p ON p.id::text = d.project_id
+  WHERE d.project_id = $1
+    AND p.workspace_id = $2
+    AND d.status IN ('provisioning', 'running', 'compacting')
+)`, projectID, workspaceID).Scan(&inProgress)
+	return inProgress, err
+}
+
 // DeleteEnvDispatchChannel handles DELETE /api/v1/env-dispatch/channels/{channelID}.
 // It resolves the bound project+env and performs concurrency-safe rollout
 // cleanup. Idempotent: a missing channel returns 204.
@@ -121,6 +135,15 @@ func (h *Handler) DeleteEnvDispatchChannel(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		// Already absent: idempotent success.
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	inProgress, err := h.dispatchDiagnosisInProgress(r.Context(), projectID, workspaceID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "lookup diagnosis run")
+		return
+	}
+	if inProgress {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "diagnosis_in_progress"})
 		return
 	}
 	if err := h.deleteEnvDispatchChannelRollout(r.Context(), workspaceID, actorUserID, channelID, projectID, envID); err != nil {

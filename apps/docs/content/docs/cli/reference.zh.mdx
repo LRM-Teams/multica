@@ -120,7 +120,7 @@ Daemon behavior is configured via flags or environment variables:
 | Daemon ID | `--daemon-id` | `MULTICA_DAEMON_ID` | hostname |
 | Device name | `--device-name` | `MULTICA_DAEMON_DEVICE_NAME` | hostname |
 | Runtime name | `--runtime-name` | `MULTICA_AGENT_RUNTIME_NAME` | `Local Agent` |
-| Workspaces root | — | `MULTICA_WORKSPACES_ROOT` | `~/multica_workspaces` |
+| Workspaces root | — | `MULTICA_WORKSPACES_ROOT` | `~/.multica/workspaces` |
 
 Agent-specific overrides:
 
@@ -181,7 +181,7 @@ multica daemon start --profile staging
 multica daemon start
 ```
 
-Each profile gets its own config directory (`~/.multica/profiles/<name>/`), daemon state, health port, and workspace root.
+Each profile gets its own config directory (`~/.multica/profiles/<name>/`), daemon state, and health port. Agent workspaces share `~/.multica/workspaces/`.
 
 ## Workspaces
 

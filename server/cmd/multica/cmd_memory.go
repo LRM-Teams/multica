@@ -55,8 +55,7 @@ func runMemoryCurate(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("pass at least one --agent or --all-agents")
 	}
 	rootOverride, _ := cmd.Flags().GetString("workspaces-root")
-	profile, _ := cmd.Flags().GetString("profile")
-	workspacesRoot, err := daemon.ResolveWorkspacesRoot(profile, rootOverride)
+	workspacesRoot, err := daemon.ResolveWorkspacesRoot(rootOverride)
 	if err != nil {
 		return err
 	}

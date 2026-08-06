@@ -16,6 +16,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -199,11 +201,15 @@ func (d *Daemon) handleWriteFileRequest(req protocol.WriteWorkdirFileRequestPayl
 
 // isAgentWorkspaceRelPath reports whether relPath (server-supplied, relative
 // to WorkspacesRoot) points into a durable agent workspace
-// ({workspaceID}/.multica/agents/{agentID}, see agentRootRelPath in
-// handler/agent_files.go) as opposed to a per-run task workdir or a
-// project's local_directory workdir, which this quota does not apply to.
+// ({workspaceID}/agents/{agentID}, see agentRootRelPath in handler/agent_files.go).
 func isAgentWorkspaceRelPath(relPath string) bool {
-	return strings.Contains(filepath.ToSlash(relPath), "/.multica/agents/")
+	workspaceID, agentID, ok := agentworkspace.IDsFromRelPath(relPath)
+	return ok && isCanonicalUUIDDirName(workspaceID) && isCanonicalUUIDDirName(agentID)
+}
+
+func isCanonicalUUIDDirName(name string) bool {
+	parsed, err := uuid.Parse(name)
+	return err == nil && parsed.String() == name
 }
 
 // handleDeleteDirRequest removes one confined directory under WorkspacesRoot.
@@ -502,13 +508,35 @@ func appendSeedContextFile(root, rel, content string, maxBytes int) error {
 	target := filepath.Join(root, filepath.FromSlash(rel))
 	current, err := os.ReadFile(target)
 	if err != nil {
-		return err
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		current = []byte(seedContextHeader(rel))
 	}
 	block := "\n\n## Initial Context\n\n" + trimmed + "\n"
 	if len(current)+len([]byte(block)) > maxBytes {
 		return errSeedContextTooLarge
 	}
 	return os.WriteFile(target, append(current, []byte(block)...), 0o644)
+}
+
+func seedContextHeader(rel string) string {
+	if strings.HasPrefix(rel, "memory/") {
+		return defaultHeaderForRel(rel)
+	}
+	headings := map[string]string{
+		"notes/agents.md":           "Agents",
+		"notes/channels.md":         "Channels",
+		"notes/project-map.md":      "Project Map",
+		"notes/relationship-map.md": "Relationship Map",
+		"notes/role-playbook.md":    "Role Playbook",
+		"notes/work-log.md":         "Work Log",
+		"notes/decisions.md":        "Decisions",
+	}
+	return "# " + headings[rel] + "\n"
 }
 
 func writeWorkdirTextFile(root, filePath, content, expectedContentHash string, maxBytes int) protocol.WriteWorkdirFileResponsePayload {

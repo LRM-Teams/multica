@@ -107,13 +107,9 @@ func validateGithubRepoRef(ref json.RawMessage) (json.RawMessage, error) {
 	return out, nil
 }
 
-// localDirectoryRef is the JSONB shape stored for resource_type=local_directory.
-// It pins a project to an existing directory on a specific user machine, so
-// agent tasks run in-place rather than in an isolated git worktree. The
-// daemon_id scopes the path to one daemon registration — the same string path
-// on a different machine is a different resource. The optional label is a
-// human-readable hint used by the UI; the row-level project_resource.label
-// column remains the generic column for any resource type.
+// localDirectoryRef is metadata that points to an existing directory on one
+// user machine. It does not affect Agent cwd or daemon execution. daemon_id
+// scopes the same string path to one machine; label is presentation metadata.
 type localDirectoryRef struct {
 	LocalPath string `json:"local_path"`
 	DaemonID  string `json:"daemon_id"`
@@ -171,10 +167,9 @@ func isDriveLetter(b byte) bool {
 
 // isValidGitRepoURL accepts the three forms a user can paste from GitHub's
 // "Code" menu: https://, ssh:// (with explicit scheme), and the scp-like
-// shorthand `git@host:owner/repo.git`. The check is intentionally lax — we are
-// guarding against pasted garbage like "not-a-url", not enforcing a strict
-// grammar — because the actual fetch happens client-side via `git clone` and
-// the user gets a clearer error from git than from us.
+// shorthand `git@host:owner/repo.git`. The check is intentionally lax because
+// the value is external-resource metadata, not an instruction for Multica to
+// clone or otherwise materialize the repository.
 func isValidGitRepoURL(s string) bool {
 	if u, err := url.Parse(s); err == nil && u.Host != "" {
 		switch u.Scheme {
@@ -447,12 +442,9 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// findLocalDirectoryConflict enforces "at most one local_directory resource
-// per (project, daemon)". The daemon picks the first matching daemon_id row
-// out of a task's resources (findLocalDirectoryAssignment), so letting a
-// project carry two rows for the same daemon would mean the agent silently
-// writes into whichever happens to come back first — a safety hazard for a
-// feature that operates directly on the user's real working directory.
+// findLocalDirectoryConflict enforces "at most one local_directory metadata
+// reference per (project, daemon)" so the UI has one unambiguous reference
+// for each machine.
 //
 // The DB-level UNIQUE(project_id, resource_type, resource_ref) constraint
 // alone is not enough here: it only fires on full ref-JSON equality, so a
@@ -484,9 +476,7 @@ func (h *Handler) findLocalDirectoryConflict(ctx context.Context, projectID pgty
 			continue
 		}
 		// Daemon-scoped uniqueness: one local_directory per daemon per
-		// project. Different daemons can each carry one row (one per
-		// user device); the daemon-side resolver routes each daemon to
-		// its own assignment by daemon_id.
+		// project. Different daemons can each carry one row per user device.
 		if existing.DaemonID == incoming.DaemonID {
 			return true, nil
 		}
@@ -558,111 +548,4 @@ func parseUUIDLoose(s string) (pgtype.UUID, error) {
 		return pgtype.UUID{}, err
 	}
 	return u, nil
-}
-
-// listProjectResourcesForProject is a small helper used by the daemon claim
-// handler to attach project resources to outgoing tasks.
-func (h *Handler) listProjectResourcesForProject(ctx context.Context, projectID pgtype.UUID) []db.ProjectResource {
-	if !projectID.Valid {
-		return nil
-	}
-	rows, err := h.Queries.ListProjectResources(ctx, projectID)
-	if err != nil {
-		return nil
-	}
-	return rows
-}
-
-// mapProjectResources loads a single project's resources and returns them as
-// the daemon-facing ProjectResourceData, plus the github_repo URLs lifted into
-// a RepoData list. Shared by the issue and chat claim paths so both resolve a
-// project's repos/directories (incl. the managed shared workdir) identically.
-func (h *Handler) mapProjectResources(ctx context.Context, projectID pgtype.UUID) ([]ProjectResourceData, []RepoData) {
-	rows := h.listProjectResourcesForProject(ctx, projectID)
-	if len(rows) == 0 {
-		return nil, nil
-	}
-	out := make([]ProjectResourceData, 0, len(rows))
-	var repos []RepoData
-	for _, row := range rows {
-		label := ""
-		if row.Label.Valid {
-			label = row.Label.String
-		}
-		ref := json.RawMessage(row.ResourceRef)
-		if len(ref) == 0 {
-			ref = json.RawMessage("{}")
-		}
-		out = append(out, ProjectResourceData{
-			ID:           uuidToString(row.ID),
-			ResourceType: row.ResourceType,
-			ResourceRef:  ref,
-			Label:        label,
-		})
-		if row.ResourceType == "github_repo" {
-			var payload struct {
-				URL string `json:"url"`
-			}
-			if json.Unmarshal(row.ResourceRef, &payload) == nil && payload.URL != "" {
-				repos = append(repos, RepoData{URL: payload.URL})
-			}
-		}
-	}
-	return out, repos
-}
-
-// managedWorkdirRelPath is the daemon-relative path (under WorkspacesRoot) of a
-// project's managed shared working directory. Kept here so the claim handler
-// and tests derive it the same way.
-func managedWorkdirRelPath(projectID string) string {
-	return "projects/" + projectID + "/workdir"
-}
-
-type registerManagedWorkdirRequest struct {
-	LocalPath string `json:"local_path"`
-	DaemonID  string `json:"daemon_id"`
-}
-
-// RegisterManagedWorkdir is the daemon self-report that records the managed
-// shared working directory it provisioned for a project, as a managed
-// local_directory project_resource. Idempotent — re-registering the same path
-// is a no-op. Daemon-authed (mounted under /api/daemon). Once registered,
-// subsequent task claims surface it through the normal project-resource path
-// and the daemon runs in it like any local_directory.
-func (h *Handler) RegisterManagedWorkdir(w http.ResponseWriter, r *http.Request) {
-	projectID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "projectId"), "project id")
-	if !ok {
-		return
-	}
-	var req registerManagedWorkdirRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	req.LocalPath = strings.TrimSpace(req.LocalPath)
-	req.DaemonID = strings.TrimSpace(req.DaemonID)
-	if req.LocalPath == "" || req.DaemonID == "" {
-		writeError(w, http.StatusBadRequest, "local_path and daemon_id are required")
-		return
-	}
-	proj, err := h.Queries.GetProject(r.Context(), projectID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "project not found")
-		return
-	}
-	ref, _ := json.Marshal(map[string]any{
-		"local_path": req.LocalPath,
-		"daemon_id":  req.DaemonID,
-		"managed":    true,
-	})
-	if _, err := h.DB.Exec(r.Context(), `
-		INSERT INTO project_resource (project_id, workspace_id, resource_type, resource_ref, managed, position)
-		VALUES ($1, $2, 'local_directory', $3::jsonb, true, 0)
-		ON CONFLICT (project_id, resource_type, resource_ref) DO NOTHING`,
-		projectID, proj.WorkspaceID, ref,
-	); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to register managed workdir")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

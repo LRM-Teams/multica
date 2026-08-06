@@ -1,7 +1,6 @@
 package execenv
 
 import (
-	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -11,42 +10,24 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
 func TestAgentWorkspaceLayoutUsesCanonicalFullIDs(t *testing.T) {
 	root := t.TempDir()
 	workspaceID := uuid.NewString()
 	agentID := uuid.NewString()
-	turnID := uuid.NewString()
 
 	layout, err := ResolveAgentWorkspaceLayout(root, workspaceID, agentID)
 	if err != nil {
 		t.Fatalf("ResolveAgentWorkspaceLayout: %v", err)
 	}
-	wantRoot := filepath.Join(root, workspaceID, ".multica", "agents", agentID)
-	if layout.RootDir != wantRoot {
-		t.Fatalf("RootDir = %q, want %q", layout.RootDir, wantRoot)
+	wantRoot := agentworkspace.Root(root, workspaceID, agentID)
+	if layout.AgentRoot != wantRoot {
+		t.Fatalf("RootDir = %q, want %q", layout.AgentRoot, wantRoot)
 	}
-	if layout.WorkDir != filepath.Join(wantRoot, "workspace") {
-		t.Fatalf("WorkDir = %q", layout.WorkDir)
-	}
-	if layout.ReposDir != filepath.Join(wantRoot, "repos") {
-		t.Fatalf("ReposDir = %q", layout.ReposDir)
-	}
-
-	turn, err := layout.Turn(turnID)
-	if err != nil {
-		t.Fatalf("Turn: %v", err)
-	}
-	wantTurnRoot := filepath.Join(wantRoot, "turns", turnID)
-	if turn.RootDir != wantTurnRoot {
-		t.Fatalf("turn RootDir = %q, want %q", turn.RootDir, wantTurnRoot)
-	}
-	if turn.WorktreesDir != filepath.Join(wantTurnRoot, "worktree") {
-		t.Fatalf("WorktreesDir = %q", turn.WorktreesDir)
-	}
-	if turn.ArtifactsDir != filepath.Join(wantTurnRoot, "artifacts") {
-		t.Fatalf("ArtifactsDir = %q", turn.ArtifactsDir)
+	if layout.AgentRoot != wantRoot {
+		t.Fatalf("WorkDir = %q", layout.AgentRoot)
 	}
 
 	for _, invalid := range []string{
@@ -60,9 +41,6 @@ func TestAgentWorkspaceLayoutUsesCanonicalFullIDs(t *testing.T) {
 		if got := PredictAgentRootDir(root, workspaceID, invalid); got != "" {
 			t.Errorf("PredictAgentRootDir accepted invalid agent ID %q: %q", invalid, got)
 		}
-		if _, err := layout.Turn(invalid); err == nil {
-			t.Errorf("Turn accepted invalid turn ID %q", invalid)
-		}
 	}
 }
 
@@ -75,12 +53,19 @@ func TestProvisionAgentWorkspaceIsIdempotentAndPreservesFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first ProvisionAgentWorkspace: %v", err)
 	}
-	memoryDir := filepath.Join(layout.RootDir, "memory")
+	entries, err := os.ReadDir(layout.AgentRoot)
+	if err != nil {
+		t.Fatalf("read fresh AgentRoot: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("fresh AgentRoot should be empty: %+v", entries)
+	}
+	memoryDir := filepath.Join(layout.AgentRoot, "memory")
 	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll memory: %v", err)
 	}
 	memoryPath := filepath.Join(memoryDir, "MEMORY.md")
-	ordinaryPath := filepath.Join(layout.WorkDir, "ordinary.txt")
+	ordinaryPath := filepath.Join(layout.AgentRoot, "ordinary.txt")
 	if err := os.WriteFile(memoryPath, []byte("durable memory\n"), 0o644); err != nil {
 		t.Fatalf("write memory: %v", err)
 	}
@@ -92,8 +77,8 @@ func TestProvisionAgentWorkspaceIsIdempotentAndPreservesFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second ProvisionAgentWorkspace: %v", err)
 	}
-	if reprovisioned.RootDir != layout.RootDir {
-		t.Fatalf("root changed across provision: %q != %q", reprovisioned.RootDir, layout.RootDir)
+	if reprovisioned.AgentRoot != layout.AgentRoot {
+		t.Fatalf("root changed across provision: %q != %q", reprovisioned.AgentRoot, layout.AgentRoot)
 	}
 	for path, want := range map[string]string{
 		memoryPath:   "durable memory\n",
@@ -106,20 +91,6 @@ func TestProvisionAgentWorkspaceIsIdempotentAndPreservesFiles(t *testing.T) {
 		if string(got) != want {
 			t.Errorf("preserved file %s = %q, want %q", path, got, want)
 		}
-	}
-
-	raw, err := os.ReadFile(filepath.Join(layout.RootDir, agentWorkspaceMetaFile))
-	if err != nil {
-		t.Fatalf("read workspace metadata: %v", err)
-	}
-	var meta agentWorkspaceMeta
-	if err := json.Unmarshal(raw, &meta); err != nil {
-		t.Fatalf("unmarshal workspace metadata: %v", err)
-	}
-	if meta.SchemaVersion != agentWorkspaceSchemaVersion ||
-		meta.WorkspaceID != workspaceID ||
-		meta.AgentID != agentID {
-		t.Fatalf("unexpected workspace metadata: %+v", meta)
 	}
 }
 
@@ -141,7 +112,7 @@ func TestProvisionAgentWorkspaceConcurrentSameRoot(t *testing.T) {
 				errs <- err
 				return
 			}
-			roots <- layout.RootDir
+			roots <- layout.AgentRoot
 		}()
 	}
 	wg.Wait()
@@ -157,84 +128,16 @@ func TestProvisionAgentWorkspaceConcurrentSameRoot(t *testing.T) {
 			t.Errorf("concurrent root = %q, want %q", got, want)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(want, agentWorkspaceMetaFile)); err != nil {
-		t.Fatalf("metadata missing after concurrent provision: %v", err)
-	}
-}
-
-func TestAgentTurnCleanupRemovesOnlyExactTurn(t *testing.T) {
-	root := t.TempDir()
-	workspaceID := uuid.NewString()
-	agentID := uuid.NewString()
-	turnAID := uuid.NewString()
-	turnBID := uuid.NewString()
-
-	layout, err := ProvisionAgentWorkspace(root, workspaceID, agentID, testLogger())
+	entries, err := os.ReadDir(want)
 	if err != nil {
-		t.Fatalf("ProvisionAgentWorkspace: %v", err)
-	}
-	turnA, err := ProvisionAgentTurn(*layout, turnAID)
-	if err != nil {
-		t.Fatalf("ProvisionAgentTurn A: %v", err)
-	}
-	turnB, err := ProvisionAgentTurn(*layout, turnBID)
-	if err != nil {
-		t.Fatalf("ProvisionAgentTurn B: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(turnA.ArtifactsDir, "a.txt"), []byte("a"), 0o644); err != nil {
-		t.Fatalf("write turn A: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(turnB.ArtifactsDir, "b.txt"), []byte("b"), 0o644); err != nil {
-		t.Fatalf("write turn B: %v", err)
-	}
-	workspaceFile := filepath.Join(layout.WorkDir, "persistent.txt")
-	if err := os.WriteFile(workspaceFile, []byte("persistent"), 0o644); err != nil {
-		t.Fatalf("write workspace file: %v", err)
-	}
-
-	if err := CleanupAgentTurn(*layout, turnAID); err != nil {
-		t.Fatalf("CleanupAgentTurn: %v", err)
-	}
-	if _, err := os.Stat(turnA.RootDir); !os.IsNotExist(err) {
-		t.Fatalf("turn A still exists or unexpected stat error: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(turnB.ArtifactsDir, "b.txt")); err != nil {
-		t.Fatalf("turn B was affected: %v", err)
-	}
-	if got, err := os.ReadFile(workspaceFile); err != nil || string(got) != "persistent" {
-		t.Fatalf("durable workspace was affected: content=%q err=%v", got, err)
-	}
-}
-
-func TestAgentTurnProvisionRejectsSymlinkedManagedNamespace(t *testing.T) {
-	root := t.TempDir()
-	workspaceID := uuid.NewString()
-	agentID := uuid.NewString()
-	layout, err := ProvisionAgentWorkspace(root, workspaceID, agentID, testLogger())
-	if err != nil {
-		t.Fatalf("ProvisionAgentWorkspace: %v", err)
-	}
-	outside := t.TempDir()
-	if err := os.Remove(layout.TurnsDir); err != nil {
-		t.Fatalf("remove empty turns dir: %v", err)
-	}
-	if err := os.Symlink(outside, layout.TurnsDir); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-
-	if _, err := ProvisionAgentTurn(*layout, uuid.NewString()); err == nil {
-		t.Fatal("ProvisionAgentTurn accepted symlinked turns namespace")
-	}
-	entries, err := os.ReadDir(outside)
-	if err != nil {
-		t.Fatalf("read outside dir: %v", err)
+		t.Fatalf("read concurrently provisioned root: %v", err)
 	}
 	if len(entries) != 0 {
-		t.Fatalf("symlink target was changed: %v", entries)
+		t.Fatalf("concurrent provision should not pre-populate AgentRoot: %+v", entries)
 	}
 }
 
-func TestRemoveAgentWorkspaceRequiresExactRootAndQuiescence(t *testing.T) {
+func TestRemoveAgentWorkspaceRequiresExactRoot(t *testing.T) {
 	root := t.TempDir()
 	workspaceID := uuid.NewString()
 	agentID := uuid.NewString()
@@ -247,30 +150,22 @@ func TestRemoveAgentWorkspaceRequiresExactRootAndQuiescence(t *testing.T) {
 		WorkspacesRoot: root,
 		WorkspaceID:    workspaceID,
 		AgentID:        agentID,
-		RootDir:        layout.RootDir,
+		AgentRoot:      layout.AgentRoot,
 		Reason:         AgentWorkspaceRemovalFullReset,
 	}
-	if err := RemoveAgentWorkspace(base); err == nil {
-		t.Fatal("RemoveAgentWorkspace succeeded without quiescence proof")
-	}
-	if _, err := os.Stat(layout.RootDir); err != nil {
-		t.Fatalf("workspace changed after rejected removal: %v", err)
-	}
-
-	base.Proof = AgentWorkspaceRemovalProof{NoActiveTurn: true, NoActiveProviderLease: true}
-	base.RootDir = filepath.Dir(layout.RootDir)
+	base.AgentRoot = filepath.Dir(layout.AgentRoot)
 	if err := RemoveAgentWorkspace(base); err == nil {
 		t.Fatal("RemoveAgentWorkspace accepted non-canonical root")
 	}
-	if _, err := os.Stat(layout.RootDir); err != nil {
+	if _, err := os.Stat(layout.AgentRoot); err != nil {
 		t.Fatalf("workspace changed after wrong-root rejection: %v", err)
 	}
 
-	base.RootDir = layout.RootDir
+	base.AgentRoot = layout.AgentRoot
 	if err := RemoveAgentWorkspace(base); err != nil {
 		t.Fatalf("RemoveAgentWorkspace: %v", err)
 	}
-	if _, err := os.Stat(layout.RootDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(layout.AgentRoot); !os.IsNotExist(err) {
 		t.Fatalf("workspace still exists or unexpected stat error: %v", err)
 	}
 }
@@ -283,7 +178,7 @@ func TestRemoveAgentWorkspaceRejectsSymlinkedCanonicalRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProvisionAgentWorkspace: %v", err)
 	}
-	if err := os.RemoveAll(layout.RootDir); err != nil {
+	if err := os.RemoveAll(layout.AgentRoot); err != nil {
 		t.Fatalf("remove test agent root: %v", err)
 	}
 	outside := t.TempDir()
@@ -291,7 +186,7 @@ func TestRemoveAgentWorkspaceRejectsSymlinkedCanonicalRoot(t *testing.T) {
 	if err := os.WriteFile(sentinel, []byte("preserve"), 0o644); err != nil {
 		t.Fatalf("write sentinel: %v", err)
 	}
-	if err := os.Symlink(outside, layout.RootDir); err != nil {
+	if err := os.Symlink(outside, layout.AgentRoot); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 
@@ -299,12 +194,8 @@ func TestRemoveAgentWorkspaceRejectsSymlinkedCanonicalRoot(t *testing.T) {
 		WorkspacesRoot: root,
 		WorkspaceID:    workspaceID,
 		AgentID:        agentID,
-		RootDir:        layout.RootDir,
+		AgentRoot:      layout.AgentRoot,
 		Reason:         AgentWorkspaceRemovalFullReset,
-		Proof: AgentWorkspaceRemovalProof{
-			NoActiveTurn:          true,
-			NoActiveProviderLease: true,
-		},
 	})
 	if err == nil {
 		t.Fatal("RemoveAgentWorkspace accepted symlinked canonical root")
@@ -330,7 +221,7 @@ func TestProvisionFunctionsCannotReachDestructiveFilesystemCalls(t *testing.T) {
 			continue
 		}
 		switch fn.Name.Name {
-		case "ProvisionAgentWorkspace", "ProvisionAgentTurn":
+		case "ProvisionAgentWorkspace":
 		default:
 			continue
 		}
@@ -348,54 +239,5 @@ func TestProvisionFunctionsCannotReachDestructiveFilesystemCalls(t *testing.T) {
 			}
 			return true
 		})
-	}
-}
-
-// TestSharedEnvWorkspaceLayoutUsesCanonicalEnvID pins the shared_sandbox
-// sample workdir layout (research D5, FR-008): all agents of one env-dispatch
-// sample anchor to <root>/<ws>/.multica/envs/<env>/workspace, namespaced away
-// from the per-agent roots so agent memory/skills stay per-agent.
-func TestSharedEnvWorkspaceLayoutUsesCanonicalEnvID(t *testing.T) {
-	root := t.TempDir()
-	workspaceID := uuid.NewString()
-	envID := uuid.NewString()
-
-	layout, err := ResolveSharedEnvWorkspaceLayout(root, workspaceID, envID)
-	if err != nil {
-		t.Fatalf("ResolveSharedEnvWorkspaceLayout: %v", err)
-	}
-	wantRoot := filepath.Join(root, workspaceID, ".multica", "envs", envID)
-	if layout.RootDir != wantRoot {
-		t.Fatalf("RootDir = %q, want %q", layout.RootDir, wantRoot)
-	}
-	if layout.WorkDir != filepath.Join(wantRoot, "workspace") {
-		t.Fatalf("WorkDir = %q", layout.WorkDir)
-	}
-
-	if _, err := ResolveSharedEnvWorkspaceLayout(root, workspaceID, "not-a-uuid"); err == nil {
-		t.Fatal("non-canonical env id must fail closed")
-	}
-}
-
-// TestProvisionSharedEnvWorkspaceIsIdempotent ensures concurrent first-turn
-// anchors of the same sample race safely and never remove existing content.
-func TestProvisionSharedEnvWorkspaceIsIdempotent(t *testing.T) {
-	root := t.TempDir()
-	workspaceID := uuid.NewString()
-	envID := uuid.NewString()
-
-	layout, err := ProvisionSharedEnvWorkspace(root, workspaceID, envID, testLogger())
-	if err != nil {
-		t.Fatalf("ProvisionSharedEnvWorkspace: %v", err)
-	}
-	marker := filepath.Join(layout.WorkDir, "kept.txt")
-	if err := os.WriteFile(marker, []byte("durable"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ProvisionSharedEnvWorkspace(root, workspaceID, envID, testLogger()); err != nil {
-		t.Fatalf("re-provision: %v", err)
-	}
-	if raw, err := os.ReadFile(marker); err != nil || string(raw) != "durable" {
-		t.Fatalf("re-provision must preserve content: read=%q err=%v", raw, err)
 	}
 }

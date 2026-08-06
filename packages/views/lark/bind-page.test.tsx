@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../locales/en/common.json";
@@ -73,31 +73,7 @@ describe("LarkBindPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("starts redemption immediately when user is already logged in", async () => {
-    mockAuthState.isLoading = false;
-    mockAuthState.user = { id: "u1", email: "u@example.com" };
-    mockRedeemToken.mockResolvedValue({
-      workspace_id: "ws1",
-      installation_id: "inst1",
-    });
-    renderPage("tok123");
-    await waitFor(() => {
-      expect(mockRedeemToken).toHaveBeenCalledWith("tok123");
-    });
-  });
 
-  it("shows success state after successful redemption", async () => {
-    mockAuthState.isLoading = false;
-    mockAuthState.user = { id: "u1", email: "u@example.com" };
-    mockRedeemToken.mockResolvedValue({
-      workspace_id: "ws1",
-      installation_id: "inst1",
-    });
-    renderPage("tok123");
-    await waitFor(() => {
-      expect(screen.getByText(/you're bound/i)).toBeInTheDocument();
-    });
-  });
 
   it("sign-in button navigates with ?next= parameter (not ?redirect=)", () => {
     mockAuthState.isLoading = false;

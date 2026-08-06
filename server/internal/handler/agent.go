@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -296,27 +297,6 @@ func (h *Handler) attachAgentRuntimeNames(ctx context.Context, resps []AgentResp
 	}
 }
 
-// RepoData holds repository information included in claim responses so the
-// daemon can set up worktrees for each workspace repo.
-type RepoData struct {
-	URL         string `json:"url"`
-	Description string `json:"description,omitempty"`
-}
-
-// ProjectResourceData is the wire shape for a project resource included in a
-// claim response. The daemon reads this list and writes it into the agent's
-// working directory so skills/agents can discover project-scoped context.
-//
-// resource_ref is type-specific JSON; the daemon doesn't interpret it beyond
-// well-known fields like url for github_repo. New types can be added without
-// changing this struct.
-type ProjectResourceData struct {
-	ID           string          `json:"id"`
-	ResourceType string          `json:"resource_type"`
-	ResourceRef  json.RawMessage `json:"resource_ref"`
-	Label        string          `json:"label,omitempty"`
-}
-
 type AgentTaskResponse struct {
 	ID          string         `json:"id"`
 	AgentID     string         `json:"agent_id"`
@@ -361,33 +341,18 @@ type AgentTaskResponse struct {
 	// routes through the bridge and its trajectory is captured. Nil for the
 	// overwhelming majority of (non-trained) tasks; omitempty so old daemons
 	// ignore it. See §4.4.
-	ArealProxy *ArealProxyData `json:"areal_proxy,omitempty"`
-	// SharedWorkdirEnvID carries the shared_sandbox workdir anchor extracted
-	// from the task's context.shared_workdir at claim time (stamped by the
-	// env-dispatch enqueue for shared-mode runs). When present the daemon
-	// anchors the run to the sample env's single shared working directory
-	// instead of the per-agent root (research D5, FR-008). Empty for
-	// non-shared tasks; omitempty so old daemons ignore it.
-	SharedWorkdirEnvID string     `json:"shared_workdir_env_id,omitempty"`
-	Repos              []RepoData `json:"repos,omitempty"`
-	ProjectID          string     `json:"project_id,omitempty"`   // issue's project, when present
-	ChannelID          string     `json:"channel_id,omitempty"`   // exact DM/channel surface, when present
-	ChannelKind        string     `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; personal-memory entry gate
+	ArealProxy         *ArealProxyData `json:"areal_proxy,omitempty"`
+	SharedWorkdirEnvID string          `json:"shared_workdir_env_id,omitempty"`
+	ProjectID          string          `json:"project_id,omitempty"`   // issue's project, when present
+	ChannelID          string          `json:"channel_id,omitempty"`   // exact DM/channel surface, when present
+	ChannelKind        string          `json:"channel_kind,omitempty"` // "dm" | "group" when ChannelID is set; personal-memory entry gate
 	// ScopedSecrets carries channel/project secrets for daemon injection after
 	// scope filtering (LRM-953). Empty until a secret store populates them.
-	ScopedSecrets    []ScopedSecretData    `json:"scoped_secrets,omitempty"`
-	ProjectTitle     string                `json:"project_title,omitempty"`     // for surfacing in agent context
-	ProjectResources []ProjectResourceData `json:"project_resources,omitempty"` // resources attached to the project
-	// ProvisionManagedWorkdir signals the daemon to lazily create a managed
-	// shared working directory for this task's project (one that has no
-	// resource yet) at <WorkspacesRoot>/<ManagedWorkdirRelPath>, run the task
-	// there, and self-register it so later tasks reuse it. Older daemons ignore
-	// these fields (omitempty) and fall back to an ephemeral per-task workdir.
-	ProvisionManagedWorkdir bool   `json:"provision_managed_workdir,omitempty"`
-	ManagedWorkdirRelPath   string `json:"managed_workdir_rel_path,omitempty"`
-	CreatedAt               string `json:"created_at"`
-	PriorSessionID          string `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
-	PriorWorkDir            string `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
+	ScopedSecrets  []ScopedSecretData `json:"scoped_secrets,omitempty"`
+	ProjectTitle   string             `json:"project_title,omitempty"` // for surfacing in agent context
+	CreatedAt      string             `json:"created_at"`
+	PriorSessionID string             `json:"prior_session_id,omitempty"` // session ID from a previous task on same issue
+	PriorWorkDir   string             `json:"prior_work_dir,omitempty"`   // work_dir from a previous task on same issue
 	// RuntimeStateGeneration is the D6-1a wire contract from agent_runtime_state:
 	// inbox claim ensures the row and fills generation only. FreshSessionNoticeReason
 	// stays empty on the claim path until D6-2 completes canonical archive/read-switch
@@ -398,9 +363,8 @@ type AgentTaskResponse struct {
 	FreshSessionNoticeReason string `json:"fresh_session_notice_reason,omitempty"`
 	WorkDir                  string `json:"work_dir,omitempty"` // local working directory pinned for this task; populated once the daemon reports it
 	// RelativeWorkDir is a privacy-safe display form of WorkDir intended for
-	// the UI. For standard tasks it strips the daemon's workspaces root so
-	// the user sees `<wsUUID>/<taskShort>/workdir`; for local_directory
-	// tasks the absolute path lives outside the envRoot layout, so we strip
+	// the UI. For current tasks it strips the daemon's workspace root so the
+	// user sees `<workspaceUUID>/agents/<agentUUID>`; for legacy/external paths we strip
 	// recognised home-directory prefixes (`/Users/<name>/`, `/home/<name>/`,
 	// `<drive>:/Users/<name>/`) and otherwise fall back to the basename so
 	// the field never carries the user's home dir or account name. Empty
@@ -621,7 +585,7 @@ func taskToResponse(t db.AgentInboxEvent, workspaceID string) AgentTaskResponse 
 		TriggerCommentID: uuidToPtr(t.TriggerCommentID),
 		TriggerSummary:   textToPtr(t.TriggerSummary),
 		WorkDir:          workDir,
-		RelativeWorkDir:  relativeWorkDir(workDir, workspaceID, uuidToString(t.ID)),
+		RelativeWorkDir:  relativeWorkDir(workDir, workspaceID, uuidToString(t.AgentID)),
 		// Surface task source so the UI can distinguish issue-linked tasks
 		// from chat-spawned or autopilot-spawned ones; all three may arrive
 		// with issue_id = "" once a task has no linked issue.
@@ -672,11 +636,11 @@ func parseSharedWorkdirEnvID(raw []byte) string {
 // rendered in transcripts that frequently end up in screen shares,
 // screenshots, and recordings, so this function is the only guard.
 //
-//   - For standard tasks (work_dir laid out as `<workspacesRoot>/<wsUUID>/
-//     <taskShort>/workdir` by execenv.Prepare), it strips everything up to and
-//     including the workspaces root, returning `<wsUUID>/<taskShort>/workdir`.
-//   - For local_directory tasks the absolute path lives outside the envRoot
-//     layout. We try to recognise common home-directory prefixes
+//   - For current tasks (work_dir laid out as `<workspacesRoot>/<wsUUID>/
+//     agents/<agentUUID>`), it strips everything up to and including the
+//     workspaces root, returning `<wsUUID>/agents/<agentUUID>`.
+//   - For unexpected external paths, we try to recognise common
+//     home-directory prefixes
 //     (`/Users/<name>/`, `/home/<name>/`, `<drive>:/Users/<name>/`) and strip
 //     them, returning the remainder (e.g. `repos/foo`). When the prefix
 //     can't be recognised — unusual home layouts, network mounts, paths
@@ -685,11 +649,8 @@ func parseSharedWorkdirEnvID(raw []byte) string {
 //
 // Returns empty when work_dir is empty, or when stripping leaves nothing
 // (i.e. work_dir was exactly the user's home — rendering nothing is
-// preferable to a chip that says `<name>`). shortTaskID() must stay in
-// lock-step with server/internal/daemon/execenv/git.go:shortID — both
-// consume the same task UUID; if that helper changes, this one must too
-// or the envRoot match silently degrades to the local_directory fallback.
-func relativeWorkDir(workDir, workspaceID, taskID string) string {
+// preferable to a chip that says `<name>`).
+func relativeWorkDir(workDir, workspaceID, agentID string) string {
 	if workDir == "" {
 		return ""
 	}
@@ -697,8 +658,8 @@ func relativeWorkDir(workDir, workspaceID, taskID string) string {
 	// reasons about forward slashes.
 	normalized := strings.ReplaceAll(workDir, "\\", "/")
 
-	if workspaceID != "" && taskID != "" {
-		envRootSuffix := workspaceID + "/" + shortTaskID(taskID)
+	if workspaceID != "" && agentID != "" {
+		envRootSuffix := agentworkspace.RootRelPath(workspaceID, agentID)
 		if idx := strings.Index(normalized, envRootSuffix); idx >= 0 {
 			return normalized[idx:]
 		}
@@ -709,18 +670,6 @@ func relativeWorkDir(workDir, workspaceID, taskID string) string {
 	}
 
 	return basename(normalized)
-}
-
-// shortTaskID mirrors execenv.shortID — first 8 hex chars of the UUID
-// with dashes stripped. Kept inline here so the agent handler has zero
-// imports from the daemon package (which would create an unwanted cycle
-// between handler and daemon).
-func shortTaskID(uuid string) string {
-	s := strings.ReplaceAll(uuid, "-", "")
-	if len(s) > 8 {
-		return s[:8]
-	}
-	return s
 }
 
 // homeDirPattern matches the well-known per-user home layouts on macOS,
@@ -752,8 +701,7 @@ func stripHomePrefix(p string) (string, bool) {
 // basename returns the last non-empty segment of a forward-slash path.
 // Used as the ultimate privacy-safe fallback when we can't otherwise
 // recognise the path: a single segment can never expose the home prefix,
-// and the leaf is almost always the most useful piece of context anyway
-// (typically the repo directory name for local_directory tasks).
+// and the leaf is the most useful safe context available.
 func basename(p string) string {
 	p = strings.TrimRight(p, "/")
 	if p == "" {
@@ -1030,6 +978,12 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// LRM-2343: agent creation (both Proposal commit and bare manual create)
+	// is gated behind the unified `manageAgents` capability (workspace
+	// owner/admin, human only). UI enable/disable is never the only defense.
+	if _, ok := h.requireManageAgents(w, r, workspaceID, "workspace not found"); !ok {
+		return
+	}
 
 	displayName := strings.TrimSpace(req.DisplayName)
 	if displayName == "" && req.Username == nil {
@@ -1135,6 +1089,18 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// LRM-2343 S2: canonical Message-backed commit seam. The agent:create
+	// proposal lives on a channel_message; CreateAgent carries its id and the
+	// whole commit (CAS prepared->executed + Agent + snapshots) is one tx.
+	actionMessageID, hasActionMessageID, err := extractActionMessageID(rawFields)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if hasActionMessageID && hasActionCardID {
+		writeError(w, http.StatusBadRequest, "action_message_id and action_card_id are mutually exclusive")
+		return
+	}
 	// Research / legacy seed only: draft_id still loads initial notes/memory when
 	// present. Agent hire must not use drafts (agent draft create is 410).
 	draftID, hasDraftID, err := extractDraftID(rawFields)
@@ -1144,6 +1110,10 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if hasDraftID && hasActionCardID {
 		writeError(w, http.StatusBadRequest, "action_card_id and draft_id are mutually exclusive")
+		return
+	}
+	if hasDraftID && hasActionMessageID {
+		writeError(w, http.StatusBadRequest, "action_message_id and draft_id are mutually exclusive")
 		return
 	}
 	initialNotes := cleanInitialContextMap(req.InitialNotes, allowedInitialNoteSeedPath)
@@ -1199,7 +1169,26 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	applyCreateAgentAvatar(&createParams, avatar)
 
 	var created db.Agent
-	if req.Username != nil {
+	createdViaActionMessage := false
+	if hasActionMessageID {
+		// LRM-2343 S2: commit the prepared proposal Message atomically. This path
+		// creates the Agent, adds the system #general membership and CAS's the
+		// action prepared->executed all in one transaction, with action_message_id
+		// + final-payload-hash idempotency (same replay -> same Agent; different
+		// -> 409). It returns early here; the shared post-commit side effects
+		// (skill suggestions, reconcile, events, reminder) run below.
+		created, err = h.createAgentFromActionMessage(r.Context(), wsUUID, parseUUID(ownerID), actionMessageID, createParams, displayName)
+		if err != nil {
+			var cErr *codedActionCommitError
+			if errors.As(err, &cErr) {
+				writeCodedError(w, cErr.status, cErr.code, cErr.msg)
+			} else {
+				writeError(w, http.StatusInternalServerError, "failed to create agent from proposal: "+err.Error())
+			}
+			return
+		}
+		createdViaActionMessage = true
+	} else if req.Username != nil {
 		if err := validateIdentityHandle(*req.Username); err != nil {
 			writeError(w, http.StatusBadRequest, "username must be 1-32 lowercase letters, digits, or hyphens")
 			return
@@ -1228,7 +1217,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
-	if hasActionCardID {
+	if !createdViaActionMessage && hasActionCardID {
 		code, markErr := h.markActionCardDone(r, workspaceID, actionCardID, parseUUID(ownerID), created.ID)
 		if markErr != nil {
 			slog.Warn("mark action card done failed", append(logger.RequestAttrs(r), "error", markErr, "action_card_id", uuidToString(actionCardID))...)
@@ -1247,7 +1236,6 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	if len(initialNotes) > 0 || len(initialMemory) > 0 {
 		h.seedAgentInitialContext(r, created, initialNotes, initialMemory)
 	}
-
 	h.refreshAgentSkillSuggestions(r.Context(), created)
 
 	if runtime.Status == "online" {

@@ -108,7 +108,7 @@ looking at the managed block in `$CODEX_HOME/config.toml`.
 ```bash
 # Inspect the managed block the daemon wrote for a given task.
 sed -n '/# BEGIN multica-managed/,/# END multica-managed/p' \
-  ~/multica_workspaces/$WORKSPACE_ID/$TASK_SHORT/codex-home/config.toml
+  ~/.multica/workspaces/$WORKSPACE_ID/agents/$AGENT_ID/codex-home/config.toml
 ```
 
 The block is idempotent — re-running a task rewrites it in place.

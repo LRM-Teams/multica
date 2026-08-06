@@ -1460,7 +1460,7 @@ type ExpireQueuedTasksOnOfflineRuntimesParams struct {
 // and claiming the task. If the sandbox/daemon never comes up, the task would
 // otherwise sit in 'queued' until the slow 2h queued-TTL sweep. This drains it
 // in ~5 min so the rollout fails promptly. FailTasksForOfflineRuntimes does NOT
-// cover this: it only touches dispatched/running/waiting_local_directory, so
+// cover this: it only touches in-flight tasks, so
 // 'queued' rows on offline runtimes are otherwise only caught by the 2h sweep.
 //
 // Same concurrency contract as ExpireStaleQueuedTasks: FOR UPDATE SKIP LOCKED
@@ -1829,11 +1829,6 @@ type FailStaleTasksParams struct {
 // Fails tasks stuck in dispatched/running beyond the given thresholds.
 // Handles cases where the daemon is alive but the task is orphaned
 // (e.g. agent process hung, daemon failed to report completion).
-// waiting_local_directory rows are intentionally excluded: the daemon owns
-// the wait (with its own ctx-driven timeout) and a legitimate queue ahead
-// of this task can exceed the dispatch / running timeouts without being
-// "stuck". If the daemon dies, RecoverOrphanedTasksForRuntime reclaims
-// those rows at restart.
 func (q *Queries) FailStaleTasks(ctx context.Context, arg FailStaleTasksParams) ([]AgentInboxEvent, error) {
 	rows, err := q.db.Query(ctx, failStaleTasks, arg.DispatchTimeoutSecs, arg.RunningTimeoutSecs)
 	if err != nil {
@@ -2330,8 +2325,7 @@ SELECT count(*) > 0 AS has_active FROM agent_inbox_event
 WHERE issue_id = $1 AND status IN ('pending', 'draining', 'failed')
 `
 
-// Returns true if there is any queued, dispatched, waiting_local_directory,
-// or running task for the issue.
+// Returns true if there is any active task for the issue.
 func (q *Queries) HasActiveTaskForIssue(ctx context.Context, issueID pgtype.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, hasActiveTaskForIssue, issueID)
 	var has_active bool
@@ -2351,7 +2345,7 @@ type HasOtherActiveTaskForRuntimeParams struct {
 	ExcludeTask pgtype.UUID `json:"exclude_task"`
 }
 
-// Returns true if any queued/dispatched/running/waiting_local_directory task
+// Returns true if any active task
 // OTHER than the given one is still bound to this runtime. Used by the Phase 5
 // ephemeral-sandbox cleanup guard: a retry child inherits the parent's runtime_id
 // (CreateRetryTask copies runtime_id), so the sandbox + runtime must not be
@@ -3289,84 +3283,6 @@ func (q *Queries) MarkAgentRuntimeReassigned(ctx context.Context, id pgtype.UUID
 	return err
 }
 
-const markAgentTaskWaitingLocalDirectory = `-- name: MarkAgentTaskWaitingLocalDirectory :one
-UPDATE agent_inbox_event
-SET wait_reason = $2
-WHERE id = $1 AND status = 'draining'
-RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
-`
-
-type MarkAgentTaskWaitingLocalDirectoryParams struct {
-	ID         pgtype.UUID `json:"id"`
-	WaitReason pgtype.Text `json:"wait_reason"`
-}
-
-// Transitions a freshly-dispatched task into 'waiting_local_directory' while
-// the daemon waits for another in-flight task to release the path lock on a
-// project_resource of type local_directory. wait_reason carries a short
-// human-readable hint (typically the contested path) that the UI surfaces
-// alongside the status.
-//
-// The CHECK only allows the transition from 'dispatched' so a daemon can't
-// mark an already-running or terminal task as waiting; the StartAgentTask
-// mutation handles the reverse transition once the lock is acquired.
-func (q *Queries) MarkAgentTaskWaitingLocalDirectory(ctx context.Context, arg MarkAgentTaskWaitingLocalDirectoryParams) (AgentInboxEvent, error) {
-	row := q.db.QueryRow(ctx, markAgentTaskWaitingLocalDirectory, arg.ID, arg.WaitReason)
-	var i AgentInboxEvent
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.AgentSessionID,
-		&i.ConversationID,
-		&i.ChannelID,
-		&i.ChatSessionID,
-		&i.AgentID,
-		&i.SourceMessageID,
-		&i.Reason,
-		&i.RequiresWake,
-		&i.Status,
-		&i.Priority,
-		&i.SeqFrom,
-		&i.SeqTo,
-		&i.Attempt,
-		&i.LastError,
-		&i.ClaimedAt,
-		&i.AckedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.TerminalOutcome,
-		&i.TerminalDeliveryID,
-		&i.Retryable,
-		&i.TerminalAt,
-		&i.RuntimeID,
-		&i.ExecutionConfig,
-		&i.DeliveryMode,
-		&i.ResponseMode,
-		&i.ChannelOnboardingID,
-		&i.IssueID,
-		&i.SourceChatMessageID,
-		&i.Context,
-		&i.DispatchedAt,
-		&i.StartedAt,
-		&i.CompletedAt,
-		&i.Result,
-		&i.Error,
-		&i.SessionID,
-		&i.WorkDir,
-		&i.TriggerCommentID,
-		&i.AutopilotRunID,
-		&i.MaxAttempts,
-		&i.ParentTaskID,
-		&i.FailureReason,
-		&i.TriggerSummary,
-		&i.ForceFreshSession,
-		&i.IsLeaderTask,
-		&i.WaitReason,
-		&i.InitiatorUserID,
-	)
-	return i, err
-}
-
 const mergeTaskArealProxyContext = `-- name: MergeTaskArealProxyContext :exec
 UPDATE agent_inbox_event
 SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object('areal_proxy', $1::jsonb)
@@ -3405,12 +3321,8 @@ WHERE runtime_id = $1 AND status = 'draining'
 RETURNING id, workspace_id, agent_session_id, conversation_id, channel_id, chat_session_id, agent_id, source_message_id, reason, requires_wake, status, priority, seq_from, seq_to, attempt, last_error, claimed_at, acked_at, created_at, updated_at, terminal_outcome, terminal_delivery_id, retryable, terminal_at, runtime_id, execution_config, delivery_mode, response_mode, channel_onboarding_id, issue_id, source_chat_message_id, context, dispatched_at, started_at, completed_at, result, error, session_id, work_dir, trigger_comment_id, autopilot_run_id, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
-// Called by the daemon at startup. Atomically fails any dispatched/running/
-// waiting_local_directory task that the prior incarnation of this runtime
-// owned but did not finalize. Returns the failed rows so callers can hand
-// them to the auto-retry path. waiting_local_directory rows are included
-// because the daemon holding the path lock is the same process that just
-// died — without us, the row would sit waiting forever.
+// Called by the daemon at startup. Atomically fails any in-flight delivery
+// that the prior incarnation of this runtime owned but did not finalize.
 func (q *Queries) RecoverOrphanedTasksForRuntime(ctx context.Context, runtimeID pgtype.UUID) ([]AgentInboxEvent, error) {
 	rows, err := q.db.Query(ctx, recoverOrphanedTasksForRuntime, runtimeID)
 	if err != nil {
@@ -3698,12 +3610,7 @@ WHERE atq.id = $1
 RETURNING atq.id, atq.workspace_id, atq.agent_session_id, atq.conversation_id, atq.channel_id, atq.chat_session_id, atq.agent_id, atq.source_message_id, atq.reason, atq.requires_wake, atq.status, atq.priority, atq.seq_from, atq.seq_to, atq.attempt, atq.last_error, atq.claimed_at, atq.acked_at, atq.created_at, atq.updated_at, atq.terminal_outcome, atq.terminal_delivery_id, atq.retryable, atq.terminal_at, atq.runtime_id, atq.execution_config, atq.delivery_mode, atq.response_mode, atq.channel_onboarding_id, atq.issue_id, atq.source_chat_message_id, atq.context, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.autopilot_run_id, atq.max_attempts, atq.parent_task_id, atq.failure_reason, atq.trigger_summary, atq.force_fresh_session, atq.is_leader_task, atq.wait_reason, atq.initiator_user_id
 `
 
-// Transitions a task to running. Accepts either 'dispatched' (the normal
-// claim → run flow) or 'waiting_local_directory' (the daemon held the row in
-// a wait state while another task owned the local_directory path lock; once
-// the lock was acquired the daemon flips here). wait_reason is cleared on
-// the transition so a future read can't conflate "currently waiting" with
-// "previously waited".
+// Transitions a claimed delivery to running and clears any generic wait hint.
 func (q *Queries) StartAgentTask(ctx context.Context, id pgtype.UUID) (AgentInboxEvent, error) {
 	row := q.db.QueryRow(ctx, startAgentTask, id)
 	var i AgentInboxEvent
@@ -4001,10 +3908,11 @@ type UpdateAgentTaskSessionParams struct {
 	WorkDir   pgtype.Text `json:"work_dir"`
 }
 
-// Pins the resume pointer mid-flight so a daemon crash leaves a usable
-// session_id/work_dir on the task row. No-op if the task is no longer
-// in dispatched/running. waiting_local_directory tasks have no session yet
-// so this query intentionally skips them.
+// Pins the provider-CLI resume pointer mid-flight so a daemon crash leaves a
+// usable session_id/work_dir on the task row (PinTaskSession / --resume).
+// This TEXT column is NOT agent_session / agent_session_id (Multica inbox
+// wake/drain UUID). No FK between them; task #109. No-op if the task is no
+// longer draining.
 func (q *Queries) UpdateAgentTaskSession(ctx context.Context, arg UpdateAgentTaskSessionParams) error {
 	_, err := q.db.Exec(ctx, updateAgentTaskSession, arg.ID, arg.SessionID, arg.WorkDir)
 	return err

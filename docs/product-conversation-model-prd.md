@@ -113,10 +113,9 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 - **三种 file ref 分清（不混为一谈）**：`attachment_ref`（会话资产）｜`workspace_file_ref`（受管 workspace 文件，可浏览可显示路径）｜**raw host 绝对路径**（如 /Users/xxx/...，不可移植、对他人无效）——裸 host path 不能当聊天链接，发出前必须转成前两者之一。context_pack 记录使用/读取的是哪种 ref。
 **查看（human）**：图片 = 有界内联预览（点开 viewer/下载）；其他文件 = file row 卡片（图标/文件名/大小 + 下载）；搜索/quote/thread 预览走 CompactSummary 文本；移动端查看体验进 #198 交互稿。
 **查看（agent，省 token）**：附件内容**不自动注入**上下文；unread bundle/context_pack 只带元数据（id/名/型/大小）；需要内容时**显式 fetch**（权限限 conversation/thread）；**context_pack 记录本次 run 读了哪些附件/片段**——Activity 里可见，但附件本身不变成 trace/message。
-**三个存储层（画进架构图）**：
+**两个持久存储层（画进架构图）**：
 - **Product Attachment Store**：消息/会话文件的 source of truth；
-- **Run Workspace**（现有 per-run workdir）：附件 materialized 工作副本、工具临时产物；TTL/GC，不承诺长期保存；
-- **Agent Workspace**（未来，§15）：agent 持久私有区；**仅显式 Save to agent workspace 才写入**——P1 不承诺此体验，只定义该未来策略，避免 P1 被拖大。
+- **Agent Workspace**：`~/.multica/workspaces/<workspace_id>/agents/<agent_id>/`，既是持久私有区也是每次运行的 cwd；Agent 自己决定是否把附件或工具产物保存到这里。
 **API 契约（Frank 定）**：查询/读取 attachment 时**必须返回可用 URL**（view/download），经权限校验签发（建议短时效 signed URL，不暴露裸 storage 路径）；消息里存的是 attachment_id/ref，URL 由查询时按当前权限动态给出。
 **边界态**：上传中/失败可重试；删除后 tombstone「附件已删除」；**无权限只显示"无权访问的附件"，不泄文件名**；大小/类型白名单；留存跟随消息生命周期。
 **Scope**：P1 = channel/dm 发送+查看（复用现有 attachment 关联/托盘/parts 契约）；**issue 附件维持现状 schema**，仅行为对齐。naming：UI 只叫「附件 / Attachment」。
@@ -284,7 +283,7 @@ Frank 四条原始需求：① agent 自然回复 issue；② agent↔human DM�
 
 ## 15. 关联独立方向：Agent Memory / Workspace
 Frank 已确认要做：per-agent 持久私有 workspace/memory（跨会话 MEMORY.md/notes/artifacts，像 Raft 一样让 agent 跨时间积累专长）。与本 PRD 的会话层（共享、权限/审计）是两层。
-**代码事实（2026-07-03 已核）**：Multica 今天**没有**这个——只有 per-run 任务 workdir（`agent_task_queue.work_dir`，`/multica_workspaces/{ws}/{taskShort}/workdir`，GC 不复用）、project 绑定目录（local_directory/worktree）、以及 `agent_memory` 表（runtime 同步的记忆记录，非可浏览工作区）。没有持久 workspace，agent 每次 run 失忆，攒不出专长——这是该方向的核心 justification。
+**当前代码事实（2026-08-05）**：每个 Agent 使用 `~/.multica/workspaces/<workspace_id>/agents/<agent_id>/` 作为持久根与 cwd；同一 Agent 跨 task、daemon 重启和 provider 切换复用。旧 per-run 目录不迁移、不扫描、不删除。
 单独 PRD 覆盖：存什么/谁能看/审计/容量清理/导出删除/与会话 attachment 的边界（显式 Save to agent workspace 才写入，见 §4.1）。
 
 ## 16. v2.3→v2.4 Delta / Implementation Map（供 Miles 排期 + Iris QA reconcile）

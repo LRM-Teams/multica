@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/memorycuration"
 )
 
@@ -227,44 +228,12 @@ func sharedSkillScanRoot(cfg Config, provider string) (string, bool) {
 	}
 }
 
-func piAgentRoot(cfg Config, workspaceID, agentID string) string {
-	return multicaAgentRoot(cfg, workspaceID, agentID)
-}
-
-// multicaAgentRoot is the authoritative on-disk root for one Multica agent.
-// It is keyed only by workspace + agent ID (LRM-955): switching coding harness /
-// provider / runtime on the same machine must keep reading and writing this
-// same tree. Provider session state and task workdirs may diverge; memory must not.
-func multicaAgentRoot(cfg Config, workspaceID, agentID string) string {
-	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".multica", "agents", agentID)
-}
-
-func legacyPiAgentRoot(cfg Config, workspaceID, agentID string) string {
-	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".pi", "agents", agentID)
-}
-
-func deviceMemoryRoot(agentRoot, daemonID string) string {
-	daemonID = strings.TrimSpace(daemonID)
-	if daemonID == "" || daemonID == "." || daemonID == ".." || filepath.Base(daemonID) != daemonID {
-		return ""
-	}
-	return filepath.Join(agentRoot, "devices", daemonID)
-}
-
-func ensureDeviceMemoryRoot(agentRoot, daemonID string) (string, error) {
-	root := deviceMemoryRoot(agentRoot, daemonID)
-	if root == "" {
-		return "", nil
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", err
-	}
-	if err := ensureFile(filepath.Join(root, "STATE.md"), "# Device-local State\n\nAbsolute paths, installed tools, loopback endpoints, and other facts that apply only to this daemon device. This file is never replicated as portable center memory.\n"); err != nil {
-		return "", err
-	}
-	return root, nil
-}
-
+// The authoritative on-disk root for one Multica agent is now resolved through
+// execenv (PredictAgentRootDir / ResolveAgentWorkspaceLayout), keyed only by
+// workspace + agent ID (LRM-955): switching coding harness / provider / runtime
+// on the same machine must keep reading and writing this same tree. The tree is
+// also the Agent's durable execution cwd. The agentRoot helpers below operate
+// on an already-resolved root.
 func agentSyncQueueDir(agentRoot string) string { return filepath.Join(agentRoot, "sync_queue") }
 func agentSkillDraftsDir(agentRoot string) string {
 	return filepath.Join(agentRoot, "skills", "drafts")
@@ -276,110 +245,10 @@ func agentSkillCandidatesPath(agentRoot string) string {
 	return filepath.Join(agentSyncQueueDir(agentRoot), "skill-candidates.jsonl")
 }
 
-// Legacy names remain for compatibility with callers that still refer to the
-// original Pi-only queue. The on-disk contract is provider-neutral.
-func piAgentSyncQueueDir(agentRoot string) string   { return agentSyncQueueDir(agentRoot) }
-func piAgentSkillDraftsDir(agentRoot string) string { return agentSkillDraftsDir(agentRoot) }
-func piAgentMemoryCandidatesPath(agentRoot string) string {
-	return agentMemoryCandidatesPath(agentRoot)
-}
-func piAgentSkillCandidatesPath(agentRoot string) string { return agentSkillCandidatesPath(agentRoot) }
-
-func ensurePiAgentRoot(root string) error {
-	return ensureMulticaAgentRoot(root)
-}
-
 func ensureMulticaAgentRoot(root string) error {
-	dirs := []string{
-		filepath.Join(root, "memory", "daily"),
-		filepath.Join(root, "memory", "audit"),
-		filepath.Join(root, "notes"),
-		filepath.Join(root, "projects"),
-		filepath.Join(root, "users"),
-		filepath.Join(root, "channels"),
-		filepath.Join(root, "runtime", "pi"),
-		filepath.Join(root, "runtime", "openclaw"),
-		filepath.Join(root, "runtime", "codex"),
-		filepath.Join(root, "runtime", "claude"),
-		filepath.Join(root, "devices"),
-		filepath.Join(root, "skills", "drafts"),
-		filepath.Join(root, "skills", "generated"),
-		filepath.Join(root, "skills", "enabled"),
-		filepath.Join(root, "inbox", "memory"),
-		filepath.Join(root, "inbox", "skills"),
-		filepath.Join(root, "shared-cache", "memory"),
-		filepath.Join(root, "shared-cache", "skills"),
-		filepath.Join(root, "profile"),
-		filepath.Join(root, "feedback"),
-		filepath.Join(root, "sync_queue"),
-		filepath.Join(root, "sessions"),
-		filepath.Join(root, "repos"),
-	}
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-	}
-	files := map[string]string{
-		filepath.Join(root, "memory", "MEMORY.md"):          "# Agent Memory\n\nSource of truth: Multica agent settings. This file supplements live agent instructions; it does not override them.\n",
-		filepath.Join(root, "memory", "USER.md"):            "# User Preferences\n\nDurable user preferences relevant to this Multica agent.\n",
-		filepath.Join(root, "memory", "STATE.md"):           "# Agent State\n\nCurrent dated state, temporary facts, and active initiatives.\n",
-		filepath.Join(root, "memory", "REVIEW.md"):          "# Memory Review\n\nPending memory candidates, conflicts, and curator review notes.\n",
-		filepath.Join(root, "memory", "SCRATCHPAD.md"):      "# Scratchpad\n\nTransient notes that should not be treated as durable memory.\n",
-		filepath.Join(root, "notes", "agent-plan.md"):       defaultAgentPlanTemplate(),
-		filepath.Join(root, "notes", "agents.md"):           "# Agents\n\nKnown teammates, roles, and collaboration boundaries.\n",
-		filepath.Join(root, "notes", "channels.md"):         "# Channels\n\nChannel and DM purpose, participants, language, and routing context.\n",
-		filepath.Join(root, "notes", "project-map.md"):      "# Project Map\n\nWorkspace/project orientation, repos, commands, risks, and conventions.\n",
-		filepath.Join(root, "notes", "relationship-map.md"): "# Relationship Map\n\nDurable collaboration preferences and relationship context.\n",
-		filepath.Join(root, "notes", "role-playbook.md"):    "# Role Playbook\n\nRole-specific operating methods. Live Multica agent instructions remain authoritative.\n",
-		filepath.Join(root, "notes", "work-log.md"):         "# Work Log\n\nConcise task history and handoffs.\n",
-		filepath.Join(root, "notes", "decisions.md"):        "# Decisions\n\nDurable decisions relevant to this agent.\n",
-	}
-	for path, content := range files {
-		if err := ensureFile(path, content); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func defaultAgentPlanTemplate() string {
-	return `# Agent Plan
-
-Source of truth: Multica agent settings and live user instructions. This file is the agent's long-lived operating plan for proactive work; it supplements memory and must not override instructions.
-
-## Mission
-- What this agent is responsible for over time.
-- What successful work looks like.
-
-## Ownership
-- Projects, modules, directories, channels, issue types, or domains this agent should watch.
-
-## Current Project State
-- Current understanding of project progress, risks, and recent changes.
-
-## Active Work
-- Work this agent is currently driving or should keep following.
-
-## Watchlist
-- Code, issues, PRs, CI signals, user feedback, or technical debt to inspect periodically.
-
-## Completed Work
-- Important completed work, decisions, outcomes, and remaining follow-ups.
-
-## Future Bets
-- Ideas or hypotheses worth revisiting when there is new evidence.
-
-## Collaboration Map
-- Humans and agents this agent should coordinate with, including ownership boundaries.
-
-## Initiative Rules
-- Speak up when there is new evidence tied to this plan, a meaningful blocker, a risk, or a concrete next step.
-- Stay silent when there is no new evidence, the issue is already being handled, or the action would only add noise.
-
-## Last Checks
-- Record recent radar checks, actions taken, and no-action reasons to avoid repeated noise.
-`
+	// Writers create their own memory, skill, cache, and runtime paths. Keeping
+	// initialization lazy avoids a forest of empty folders and template files.
+	return os.MkdirAll(root, 0o755)
 }
 
 func ensureFile(path, content string) error {
@@ -487,24 +356,17 @@ func (d *Daemon) syncEvolutionSubmissionsForRuntime(ctx context.Context, rt Runt
 	}
 	payload := EvolutionSubmissionSyncPayload{}
 	pendingFingerprints := map[string]string{}
-	roots := []string{
-		filepath.Join(d.cfg.WorkspacesRoot, rt.WorkspaceID, ".multica", "agents"),
-		filepath.Join(d.cfg.WorkspacesRoot, rt.WorkspaceID, ".pi", "agents"),
-	}
-	for _, base := range roots {
-		submissions, err := d.scanEvolutionSubmissionsRoot(rt, base)
-		if err != nil {
-			d.logger.Warn("agent evolution root unavailable", "path", base, "provider", rt.Provider, "error", err)
-			continue
-		}
+	base := agentworkspace.AgentsDir(d.cfg.WorkspacesRoot, rt.WorkspaceID)
+	submissions, err := d.scanEvolutionSubmissionsRoot(rt, base)
+	if err != nil {
+		d.logger.Warn("agent evolution root unavailable", "path", base, "provider", rt.Provider, "error", err)
+	} else {
 		for _, submission := range submissions {
 			ackKey := evolutionSubmissionAckKey(submission.AgentID, submission.LocalUnitID)
 			fingerprint := evolutionSubmissionFingerprint(submission)
 			if acknowledged[ackKey] == fingerprint {
 				continue
 			}
-			// Prefer the first occurrence when a candidate is present in both the
-			// provider-neutral root and the legacy Pi root.
 			if _, exists := pendingFingerprints[ackKey]; exists {
 				continue
 			}
@@ -773,7 +635,7 @@ func evolutionSubmissionFingerprint(submission EvolutionSubmissionBundle) string
 }
 
 func evolutionAcknowledgementsPath(cfg Config, workspaceID string) string {
-	return filepath.Join(cfg.WorkspacesRoot, workspaceID, ".multica", "evolution-sync-acks.json")
+	return filepath.Join(agentworkspace.WorkspaceDir(cfg.WorkspacesRoot, workspaceID), ".multica", "evolution-sync-acks.json")
 }
 
 func loadEvolutionAcknowledgements(cfg Config, workspaceID string) (map[string]string, error) {

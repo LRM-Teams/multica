@@ -312,8 +312,7 @@ export function InsightTreeView({
           {visibleCount} {collapsedLabel}
         </span>
         <span className="text-xs text-muted-foreground" data-testid="viewport-context">
-          {viewportLabel} z{viewport.zoom.toFixed(2)} ({Math.round(viewport.viewportCenter.x)},
-          {Math.round(viewport.viewportCenter.y)})
+          {`${viewportLabel} z${viewport.zoom.toFixed(2)} (${Math.round(viewport.viewportCenter.x)}, ${Math.round(viewport.viewportCenter.y)})`}
         </span>
       </div>
 

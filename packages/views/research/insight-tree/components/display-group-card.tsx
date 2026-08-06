@@ -32,6 +32,7 @@ export function DisplayGroupCard({
     staleLabel?: string;
     expandLabel?: string;
     collapseLabel?: string;
+    hintLabel?: string;
   };
 }) {
   const L = labels ?? {};
@@ -40,6 +41,7 @@ export function DisplayGroupCard({
   const staleLabel = L.staleLabel ?? "已失效";
   const expandLabel = L.expandLabel ?? "展开改组";
   const collapseLabel = L.collapseLabel ?? "折叠改组";
+  const hintLabel = L.hintLabel ?? "非真实 Insight";
 
   const clickable = Boolean(onToggle || onSelect);
   const ariaLabel = [
@@ -94,7 +96,7 @@ export function DisplayGroupCard({
           </span>
         ) : (
           <span className="text-[10px] text-muted-foreground/60" data-testid="display-group-hint">
-            非真实 Insight
+            {hintLabel}
           </span>
         )}
         {clickable ? (

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { researchV6FixtureDelta, researchV6FixtureSnapshot } from "./research-v6-fixtures";
+import { researchV6FixtureDelta, researchV6FixtureSnapshot } from "../api/research-v6-fixtures";
 import {
   parseResearchV6Delta,
   parseResearchV6Snapshot,
   ResearchV6NodeKinds,
-} from "./research-v6-schemas";
+} from "./schemas";
 
 describe("research-v6 contract fixtures + schemas", () => {
   it("snapshot fixture round-trips through the lenient schema", () => {

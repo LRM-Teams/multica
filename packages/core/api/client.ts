@@ -111,7 +111,7 @@ import type {
   DashboardUsageByAgent,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
-  RuntimeUpdate,
+  MachineUpgrade,
   RuntimeRestart,
   AgentLifecycleActionKind,
   AgentLifecyclePreflight,
@@ -405,6 +405,8 @@ import {
   EMPTY_REMOVE_COMPUTER_AGENTS_RESPONSE,
   type DeleteComputerResponse,
   type RemoveComputerAgentsResponse,
+  MachineUpgradeSchema,
+  EMPTY_MACHINE_UPGRADE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1857,21 +1859,25 @@ export class ApiClient {
     );
   }
 
-  async initiateUpdate(
-    runtimeId: string,
+  async initiateMachineUpgrade(
+    daemonId: string,
     targetVersion: string,
-  ): Promise<RuntimeUpdate> {
-    return this.fetch(`/api/runtimes/${runtimeId}/update`, {
+    requestId: string,
+  ): Promise<MachineUpgrade> {
+    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades`, {
       method: "POST",
-      body: JSON.stringify({ target_version: targetVersion }),
+      body: JSON.stringify({ target_version: targetVersion, request_id: requestId }),
+    });
+    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
+      endpoint: "POST /api/daemons/:daemonId/upgrades",
     });
   }
 
-  async getUpdateResult(
-    runtimeId: string,
-    updateId: string,
-  ): Promise<RuntimeUpdate> {
-    return this.fetch(`/api/runtimes/${runtimeId}/update/${updateId}`);
+  async getMachineUpgrade(daemonId: string, upgradeId: string): Promise<MachineUpgrade> {
+    const raw = await this.fetch<unknown>(`/api/daemons/${daemonId}/upgrades/${upgradeId}`);
+    return parseWithFallback(raw, MachineUpgradeSchema, EMPTY_MACHINE_UPGRADE, {
+      endpoint: "GET /api/daemons/:daemonId/upgrades/:upgradeId",
+    });
   }
 
   async initiateRestart(runtimeId: string): Promise<RuntimeRestart> {

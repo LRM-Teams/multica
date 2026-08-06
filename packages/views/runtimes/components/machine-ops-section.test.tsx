@@ -30,8 +30,8 @@ vi.mock("@multica/core/workspace/queries", () => ({
 
 vi.mock("@multica/core/api", () => ({
   api: {
-    initiateUpdate: vi.fn(),
-    getUpdateResult: vi.fn(),
+    initiateMachineUpgrade: vi.fn(),
+    getMachineUpgrade: vi.fn(),
     initiateRestart: vi.fn(),
     getRestart: vi.fn(),
   },

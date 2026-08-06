@@ -1081,11 +1081,16 @@ func canDeleteRuntime(member db.Member, rt db.AgentRuntime) bool {
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
 }
 
-// canOwnRuntime is Computer-owner-only for upgrade/restart mutations.
-// Frank 2026-08-03: non-owners must not upgrade or restart others' machines;
-// workspace admin is not enough — FE hide is insufficient without a server 403.
+// canOwnRuntime is Computer-owner-only for restart mutations.
 func canOwnRuntime(member db.Member, rt db.AgentRuntime) bool {
 	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+}
+
+// canManageMachineUpgrade permits a computer owner or a workspace owner/admin
+// to start, inspect, or cancel a daemon-scoped machine upgrade. Restart remains
+// computer-owner-only because it is a separate, immediate machine mutation.
+func canManageMachineUpgrade(member db.Member, rt db.AgentRuntime) bool {
+	return roleAllowed(member.Role, "owner", "admin") || canOwnRuntime(member, rt)
 }
 
 // runtimesShareMachine reports whether two runtimes represent the same

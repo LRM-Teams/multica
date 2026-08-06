@@ -38,10 +38,8 @@ The chain is:
 multica runtime list --output json
 multica runtime usage <runtime-id> --output json
 multica runtime activity <runtime-id> --output json
-multica runtime update <runtime-id> --target-version <version> --output json
 ```
 
-`runtime update` changes active execution state.
 
 ## Debugging an Agent that did not run
 

@@ -55,37 +55,44 @@ func getMachineUpgradeRuntime(t *testing.T, runtimeID string) db.AgentRuntime {
 	return rt
 }
 
-func initiateMachineUpgradeThroughRuntime(t *testing.T, userID, runtimeID, target string) (*httptest.ResponseRecorder, UpdateRequest) {
+func initiateMachineUpgrade(t *testing.T, userID, daemonID, target string) (*httptest.ResponseRecorder, MachineUpgrade) {
 	t.Helper()
-	req := newRequestAsUser(userID, http.MethodPost, "/api/runtimes/"+runtimeID+"/update", map[string]string{"target_version": target})
-	req = withURLParam(req, "runtimeId", runtimeID)
+	req := newRequestAsUser(userID, http.MethodPost, "/api/daemons/"+daemonID+"/upgrades", map[string]string{
+		"target_version": target,
+		"request_id":     uuid.NewString(),
+	})
+	req = withURLParam(req, "daemonId", daemonID)
 	w := httptest.NewRecorder()
-	testHandler.InitiateUpdate(w, req)
+	testHandler.CreateMachineUpgrade(w, req)
 	if w.Code != http.StatusOK {
-		return w, UpdateRequest{}
+		return w, MachineUpgrade{}
 	}
-	return w, decodeUpdateResponse(t, w)
+	var op MachineUpgrade
+	if err := json.Unmarshal(w.Body.Bytes(), &op); err != nil {
+		t.Fatal(err)
+	}
+	return w, op
 }
 
-func TestMachineUpgrade_RuntimeCompatibilityRoutesShareOneDaemonOperation(t *testing.T) {
+func TestMachineUpgrade_CanonicalRouteSharesOneDaemonOperation(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
 
-	firstW, first := initiateMachineUpgradeThroughRuntime(t, testUserID, firstRuntimeID, "v9.9.9")
-	if firstW.Code != http.StatusOK || first.Status != UpdateQueued {
-		t.Fatalf("first runtime update = %d %+v", firstW.Code, first)
+	firstW, first := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	if firstW.Code != http.StatusOK || first.Phase != MachineUpgradeQueued {
+		t.Fatalf("first machine upgrade = %d %+v", firstW.Code, first)
 	}
-	secondW, second := initiateMachineUpgradeThroughRuntime(t, testUserID, secondRuntimeID, "v9.9.9")
-	if secondW.Code != http.StatusOK {
-		t.Fatalf("sibling runtime update = %d: %s", secondW.Code, secondW.Body.String())
+	secondW, _ := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
+	if secondW.Code != http.StatusConflict {
+		t.Fatalf("distinct request for same daemon = %d: %s", secondW.Code, secondW.Body.String())
 	}
-	if second.ID != first.ID {
-		t.Fatalf("sibling operation = %q, want canonical %q", second.ID, first.ID)
+	var conflict struct {
+		Operation MachineUpgrade `json:"operation"`
 	}
-	if second.RuntimeID != secondRuntimeID {
-		t.Fatalf("compatibility response runtime_id = %q, want sibling %q", second.RuntimeID, secondRuntimeID)
+	if err := json.Unmarshal(secondW.Body.Bytes(), &conflict); err != nil || conflict.Operation.ID != first.ID {
+		t.Fatalf("same daemon conflict = %+v err=%v, want canonical %q", conflict, err, first.ID)
 	}
 	if op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, first.ID); err != nil || op == nil || op.Phase != MachineUpgradeQueued {
 		t.Fatalf("canonical machine operation = %+v err=%v", op, err)
@@ -97,10 +104,10 @@ func TestMachineUpgrade_RuntimeCompatibilityRoutesShareOneDaemonOperation(t *tes
 		t.Fatal(err)
 	}
 	if legacyIntentCount != 0 {
-		t.Fatalf("compatibility route created %d legacy runtime intents", legacyIntentCount)
+		t.Fatalf("canonical route created %d legacy runtime intents", legacyIntentCount)
 	}
 
-	conflictW, _ := initiateMachineUpgradeThroughRuntime(t, testUserID, secondRuntimeID, "v10.0.0")
+	conflictW, _ := initiateMachineUpgrade(t, testUserID, daemonID, "v10.0.0")
 	if conflictW.Code != http.StatusConflict {
 		t.Fatalf("different target conflict = %d: %s", conflictW.Code, conflictW.Body.String())
 	}
@@ -163,7 +170,7 @@ func TestMachineUpgrade_CapableHeartbeatAcceptsAndRequiresEverySiblingAttestatio
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	_, created := initiateMachineUpgradeThroughRuntime(t, testUserID, firstRuntimeID, "v9.9.9")
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	secondRuntime := getMachineUpgradeRuntime(t, secondRuntimeID)
 
@@ -259,7 +266,7 @@ func TestMachineUpgrade_CapabilityAndManagedSetPreventUnsafeCompletion(t *testin
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	_, created := initiateMachineUpgradeThroughRuntime(t, testUserID, firstRuntimeID, "v9.9.9")
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET metadata = '{}'::jsonb WHERE id = $1`, firstRuntimeID); err != nil {
 		t.Fatal(err)
@@ -307,7 +314,7 @@ func TestMachineUpgrade_NewTargetProgressesDurablyBeforeHandoff(t *testing.T) {
 		t.Skip("database not available")
 	}
 	firstRuntimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	_, created := initiateMachineUpgradeThroughRuntime(t, testUserID, firstRuntimeID, "v10.0.0")
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v10.0.0")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	ack, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil)
 	if err != nil || ack.PendingMachineUpgrade == nil {
@@ -358,7 +365,7 @@ func TestMachineUpgrade_HandoffCompletesOnlyWithSuccessorSiblingSet(t *testing.T
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	_, created := initiateMachineUpgradeThroughRuntime(t, testUserID, firstRuntimeID, "v10.0.0")
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v10.0.0")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
 		t.Fatal(err)
@@ -393,7 +400,7 @@ func TestMachineUpgradeRollbackRequiresRestoredFullSiblingSet(t *testing.T) {
 		t.Skip("database not available")
 	}
 	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	_, created := initiateMachineUpgradeThroughRuntime(t, testUserID, firstRuntimeID, "v10.0.0")
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v10.0.0")
 	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
 	secondRuntime := getMachineUpgradeRuntime(t, secondRuntimeID)
 	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
@@ -435,8 +442,8 @@ func TestMachineUpgrade_ProjectsCanonicalOperationToEverySiblingRuntime(t *testi
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	firstRuntimeID, secondRuntimeID, _ := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	_, created := initiateMachineUpgradeThroughRuntime(t, testUserID, firstRuntimeID, "v9.9.9")
+	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 
 	req := newRequestAsUser(testUserID, http.MethodGet, "/api/runtimes", nil)
 	w := httptest.NewRecorder()
@@ -469,8 +476,8 @@ func TestMachineUpgrade_CanonicalAuthorizationAndCancellationBoundary(t *testing
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	firstRuntimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
-	_, created := initiateMachineUpgradeThroughRuntime(t, testUserID, firstRuntimeID, "v9.9.9")
+	_, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 
 	plainMemberID := createRuntimeLocalSkillTestMember(t, "member")
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
@@ -487,19 +494,28 @@ func TestMachineUpgrade_CanonicalAuthorizationAndCancellationBoundary(t *testing
 		}
 	}
 
-	cancelReq := newRequestAsUser(testUserID, http.MethodDelete, "/api/daemons/"+daemonID+"/upgrades/"+created.ID, nil)
+	adminMemberID := createRuntimeLocalSkillTestMember(t, "admin")
+	getReq := newRequestAsUser(adminMemberID, http.MethodGet, "/api/daemons/"+daemonID+"/upgrades/"+created.ID, nil)
+	getReq = withURLParams(getReq, "daemonId", daemonID, "upgradeId", created.ID)
+	getW := httptest.NewRecorder()
+	testHandler.GetMachineUpgrade(getW, getReq)
+	if getW.Code != http.StatusOK {
+		t.Fatalf("get queued operation by workspace admin = %d: %s", getW.Code, getW.Body.String())
+	}
+
+	cancelReq := newRequestAsUser(adminMemberID, http.MethodDelete, "/api/daemons/"+daemonID+"/upgrades/"+created.ID, nil)
 	cancelReq = withURLParams(cancelReq, "daemonId", daemonID, "upgradeId", created.ID)
 	cancelW := httptest.NewRecorder()
 	testHandler.CancelMachineUpgrade(cancelW, cancelReq)
 	if cancelW.Code != http.StatusOK {
-		t.Fatalf("cancel queued operation = %d: %s", cancelW.Code, cancelW.Body.String())
+		t.Fatalf("cancel queued operation by workspace admin = %d: %s", cancelW.Code, cancelW.Body.String())
 	}
 	var cancelled MachineUpgrade
 	if err := json.Unmarshal(cancelW.Body.Bytes(), &cancelled); err != nil || cancelled.Phase != MachineUpgradeCancelled || cancelled.Result == nil || *cancelled.Result != "cancelled" {
 		t.Fatalf("cancel response = %+v err=%v", cancelled, err)
 	}
 
-	_, accepted := initiateMachineUpgradeThroughRuntime(t, testUserID, firstRuntimeID, "v10.0.0")
+	_, accepted := initiateMachineUpgrade(t, testUserID, daemonID, "v10.0.0")
 	if _, err := testPool.Exec(context.Background(), `UPDATE machine_upgrade SET phase = 'starting', result = NULL WHERE id = $1`, accepted.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -512,28 +528,41 @@ func TestMachineUpgrade_CanonicalAuthorizationAndCancellationBoundary(t *testing
 	}
 }
 
-func TestMachineUpgrade_RuntimeCompatibilityPreservesOwnerAndPinGates(t *testing.T) {
+func TestMachineUpgrade_AllowsComputerOwnerOrWorkspaceOwnerAdmin(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	runtimeID, _, _ := createMachineUpgradeSiblingRuntimes(t, testUserID)
+	runtimeID, _, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
 	plainMemberID := createRuntimeLocalSkillTestMember(t, "member")
 
-	nonOwnerReq := newRequestAsUser(plainMemberID, http.MethodPost, "/api/runtimes/"+runtimeID+"/update", map[string]string{"target_version": "v9.9.9"})
-	nonOwnerReq = withURLParam(nonOwnerReq, "runtimeId", runtimeID)
+	nonOwnerReq := newRequestAsUser(plainMemberID, http.MethodPost, "/api/daemons/"+daemonID+"/upgrades", map[string]string{"target_version": "v9.9.9", "request_id": uuid.NewString()})
+	nonOwnerReq = withURLParam(nonOwnerReq, "daemonId", daemonID)
 	nonOwnerW := httptest.NewRecorder()
-	testHandler.InitiateUpdate(nonOwnerW, nonOwnerReq)
+	testHandler.CreateMachineUpgrade(nonOwnerW, nonOwnerReq)
 	if nonOwnerW.Code != http.StatusForbidden {
-		t.Fatalf("compatibility create by non-owner = %d: %s", nonOwnerW.Code, nonOwnerW.Body.String())
+		t.Fatalf("canonical create by non-owner = %d: %s", nonOwnerW.Code, nonOwnerW.Body.String())
+	}
+	workspaceOwnerMemberID := createRuntimeLocalSkillTestMember(t, "owner")
+	workspaceOwnerW, _ := initiateMachineUpgrade(t, workspaceOwnerMemberID, daemonID, "v9.9.9")
+	if workspaceOwnerW.Code != http.StatusOK {
+		t.Fatalf("canonical create by workspace owner = %d: %s", workspaceOwnerW.Code, workspaceOwnerW.Body.String())
+	}
+	if _, err := testPool.Exec(context.Background(), `DELETE FROM machine_upgrade WHERE daemon_id = $1`, daemonID); err != nil {
+		t.Fatal(err)
+	}
+	adminMemberID := createRuntimeLocalSkillTestMember(t, "admin")
+	adminW, _ := initiateMachineUpgrade(t, adminMemberID, daemonID, "v9.9.9")
+	if adminW.Code != http.StatusOK {
+		t.Fatalf("canonical create by workspace admin = %d: %s", adminW.Code, adminW.Body.String())
 	}
 
+	if _, err := testPool.Exec(context.Background(), `DELETE FROM machine_upgrade WHERE daemon_id = $1`, daemonID); err != nil {
+		t.Fatal(err)
+	}
 	pinTestRuntime(t, runtimeID, "0.3.85")
-	pinnedReq := newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/update", map[string]string{"target_version": "v9.9.9"})
-	pinnedReq = withURLParam(pinnedReq, "runtimeId", runtimeID)
-	pinnedW := httptest.NewRecorder()
-	testHandler.InitiateUpdate(pinnedW, pinnedReq)
+	pinnedW, _ := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 	if pinnedW.Code != http.StatusConflict {
-		t.Fatalf("compatibility create on pinned runtime = %d: %s", pinnedW.Code, pinnedW.Body.String())
+		t.Fatalf("canonical create on pinned runtime = %d: %s", pinnedW.Code, pinnedW.Body.String())
 	}
 	var body map[string]string
 	if err := json.Unmarshal(pinnedW.Body.Bytes(), &body); err != nil || body["code"] != "runtime_pinned" {
@@ -543,12 +572,9 @@ func TestMachineUpgrade_RuntimeCompatibilityPreservesOwnerAndPinGates(t *testing
 	if _, err := testPool.Exec(context.Background(), `UPDATE agent_runtime SET pinned_version = NULL, metadata = '{"launched_by":"desktop","capabilities":["machine_upgrade_v1"]}'::jsonb WHERE id = $1`, runtimeID); err != nil {
 		t.Fatal(err)
 	}
-	desktopReq := newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+runtimeID+"/update", map[string]string{"target_version": "v9.9.9"})
-	desktopReq = withURLParam(desktopReq, "runtimeId", runtimeID)
-	desktopW := httptest.NewRecorder()
-	testHandler.InitiateUpdate(desktopW, desktopReq)
+	desktopW, _ := initiateMachineUpgrade(t, testUserID, daemonID, "v9.9.9")
 	if desktopW.Code != http.StatusConflict {
-		t.Fatalf("compatibility create on desktop-managed runtime = %d: %s", desktopW.Code, desktopW.Body.String())
+		t.Fatalf("canonical create on desktop-managed runtime = %d: %s", desktopW.Code, desktopW.Body.String())
 	}
 	if err := json.Unmarshal(desktopW.Body.Bytes(), &body); err != nil || body["code"] != "desktop_managed" {
 		t.Fatalf("desktop response = %s err=%v", desktopW.Body.String(), err)

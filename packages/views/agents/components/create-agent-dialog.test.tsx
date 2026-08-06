@@ -9,6 +9,7 @@ import { WorkspaceSlugProvider } from "@multica/core/paths";
 import { NavigationProvider, type NavigationAdapter } from "../../navigation";
 import enCommon from "../../locales/en/common.json";
 import enAgents from "../../locales/en/agents.json";
+import { runtimeMachineKey } from "../../runtimes/components/runtime-machines";
 
 const navigationStub: NavigationAdapter = {
   push: vi.fn(),
@@ -128,7 +129,11 @@ function makeRuntime(overrides: Partial<RuntimeDevice>): RuntimeDevice {
 }
 
 
-function renderDialog(runtimes: RuntimeDevice[], template?: Agent) {
+function renderDialog(
+  runtimes: RuntimeDevice[],
+  template?: Agent,
+  defaultMachineId?: string,
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -144,6 +149,7 @@ function renderDialog(runtimes: RuntimeDevice[], template?: Agent) {
             members={members}
             currentUserId={ME}
             template={template}
+            defaultMachineId={defaultMachineId}
             onClose={onClose}
             onCreate={onCreate}
           />
@@ -214,10 +220,14 @@ describe("CreateAgentDialog workspace runtime selection", () => {
       provider: "cursor",
       device_info: "other-box",
     });
-    renderDialog([onS144, alsoOnS144, onOther]);
+    renderDialog(
+      [onS144, alsoOnS144, onOther],
+      undefined,
+      runtimeMachineKey(onS144),
+    );
 
-    // Default computer is the first usable machine (s144). Open the
-    // code-agent picker — other-box's Cursor must not appear.
+    // Pin the selected computer so this assertion does not depend on machine
+    // ordering. Open the code-agent picker — other-box's Cursor must not appear.
     fireEvent.click(
       screen.getByText("Cursor", { selector: "span.truncate" }),
     );
@@ -245,7 +255,7 @@ describe("CreateAgentDialog workspace runtime selection", () => {
       provider: "pi",
       device_info: "other-box",
     });
-    renderDialog([onS144, onOther]);
+    renderDialog([onS144, onOther], undefined, runtimeMachineKey(onS144));
 
     // Open computer picker and switch to other-box.
     fireEvent.click(screen.getByText("s144", { selector: "div.truncate" }));

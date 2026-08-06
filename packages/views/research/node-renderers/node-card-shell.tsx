@@ -34,6 +34,7 @@
 import type { ReactNode } from "react";
 import { ChevronRight, Star } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../../i18n/use-t";
 import type { NodeCardState } from "./node-state-matrix";
 import { stateVisualFor } from "./node-state-matrix";
 import type { NodeKindFamily } from "./node-kind-registry";
@@ -78,6 +79,7 @@ export interface NodeCardShellProps {
 }
 
 function ImportanceStars({ level }: { level: number }): ReactNode {
+  const { t } = useT("research");
   if (level < 1) return null;
   return (
     <span
@@ -85,7 +87,7 @@ function ImportanceStars({ level }: { level: number }): ReactNode {
       data-testid="node-importance"
       title={`重要性 ${level}/3`}
     >
-      <span className="sr-only">重要性 {level}/3</span>
+      <span className="sr-only">{t(($) => $.node_card.importance_sr, { level })}</span>
       {[1, 2, 3].map((i) => (
         <Star
           key={i}
@@ -112,10 +114,11 @@ function CardFaceRow({
   value: string;
   testid: string;
 }) {
+  const { t } = useT("research");
   return (
     <div data-testid={testid} className="flex min-w-0 items-start gap-1 text-[10px] leading-tight">
       <span aria-hidden="true" className="shrink-0">{icon}</span>
-      <span className="sr-only">{label}：</span>
+      <span className="sr-only">{t(($) => $.node_card.row_label_sr, { label })}</span>
       <span className="min-w-0 truncate text-muted-foreground">{value}</span>
     </div>
   );
@@ -133,6 +136,7 @@ function ProgressCountsRow({
   risk: number | null | undefined;
   expanded: boolean;
 }) {
+  const { t } = useT("research");
   const hasAny =
     (resolved !== null && resolved !== undefined) ||
     (progress !== null && progress !== undefined) ||
@@ -145,7 +149,7 @@ function ProgressCountsRow({
   if (chips.every((c) => c.value === 0)) {
     return (
       <div data-testid="node-progress-none" className="text-[10px] text-muted-foreground">
-        暂无新进展
+        {t(($) => $.node_card.no_progress)}
       </div>
     );
   }
@@ -156,8 +160,8 @@ function ProgressCountsRow({
     >
       {chips.map((c) => (
         <span key={c.label} className="flex items-center gap-0.5 text-[10px] text-muted-foreground">
-          <span aria-hidden="true">✓</span>
-          <span className="sr-only">{c.label}：</span>
+          <span aria-hidden="true">{"✓"}</span>
+          <span className="sr-only">{t(($) => $.node_card.row_label_sr, { label: c.label })}</span>
           <span>{c.value}</span>
           <span className={cn("tabular-nums", expanded ? "inline" : "hidden")}>{c.label}</span>
         </span>
@@ -218,7 +222,7 @@ export function NodeCardShell({
           className="absolute right-1.5 top-2 flex h-4 w-4 items-center justify-center rounded-full bg-success text-[9px] font-bold text-white"
           aria-label="已完成"
         >
-          ✓
+          {"✓"}
         </span>
       )}
 
@@ -374,7 +378,7 @@ function StatusGlyph({
           data-testid="node-glyph-failed"
           className="flex h-2.5 w-2.5 items-center justify-center rounded-full bg-destructive text-[7px] font-bold text-white"
         >
-          ✕
+          {"✕"}
         </span>
       );
     case "stale-dot":

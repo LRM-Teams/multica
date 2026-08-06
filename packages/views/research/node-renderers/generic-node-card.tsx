@@ -17,6 +17,7 @@
 import type { ResearchV6UnknownKindDiagnostic } from "@multica/core/types/research-v6";
 import { HelpCircle } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../../i18n/use-t";
 import { stateVisualFor } from "./node-state-matrix";
 
 export interface GenericNodeCardProps {
@@ -41,6 +42,7 @@ export function GenericNodeCard({
   zoom = 1,
   onOpen,
 }: GenericNodeCardProps) {
+  const { t } = useT("research");
   const compact = zoom <= 0.4;
   const interactive = Boolean(onOpen);
   const state = stateVisualFor("unknown");
@@ -63,7 +65,7 @@ export function GenericNodeCard({
             data-testid="generic-type-badge"
             className="truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
           >
-            未知类型
+            {t(($) => $.node_card.generic_type)}
           </span>
           <span
             data-testid="generic-raw-kind"
@@ -90,16 +92,16 @@ export function GenericNodeCard({
         </div>
         {!compact && diagnostic && (
           <details data-testid="generic-diagnostics" className="pt-0.5 text-[9px] text-muted-foreground">
-            <summary className="cursor-pointer">无法识别的类型</summary>
+            <summary className="cursor-pointer">{t(($) => $.node_card.generic_unrecognized)}</summary>
             <dl className="mt-0.5 font-mono">
               <div>
-                <dt className="inline">原始: </dt>
+                <dt className="inline">{t(($) => $.node_card.generic_raw)}</dt>
                 <dd className="inline" data-testid="generic-diagnostic-raw">
                   {diagnostic.raw}
                 </dd>
               </div>
               <div>
-                <dt className="inline">归属: </dt>
+                <dt className="inline">{t(($) => $.node_card.generic_owner)}</dt>
                 <dd className="inline">{diagnostic.owner_id}</dd>
               </div>
             </dl>

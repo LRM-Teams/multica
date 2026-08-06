@@ -13,7 +13,7 @@ import { ResearchExecutionPanel } from "./research-execution-panel";
 // with live-activity-free agents so the view-model's semantic fallbacks run.
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: Record<string, unknown>) => unknown, values?: { location?: string; name?: string; count?: number; time?: string }) =>
+    t: (fn: (dict: Record<string, unknown>) => unknown, values?: { location?: string; name?: string; count?: number; time?: string; anomaly?: number; running?: number; queued?: number; total?: number }) =>
       String(fn({
         panel: {
           execution: {
@@ -54,15 +54,22 @@ vi.mock("../../i18n/use-t", () => ({
             group_waiting: "Waiting",
             group_finished: "Finished",
             group_idle: "Idle",
-            status: { waiting: "Waiting", running: "Running", done: "Done", failed: "Failed", retrying: "Retrying", stale: "Stale", offline: "Offline", unknown: "Unknown" },
-            action: { waiting: "Waiting for the current task to start", working: "Running the current task", recent_done: "Recent task completed", recent_failed: "Recent task failed", retrying: "Retrying the current task", stale: "Execution state is stale", offline: "No live signal; not at post", unknown: "Execution state unknown" },
+            task_objective: "Task",
+            collapse_counts: "{{anomaly}} anomaly · {{running}} running · {{queued}} queued · {{total}} agents",
+            collapsed_hint: "Expand the count bar to browse execution",
+            status: { queued: "Queued", waiting: "Waiting", running: "Running", cancelling: "Cancelling", done: "Done", failed: "Failed", retrying: "Retrying", stale: "Stale", idle: "Idle", offline: "Offline", unknown: "Unknown" },
+            action: { waiting: "Waiting for the current task to start", working: "Running the current task", cancelling: "Cancellation requested", recent_done: "Recent task completed", recent_failed: "Recent task failed", retrying: "Retrying the current task", stale: "Execution state is stale", idle: "No small task available", offline: "No live signal; not at post", unknown: "Execution state unknown" },
           },
         },
       }))
         .replace("{{location}}", values?.location ?? "")
         .replace("{{name}}", values?.name ?? "")
         .replace("{{count}}", String(values?.count ?? ""))
-        .replace("{{time}}", values?.time ?? ""),
+        .replace("{{time}}", values?.time ?? "")
+        .replace("{{anomaly}}", String(values?.anomaly ?? ""))
+        .replace("{{running}}", String(values?.running ?? ""))
+        .replace("{{queued}}", String(values?.queued ?? ""))
+        .replace("{{total}}", String(values?.total ?? "")),
   }),
 }));
 
@@ -108,8 +115,8 @@ describe("ResearchExecutionPanel · en locale no-CJK probe", () => {
     const { container } = render(<ResearchExecutionPanel agents={semanticAgents} title="Execution activity" />);
     const text = collectVisibleText(container);
 
-    // Header running counter is localised (no Chinese like “个智能体执行中”).
-    expect(screen.getByText("1 agents working")).toBeTruthy();
+    // Header deck count is localised (no Chinese like “个智能体执行中”).
+    expect(screen.getByText(/2 anomaly · 1 running · 1 queued · 6 agents/)).toBeTruthy();
 
     for (const row of screen.getAllByTestId("execution-overlay-row")) {
       const status = row.getAttribute("data-status") as ResearchExecutionStatus;

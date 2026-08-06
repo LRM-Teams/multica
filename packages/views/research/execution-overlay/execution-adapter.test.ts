@@ -67,14 +67,14 @@ function run(attempts: unknown[], claims: unknown[] = [], sources: unknown[] = [
 
 const NOW = 1_700_000_000_000;
 
-describe("buildExecutionOverlayRows — 8-state derivation", () => {
-  it("derives each of the 8 states strictly from the projection", () => {
+describe("buildExecutionOverlayRows — state derivation (contract PR #2415)", () => {
+  it("derives states strictly from the projection", () => {
     const rows = buildExecutionOverlayRows({
       members,
       presence: {
         "agent-0": signal({ phase: "running" }), // running (unexpired)
         "agent-1": signal({ phase: "running", expiresAt: NOW - 1 }), // expired → stale
-        "agent-2": signal({ phase: "queued" }), // waiting
+        "agent-2": signal({ phase: "queued" }), // queued (assigned, not started)
         "agent-3": signal({ phase: "done" }), // done
         // agent-4 presence failed + newer in-flight attempt → retrying
         "agent-4": signal({ phase: "failed" }),
@@ -115,9 +115,34 @@ describe("buildExecutionOverlayRows — 8-state derivation", () => {
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
     expect(byId["agent-0"]!.status).toBe("running");
     expect(byId["agent-1"]!.status).toBe("stale");
-    expect(byId["agent-2"]!.status).toBe("waiting");
+    expect(byId["agent-2"]!.status).toBe("queued");
     expect(byId["agent-3"]!.status).toBe("done");
     expect(byId["agent-4"]!.status).toBe("retrying");
+  });
+
+  it("maps presence idle to idle and an in-flight cancellation to cancelling", () => {
+    const rows = buildExecutionOverlayRows({
+      members,
+      presence: {
+        "agent-0": signal({ phase: "idle" }), // roster present, no running evidence → idle
+        "agent-1": signal({ phase: "running" }), // attempt ledger shows cancelling → cancelling
+      },
+      nodes: [],
+      run: run([
+        {
+          id: "c1",
+          task_id: "t1",
+          attempt_number: 1,
+          assigned_agent_id: "agent-1",
+          status: "cancelling",
+        },
+      ]),
+      now: NOW,
+    });
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId["agent-0"]!.status).toBe("idle");
+    expect(byId["agent-1"]!.status).toBe("cancelling");
+    expect(rows.some((r) => r.status === "running")).toBe(false);
   });
 
   it("missing presence is offline (never idle), distinct from stale and running", () => {
@@ -159,43 +184,50 @@ describe("buildExecutionOverlayRows — 8-state derivation", () => {
     expect(byId["agent-1"]!.status).toBe("unknown");
   });
 
-  it("surfaces start time, elapsed, update time and the most recent accepted result", () => {
+  it("surfaces task objective, start time, elapsed, update time and most recent accepted result", () => {
     const rows = buildExecutionOverlayRows({
       members,
       presence: {
-        "agent-1": signal({ phase: "running", updatedAt: NOW - 10_000, nodeId: node.id }),
+        "agent-1": signal({ phase: "running", updatedAt: NOW - 10_000, nodeId: node.id, taskId: "t1" }),
       },
       nodes: [node],
-      run: run(
-        [
-          {
-            id: "a1",
-            task_id: "t1",
-            attempt_number: 1,
-            assigned_agent_id: "agent-1",
-            status: "running",
-            started_at: new Date(NOW - 120_000).toISOString(),
-          },
-        ],
-        [
-          {
-            id: "c1",
-            produced_by_task_id: "t1",
-            text: "Latest accepted claim",
-            created_at: new Date(NOW - 40_000).toISOString(),
-          },
-          {
-            id: "c0",
-            produced_by_task_id: "t1",
-            text: "Older accepted claim",
-            created_at: new Date(NOW - 400_000).toISOString(),
-          },
-        ],
-      ),
+      run: (() => {
+        const r = run(
+          [
+            {
+              id: "a1",
+              task_id: "t1",
+              attempt_number: 1,
+              assigned_agent_id: "agent-1",
+              status: "running",
+              started_at: new Date(NOW - 120_000).toISOString(),
+            },
+          ],
+          [
+            {
+              id: "c1",
+              produced_by_task_id: "t1",
+              text: "Latest accepted claim",
+              created_at: new Date(NOW - 40_000).toISOString(),
+            },
+            {
+              id: "c0",
+              produced_by_task_id: "t1",
+              text: "Older accepted claim",
+              created_at: new Date(NOW - 400_000).toISOString(),
+            },
+          ],
+        );
+        r.tasks = [
+          { id: "t1", objective: "Verify supplier regional terms", expected_result: undefined } as ResearchRunSnapshot["tasks"][number],
+        ];
+        return r;
+      })(),
       now: NOW,
     });
     const scout = rows.find((r) => r.id === "agent-1")!;
     expect(scout.status).toBe("running");
+    expect(scout.taskObjective).toBe("Verify supplier regional terms");
     expect(scout.startedAt).toBe(NOW - 120_000);
     expect(scout.updatedAt).toBe(NOW - 10_000);
     expect(scout.elapsedMs).toBe(120_000);

@@ -220,7 +220,8 @@
         "waiting": "Waiting",
         "retrying": "Retrying",
         "offline": "Offline",
-        "unknown": "Unknown"
+        "unknown": "Unknown",
+        "cancelling": "Cancelling"
       },
       "action": {
         "waiting": "Waiting for the current task to start",
@@ -231,7 +232,8 @@
         "idle": "No small task available to pick up",
         "retrying": "Retrying the current task",
         "offline": "No live signal; not at post",
-        "unknown": "Execution state unknown"
+        "unknown": "Execution state unknown",
+        "cancelling": "Cancellation requested, not yet finished"
       },
       "time": {
         "queued": "Queued",
@@ -273,7 +275,10 @@
       "group_waiting": "Waiting",
       "group_finished": "Finished",
       "group_idle": "Idle",
-      "expand_aria": "Expand {{name}}'s detail"
+      "expand_aria": "Expand {{name}}'s detail",
+      "collapse_counts": "{{anomaly}} 异常 · {{running}} 运行 · {{queued}} 排队 · {{total}} 人",
+      "collapsed_hint": "点击计数栏展开执行概览",
+      "task_objective": "任务"
     },
     "aux_close_sources": "Close evidence & collaboration",
     "module_execution": "Execution",

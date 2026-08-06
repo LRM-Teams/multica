@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useState, type KeyboardEvent } from "react";
 import {
   ChevronDown,
   LocateFixed,
@@ -72,6 +72,33 @@ export type ExecutionCopy = {
   elapsed_hour: (count: number) => string;
 };
 
+// Roving keyboard navigation across the row list (ArrowUp / ArrowDown). Lives on
+// each row's primary button so interaction stays on an interactive element;
+// sibling rows are found within the nearest list container. Pure (no local
+// state), so defined at module scope.
+function navigateRowList(event: KeyboardEvent<HTMLButtonElement>) {
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+  // Scope to the outermost list container so navigation spans all status
+  // groups (each group renders its own nested <ul> inside the outer list).
+  let container = event.currentTarget.closest("ul");
+  while (container?.parentElement?.closest("ul")) {
+    container = container.parentElement.closest("ul");
+  }
+  if (!container) return;
+  const buttons = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '[data-testid="execution-overlay-row"] > button',
+    ),
+  );
+  if (buttons.length === 0) return;
+  const idx = buttons.indexOf(document.activeElement as HTMLButtonElement);
+  if (idx === -1) return;
+  event.preventDefault();
+  const next = event.key === "ArrowDown" ? idx + 1 : idx - 1;
+  const target = buttons[(next + buttons.length) % buttons.length];
+  target?.focus();
+}
+
 export function ExecutionOverlayRow({
   agent,
   highlighted,
@@ -132,6 +159,7 @@ export function ExecutionOverlayRow({
         aria-expanded={expanded}
         aria-controls={detailId}
         onClick={activate}
+        onKeyDown={navigateRowList}
       >
         {agent.avatarUrl ? (
           <img src={agent.avatarUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />

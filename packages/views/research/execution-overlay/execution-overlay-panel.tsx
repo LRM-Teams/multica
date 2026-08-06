@@ -25,6 +25,33 @@ export type ExecutionOverlaySyncState = {
  * Rendering + ordering is a pure display concern: rows arrive pre-derived from
  * the Projection via `buildExecutionOverlayRows` and are never written back.
  */
+function ExecutionOverlayList({
+  list,
+  makeRowCopy,
+  highlightAgentId,
+  onLocate,
+}: {
+  list: readonly ExecutionRow[];
+  makeRowCopy: (agent: ExecutionRow) => ExecutionCopy;
+  highlightAgentId?: string | null;
+  onLocate?: (agent: ExecutionRow) => void;
+}) {
+  return (
+    <>
+      {list.map((agent) => (
+        <li key={agent.id} className="min-w-0">
+          <ExecutionOverlayRow
+            agent={agent}
+            copy={makeRowCopy(agent)}
+            highlighted={highlightAgentId != null && agent.id === highlightAgentId}
+            onLocate={onLocate}
+          />
+        </li>
+      ))}
+    </>
+  );
+}
+
 export function ExecutionOverlayPanel({
   rows,
   title,
@@ -114,7 +141,7 @@ export function ExecutionOverlayPanel({
   // mutates the underlying rows.
   const sortedRows = useMemo(
     () =>
-      [...rows].sort((a, b) => {
+      rows.toSorted((a, b) => {
         const pa = EXECUTION_DECK_PRIORITY[a.status] ?? 9;
         const pb = EXECUTION_DECK_PRIORITY[b.status] ?? 9;
         if (pa !== pb) return pa - pb;
@@ -135,40 +162,21 @@ export function ExecutionOverlayPanel({
       list.push(row);
       buckets.set(row.status, list);
     }
-    return order
-      .map((status) => ({ status, list: buckets.get(status) ?? [] }))
-      .filter(({ list }) => list.length > 0);
+    const result: { status: ExecutionStatus; list: ExecutionRow[] }[] = [];
+    for (const status of order) {
+      const list = buckets.get(status) ?? [];
+      if (list.length > 0) result.push({ status, list });
+    }
+    return result;
   }, [sortedRows]);
 
-  const renderList = (list: readonly ExecutionRow[]) =>
-    list.map((agent) => (
-      <ExecutionOverlayRow
-        key={agent.id}
-        agent={agent}
-        copy={{ ...copy, locatable: t(($) => $.panel.execution.locatable, { location: agent.locationLabel ?? "" }), locate: t(($) => $.panel.execution.locate, { location: agent.locationLabel ?? "" }) }}
-        highlighted={highlightAgentId != null && agent.id === highlightAgentId}
-        onLocate={onLocate}
-      />
-    ));
-
-  // Roving keyboard navigation across the row list (ArrowUp / ArrowDown).
-  const onListKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLElement>) => {
-      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-      const buttons = Array.from(
-        (event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>(
-          '[data-testid="execution-overlay-row"] > button',
-        ),
-      );
-      if (buttons.length === 0) return;
-      const idx = buttons.indexOf(document.activeElement as HTMLButtonElement);
-      if (idx === -1) return;
-      event.preventDefault();
-      const next = event.key === "ArrowDown" ? idx + 1 : idx - 1;
-      const target = buttons[(next + buttons.length) % buttons.length];
-      target?.focus();
-    },
-    [],
+  const makeRowCopy = useCallback(
+    (agent: ExecutionRow): ExecutionCopy => ({
+      ...copy,
+      locatable: t(($) => $.panel.execution.locatable, { location: agent.locationLabel ?? "" }),
+      locate: t(($) => $.panel.execution.locate, { location: agent.locationLabel ?? "" }),
+    }),
+    [copy, t],
   );
 
   const [collapsed, setCollapsed] = useState(false);
@@ -220,20 +228,32 @@ export function ExecutionOverlayPanel({
           {t(($) => $.panel.execution.empty)}
         </p>
       ) : !groups ? (
-        <div className="min-w-0" onKeyDown={onListKeyDown}>
-          {renderList(sortedRows)}
-        </div>
+        <ul className="min-w-0 list-none">
+          <ExecutionOverlayList
+            list={sortedRows}
+            makeRowCopy={makeRowCopy}
+            highlightAgentId={highlightAgentId}
+            onLocate={onLocate}
+          />
+        </ul>
       ) : (
-        <div className="min-w-0" onKeyDown={onListKeyDown}>
+        <ul className="min-w-0 list-none">
           {grouped.map(({ status, list }) => (
-            <div key={status} className="min-w-0">
+            <li key={status} className="min-w-0">
               <div className="px-3 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 {copy.status[status]}
               </div>
-              {renderList(list)}
-            </div>
+              <ul className="min-w-0 list-none">
+                <ExecutionOverlayList
+                  list={list}
+                  makeRowCopy={makeRowCopy}
+                  highlightAgentId={highlightAgentId}
+                  onLocate={onLocate}
+                />
+              </ul>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
     </section>
   );

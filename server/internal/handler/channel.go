@@ -5111,52 +5111,6 @@ func (h *Handler) dispatchSingleChannelMessageWakeWithCursorPolicy(ctx context.C
 	_ = initiatorUserID
 	_ = agent
 	_ = replayTrigger
-	return
-
-	if h.TxStarter == nil {
-		slog.Warn("channel message wake: transaction starter missing", "channel", ch.ID, "agent", uuidToString(agent.ID))
-		return
-	}
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		slog.Warn("channel message wake: begin transaction failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
-	}
-	defer tx.Rollback(ctx)
-	if err := h.lockChannelAmbientGate(ctx, tx, ch, agent); err != nil {
-		slog.Warn("channel message wake: advisory lock failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
-	}
-	conversationID, workspaceID, cursorSeq, pendingToSeq, ok := h.channelAmbientWakeCursorTx(ctx, tx, ch, agent, trigger)
-	if !ok {
-		return
-	}
-	if replayTrigger {
-		if trigger.Seq <= 0 {
-			slog.Warn("transcribed channel message wake: trigger sequence missing", "channel", ch.ID, "message", trigger.ID)
-			return
-		}
-		cursorSeq = trigger.Seq - 1
-		pendingToSeq = trigger.Seq
-	} else if pendingToSeq <= cursorSeq {
-		if err := tx.Commit(ctx); err != nil {
-			slog.Warn("channel message wake: commit empty cursor failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		}
-		return
-	}
-	qtx := h.Queries.WithTx(tx)
-	txResult, err := h.enqueueOrCoalesceChannelMessageWakeWithTx(ctx, qtx, tx, ch, agent, trigger, initiatorUserID, conversationID, workspaceID, cursorSeq, pendingToSeq)
-	if err != nil {
-		slog.Warn("channel message wake: persist prompt and inbox event failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "error", err)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		slog.Warn("channel message wake: commit failed", "channel", ch.ID, "agent", uuidToString(agent.ID), "inbox_event", uuidToString(txResult.Event.ID), "error", err)
-		return
-	}
-	if !txResult.Coalesced {
-		h.recordChannelAgentPromptWake(ctx, ch, agent, trigger, channelMessageWakeReason, txResult)
-	}
 }
 
 // dispatchChannelAgentReply runs one agent's reply to a triggering message:
@@ -5182,8 +5136,6 @@ func (h *Handler) dispatchChannelAgentReplyWithReason(ctx context.Context, ch Ch
 	if trigger.Type == "agent" && trigger.AuthorID != nil && *trigger.AuthorID == uuidToString(agent.ID) {
 		return db.AgentInboxEvent{}, errors.New("agent cannot trigger itself")
 	}
-	rootID := h.channelThreadRootForTrigger(ch, trigger)
-	facilitatorState := h.loadChannelFacilitatorState(ctx, rootID, agent.ID, trigger)
 	if trigger.ThreadRootMessageID != nil {
 		h.ensureChannelThreadAgentWakeParticipant(ctx, parseUUID(ch.ID), parseUUID(*trigger.ThreadRootMessageID), agent.ID)
 	}
@@ -5193,15 +5145,6 @@ func (h *Handler) dispatchChannelAgentReplyWithReason(ctx context.Context, ch Ch
 	_ = initiatorUserID
 	_ = reason
 	return db.AgentInboxEvent{}, nil
-
-	if strings.TrimSpace(reason) == "" {
-		reason = "mention"
-		if ch.Kind == "dm" {
-			reason = "dm"
-		}
-	}
-	actorType, actorID := channelPromptActor(trigger, initiatorUserID)
-	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, h.buildChannelMentionPromptForActor(ctx, ch, trigger, facilitatorState, actorType, actorID), "channel agent reply", true, reason, channelDirectedWakePriority)
 }
 
 func channelPromptActor(trigger ChannelMessageResponse, initiatorUserID pgtype.UUID) (string, string) {
@@ -5235,9 +5178,6 @@ func (h *Handler) dispatchChannelThreadContinuation(ctx context.Context, ch Chan
 	// committed Message; there is no task-shaped continuation to enqueue.
 	_ = initiatorUserID
 	return db.AgentInboxEvent{}, nil
-
-	prompt := h.buildChannelThreadContinuationPrompt(ctx, ch, agent, trigger)
-	return h.enqueueChannelAgentPrompt(ctx, ch, agent, trigger, initiatorUserID, prompt, "channel thread continuation", true, "thread_reply", channelThreadReplyPriority)
 }
 
 type channelAgentPromptTxResult struct {
@@ -6369,20 +6309,6 @@ func (h *Handler) dispatchChannelAmbientDeliveryExcept(ctx context.Context, ch C
 	_ = ch
 	_ = trigger
 	_ = skipAgentIDs
-	return
-
-	if skip, _ := channelMessageAmbientSkipReason(trigger); skip {
-		return
-	}
-	for _, agent := range h.channelAgentMembers(ctx, ch.WorkspaceID, ch.ID) {
-		if _, skip := skipAgentIDs[uuidToString(agent.ID)]; skip {
-			continue
-		}
-		if h.isChannelAgentMuted(ctx, parseUUID(ch.ID), parseUUID(ch.WorkspaceID), agent.ID) {
-			continue
-		}
-		h.recordChannelAmbientInboxEvent(ctx, ch, trigger, agent)
-	}
 }
 
 func (h *Handler) recordChannelAmbientInboxEvent(ctx context.Context, ch ChannelResponse, trigger ChannelMessageResponse, agent db.Agent) {

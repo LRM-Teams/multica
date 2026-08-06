@@ -19,7 +19,16 @@
 > Also measured and rejected on the way: `pool: "vmThreads"` (fastest of all —
 > 83.6s single-worker — but externalized modules are shared across VM realms
 > per worker, producing 650–683 load-order-dependent failures at CI's
-> 1-worker shape; same nondeterminism class as §4a).
+> 1-worker shape; same nondeterminism class as §4a), and
+> `deps.optimizer.client` esbuild prebundling of the react-free heavy deps
+> (in a --cpus=2 container, cold like CI: 109.9s vs 88.5s without — the
+> per-run prebundle costs more than it saves, and 11 files fail on
+> dual-module-copy identity breaks).
+>
+> One jsdom-era conclusion did flip: worker count. On this stack a second
+> worker helps the 2-vCPU runner (--cpus=2 container, cold: 1 worker 119.1s,
+> 2 workers 88.5s, 3 workers 103.3s), so the configs pin
+> `maxWorkers: max(2, availableParallelism() - 1)`.
 >
 > Costs of the switch: 2 test files pinned to jsdom via
 > `// @vitest-environment jsdom` (they assert CSSOM cascade that happy-dom

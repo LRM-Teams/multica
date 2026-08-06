@@ -55,6 +55,7 @@ export type ExecutionCopy = {
   staleLabel: string;
   taskLabel: string;
   attemptLabel: string;
+  taskObjectiveLabel: string;
   failedReason: string;
   waitingReason: string;
   offlineReason: string;
@@ -89,7 +90,7 @@ export function ExecutionOverlayRow({
   const canLocate = Boolean(agent.currentNodeId && onLocate);
   const actionText =
     agent.action ?? copy.action[EXECUTION_STATUS_ACTION_KEY[agent.status]] ?? agent.action;
-  const active = agent.status === "running" || agent.status === "waiting" || agent.status === "retrying";
+  const active = agent.status === "running" || agent.status === "queued" || agent.status === "cancelling" || agent.status === "retrying";
   const activate = () => {
     if (canLocate) onLocate?.(agent);
     else setExpanded(true);
@@ -98,7 +99,7 @@ export function ExecutionOverlayRow({
   const reasonText =
     agent.status === "failed"
       ? copy.failedReason
-      : agent.status === "waiting"
+      : agent.status === "queued" || agent.status === "idle"
         ? copy.waitingReason
         : agent.status === "offline"
           ? copy.offlineReason
@@ -152,6 +153,15 @@ export function ExecutionOverlayRow({
           <span className="mt-0.5 block truncate text-xs leading-5 text-foreground" title={actionText}>
             {actionText}
           </span>
+          {/* Task row: current task objective (contract §1) when known. */}
+          {agent.taskObjective ? (
+            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span className="shrink-0">{copy.taskObjectiveLabel}:</span>
+              <span className="truncate" title={agent.taskObjective}>
+                {agent.taskObjective}
+              </span>
+            </span>
+          ) : null}
           {/* Time line: start · duration · last update (tabular-nums). */}
           <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] tabular-nums text-muted-foreground">
             {agent.startedAt != null ? (
@@ -234,7 +244,7 @@ export function ExecutionOverlayRow({
                 <dd className="min-w-0 break-words">{agent.stage}</dd>
               </div>
             ) : null}
-            {agent.waitingReason && agent.status === "waiting" ? (
+            {agent.waitingReason && (agent.status === "queued" || agent.status === "idle") ? (
               <div className="flex gap-1.5">
                 <dt className="shrink-0">{copy.waitLabel}</dt>
                 <dd className="min-w-0 break-words">{agent.waitingReason}</dd>

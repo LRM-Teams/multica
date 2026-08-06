@@ -4,6 +4,8 @@ import {
   CircleDashed,
   CircleOff,
   Clock3,
+  ListTodo,
+  PauseCircle,
   RefreshCw,
   TriangleAlert,
   X,
@@ -11,30 +13,37 @@ import {
 } from "lucide-react";
 
 /**
- * Execution overlay 8-state model (LRM-1473 / LRM-1479).
+ * Execution overlay state model (LRM-1473 / LRM-1479, contract PR #2415).
  *
- * Derived strictly from the backend Projection (Presence contract v2 +
- * run snapshot tasks/attempts/results). No state is inferred from chat
- * summaries, animations or captions; a row only shows `running` when the
- * projection carries an unexpired running signal.
+ * States are derived strictly from the authoritative Projection (Presence
+ * contract v2 + `ResearchRunSnapshot` attempts/tasks/results). No state is
+ * inferred from chat summaries, animations or captions. A row only shows
+ * `running` when the projection carries an unexpired running signal; a row
+ * only shows `queued` when the presence phase is `queued` (task assigned but
+ * not yet runtime-started); `cancelling` only when the attempt ledger shows an
+ * in-flight cancellation before a terminal state.
  */
 export type ExecutionStatus =
+  | "queued"
   | "running"
-  | "waiting"
+  | "cancelling"
   | "done"
   | "failed"
   | "retrying"
   | "stale"
+  | "idle"
   | "offline"
   | "unknown";
 
 export type ExecutionActionKey =
   | "waiting"
   | "working"
+  | "cancelling"
   | "recent_done"
   | "recent_failed"
   | "retrying"
   | "stale"
+  | "idle"
   | "offline"
   | "unknown";
 
@@ -52,6 +61,13 @@ export const EXECUTION_STATUS_PRESENTATION: Record<
   ExecutionStatus,
   StatusPresentation
 > = {
+  queued: {
+    labelKey: "queued",
+    Icon: ListTodo,
+    badgeClass: "bg-muted text-muted-foreground",
+    markerClass: "border-dashed border-muted-foreground/55 text-muted-foreground",
+    textClass: "text-muted-foreground",
+  },
   running: {
     labelKey: "running",
     Icon: Activity,
@@ -59,12 +75,12 @@ export const EXECUTION_STATUS_PRESENTATION: Record<
     markerClass: "border-brand/35 bg-brand/10 text-brand",
     textClass: "text-brand",
   },
-  waiting: {
-    labelKey: "waiting",
-    Icon: Clock3,
-    badgeClass: "bg-muted text-muted-foreground",
-    markerClass: "border-dashed border-muted-foreground/55 text-muted-foreground",
-    textClass: "text-muted-foreground",
+  cancelling: {
+    labelKey: "cancelling",
+    Icon: PauseCircle,
+    badgeClass: "bg-warning/10 text-warning",
+    markerClass: "border-warning/35 bg-warning/10 text-warning",
+    textClass: "text-warning",
   },
   done: {
     labelKey: "done",
@@ -94,6 +110,13 @@ export const EXECUTION_STATUS_PRESENTATION: Record<
     markerClass: "border-warning/35 bg-warning/10 text-warning",
     textClass: "text-warning",
   },
+  idle: {
+    labelKey: "idle",
+    Icon: Clock3,
+    badgeClass: "bg-muted text-muted-foreground",
+    markerClass: "border-muted-foreground/40 text-muted-foreground",
+    textClass: "text-muted-foreground",
+  },
   offline: {
     labelKey: "offline",
     Icon: CircleOff,
@@ -114,12 +137,31 @@ export const EXECUTION_STATUS_ACTION_KEY: Record<
   ExecutionStatus,
   ExecutionActionKey
 > = {
+  queued: "waiting",
   running: "working",
-  waiting: "waiting",
+  cancelling: "cancelling",
   done: "recent_done",
   failed: "recent_failed",
   retrying: "retrying",
   stale: "stale",
+  idle: "idle",
   offline: "offline",
   unknown: "unknown",
+};
+
+/**
+ * Deck priority for display ordering (agent-execution-spec §3).
+ * Lower value sorts first; `blocking failed` rises above everything.
+ */
+export const EXECUTION_DECK_PRIORITY: Record<ExecutionStatus, number> = {
+  failed: 0,
+  cancelling: 1,
+  running: 2,
+  queued: 3,
+  retrying: 4,
+  stale: 5,
+  idle: 6,
+  done: 7,
+  offline: 8,
+  unknown: 9,
 };

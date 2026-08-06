@@ -9,7 +9,7 @@ import { ResearchExecutionPanel } from "./research-execution-panel";
 // translated; statuses are asserted by 8-state mapping.
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: Record<string, unknown>) => unknown, values?: { location?: string; name?: string; count?: number; time?: string }) =>
+    t: (fn: (dict: Record<string, unknown>) => unknown, values?: { location?: string; name?: string; count?: number; time?: string; anomaly?: number; running?: number; queued?: number; total?: number }) =>
       String(fn({ panel: { execution: {
         title: "执行动态",
         locatable: "可定位至 {{location}}",
@@ -32,6 +32,9 @@ vi.mock("../../i18n/use-t", () => ({
         stale_reason: "过期原因",
         task: "任务",
         attempt: "尝试",
+        task_objective: "任务",
+        collapse_counts: "{{anomaly}} 异常 · {{running}} 运行 · {{queued}} 排队 · {{total}} 人",
+        collapsed_hint: "点击计数栏展开执行概览",
         waiting_reason: "已排队或等待名额，暂无执行信号。",
         offline_reason: "该成员暂无实时在场信号，视为未在岗。",
         unknown_reason: "无法从投影判定执行状态。",
@@ -47,13 +50,17 @@ vi.mock("../../i18n/use-t", () => ({
         group_waiting: "等待中",
         group_finished: "已完成",
         group_idle: "空闲",
-        status: { waiting: "等待中", running: "执行中", done: "完成", failed: "失败", retrying: "重试中", stale: "停滞", offline: "离线", unknown: "未知" },
-        action: { waiting: "等待开始当前任务", working: "正在执行当前任务", recent_done: "最近任务已完成", recent_failed: "最近任务执行失败", retrying: "正在重试当前任务", stale: "执行状态已过期", offline: "无实时信号，视为未在岗", unknown: "执行状态未知" },
+        status: { queued: "排队", waiting: "等待中", running: "执行中", cancelling: "取消中", done: "完成", failed: "失败", retrying: "重试中", stale: "停滞", idle: "空闲", offline: "离线", unknown: "未知" },
+        action: { waiting: "等待开始当前任务", working: "正在执行当前任务", cancelling: "已请求取消", recent_done: "最近任务已完成", recent_failed: "最近任务执行失败", retrying: "正在重试当前任务", stale: "执行状态已过期", idle: "当前没有可领取的小任务", offline: "无实时信号，视为未在岗", unknown: "执行状态未知" },
       } } }))
         .replace("{{location}}", values?.location ?? "")
         .replace("{{name}}", values?.name ?? "")
         .replace("{{count}}", String(values?.count ?? ""))
-        .replace("{{time}}", values?.time ?? ""),
+        .replace("{{time}}", values?.time ?? "")
+        .replace("{{anomaly}}", String(values?.anomaly ?? ""))
+        .replace("{{running}}", String(values?.running ?? ""))
+        .replace("{{queued}}", String(values?.queued ?? ""))
+        .replace("{{total}}", String(values?.total ?? "")),
   }),
 }));
 
@@ -64,17 +71,17 @@ const agents = researchExecutionPanelFixture.map((agent) =>
     : agent,
 );
 
-// Legacy fixture statuses → 8-state overlay mapping (queued/idle → waiting).
+// Legacy fixture statuses → overlay state mapping (queued/idle stay distinct).
 describe("ResearchExecutionPanel", () => {
-  it("shows the mixed roster upgraded to the 8-state overlay", () => {
+  it("shows the mixed roster upgraded to the execution overlay", () => {
     render(<ResearchExecutionPanel agents={agents} />);
-    expect(screen.getByText("1 个智能体执行中")).toBeTruthy();
+    expect(screen.getByText(/2 异常 · 1 运行 · 1 排队 · 6 人/)).toBeTruthy();
     const statuses = new Set(
       screen.getAllByTestId("execution-overlay-row").map(
         (row) => row.getAttribute("data-status") as string,
       ),
     );
-    expect(statuses).toEqual(new Set(["waiting", "running", "done", "failed", "stale"]));
+    expect(statuses).toEqual(new Set(["queued", "running", "done", "failed", "stale", "idle"]));
   });
 
   it("sends one locate request from click, Enter, or Space and keeps the last selection", async () => {

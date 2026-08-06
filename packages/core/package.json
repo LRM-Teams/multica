@@ -131,7 +131,15 @@
     "./stickers/queries": "./stickers/queries.ts",
     "./voice-calls": "./voice-calls/index.ts",
     "./voice-calls/queries": "./voice-calls/queries.ts",
-    "./voice-calls/mutations": "./voice-calls/mutations.ts"
+    "./voice-calls/mutations": "./voice-calls/mutations.ts",
+    "./research-v6": "./hooks/research-v6/index.ts",
+    "./research-v6/queries": "./hooks/research-v6/queries.ts",
+    "./research-v6/projection-client": "./hooks/research-v6/projection-client.ts",
+    "./research-v6/store": "./hooks/research-v6/store.ts",
+    "./research-v6/registry": "./research-v6/registry.ts",
+    "./api/research-v6": "./api/research-v6.ts",
+    "./api/research-v6/schemas": "./api/research-v6-schemas.ts",
+    "./api/research-v6/fixtures": "./api/research-v6-fixtures.ts"
   },
   "dependencies": {
     "@formatjs/intl-localematcher": "catalog:",

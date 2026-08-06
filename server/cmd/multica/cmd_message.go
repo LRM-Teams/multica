@@ -239,13 +239,21 @@ func newMessageReadCmd() *cobra.Command {
 
 func newMessageSearchCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "search <query>",
-		Short: "Search messages in a targeted chat surface",
-		Args:  exactArgs(1),
-		RunE:  runAgentMessageSearch,
+		Use:   "search [query]",
+		Short: "Search canonical messages visible to the running agent",
+		Long: "Search canonical messages visible to the running agent. Supply a query or at least one filter. " +
+			"--sender accepts user:<uuid> or agent:<uuid>; --before and --after use RFC3339 timestamps. " +
+			"Results are ordered newest first by default, with a stable message-id tie-breaker.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: runAgentMessageSearch,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
-	cmd.Flags().Int("limit", 50, "Maximum matches to return")
+	cmd.Flags().String("sender", "", "Filter by canonical sender: user:<uuid> or agent:<uuid>")
+	cmd.Flags().String("sort", "newest", "Result order: newest or oldest")
+	cmd.Flags().String("before", "", "Only messages before this RFC3339 timestamp")
+	cmd.Flags().String("after", "", "Only messages after this RFC3339 timestamp")
+	cmd.Flags().Int("limit", 50, "Maximum matches to return (1-100)")
+	cmd.Flags().Int("offset", 0, "Number of matching messages to skip (0-10000)")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	return cmd
 }
@@ -641,15 +649,21 @@ func postAgentMessageThroughCredentialProxy(operation string, body map[string]an
 }
 
 func runAgentMessageSearch(cmd *cobra.Command, args []string) error {
-	target, err := requiredMessageTarget(cmd)
-	if err != nil {
-		return err
-	}
 	limit, _ := cmd.Flags().GetInt("limit")
+	offset, _ := cmd.Flags().GetInt("offset")
+	query := ""
+	if len(args) > 0 {
+		query = strings.TrimSpace(args[0])
+	}
 	body := map[string]any{
-		"target": target,
-		"query":  args[0],
+		"query":  query,
 		"limit":  limit,
+		"offset": offset,
+	}
+	for _, name := range []string{"target", "sender", "sort", "before", "after"} {
+		if value := strings.TrimSpace(flagString(cmd, name)); value != "" {
+			body[name] = value
+		}
 	}
 	var out map[string]any
 	if err := postAgentTransport(cmd, "/api/agent/messages/search", body, &out); err != nil {

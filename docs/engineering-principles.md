@@ -412,6 +412,10 @@
 - 附件上传基础设施对齐 Raft Upload Session/direct upload/完成验证；Agent send DTO 提交正文和 attachment IDs，Server 校验后组装 Multica canonical `parts`。Proxy 不理解或构造 Message Parts。
 - 完整术语、状态、Activity 时机、bounded held context、Draft 和命令契约见 [`docs/adr/0010-direct-message-delivery-lifecycle.md`](adr/0010-direct-message-delivery-lifecycle.md)。该 ADR 落地后取代 4.2 等旧 task/lease 消息路径；切换前不得把目标态写成已完成能力。
 
+### 4.20 云端电脑 Docker 宿主机名称必须携带可追踪上下文 — `可执行`（②payload 合同 + ⑤单测；owner: @Codex）
+- 通过 Computers → Cloud computer 创建 Docker 容器时，传给宿主机 `docker run --name` 的名称不是 Multica UI 展示名。服务端必须生成并下发 `multica-<部署服务端>-<workspace>-<username>-<container>` 形状的宿主机容器名，所有段需清洗成 Docker 安全 ASCII；UI 展示名只作为 `<container>` 输入。
+- **物**：`CreateSandboxInstance` 写入 `metadata.docker_container_name` / job `docker_container_name`；`sandboxd` 使用该字段作为 `--name`，旧 payload 只回退到 instance-id 名称。
+
 ---
 
 ### 4.15 Agent 临时协作空间必须保留人类所有权与幂等来源 — `可执行`（①数据库约束 + ③Agent 专用入口 + ⑤合同测试；owner: @Codex）

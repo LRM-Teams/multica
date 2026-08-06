@@ -101,21 +101,22 @@ type sandboxJob struct {
 }
 
 type sandboxJobPayload struct {
-	Template         string            `json:"template"`
-	Name             string            `json:"name"`
-	Limits           json.RawMessage   `json:"limits"`
-	Metadata         json.RawMessage   `json:"metadata"`
-	Runtime          json.RawMessage   `json:"runtime"`
-	RuntimeEnv       map[string]string `json:"runtime_env"`
-	InstanceID       string            `json:"instance_id"`
-	LocalRef         string            `json:"local_ref"`
-	DockerImage      string            `json:"docker_image"`
-	EndpointInfo     json.RawMessage   `json:"endpoint_info"`
-	SourceExternalID string            `json:"source_external_id"`
-	CreatePayload    json.RawMessage   `json:"create_payload"`
-	Code             string            `json:"code"`
-	Language         string            `json:"language"`
-	TimeoutSeconds   int               `json:"timeout_seconds"`
+	Template            string            `json:"template"`
+	Name                string            `json:"name"`
+	Limits              json.RawMessage   `json:"limits"`
+	Metadata            json.RawMessage   `json:"metadata"`
+	Runtime             json.RawMessage   `json:"runtime"`
+	RuntimeEnv          map[string]string `json:"runtime_env"`
+	InstanceID          string            `json:"instance_id"`
+	LocalRef            string            `json:"local_ref"`
+	DockerImage         string            `json:"docker_image"`
+	DockerContainerName string            `json:"docker_container_name"`
+	EndpointInfo        json.RawMessage   `json:"endpoint_info"`
+	SourceExternalID    string            `json:"source_external_id"`
+	CreatePayload       json.RawMessage   `json:"create_payload"`
+	Code                string            `json:"code"`
+	Language            string            `json:"language"`
+	TimeoutSeconds      int               `json:"timeout_seconds"`
 }
 
 type cubeSandbox struct {
@@ -662,6 +663,61 @@ func dockerContainerName(instanceID string) string {
 	return "multica-" + clean
 }
 
+func dockerContainerNameForJob(job sandboxJob, payload sandboxJobPayload) string {
+	candidate := firstNonEmpty(
+		payload.DockerContainerName,
+		stringFromRawObject(payload.Metadata, "docker_container_name"),
+	)
+	if name := sanitizeDockerContainerName(candidate); name != "" {
+		return name
+	}
+	return dockerContainerName(job.InstanceID)
+}
+
+func sanitizeDockerContainerName(raw string) string {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return ""
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, r := range name {
+		var out rune
+		switch {
+		case r >= 'a' && r <= 'z':
+			out = r
+		case r >= 'A' && r <= 'Z':
+			out = r + ('a' - 'A')
+		case r >= '0' && r <= '9':
+			out = r
+		case r == '_' || r == '.' || r == '-':
+			out = r
+		default:
+			out = '-'
+		}
+		if out == '-' {
+			if b.Len() == 0 || lastDash {
+				continue
+			}
+			lastDash = true
+		} else {
+			lastDash = false
+		}
+		b.WriteRune(out)
+		if b.Len() >= 128 {
+			break
+		}
+	}
+	clean := strings.Trim(b.String(), "-_.")
+	if clean == "" {
+		return ""
+	}
+	if clean[0] >= '0' && clean[0] <= '9' {
+		clean = "m-" + clean
+	}
+	return clean
+}
+
 func (c *sandboxdClient) createDockerContainer(ctx context.Context, job sandboxJob, payload sandboxJobPayload) (map[string]any, error) {
 	image := strings.TrimSpace(payload.DockerImage)
 	if image == "" {
@@ -673,7 +729,7 @@ func (c *sandboxdClient) createDockerContainer(ctx context.Context, job sandboxJ
 	}
 	runtimeEnv["PATH"] = firstNonEmpty(runtimeEnv["PATH"], "/root/.local/bin:/root/.npm-global/bin:/root/.bun/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin")
 	ensureDockerDesktopEnv(runtimeEnv)
-	name := dockerContainerName(job.InstanceID)
+	name := dockerContainerNameForJob(job, payload)
 	if existing, ok := c.findDockerContainerByInstance(ctx, job.InstanceID); ok {
 		endpoint := c.dockerEndpointInfo(ctx, existing, name, image)
 		return map[string]any{"local_ref": existing, "endpoint_info": endpoint, "result": map[string]any{"container_id": existing, "container_name": name, "image": image, "reused": true}}, nil

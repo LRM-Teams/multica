@@ -1112,14 +1112,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/lifecycle", h.GetAgentLifecycle)
 					r.Post("/lifecycle", h.CreateAgentLifecycleOperation)
 					r.Get("/lifecycle/{operationId}", h.GetAgentLifecycleOperation)
-					r.Get("/activity", h.ListAgentActivity)
-					// Dormant until #2424 activates the coordinated Runner Activity
-					// cut. Its separate path prevents compatibility translation with
-					// the historical /activity contracts.
+					// Workspace Runner Activity is the only public Agent Activity
+					// contract. It is a server-owned presentation read model; there is
+					// no compatibility translation from the removed event timeline.
 					r.Get("/runner-activity", h.GetRunnerActivity)
-					r.Get("/activity/{activityId}", h.GetAgentActivity)
-					r.Get("/activity/{activityId}/steps", h.ListAgentActivitySteps)
-					r.Get("/activity/{activityId}/diagnostic", h.GetAgentActivityDiagnostic)
 					r.Get("/tasks", h.ListAgentTasks)
 					r.Get("/reminders", h.ListAgentReminders)
 					r.Get("/skills", h.ListAgentSkills)

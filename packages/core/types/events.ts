@@ -271,57 +271,11 @@ export interface TaskMessagePayload {
   created_at?: string;
 }
 
-export type AgentActivityKind =
-  | "thinking"
-  | "tool_call"
-  | "tool_output"
-  | "turn_end"
-  | "session_init"
-  | "compaction_started"
-  | "compaction_finished"
-  | "wake_attempt"
-  | "error"
-  | "text"
-  | "system"
-  | "transport"
-  | "telemetry"
-  | "blocked"
-  // Raft diagnostic kinds (#389) — naturally diagnostic/raw, never mainline
-  // narrative. The BE prefilters these out of the default page; the FE predicate
-  // keeps them out defensively.
-  | "internal_progress"
-  | "runtime_diagnostic"
-  | "custom";
-
-export interface AgentActivitySourceRef {
-  kind: string;
-  id?: string;
-  seq?: number;
-}
-
-export interface AgentActivityTargetRef {
-  kind: string;
-  id?: string;
-  slug?: string;
-}
-
-/**
- * One normalized narrative display fragment inside an event (#389). The BE
- * projects raft's `entries` from source-backed safe fields; the FE renders them
- * (e.g. the command two-tier: `tool_target` compact / redacted `command` full).
- */
 /** `agent_reminder:changed` — a pure invalidate signal (schedule/snooze/update/cancel/fire/terminalize, emitted post-commit). Minimal on purpose: no title/anchor/reminder data broadcast, just the scope to refetch. */
 export interface AgentReminderChangedPayload {
   agent_id: string;
 }
 
-/**
- * REST response for `GET /api/agents/{id}/activity/events` — an intentional
- * pagination envelope (#474/#389), NOT a bare array. `next_cursor` is an
- * OPAQUE STRING keyset token (the BE keys on `occurred_at+id` internally, but
- * that is not exposed on the wire); the FE echoes it back verbatim as
- * `?before=<token>` for the next page and never parses it.
- */
 // The Workspace Runner Activity read-model is presentation-safe: callers must
 // display these fields as supplied and never infer runtime state.
 export interface RunnerActivitySummary {

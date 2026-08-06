@@ -67,6 +67,7 @@ type RuntimePendingNoticeHandoff func(context.Context, PendingNoticeSnapshot) er
 // Its callers send agent:deliver:ack only after Accept returns successfully.
 type MessageCoordinator struct {
 	mu              sync.Mutex
+	draftMu         sync.Mutex
 	root            string
 	boundaries      map[string]int64
 	pending         map[string]map[int64]protocol.AgentMessageProjection
@@ -81,6 +82,18 @@ type MessageCoordinator struct {
 	noticeRetry     time.Duration
 	noticeTimer     *time.Timer
 	closed          bool
+}
+
+// MessageSendFreshness is the local preflight result for one target.  The
+// coordinator is the only owner of the Context Boundary, so callers never
+// provide a cursor or decide whether Pending is safe to skip.
+type MessageSendFreshness struct {
+	SeenUpToSeq     int64
+	LatestSeq       int64
+	NewMessageCount int64
+	Messages        []protocol.AgentMessageProjection
+	Omitted         int64
+	Held            bool
 }
 
 type acceptedRuntimeHandoff struct {
@@ -247,6 +260,85 @@ func (c *MessageCoordinator) ContextBoundary(target string) (int64, bool) {
 		return 0, false
 	}
 	return c.boundaries[target], true
+}
+
+// SendBoundarySnapshot returns the last durable boundary even while freshness
+// is unknown.  It is used only to record an attempted Draft before a network
+// operation; PreflightMessageSend below is still the authority that decides
+// whether the attempt may proceed.
+func (c *MessageCoordinator) SendBoundarySnapshot(target string) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.boundaries[strings.TrimSpace(target)]
+}
+
+// PreflightMessageSend checks one canonical target after the caller has saved
+// its local Draft.  Pending is accepted as held context atomically: durable
+// coverage advances through every Pending Message, while only the newest three
+// concrete bodies are returned to the Agent.  This keeps omitted canonical
+// history available to an explicit read without allowing the same Draft to be
+// held forever on the same range.
+func (c *MessageCoordinator) PreflightMessageSend(target string) (MessageSendFreshness, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return MessageSendFreshness{}, errors.New("canonical Message target is required")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return MessageSendFreshness{}, errors.New("Message coordinator is closed")
+	}
+	result := MessageSendFreshness{SeenUpToSeq: c.boundaries[target]}
+	if c.recovery.status != messageFreshnessComplete || !c.boundaryHealthy {
+		return result, errors.New("Message freshness is unknown")
+	}
+	bySequence := c.pending[target]
+	if len(bySequence) == 0 {
+		return result, nil
+	}
+
+	sequences := make([]int64, 0, len(bySequence))
+	for sequence := range bySequence {
+		sequences = append(sequences, sequence)
+	}
+	sort.Slice(sequences, func(i, j int) bool { return sequences[i] < sequences[j] })
+	result.Held = true
+	result.NewMessageCount = int64(len(sequences))
+	result.LatestSeq = sequences[len(sequences)-1]
+	shownFrom := len(sequences) - messageCheckMaxLimit
+	if shownFrom < 0 {
+		shownFrom = 0
+	}
+	result.Messages = make([]protocol.AgentMessageProjection, 0, len(sequences)-shownFrom)
+	for _, sequence := range sequences[shownFrom:] {
+		result.Messages = append(result.Messages, bySequence[sequence])
+	}
+	result.Omitted = int64(shownFrom)
+
+	next := cloneBoundaries(c.boundaries)
+	if result.LatestSeq > next[target] {
+		next[target] = result.LatestSeq
+	}
+	if err := writeConsumedSeqs(filepath.Join(c.root, consumedSeqsFileName), next); err != nil {
+		c.boundaryHealthy = false
+		return MessageSendFreshness{}, fmt.Errorf("persist Context Boundary after freshness hold: %w", err)
+	}
+	c.boundaries = next
+	c.boundaryHealthy = true
+	for _, sequence := range sequences {
+		message := bySequence[sequence]
+		delete(bySequence, sequence)
+		delete(c.accepted, messageIdentityKey(message))
+	}
+	delete(c.pending, target)
+	return result, nil
+}
+
+// AcceptHeldContext advances local coverage after the canonical Server wins a
+// final send-race check.  The Server's latest sequence is the complete held
+// range even when its response contains only a bounded projection.
+func (c *MessageCoordinator) AcceptHeldContext(target string, throughSeq int64) error {
+	return c.MarkRead(target, throughSeq)
 }
 
 // Accept installs a Delivery into Pending. It returns false for a duplicate;

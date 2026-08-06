@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -120,4 +121,73 @@ func (p *CredentialProxy) RecordMessageRead(agentID, target string, throughSeq i
 		return errors.New("Message coordinator is unavailable")
 	}
 	return coordinator.MarkRead(target, throughSeq)
+}
+
+func (p *CredentialProxy) messageCoordinator(agentID string) (*MessageCoordinator, error) {
+	if p == nil || p.daemon == nil {
+		return nil, errors.New("Credential Proxy is unavailable")
+	}
+	p.daemon.messageCoordinatorMu.RLock()
+	coordinator := p.daemon.messageCoordinators[strings.TrimSpace(agentID)]
+	p.daemon.messageCoordinatorMu.RUnlock()
+	if coordinator == nil {
+		return nil, errors.New("Message coordinator is unavailable")
+	}
+	return coordinator, nil
+}
+
+func (p *CredentialProxy) SaveNormalMessageDraft(agentID string, draft messageDraft, now time.Time) (messageDraft, error) {
+	coordinator, err := p.messageCoordinator(agentID)
+	if err != nil {
+		return messageDraft{}, err
+	}
+	return coordinator.SaveNormalMessageDraft(draft, now)
+}
+
+func (p *CredentialProxy) LoadMessageDraft(agentID, target string, now time.Time) (messageDraft, bool, error) {
+	coordinator, err := p.messageCoordinator(agentID)
+	if err != nil {
+		return messageDraft{}, false, err
+	}
+	return coordinator.LoadMessageDraft(target, now)
+}
+
+func (p *CredentialProxy) RefreshMessageDraft(agentID, target, clientMessageID, contextTarget string, seenUpToSeq int64, now time.Time) (messageDraft, error) {
+	coordinator, err := p.messageCoordinator(agentID)
+	if err != nil {
+		return messageDraft{}, err
+	}
+	return coordinator.RefreshMessageDraft(target, clientMessageID, contextTarget, seenUpToSeq, now)
+}
+
+func (p *CredentialProxy) ClearMessageDraft(agentID, target, clientMessageID string) error {
+	coordinator, err := p.messageCoordinator(agentID)
+	if err != nil {
+		return err
+	}
+	return coordinator.ClearMessageDraft(target, clientMessageID)
+}
+
+func (p *CredentialProxy) MessageSendBoundarySnapshot(agentID, target string) (int64, error) {
+	coordinator, err := p.messageCoordinator(agentID)
+	if err != nil {
+		return 0, err
+	}
+	return coordinator.SendBoundarySnapshot(target), nil
+}
+
+func (p *CredentialProxy) PreflightMessageSend(agentID, target string) (MessageSendFreshness, error) {
+	coordinator, err := p.messageCoordinator(agentID)
+	if err != nil {
+		return MessageSendFreshness{}, err
+	}
+	return coordinator.PreflightMessageSend(target)
+}
+
+func (p *CredentialProxy) AcceptHeldMessageContext(agentID, target string, throughSeq int64) error {
+	coordinator, err := p.messageCoordinator(agentID)
+	if err != nil {
+		return err
+	}
+	return coordinator.AcceptHeldContext(target, throughSeq)
 }

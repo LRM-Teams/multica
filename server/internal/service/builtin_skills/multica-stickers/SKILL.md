@@ -97,3 +97,7 @@ Use a searched sticker only in the standalone final-output envelope.
   `multica attachment upload --path <file> --target <target>`, then pipe a
   non-empty body to `multica message send --target <target> --attachment-id <id>`.
   The Server, not the Agent CLI, turns attachment ids into canonical message Parts.
+  If a direct upload is interrupted, retry the same verified session with
+  `multica attachment upload --path <file> --resume-session <session-id>`;
+  cancel an abandoned pending session with
+  `multica attachment upload --cancel-session <session-id>`.

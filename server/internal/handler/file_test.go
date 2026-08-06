@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -135,7 +136,7 @@ func (m *mockStorage) PresignGetWithContentDisposition(_ context.Context, key st
 	return u.String(), nil
 }
 
-func (m *mockStorage) PresignUpload(_ context.Context, _ string, _ time.Duration, contentType, _ string) (storage.UploadSessionDestination, error) {
+func (m *mockStorage) PresignUpload(_ context.Context, _ string, _ time.Duration, contentType, _, _ string) (storage.UploadSessionDestination, error) {
 	return storage.UploadSessionDestination{Method: http.MethodPut, Headers: map[string]string{"Content-Type": contentType}}, nil
 }
 
@@ -147,10 +148,12 @@ func (m *mockStorage) VerifyUpload(_ context.Context, key string) (storage.Uploa
 		return storage.UploadedObject{}, fmt.Errorf("mockStorage VerifyUpload: key not found: %q", key)
 	}
 	contentType := m.contentTypes[key]
+	digest := sha256.Sum256(data)
 	return storage.UploadedObject{
-		URL:         fmt.Sprintf("https://cdn.example.com/%s", key),
-		SizeBytes:   int64(len(data)),
-		ContentType: contentType,
+		URL:            fmt.Sprintf("https://cdn.example.com/%s", key),
+		SizeBytes:      int64(len(data)),
+		ContentType:    contentType,
+		ChecksumSHA256: fmt.Sprintf("%x", digest),
 	}, nil
 }
 

@@ -3261,11 +3261,11 @@ func seedCompletedAgentAttachmentUploadSessionForTest(t *testing.T, agentID, cha
 		INSERT INTO agent_attachment_upload_session (
 			id, workspace_id, agent_id, channel_id, thread_root_message_id,
 			context_target, object_key, filename, content_type, size_bytes,
-			upload_mode, state, expires_at, attachment_id, completed_at
+			checksum_sha256, upload_mode, state, expires_at, attachment_id, completed_at
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7, 'test-upload.png', 'image/png', 42,
-			'local', 'completed', now() + interval '15 minutes', $8, now()
+			repeat('0', 64), 'local', 'completed', now() + interval '15 minutes', $8, now()
 		)`,
 		uuid.NewString(), testWorkspaceID, agentID, channelID, threadRoot,
 		contextTarget, "test-agent-upload-session/"+uuid.NewString(), attachmentID,

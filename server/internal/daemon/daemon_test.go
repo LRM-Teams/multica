@@ -458,7 +458,7 @@ func TestHandleUpdateReportsFailedWhenStableBinaryStillOld(t *testing.T) {
 			t.Fatalf("error = %q, want substring %q", errMsg, want)
 		}
 	}
-	assertUpdateObservation(t, observation, "waiting", "verification_failed")
+	assertUpdateObservation(t, observation, "disabled", "verification_failed")
 }
 
 func TestHandleUpdateRestartsWhenStableBinaryVerifiedAndIdle(t *testing.T) {
@@ -721,7 +721,7 @@ func TestHandleUpdateDoesNotRestartUntilReadyToApplyIsDurablyAcknowledged(t *tes
 			t.Fatalf("retry %d status = %v, want ready_to_apply", i+1, report["status"])
 		}
 	}
-	assertUpdateObservation(t, observation, "waiting", "update_succeeded")
+	assertUpdateObservation(t, observation, "disabled", "update_succeeded")
 }
 
 func TestHandleUpdateDoesNotRestartWhenReadyToApplyConflictsWithPersistedState(t *testing.T) {
@@ -778,7 +778,7 @@ func TestHandleUpdateDoesNotRestartWhenReadyToApplyConflictsWithPersistedState(t
 	if reports[0]["status"] != "running" || reports[1]["status"] != "ready_to_apply" {
 		t.Fatalf("report statuses = %#v, want running then ready_to_apply", reports)
 	}
-	assertUpdateObservation(t, observation, "waiting", "update_succeeded")
+	assertUpdateObservation(t, observation, "disabled", "update_succeeded")
 }
 
 func TestHandleUpdateDoesNotRestartWhenRootCanceledAfterReadyAck(t *testing.T) {
@@ -835,7 +835,7 @@ func TestHandleUpdateDoesNotRestartWhenRootCanceledAfterReadyAck(t *testing.T) {
 		t.Fatalf("restart calls after root cancellation = %d, want 0", restartCalls.Load())
 	}
 	waitForClaimBarrierState(t, d, false)
-	assertUpdateObservation(t, observation, "waiting", "update_succeeded")
+	assertUpdateObservation(t, observation, "disabled", "update_succeeded")
 }
 
 func TestHandleUpdateReportsCompletedBeforeRestartForOldServerWhenIdle(t *testing.T) {
@@ -940,7 +940,7 @@ func TestHandleUpdateOldServerBusyDoesNotClaimRestartPending(t *testing.T) {
 	if len(reports) != 2 || reports[0]["status"] != "running" || reports[1]["status"] != "failed" {
 		t.Fatalf("report statuses = %#v, want running then failed", reports)
 	}
-	assertUpdateObservation(t, observation, "waiting", "update_succeeded")
+	assertUpdateObservation(t, observation, "disabled", "update_succeeded")
 }
 
 func TestHandleUpdateForceActivatesWhenBusyAndServerSupportsReadyToApply(t *testing.T) {

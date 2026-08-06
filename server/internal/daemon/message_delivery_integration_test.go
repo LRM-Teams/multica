@@ -292,16 +292,11 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	default:
 	}
 
-	turnKey := agentRuntimeTurnSlotKey{AgentID: agentID, RuntimeID: runtimeID}
-	if !d.agentRuntimeTurns.reserve(turnKey, "task-busy") {
-		t.Fatal("reserve busy turn")
-	}
 	checkRecorder := httptest.NewRecorder()
 	checkRequest := httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(
-		fmt.Sprintf(`{"agent_id":%q,"task_id":"task-busy"}`, agentID),
+		fmt.Sprintf(`{"agent_id":%q}`, agentID),
 	))
 	d.credentialProxyMessageCheckHandler().ServeHTTP(checkRecorder, checkRequest)
-	d.agentRuntimeTurns.release(turnKey, "task-busy")
 	if checkRecorder.Code != http.StatusOK {
 		t.Fatalf("Credential Proxy check: status=%d body=%s", checkRecorder.Code, checkRecorder.Body.String())
 	}

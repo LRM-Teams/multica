@@ -179,7 +179,7 @@ func (p *piPersistentPool) evictChat(agentID, runtimeID, chatSessionID string) i
 
 func usesPersistentPiChatRuntime(provider string, task Task) bool {
 	profile, err := taskExecutionProfile(task)
-	return err == nil && profile == executionProfileFull && provider == "pi" && task.ChatSessionID != ""
+	return err == nil && profile == executionProfileFull && provider == "pi" && isChatLikeTask(task)
 }
 
 func (d *Daemon) acquirePiChatRPCBackend(identity piPersistentIdentity, cfg agent.Config) (agent.Backend, func(bool), error) {

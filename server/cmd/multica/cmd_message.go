@@ -149,16 +149,15 @@ func newMessageCheckCmd() *cobra.Command {
 
 func runAgentMessageCheck(_ *cobra.Command, _ []string) error {
 	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
-	taskID := strings.TrimSpace(os.Getenv("MULTICA_TASK_ID"))
 	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
-	if agentID == "" || taskID == "" {
-		return errors.New("message check requires an active daemon Agent turn")
+	if agentID == "" {
+		return errors.New("message check requires MULTICA_AGENT_ID")
 	}
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
 		return errors.New("message check requires a valid MULTICA_DAEMON_PORT")
 	}
-	body, err := json.Marshal(map[string]string{"agent_id": agentID, "task_id": taskID})
+	body, err := json.Marshal(map[string]string{"agent_id": agentID})
 	if err != nil {
 		return fmt.Errorf("encode message check request: %w", err)
 	}
@@ -363,9 +362,6 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 			body["anyway"] = true
 		}
 		var out map[string]any
-		if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
-			return err
-		}
 		if err := postAgentMessageSendThroughCredentialProxy(body, &out); err != nil {
 			return fmt.Errorf("send saved Draft: %w", err)
 		}
@@ -395,9 +391,6 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		"attachment_ids": attachmentIDs,
 	}
 	var out map[string]any
-	if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
-		return err
-	}
 	if err := postAgentMessageSendThroughCredentialProxy(body, &out); err != nil {
 		return fmt.Errorf("send message: %w", err)
 	}
@@ -595,11 +588,10 @@ func postAgentMessageSendThroughCredentialProxy(body map[string]any, out any) er
 
 func postAgentMessageThroughCredentialProxy(operation string, body map[string]any, out any) error {
 	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
-	taskID := strings.TrimSpace(os.Getenv("MULTICA_TASK_ID"))
 	workspaceID := strings.TrimSpace(os.Getenv("MULTICA_WORKSPACE_ID"))
 	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
-	if agentID == "" || taskID == "" || workspaceID == "" {
-		return fmt.Errorf("message %s requires an active daemon Agent turn", operation)
+	if agentID == "" || workspaceID == "" {
+		return fmt.Errorf("message %s requires MULTICA_AGENT_ID and MULTICA_WORKSPACE_ID", operation)
 	}
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
@@ -610,17 +602,7 @@ func postAgentMessageThroughCredentialProxy(operation string, body map[string]an
 		requestBody[key] = value
 	}
 	requestBody["agent_id"] = agentID
-	requestBody["task_id"] = taskID
 	requestBody["workspace_id"] = workspaceID
-	for env, field := range map[string]string{
-		"MULTICA_AGENT_INBOX_EVENT_ID":    "agent_inbox_event_id",
-		"MULTICA_AGENT_INBOX_DELIVERY_ID": "agent_inbox_delivery_id",
-		"MULTICA_AGENT_INBOX_LEASE_TOKEN": "agent_inbox_lease_token",
-	} {
-		if value := strings.TrimSpace(os.Getenv(env)); value != "" {
-			requestBody[field] = value
-		}
-	}
 	raw, err := json.Marshal(requestBody)
 	if err != nil {
 		return fmt.Errorf("encode message %s request: %w", operation, err)

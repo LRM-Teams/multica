@@ -287,9 +287,35 @@ type agentTransportTarget struct {
 }
 
 type agentTransportSource struct {
-	task         db.AgentInboxEvent
-	origin       chatOutputOrigin
-	inboxEventID pgtype.UUID
+	legacyTask        *db.AgentInboxEvent
+	origin            chatOutputOrigin
+	inboxEventID      pgtype.UUID
+	durableCredential bool
+}
+
+func (source agentTransportSource) runtimeID() pgtype.UUID {
+	if source.legacyTask == nil {
+		return pgtype.UUID{}
+	}
+	return source.legacyTask.RuntimeID
+}
+
+func (source agentTransportSource) isChannelOnboarding() bool {
+	return source.legacyTask != nil && source.legacyTask.Reason == channelOnboardingReason
+}
+
+func (source agentTransportSource) legacyTaskID() pgtype.UUID {
+	if source.legacyTask == nil {
+		return pgtype.UUID{}
+	}
+	return source.legacyTask.ID
+}
+
+func (h *Handler) channelInitiatorForTransportSource(ctx context.Context, source agentTransportSource) pgtype.UUID {
+	if source.legacyTask != nil {
+		return h.channelInitiatorForTask(ctx, *source.legacyTask)
+	}
+	return h.agentOwnerID(ctx, source.origin.workspaceID, source.origin.agentID)
 }
 
 func (h *Handler) agentTransportInitiatorUserID(r *http.Request, source agentTransportSource) (pgtype.UUID, bool) {
@@ -460,7 +486,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "client_message_id is too long")
 		return
 	}
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, true)
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.legacyTask, source.origin, req.Target, true)
 	if err != nil {
 		if errors.Is(err, errReminderSendOutsideAnchor) {
 			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
@@ -497,7 +523,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	initiatorID := h.channelInitiatorForTask(r.Context(), source.task)
+	initiatorID := h.channelInitiatorForTransportSource(r.Context(), source)
 	if err := h.requireAgentTransportVisibilityGrantActive(r.Context(), source); err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
@@ -506,7 +532,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 	if !isChannelOnboarding && !req.BypassFreshness {
 		seenUpToSeq, err = h.agentTransportSeenUpToSeq(r.Context(), source, target.raw, req.SeenUpToSeq)
 		if err != nil {
-			slog.Warn("agent transport freshness check failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+			slog.Warn("agent transport freshness check failed", "task_id", uuidToString(nullableTaskIDForTransportSource(source)), "agent_id", uuidToString(source.origin.agentID), "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to send message")
 			return
 		}
@@ -543,7 +569,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			})
 			return
 		}
-		slog.Warn("agent transport send failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
+		slog.Warn("agent transport send failed", "task_id", uuidToString(nullableTaskIDForTransportSource(source)), "agent_id", uuidToString(source.origin.agentID), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to send message")
 		return
 	}
@@ -560,7 +586,7 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	h.recordAgentActivityEvent(r.Context(), h.DB,
-		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
+		source.origin.workspaceID, source.origin.agentID, source.runtimeID(), nullableTaskIDForTransportSource(source),
 		activityKindText, "message_sent", "info",
 		"channel", parseUUID(target.channel.ID), target.raw,
 		"", agentVisibleOutputActivityText(result.Message.Content, result.Message.Parts, result.Message.Attachments),
@@ -596,7 +622,7 @@ func (h *Handler) AgentTransportResolveMessageTarget(w http.ResponseWriter, r *h
 		writeError(w, http.StatusBadRequest, "target is required")
 		return
 	}
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, true)
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.legacyTask, source.origin, req.Target, true)
 	if err != nil {
 		if errors.Is(err, errReminderSendOutsideAnchor) {
 			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
@@ -727,7 +753,7 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	limit := clampAgentTransportLimit(req.Limit, 20)
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.legacyTask, source.origin, req.Target, false)
 	if err != nil {
 		if errors.Is(err, errReminderSendOutsideAnchor) {
 			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
@@ -746,7 +772,7 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		case errors.Is(err, errAgentTransportReadAnchorAmbiguous):
 			writeError(w, http.StatusConflict, err.Error())
 		default:
-			slog.Warn("agent transport read failed", "task_id", uuidToString(source.task.ID), "error", err)
+			slog.Warn("agent transport read failed", "task_id", uuidToString(nullableTaskIDForTransportSource(source)), "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to read messages")
 		}
 		return
@@ -765,7 +791,7 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		"target_snapshot": target.raw,
 	})
 	if err != nil {
-		slog.Warn("agent transport read audit failed", "task_id", uuidToString(source.task.ID), "error", err)
+		slog.Warn("agent transport read audit failed", "task_id", uuidToString(nullableTaskIDForTransportSource(source)), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to record message read")
 		return
 	}
@@ -820,8 +846,14 @@ func (h *Handler) enforceAgentTransportVoiceReply(
 }
 
 func (h *Handler) agentTransportSourceMessageID(ctx context.Context, source agentTransportSource) (pgtype.UUID, error) {
+	if source.durableCredential {
+		return pgtype.UUID{}, nil
+	}
 	if !source.inboxEventID.Valid {
-		return h.channelReactionTargetFromPrompt(ctx, source.task.ChatSessionID, source.task.ID), nil
+		if source.legacyTask == nil {
+			return pgtype.UUID{}, nil
+		}
+		return h.channelReactionTargetFromPrompt(ctx, source.legacyTask.ChatSessionID, source.legacyTask.ID), nil
 	}
 	var sourceMessageID pgtype.UUID
 	if err := h.DB.QueryRow(ctx, `
@@ -895,7 +927,7 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if rawTarget := strings.TrimSpace(req.Target); rawTarget != "" {
-		target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, rawTarget, false)
+		target, err := h.resolveAgentTransportTarget(r.Context(), source.legacyTask, source.origin, rawTarget, false)
 		if err != nil || !h.agentHasSurfaceAccess(r.Context(), source.origin.workspaceID, source.origin.agentID, parseUUID(target.channel.ID)) {
 			writeError(w, http.StatusBadRequest, "invalid target")
 			return
@@ -908,7 +940,7 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 	}
 	total, results, err := h.searchAgentTransportMessages(r.Context(), source, search)
 	if err != nil {
-		slog.Warn("agent transport search failed", "task_id", uuidToString(source.task.ID), "error", err)
+		slog.Warn("agent transport search failed", "task_id", uuidToString(nullableTaskIDForTransportSource(source)), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to search messages")
 		return
 	}
@@ -936,7 +968,7 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 		"offset":       search.Offset,
 	})
 	if err != nil {
-		slog.Warn("agent transport search audit failed", "task_id", uuidToString(source.task.ID), "error", err)
+		slog.Warn("agent transport search audit failed", "task_id", uuidToString(nullableTaskIDForTransportSource(source)), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to record message search")
 		return
 	}
@@ -971,7 +1003,7 @@ func (h *Handler) writeAgentTransportMessageResolveError(w http.ResponseWriter, 
 	case errors.Is(err, errAgentTransportMessageIDInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
-		slog.Warn("agent transport canonical message lookup failed", "task_id", uuidToString(source.task.ID), "error", err)
+		slog.Warn("agent transport canonical message lookup failed", "task_id", uuidToString(nullableTaskIDForTransportSource(source)), "error", err)
 		writeError(w, http.StatusInternalServerError, failure)
 	}
 }
@@ -1194,7 +1226,7 @@ func (h *Handler) AgentTransportUnfollowThread(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.legacyTask, source.origin, req.Target, false)
 	if err != nil {
 		if errors.Is(err, errReminderSendOutsideAnchor) {
 			writeError(w, http.StatusBadRequest, errReminderSendOutsideAnchor.Error())
@@ -1218,7 +1250,7 @@ func (h *Handler) AgentTransportUnfollowThread(w http.ResponseWriter, r *http.Re
 		"message_id": uuidToString(target.threadRootMessageID),
 	})
 	if err != nil {
-		slog.Warn("agent transport thread unfollow audit failed", "task_id", uuidToString(source.task.ID), "error", err)
+		slog.Warn("agent transport thread unfollow audit failed", "task_id", uuidToString(nullableTaskIDForTransportSource(source)), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to record thread unfollow")
 		return
 	}
@@ -1241,23 +1273,37 @@ func (h *Handler) requireAgentTransportSource(w http.ResponseWriter, r *http.Req
 		if !ok {
 			return agentTransportSource{}, false
 		}
-		return agentTransportSource{task: task, origin: origin}, true
+		return agentTransportSource{legacyTask: &task, origin: origin}, true
 	case "agent_inbox_token":
 		task, origin, inboxEventID, ok := h.requireAgentTransportInboxEvent(w, r)
 		if !ok {
 			return agentTransportSource{}, false
 		}
-		return agentTransportSource{task: task, origin: origin, inboxEventID: inboxEventID}, true
+		return agentTransportSource{legacyTask: &task, origin: origin, inboxEventID: inboxEventID}, true
 	case "agent_credential":
-		task, origin, inboxEventID, ok := h.requireAgentCredentialTransportInboxEvent(w, r)
-		if !ok {
-			return agentTransportSource{}, false
-		}
-		return agentTransportSource{task: task, origin: origin, inboxEventID: inboxEventID}, true
+		return h.requireAgentCredentialChatTransport(w, r)
 	default:
 		writeError(w, http.StatusForbidden, "agent transport requires a task token")
 		return agentTransportSource{}, false
 	}
+}
+
+// requireAgentCredentialChatTransport authorizes chat actions from the durable
+// credential identity stamped by auth middleware. Chat is not scoped to an
+// issue task, inbox event, delivery, lease, or current runtime turn.
+func (h *Handler) requireAgentCredentialChatTransport(w http.ResponseWriter, r *http.Request) (agentTransportSource, bool) {
+	workspaceID, ok := parseUUIDOrBadRequest(w, ctxWorkspaceID(r.Context()), "workspace id")
+	if !ok {
+		return agentTransportSource{}, false
+	}
+	agentID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent id")
+	if !ok {
+		return agentTransportSource{}, false
+	}
+	return agentTransportSource{
+		origin:            chatOutputOrigin{workspaceID: workspaceID, agentID: agentID},
+		durableCredential: true,
+	}, true
 }
 
 func (h *Handler) requireAgentTransportTask(w http.ResponseWriter, r *http.Request) (db.AgentInboxEvent, chatOutputOrigin, bool) {
@@ -1341,31 +1387,6 @@ func (h *Handler) requireAgentTransportInboxEvent(w http.ResponseWriter, r *http
 	return task, origin, event.ID, true
 }
 
-func (h *Handler) requireAgentCredentialTransportInboxEvent(w http.ResponseWriter, r *http.Request) (db.AgentInboxEvent, chatOutputOrigin, pgtype.UUID, bool) {
-	event, runtimeID, ok := h.requireAgentCredentialActiveInboxDelivery(w, r)
-	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	workspaceID := ctxWorkspaceID(r.Context())
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
-	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	agentID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent id")
-	if !ok {
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	task := agentInboxSyntheticTask(event, runtimeID)
-	origin, ok := h.chatOutputOriginForTask(r.Context(), task)
-	if !ok || origin.workspaceID != wsUUID || origin.agentID != agentID {
-		// LRM-1055: missing chat_session alone is no longer a hard reject; reject
-		// only when neither session nor channel_id yields a surface origin.
-		writeError(w, http.StatusForbidden, "agent inbox event has no channel transport origin")
-		return db.AgentInboxEvent{}, chatOutputOrigin{}, pgtype.UUID{}, false
-	}
-	return task, origin, event.ID, true
-}
-
 // requireAgentCredentialActiveInboxDelivery validates the short-lived delivery
 // fence presented alongside a durable agent credential. It intentionally does
 // not require a chat transport origin: non-chat agent APIs, including research
@@ -1435,7 +1456,7 @@ func (h *Handler) requireAgentCredentialActiveInboxDelivery(w http.ResponseWrite
 	return event, runtimeID, true
 }
 
-func (h *Handler) resolveAgentTransportTarget(ctx context.Context, task db.AgentInboxEvent, origin chatOutputOrigin, rawTarget string, createDM bool) (agentTransportTarget, error) {
+func (h *Handler) resolveAgentTransportTarget(ctx context.Context, task *db.AgentInboxEvent, origin chatOutputOrigin, rawTarget string, createDM bool) (agentTransportTarget, error) {
 	rawTarget = strings.TrimSpace(rawTarget)
 	if rawTarget == "" {
 		return agentTransportTarget{}, errChatOutputInvalidTarget
@@ -1451,7 +1472,10 @@ func (h *Handler) resolveAgentTransportTarget(ctx context.Context, task db.Agent
 	}
 	switch resolved.kind {
 	case chatOutputTargetDM:
-		creatorID := task.InitiatorUserID
+		creatorID := pgtype.UUID{}
+		if task != nil {
+			creatorID = task.InitiatorUserID
+		}
 		if !creatorID.Valid {
 			creatorID = h.agentOwnerID(ctx, origin.workspaceID, origin.agentID)
 		}
@@ -1477,8 +1501,10 @@ func (h *Handler) resolveAgentTransportTarget(ctx context.Context, task db.Agent
 	} else if strings.TrimSpace(out.threadRoot.ID) != "" {
 		threadRootID = strings.TrimSpace(out.threadRoot.ID)
 	}
-	if err := enforceReminderAnchorSurface(task, out.channel.ID, out.kind, threadRootID); err != nil {
-		return agentTransportTarget{}, err
+	if task != nil {
+		if err := enforceReminderAnchorSurface(*task, out.channel.ID, out.kind, threadRootID); err != nil {
+			return agentTransportTarget{}, err
+		}
 	}
 	return out, nil
 }
@@ -1655,7 +1681,7 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 	if err != nil {
 		return agentTransportMessageResult{}, err
 	}
-	if source.task.Reason != channelOnboardingReason {
+	if !source.isChannelOnboarding() {
 		if err := h.lockAgentTransportSource(ctx, tx, source); err != nil {
 			_ = tx.Rollback(ctx)
 			return agentTransportMessageResult{}, err
@@ -1822,6 +1848,9 @@ func (h *Handler) lockAgentTransportDraftSource(ctx context.Context, exec dbExec
 }
 
 func (h *Handler) requireAgentTransportSourceActiveWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource) error {
+	if source.durableCredential {
+		return nil
+	}
 	var status string
 	if err := exec.QueryRow(ctx, `
 		SELECT status
@@ -1829,7 +1858,7 @@ func (h *Handler) requireAgentTransportSourceActiveWithExec(ctx context.Context,
 		WHERE id = $1
 		  AND workspace_id = $2
 		  AND agent_id = $3`,
-		source.task.ID, source.origin.workspaceID, source.origin.agentID,
+		source.legacyTaskID(), source.origin.workspaceID, source.origin.agentID,
 	).Scan(&status); err != nil {
 		if errorsIsNoRows(err) {
 			return errAgentTransportSourceNotActive
@@ -1953,8 +1982,8 @@ func (h *Handler) abandonAgentTransportFreshnessDraftsWithExec(
 		workspaceID: event.WorkspaceID,
 		agentID:     event.AgentID,
 	}
-	taskSource := agentTransportSource{task: task, origin: origin}
-	inboxSource := agentTransportSource{task: task, origin: origin, inboxEventID: event.ID}
+	taskSource := agentTransportSource{legacyTask: &task, origin: origin}
+	inboxSource := agentTransportSource{legacyTask: &task, origin: origin, inboxEventID: event.ID}
 	// Completion must own both source namespaces before it enumerates drafts.
 	// This closes the absent -> first-hold transition: a send that started from
 	// a stale pre-ACK access check cannot create its first draft after this
@@ -2091,7 +2120,7 @@ func (h *Handler) insertAgentTransportFreshnessResolutionActivityWithExec(
 		details["message_id"] = uuidToString(messageID)
 	}
 	eventID, inserted := insertAgentActivityEvent(ctx, exec,
-		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
+		source.origin.workspaceID, source.origin.agentID, source.runtimeID(), nullableTaskIDForTransportSource(source),
 		activityKindText, "send_freshness_resolved", "info",
 		"channel", parseUUID(target.channel.ID), target.raw,
 		"", message, details,
@@ -2198,7 +2227,7 @@ func (h *Handler) resolveDuplicateAgentTransportMessageAtomic(ctx context.Contex
 	if err != nil {
 		return agentTransportMessageResult{}, err
 	}
-	if source.task.Reason != channelOnboardingReason {
+	if !source.isChannelOnboarding() {
 		if err := h.lockAgentTransportSource(ctx, tx, source); err != nil {
 			_ = tx.Rollback(ctx)
 			return agentTransportMessageResult{}, err
@@ -2871,6 +2900,9 @@ func (h *Handler) holdAgentTransportSend(ctx context.Context, source agentTransp
 }
 
 func (h *Handler) holdAgentTransportSendWithExec(ctx context.Context, exec dbExecutor, source agentTransportSource, target agentTransportTarget, content string, parts []protocol.MessagePart, clientMessageID string, decision agentTransportFreshnessDecision) (agentTransportFreshnessDecision, string, bool, error) {
+	if source.durableCredential {
+		return decision, "", true, nil
+	}
 	chosen, winner, err := h.saveAgentTransportDraftWithExec(ctx, exec, source, target, content, parts, clientMessageID, decision)
 	if err != nil {
 		return agentTransportFreshnessDecision{}, "", false, err
@@ -2952,7 +2984,7 @@ func (h *Handler) recordAgentTransportFreshnessHoldActivity(ctx context.Context,
 		"recommended_action":    "review_newer_messages",
 	}
 	h.recordAgentActivityEvent(ctx, h.DB,
-		source.origin.workspaceID, source.task.AgentID, source.task.RuntimeID, nullableTaskIDForTransportSource(source),
+		source.origin.workspaceID, source.origin.agentID, source.runtimeID(), nullableTaskIDForTransportSource(source),
 		activityKindBlocked, "send_freshness_hold", "info",
 		"channel", parseUUID(target.channel.ID), target.raw,
 		"", "Send held by freshness check",
@@ -3024,7 +3056,7 @@ func (h *Handler) saveAgentTransportDraftWithExec(ctx context.Context, exec dbEx
 			decision_fact_id = EXCLUDED.decision_fact_id,
 		updated_at = now()
 		WHERE agent_transport_draft.held_to_seq < EXCLUDED.held_to_seq
-		RETURNING decision_fact_id`, append(args, source.task.ID)...).Scan(&decision.ProducerID)
+		RETURNING decision_fact_id`, append(args, source.legacyTaskID())...).Scan(&decision.ProducerID)
 	if err == nil {
 		return decision, true, nil
 	}
@@ -3189,10 +3221,13 @@ func agentTransportFreshnessRevisedClientMessageID(producerFactID string) string
 }
 
 func agentTransportSourceDecisionKey(source agentTransportSource) string {
+	if source.durableCredential {
+		return "credential:" + uuidToString(source.origin.workspaceID) + ":" + uuidToString(source.origin.agentID)
+	}
 	if source.inboxEventID.Valid {
 		return "inbox:" + uuidToString(source.inboxEventID)
 	}
-	return "task:" + uuidToString(source.task.ID)
+	return "task:" + uuidToString(source.legacyTaskID())
 }
 
 func (h *Handler) recordAgentTransportAudit(ctx context.Context, source agentTransportSource, action, target string, channelID, messageID pgtype.UUID, clientMessageID string, contextPack map[string]any) (string, error) {
@@ -3200,6 +3235,9 @@ func (h *Handler) recordAgentTransportAudit(ctx context.Context, source agentTra
 }
 
 func (h *Handler) recordAgentTransportAuditExec(ctx context.Context, exec dbExecutor, source agentTransportSource, action, target string, channelID, messageID pgtype.UUID, clientMessageID string, contextPack map[string]any) (string, error) {
+	if source.durableCredential {
+		return "", nil
+	}
 	pack, err := json.Marshal(contextPack)
 	if err != nil {
 		return "", err
@@ -3209,7 +3247,7 @@ func (h *Handler) recordAgentTransportAuditExec(ctx context.Context, exec dbExec
 		INSERT INTO agent_task_transport_audit (workspace_id, task_id, inbox_event_id, agent_id, action, target, channel_id, channel_message_id, client_message_id, context_pack)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
 		RETURNING id`,
-		source.origin.workspaceID, nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source), source.task.AgentID, action, strings.TrimSpace(target), nullableUUID(channelID), nullableUUID(messageID), nullableAgentTransportClientID(clientMessageID), pack).Scan(&auditID); err != nil {
+		source.origin.workspaceID, nullableTaskIDForTransportSource(source), nullableInboxEventIDForTransportSource(source), source.origin.agentID, action, strings.TrimSpace(target), nullableUUID(channelID), nullableUUID(messageID), nullableAgentTransportClientID(clientMessageID), pack).Scan(&auditID); err != nil {
 		return "", err
 	}
 	return uuidToString(auditID), nil
@@ -3219,7 +3257,7 @@ func nullableTaskIDForTransportSource(source agentTransportSource) pgtype.UUID {
 	if source.inboxEventID.Valid {
 		return pgtype.UUID{}
 	}
-	return source.task.ID
+	return source.legacyTaskID()
 }
 
 func nullableInboxEventIDForTransportSource(source agentTransportSource) pgtype.UUID {

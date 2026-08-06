@@ -213,7 +213,6 @@ func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 	}
 	t.Setenv("MULTICA_DAEMON_PORT", port)
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
-	t.Setenv("MULTICA_TASK_ID", "task-1")
 
 	readOut, writeOut, err := os.Pipe()
 	if err != nil {
@@ -232,8 +231,13 @@ func TestRunAgentMessageCheckUsesMachineLocalCredentialProxy(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("read stdout: %v", readErr)
 	}
-	if body["agent_id"] != "agent-1" || body["task_id"] != "task-1" {
+	if body["agent_id"] != "agent-1" {
 		t.Fatalf("Credential Proxy body = %+v", body)
+	}
+	for _, legacy := range []string{"task_id", "agent_inbox_event_id", "agent_inbox_delivery_id", "agent_inbox_lease_token"} {
+		if _, found := body[legacy]; found {
+			t.Fatalf("Credential Proxy body leaked %s: %+v", legacy, body)
+		}
 	}
 	for _, want := range []string{"channel:one", "new context", "run `multica message check` again"} {
 		if !strings.Contains(string(output), want) {
@@ -266,7 +270,6 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 	}
 	t.Setenv("MULTICA_DAEMON_PORT", port)
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
-	t.Setenv("MULTICA_TASK_ID", "task-1")
 	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-1")
 
 	cmd := newMessageReadCmd()
@@ -291,7 +294,7 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 		t.Fatalf("read stdout: %v", readErr)
 	}
 	for field, want := range map[string]any{
-		"agent_id": "agent-1", "task_id": "task-1", "workspace_id": "workspace-1",
+		"agent_id": "agent-1", "workspace_id": "workspace-1",
 		"target": "#one", "around": "123", "limit": float64(2),
 	} {
 		if got := body[field]; got != want {
@@ -336,7 +339,6 @@ func TestRunAgentMessageSendPostsOpaqueAttachmentIDsInOrder(t *testing.T) {
 
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
 	t.Setenv("MULTICA_AGENT_ID", "agent-1")
-	t.Setenv("MULTICA_TASK_ID", "task-1")
 	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	if err != nil {
 		t.Fatalf("server port: %v", err)
@@ -361,6 +363,11 @@ func TestRunAgentMessageSendPostsOpaqueAttachmentIDsInOrder(t *testing.T) {
 	if body["content"] != "here's the file" {
 		t.Fatalf("content = %#v, want message text", body["content"])
 	}
+	for _, legacy := range []string{"task_id", "agent_inbox_event_id", "agent_inbox_delivery_id", "agent_inbox_lease_token"} {
+		if _, found := body[legacy]; found {
+			t.Fatalf("Proxy request leaked %s: %+v", legacy, body)
+		}
+	}
 	attachmentIDs, ok := body["attachment_ids"].([]any)
 	if !ok {
 		t.Fatalf("attachment_ids = %#v, want JSON array", body["attachment_ids"])
@@ -370,7 +377,7 @@ func TestRunAgentMessageSendPostsOpaqueAttachmentIDsInOrder(t *testing.T) {
 	}
 }
 
-func TestRunAgentMessageSendRecordsAttemptBeforeHTTPFailure(t *testing.T) {
+func TestRunAgentMessageSendDoesNotRecordTurnAttempt(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "transport down", http.StatusServiceUnavailable)
 	}))
@@ -388,8 +395,8 @@ func TestRunAgentMessageSendRecordsAttemptBeforeHTTPFailure(t *testing.T) {
 	if err := runAgentMessageSend(cmd, nil); err == nil {
 		t.Fatal("runAgentMessageSend succeeded against failing transport")
 	}
-	if _, err := os.Stat(attemptPath); err != nil {
-		t.Fatalf("transport attempt marker missing after HTTP failure: %v", err)
+	if _, err := os.Stat(attemptPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("chat send must not record a turn attempt, stat error = %v", err)
 	}
 }
 

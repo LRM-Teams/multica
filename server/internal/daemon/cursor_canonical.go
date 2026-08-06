@@ -5,7 +5,8 @@ import "github.com/multica-ai/multica/server/pkg/agent"
 // usesCanonicalResidentChatRuntime is true when full chat should enter the
 // canonical tryCanonicalChatBackend path (agent×runtime slot, one long-lived
 // resident process across channel/DM/thread surfaces, never force-fresh).
-// Issue tasks and chats without a ChatSessionID stay one-shot.
+// Only actual conversational deliveries qualify; issue executions stay
+// one-shot. ChatSessionID is retired and never participates in this decision.
 //
 // Provider membership comes from agent.Capabilities.CanonicalResident
 // (task #47). The switch below answers a DIFFERENT question — "does this
@@ -16,6 +17,9 @@ func usesCanonicalResidentChatRuntime(provider string, task Task) bool {
 	if !agent.Capabilities(provider).CanonicalResident {
 		return false
 	}
+	if !isChatLikeTask(task) {
+		return false
+	}
 	switch provider {
 	case "grok":
 		return usesPersistentGrokChatRuntime(provider, task)
@@ -23,7 +27,7 @@ func usesCanonicalResidentChatRuntime(provider string, task Task) bool {
 		return usesPersistentPiChatRuntime(provider, task)
 	case "cursor", "opencode", "kiro", "codex", "claude":
 		profile, err := taskExecutionProfile(task)
-		return err == nil && profile == executionProfileFull && task.ChatSessionID != ""
+		return err == nil && profile == executionProfileFull
 	default:
 		// Capability says resident but no task-shape adapter — fail closed.
 		return false

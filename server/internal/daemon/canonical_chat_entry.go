@@ -36,7 +36,7 @@ func (d *Daemon) tryCanonicalChatBackend(
 	if d == nil || d.agentRuntimeTurns == nil || d.canonicalRuntimes == nil {
 		return nil, nil, nil, false, fmt.Errorf("canonical chat runtime is not configured")
 	}
-	if strings.TrimSpace(task.ChatSessionID) == "" || isRestrictedExecutionProfile(profile) {
+	if !isChatLikeTask(task) || isRestrictedExecutionProfile(profile) {
 		return nil, nil, nil, false, nil
 	}
 	if !isCanonicalResidentProvider(provider) {

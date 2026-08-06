@@ -52,9 +52,47 @@ import type {
   VoiceCallDuplexEventHint,
   WorkspaceSearchResponse,
   RuntimeAgentWorkspacesResponse,
+  NotePage,
+  NotePageListResponse,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { RawReminderPage } from "../agents/reminder-view-model";
+
+export const NotePageSchema: z.ZodType<NotePage> = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  parent_id: z.string().nullable().default(null),
+  owner_user_id: z.string().default(""),
+  title: z.string().default("Untitled"),
+  content: z.string().default(""),
+  sort_key: z.string().default(""),
+  share_user_ids: z.array(z.string()).default([]),
+  can_manage_shares: z.boolean().default(false),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+  deleted_at: z.string().nullable().default(null),
+}).loose();
+
+export const NotePageListResponseSchema: z.ZodType<NotePageListResponse> = z.object({
+  pages: z.array(NotePageSchema).default([]),
+}).loose();
+
+export const EMPTY_NOTE_PAGE: NotePage = {
+  id: "",
+  workspace_id: "",
+  parent_id: null,
+  owner_user_id: "",
+  title: "Untitled",
+  content: "",
+  sort_key: "",
+  share_user_ids: [],
+  can_manage_shares: false,
+  created_at: "",
+  updated_at: "",
+  deleted_at: null,
+};
+
+export const EMPTY_NOTE_PAGE_LIST: NotePageListResponse = { pages: [] };
 
 export const ChannelGoalSchema = z.object({
   id: z.string(),

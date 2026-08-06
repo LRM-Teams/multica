@@ -221,6 +221,11 @@ import type {
   GetVoiceCallResponse,
   StartVoiceCallDuplexResponse,
   WorkGraphDetail,
+  NotePage,
+  NotePageListResponse,
+  CreateNotePageRequest,
+  UpdateNotePageRequest,
+  UpdateNotePageSharesRequest,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
@@ -407,6 +412,10 @@ import {
   type RemoveComputerAgentsResponse,
   MachineUpgradeSchema,
   EMPTY_MACHINE_UPGRADE,
+  NotePageSchema,
+  NotePageListResponseSchema,
+  EMPTY_NOTE_PAGE,
+  EMPTY_NOTE_PAGE_LIST,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -936,6 +945,68 @@ export class ApiClient {
     if (params.offset !== undefined) search.set("offset", String(params.offset));
     if (params.include_closed) search.set("include_closed", "true");
     return this.fetch(`/api/projects/search?${search}`, params.signal ? { signal: params.signal } : undefined);
+  }
+
+  async listNotePages(): Promise<NotePageListResponse> {
+    const raw = await this.fetch<unknown>("/api/notes/pages");
+    return parseWithFallback(raw, NotePageListResponseSchema, EMPTY_NOTE_PAGE_LIST, {
+      endpoint: "GET /api/notes/pages",
+    });
+  }
+
+  async listDeletedNotePages(): Promise<NotePageListResponse> {
+    const raw = await this.fetch<unknown>("/api/notes/pages/trash");
+    return parseWithFallback(raw, NotePageListResponseSchema, EMPTY_NOTE_PAGE_LIST, {
+      endpoint: "GET /api/notes/pages/trash",
+    });
+  }
+
+  async createNotePage(data: CreateNotePageRequest): Promise<NotePage> {
+    const raw = await this.fetch<unknown>("/api/notes/pages", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageSchema, EMPTY_NOTE_PAGE, {
+      endpoint: "POST /api/notes/pages",
+    });
+  }
+
+  async getNotePage(id: string): Promise<NotePage> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(id)}`);
+    return parseWithFallback(raw, NotePageSchema, EMPTY_NOTE_PAGE, {
+      endpoint: "GET /api/notes/pages/{id}",
+    });
+  }
+
+  async updateNotePage(id: string, data: UpdateNotePageRequest): Promise<NotePage> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageSchema, EMPTY_NOTE_PAGE, {
+      endpoint: "PATCH /api/notes/pages/{id}",
+    });
+  }
+
+  async updateNotePageShares(id: string, data: UpdateNotePageSharesRequest): Promise<NotePage> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(id)}/shares`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, NotePageSchema, EMPTY_NOTE_PAGE, {
+      endpoint: "PUT /api/notes/pages/{id}/shares",
+    });
+  }
+
+  async deleteNotePage(id: string): Promise<void> {
+    await this.fetch(`/api/notes/pages/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  async restoreNotePage(id: string): Promise<NotePage> {
+    const raw = await this.fetch<unknown>(`/api/notes/pages/${encodeURIComponent(id)}/restore`, { method: "POST" });
+    return parseWithFallback(raw, NotePageSchema, EMPTY_NOTE_PAGE, {
+      endpoint: "POST /api/notes/pages/{id}/restore",
+    });
   }
 
   async getIssue(id: string): Promise<Issue> {

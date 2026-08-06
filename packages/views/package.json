@@ -37,6 +37,7 @@
     "./dashboard": "./dashboard/index.ts",
     "./overview": "./overview/index.ts",
     "./evolution": "./evolution/index.ts",
+    "./notes": "./notes/index.ts",
     "./knowledge": "./knowledge/index.ts",
     "./research": "./research/index.ts",
     "./research/components": "./research/components/index.ts",

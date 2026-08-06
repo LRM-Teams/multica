@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -165,7 +164,7 @@ func (h *Handler) ListAgentFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetAgentFileContent(w http.ResponseWriter, r *http.Request) {
-	agent, actorType, actorID, ok := h.authorizeAgentFiles(w, r, agentFileAccessRead)
+	agent, _, _, ok := h.authorizeAgentFiles(w, r, agentFileAccessRead)
 	if !ok {
 		return
 	}
@@ -203,18 +202,6 @@ func (h *Handler) GetAgentFileContent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, resp.Error)
 		return
 	}
-	h.recordAgentActivityEvent(r.Context(), h.DB,
-		agent.WorkspaceID, agent.ID, agent.RuntimeID, pgtype.UUID{},
-		activityKindWorkspaceFile, agentWorkspaceFileEventRead, "info",
-		agentWorkspaceFileTargetKind, pgtype.UUID{}, filePath,
-		"", "Agent workspace file read",
-		map[string]any{
-			"actor_type":   actorType,
-			"actor_id":     actorID,
-			"content_hash": resp.ContentHash,
-			"truncated":    resp.Truncated,
-		},
-	)
 	writeJSON(w, http.StatusOK, AgentFileContentResponse{
 		Content:     resp.Content,
 		Encoding:    resp.Encoding,
@@ -227,7 +214,7 @@ func (h *Handler) GetAgentFileContent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateAgentFileContent(w http.ResponseWriter, r *http.Request) {
-	agent, actorType, actorID, ok := h.authorizeAgentFiles(w, r, agentFileAccessWrite)
+	agent, _, _, ok := h.authorizeAgentFiles(w, r, agentFileAccessWrite)
 	if !ok {
 		return
 	}
@@ -287,17 +274,6 @@ func (h *Handler) UpdateAgentFileContent(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, resp.Error)
 		return
 	}
-	h.recordAgentActivityEvent(r.Context(), h.DB,
-		agent.WorkspaceID, agent.ID, agent.RuntimeID, pgtype.UUID{},
-		activityKindWorkspaceFile, agentWorkspaceFileEventWrite, "info",
-		agentWorkspaceFileTargetKind, pgtype.UUID{}, req.Path,
-		"", "Agent workspace file written",
-		map[string]any{
-			"actor_type":   actorType,
-			"actor_id":     actorID,
-			"content_hash": resp.ContentHash,
-		},
-	)
 	writeJSON(w, http.StatusOK, UpdateAgentFileContentResponse{
 		ContentHash: resp.ContentHash,
 		Conflict:    false,

@@ -216,14 +216,19 @@ describe("CreateAgentDialog workspace runtime selection", () => {
     });
     renderDialog([onS144, alsoOnS144, onOther]);
 
-    // Default computer is the first usable machine (s144). Open the
-    // code-agent picker — other-box's Cursor must not appear.
+    // Default computer is alphabetically first (other-box). Select s144, then
+    // open the code-agent picker — other-box's Cursor must not appear.
+    fireEvent.click(
+      screen.getByText("other-box", { selector: "div.truncate.font-medium" }),
+    );
+    fireEvent.click(
+      screen.getByText("s144", { selector: "div.truncate.font-medium" }),
+    );
     fireEvent.click(
       screen.getByText("Cursor", { selector: "span.truncate" }),
     );
-    expect(screen.getByText("Pi")).toBeInTheDocument();
-    // Only one Cursor row (s144) — host subtitle unused because Pi differs.
-    expect(screen.getAllByText("Cursor").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Pi", { selector: "span.truncate" })).toBeInTheDocument();
+    expect(screen.queryByText("other-box")).toBeNull();
   });
 
   it("re-filters the code-agent list after switching computers", () => {
@@ -247,17 +252,26 @@ describe("CreateAgentDialog workspace runtime selection", () => {
     });
     renderDialog([onS144, onOther]);
 
-    // Open computer picker and switch to other-box.
-    fireEvent.click(screen.getByText("s144", { selector: "div.truncate" }));
-    fireEvent.click(screen.getByText("other-box", { selector: "div.truncate" }));
-
-    // Runtime trigger should now show the other machine's brand.
+    // Default computer is alphabetically first (other-box) with Pi selected.
     expect(
       screen.getByText("Pi", { selector: "span.truncate" }),
     ).toBeInTheDocument();
+
+    // Open computer picker and switch to s144.
     fireEvent.click(
-      screen.getByText("Pi", { selector: "span.truncate" }),
+      screen.getByText("other-box", { selector: "div.truncate.font-medium" }),
     );
-    expect(screen.queryByText("Cursor")).toBeNull();
+    fireEvent.click(
+      screen.getByText("s144", { selector: "div.truncate.font-medium" }),
+    );
+
+    // Runtime trigger should now show the s144 machine's brand.
+    expect(
+      screen.getByText("Cursor", { selector: "span.truncate" }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByText("Cursor", { selector: "span.truncate" }),
+    );
+    expect(screen.queryByText("Pi")).toBeNull();
   });
 });

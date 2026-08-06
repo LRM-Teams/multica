@@ -250,6 +250,15 @@ func TestDispatchOutboxFreezesRequestRecoversExpiredLeaseAndHonorsCancellation(t
 	if frozenPrompt != input.Request.Prompt || frozenHash != input.Request.RequestHash || outboxStatus != "pending" {
 		t.Fatalf("frozen prompt=%q hash=%q status=%q", frozenPrompt, frozenHash, outboxStatus)
 	}
+	if _, err = pool.Exec(ctx, `UPDATE research_task_attempt SET dispatched_at = now() - interval '2 hours' WHERE id = $1::uuid`, attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	if events, reconcileErr := store.ReconcileAttempts(ctx, fixture.sessionID, map[string]InboxTaskState{}); reconcileErr != nil || len(events) != 0 {
+		t.Fatalf("undelivered outbox was reconciled as runtime work: events=%+v err=%v", events, reconcileErr)
+	}
+	if attempts, listErr := store.ListAttempts(ctx, fixture.sessionID); listErr != nil || len(attempts) != 1 || attempts[0].Status != AttemptStatusDispatching {
+		t.Fatalf("undelivered attempt changed: attempts=%+v err=%v", attempts, listErr)
+	}
 
 	firstClaims, err := store.ClaimDispatchIntents(ctx, fixture.sessionID, uuid.NewString(), time.Minute, 1)
 	if err != nil || len(firstClaims) != 1 {
@@ -465,11 +474,15 @@ func TestExhaustedInitialPlanStopsRunWithoutCreatingReplan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = pool.Exec(ctx, `
-		UPDATE research_task
-		SET status = 'blocked', terminal_reason = 'result_not_submitted', completed_at = now()
-		WHERE session_id = $1::uuid AND kind = 'plan'
-	`, fixture.sessionID); err != nil {
+	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.FailAttempt(ctx, AttemptFailure{AttemptID: attempt.ID, FailureClass: "result_not_submitted", Retryable: false}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -484,7 +497,7 @@ func TestExhaustedInitialPlanStopsRunWithoutCreatingReplan(t *testing.T) {
 	if run.Status != RunStatusFailed || !strings.Contains(run.StopReason, "result_not_submitted") {
 		t.Fatalf("run=%+v", run)
 	}
-	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	tasks, err = store.ListTasks(ctx, fixture.sessionID)
 	if err != nil {
 		t.Fatal(err)
 	}

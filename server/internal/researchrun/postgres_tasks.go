@@ -331,6 +331,14 @@ func failAttemptTx(ctx context.Context, tx pgx.Tx, in AttemptFailure) (RunEvent,
 	}
 	diagnostics := truncateBytes(in.Diagnostics, 4096)
 	if _, err = tx.Exec(ctx, `
+		UPDATE research_dispatch_outbox
+		SET status = 'failed', lease_token = NULL, lease_expires_at = NULL,
+		    last_error = $2, updated_at = now()
+		WHERE attempt_id = $1::uuid AND status IN ('pending', 'delivering')
+	`, in.AttemptID, diagnostics); err != nil {
+		return RunEvent{}, err
+	}
+	if _, err = tx.Exec(ctx, `
 		UPDATE research_task_attempt
 		SET status = 'failed', failure_class = $2, diagnostics = $3,
 		    completed_at = now(), updated_at = now()

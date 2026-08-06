@@ -24,8 +24,10 @@ func TestMessageSendHasNoAgentControlledCursorFlag(t *testing.T) {
 			t.Errorf("message send exposes cursor flag %q", flag.Name)
 		}
 	})
-	if cmd.Flags().Lookup("client-message-id") != nil || cmd.Flags().Lookup("idempotency-key") != nil {
-		t.Fatal("message send exposes an Agent-controlled idempotency flag")
+	for _, name := range []string{"message", "message-stdin", "message-file", "seen", "client-message-id", "idempotency-key", "output"} {
+		if cmd.Flags().Lookup(name) != nil {
+			t.Fatalf("message send must not expose --%s", name)
+		}
 	}
 }
 
@@ -51,8 +53,10 @@ func TestMessageReadUsesOnlyCanonicalTargetFlag(t *testing.T) {
 	if cmd.Flags().Lookup("target") == nil {
 		t.Fatal("message read is missing --target")
 	}
-	if cmd.Flags().Lookup("channel") != nil {
-		t.Fatal("message read must not expose legacy --channel")
+	for _, name := range []string{"channel", "output"} {
+		if cmd.Flags().Lookup(name) != nil {
+			t.Fatalf("message read must not expose --%s", name)
+		}
 	}
 }
 
@@ -117,12 +121,12 @@ func TestRunAgentMessageResolvePostsOneIdentity(t *testing.T) {
 
 func TestMessageReactUsesCanonicalIdentityWithoutTargetOrCursor(t *testing.T) {
 	cmd := newMessageReactCmd()
-	for _, name := range []string{"message-id", "emoji", "remove", "output"} {
+	for _, name := range []string{"message-id", "emoji", "remove"} {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("message react is missing --%s", name)
 		}
 	}
-	for _, name := range []string{"target", "client-message-id", "channel"} {
+	for _, name := range []string{"target", "client-message-id", "channel", "output"} {
 		if cmd.Flags().Lookup(name) != nil {
 			t.Errorf("message react must not expose --%s", name)
 		}
@@ -181,8 +185,10 @@ func TestMessageSearchUsesCanonicalFiltersWithoutLegacyChannelFlag(t *testing.T)
 			t.Errorf("message search missing --%s", name)
 		}
 	}
-	if cmd.Flags().Lookup("channel") != nil {
-		t.Fatal("message search must not expose legacy --channel")
+	for _, name := range []string{"channel", "output"} {
+		if cmd.Flags().Lookup(name) != nil {
+			t.Fatalf("message search must not expose --%s", name)
+		}
 	}
 	if err := cmd.Args(cmd, nil); err != nil {
 		t.Fatalf("filter-only message search must be accepted: %v", err)
@@ -400,89 +406,12 @@ func TestRunAgentMessageSendDoesNotRecordTurnAttempt(t *testing.T) {
 	}
 }
 
-func TestRunAgentMessageA2AControlPostsOwnerControl(t *testing.T) {
-	var body map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent/messages/a2a-control" {
-			http.NotFound(w, r)
-			return
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode body: %v", err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"target": "dm:@peer-agent",
-			"control": map[string]any{
-				"state":       "active",
-				"round_limit": 5,
-			},
-		})
-	}))
-	defer srv.Close()
-
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
-
-	cmd := newMessageA2AControlCmd()
-	_ = cmd.Flags().Set("target", "dm:@peer-agent")
-	_ = cmd.Flags().Set("action", "grant_rounds")
-	_ = cmd.Flags().Set("exchange-id", "exchange-1")
-	_ = cmd.Flags().Set("rounds", "2")
-	if err := runAgentMessageA2AControl(cmd, nil); err != nil {
-		t.Fatalf("runAgentMessageA2AControl: %v", err)
-	}
-	if body["target"] != "dm:@peer-agent" ||
-		body["action"] != "grant_rounds" ||
-		body["exchange_id"] != "exchange-1" ||
-		body["rounds"] != float64(2) {
-		t.Fatalf("A2A control body=%#v", body)
-	}
-}
-
-func TestAgentMessageSendTextFallbackReportsHeld(t *testing.T) {
-	got := agentMessageSendTextFallback(map[string]any{
-		"state": "held",
-		"contextWindow": map[string]any{
-			"olderBoundary": "No older.",
-			"newerBoundary": "No newer.",
-		},
-	})
-	if !strings.Contains(got, "Message held by freshness check") {
-		t.Fatalf("fallback = %q, want held freshness text", got)
-	}
-	if !strings.Contains(got, "exits non-zero") || !strings.Contains(got, "Do not automatically retry") {
-		t.Fatalf("fallback = %q, want non-zero exit + no-auto-retry guidance", got)
-	}
-	for _, want := range []string{
-		"No older.",
-		"No newer.",
-		"compose and send a new message",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("fallback = %q, want %q", got, want)
-		}
-	}
-	if strings.Contains(got, "multica message send") {
-		t.Fatalf("fallback = %q, must not expose an executable resend command", got)
-	}
-	if strings.Contains(got, "--abandon-draft") {
-		t.Fatalf("fallback = %q, must not invent an abandon command", got)
-	}
-	got = agentMessageSendTextFallback(map[string]any{"created": true})
-	if got != "Message sent." {
-		t.Fatalf("fallback = %q, want sent text", got)
-	}
-}
-
 func TestPrintAgentTransportOutputHeldReturnsError(t *testing.T) {
-	cmd := newMessageSendCmd()
-	_ = cmd.Flags().Set("output", "json")
-	err := printAgentTransportOutput(cmd, map[string]any{
+	err := printAgentTransportOutput(map[string]any{
 		"state":   "held",
 		"outcome": "held",
 		"reason":  "newer_messages_available",
-	}, agentMessageSendTextFallback(map[string]any{"state": "held"}))
+	})
 	if !errors.Is(err, errAgentMessageHeld) {
 		t.Fatalf("error = %v, want errAgentMessageHeld", err)
 	}
@@ -492,12 +421,10 @@ func TestPrintAgentTransportOutputHeldReturnsError(t *testing.T) {
 }
 
 func TestPrintAgentTransportOutputSuccessReturnsNil(t *testing.T) {
-	cmd := newMessageSendCmd()
-	_ = cmd.Flags().Set("output", "json")
-	err := printAgentTransportOutput(cmd, map[string]any{
+	err := printAgentTransportOutput(map[string]any{
 		"created": true,
 		"message": map[string]any{"id": "msg-1"},
-	}, "Message sent.")
+	})
 	if err != nil {
 		t.Fatalf("error = %v, want nil for successful send", err)
 	}

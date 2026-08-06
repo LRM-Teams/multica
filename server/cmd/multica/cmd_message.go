@@ -60,17 +60,16 @@ func newMessageSendCmd() *cobra.Command {
 func newMessageReactCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "react",
-		Short: "React to a channel or thread message from the running agent task",
-		Long: "Add a reaction from the running agent task to an explicit target. " +
-			"Target syntax: #channel, #channel:<threadId>, dm:@handle, " +
-			"or dm:@handle:<threadId>. Omit --message-id to react to the message " +
-			"that triggered the task when the task context provides one.",
+		Short: "React to one visible canonical message from the running agent task",
+		Long: "Add or remove the running agent task's reaction on one visible canonical " +
+			"message. Use a full message UUID or a unique short ID prefix; no target is " +
+			"accepted or inferred.",
+		Args: cobra.NoArgs,
 		RunE: runAgentMessageReact,
 	}
-	cmd.Flags().String("target", "", messageTargetFlagUsage())
-	cmd.Flags().String("message-id", "", "Message UUID to react to; omit to use the triggering message when available")
-	cmd.Flags().String("emoji", "", "Emoji reaction to add")
-	cmd.Flags().String("client-message-id", "", "Idempotency/audit key; generated automatically when omitted")
+	cmd.Flags().String("message-id", "", "Full message UUID or unique short ID prefix")
+	cmd.Flags().String("emoji", "", "Emoji reaction to add or remove")
+	cmd.Flags().Bool("remove", false, "Remove this reaction instead of adding it")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	return cmd
 }
@@ -459,28 +458,29 @@ func buildAgentSendParts(stickerID, text string, attachmentIDs []string, voice b
 }
 
 func runAgentMessageReact(cmd *cobra.Command, _ []string) error {
-	target, err := requiredMessageTarget(cmd)
-	if err != nil {
-		return err
+	messageID := strings.TrimSpace(flagString(cmd, "message-id"))
+	if messageID == "" {
+		return fmt.Errorf("message-id is required; pass --message-id")
 	}
 	emoji := strings.TrimSpace(flagString(cmd, "emoji"))
 	if emoji == "" {
 		return fmt.Errorf("emoji is required; pass --emoji")
 	}
+	remove, _ := cmd.Flags().GetBool("remove")
 	body := map[string]any{
-		"target":            target,
-		"message_id":        flagString(cmd, "message-id"),
-		"emoji":             emoji,
-		"client_message_id": clientMessageIDFlag(cmd),
+		"message_id": messageID,
+		"emoji":      emoji,
+		"remove":     remove,
 	}
 	var out map[string]any
-	if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
-		return err
-	}
 	if err := postAgentTransport(cmd, "/api/agent/messages/react", body, &out); err != nil {
 		return fmt.Errorf("react to message: %w", err)
 	}
-	return printAgentTransportOutput(cmd, out, "Reaction sent.")
+	fallback := "Reaction sent."
+	if remove {
+		fallback = "Reaction removed."
+	}
+	return printAgentTransportOutput(cmd, out, fallback)
 }
 
 func runAgentMessageAskChoice(cmd *cobra.Command, _ []string) error {

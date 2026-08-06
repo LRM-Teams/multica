@@ -534,7 +534,7 @@ func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
 		"terminates the current send attempt",
 		"the held draft is never retried or sent later",
 		"a freshness `held` result exits non-zero",
-		"multica message react --message-id <id>",
+		"multica message react --message-id <id> --emoji \"...\" [--remove]",
 		"multica message read [--target ...] [--limit N] --output json",
 		"multica message search \"query\" [--target ...] --output json",
 		"multica message resolve <message-id>",

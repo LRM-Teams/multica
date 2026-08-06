@@ -59,6 +59,8 @@ import {
   type CanvasNodeSnapshot,
 } from "../lib/canvas-reorg-motion";
 import { ResearchCanvasDock } from "./research-canvas-dock";
+import { ResearchCanvasPluginShell } from "../canvas-plugins/plugin-shell";
+import type { ResearchCanvasNodeContext } from "../canvas-plugins/types";
 import { ResearchChatFab } from "./research-chat-fab";
 import { ResearchFleetAvatarStack } from "./research-fleet-avatar-stack";
 import { ResearchGraphNode as ResearchGraphNodeView } from "./research-graph-node";
@@ -87,6 +89,20 @@ const EMPTY_RUN_BLOCKERS: RunV2GateBlocker[] = [];
 function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) return false;
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** Derive the read-only display snapshot handed to canvas plugin slots. */
+function toCanvasPluginNodeContexts(
+  nodes: readonly ResearchGraphNode[],
+  selectedId: string | null | undefined,
+): ResearchCanvasNodeContext[] {
+  return nodes.map((n) => ({
+    id: n.id,
+    kind: n.node_type,
+    title: n.title,
+    status: n.status,
+    selected: n.id === selectedId,
+  }));
 }
 
 type FlowNode = Node<ResearchFlowNodeData>;
@@ -686,6 +702,11 @@ function ResearchCanvasInner({
           stroke-opacity: 0.62;
         }
       `}</style>
+      <ResearchCanvasPluginShell
+        nodes={toCanvasPluginNodeContexts(nodes, selectedId)}
+        selectedNodeId={selectedId ?? null}
+        reducedMotion={prefersReducedMotion()}
+      >
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
@@ -755,6 +776,7 @@ function ResearchCanvasInner({
           nodeColor={(n) => (n.type === "gitGutter" ? "transparent" : "var(--brand)")}
         />
       </ReactFlow>
+      </ResearchCanvasPluginShell>
       <ResearchRunGateBlockers blockers={runBlockers} degraded={runDegraded} onLocate={locateNode} title={t(($) => $.run_v2.delivery_blocked)} degradedTitle={t(($) => $.run_v2.syncing_title)} degradedBody={t(($) => $.run_v2.syncing_body)} />
       {/* LRM-1151: Canvas Dock bottom-center; yield left when Aux Drawer open. */}
       <div

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -34,13 +35,14 @@ const (
 )
 
 type AgentTransportSendRequest struct {
-	Target          string                 `json:"target"`
-	Content         string                 `json:"content"`
-	Parts           []protocol.MessagePart `json:"parts"`
-	ClientMessageID string                 `json:"client_message_id"`
-	SeenUpToSeq     int64                  `json:"seen_up_to_seq,omitempty"`
-	ContextTarget   string                 `json:"context_target,omitempty"`
-	BypassFreshness bool                   `json:"bypass_freshness,omitempty"`
+	Target          string          `json:"target"`
+	Content         string          `json:"content"`
+	AttachmentIDs   []string        `json:"attachment_ids"`
+	Parts           json.RawMessage `json:"parts"`
+	ClientMessageID string          `json:"client_message_id"`
+	SeenUpToSeq     int64           `json:"seen_up_to_seq,omitempty"`
+	ContextTarget   string          `json:"context_target,omitempty"`
+	BypassFreshness bool            `json:"bypass_freshness,omitempty"`
 }
 
 // AgentTransportTargetRequest is an internal Credential Proxy preflight. It
@@ -371,7 +373,13 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req AgentTransportSendRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -390,33 +398,20 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
-	content, parts, err := messageparts.Normalize(req.Content, req.Parts)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
+	if req.Parts != nil {
+		writeError(w, http.StatusBadRequest, "agent message send accepts content and attachment_ids, not parts")
 		return
 	}
-	// Reference attachment resources from parts only (same contract as
-	// channel/DM/thread user send). CLI --attachment-id sugar becomes parts; do not
-	// dual-merge a sidecar attachment_ids field.
-	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, attachmentIDsFromParts(parts), "attachment_id")
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		writeError(w, http.StatusBadRequest, "content is required; attachment-only Agent messages are not supported")
+		return
+	}
+	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, req.AttachmentIDs, "attachment_id")
 	if !ok {
 		return
 	}
-	parts, err = h.normalizeLegacyAgentAudioVoiceReply(r.Context(), source, content, parts)
-	if err != nil {
-		slog.Warn("agent transport audio modality inspection failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to validate message attachments")
-		return
-	}
-	content, parts, err = messageparts.Normalize(content, parts)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid message parts: "+err.Error())
-		return
-	}
-	if strings.TrimSpace(content) == "" && len(parts) == 0 {
-		writeError(w, http.StatusBadRequest, "content, sticker, or attachment is required")
-		return
-	}
+	parts := agentTransportAttachmentMessageParts(content, attachmentIDs)
 	if len([]rune(content)) > channelMessageMaxLen {
 		writeError(w, http.StatusBadRequest, "content is too long")
 		return
@@ -450,10 +445,14 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "channel onboarding must send to the joined channel main timeline")
 		return
 	}
+	parts, err = h.normalizeLegacyAgentAudioVoiceReply(r.Context(), source, content, parts)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to normalize message delivery")
+		return
+	}
 	parts, err = h.enforceAgentTransportVoiceReply(r.Context(), source, target, content, parts)
 	if err != nil {
-		slog.Warn("agent transport voice modality inspection failed", "task_id", uuidToString(source.task.ID), "agent_id", uuidToString(source.task.AgentID), "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to preserve reply modality")
+		writeError(w, http.StatusInternalServerError, "failed to enforce message delivery")
 		return
 	}
 	content, parts, err = messageparts.Normalize(content, parts)
@@ -538,6 +537,15 @@ func (h *Handler) AgentTransportSendMessage(w http.ResponseWriter, r *http.Reque
 			"created":    result.Created,
 		},
 	)
+}
+
+func agentTransportAttachmentMessageParts(content string, attachmentIDs []pgtype.UUID) []protocol.MessagePart {
+	parts := make([]protocol.MessagePart, 0, 1+len(attachmentIDs))
+	parts = append(parts, protocol.MessagePart{Type: protocol.MessagePartTypeText, Text: content})
+	for _, attachmentID := range attachmentIDs {
+		parts = append(parts, protocol.MessagePart{Type: protocol.MessagePartTypeAttachment, AttachmentID: uuidToString(attachmentID)})
+	}
+	return parts
 }
 
 func (h *Handler) AgentTransportResolveMessageTarget(w http.ResponseWriter, r *http.Request) {
@@ -1699,8 +1707,7 @@ func (h *Handler) insertAgentTransportMessageWithAudit(ctx context.Context, sour
 		return agentTransportMessageResult{}, err
 	}
 	if len(attachmentIDs) > 0 {
-		qtx := h.Queries.WithTx(tx)
-		if err := linkOwnedAttachmentsToChannelMessage(ctx, qtx, parseUUID(msg.ID), source.origin.workspaceID, "agent", source.origin.agentID, attachmentIDs); err != nil {
+		if err := h.linkVerifiedAgentUploadAttachmentsToChannelMessage(ctx, tx, source, target, parseUUID(msg.ID), attachmentIDs); err != nil {
 			_ = tx.Rollback(ctx)
 			return agentTransportMessageResult{}, err
 		}

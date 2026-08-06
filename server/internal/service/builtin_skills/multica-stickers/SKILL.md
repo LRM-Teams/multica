@@ -1,6 +1,6 @@
 ---
 name: multica-stickers
-description: "Use for short social chat beats that should be a sticker instead of text: greetings, ok/收到, thanks, praise, welcome, laughter, or 'on it'. Covers stable sticker ids, standalone-chat final sticker output, channel/DM/thread `multica message send --sticker`, combining one sticker with substantive text, and when not to use stickers. Do not use for substantive-only answers or issue comments."
+description: "Use for short social chat beats in standalone chat sessions: greetings, ok/收到, thanks, praise, welcome, laughter, or 'on it'. Covers stable sticker ids and standalone-chat final sticker output. Agent channel/DM/thread message sends do not accept sticker Parts; use a reaction or short text there. Do not use for substantive-only answers or issue comments."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
@@ -8,11 +8,12 @@ allowed-tools: Bash(multica *)
 # Using stickers
 
 When your reply is just a short social beat — a greeting, an acknowledgement,
-praise, agreement, thanks — **send a sticker instead of typing it.** The sticker
-IS the reply.
+praise, agreement, thanks — return a sticker only in a standalone chat session.
+For a ChannelID-backed channel, DM, or thread, use a reaction or a short text
+message instead: Agent transport does not accept sticker Parts.
 
-When you also need to explain something, send **one message** with a sticker plus
-your text: acknowledgement sticker first, explanation second.
+When you also need to explain something, send ordinary text. A standalone
+session may use a sticker envelope only when that is the entire reply.
 
 ## Fast path — common replies (use these ids directly, no command)
 
@@ -64,8 +65,8 @@ final output (sticker JSON or text) instead.
 Use the task-scoped transport with the explicit target supplied by the current
 surface:
 
-    multica message send --target <target> --sticker hi
-    multica message send --target <target> --sticker got-it --message "这个问题是因为 xxx，我建议 xxx"
+    multica message react --message-id <triggering-message-id> --emoji "✅"
+    printf '%s\n' '收到，我会处理。' | multica message send --target <target>
 
 After `multica message send` succeeds, leave final assistant output empty so the
 platform does not duplicate the reply.
@@ -78,23 +79,25 @@ do not read any files:
     multica sticker search 害怕
     multica sticker search celebrate
 
-Use the printed id with `--sticker`.
+Use a searched sticker only in the standalone final-output envelope.
 
 ## When to use it — and when not
 
-- **Do** replace a short canned reply (hi / ok / 收到 / 谢谢 / 赞 / 厉害 / 安排)
-  with a single sticker when that is the whole reply.
-- **Do** combine `--sticker` and `--message` when you acknowledge first and then
-  explain or answer substantively.
-- **Don't** stick one on a substantive message that carries real information only —
-  a status report, a code explanation, an actual answer with no social beat. At most
-  one sticker per message, and never as filler on top of real content.
+- **Do** use a single sticker envelope for a short canned reply (hi / ok / 收到 /
+  谢谢 / 赞 / 厉害 / 安排) when that is the whole reply in a standalone session.
+- **Do** use a reaction or short text for the same beat in a ChannelID-backed run.
+- **Don't** put a sticker on a substantive message that carries real information —
+  a status report, a code explanation, or an actual answer.
 - **Don't** paste legacy `:sticker:<id>:` tokens.
 - **Don't** use a JSON action envelope in a DM/channel/thread transport run, or
   use `multica message send` for the current reply in a standalone session.
 - **Don't** treat a standalone-session `not a channel task` error as a CLI outage;
   switch to final-output delivery instead of diagnosing Multica.
 - **Don't** embed chat files as markdown images (`![](url)`). Upload with
-  `multica attachment upload`, then send with
-  `multica message send --attachment-id <id>` (optionally with `--message` /
-  `--sticker`). The CLI turns attachment ids into structured message parts.
+  `multica attachment upload --path <file> --target <target>`, then pipe a
+  non-empty body to `multica message send --target <target> --attachment-id <id>`.
+  The Server, not the Agent CLI, turns attachment ids into canonical message Parts.
+  If a direct upload is interrupted, retry the same verified session with
+  `multica attachment upload --path <file> --resume-session <session-id>`;
+  cancel an abandoned pending session with
+  `multica attachment upload --cancel-session <session-id>`.

@@ -304,7 +304,7 @@ func buildQuickCreatePrompt(task Task) string {
 
 	// description — the core optimization
 	b.WriteString("- **description**: The description is the executing agent's primary context. Aim for high fidelity — they should grasp the user's intent as if they had read the raw input themselves. Use this section structure:\n\n")
-	b.WriteString("  1. **User request** — Faithfully restate what the user wants in their own words. Preserve specific names, identifiers, file paths, code snippets, and technical terms verbatim. Strip non-spec material before writing it (this is removal, not paraphrasing): verbal routing wrappers about creating the issue or routing it (e.g. \"create an issue\", \"分配给 X\", \"让 @X 处理\") and pure conversational fillers (e.g. \"对吧？\"). When in doubt, keep it.\n\n")
+	b.WriteString("  1. **User request** — Faithfully restate what the user wants in their own words. Preserve specific names, identifiers, file paths, code snippets, and technical terms verbatim. Strip non-spec material before writing it (this is removal, not paraphrasing): verbal routing wrappers about creating the issue or routing it (e.g. \"create an issue\", \"assign it to X\", \"have @X handle it\") and pure conversational fillers (e.g. \"right?\"). When in doubt, keep it.\n\n")
 	b.WriteString("     CC exception: `multica issue create` has no `--subscriber` flag, and the platform auto-subscribes members whose `[@Name](mention://member/<uuid>)` link appears in the description. When the user wrote \"cc @Y\", strip the verbal \"cc\" wrapper from the User request body and append a final `CC: <mention link(s)>` line to the description so the cc routing still fires.\n\n")
 	b.WriteString("  2. **Context** — include ONLY when the input cited external resources AND you successfully fetched them AND they produced verifiable facts worth recording. Summarize facts only (e.g. \"PR #45 changes auth to JWT\"), not interpretation or unsolicited reference implementations. If you have nothing factual to add, omit the section entirely — never use it as an apology log for resources you could not fetch.\n\n")
 	b.WriteString("  3. **Source chat context** — include ONLY when a `Source chat context` block is present in this prompt. Copy the source surface, thread root message ID, source message ID, source quote/excerpt, attachment IDs, and bounded visible summary into this section so the created issue can be audited back to the chat/DM/thread that spawned it. Do not add internal run IDs, queue IDs, event payloads, or hidden conversation data.\n\n")
@@ -316,7 +316,7 @@ func buildQuickCreatePrompt(task Task) string {
 	// assignee
 	b.WriteString("- **assignee**:\n")
 	b.WriteString("    - When the user names someone (\"assign to X\" / \"@X\"), call `multica workspace member list --output json` and `multica workspace info --agents --output json` and find the matching entity by display name. Assignees are members or agents only (squads are retired). On a clean unambiguous match, prefer `--assignee-id <uuid>` using the `user_id` (member) or `id` (agent) from that JSON — UUID matching is exact and robust to name collisions in workspaces with overlapping names. `--assignee <name>` (fuzzy) is acceptable as a fallback when names are unambiguous. On no match or ambiguous match, do NOT pass either flag — instead append a final line to the description: `Unrecognized assignee: X`.\n")
-	b.WriteString("    - Treat bare @-routing as an assignee directive even when the user did not write the English word \"assign\". This includes Chinese imperatives like `让 @X review 这个 PR`, `给 @X 处理`, or `交给 @X`; strip the leading `@`/`＠` before matching display names. Do not keep that routing wrapper or `@Name` in the description unless it is a true CC-style notification rather than ownership.\n")
+	b.WriteString("    - Treat bare @-routing as an assignee directive even when the user did not write the English word \"assign\". This includes imperative forms such as `have @X review this PR`, `@X handle it`, or `give it to @X`; strip the leading `@`/`＠` before matching display names. Do not keep that routing wrapper or `@Name` in the description unless it is a true CC-style notification rather than ownership.\n")
 	agentID := ""
 	agentName := ""
 	if task.Agent != nil {
@@ -358,7 +358,7 @@ func buildQuickCreatePrompt(task Task) string {
 		}
 	}
 	b.WriteString("- **status**: omit (defaults to `todo`).\n")
-	b.WriteString("- **attachments**: when Source attachment IDs are listed (or `MULTICA_QUICK_CREATE_ATTACHMENT_IDS` is set), pass EVERY id with `--attachment-id` on this MAIN `issue create`. Also keep markdown image embeds inline in `--description`. Do NOT create a separate \"附件\" / carrier sub-issue as the only place for screenshots — sub-issues may back up designs, but the parent/main issue must show the reference images (attachments non-empty or description embeds). Do NOT try to re-upload image URLs.\n\n")
+	b.WriteString("- **attachments**: when Source attachment IDs are listed (or `MULTICA_QUICK_CREATE_ATTACHMENT_IDS` is set), pass EVERY id with `--attachment-id` on this MAIN `issue create`. Also keep markdown image embeds inline in `--description`. Do NOT create a separate attachment-carrier sub-issue as the only place for screenshots — sub-issues may back up designs, but the parent/main issue must show the reference images (attachments non-empty or description embeds). Do NOT try to re-upload image URLs.\n\n")
 
 	// output format
 	b.WriteString("Output format:\n")
@@ -481,7 +481,7 @@ func buildChatPrompt(task Task, agentRoot string) string {
 		b.WriteString("- This task is a Multica `chat_session` (bubble / FAB chat), NOT a channel or outer-DM transport task.\n")
 		b.WriteString("- Your final assistant output is delivered to this chat session automatically.\n")
 		b.WriteString("- Do NOT run `multica message send`, `multica message react`, or search for a DM/channel `--target` to reply to THIS turn.\n")
-		b.WriteString("- Pure greetings (hi / hello / hey / 你好 / 在吗 / 嗨): reply with a sticker JSON only. Zero tools. Zero troubleshooting. Example: `{\"action\":\"message_send\",\"parts\":[{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}`.\n")
+		b.WriteString("- Pure greetings (hi / hello / hey): reply with a sticker JSON only. Zero tools. Zero troubleshooting. Example: `{\"action\":\"message_send\",\"parts\":[{\"type\":\"sticker\",\"sticker_id\":\"hi\"}]}`.\n")
 		b.WriteString("- If you mistakenly call `multica message send` and get `agent task is not a channel task` (403): STOP. Do not run help/env/rg/daemon diagnostics. Immediately reply via final output instead.\n")
 		b.WriteString("- For a short text reply without a sticker, return plain text (or `{\"action\":\"message_send\",\"parts\":[{\"type\":\"text\",\"text\":\"...\"}]}`) as the final output — never dump protocol JSON as user-visible prose after a tool spiral.\n\n")
 	}
@@ -577,7 +577,7 @@ func buildChatPrompt(task Task, agentRoot string) string {
 			}
 		}
 		b.WriteString("Use `multica attachment view --id <id> --output <path>` to fetch each file locally before referring to it.\n")
-		b.WriteString("When creating an issue that should preserve these attachments, pass EVERY id with `--attachment-id <id>` on the MAIN `multica issue create` (plus markdown embeds in `--description`). Do NOT park screenshots only on an \"附件\" carrier sub-issue — the main issue must show the reference images.\n")
+		b.WriteString("When creating an issue that should preserve these attachments, pass EVERY id with `--attachment-id <id>` on the MAIN `multica issue create` (plus markdown embeds in `--description`). Do NOT park screenshots only on an attachment-carrier sub-issue — the main issue must show the reference images.\n")
 	}
 	return b.String()
 }

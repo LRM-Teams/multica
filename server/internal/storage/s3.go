@@ -3,6 +3,9 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -239,6 +242,80 @@ func (s *S3Storage) PresignGetWithContentDisposition(ctx context.Context, key st
 		return "", fmt.Errorf("s3 PresignGetObject: %w", err)
 	}
 	return out.URL, nil
+}
+
+// PresignUpload creates a direct S3 PUT destination for an Agent Upload
+// Session. The server keeps the object key and completion-verification
+// authority; the Agent receives only this bounded destination.
+func (s *S3Storage) PresignUpload(ctx context.Context, key string, ttl time.Duration, contentType, filename, checksumSHA256 string) (UploadSessionDestination, error) {
+	if key == "" {
+		return UploadSessionDestination{}, fmt.Errorf("s3 PresignUpload: empty key")
+	}
+	checksum, err := hex.DecodeString(checksumSHA256)
+	if err != nil || len(checksum) != sha256.Size {
+		return UploadSessionDestination{}, fmt.Errorf("s3 PresignUpload: invalid SHA-256 checksum")
+	}
+	if ttl <= 0 {
+		ttl = 15 * time.Minute
+	}
+	out, err := s3.NewPresignClient(s.client).PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket:             aws.String(s.bucket),
+		Key:                aws.String(key),
+		ContentType:        aws.String(contentType),
+		ContentDisposition: aws.String(ContentDisposition(contentType, filename)),
+		ChecksumSHA256:     aws.String(base64.StdEncoding.EncodeToString(checksum)),
+		CacheControl:       aws.String("max-age=432000,public"),
+		StorageClass:       s.storageClass(),
+	}, func(opts *s3.PresignOptions) {
+		opts.Expires = ttl
+	})
+	if err != nil {
+		return UploadSessionDestination{}, fmt.Errorf("s3 PresignPutObject: %w", err)
+	}
+	headers := make(map[string]string, len(out.SignedHeader))
+	for name, values := range out.SignedHeader {
+		if strings.EqualFold(name, "Host") || len(values) == 0 {
+			continue
+		}
+		headers[name] = strings.Join(values, ",")
+	}
+	if _, ok := headers["Content-Type"]; !ok {
+		headers["Content-Type"] = contentType
+	}
+	return UploadSessionDestination{
+		URL:     out.URL,
+		Method:  "PUT",
+		Headers: headers,
+	}, nil
+}
+
+// VerifyUpload obtains the storage-authoritative metadata after a direct PUT.
+func (s *S3Storage) VerifyUpload(ctx context.Context, key string) (UploadedObject, error) {
+	if key == "" {
+		return UploadedObject{}, fmt.Errorf("s3 VerifyUpload: empty key")
+	}
+	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket:       aws.String(s.bucket),
+		Key:          aws.String(key),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		return UploadedObject{}, fmt.Errorf("s3 HeadObject: %w", err)
+	}
+	checksum := ""
+	if encoded := aws.ToString(out.ChecksumSHA256); encoded != "" {
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || len(decoded) != sha256.Size {
+			return UploadedObject{}, fmt.Errorf("s3 HeadObject: invalid SHA-256 checksum")
+		}
+		checksum = hex.EncodeToString(decoded)
+	}
+	return UploadedObject{
+		URL:            s.uploadedURL(key),
+		SizeBytes:      aws.ToInt64(out.ContentLength),
+		ContentType:    aws.ToString(out.ContentType),
+		ChecksumSHA256: checksum,
+	}, nil
 }
 
 // Delete removes an object from S3. Errors are logged but not fatal.

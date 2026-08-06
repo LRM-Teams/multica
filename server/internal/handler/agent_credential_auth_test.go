@@ -1018,11 +1018,8 @@ func TestAgentCredentialTransportAllowsActiveInboxDeliveryThroughMiddleware(t *t
 
 	clientID := "agent-credential-transport-" + uuid.NewString()
 	body := map[string]any{
-		"target": "#" + channelNameForTransportTest(t, fixture.channelID),
-		"parts": []protocol.MessagePart{{
-			Type:      protocol.MessagePartTypeSticker,
-			StickerID: "huaji",
-		}},
+		"target":            "#" + channelNameForTransportTest(t, fixture.channelID),
+		"content":           "credential transport delivery",
 		"client_message_id": clientID,
 	}
 	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", body)
@@ -1680,11 +1677,8 @@ func TestAgentCredentialTransportAllowsChannelBoundWakeWithoutChatSession(t *tes
 
 	clientID := "lrm-1055-role-wake-" + uuid.NewString()
 	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target": target,
-		"parts": []protocol.MessagePart{{
-			Type:      protocol.MessagePartTypeSticker,
-			StickerID: "huaji",
-		}},
+		"target":            target,
+		"content":           "channel role wake reply",
 		"client_message_id": clientID,
 	})
 	authHeaders(sendReq)
@@ -1738,11 +1732,8 @@ func TestAgentCredentialTransportAmbientManagerMaySpeakWithoutChatSession(t *tes
 	}
 
 	blockedSend := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target": target,
-		"parts": []protocol.MessagePart{{
-			Type:      protocol.MessagePartTypeSticker,
-			StickerID: "huaji",
-		}},
+		"target":            target,
+		"content":           "blocked ambient reply",
 		"client_message_id": "lrm-1055-ambient-blocked-" + uuid.NewString(),
 	})
 	authHeaders(blockedSend)
@@ -1763,11 +1754,8 @@ func TestAgentCredentialTransportAmbientManagerMaySpeakWithoutChatSession(t *tes
 	}
 
 	okSend := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target": target,
-		"parts": []protocol.MessagePart{{
-			Type:      protocol.MessagePartTypeSticker,
-			StickerID: "huaji",
-		}},
+		"target":            target,
+		"content":           "manager ambient reply",
 		"client_message_id": "lrm-1055-ambient-manager-" + uuid.NewString(),
 	})
 	authHeaders(okSend)

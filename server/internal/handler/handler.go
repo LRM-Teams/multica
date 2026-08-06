@@ -155,6 +155,7 @@ type Handler struct {
 	// parallel tests with separate Handler values cannot cross-contaminate.
 	channelUnmentionedMessages  uint64
 	channelUnmentionedFullWakes uint64
+	UploadSessionNow            func() time.Time
 	PATCache                    *auth.PATCache
 	DaemonTokenCache            *auth.DaemonTokenCache
 	MembershipCache             *auth.MembershipCache

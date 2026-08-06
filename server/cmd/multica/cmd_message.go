@@ -27,30 +27,23 @@ import (
 // followed an instruction from the held response.
 var errAgentMessageHeld = errors.New("message held by freshness check (not delivered); saved as an unsent draft and requires an explicit new decision before sending")
 
+const maxAgentMessageStdinBytes = 1 << 20
+
 func newMessageSendCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "send",
 		Short: "Send a visible chat message from the running agent task",
 		Long: "Send a visible message from the running agent task to an explicit " +
 			"target. Target syntax: #channel, #channel:<threadId>, " +
-			"dm:@handle, or dm:@handle:<threadId>. Use --sticker for a sticker-only " +
-			"reply, or combine --sticker with --message for an acknowledgement sticker " +
-			"followed by explanatory text in one message. Attach files with " +
-			"--attachment-id from `multica attachment upload` (repeatable). If the " +
-			"human used voice input or explicitly requested spoken output, add --voice; " +
-			"the message text remains the accessible transcript. Do not generate or " +
-			"attach an audio file for a voice reply; Multica synthesizes the transcript. If the " +
+			"dm:@handle, or dm:@handle:<threadId>. A normal send requires a non-empty " +
+			"body on stdin. Attach completed files with repeatable --attachment-id values " +
+			"from `multica attachment upload`; attachment-only sends are rejected. If the " +
 			"freshness check holds a send because newer messages arrived, it remains an unsent " +
 			"draft. Do not automatically retry it or send it later; after reviewing the newer " +
 			"context, compose a fresh response if one is still needed.",
 		RunE: runAgentMessageSend,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
-	cmd.Flags().String("message", "", "Message to send (decodes \\n, \\r, \\t, \\\\; use --message-stdin to preserve literal backslashes)")
-	cmd.Flags().Bool("message-stdin", false, "Read the message from stdin (preserves multi-line content verbatim)")
-	cmd.Flags().String("message-file", "", "Read the message from a UTF-8 file")
-	cmd.Flags().String("sticker", "", "Builtin sticker id (see `multica sticker list`); sticker-only when --message is omitted")
-	cmd.Flags().Bool("voice", false, "Deliver the message text as synthesized speech and an accessible transcript")
 	cmd.Flags().StringSlice("attachment-id", nil, "Attachment id to link (repeatable). Get one from `multica attachment upload`")
 	cmd.Flags().Bool("send-draft", false, "Send the current local Draft for this target")
 	cmd.Flags().Bool("anyway", false, "Send a saved Draft despite the freshness check")
@@ -352,7 +345,7 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("--anyway is only valid with --send-draft")
 	}
 	if sendDraft {
-		for _, name := range []string{"message", "message-stdin", "message-file", "sticker", "voice", "attachment-id"} {
+		for _, name := range []string{"attachment-id"} {
 			if cmd.Flags().Changed(name) {
 				return fmt.Errorf("--send-draft does not accept --%s; it reuses the saved payload", name)
 			}
@@ -370,36 +363,28 @@ func runAgentMessageSend(cmd *cobra.Command, _ []string) error {
 		}
 		return printAgentTransportOutput(cmd, out, agentMessageSendTextFallback(out))
 	}
-	content, contentOK, err := resolveTextFlag(cmd, "message")
+	contentBytes, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), maxAgentMessageStdinBytes+1))
 	if err != nil {
-		return err
+		return fmt.Errorf("read message stdin: %w", err)
 	}
-	stickerID := strings.TrimSpace(flagString(cmd, "sticker"))
-	voice, _ := cmd.Flags().GetBool("voice")
-	text := ""
-	if contentOK {
-		text = strings.TrimSpace(content)
+	content := string(contentBytes)
+	if len(contentBytes) > maxAgentMessageStdinBytes {
+		return fmt.Errorf("message content is too large")
+	}
+	if strings.TrimSpace(content) == "" {
+		return fmt.Errorf("message content is required on stdin")
 	}
 	attachmentIDs, _ := cmd.Flags().GetStringSlice("attachment-id")
-	attachmentIDs = appendUniqueStrings(nil, attachmentIDs...)
-	if voice && text == "" {
-		return fmt.Errorf("--voice requires message text; pass --message, --message-stdin, or --message-file")
-	}
-	if stickerID == "" && text == "" && len(attachmentIDs) == 0 {
-		return fmt.Errorf("message, sticker, or attachment is required; pass --message, --message-stdin, --message-file, --sticker, and/or --attachment-id")
+	for i, attachmentID := range attachmentIDs {
+		if strings.TrimSpace(attachmentID) == "" {
+			return fmt.Errorf("--attachment-id %d is empty", i+1)
+		}
 	}
 
 	body := map[string]any{
-		"target": target,
-	}
-	if text != "" {
-		body["content"] = content
-	}
-	// Chat attachments are structured parts only. --attachment-id is sugar that
-	// becomes {type:attachment, attachment_id} before POST; do not send a
-	// sidecar attachment_ids field (server binds from parts).
-	if parts := buildAgentSendParts(stickerID, text, attachmentIDs, voice); len(parts) > 0 {
-		body["parts"] = parts
+		"target":         target,
+		"content":        content,
+		"attachment_ids": attachmentIDs,
 	}
 	var out map[string]any
 	if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
@@ -438,39 +423,6 @@ func agentMessageSendTextFallback(out map[string]any) string {
 
 func agentTransportOutputIsHeld(out map[string]any) bool {
 	return strings.EqualFold(fmt.Sprint(out["state"]), "held") || strings.EqualFold(fmt.Sprint(out["outcome"]), "held")
-}
-
-// buildAgentSendParts assembles the structured chat message body for agent
-// transport send. Order: sticker (if any), text (if any), then attachment parts
-// in --attachment-id order. Attachments are never encoded as markdown embeds.
-func buildAgentSendParts(stickerID, text string, attachmentIDs []string, voice bool) []protocol.MessagePart {
-	var parts []protocol.MessagePart
-	if stickerID != "" {
-		parts = append(parts, protocol.MessagePart{
-			Type:      protocol.MessagePartTypeSticker,
-			StickerID: stickerID,
-		})
-	}
-	if text != "" {
-		parts = append(parts, protocol.MessagePart{
-			Type: protocol.MessagePartTypeText,
-			Text: text,
-		})
-	}
-	if voice {
-		parts = append(parts, protocol.MessagePart{Type: protocol.MessagePartTypeVoice})
-	}
-	for _, id := range attachmentIDs {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		parts = append(parts, protocol.MessagePart{
-			Type:         protocol.MessagePartTypeAttachment,
-			AttachmentID: id,
-		})
-	}
-	return parts
 }
 
 func runAgentMessageReact(cmd *cobra.Command, _ []string) error {

@@ -1988,7 +1988,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 }
 
-func TestChannelAgentInboxTransportCanSendStickerAndSuppressesFinalOutput(t *testing.T) {
+func TestChannelAgentInboxTransportCanSendTextAndSuppressesFinalOutput(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2014,7 +2014,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if !found {
 		t.Fatal("channel not found after seed")
 	}
-	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") send a sticker", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-sticker"), 0)
+	trigger, err := testHandler.insertChannelMessage(ctx, parseUUID(channelID), parseUUID(testWorkspaceID), "user", parseUUID(testUserID), "Tester", "[@"+agentName+"](mention://agent/"+agentID+") send a reply", "multica", nil, pgtype.UUID{}, pgtype.UUID{}, strPtr("inbox-text"), 0)
 	if err != nil {
 		t.Fatalf("insert mention trigger: %v", err)
 	}
@@ -2036,13 +2036,10 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	}
 	got := drainResp.Events[0]
 
-	clientID := "inbox-sticker-" + uuid.NewString()
+	clientID := "inbox-text-" + uuid.NewString()
 	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", map[string]any{
-		"target": "#" + channelNameForTransportTest(t, channelID),
-		"parts": []protocol.MessagePart{{
-			Type:      protocol.MessagePartTypeSticker,
-			StickerID: "huaji",
-		}},
+		"target":            "#" + channelNameForTransportTest(t, channelID),
+		"content":           "inbox transport reply",
 		"client_message_id": clientID,
 	})
 	sendReq = withChatTestWorkspaceCtx(t, sendReq)
@@ -2054,14 +2051,14 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	sendRec := httptest.NewRecorder()
 	testHandler.AgentTransportSendMessage(sendRec, sendReq)
 	if sendRec.Code != http.StatusCreated {
-		t.Fatalf("inbox transport sticker send: status=%d body=%s", sendRec.Code, sendRec.Body.String())
+		t.Fatalf("inbox transport text send: status=%d body=%s", sendRec.Code, sendRec.Body.String())
 	}
 	var sendBody AgentTransportSendResponse
 	if err := json.Unmarshal(sendRec.Body.Bytes(), &sendBody); err != nil {
 		t.Fatalf("decode inbox transport send: %v", err)
 	}
-	if len(sendBody.Message.Parts) != 1 || sendBody.Message.Parts[0].Type != protocol.MessagePartTypeSticker || sendBody.Message.Parts[0].StickerID != "huaji" {
-		t.Fatalf("sticker message parts = %+v, want huaji sticker", sendBody.Message.Parts)
+	if len(sendBody.Message.Parts) != 1 || sendBody.Message.Parts[0].Type != protocol.MessagePartTypeText || sendBody.Message.Parts[0].Text != "inbox transport reply" {
+		t.Fatalf("text message parts = %+v, want inbox transport reply", sendBody.Message.Parts)
 	}
 	var taskAuditRows, inboxAuditRows int
 	if err := testPool.QueryRow(ctx, `
@@ -2077,7 +2074,7 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 		t.Fatalf("transport audit task rows=%d inbox rows=%d, want 0/1", taskAuditRows, inboxAuditRows)
 	}
 
-	finalText := "duplicate final after inbox sticker " + uuid.NewString()
+	finalText := "duplicate final after inbox text " + uuid.NewString()
 	completeReq := newDaemonTokenRequest(http.MethodPost, "/api/daemon/agent-inbox/events/"+got.ID+"/complete", CompleteAgentInboxEventRequest{
 		DeliveryID: got.DeliveryID,
 		LeaseToken: got.LeaseToken,
@@ -2311,11 +2308,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 
 	clientID := "inbox-bearer-" + uuid.NewString()
 	body := map[string]any{
-		"target": "#" + channelNameForTransportTest(t, channelID),
-		"parts": []protocol.MessagePart{{
-			Type:      protocol.MessagePartTypeSticker,
-			StickerID: "huaji",
-		}},
+		"target":            "#" + channelNameForTransportTest(t, channelID),
+		"content":           "inbox bearer reply",
 		"client_message_id": clientID,
 	}
 	sendReq := newRequest(http.MethodPost, "/api/agent/messages/send", body)
@@ -2330,8 +2324,8 @@ ON CONFLICT DO NOTHING`, channelID, testWorkspaceID, agentID); err != nil {
 	if err := json.Unmarshal(sendRec.Body.Bytes(), &sendBody); err != nil {
 		t.Fatalf("decode inbox bearer transport send: %v", err)
 	}
-	if len(sendBody.Message.Parts) != 1 || sendBody.Message.Parts[0].Type != protocol.MessagePartTypeSticker || sendBody.Message.Parts[0].StickerID != "huaji" {
-		t.Fatalf("sticker message parts = %+v, want huaji sticker", sendBody.Message.Parts)
+	if len(sendBody.Message.Parts) != 1 || sendBody.Message.Parts[0].Type != protocol.MessagePartTypeText || sendBody.Message.Parts[0].Text != "inbox bearer reply" {
+		t.Fatalf("text message parts = %+v, want inbox bearer reply", sendBody.Message.Parts)
 	}
 
 	var taskAuditRows, inboxAuditRows int

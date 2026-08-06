@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // continue-state.json is intentionally separate from consumed-seqs.json:
@@ -26,14 +24,13 @@ type messageDraftState struct {
 }
 
 type messageDraft struct {
-	Target          string                 `json:"target"`
-	ContextTarget   string                 `json:"context_target"`
-	Content         string                 `json:"content"`
-	Parts           []protocol.MessagePart `json:"parts,omitempty"`
-	AttachmentIDs   []string               `json:"attachment_ids,omitempty"`
-	ClientMessageID string                 `json:"client_message_id"`
-	SeenUpToSeq     int64                  `json:"seen_up_to_seq"`
-	SavedAt         time.Time              `json:"saved_at"`
+	Target          string    `json:"target"`
+	ContextTarget   string    `json:"context_target"`
+	Content         string    `json:"content"`
+	AttachmentIDs   []string  `json:"attachment_ids,omitempty"`
+	ClientMessageID string    `json:"client_message_id"`
+	SeenUpToSeq     int64     `json:"seen_up_to_seq"`
+	SavedAt         time.Time `json:"saved_at"`
 }
 
 func (c *MessageCoordinator) messageDraftPath() string {
@@ -48,8 +45,7 @@ func (c *MessageCoordinator) SaveNormalMessageDraft(draft messageDraft, now time
 		return messageDraft{}, errors.New("Draft target and internal identity are required")
 	}
 	draft.SavedAt = now.UTC()
-	draft.Parts = cloneMessageParts(draft.Parts)
-	draft.AttachmentIDs = attachmentIDsInOrder(draft.Parts)
+	draft.AttachmentIDs = append([]string(nil), draft.AttachmentIDs...)
 
 	c.draftMu.Lock()
 	defer c.draftMu.Unlock()
@@ -90,7 +86,6 @@ func (c *MessageCoordinator) LoadMessageDraft(target string, now time.Time) (mes
 		}
 		return messageDraft{}, false, nil
 	}
-	draft.Parts = cloneMessageParts(draft.Parts)
 	draft.AttachmentIDs = append([]string(nil), draft.AttachmentIDs...)
 	return draft, true, nil
 }
@@ -133,7 +128,6 @@ func (c *MessageCoordinator) RefreshMessageDraft(target, clientMessageID, contex
 	if err := c.writeMessageDraftStateLocked(state); err != nil {
 		return messageDraft{}, fmt.Errorf("refresh local Draft: %w", err)
 	}
-	draft.Parts = cloneMessageParts(draft.Parts)
 	draft.AttachmentIDs = append([]string(nil), draft.AttachmentIDs...)
 	return draft, nil
 }
@@ -196,23 +190,4 @@ func removeExpiredMessageDrafts(drafts map[string]messageDraft, now time.Time) {
 
 func messageDraftExpired(draft messageDraft, now time.Time) bool {
 	return draft.SavedAt.IsZero() || !now.Before(draft.SavedAt.Add(messageDraftTTL))
-}
-
-func attachmentIDsInOrder(parts []protocol.MessagePart) []string {
-	ids := make([]string, 0)
-	for _, part := range parts {
-		if part.Type == protocol.MessagePartTypeAttachment {
-			if id := strings.TrimSpace(part.AttachmentID); id != "" {
-				ids = append(ids, id)
-			}
-		}
-	}
-	return ids
-}
-
-func cloneMessageParts(parts []protocol.MessagePart) []protocol.MessagePart {
-	if len(parts) == 0 {
-		return nil
-	}
-	return append([]protocol.MessagePart(nil), parts...)
 }

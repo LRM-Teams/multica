@@ -206,6 +206,23 @@ describe("ExecutionOverlayPanel — bidirectional locate + a11y + motion", () =>
     unmount();
   });
 
+  it("keeps the expanded-detail locate touch target ≥44px (min-h-11)", async () => {
+    const user = userEvent.setup();
+    const base = [row({ id: "w", name: "Wanda", status: "queued" })];
+    // Expand the row while it has no locatable node yet.
+    const { rerender } = render(<ExecutionOverlayPanel rows={base} />);
+    await user.click(screen.getByRole("button", { name: "View Wanda's recent activity" }));
+    // Node binding resolves while the row stays expanded → detail locate button renders.
+    rerender(
+      <ExecutionOverlayPanel
+        rows={[{ ...base[0]!, currentNodeId: "node-w", locationLabel: "node-w" }]}
+        onLocate={() => {}}
+      />,
+    );
+    const locateBtn = screen.getByRole("button", { name: "Locate at node-w" });
+    expect(locateBtn.className).toContain("min-h-11");
+  });
+
   it("keeps reduced-motion guard on the running progress sweep", () => {
     render(<ExecutionOverlayPanel rows={tenStateRows} />);
     const running = Array.from(screen.getAllByTestId("execution-overlay-row")).find(

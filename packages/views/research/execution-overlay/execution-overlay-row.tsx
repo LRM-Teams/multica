@@ -308,7 +308,7 @@ export function ExecutionOverlayRow({
               type="button"
               variant="outline"
               size="sm"
-              className="mt-2 min-h-9 max-w-full gap-1.5 px-2 text-xs"
+              className="mt-2 min-h-11 max-w-full gap-1.5 px-2 text-xs"
               onClick={() => onLocate?.(agent)}
             >
               <LocateFixed className="size-3.5 shrink-0" aria-hidden="true" />

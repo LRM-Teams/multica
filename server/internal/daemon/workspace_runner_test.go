@@ -1,6 +1,18 @@
 package daemon
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/multica-ai/multica/server/pkg/protocol"
+)
 
 func TestWorkspaceRunnerURLIsScopedWithoutRuntimeIDs(t *testing.T) {
 	got, err := workspaceRunnerURL("https://api.example.com/multica", "workspace-1")
@@ -11,4 +23,91 @@ func TestWorkspaceRunnerURLIsScopedWithoutRuntimeIDs(t *testing.T) {
 	if got != want {
 		t.Fatalf("workspaceRunnerURL() = %q, want %q", got, want)
 	}
+}
+
+func TestWorkspaceRunnerAcceptsScopedStartAndReturnsAckThenStatus(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	frames := make(chan protocol.Message, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("workspace_id") != "ws-1" || r.Header.Get("Authorization") != "Bearer workspace-token" {
+			http.Error(w, "unexpected runner scope", http.StatusForbidden)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var ready protocol.Message
+		if err := json.Unmarshal(raw, &ready); err != nil {
+			t.Error(err)
+			return
+		}
+		frames <- ready
+		start, _ := json.Marshal(protocol.Message{Type: protocol.EventDaemonAgentStart, Payload: marshalRaw(protocol.WorkspaceRunnerAgentStartPayload{AgentID: "agent-1", RuntimeID: "runtime-1", StartDispatchID: "dispatch-1"})})
+		if err := conn.WriteMessage(websocket.TextMessage, start); err != nil {
+			t.Error(err)
+			return
+		}
+		for i := 0; i < 2; i++ {
+			_, raw, err = conn.ReadMessage()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			var msg protocol.Message
+			if err := json.Unmarshal(raw, &msg); err != nil {
+				t.Error(err)
+				return
+			}
+			frames <- msg
+		}
+	}))
+	defer server.Close()
+	d := New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.client.SetWorkspaceDaemonToken("ws-1", "workspace-token", time.Now().Add(time.Hour))
+	d.mu.Lock()
+	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
+	d.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.runWorkspaceRunnerConnection(ctx, "ws-1") }()
+	var ready, ack, status protocol.Message
+	for i := 0; i < 3; i++ {
+		select {
+		case msg := <-frames:
+			switch msg.Type {
+			case protocol.EventWorkspaceRunnerReady:
+				ready = msg
+			case protocol.EventAgentStartAck:
+				ack = msg
+			case protocol.EventAgentStatus:
+				status = msg
+			}
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for Runner frames")
+		}
+	}
+	if ready.Type != protocol.EventWorkspaceRunnerReady {
+		t.Fatalf("ready frame = %+v", ready)
+	}
+	var accepted protocol.AgentStartAckPayload
+	if err := json.Unmarshal(ack.Payload, &accepted); err != nil {
+		t.Fatal(err)
+	}
+	var active protocol.AgentStatusPayload
+	if err := json.Unmarshal(status.Payload, &active); err != nil {
+		t.Fatal(err)
+	}
+	if accepted.LaunchID == "" || active.LaunchID != accepted.LaunchID || active.Status != protocol.AgentStatusActive {
+		t.Fatalf("ack=%+v status=%+v", accepted, active)
+	}
+	<-errCh
 }

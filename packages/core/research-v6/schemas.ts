@@ -8,14 +8,22 @@ import {
   RESEARCH_V6_EDGE_TYPES,
   RESEARCH_V6_NODE_KINDS,
   RESEARCH_V6_TRANSITION_KINDS,
-} from "../research-v6/registry";
+} from "./registry";
 
 /**
- * The minimum `node_kind` set V6 must register (design doc 7.1).
- * Single source of truth lives in `research-v6/registry` (the frontend node
- * registry); this re-export anchors the wire layer to the same list so the
- * acceptance set cannot drift between schema and registry.
+ * Research V6 projection wire schemas — the unified, single source of truth.
+ *
+ * The `node_kind` / `edge_type` / `transition_kind` constants are anchored to
+ * the frontend node registry (`./registry`) so the acceptance set can never
+ * drift between registry and wire layer.
+ *
+ * Schemas are lenient by convention (see `packages/core/api/schema.ts`):
+ * enums stay `z.string()` so an unknown future `node_kind` / `edge_type`
+ * still parses and degrades to a generic node instead of crashing an old
+ * client (design doc 7.1).
  */
+
+/** The minimum `node_kind` set V6 must register (design doc 7.1). */
 export const ResearchV6NodeKinds = RESEARCH_V6_NODE_KINDS;
 
 /** Stable typed edge types (design doc 7.1) — anchored to the registry. */
@@ -23,13 +31,6 @@ export const ResearchV6EdgeTypes = RESEARCH_V6_EDGE_TYPES;
 
 /** Transition kinds (design doc 7.2) — anchored to the registry. */
 export const ResearchV6TransitionKinds = RESEARCH_V6_TRANSITION_KINDS;
-
-/**
- * Research V6 projection wire schemas (lenient by convention — see
- * `packages/core/api/schema.ts`). Enums stay `z.string()` so an unknown future
- * `node_kind` / `edge_type` still parses and degrades to a generic node
- * instead of crashing an old client (design doc 7.1).
- */
 
 export const ResearchV6ProjectionNodeSchema = z
   .object({

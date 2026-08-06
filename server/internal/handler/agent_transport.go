@@ -25,6 +25,7 @@ const (
 	agentTransportActionReact          = "message_react"
 	agentTransportActionRead           = "message_read"
 	agentTransportActionSearch         = "message_search"
+	agentTransportActionResolve        = "message_resolve"
 	agentTransportActionThreadUnfollow = "thread_unfollow"
 
 	agentTransportFreshnessHoldLimit = 5
@@ -192,6 +193,21 @@ type AgentTransportSearchResponse struct {
 	Total       int                          `json:"total"`
 	Results     []ChannelMessageSearchResult `json:"results"`
 	TransportID string                       `json:"transport_id"`
+}
+
+type AgentTransportResolveRequest struct {
+	MessageID string `json:"message_id"`
+}
+
+type AgentTransportResolveTarget struct {
+	ChannelID           string  `json:"channel_id"`
+	ThreadRootMessageID *string `json:"thread_root_message_id,omitempty"`
+}
+
+type AgentTransportResolveResponse struct {
+	Action  string                      `json:"action"`
+	Target  AgentTransportResolveTarget `json:"target"`
+	Message ChannelMessageResponse      `json:"message"`
 }
 
 type AgentTransportThreadUnfollowRequest struct {
@@ -867,6 +883,125 @@ func (h *Handler) AgentTransportSearchMessages(w http.ResponseWriter, r *http.Re
 		Results:     results,
 		TransportID: transportID,
 	})
+}
+
+var errAgentTransportMessageNotFound = errors.New("message not found")
+var errAgentTransportMessageAmbiguous = errors.New("message id prefix is ambiguous")
+var errAgentTransportMessageIDInvalid = errors.New("invalid message id")
+
+func (h *Handler) AgentTransportResolveMessage(w http.ResponseWriter, r *http.Request) {
+	source, ok := h.requireAgentTransportSource(w, r)
+	if !ok {
+		return
+	}
+	var req AgentTransportResolveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	message, err := h.resolveAgentTransportMessage(r.Context(), source, req.MessageID)
+	if err != nil {
+		switch {
+		case errors.Is(err, errAgentTransportMessageNotFound):
+			// The same response covers a missing Message and an inaccessible target.
+			writeError(w, http.StatusNotFound, "message not found")
+		case errors.Is(err, errAgentTransportMessageAmbiguous):
+			writeError(w, http.StatusConflict, "message id prefix is ambiguous; use more characters")
+		case errors.Is(err, errAgentTransportMessageIDInvalid):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			slog.Warn("agent transport message resolve failed", "task_id", uuidToString(source.task.ID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to resolve message")
+		}
+		return
+	}
+	messages := []ChannelMessageResponse{message}
+	h.decorateAgentTransportMessages(r.Context(), message.WorkspaceID, messages)
+	message = messages[0]
+	writeJSON(w, http.StatusOK, AgentTransportResolveResponse{
+		Action: agentTransportActionResolve,
+		Target: AgentTransportResolveTarget{
+			ChannelID:           message.ChannelID,
+			ThreadRootMessageID: message.ThreadRootMessageID,
+		},
+		Message: message,
+	})
+}
+
+func (h *Handler) resolveAgentTransportMessage(ctx context.Context, source agentTransportSource, rawMessageID string) (ChannelMessageResponse, error) {
+	fullID, prefix, err := parseAgentTransportMessageID(rawMessageID)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	args := []any{source.origin.workspaceID, source.origin.agentID}
+	whereID := ""
+	if fullID != "" {
+		args = append(args, parseUUID(fullID))
+		whereID = fmt.Sprintf("m.id = $%d", len(args))
+	} else {
+		args = append(args, prefix)
+		whereID = fmt.Sprintf("replace(m.id::text, '-', '') LIKE $%d || '%%'", len(args))
+	}
+	rows, err := h.DB.Query(ctx, `
+		SELECT `+channelMessageColumnList+`
+		FROM channel_message m
+		WHERE m.workspace_id = $1
+		  AND m.author_type IN ('user', 'agent')
+		  AND m.deleted_at IS NULL
+		  AND EXISTS (
+			SELECT 1
+			FROM channel_member visible
+			WHERE visible.workspace_id = m.workspace_id
+			  AND visible.channel_id = m.channel_id
+			  AND visible.member_type = 'agent'
+			  AND visible.member_id = $2
+		  )
+		  AND `+whereID+`
+		ORDER BY m.id ASC
+		LIMIT 2`, args...)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	defer rows.Close()
+	matches := make([]ChannelMessageResponse, 0, 2)
+	for rows.Next() {
+		message, err := scanChannelMessage(rows)
+		if err != nil {
+			return ChannelMessageResponse{}, err
+		}
+		matches = append(matches, message)
+	}
+	if err := rows.Err(); err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	switch len(matches) {
+	case 0:
+		return ChannelMessageResponse{}, errAgentTransportMessageNotFound
+	case 1:
+		return matches[0], nil
+	default:
+		return ChannelMessageResponse{}, errAgentTransportMessageAmbiguous
+	}
+}
+
+func parseAgentTransportMessageID(raw string) (fullID, prefix string, err error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", fmt.Errorf("%w: message id is required", errAgentTransportMessageIDInvalid)
+	}
+	if parsed, parseErr := uuid.Parse(raw); parseErr == nil {
+		return parsed.String(), "", nil
+	}
+	prefix = strings.ToLower(strings.ReplaceAll(raw, "-", ""))
+	if len(prefix) < 4 {
+		return "", "", fmt.Errorf("%w: message id must be a full UUID or at least 4 hex characters", errAgentTransportMessageIDInvalid)
+	}
+	for _, char := range prefix {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+			return "", "", fmt.Errorf("%w: message id must be a full UUID or at least 4 hex characters", errAgentTransportMessageIDInvalid)
+		}
+	}
+	return "", prefix, nil
 }
 
 func (h *Handler) AgentTransportUnfollowThread(w http.ResponseWriter, r *http.Request) {

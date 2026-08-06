@@ -962,7 +962,7 @@ func failedAgentInboxEvent(row db.FailAgentInboxDeliveryRow) db.AgentInboxEvent 
 func (h *Handler) recordAgentInboxFailureActivity(ctx context.Context, event db.AgentInboxEvent, deliveryID pgtype.UUID, errText, failureReason, reasonCode string) {
 	delivery, err := h.Queries.GetAgentEventDelivery(ctx, deliveryID)
 	if err != nil {
-		slog.Warn("agent inbox fail: failed to reload delivery for activity event", "delivery_id", uuidToString(deliveryID), "error", err)
+		slog.Warn("agent inbox fail: failed to reload delivery", "delivery_id", uuidToString(deliveryID), "error", err)
 	}
 	h.TaskService.RecordEvolutionSkillOutcome(ctx, event.ID, "failure", "failure")
 	h.refreshAgentHonor(ctx, event.WorkspaceID, event.AgentID, "task_failed")

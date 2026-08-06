@@ -344,6 +344,11 @@ func (h *Handler) prepareRunnerActivityRead(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "workspace_id is required")
 		return pgtype.UUID{}, pgtype.UUID{}, false
 	}
+	actorType, _ := h.resolveActor(r, requestUserID(r), workspaceIDText)
+	if actorType == "agent" {
+		writeError(w, http.StatusForbidden, "agent principals may not read runner activity")
+		return pgtype.UUID{}, pgtype.UUID{}, false
+	}
 	// loadAgentForUser preserves the public object contract: an agent outside
 	// this Workspace is indistinguishable from one that does not exist (404).
 	agent, ok := h.loadAgentForUser(w, r, chi.URLParam(r, "id"))

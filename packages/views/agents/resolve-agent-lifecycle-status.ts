@@ -31,7 +31,7 @@ const BRAND_DOT = "bg-brand";
  *
  * Reads `runtime_display_status` (server/internal/handler/agent_health.go's
  * `agentRuntimeDisplayStatus`). Returns null for "idle"/"working" — those
- * already have their own presentation via activity-event.ts, this function
+ * already have their own server-projected Activity presentation, this function
  * doesn't duplicate it.
  *
  * A missing/unrecognized value (older backend, or a status this FE doesn't

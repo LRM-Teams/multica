@@ -183,22 +183,6 @@
       "tests_ms": 876.5048660000002
     },
     {
-      "file": "agents/components/tabs/activity-event-reducer.test.ts",
-      "import_ms": 18.211681999999996,
-      "environment_ms": 0.1164720000000159,
-      "setup_ms": 10.566417000000001,
-      "prepare_ms": 10.477986999999985,
-      "tests_ms": 8.25837900000002
-    },
-    {
-      "file": "agents/components/tabs/activity-event.test.ts",
-      "import_ms": 81.13041799999996,
-      "environment_ms": 0.11719600000000696,
-      "setup_ms": 26.473145000000017,
-      "prepare_ms": 11.347845000000007,
-      "tests_ms": 25.871442000000002
-    },
-    {
       "file": "agents/components/tabs/activity-message-link.test.ts",
       "import_ms": 23.01083700000001,
       "environment_ms": 0.12237700000000018,
@@ -261,14 +245,6 @@
       "setup_ms": 152.90265999999997,
       "prepare_ms": 10.970669000000044,
       "tests_ms": 366.5587939999998
-    },
-    {
-      "file": "agents/components/tabs/use-agent-activity-events.test.tsx",
-      "import_ms": 81.08683900000005,
-      "environment_ms": 943.5805660000001,
-      "setup_ms": 211.48228199999994,
-      "prepare_ms": 13.148595999999998,
-      "tests_ms": 48.60437899999988
     },
     {
       "file": "agents/components/tabs/use-agent-reminders-realtime.test.ts",

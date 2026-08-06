@@ -12,13 +12,13 @@ import (
 )
 
 type Engine struct {
-	store      Store
+	store      *PostgresStore
 	dispatcher Dispatcher
 	projector  Projector
 	clock      Clock
 }
 
-func NewEngine(store Store, dispatcher Dispatcher, projector Projector) *Engine {
+func NewEngine(store *PostgresStore, dispatcher Dispatcher, projector Projector) *Engine {
 	return &Engine{store: store, dispatcher: dispatcher, projector: projector, clock: systemClock{}}
 }
 

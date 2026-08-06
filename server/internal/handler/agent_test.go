@@ -2214,8 +2214,7 @@ func TestEnsureWindyConcurrentCallersProduceOneOnboardingAgent(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		go func(i int) {
 			defer wg.Done()
-			req := newRequest(http.MethodPost, "/api/agents/windy", nil)
-			results[i], _, errs[i] = testHandler.ensureWindyAgent(req, workspace.ID, runtime)
+			results[i], _, errs[i] = testHandler.provisionOnboardingAgent(ctx, workspace.ID, runtime, "race-model")
 		}(i)
 	}
 	wg.Wait()

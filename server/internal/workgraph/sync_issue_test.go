@@ -182,12 +182,36 @@ func TestSyncDependenciesForIssueResolvesStaleWaitsOnEdges(t *testing.T) {
 
 func createWorkgraphWorkspace(t *testing.T, ctx context.Context, id pgtype.UUID) {
 	t.Helper()
-	if _, err := testPool.Exec(ctx, `
+	ownerID := pgUUID(uuid.New())
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin workspace fixture: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO "user" (id, name, email)
+		VALUES ($1, 'Workgraph Owner', $2)
+	`, ownerID, uuid.NewString()+"@workgraph.test"); err != nil {
+		t.Fatalf("create workspace owner: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO workspace (id, name, slug, issue_prefix)
 		VALUES ($1, 'Workgraph Test', $2, 'WGR')
 	`, id, "workgraph-"+uuid.NewString()); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'owner')
+	`, id, ownerID); err != nil {
+		t.Fatalf("create workspace owner membership: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit workspace fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, ownerID)
+	})
 }
 
 func createWorkgraphIssue(t *testing.T, ctx context.Context, workspaceID, agentID pgtype.UUID, number int, title, status string) db.Issue {

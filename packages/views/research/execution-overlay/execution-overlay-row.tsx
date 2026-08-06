@@ -119,8 +119,11 @@ export function ExecutionOverlayRow({
     agent.action ?? copy.action[EXECUTION_STATUS_ACTION_KEY[agent.status]] ?? agent.action;
   const active = agent.status === "running" || agent.status === "queued" || agent.status === "cancelling" || agent.status === "retrying";
   const activate = () => {
+    // 保持单次 select/focus 请求（可定位时仍只发一次 onLocate），
+    // 同时始终切换 expanded，让已渲染的展开 affordance 可用——
+    // 可定位的失败/等待成员也能读到展开详情（LRM-1437）。
     if (canLocate) onLocate?.(agent);
-    else setExpanded(true);
+    setExpanded((prev) => !prev);
   };
 
   const reasonText =

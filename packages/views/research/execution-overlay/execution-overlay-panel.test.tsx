@@ -182,6 +182,30 @@ describe("ExecutionOverlayPanel — bidirectional locate + a11y + motion", () =>
     expect(onLocate).toHaveBeenCalledWith(expect.objectContaining({ id: "q" }));
   });
 
+  it("lets a locatable failed row also expand to read the failure detail (LRM-1437)", () => {
+    const onLocate = vi.fn();
+    const failed = { ...tenStateRows[4]!, currentNodeId: "node-f", locationLabel: "node-f" };
+    const { unmount } = render(<ExecutionOverlayPanel rows={[failed]} onLocate={onLocate} />);
+    const rowButton = screen.getByRole("button", { name: "Locate Felix's current node" });
+
+    // Before activation the detail is collapsed.
+    expect(rowButton.getAttribute("aria-expanded")).toBe("false");
+
+    // Clicking a locatable failed row locates once AND expands the detail.
+    fireEvent.click(rowButton);
+    expect(onLocate).toHaveBeenCalledTimes(1);
+    expect(onLocate).toHaveBeenCalledWith(expect.objectContaining({ id: "f" }));
+    expect(rowButton.getAttribute("aria-expanded")).toBe("true");
+    // Failure reason is now readable.
+    expect(screen.getByText("The task did not finish; review recent activity and retry.")).toBeTruthy();
+
+    // Click again still locates and collapses (toggle).
+    fireEvent.click(rowButton);
+    expect(onLocate).toHaveBeenCalledTimes(2);
+    expect(rowButton.getAttribute("aria-expanded")).toBe("false");
+    unmount();
+  });
+
   it("keeps reduced-motion guard on the running progress sweep", () => {
     render(<ExecutionOverlayPanel rows={tenStateRows} />);
     const running = Array.from(screen.getAllByTestId("execution-overlay-row")).find(

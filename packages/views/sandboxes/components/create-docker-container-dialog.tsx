@@ -7,12 +7,7 @@ import { toast } from "sonner";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { useCreateSandboxMutation } from "@multica/core/sandboxes/mutations";
 import { sandboxNodeDockerImagesOptions } from "@multica/core/sandboxes/queries";
-import {
-  buildSandboxRuntimePayload,
-  emptySandboxRuntimeForm,
-  type SandboxRuntimeFormState,
-} from "@multica/core/sandboxes/utils";
-import type { DockerImage, SandboxBinding, SandboxInstance } from "@multica/core/types";
+import type { SandboxBinding, SandboxInstance } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -34,15 +29,17 @@ import {
 } from "@multica/ui/components/ui/select";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useT } from "../../i18n/use-t";
-import { SandboxRuntimeForm } from "./sandbox-runtime-form";
+import {
+  defaultDockerContainerName,
+  dockerImageLabel,
+  dockerNodeSelectLabel,
+} from "./docker-container-labels";
 
-export function dockerImageLabel(image: DockerImage): string {
-  return image.image_ref || [image.repository, image.tag].filter(Boolean).join(":");
-}
-
-export function defaultDockerContainerName(): string {
-  return `docker-${Math.random().toString(36).slice(2, 8)}`;
-}
+export {
+  defaultDockerContainerName,
+  dockerImageLabel,
+  dockerNodeSelectLabel,
+} from "./docker-container-labels";
 
 function preferredDockerNodeId(
   bindings: SandboxBinding[],
@@ -99,7 +96,6 @@ export function CreateDockerContainerDialog({
   const [name, setName] = useState(defaultDockerContainerName);
   const [nodeId, setNodeId] = useState(initialNodeId);
   const [selectedImageRef, setSelectedImageRef] = useState("");
-  const [runtime, setRuntime] = useState<SandboxRuntimeFormState>(emptySandboxRuntimeForm);
 
   // Reset form on open transition during render (no stale frame via useEffect).
   const prevOpenRef = useRef(false);
@@ -108,7 +104,6 @@ export function CreateDockerContainerDialog({
     if (open) {
       setName(defaultDockerContainerName());
       setSelectedImageRef("");
-      setRuntime(emptySandboxRuntimeForm());
       setNodeId(preferredDockerNodeId(bindings, initialNodeId));
     }
   }
@@ -154,12 +149,10 @@ export function CreateDockerContainerDialog({
   const handleCreate = async () => {
     if (!canCreate || !selectedImage) return;
     try {
-      const runtimePayload = buildSandboxRuntimePayload(runtime);
       const instance = await create.mutateAsync({
         name: name.trim(),
         node_id: nodeId,
         docker_image: image,
-        ...(runtimePayload ? { runtime: runtimePayload } : {}),
       });
       onOpenChange(false);
       onCreated?.(instance);
@@ -205,12 +198,7 @@ export function CreateDockerContainerDialog({
               <Label>{t(($) => $.sandboxes_page.node_label)}</Label>
               {nodeLocked ? (
                 <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-                  {selectedBinding?.node_name ?? nodeId}
-                  {selectedBinding ? (
-                    <span className="ml-2 text-muted-foreground">
-                      ({selectedBinding.node_status})
-                    </span>
-                  ) : null}
+                  {selectedBinding ? dockerNodeSelectLabel(selectedBinding) : nodeId}
                 </div>
               ) : (
                 <Select
@@ -223,12 +211,14 @@ export function CreateDockerContainerDialog({
                   <SelectTrigger className="h-9 w-full min-w-0">
                     <SelectValue
                       placeholder={t(($) => $.sandboxes_page.select_node_placeholder)}
-                    />
+                    >
+                      {selectedBinding ? dockerNodeSelectLabel(selectedBinding) : null}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent alignItemWithTrigger className="min-w-(--anchor-width)">
                     {bindings.map((binding) => (
                       <SelectItem key={binding.id} value={binding.node_id}>
-                        {binding.node_name} ({binding.node_status})
+                        {dockerNodeSelectLabel(binding)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -298,8 +288,6 @@ export function CreateDockerContainerDialog({
                 {t(($) => $.sandboxes_page.docker_image_hint)}
               </p>
             </div>
-
-            <SandboxRuntimeForm value={runtime} onChange={setRuntime} />
           </div>
         )}
 

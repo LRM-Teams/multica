@@ -2103,9 +2103,7 @@ func taskMessageVisibleToUser(messageType, content, visibility string) bool {
 }
 
 func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any) string {
-	if _, _, _, ok := taskMessageCompactionActivity(msgType); ok {
-		// Context compaction belongs to the Activity timeline, never the task
-		// transcript. ReportTaskMessages persists a dedicated Activity row.
+	if msgType == "compaction_started" || msgType == "compaction_finished" {
 		return "diagnostic_only"
 	}
 	// Provider thinking and tool_result / log are diagnostic-only. Tool-use
@@ -2113,21 +2111,9 @@ func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any)
 	if msgType == "thinking" || msgType == "tool_result" || msgType == "log" {
 		return "diagnostic_only"
 	}
-	if !taskMessageToolIsMapped(msgType, tool, input) {
-		return "diagnostic_only"
-	}
+	_ = tool
+	_ = input
 	return "user_facing"
-}
-
-func taskMessageCompactionActivity(messageType string) (eventKind, eventType, message string, ok bool) {
-	switch messageType {
-	case "compaction_started":
-		return activityKindCompactionStarted, "compaction_started", activityCompactingContextMessage, true
-	case "compaction_finished":
-		return activityKindCompactionFinished, "compaction_finished", activityContextCompactionFinishedText, true
-	default:
-		return "", "", "", false
-	}
 }
 
 // ListTaskMessages returns the persisted messages for a task (for catch-up after reconnect).

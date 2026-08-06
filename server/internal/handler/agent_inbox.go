@@ -349,7 +349,7 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			// Legacy daemons may still report an empty thinking phase. Retain it
 			// as diagnostic data only; current daemons no longer emit this wire.
 			details["phase_status"] = true
-			if payload, ok := agentInboxTaskMessagePayload(event, msg, activityKindThinking, details); ok && h.Bus != nil {
+			if payload, ok := agentInboxTaskMessagePayload(event, msg, "thinking", details); ok && h.Bus != nil {
 				h.publishTask(protocol.EventTaskMessage, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
 			}
 			continue
@@ -359,40 +359,11 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 			details["call_id"] = callID
 		}
 		if msg.Type == "tool_use" {
-			rawTool := strings.TrimSpace(msg.Tool)
-			canonicalTool, known := taskMessageCanonicalToolName(rawTool, msg.Input)
-			if command := redactedCommandFromInput(msg.Input); command != "" {
-				details["command"] = command
-			}
-			if cli, ok := resolveRaftCLIInvocation(canonicalTool, msg.Input); ok {
-				canonicalTool = cli.Tool
-				known = true
-				for key, value := range cli.Details {
-					details[key] = value
-				}
-			}
-			if !known {
-				if rawTool != "" {
-					details["unmapped_tool_name"] = rawTool
-				}
-				if target, summaryKind := agentInboxActivityToolTarget(msg); target != "" {
-					details["tool_target"] = target
-					details["summary_kind"] = summaryKind
-				}
+			tool := strings.TrimSpace(msg.Tool)
+			if tool == "" {
 				continue
 			}
-			details["tool"] = canonicalTool
-			if canonicalTool != rawTool {
-				details["raw_tool"] = rawTool
-			}
-			agentActivityApplyToolSourceFacts(details, rawTool, canonicalTool, msg.Input)
-			agentActivityApplyToolInputSummary(details, canonicalTool, msg.Input, false)
-		}
-		if msg.Type == "tool_use" {
-			if target, summaryKind := agentInboxActivityToolTarget(msg); target != "" && details["tool_target"] == nil {
-				details["tool_target"] = target
-				details["summary_kind"] = summaryKind
-			}
+			details["tool"] = tool
 		}
 		if payload, ok := agentInboxTaskMessagePayload(event, msg, kind, details); ok && h.Bus != nil {
 			h.publishTask(protocol.EventTaskMessage, uuidToString(event.WorkspaceID), "system", "", uuidToString(event.ID), payload)
@@ -2016,14 +1987,14 @@ func agentInboxTaskMessagePayload(event db.AgentInboxEvent, msg TaskMessageReque
 		return protocol.TaskMessagePayload{}, false
 	}
 	switch kind {
-	case activityKindToolCall:
+	case "tool_call":
 		payload.Type = "tool_use"
 		payload.Tool = stringFromMap(details, "tool")
 		if payload.Tool == "" {
 			return protocol.TaskMessagePayload{}, false
 		}
 		payload.Input = msg.Input
-	case activityKindError:
+	case "error":
 		payload.Type = "error"
 		payload.Content = agentInboxActivityMessageText(msg)
 	default:
@@ -2123,37 +2094,31 @@ func cursorSubagentStartedMessage(tool string, input map[string]any) string {
 }
 
 func agentInboxActivityMessageKind(messageType string) (kind, eventType, severity string) {
-	if kind, eventType, _, ok := taskMessageCompactionActivity(messageType); ok {
-		return kind, eventType, "info"
-	}
 	switch messageType {
 	case "thinking":
 		// Provider reasoning remains diagnostic-only. Empty thinking is handled
 		// earlier as a legacy phase row, but current daemons do not send it.
-		return activityKindThinking, "runtime_thinking", "info"
+		return "thinking", "runtime_thinking", "info"
 	case "tool_use":
-		return activityKindToolCall, "tool_use", "info"
+		return "tool_call", "tool_use", "info"
 	case "tool_result":
-		return activityKindToolOutput, "tool_result", "info"
+		return "tool_output", "tool_result", "info"
 	case "error":
-		return activityKindError, "error", "error"
+		return "error", "error", "error"
 	case "log":
-		return activityKindCustom, "runtime_text", "info"
+		return "custom", "runtime_text", "info"
 	case "text":
 		// For inbox/direct runs, streaming text is not necessarily a user-visible
 		// reply: several runtimes emit wrapper logs or plan narration on this
 		// channel. Visible replies get their own message_sent event on completion
 		// or transport send, so keep raw runtime text diagnostic-only.
-		return activityKindCustom, "runtime_text", "info"
+		return "custom", "runtime_text", "info"
 	default:
-		return activityKindCustom, "runtime_message", "info"
+		return "custom", "runtime_message", "info"
 	}
 }
 
 func agentInboxActivityMessageText(msg TaskMessageRequest) string {
-	if _, _, message, ok := taskMessageCompactionActivity(msg.Type); ok {
-		return message
-	}
 	switch msg.Type {
 	case "thinking", "text", "error", "log":
 		text := strings.TrimSpace(msg.Content)
@@ -2166,17 +2131,6 @@ func agentInboxActivityMessageText(msg TaskMessageRequest) string {
 	default:
 		return ""
 	}
-}
-
-func agentInboxActivityToolTarget(msg TaskMessageRequest) (string, string) {
-	if msg.Type != "tool_use" {
-		return "", ""
-	}
-	canonicalTool, known := taskMessageCanonicalToolName(msg.Tool, msg.Input)
-	if !known {
-		canonicalTool = ""
-	}
-	return agentActivitySafeToolTargetForTool(canonicalTool, msg.Input)
 }
 
 func (h *Handler) recordAgentInboxVisibleOutputActivity(ctx context.Context, event db.AgentInboxEvent, runtimeID pgtype.UUID, payload protocol.ChatDonePayload) {

@@ -133,7 +133,9 @@ export function ExecutionOverlayRow({
         onClick={activate}
       >
         {agent.avatarUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
+          // Plain <img> on purpose: packages/views is framework-agnostic and
+          // must not reference next/image (or Next-only lint rules — the
+          // @next/next plugin does not exist in this package's eslint config).
           <img src={agent.avatarUrl} alt="" className="size-8 shrink-0 rounded-lg object-cover" />
         ) : (
           <span

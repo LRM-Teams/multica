@@ -67,6 +67,23 @@ export const agentActivityEventsKeys = {
   all: (agentId: string) => ["agent-activity-events", agentId] as const,
 };
 
+// Runner Activity is server-projected presentation keyed by both Workspace and
+// Agent. It intentionally does not share a cache with the historical raw fact
+// timeline, so the hard cut can delete the latter without a compatibility path.
+export const runnerActivityKeys = {
+  all: (wsId: string, agentId: string) =>
+    ["workspaces", wsId, "runner-activity", agentId] as const,
+};
+
+export function runnerActivityOptions(wsId: string, agentId: string) {
+  return queryOptions({
+    queryKey: runnerActivityKeys.all(wsId, agentId),
+    queryFn: () => api.getRunnerActivity(agentId),
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+  });
+}
+
 export function agentActivityEventsOptions(agentId: string) {
   return infiniteQueryOptions({
     queryKey: agentActivityEventsKeys.all(agentId),

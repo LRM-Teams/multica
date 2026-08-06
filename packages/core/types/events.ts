@@ -21,6 +21,7 @@ export type WSEventType =
   | "comment:resolved"
   | "comment:unresolved"
   | "agent:status"
+  | "agent:activity"
   | "agent:created"
   | "agent:archived"
   | "agent:restored"
@@ -371,6 +372,35 @@ export interface AgentActivityEventsPage {
   next_cursor?: string | null;
 }
 
+// The Workspace Runner Activity read-model is intentionally separate from the
+// historical agent_activity:event fact stream. It is already presentation-safe:
+// callers must display these fields as supplied and never infer runtime state.
+export interface RunnerActivitySummary {
+  label: string;
+  tone: string;
+  visibility: string;
+}
+
+export interface RunnerActivityTimelineRow {
+  id: string;
+  occurred_at: string;
+  title: string;
+  subtext?: string;
+  tone: string;
+  body_kind: string;
+  body?: string;
+}
+
+export interface RunnerActivityResponse {
+  summary: RunnerActivitySummary | null;
+  timeline: RunnerActivityTimelineRow[];
+}
+
+export interface RunnerActivityRealtimePayload {
+  agent_id: string;
+  activity: RunnerActivityResponse;
+}
+
 export interface TaskQueuedPayload {
   task_id: string;
   agent_id: string;
@@ -596,6 +626,7 @@ export interface WSEventPayloadMap {
   "task:failed": TaskFailedPayload;
   "task:message": TaskMessagePayload;
   "agent_activity:event": AgentActivityEventRealtimePayload;
+  "agent:activity": RunnerActivityRealtimePayload;
   "agent_reminder:changed": AgentReminderChangedPayload;
   "task:cancelled": TaskCancelledPayload;
   "task:progress": unknown;

@@ -62,6 +62,7 @@ import type {
   UpdateAgentFileContentResponse,
   AgentTask,
   AgentActivityEventsPage,
+  RunnerActivityResponse,
   AgentHealthResponse,
   AgentActivityBucket,
   AgentRunCount,
@@ -297,6 +298,8 @@ import {
   AgentFileContentResponseSchema,
   AgentFilesResponseSchema,
   AgentHealthResponseSchema,
+  RunnerActivityResponseSchema,
+  EMPTY_RUNNER_ACTIVITY_RESPONSE,
   AgentRuntimeListSchema,
   ChannelMessagesPageSchema,
   ChannelThreadMessagesPageSchema,
@@ -1408,6 +1411,16 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/agents/${id}/health`);
     return parseWithFallback(raw, AgentHealthResponseSchema, EMPTY_AGENT_HEALTH_RESPONSE, {
       endpoint: "GET /api/agents/:id/health",
+    });
+  }
+
+  // Dormant until the coordinated Runner Activity cut. This is a
+  // presentation-only boundary: clients receive no provider/runtime facts and
+  // must not apply a semantic fallback of their own.
+  async getRunnerActivity(id: string): Promise<RunnerActivityResponse> {
+    const raw = await this.fetch<unknown>(`/api/agents/${id}/runner-activity`);
+    return parseWithFallback(raw, RunnerActivityResponseSchema, EMPTY_RUNNER_ACTIVITY_RESPONSE, {
+      endpoint: "GET /api/agents/:id/runner-activity",
     });
   }
 

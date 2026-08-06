@@ -36,6 +36,7 @@ import {
   EMPTY_SANDBOX_NODE_TEMPLATES_RESPONSE,
   VoiceTranscriptResponseSchema,
   EMPTY_VOICE_TRANSCRIPT_RESPONSE,
+  RunnerActivityResponseSchema,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
 
@@ -73,6 +74,23 @@ describe("VoiceTranscriptResponseSchema", () => {
         { endpoint: "POST /api/voice/asr" },
       ),
     ).toEqual(EMPTY_VOICE_TRANSCRIPT_RESPONSE);
+  });
+});
+
+describe("RunnerActivityResponseSchema", () => {
+  it("preserves unknown server presentation values without creating a client semantic branch", () => {
+    const parsed = RunnerActivityResponseSchema.parse({
+      summary: { label: "Future state", tone: "future-tone", visibility: "visible" },
+      timeline: [{
+        id: "row-1",
+        occurred_at: "2026-08-06T00:00:00Z",
+        title: "Future row",
+        tone: "future-tone",
+        body_kind: "future-body",
+      }],
+    });
+    expect(parsed.summary?.label).toBe("Future state");
+    expect(parsed.timeline[0]).toMatchObject({ title: "Future row", body_kind: "future-body" });
   });
 });
 

@@ -7,6 +7,7 @@ export * from "./use-agent-health";
 export * from "./agent-lifecycle";
 export * from "./use-agent-lifecycle";
 export * from "./use-agent-activity";
+export * from "./use-runner-activity";
 export * from "./use-workspace-presence-prefetch";
 export * from "./constants";
 export * from "./use-workspace-agent-availability";

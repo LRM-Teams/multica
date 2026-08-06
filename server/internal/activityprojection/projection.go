@@ -25,6 +25,19 @@ type TimelineRow struct {
 	Body     string `json:"body,omitempty"`
 }
 
+// TimelineRowFromSnapshot is the server-owned presentation for the current
+// replaceable observation. It deliberately has no body: compact and header
+// surfaces must never receive provider detail merely because no narrative
+// Entry accompanied the observation.
+func TimelineRowFromSnapshot(snapshot protocol.AgentActivitySnapshot) TimelineRow {
+	summary := ProjectSummary(snapshot)
+	return TimelineRow{
+		Title:    summary.Label,
+		Tone:     summary.Tone,
+		BodyKind: "none",
+	}
+}
+
 // ProjectSummary deliberately never reads command text, paths, tool input,
 // prompts, stderr, or Entry bodies. Those facts cannot reach compact surfaces.
 func ProjectSummary(snapshot protocol.AgentActivitySnapshot) Summary {

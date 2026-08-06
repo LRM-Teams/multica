@@ -5,13 +5,38 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/activityprojection"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+const runnerActivityTimelineLimit = 100
+
+// RunnerActivityResponse is deliberately a presentation boundary. Browser and
+// desktop callers receive labels, tones and bounded narrative bodies, never a
+// Runner fact envelope or provider-specific detail.
+type RunnerActivityResponse struct {
+	Summary  *activityprojection.Summary         `json:"summary"`
+	Timeline []RunnerActivityTimelineResponseRow `json:"timeline"`
+}
+
+type RunnerActivityTimelineResponseRow struct {
+	ID         string `json:"id"`
+	OccurredAt string `json:"occurred_at"`
+	activityprojection.TimelineRow
+}
+
+type RunnerActivityRealtimePayload struct {
+	AgentID  string                 `json:"agent_id"`
+	Activity RunnerActivityResponse `json:"activity"`
+}
 
 // HandleWorkspaceRunnerFrame is dormant until the hard cut. The daemonws hub
 // invokes it only for a current ready Runner; this method adds durable Agent,
@@ -131,7 +156,119 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 			return fmt.Errorf("insert Runner Activity entry: %w", err)
 		}
 	}
+	// This publish remains inert until the coordinated cutover: no current
+	// Runner emits these frames. Keeping the projection at the server boundary
+	// ensures clients never need a runtime/provider semantic fallback once it is
+	// activated.
+	if h.Bus != nil {
+		projected, err := h.runnerActivityPresentation(ctx, workspaceID, agentID)
+		if err != nil {
+			return err
+		}
+		h.publish(protocol.EventAgentActivity, identity.WorkspaceID, "system", "", RunnerActivityRealtimePayload{
+			AgentID:  snapshot.AgentID,
+			Activity: projected,
+		})
+	}
 	return nil
+}
+
+// GetRunnerActivity is the dormant Workspace-authorized presentation API used
+// by the coordinated Activity cut. It intentionally has a distinct path from
+// the historical /activity endpoints so no compatibility translation or dual
+// representation is needed at activation.
+func (h *Handler) GetRunnerActivity(w http.ResponseWriter, r *http.Request) {
+	workspaceID, agentID, ok := h.prepareRunnerActivityRead(w, r)
+	if !ok {
+		return
+	}
+	response, err := h.runnerActivityPresentation(r.Context(), workspaceID, agentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load runner activity")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) prepareRunnerActivityRead(w http.ResponseWriter, r *http.Request) (pgtype.UUID, pgtype.UUID, bool) {
+	if _, ok := requireUserID(w, r); !ok {
+		return pgtype.UUID{}, pgtype.UUID{}, false
+	}
+	workspaceIDText := ctxWorkspaceID(r.Context())
+	if workspaceIDText == "" {
+		workspaceIDText = h.resolveWorkspaceID(r)
+	}
+	if workspaceIDText == "" {
+		writeError(w, http.StatusBadRequest, "workspace_id is required")
+		return pgtype.UUID{}, pgtype.UUID{}, false
+	}
+	// loadAgentForUser preserves the public object contract: an agent outside
+	// this Workspace is indistinguishable from one that does not exist (404).
+	agent, ok := h.loadAgentForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return pgtype.UUID{}, pgtype.UUID{}, false
+	}
+	if _, ok := h.workspaceMember(w, r, workspaceIDText); !ok {
+		return pgtype.UUID{}, pgtype.UUID{}, false
+	}
+	workspaceID, err := util.ParseUUID(workspaceIDText)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid workspace_id")
+		return pgtype.UUID{}, pgtype.UUID{}, false
+	}
+	return workspaceID, agent.ID, true
+}
+
+func (h *Handler) runnerActivityPresentation(ctx context.Context, workspaceID, agentID pgtype.UUID) (RunnerActivityResponse, error) {
+	response := RunnerActivityResponse{Timeline: []RunnerActivityTimelineResponseRow{}}
+	var snapshot protocol.AgentActivitySnapshot
+	var observedAt pgtype.Timestamptz
+	err := h.DB.QueryRow(ctx, `
+		SELECT daemon_instance_id, launch_id, client_sequence, producer_fact_id,
+			observed_at, activity_kind, detail_kind, probe_id, process_instance_id
+		FROM agent_activity_snapshot
+		WHERE workspace_id = $1 AND agent_id = $2`, workspaceID, agentID).Scan(
+		&snapshot.DaemonInstanceID, &snapshot.LaunchID, &snapshot.ClientSequence, &snapshot.ProducerFactID,
+		&observedAt, &snapshot.ActivityKind, &snapshot.DetailKind, &snapshot.ProbeID, &snapshot.ProcessInstanceID,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return response, nil
+	}
+	if err != nil {
+		return RunnerActivityResponse{}, fmt.Errorf("load Runner Activity snapshot: %w", err)
+	}
+	snapshot.AgentID = util.UUIDToString(agentID)
+	snapshot.ObservedAt = observedAt.Time
+	summary := activityprojection.ProjectSummary(snapshot)
+	response.Summary = &summary
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, entry_kind, entry_body, observed_at
+		FROM agent_activity_entry
+		WHERE workspace_id = $1 AND agent_id = $2
+		ORDER BY observed_at DESC, id DESC
+		LIMIT $3`, workspaceID, agentID, runnerActivityTimelineLimit)
+	if err != nil {
+		return RunnerActivityResponse{}, fmt.Errorf("load Runner Activity timeline: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id pgtype.UUID
+		var entry protocol.AgentActivityEntry
+		var occurredAt pgtype.Timestamptz
+		if err := rows.Scan(&id, &entry.Kind, &entry.Body, &occurredAt); err != nil {
+			return RunnerActivityResponse{}, fmt.Errorf("scan Runner Activity timeline: %w", err)
+		}
+		response.Timeline = append(response.Timeline, RunnerActivityTimelineResponseRow{
+			ID:          util.UUIDToString(id),
+			OccurredAt:  occurredAt.Time.UTC().Format(time.RFC3339Nano),
+			TimelineRow: activityprojection.ProjectTimelineEntry(entry, summary),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return RunnerActivityResponse{}, fmt.Errorf("iterate Runner Activity timeline: %w", err)
+	}
+	return response, nil
 }
 
 func (h *Handler) runnerActivityAgentScope(ctx context.Context, workspaceIDText, agentIDText string) (pgtype.UUID, pgtype.UUID, pgtype.UUID, error) {

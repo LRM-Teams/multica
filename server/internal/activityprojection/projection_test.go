@@ -40,6 +40,16 @@ func TestProjectSummaryCannotLeakSensitiveProviderDetail(t *testing.T) {
 	}
 }
 
+func TestTimelineRowFromSnapshotHasNoProviderBody(t *testing.T) {
+	row := TimelineRowFromSnapshot(protocol.AgentActivitySnapshot{
+		ActivityKind: protocol.ActivityKindWorking,
+		DetailKind:   "running_command",
+	})
+	if row.Title != "Running command..." || row.BodyKind != "none" || row.Body != "" || row.Subtext != "" {
+		t.Fatalf("snapshot row = %+v, want bounded presentation without provider detail", row)
+	}
+}
+
 func TestProjectTimelineEntryUsesGenericFallbackAndBoundsText(t *testing.T) {
 	unknown := ProjectTimelineEntry(protocol.AgentActivityEntry{Kind: "future_kind", Body: []byte(`{"secret":"must not render"}`)}, Summary{Label: "Working...", Tone: "info"})
 	if unknown.Body != "" || unknown.BodyKind != "generic" {

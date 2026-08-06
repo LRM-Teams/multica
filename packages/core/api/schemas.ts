@@ -1891,6 +1891,29 @@ export const EMPTY_AGENT_HEALTH_RESPONSE: AgentHealthResponse = {
   health_events: [],
 };
 
+const RunnerActivitySummarySchema = z.object({
+  label: z.string().default(""),
+  tone: z.string().default("muted"),
+  visibility: z.string().default("hidden"),
+}).loose();
+
+const RunnerActivityTimelineRowSchema = z.object({
+  id: z.string().default(""),
+  occurred_at: z.string().default(""),
+  title: z.string().default("Working..."),
+  subtext: z.string().optional(),
+  tone: z.string().default("muted"),
+  body_kind: z.string().default("generic"),
+  body: z.string().optional(),
+}).loose();
+
+export const RunnerActivityResponseSchema = z.object({
+  summary: RunnerActivitySummarySchema.nullable().default(null),
+  timeline: z.array(RunnerActivityTimelineRowSchema).default([]),
+}).loose();
+
+export const EMPTY_RUNNER_ACTIVITY_RESPONSE = { summary: null, timeline: [] };
+
 const AgentFileNodeSchema = z.object({
   path: z.string(),
   is_dir: z.boolean().default(false),

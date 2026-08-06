@@ -95,7 +95,10 @@ type openLifecycleTransition struct {
 }
 
 func newAgentProcessManager(processCap int, now func() time.Time, onTransition func(agentLifecycleTransition)) *agentProcessManager {
-	if processCap < 1 {
+	if processCap == 0 {
+		processCap = int(^uint(0) >> 1)
+	}
+	if processCap < 0 {
 		processCap = 1
 	}
 	if now == nil {

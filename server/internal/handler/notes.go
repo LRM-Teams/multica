@@ -3,8 +3,12 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -51,6 +55,10 @@ type noteUpdateRequest struct {
 
 type noteShareRequest struct {
 	UserIDs []string `json:"user_ids"`
+}
+
+type noteDuplicateRequest struct {
+	Title *string `json:"title"`
 }
 
 func (h *Handler) notesWorkspaceAndUser(w http.ResponseWriter, r *http.Request) (pgtype.UUID, pgtype.UUID, string, bool) {
@@ -402,6 +410,111 @@ WHERE id IN (SELECT id FROM subtree)`, page.ID, workspaceID, userID)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) DuplicateNotePage(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, _, ok := h.notesWorkspaceAndUser(w, r)
+	if !ok {
+		return
+	}
+	page, owner, ok := h.loadAccessibleNote(w, r, chi.URLParam(r, "id"), workspaceID, userID)
+	if !ok {
+		return
+	}
+	if !owner {
+		writeError(w, http.StatusForbidden, "only the owner can duplicate this note page")
+		return
+	}
+	var req noteDuplicateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	type duplicateSource struct {
+		ID       pgtype.UUID
+		ParentID pgtype.UUID
+		Title    string
+		Content  string
+		SortKey  string
+	}
+	rows, err := h.DB.Query(r.Context(), `
+WITH RECURSIVE subtree AS (
+    SELECT id, parent_id, title, content, sort_key, created_at, 0 AS depth
+    FROM note_page
+    WHERE id = $1 AND workspace_id = $2 AND owner_user_id = $3 AND deleted_at IS NULL
+  UNION ALL
+    SELECT child.id, child.parent_id, child.title, child.content, child.sort_key, child.created_at, parent.depth + 1
+    FROM note_page child
+    JOIN subtree parent ON child.parent_id = parent.id
+    WHERE child.workspace_id = $2 AND child.owner_user_id = $3 AND child.deleted_at IS NULL
+)
+SELECT id, parent_id, title, content, sort_key
+FROM subtree
+ORDER BY depth, parent_id NULLS FIRST, sort_key, created_at`, page.ID, workspaceID, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to duplicate note page")
+		return
+	}
+	defer rows.Close()
+	sources := []duplicateSource{}
+	for rows.Next() {
+		var source duplicateSource
+		if err := rows.Scan(&source.ID, &source.ParentID, &source.Title, &source.Content, &source.SortKey); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to duplicate note page")
+			return
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to duplicate note page")
+		return
+	}
+	if len(sources) == 0 {
+		writeError(w, http.StatusNotFound, "note page not found")
+		return
+	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to duplicate note page")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	newIDs := map[string]pgtype.UUID{}
+	copied := make([]NotePageResponse, 0, len(sources))
+	for index, source := range sources {
+		parentID := page.ParentID
+		if uuidToString(source.ID) != uuidToString(page.ID) {
+			mappedParent, ok := newIDs[uuidToString(source.ParentID)]
+			if !ok {
+				writeError(w, http.StatusInternalServerError, "failed to duplicate note page")
+				return
+			}
+			parentID = mappedParent
+		}
+		title := source.Title
+		if uuidToString(source.ID) == uuidToString(page.ID) && req.Title != nil {
+			title = normalizeNoteTitle(*req.Title)
+		}
+		sortKey := source.SortKey
+		if uuidToString(source.ID) == uuidToString(page.ID) {
+			sortKey = fmt.Sprintf("%020d", time.Now().UnixMicro()+int64(index))
+		}
+		inserted, err := scanNotePage(tx.QueryRow(r.Context(), `
+INSERT INTO note_page (workspace_id, parent_id, owner_user_id, title, content, sort_key, created_by, updated_by)
+VALUES ($1, $2, $3, $4, $5, $6, $3, $3)
+RETURNING id, workspace_id, parent_id, owner_user_id, title, content, sort_key, created_at, updated_at, deleted_at`, workspaceID, parentID, userID, title, source.Content, sortKey))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to duplicate note page")
+			return
+		}
+		newIDs[uuidToString(source.ID)] = inserted.ID
+		copied = append(copied, notePageToResponse(inserted, userID, []string{}))
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to duplicate note page")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"pages": copied})
 }
 
 func (h *Handler) RestoreNotePage(w http.ResponseWriter, r *http.Request) {

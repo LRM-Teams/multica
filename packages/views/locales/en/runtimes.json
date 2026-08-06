@@ -176,7 +176,7 @@
       "upgrade": "Upgrade",
       "upgrade_to": "Upgrade to {{version}}",
       "updating": "Updating…",
-      "upgrade_progress_pending": "Starting update…",
+      "upgrade_progress_pending": "Waiting for daemon to accept update…",
       "upgrade_progress_running": "Downloading and installing…",
       "upgrade_progress_applying": "Restarting to switch version…",
       "upgrade_failed_prefix": "Upgrade failed: ",

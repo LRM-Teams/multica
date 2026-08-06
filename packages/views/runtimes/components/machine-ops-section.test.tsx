@@ -230,6 +230,7 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     );
     expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute("data-state", "active");
     expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent("0.4.0");
+	    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent("Waiting for daemon to accept update…");
   });
 
   it("keeps rollback recovery active until every sibling has attested", () => {

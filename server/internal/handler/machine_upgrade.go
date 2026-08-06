@@ -17,6 +17,11 @@ import (
 // a second runtime-owned request model.
 type MachineUpgradePhase string
 
+// legacyMachineUpgradeAcceptanceMarker is stored in the existing acceptance
+// field only for daemons that predate machine generations. It is a protocol
+// marker, not a claimed daemon generation; AttestLegacy is the only reader.
+const legacyMachineUpgradeAcceptanceMarker = "legacy_pending_update_v1"
+
 const (
 	MachineUpgradeQueued          MachineUpgradePhase = "queued"
 	MachineUpgradeStarting        MachineUpgradePhase = "starting"
@@ -71,6 +76,9 @@ type MachineUpgradeStore interface {
 	LatestForDaemon(ctx context.Context, daemonID string) (*MachineUpgrade, error)
 	LatestForDaemons(ctx context.Context, daemonIDs []string) (map[string]*MachineUpgrade, error)
 	ClaimQueued(ctx context.Context, daemonID string) (*MachineUpgrade, error)
+	ClaimQueuedLegacy(ctx context.Context, daemonID, runtimeID, sourceVersion string, runtimeIDs []string) (*MachineUpgrade, error)
+	AcceptLegacy(ctx context.Context, daemonID, id, runtimeID, resolvedTarget string) (*MachineUpgrade, error)
+	AttestLegacy(ctx context.Context, daemonID, id, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
 	Accept(ctx context.Context, daemonID, id, generation, runningVersion, resolvedTarget string, runtimeIDs []string) (*MachineUpgrade, error)
 	Attest(ctx context.Context, daemonID, id, generation, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error)
 	BeginRollback(ctx context.Context, daemonID, id, generation, errorCode, errorMessage string) (*MachineUpgrade, error)
@@ -156,6 +164,9 @@ func (s *PostgresMachineUpgradeStore) Get(ctx context.Context, daemonID, id stri
 	if s == nil || s.db == nil {
 		return nil, errors.New("machine upgrade store is not configured")
 	}
+	if err := s.expireStaleLegacy(ctx); err != nil {
+		return nil, err
+	}
 	return scanMachineUpgrade(s.db.QueryRow(ctx, machineUpgradeSelect+`
 		WHERE daemon_id = $1 AND id = $2`, strings.TrimSpace(daemonID), strings.TrimSpace(id)))
 }
@@ -163,6 +174,9 @@ func (s *PostgresMachineUpgradeStore) Get(ctx context.Context, daemonID, id stri
 func (s *PostgresMachineUpgradeStore) LatestForDaemon(ctx context.Context, daemonID string) (*MachineUpgrade, error) {
 	if s == nil || s.db == nil || strings.TrimSpace(daemonID) == "" {
 		return nil, nil
+	}
+	if err := s.expireStaleLegacy(ctx); err != nil {
+		return nil, err
 	}
 	return scanMachineUpgrade(s.db.QueryRow(ctx, machineUpgradeSelect+`
 		WHERE daemon_id = $1
@@ -174,6 +188,9 @@ func (s *PostgresMachineUpgradeStore) LatestForDaemons(ctx context.Context, daem
 	result := make(map[string]*MachineUpgrade)
 	if s == nil || s.db == nil || len(daemonIDs) == 0 {
 		return result, nil
+	}
+	if err := s.expireStaleLegacy(ctx); err != nil {
+		return nil, err
 	}
 	rows, err := s.db.Query(ctx, `
 		SELECT DISTINCT ON (daemon_id) `+machineUpgradeColumns+`
@@ -197,6 +214,36 @@ func (s *PostgresMachineUpgradeStore) LatestForDaemons(ctx context.Context, daem
 	return result, nil
 }
 
+// expireStaleLegacy makes a lost old-protocol receipt, execution, or
+// successor registration visibly terminal. New-protocol operations have their
+// own phase/recovery proof and are deliberately not touched here.
+func (s *PostgresMachineUpgradeStore) expireStaleLegacy(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("machine upgrade store is not configured")
+	}
+	_, err := s.db.Exec(ctx, `
+		UPDATE machine_upgrade
+		SET phase = 'timeout', result = 'timeout', error_code = 'legacy_update_timeout',
+			error_message = CASE phase
+				WHEN 'starting' THEN 'daemon did not confirm update receipt within 120 seconds'
+				WHEN 'staging' THEN 'daemon did not complete the update within 150 seconds'
+				WHEN 'verifying' THEN 'daemon did not complete the update within 150 seconds'
+				ELSE 'updated daemon did not re-register within 20 minutes'
+			END,
+			completed_at = now(), updated_at = now()
+		WHERE accepted_generation = $1
+		  AND phase IN ('starting', 'staging', 'verifying', 'handoff', 'converging')
+		  AND (
+			(phase = 'starting' AND updated_at < now() - interval '120 seconds')
+			OR (phase IN ('staging', 'verifying') AND updated_at < now() - interval '150 seconds')
+			OR (phase IN ('handoff', 'converging') AND updated_at < now() - interval '20 minutes')
+		  )`, legacyMachineUpgradeAcceptanceMarker)
+	if err != nil {
+		return fmt.Errorf("expire stale legacy machine upgrades: %w", err)
+	}
+	return nil
+}
+
 // ClaimQueued is the sibling-heartbeat arbitration point. SKIP LOCKED makes
 // concurrent provider runtime heartbeats safe: exactly one changes queued to
 // starting and receives the action, while the others observe no claim.
@@ -215,6 +262,78 @@ func (s *PostgresMachineUpgradeStore) ClaimQueued(ctx context.Context, daemonID 
 			LIMIT 1
 		)
 		RETURNING `+machineUpgradeColumns, strings.TrimSpace(daemonID)))
+}
+
+// ClaimQueuedLegacy reserves a queued daemon operation for an installed
+// daemon that only understands PendingUpdate. It captures the exact sibling
+// set before the old process restarts; later success still requires every one
+// of those rows to re-register at the resolved target.
+func (s *PostgresMachineUpgradeStore) ClaimQueuedLegacy(ctx context.Context, daemonID, runtimeID, sourceVersion string, runtimeIDs []string) (*MachineUpgrade, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("machine upgrade store is not configured")
+	}
+	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
+	if strings.TrimSpace(runtimeID) == "" || len(runtimeIDs) == 0 {
+		return nil, errMachineUpgradeAttestationRejected
+	}
+	return scanMachineUpgrade(s.db.QueryRow(ctx, `
+		UPDATE machine_upgrade AS operation
+		SET phase = 'starting', accepted_generation = '`+legacyMachineUpgradeAcceptanceMarker+`',
+			source_version = NULLIF($2, ''), accepted_runtime_ids = $3::text[]::uuid[], updated_at = now()
+		WHERE operation.id = (
+			SELECT candidate.id FROM machine_upgrade AS candidate
+			WHERE candidate.daemon_id = $1 AND candidate.phase = 'queued'
+			ORDER BY candidate.created_at ASC, candidate.id ASC
+			FOR UPDATE SKIP LOCKED
+			LIMIT 1
+		)
+		RETURNING `+machineUpgradeColumns,
+		strings.TrimSpace(daemonID), strings.TrimSpace(sourceVersion), runtimeIDs))
+}
+
+// AcceptLegacy turns the old daemon's running report into the canonical
+// receipt. Old daemons have no machine generation, so completion is later
+// proven by the captured sibling set re-registering at the resolved version.
+func (s *PostgresMachineUpgradeStore) AcceptLegacy(ctx context.Context, daemonID, id, runtimeID, resolvedTarget string) (*MachineUpgrade, error) {
+	return scanMachineUpgrade(s.db.QueryRow(ctx, `
+		UPDATE machine_upgrade
+		SET phase = 'staging', accepted_at = now(), resolved_target = NULLIF($4, ''), updated_at = now()
+		WHERE daemon_id = $1 AND id = $2 AND phase = 'starting'
+		  AND accepted_generation = '`+legacyMachineUpgradeAcceptanceMarker+`'
+		  AND accepted_runtime_ids @> ARRAY[$3::uuid]
+		RETURNING `+machineUpgradeColumns,
+		strings.TrimSpace(daemonID), strings.TrimSpace(id), strings.TrimSpace(runtimeID), strings.TrimSpace(resolvedTarget)))
+}
+
+// AttestLegacy is the bridge completion proof for daemons predating machine
+// generations. It is intentionally narrower than Attest: only a previously
+// accepted legacy carrier, its captured sibling set, and the resolved target
+// can complete the operation.
+func (s *PostgresMachineUpgradeStore) AttestLegacy(ctx context.Context, daemonID, id, runtimeID, cliVersion string, runtimeIDs []string) (*MachineUpgrade, error) {
+	op, err := s.Get(ctx, daemonID, id)
+	if err != nil || op == nil {
+		return op, err
+	}
+	runtimeIDs = normalizedMachineRuntimeIDs(runtimeIDs)
+	if op.AcceptedGeneration == nil || *op.AcceptedGeneration != legacyMachineUpgradeAcceptanceMarker || (op.Phase != MachineUpgradeHandoff && op.Phase != MachineUpgradeConverging) ||
+		op.AcceptedAt == nil || op.ResolvedTarget == nil || !versionsMatch(op.ResolvedTarget, stringPointer(strings.TrimSpace(cliVersion))) ||
+		!sameMachineRuntimeSet(op.AcceptedRuntimeIDs, runtimeIDs) || !containsMachineRuntimeID(op.AcceptedRuntimeIDs, runtimeID) {
+		return nil, errMachineUpgradeAttestationRejected
+	}
+	return scanMachineUpgrade(s.db.QueryRow(ctx, `
+		UPDATE machine_upgrade
+		SET attested_runtime_ids = ARRAY(SELECT DISTINCT unnest(attested_runtime_ids || ARRAY[$3::uuid])),
+			phase = CASE WHEN accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(attested_runtime_ids || ARRAY[$3::uuid]))
+				THEN 'completed' ELSE 'converging' END,
+			result = CASE WHEN accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(attested_runtime_ids || ARRAY[$3::uuid]))
+				THEN 'completed' ELSE NULL END,
+			completed_at = CASE WHEN accepted_runtime_ids <@ ARRAY(SELECT DISTINCT unnest(attested_runtime_ids || ARRAY[$3::uuid]))
+				THEN now() ELSE NULL END,
+			updated_at = now()
+		WHERE daemon_id = $1 AND id = $2 AND accepted_generation = '`+legacyMachineUpgradeAcceptanceMarker+`'
+		  AND phase IN ('handoff', 'converging')
+		RETURNING `+machineUpgradeColumns,
+		strings.TrimSpace(daemonID), strings.TrimSpace(id), strings.TrimSpace(runtimeID)))
 }
 
 // Accept captures one daemon process generation and the complete sibling
@@ -296,6 +415,14 @@ func (s *PostgresMachineUpgradeStore) Progress(ctx context.Context, daemonID, id
 		return scanMachineUpgrade(s.db.QueryRow(ctx, `
 			UPDATE machine_upgrade
 			SET phase = 'failed', result = 'failed', error_code = NULLIF($3, ''),
+				error_message = NULLIF($4, ''), completed_at = now(), updated_at = now()
+			WHERE daemon_id = $1 AND id = $2
+			  AND phase IN ('starting', 'staging', 'verifying', 'handoff', 'converging')
+			RETURNING `+machineUpgradeColumns, daemonID, id, strings.TrimSpace(errorCode), strings.TrimSpace(errorMessage)))
+	case MachineUpgradeTimeout:
+		return scanMachineUpgrade(s.db.QueryRow(ctx, `
+			UPDATE machine_upgrade
+			SET phase = 'timeout', result = 'timeout', error_code = NULLIF($3, ''),
 				error_message = NULLIF($4, ''), completed_at = now(), updated_at = now()
 			WHERE daemon_id = $1 AND id = $2
 			  AND phase IN ('starting', 'staging', 'verifying', 'handoff', 'converging')

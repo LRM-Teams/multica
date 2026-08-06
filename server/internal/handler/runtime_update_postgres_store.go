@@ -29,6 +29,17 @@ func NewPostgresUpdateStore(db updatePostgresDB) *PostgresUpdateStore {
 }
 
 func (s *PostgresUpdateStore) Create(ctx context.Context, runtimeID, targetVersion string) (*UpdateRequest, error) {
+	return s.create(ctx, randomID(), runtimeID, targetVersion)
+}
+
+// CreateWithID creates an old PendingUpdate carrier under the canonical
+// Machine Upgrade ID. The two tables remain independently durable, but their
+// shared ID gives ReportUpdateResult an unambiguous, authenticated bridge.
+func (s *PostgresUpdateStore) CreateWithID(ctx context.Context, id, runtimeID, targetVersion string) (*UpdateRequest, error) {
+	return s.create(ctx, id, runtimeID, targetVersion)
+}
+
+func (s *PostgresUpdateStore) create(ctx context.Context, id, runtimeID, targetVersion string) (*UpdateRequest, error) {
 	if err := s.requireDB(); err != nil {
 		return nil, err
 	}
@@ -40,6 +51,17 @@ func (s *PostgresUpdateStore) Create(ctx context.Context, runtimeID, targetVersi
 
 	if err := s.expireStale(ctx, tx, "runtime_id = $4", runtimeID); err != nil {
 		return nil, err
+	}
+	if existing, err := scanPostgresUpdate(tx.QueryRow(ctx, postgresUpdateSelect+` WHERE id = $1`, id)); err != nil {
+		return nil, fmt.Errorf("load daemon runtime update by ID: %w", err)
+	} else if existing != nil {
+		if existing.RuntimeID == runtimeID && existing.TargetVersion == targetVersion {
+			if err := tx.Commit(ctx); err != nil {
+				return nil, fmt.Errorf("commit replay daemon runtime update: %w", err)
+			}
+			return existing, nil
+		}
+		return nil, &updateError{msg: "update ID is already bound to another runtime update"}
 	}
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM daemon_runtime_update
@@ -67,7 +89,7 @@ func (s *PostgresUpdateStore) Create(ctx context.Context, runtimeID, targetVersi
 			run_started_at,
 			created_at,
 			updated_at
-	`, randomID(), runtimeID, targetVersion))
+	`, id, runtimeID, targetVersion))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == activeRuntimeUpdateConstraint {

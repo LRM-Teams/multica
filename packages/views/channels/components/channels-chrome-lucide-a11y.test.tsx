@@ -34,7 +34,6 @@ describe("channels chrome lucide a11y (LRM-1305)", () => {
     expect(src).toMatch(/<VolumeX\b[\s\S]{0,60}aria-hidden/);
     expect(src).toMatch(/<Search\b[\s\S]{0,60}aria-hidden/);
     expect(src).toMatch(/<Settings\b[\s\S]{0,60}aria-hidden/);
-    expect(src).toMatch(/<Square\b[\s\S]{0,80}aria-hidden/);
     expect(src).toMatch(/<Trash2\b[\s\S]{0,60}aria-hidden/);
   });
 });

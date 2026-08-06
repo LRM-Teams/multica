@@ -77,3 +77,24 @@ func TestRunnerActivityProbeResponseMustMatchPendingProbe(t *testing.T) {
 		t.Fatalf("matched probe was not cleared: %d", probes)
 	}
 }
+
+func TestRunnerActivityRejectsLateProbeAfterLaunchWasFenced(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "late-probe-"+uuid.NewString()[:8], nil)
+	launchID := "launch-" + uuid.NewString()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_activity_launch (workspace_id, agent_id, runtime_id, daemon_id, daemon_instance_id, launch_id, status)
+		VALUES ($1, $2, $3, 'daemon-1', 'instance-1', $4, 'inactive')`, testWorkspaceID, agentID, handlerTestRuntimeID(t), launchID); err != nil {
+		t.Fatal(err)
+	}
+	err := testHandler.recordRunnerActivity(ctx, daemonws.ClientIdentity{DaemonID: "daemon-1", WorkspaceID: testWorkspaceID}, "instance-1", protocol.AgentActivityPayload{Snapshot: protocol.AgentActivitySnapshot{
+		AgentID: agentID, LaunchID: launchID, DaemonInstanceID: "instance-1", ClientSequence: 1, ProducerFactID: "late-fact",
+		ObservedAt: time.Now().UTC(), ActivityKind: protocol.ActivityKindWorking, ProbeID: "expired-probe",
+	}})
+	if err == nil {
+		t.Fatal("late probe response changed an inactive launch")
+	}
+}

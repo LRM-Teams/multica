@@ -239,6 +239,17 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://multica:multica@localhost:55432/multica?sslmode=disable
+      # Wires up internal/researchrun's real-PostgreSQL suite (55 guarded tests
+      # across 14 files). Without this the whole Research Run persistence
+      # evidence base — state machine triggers, dispatch outbox, attempt leases,
+      # reconcile fencing, execution circuits, target repairs — skipped in CI and
+      # only ever ran on a developer's machine.
+      #
+      # It gets its own database on purpose: the suite replays migration
+      # down/up, so a mid-test rollback must not leave the shared schema broken
+      # for the packages that run after it. Two recorded incidents came from
+      # `migrate down` reaching a shared database.
+      TEST_DATABASE_URL: postgres://multica:multica@localhost:55432/multica_research?sslmode=disable
       # Wires up the RedisLocalSkill*_test.go suite. Distinct from REDIS_URL
       # (which would flip the server binary itself onto the Redis-backed
       # realtime relay + request stores); the tests talk to this Redis
@@ -287,6 +298,16 @@ jobs:
 
       - name: Run migrations
         run: cd server && go run ./cmd/migrate up
+
+      # Isolated database for internal/researchrun. Its migration down/up
+      # replays must not touch the schema the other integration packages share.
+      - name: Prepare isolated research integration database
+        env:
+          PGPASSWORD: multica
+        run: |
+          psql -h localhost -p 55432 -U multica -d postgres -v ON_ERROR_STOP=1 \
+            -c 'CREATE DATABASE multica_research;'
+          cd server && DATABASE_URL="$TEST_DATABASE_URL" go run ./cmd/migrate up
 
       - name: Test
         # Integration packages share this job's Postgres service. Run packages

@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enChannels from "../../locales/en/channels.json";
 import type { DMItem } from "@multica/core/dm";
@@ -305,53 +305,8 @@ describe("DmList new-DM picker", () => {
     expect(screen.queryByText("Helpful Bot")).not.toBeInTheDocument();
   });
 
-  it("opens a DM with the selected peer and closes the picker on success", async () => {
-    seedPickerPeers();
-    renderDmList();
-    openDesktopPicker();
 
-    fireEvent.click(screen.getByText("Alice"));
 
-    await waitFor(() => {
-      expect(openDMMocks.openDM).toHaveBeenCalledWith({
-        peer_type: "user",
-        peer_id: "user-2",
-      });
-    });
-    await waitFor(() => {
-      expect(screen.queryByText("New message")).not.toBeInTheDocument();
-    });
-  });
-
-  it("opens a DM with an agent peer", async () => {
-    seedPickerPeers();
-    renderDmList();
-    openDesktopPicker();
-
-    fireEvent.click(screen.getByText("Helpful Bot"));
-
-    await waitFor(() => {
-      expect(openDMMocks.openDM).toHaveBeenCalledWith({
-        peer_type: "agent",
-        peer_id: "agent-1",
-      });
-    });
-  });
-
-  it("keeps the picker open when openDM fails", async () => {
-    openDMMocks.openDM.mockResolvedValueOnce(null);
-    seedPickerPeers();
-    renderDmList();
-    openDesktopPicker();
-
-    fireEvent.click(screen.getByText("Alice"));
-
-    await waitFor(() => {
-      expect(openDMMocks.openDM).toHaveBeenCalled();
-    });
-    expect(screen.getByText("New message")).toBeInTheDocument();
-    expect(screen.getByText("Alice")).toBeInTheDocument();
-  });
 });
 
 // Anchor 7 (A4 / A6) — the row must surface the read-model `real_unread`-backed

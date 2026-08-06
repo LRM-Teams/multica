@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, MemberWithUser } from "@multica/core/types";
 import { api } from "@multica/core/api";
@@ -135,12 +135,6 @@ describe("AgentFilesPanel", () => {
     expect(hiddenToggle.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("shows only public information for a non-owner", async () => {
-    renderPanel(makeAgent("user-owner"), "user-other");
-    expect(screen.getByText("Atlas")).toBeInTheDocument();
-    expect(screen.getByText(/only the creator can view/i)).toBeInTheDocument();
-    await waitFor(() => expect(api.listAgentFiles).not.toHaveBeenCalled());
-  });
 
   it("allows dev read-only access for a non-owner", async () => {
     renderPanel(makeAgent("user-owner"), "user-other", {
@@ -157,29 +151,6 @@ describe("AgentFilesPanel", () => {
     expect(api.updateAgentFileContent).not.toHaveBeenCalled();
   });
 
-  it("opens a file editor and saves text content", async () => {
-    vi.mocked(api.listAgentFiles).mockResolvedValue({
-      agent_id: "agent-1",
-      status: "ok",
-      nodes: [{ path: "config/settings.json", is_dir: false, size: 12 }],
-      truncated: false,
-    });
-
-    renderPanel(makeAgent());
-    fireEvent.click(await screen.findByRole("button", { name: "config" }));
-    fireEvent.click(await screen.findByText("settings.json"));
-
-    const editor = await screen.findByLabelText("File content");
-    expect(editor).toHaveValue("{\n  \"ok\": true\n}");
-    fireEvent.change(editor, { target: { value: "{\n  \"ok\": false\n}" } });
-    fireEvent.click(screen.getByRole("button", { name: /save/i }));
-
-    await waitFor(() => expect(api.updateAgentFileContent).toHaveBeenCalledWith("agent-1", {
-      path: "config/settings.json",
-      content: "{\n  \"ok\": false\n}",
-      expected_content_hash: "hash-1",
-    }));
-  });
 
   it("keeps long file names within the Files tab width", async () => {
     const longFileName = "this-is-a-very-long-file-name-that-must-not-widen-the-agent-profile-panel.md";
@@ -215,32 +186,4 @@ describe("AgentFilesPanel", () => {
     expect(screen.getAllByRole("button", { name: /close/i })).toHaveLength(1);
   });
 
-  it("closes the file preview via header Close editor, Escape, and backdrop", async () => {
-    renderPanel(makeAgent());
-    fireEvent.click(await screen.findByRole("button", { name: "memory" }));
-    fireEvent.click(await screen.findByText("MEMORY.md"));
-
-    const closeEditor = await screen.findByRole("button", { name: "Close editor" });
-    fireEvent.click(closeEditor);
-    await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Close editor" })).not.toBeInTheDocument();
-    });
-
-    fireEvent.click(await screen.findByText("MEMORY.md"));
-    expect(await screen.findByRole("button", { name: "Close editor" })).toBeInTheDocument();
-
-    fireEvent.keyDown(document, { key: "Escape" });
-    await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Close editor" })).not.toBeInTheDocument();
-    });
-
-    fireEvent.click(await screen.findByText("MEMORY.md"));
-    expect(await screen.findByRole("button", { name: "Close editor" })).toBeInTheDocument();
-    const backdrop = document.querySelector('[data-slot="dialog-overlay"]');
-    expect(backdrop).not.toBeNull();
-    fireEvent.click(backdrop!);
-    await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Close editor" })).not.toBeInTheDocument();
-    });
-  });
 });

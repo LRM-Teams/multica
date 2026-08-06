@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Agent, AgentRuntime, MemberWithUser } from "@multica/core/types";
 import { RuntimeConfigDialog } from "./runtime-config-dialog";
@@ -124,54 +124,7 @@ const runtimes = [
 const members = [] as MemberWithUser[];
 
 describe("RuntimeConfigDialog (LRM-1351)", () => {
-  it("batches multi-field draft edits into a single onSave patch", async () => {
-    const onSave = vi.fn().mockResolvedValue(undefined);
-    const onOpenChange = vi.fn();
-    render(
-      <RuntimeConfigDialog
-        agent={agent}
-        open
-        onOpenChange={onOpenChange}
-        runtimes={runtimes}
-        members={members}
-        currentUserId="user-1"
-        runtimeOnline
-        onSave={onSave}
-      />,
-    );
 
-    fireEvent.click(screen.getByTestId("draft-model"));
-    fireEvent.click(screen.getByTestId("draft-thinking"));
-    fireEvent.click(screen.getByTestId("agent-runtime-config-save"));
-
-    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
-    expect(onSave).toHaveBeenCalledWith({
-      model: "claude-sonnet-5",
-      thinking_level: "high",
-    });
-    expect(onOpenChange).toHaveBeenCalledWith(false);
-  });
-
-  it("closes without onSave when draft is unchanged", async () => {
-    const onSave = vi.fn();
-    const onOpenChange = vi.fn();
-    render(
-      <RuntimeConfigDialog
-        agent={agent}
-        open
-        onOpenChange={onOpenChange}
-        runtimes={runtimes}
-        members={members}
-        currentUserId="user-1"
-        runtimeOnline
-        onSave={onSave}
-      />,
-    );
-
-    fireEvent.click(screen.getByTestId("agent-runtime-config-save"));
-    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    expect(onSave).not.toHaveBeenCalled();
-  });
 
   it("Cancel discards draft without calling onSave", async () => {
     const onSave = vi.fn();

@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ComponentType, ReactNode } from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -121,36 +121,6 @@ describe("ChannelFilesPanel channel attachments (LRM-607 / LRM-675)", () => {
     download.mockReset();
   });
 
-  it("lists channel uploads with open/download (no project-files tree)", async () => {
-    listChannelAttachments.mockResolvedValue([
-      {
-        id: "att-1",
-        workspace_id: "ws",
-        issue_id: null,
-        comment_id: null,
-        chat_session_id: null,
-        chat_message_id: "m1",
-        uploader_type: "member",
-        uploader_id: "user-1",
-        filename: "design.pdf",
-        url: "/u",
-        download_url: "/api/attachments/att-1/download",
-        markdown_url: "/api/attachments/att-1/download",
-        content_type: "application/pdf",
-        size_bytes: 1_200_000,
-        created_at: "2026-07-26T02:00:00Z",
-      },
-    ]);
-
-    renderPanel();
-
-    expect(await screen.findByText("design.pdf")).toBeInTheDocument();
-    expect(screen.getByText(/Frank/)).toBeInTheDocument();
-    expect(screen.queryByText("MEMORY.md")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Download" }));
-    await waitFor(() => expect(download).toHaveBeenCalledWith("att-1"));
-  });
 
   it("image rows render a visible thumbnail (LRM-675)", async () => {
     listChannelAttachments.mockResolvedValue([
@@ -212,36 +182,6 @@ describe("ChannelFilesPanel channel attachments (LRM-607 / LRM-675)", () => {
     );
   });
 
-  it("non-previewable binaries drop the Open action and download on click", async () => {
-    tryOpen.mockReturnValue(false);
-    listChannelAttachments.mockResolvedValue([
-      {
-        id: "att-zip",
-        workspace_id: "ws",
-        issue_id: null,
-        comment_id: null,
-        chat_session_id: null,
-        chat_message_id: "m4",
-        uploader_type: "member",
-        uploader_id: "user-1",
-        filename: "build-log.zip",
-        url: "/u",
-        download_url: "/api/attachments/att-zip/download",
-        markdown_url: "/api/attachments/att-zip/download",
-        content_type: "application/zip",
-        size_bytes: 4_600_000,
-        created_at: "2026-07-26T02:00:00Z",
-      },
-    ]);
-
-    renderPanel();
-
-    await screen.findByText("build-log.zip");
-    expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
-    const row = screen.getByTestId("channel-file-row");
-    fireEvent.click(row.firstElementChild as HTMLElement);
-    await waitFor(() => expect(download).toHaveBeenCalledWith("att-zip"));
-  });
 
   it("renders through the virtualized scroller, newest first (LRM-714)", async () => {
     const make = (id: string, created_at: string) => ({

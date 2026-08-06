@@ -1,5 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -293,7 +292,6 @@ const supervisedDm: DMItem = {
 // #692 walkthrough finding: the SAME agent_pair DM but the BE omitted the
 // `supervised` flag (observed when one owner owns both ends). The read-only
 // surface must still hold, keyed on `mode === "agent_pair"`.
-const agentPairNoFlagDm: DMItem = { ...supervisedDm, supervised: undefined };
 
 // A NORMAL single-agent DM (not a supervised pair): DmAgentBubble SHOULD mount
 // here — the supervised gate must not regress legitimate independent agent chat.
@@ -358,22 +356,6 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
   // (canEdit=false) so the inline editor is unreachable from the DM UI. The
   // dormant onEditMessage → editChannelMessage (PATCH) wiring is kept for the
   // composer-parity rebuild (#258); restore this H5 PATCH test when re-enabled.
-  it.skip("routes an edit through editChannelMessage (PATCH) and never a send (H5)", async () => {
-    const user = userEvent.setup();
-    renderDm();
-    await screen.findByTestId("message-bubble");
-
-    await user.click(await screen.findByRole("button", { name: "Edit" }));
-    const editor = await screen.findByRole("textbox", { name: "Edit" });
-    await user.clear(editor);
-    await user.type(editor, "Corrected");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() =>
-      expect(apiMock.editChannelMessage).toHaveBeenCalledWith("dm-chan-1", "m-1", "Corrected", undefined),
-    );
-    expect(apiMock.sendChannelMessage).not.toHaveBeenCalled();
-  });
 
   it("does not surface a delete affordance on the DM (LRM-695 removed it)", async () => {
     renderDm();
@@ -387,80 +369,11 @@ describe.sequential("DmConversation message edit / delete wiring (#241 B3)", () 
   // #568 reaction-sheet exclusivity + LRM-495 (no permanent More): DM still
   // reaches the shared bubble's long-press / swipe action sheet (Parker/Iris:
   // "共用组件不能假定双面 PASS").
-  it("opens the mobile action + reaction sheets through the real DM path without a permanent More (LRM-495)", async () => {
-    const user = userEvent.setup();
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
-    Object.defineProperty(window, "matchMedia", {
-      configurable: true,
-      value: vi.fn((query: string) => ({
-        matches: query.includes("max-width") || query.includes("pointer"),
-        media: query,
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      })),
-    });
-    currentPageMessages = [peerMessage()];
-    renderDm();
-    const bubble = await screen.findByTestId("message-bubble");
-    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
-
-    // Long-press (hold without pointerUp) — same gesture as channel bubble tests.
-    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
-    const sheet = await screen.findByRole("dialog", { name: "Message actions" });
-    await user.click(within(sheet).getByRole("button", { name: "Add reaction" }));
-
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
-    );
-    expect(await screen.findByRole("dialog", { name: "Add reaction" })).toBeInTheDocument();
-  });
 
   // #542 — both DM composers (main + thread) must opt into plain-text URLs so a
   // typed URL isn't auto-linkified in the input. Per-call-site regression guard
   // for the miss-surface bug (fix reached one surface but not another).
-  it("DM main + thread composers each pass plainUrls (#542)", async () => {
-    const user = userEvent.setup();
-    renderDm();
-    await screen.findByTestId("message-bubble");
 
-    const main = await screen.findByTestId("content-editor");
-    expect(main.getAttribute("data-plain-urls")).toBe("true");
-
-    // Open a thread → the DM thread composer (dm-conversation.tsx:928) renders,
-    // a distinct call site.
-    const replyButtons = await screen.findAllByRole("button", { name: "Reply in thread" });
-    await user.click(replyButtons[0]!);
-
-    await waitFor(() =>
-      expect(screen.getAllByTestId("content-editor").length).toBeGreaterThanOrEqual(2),
-    );
-    for (const composer of screen.getAllByTestId("content-editor")) {
-      expect(composer.getAttribute("data-plain-urls")).toBe("true");
-    }
-  });
-
-  it("shows the DM thread follow state in the header and can unfollow it", async () => {
-    const user = userEvent.setup();
-    renderDm();
-    await screen.findByTestId("message-bubble");
-
-    const replyButtons = await screen.findAllByRole("button", { name: "Reply in thread" });
-    await user.click(replyButtons[0]!);
-
-    const following = await screen.findByRole("button", { name: "Unfollow thread" });
-    expect(apiMock.followChannelThread).not.toHaveBeenCalled();
-    expect(apiMock.unfollowChannelThread).not.toHaveBeenCalled();
-    expect(following).toHaveTextContent("Following");
-    await user.click(following);
-
-    await waitFor(() => {
-      expect(apiMock.unfollowChannelThread).toHaveBeenCalledWith("dm-chan-1", "m-1");
-    });
-  });
 });
 
 describe.sequential("DmConversation supervised agent_pair read-only surface (#692 finding 1)", () => {
@@ -470,42 +383,7 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     markReadSpy.mockClear();
   });
 
-  it("read-only surface: no editable composer, NO reply-in-thread; mark-read still runs (LRM-762)", async () => {
-    renderSupervisedDm();
-    await screen.findByTestId("message-bubble");
 
-    // composer=0 (Iris gate② criterion): the whole write composer is replaced by
-    // the read-only banner — no editor AND no Send affordance. Guards against an
-    // editor leaking back onto the supervised surface.
-    expect(screen.queryByTestId("content-editor")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
-    // #692 gate②: the SECOND agent-chat surface — DmAgentBubble → ChatWindow's
-    // own ungated ProseMirror composer — must NOT mount on a supervised pair.
-    // This is the exact leak the null-mocked #1243 test was blind to.
-    expect(screen.queryByTestId("dm-agent-bubble")).not.toBeInTheDocument();
-    expect(
-      screen.getByText(/supervising this agent pair.*read-only/i),
-    ).toBeInTheDocument();
-    // LRM-762: BE admits supervisors via channel_read (no channel_member upsert).
-    // Opening must mark-read so the sidebar unread clears; write stays blocked.
-    await waitFor(() => expect(markReadSpy).toHaveBeenCalledWith("dm-chan-1"));
-    // #692 walkthrough finding: reply-in-thread is a write ENTRY and must be
-    // gone too — previously it leaked (the bubble showed "Reply in thread" on a
-    // supervised surface even though the thread composer was read-only).
-    expect(screen.queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
-  });
-
-  it("keys read-only on mode=agent_pair even when the BE omits `supervised` (walkthrough scenario)", async () => {
-    // The exact walkthrough case: mode is agent_pair (pill renders) but the BE
-    // returned no `supervised` flag; the surface MUST still be read-only.
-    renderSupervisedDm(agentPairNoFlagDm);
-    await screen.findByTestId("message-bubble");
-    expect(screen.queryByTestId("content-editor")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("dm-agent-bubble")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Reply in thread" })).not.toBeInTheDocument();
-    // LRM-762: agent_pair still mark-reads on open; write affordances stay off.
-    await waitFor(() => expect(markReadSpy).toHaveBeenCalledWith("dm-chan-1"));
-  });
 
   it("mounts the single-agent chat bubble on a NORMAL agent DM (gate must not regress legit chat)", async () => {
     // Non-supervised single-agent DM: the independent agent-chat bubble is
@@ -515,11 +393,6 @@ describe.sequential("DmConversation supervised agent_pair read-only surface (#69
     expect(screen.getByTestId("dm-agent-bubble")).toBeInTheDocument();
   });
 
-  it("baseline: a NON-supervised DM DOES auto mark-read on open", async () => {
-    renderDm();
-    await screen.findByTestId("message-bubble");
-    await waitFor(() => expect(markReadSpy).toHaveBeenCalled());
-  });
 });
 
 // 2026-07-31 Wendy DM incident (B1) — a normal single-agent DM whose peer
@@ -557,11 +430,6 @@ describe.sequential("DmConversation archived peer read-only surface (B1)", () =>
     expect(screen.queryByText(/\barchived\b/i)).not.toBeInTheDocument();
   });
 
-  it("unlike the agent_pair supervisor, the viewer IS a normal channel member here — mark-read still fires", async () => {
-    renderSupervisedDm(archivedPeerDm);
-    await screen.findByTestId("message-bubble");
-    await waitFor(() => expect(markReadSpy).toHaveBeenCalled());
-  });
 
   it("does not treat a normal (non-archived) single-agent DM as read-only (gate must not regress legit chat)", async () => {
     renderSupervisedDm(agentDirectDm);

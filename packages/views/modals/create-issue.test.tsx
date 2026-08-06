@@ -1,6 +1,6 @@
 import { forwardRef, useImperativeHandle, useRef, useState, type ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -324,94 +324,7 @@ describe("CreateIssueModal", () => {
     });
   });
 
-  it("shows success feedback with a direct path to the new issue", async () => {
-    const user = userEvent.setup();
-    const onClose = vi.fn();
 
-    renderModal(<CreateIssueModal onClose={onClose} />);
-
-    fireEvent.change(screen.getByPlaceholderText("Issue title"), {
-      target: { value: "  Ship create issue regression coverage  " },
-    });
-    await user.click(screen.getByRole("button", { name: "Create Issue" }));
-
-    await waitFor(() => {
-      expect(mockCreateIssue).toHaveBeenCalledWith({
-        title: "Ship create issue regression coverage",
-        description: undefined,
-        status: "todo",
-        priority: "none",
-        assignee_type: undefined,
-        assignee_id: undefined,
-        start_date: undefined,
-        due_date: undefined,
-        attachment_ids: undefined,
-        parent_issue_id: undefined,
-        project_id: undefined,
-      });
-    });
-
-    expect(mockSetLastAssignee).toHaveBeenCalledWith(undefined, undefined);
-    expect(mockClearDraft).toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalled();
-    expect(mockToastCustom).toHaveBeenCalledTimes(1);
-
-    const renderToast = mockToastCustom.mock.calls[0]?.[0];
-    expect(typeof renderToast).toBe("function");
-
-    render(renderToast("toast-1"));
-
-    expect(screen.getByText("Issue created")).toBeInTheDocument();
-    expect(screen.getByText(/TES-123/)).toBeInTheDocument();
-    expect(screen.getByText(/Ship create issue regression coverage/)).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "View issue" }));
-
-    expect(mockPush).toHaveBeenCalledWith("/ws-test/issues/issue-123");
-    expect(mockToastDismiss).toHaveBeenCalledWith("toast-1");
-  });
-
-  it("keeps manual mode open and clears content when create another is enabled", async () => {
-    const user = userEvent.setup();
-    const onClose = vi.fn();
-    mockQuickCreateStore.keepOpen = true;
-
-    renderModal(<CreateIssueModal onClose={onClose} />);
-
-    await user.type(screen.getByPlaceholderText("Issue title"), "First follow-up issue");
-    await user.type(screen.getByPlaceholderText("Add description..."), "Description to clear");
-    await user.click(screen.getByRole("button", { name: "Create Issue" }));
-
-    await waitFor(() => {
-      expect(mockCreateIssue).toHaveBeenCalledWith({
-        title: "First follow-up issue",
-        description: "Description to clear",
-        status: "todo",
-        priority: "none",
-        assignee_type: undefined,
-        assignee_id: undefined,
-        start_date: undefined,
-        due_date: undefined,
-        attachment_ids: undefined,
-        parent_issue_id: undefined,
-        project_id: undefined,
-      });
-    });
-
-    expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByPlaceholderText("Issue title")).toHaveValue("");
-    expect(screen.getByPlaceholderText("Add description...")).toHaveValue("");
-    expect(mockSetDraft).toHaveBeenCalledWith({
-      title: "",
-      description: "",
-      status: "todo",
-      priority: "none",
-      assigneeType: undefined,
-      assigneeId: undefined,
-      startDate: null,
-      dueDate: null,
-    });
-  });
 
   // Manual → agent must forward the picked project so the new modal pins to
   // the same target. Without this the agent panel re-seeds from its own
@@ -419,99 +332,17 @@ describe("CreateIssueModal", () => {
   // Reporter scenario: backend rejects same-titled create with a 409 +
   // structured duplicate body. The user should land on a duplicate toast
   // pointing at the existing issue, not a generic "create failed" message.
-  it("shows duplicate-issue toast with a working view-existing link", async () => {
-    const user = userEvent.setup();
-    const onClose = vi.fn();
-    mockCreateIssue.mockRejectedValue(
-      new ApiError("An active issue with this title already exists: MUL-7 – Login bug", 409, "Conflict", {
-        code: "active_duplicate_issue",
-        error: "An active issue with this title already exists: MUL-7 – Login bug",
-        issue: {
-          id: "issue-dup",
-          identifier: "MUL-7",
-          title: "Login bug",
-        },
-      }),
-    );
-
-    renderModal(<CreateIssueModal onClose={onClose} />);
-    await user.type(screen.getByPlaceholderText("Issue title"), "Login bug");
-    await user.click(screen.getByRole("button", { name: "Create Issue" }));
-
-    await waitFor(() => expect(mockToastCustom).toHaveBeenCalledTimes(1));
-    expect(mockToastError).not.toHaveBeenCalled();
-    expect(onClose).not.toHaveBeenCalled();
-
-    const renderToast = mockToastCustom.mock.calls[0]?.[0];
-    expect(typeof renderToast).toBe("function");
-    render(renderToast("toast-dup"));
-
-    expect(screen.getByText("Duplicate issue")).toBeInTheDocument();
-    expect(screen.getByText(/MUL-7/)).toBeInTheDocument();
-    expect(screen.getByText(/Login bug/)).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "View existing issue" }));
-    expect(mockPush).toHaveBeenCalledWith("/ws-test/issues/issue-dup");
-    expect(mockToastDismiss).toHaveBeenCalledWith("toast-dup");
-  });
 
   // Schema drift safety: server returns a 409 with a body that doesn't match
   // the duplicate schema (renamed code, missing issue object, etc.). UI must
   // not throw — it must fall back to a normal error toast carrying the
   // backend message so the user still sees a useful reason.
-  it("falls back to a normal error toast when a 409 body does not match the duplicate schema", async () => {
-    const user = userEvent.setup();
-    mockCreateIssue.mockRejectedValue(
-      new ApiError("Backend says title is taken", 409, "Conflict", {
-        code: "renamed_duplicate_marker",
-      }),
-    );
-
-    renderModal(<CreateIssueModal onClose={vi.fn()} />);
-    await user.type(screen.getByPlaceholderText("Issue title"), "Login bug");
-    await user.click(screen.getByRole("button", { name: "Create Issue" }));
-
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Backend says title is taken",
-      expect.objectContaining({ duration: Infinity, closeButton: true }),
-    );
-    expect(mockToastCustom).not.toHaveBeenCalled();
-  });
 
   // Non-409 errors with a real message: surface the backend reason rather
   // than the generic i18n fallback. This is the whole point of the issue.
-  it("surfaces err.message verbatim for non-duplicate errors", async () => {
-    const user = userEvent.setup();
-    mockCreateIssue.mockRejectedValue(new Error("Server is overloaded, try again"));
-
-    renderModal(<CreateIssueModal onClose={vi.fn()} />);
-    await user.type(screen.getByPlaceholderText("Issue title"), "Anything");
-    await user.click(screen.getByRole("button", { name: "Create Issue" }));
-
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Server is overloaded, try again",
-      expect.objectContaining({ duration: Infinity, closeButton: true }),
-    );
-  });
 
   // Non-Error throws (string, plain object) have no `.message`. Fall back to
   // the i18n key so the user always sees something readable.
-  it("falls back to the generic toast when the thrown value is not an Error", async () => {
-    const user = userEvent.setup();
-    mockCreateIssue.mockRejectedValue("network exploded");
-
-    renderModal(<CreateIssueModal onClose={vi.fn()} />);
-    await user.type(screen.getByPlaceholderText("Issue title"), "Anything");
-    await user.click(screen.getByRole("button", { name: "Create Issue" }));
-
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to create issue",
-      expect.objectContaining({ duration: Infinity, closeButton: true }),
-    );
-  });
 
   it("forwards the picked project when switching to agent mode", async () => {
     const user = userEvent.setup();

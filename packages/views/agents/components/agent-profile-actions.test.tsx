@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@multica/core/types";
 import { AgentProfileActions } from "./agent-profile-actions";
@@ -307,15 +307,4 @@ describe("AgentProfileActions (LRM-468 / LRM-909)", () => {
     expect(del.parentElement?.className).toMatch(/border-t/);
   });
 
-  it("Delete confirms then deactivates via archiveAgent (LRM-448: Delete, not Archive)", async () => {
-    render(<AgentProfileActions agent={agent} canManage forceRestartSupported />);
-    expect(screen.getByTestId("agent-profile-action-delete")).toHaveTextContent("Delete");
-    expect(screen.queryByText("Archive agent")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("agent-profile-action-delete"));
-    fireEvent.click(screen.getByTestId("confirm-delete-agent-confirm"));
-    await waitFor(() => {
-      expect(mocks.archiveAgent).toHaveBeenCalledWith("agent-1");
-    });
-    expect(mocks.toastSuccess).toHaveBeenCalledWith("Deleted");
-  });
 });

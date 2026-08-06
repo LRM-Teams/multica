@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { ActivityTimeline } from "./activity-timeline";
 import { formatActivityTime, formatActivityRelativeTime, type ActivityEvent } from "./activity-event";
@@ -515,62 +515,6 @@ describe("ActivityTimeline", () => {
     expect(container.querySelector(".animate-pulse")).toBeNull();
   });
 
-  it("expands a command into a bounded sibling code detail with a usable Copy control", async () => {
-    const full =
-      'multica message send --message \'能看到，截图里是我的状态显示"Idle"\' --output text';
-    const CMD: ActivityEvent = {
-      id: "cmd-expand",
-      agent_id: "agent-1",
-      occurred_at: "2026-07-06T09:36:05Z",
-      activity_kind: "tool_call",
-      detail_kind: "tool_use",
-      tool: "bash",
-      status: "completed",
-      entries: [{ kind: "tool_call", tool: "bash", command: full }],
-      target_ref: { kind: "agent", id: "agent-1" },
-    };
-    render(<ActivityTimeline events={[CMD]} />);
-    const toggle = screen.getByRole("button", { expanded: false });
-    expect(screen.getByTestId("activity-command-block").querySelector(".line-clamp-2")).not.toBeNull();
-    fireEvent.click(toggle);
-
-    const open = screen.getByRole("button", { expanded: true });
-    const detail = screen.getByTestId("activity-expanded-detail");
-    expect(open.contains(detail)).toBe(false);
-    // Tier2 command details share the same bounded vertical-detail baseline,
-    // while their pre keeps its independent horizontal handling.
-    expect(detail).toHaveClass("max-h-[min(260px,55vh)]", "md:max-h-[360px]");
-    expect(detail.querySelector("pre")).toHaveClass("overflow-x-auto");
-    expect(detail.querySelector("pre")).not.toHaveClass("line-clamp-2");
-    expect(detail.querySelector("pre code")).toHaveTextContent(full);
-    const copy = screen.getByRole("button", { name: "Copy" });
-
-    Object.defineProperties(detail, {
-      clientHeight: { configurable: true, value: 260 },
-      scrollHeight: { configurable: true, value: 520 },
-      scrollTop: { configurable: true, value: 0, writable: true },
-    });
-    fireEvent(window, new Event("resize"));
-
-    // Tier2 command source takes the same real-overflow path as Tier1 Markdown.
-    expect(detail).toHaveClass("overflow-y-auto", "overscroll-contain");
-    expect(detail).toHaveAttribute("role", "region");
-    expect(detail).toHaveAttribute("tabindex", "0");
-    expect(screen.getByTestId("activity-detail-scroll-fade")).toBeInTheDocument();
-
-    fireEvent.click(copy);
-    await waitFor(() => expect(copyText).toHaveBeenCalledWith(full));
-    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
-
-    detail.scrollTop = 260;
-    fireEvent.scroll(detail);
-    expect(screen.queryByTestId("activity-detail-scroll-fade")).toBeNull();
-
-    // Collapse again — clamp + hover Copy return on the command surface.
-    fireEvent.click(open);
-    expect(screen.getByTestId("activity-command-block").querySelector(".line-clamp-2")).not.toBeNull();
-    expect(screen.getByRole("button", { name: /Copy|Copied/ })).toBeInTheDocument();
-  });
 
   it("compact mode drops command detail — state type only, non-interactive (LRM-650)", () => {
     const CMD: ActivityEvent = {

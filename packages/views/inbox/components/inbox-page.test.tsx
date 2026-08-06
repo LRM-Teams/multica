@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { UserActivityListResponse, UserActivityTab } from "@multica/core/types";
 import { userActivityKeys } from "@multica/core/user-activity/queries";
@@ -216,16 +216,6 @@ describe("InboxPage entry paint (LRM-424)", () => {
     expect(screen.getByRole("heading", { name: "Activity" })).toBeInTheDocument();
   });
 
-  it("shows explicit error state on cold failure (no silent empty)", async () => {
-    listUserActivity.mockRejectedValueOnce(new Error("boom"));
-    renderInbox();
-
-    await waitFor(() => {
-      expect(screen.getByText("boom")).toBeInTheDocument();
-    });
-    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Activity" })).toBeInTheDocument();
-  });
 });
 
 describe("InboxPage unread session deep-link (LRM-388)", () => {

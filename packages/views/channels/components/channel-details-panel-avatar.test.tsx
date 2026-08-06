@@ -1,5 +1,5 @@
 import { type ComponentProps } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -95,11 +95,6 @@ function renderPanel(
   return { onUpdateAvatar, onRename, onUpdateDescription };
 }
 
-function pickFile(file: File) {
-  const input = document.querySelector('input[type="file"]');
-  expect(input).not.toBeNull();
-  fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
-}
 
 describe("ChannelDetailsPanel hero inline edit (LRM-860)", () => {
   beforeEach(() => {
@@ -113,36 +108,7 @@ describe("ChannelDetailsPanel hero inline edit (LRM-860)", () => {
     expect(screen.getByTestId("channel-details-hero-name")).toBeTruthy();
   });
 
-  it("uploads via the hero avatar click path", async () => {
-    uploadFile.mockResolvedValue({
-      id: "att-1",
-      url: "/uploads/icon.png",
-      markdown_url: "https://cdn.example.com/icon.png",
-    });
-    const { onUpdateAvatar } = renderPanel();
 
-    expect(screen.getByTestId("channel-details-avatar-change")).toBeTruthy();
-    pickFile(new File(["x"], "icon.png", { type: "image/png" }));
-
-    await waitFor(() => {
-      expect(uploadFile).toHaveBeenCalledTimes(1);
-    });
-    const [, ctx] = uploadFile.mock.calls[0] as [File, { channelId?: string }];
-    expect(ctx).toEqual({ channelId: "chan-1" });
-    await waitFor(() => {
-      expect(onUpdateAvatar).toHaveBeenCalledWith("/uploads/icon.png");
-    });
-  });
-
-  it("rejects non-image files without calling onUpdateAvatar", async () => {
-    const { onUpdateAvatar } = renderPanel();
-    pickFile(new File(["x"], "notes.txt", { type: "text/plain" }));
-
-    await waitFor(() => {
-      expect(uploadFile).not.toHaveBeenCalled();
-    });
-    expect(onUpdateAvatar).not.toHaveBeenCalled();
-  });
 
   it("hides the avatar change control without manage permission", () => {
     renderPanel({

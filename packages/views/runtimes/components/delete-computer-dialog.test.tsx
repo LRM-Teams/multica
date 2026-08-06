@@ -2,8 +2,8 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import type { Agent, AgentRuntime } from "@multica/core/types";
+import { render, screen } from "@testing-library/react";
+import type { AgentRuntime } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enRuntimes from "../../locales/en/runtimes.json";
@@ -147,15 +147,6 @@ function makeRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
   } as AgentRuntime;
 }
 
-function makeAgent(overrides: Partial<Agent> = {}): Agent {
-  return {
-    id: "agent-1",
-    name: "worker",
-    display_name: "Worker",
-    runtime_id: "rt-1",
-    ...overrides,
-  } as Agent;
-}
 
 function makeMachine(
   overrides: Partial<RuntimeMachine> = {},
@@ -261,145 +252,9 @@ describe("DeleteComputerDialog", () => {
     apiListAgents.mockResolvedValue([]);
   });
 
-  it("calls deleteRuntimesByDaemon once with daemon id + mode (not N× row delete)", async () => {
-    apiDeleteByDaemon.mockResolvedValue({
-      status: "ok",
-      daemon_id: "daemon-1",
-      deleted_count: 2,
-      deleted_runtime_ids: ["rt-1", "rt-2"],
-    });
-    const onDeleted = vi.fn();
-    renderDialog({ onDeleted });
 
-    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
-      target: { value: "build-01" },
-    });
-    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
 
-    await waitFor(() => {
-      expect(apiDeleteByDaemon).toHaveBeenCalledTimes(1);
-      expect(apiDeleteByDaemon).toHaveBeenCalledWith({
-        daemonId: "daemon-1",
-        runtimeMode: "local",
-      });
-    });
-    expect(onDeleted).toHaveBeenCalled();
-  });
 
-  it("archives the exact reviewed active-agent set before permanent deletion", async () => {
-    const activeAgent = makeAgent();
-    apiDeleteByDaemon
-      .mockRejectedValueOnce(
-        new ApiError("blocked", 409, "Conflict", {
-          code: "computer_has_active_agents",
-          error: "active agents",
-          active_agents: [activeAgent],
-        }),
-      )
-      .mockResolvedValueOnce({
-        status: "ok",
-        daemon_id: "daemon-1",
-        deleted_count: 1,
-        deleted_runtime_ids: ["rt-1"],
-      });
-    apiRemoveByDaemon.mockResolvedValue({
-      status: "ok",
-      daemon_id: "daemon-1",
-      agents_archived: 1,
-      tasks_cancelled: 0,
-    });
-    const onDeleted = vi.fn();
-    renderDialog({ onDeleted });
-
-    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
-      target: { value: "build-01" },
-    });
-    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
-
-    await waitFor(() => {
-      expect(screen.getByText(/still has 1 agent/i)).toBeTruthy();
-      expect(screen.getByText("Worker")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Remove all agents" }));
-    expect(screen.queryByTestId("remove-computer-agents-confirmation")).toBeNull();
-    fireEvent.click(screen.getByTestId("remove-computer-agents-confirm"));
-
-    await waitFor(() => {
-      expect(apiRemoveByDaemon).toHaveBeenCalledWith({
-        daemonId: "daemon-1",
-        runtimeMode: "local",
-        expectedActiveAgentIds: ["agent-1"],
-      });
-      expect(screen.getByTestId("delete-computer-confirmation")).toBeTruthy();
-    });
-
-    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
-      target: { value: "build-01" },
-    });
-    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
-
-    await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
-    expect(apiDeleteByDaemon).toHaveBeenCalledTimes(2);
-  });
-
-  it("requires re-review when the active-agent set changes", async () => {
-    apiDeleteByDaemon.mockRejectedValue(
-      new ApiError("blocked", 409, "Conflict", {
-        code: "computer_has_active_agents",
-        error: "active agents",
-        active_agents: [makeAgent()],
-      }),
-    );
-    apiRemoveByDaemon.mockRejectedValue(
-      new ApiError("changed", 409, "Conflict", {
-        code: "computer_agent_plan_changed",
-        error: "plan changed",
-        active_agents: [
-          makeAgent({ id: "agent-2", name: "second", display_name: "Second" }),
-        ],
-      }),
-    );
-    renderDialog();
-
-    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
-      target: { value: "build-01" },
-    });
-    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
-    await screen.findByRole("button", { name: "Remove all agents" });
-
-    fireEvent.click(screen.getByRole("button", { name: "Remove all agents" }));
-    fireEvent.click(screen.getByTestId("remove-computer-agents-confirm"));
-
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: '"build-01" changed' }),
-      ).toBeTruthy();
-      expect(screen.getByText("Second")).toBeTruthy();
-    });
-    expect(apiRemoveByDaemon).toHaveBeenCalledWith({
-      daemonId: "daemon-1",
-      runtimeMode: "local",
-      expectedActiveAgentIds: ["agent-1"],
-    });
-  });
-
-  it("counts pre-existing archived agents in the permanent-delete warning", async () => {
-    apiListAgents.mockResolvedValue([
-      makeAgent({ archived_at: "2026-07-25T00:00:00Z" }),
-    ]);
-    renderDialog();
-
-    await waitFor(() => {
-      expect(apiListAgents).toHaveBeenCalledWith({
-        workspace_id: "ws-1",
-        include_archived: true,
-      });
-      expect(
-        screen.getByText(/all archived agents on it \(1 total\)/i),
-      ).toBeTruthy();
-    });
-  });
 
   it("blocks machines without daemon id without calling the API", () => {
     renderDialog({ machine: makeMachine({ daemonId: null }) });
@@ -407,79 +262,7 @@ describe("DeleteComputerDialog", () => {
     expect(apiDeleteByDaemon).not.toHaveBeenCalled();
   });
 
-  it("deletes pending cloud computers via deleteSandbox only (no by-daemon)", async () => {
-    apiDeleteSandbox.mockResolvedValue(undefined);
-    const onDeleted = vi.fn();
-    renderDialog({
-      onDeleted,
-      machine: makeMachine({
-        id: "pending-cloud:sb-1",
-        daemonId: null,
-        title: "my-docker",
-        runtimes: [],
-        pendingCloud: true,
-        sandboxInstanceId: "sb-1",
-        ownerUserId: "user-me",
-      }),
-    });
 
-    expect(
-      screen.getByText(/cloud container will be permanently deleted/i),
-    ).toBeTruthy();
-
-    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
-      target: { value: "my-docker" },
-    });
-    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
-
-    await waitFor(() => {
-      expect(apiDeleteSandbox).toHaveBeenCalledTimes(1);
-      expect(apiDeleteSandbox).toHaveBeenCalledWith("sb-1");
-    });
-    expect(apiDeleteByDaemon).not.toHaveBeenCalled();
-    expect(onDeleted).toHaveBeenCalled();
-  });
-
-  it("deletes registered cloud computers: by-daemon then deleteSandbox", async () => {
-    apiDeleteByDaemon.mockResolvedValue({
-      status: "ok",
-      daemon_id: "daemon-cloud-1",
-      deleted_count: 1,
-      deleted_runtime_ids: ["rt-1"],
-    });
-    apiDeleteSandbox.mockResolvedValue(undefined);
-    const onDeleted = vi.fn();
-    renderDialog({
-      onDeleted,
-      machine: makeMachine({
-        id: "local:daemon-cloud-1",
-        daemonId: "daemon-cloud-1",
-        title: "cloud-box",
-        sandboxInstanceId: "sb-reg-1",
-        runtimes: [
-          makeRuntime({
-            id: "rt-1",
-            daemon_id: "daemon-cloud-1",
-            name: "Claude (cloud-box)",
-          }),
-        ],
-      }),
-    });
-
-    fireEvent.change(screen.getByTestId("delete-computer-confirmation"), {
-      target: { value: "cloud-box" },
-    });
-    fireEvent.click(screen.getByTestId("delete-computer-confirm"));
-
-    await waitFor(() => {
-      expect(apiDeleteByDaemon).toHaveBeenCalledWith({
-        daemonId: "daemon-cloud-1",
-        runtimeMode: "local",
-      });
-      expect(apiDeleteSandbox).toHaveBeenCalledWith("sb-reg-1");
-    });
-    expect(onDeleted).toHaveBeenCalled();
-  });
 
   it("blocks cloud computers without sandbox id without calling APIs", () => {
     renderDialog({

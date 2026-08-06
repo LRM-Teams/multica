@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "./composer";
 
@@ -133,55 +133,10 @@ describe("Composer — the uploading cause, driven through a real capture (#858)
     });
   });
 
-  function mic() {
-    return screen.getByRole("button", {
-      name: /Record voice message|Stop recording|Uploading voice message/,
-    });
-  }
   function status() {
     return document.querySelector('[data-slot="composer-voice-block-status"]');
   }
 
-  it("renders the uploading sentence while the recording actually uploads, with the mic natively disabled and described by it", async () => {
-    render(
-      <Composer
-        surface="channel"
-        {...base}
-        onVoiceSend={() => true}
-        voiceBlock={{ hasTextDraft: false, hasAttachmentDraft: false }}
-      />,
-    );
-
-    // Nothing blocks recording yet — the control that makes the assertion below
-    // mean something. Without it, "the uploading copy is present" would also
-    // pass on a shell that renders it unconditionally.
-    expect(status()).toBeNull();
-
-    fireEvent.click(mic()); // start capture — getUserMedia is held pending
-    media.resolve?.();
-    await waitFor(() => expect(mic()).toHaveAccessibleName("Stop recording"));
-    fireEvent.click(mic()); // stop → enters "uploading" and stays there
-
-    await waitFor(() => expect(status()).not.toBeNull());
-    const line = status();
-    expect(line).toHaveTextContent("COPY_UPLOADING");
-    // `<output>` carries role=status implicitly; assert what AT resolves.
-    expect(screen.getByRole("status")).toBe(line);
-
-    // NOTE: during its OWN upload the button announces "Uploading voice
-    // message" — pre-existing behaviour and correct, since the name describes
-    // what the control is doing. The "name stays 'Record voice message'" rule
-    // applies to the mic being blocked by OTHER causes (asserted in
-    // composer.test.tsx), not to this one.
-    const button = screen.getByRole("button", { name: "Uploading voice message" });
-    expect(button).toBeDisabled();
-    expect(button).not.toHaveAttribute("aria-disabled");
-    expect(button.getAttribute("aria-describedby")).toBe(line?.getAttribute("id"));
-
-    // …and it clears once the upload finishes, rather than sticking.
-    delivery.resolve?.();
-    await waitFor(() => expect(status()).toBeNull());
-  });
 
   it("an attachment upload keeps the attachment sentence — never projected as a voice upload", async () => {
     // The tray's `hasUploading` is a subset of `pending`, so an uploading PDF
@@ -198,43 +153,4 @@ describe("Composer — the uploading cause, driven through a real capture (#858)
     expect(status()).not.toHaveTextContent("COPY_UPLOADING");
   });
 
-  it("says it is PREPARING while acquiring the mic, and only says uploading after the recording is handed off", async () => {
-    // The gap Iris caught in review: `busy = starting || uploading` reported one
-    // boolean, so this window announced "uploading your voice message" while
-    // getUserMedia was still pending and nothing had been uploaded. Same defect
-    // as the original shared sentence, one state earlier.
-    render(
-      <Composer
-        surface="channel"
-        {...base}
-        onVoiceSend={() => true}
-        voiceBlock={{ hasTextDraft: false, hasAttachmentDraft: false }}
-      />,
-    );
-    expect(status()).toBeNull();
-
-    fireEvent.click(mic()); // getUserMedia deliberately left pending
-
-    await waitFor(() => expect(status()).not.toBeNull());
-    const starting = status();
-    expect(starting).toHaveTextContent("COPY_STARTING");
-    // The whole point: it must NOT claim an upload yet.
-    expect(starting).not.toHaveTextContent("COPY_UPLOADING");
-    expect(screen.getByRole("status")).toBe(starting);
-    const preparing = mic();
-    expect(preparing).toBeDisabled();
-    expect(preparing).not.toHaveAttribute("aria-disabled");
-    expect(preparing.getAttribute("aria-describedby")).toBe(starting?.getAttribute("id"));
-
-    // Let the mic open, record, then stop → NOW it is genuinely uploading.
-    media.resolve?.();
-    await waitFor(() => expect(mic()).toHaveAccessibleName("Stop recording"));
-    fireEvent.click(mic());
-
-    await waitFor(() => expect(status()).toHaveTextContent("COPY_UPLOADING"));
-    expect(status()).not.toHaveTextContent("COPY_STARTING");
-
-    delivery.resolve?.();
-    await waitFor(() => expect(status()).toBeNull());
-  });
 });

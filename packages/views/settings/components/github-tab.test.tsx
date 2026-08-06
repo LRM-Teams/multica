@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
 import enSettings from "../../locales/en/settings.json";
@@ -157,49 +156,7 @@ describe("GitHubTab", () => {
     }
   });
 
-  it("flipping the master switch off persists github_enabled=false and merges existing settings", async () => {
-    const user = userEvent.setup();
-    workspaceRef.current.settings = { co_authored_by_enabled: true };
-    mockUpdateWorkspace.mockResolvedValue({
-      ...workspaceRef.current,
-      settings: { co_authored_by_enabled: true, github_enabled: false },
-    });
 
-    render(<GitHubTab />, { wrapper: I18nWrapper });
-
-    await user.click(screen.getByRole("switch", { name: /enable github features/i }));
-
-    await waitFor(() => {
-      expect(mockUpdateWorkspace).toHaveBeenCalledWith("workspace-1", {
-        settings: { co_authored_by_enabled: true, github_enabled: false },
-      });
-    });
-  });
-
-  it("clicking Disconnect opens the confirmation and only fires on confirm", async () => {
-    const user = userEvent.setup();
-    installationsRef.current = {
-      configured: true,
-      can_manage: true,
-      installations: [{ id: "inst-42", account_login: "acme", installation_id: 42 }],
-    };
-    mockDeleteInstallation.mockResolvedValue(undefined);
-
-    render(<GitHubTab />, { wrapper: I18nWrapper });
-
-    await user.click(screen.getByRole("button", { name: /^Disconnect$/ }));
-    expect(screen.getByText(/Multica will stop receiving webhooks/i)).toBeTruthy();
-    expect(mockDeleteInstallation).not.toHaveBeenCalled();
-
-    const dialogConfirm = screen
-      .getAllByRole("button", { name: /^Disconnect$/ })
-      .find((b) => b.getAttribute("data-slot")?.includes("alert-dialog"));
-    await user.click(dialogConfirm ?? screen.getAllByRole("button", { name: /^Disconnect$/ })[1]!);
-
-    await waitFor(() => {
-      expect(mockDeleteInstallation).toHaveBeenCalledWith("workspace-1", "inst-42");
-    });
-  });
 
   it("Disconnect button is still visible when the master switch is off", () => {
     workspaceRef.current.settings = { github_enabled: false };

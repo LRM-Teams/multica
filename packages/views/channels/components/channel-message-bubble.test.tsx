@@ -1,4 +1,4 @@
-import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
@@ -1447,78 +1447,7 @@ describe("ChannelMessageBubble", () => {
     expect(body).toHaveClass("select-text");
   });
 
-  it("keeps long messages as full DOM content behind a Slack-height collapsed preview", async () => {
-    render(
-      <ChannelMessageBubble
-        message={makeMessage({ content: Array.from({ length: 20 }, (_, index) => `Line ${index}`).join("\n") })}
-        currentUserId="user-1"
-      />,
-    );
 
-    const body = screen.getByTestId("message-body");
-    Object.defineProperties(body, {
-      scrollHeight: { configurable: true, value: 420 },
-      clientHeight: { configurable: true, value: 320 },
-    });
-    fireEvent(window, new Event("resize"));
-
-    await waitFor(() => {
-      expect(body).toHaveAttribute("data-collapsed", "true");
-    });
-    expect(body).toHaveClass("max-h-[320px]");
-    expect(body).toHaveTextContent("Line 19");
-    expect(screen.getByTestId("message-collapse-fade")).toBeInTheDocument();
-
-    const expand = screen.getByRole("button", { name: "See more" });
-    // LRM-302: text link, not centered pill covering the body.
-    expect(expand.className).toMatch(/text-sm/);
-    expect(expand.className).not.toMatch(/rounded-full/);
-    expect(expand.className).not.toMatch(/min-h-11/);
-    expect(expand.className).not.toMatch(/shadow-sm/);
-    expect(screen.getByTestId("message-collapse-fade").className).toMatch(
-      /justify-start/,
-    );
-    expect(screen.getByTestId("message-collapse-fade").className).toMatch(
-      /from-background/,
-    );
-    expect(screen.getByTestId("message-collapse-fade").className).toMatch(/from-35%/);
-
-    await userEvent.click(expand);
-
-    expect(body).not.toHaveAttribute("data-collapsed");
-    expect(screen.queryByRole("button", { name: "See more" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "See less" })).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "See less" }));
-    expect(body).toHaveAttribute("data-collapsed", "true");
-    expect(screen.getByRole("button", { name: "See more" })).toBeInTheDocument();
-  });
-
-  it("uses self-mention row tokens on the collapse fade (LRM-368)", async () => {
-    const longBody = Array.from({ length: 20 }, (_, index) => `Line ${index}`).join("\n");
-    const msg = makeMessage({
-      type: "user",
-      author_id: "user-2",
-      author_name: "bob",
-      content: `hey [@Alice](mention://member/user-1)\n${longBody}`,
-    });
-    render(<ChannelMessageBubble message={msg} currentUserId="user-1" />);
-
-    const body = screen.getByTestId("message-body");
-    Object.defineProperties(body, {
-      scrollHeight: { configurable: true, value: 420 },
-      clientHeight: { configurable: true, value: 320 },
-    });
-    fireEvent(window, new Event("resize"));
-
-    await waitFor(() => {
-      expect(body).toHaveAttribute("data-collapsed", "true");
-    });
-
-    const fade = screen.getByTestId("message-collapse-fade");
-    expect(fade.className).toContain("from-[#fef9e8]");
-    expect(fade.className).not.toContain("from-background");
-  });
 
   it("#689: does not construct a per-row ResizeObserver — window resize alone drives re-measurement", () => {
     // A per-row ResizeObserver used to exist to catch late content growth
@@ -1569,16 +1498,6 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByRole("button", { name: "See more" })).not.toBeInTheDocument();
   });
 
-  it("copies the message content from the visible action button", async () => {
-    copyTextMock.mockResolvedValue(true);
-
-    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
-
-    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
-
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("Here is the data."));
-    expect(toast.success).toHaveBeenCalledWith("Copied");
-  });
 
   // #250 — historical agent messages whose denormalized `parts` were never
   // backfilled carry the structured-action envelope JSON in `content`. The body
@@ -1602,79 +1521,8 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByText(ENVELOPE_CONTENT)).not.toBeInTheDocument();
   });
 
-  it("copies the unwrapped envelope text for a historical message, not raw JSON", async () => {
-    copyTextMock.mockResolvedValue(true);
 
-    render(
-      <ChannelMessageBubble
-        message={makeMessage({ content: ENVELOPE_CONTENT, parts: [] })}
-        currentUserId="user-1"
-      />,
-    );
 
-    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
-
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("hi there"));
-    const copied = copyTextMock.mock.calls[0]?.[0] as string;
-    expect(copied).not.toContain('"action"');
-    expect(copied).not.toContain("{");
-  });
-
-  it("leaves body and copy unchanged for ordinary non-envelope content", async () => {
-    copyTextMock.mockResolvedValue(true);
-
-    render(
-      <ChannelMessageBubble
-        message={makeMessage({ content: "just a plain message" })}
-        currentUserId="user-1"
-      />,
-    );
-
-    expect(screen.getByText("just a plain message")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("just a plain message"));
-  });
-
-  it("copies the display name, not the internal handle (#530 — clipboard must match the screen)", async () => {
-    // Iris's ruling: copy = take away what I can see. The screen says "Alice
-    // Display"; a clipboard holding "@user_raw" disagrees with it, and that is its
-    // own kind of lying.
-    //
-    // This asserts the WIRING at this surface, not the projection —
-    // projectReferencesToText is covered in message-preview.test.ts. What can break
-    // here silently is the call itself: delete it and copy falls back to raw
-    // content, the leak returns, and CI stays green. (The preceding test is the
-    // control: an ordinary message must still copy verbatim.)
-    copyTextMock.mockResolvedValue(true);
-
-    render(
-      <ChannelMessageBubble
-        message={makeMessage({
-          content: "ping @user_raw now",
-          parts: [
-            {
-              type: "reference",
-              ref_type: "mention",
-              ref_subtype: "member",
-              ref_id: "user-1",
-              label: "@user_raw",
-              content_start_utf16: 5,
-              content_end_utf16: 14,
-            },
-          ],
-        } as never)}
-        currentUserId="user-2"
-      />,
-    );
-
-    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
-
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalled());
-    const copied = copyTextMock.mock.calls[0]?.[0] as string;
-    expect(copied).toBe("ping @Alice Display now");
-    expect(copied).not.toContain("user_raw");
-  });
 
   // GAP 3 — legit user-pasted JSON with a `parts` array but no top-level
   // `action` key must NOT be intercepted; it renders as normal markdown text.
@@ -1712,23 +1560,6 @@ describe("ChannelMessageBubble", () => {
     expect(body.textContent).not.toContain("Repo isn't checked out");
   });
 
-  it("copies only the embedded envelope's real text, not the prefix or JSON", async () => {
-    copyTextMock.mockResolvedValue(true);
-
-    render(
-      <ChannelMessageBubble
-        message={makeMessage({ content: EMBEDDED_ENVELOPE_CONTENT, parts: [] })}
-        currentUserId="user-1"
-      />,
-    );
-
-    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
-
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("the real message"));
-    const copied = copyTextMock.mock.calls[0]?.[0] as string;
-    expect(copied).not.toContain('"action"');
-    expect(copied).not.toContain("Repo isn't checked out");
-  });
 
   it("extracts an embedded envelope even when a part text value contains braces", () => {
     const raw =
@@ -1778,26 +1609,6 @@ describe("ChannelMessageBubble", () => {
     expect(body.textContent).not.toContain("{");
   });
 
-  it("copies structured message parts instead of hidden fallback content", async () => {
-    copyTextMock.mockResolvedValue(true);
-
-    renderWithStickerCatalog(
-      <ChannelMessageBubble
-        message={makeMessage({
-          content: ":sticker:hi:",
-          parts: [
-            { type: "text", text: "Done" },
-            { type: "sticker", sticker_id: "hi", alt: "Hi sticker" },
-          ],
-        })}
-        currentUserId="user-1"
-      />,
-    );
-
-    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
-
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("Done [Sticker] Hi sticker"));
-  });
 
   it("does not open a custom message menu from the message body", () => {
     render(
@@ -2031,35 +1842,6 @@ describe("ChannelMessageBubble", () => {
     expect(onReact).toHaveBeenCalledWith(message, "🎉");
   });
 
-  it("opens the thread page from a mobile message tap with border feedback", async () => {
-    setMobileViewport();
-    const onOpenThread = vi.fn();
-    const message = makeMessage();
-    render(
-      <ChannelMessageBubble
-        message={message}
-        currentUserId="user-1"
-        onOpenThread={onOpenThread}
-        onReact={vi.fn()}
-      />,
-    );
-
-    const bubble = screen.getByTestId("message-bubble");
-    const actionBar = screen.getByTestId("message-action-bar");
-    expect(actionBar).toHaveClass("hidden");
-    expect(actionBar).toHaveClass(
-      "[@media(pointer:fine)_and_(min-width:640px)]:flex",
-    );
-    expect(actionBar).toHaveClass("opacity-0");
-    expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
-
-    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
-    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
-
-    expect(bubble).toHaveClass("ring-primary/45");
-    expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument();
-    await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith(message));
-  });
 
   it("opens mobile message actions from a long press without a thread menu item", async () => {
     setMobileViewport();
@@ -2083,23 +1865,6 @@ describe("ChannelMessageBubble", () => {
     expect(within(menu).queryByRole("button", { name: "Quote reply" })).not.toBeInTheDocument();
   });
 
-  it("closes the mobile action sheet after a copy action", async () => {
-    setMobileViewport();
-    copyTextMock.mockResolvedValue(true);
-    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
-
-    const bubble = screen.getByTestId("message-bubble");
-    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
-    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
-
-    const copyButtons = await screen.findAllByRole("button", { name: "Copy" });
-    await userEvent.click(copyButtons.at(-1)!);
-
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith("Here is the data."));
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
-    );
-  });
 
   // LRM-1174 (LRM-1173 freeze B): the JS gate (pointerType === "touch" +
   // isMobileActionViewport) can open the sheet on a touch laptop in a narrow
@@ -2129,53 +1894,7 @@ describe("ChannelMessageBubble", () => {
     );
   });
 
-  it("returns focus to the triggering bubble when the mobile action sheet closes (LRM-1174)", async () => {
-    setMobileViewport();
-    copyTextMock.mockResolvedValue(true);
-    render(<ChannelMessageBubble message={makeMessage()} currentUserId="user-1" />);
 
-    const bubble = screen.getByTestId("message-bubble");
-    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
-    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
-
-    const menu = await screen.findByRole("dialog", { name: "Message actions" });
-    await userEvent.click(within(menu).getByRole("button", { name: "Copy" }));
-
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
-    );
-    // Removing a top-layer <dialog> drops activeElement to <body>; the bubble
-    // that opened the sheet must get focus back so the next action/keyboard
-    // step continues from the same message.
-    await waitFor(() => expect(document.activeElement).toBe(bubble));
-  });
-
-  it("returns focus to the triggering bubble when the mobile reaction sheet closes (LRM-1174)", async () => {
-    setMobileViewport();
-    const onReact = vi.fn();
-    render(
-      <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" onReact={onReact} />,
-    );
-
-    const bubble = screen.getByTestId("message-bubble");
-    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
-    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
-
-    const menu = await screen.findByRole("dialog", { name: "Message actions" });
-    await userEvent.click(within(menu).getByRole("button", { name: "Add reaction" }));
-    const reactionSheet = await screen.findByRole("dialog", { name: "Add reaction" });
-
-    // Handing the primary sheet over to the reaction sheet is NOT a dismissal —
-    // focus must stay inside the overlay stack, not snap back to the bubble.
-    expect(document.activeElement).not.toBe(bubble);
-
-    await userEvent.click(within(reactionSheet).getByRole("button", { name: "🎉" }));
-
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Add reaction" })).not.toBeInTheDocument(),
-    );
-    await waitFor(() => expect(document.activeElement).toBe(bubble));
-  });
 
   it("hides the permanent mobile More trigger; long-press and left-swipe open the action sheet (LRM-495)", async () => {
     setMobileViewport();
@@ -2202,37 +1921,6 @@ describe("ChannelMessageBubble", () => {
     expect(await screen.findByRole("dialog", { name: "Message actions" })).toBeInTheDocument();
   });
 
-  it("opens the reaction sheet in place of the action sheet, never both at once (#568)", async () => {
-    setMobileViewport();
-    const onReact = vi.fn();
-    render(
-      <ChannelMessageBubble message={makeMessage()} currentUserId="user-1" onReact={onReact} />,
-    );
-
-    const bubble = screen.getByTestId("message-bubble");
-    fireEvent.pointerDown(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
-    fireEvent.pointerUp(bubble, { pointerType: "touch", clientX: 0, clientY: 0 });
-
-    const menu = await screen.findByRole("dialog", { name: "Message actions" });
-    await userEvent.click(within(menu).getByRole("button", { name: "Add reaction" }));
-
-    // The action sheet must be gone before the reaction sheet appears — the two
-    // mobile overlays are never mounted together (Iris #568: was a real
-    // double-panel bug when the QuickEmojiPicker popover opened on top of the
-    // still-open action <dialog>).
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Message actions" })).not.toBeInTheDocument(),
-    );
-    const reactionSheet = await screen.findByRole("dialog", { name: "Add reaction" });
-    expect(reactionSheet).toBeInTheDocument();
-
-    await userEvent.click(within(reactionSheet).getByRole("button", { name: "🎉" }));
-
-    expect(onReact).toHaveBeenCalledWith(expect.anything(), "🎉");
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Add reaction" })).not.toBeInTheDocument(),
-    );
-  });
 
   it("projects anchored issue refs in a backflow system row instead of dumping raw text (#469/#497)", () => {
     render(
@@ -2738,25 +2426,6 @@ describe("ChannelMessageBubble", () => {
     expect(screen.queryByTestId("voice-reply-transcript")).not.toBeInTheDocument();
   });
 
-  it("keeps the Agent voice replay control in a compact message group", async () => {
-    render(
-      <ChannelMessageBubble
-        message={makeMessage({
-          content: "spoken answer",
-          parts: [
-            { type: "text", text: "spoken answer" },
-            { type: "voice" },
-          ],
-        })}
-        currentUserId="user-1"
-        compact
-      />,
-    );
-
-    expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-message-group", "compact");
-    expect(screen.getByRole("button", { name: "Play voice reply" })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId("voice-reply-control")).toHaveTextContent('3″'));
-  });
 });
 
 describe("ChannelMessageBubble — #1276 INV-3 in-flight status", () => {

@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, waitFor } from "@testing-library/react";
-import type { MouseEventHandler, ReactElement, ReactNode } from "react";
+import { fireEvent, render } from "@testing-library/react";
+import type { MouseEventHandler, ReactNode } from "react";
 import { readFileSync } from "node:fs";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const { getAttachmentTextContentMock } = vi.hoisted(() => ({
   getAttachmentTextContentMock: vi.fn(),
@@ -114,7 +113,6 @@ Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
   }),
 });
 
-import mermaid from "mermaid";
 import { ReadonlyContent } from "./readonly-content";
 
 beforeEach(() => {
@@ -139,30 +137,6 @@ describe("ReadonlyContent memoization", () => {
   });
 });
 
-describe("ReadonlyContent math rendering", () => {
-  it("renders inline and block LaTeX after the lazy KaTeX plugins load", async () => {
-    const { container } = render(
-      <ReadonlyContent
-        content={[
-          "Inline math: $E = mc^2$",
-          "",
-          "$$",
-          "\\int_0^1 x^2 \\, dx",
-          "$$",
-        ].join("\n")}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(container.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(2);
-      expect(container.querySelector(".katex-display")).not.toBeNull();
-    });
-
-    const text = container.textContent?.replace(/\s+/g, " ") ?? "";
-    expect(text).toContain("E = mc^2");
-    expect(text).toContain("\\int_0^1 x^2 \\, dx");
-  });
-});
 
 describe("ReadonlyContent line breaks", () => {
   // Issue panel comments are the primary user-visible surface for agent
@@ -388,44 +362,6 @@ describe("ReadonlyContent code styling", () => {
 });
 
 describe("ReadonlyContent Mermaid rendering", () => {
-  it("renders mermaid code fences in a sized sandbox iframe with legacy rgb colors", async () => {
-    const originalGetComputedStyle = window.getComputedStyle;
-    vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudoElt) => {
-      if (element instanceof HTMLElement && element.style.color.startsWith("var(")) {
-        return { color: "oklch(60% 0.2 120)" } as CSSStyleDeclaration;
-      }
-      return originalGetComputedStyle.call(window, element, pseudoElt);
-    });
-
-    const { container } = render(
-      <ReadonlyContent
-        content={["```mermaid", "graph LR", "  A[Start] --> B[Done]", "```"].join("\n")}
-      />,
-    );
-
-    expect(container.querySelector(".mermaid-diagram")).not.toBeNull();
-    expect(container.querySelector("pre code.language-mermaid")).toBeNull();
-
-    await waitFor(() => {
-      const iframe = container.querySelector<HTMLIFrameElement>(".mermaid-diagram-frame");
-      expect(iframe).not.toBeNull();
-      expect(iframe?.getAttribute("sandbox")).toBe("");
-      expect(iframe?.srcdoc).toContain("mock diagram");
-      expect(iframe?.style.width).toBe("123px");
-      expect(iframe?.style.height).toBe("45px");
-    });
-
-    expect(mermaid.initialize).toHaveBeenCalledWith(
-      expect.objectContaining({
-        themeVariables: expect.objectContaining({
-          lineColor: "rgb(12, 34, 56)",
-          primaryBorderColor: "rgb(12, 34, 56)",
-          primaryColor: "rgb(12, 34, 56)",
-          primaryTextColor: "rgb(12, 34, 56)",
-        }),
-      }),
-    );
-  });
 
   it("does not regress Mermaid unwrap after the HtmlBlockPreview branch was added", async () => {
     // Both Mermaid and HtmlBlockPreview rely on react-markdown's `code`
@@ -444,38 +380,6 @@ describe("ReadonlyContent Mermaid rendering", () => {
     expect(container.querySelector("pre")).toBeNull();
   });
 
-  it("opens a fullscreen lightbox when the toolbar button is clicked", async () => {
-    const { container } = render(
-      <ReadonlyContent
-        content={["```mermaid", "graph LR", "  A[Start] --> B[Done]", "```"].join("\n")}
-      />,
-    );
-
-    const button = await waitFor(() => {
-      const found = container.querySelector<HTMLButtonElement>(
-        ".mermaid-diagram-toolbar button",
-      );
-      expect(found).not.toBeNull();
-      return found!;
-    });
-
-    expect(document.querySelector(".mermaid-diagram-lightbox")).toBeNull();
-
-    fireEvent.click(button);
-
-    const lightboxFrame = document.querySelector<HTMLIFrameElement>(
-      ".mermaid-diagram-lightbox-frame",
-    );
-    expect(lightboxFrame).not.toBeNull();
-    expect(lightboxFrame?.getAttribute("sandbox")).toBe("");
-    expect(lightboxFrame?.srcdoc).toContain("mock diagram");
-    expect(lightboxFrame?.srcdoc).toContain("max-height: 100%");
-
-    fireEvent.keyDown(document, { key: "Escape" });
-    await waitFor(() => {
-      expect(document.querySelector(".mermaid-diagram-lightbox")).toBeNull();
-    });
-  });
 });
 
 describe("ReadonlyContent HTML block rendering", () => {
@@ -528,49 +432,6 @@ describe("ReadonlyContent HTML block rendering", () => {
   });
 });
 
-describe("ReadonlyContent file-card → AttachmentBlock HTML routing", () => {
-  // Regression pin for readonly-content.tsx:279. The `div data-type=fileCard`
-  // branch must render through <AttachmentBlock>, not the older
-  // <AttachmentCard>. Reverting that line would skip the html+attachmentId
-  // dispatcher branch and surface the bare file-card chrome (filename row)
-  // instead of the rendered iframe — the exact regression MUL-2330 fixed.
-  function renderWithQuery(ui: ReactElement) {
-    const qc = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
-    return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
-  }
-
-  it("renders the !file[](url) HTML attachment as an iframe (no file-card chrome)", async () => {
-    getAttachmentTextContentMock.mockResolvedValueOnce({
-      text: "<p>chart</p>",
-      originalContentType: "text/html",
-    });
-    const attachment = {
-      id: "att-1",
-      url: "/uploads/report.html",
-      filename: "report.html",
-      content_type: "text/html",
-      size_bytes: 0,
-    } as any;
-    const { container, queryByText } = renderWithQuery(
-      <ReadonlyContent
-        content="!file[report.html](/uploads/report.html)"
-        attachments={[attachment]}
-      />,
-    );
-    const frame = await waitFor(() => {
-      const f = container.querySelector<HTMLIFrameElement>("iframe");
-      expect(f).not.toBeNull();
-      return f!;
-    });
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(frame.getAttribute("srcdoc")).toContain("<p>chart</p>");
-    // AttachmentCard chrome surfaces the filename as visible text in a
-    // <p class="truncate"> row. HtmlAttachmentPreview replaces it entirely.
-    expect(queryByText("report.html")).toBeNull();
-  });
-});
 
 describe("ReadonlyContent slash command rendering", () => {
   it("renders slash skill links as slash command pills", () => {

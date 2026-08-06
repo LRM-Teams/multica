@@ -173,7 +173,7 @@
       "upgrade": "升级",
       "upgrade_to": "升级到 {{version}}",
       "updating": "升级中…",
-      "upgrade_progress_pending": "正在开始升级…",
+      "upgrade_progress_pending": "等待 daemon 接收升级…",
       "upgrade_progress_running": "正在下载并安装…",
       "upgrade_progress_applying": "正在重启并切换版本…",
       "upgrade_failed_prefix": "升级失败：",

@@ -146,8 +146,8 @@ export function MachineDaemonUpgrade({
   const projectedMachineStatus: RuntimeUpdateStatus | null = (() => {
     switch (machineUpgrade?.phase) {
       case "queued":
-        return "queued";
       case "starting":
+        return "queued";
       case "staging":
       case "verifying":
       case "handoff":

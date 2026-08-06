@@ -17,6 +17,17 @@ import (
 	"github.com/spf13/pflag"
 )
 
+func setMessageCredentialProxyEnv(t *testing.T, serverURL string) {
+	t.Helper()
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(serverURL, "http://"))
+	if err != nil {
+		t.Fatalf("server port: %v", err)
+	}
+	t.Setenv("MULTICA_DAEMON_PORT", port)
+	t.Setenv("MULTICA_AGENT_ID", "agent-1")
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+}
+
 func TestMessageSendHasNoAgentControlledCursorFlag(t *testing.T) {
 	cmd := newMessageSendCmd()
 	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
@@ -81,7 +92,7 @@ func TestMessageResolveAcceptsOnlyOneIdentityWithoutGenericFlags(t *testing.T) {
 func TestRunAgentMessageResolvePostsOneIdentity(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent/messages/resolve" {
+		if r.URL.Path != "/credential-proxy/messages/resolve" {
 			http.NotFound(w, r)
 			return
 		}
@@ -93,9 +104,7 @@ func TestRunAgentMessageResolvePostsOneIdentity(t *testing.T) {
 		})
 	}))
 	defer srv.Close()
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
+	setMessageCredentialProxyEnv(t, srv.URL)
 
 	readOut, writeOut, err := os.Pipe()
 	if err != nil {
@@ -114,8 +123,13 @@ func TestRunAgentMessageResolvePostsOneIdentity(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("read stdout: %v", readErr)
 	}
-	if len(body) != 1 || body["message_id"] != "11111111" {
-		t.Fatalf("resolve request body = %#v, want only message_id", body)
+	if body["message_id"] != "11111111" || body["agent_id"] != "agent-1" || body["workspace_id"] != "ws-1" {
+		t.Fatalf("resolve request body = %#v, want canonical identity and local principal", body)
+	}
+	for _, legacy := range []string{"task_id", "execution_id", "agent_inbox_event_id", "agent_inbox_delivery_id", "agent_inbox_lease_token"} {
+		if _, found := body[legacy]; found {
+			t.Fatalf("resolve proxy body leaked %s: %#v", legacy, body)
+		}
 	}
 }
 
@@ -136,7 +150,7 @@ func TestMessageReactUsesCanonicalIdentityWithoutTargetOrCursor(t *testing.T) {
 func TestRunAgentMessageReactPostsTargetFreeIdentity(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent/messages/react" {
+		if r.URL.Path != "/credential-proxy/messages/react" {
 			http.NotFound(w, r)
 			return
 		}
@@ -148,9 +162,7 @@ func TestRunAgentMessageReactPostsTargetFreeIdentity(t *testing.T) {
 		})
 	}))
 	defer srv.Close()
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
+	setMessageCredentialProxyEnv(t, srv.URL)
 
 	readOut, writeOut, err := os.Pipe()
 	if err != nil {
@@ -173,8 +185,13 @@ func TestRunAgentMessageReactPostsTargetFreeIdentity(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("read stdout: %v", readErr)
 	}
-	if len(body) != 3 || body["message_id"] != "11111111" || body["emoji"] != "+1" || body["remove"] != true {
+	if body["message_id"] != "11111111" || body["emoji"] != "+1" || body["remove"] != true || body["agent_id"] != "agent-1" || body["workspace_id"] != "ws-1" {
 		t.Fatalf("react request body = %#v, want target-free canonical identity", body)
+	}
+	for _, legacy := range []string{"task_id", "execution_id", "agent_inbox_event_id", "agent_inbox_delivery_id", "agent_inbox_lease_token"} {
+		if _, found := body[legacy]; found {
+			t.Fatalf("react proxy body leaked %s: %#v", legacy, body)
+		}
 	}
 }
 
@@ -465,7 +482,7 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 func TestRunAgentMessageSearchPostsCanonicalFiltersAndPermitsFilterOnly(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent/messages/search" {
+		if r.URL.Path != "/credential-proxy/messages/search" {
 			http.NotFound(w, r)
 			return
 		}
@@ -477,9 +494,7 @@ func TestRunAgentMessageSearchPostsCanonicalFiltersAndPermitsFilterOnly(t *testi
 		})
 	}))
 	defer srv.Close()
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
+	setMessageCredentialProxyEnv(t, srv.URL)
 
 	cmd := newMessageSearchCmd()
 	_ = cmd.Flags().Set("target", "#multica")
@@ -516,6 +531,11 @@ func TestRunAgentMessageSearchPostsCanonicalFiltersAndPermitsFilterOnly(t *testi
 	if _, ok := body["channel"]; ok {
 		t.Fatalf("legacy channel field leaked into search body: %#v", body)
 	}
+	for _, legacy := range []string{"task_id", "execution_id", "agent_inbox_event_id", "agent_inbox_delivery_id", "agent_inbox_lease_token"} {
+		if _, found := body[legacy]; found {
+			t.Fatalf("search proxy body leaked %s: %#v", legacy, body)
+		}
+	}
 }
 
 func TestRunAgentMessageSearchReportsMalformedUpstreamResponse(t *testing.T) {
@@ -524,9 +544,7 @@ func TestRunAgentMessageSearchReportsMalformedUpstreamResponse(t *testing.T) {
 		_, _ = w.Write([]byte("not-json"))
 	}))
 	defer srv.Close()
-	t.Setenv("MULTICA_SERVER_URL", srv.URL)
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_TOKEN", "test-token")
+	setMessageCredentialProxyEnv(t, srv.URL)
 
 	err := runAgentMessageSearch(newMessageSearchCmd(), []string{"needle"})
 	if err == nil || !strings.Contains(err.Error(), "search messages") {

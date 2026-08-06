@@ -234,16 +234,6 @@ func (d *Daemon) forceTerminateManagedAgentProcesses() error {
 			return fmt.Errorf("canonical managed runtime: %w", err)
 		}
 	}
-	if d.persistentRuntimes != nil {
-		if err := d.persistentRuntimes.forceTerminateAll(); err != nil {
-			return fmt.Errorf("grok managed runtime: %w", err)
-		}
-	}
-	if d.piPersistentRuntimes != nil {
-		if err := d.piPersistentRuntimes.forceTerminateAll(); err != nil {
-			return fmt.Errorf("pi managed runtime: %w", err)
-		}
-	}
 	return nil
 }
 

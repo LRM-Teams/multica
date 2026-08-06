@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
@@ -32,7 +33,6 @@ type agentLifecycleSessionResetter interface {
 
 type agentLifecycleExecutor struct {
 	workspacesRoot string
-	turns          *agentRuntimeTurnCoordinator
 	runtimes       *canonicalAgentRuntimePool
 	sessionReset   agentLifecycleSessionResetter
 	logger         *slog.Logger
@@ -92,9 +92,6 @@ func (e *agentLifecycleExecutor) Execute(ctx context.Context, request agentLifec
 }
 
 func (e *agentLifecycleExecutor) validateDependencies(request agentLifecycleExecutionRequest) error {
-	if e.turns == nil {
-		return errors.New("canonical turn coordinator is not configured")
-	}
 	if e.runtimes == nil {
 		return errors.New("canonical runtime pool is not configured")
 	}
@@ -200,4 +197,13 @@ func lifecycleStepError(step string, err error) error {
 		return nil
 	}
 	return &agentLifecycleExecutionError{Step: step, Err: err}
+}
+
+func isCanonicalRuntimeUUID(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || value != strings.ToLower(trimmed) {
+		return false
+	}
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed != uuid.Nil && parsed.String() == value
 }

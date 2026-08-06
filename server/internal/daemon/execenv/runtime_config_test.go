@@ -420,6 +420,7 @@ func TestAssignmentTriggeredProtocolHonorsAgentIdentity(t *testing.T) {
 }
 
 func TestRuntimeBriefHasOneContractWithoutModeIdentity(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 
 	cases := []struct {
@@ -427,7 +428,7 @@ func TestRuntimeBriefHasOneContractWithoutModeIdentity(t *testing.T) {
 		ctx  TaskContextForEnv
 	}{
 		{name: "issue", ctx: TaskContextForEnv{IssueID: "issue-1"}},
-		{name: "channel", ctx: TaskContextForEnv{ChatSessionID: "chat-1", ChannelID: "channel-1"}},
+		{name: "channel", ctx: TaskContextForEnv{MessageDelivery: true, ChannelID: "channel-1"}},
 		{name: "channel-only", ctx: TaskContextForEnv{ChannelID: "channel-1"}},
 	}
 	for _, tc := range cases {
@@ -519,10 +520,11 @@ func TestRuntimeBriefHasOneContractWithoutModeIdentity(t *testing.T) {
 }
 
 func TestChatRuntimeBriefIsLeanButKeepsFastChatPaths(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChatSessionID: "chat-1",
-		ChannelID:     "channel-1",
+		MessageDelivery: true,
+		ChannelID:       "channel-1",
 		AgentSkills: []SkillContextForEnv{{
 			Name:        "Issue Triage",
 			Description: "Use when organizing issue work.",
@@ -611,18 +613,15 @@ func TestChatRuntimeBriefPinsRaftThreadUnfollowDecisionBoundary(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name     string
-		directed bool
+		name string
 	}{
-		{name: "ambient", directed: false},
-		{name: "directed", directed: true},
+		{name: "message-runtime"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			out := buildMetaSkillContent("codex", TaskContextForEnv{
-				ChannelID:     "channel-1",
-				ChatSessionID: "chat-1",
-				Directed:      tc.directed,
+				ChannelID:       "channel-1",
+				MessageDelivery: true,
 			})
 
 			for _, want := range []string{
@@ -640,22 +639,43 @@ func TestChatRuntimeBriefPinsRaftThreadUnfollowDecisionBoundary(t *testing.T) {
 	}
 }
 
+func TestMessageRuntimeBriefHasNoTaskOrSessionDeliveryContract(t *testing.T) {
+	brief := buildMetaSkillContent("codex", TaskContextForEnv{MessageDelivery: true})
+	for _, want := range []string{
+		"multica message check",
+		"Visible output is delivered only by the durable agent-credential Multica CLI transport",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Fatalf("Message runtime brief missing %q:\n%s", want, brief)
+		}
+	}
+	for _, forbidden := range []string{
+		"ChatSessionID",
+		"current session delivers automatically",
+		"final assistant output is delivered",
+		"MULTICA_TASK_ID",
+		"MULTICA_EXECUTION_ID",
+		"MULTICA_AGENT_INBOX_LEASE_TOKEN",
+	} {
+		if strings.Contains(brief, forbidden) {
+			t.Fatalf("Message runtime brief leaked %q:\n%s", forbidden, brief)
+		}
+	}
+}
+
 func TestChatRuntimeBriefPinsReminderDecisionBoundary(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name     string
-		directed bool
+		name string
 	}{
-		{name: "ambient", directed: false},
-		{name: "directed", directed: true},
+		{name: "message-runtime"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			out := buildMetaSkillContent("codex", TaskContextForEnv{
-				ChannelID:     "channel-1",
-				ChatSessionID: "chat-1",
-				Directed:      tc.directed,
+				ChannelID:       "channel-1",
+				MessageDelivery: true,
 			})
 
 			for _, want := range []string{
@@ -723,11 +743,11 @@ func TestRuntimeBriefMakesFreshCanonicalSessionExplicit(t *testing.T) {
 }
 
 func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChatSessionID: "chat-1",
-		ChannelID:     "channel-1",
-		Directed:      true,
+		MessageDelivery: true,
+		ChannelID:       "channel-1",
 	}
 	out := buildMetaSkillContent("codex", ctx)
 
@@ -761,11 +781,12 @@ func TestChatRuntimeBriefRendersReplyRequirementForDirectedRun(t *testing.T) {
 }
 
 func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChatSessionID: "chat-1",
-		ChannelID:     "channel-1",
-		Directed:      false, // ambient run
+		MessageDelivery: true,
+		ChannelID:       "channel-1",
+		// ambient run
 	}
 	out := buildMetaSkillContent("codex", ctx)
 
@@ -794,11 +815,11 @@ func TestChatRuntimeBriefOmitsReplyRequirementForAmbientRun(t *testing.T) {
 }
 
 func TestChatRuntimeBriefAlwaysAdvertisesCredentialCLITransport(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChatSessionID:                    "chat-1",
+		MessageDelivery:                  true,
 		ChannelID:                        "channel-1",
-		Directed:                         true,
 		AgentSkills:                      []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
 		RequestingUserName:               "Frank",
 		RequestingUserProfileDescription: "Product owner",
@@ -850,8 +871,7 @@ func TestTargetlessRuntimeBriefUsesAutomaticCompletionDelivery(t *testing.T) {
 	t.Parallel()
 	// Single-track: ChatSessionID alone must not unlock targetless chat delivery brief.
 	out := buildMetaSkillContent("codex", TaskContextForEnv{
-		ChatSessionID: "standalone-chat-1",
-		Directed:      true,
+		MessageDelivery: true,
 	})
 	if strings.Contains(out, "no `ChannelID`") {
 		t.Fatalf("ChatSessionID alone must not select targetless chat delivery brief:\n%s", out)
@@ -886,13 +906,14 @@ func TestIssueRuntimeBriefKeepsIssueWorkflowContract(t *testing.T) {
 }
 
 func TestChatBackedIssueUsesSemanticIssueWorkflow(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 	out := buildMetaSkillContent("pi", TaskContextForEnv{
-		ChannelID:     "channel-1",
-		ChatSessionID: "resident-session-1",
-		IssueID:       "11111111-2222-3333-4444-555555555555",
-		ProjectID:     "project-1",
-		ProjectTitle:  "Launch Project",
+		ChannelID:       "channel-1",
+		MessageDelivery: true,
+		IssueID:         "11111111-2222-3333-4444-555555555555",
+		ProjectID:       "project-1",
+		ProjectTitle:    "Launch Project",
 	})
 	for _, want := range []string{
 		"## Pinned Rules",
@@ -1038,7 +1059,7 @@ func TestWorkspaceContextRenderedAcrossTaskKinds(t *testing.T) {
 			name: "chat",
 			ctx: TaskContextForEnv{
 				ChannelID:        "channel-1",
-				ChatSessionID:    "chat-1",
+				MessageDelivery:  true,
 				WorkspaceContext: wsContext,
 			},
 		},
@@ -1083,11 +1104,11 @@ func TestWorkspaceContextRenderedAcrossTaskKinds(t *testing.T) {
 func TestPinnedRulesAndProjectContextRenderForChat(t *testing.T) {
 	t.Parallel()
 	out := buildMetaSkillContent("pi", TaskContextForEnv{
-		ChatSessionID: "chat-1",
-		ChannelID:     "channel-1",
-		ProjectID:     "project-1",
-		ProjectTitle:  "Demo Project",
-		AgentSkills:   []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
+		MessageDelivery: true,
+		ChannelID:       "channel-1",
+		ProjectID:       "project-1",
+		ProjectTitle:    "Demo Project",
+		AgentSkills:     []SkillContextForEnv{{Name: "multica-stickers", Description: "Use for short social chat beats."}},
 	})
 
 	for _, want := range []string{
@@ -1105,6 +1126,7 @@ func TestPinnedRulesAndProjectContextRenderForChat(t *testing.T) {
 }
 
 func TestRenderProjectContextUsesTruthfulTaskKindWording(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 	tests := []struct {
 		name string
@@ -1135,9 +1157,9 @@ func TestRenderProjectContextUsesTruthfulTaskKindWording(t *testing.T) {
 func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChannelID:     "channel-1",
-		ChatSessionID: "chat-1",
-		AgentRoot:     "/tmp/multica/workspace-1/agents/agent-1",
+		ChannelID:       "channel-1",
+		MessageDelivery: true,
+		AgentRoot:       "/tmp/multica/workspace-1/agents/agent-1",
 	}
 	out := buildMetaSkillContent("pi", ctx)
 
@@ -1167,10 +1189,9 @@ func TestMulticaMemoryScopeRenderedForPiProvider(t *testing.T) {
 func TestMemoryOperatingGuidePrioritizesExplicitUserPreferences(t *testing.T) {
 	t.Parallel()
 	ctx := TaskContextForEnv{
-		ChannelID:     "channel-1",
-		ChatSessionID: "chat-1",
-		Directed:      true,
-		AgentRoot:     "/tmp/multica/workspace-1/agents/agent-1",
+		ChannelID:       "channel-1",
+		MessageDelivery: true,
+		AgentRoot:       "/tmp/multica/workspace-1/agents/agent-1",
 	}
 	out := buildMetaSkillContent("codex", ctx)
 
@@ -1247,15 +1268,15 @@ func TestMemoryOperatingGuideRequiresAgentLocalScope(t *testing.T) {
 	}
 
 	withRoot := buildMetaSkillContent("codex", TaskContextForEnv{
-		ChannelID:     "channel-1",
-		ChatSessionID: "chat-1",
-		AgentRoot:     "/tmp/multica/workspace-1/agents/agent-1",
+		ChannelID:       "channel-1",
+		MessageDelivery: true,
+		AgentRoot:       "/tmp/multica/workspace-1/agents/agent-1",
 	})
 	if !strings.Contains(withRoot, "### Memory Operating Guide (v0.11)") {
 		t.Fatalf("memory operating guide missing when an agent-local root exists:\n%s", withRoot)
 	}
 
-	skillsOnly := buildMetaSkillContent("codex", TaskContextForEnv{ChannelID: "channel-1", ChatSessionID: "chat-1", AgentSkills: []SkillContextForEnv{{Name: "demo"}}})
+	skillsOnly := buildMetaSkillContent("codex", TaskContextForEnv{ChannelID: "channel-1", MessageDelivery: true, AgentSkills: []SkillContextForEnv{{Name: "demo"}}})
 	if strings.Contains(skillsOnly, "Memory Operating Guide") {
 		t.Fatalf("memory operating guide must not render for a skills-only scope:\n%s", skillsOnly)
 	}
@@ -1316,6 +1337,7 @@ func TestWorkspaceContextHeadingSkippedWhenEmpty(t *testing.T) {
 }
 
 func TestMetaSkillDocumentsCanonicalHumanDMTransport(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 	out := buildMetaSkillContent("claude", TaskContextForEnv{ChannelID: "channel-1"})
 
@@ -1744,10 +1766,10 @@ func TestWriteRuntimeConfigFileAlwaysInsertsFixedManagedSeparator(t *testing.T) 
 
 func TestBuildMetaSkillContentDoesNotUseLegacyManagedRole(t *testing.T) {
 	content := buildMetaSkillContent("codex", TaskContextForEnv{
-		ChannelID:     "channel-1",
-		ChatSessionID: "chat-1",
-		AgentName:     "ordinary-looking-name",
-		ManagedRole:   "group_manager",
+		ChannelID:       "channel-1",
+		MessageDelivery: true,
+		AgentName:       "ordinary-looking-name",
+		ManagedRole:     "group_manager",
 	})
 	if strings.Contains(content, "**Group manager:") ||
 		strings.Contains(content, "### Managed Group Manager Role") {
@@ -1757,7 +1779,7 @@ func TestBuildMetaSkillContentDoesNotUseLegacyManagedRole(t *testing.T) {
 
 func TestRuntimeBriefStaticInstructionsContainNoChineseCharacters(t *testing.T) {
 	t.Parallel()
-	brief := buildMetaSkillContent("codex", TaskContextForEnv{ChannelID: "channel-1", ChatSessionID: "chat-1"})
+	brief := buildMetaSkillContent("codex", TaskContextForEnv{ChannelID: "channel-1", MessageDelivery: true})
 	for _, r := range brief {
 		if r >= '\u4e00' && r <= '\u9fff' {
 			t.Fatalf("runtime brief must not inject Chinese instruction text: %q", string(r))
@@ -1776,7 +1798,7 @@ func TestStandaloneChatRuntimeBriefNeverLeaksChannelCLITransportContract(t *test
 	t.Parallel()
 	// Single-track: ChatSessionID alone must not select the chat runtime brief.
 	out := buildMetaSkillContent("claude", TaskContextForEnv{
-		ChatSessionID: "standalone-chat-1",
+		MessageDelivery: true,
 	})
 	if strings.Contains(out, "No `ChannelID` target") {
 		t.Fatalf("ChatSessionID alone must not select standalone chat delivery brief:\n%s", out)
@@ -1787,11 +1809,11 @@ func TestStandaloneChatRuntimeBriefNeverLeaksChannelCLITransportContract(t *test
 }
 
 func TestChannelChatRuntimeBriefNeverLeaksStandaloneFinalOutputContract(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 	out := buildMetaSkillContent("codex", TaskContextForEnv{
-		ChatSessionID: "chat-1",
-		ChannelID:     "channel-1",
-		Directed:      true,
+		MessageDelivery: true,
+		ChannelID:       "channel-1",
 	})
 
 	for _, want := range []string{

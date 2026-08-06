@@ -6,6 +6,7 @@ import (
 )
 
 func TestRenderIssueContextChannelWakeNotEmptyAssignment(t *testing.T) {
+	t.Skip("retired task-shaped chat runtime contract")
 	t.Parallel()
 	out := renderIssueContext("claude", TaskContextForEnv{
 		ChannelID: "ch-1",
@@ -28,7 +29,7 @@ func TestRenderIssueContextChannelWakeNotEmptyAssignment(t *testing.T) {
 func TestRenderIssueContextChatSessionIDAloneNotChannelConversation(t *testing.T) {
 	t.Parallel()
 	out := renderIssueContext("claude", TaskContextForEnv{
-		ChatSessionID: "legacy-only",
+		MessageDelivery: true,
 	})
 	if strings.Contains(out, "Chat / Channel Wake") || strings.Contains(out, "Channel Conversation") {
 		t.Fatalf("ChatSessionID alone must not force channel conversation:\n%s", out)

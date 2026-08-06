@@ -58,14 +58,16 @@ func (b *canonicalRuntimeTestBackend) lastResumeSessionID() string {
 type canonicalRuntimeFactoryProbe struct {
 	mu       sync.Mutex
 	backends []*canonicalRuntimeTestBackend
+	configs  []agent.Config
 	closed   int
 }
 
-func (p *canonicalRuntimeFactoryProbe) factory(_ agent.Config) (agent.Backend, func(), error) {
+func (p *canonicalRuntimeFactoryProbe) factory(config agent.Config) (agent.Backend, func(), error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	backend := &canonicalRuntimeTestBackend{}
 	p.backends = append(p.backends, backend)
+	p.configs = append(p.configs, config)
 	return backend, func() {
 		p.mu.Lock()
 		p.closed++
@@ -77,6 +79,15 @@ func (p *canonicalRuntimeFactoryProbe) counts() (created, closed int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.backends), p.closed
+}
+
+func (p *canonicalRuntimeFactoryProbe) latestConfig() agent.Config {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.configs) == 0 {
+		return agent.Config{}
+	}
+	return p.configs[len(p.configs)-1]
 }
 
 func canonicalRuntimeIdentityForTest(t *testing.T, model string, environment map[string]string) canonicalAgentRuntimeIdentity {
@@ -1260,14 +1271,14 @@ func TestCheckResidentLivenessSupportsMultipleSubscribers(t *testing.T) {
 	}
 }
 
-func TestCanonicalAgentRuntimePoolIsActivatedForD6(t *testing.T) {
-	// Behavioral proof of reuse is TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs.
-	// This only pins the runTask call site so the entry is not left unhooked.
+func TestCanonicalAgentRuntimePoolIsActivatedForMessageCoordinator(t *testing.T) {
+	// The coordinator must establish a resident provider before accepting a
+	// canonical Delivery, otherwise an ACK could outrun local durability.
 	raw, err := os.ReadFile("daemon.go")
 	if err != nil {
 		t.Fatalf("read daemon.go: %v", err)
 	}
-	if !strings.Contains(string(raw), "tryCanonicalChatBackend(") {
-		t.Fatal("D6-1b must invoke tryCanonicalChatBackend from runTask")
+	if !strings.Contains(string(raw), "ensureResidentMessageRuntime(") {
+		t.Fatal("Message delivery must ensure its resident runtime before acceptance")
 	}
 }

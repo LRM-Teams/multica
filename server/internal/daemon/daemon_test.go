@@ -4103,62 +4103,6 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 	}
 }
 
-func TestReportTaskResult_ResumeUnsafeReceiptEvictsPersistentChatRuntimes(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if !strings.HasSuffix(req.URL.Path, "/complete") {
-			http.NotFound(w, req)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"acked_seq":42,"terminal_outcome":"failed","resume_unsafe":true}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	now := time.Date(2026, 7, 27, 13, 0, 0, 0, time.UTC)
-	grokPool := newPersistentRuntimePool()
-	piPool := newPiPersistentPool()
-	grokIdentity := persistentRuntimeIdentity{AgentID: "agent-1", RuntimeID: "rt-1", ChatSessionID: "chat-1"}
-	piIdentity := piPersistentIdentity{AgentID: "agent-1", RuntimeID: "rt-1", ChatSessionID: "chat-1"}
-	grokLease, _ := grokPool.acquire(grokIdentity, now)
-	grokSession := grokLease.session
-	grokLease.release(true, now)
-	piLease, _ := piPool.acquire(piIdentity, now)
-	piSession := piLease.session
-	piLease.release(true, now)
-
-	d := &Daemon{
-		client:               NewClient(srv.URL),
-		logger:               slog.Default(),
-		persistentRuntimes:   grokPool,
-		piPersistentRuntimes: piPool,
-	}
-	task := canonicalInboxTaskForTest(Task{
-		ID:            "task-unsafe",
-		AgentID:       "agent-1",
-		RuntimeID:     "rt-1",
-		ChatSessionID: "chat-1",
-	})
-	d.reportTaskResultForTask(context.Background(), task, TaskResult{Status: "completed"}, slog.Default())
-
-	freshGrok, err := grokPool.acquire(grokIdentity, now.Add(time.Second))
-	if err != nil {
-		t.Fatalf("reacquire evicted Grok runtime: %v", err)
-	}
-	if freshGrok.session == grokSession {
-		t.Fatal("resume-unsafe receipt retained Grok runtime")
-	}
-	freshGrok.release(false, now)
-
-	freshPi, err := piPool.acquire(piIdentity, now.Add(time.Second))
-	if err != nil {
-		t.Fatalf("reacquire evicted Pi runtime: %v", err)
-	}
-	if freshPi.session == piSession {
-		t.Fatal("resume-unsafe receipt retained Pi runtime")
-	}
-	freshPi.release(false, now)
-}
-
 func TestIsChannelOnboardingSkipReceipt(t *testing.T) {
 	onboarding := Task{InboxEvent: &AgentInboxLease{Reason: protocol.ChannelOnboardingReason}}
 	ordinary := Task{InboxEvent: &AgentInboxLease{Reason: "mention"}}

@@ -148,19 +148,12 @@ func (h *Handler) HandleAgentMessageRecovery(ctx context.Context, identity daemo
 
 	rows, err := h.DB.Query(ctx, `
 		WITH eligible AS (
-			SELECT m.id, m.seq, m.content, m.parts,
-			       CASE WHEN m.thread_root_message_id IS NULL
-			            THEN 'channel:' || m.channel_id::text
-			            ELSE 'thread:' || m.thread_root_message_id::text END AS target
-			FROM channel_message m
-			JOIN channel_member member
-			  ON member.channel_id = m.channel_id
-			 AND member.workspace_id = m.workspace_id
-			 AND member.member_type = 'agent'
-			 AND member.member_id = $2
-			WHERE m.workspace_id = $1
+			SELECT m.id, delivery.seq, m.content, m.parts, delivery.target
+			FROM agent_message_delivery delivery
+			JOIN channel_message m ON m.id = delivery.message_id
+			WHERE delivery.workspace_id = $1
+			  AND delivery.agent_id = $2
 			  AND m.deleted_at IS NULL
-			  AND NOT (m.author_type = 'agent' AND m.author_id = $2)
 		)
 		SELECT id, seq, content, parts, target
 		FROM eligible
@@ -223,19 +216,12 @@ func (h *Handler) resolveAgentRecoverySnapshot(ctx context.Context, workspaceID,
 	}
 	rows, err := h.DB.Query(ctx, `
 		WITH eligible AS (
-			SELECT m.seq,
-			       CASE WHEN m.thread_root_message_id IS NULL
-			            THEN 'channel:' || m.channel_id::text
-			            ELSE 'thread:' || m.thread_root_message_id::text END AS target
-			FROM channel_message m
-			JOIN channel_member member
-			  ON member.channel_id = m.channel_id
-			 AND member.workspace_id = m.workspace_id
-			 AND member.member_type = 'agent'
-			 AND member.member_id = $2
-			WHERE m.workspace_id = $1
+			SELECT delivery.seq, delivery.target
+			FROM agent_message_delivery delivery
+			JOIN channel_message m ON m.id = delivery.message_id
+			WHERE delivery.workspace_id = $1
+			  AND delivery.agent_id = $2
 			  AND m.deleted_at IS NULL
-			  AND NOT (m.author_type = 'agent' AND m.author_id = $2)
 		)
 		SELECT target, max(seq)
 		FROM eligible

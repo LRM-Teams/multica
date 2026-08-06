@@ -59,8 +59,6 @@ const (
 	// the curator agent (self-review / team curation / L3). 30s was too short
 	// for Cursor/Codex team curation over multiple agents and evidence.
 	DefaultMemoryCurationL3ReviewTimeout = 10 * time.Minute
-	DefaultGrokPersistentIdleTTL         = 15 * time.Minute
-	DefaultPiPersistentIdleTTL           = 15 * time.Minute
 	raftLoopbackNoProxy                  = "127.0.0.1,localhost"
 	// DefaultInboundWatchdog: see inbound_watchdog.go (Raft-aligned 70s).
 
@@ -99,8 +97,6 @@ type Config struct {
 	MemoryCurationL3ReviewEnabled bool          // run the local Pi L3 reviewer during daemon-side curation
 	MemoryCurationL3ReviewTimeout time.Duration // per-agent L3 reviewer timeout
 	MemoryCurationRunTimeout      time.Duration // wall-clock timeout for one daemon-claimed curation run
-	GrokPersistentIdleTTL         time.Duration // 0 disables idle chat-session eviction
-	PiPersistentIdleTTL           time.Duration // 0 disables idle Pi chat-session eviction
 	// MaxAgentProcesses bounds distinct agents with a live resident provider
 	// process on this daemon (#35). 0 = unlimited. Default = f(NumCPU) clamped
 	// FLOOR/CEIL; override with MULTICA_MAX_AGENT_PROCESSES.
@@ -513,14 +509,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if memoryCurationRunTimeout <= 0 {
 		return Config{}, fmt.Errorf("MULTICA_DAEMON_MEMORY_CURATION_RUN_TIMEOUT: must be positive")
 	}
-	grokPersistentIdleTTL, err := durationFromEnv("MULTICA_GROK_PERSISTENT_IDLE_TTL", DefaultGrokPersistentIdleTTL)
-	if err != nil {
-		return Config{}, err
-	}
-	piPersistentIdleTTL, err := durationFromEnv("MULTICA_PI_PERSISTENT_IDLE_TTL", DefaultPiPersistentIdleTTL)
-	if err != nil {
-		return Config{}, err
-	}
 	maxAgentProcesses, err := resolveMaxAgentProcessesFromEnv(os.Getenv)
 	if err != nil {
 		return Config{}, err
@@ -547,8 +535,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		MemoryCurationL3ReviewEnabled:  memoryCurationL3ReviewEnabled,
 		MemoryCurationL3ReviewTimeout:  memoryCurationL3ReviewTimeout,
 		MemoryCurationRunTimeout:       memoryCurationRunTimeout,
-		GrokPersistentIdleTTL:          grokPersistentIdleTTL,
-		PiPersistentIdleTTL:            piPersistentIdleTTL,
 		MaxAgentProcesses:              maxAgentProcesses,
 		HealthPort:                     healthPort,
 		PollInterval:                   pollInterval,

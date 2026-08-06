@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -354,6 +355,37 @@ func TestMachineUpgrade_LegacyBootstrapTimesOutWithoutReceipt(t *testing.T) {
 	op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
 	if err != nil || op == nil || op.Phase != MachineUpgradeTimeout || op.ErrorCode == nil || *op.ErrorCode != "legacy_update_timeout" {
 		t.Fatalf("legacy receipt timeout = %+v err=%v", op, err)
+	}
+}
+
+func TestMachineUpgrade_LegacyBootstrapTimesOutWhenStandaloneSuccessorNeverRegisters(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	firstRuntimeID, _, daemonID := createLegacyMachineUpgradeSiblingRuntimes(t, testUserID)
+	_, created := initiateMachineUpgrade(t, testUserID, daemonID, "v0.4.14")
+	firstRuntime := getMachineUpgradeRuntime(t, firstRuntimeID)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM daemon_runtime_update WHERE id = $1`, created.ID)
+	})
+	if _, _, err := testHandler.processHeartbeat(context.Background(), firstRuntime, false, false, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"running", "ready_to_apply"} {
+		req := newRequestAsUser(testUserID, http.MethodPost, "/api/daemon/runtimes/"+firstRuntimeID+"/update/"+created.ID+"/result", map[string]string{"status": status})
+		req = withRouteParams(req, "runtimeId", firstRuntimeID, "updateId", created.ID)
+		w := httptest.NewRecorder()
+		testHandler.ReportUpdateResult(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("legacy %s report = %d: %s", status, w.Code, w.Body.String())
+		}
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE machine_upgrade SET updated_at = now() - interval '91 seconds' WHERE id = $1`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID)
+	if err != nil || op == nil || op.Phase != MachineUpgradeTimeout || op.ErrorMessage == nil || !strings.Contains(*op.ErrorMessage, "multica daemon restart") {
+		t.Fatalf("legacy successor timeout = %+v err=%v", op, err)
 	}
 }
 

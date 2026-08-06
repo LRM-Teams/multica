@@ -262,6 +262,36 @@ describe("MachineDaemonUpgrade (LRM-1071 / v5)", () => {
     expect(screen.getByTestId("machine-daemon-upgrade")).toHaveAttribute("data-state", "active");
     expect(screen.getByTestId("machine-basics-daemon-target")).toHaveTextContent("0.4.0");
   });
+
+  it("labels a successor handoff as restarting instead of downloading", () => {
+    const runtime = makeRuntime({
+      runtime_health: "ok",
+      target_version: null,
+      machine_upgrade: {
+        id: "machine-upgrade-1",
+        daemon_id: "daemon-1",
+        request_id: "request-1",
+        requested_target: "0.4.0",
+        resolved_target: "0.4.0",
+        phase: "handoff",
+        created_at: "2026-08-06T00:00:00Z",
+        updated_at: "2026-08-06T00:00:00Z",
+      },
+    });
+    wrap(
+      <MachineDaemonUpgrade
+        runtime={runtime}
+        cliVersion="0.3.99"
+        daemonTargetVersion={null}
+        updateError={null}
+        isOnline={false}
+        canUpdate
+      />,
+    );
+    expect(screen.getByTestId("machine-daemon-upgrade-progress")).toHaveTextContent(
+      "Restarting to switch version…",
+    );
+  });
 });
 
 describe("MachineDangerZone (LRM-1071 / v5)", () => {

@@ -230,6 +230,12 @@ export function MachineDaemonUpgrade({
 
   const progressLabel = (() => {
     if (
+      machineUpgrade?.phase === "handoff" ||
+      machineUpgrade?.phase === "converging"
+    ) {
+      return t(($) => $.machine.ops.upgrade_progress_applying);
+    }
+    if (
       derivedStatus === "pending" ||
       effectiveStatus === "queued" ||
       effectiveStatus === "pending"

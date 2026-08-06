@@ -30,6 +30,7 @@ import type {
   ChannelThreadMessagesPage,
   AgentHealthResponse,
   AgentRuntime,
+  MachineUpgrade,
   StickerCatalogResponse,
   ListIssuesResponse,
   TimelineEntry,
@@ -336,6 +337,41 @@ export const AgentRuntimeSchema = z.object({
 
 export const AgentRuntimeListSchema = z.array(AgentRuntimeSchema);
 export const EMPTY_AGENT_RUNTIME_LIST: AgentRuntime[] = [];
+
+export const MachineUpgradeSchema = z.object({
+  id: z.string(),
+  daemon_id: z.string(),
+  request_id: z.string(),
+  requested_target: z.string(),
+  resolved_target: z.string().nullable().optional(),
+  phase: z.string().default("failed"),
+  result: z.string().nullable().optional(),
+  error_code: z.string().nullable().optional(),
+  error_message: z.string().nullable().optional(),
+  accepted_at: z.string().nullable().optional(),
+  accepted_generation: z.string().nullable().optional(),
+  accepted_runtime_ids: z.array(z.string()).default([]),
+  attested_runtime_ids: z.array(z.string()).default([]),
+  source_version: z.string().nullable().optional(),
+  rollback_generation: z.string().nullable().optional(),
+  rollback_runtime_ids: z.array(z.string()).default([]),
+  completed_at: z.string().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const EMPTY_MACHINE_UPGRADE: MachineUpgrade = {
+  id: "",
+  daemon_id: "",
+  request_id: "",
+  requested_target: "",
+  phase: "failed",
+  accepted_runtime_ids: [],
+  attested_runtime_ids: [],
+  rollback_runtime_ids: [],
+  created_at: "",
+  updated_at: "",
+};
 
 // ---------------------------------------------------------------------------
 // Schemas for the highest-risk API endpoints — those whose responses drive

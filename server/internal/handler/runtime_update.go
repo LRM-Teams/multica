@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -30,23 +28,7 @@ const (
 	UpdateReady     UpdateStatus = "ready_to_apply"
 	UpdateFailed    UpdateStatus = "failed"
 	UpdateTimeout   UpdateStatus = "timeout"
-
-	// UpdateQueued is synthetic — never persisted in daemon_runtime_update.
-	// It's what GetUpdate/InitiateUpdate return while an UpdateIntent exists
-	// but hasn't yet been materialized into a real attempt (the runtime
-	// hasn't sent a heartbeat since the intent was created). See
-	// docs/superpowers/specs/2026-08-01-daemon-update-mechanism-design.md.
-	UpdateQueued UpdateStatus = "queued"
 )
-
-// intentUpdateIDPrefix marks a synthetic UpdateRequest.ID as representing an
-// UpdateIntent rather than a real daemon_runtime_update row — GetUpdate uses
-// this to know which store to check.
-const intentUpdateIDPrefix = "intent:"
-
-func intentUpdateID(runtimeID string) string {
-	return intentUpdateIDPrefix + runtimeID
-}
 
 // UpdateRequest represents a pending or completed CLI update request.
 type UpdateRequest struct {
@@ -176,8 +158,8 @@ var errUpdateInProgress = &updateError{msg: "an update is already in progress fo
 
 // runtimePinnedVersion centralizes the "pin wins" rule (task #81): a runtime
 // pinned via MULTICA_PINNED_VERSION must never receive an automatic or
-// queued update, on any of the three paths that can deliver one (manual
-// InitiateUpdate, intent materialization, heartbeat delivery) — checked here
+// queued update, on any delivery path (historical intent materialization or
+// heartbeat delivery) — checked here
 // once so a future rule change (e.g. an override) only needs one edit.
 func runtimePinnedVersion(rt db.AgentRuntime) (version string, pinned bool) {
 	if !rt.PinnedVersion.Valid {
@@ -358,210 +340,6 @@ func invalidUpdateTransition(from, to UpdateStatus) error {
 	return &updateTransitionError{from: from, to: to}
 }
 
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
-
-// InitiateUpdate records a durable intent to update this runtime to whatever
-// the latest release is (protected route, called by frontend).
-//
-// This does NOT create an attempt directly. Before 2026-08-02 it did, with a
-// 120-second window for the daemon to pick it up — fine for an always-on
-// target, but a laptop asleep at the moment of this call simply missed it,
-// with no retry and no queueing (2026-08-01/02 incident). The intent this
-// creates is durable (default 14-day TTL, UpdateIntentTTL) and gets
-// materialized into a real attempt the moment a heartbeat proves the runtime
-// reachable (see maybeMaterializeUpdateIntent in daemon.go) — the same code
-// path whether the runtime heartbeats back in 2 seconds or 2 weeks.
-func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
-	runtimeID := chi.URLParam(r, "runtimeId")
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
-	if !ok {
-		return
-	}
-
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
-		return
-	}
-
-	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found")
-	if !ok {
-		return
-	}
-	if !canOwnRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the computer owner can update this runtime")
-		return
-	}
-
-	var req createMachineUpgradeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	op, _, err := h.createMachineUpgrade(r, rt, member, req, true)
-	if err != nil {
-		h.writeMachineUpgradeError(w, err)
-		return
-	}
-	// Compatibility shape: installed clients still poll a runtime endpoint, but
-	// the returned ID is the one canonical machine operation for every sibling.
-	writeJSON(w, http.StatusOK, runtimeUpdateFromMachineUpgrade(op, uuidToString(rt.ID)))
-}
-
-// CancelUpdateIntent withdraws a not-yet-delivered update intent (protected
-// route, called by frontend). No-op if none exists or it's already been
-// delivered/expired — same auth as InitiateUpdate.
-func (h *Handler) CancelUpdateIntent(w http.ResponseWriter, r *http.Request) {
-	runtimeID := chi.URLParam(r, "runtimeId")
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
-	if !ok {
-		return
-	}
-
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
-		return
-	}
-	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found")
-	if !ok {
-		return
-	}
-	if !canOwnRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the computer owner can cancel this update")
-		return
-	}
-
-	if h.MachineUpgradeStore != nil {
-		if op, err := h.MachineUpgradeStore.LatestForDaemon(r.Context(), runtimeDaemonKey(rt)); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to load machine upgrade: "+err.Error())
-			return
-		} else if op != nil && !op.Phase.terminal() {
-			if _, err := h.MachineUpgradeStore.Cancel(r.Context(), op.DaemonID, op.ID); err != nil {
-				if errors.Is(err, errMachineUpgradeAlreadyAccepted) {
-					writeCodedError(w, http.StatusConflict, "machine_upgrade_already_accepted", err.Error())
-					return
-				}
-				writeError(w, http.StatusInternalServerError, "failed to cancel machine upgrade: "+err.Error())
-				return
-			}
-			h.publishMachineUpgradeProjection(r, rt)
-			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-			return
-		}
-	}
-
-	// Legacy intent rows can still exist during rollout. This is deliberately a
-	// read/cleanup compatibility path only; InitiateUpdate no longer writes one.
-	if err := h.UpdateIntentStore.Cancel(r.Context(), uuidToString(rt.ID)); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to cancel update intent: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-// GetUpdate returns the status of an update request or, if it hasn't been
-// delivered yet, the queued intent behind it (protected route, called by
-// frontend). Polling never needs to know which of the two it's looking at —
-// InitiateUpdate hands back an ID that resolves through whichever is live.
-func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
-	runtimeID := chi.URLParam(r, "runtimeId")
-	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
-	if !ok {
-		return
-	}
-
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
-		return
-	}
-	member, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found")
-	if !ok {
-		return
-	}
-	if !canOwnRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the computer owner can inspect this update")
-		return
-	}
-
-	rtID := uuidToString(rt.ID)
-	updateID := chi.URLParam(r, "updateId")
-
-	if h.MachineUpgradeStore != nil && !strings.HasPrefix(updateID, intentUpdateIDPrefix) {
-		op, err := h.MachineUpgradeStore.Get(r.Context(), runtimeDaemonKey(rt), updateID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to load machine upgrade: "+err.Error())
-			return
-		}
-		if op != nil {
-			writeJSON(w, http.StatusOK, runtimeUpdateFromMachineUpgrade(op, rtID))
-			return
-		}
-	}
-
-	if updateID == intentUpdateID(rtID) {
-		intent, err := h.UpdateIntentStore.Get(r.Context(), rtID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to load update intent: "+err.Error())
-			return
-		}
-		if intent == nil || intent.CancelledAt != nil {
-			writeError(w, http.StatusNotFound, "update not found")
-			return
-		}
-
-		// A terminal intent state (given up / expired) takes priority over
-		// whatever the last raw attempt says, even if that attempt is still
-		// within UpdateStore's retention window — a bare "failed" from the
-		// last attempt doesn't tell the caller "and we've stopped
-		// auto-retrying," which is the more important fact once it's true
-		// (Alice's catch, 2026-08-02: the original ordering here let a
-		// still-fresh failed attempt silently mask the given-up state).
-		if intent.GivenUpAt != nil || intent.ExpiredAt != nil {
-			var lastAttemptError string
-			if intent.GivenUpAt != nil && intent.LastFailedAttemptID != "" {
-				// The give-up message must say why, not just that it
-				// happened — "gave up after N attempts" with no reason is a
-				// wall, not an answer (Parker's rule, 2026-08-02).
-				// Best-effort: if the attempt has already aged out of
-				// UpdateStore's retention, fall back to the generic message
-				// rather than fail the request.
-				if lastAttempt, err := h.UpdateStore.Get(r.Context(), intent.LastFailedAttemptID); err == nil && lastAttempt != nil {
-					lastAttemptError = lastAttempt.Error
-				}
-			}
-			writeJSON(w, http.StatusOK, queuedUpdateFromIntent(intent, lastAttemptError))
-			return
-		}
-
-		// Intent still live: a real attempt may have been delivered since
-		// it was created — surface that instead so a caller polling the ID
-		// InitiateUpdate handed back sees live progress the moment
-		// materialization happens, not a stale "queued" forever.
-		if attempt, err := h.UpdateStore.LatestForRuntime(r.Context(), rtID); err == nil && attempt != nil {
-			writeJSON(w, http.StatusOK, attempt)
-			return
-		}
-		writeJSON(w, http.StatusOK, queuedUpdateFromIntent(intent, ""))
-		return
-	}
-
-	update, err := h.UpdateStore.Get(r.Context(), updateID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load update: "+err.Error())
-		return
-	}
-	if update == nil || update.RuntimeID != rtID {
-		writeError(w, http.StatusNotFound, "update not found")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, update)
-}
-
 // maybeMaterializeUpdateIntent turns a durable UpdateIntent into a concrete
 // daemon_runtime_update attempt the moment a heartbeat proves the runtime is
 // reachable. Called unconditionally on every heartbeat (handler/daemon.go,
@@ -573,7 +351,7 @@ func (h *Handler) maybeMaterializeUpdateIntent(ctx context.Context, rt db.AgentR
 	}
 	runtimeID := uuidToString(rt.ID)
 	// Pin wins (task #81): an intent always resolves to whatever's newest at
-	// delivery time (see queuedUpdateFromIntent's comment) — fundamentally
+	// delivery time — fundamentally
 	// incompatible with "stay on this version". Leave the intent live and
 	// un-materialized rather than consume it into an attempt that would
 	// never be delivered (see the heartbeat-delivery gate in daemon.go for
@@ -671,57 +449,6 @@ func (h *Handler) maybeMaterializeUpdateIntent(ctx context.Context, rt db.AgentR
 	}
 	if _, err := h.UpdateStore.Create(ctx, runtimeID, release.TagName); err != nil && !errors.Is(err, errUpdateInProgress) {
 		slog.Warn("materialize update intent into attempt failed", "error", err, "runtime_id", runtimeID)
-	}
-}
-
-// queuedUpdateFromIntent renders an UpdateIntent in the same wire shape the
-// frontend already polls for a real UpdateRequest — TargetVersion is
-// deliberately "latest", never a specific version, because the intent
-// resolves to whatever's newest at delivery time, not whatever was newest
-// when it was created (Parker's call, 2026-08-02 — showing a version number
-// that might not be what actually gets installed would be the UI lying).
-//
-// lastAttemptError is the Error field off the UpdateRequest referenced by
-// intent.LastFailedAttemptID, if the caller already fetched it — only
-// relevant when GivenUpAt is set. Passed in rather than fetched here so this
-// stays a pure function; GetUpdate does the (best-effort) lookup.
-func queuedUpdateFromIntent(intent *UpdateIntent, lastAttemptError string) *UpdateRequest {
-	if intent == nil {
-		return nil
-	}
-	status := UpdateQueued
-	errMsg := ""
-	switch {
-	case intent.ExpiredAt != nil:
-		// Never got a chance — the runtime was never seen online in time.
-		status = UpdateTimeout
-		errMsg = "queued update expired after " + UpdateIntentTTL.String() + " without the runtime coming online"
-	case intent.GivenUpAt != nil:
-		// Got plenty of chances — every one of them failed. Distinct status
-		// from "expired" (Parker's rule, 2026-08-02): a stale "queued" label
-		// here would be a UI lie the moment auto-retry actually stops. The
-		// reason must say *why*, not just that it happened (Parker's rule,
-		// same session, restated specifically for this message,
-		// 2026-08-02): "gave up after N attempts" alone is a wall, not an
-		// answer — append the actual last failure (e.g. the real 404/rename
-		// error) when it's available.
-		status = UpdateFailed
-		errMsg = fmt.Sprintf(
-			"gave up after %d consecutive failed attempts — cancel and retry manually once the underlying issue is resolved",
-			intent.ConsecutiveFailures,
-		)
-		if lastAttemptError != "" {
-			errMsg = fmt.Sprintf("%s (last failure: %s)", errMsg, lastAttemptError)
-		}
-	}
-	return &UpdateRequest{
-		ID:            intentUpdateID(intent.RuntimeID),
-		RuntimeID:     intent.RuntimeID,
-		Status:        status,
-		TargetVersion: "latest",
-		Error:         errMsg,
-		CreatedAt:     intent.CreatedAt,
-		UpdatedAt:     intent.CreatedAt,
 	}
 }
 

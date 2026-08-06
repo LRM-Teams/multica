@@ -10,8 +10,8 @@ set captured at acceptance.
 1. Apply migrations `288_machine_upgrade_contract`,
    `289_machine_upgrade_acceptance`, and
    `290_machine_upgrade_rollback_proof` before deploying a server that
-   advertises Machine Upgrade actions. They are additive; do not remove legacy
-   runtime update rows or routes in this rollout.
+   advertises Machine Upgrade actions. They are additive; preserve legacy
+   runtime update rows so already-queued historical delivery can recover.
 2. Deploy the server. Confirm canonical daemon routes, runtime projection, and
    capability gating are live before any daemon advertises
    `machine_upgrade_v1`.
@@ -20,8 +20,8 @@ set captured at acceptance.
    capability.
 4. Deploy the web/desktop UI. A runtime is a projection of its daemon's
    canonical operation; sibling status must agree.
-5. Retire the legacy runtime-owned write path only after the capability floor
-   and compatibility window have been measured in production.
+5. The legacy runtime-owned HTTP update routes have been retired. New callers
+   must use the daemon-scoped machine-upgrade API.
 
 ## Bootstrap limitation
 

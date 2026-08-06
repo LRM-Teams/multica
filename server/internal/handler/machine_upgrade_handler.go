@@ -114,7 +114,7 @@ func (h *Handler) ReportMachineUpgradeProgress(w http.ResponseWriter, r *http.Re
 // cannot acquire independent lineages.
 func (h *Handler) CreateMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 	daemonID := strings.TrimSpace(chi.URLParam(r, "daemonId"))
-	rt, member, ok := h.requireMachineUpgradeOwner(w, r, daemonID)
+	rt, member, ok := h.requireMachineUpgradeManager(w, r, daemonID)
 	if !ok {
 		return
 	}
@@ -137,7 +137,7 @@ func (h *Handler) CreateMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 	daemonID := strings.TrimSpace(chi.URLParam(r, "daemonId"))
-	_, _, ok := h.requireMachineUpgradeOwner(w, r, daemonID)
+	_, _, ok := h.requireMachineUpgradeManager(w, r, daemonID)
 	if !ok {
 		return
 	}
@@ -155,7 +155,7 @@ func (h *Handler) GetMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) CancelMachineUpgrade(w http.ResponseWriter, r *http.Request) {
 	daemonID := strings.TrimSpace(chi.URLParam(r, "daemonId"))
-	rt, _, ok := h.requireMachineUpgradeOwner(w, r, daemonID)
+	rt, _, ok := h.requireMachineUpgradeManager(w, r, daemonID)
 	if !ok {
 		return
 	}
@@ -338,11 +338,10 @@ func (h *Handler) attestMachineUpgradeRollbackRegistration(r *http.Request, rt d
 	}
 }
 
-// requireMachineUpgradeOwner preserves the established runtime boundary: an
-// unknown runtime/daemon is 404, a workspace member who does not own the
-// computer is 403.  The canonical endpoint receives daemon_id directly, while
-// the compatibility route already has the runtime row and calls create directly.
-func (h *Handler) requireMachineUpgradeOwner(w http.ResponseWriter, r *http.Request, daemonID string) (db.AgentRuntime, db.Member, bool) {
+// requireMachineUpgradeManager returns 404 for an unknown daemon and 403 for
+// a workspace member who is neither the computer owner nor a workspace
+// owner/admin. The canonical endpoint receives daemon_id directly.
+func (h *Handler) requireMachineUpgradeManager(w http.ResponseWriter, r *http.Request, daemonID string) (db.AgentRuntime, db.Member, bool) {
 	if daemonID == "" {
 		writeError(w, http.StatusBadRequest, "daemon_id is required")
 		return db.AgentRuntime{}, db.Member{}, false
@@ -375,8 +374,8 @@ func (h *Handler) requireMachineUpgradeOwner(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return db.AgentRuntime{}, db.Member{}, false
 	}
-	if !canOwnRuntime(member, rt) {
-		writeError(w, http.StatusForbidden, "only the computer owner can update this daemon")
+	if !canManageMachineUpgrade(member, rt) {
+		writeError(w, http.StatusForbidden, "only the computer owner or a workspace owner/admin can update this daemon")
 		return db.AgentRuntime{}, db.Member{}, false
 	}
 	return rt, member, true
@@ -386,41 +385,4 @@ func (h *Handler) publishMachineUpgradeProjection(r *http.Request, rt db.AgentRu
 	h.publish(protocol.EventDaemonRuntimeUpdated, uuidToString(rt.WorkspaceID), "system", "", map[string]any{
 		"runtime": h.runtimeToResponse(r.Context(), rt),
 	})
-}
-
-func runtimeUpdateFromMachineUpgrade(op *MachineUpgrade, runtimeID string) *UpdateRequest {
-	if op == nil {
-		return nil
-	}
-	status := UpdateQueued
-	switch op.Phase {
-	case MachineUpgradeStarting, MachineUpgradeStaging, MachineUpgradeVerifying, MachineUpgradeHandoff, MachineUpgradeConverging:
-		status = UpdateRunning
-	case MachineUpgradeCompleted:
-		status = UpdateCompleted
-	case MachineUpgradeFailed, MachineUpgradeRolledBack, MachineUpgradeCancelled:
-		status = UpdateFailed
-	case MachineUpgradeTimeout:
-		status = UpdateTimeout
-	}
-	target := op.RequestedTarget
-	if op.ResolvedTarget != nil && strings.TrimSpace(*op.ResolvedTarget) != "" {
-		target = *op.ResolvedTarget
-	}
-	errMsg := ""
-	if op.ErrorMessage != nil {
-		errMsg = *op.ErrorMessage
-	}
-	if op.Phase == MachineUpgradeCancelled && errMsg == "" {
-		errMsg = "machine upgrade cancelled"
-	}
-	return &UpdateRequest{
-		ID:            op.ID,
-		RuntimeID:     runtimeID,
-		Status:        status,
-		TargetVersion: target,
-		Error:         errMsg,
-		CreatedAt:     op.CreatedAt,
-		UpdatedAt:     op.UpdatedAt,
-	}
 }

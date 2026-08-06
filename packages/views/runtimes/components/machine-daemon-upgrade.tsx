@@ -11,6 +11,7 @@ import {
   isNewerCliVersion,
 } from "@multica/core/runtimes";
 import { api, ApiError } from "@multica/core/api";
+import { createSafeId } from "@multica/core/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { ArrowUpCircle, Loader2 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
@@ -91,16 +92,28 @@ export function MachineDaemonUpgrade({
     // Immediate local feedback (≤200ms) before first poll tick.
     setStatus("pending");
     try {
-      const update = await api.initiateUpdate(runtime.id, aim);
+      const daemonID = runtime.daemon_id?.trim();
+      if (!daemonID) {
+        throw new Error("runtime has no daemon identity");
+      }
+      const update = await api.initiateMachineUpgrade(daemonID, aim, createSafeId());
       pollRef.current = setInterval(async () => {
         try {
-          const result = await api.getUpdateResult(runtime.id, update.id);
-          setStatus(result.status as RuntimeUpdateStatus);
+          const result = await api.getMachineUpgrade(daemonID, update.id);
+          const nextStatus: RuntimeUpdateStatus = (() => {
+            switch (result.phase) {
+              case "queued": return "queued";
+              case "completed": return "completed";
+              case "timeout": return "timeout";
+              case "failed": case "rolled_back": case "cancelled": return "failed";
+              default: return "running";
+            }
+          })();
+          setStatus(nextStatus);
           if (
-            result.status === "completed" ||
-            result.status === "ready_to_apply" ||
-            result.status === "failed" ||
-            result.status === "timeout"
+            nextStatus === "completed" ||
+            nextStatus === "failed" ||
+            nextStatus === "timeout"
           ) {
             setUpdating(false);
             cleanup();

@@ -868,7 +868,9 @@
     "director_adjudicating": "Director adjudicating",
     "empty": {
       "positions": "No positions yet",
-      "evidence": "No evidence yet"
+      "evidence": "No evidence yet",
+      "turns": "No turns yet",
+      "root": "No dispute yet"
     },
     "overflow_more": "+{{count}}",
     "tabs": {
@@ -879,6 +881,21 @@
     },
     "delivery_blocking": "Blocks delivery",
     "superseded": "Superseded by new verdict",
-    "loading_more": "Load more"
+    "loading_more": "Load more",
+    "stance": {
+      "supports": "Supports",
+      "contradicts": "Contradicts",
+      "conditional": "Conditional"
+    },
+    "focus": {
+      "node": "Focus this node on canvas"
+    },
+    "conditions_label": "Conditions",
+    "conflict_type_label": "Conflict type",
+    "verdict": "Decision",
+    "stance_label": "Stance",
+    "deadlock_reason": "Deadlock reason",
+    "escalation_reason": "Escalation reason",
+    "severity_label": "Severity"
   }
 }

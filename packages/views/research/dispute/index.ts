@@ -1,6 +1,39 @@
-/// Reference-only export surface for the dispute subgraph module.
-/// Production components import from `./encode` and the contract fixture is
-/// dev/test-only (never wired into a production path).
+/// LRM-1472 / UI-04 — dispute subgraph component module export surface.
+export {
+  buildDisputeModel,
+  findDisputeRoot,
+  type DisputeSubgraphModel,
+  type EvidenceView,
+  type PositionView,
+  type TurnView,
+  type EscalationView,
+  type DecisionView,
+} from "./model";
+export type { FocusNodeHandler } from "./parts";
+export { PositionFan, EvidenceRelation } from "./parts";
+export { stanceGlyph, stanceTone, stanceLabel, type DisputeStanceTone } from "./stance";
+export {
+  DeliberationTimeline,
+  EscalationBanner,
+  DecisionHistory,
+  DisputeCard,
+  Section,
+  StatusBadge,
+  disputeStatusLabel,
+} from "./panels";
+export {
+  DisputeDetailSection,
+  PositionDetailSection,
+  DeliberationDetailSection,
+  TurnDetailSection,
+  DecisionDetailSection,
+} from "./detail-sections";
+export {
+  moveDisputeNavIndex,
+  rovingTabNext,
+  disputeNavFromKey,
+  type DisputeNavDirection,
+} from "./keyboard-nav";
 export {
   disputeNodeGlyph,
   decisionIsSuperseded,

@@ -868,7 +868,9 @@
     "director_adjudicating": "研究总监裁决中",
     "empty": {
       "positions": "尚无立场",
-      "evidence": "尚无证据"
+      "evidence": "尚无证据",
+      "turns": "尚无轮次",
+      "root": "尚无争议"
     },
     "overflow_more": "+{{count}}",
     "tabs": {
@@ -879,6 +881,21 @@
     },
     "delivery_blocking": "阻断交付",
     "superseded": "已被新裁决取代",
-    "loading_more": "加载更多"
+    "loading_more": "加载更多",
+    "stance": {
+      "supports": "支持",
+      "contradicts": "反驳",
+      "conditional": "条件细化"
+    },
+    "focus": {
+      "node": "在图面定位此节点"
+    },
+    "conditions_label": "条件",
+    "conflict_type_label": "冲突类型",
+    "verdict": "裁决",
+    "stance_label": "立场",
+    "deadlock_reason": "僵局原因",
+    "escalation_reason": "升级原因",
+    "severity_label": "严重度"
   }
 }

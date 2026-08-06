@@ -19,7 +19,7 @@ import (
 var setupCmd = &cobra.Command{
 	Use:   "setup [/workspace]",
 	Short: "Configure the CLI, authenticate, and install the daemon service",
-	Long: `Configures the CLI to connect to Multica Cloud (multica.ai), then
+	Long: `Configures the CLI to connect to Multica Cloud (leagent.me), then
 authenticates via browser and installs the agent daemon as a per-user OS
 service (LaunchAgent / systemd --user / Windows Scheduled Task) so it
 survives terminal close and restarts after upgrade.
@@ -39,8 +39,8 @@ Use --profile to create an isolated configuration for a separate environment:
 
 var setupCloudCmd = &cobra.Command{
 	Use:   "cloud [/workspace]",
-	Short: "Configure the CLI for Multica Cloud (multica.ai)",
-	Long: `Explicitly configures the CLI to connect to Multica Cloud (multica.ai).
+	Short: "Configure the CLI for Multica Cloud (leagent.me)",
+	Long: `Explicitly configures the CLI to connect to Multica Cloud (leagent.me).
 
 This is equivalent to running 'multica setup' without a subcommand.`,
 	Args: requireWorkspacePath,
@@ -186,15 +186,12 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	cfg := cli.CLIConfig{
-		ServerURL: cli.OfficialCloudAPIURL,
-		AppURL:    "https://multica.ai",
-	}
+	cfg := cloudCLIConfig()
 	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
 
-	fmt.Fprintln(os.Stderr, "Configured for Multica Cloud (https://multica.ai).")
+	fmt.Fprintln(os.Stderr, "Configured for Multica Cloud (https://leagent.me).")
 	fmt.Fprintf(os.Stderr, "  server_url: %s\n", cfg.ServerURL)
 	fmt.Fprintf(os.Stderr, "  app_url:    %s\n", cfg.AppURL)
 	printConfigLocation(profile)
@@ -211,6 +208,13 @@ func runSetupCloud(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(os.Stderr, "\n✓ Setup complete! Your machine is now connected to Multica (daemon supervised).")
 
 	return nil
+}
+
+func cloudCLIConfig() cli.CLIConfig {
+	return cli.CLIConfig{
+		ServerURL: cli.OfficialCloudAPIURL,
+		AppURL:    cli.OfficialCloudAppURL,
+	}
 }
 
 func runSetupSelfHost(cmd *cobra.Command, args []string) error {

@@ -95,8 +95,8 @@ TTL), returns:
 {
   "device_code": "…",
   "user_code": "XXXX-XXXX",
-  "verification_uri": "https://app.multica.ai/device",
-  "verification_uri_complete": "https://app.multica.ai/device?user_code=XXXX-XXXX",
+  "verification_uri": "https://leagent.me/device",
+  "verification_uri_complete": "https://leagent.me/device?user_code=XXXX-XXXX",
   "expires_in": 600,
   "interval": 5
 }

@@ -219,7 +219,8 @@ describe("Scaling fixture (10k protection)", () => {
     const seenIds = new Set<string>();
     let pages = 0;
     let sentOverWireNodes = 0;
-    do {
+    let hasMore = true;
+    while (hasMore) {
       const res = await collect(gw, req);
       // Every page is bounded: never the whole 10k graph.
       expect(res.nodes.length).toBeLessThanOrEqual(500);
@@ -229,10 +230,12 @@ describe("Scaling fixture (10k protection)", () => {
         // cursor repeats must never duplicate a page
       }
       pages += 1;
-      if (!res.hasMore) break;
-      req = { ...req, cursor: res.nextCursor ?? undefined };
+      hasMore = res.hasMore === true;
+      if (hasMore) {
+        req = { ...req, cursor: res.nextCursor ?? undefined };
+      }
       if (pages > 100) throw new Error("infinite pagination");
-    } while (true);
+    }
 
     off();
     expect(pages).toBeGreaterThan(1);
@@ -256,17 +259,20 @@ describe("Scaling fixture (10k protection)", () => {
     const seen = new Set<string>();
     let duplicates = 0;
     let guard = 0;
-    do {
+    let hasMore = true;
+    while (hasMore) {
       const res = await collect(gw, req);
       for (const n of res.nodes) {
         if (seen.has(n.node.id)) duplicates += 1;
         seen.add(n.node.id);
       }
-      if (!res.hasMore) break;
-      req = { ...req, cursor: res.nextCursor ?? undefined };
+      hasMore = res.hasMore === true;
+      if (hasMore) {
+        req = { ...req, cursor: res.nextCursor ?? undefined };
+      }
       guard += 1;
       if (guard > 200) throw new Error("infinite pagination");
-    } while (true);
+    }
     expect(duplicates).toBe(0);
   });
 });
@@ -302,14 +308,17 @@ describe("Scaling fixture perf (LRM-1465 AC2: no long main-thread slice)", () =>
     };
     let pages = 0;
     let guard = 0;
-    do {
+    let hasMore = true;
+    while (hasMore) {
       const res = await collect(gw, req);
       pages += 1;
-      if (!res.hasMore) break;
-      req = { ...req, cursor: res.nextCursor ?? undefined };
+      hasMore = res.hasMore === true;
+      if (hasMore) {
+        req = { ...req, cursor: res.nextCursor ?? undefined };
+      }
       guard += 1;
       if (guard > 200) throw new Error("infinite pagination");
-    } while (true);
+    }
     const walkMs = performance.now() - walkStart;
     expect(pages).toBe(20); // 10_000 / 500
     expect(walkMs).toBeLessThan(2000);

@@ -249,6 +249,13 @@ func TestWorkspaceRunnerAcknowledgesCanonicalMessageDelivery(t *testing.T) {
 	d.mu.Lock()
 	d.runtimeIndex["runtime-1"] = Runtime{ID: "runtime-1", WorkspaceID: "ws-1"}
 	d.mu.Unlock()
+	// Acknowledgement is permitted only after the coordinator accepts the
+	// delivery into an available resident runtime. This transport test owns a
+	// pre-existing resident slot rather than provisioning a provider process.
+	d.canonicalRuntimes.slots["agent-1\x00runtime-1"] = &canonicalAgentRuntimeSlot{
+		mode:    canonicalRuntimeResident,
+		backend: &idleMessageFakeRuntime{},
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	errCh := make(chan error, 1)

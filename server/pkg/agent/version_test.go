@@ -79,6 +79,26 @@ func TestCheckMinCLIVersion(t *testing.T) {
 	}
 }
 
+func TestCheckCLIVersionAtLeast(t *testing.T) {
+	for _, tt := range []struct {
+		version string
+		want    error
+	}{
+		{"0.4.13", nil},
+		{"0.4.12", ErrCLIVersionTooOld},
+		{"", ErrCLIVersionMissing},
+		{"v0.4.12-1-gabc1234", nil},
+	} {
+		err := CheckCLIVersionAtLeast(tt.version, "0.4.13")
+		if tt.want == nil && err != nil {
+			t.Errorf("CheckCLIVersionAtLeast(%q) = %v, want nil", tt.version, err)
+		}
+		if tt.want != nil && !errors.Is(err, tt.want) {
+			t.Errorf("CheckCLIVersionAtLeast(%q) = %v, want %v", tt.version, err, tt.want)
+		}
+	}
+}
+
 func TestExtractVersionLine(t *testing.T) {
 	tests := []struct {
 		name string

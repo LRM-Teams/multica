@@ -54,6 +54,11 @@ export function laneForNode(node: ResearchGraphNode): LogicLaneId {
       return "deep_read";
     case "conflict":
     case "refuted":
+    case "dispute":
+    case "dispute_position":
+    case "decision":
+    case "deliberation":
+    case "deliberation_turn":
       return "validate";
     case "dead_end":
     case "pivot":

@@ -441,7 +441,12 @@
       "resolved": "Resolved",
       "pending": "Pending",
       "unknown": "Unknown"
-    }
+    },
+    "dispute": "Dispute",
+    "dispute_position": "Position",
+    "deliberation": "Deliberation",
+    "deliberation_turn": "Turn",
+    "decision": "Decision"
   },
   "node_card": {
     "generic_type": "Unknown type",
@@ -865,5 +870,80 @@
     "error_title": "This part failed to load",
     "error_unknown": "Unexpected error",
     "retry": "Retry"
+  },
+  "dispute": {
+    "status": {
+      "open": "Open",
+      "investigating": "Investigating",
+      "deadlocked": "Deadlocked",
+      "escalated": "Escalated",
+      "resolved": "Resolved",
+      "conditionally_resolved": "Conditionally resolved",
+      "irreducible": "Irreducible",
+      "reopened": "Reopened",
+      "cancelled": "Cancelled",
+      "converged": "Converged",
+      "unresolved": "Unresolved",
+      "pending": "Pending",
+      "discussing": "Discussing"
+    },
+    "conflict_type": {
+      "fact": "Fact",
+      "definition": "Definition",
+      "scope": "Scope",
+      "time": "Timeline",
+      "population": "Population",
+      "method": "Method",
+      "measurement": "Measurement",
+      "interpretation": "Interpretation",
+      "source_identity": "Source identity"
+    },
+    "turn_marker": {
+      "position_changed": "Position changed",
+      "evidence_added": "Evidence added",
+      "scope_refined": "Scope refined",
+      "no_change": "No change"
+    },
+    "gate_blocking": "This dispute blocks delivery",
+    "residual_note": "Residual impact",
+    "reopened_note": "Reopened by new evidence",
+    "view_history": "View history",
+    "positions": "Positions",
+    "evidence": "Evidence",
+    "turns": "Turns",
+    "participants": "Participants",
+    "escalated_to": "Escalated to",
+    "director_adjudicating": "Director adjudicating",
+    "empty": {
+      "positions": "No positions yet",
+      "evidence": "No evidence yet",
+      "turns": "No turns yet",
+      "root": "No dispute yet"
+    },
+    "overflow_more": "+{{count}}",
+    "tabs": {
+      "overview": "Overview",
+      "positions": "Positions",
+      "debate": "Debate",
+      "verdict": "Verdict"
+    },
+    "delivery_blocking": "Blocks delivery",
+    "superseded": "Superseded by new verdict",
+    "loading_more": "Load more",
+    "stance": {
+      "supports": "Supports",
+      "contradicts": "Contradicts",
+      "conditional": "Conditional"
+    },
+    "focus": {
+      "node": "Focus this node on canvas"
+    },
+    "conditions_label": "Conditions",
+    "conflict_type_label": "Conflict type",
+    "verdict": "Decision",
+    "stance_label": "Stance",
+    "deadlock_reason": "Deadlock reason",
+    "escalation_reason": "Escalation reason",
+    "severity_label": "Severity"
   }
 }

@@ -24,7 +24,13 @@ export type ResearchGraphNodeType =
   | "roster_change"
   | "stage_gate"
   | "product_round_gate"
-  | "agent_activity";
+  | "agent_activity"
+  // LRM-1472 / UI-04 dispute subgraph.
+  | "dispute"
+  | "dispute_position"
+  | "deliberation"
+  | "deliberation_turn"
+  | "decision";
 
 /** LRM-676 depth tier → product-round hard cap (LRM-905 / LRM-911). */
 export type ResearchDepthTier = "shallow" | "standard" | "deep" | string;
@@ -61,7 +67,14 @@ export type ResearchGraphEdgeType =
   | "supports"
   | "contradicts"
   | "supersedes"
-  | "abandons";
+  | "abandons"
+  // LRM-1472 / UI-04 dispute subgraph.
+  | "refines"
+  | "invalidates"
+  | "discussed_by"
+  | "challenged_by"
+  | "escalated_to"
+  | "resolved_by";
 
 export type ResearchFleetMemberStatus =
   | "pending_prompt_review"

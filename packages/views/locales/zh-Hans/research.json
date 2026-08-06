@@ -441,7 +441,12 @@
       "resolved": "已解决",
       "pending": "待处理",
       "unknown": "未知"
-    }
+    },
+    "dispute": "争议",
+    "dispute_position": "立场",
+    "deliberation": "讨论",
+    "deliberation_turn": "轮次",
+    "decision": "裁决"
   },
   "node_card": {
     "generic_type": "未知类型",
@@ -865,5 +870,80 @@
     "error_title": "该模块加载失败",
     "error_unknown": "未知错误",
     "retry": "重试"
+  },
+  "dispute": {
+    "status": {
+      "open": "未解决",
+      "investigating": "调查中",
+      "deadlocked": "僵局",
+      "escalated": "升级中",
+      "resolved": "已裁决",
+      "conditionally_resolved": "条件裁决",
+      "irreducible": "不可判定",
+      "reopened": "已重开",
+      "cancelled": "已取消",
+      "converged": "已收敛",
+      "unresolved": "未收敛",
+      "pending": "待定",
+      "discussing": "讨论中"
+    },
+    "conflict_type": {
+      "fact": "事实",
+      "definition": "定义",
+      "scope": "范围",
+      "time": "时间线",
+      "population": "群体",
+      "method": "方法",
+      "measurement": "口径",
+      "interpretation": "解读",
+      "source_identity": "来源身份"
+    },
+    "turn_marker": {
+      "position_changed": "立场变化",
+      "evidence_added": "新增证据",
+      "scope_refined": "范围细化",
+      "no_change": "无进展"
+    },
+    "gate_blocking": "此争议阻断交付",
+    "residual_note": "残余影响",
+    "reopened_note": "因新证据重开",
+    "view_history": "查看历史",
+    "positions": "立场",
+    "evidence": "证据",
+    "turns": "轮次",
+    "participants": "参与者",
+    "escalated_to": "升级至",
+    "director_adjudicating": "研究总监裁决中",
+    "empty": {
+      "positions": "尚无立场",
+      "evidence": "尚无证据",
+      "turns": "尚无轮次",
+      "root": "尚无争议"
+    },
+    "overflow_more": "+{{count}}",
+    "tabs": {
+      "overview": "概览",
+      "positions": "立场",
+      "debate": "讨论",
+      "verdict": "裁决"
+    },
+    "delivery_blocking": "阻断交付",
+    "superseded": "已被新裁决取代",
+    "loading_more": "加载更多",
+    "stance": {
+      "supports": "支持",
+      "contradicts": "反驳",
+      "conditional": "条件细化"
+    },
+    "focus": {
+      "node": "在图面定位此节点"
+    },
+    "conditions_label": "条件",
+    "conflict_type_label": "冲突类型",
+    "verdict": "裁决",
+    "stance_label": "立场",
+    "deadlock_reason": "僵局原因",
+    "escalation_reason": "升级原因",
+    "severity_label": "严重度"
   }
 }

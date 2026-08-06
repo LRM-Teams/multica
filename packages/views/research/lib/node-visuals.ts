@@ -94,6 +94,32 @@ const NODE_VISUALS: Record<string, NodeVisual> = {
     accentBarClass: "bg-brand",
     labelTone: "info",
   },
+  // LRM-1472 / UI-04 dispute subgraph registry entries. Semantics first,
+  // no hardcoded hex / palette-500 — all tokens come from the semantic set.
+  dispute: {
+    ringClass: "ring-2 ring-warning/60",
+    accentBarClass: "bg-warning",
+    labelTone: "warning",
+    emphasizeType: true,
+  },
+  dispute_position: {
+    ringClass: "ring-1 ring-warning/35",
+    accentBarClass: "bg-warning/15",
+    labelTone: "default",
+    emphasizeType: true,
+  },
+  deliberation: {
+    ringClass: "ring-1 ring-brand/40",
+    accentBarClass: "bg-brand",
+    labelTone: "info",
+    emphasizeType: true,
+  },
+  decision: {
+    ringClass: "ring-1 ring-success/50",
+    accentBarClass: "bg-success",
+    labelTone: "success",
+    emphasizeType: true,
+  },
 };
 
 const DEFAULT_VISUAL: NodeVisual = {
@@ -129,7 +155,9 @@ export function visualForEdgeType(edgeType: ResearchGraphEdgeType | string): Edg
     case "contradicts":
       return {
         stroke: "var(--destructive)",
-        strokeDasharray: "6 5",
+        // LRM-1472: double-strike dash = clash; grayscale-distinct from solid supports.
+        strokeDasharray: "10 3 2 3",
+        strokeWidth: 1.75,
         animated: false,
         role: "dashed",
       };
@@ -137,6 +165,55 @@ export function visualForEdgeType(edgeType: ResearchGraphEdgeType | string): Edg
       return {
         stroke: "var(--warning)",
         strokeDasharray: "5 5",
+        strokeWidth: 1.5,
+        animated: false,
+        role: "dashed",
+      };
+    // LRM-1472 / UI-04
+    case "refines":
+      return {
+        stroke: "var(--brand)",
+        strokeWidth: 1.5,
+        animated: false,
+        role: "solid",
+      };
+    case "invalidates":
+      return {
+        stroke: "var(--destructive)",
+        strokeDasharray: "2 4",
+        strokeWidth: 1.5,
+        animated: false,
+        role: "dashed",
+      };
+    case "discussed_by":
+      return {
+        stroke: "var(--muted-foreground)",
+        strokeOpacity: 0.4,
+        strokeWidth: 1.25,
+        animated: false,
+        role: "recessed",
+      };
+    case "challenged_by":
+      return {
+        stroke: "var(--warning)",
+        strokeDasharray: "6 3",
+        strokeWidth: 1.5,
+        animated: false,
+        role: "dashed",
+      };
+    case "escalated_to":
+      return {
+        stroke: "var(--warning)",
+        // Only thick solid line on the canvas — impossible to confuse with thin supports.
+        strokeWidth: 2.5,
+        animated: true,
+        role: "active",
+      };
+    case "resolved_by":
+      return {
+        stroke: "var(--success)",
+        strokeDasharray: "5 5",
+        strokeWidth: 1.5,
         animated: false,
         role: "dashed",
       };
@@ -192,6 +269,59 @@ export function confidencePercent(confidence: number | null | undefined): number
 export function isLowConfidence(confidence: number | null | undefined): boolean {
   const pct = confidencePercent(confidence);
   return pct != null && pct < 50;
+}
+
+/** LRM-1472 / UI-04 — dispute lifecycle display buckets (A·未解决 B·升级中 C·已裁决 D·重开). */
+export type DisputeLifecycleBucket =
+  | "open"
+  | "escalating"
+  | "adjudicated"
+  | "reopened";
+
+const DISPUTE_LIFECYCLE_MAP: Record<string, DisputeLifecycleBucket> = {
+  open: "open",
+  investigating: "open",
+  pending: "open",
+  discussing: "open",
+  deadlocked: "escalating",
+  escalated: "escalating",
+  resolved: "adjudicated",
+  conditionally_resolved: "adjudicated",
+  irreducible: "adjudicated",
+  converged: "adjudicated",
+  cancelled: "adjudicated",
+  reopened: "reopened",
+};
+
+/**
+ * Bucket a node's status into the display lifecycle group. Unknown statuses
+ * fall back to open — display-only, never a canonical mutation.
+ */
+export function disputeLifecycleBucket(status: string): DisputeLifecycleBucket {
+  return DISPUTE_LIFECYCLE_MAP[(status || "").toLowerCase().trim()] ?? "open";
+}
+
+/** LRM-1472: open/investigating disputes block report delivery. */
+export function disputeIsDeliveryBlocking(status: string): boolean {
+  return disputeLifecycleBucket(status) === "open";
+}
+
+/** Stance tint for a dispute_position (read from typed edge role, not text). */
+export type DisputeStance = "supports" | "contradicts" | "conditional";
+
+export function stanceTone(stance: DisputeStance): {
+  accentBarClass: string;
+  labelTone: "success" | "danger" | "warning";
+} {
+  switch (stance) {
+    case "contradicts":
+      return { accentBarClass: "bg-destructive/15", labelTone: "danger" };
+    case "conditional":
+      return { accentBarClass: "bg-warning/15", labelTone: "warning" };
+    case "supports":
+    default:
+      return { accentBarClass: "bg-success/15", labelTone: "success" };
+  }
 }
 
 export function nodeConfidence(node: Pick<ResearchGraphNode, "confidence" | "payload">): number | null {

@@ -26,7 +26,6 @@ func (h *Handler) applyAgentProviderQuotaBlock(
 	}
 	now := time.Now()
 	until, untilOK := taskfailure.ParseProviderBlockedUntil(errText, now, time.Local)
-	reason := string(taskfailure.ReasonAgentProviderQuotaLimit)
 	detail := truncateForActivity(errText, 500)
 
 	alreadyLocked := false
@@ -53,26 +52,6 @@ func (h *Handler) applyAgentProviderQuotaBlock(
 		return
 	}
 
-	msg := "Provider quota exhausted"
-	if untilOK {
-		msg = "Provider quota exhausted until " + until.Format("2006-01-02 15:04:05")
-	}
-	details := map[string]any{
-		"failure_reason":        reason,
-		"provider_block_detail": detail,
-		"source_failure_reason": failureReason,
-	}
-	if untilOK {
-		details["provider_blocked_until"] = until.UTC().Format(time.RFC3339)
-	} else {
-		details["provider_blocked_until"] = nil
-	}
-	h.recordAgentActivityEvent(ctx, h.DB,
-		workspaceID, agentID, runtimeID, taskID,
-		activityKindBlocked, "provider_quota_exhausted", "error",
-		"agent", agentID, "",
-		reason, msg, details,
-	)
 }
 
 // inboxFailureRetryable: sticky provider-quota failures are not auto-retryable

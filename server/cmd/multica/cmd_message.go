@@ -123,6 +123,7 @@ var messageCmd = &cobra.Command{
 
 var messageReadCmd = newMessageReadCmd()
 var messageSearchCmd = newMessageSearchCmd()
+var messageResolveCmd = newMessageResolveCmd()
 var messageA2AControlCmd = newMessageA2AControlCmd()
 var messageCheckCmd = newMessageCheckCmd()
 
@@ -132,6 +133,7 @@ func init() {
 	messageCmd.AddCommand(messageAskChoiceCmd)
 	messageCmd.AddCommand(messageReadCmd)
 	messageCmd.AddCommand(messageSearchCmd)
+	messageCmd.AddCommand(messageResolveCmd)
 	messageCmd.AddCommand(messageA2AControlCmd)
 	messageCmd.AddCommand(messageCheckCmd)
 }
@@ -253,6 +255,17 @@ func newMessageSearchCmd() *cobra.Command {
 	cmd.Flags().Int("limit", 50, "Maximum matches to return")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	return cmd
+}
+
+func newMessageResolveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "resolve <message-id>",
+		Short: "Resolve one canonical message by its full or unique short ID",
+		Long: "Resolve exactly one canonical message visible to the running agent. " +
+			"The identity may be a full UUID or a unique short UUID prefix.",
+		Args: cobra.ExactArgs(1),
+		RunE: runAgentMessageResolve,
+	}
 }
 
 func newMessageA2AControlCmd() *cobra.Command {
@@ -667,6 +680,15 @@ func runAgentMessageSearch(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("search messages: %w", err)
 	}
 	return printAgentTransportOutput(cmd, out, "")
+}
+
+func runAgentMessageResolve(cmd *cobra.Command, args []string) error {
+	body := map[string]string{"message_id": strings.TrimSpace(args[0])}
+	var out map[string]any
+	if err := postAgentTransport(cmd, "/api/agent/messages/resolve", body, &out); err != nil {
+		return fmt.Errorf("resolve message: %w", err)
+	}
+	return cli.PrintJSON(os.Stdout, out)
 }
 
 func postAgentTransport(cmd *cobra.Command, path string, body any, out any) error {

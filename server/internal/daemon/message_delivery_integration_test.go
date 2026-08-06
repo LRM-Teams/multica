@@ -20,7 +20,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/daemonws"
@@ -82,18 +81,14 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		t.Skip("acceptance database is unavailable")
 	}
 	t.Cleanup(pool.Close)
-	workspaceID, userID, runtimeID, agentID, channelID, member := seedIdleMessageAcceptanceFixture(t, pool)
+	workspaceID, userID, runtimeID, agentID, channelID, daemonID, member := seedIdleMessageAcceptanceFixture(t, pool)
 
 	root := t.TempDir()
 	if err := seedIdleMessageAcceptanceBoundaries(context.Background(), pool, root, workspaceID, agentID); err != nil {
 		t.Fatalf("seed initial Context Boundaries: %v", err)
 	}
 	fakeRuntime := &idleMessageFakeRuntime{}
-	d := &Daemon{
-		logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
-		messageCoordinators: make(map[string]*MessageCoordinator),
-		canonicalRuntimes:   newCanonicalAgentRuntimePool(),
-	}
+	d := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 		mode: canonicalRuntimeResident, backend: fakeRuntime,
 	}
@@ -132,28 +127,17 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 		return serverHandler.HandleAgentMessageHandoff(ctx, identity, payload)
 	})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{WorkspaceID: workspaceID, RuntimeIDs: []string{runtimeID}})
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: workspaceID})
 	}))
 	defer server.Close()
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	if err != nil {
-		t.Fatalf("dial daemon websocket: %v", err)
-	}
-	writes := make(chan []byte, 16)
-	writerDone := make(chan struct{})
-	go d.runWSWriter(conn, writes, writerDone)
-	d.setReminderWS(writes, writerDone, conn.Close)
-	readDone := make(chan error, 1)
-	go func() { readDone <- d.readTaskWakeupMessages(conn, make(chan taskWakeup, 1), writes, nil) }()
-	t.Cleanup(func() {
-		d.clearReminderWS(writes)
-		_ = conn.Close()
-		<-readDone
-		close(writes)
-		<-writerDone
-	})
+	d.cfg.ServerBaseURL = server.URL
+	d.client.SetWorkspaceDaemonToken(workspaceID, "workspace-token", time.Now().Add(time.Hour))
+	d.mu.Lock()
+	d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+	d.mu.Unlock()
+	teardownRunner := startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
+	defer teardownRunner()
 
-	d.beginMessageRecovery(writes)
 	select {
 	case request := <-recoveryRequests:
 		if request.AgentID != agentID || request.RecoveryID == "" {
@@ -310,7 +294,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	if batches := fakeRuntime.snapshot(); len(batches) != 1 {
 		t.Fatalf("message check duplicated runtime body handoff: %+v", batches)
 	}
-	d.beginMessageRecovery(writes)
+	d.beginAgentMessageRecovery(agentID, nil)
 	select {
 	case request := <-recoveryRequests:
 		if request.AgentID != agentID || request.RecoveryID == "" || request.Boundaries[target] != busyCreated.Seq {
@@ -321,7 +305,7 @@ func TestMessageRealServerMachineProxyRuntimeAcceptance(t *testing.T) {
 	}
 }
 
-func seedIdleMessageAcceptanceFixture(t *testing.T, pool *pgxpool.Pool) (workspaceID, userID, runtimeID, agentID, channelID string, member db.Member) {
+func seedIdleMessageAcceptanceFixture(t *testing.T, pool *pgxpool.Pool) (workspaceID, userID, runtimeID, agentID, channelID, daemonID string, member db.Member) {
 	t.Helper()
 	ctx := context.Background()
 	suffix := uuid.NewString()
@@ -338,7 +322,8 @@ func seedIdleMessageAcceptanceFixture(t *testing.T, pool *pgxpool.Pool) (workspa
 	if err := pool.QueryRow(ctx, `INSERT INTO member (workspace_id,user_id,role) VALUES ($1,$2,'owner') RETURNING id,workspace_id,user_id,role,created_at,last_active_at`, workspaceID, userID).Scan(&member.ID, &member.WorkspaceID, &member.UserID, &member.Role, &member.CreatedAt, &member.LastActiveAt); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO agent_runtime (workspace_id,name,runtime_mode,provider,status,device_info,owner_id,last_seen_at) VALUES ($1,$2,'cloud','pi','online','acceptance',$3,now()) RETURNING id`, workspaceID, "delivery-runtime-"+suffix[:8], userID).Scan(&runtimeID); err != nil {
+	daemonID = "delivery-daemon-" + suffix[:8]
+	if err := pool.QueryRow(ctx, `INSERT INTO agent_runtime (workspace_id,name,runtime_mode,provider,status,device_info,daemon_id,owner_id,last_seen_at) VALUES ($1,$2,'cloud','pi','online','acceptance',$3,$4,now()) RETURNING id`, workspaceID, "delivery-runtime-"+suffix[:8], daemonID, userID).Scan(&runtimeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO agent (workspace_id,name,description,runtime_mode,runtime_config,runtime_id,max_concurrent_tasks,owner_id,instructions,custom_env,custom_args,model) VALUES ($1,$2,'','cloud','{}',$3,1,$4,'','{}','[]','composer-1.5') RETURNING id`, workspaceID, "delivery_agent_"+suffix[:8], runtimeID, userID).Scan(&agentID); err != nil {
@@ -353,6 +338,35 @@ func seedIdleMessageAcceptanceFixture(t *testing.T, pool *pgxpool.Pool) (workspa
 		}
 	}
 	return
+}
+
+func startIdleMessageAcceptanceRunner(t *testing.T, d *Daemon, hub *daemonws.Hub, workspaceID, daemonID string) func() {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.runWorkspaceRunnerConnection(ctx, workspaceID) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for hub.WorkspaceRunnerConnectionCount(daemonID, workspaceID) != 1 && time.Now().Before(deadline) {
+		runtime.Gosched()
+	}
+	if hub.WorkspaceRunnerConnectionCount(daemonID, workspaceID) != 1 {
+		cancel()
+		select {
+		case err := <-errCh:
+			t.Fatalf("Workspace Runner did not connect: %v", err)
+		case <-time.After(time.Second):
+			t.Fatal("Workspace Runner did not connect")
+		}
+	}
+	return func() {
+		hub.CloseWorkspaceRunner(daemonID, workspaceID, d.runnerInstanceID)
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(2 * time.Second):
+			t.Error("Workspace Runner did not stop")
+		}
+	}
 }
 
 func seedIdleMessageAcceptanceBoundaries(ctx context.Context, pool *pgxpool.Pool, root, workspaceID, agentID string) error {
@@ -440,7 +454,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		t.Skip("acceptance database is unavailable")
 	}
 	defer pool.Close()
-	workspaceID, userID, runtimeID, agentID, channelID, member := seedIdleMessageAcceptanceFixture(t, pool)
+	workspaceID, userID, runtimeID, agentID, channelID, daemonID, member := seedIdleMessageAcceptanceFixture(t, pool)
 
 	root := t.TempDir()
 	if err := seedIdleMessageAcceptanceBoundaries(context.Background(), pool, root, workspaceID, agentID); err != nil {
@@ -460,7 +474,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 	)
 	serverHandler.AgentDeliveryNotifier = hub
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{WorkspaceID: workspaceID, RuntimeIDs: []string{runtimeID}})
+		hub.HandleWebSocket(w, r, daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: workspaceID})
 	}))
 	defer server.Close()
 
@@ -487,11 +501,11 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 		teardown func(),
 	) {
 		normal := &recordingResidentMessage{Backend: backend}
-		d = &Daemon{
-			logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
-			messageCoordinators: make(map[string]*MessageCoordinator),
-			canonicalRuntimes:   newCanonicalAgentRuntimePool(),
-		}
+		d = New(Config{ServerBaseURL: server.URL}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		d.client.SetWorkspaceDaemonToken(workspaceID, "workspace-token", time.Now().Add(time.Hour))
+		d.mu.Lock()
+		d.runtimeIndex[runtimeID] = Runtime{ID: runtimeID, WorkspaceID: workspaceID}
+		d.mu.Unlock()
 		d.canonicalRuntimes.slots[agentID+"\x00"+runtimeID] = &canonicalAgentRuntimeSlot{
 			mode: canonicalRuntimeResident, backend: normal,
 		}
@@ -508,24 +522,7 @@ func TestIdleMessageRealWebSocketCrashRestartRehandsDeliveredMessage(t *testing.
 			recoveryReqs <- request
 			return serverHandler.HandleAgentMessageRecovery(ctx, identity, request)
 		})
-		conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-		if err != nil {
-			t.Fatalf("dial daemon websocket: %v", err)
-		}
-		writes := make(chan []byte, 16)
-		writerDone := make(chan struct{})
-		go d.runWSWriter(conn, writes, writerDone)
-		d.setReminderWS(writes, writerDone, conn.Close)
-		readDone := make(chan error, 1)
-		go func() { readDone <- d.readTaskWakeupMessages(conn, make(chan taskWakeup, 1), writes, nil) }()
-		teardown = func() {
-			d.clearReminderWS(writes)
-			_ = conn.Close()
-			<-readDone
-			close(writes)
-			<-writerDone
-		}
-		d.beginMessageRecovery(writes)
+		teardown = startIdleMessageAcceptanceRunner(t, d, hub, workspaceID, daemonID)
 		select {
 		case request := <-recoveryReqs:
 			if request.AgentID != agentID || request.RecoveryID == "" {

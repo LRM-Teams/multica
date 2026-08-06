@@ -46,14 +46,11 @@ func (h *Handler) HandleAgentMessageHandoff(ctx context.Context, identity daemon
 	if err := h.requireAgentMessageDaemonScope(ctx, identity, payload.AgentID); err != nil {
 		return err
 	}
-	allowedRuntime := false
-	for _, runtimeID := range identity.RuntimeIDs {
-		if runtimeID == payload.RuntimeID {
-			allowedRuntime = true
-			break
-		}
+	var boundRuntimeID pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1 AND workspace_id = $2`, parseUUID(payload.AgentID), parseUUID(identity.WorkspaceID)).Scan(&boundRuntimeID); err != nil {
+		return err
 	}
-	if !allowedRuntime {
+	if uuidToString(boundRuntimeID) != payload.RuntimeID {
 		return errors.New("agent Message handoff runtime mismatch")
 	}
 	if h.TxStarter == nil {
@@ -246,15 +243,10 @@ func (h *Handler) requireAgentMessageDaemonScope(ctx context.Context, identity d
 	if uuidToString(workspaceID) != identity.WorkspaceID {
 		return errors.New("agent delivery workspace mismatch")
 	}
-	if daemonID != nil && *daemonID != "" && *daemonID == identity.DaemonID {
-		return nil
+	if daemonID == nil || *daemonID == "" || identity.DaemonID == "" || *daemonID != identity.DaemonID {
+		return errors.New("agent delivery daemon mismatch")
 	}
-	for _, candidate := range identity.RuntimeIDs {
-		if candidate == uuidToString(runtimeID) {
-			return nil
-		}
-	}
-	return errors.New("agent delivery runtime mismatch")
+	return nil
 }
 
 func validateAgentRecoveryBoundaries(boundaries map[string]int64) error {

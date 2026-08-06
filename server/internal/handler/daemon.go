@@ -1987,6 +1987,9 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		msg.Content = redact.Text(msg.Content)
 		msg.Output = redact.Text(msg.Output)
 		msg.Input = redact.InputMap(msg.Input)
+		if canonicalTool, known := taskMessageCanonicalToolName(msg.Tool, msg.Input); known {
+			msg.Tool = canonicalTool
+		}
 		visibility := taskMessageRequestVisibility(msg)
 
 		var inputJSON []byte
@@ -2111,8 +2114,9 @@ func taskMessageVisibilityForMessage(msgType, tool string, input map[string]any)
 	if msgType == "thinking" || msgType == "tool_result" || msgType == "log" {
 		return "diagnostic_only"
 	}
-	_ = tool
-	_ = input
+	if !taskMessageToolIsMapped(msgType, tool, input) {
+		return "diagnostic_only"
+	}
 	return "user_facing"
 }
 

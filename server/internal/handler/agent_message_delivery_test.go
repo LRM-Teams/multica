@@ -18,7 +18,8 @@ func TestAgentMessageRecoveryPagesStableSequenceFenceAcrossTargets(t *testing.T)
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
+	daemonID := "message-recovery-runner-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "message recovery")
 	agentID := createHandlerTestAgentOnRuntime(t, "message-recovery-"+uuid.NewString()[:8], runtimeID)
 	channelOne := seedChannelForTest(t, "message-recovery-one-"+uuid.NewString(), testUserID)
 	channelTwo := seedChannelForTest(t, "message-recovery-two-"+uuid.NewString(), testUserID)
@@ -70,7 +71,7 @@ func TestAgentMessageRecoveryPagesStableSequenceFenceAcrossTargets(t *testing.T)
 		insert(channelOne, "two"),
 		insert(channelTwo, "three"),
 	}
-	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
 	request := protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: uuid.NewString(), Boundaries: boundaries, Limit: 2}
 	page, err := testHandler.HandleAgentMessageRecovery(ctx, identity, request)
 	if err != nil {
@@ -148,9 +149,10 @@ func TestAgentMessageRecoveryRejectsCorruptStateAndWrongRuntime(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	runtimeID := handlerTestRuntimeID(t)
+	daemonID := "message-recovery-invalid-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "message recovery invalid")
 	agentID := createHandlerTestAgentOnRuntime(t, "message-recovery-invalid-"+uuid.NewString()[:8], runtimeID)
-	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
 	forgedCursorRaw, err := json.Marshal(agentMessageRecoveryCursor{
 		Target: "channel:one", Seq: 1, ID: uuid.NewString(), SnapshotHash: "forged", Checksum: "forged",
 	})
@@ -170,7 +172,7 @@ func TestAgentMessageRecoveryRejectsCorruptStateAndWrongRuntime(t *testing.T) {
 			}
 		})
 	}
-	wrong := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{uuid.NewString()}}
+	wrong := daemonws.ClientIdentity{DaemonID: "wrong-" + daemonID, WorkspaceID: testWorkspaceID}
 	if _, err := testHandler.HandleAgentMessageRecovery(context.Background(), wrong, protocol.AgentRecoveryRequest{AgentID: agentID, RecoveryID: uuid.NewString(), Boundaries: map[string]int64{}}); err == nil {
 		t.Fatal("wrong runtime recovered Agent Messages")
 	}
@@ -184,9 +186,10 @@ func TestAgentMessageHandoffReceiptIsIdempotent(t *testing.T) {
 		t.Skip("database not available")
 	}
 	ctx := context.Background()
-	runtimeID := handlerTestRuntimeID(t)
+	daemonID := "message-handoff-runner-" + uuid.NewString()[:8]
+	runtimeID := seedMachineLockedRuntime(t, daemonID, "message handoff")
 	agentID := createHandlerTestAgentOnRuntime(t, "message-handoff-activity-"+uuid.NewString()[:8], runtimeID)
-	identity := daemonws.ClientIdentity{WorkspaceID: testWorkspaceID, RuntimeIDs: []string{runtimeID}}
+	identity := daemonws.ClientIdentity{DaemonID: daemonID, WorkspaceID: testWorkspaceID}
 	payload := protocol.AgentMessageHandoffPayload{AgentID: agentID, RuntimeID: runtimeID, HandoffID: uuid.NewString(), Count: 2, Targets: []string{"channel:one"}}
 	if err := testHandler.HandleAgentMessageHandoff(ctx, identity, payload); err != nil {
 		t.Fatalf("first handoff receipt: %v", err)

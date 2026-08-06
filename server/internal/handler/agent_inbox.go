@@ -330,6 +330,12 @@ func (h *Handler) ReportAgentInboxMessages(w http.ResponseWriter, r *http.Reques
 		msg.Content = redact.Text(msg.Content)
 		msg.Output = redact.Text(msg.Output)
 		msg.Input = redact.InputMap(msg.Input)
+		if canonicalTool, known := taskMessageCanonicalToolName(msg.Tool, msg.Input); known {
+			msg.Tool = canonicalTool
+		}
+		if taskMessageRequestVisibility(msg) != "user_facing" {
+			continue
+		}
 		details := map[string]any{
 			"inbox_event_id":    uuidToString(event.ID),
 			"delivery_id":       uuidToString(deliveryID),

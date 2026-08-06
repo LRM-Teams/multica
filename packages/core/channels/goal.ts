@@ -19,7 +19,17 @@ export const channelGoalKeys = {
     [...channelGoalKeys.processes(channelId), managerAgentId] as const,
   subgoals: (channelId: string) =>
     [...channelGoalKeys.detail(channelId), "subgoals"] as const,
+  workGraphs: () => ["work-graph"] as const,
+  workGraph: (graphId: string) => [...channelGoalKeys.workGraphs(), graphId] as const,
 };
+
+export function workGraphOptions(graphId?: string) {
+  return queryOptions({
+    queryKey: channelGoalKeys.workGraph(graphId ?? ""),
+    queryFn: () => api.getWorkGraph(graphId ?? ""),
+    enabled: !!graphId,
+  });
+}
 
 export function channelGoalOptions(channelId: string) {
   return queryOptions({

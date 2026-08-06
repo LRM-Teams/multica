@@ -1826,6 +1826,7 @@ func (h *Handler) agentInboxTaskResponse(ctx context.Context, runtime db.AgentRu
 	if strings.TrimSpace(resp.ChannelID) != "" {
 		channelID := parseUUID(resp.ChannelID)
 		if goal, err := h.currentChannelGoal(ctx, event.WorkspaceID, channelID); err == nil {
+			h.hydrateChannelGoalWorkGraph(ctx, &goal)
 			resp.ChannelGoal = channelGoalContextForClaim(goal)
 			// LRM-1004: attach bounded subgoals for this claiming agent only.
 			if resp.ChannelGoal != nil {

@@ -327,6 +327,23 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	}
 	if pool, ok := txStarter.(*pgxpool.Pool); ok {
 		h.WorkGraph = workgraph.NewStore(pool)
+		h.WorkGraph.OnNodesReady = func(ctx context.Context, workspaceID string, issueIDs []string) {
+			for _, issueID := range issueIDs {
+				issue, err := queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: parseUUID(issueID), WorkspaceID: parseUUID(workspaceID)})
+				if err != nil || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
+					continue
+				}
+				if issue.Status == "backlog" {
+					issue, err = queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{ID: issue.ID, Status: "todo", WorkspaceID: parseUUID(workspaceID)})
+					if err != nil {
+						continue
+					}
+				}
+				if h.isAgentAssigneeReady(ctx, issue) {
+					_, _ = taskSvc.EnqueueTaskForIssue(ctx, issue)
+				}
+			}
+		}
 		researchStore := researchrun.NewPostgresStore(pool)
 		h.ResearchRun = researchrun.NewEngine(researchStore, &researchRunDispatcher{handler: h}, &researchRunProjector{handler: h})
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess

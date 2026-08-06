@@ -152,6 +152,10 @@ func channelGoalStateSlot(task Task) string {
 	if strings.TrimSpace(goal.Blocker) != "" {
 		fmt.Fprintf(&b, "- Blocker: %s\n", goal.Blocker)
 	}
+	if goal.WorkGraph != nil {
+		fmt.Fprintf(&b, "- Work Graph: %s version=%d status=%s completed=%d running=%d waiting=%d stale=%d\n", goal.WorkGraph.ID, goal.WorkGraph.Version, goal.WorkGraph.Status, goal.WorkGraph.Completed, goal.WorkGraph.Running, goal.WorkGraph.Waiting, goal.WorkGraph.Stale)
+		b.WriteString("Treat this graph delta as current server state. Do not redo completed child work; act only on newly ready, failed, stale, blocked, or gated work assigned to you.\n")
+	}
 	b.WriteString("Advance only the work requested in this turn toward the goal. Preserve the objective and success standard; do not revise or lower the parent goal.\n")
 	fmt.Fprintf(&b, "After concrete progress, checkpoint it with `multica goal checkpoint --channel %s --expected-version %d --progress \"...\" --current-step \"...\"` plus repeatable `--evidence`, `--completed-criterion`, or `--blocker` flags as needed. If the command reports a stale version, run `multica goal get --channel %s` and reconcile before retrying.\n", task.ChannelID, goal.Version, task.ChannelID)
 	if len(goal.Subgoals) > 0 {

@@ -16,6 +16,34 @@ For building mention links, load `multica-mentioning` instead — not this skill
 Every contract below is traced to source in
 `references/working-on-issues-source-map.md`.
 
+## Decide before decomposing
+
+The assignment runtime requires one decision before substantive execution:
+
+- `DIRECT`: do the work in the current Issue when it is tightly coupled and can
+  be completed coherently in one bounded context.
+- `GRAPH`: use `multica issue graph create --plan-file <path>
+  --idempotency-key <uuid>` when there are at least two independently acceptable
+  deliverables, useful parallelism, distinct roles or permissions, a long
+  external wait, or a genuine independent-verification boundary.
+- `PROPOSE_GRAPH`: ask the human first when the split materially expands scope,
+  cost, permissions, or runtime.
+
+Do not use task length by itself as the trigger. Do not create a graph node for a
+greeting, one tool call, a small low-risk edit, or a step with no independent
+completion boundary. Graph plans declare `depends_on`; the service atomically
+creates declared Issues, rejects cycles and budget violations, starts only
+roots, and readies downstream nodes after prerequisites succeed. Do not
+manually promote graph-managed Issues.
+After delegating a bounded deliverable, the planner coordinates and integrates
+it rather than implementing the same deliverable again.
+
+Each plan node requires `temp_id`, `role`, and either an existing backlog
+`issue_id` or `title` plus `assignee_id`. Optional fields include `description`,
+`objective`, `completion_contract`, `context_policy`, `depends_on`, and `budget`.
+The plan root supplies `anchor_kind`, `anchor_id`, `admission_decision`,
+`reason`, and optional `budget_policy`.
+
 ## PR linking and close intent are two distinct contracts
 
 The GitHub webhook runs two separate scans over an incoming PR. They are not the

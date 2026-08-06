@@ -76,10 +76,32 @@ export const ChannelGoalSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   completed_at: z.string().optional(),
+  work_graph: z.object({
+    id: z.string(),
+    version: z.number(),
+    status: z.enum(["active", "paused", "deliverable", "completed", "cancelled", "failed"]),
+    total: z.number().default(0),
+    completed: z.number().default(0),
+    running: z.number().default(0),
+    waiting: z.number().default(0),
+    stale: z.number().default(0),
+  }).optional(),
 }).loose();
 
 export const ChannelGoalEnvelopeSchema = z.object({
   goal: ChannelGoalSchema.nullable().default(null),
+}).loose();
+
+export const WorkGraphDetailSchema = z.object({
+  id: z.string(), workspace_id: z.string(), anchor_kind: z.string(), anchor_id: z.string(),
+  status: z.string(), current_version: z.number(), admission_decision: z.enum(["GRAPH", "PROPOSE_GRAPH"]),
+  nodes: z.array(z.object({
+    id: z.string(), issue_id: z.string(), role: z.string(), context_policy: z.string(),
+    execution_status: z.string(), validity_status: z.string(), review_status: z.string(),
+    objective: z.string().default(""), completion_contract: z.array(z.string()).default([]),
+    based_on_graph_version: z.number(),
+  }).loose()).default([]),
+  edges: z.array(z.object({ id:z.string(),from_node_id:z.string(),to_node_id:z.string(),edge_type:z.string(),required:z.boolean() }).loose()).default([]),
 }).loose();
 
 export const ChannelGoalProcessMarkdownSchema = z.object({

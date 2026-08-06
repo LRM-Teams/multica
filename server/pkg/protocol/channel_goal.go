@@ -16,5 +16,16 @@ type ChannelGoalContext struct {
 	CompletedCriteria []string `json:"completed_criteria,omitempty"`
 	// Subgoals is the bounded list of sub-goals relevant to the claiming agent
 	// (LRM-1004). Never a dump of other agents' full threads.
-	Subgoals []ChannelSubgoalContext `json:"subgoals,omitempty"`
+	Subgoals  []ChannelSubgoalContext  `json:"subgoals,omitempty"`
+	WorkGraph *ChannelWorkGraphContext `json:"work_graph,omitempty"`
+}
+
+type ChannelWorkGraphContext struct {
+	ID        string `json:"id"`
+	Version   int64  `json:"version"`
+	Status    string `json:"status"`
+	Completed int    `json:"completed"`
+	Running   int    `json:"running"`
+	Waiting   int    `json:"waiting"`
+	Stale     int    `json:"stale"`
 }

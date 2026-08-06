@@ -1113,7 +1113,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/lifecycle", h.CreateAgentLifecycleOperation)
 					r.Get("/lifecycle/{operationId}", h.GetAgentLifecycleOperation)
 					r.Get("/activity", h.ListAgentActivity)
-					r.Get("/activity/events", h.ListAgentActivityEvents)
 					// Dormant until #2424 activates the coordinated Runner Activity
 					// cut. Its separate path prevents compatibility translation with
 					// the historical /activity contracts.

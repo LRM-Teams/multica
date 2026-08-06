@@ -141,7 +141,7 @@ func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *test
 	}
 
 	dispatcher := &recordingCancellationDispatcher{states: map[string]InboxTaskState{}}
-	engine := NewEngine(store, dispatcher, nil)
+	engine := newEngine(store, dispatcher, nil)
 	if pendingStill, cancelErr := engine.cancelPendingAttempts(ctx, run, "test_cancellation"); cancelErr != nil {
 		t.Fatal(cancelErr)
 	} else if !pendingStill {
@@ -234,7 +234,7 @@ func TestNonRetryableDispatchFailureStopsRunWithoutRemediationLoop(t *testing.T)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
 	}()
 	store := NewPostgresStore(pool)
-	engine := NewEngine(store, nonRetryableTestDispatcher{}, nil)
+	engine := newEngine(store, nonRetryableTestDispatcher{}, nil)
 	_, err = engine.Start(ctx, StartInput{
 		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
 		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Test permanent dispatch failure",
@@ -304,7 +304,7 @@ func TestExhaustedInitialPlanStopsRunWithoutCreatingReplan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine := NewEngine(store, &recordingCancellationDispatcher{states: map[string]InboxTaskState{}}, nil)
+	engine := newEngine(store, &recordingCancellationDispatcher{states: map[string]InboxTaskState{}}, nil)
 	if err = engine.ReconcileSession(ctx, fixture.sessionID); err == nil || !strings.Contains(err.Error(), "exhausted its attempts") {
 		t.Fatalf("ReconcileSession err=%v", err)
 	}

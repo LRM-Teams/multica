@@ -898,7 +898,7 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
   - [x] B5：建立 `failureModule`，拥有确定性 dispatch 错误分类、预算耗尽决策顺序、Run 失败转换、Attempt 取消和失败事件投影顺序，并阻止永久失败的计划或同一补救任务无限重建。
   - [x] B6：建立 `deliveryGateModule`，拥有 Gate 评估、最小补救路由、控制任务创建、并发目标变化、等待确认和最终确认；新补救任务的激活与派发仍由 `executionModule` 执行。
 - [x] 删除巨型 `Store` Interface；Engine 只接受具体 `PostgresStore`，PostgreSQL 事务保留在 `researchrun` 内部，各业务 Module 只声明自己的窄持久化输入，没有新建同规模组合接口。
-- [ ] 固定外部 `ResearchRun` Interface，禁止 Handler 直接写子实体状态。
+- [x] 固定外部 `ResearchRun` Interface，禁止 Handler 直接写子实体状态；`NewEngine` 只返回该接口，内部 `Start` 和单 Run reconcile 不对 Handler 暴露。
 - [ ] 保持 V1–V5 字节级 Prompt/Result 兼容和行为回放一致。
 
 退出条件：行为无变化；每个不变量只有一个 Implementation；新增研究状态不再要求修改一个千行 Engine 和一个全能 Store。
@@ -1087,6 +1087,8 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [x] B5 把确定性 dispatch 错误分类、预算耗尽后的 Gate 决策顺序、Run 失败转换、Attempt 取消和失败事件投影迁入 `failureModule`。未知或明确可重试的 dispatch 错误不修改 Run；能力缺失和不可重试错误才结束 Run。失败路径固定先提交 `MarkFailed`，再请求 Runtime 取消，取消未确认时不投影已静止的终态；预算事件必须先提交，随后才判断可交付或失败。模块测试覆盖可重试无状态修改、不可重试失败顺序、取消失败延迟投影、预算通过和预算失败；真实 PostgreSQL 的永久 dispatch 与计划耗尽回归继续通过。
 - [x] B6 把交付 Gate 评估、finding 优先级、最小补救动作、question 绑定、控制任务创建、并发目标变化、等待用户确认和确认时复检迁入 `deliveryGateModule`。Module 只创建一个可寻址补救 Task 并把执行交回 `executionModule`；`ErrControlTargetChanged` 不失败 Run，而是在投影并等待一秒后用新状态重算。模块测试覆盖通过、目标补救、并发变化、预算转交、失败计划防循环和确认复检；真实 PostgreSQL 全流程、补救路由、V1–V5 golden 与竞态测试通过。`engine.go` 已不包含 Prompt 文本、Dispatcher/Attempt 状态组合、Result 接纳规则、失败转换、Gate 路由或 Projection outbox 算法。
 - [x] B7 删除 `researchrun.Store` 的 44 方法全能接口。`NewEngine` 和 `Engine` 明确接受具体 `*PostgresStore`；`projectionEventStore`、`resultAcceptanceStore`、`executionStore`、`failureStore`、`deliveryGateStore` 分别声明各 Module 所需的最小方法集，并由编译期断言验证 `PostgresStore` 实现。没有创建包含这些接口的全能组合接口，模块测试继续使用最小替身，Engine 全流程只用真实 PostgreSQL 验证。
+- [x] B8 新增固定 `ResearchRun` 外部用例接口，只暴露 Create/Snapshot/Fleet read、运行级生命周期命令、Steer/NodeCommand、task-scoped SubmitResult 和 scheduler ReconcileDue。`NewEngine` 返回该接口，Handler 字段不再持有 `*Engine`；内部 `Start`、`ReconcileSession`、Module、Store 和子实体写方法不在接口中。反射回归锁定 12 个方法，Handler 纯编译、`go vet`、真实 PostgreSQL 全包和竞态测试通过。
+- [ ] 计划外发现：共享 Handler 测试库已应用 migration 257，但缺少后加入的 `204_system_general_channel`；补跑 204 时无条件操作已被 257 删除的 radar trigger，真实旧部署也可能遇到同一升级顺序。B8 已用不执行 TestMain 的纯编译验证隔离；下一独立变更必须让 204 在 radar 已存在和已删除两种 schema 上都成立，且不能复活 257 删除的 radar 对象。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。
 - [ ] 按 A–N 实现并逐项记录证据。

@@ -40,6 +40,7 @@ func TestEnvDispatchCloneAdapterCreateDerivedAgentUsesUniqueDerivedName(t *testi
 
 	derivedID, err := a.CreateDerivedAgent(context.Background(), service.CreateDerivedAgentInput{
 		WorkspaceID: "ws-1", SourceAgentID: "src-1", RuntimeID: "rt-1", Name: "env-bind-1",
+		ExecutionModel: "env-leader-1/glm-5.2",
 	})
 	if err != nil {
 		t.Fatalf("create derived agent: %v", err)
@@ -47,8 +48,14 @@ func TestEnvDispatchCloneAdapterCreateDerivedAgentUsesUniqueDerivedName(t *testi
 	if derivedID != "derived-1" {
 		t.Fatalf("derivedID = %q, want derived-1", derivedID)
 	}
-	if len(fake.queryRowArgs) != 5 || fake.queryRowArgs[2] != "env-bind-1" {
-		t.Fatalf("derived insert args = %#v, want unique name as third argument", fake.queryRowArgs)
+	if len(fake.queryRowArgs) != 6 || fake.queryRowArgs[2] != "env-bind-1" || fake.queryRowArgs[5] != "env-leader-1/glm-5.2" {
+		t.Fatalf("derived insert args do not carry the unique name and execution model")
+	}
+	if !strings.Contains(fake.queryRowSQL, "COALESCE(NULLIF($6, ''), model)") {
+		t.Fatal("derived insert must preserve the source model only when the execution override is empty")
+	}
+	if !strings.Contains(fake.queryRowSQL, "model = EXCLUDED.model") {
+		t.Fatal("same-lineage retry must update a stale derived model")
 	}
 	if !strings.Contains(fake.queryRowSQL, "ON CONFLICT (workspace_id, name)") ||
 		!strings.Contains(fake.queryRowSQL, "agent.source_agent_id = EXCLUDED.source_agent_id") {

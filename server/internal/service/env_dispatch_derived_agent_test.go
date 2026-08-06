@@ -60,6 +60,7 @@ func cloneInput() CloneEnvDispatchAgentInput {
 	return CloneEnvDispatchAgentInput{
 		WorkspaceID: "ws-1", SourceAgentID: "src-1", RuntimeID: "rt-1",
 		EnvID: "env-1", ChannelID: "ch-1", BindingID: "bind-1",
+		ExecutionModel: "env-leader-1/glm-5.2",
 	}
 }
 
@@ -84,6 +85,9 @@ func TestCloneEnvDispatchAgentCreatesDerivedWithLineageAndRuntime(t *testing.T) 
 	}
 	if deps.created.SourceAgentID != "src-1" {
 		t.Fatalf("derived SourceAgentID = %q, want src-1", deps.created.SourceAgentID)
+	}
+	if deps.created.ExecutionModel != "env-leader-1/glm-5.2" {
+		t.Fatalf("derived ExecutionModel = %q, want env-leader-1/glm-5.2", deps.created.ExecutionModel)
 	}
 	if deps.created.RuntimeID != "rt-1" {
 		t.Fatalf("derived RuntimeID = %q, want rt-1", deps.created.RuntimeID)

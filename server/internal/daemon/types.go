@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -168,6 +169,22 @@ type ArealProxy struct {
 	Model    string `json:"model"`
 	APIKey   string `json:"api_key"`
 	BaseURL  string `json:"base_url"`
+}
+
+// String returns a log-safe representation. Task-scoped proxy credentials and
+// route details are intentionally omitted so accidental formatting cannot leak
+// them into logs or test output.
+func (p *ArealProxy) String() string {
+	if p == nil {
+		return "<nil>"
+	}
+	return "ArealProxy{route_configured:true credentials:[REDACTED]}"
+}
+
+// Format ensures alternate fmt verbs such as %#v cannot bypass String and
+// reflect the credential-bearing wire fields.
+func (p *ArealProxy) Format(state fmt.State, _ rune) {
+	_, _ = state.Write([]byte(p.String()))
 }
 
 // ScopedSecret is one env entry with a hard scope boundary for injection.

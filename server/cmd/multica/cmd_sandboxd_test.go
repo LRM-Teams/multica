@@ -215,6 +215,35 @@ func TestMergeRuntimeEnvMultiProvider(t *testing.T) {
 	}
 }
 
+func TestMergeRuntimeEnvPreservesSharedCatalogProviderAliases(t *testing.T) {
+	runtime := json.RawMessage(`{
+		"providers": [
+			{"provider":"env-leader-agent-1","api_key":"placeholder-a","base_url":"https://a.invalid/v1","model":"glm-5.2"},
+			{"provider":"env-peer-agent-2","api_key":"placeholder-b","base_url":"https://b.invalid/v1","model":"model-b"}
+		],
+		"default_provider":"env-leader-agent-1",
+		"default_model":"glm-5.2"
+	}`)
+	out := mergeRuntimeEnv(nil, runtime)
+	if out["TEAM_PROVIDER"] != "env-leader-agent-1" || out["TEAM_MODEL"] != "glm-5.2" {
+		t.Fatal("custom shared-catalog default alias was not selected")
+	}
+	var cfg teamPiConfig
+	if err := json.Unmarshal([]byte(out["TEAM_PI_CONFIG"]), &cfg); err != nil {
+		t.Fatalf("decode TEAM_PI_CONFIG: %v", err)
+	}
+	if len(cfg.Providers) != 2 {
+		t.Fatalf("TEAM_PI_CONFIG provider count = %d, want 2", len(cfg.Providers))
+	}
+	if cfg.Providers[0].Name != "env-leader-agent-1" || cfg.Providers[1].Name != "env-peer-agent-2" {
+		t.Fatal("TEAM_PI_CONFIG rewrote deterministic provider aliases")
+	}
+	if cfg.Providers[0].BaseURL != "https://a.invalid/v1" || cfg.Providers[1].BaseURL != "https://b.invalid/v1" ||
+		cfg.Providers[0].Model != "glm-5.2" || cfg.Providers[1].Model != "model-b" {
+		t.Fatal("TEAM_PI_CONFIG lost an aliased provider route")
+	}
+}
+
 func TestMergeRuntimeEnvDefaultsOpenAIModel(t *testing.T) {
 	runtime := json.RawMessage(`{"providers":[{"provider":"openai","api_key":"sk","base_url":"https://x/v1"}],"default_provider":"openai"}`)
 	out := mergeRuntimeEnv(nil, runtime)

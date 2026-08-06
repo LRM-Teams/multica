@@ -2,11 +2,14 @@
 import { describe, expect, it } from "vitest";
 import type { ResearchGraphNodeType } from "@multica/core/types";
 import {
+  disputeIsDeliveryBlocking,
+  disputeLifecycleBucket,
   edgeVisualForConnection,
   isLowConfidence,
   nodeIsVisuallyBusy,
   normalizeNodeStatusKey,
   shouldPulseNode,
+  stanceTone,
   visualForEdgeType,
   visualForNodeType,
 } from "./node-visuals";
@@ -111,5 +114,85 @@ describe("node-visuals (LRM-798 / LRM-972)", () => {
     expect(normalizeNodeStatusKey("done")).toBe("done");
     expect(normalizeNodeStatusKey("ACTIVE")).toBe("active");
     expect(normalizeNodeStatusKey("weird")).toBe("unknown");
+  });
+
+  // ----- LRM-1472 / UI-04 dispute subgraph -----
+  const DISPUTE_NODE_TYPES = [
+    "dispute",
+    "dispute_position",
+    "deliberation",
+    "decision",
+  ] as const;
+
+  it("maps every dispute node type to a semantic visual (no hex / palette-500)", () => {
+    for (const type of DISPUTE_NODE_TYPES) {
+      const v = visualForNodeType(type);
+      expect(v.emphasizeType, type).toBe(true);
+      expect(v.ringClass, type).not.toMatch(FORBIDDEN);
+      expect(v.accentBarClass, type).not.toMatch(FORBIDDEN);
+    }
+    expect(visualForNodeType("dispute").labelTone).toBe("warning");
+    expect(visualForNodeType("deliberation").labelTone).toBe("info");
+    expect(visualForNodeType("decision").labelTone).toBe("success");
+    // deliberation_turn is an inline row, not a full card — falls back gracefully.
+    expect(visualForNodeType("deliberation_turn").labelTone).toBe("default");
+  });
+
+  it("encodes all LRM-1472 dispute edge types with semantic strokes (grayscale-distinct)", () => {
+    const edges = [
+      "refines",
+      "invalidates",
+      "discussed_by",
+      "challenged_by",
+      "escalated_to",
+      "resolved_by",
+    ] as const;
+    for (const edge of edges) {
+      const v = visualForEdgeType(edge);
+      expect(v.stroke, edge).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+      expect(v.stroke, edge).toMatch(/var\(--/);
+    }
+  });
+
+  it("distinguishes conflict (double-strike) from supports (solid) and escalation (thick solid)", () => {
+    const supports = visualForEdgeType("supports");
+    const contradicts = visualForEdgeType("contradicts");
+    const escalated = visualForEdgeType("escalated_to");
+    expect(supports.role).toBe("source");
+    expect(contradicts.role).toBe("dashed");
+    expect(contradicts.strokeDasharray).toBe("10 3 2 3");
+    expect(escalated.role).toBe("active");
+    expect(escalated.strokeWidth).toBe(2.5);
+    // escalation is the only thick solid line vs thin supports
+    expect(escalated.strokeWidth).toBeGreaterThan(supports.strokeWidth ?? 0);
+    // invalidates uses sparse dash distinct from double-strike conflict
+    expect(visualForEdgeType("invalidates").strokeDasharray).toBe("2 4");
+  });
+
+  it("buckets dispute lifecycle into A/B/C/D display groups", () => {
+    expect(disputeLifecycleBucket("open")).toBe("open");
+    expect(disputeLifecycleBucket("investigating")).toBe("open");
+    expect(disputeLifecycleBucket("discussing")).toBe("open");
+    expect(disputeLifecycleBucket("deadlocked")).toBe("escalating");
+    expect(disputeLifecycleBucket("escalated")).toBe("escalating");
+    expect(disputeLifecycleBucket("resolved")).toBe("adjudicated");
+    expect(disputeLifecycleBucket("conditionally_resolved")).toBe("adjudicated");
+    expect(disputeLifecycleBucket("irreducible")).toBe("adjudicated");
+    expect(disputeLifecycleBucket("reopened")).toBe("reopened");
+    expect(disputeLifecycleBucket("weird")).toBe("open");
+  });
+
+  it("flags open/investigating disputes as delivery-blocking", () => {
+    expect(disputeIsDeliveryBlocking("open")).toBe(true);
+    expect(disputeIsDeliveryBlocking("investigating")).toBe(true);
+    expect(disputeIsDeliveryBlocking("resolved")).toBe(false);
+    expect(disputeIsDeliveryBlocking("conditionally_resolved")).toBe(false);
+  });
+
+  it("stance tint is never color-only: labelled tone + semantic accent", () => {
+    expect(stanceTone("supports").labelTone).toBe("success");
+    expect(stanceTone("contradicts").labelTone).toBe("danger");
+    expect(stanceTone("conditional").labelTone).toBe("warning");
+    expect(stanceTone("contradicts").accentBarClass).toContain("destructive");
   });
 });

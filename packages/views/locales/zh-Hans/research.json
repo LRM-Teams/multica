@@ -436,7 +436,12 @@
       "resolved": "已解决",
       "pending": "待处理",
       "unknown": "未知"
-    }
+    },
+    "dispute": "争议",
+    "dispute_position": "立场",
+    "deliberation": "讨论",
+    "deliberation_turn": "轮次",
+    "decision": "裁决"
   },
   "logic": {
     "label": "调研逻辑",
@@ -817,5 +822,63 @@
   },
   "canvas": {
     "reorg_badge": "已按新需求重排 · {{count}} 处更新 · {{paths}} 条新路径"
+  },
+  "dispute": {
+    "status": {
+      "open": "未解决",
+      "investigating": "调查中",
+      "deadlocked": "僵局",
+      "escalated": "升级中",
+      "resolved": "已裁决",
+      "conditionally_resolved": "条件裁决",
+      "irreducible": "不可判定",
+      "reopened": "已重开",
+      "cancelled": "已取消",
+      "converged": "已收敛",
+      "unresolved": "未收敛",
+      "pending": "待定",
+      "discussing": "讨论中"
+    },
+    "conflict_type": {
+      "fact": "事实",
+      "definition": "定义",
+      "scope": "范围",
+      "time": "时间线",
+      "population": "群体",
+      "method": "方法",
+      "measurement": "口径",
+      "interpretation": "解读",
+      "source_identity": "来源身份"
+    },
+    "turn_marker": {
+      "position_changed": "立场变化",
+      "evidence_added": "新增证据",
+      "scope_refined": "范围细化",
+      "no_change": "无进展"
+    },
+    "gate_blocking": "此争议阻断交付",
+    "residual_note": "残余影响",
+    "reopened_note": "因新证据重开",
+    "view_history": "查看历史",
+    "positions": "立场",
+    "evidence": "证据",
+    "turns": "轮次",
+    "participants": "参与者",
+    "escalated_to": "升级至",
+    "director_adjudicating": "研究总监裁决中",
+    "empty": {
+      "positions": "尚无立场",
+      "evidence": "尚无证据"
+    },
+    "overflow_more": "+{{count}}",
+    "tabs": {
+      "overview": "概览",
+      "positions": "立场",
+      "debate": "讨论",
+      "verdict": "裁决"
+    },
+    "delivery_blocking": "阻断交付",
+    "superseded": "已被新裁决取代",
+    "loading_more": "加载更多"
   }
 }

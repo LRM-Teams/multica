@@ -12,21 +12,20 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/cli"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // credentialProxyMessageSendRequest is deliberately not the Server request
 // shape.  In particular, Agent code cannot provide a client identity or a
 // seen cursor: both are machine-local Draft state.
 type credentialProxyMessageSendRequest struct {
-	AgentID     string                 `json:"agent_id"`
-	TaskID      string                 `json:"task_id"`
-	WorkspaceID string                 `json:"workspace_id"`
-	Target      string                 `json:"target"`
-	Content     string                 `json:"content"`
-	Parts       []protocol.MessagePart `json:"parts"`
-	SendDraft   bool                   `json:"send_draft,omitempty"`
-	Anyway      bool                   `json:"anyway,omitempty"`
+	AgentID       string   `json:"agent_id"`
+	TaskID        string   `json:"task_id"`
+	WorkspaceID   string   `json:"workspace_id"`
+	Target        string   `json:"target"`
+	Content       string   `json:"content"`
+	AttachmentIDs []string `json:"attachment_ids"`
+	SendDraft     bool     `json:"send_draft,omitempty"`
+	Anyway        bool     `json:"anyway,omitempty"`
 
 	AgentInboxEventID    string `json:"agent_inbox_event_id,omitempty"`
 	AgentInboxDeliveryID string `json:"agent_inbox_delivery_id,omitempty"`
@@ -106,7 +105,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 		upstreamRequest := map[string]any{
 			"target":            draft.Target,
 			"content":           draft.Content,
-			"parts":             draft.Parts,
+			"attachment_ids":    draft.AttachmentIDs,
 			"client_message_id": draft.ClientMessageID,
 			"seen_up_to_seq":    draft.SeenUpToSeq,
 			"context_target":    draft.ContextTarget,
@@ -165,8 +164,11 @@ func (request *credentialProxyMessageSendRequest) validate() error {
 	if request.Anyway && !request.SendDraft {
 		return errors.New("--anyway is only valid with --send-draft")
 	}
-	if request.SendDraft && (strings.TrimSpace(request.Content) != "" || len(request.Parts) != 0) {
+	if request.SendDraft && (strings.TrimSpace(request.Content) != "" || len(request.AttachmentIDs) != 0) {
 		return errors.New("--send-draft does not accept replacement message content or attachments")
+	}
+	if !request.SendDraft && strings.TrimSpace(request.Content) == "" {
+		return errors.New("message content is required")
 	}
 	return nil
 }
@@ -193,7 +195,7 @@ func (d *Daemon) prepareMessageSendDraft(ctx context.Context, proxy *CredentialP
 			return messageDraft{}, http.StatusConflict, err
 		}
 		saved, err := proxy.SaveNormalMessageDraft(request.AgentID, messageDraft{
-			Target: request.Target, ContextTarget: contextTarget, Content: request.Content, Parts: request.Parts,
+			Target: request.Target, ContextTarget: contextTarget, Content: request.Content, AttachmentIDs: append([]string(nil), request.AttachmentIDs...),
 			ClientMessageID: uuid.NewString(), SeenUpToSeq: seenUpToSeq,
 		}, now)
 		if err != nil {

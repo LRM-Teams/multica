@@ -14,7 +14,6 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/cli"
 	"github.com/multica-ai/multica/server/internal/turntransport"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/spf13/pflag"
 )
 
@@ -31,17 +30,16 @@ func TestMessageSendHasNoAgentControlledCursorFlag(t *testing.T) {
 }
 
 func TestRunAgentMessageSendDraftPathRejectsReplacementPayloadAndNormalAnyway(t *testing.T) {
-	withMessage := newMessageSendCmd()
-	_ = withMessage.Flags().Set("target", "#one")
-	_ = withMessage.Flags().Set("send-draft", "true")
-	_ = withMessage.Flags().Set("message", "replacement")
-	if err := runAgentMessageSend(withMessage, nil); err == nil || !strings.Contains(err.Error(), "does not accept --message") {
+	withAttachment := newMessageSendCmd()
+	_ = withAttachment.Flags().Set("target", "#one")
+	_ = withAttachment.Flags().Set("send-draft", "true")
+	_ = withAttachment.Flags().Set("attachment-id", "attachment-1")
+	if err := runAgentMessageSend(withAttachment, nil); err == nil || !strings.Contains(err.Error(), "does not accept --attachment-id") {
 		t.Fatalf("send-draft replacement error = %v", err)
 	}
 
 	normalAnyway := newMessageSendCmd()
 	_ = normalAnyway.Flags().Set("target", "#one")
-	_ = normalAnyway.Flags().Set("message", "replacement")
 	_ = normalAnyway.Flags().Set("anyway", "true")
 	if err := runAgentMessageSend(normalAnyway, nil); err == nil || !strings.Contains(err.Error(), "only valid with --send-draft") {
 		t.Fatalf("normal --anyway error = %v", err)
@@ -294,55 +292,16 @@ func TestRunAgentMessageReadUsesMachineLocalCredentialProxy(t *testing.T) {
 	}
 }
 
-func TestBuildAgentSendPartsIncludesAttachmentParts(t *testing.T) {
-	parts := buildAgentSendParts("got-it", "see files", []string{
-		"att-1",
-		"  att-2  ",
-		"",
-		"att-1", // duplicates preserved in flag order after appendUniqueStrings; builder itself does not dedupe
-	}, false)
-	want := []protocol.MessagePart{
-		{Type: protocol.MessagePartTypeSticker, StickerID: "got-it"},
-		{Type: protocol.MessagePartTypeText, Text: "see files"},
-		{Type: protocol.MessagePartTypeAttachment, AttachmentID: "att-1"},
-		{Type: protocol.MessagePartTypeAttachment, AttachmentID: "att-2"},
-		{Type: protocol.MessagePartTypeAttachment, AttachmentID: "att-1"},
-	}
-	if len(parts) != len(want) {
-		t.Fatalf("parts len = %d, want %d (%+v)", len(parts), len(want), parts)
-	}
-	for i := range want {
-		if parts[i].Type != want[i].Type || parts[i].StickerID != want[i].StickerID ||
-			parts[i].Text != want[i].Text || parts[i].AttachmentID != want[i].AttachmentID {
-			t.Fatalf("parts[%d] = %+v, want %+v", i, parts[i], want[i])
-		}
-	}
-}
-
-func TestBuildAgentSendPartsAttachmentOnly(t *testing.T) {
-	parts := buildAgentSendParts("", "", []string{"att-only"}, false)
-	if len(parts) != 1 || parts[0].Type != protocol.MessagePartTypeAttachment || parts[0].AttachmentID != "att-only" {
-		t.Fatalf("parts = %+v, want single attachment part", parts)
-	}
-}
-
-func TestBuildAgentSendPartsMarksVoiceDelivery(t *testing.T) {
-	parts := buildAgentSendParts("", "spoken answer", nil, true)
-	if len(parts) != 2 || parts[0].Type != protocol.MessagePartTypeText || parts[1].Type != protocol.MessagePartTypeVoice {
-		t.Fatalf("parts = %+v, want text followed by voice marker", parts)
-	}
-}
-
-func TestRunAgentMessageSendVoiceRequiresTranscript(t *testing.T) {
+func TestRunAgentMessageSendRequiresNonEmptyStdin(t *testing.T) {
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("voice", "true")
-	if err := runAgentMessageSend(cmd, nil); err == nil || !strings.Contains(err.Error(), "--voice requires message text") {
-		t.Fatalf("error = %v, want missing transcript error", err)
+	cmd.SetIn(strings.NewReader(" \n\t "))
+	if err := runAgentMessageSend(cmd, nil); err == nil || !strings.Contains(err.Error(), "required on stdin") {
+		t.Fatalf("error = %v, want missing stdin content error", err)
 	}
 }
 
-func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
+func TestRunAgentMessageSendPostsOpaqueAttachmentIDsInOrder(t *testing.T) {
 	var body map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/credential-proxy/messages/send" {
@@ -371,15 +330,15 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("message", "here's the file")
 	_ = cmd.Flags().Set("attachment-id", "att-a")
 	_ = cmd.Flags().Set("attachment-id", "att-b")
+	cmd.SetIn(strings.NewReader("here's the file"))
 	if err := runAgentMessageSend(cmd, nil); err != nil {
 		t.Fatalf("runAgentMessageSend: %v", err)
 	}
 
-	if _, has := body["attachment_ids"]; has {
-		t.Fatalf("body still has attachment_ids = %#v; chat send must use parts only", body["attachment_ids"])
+	if _, has := body["parts"]; has {
+		t.Fatalf("Proxy request must not contain caller-built parts: %#v", body["parts"])
 	}
 	if body["target"] != "#multica" {
 		t.Fatalf("target = %#v, want #multica", body["target"])
@@ -387,16 +346,13 @@ func TestRunAgentMessageSendPostsAttachmentPartsNotIDs(t *testing.T) {
 	if body["content"] != "here's the file" {
 		t.Fatalf("content = %#v, want message text", body["content"])
 	}
-	rawParts, ok := body["parts"].([]any)
+	attachmentIDs, ok := body["attachment_ids"].([]any)
 	if !ok {
-		t.Fatalf("parts = %#v, want JSON array", body["parts"])
+		t.Fatalf("attachment_ids = %#v, want JSON array", body["attachment_ids"])
 	}
-	if len(rawParts) != 3 {
-		t.Fatalf("parts len = %d, want 3 (text + 2 attachments): %#v", len(rawParts), rawParts)
+	if len(attachmentIDs) != 2 || attachmentIDs[0] != "att-a" || attachmentIDs[1] != "att-b" {
+		t.Fatalf("attachment_ids = %#v, want ordered opaque ids", attachmentIDs)
 	}
-	assertPartMap(t, rawParts[0], map[string]any{"type": "text", "text": "here's the file"})
-	assertPartMap(t, rawParts[1], map[string]any{"type": "attachment", "attachment_id": "att-a"})
-	assertPartMap(t, rawParts[2], map[string]any{"type": "attachment", "attachment_id": "att-b"})
 }
 
 func TestRunAgentMessageSendRecordsAttemptBeforeHTTPFailure(t *testing.T) {
@@ -413,7 +369,7 @@ func TestRunAgentMessageSendRecordsAttemptBeforeHTTPFailure(t *testing.T) {
 
 	cmd := newMessageSendCmd()
 	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("message", "attempted reply")
+	cmd.SetIn(strings.NewReader("attempted reply"))
 	if err := runAgentMessageSend(cmd, nil); err == nil {
 		t.Fatal("runAgentMessageSend succeeded against failing transport")
 	}
@@ -460,55 +416,6 @@ func TestRunAgentMessageA2AControlPostsOwnerControl(t *testing.T) {
 		body["rounds"] != float64(2) {
 		t.Fatalf("A2A control body=%#v", body)
 	}
-}
-
-func TestRunAgentMessageSendPostsVoiceMarkerAfterTranscript(t *testing.T) {
-	var body map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/credential-proxy/messages/send" {
-			http.NotFound(w, r)
-			return
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode body: %v", err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"action":  "message_send",
-			"created": true,
-			"message": map[string]any{"id": "msg-voice"},
-		})
-	}))
-	defer srv.Close()
-
-	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
-	t.Setenv("MULTICA_AGENT_ID", "agent-1")
-	t.Setenv("MULTICA_TASK_ID", "task-1")
-	_, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
-	if err != nil {
-		t.Fatalf("server port: %v", err)
-	}
-	t.Setenv("MULTICA_DAEMON_PORT", port)
-
-	cmd := newMessageSendCmd()
-	_ = cmd.Flags().Set("target", "#multica")
-	_ = cmd.Flags().Set("message", "spoken answer")
-	_ = cmd.Flags().Set("voice", "true")
-	if err := runAgentMessageSend(cmd, nil); err != nil {
-		t.Fatalf("runAgentMessageSend: %v", err)
-	}
-
-	if body["content"] != "spoken answer" {
-		t.Fatalf("content = %#v, want spoken answer", body["content"])
-	}
-	rawParts, ok := body["parts"].([]any)
-	if !ok {
-		t.Fatalf("parts = %#v, want JSON array", body["parts"])
-	}
-	if len(rawParts) != 2 {
-		t.Fatalf("parts len = %d, want 2 (text + voice): %#v", len(rawParts), rawParts)
-	}
-	assertPartMap(t, rawParts[0], map[string]any{"type": "text", "text": "spoken answer"})
-	assertPartMap(t, rawParts[1], map[string]any{"type": "voice"})
 }
 
 func TestAgentMessageSendTextFallbackReportsHeld(t *testing.T) {
@@ -583,7 +490,7 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 			name: "send",
 			run: func() error {
 				cmd := newMessageSendCmd()
-				_ = cmd.Flags().Set("message", "hello")
+				cmd.SetIn(strings.NewReader("hello"))
 				return runAgentMessageSend(cmd, nil)
 			},
 		},
@@ -610,18 +517,5 @@ func TestRunAgentMessageCommandsRequireTarget(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, want)
 			}
 		})
-	}
-}
-
-func assertPartMap(t *testing.T, got any, want map[string]any) {
-	t.Helper()
-	m, ok := got.(map[string]any)
-	if !ok {
-		t.Fatalf("part = %#v, want map", got)
-	}
-	for k, w := range want {
-		if m[k] != w {
-			t.Fatalf("part[%q] = %#v, want %#v (full=%#v)", k, m[k], w, m)
-		}
 	}
 }

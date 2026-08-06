@@ -378,6 +378,51 @@ func (c *APIClient) PutJSON(ctx context.Context, path string, body any, out any)
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+// UploadToDestination streams bytes to an Upload Session destination. Relative
+// destinations are Server-local and therefore retain Agent authentication;
+// absolute destinations are presigned object URLs and receive only the
+// capability headers returned by the Server.
+func (c *APIClient) UploadToDestination(ctx context.Context, destination, method string, headers map[string]string, body io.Reader, sizeBytes int64) error {
+	destination = strings.TrimSpace(destination)
+	if destination == "" {
+		return fmt.Errorf("upload destination is required")
+	}
+	method = strings.TrimSpace(method)
+	if method == "" {
+		method = http.MethodPut
+	}
+	url := destination
+	serverLocal := strings.HasPrefix(destination, "/")
+	if serverLocal {
+		url = c.BaseURL + destination
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return err
+	}
+	if sizeBytes >= 0 {
+		req.ContentLength = sizeBytes
+	}
+	for key, value := range headers {
+		if strings.TrimSpace(key) != "" {
+			req.Header.Set(key, value)
+		}
+	}
+	if serverLocal {
+		c.setHeaders(req)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	err = wrapTransport(req, err)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return newHTTPError(method, destination, resp)
+	}
+	return nil
+}
+
 // PatchJSON performs a PATCH request with a JSON body.
 func (c *APIClient) PatchJSON(ctx context.Context, path string, body any, out any) error {
 	data, err := json.Marshal(body)

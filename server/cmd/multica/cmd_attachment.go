@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"mime"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -38,15 +41,12 @@ var attachmentUploadCmd = &cobra.Command{
 	Short: "Upload a local file as an attachment",
 	Long: "Upload a local file and print its attachment id. Use the id with " +
 		"`multica message send --attachment-id` or `multica issue create --attachment-id`.\n\n" +
-		"Pass --target '#channel' to bind the upload to a channel at upload time. " +
-		"Omit --target for an unbound workspace upload (link later via --attachment-id). " +
-		"For agent tokens (mat_*), unbound uploads are uploader-owned staging: only that agent " +
-		"can view them until bound (DM/thread: omit --target, then message send --attachment-id).\n\n" +
-		"DM and thread targets are not resolved as --target here — upload unbound and pass " +
-		"--attachment-id to message send with the full target.",
+		"An Agent upload requires the same canonical --target as its later message send. " +
+		"It creates a bounded Upload Session, uploads directly to its authorized destination, " +
+		"then asks the Server to verify the resulting object before returning an attachment id.",
 	Example: `  $ multica attachment upload --path ./shot.png --target '#eng'
-  $ multica attachment upload --path ./notes.md
-  $ multica message send --target 'dm:@user' --attachment-id <id> --message 'see file'`,
+  $ multica attachment upload --path ./notes.md --target 'dm:@user'
+  $ printf 'see file\n' | multica message send --target 'dm:@user' --attachment-id <id>`,
 	Args: cobra.NoArgs,
 	RunE: runAttachmentUpload,
 }
@@ -61,7 +61,7 @@ func init() {
 	_ = attachmentViewCmd.MarkFlagRequired("output")
 
 	attachmentUploadCmd.Flags().String("path", "", "Absolute or relative path to the local file to upload (required)")
-	attachmentUploadCmd.Flags().String("target", "", "Optional channel target: '#channel' or channel UUID")
+	attachmentUploadCmd.Flags().String("target", "", "Agent upload target (required for Agent tokens): #channel, #channel:<threadId>, dm:@handle, or dm:@handle:<threadId>")
 	_ = attachmentUploadCmd.MarkFlagRequired("path")
 
 	attachmentListCmd.Flags().String("issue", "", "Issue id or key (list issue attachments)")
@@ -169,6 +169,11 @@ func runAttachmentUpload(cmd *cobra.Command, _ []string) error {
 	if st.Size() == 0 {
 		return fmt.Errorf("--path is empty; refusing to upload a 0-byte attachment")
 	}
+	target, _ := cmd.Flags().GetString("target")
+	target = strings.TrimSpace(target)
+	if isAgentAPIToken(cmd) && target == "" {
+		return fmt.Errorf("--target is required for attachment upload")
+	}
 
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -177,8 +182,10 @@ func runAttachmentUpload(cmd *cobra.Command, _ []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
 	defer cancel()
+	if isAgentAPIToken(cmd) {
+		return runAgentAttachmentUploadSession(ctx, client, path, st.Size(), target)
+	}
 
-	target, _ := cmd.Flags().GetString("target")
 	channelID, err := resolveChannelIDFromUploadTarget(ctx, client, target)
 	if err != nil {
 		return err
@@ -190,9 +197,6 @@ func runAttachmentUpload(cmd *cobra.Command, _ []string) error {
 	}
 
 	uploadOpts := cli.UploadFileOptions{ChannelID: channelID}
-	if isAgentAPIToken(cmd) {
-		uploadOpts.Path = "/api/agent/attachments"
-	}
 	id, err := client.UploadFileOpts(ctx, data, path, uploadOpts)
 	if err != nil {
 		return fmt.Errorf("upload: %w", err)
@@ -212,6 +216,85 @@ func runAttachmentUpload(cmd *cobra.Command, _ []string) error {
 		out["channel_id"] = channelID
 	}
 	return cli.PrintJSON(os.Stdout, out)
+}
+
+type agentAttachmentUploadCapabilities struct {
+	MaxSizeBytes      int64 `json:"max_size_bytes"`
+	SessionTTLSeconds int64 `json:"session_ttl_seconds"`
+}
+
+type agentAttachmentUploadSession struct {
+	ID        string            `json:"id"`
+	UploadURL string            `json:"upload_url"`
+	Method    string            `json:"method"`
+	Headers   map[string]string `json:"headers"`
+}
+
+func runAgentAttachmentUploadSession(ctx context.Context, client *cli.APIClient, filePath string, sizeBytes int64, target string) error {
+	var capabilities agentAttachmentUploadCapabilities
+	if err := client.GetJSON(ctx, "/api/agent/attachment-upload-capabilities", &capabilities); err != nil {
+		return fmt.Errorf("get attachment upload capabilities: %w", err)
+	}
+	if capabilities.MaxSizeBytes <= 0 {
+		return fmt.Errorf("attachment upload capabilities returned an invalid size limit")
+	}
+	if sizeBytes > capabilities.MaxSizeBytes {
+		return fmt.Errorf("file exceeds server upload size limit (%s)", formatByteSize(capabilities.MaxSizeBytes))
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("open file: %w", err)
+	}
+	defer file.Close()
+	contentType, err := detectAttachmentUploadContentType(file, filepath.Base(filePath))
+	if err != nil {
+		return err
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind file: %w", err)
+	}
+	var session agentAttachmentUploadSession
+	if err := client.PostJSON(ctx, "/api/agent/attachment-upload-sessions", map[string]any{
+		"target":       target,
+		"filename":     filepath.Base(filePath),
+		"content_type": contentType,
+		"size_bytes":   sizeBytes,
+	}, &session); err != nil {
+		return fmt.Errorf("create attachment upload session: %w", err)
+	}
+	if strings.TrimSpace(session.ID) == "" || strings.TrimSpace(session.UploadURL) == "" {
+		return fmt.Errorf("attachment upload session returned no destination")
+	}
+	if err := client.UploadToDestination(ctx, session.UploadURL, session.Method, session.Headers, file, sizeBytes); err != nil {
+		return fmt.Errorf("upload attachment bytes: %w", err)
+	}
+	var attachment map[string]any
+	if err := client.PostJSON(ctx, "/api/agent/attachment-upload-sessions/"+session.ID+"/complete", map[string]any{}, &attachment); err != nil {
+		return fmt.Errorf("complete attachment upload session: %w", err)
+	}
+	id := strings.TrimSpace(strVal(attachment, "id"))
+	if id == "" {
+		return fmt.Errorf("completed upload response missing attachment id")
+	}
+	fmt.Fprintf(os.Stderr, "File uploaded: %s (%s)\n", filepath.Base(filePath), formatByteSize(sizeBytes))
+	fmt.Fprintf(os.Stderr, "Attachment ID: %s\n\n", id)
+	fmt.Fprintf(os.Stderr, "Use this ID with multica message send --attachment-id %s.\n", id)
+	return cli.PrintJSON(os.Stdout, attachment)
+}
+
+func detectAttachmentUploadContentType(file *os.File, filename string) (string, error) {
+	buf := make([]byte, 512)
+	n, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		return "", fmt.Errorf("read file type: %w", err)
+	}
+	if byExtension := mime.TypeByExtension(strings.ToLower(filepath.Ext(filename))); byExtension != "" {
+		contentType, _, err := mime.ParseMediaType(byExtension)
+		if err == nil && contentType != "" {
+			return strings.ToLower(contentType), nil
+		}
+	}
+	return http.DetectContentType(buf[:n]), nil
 }
 
 // resolveChannelIDFromUploadTarget maps an optional --target to a channel UUID

@@ -24,9 +24,21 @@ type SweLegoTemplateCacheRecord struct {
 
 // SweLegoTemplateMaterializer derives a task-specific Cube template from the
 // selected ready parent template. It never chooses a Docker image or starts a
-// daemon in the builder sandbox.
+// daemon in the builder sandbox. Building happens ONLY via the manual warm-up
+// endpoint (POST /api/v1/source-tasks/{id}/materialize); the dispatch path
+// never builds — it reads the ready cache through SweLegoTemplateResolver.
 type SweLegoTemplateMaterializer interface {
 	Materialize(context.Context, SweLegoTemplateRequest) (string, error)
+}
+
+// SweLegoTemplateResolver is the read-only counterpart of the materializer
+// used on the dispatch path: it resolves node placement + the parent
+// template, then reads the node-local cache. LookupReadyTemplate returns the
+// ready task template id, or "" plus the cache status ("building", "failed",
+// or "" when no row exists) for diagnostics. It performs exactly one cache
+// read and never triggers a builder/exec/snapshot.
+type SweLegoTemplateResolver interface {
+	LookupReadyTemplate(ctx context.Context, req SweLegoTemplateRequest) (templateID, status string, err error)
 }
 
 type SweLegoTemplateMaterializerDeps interface {

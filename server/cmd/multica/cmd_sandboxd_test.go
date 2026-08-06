@@ -272,3 +272,88 @@ func TestMergeRuntimeEnvLegacyFlat(t *testing.T) {
 		t.Fatal("expected TEAM_PI_CONFIG from legacy")
 	}
 }
+
+// Daemon-less Cube sandboxes (template builders, image holders) carry no
+// minted MULTICA_TOKEN; create must skip the runtime start instead of
+// failing the job.
+func TestCreateCubeSandboxWithoutTokenSkipsRuntimeStart(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/sandboxes":
+			_, _ = w.Write([]byte(`{"sandboxID":"builder-cube-id"}`))
+		default:
+			t.Fatalf("unexpected Cube request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &sandboxdClient{cfg: sandboxdConfig{
+		SandboxServer: server.URL, CubeProxyHTTP: server.URL, CubeDomain: "cube.test", TemplateID: "tpl-parent",
+	}, http: server.Client()}
+	result, err := client.callCube(context.Background(), sandboxJob{
+		InstanceID: "builder-instance", WorkspaceID: "workspace", Type: "create",
+		Payload: json.RawMessage(`{"template":"tpl-parent","limits":{"timeout":60}}`),
+	})
+	if err != nil {
+		t.Fatalf("daemon-less create: %v", err)
+	}
+	if result["local_ref"] != "builder-cube-id" {
+		t.Fatalf("create local_ref = %v", result["local_ref"])
+	}
+	if joined := strings.Join(paths, ","); strings.Contains(joined, "/execute") {
+		t.Fatalf("daemon-less create must not start the runtime, requests = %q", joined)
+	}
+}
+
+// The Cube /execute response is an NDJSON event stream: stdout events
+// accumulate into the job result, an error event fails the exec job.
+func TestExecCubeSandboxParsesNDJSONStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/execute" {
+			_, _ = w.Write([]byte("{\"type\":\"stdout\",\"text\":\"clone ok\\n\"}\n{\"type\":\"stdout\",\"text\":\"__EXIT_CODE__=0\\n\"}\n"))
+			return
+		}
+		t.Fatalf("unexpected Cube request %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	client := &sandboxdClient{cfg: sandboxdConfig{
+		SandboxServer: server.URL, CubeProxyHTTP: server.URL, CubeDomain: "cube.test",
+	}, http: server.Client()}
+	result, err := client.callCube(context.Background(), sandboxJob{
+		InstanceID: "builder-instance", WorkspaceID: "workspace", Type: "exec",
+		Payload: json.RawMessage(`{"local_ref":"builder-cube-id","code":"print(1)","language":"python","timeout_seconds":60}`),
+	})
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	res, _ := result["result"].(map[string]any)
+	stdout, _ := res["stdout"].(string)
+	if !strings.Contains(stdout, "clone ok") || !strings.Contains(stdout, "__EXIT_CODE__=0") {
+		t.Fatalf("exec stdout = %q", stdout)
+	}
+}
+
+func TestExecCubeSandboxFailsOnErrorEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/execute" {
+			_, _ = w.Write([]byte("{\"type\":\"stdout\",\"text\":\"fatal: checkout failed\\n\"}\n{\"type\":\"error\",\"name\":\"SystemExit\",\"value\":\"1\"}\n"))
+			return
+		}
+		t.Fatalf("unexpected Cube request %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	client := &sandboxdClient{cfg: sandboxdConfig{
+		SandboxServer: server.URL, CubeProxyHTTP: server.URL, CubeDomain: "cube.test",
+	}, http: server.Client()}
+	_, err := client.callCube(context.Background(), sandboxJob{
+		InstanceID: "builder-instance", WorkspaceID: "workspace", Type: "exec",
+		Payload: json.RawMessage(`{"local_ref":"builder-cube-id","code":"raise SystemExit(1)","language":"python","timeout_seconds":60}`),
+	})
+	if err == nil || !strings.Contains(err.Error(), "SystemExit") {
+		t.Fatalf("exec error = %v, want the error event surfaced", err)
+	}
+}

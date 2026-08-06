@@ -562,6 +562,9 @@ func newEnvDispatchService(h *Handler, concurrency int) *service.EnvDispatchServ
 		WithReclaimer(newEnvDispatchReclaimer(h))
 	if lc := newEnvSandboxLifecycleService(h); lc != nil {
 		svc = svc.WithSandboxLifecycle(lc)
+		if placement := newSweLegoTemplatePlacement(h, lc); placement != nil {
+			svc = svc.WithSweLegoTemplateResolver(placement)
+		}
 	}
 	return svc
 }

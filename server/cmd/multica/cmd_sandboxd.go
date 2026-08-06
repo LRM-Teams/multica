@@ -1110,8 +1110,13 @@ func (c *sandboxdClient) createCubeSandbox(ctx context.Context, job sandboxJob, 
 		return nil, fmt.Errorf("cube create response missing sandboxID")
 	}
 	runtimeEnv := mergeRuntimeEnv(payload.RuntimeEnv, payload.Runtime)
-	if err := c.startRuntimeInCube(ctx, cube.SandboxID, runtimeEnv); err != nil {
-		return nil, err
+	// Daemon-less sandboxes (template builders, image holders) carry no minted
+	// MULTICA_TOKEN; skip the runtime start so the create succeeds without
+	// booting a daemon in the sandbox.
+	if runtimeEnvToken(runtimeEnv) != "" {
+		if err := c.startRuntimeInCube(ctx, cube.SandboxID, runtimeEnv); err != nil {
+			return nil, err
+		}
 	}
 	endpoint := map[string]any{
 		"kind":       "cube",
@@ -1169,11 +1174,51 @@ func (c *sandboxdClient) execCubeSandbox(ctx context.Context, sandboxID string, 
 	if timeout <= 0 || timeout > 5*time.Minute {
 		return nil, fmt.Errorf("exec job timeout_seconds must be in [1, 300]")
 	}
-	var result map[string]any
-	if err := c.cubeJSONWithTimeout(ctx, timeout, http.MethodPost, "/execute", map[string]any{"code": payload.Code, "language": payload.Language}, fmt.Sprintf("49999-%s.%s", sandboxID, c.cfg.CubeDomain), &result); err != nil {
+	var stream cubeExecStream
+	if err := c.cubeJSONWithTimeout(ctx, timeout, http.MethodPost, "/execute", map[string]any{"code": payload.Code, "language": payload.Language}, fmt.Sprintf("49999-%s.%s", sandboxID, c.cfg.CubeDomain), &stream); err != nil {
 		return nil, err
 	}
-	return map[string]any{"local_ref": sandboxID, "result": result}, nil
+	if stream.err != nil {
+		return nil, stream.err
+	}
+	return map[string]any{"local_ref": sandboxID, "result": map[string]any{"stdout": stream.stdout.String()}}, nil
+}
+
+// cubeExecStream decodes the Cube /execute NDJSON event stream (one JSON
+// event per line; the documented sandbox-exec contract). stdout events
+// accumulate into the job result; the first error event fails the exec job.
+// The body is not a single JSON object, so cubeJSONWithClient hands it to
+// decode directly instead of json.Unmarshal.
+type cubeExecStream struct {
+	stdout strings.Builder
+	err    error
+}
+
+func (s *cubeExecStream) decode(data []byte) error {
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var event struct {
+			Type  string `json:"type"`
+			Text  string `json:"text"`
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			continue // tolerate non-JSON lines, mirroring the reference parser
+		}
+		switch event.Type {
+		case "stdout":
+			s.stdout.WriteString(event.Text)
+		case "error":
+			if s.err == nil {
+				s.err = fmt.Errorf("cube exec: %s", strings.TrimSpace(event.Name+": "+event.Value))
+			}
+		}
+	}
+	return nil
 }
 
 func (c *sandboxdClient) createCubeSnapshotTemplate(ctx context.Context, sandboxID string, payload sandboxJobPayload) (map[string]any, error) {
@@ -1651,6 +1696,10 @@ func (c *sandboxdClient) cubeJSONWithClient(ctx context.Context, client *http.Cl
 		return fmt.Errorf("cube %s %s returned %d: %s", method, path, res.StatusCode, strings.TrimSpace(string(resBody)))
 	}
 	if out != nil && len(resBody) > 0 {
+		if stream, ok := out.(*cubeExecStream); ok {
+			// /execute answers an NDJSON event stream, not a JSON object.
+			return stream.decode(resBody)
+		}
 		if cs, ok := out.(*cubeSandbox); ok {
 			var raw map[string]any
 			if err := json.Unmarshal(resBody, &raw); err != nil {

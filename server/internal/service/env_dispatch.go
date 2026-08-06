@@ -96,9 +96,11 @@ type EnvDispatchInput struct {
 	// already configured.
 	DefaultBaseTemplate string
 
-	// TaskTemplateID is the ready, sanitized Cube template produced for a
-	// scratch SWE-Lego issue source. It is internal dispatch state, never a
-	// caller-selected template, and takes precedence for every rollout sandbox.
+	// TaskTemplateID is the ready, sanitized Cube template pre-materialized for
+	// a scratch SWE-Lego issue source via the warm-up endpoint
+	// (POST /api/v1/source-tasks/<id>/materialize). It is internal dispatch
+	// state, never a caller-selected template, and takes precedence for every
+	// rollout sandbox.
 	TaskTemplateID string
 
 	// InstanceBackedBase is resolved by Dispatch after GetEnv: true when the base
@@ -667,6 +669,11 @@ type EnvDispatchService struct {
 	// implementation is available. Keeping the dependency optional preserves
 	// the current project-delete behavior until T020 delegates to it.
 	reclaimer EnvDispatchReclaimer
+	// resolver resolves the ready, pre-materialized Cube template for scratch
+	// SWE-Lego issue sources (read-only; building happens exclusively through
+	// the manual warm-up endpoint). Optional: nil keeps TaskTemplateID empty
+	// and preserves the pre-integration sandbox creation behavior.
+	resolver SweLegoTemplateResolver
 }
 
 // EnvDispatchReclamationRequest identifies one env-dispatch-owned scope for
@@ -731,6 +738,18 @@ func (s *EnvDispatchService) WithAuditStorage(storage EnvDispatchAuditStorage) *
 // provides the T018 implementation.
 func (s *EnvDispatchService) WithReclaimer(reclaimer EnvDispatchReclaimer) *EnvDispatchService {
 	s.reclaimer = reclaimer
+	return s
+}
+
+// WithSweLegoTemplateResolver injects the read-only SWE-Lego task-template
+// resolver. When set, a scratch swe_lego dispatch with an issue source task
+// looks up the pre-materialized Cube template (built beforehand via the
+// manual warm-up endpoint) before fan-out and stamps it on TaskTemplateID;
+// a cache that is missing/building/failed fails the dispatch with a
+// validation error. A nil resolver leaves TaskTemplateID empty, preserving
+// today's behavior. Returns the service for chaining.
+func (s *EnvDispatchService) WithSweLegoTemplateResolver(resolver SweLegoTemplateResolver) *EnvDispatchService {
+	s.resolver = resolver
 	return s
 }
 
@@ -865,6 +884,22 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		} else if ok {
 			return prev, nil
 		}
+	}
+
+	// Scratch SWE-Lego issue sources resolve the pre-materialized task-specific
+	// Cube template once per dispatch, after source resolution and before any
+	// fan-out, so every rollout sandbox boots from it. This path is read-only:
+	// building happens exclusively through the manual warm-up endpoint; a cache
+	// that is missing/building/failed fails the dispatch (validation_failed,
+	// handler → 400). Branch/resume and message sources never resolve. A nil
+	// resolver keeps TaskTemplateID empty.
+	if s.resolver != nil && in.Mode == EnvModeScratch && in.Domain == EnvDomainSweLego &&
+		in.SourceTask != nil && in.SourceTask.Type == SourceTaskIssue && in.TaskTemplateID == "" {
+		templateID, err := s.resolveSweLegoTaskTemplate(ctx, in, env)
+		if err != nil {
+			return EnvDispatchResult{}, err
+		}
+		in.TaskTemplateID = templateID
 	}
 
 	// Audit is intentionally started only after validation and source
@@ -1122,6 +1157,50 @@ func materializeScratchSourceTask(in *EnvDispatchInput, source SourceTask) error
 	in.SourceTaskID = source.ID
 	in.SourceTask = &source
 	return nil
+}
+
+// resolveSweLegoTaskTemplate reads the pre-materialized task-specific Cube
+// template for a scratch SWE-Lego issue source from the node-local cache
+// (exactly one cache read; it never builds). The parent template prefers the
+// one recorded on the instance-backed base env's sandbox; the resolver
+// resolves node placement and falls back to the node's default Cube template
+// when this is empty. A cache that is not ready fails the dispatch with an
+// actionable validation error naming the warm-up endpoint.
+func (s *EnvDispatchService) resolveSweLegoTaskTemplate(ctx context.Context, in EnvDispatchInput, env Env) (string, error) {
+	var payload sourceTaskIssuePayload
+	if err := json.Unmarshal(in.SourceTask.Payload, &payload); err != nil {
+		return "", fmt.Errorf("validation_failed: decode swe_lego issue source task payload: %w", err)
+	}
+	if payload.RepoURL == "" || payload.BaseCommit == "" || payload.IssueDate == "" {
+		return "", fmt.Errorf("validation_failed: swe_lego issue source task requires repo_url, base_commit, and issue_date")
+	}
+	parentTemplate := ""
+	if in.InstanceBackedBase && s.lifecycle != nil && len(env.SandboxIDs) > 0 {
+		if ref, err := s.lifecycle.GetSandboxInstanceRef(ctx, in.WorkspaceID, env.SandboxIDs[0]); err == nil && ref.Template != "" && ref.Template != "default" {
+			parentTemplate = ref.Template
+		}
+	}
+	templateID, status, err := s.resolver.LookupReadyTemplate(ctx, SweLegoTemplateRequest{
+		WorkspaceID:      in.WorkspaceID,
+		UserID:           in.UserID,
+		ParentTemplateID: parentTemplate,
+		SourceTaskID:     in.SourceTaskID,
+		RepoURL:          payload.RepoURL,
+		BaseCommit:       payload.BaseCommit,
+		IssueDate:        payload.IssueDate,
+	})
+	if err != nil {
+		return "", fmt.Errorf("resolve swe_lego task template: %w", err)
+	}
+	if templateID == "" {
+		state := status
+		if state == "" {
+			state = "not built"
+		}
+		return "", fmt.Errorf("validation_failed: swe_lego task template not materialized for source task %s (cache %s): POST /api/v1/source-tasks/%s/materialize first",
+			in.SourceTaskID, state, in.SourceTaskID)
+	}
+	return templateID, nil
 }
 
 func validateSourceTaskType(dispatchType EnvDispatchType, source SourceTask) error {

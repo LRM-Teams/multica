@@ -1245,6 +1245,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Delete("/api/v1/env/{envID}", h.DeleteEnv)
 			r.Post("/api/v1/source-tasks", h.CreateSourceTask)
 			r.Get("/api/v1/source-tasks/{sourceTaskID}", h.GetSourceTask)
+			// Manual SWE-Lego task-template warm-up: build the materialized Cube
+			// template ahead of the first scratch swe_lego dispatch.
+			r.Post("/api/v1/source-tasks/{sourceTaskID}/materialize", h.MaterializeSourceTaskTemplate)
 			r.Post("/api/v1/env-dispatch", h.EnvDispatch)
 			r.Delete("/api/v1/env-dispatch/{projectID}", h.DeleteEnvDispatchProject)
 			r.Get("/api/v1/env-dispatch/{projectID}/dag", h.GetDag)

@@ -82,10 +82,15 @@ function fakeQc(data: {
   }>;
   squads?: never;
   issues?: Array<{ id: string; identifier: string; title: string; status: string }>;
+  /** When true, leave the member/agent directory keys absent (true cold cache)
+   *  instead of seeding them with empty arrays (empty-but-resolved cache). */
+  coldDirectory?: boolean;
 }): QueryClient {
   const map = new Map<string, unknown>();
-  map.set(JSON.stringify(workspaceKeys.members("ws-1")), data.members ?? []);
-  map.set(JSON.stringify(workspaceKeys.agents("ws-1")), data.agents ?? []);
+  if (!data.coldDirectory) {
+    map.set(JSON.stringify(workspaceKeys.members("ws-1")), data.members ?? []);
+    map.set(JSON.stringify(workspaceKeys.agents("ws-1")), data.agents ?? []);
+  }
   const byStatus: ListIssuesCache["byStatus"] = {};
   for (const status of PAGINATED_STATUSES) {
     const bucket = (data.issues ?? []).filter((i) => i.status === status);
@@ -108,15 +113,40 @@ function fakeQc(data: {
       }
       return results;
     },
+    prefetchQuery: prefetchQuerySpy,
   } as unknown as QueryClient;
 }
+
+// Module-level spy the fake query client forwards prefetchQuery to, so tests
+// can assert the bare-@ cold-cache path warms the mention directory without
+// requiring the full React Query machinery.
+const prefetchQuerySpy = vi.hoisted(() => vi.fn());
 
 describe("createMentionSuggestion", () => {
   beforeEach(() => {
     searchIssuesMock.mockReset();
     searchProjectsMock.mockReset();
     actorProfileTriggerMock.mockClear();
+    prefetchQuerySpy.mockReset();
     Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  it("returns a cold-cache bare `@` pool by warming the member/agent directory", () => {
+    // Cold cache: no members/agents resolved yet in the React Query store.
+    const qc = fakeQc({ coldDirectory: true });
+    searchIssuesMock.mockReturnValue(new Promise(() => {}));
+
+    const config = createMentionSuggestion(qc);
+    const result = config.items!({ query: "", editor: {} as never }) as MentionItem[];
+
+    // Synchronous result may be empty on first cold `@`, but the directory
+    // must be on its way so the picker surfaces candidates instead of a dead
+    // "no results" state — i.e. prefetch is fired for both lists, once each.
+    expect(Array.isArray(result)).toBe(true);
+    expect(prefetchQuerySpy).toHaveBeenCalledTimes(2);
+    const keys = prefetchQuerySpy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(["workspaces", "ws-1", "members"]));
+    expect(keys).toContain(JSON.stringify(["workspaces", "ws-1", "agents"]));
   });
 
   it("returns members and agents synchronously without waiting for the server search", () => {

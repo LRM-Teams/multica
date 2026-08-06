@@ -3,6 +3,7 @@ package researchrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,6 +12,23 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// elapseTaskRetryBackoff stands in for waiting out the production retry
+// backoff. A retryable failure leaves the Task ready with a future ready_at, so
+// the next Attempt only becomes dispatchable once that instant has passed.
+func elapseTaskRetryBackoff(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID string) {
+	t.Helper()
+	tag, err := pool.Exec(ctx, `
+		UPDATE research_task SET ready_at = now() - interval '1 second'
+		WHERE id = $1::uuid AND status = 'ready'
+	`, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("task %s is not ready for another attempt after a retryable failure", taskID)
+	}
+}
 
 // A repeated identical failure must reuse one repair decision. Before the
 // repair record existed, every recomputed failure of the same cause was free to
@@ -54,7 +72,9 @@ func TestTargetRepairIsIdempotentPerCanonicalFailure(t *testing.T) {
 	}
 
 	// The same canonical failure of the same Task at the same state version.
-	// The Task is retryable, so a second Attempt exists for the same cause.
+	// The Task is retryable, so a second Attempt exists for the same cause once
+	// the retry backoff has elapsed.
+	elapseTaskRetryBackoff(t, ctx, pool, tasks[0].ID)
 	second := createCircuitAttempt(t, ctx, store, fixture, tasks[0], target)
 	if _, err = store.FailAttempt(ctx, AttemptFailure{
 		AttemptID: second.ID, FailureClass: string(FailureTimeout),
@@ -157,6 +177,7 @@ func TestTargetRepairSplitsOnTargetConfigurationChange(t *testing.T) {
 
 	// A later Attempt freezes a different configuration. The execution target is
 	// immutable per Attempt, so the change is expressed by the next Attempt.
+	elapseTaskRetryBackoff(t, ctx, pool, tasks[0].ID)
 	changed := target
 	changed.ConfigFingerprint = ExecutionTargetFingerprint("changed", target.AgentID)
 	second := createCircuitAttempt(t, ctx, store, fixture, tasks[0], changed)
@@ -321,9 +342,11 @@ func TestRepairActionMatrixIsEnforcedByDatabaseAndMatchesExecutor(t *testing.T) 
 	}
 }
 
-// Two workers settling the same canonical failure concurrently must converge on
-// one decision. The unique repair key is the arbiter; neither worker may create
-// a second remediation path for the same cause.
+// Two workers settling the same Attempt concurrently must converge on one
+// repair decision counted once. A repair key contains the Task, and the Task
+// state machine only ever has one Attempt in flight, so this — not two parallel
+// Attempts — is the multi-worker race the system actually has: a reconcile lease
+// handoff can leave two workers holding the same settlement.
 func TestConcurrentWorkersConvergeOnOneTargetRepair(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -339,49 +362,69 @@ func TestConcurrentWorkersConvergeOnOneTargetRepair(t *testing.T) {
 	fixture := seedResearchRunFixture(t, ctx, pool)
 	defer cleanupResearchCircuitFixture(pool, fixture)
 	store := NewPostgresStore(pool)
-	target, tasks := initializeCircuitFixture(t, ctx, store, fixture, 4)
+	target, tasks := initializeCircuitFixture(t, ctx, store, fixture, 2)
+	attempt := createCircuitAttempt(t, ctx, store, fixture, tasks[0], target)
 
-	attempts := make([]Attempt, 0, 3)
-	for i := 0; i < 3; i++ {
-		attempts = append(attempts, createCircuitAttempt(t, ctx, store, fixture, tasks[0], target))
-	}
-
+	const workers = 4
 	var waitGroup sync.WaitGroup
-	errs := make([]error, len(attempts))
+	errs := make([]error, workers)
 	start := make(chan struct{})
-	for i, attempt := range attempts {
+	for i := 0; i < workers; i++ {
 		waitGroup.Add(1)
-		go func(index int, attemptID string) {
+		go func(index int) {
 			defer waitGroup.Done()
 			<-start
 			_, errs[index] = store.FailAttempt(context.Background(), AttemptFailure{
-				AttemptID: attemptID, FailureClass: string(FailureRateLimited),
+				AttemptID: attempt.ID, FailureClass: string(FailureRateLimited),
 				SourceReason: "agent_provider_capacity_or_rate_limit",
 				Diagnostics:  "concurrent rate limit", Retryable: true,
 			})
-		}(i, attempt.ID)
+		}(i)
 	}
 	close(start)
 	waitGroup.Wait()
 
-	settled := 0
+	settled, rejected := 0, 0
 	for _, failErr := range errs {
-		if failErr == nil {
+		switch {
+		case failErr == nil:
 			settled++
+		case errors.Is(failErr, ErrInvalidTransition):
+			rejected++
+		default:
+			t.Fatalf("unexpected concurrent settlement error: %v", failErr)
 		}
 	}
-	if settled == 0 {
-		t.Fatalf("no concurrent worker settled its attempt: %v", errs)
+	if settled != 1 || rejected != workers-1 {
+		t.Fatalf("concurrent settlement: settled=%d rejected=%d of %d workers", settled, rejected, workers)
 	}
 	repairs, err := store.ListTargetRepairs(ctx, fixture.sessionID)
 	if err != nil || len(repairs) != 1 {
 		t.Fatalf("concurrent settlement produced %d repairs (err=%v)", len(repairs), err)
 	}
-	if repairs[0].OccurrenceCount != settled {
-		t.Fatalf("repair occurrence_count=%d, settled attempts=%d", repairs[0].OccurrenceCount, settled)
+	if repairs[0].OccurrenceCount != 1 {
+		t.Fatalf("double settlement inflated occurrence_count to %d", repairs[0].OccurrenceCount)
 	}
 	if repairs[0].RepairKind != RepairWaitForTarget {
 		t.Fatalf("rate-limit repair kind=%q", repairs[0].RepairKind)
+	}
+
+	// Control group: once the retry backoff elapses, a genuinely new Attempt of
+	// the same cause does advance the counter, so the assertion above is about
+	// double settlement and not about the counter never moving.
+	elapseTaskRetryBackoff(t, ctx, pool, tasks[0].ID)
+	retry := createCircuitAttempt(t, ctx, store, fixture, tasks[0], target)
+	if _, err = store.FailAttempt(ctx, AttemptFailure{
+		AttemptID: retry.ID, FailureClass: string(FailureRateLimited),
+		SourceReason: "agent_provider_capacity_or_rate_limit",
+		Diagnostics:  "retry hit the same rate limit", Retryable: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	repairs, err = store.ListTargetRepairs(ctx, fixture.sessionID)
+	if err != nil || len(repairs) != 1 || repairs[0].OccurrenceCount != 2 {
+		t.Fatalf("retry of the same cause: repairs=%d occurrence=%v err=%v",
+			len(repairs), repairs, err)
 	}
 }
 

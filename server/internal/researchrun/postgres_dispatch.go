@@ -171,20 +171,26 @@ func (s *PostgresStore) AcknowledgeDispatchIntent(ctx context.Context, intentID,
 	}
 	err = tx.QueryRow(ctx, `
 		UPDATE research_task_attempt
-		SET inbox_task_id = $2::uuid, status = 'running',
-		    started_at = COALESCE(started_at, now()), updated_at = now()
+		SET inbox_task_id = $2::uuid, updated_at = now()
 		WHERE id = (SELECT attempt_id FROM research_dispatch_outbox WHERE id = $1::uuid)
 		  AND status = 'dispatching'
 		RETURNING id::text, session_id::text, workspace_id::text, task_id::text,
 		          attempt_number, assigned_agent_id::text, inbox_task_id::text,
 		          dispatch_key, COALESCE(client_request_id, ''), status,
 		          COALESCE(result_hash, ''), failure_class, diagnostics, dispatched_at,
-		          started_at, result_submitted_at, completed_at
+		          started_at, runtime_started_at, runtime_last_observed_at,
+		          runtime_lease_expires_at, cancellation_requested_at,
+		          cancellation_completed_at, pending_failure_class,
+		          pending_failure_diagnostics, pending_failure_retryable,
+		          result_submitted_at, completed_at
 	`, intentID, inboxTaskID).Scan(&attempt.ID, &attempt.SessionID, &attempt.WorkspaceID,
 		&attempt.TaskID, &attempt.AttemptNumber, &attempt.AssignedAgentID,
 		&attempt.InboxTaskID, &attempt.DispatchKey, &attempt.ClientRequestID,
 		&attempt.Status, &attempt.ResultHash, &attempt.FailureClass,
 		&attempt.Diagnostics, &attempt.DispatchedAt, &attempt.StartedAt,
+		&attempt.RuntimeStartedAt, &attempt.RuntimeObservedAt, &attempt.RuntimeLeaseUntil,
+		&attempt.CancelRequestedAt, &attempt.CancelCompletedAt, &attempt.PendingFailure,
+		&attempt.PendingDiagnostics, &attempt.PendingRetryable,
 		&attempt.ResultSubmittedAt, &attempt.CompletedAt)
 	if err != nil {
 		return false, Attempt{}, RunEvent{}, err
@@ -197,14 +203,7 @@ func (s *PostgresStore) AcknowledgeDispatchIntent(ctx context.Context, intentID,
 	`, intentID); err != nil {
 		return false, Attempt{}, RunEvent{}, err
 	}
-	if _, err = tx.Exec(ctx, `
-		UPDATE research_task
-		SET status = 'running', started_at = COALESCE(started_at, now()), updated_at = now()
-		WHERE id = $1::uuid
-	`, attempt.TaskID); err != nil {
-		return false, Attempt{}, RunEvent{}, err
-	}
-	event, err = appendEvent(ctx, tx, attempt.WorkspaceID, attempt.SessionID, "task_started", "task-started:"+attempt.ID, "system", "", map[string]any{
+	event, err = appendEvent(ctx, tx, attempt.WorkspaceID, attempt.SessionID, "task_dispatched", "task-dispatched:"+attempt.ID, "system", "", map[string]any{
 		"task_id": attempt.TaskID, "attempt_id": attempt.ID, "inbox_task_id": inboxTaskID, "agent_id": attempt.AssignedAgentID,
 	})
 	if err != nil {

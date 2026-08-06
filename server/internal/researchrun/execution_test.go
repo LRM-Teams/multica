@@ -73,7 +73,8 @@ func TestExecutionModuleCancelPendingAttemptsResolvesAttachedDiscoveredAndStaleA
 		{AttemptID: "fresh", DispatchKey: "dispatch-fresh", DispatchedAt: now.Add(-time.Minute)},
 	}}
 	dispatcher := &executionTestDispatcher{states: map[string]InboxTaskState{
-		"dispatch-discovered": {ID: "inbox-discovered", Status: "running"},
+		"inbox-attached":      {ID: "inbox-attached", Status: "running", HasActiveLease: true},
+		"dispatch-discovered": {ID: "inbox-discovered", Status: "running", HasActiveLease: true},
 	}}
 	module := executionModule{store: store, dispatcher: dispatcher, clock: executionFixedClock{now: now}}
 	run := Run{SessionID: "session-1", Config: RunConfig{StaleAfterSeconds: 600}}
@@ -85,14 +86,52 @@ func TestExecutionModuleCancelPendingAttemptsResolvesAttachedDiscoveredAndStaleA
 	if !pending {
 		t.Fatal("fresh unattached attempt must keep cancellation pending")
 	}
-	if !reflect.DeepEqual(dispatcher.inspected, []string{"dispatch-discovered", "dispatch-stale", "dispatch-fresh"}) {
+	if !reflect.DeepEqual(dispatcher.inspected, []string{"inbox-attached", "dispatch-discovered", "dispatch-stale", "dispatch-fresh"}) {
 		t.Fatalf("inspect keys=%v", dispatcher.inspected)
 	}
 	if !reflect.DeepEqual(dispatcher.cancelledIDs, []string{"inbox-attached", "inbox-discovered"}) || dispatcher.cancelReason != "run_paused" {
 		t.Fatalf("cancel ids=%v reason=%q", dispatcher.cancelledIDs, dispatcher.cancelReason)
 	}
-	if store.completedSession != "session-1" || !reflect.DeepEqual(store.completedAttemptIDs, []string{"attached", "discovered", "stale"}) {
+	wantRequests := []CancellationRequest{
+		{AttemptID: "attached", InboxTaskID: "inbox-attached"},
+		{AttemptID: "discovered", InboxTaskID: "inbox-discovered"},
+	}
+	if store.requestedSession != "session-1" || !reflect.DeepEqual(store.requestedRequests, wantRequests) {
+		t.Fatalf("requested session=%q requests=%v", store.requestedSession, store.requestedRequests)
+	}
+	if store.completedSession != "session-1" || !reflect.DeepEqual(store.completedAttemptIDs, []string{"stale"}) {
 		t.Fatalf("completed session=%q attempts=%v", store.completedSession, store.completedAttemptIDs)
+	}
+}
+
+func TestExecutionModuleCancelPendingAttemptsWaitsForRuntimeLeaseLoss(t *testing.T) {
+	now := time.Date(2026, time.August, 5, 10, 0, 0, 0, time.UTC)
+	requestedAt := now.Add(-time.Minute)
+	store := &executionTestStore{pending: []PendingCancellation{{
+		AttemptID: "attempt-1", InboxTaskID: "inbox-1", Status: AttemptStatusCancelling,
+		DispatchedAt: now.Add(-time.Hour), CancellationRequestedAt: &requestedAt,
+	}}}
+	dispatcher := &executionTestDispatcher{states: map[string]InboxTaskState{
+		"inbox-1": {ID: "inbox-1", Status: "cancelled", HasActiveLease: true},
+	}}
+	module := executionModule{store: store, dispatcher: dispatcher, clock: executionFixedClock{now: now}}
+	run := Run{SessionID: "session-1", Config: RunConfig{StaleAfterSeconds: 600}}
+
+	pending, err := module.CancelPendingAttempts(context.Background(), run, "task_timeout")
+	if err != nil || !pending {
+		t.Fatalf("pending=%v error=%v", pending, err)
+	}
+	if len(dispatcher.cancelledIDs) != 0 || len(store.completedAttemptIDs) != 0 {
+		t.Fatalf("active runtime was acknowledged: cancelled=%v completed=%v", dispatcher.cancelledIDs, store.completedAttemptIDs)
+	}
+
+	dispatcher.states["inbox-1"] = InboxTaskState{ID: "inbox-1", Status: "cancelled", HasActiveLease: false}
+	pending, err = module.CancelPendingAttempts(context.Background(), run, "task_timeout")
+	if err != nil || pending {
+		t.Fatalf("pending=%v error=%v", pending, err)
+	}
+	if !reflect.DeepEqual(store.completedAttemptIDs, []string{"attempt-1"}) {
+		t.Fatalf("completed=%v", store.completedAttemptIDs)
 	}
 }
 
@@ -221,6 +260,8 @@ type executionTestStore struct {
 	activatedSession        string
 	completedSession        string
 	completedAttemptIDs     []string
+	requestedSession        string
+	requestedRequests       []CancellationRequest
 	createdInput            CreateDispatchIntentInput
 	claimed                 []DispatchIntent
 	rescheduledIntentID     string
@@ -251,10 +292,16 @@ func (store *executionTestStore) ListPendingCancellations(context.Context, strin
 	return append([]PendingCancellation(nil), store.pending...), nil
 }
 
-func (store *executionTestStore) MarkCancellationsCompleted(_ context.Context, sessionID string, attemptIDs []string) error {
+func (store *executionTestStore) MarkCancellationsRequested(_ context.Context, sessionID string, requests []CancellationRequest) error {
+	store.requestedSession = sessionID
+	store.requestedRequests = append([]CancellationRequest(nil), requests...)
+	return nil
+}
+
+func (store *executionTestStore) CompleteCancellations(_ context.Context, sessionID string, attemptIDs []string) ([]RunEvent, error) {
 	store.completedSession = sessionID
 	store.completedAttemptIDs = append([]string(nil), attemptIDs...)
-	return nil
+	return nil, nil
 }
 
 func (store *executionTestStore) CreateDispatchIntent(_ context.Context, in CreateDispatchIntentInput) (Attempt, RunEvent, error) {

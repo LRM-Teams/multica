@@ -651,15 +651,14 @@ func (s *PostgresStore) MarkEventProjectionFailed(ctx context.Context, eventID, 
 	return err
 }
 
+type activeAttempt struct {
+	id, inboxID, dispatchKey string
+}
+
 func (s *PostgresStore) ReconcileAttempts(ctx context.Context, sessionID string, states map[string]InboxTaskState) ([]RunEvent, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT a.id::text, COALESCE(a.inbox_task_id::text, ''), a.dispatch_key,
-		       a.status, a.dispatched_at,
-		       now() > a.dispatched_at + make_interval(secs => t.timeout_seconds),
-		       now() > a.dispatched_at + make_interval(secs => COALESCE((s.run_config->>'stale_after_seconds')::int, 900))
+		SELECT a.id::text, COALESCE(a.inbox_task_id::text, ''), a.dispatch_key
 		FROM research_task_attempt a
-		JOIN research_task t ON t.id = a.task_id
-		JOIN research_session s ON s.id = a.session_id
 		LEFT JOIN research_dispatch_outbox outbox ON outbox.attempt_id = a.id
 		WHERE a.session_id = $1::uuid AND a.status IN ('dispatching', 'running')
 		  AND (outbox.id IS NULL OR outbox.status NOT IN ('pending', 'delivering'))
@@ -668,17 +667,10 @@ func (s *PostgresStore) ReconcileAttempts(ctx context.Context, sessionID string,
 	if err != nil {
 		return nil, err
 	}
-	type activeAttempt struct {
-		id, inboxID, dispatchKey string
-		status                   AttemptStatus
-		dispatchedAt             time.Time
-		timedOut, stale          bool
-	}
 	active := []activeAttempt{}
 	for rows.Next() {
 		var item activeAttempt
-		if err = rows.Scan(&item.id, &item.inboxID, &item.dispatchKey, &item.status,
-			&item.dispatchedAt, &item.timedOut, &item.stale); err != nil {
+		if err = rows.Scan(&item.id, &item.inboxID, &item.dispatchKey); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -700,41 +692,180 @@ func (s *PostgresStore) ReconcileAttempts(ctx context.Context, sessionID string,
 		if !found {
 			state, found = states[attempt.dispatchKey]
 		}
-		if found && attempt.inboxID == "" && state.ID != "" {
-			_, event, attachErr := s.AttachInboxTask(ctx, attempt.id, state.ID)
-			if attachErr != nil && !errors.Is(attachErr, ErrInvalidTransition) {
-				return events, attachErr
-			}
-			if event.ID != "" {
-				events = append(events, event)
-			}
-		}
-		failure := AttemptFailure{AttemptID: attempt.id, Retryable: true}
-		switch {
-		case attempt.timedOut:
-			failure.FailureClass = "task_timeout"
-			failure.Diagnostics = "The agent task exceeded its configured timeout without a valid result."
-		case found && (state.Status == "failed" || state.Status == "cancelled"):
-			failure.FailureClass = "inbox_task_" + state.Status
-			failure.Diagnostics = state.FailureReason
-			failure.Retryable = state.Retryable
-		case found && state.Status == "completed":
-			failure.FailureClass = "result_not_submitted"
-			failure.Diagnostics = "The agent task completed without submitting the structured research result."
-		case !found && attempt.stale:
-			failure.FailureClass = "dispatch_lost"
-			failure.Diagnostics = "No durable inbox task could be found for the research attempt."
-		default:
-			continue
-		}
-		event, failErr := s.FailAttempt(ctx, failure)
-		if failErr != nil {
-			if errors.Is(failErr, ErrInvalidTransition) {
+		reconciled, reconcileErr := s.reconcileAttemptRuntime(ctx, attempt, state, found)
+		if reconcileErr != nil {
+			if errors.Is(reconcileErr, ErrInvalidTransition) {
 				continue
 			}
-			return events, failErr
+			return events, reconcileErr
+		}
+		events = append(events, reconciled...)
+	}
+	return events, nil
+}
+
+func (s *PostgresStore) reconcileAttemptRuntime(ctx context.Context, observed activeAttempt, state InboxTaskState, found bool) ([]RunEvent, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var sessionID, workspaceID, taskID, inboxID string
+	var status AttemptStatus
+	var dispatchedAt, databaseNow time.Time
+	var runtimeStartedAt *time.Time
+	var timeoutSeconds, staleAfterSeconds int
+	err = tx.QueryRow(ctx, `
+		SELECT session_id::text, task_id::text
+		FROM research_task_attempt
+		WHERE id = $1::uuid
+	`, observed.id).Scan(&sessionID, &taskID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrInvalidTransition
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(ctx, `SELECT 1 FROM research_session WHERE id = $1::uuid FOR UPDATE`, sessionID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(ctx, `SELECT 1 FROM research_task WHERE id = $1::uuid FOR UPDATE`, taskID); err != nil {
+		return nil, err
+	}
+	err = tx.QueryRow(ctx, `
+		SELECT attempt.workspace_id::text, COALESCE(attempt.inbox_task_id::text, ''),
+		       attempt.status, attempt.dispatched_at, attempt.runtime_started_at,
+		       task.timeout_seconds,
+		       COALESCE((session.run_config->>'stale_after_seconds')::int, 900), now()
+		FROM research_task_attempt attempt
+		JOIN research_task task ON task.id = attempt.task_id
+		JOIN research_session session ON session.id = attempt.session_id
+		WHERE attempt.id = $1::uuid
+		FOR UPDATE OF attempt
+	`, observed.id).Scan(&workspaceID, &inboxID, &status, &dispatchedAt,
+		&runtimeStartedAt, &timeoutSeconds, &staleAfterSeconds, &databaseNow)
+	if err != nil {
+		return nil, err
+	}
+	if status != AttemptStatusDispatching && status != AttemptStatusRunning {
+		return nil, ErrInvalidTransition
+	}
+	events := []RunEvent{}
+	if found {
+		if state.ID == "" {
+			return nil, fmt.Errorf("%w: runtime state is missing inbox identity", ErrInvalidTransition)
+		}
+		if inboxID != "" && inboxID != state.ID {
+			return nil, fmt.Errorf("%w: runtime identity changed for attempt", ErrResultConflict)
+		}
+		if state.StartedAt != nil && state.StartedAt.Before(dispatchedAt) {
+			return nil, fmt.Errorf("%w: runtime start predates dispatch", ErrInvalidTransition)
+		}
+		observedAt := state.ObservedAt
+		if observedAt.IsZero() {
+			observedAt = databaseNow
+		}
+		if runtimeStartedAt == nil && state.StartedAt != nil {
+			runtimeStartedAt = state.StartedAt
+		}
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_task_attempt
+			SET inbox_task_id = COALESCE(inbox_task_id, $2::uuid),
+			    runtime_started_at = COALESCE(runtime_started_at, $3),
+			    runtime_lease_expires_at = CASE
+			      WHEN runtime_last_observed_at IS NULL OR runtime_last_observed_at <= $4
+			        THEN COALESCE($5, runtime_lease_expires_at)
+			      ELSE runtime_lease_expires_at
+			    END,
+			    runtime_last_observed_at = GREATEST(COALESCE(runtime_last_observed_at, $4), $4),
+			    updated_at = now()
+			WHERE id = $1::uuid
+		`, observed.id, state.ID, state.StartedAt, observedAt, state.LeaseExpiresAt); err != nil {
+			return nil, err
+		}
+		if inboxID == "" {
+			inboxID = state.ID
+			event, eventErr := appendEvent(ctx, tx, workspaceID, sessionID, "task_dispatched", "task-dispatched:"+observed.id, "system", "", map[string]any{
+				"task_id": taskID, "attempt_id": observed.id, "inbox_task_id": state.ID,
+			})
+			if eventErr != nil {
+				return nil, eventErr
+			}
+			events = append(events, event)
+		}
+		if status == AttemptStatusDispatching && state.StartedAt != nil {
+			if _, err = tx.Exec(ctx, `
+				UPDATE research_task_attempt
+				SET status = 'running', started_at = COALESCE(started_at, $2), updated_at = now()
+				WHERE id = $1::uuid AND status = 'dispatching'
+			`, observed.id, state.StartedAt); err != nil {
+				return nil, err
+			}
+			if _, err = tx.Exec(ctx, `
+				UPDATE research_task
+				SET status = 'running', started_at = COALESCE(started_at, $2), updated_at = now()
+				WHERE id = $1::uuid AND status = 'dispatching'
+			`, taskID, state.StartedAt); err != nil {
+				return nil, err
+			}
+			status = AttemptStatusRunning
+			event, eventErr := appendEvent(ctx, tx, workspaceID, sessionID, "task_started", "task-started:"+observed.id, "system", "", map[string]any{
+				"task_id": taskID, "attempt_id": observed.id, "inbox_task_id": inboxID,
+			})
+			if eventErr != nil {
+				return nil, eventErr
+			}
+			events = append(events, event)
+		}
+	}
+
+	failure := AttemptFailure{AttemptID: observed.id, Retryable: true}
+	switch {
+	case found && !state.HasActiveLease && (state.Status == "failed" || state.Status == "cancelled"):
+		failure.FailureClass = "inbox_task_" + state.Status
+		failure.Diagnostics = state.FailureReason
+		failure.Retryable = state.Retryable
+	case found && !state.HasActiveLease && state.Status == "completed":
+		failure.FailureClass = "result_not_submitted"
+		failure.Diagnostics = "The agent task completed without submitting the structured research result."
+	case runtimeStartedAt != nil && timeoutSeconds > 0 && !databaseNow.Before(runtimeStartedAt.Add(time.Duration(timeoutSeconds)*time.Second)):
+		diagnostics := "The agent task exceeded its configured execution timeout without a valid result."
+		if _, err = tx.Exec(ctx, `
+			UPDATE research_task_attempt
+			SET status = 'cancelling', pending_failure_class = 'task_timeout',
+			    pending_failure_diagnostics = $2, pending_failure_retryable = true,
+			    updated_at = now()
+			WHERE id = $1::uuid AND status IN ('dispatching', 'running')
+		`, observed.id, diagnostics); err != nil {
+			return nil, err
+		}
+		event, eventErr := appendEvent(ctx, tx, workspaceID, sessionID, "task_attempt_cancelling", "attempt-cancelling:"+observed.id, "system", "", map[string]any{
+			"task_id": taskID, "attempt_id": observed.id, "failure_class": "task_timeout", "diagnostics": diagnostics,
+		})
+		if eventErr != nil {
+			return nil, eventErr
 		}
 		events = append(events, event)
+		if err = tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return events, nil
+	case !found && !databaseNow.Before(dispatchedAt.Add(time.Duration(staleAfterSeconds)*time.Second)):
+		failure.FailureClass = "dispatch_lost"
+		failure.Diagnostics = "No durable inbox task could be found for the research attempt."
+	default:
+		if err = tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return events, nil
+	}
+	event, failErr := failAttemptTx(ctx, tx, failure)
+	if failErr != nil {
+		return nil, failErr
+	}
+	events = append(events, event)
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return events, nil
 }

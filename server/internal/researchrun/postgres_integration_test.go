@@ -123,6 +123,12 @@ func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *test
 		t.Fatalf("claim cancellation dispatch=%+v err=%v", claimed, claimErr)
 	}
 	inboxID := uuid.NewString()
+	if _, err = pool.Exec(ctx, `
+		INSERT INTO agent_inbox_event (id, workspace_id, agent_id, reason, status)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, 'dm', 'pending')
+	`, inboxID, fixture.workspaceID, fixture.agentID); err != nil {
+		t.Fatal(err)
+	}
 	run, _, _, err = store.Pause(ctx, fixture.sessionID, fixture.workspaceID, fixture.userID)
 	if err != nil {
 		t.Fatal(err)
@@ -150,21 +156,27 @@ func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *test
 	} else if !pendingStill {
 		t.Fatal("missing dispatch must keep cancellation pending during its stale window")
 	}
-	dispatcher.states[attempt.DispatchKey] = InboxTaskState{ID: inboxID, Status: "running"}
+	dispatcher.states[attempt.DispatchKey] = InboxTaskState{ID: inboxID, Status: "running", HasActiveLease: true}
 	if pendingStill, cancelErr := engine.cancelPendingAttempts(ctx, run, "test_cancellation"); cancelErr != nil {
 		t.Fatal(cancelErr)
-	} else if pendingStill {
-		t.Fatal("cancellation remained pending after the dispatch key resolved")
+	} else if !pendingStill {
+		t.Fatal("cancellation was acknowledged while the runtime lease remained active")
 	}
 	if len(dispatcher.cancelled) != 1 || dispatcher.cancelled[0] != inboxID {
 		t.Fatalf("cancelled=%v", dispatcher.cancelled)
+	}
+	dispatcher.states[inboxID] = InboxTaskState{ID: inboxID, Status: "cancelled"}
+	if pendingStill, cancelErr := engine.cancelPendingAttempts(ctx, run, "test_cancellation"); cancelErr != nil {
+		t.Fatal(cancelErr)
+	} else if pendingStill {
+		t.Fatal("cancellation remained pending after the runtime lease ended")
 	}
 	pending, err = store.ListPendingCancellations(ctx, fixture.sessionID)
 	if err != nil || len(pending) != 0 {
 		t.Fatalf("pending after cancellation=%+v err=%v", pending, err)
 	}
 	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
-	if err != nil || len(attempts) != 1 {
+	if err != nil || len(attempts) != 1 || attempts[0].InboxTaskID != inboxID {
 		t.Fatalf("attempts after cancellation=%+v err=%v", attempts, err)
 	}
 	assertResearchBehaviorGolden(t, "cancellation", map[string]any{
@@ -173,6 +185,52 @@ func TestCancelledAttemptRemainsScheduledUntilInboxCancellationCompletes(t *test
 		"pending_cancellations": len(pending),
 		"cancelled_inbox_tasks": len(dispatcher.cancelled),
 	})
+}
+
+func TestPauseAcknowledgesNeverClaimedDispatchWithoutRuntimeWait(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	fixture := seedResearchRunFixture(t, ctx, pool)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1::uuid`, fixture.workspaceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, fixture.userID)
+	}()
+	store := NewPostgresStore(pool)
+	if _, _, err = store.InitializeRun(ctx, StartInput{
+		SessionID: fixture.sessionID, WorkspaceID: fixture.workspaceID, FleetID: fixture.fleetID,
+		CreatedBy: fixture.userID, LeadAgentID: fixture.agentID, Goal: "Test undelivered cancellation",
+		Title: "Undelivered cancellation", DepthTier: "standard", Language: "English",
+	}, DefaultRunConfig("standard")); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := store.ListTasks(ctx, fixture.sessionID)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	attempt, _, err := store.CreateDispatchIntent(ctx, testDispatchIntentInput(t, ctx, store, fixture.sessionID, fixture.workspaceID, tasks[0].ID, fixture.agentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err = store.Pause(ctx, fixture.sessionID, fixture.workspaceID, fixture.userID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.ListPendingCancellations(ctx, fixture.sessionID)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("never-dispatched attempt waited for runtime acknowledgement: pending=%+v err=%v", pending, err)
+	}
+	attempts, err := store.ListAttempts(ctx, fixture.sessionID)
+	if err != nil || len(attempts) != 1 || attempts[0].ID != attempt.ID || attempts[0].Status != AttemptStatusCancelled || attempts[0].CancelCompletedAt == nil {
+		t.Fatalf("cancelled attempt=%+v err=%v", attempts, err)
+	}
 }
 
 func TestDispatchOutboxFreezesRequestRecoversExpiredLeaseAndHonorsCancellation(t *testing.T) {
@@ -284,7 +342,7 @@ func TestDispatchOutboxFreezesRequestRecoversExpiredLeaseAndHonorsCancellation(t
 		t.Fatal(err)
 	}
 	accepted, acknowledged, _, err := store.AcknowledgeDispatchIntent(ctx, secondClaims[0].ID, secondToken, inboxID)
-	if err != nil || !accepted || acknowledged.Status != AttemptStatusRunning || acknowledged.InboxTaskID != inboxID {
+	if err != nil || !accepted || acknowledged.Status != AttemptStatusDispatching || acknowledged.InboxTaskID != inboxID {
 		t.Fatalf("accepted=%v attempt=%+v err=%v", accepted, acknowledged, err)
 	}
 

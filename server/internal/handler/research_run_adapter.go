@@ -332,7 +332,9 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 	if h.ResearchRun != nil {
 		if snap, snapErr := h.ResearchRun.Snapshot(ctx, event.SessionID, event.WorkspaceID); snapErr == nil {
 			nodes, edges := projectRunV2Graph(snap)
-			publishProjectedRunGraph(h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, nodes, edges)
+			if err = publishProjectedRunGraph(ctx, h, event.WorkspaceID, event.ActorType, event.ActorID, event.SessionID, event.Sequence, nodes, edges); err != nil {
+				return err
+			}
 		} else {
 			// Snapshot unavailable: retain legacy single-event node insert.
 			if nodeType, title, summary, status := projectResearchEvent(event, session, payload); nodeType != "" {
@@ -347,6 +349,9 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 				node, insertErr := insertProjectedResearchNode(ctx, h.DB, workspaceID, sessionID, event.ID, nodeType, title, summary, status, actorAgentID, encoded)
 				if insertErr != nil {
 					return insertErr
+				}
+				if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
+					return err
 				}
 				h.publishResearchGraph(event.WorkspaceID, event.ActorType, event.ActorID, sessionID, node, nil)
 			}
@@ -364,9 +369,15 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 		if insertErr != nil {
 			return insertErr
 		}
+		if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
+			return err
+		}
 		h.publishResearchGraph(event.WorkspaceID, event.ActorType, event.ActorID, sessionID, node, nil)
 	}
 
+	if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
+		return err
+	}
 	h.publish(protocol.EventResearchSessionStatusChanged, event.WorkspaceID, event.ActorType, event.ActorID, map[string]any{
 		"session":      researchSessionToResponse(session),
 		"run_event_id": event.ID,
@@ -375,6 +386,9 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 	if event.Type == "task_result_accepted" {
 		if reportID, _ := payload["report_id"].(string); strings.TrimSpace(reportID) != "" {
 			if report, reportErr := h.Queries.GetLatestResearchReport(ctx, db.GetLatestResearchReportParams{SessionID: sessionID, WorkspaceID: workspaceID}); reportErr == nil {
+				if err = assertResearchProjectionLease(ctx, h.DB, event.SessionID); err != nil {
+					return err
+				}
 				h.publish(protocol.EventResearchSessionReportUpdated, event.WorkspaceID, event.ActorType, event.ActorID, map[string]any{
 					"session_id": event.SessionID,
 					"report":     researchReportToResp(report),
@@ -387,10 +401,11 @@ func (p *researchRunProjector) Project(ctx context.Context, event researchrun.Ru
 
 // publishProjectedRunGraph upserts the full run-v2 projected graph over WS.
 // Stable node/edge IDs let the client replace prior semantic nodes in place.
-func publishProjectedRunGraph(h *Handler, workspaceID, actorType, actorID, sessionID string, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) {
+func publishProjectedRunGraph(ctx context.Context, h *Handler, workspaceID, actorType, actorID, sessionID string, eventSequence int64, nodes []ResearchGraphNodeResp, edges []ResearchGraphEdgeResp) error {
 	if h == nil {
-		return
+		return nil
 	}
+	lease, _ := researchrun.ReconcileLeaseFromContext(ctx)
 	edgeByTo := map[string]ResearchGraphEdgeResp{}
 	for _, e := range edges {
 		if e.EdgeType != researchTreeEdgeType {
@@ -402,9 +417,14 @@ func publishProjectedRunGraph(h *Handler, workspaceID, actorType, actorID, sessi
 		edgeByTo[e.ToNodeID] = e
 	}
 	for _, node := range nodes {
+		if err := assertResearchProjectionLease(ctx, h.DB, sessionID); err != nil {
+			return err
+		}
 		payload := map[string]any{
-			"session_id": sessionID,
-			"node":       node,
+			"session_id":           sessionID,
+			"node":                 node,
+			"run_event_sequence":   eventSequence,
+			"reconcile_generation": lease.Generation,
 		}
 		if edge, ok := edgeByTo[node.ID]; ok {
 			payload["edge"] = edge
@@ -413,6 +433,26 @@ func publishProjectedRunGraph(h *Handler, workspaceID, actorType, actorID, sessi
 		}
 		h.publish(protocol.EventResearchSessionGraphUpdated, workspaceID, actorType, actorID, payload)
 	}
+	return nil
+}
+
+func assertResearchProjectionLease(ctx context.Context, executor dbExecutor, sessionID string) error {
+	lease, ok := researchrun.ReconcileLeaseFromContext(ctx)
+	if !ok || lease.SessionID != sessionID {
+		return researchrun.ErrRunLeaseLost
+	}
+	var one int
+	err := executor.QueryRow(ctx, `
+		SELECT 1 FROM research_session
+		WHERE id = $1::uuid
+		  AND reconcile_lease_token = $2::uuid
+		  AND reconcile_lease_generation = $3
+		  AND reconcile_lease_expires_at > now()
+	`, sessionID, lease.Token, lease.Generation).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return researchrun.ErrRunLeaseLost
+	}
+	return err
 }
 
 func projectedResearchActorAgentID(event researchrun.RunEvent, payload map[string]any) pgtype.UUID {
@@ -480,23 +520,37 @@ func valueString(values map[string]any, key string) string {
 }
 
 func insertProjectedResearchNode(ctx context.Context, executor dbExecutor, workspaceID, sessionID pgtype.UUID, eventID, nodeType, title, summary, status string, actorAgentID pgtype.UUID, payload []byte) (db.ResearchGraphNode, error) {
+	lease, ok := researchrun.ReconcileLeaseFromContext(ctx)
+	if !ok || lease.SessionID != uuidToString(sessionID) {
+		return db.ResearchGraphNode{}, researchrun.ErrRunLeaseLost
+	}
 	query := `
 		INSERT INTO research_graph_node (
 			workspace_id, session_id, node_type, title, summary, status,
 			actor_agent_id, payload, run_event_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid)
+		)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9::uuid
+		FROM research_session
+		WHERE id = $2
+		  AND reconcile_lease_token = $10::uuid
+		  AND reconcile_lease_generation = $11
+		  AND reconcile_lease_expires_at > now()
 		ON CONFLICT DO NOTHING
 		RETURNING id, workspace_id, session_id, node_type, title, summary, status,
 		          actor_agent_id, payload, created_at, updated_at
 	`
 	var node db.ResearchGraphNode
 	err := executor.QueryRow(ctx, query, workspaceID, sessionID, nodeType,
-		strings.TrimSpace(title), summary, status, actorAgentID, payload, eventID).Scan(
+		strings.TrimSpace(title), summary, status, actorAgentID, payload, eventID,
+		lease.Token, lease.Generation).Scan(
 		&node.ID, &node.WorkspaceID, &node.SessionID, &node.NodeType, &node.Title,
 		&node.Summary, &node.Status, &node.ActorAgentID, &node.Payload,
 		&node.CreatedAt, &node.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if leaseErr := assertResearchProjectionLease(ctx, executor, uuidToString(sessionID)); leaseErr != nil {
+			return db.ResearchGraphNode{}, leaseErr
+		}
 		err = executor.QueryRow(ctx, `
 			SELECT id, workspace_id, session_id, node_type, title, summary, status,
 			       actor_agent_id, payload, created_at, updated_at

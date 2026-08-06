@@ -272,7 +272,10 @@ func (s *PostgresStore) GetCurrentMethod(ctx context.Context, sessionID, workspa
 }
 
 func loadRunForUpdate(ctx context.Context, tx pgx.Tx, sessionID, workspaceID string) (Run, error) {
-	return loadRun(ctx, tx, sessionID, workspaceID, true)
+	if err := lockRunForMutation(ctx, tx, sessionID, workspaceID); err != nil {
+		return Run{}, err
+	}
+	return loadRun(ctx, tx, sessionID, workspaceID, false)
 }
 
 type rowQuerier interface {
@@ -415,7 +418,7 @@ func (s *PostgresStore) MarkCancellationsRequested(ctx context.Context, sessionI
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `SELECT 1 FROM research_session WHERE id = $1::uuid FOR UPDATE`, sessionID); err != nil {
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
 		return err
 	}
 	for _, request := range requests {
@@ -449,7 +452,7 @@ func (s *PostgresStore) CompleteCancellations(ctx context.Context, sessionID str
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, `SELECT 1 FROM research_session WHERE id = $1::uuid FOR UPDATE`, sessionID); err != nil {
+	if err = lockRunForMutation(ctx, tx, sessionID, ""); err != nil {
 		return nil, err
 	}
 	rows, err := tx.Query(ctx, `
@@ -604,12 +607,22 @@ func (s *PostgresStore) TaskContext(ctx context.Context, taskID, workspaceID str
 	}, nil
 }
 
-func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, duration time.Duration) (Run, bool, error) {
+func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, duration time.Duration) (Run, RunLease, bool, error) {
+	if duration <= 0 {
+		return Run{}, RunLease{}, false, fmt.Errorf("%w: reconcile lease duration must be positive", ErrInvalidTransition)
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Run{}, RunLease{}, false, err
+	}
+	defer tx.Rollback(ctx)
 	var workspaceID string
-	err := s.pool.QueryRow(ctx, `
+	lease := RunLease{SessionID: sessionID, Token: token}
+	err = tx.QueryRow(ctx, `
 		UPDATE research_session
 		SET reconcile_lease_token = $2::uuid,
 		    reconcile_lease_expires_at = now() + $3::interval,
+		    reconcile_lease_generation = reconcile_lease_generation + 1,
 		    updated_at = now()
 		WHERE id = $1::uuid
 		  AND (
@@ -627,27 +640,63 @@ func (s *PostgresStore) ClaimRun(ctx context.Context, sessionID, token string, d
 		        AND event.next_projection_at <= now()
 		    )
 		  )
-		  AND (reconcile_lease_expires_at IS NULL OR reconcile_lease_expires_at < now() OR reconcile_lease_token = $2::uuid)
-		RETURNING workspace_id::text
-	`, sessionID, token, duration.String()).Scan(&workspaceID)
+		  AND (reconcile_lease_expires_at IS NULL OR reconcile_lease_expires_at <= now())
+		RETURNING workspace_id::text, reconcile_lease_generation, reconcile_lease_expires_at
+	`, sessionID, token, duration.String()).Scan(&workspaceID, &lease.Generation, &lease.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Run{}, false, nil
+		return Run{}, RunLease{}, false, nil
 	}
 	if err != nil {
-		return Run{}, false, err
+		return Run{}, RunLease{}, false, err
 	}
-	run, err := s.GetRun(ctx, sessionID, workspaceID)
-	return run, true, err
+	run, err := loadRun(ctx, tx, sessionID, workspaceID, false)
+	if err != nil {
+		return Run{}, RunLease{}, false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Run{}, RunLease{}, false, err
+	}
+	return run, lease, true, nil
 }
 
-func (s *PostgresStore) ReleaseRun(ctx context.Context, sessionID, token string, next time.Time) error {
-	_, err := s.pool.Exec(ctx, `
+func (s *PostgresStore) RenewRunLease(ctx context.Context, lease RunLease, duration time.Duration) (RunLease, error) {
+	if duration <= 0 {
+		return RunLease{}, fmt.Errorf("%w: reconcile lease duration must be positive", ErrInvalidTransition)
+	}
+	renewed := lease
+	err := s.pool.QueryRow(ctx, `
+		UPDATE research_session
+		SET reconcile_lease_expires_at = now() + $4::interval,
+		    updated_at = now()
+		WHERE id = $1::uuid
+		  AND reconcile_lease_token = $2::uuid
+		  AND reconcile_lease_generation = $3
+		  AND reconcile_lease_expires_at > now()
+		RETURNING reconcile_lease_expires_at
+	`, lease.SessionID, lease.Token, lease.Generation, duration.String()).Scan(&renewed.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RunLease{}, ErrRunLeaseLost
+	}
+	return renewed, err
+}
+
+func (s *PostgresStore) ReleaseRun(ctx context.Context, lease RunLease, next time.Time) error {
+	command, err := s.pool.Exec(ctx, `
 		UPDATE research_session
 		SET reconcile_lease_token = NULL, reconcile_lease_expires_at = NULL,
-		    next_reconcile_at = $3, updated_at = now()
-		WHERE id = $1::uuid AND reconcile_lease_token = $2::uuid
-	`, sessionID, token, next)
-	return err
+		    next_reconcile_at = $4, updated_at = now()
+		WHERE id = $1::uuid
+		  AND reconcile_lease_token = $2::uuid
+		  AND reconcile_lease_generation = $3
+		  AND reconcile_lease_expires_at > now()
+	`, lease.SessionID, lease.Token, lease.Generation, next)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return ErrRunLeaseLost
+	}
+	return nil
 }
 
 func (s *PostgresStore) ListDueRunIDs(ctx context.Context, limit int) ([]string, error) {
@@ -750,11 +799,7 @@ func appendEvent(ctx context.Context, tx pgx.Tx, workspaceID, sessionID, eventTy
 	if err != nil {
 		return RunEvent{}, err
 	}
-	if _, err = tx.Exec(ctx, `
-		SELECT 1 FROM research_session
-		WHERE id = $1::uuid AND workspace_id = $2::uuid
-		FOR UPDATE
-	`, sessionID, workspaceID); err != nil {
+	if err = lockRunForMutation(ctx, tx, sessionID, workspaceID); err != nil {
 		return RunEvent{}, err
 	}
 	var existing RunEvent

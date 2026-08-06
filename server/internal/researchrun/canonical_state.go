@@ -126,7 +126,7 @@ var canonicalStateQueries = []canonicalStateQuery{
 		FROM (
 			SELECT to_jsonb(run) - ARRAY[
 				'created_at', 'updated_at', 'last_progress_at', 'next_reconcile_at',
-				'reconcile_lease_token', 'reconcile_lease_expires_at', 'last_user_activity_at'
+				'reconcile_lease_token', 'reconcile_lease_expires_at', 'reconcile_lease_generation', 'last_user_activity_at'
 			] AS row_data
 			FROM research_session run
 			WHERE run.id = $1::uuid AND run.workspace_id = $2::uuid

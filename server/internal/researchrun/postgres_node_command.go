@@ -19,6 +19,9 @@ func (s *PostgresStore) NodeCommand(ctx context.Context, in NodeCommandInput) (N
 		return NodeCommandOutcome{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockRunForMutation(ctx, tx, in.SessionID, in.WorkspaceID); err != nil {
+		return NodeCommandOutcome{}, err
+	}
 
 	var (
 		workspaceID, status, orchestratorVersion                 string

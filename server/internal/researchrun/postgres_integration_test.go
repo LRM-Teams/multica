@@ -955,7 +955,7 @@ func TestPostgresStoreLeasesTerminalRunForPendingProjection(t *testing.T) {
 	if !containsString(due, fixture.sessionID) {
 		t.Fatalf("terminal run with pending projection not due: %v", due)
 	}
-	run, claimed, err := store.ClaimRun(ctx, fixture.sessionID, uuid.NewString(), time.Minute)
+	run, _, claimed, err := store.ClaimRun(ctx, fixture.sessionID, uuid.NewString(), time.Minute)
 	if err != nil || !claimed || run.Status != RunStatusPaused {
 		t.Fatalf("run=%+v claimed=%v err=%v", run, claimed, err)
 	}

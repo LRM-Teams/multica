@@ -32,6 +32,7 @@ var ErrOpenCodeServeTurnBusy = errors.New("opencode serve turn busy")
 // and failed turns — same contract as CursorACPBackend/GrokACPBackend.
 type OpenCodeServeBackend interface {
 	Backend
+	ResidentPendingNoticeInput
 	Close()
 }
 
@@ -44,9 +45,14 @@ type OpenCodeServeBackend interface {
 type opencodeServeBackend struct {
 	cfg Config
 
-	mu      sync.Mutex
-	server  *opencodeServeProcess
-	running bool
+	// noticeMu serializes primary-turn admission, queued Notice admission,
+	// and terminal release. A successful queue receipt therefore belongs to
+	// the exact resident turn whose busy state the coordinator observed.
+	noticeMu    sync.Mutex
+	noticeReady bool
+	mu          sync.Mutex
+	server      *opencodeServeProcess
+	running     bool
 	// forceKilled is set by ForceKill() (task #62); see cursorACPBackend's
 	// field of the same name for the full explanation. Plain bool guarded by
 	// b.mu, matching this backend's existing convention for `running`.
@@ -117,13 +123,17 @@ func (b *opencodeServeBackend) takeForceKilled() bool {
 }
 
 func (b *opencodeServeBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
+	b.noticeMu.Lock()
 	b.mu.Lock()
 	if b.running {
 		b.mu.Unlock()
+		b.noticeMu.Unlock()
 		return nil, fmt.Errorf("%w: concurrent opencode serve turn", ErrOpenCodeServeTurnBusy)
 	}
 	b.running = true
+	b.noticeReady = false
 	b.mu.Unlock()
+	b.noticeMu.Unlock()
 
 	msgCh := make(chan Message, 256)
 	resCh := make(chan Result, 1)
@@ -133,9 +143,7 @@ func (b *opencodeServeBackend) Execute(ctx context.Context, prompt string, opts 
 		var releaseOnce sync.Once
 		release := func() {
 			releaseOnce.Do(func() {
-				b.mu.Lock()
-				b.running = false
-				b.mu.Unlock()
+				b.releaseTurnAdmission()
 			})
 		}
 		defer release()
@@ -151,10 +159,54 @@ func (b *opencodeServeBackend) Execute(ctx context.Context, prompt string, opts 
 	return &Session{Messages: msgCh, Result: resCh, RuntimeAlive: b.runtimeAlive}, nil
 }
 
+func (b *opencodeServeBackend) releaseTurnAdmission() {
+	b.noticeMu.Lock()
+	defer b.noticeMu.Unlock()
+	b.noticeReady = false
+	b.mu.Lock()
+	b.running = false
+	b.mu.Unlock()
+}
+
 // RuntimeAlive implements ResidentRuntimeLivenessChecker, letting a caller
 // poll process liveness between turns, not just during an in-flight one.
 func (b *opencodeServeBackend) RuntimeAlive() (bool, bool) {
 	return b.runtimeAlive()
+}
+
+// AcceptPendingNotice durably queues a content-free follow-up through
+// OpenCode's v2 Session inbox. Queue delivery is the provider's safe-boundary
+// contract: it is promoted only when the current drain would otherwise idle.
+func (b *opencodeServeBackend) AcceptPendingNotice(ctx context.Context, notice ResidentPendingNotice) error {
+	prompt, err := formatResidentPendingNotice(notice)
+	if err != nil {
+		return err
+	}
+	b.noticeMu.Lock()
+	defer b.noticeMu.Unlock()
+	b.mu.Lock()
+	if !b.running {
+		b.mu.Unlock()
+		return errors.New("OpenCode Pending Notice requires an active turn")
+	}
+	p := b.server
+	b.mu.Unlock()
+	if !b.noticeReady {
+		return errors.New("OpenCode Pending Notice is waiting for primary prompt admission")
+	}
+	if p == nil {
+		return errors.New("OpenCode Pending Notice requires a live server")
+	}
+	p.sessionMu.Lock()
+	sessionID := p.sessionID
+	p.sessionMu.Unlock()
+	if strings.TrimSpace(sessionID) == "" {
+		return errors.New("OpenCode Pending Notice requires a live session")
+	}
+	if err := p.client.queuePendingNotice(ctx, sessionID, prompt); err != nil {
+		return fmt.Errorf("OpenCode Pending Notice: %w", err)
+	}
+	return nil
 }
 
 func (b *opencodeServeBackend) runtimeAlive() (bool, bool) {
@@ -193,7 +245,11 @@ func (b *opencodeServeBackend) executeTurn(ctx context.Context, prompt string, o
 	}
 
 	var output strings.Builder
-	turn, err := p.client.runTurn(ctx, sessionID, prompt, opts, func(msg Message) {
+	turn, err := p.client.runTurnWithAdmission(ctx, sessionID, prompt, opts, func() {
+		b.noticeMu.Lock()
+		b.noticeReady = true
+		b.noticeMu.Unlock()
+	}, func(msg Message) {
 		if msg.Type == MessageText {
 			output.WriteString(msg.Content)
 		}
@@ -617,12 +673,19 @@ func (r opencodeServeTurnResult) usage(model string) map[string]TokenUsage {
 // (session.idle or session.error), then reconciles the final message
 // content via a direct GET rather than trusting the SSE stream alone.
 func (c *opencodeServeClient) runTurn(ctx context.Context, sessionID, prompt string, opts ExecOptions, onMessage func(Message)) (opencodeServeTurnResult, error) {
+	return c.runTurnWithAdmission(ctx, sessionID, prompt, opts, nil, onMessage)
+}
+
+func (c *opencodeServeClient) runTurnWithAdmission(ctx context.Context, sessionID, prompt string, opts ExecOptions, onAdmitted func(), onMessage func(Message)) (opencodeServeTurnResult, error) {
 	signalCh := make(chan opencodeServeSessionSignal, 1)
 	c.registerWaiter(sessionID, &opencodeServeWaiter{signal: signalCh, onMessage: onMessage})
 	defer c.unregisterWaiter(sessionID)
 
 	if err := c.sendMessage(ctx, sessionID, prompt, opts); err != nil {
 		return opencodeServeTurnResult{}, err
+	}
+	if onAdmitted != nil {
+		onAdmitted()
 	}
 
 	select {
@@ -670,6 +733,42 @@ func (c *opencodeServeClient) sendMessage(ctx context.Context, sessionID, prompt
 	io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("send message: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (c *opencodeServeClient) queuePendingNotice(ctx context.Context, sessionID, prompt string) error {
+	body := map[string]any{
+		"prompt":   map[string]string{"text": prompt},
+		"delivery": "queue",
+		"resume":   true,
+	}
+	payload, _ := json.Marshal(body)
+	req, err := c.newRequest(ctx, http.MethodPost, "/api/session/"+sessionID+"/prompt", strings.NewReader(string(payload)))
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("queue Notice: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("queue Notice: status %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	var receipt struct {
+		Data struct {
+			ID        string `json:"id"`
+			SessionID string `json:"sessionID"`
+			Delivery  string `json:"delivery"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&receipt); err != nil {
+		return fmt.Errorf("queue Notice receipt: %w", err)
+	}
+	if receipt.Data.ID == "" || receipt.Data.SessionID != sessionID || receipt.Data.Delivery != "queue" {
+		return fmt.Errorf("queue Notice returned invalid admission receipt")
 	}
 	return nil
 }

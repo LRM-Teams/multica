@@ -178,8 +178,8 @@ func TestWebSearchAndFetchToolsHandled(t *testing.T) {
 
 func TestDefaultDialogToolsIncludesWebLookup(t *testing.T) {
 	tools := DefaultDialogTools()
-	if len(tools) != 3 {
-		t.Fatalf("tools=%d want 3", len(tools))
+	if len(tools) != 4 {
+		t.Fatalf("tools=%d want 4", len(tools))
 	}
 	names := map[string]bool{}
 	for _, tool := range tools {
@@ -192,7 +192,7 @@ func TestDefaultDialogToolsIncludesWebLookup(t *testing.T) {
 			t.Fatalf("duplex tools must be flat: %s", encoded)
 		}
 	}
-	for _, want := range []string{MulticaDelegateToolName, WebSearchToolName, WebFetchToolName} {
+	for _, want := range []string{MulticaDelegateToolName, MulticaChannelContextToolName, WebSearchToolName, WebFetchToolName} {
 		if !names[want] {
 			t.Fatalf("missing tool %s in %#v", want, names)
 		}
@@ -212,6 +212,29 @@ func TestDefaultDialogToolsIncludesWebLookup(t *testing.T) {
 	}
 	if !strings.Contains(instr, "继续保持通话可听可说") {
 		t.Fatal("instructions should keep duplex open during web tools")
+	}
+}
+
+func TestMulticaToolBridgeHandlesChannelContext(t *testing.T) {
+	executor := &RecordingExecutor{}
+	sender := &fakeSender{}
+	bridge, err := NewMulticaToolBridge(executor, sender)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, err := bridge.HandleServerEvent(context.Background(), ServerEvent{
+		Type: EventFunctionCallArgumentsDone,
+		FunctionCalls: []FunctionCall{{
+			CallID:    "call-channel",
+			Name:      MulticaChannelContextToolName,
+			Arguments: `{"action":"search","channel_id":"channel-1","query":"发布"}`,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handled || len(sender.outputs) != 1 || sender.outputs[0].Output != "search channel-1 发布" {
+		t.Fatalf("unexpected channel context result: handled=%v outputs=%#v", handled, sender.outputs)
 	}
 }
 

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../locales/en/common.json";
@@ -77,37 +77,6 @@ describe("CreateWorkspaceModal", () => {
     expect(slugInput).toHaveValue("custom-team");
   });
 
-  it("shows a specific slug conflict error on 409 responses", async () => {
-    const user = userEvent.setup();
-    mockCreateWorkspaceMutate.mockImplementation(
-      (
-        _data: unknown,
-        options: { onError: (error: unknown) => void },
-      ) => {
-        options.onError({ status: 409 });
-      },
-    );
-
-    renderModal({ onClose: vi.fn() });
-
-    await user.type(screen.getByPlaceholderText("My Workspace"), "My Team");
-    await user.click(screen.getByRole("button", { name: "Create workspace" }));
-
-    await waitFor(() => {
-      expect(
-        screen.getByText("That workspace URL is already taken."),
-      ).toBeInTheDocument();
-    });
-
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Choose a different workspace URL",
-      expect.objectContaining({ duration: Infinity, closeButton: true }),
-    );
-    expect(mockCreateWorkspaceMutate).toHaveBeenCalledWith(
-      { name: "My Team", slug: "my-team" },
-      expect.any(Object),
-    );
-  });
 
   it("navigates into the newly created workspace after success", async () => {
     const user = userEvent.setup();

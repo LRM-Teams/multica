@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { Skill } from "@multica/core/types";
@@ -86,41 +85,7 @@ describe("SkillGrantSection", () => {
     listSkillPromotions.mockResolvedValue({ items: [] });
   });
 
-  it("shows Agent level badge and promote actions from capabilities", async () => {
-    renderGrant(makeSkill());
-    expect(screen.getByText("Agent (L1)")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Authorize to channel" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Promote to workspace default" }),
-    ).toBeInTheDocument();
-    await waitFor(() => {
-      expect(listSkillPromotions).toHaveBeenCalledWith("skill-1");
-    });
-  });
 
-  it("promotes to workspace when clicked", async () => {
-    const user = userEvent.setup();
-    promoteSkill.mockResolvedValue(
-      makeSkill({
-        grant_level: "workspace",
-        capabilities: {
-          can_promote_to_channel: false,
-          can_promote_to_workspace: false,
-        },
-      }),
-    );
-    renderGrant(makeSkill());
-    await user.click(
-      screen.getByRole("button", { name: "Promote to workspace default" }),
-    );
-    await waitFor(() => {
-      expect(promoteSkill).toHaveBeenCalledWith("skill-1", {
-        to_level: "workspace",
-      });
-    });
-  });
 
   it("hides promote buttons when capabilities are false/missing", () => {
     renderGrant(

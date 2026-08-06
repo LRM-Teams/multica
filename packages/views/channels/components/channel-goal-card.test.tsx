@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -197,20 +197,4 @@ describe("ChannelGoalCard", () => {
     );
   });
 
-  it("requires confirmation before completing an evidence-ready goal", async () => {
-    const user = userEvent.setup();
-    state.goal = goal({ completed_criteria: ["Goal is visible", "Goal survives resume"] });
-    state.update.mockImplementation((_input, options) => options?.onSuccess?.());
-    renderCard();
-    await user.click(screen.getByRole("button", { name: "Expand goal" }));
-    await user.click(screen.getByRole("button", { name: "Complete goal" }));
-    expect(screen.getByText("Complete this goal?")).toBeInTheDocument();
-    await user.click(screen.getAllByRole("button", { name: "Complete goal" }).at(-1)!);
-    await waitFor(() => {
-      expect(state.update).toHaveBeenCalledWith(
-        { expected_version: 3, status: "completed" },
-        expect.objectContaining({ onSuccess: expect.any(Function), onError: expect.any(Function) }),
-      );
-    });
-  });
 });

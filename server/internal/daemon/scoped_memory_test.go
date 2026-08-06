@@ -10,6 +10,32 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
+func TestPrepareExecutionMemoryDoesNotCreateFiles(t *testing.T) {
+	root := t.TempDir()
+	task := Task{
+		AgentID:       "agent-1",
+		InitiatorType: "member",
+		InitiatorID:   "member-a",
+		ProjectID:     "project-a",
+		ChannelID:     "channel-a",
+	}
+
+	memories, paths := prepareExecutionMemory(root, task, nil)
+	if len(memories) != 0 {
+		t.Fatalf("memories = %+v, want none", memories)
+	}
+	if paths.UserDir == "" || paths.ProjectDir == "" || paths.ChannelDir == "" {
+		t.Fatalf("scope paths should still resolve: %+v", paths)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("reading execution memory created files: %+v", entries)
+	}
+}
+
 func TestPrepareExecutionMemoryLoadsOnlyCurrentScopesAndToday(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "agent")
 	if err := ensureMulticaAgentRoot(root); err != nil {
@@ -17,7 +43,6 @@ func TestPrepareExecutionMemoryLoadsOnlyCurrentScopesAndToday(t *testing.T) {
 	}
 	task := Task{AgentID: "agent-1", InitiatorType: "member", InitiatorID: "member-a", ProjectID: "project-a", ChannelID: "channel-a"}
 	paths := scopedMemoryPathsForTask(root, task)
-	ensureScopedMemoryFiles(paths)
 	writes := map[string]string{
 		filepath.Join(paths.UserDir, "USER.md"):                   "Frank prefers an acknowledgement before work.\n",
 		filepath.Join(paths.ProjectDir, "MEMORY.md"):              "Project A uses Go.\n",
@@ -37,6 +62,9 @@ func TestPrepareExecutionMemoryLoadsOnlyCurrentScopesAndToday(t *testing.T) {
 		}
 	}
 	todayPath := scopedMemoryTodayPath(root, time.Now())
+	if err := os.MkdirAll(filepath.Dir(todayPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(todayPath, []byte("Today's activity only.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +96,18 @@ func TestPrepareExecutionMemoryLoadsOnlyCurrentScopesAndToday(t *testing.T) {
 	}
 	if total > executionMemoryBudgetBytes {
 		t.Fatalf("memory pack bytes = %d, budget = %d", total, executionMemoryBudgetBytes)
+	}
+}
+
+func TestPrepareExecutionMemoryDoesNotMaterializeEmptyScopes(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "agent")
+	task := Task{InitiatorType: "member", InitiatorID: "member-a", ProjectID: "project-a", ChannelID: "channel-a"}
+
+	_, paths := prepareExecutionMemory(root, task, nil)
+	for _, path := range []string{paths.UserDir, paths.ProjectDir, paths.ChannelDir, filepath.Join(root, "memory")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("unused scope %s was materialized: %v", path, err)
+		}
 	}
 }
 

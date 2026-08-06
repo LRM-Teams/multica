@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
 
 const (
@@ -54,33 +56,7 @@ func NormalizeStage(raw string) (Stage, error) {
 }
 
 func ensureMemoryRoot(root string) error {
-	dirs := []string{
-		filepath.Join(root, "memory", "daily"),
-		filepath.Join(root, "memory", "audit"),
-		filepath.Join(root, "notes"),
-		filepath.Join(root, "shared-cache", "memory", "proposals"),
-		filepath.Join(root, "sync_queue"),
-	}
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-	}
-	files := map[string]string{
-		filepath.Join(root, "memory", "MEMORY.md"):     memoryHeader,
-		filepath.Join(root, "memory", "USER.md"):       userHeader,
-		filepath.Join(root, "memory", "STATE.md"):      stateHeader,
-		filepath.Join(root, "memory", "REVIEW.md"):     reviewHeader,
-		filepath.Join(root, "memory", "SCRATCHPAD.md"): scratchHeader,
-		filepath.Join(root, "notes", "work-log.md"):    "# Work Log\n\nConcise task history and handoffs.\n",
-		filepath.Join(root, "notes", "decisions.md"):   "# Decisions\n\nDurable decisions relevant to this agent.\n",
-	}
-	for path, content := range files {
-		if err := ensureFile(path, content); err != nil {
-			return err
-		}
-	}
-	return nil
+	return os.MkdirAll(root, 0o755)
 }
 
 func ensureFile(path, content string) error {
@@ -110,7 +86,7 @@ func discoverAgentRoots(workspacesRoot, workspaceID string, agentIDs []string, a
 			roots = append(roots, agentRoot{
 				WorkspaceID: workspaceID,
 				AgentID:     id,
-				Root:        filepath.Join(workspacesRoot, workspaceID, ".multica", "agents", id),
+				Root:        agentworkspace.Root(workspacesRoot, workspaceID, id),
 			})
 		}
 		return roots, nil
@@ -133,7 +109,7 @@ func discoverAgentRoots(workspacesRoot, workspaceID string, agentIDs []string, a
 		sort.Strings(workspaceIDs)
 	}
 	for _, ws := range workspaceIDs {
-		base := filepath.Join(workspacesRoot, ws, ".multica", "agents")
+		base := agentworkspace.AgentsDir(workspacesRoot, ws)
 		entries, err := os.ReadDir(base)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -143,7 +119,7 @@ func discoverAgentRoots(workspacesRoot, workspaceID string, agentIDs []string, a
 		}
 		for _, entry := range entries {
 			if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
-				roots = append(roots, agentRoot{WorkspaceID: ws, AgentID: entry.Name(), Root: filepath.Join(base, entry.Name())})
+				roots = append(roots, agentRoot{WorkspaceID: ws, AgentID: entry.Name(), Root: agentworkspace.Root(workspacesRoot, ws, entry.Name())})
 			}
 		}
 	}
@@ -168,6 +144,9 @@ func appendAudit(root, stage string, planDate time.Time, payload map[string]any,
 		return err
 	}
 	path := filepath.Join(root, "memory", "audit", fmt.Sprintf("%s-%s.jsonl", stage, formatDate(planDate)))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err

@@ -93,3 +93,30 @@ func TestForceRestartCapabilityMatchesPooledResidentBackend(t *testing.T) {
 		}
 	}
 }
+
+func TestPendingNoticeCapabilityMatchesSupportedCanonicalBackends(t *testing.T) {
+	for _, provider := range []string{"pi", "claude", "codex", "grok", "cursor", "opencode"} {
+		backend, cleanup, err := defaultCanonicalRuntimeFactory(provider, canonicalRuntimeResident)(agent.Config{})
+		if err != nil {
+			t.Fatalf("%s resident factory: %v", provider, err)
+		}
+		if cleanup != nil {
+			defer cleanup()
+		}
+		if _, ok := backend.(agent.ResidentPendingNoticeInput); !ok {
+			t.Errorf("%s canonical backend %T must accept Pending Notices", provider, backend)
+		}
+	}
+	for _, provider := range []string{"kiro"} {
+		backend, cleanup, err := defaultCanonicalRuntimeFactory(provider, canonicalRuntimeResident)(agent.Config{})
+		if err != nil {
+			t.Fatalf("%s resident factory: %v", provider, err)
+		}
+		if cleanup != nil {
+			defer cleanup()
+		}
+		if _, ok := backend.(agent.ResidentPendingNoticeInput); ok {
+			t.Errorf("%s canonical backend %T must fail closed until its native busy-input contract is proven", provider, backend)
+		}
+	}
+}

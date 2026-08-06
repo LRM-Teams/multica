@@ -28,6 +28,62 @@ if ! grep -Fq -- 'goreleaser/goreleaser-action' <<<"$release_workflow"; then
   exit 1
 fi
 
+for required in \
+  'publish-downloads-feed:' \
+  'OSS_BUCKET: leagent' \
+  'RELEASE_PREFIX: computer' \
+  'PUBLIC_BASE_URL: https://cdn.leagent.me/computer' \
+  'canonical_prefix="${RELEASE_PREFIX}/${version}"' \
+  'legacy_prefix="${RELEASE_PREFIX}/${TAG_NAME}"' \
+  '"${canonical_prefix}/manifest.json" "${legacy_prefix}/release.json"' \
+  'for name in manifest.json latest.json' \
+  'aliyun --config-path "$config" \' \
+  'cdn RefreshObjectCaches' \
+  'Verify the published feed through the public CDN'; do
+  if ! grep -Fq -- "$required" <<<"$release_workflow"; then
+    echo "Canonical CDN release contract is missing: $required"
+    exit 1
+  fi
+done
+
+if grep -Fq -- '--profile release-cdn' <<<"$release_workflow"; then
+  echo "Aliyun CLI cannot create a named profile with configure set in a fresh config file"
+  exit 1
+fi
+
+if grep -Fq -- 'runs-on: [self-hosted, aliyun]' <<<"$release_workflow"; then
+  echo "Release publishing must not depend on the Aliyun host runner"
+  exit 1
+fi
+
+for legacy_marker in \
+  'publish-downloads-feed-oss' \
+  'lrm-2-0-release' \
+  '/data/multica/releases' \
+  '/srv/multica-releases'; do
+  matches="$(git grep -n -F -- "$legacy_marker" -- ':!scripts/web-workflows.test.sh' || true)"
+  if [[ -n "$matches" ]]; then
+    echo "Legacy release path remains in the repository: $legacy_marker"
+    echo "$matches"
+    exit 1
+  fi
+done
+
+if grep -Fq -- 'cdn.leagent.me' deploy/aliyun/Caddyfile; then
+  echo "Caddy must not serve the CDN release feed"
+  exit 1
+fi
+
+if grep -Fq -- 'multica-releases' docker-compose.aliyun.yml; then
+  echo "Aliyun Compose must not mount a local release feed"
+  exit 1
+fi
+
+if grep -Fq -- 'Ensure release feed directory' .github/workflows/deploy.yml; then
+  echo "Deploy workflow must not prepare the removed local release feed"
+  exit 1
+fi
+
 goreleaser_config="$(<.goreleaser.yml)"
 if ! perl -0ne 'exit(!/- id: multica-darwin-arm64\n.*?goos:\s*\n\s*- darwin.*?goarch:\s*\n\s*- arm64/s)' <<<"$goreleaser_config"; then
   echo "Darwin arm64 daemon CLI target must stay enabled"

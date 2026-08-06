@@ -448,16 +448,16 @@ describe("agent status transitions — Working ↔ Idle rows (#411/#525)", () =>
     expect(isNarrativeActivityEvent(statusEvent("working"))).toBe(false);
   });
 
-  it("keeps lifecycle success (Restarted) as a narrative timeline row", () => {
+  it("keeps lifecycle completion (Restart prepared) as a narrative timeline row", () => {
     const restarted: ActivityEvent = {
       ...evtBase("custom"),
       id: "lifecycle-succeeded",
       detail_kind: "agent_lifecycle_succeeded",
-      text: "Restarted",
+      text: "Restart prepared",
     } as ActivityEvent;
     expect(isNarrativeActivityEvent(restarted)).toBe(true);
     expect(activityPresentation(restarted)).toMatchObject({
-      labelKey: "restarted",
+      labelKey: "restart_prepared",
       tone: "neutral",
     });
     expect(activityPresentation(restarted).subtext).toBeUndefined();

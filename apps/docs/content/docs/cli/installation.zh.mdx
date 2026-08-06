@@ -8,7 +8,7 @@ description: Install the Multica CLI and start the agent daemon.
 ### 安装脚本 (macOS/Linux)
 
 ```bash
-curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 ```
 
 ### Build from Source
@@ -39,7 +39,7 @@ fi
 PLATFORM="${OS}-${ARCH}"
 
 # Fetch the release manifest
-curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/latest.json -o /tmp/latest.json
+curl -fsSL https://cdn.leagent.me/computer/latest.json -o /tmp/latest.json
 LATEST=$(jq -r '.tag' /tmp/latest.json)
 URL=$(jq -r --arg p "$PLATFORM" '.platforms[$p].url' /tmp/latest.json)
 SHA256=$(jq -r --arg p "$PLATFORM" '.platforms[$p].sha256' /tmp/latest.json)
@@ -102,13 +102,13 @@ Some older daemons (for example **0.3.64–0.3.x** installs) never self-upgrade:
 - the process is not a release build (`git describe` version), or is pinned
 
 You cannot fix those gates by waiting for the old binary to update itself.
-Use an **out-of-band** install from the OSS release feed, then restart the daemon.
+Use an **out-of-band** install from the public CDN release feed, then restart the daemon.
 
 ### Runbook (macOS/Linux)
 
 ```bash
 # 1) Install latest CLI into the canonical path (same as "Download directly")
-curl -fsSL https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases/install.sh | bash
+curl -fsSL https://cdn.leagent.me/computer/install.sh | bash
 
 # 2) Confirm the new binary
 export PATH="$HOME/.local/bin:$PATH"
@@ -124,16 +124,16 @@ multica daemon install-service   # preferred: user service + supervise (all plat
 multica daemon status
 ```
 
-Optional (self-host only, after the new binary is on PATH): enable auto-update and point at OSS so the *next* releases do not get stuck again:
+Optional (self-host only, after the new binary is on PATH): enable auto-update and point at the canonical CDN so the *next* releases do not get stuck again:
 
 ```bash
-export MULTICA_RELEASE_MANIFEST_BASE_URL="https://lrm-2-0-release.oss-cn-beijing.aliyuncs.com/releases"
+export MULTICA_RELEASE_MANIFEST_BASE_URL="https://cdn.leagent.me/computer"
 export MULTICA_DAEMON_AUTO_UPDATE=true
 # put these in the daemon service environment, then:
 multica daemon install-service
 ```
 
-Windows: download the `windows-amd64` zip from `latest.json` under the same OSS base URL, replace `multica.exe`, then `multica daemon install-service` (or restart the existing service).
+Windows: download the `windows-amd64` zip from `latest.json` under the same CDN base URL, replace `multica.exe`, then `multica daemon install-service` (or restart the existing service).
 
 Do **not** change `server_url` to `https://…` until TLS to that host works from the machine (see ops notes for temporary `http://IP:port` configs).
 

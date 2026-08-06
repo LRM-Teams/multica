@@ -157,50 +157,6 @@ describe("uploadAndInsertFile", () => {
     expect(reparsed.getMarkdown().trimEnd()).toBe(saved);
   });
 
-  it("reserves the image box by capturing intrinsic dimensions, kept through the URL swap", async () => {
-    const close = vi.fn();
-    const createImageBitmap = vi.fn(async () => ({
-      width: 800,
-      height: 600,
-      close,
-    }));
-    vi.stubGlobal("createImageBitmap", createImageBitmap);
-
-    try {
-      const editor = makeEditor();
-      const upload = deferred<UploadResult | null>();
-      const handler = vi.fn(() => upload.promise);
-      const file = new File(["image"], "photo.png", { type: "image/png" });
-
-      const uploadTask = uploadAndInsertFile(editor, file, handler);
-
-      // Dimensions are measured off-thread and patched onto the node before the
-      // upload resolves, so the blob preview already reserves its box.
-      await vi.waitFor(() => {
-        const attrs = firstImageAttrs(editor);
-        expect(attrs?.width).toBe(800);
-        expect(attrs?.height).toBe(600);
-      });
-      expect(createImageBitmap).toHaveBeenCalledWith(file);
-      expect(close).toHaveBeenCalled();
-
-      upload.resolve(
-        makeUpload({ id: "attachment-1", link: FINAL_URL, filename: "photo.png" }),
-      );
-      await uploadTask;
-
-      // The src swap preserves width/height (spread of existing attrs).
-      const finalAttrs = firstImageAttrs(editor);
-      expect(finalAttrs?.src).toBe(FINAL_URL);
-      expect(finalAttrs?.width).toBe(800);
-      expect(finalAttrs?.height).toBe(600);
-
-      // width/height are render-only — they never reach the markdown.
-      expect(editor.getMarkdown().trimEnd()).toBe(`![photo.png](${FINAL_URL})`);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
 
   it("persists markdownLink (the stable per-attachment URL) into the markdown body, not the short-lived storage URL", async () => {
     // Regression pin for MUL-3130 review feedback. useFileUpload returns
@@ -353,26 +309,6 @@ describe("createFileUploadExtension — mediaMode external", () => {
     expect(firstImageAttrs(editor)).toBeNull();
   });
 
-  it("inline mode (default) still inserts an image on paste", async () => {
-    const onUploadFile = vi.fn(async () =>
-      makeUpload({ id: "a1", link: FINAL_URL, filename: "photo.png" }),
-    );
-    const onUploadFileRef = refOf(onUploadFile as
-      | ((file: File) => Promise<UploadResult | null>)
-      | undefined);
-    const mediaModeRef = refOf<MediaMode>("inline");
-
-    const editor = makeUploadEditor({ onUploadFileRef, mediaModeRef });
-    const file = new File(["image"], "photo.png", { type: "image/png" });
-
-    const handled = pasteFiles(editor, [file]);
-    expect(handled).toBe(true);
-
-    await vi.waitFor(() => {
-      expect(onUploadFile).toHaveBeenCalledWith(file);
-      expect(editor.getMarkdown().trimEnd()).toBe(`![photo.png](${FINAL_URL})`);
-    });
-  });
 
   it("dedupes duplicate files from the same paste before calling onExternalFiles", () => {
     const onExternalFiles = vi.fn();

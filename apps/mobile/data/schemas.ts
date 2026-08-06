@@ -468,7 +468,6 @@ export const WorkspaceSchema: z.ZodType<Workspace> = z.object({
   description: z.string().nullable().default(null),
   context: z.string().nullable().default(null),
   settings: z.record(z.string(), z.unknown()).default({}),
-  repos: z.array(z.object({ url: z.string() }).loose()).default([]),
   issue_prefix: z.string().default(""),
   avatar_url: z.string().nullable().default(null),
   created_at: z.string().default(""),

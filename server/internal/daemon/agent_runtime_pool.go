@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/agent"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 var ErrCanonicalAgentRuntimeBusy = errors.New("canonical agent runtime busy")
@@ -229,14 +230,17 @@ type canonicalAgentRuntimePool struct {
 }
 
 type canonicalAgentRuntimeSlot struct {
-	mu          sync.Mutex
-	fingerprint string
-	mode        canonicalRuntimeMode
-	provider    string
-	running     bool
-	idleSince   time.Time
-	backend     agent.Backend
-	close       func()
+	mu                           sync.Mutex
+	fingerprint                  string
+	mode                         canonicalRuntimeMode
+	provider                     string
+	running                      bool
+	idleSince                    time.Time
+	backend                      agent.Backend
+	close                        func()
+	messageInputDone             <-chan error
+	lastPendingNoticeFingerprint string
+	lastPendingTargetFingerprint map[string]string
 }
 
 func newCanonicalAgentRuntimePool() *canonicalAgentRuntimePool {
@@ -545,6 +549,8 @@ func (slot *canonicalAgentRuntimeSlot) closeBackend() {
 	}
 	slot.backend = nil
 	slot.close = nil
+	slot.lastPendingNoticeFingerprint = ""
+	slot.lastPendingTargetFingerprint = nil
 }
 
 func (p *canonicalAgentRuntimePool) slotCount() int {
@@ -554,6 +560,115 @@ func (p *canonicalAgentRuntimePool) slotCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.slots)
+}
+
+func (p *canonicalAgentRuntimePool) handoffIdleMessages(ctx context.Context, agentID, runtimeID string, messages []protocol.AgentMessageProjection) error {
+	if p == nil {
+		return errors.New("canonical agent runtime pool is nil")
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot == nil {
+		p.mu.Unlock()
+		return errors.New("canonical resident runtime is not registered")
+	}
+	slot.mu.Lock()
+	p.mu.Unlock()
+	defer slot.mu.Unlock()
+	if slot.running {
+		return ErrCanonicalAgentRuntimeBusy
+	}
+	if slot.mode != canonicalRuntimeResident || slot.backend == nil {
+		return errors.New("canonical resident runtime is unavailable")
+	}
+	input, ok := slot.backend.(agent.ResidentMessageInput)
+	if !ok {
+		return errors.New("canonical resident runtime does not support idle Message input")
+	}
+	batch := make([]agent.ResidentMessage, 0, len(messages))
+	for _, message := range messages {
+		partsJSON, err := json.Marshal(message.Parts)
+		if err != nil {
+			return fmt.Errorf("marshal resident Message parts: %w", err)
+		}
+		batch = append(batch, agent.ResidentMessage{
+			ID: message.ID, Target: message.Target, Seq: message.Seq, Content: message.Content, PartsJSON: partsJSON,
+		})
+	}
+	acceptance, err := input.AcceptMessageBatch(ctx, batch)
+	if err != nil {
+		return err
+	}
+	if acceptance.Done == nil {
+		return errors.New("canonical resident runtime returned no Message input completion receipt")
+	}
+	// Native acceptance is the Context Boundary receipt. The provider may keep
+	// processing that accepted input afterward, so retain pool-level admission
+	// until its completion receipt resolves without delaying boundary persistence.
+	slot.running = true
+	slot.messageInputDone = acceptance.Done
+	go p.finishResidentMessageInput(slot, acceptance.Done)
+	return nil
+}
+
+func (p *canonicalAgentRuntimePool) handoffBusyNotice(ctx context.Context, agentID, runtimeID string, snapshot PendingNoticeSnapshot) error {
+	if p == nil {
+		return errors.New("canonical agent runtime pool is nil")
+	}
+	key := strings.TrimSpace(agentID) + "\x00" + strings.TrimSpace(runtimeID)
+	p.mu.Lock()
+	slot := p.slots[key]
+	if slot == nil {
+		p.mu.Unlock()
+		return errors.New("canonical resident runtime is not registered")
+	}
+	slot.mu.Lock()
+	p.mu.Unlock()
+	defer slot.mu.Unlock()
+	if !slot.running {
+		return errors.New("canonical resident runtime is idle")
+	}
+	if slot.mode != canonicalRuntimeResident || slot.backend == nil {
+		return errors.New("canonical resident runtime is unavailable")
+	}
+	if snapshot.Fingerprint == slot.lastPendingNoticeFingerprint {
+		return nil
+	}
+	input, ok := slot.backend.(agent.ResidentPendingNoticeInput)
+	if !ok {
+		return errors.New("canonical resident runtime does not support Pending Notice input")
+	}
+	notice := snapshot.Notice
+	notice.ChangedTargets = make([]agent.ResidentPendingTarget, 0, len(snapshot.Notice.ChangedTargets))
+	for _, target := range snapshot.Notice.ChangedTargets {
+		if snapshot.TargetFingerprints[target.Target] != slot.lastPendingTargetFingerprint[target.Target] {
+			notice.ChangedTargets = append(notice.ChangedTargets, target)
+		}
+	}
+	if len(notice.ChangedTargets) == 0 {
+		notice.ChangedTargets = append(notice.ChangedTargets, snapshot.Notice.ChangedTargets...)
+	}
+	if err := input.AcceptPendingNotice(ctx, notice); err != nil {
+		return err
+	}
+	slot.lastPendingNoticeFingerprint = snapshot.Fingerprint
+	slot.lastPendingTargetFingerprint = make(map[string]string, len(snapshot.TargetFingerprints))
+	for target, fingerprint := range snapshot.TargetFingerprints {
+		slot.lastPendingTargetFingerprint[target] = fingerprint
+	}
+	return nil
+}
+
+func (p *canonicalAgentRuntimePool) finishResidentMessageInput(slot *canonicalAgentRuntimeSlot, done <-chan error) {
+	<-done
+	slot.mu.Lock()
+	if slot.messageInputDone == done {
+		slot.messageInputDone = nil
+		slot.running = false
+		slot.idleSince = time.Now()
+	}
+	slot.mu.Unlock()
 }
 
 // invalidateSession closes the idle provider process after the canonical

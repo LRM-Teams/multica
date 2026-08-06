@@ -238,7 +238,6 @@ function taskVisual(status: AgentTask["status"]): { Icon: LucideIcon; cls: strin
     case "running":
     case "dispatched":
     case "queued":
-    case "waiting_local_directory":
     default:
       return { Icon: Loader2, cls: "text-brand" };
   }

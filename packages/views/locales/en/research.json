@@ -209,7 +209,36 @@
       "unavailable": "No locatable node yet",
       "load_failed": "Could not load execution status",
       "retry": "Retry",
-      "empty": "No execution members"
+      "empty": "No execution members",
+      "status": {
+        "queued": "Queued",
+        "running": "Running",
+        "done": "Done",
+        "failed": "Failed",
+        "stale": "Stale",
+        "idle": "Idle"
+      },
+      "action": {
+        "waiting": "Waiting for the current task to start",
+        "working": "Running the current task",
+        "recent_done": "Recent task completed",
+        "recent_failed": "Recent task failed",
+        "stale": "Execution state is stale",
+        "idle": "No small task available to pick up"
+      },
+      "time": {
+        "queued": "Queued",
+        "running": "Running",
+        "recent": "Recently updated",
+        "failed": "Execution failed",
+        "stale": "No updates for a while",
+        "idle": "Idle"
+      },
+      "failed_reason": "The task did not finish; review recent activity and retry.",
+      "active_count": "{{count}} agents working",
+      "no_active": "No agents working",
+      "locate_aria": "Locate {{name}}'s current node",
+      "view_aria": "View {{name}}'s recent activity"
     },
     "aux_close_sources": "Close evidence & collaboration"
   },

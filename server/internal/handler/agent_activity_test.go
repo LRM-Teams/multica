@@ -373,7 +373,7 @@ func TestAgentActivityEvents_FileToolUsesTopLevelPathFacts(t *testing.T) {
 	}
 
 	agentID := createWorkspaceVisibleActivityAgent(t, "activity-file-tool-agent")
-	const filePath = "/Users/frank/multica_workspaces/ws/.multica/agents/agent/hello_world_2.txt"
+	const filePath = "/Users/frank/.multica/workspaces/ws/agents/agent/hello_world_2.txt"
 	ctx := context.Background()
 
 	var eventID string
@@ -918,9 +918,14 @@ func TestResolveRaftCLIInvocation_MapsMessageCommands(t *testing.T) {
 		t.Fatalf("full redacted command must be retained for full activity detail: %+v", invocation.Details)
 	}
 
-	check, ok := resolveRaftCLIInvocation("bash", map[string]any{"command": "raft message check"})
+	check, ok := resolveRaftCLIInvocation("bash", map[string]any{"command": "multica message check"})
 	if !ok || check.Tool != "check_messages" || check.ToolTarget != "" || check.SummaryKind != "none" {
 		t.Fatalf("message check invocation = %+v ok=%v, want check_messages without target", check, ok)
+	}
+
+	read, ok := resolveRaftCLIInvocation("bash", map[string]any{"command": "multica message read --target '#multica' --around 42"})
+	if !ok || read.Tool != "read_history" || read.ToolTarget != "#multica" || read.SummaryKind != "message_target" {
+		t.Fatalf("message read invocation = %+v ok=%v, want read_history on canonical target", read, ok)
 	}
 }
 
@@ -1265,7 +1270,7 @@ func TestAgentActivitySafeToolTargetForTool_NonFileToolsKeepSafeSummary(t *testi
 	}
 
 	argvTarget, argvKind := agentActivitySafeToolTargetForTool("", map[string]any{
-		"command": "multica repo checkout https://github.com/LRM-Teams/multica.git",
+		"command": "git status --short",
 	})
 	if argvTarget != "" || argvKind != "" {
 		t.Fatalf("unknown command target=(%q,%q), want no argv0-derived target", argvTarget, argvKind)

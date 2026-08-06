@@ -34,7 +34,7 @@ func TestAgentLifecycleExecutorPreserveAndDeleteBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("provision workspace: %v", err)
 	}
-	memoryPath := filepath.Join(layout.WorkDir, "MEMORY.md")
+	memoryPath := filepath.Join(layout.AgentRoot, "MEMORY.md")
 	if err := os.WriteFile(memoryPath, []byte("keep me"), 0o600); err != nil {
 		t.Fatalf("write memory fixture: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestAgentLifecycleExecutorPreserveAndDeleteBoundaries(t *testing.T) {
 	if _, err := os.Stat(memoryPath); !os.IsNotExist(err) {
 		t.Fatalf("full reset retained workspace file: %v", err)
 	}
-	if _, err := os.Stat(layout.WorkDir); err != nil {
+	if _, err := os.Stat(layout.AgentRoot); err != nil {
 		t.Fatalf("full reset did not reprovision workspace: %v", err)
 	}
 	if len(resetter.calls) != 2 {
@@ -230,7 +230,7 @@ func TestAgentLifecycleExecutorRequiresSafetyDependenciesBeforeMutation(t *testi
 	if err != nil {
 		t.Fatalf("provision workspace: %v", err)
 	}
-	sentinelPath := filepath.Join(layout.WorkDir, "sentinel.txt")
+	sentinelPath := filepath.Join(layout.AgentRoot, "sentinel.txt")
 	if err := os.WriteFile(sentinelPath, []byte("keep me"), 0o600); err != nil {
 		t.Fatalf("write sentinel: %v", err)
 	}

@@ -40,7 +40,6 @@ type WorkspaceResponse struct {
 	Description  *string `json:"description"`
 	Context      *string `json:"context"`
 	Settings     any     `json:"settings"`
-	Repos        any     `json:"repos"`
 	IssuePrefix  string  `json:"issue_prefix"`
 	AvatarURL    *string `json:"avatar_url"`
 	LastActiveAt *string `json:"last_active_at"`
@@ -56,7 +55,6 @@ func workspaceToResponse(w db.Workspace) WorkspaceResponse {
 		w.Description,
 		w.Context,
 		w.Settings,
-		w.Repos,
 		w.IssuePrefix,
 		w.AvatarUrl,
 		pgtype.Timestamptz{},
@@ -73,7 +71,6 @@ func listedWorkspaceToResponse(w db.ListWorkspacesRow) WorkspaceResponse {
 		w.Description,
 		w.Context,
 		w.Settings,
-		w.Repos,
 		w.IssuePrefix,
 		w.AvatarUrl,
 		w.LastActiveAt,
@@ -89,7 +86,6 @@ func workspaceFieldsToResponse(
 	description pgtype.Text,
 	context pgtype.Text,
 	settingsBytes []byte,
-	reposBytes []byte,
 	issuePrefix string,
 	avatarURL pgtype.Text,
 	lastActiveAt pgtype.Timestamptz,
@@ -103,13 +99,6 @@ func workspaceFieldsToResponse(
 	if settings == nil {
 		settings = map[string]any{}
 	}
-	var repos any
-	if reposBytes != nil {
-		json.Unmarshal(reposBytes, &repos)
-	}
-	if repos == nil {
-		repos = []any{}
-	}
 	return WorkspaceResponse{
 		ID:           uuidToString(id),
 		Name:         name,
@@ -117,7 +106,6 @@ func workspaceFieldsToResponse(
 		Description:  textToPtr(description),
 		Context:      textToPtr(context),
 		Settings:     settings,
-		Repos:        repos,
 		IssuePrefix:  issuePrefix,
 		AvatarURL:    textToPtr(avatarURL),
 		LastActiveAt: timestampToPtr(lastActiveAt),
@@ -305,7 +293,6 @@ type UpdateWorkspaceRequest struct {
 	Description *string `json:"description"`
 	Context     *string `json:"context"`
 	Settings    any     `json:"settings"`
-	Repos       any     `json:"repos"`
 	IssuePrefix *string `json:"issue_prefix"`
 	AvatarURL   *string `json:"avatar_url"`
 }
@@ -343,10 +330,6 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if req.Settings != nil {
 		s, _ := json.Marshal(req.Settings)
 		params.Settings = s
-	}
-	if req.Repos != nil {
-		reposJSON, _ := json.Marshal(req.Repos)
-		params.Repos = reposJSON
 	}
 	if req.IssuePrefix != nil {
 		prefix := strings.ToUpper(strings.TrimSpace(*req.IssuePrefix))

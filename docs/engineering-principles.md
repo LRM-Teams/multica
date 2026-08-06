@@ -306,6 +306,11 @@
 - A1 已由 `server/internal/researchrun/canonical_state.go` 建立可执行基线：`CanonicalState` 对同一 Run 的 V1–V5 规范表做确定性哈希，排除 lease、调度时间、行维护时间和投影重试字段；`ListRunEvents` 与 `ReplayRunEvents` 按 workspace、连续 sequence 和重复一致性重放 committed Event。当前 Event 只保证投影重放，不包含从零恢复全部规范表所需的完整数据，不能宣称系统已经采用 event sourcing。
 - A2a 已由 `orchestrator_golden_test.go` 和 `testdata/golden/orchestrator_contracts.json` 冻结 V1–V5 的完整 Task Prompt 哈希、可接受 Plan Result 哈希和新 schema 拒绝行为。修改旧版本协议必须让 golden 失败；真实语义变化只能新增 orchestrator version，不能更新旧 hash 来掩盖不兼容。
 - V1–V5 Research Task Prompt 的版本选择和渲染由 `taskPromptModule` 独占；Engine 与 dispatch 只提交 Run、Task、Attempt、Snapshot 和 Fleet 输入，不能拼接或修改 Prompt。历史 builder 保持不可变，新语义只能新增 orchestrator version，并继续由完整 Prompt hash 验证。
+- Research Task 的运行态同步、Ready Task 排序、能力路由、Attempt 创建、Inbox 分派、身份挂接和取消确认由 `executionModule` 独占。已挂接 Attempt 以 Inbox Task ID 为运行身份；未挂接 Attempt 以稳定 dispatch key 查找原执行，禁止因响应丢失直接复制 Task。取消只有在 Runtime 接受取消或未挂接派发超过 stale 后才能在 Store 确认；派发成功但身份挂接失败时必须撤销刚创建的 Runtime Task。Engine 只能调用该 Module，不能直接组合 Dispatcher 与 Attempt 状态变更。
+- Research Run 的确定性 dispatch 故障、预算耗尽和补救终态由 `failureModule` 处理。未知或明确可重试的 dispatch 错误不得修改 Run；能力永久缺失和不可重试 Adapter 错误才失败。Run 失败必须先提交 `MarkFailed`，再取消活动 Attempt，最后投影 committed Event；取消失败时保留待确认状态并停止本次投影。预算耗尽必须先写幂等 Decision，再评估交付 Gate，禁止先看 Gate 后补写预算事实。Engine 不得直接组合 `MarkFailed`、取消和投影。
+- Research Run 的交付判断和 finding 到补救任务的确定性路由由 `deliveryGateModule` 独占。Gate 通过后只能进入等待用户确认；确认请求必须重新评估最新 canonical graph，不能复用旧 Gate。Gate 未通过时一次只创建最小、可寻址且带完整 observed findings 的控制任务；绑定目标并发变化返回可重算结果，不能失败 Run。Module 不派发任务，任务激活和执行继续由 `executionModule` 负责。Engine 不得解释 finding code、拼补救 objective 或直接执行 Gate 状态转换。
+- `researchrun` 禁止重新引入覆盖全部用例的 Store Interface。Engine 的生产实现明确组合具体 `PostgresStore`、Dispatcher 和 Projector；每个内部 Module 只声明自己的窄输入接口，测试替身也按该接口实现。多个窄接口不能再嵌入一个全能组合接口以绕过此约束。PostgreSQL 事务和 SQL 留在 `researchrun` 包内，Handler 只能通过外部 Research Run 用例接口调用，不能获取子实体写接口。
+- Handler 和 scheduler 只依赖固定 `researchrun.ResearchRun` 用例接口：运行创建/读取、Fleet 读取、生命周期命令、Steer、NodeCommand、task-scoped SubmitResult 和批量 reconcile。`NewEngine` 返回该接口；内部 `Start`、单 Run `ReconcileSession`、Module、PostgresStore 和来源/Observation/Claim/Task 写方法不得加入外部接口。接口方法集合由反射回归固定，新增用例必须先说明调用者、授权和不可由现有命令表达的原因。
 - A2b 已由 `behavior_golden_test.go` 和 `testdata/golden/research_behaviors.json` 冻结证据接纳、报告物化、评审缺陷传递、有界重试、取消确认和结果幂等恢复的用户可观察语义。跨运行随机 UUID、数据库时间和 scheduler 字段不属于行为 golden；同一 Run 的崩溃前后完整状态比较继续使用 A1 canonical hash。golden 变化必须说明协议或状态机原因，不能直接重录期望值。
 - Research Task 自身的 Attempt 永久失败或耗尽预算后必须进入 `failed` 并记录 failure class；`blocked` 只表示任务尚未执行但因依赖终态等外部前置条件无法继续。两者都属于终态，但投影、详情和失败分析不得混用。
 - 已发生的 Research 生产故障必须保留脱敏、可执行回归和明确 oracle。当前集合覆盖画布重复节点、合法 task result 被 403、永久 dispatch 失败扩散、报告绕过验证、评审缺陷丢失和重复证据低收益；测试与症状的权威映射记录在自主调研实现计划 A3。只写事故描述或只断言 HTTP/任务数量之一均不能替代端到端状态断言。
@@ -382,10 +387,18 @@
 ### 4.17 跨设备 Memory 以 portable 中心事实 + device-local overlay 同步 — `可执行`（① tombstone/change_seq + ② typed cursor/outbox + ⑤回归；owner: @Kiro ✅）
 - portable USER/RELATIONSHIP/MEMORY/project/channel atom 必须先写本机 `memory-sync-outbox.json`，server ACK 后才能移除 batch；daemon 重启和网络失败不得靠已推进的文件 hash 丢写入。每次 agent turn 前按 `change_seq` cursor 增量 pull，不再用一次性 hydrate marker。
 - 删除是 `superseded + deleted_at` tombstone，离线旧设备自动上行不得复活；active 更新、conflict 和删除都推进单调 change sequence。冲突内容移出正式文件，只进 `REVIEW.md`，不得作为权威规则注入。
-- 绝对本机路径、loopback endpoint、credential-like 内容在 daemon 和 server 双端 fail closed，不进入中心。机器环境事实写 `<agent-root>/devices/<daemon-id>/STATE.md`，通过 `MULTICA_DEVICE_MEMORY_DIR` 暴露。
+- 绝对本机路径、loopback endpoint、credential-like 内容在 daemon 和 server 双端 fail closed，不进入中心。机器环境事实写 `$MULTICA_AGENT_ROOT/devices/<daemon-id>/STATE.md`；运行时不再暴露独立的 memory/device/skill 目录变量。
 - published/bound skill 的跨机事实仍只有 `skill/skill_file/agent_skill`；`skills/enabled` 是可重建镜像，draft/sync_queue/provider-global skill root 不因换机自动搬运。OS/arch/tool capability 需要独立 typed manifest，不从路径猜测。
 - Agent 可切换到另一台电脑的 runtime；跨机目标 daemon 必须显式上报 `memory_cross_device_sync_v2`，否则服务端 fail closed。同机 runtime 切换不需要该能力。切换只迁移 portable memory 与服务端任务状态，不声称迁移本地工作目录、provider 登录态或 device-local 状态。
 - **物**：migration `278_agent_memory_cross_device_sync`；`memory_center_replication.go`；`memorysync.PortabilityReason`；`memory_center_replication_test.go`、`compare_test.go`、runtime memory-scope contract tests；完整产品模型见 `docs/agent-memory-model.md` §8.1。
+
+### 4.18 Agent workspace 只有一个持久根 — `可执行`（②单一路径 API + ⑤合同测试；owner: @Codex）
+- `WorkspacesRoot` 默认且唯一为 `~/.multica/workspaces`；每个 Agent 的根目录、工作目录和 subprocess cwd 都是 `<WorkspacesRoot>/<workspace_id>/agents/<agent_id>/`。路径拼装只通过 `server/internal/agentworkspace`，禁止 caller 自己拼 `agents`、task ID 或 provider/profile 后缀。
+- 运行时只暴露 `MULTICA_AGENT_ROOT`。`memory/`、`skills/`、`devices/`、provider 私有配置和 Agent 自己创建的代码/worktree 都位于 AgentRoot 下，以相对路径定位；不得为这些子目录增加平行 context 字段或 `MULTICA_*_DIR` 环境变量。
+- 同一 Agent 跨 task、daemon 重启和 provider 切换复用同一目录。硬切不扫描、不迁移、不删除旧 per-task/repo 目录；旧文件留在原处，新运行只认 canonical AgentRoot。
+- Multica 不 clone/pull/reset/branch/worktree，也不提供 `multica repo` 命令。Git 与 worktree 工作方式由 Agent 自己决定。项目资源只保留用户管理的 metadata，不改变 cwd，不写入 daemon claim/register payload，也不把 repository URL 注入 Agent prompt。
+- AgentRoot 不参与 task GC，也没有后台 retention/GC；仅用户明确选择 full reset，或在 Computer 存储页确认删除时，才可删除精确 canonical root。full reset 是硬切语义：先强制中断 runtime，然后直接删除并重建，不等待 quiescence。
+- **物**：`server/internal/agentworkspace/path.go`；`agent_runtime_turn.go`；`execenv/agent_workspace.go`；`TestCanonicalAgentWorkspace*`、`TestMulticaAgentRootStableAcrossHarnessSwitch`、`TestMulticaAgentEnvUsesProviderNeutralRoot`。
 
 ### 4.19 Agent 消息链路硬切到 Raft 风格 coordinator — `仅文档`（新协议尚未落地）
 

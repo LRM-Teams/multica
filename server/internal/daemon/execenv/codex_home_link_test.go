@@ -132,7 +132,7 @@ func TestEnsureSymlink_ReplacesStaleRegularFile(t *testing.T) {
 
 	// Regression for issue #2081: a regular file at dst (e.g. left over from
 	// the Windows copy fallback in createFileLink) must be replaced so the
-	// per-task home picks up changes to the shared source — otherwise a
+	// Agent-scoped home picks up changes to the shared source — otherwise a
 	// once-stale auth.json never refreshes across env reuses.
 	if err := ensureSymlink(src, dst); err != nil {
 		t.Fatalf("ensureSymlink: %v", err)

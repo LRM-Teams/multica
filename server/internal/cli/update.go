@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,11 +28,9 @@ const DefaultUpdateDownloadTimeout = 120 * time.Second
 // unauthenticated GitHub Releases API/asset request from a bare install
 // always 404s.
 //
-// Primary release feed on the filed custom domain (cdn.leagent.me).
-// OSS mirror remains available via MULTICA_RELEASE_MANIFEST_BASE_URL for
-// emergency redirect; see release.yml publish-downloads-feed-oss.
-// 2026-08-04: ICP/备案 cleared — verified leagent.me + cdn.leagent.me/computer
-// from s144 (CN) and desktop; no Aliyun block page.
+// release.yml publishes the feed to OSS and verifies the same bytes through
+// this CDN URL before completing a release. Consumers never depend on the
+// storage provider's bucket hostname.
 const DefaultReleaseManifestBaseURL = "https://cdn.leagent.me/computer"
 
 // ReleaseManifestBaseURLEnv overrides DefaultReleaseManifestBaseURL when set,
@@ -82,11 +81,10 @@ func ReleaseWebURL() string {
 // (daemon/config.go's officialCloudHost mirrors this) and for `multica
 // setup`'s default ServerURL (cmd_setup.go). Task #29 (domain unification,
 // 2026-07-31) found no Caddy/infra routing anywhere in this repo for
-// api.leagent.me, and Aliyun's block on leagent.me (the same block that
-// forced the install/release feed onto an OSS mirror, #prj-daemon
-// 2026-07-31) is still open — flipping this before the backend is actually
-// reachable there would break `multica setup` for every new install. Flip
-// this one constant to "api.leagent.me" once infra confirms it's routed and
+// api.leagent.me, and the backend is still not reachable there. Flipping this
+// before the backend is actually routed would break `multica setup` for every
+// new install. Flip this one constant to "api.leagent.me" once infra confirms
+// it's routed and
 // has a valid cert; every caller picks it up automatically.
 const OfficialCloudAPIHost = "api.multica.ai"
 
@@ -117,10 +115,11 @@ func IsBrewUpdateConfigured() bool {
 	return pkg != "" && !IsLegacyBrewPackage(pkg)
 }
 
-// ReleaseManifest is the schema published at {ReleaseManifestBaseURL}/latest.json
-// (the promoted pointer) and at {ReleaseManifestBaseURL}/{tag}/release.json
-// (the immutable per-version copy written before promotion). Platforms keys
-// are "<goos>-<goarch>", matching runtime.GOOS/GOARCH.
+// ReleaseManifest is the schema used by both generations of the release feed.
+// The canonical paths are /manifest.json and /{version}/manifest.json. During
+// the staged migration, clients fall back on 404 to the existing /latest.json
+// and /{tag}/release.json paths. Platform keys are "<goos>-<goarch>", matching
+// runtime.GOOS/GOARCH.
 type ReleaseManifest struct {
 	TagName   string                  `json:"tag"`
 	Version   string                  `json:"version"`
@@ -262,9 +261,9 @@ func verifyAssetSHA256(data []byte, expectedHex, assetName string) error {
 	return nil
 }
 
-// fetchManifest GETs and JSON-decodes a ReleaseManifest from url. Shared by
-// FetchLatestRelease (the promoted "latest.json" pointer) and
-// fetchReleaseByTag (an immutable per-version "release.json").
+var errReleaseManifestNotFound = errors.New("release manifest not found")
+
+// fetchManifest GETs and JSON-decodes a ReleaseManifest from url.
 func fetchManifest(url string) (*ReleaseManifest, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -279,6 +278,9 @@ func fetchManifest(url string) (*ReleaseManifest, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("%w: %s", errReleaseManifestNotFound, url)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("release manifest request returned %d", resp.StatusCode)
 	}
@@ -290,15 +292,33 @@ func fetchManifest(url string) (*ReleaseManifest, error) {
 	return &manifest, nil
 }
 
-// fetchReleaseByTagWithOverride fetches the immutable per-version manifest
-// for tag, with the server-dispatched top layer of the three-layer precedence
-// applied — the same override FetchLatestReleaseWithOverride already threads
-// through for the "check for a new version" step. Without this, a machine
-// relying purely on server-dispatch (no local env var set) could see a new
-// version at check time and then silently fall back to the compiled default
-// at download time.
+// fetchManifestWithNotFoundFallback reads the new path first and falls back
+// only when it is explicitly absent. Network failures, server errors, and
+// malformed manifests fail closed so a broken canonical feed cannot be hidden
+// by a stale compatibility copy.
+func fetchManifestWithNotFoundFallback(primaryURL, fallbackURL string) (*ReleaseManifest, error) {
+	manifest, err := fetchManifest(primaryURL)
+	if err == nil {
+		return manifest, nil
+	}
+	if !errors.Is(err, errReleaseManifestNotFound) {
+		return nil, err
+	}
+	return fetchManifest(fallbackURL)
+}
+
+// fetchReleaseByTagWithOverride prefers the canonical immutable manifest and
+// falls back to the existing tagged release path while deployed daemons move
+// through the naming migration. The same server-dispatched base URL is used
+// for both attempts.
 func fetchReleaseByTagWithOverride(tag, serverDispatched string) (*ReleaseManifest, error) {
-	return fetchManifest(releaseManifestBaseURLWithOverride(serverDispatched) + "/" + tag + "/release.json")
+	baseURL := strings.TrimRight(releaseManifestBaseURLWithOverride(serverDispatched), "/")
+	tag = normalizeReleaseTag(tag)
+	version := strings.TrimPrefix(tag, "v")
+	return fetchManifestWithNotFoundFallback(
+		baseURL+"/"+version+"/manifest.json",
+		baseURL+"/"+tag+"/release.json",
+	)
 }
 
 // FetchReleaseByTagWithOverride is the exported form of
@@ -307,19 +327,21 @@ func FetchReleaseByTagWithOverride(tag, serverDispatched string) (*ReleaseManife
 	return fetchReleaseByTagWithOverride(tag, serverDispatched)
 }
 
-// FetchLatestRelease fetches the promoted "latest" release manifest from the
-// Multica release feed.
+// FetchLatestRelease fetches the promoted release manifest.
 func FetchLatestRelease() (*ReleaseManifest, error) {
 	return FetchLatestReleaseWithOverride("")
 }
 
-// FetchLatestReleaseWithOverride is FetchLatestRelease with the
-// server-dispatched top layer of the three-layer precedence (task #815 step
-// 2) applied. Only the daemon's auto-update loop has a serverDispatched
-// value to pass (cached from the heartbeat ack); every other caller passes
-// "" and gets identical behavior to before this change.
+// FetchLatestReleaseWithOverride prefers the canonical root manifest and
+// falls back to latest.json while deployed daemons move through the naming
+// migration. The server-dispatched top layer of the base-URL precedence is
+// applied to both attempts.
 func FetchLatestReleaseWithOverride(serverDispatched string) (*ReleaseManifest, error) {
-	return fetchManifest(releaseManifestBaseURLWithOverride(serverDispatched) + "/latest.json")
+	baseURL := strings.TrimRight(releaseManifestBaseURLWithOverride(serverDispatched), "/")
+	return fetchManifestWithNotFoundFallback(
+		baseURL+"/manifest.json",
+		baseURL+"/latest.json",
+	)
 }
 
 // knownBrewPrefixes lists the install roots Homebrew uses on each platform.

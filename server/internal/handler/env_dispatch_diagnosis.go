@@ -217,6 +217,12 @@ func (h *Handler) diagnoseEnvDispatchProject(w http.ResponseWriter, r *http.Requ
 // the sandbox orchestrator asynchronously — provisioning takes minutes
 // (sandbox create + daemon online), so the trigger returns a prompt running
 // report instead of blocking on the diagnosis like the server path does.
+func diagnosisRunAlreadyLaunched(run service.DiagnosisRunCheckpoint) bool {
+	return run.Status == service.DiagnosisRunProvisioning ||
+		run.ExecutionMode == service.DiagnosisExecutionModeSandbox ||
+		run.SandboxInstanceID != ""
+}
+
 func (h *Handler) diagnoseEnvDispatchProjectSandbox(w http.ResponseWriter, r *http.Request, projectID, workspaceID, userID, rootTaskID string, segmentIDs []string, cfg service.TrainingConfig) {
 	orchestrator := h.newDiagnosisSandboxOrchestrator()
 	if orchestrator == nil {
@@ -231,6 +237,12 @@ func (h *Handler) diagnoseEnvDispatchProjectSandbox(w http.ResponseWriter, r *ht
 	}
 	if completed {
 		writeJSON(w, http.StatusOK, report)
+		return
+	}
+	if diagnosisRunAlreadyLaunched(run) {
+		writeJSON(w, http.StatusOK, service.DiagnosisReport{
+			RunID: run.RunID, TotalSegments: len(segmentIDs), Status: run.Status,
+		})
 		return
 	}
 	runner, err := service.NewDiagnosisAgentRunner(service.DiagnosisAgentConfig{
@@ -278,6 +290,23 @@ func (h *Handler) diagnoseEnvDispatchProjectSandbox(w http.ResponseWriter, r *ht
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "diagnosis_failed"})
 			return
 		}
+	}
+	claimed, err := state.ClaimRunProvisioning(r.Context(), run.RunID)
+	if err != nil {
+		_ = state.FailRun(r.Context(), run.RunID, fmt.Errorf("provisioning: claim launch: %w", err))
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "diagnosis_failed"})
+		return
+	}
+	if !claimed {
+		current, getErr := state.GetRun(r.Context(), run.RunID)
+		if getErr != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "diagnosis_failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, service.DiagnosisReport{
+			RunID: current.RunID, TotalSegments: len(segmentIDs), Status: current.Status,
+		})
+		return
 	}
 	req := service.DiagnosisProvisionRequest{
 		RunID:           run.RunID,
@@ -373,6 +402,8 @@ type diagnosisLatestResponse struct {
 	ExecutionMode     string `json:"execution_mode,omitempty"`
 	SandboxMode       string `json:"sandbox_mode,omitempty"`
 	SandboxInstanceID string `json:"sandbox_instance_id,omitempty"`
+	RuntimeID         string `json:"runtime_id,omitempty"`
+	DaemonID          string `json:"daemon_id,omitempty"`
 }
 
 // GetLatestEnvDispatchDiagnosis returns the latest diagnosis run of any
@@ -427,12 +458,22 @@ func (h *Handler) GetLatestEnvDispatchDiagnosis(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusServiceUnavailable, "lookup diagnosis segments: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, diagnosisLatestResponse{
+	response := diagnosisLatestResponse{
 		DiagnosisRunProgress: service.BuildDiagnosisRunProgress(run, segments),
 		ExecutionMode:        run.ExecutionMode,
 		SandboxMode:          run.SandboxMode,
 		SandboxInstanceID:    run.SandboxInstanceID,
-	})
+	}
+	if run.SandboxMode == service.DiagnosisSandboxModeShared {
+		ref, err := h.resolveSharedDiagnosisBinding(r.Context(), workspaceID, uuidToString(projectUUID))
+		if err != nil || ref == nil || ref.InstanceID != run.SandboxInstanceID {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "provisioning_binding"})
+			return
+		}
+		response.RuntimeID = ref.RuntimeID
+		response.DaemonID = ref.DaemonID
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 type diagnosisDAGWriterAdapter struct{ store service.InteractionDAGStore }

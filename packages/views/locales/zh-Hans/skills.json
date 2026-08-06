@@ -214,10 +214,6 @@
       "runtime": {
         "title": "从运行时复制",
         "desc": "扫描本地运行时，把它磁盘上的 skill 提升到工作区。"
-      },
-      "platform": {
-        "title": "安装平台工作流",
-        "desc": "把 Multica 维护的迁移 skill 添加到当前工作区。"
       }
     },
     "method_card": {
@@ -226,9 +222,7 @@
       "url_title": "从 URL 导入",
       "url_desc": "从 ClawHub 或 Skills.sh 拉取已发布的 skill。",
       "runtime_title": "从运行时复制",
-      "runtime_desc": "把本地运行时里已经装好的 skill 提升过来。",
-      "platform_title": "记忆迁移工作流",
-      "platform_desc": "安装 Multica 的分阶段语义迁移 skill，然后分配给需要迁移旧记忆的智能体。"
+      "runtime_desc": "把本地运行时里已经装好的 skill 提升过来。"
     },
     "manual": {
       "name_label": "名称",
@@ -255,15 +249,6 @@
       "fallback_error": "导入失败",
       "cancel": "取消",
       "toast_imported": "已导入 skill"
-    },
-    "platform": {
-      "skill_title": "multica-memory-migration",
-      "skill_desc": "添加一个语义迁移流程：扫描 inventory、建立别名映射、抽取候选、写 REVIEW.md、只迁入高置信内容，并输出迁移报告。",
-      "cancel": "取消",
-      "install": "安装 skill",
-      "installing": "安装中...",
-      "toast_installed": "已安装迁移 skill",
-      "fallback_error": "安装平台 skill 失败"
     }
   },
   "runtime_import": {

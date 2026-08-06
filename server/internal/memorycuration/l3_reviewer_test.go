@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -78,7 +79,7 @@ func TestAgentStageRunnerUsesPiToolsAndAgentRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := runner.RunStage(context.Background(), StageAgentInput{Stage: StageL1, WorkspaceID: "ws-1", AgentID: "agent-1", AgentRoot: root, DBEvidence: []EvidenceItem{{Kind: "task", ID: "task-1", Title: "Done"}}})
+	out, err := runner.RunStage(context.Background(), StageAgentInput{Stage: StageL1, WorkspaceID: "ws-1", AgentID: "agent-1", AgentRoot: root, DBEvidence: []EvidenceItem{{Kind: "task", ID: "task-1", Title: "Done"}}, OversizedFiles: []OversizedMemoryFile{{Path: "memory/MEMORY.md", SizeBytes: 20000, SoftLimit: durableMemorySoftLimit}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +91,11 @@ func TestAgentStageRunnerUsesPiToolsAndAgentRoot(t *testing.T) {
 	}
 	if !strings.Contains(backend.prompt, "db_evidence") || !strings.Contains(backend.opts.SystemPrompt, "available tools") {
 		t.Fatalf("stage prompt/options missing DB evidence or tool instruction: prompt=%s opts=%#v", backend.prompt, backend.opts)
+	}
+	for _, want := range []string{"oversized_files", "memory_maintenance", "read the complete file", "memory/MEMORY.md"} {
+		if !strings.Contains(backend.prompt, want) {
+			t.Fatalf("stage prompt missing oversized-memory maintenance %q: %s", want, backend.prompt)
+		}
 	}
 	if !strings.Contains(backend.prompt, "都给我记住") || !strings.Contains(backend.prompt, "speaker as provenance") || !strings.Contains(backend.prompt, "collective wording alone is not evidence for workspace/team scope") {
 		t.Fatalf("stage prompt missing collective memory semantics: %s", backend.prompt)
@@ -403,8 +409,8 @@ func TestCuratorModeAllowsOnlyGovernedAutomaticDecisions(t *testing.T) {
 func prepareL3ReviewRoot(t *testing.T, entries []reviewEntry) (string, string) {
 	t.Helper()
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
-	if err := ensureMemoryRoot(agentRoot); err != nil {
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
+	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(agentRoot, "memory", "REVIEW.md"), []byte(renderReview(entries)), 0o644); err != nil {

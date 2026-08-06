@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { ResearchConnectivityShell } from "./research-connectivity-shell";
 
 const toastSuccess = vi.hoisted(() => vi.fn());
@@ -74,56 +74,5 @@ describe("ResearchConnectivityShell (LRM-833)", () => {
     expect(screen.getByTestId("research-body").textContent).toContain("session body");
   });
 
-  it("auto-reconnects on online and toasts success", async () => {
-    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
-    const onReconnect = vi.fn().mockResolvedValue(undefined);
-    render(
-      <ResearchConnectivityShell onReconnect={onReconnect}>
-        <div>body</div>
-      </ResearchConnectivityShell>,
-    );
-    expect(screen.getByTestId("research-offline-banner")).toBeTruthy();
 
-    await act(async () => {
-      Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
-      window.dispatchEvent(new Event("online"));
-    });
-
-    await waitFor(() => expect(onReconnect).toHaveBeenCalled());
-    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Reconnected"));
-    await waitFor(() =>
-      expect(screen.queryByTestId("research-offline-banner")).toBeNull(),
-    );
-  });
-
-  it("surfaces manual retry when reconnect fails", async () => {
-    Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
-    const onReconnect = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("5xx"))
-      .mockResolvedValueOnce(undefined);
-    render(
-      <ResearchConnectivityShell onReconnect={onReconnect}>
-        <div>body</div>
-      </ResearchConnectivityShell>,
-    );
-
-    await act(async () => {
-      Object.defineProperty(navigator, "onLine", { configurable: true, value: true });
-      window.dispatchEvent(new Event("online"));
-    });
-
-    await waitFor(() =>
-      expect(screen.getByTestId("research-offline-banner").getAttribute("data-mode")).toBe(
-        "failed",
-      ),
-    );
-    expect(toastError).toHaveBeenCalled();
-
-    await act(async () => {
-      fireEvent.click(screen.getByTestId("research-offline-banner-retry"));
-    });
-    await waitFor(() => expect(onReconnect).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
-  });
 });

@@ -96,7 +96,7 @@ func TestStartupStaticContextStripsPerTurnSurface(t *testing.T) {
 	in := TaskContextForEnv{
 		AgentID: "a", AgentName: "A", AgentInstructions: "stay",
 		ChatSessionID: "chat-1", ChannelID: "ch-1", Directed: true,
-		ProjectID: "p1", ProjectTitle: "P", Repos: []RepoContextForEnv{{URL: "https://example.com/r.git"}},
+		ProjectID: "p1", ProjectTitle: "P",
 		InitiatorName: "Bob", IssueID: "iss",
 	}
 	out := StartupStaticContext(in)
@@ -138,11 +138,10 @@ func TestBarryMaterializeSlimSkillIndexPointsAtDurableReadableMirror(t *testing.
 	}
 
 	brief, _, err := MaterializeCanonicalTurnContextB(workDir, t.TempDir(), "grok", TaskContextForEnv{
-		AgentID:       "agent-a",
-		AgentName:     "Agent A",
-		AgentRoot:     agentRoot,
-		AgentSkillDir: filepath.Join(agentRoot, "skills"),
-		AgentSkills:   skills,
+		AgentID:     "agent-a",
+		AgentName:   "Agent A",
+		AgentRoot:   agentRoot,
+		AgentSkills: skills,
 	})
 	if err != nil {
 		t.Fatalf("materialize slim: %v", err)

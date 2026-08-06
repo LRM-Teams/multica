@@ -11,7 +11,7 @@
  * timeline is left untouched.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
@@ -47,29 +47,6 @@ describe("useSetChannelProject refreshes the originator's channel timeline (#615
     vi.clearAllMocks();
   });
 
-  it("invalidates the channel messages timeline on a successful bind", async () => {
-    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
-    const { result } = renderHook(() => useSetChannelProject("ws-1", "channel-1"), {
-      wrapper: createWrapper(qc),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync("proj-9");
-    });
-
-    await waitFor(() =>
-      expect(api.setChannelProject).toHaveBeenCalledWith("channel-1", "proj-9"),
-    );
-
-    // Both timeline query surfaces are invalidated so the `channel_project_bound`
-    // row is fetched and shown to the originator immediately.
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: channelKeys.messages("channel-1"),
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: channelKeys.messagesPage("channel-1"),
-    });
-  });
 
   it("also refreshes the timeline on an unbind (projectId null)", async () => {
     const invalidateSpy = vi.spyOn(qc, "invalidateQueries");

@@ -607,14 +607,12 @@ export function createZhDict(allowSignup: boolean): LandingDict {
         features: [
           "Multica iOS 客户端发布官方首个可用版本，覆盖登录、工作区、收件箱、Issue、项目、聊天、评论、表情回应、在线状态和实时更新；目前暂未上架 App Store，需要用户自行打包安装",
           "自托管团队现在可以通过 Helm 将 Multica 部署到 Kubernetes，Docker 安装也有更清晰的端口和 URL 配置",
-          "项目资源选择器新增仓库搜索，工作区仓库设置也可以保存描述，帮助智能体理解每个代码库",
           "运行时用量现在可以更准确识别 DeepSeek、Kimi K2.6、Zhipu GLM 和长上下文 Claude Opus 的费用",
           "官网新增使用场景页面能力，并让文档、更新日志和开始使用入口更清晰",
         ],
         improvements: [
           "桌面端在长 Issue 和聊天中切换标签页时，会更好地保留滚动位置，并避免重复的历史记录",
           "代码和富文本内容更容易阅读，命令文本会按原样显示，编辑器样式也拆分得更清晰",
-          "工作区仓库描述会进入智能体的任务上下文，让分配的工作带上更有用的项目背景",
           "文档和 README 补充了移动端支持、自动化、授权说明和自托管选项",
         ],
         fixes: [
@@ -1003,10 +1001,9 @@ export function createZhDict(allowSignup: boolean): LandingDict {
       {
         version: "0.2.24",
         date: "2026-05-03",
-        title: "Repo Checkout `--ref`、Hermes 历史回放修复与多副本 Model Picker",
+        title: "Hermes 历史回放修复与多副本 Model Picker",
         changes: [],
         features: [
-          "`multica repo checkout --ref` 支持按分支、tag 或指定 commit 拉取仓库",
           "`multica agent avatar` 命令支持直接通过 CLI 上传 Agent 头像",
           "Inbox 中已完成任务新增 archive 按钮，移除冗余的 mark-as-done 悬浮按钮",
         ],

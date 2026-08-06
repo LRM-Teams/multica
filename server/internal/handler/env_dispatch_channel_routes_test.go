@@ -338,3 +338,32 @@ func TestChannelCleanupSharedBindingsReclaimOnce(t *testing.T) {
 		t.Errorf("bindings should be deleted, %d remain", bindings)
 	}
 }
+
+func TestChannelCleanupWaitsForDiagnosisTerminal(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	_, projectID, channelID, _ := setupEnvDispatchChannelRolloutFixture(t)
+	runID := "diag-cleanup-" + uuid.NewString()
+	_, err := testPool.Exec(ctx, `
+		INSERT INTO interaction_dag_diagnosis_run (
+			run_id, project_id, task_id, topology_hash, ordered_segment_ids, status, sandbox_mode
+		) VALUES ($1, $2, $3, 'topology', '[]'::jsonb, 'provisioning', 'shared')`,
+		runID, projectID, uuid.NewString())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM interaction_dag_diagnosis_run WHERE run_id = $1`, runID)
+	})
+
+	blocked := httptest.NewRecorder()
+	testHandler.DeleteEnvDispatchChannel(blocked, authedChannelRequest(http.MethodDelete, "/api/v1/env-dispatch/channels/"+channelID, "channelID", channelID))
+	require.Equal(t, http.StatusConflict, blocked.Code, "body=%s", blocked.Body.String())
+	require.JSONEq(t, `{"error":"diagnosis_in_progress"}`, blocked.Body.String())
+
+	_, err = testPool.Exec(ctx, `UPDATE interaction_dag_diagnosis_run SET status = 'failed' WHERE run_id = $1`, runID)
+	require.NoError(t, err)
+	allowed := httptest.NewRecorder()
+	testHandler.DeleteEnvDispatchChannel(allowed, authedChannelRequest(http.MethodDelete, "/api/v1/env-dispatch/channels/"+channelID, "channelID", channelID))
+	require.Equal(t, http.StatusNoContent, allowed.Code, "body=%s", allowed.Body.String())
+}

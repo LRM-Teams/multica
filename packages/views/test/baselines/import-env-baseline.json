@@ -2655,14 +2655,6 @@
       "tests_ms": 1855.4846300000002
     },
     {
-      "file": "settings/components/repositories-tab.test.tsx",
-      "import_ms": 392.711362,
-      "environment_ms": 935.8309610000001,
-      "setup_ms": 197.91171400000007,
-      "prepare_ms": 13.501524999999901,
-      "tests_ms": 2002.9554620000001
-    },
-    {
       "file": "settings/components/roles-dialog.test.tsx",
       "import_ms": 514.53714,
       "environment_ms": 667.075985,

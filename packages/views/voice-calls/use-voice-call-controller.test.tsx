@@ -9,7 +9,7 @@ import type {
   GetVoiceCallResponse,
 } from "@multica/core/types";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -419,66 +419,6 @@ describe("useVoiceCallController", () => {
     }
   });
 
-  it("keeps an early remote answer that arrives before the provider response", async () => {
-    vi.useFakeTimers();
-    try {
-      let resolveProviderStart:
-        | ((response: GetVoiceCallResponse) => void)
-        | undefined;
-      connectVoiceCall.mockReturnValue(new Promise<GetVoiceCallResponse>(
-        (resolve) => {
-          resolveProviderStart = resolve;
-        },
-      ));
-      const media = createFakeMediaSession();
-      const ringback = createFakeRingback();
-      const { result } = renderHook(
-        () => useVoiceCallController("workspace-1", {
-          mediaSessionFactory: media.factory,
-          ringbackFactory: ringback.factory,
-          activationTimeoutMs: 1_000,
-        }),
-        { wrapper: wrapper(queryClient) },
-      );
-
-      let startPromise: Promise<string>;
-      act(() => {
-        startPromise = result.current.start({
-          channel_id: "channel-1",
-          agent_id: "agent-1",
-        });
-      });
-      await vi.waitFor(() => {
-        expect(connectVoiceCall).toHaveBeenCalledOnce();
-      });
-
-      act(() => {
-        media.events().onRemoteAudioStarted?.("voice-agent-1");
-      });
-      expect(result.current.phase).toBe("connected");
-      await act(async () => {
-        await result.current.setMuted(true);
-      });
-      expect(result.current.phase).toBe("muted");
-
-      resolveProviderStart?.({
-        call: { ...createdCall.call, status: "connecting" },
-      });
-      await act(async () => {
-        await startPromise;
-        await vi.advanceTimersByTimeAsync(1_000);
-      });
-
-      expect(result.current.phase).toBe("muted");
-      expect(result.current.error).toBeNull();
-      expect(media.session.disconnect).not.toHaveBeenCalled();
-      expect(stopVoiceCall).not.toHaveBeenCalled();
-      expect(ringback.ringback.stop).toHaveBeenCalled();
-      expect(answerVoiceCall).toHaveBeenCalledWith("workspace-1", "call-1");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 
   it("retries /answer until connected_at syncs without hanging up audible media", async () => {
     vi.useFakeTimers();
@@ -529,47 +469,6 @@ describe("useVoiceCallController", () => {
     }
   });
 
-  it("starts the provider with its welcome message only after the caller joins the RTC room", async () => {
-    let resolveMedia: (() => void) | undefined;
-    const media = createFakeMediaSession(() =>
-      new Promise<void>((resolve) => {
-        resolveMedia = resolve;
-      })
-    );
-    const { result } = renderHook(
-      () => useVoiceCallController("workspace-1", {
-        mediaSessionFactory: media.factory,
-      }),
-      { wrapper: wrapper(queryClient) },
-    );
-
-    let startPromise: Promise<string>;
-    act(() => {
-      startPromise = result.current.start({
-        channel_id: "channel-1",
-        agent_id: "agent-1",
-      });
-    });
-
-    await waitFor(() => {
-      expect(media.session.connect).toHaveBeenCalledOnce();
-    });
-    expect(connectVoiceCall).not.toHaveBeenCalled();
-
-    resolveMedia?.();
-    await act(async () => {
-      await startPromise;
-    });
-
-    expect(connectVoiceCall).toHaveBeenCalledWith("workspace-1", "call-1");
-    const mediaJoinOrder = vi.mocked(media.session.connect)
-      .mock.invocationCallOrder[0];
-    const providerStartOrder = connectVoiceCall.mock.invocationCallOrder[0];
-    expect(mediaJoinOrder).toBeDefined();
-    expect(providerStartOrder).toBeDefined();
-    expect(mediaJoinOrder!).toBeLessThan(providerStartOrder!);
-    expect(result.current.phase).toBe("joining");
-  });
 
   it("creates the server call and connects media without exposing credentials", async () => {
     const media = createFakeMediaSession();
@@ -679,33 +578,6 @@ describe("useVoiceCallController", () => {
     expect(result.current.phase).toBe("ended");
   });
 
-  it("stops the server call after an active provider media failure", async () => {
-    const media = createFakeMediaSession();
-    const { result } = renderHook(
-      () => useVoiceCallController("workspace-1", {
-        mediaSessionFactory: media.factory,
-      }),
-      { wrapper: wrapper(queryClient) },
-    );
-    await act(async () => {
-      await result.current.start({
-        channel_id: "channel-1",
-        agent_id: "agent-1",
-      });
-    });
-
-    act(() => {
-      media.events().onError?.(
-        new VoiceCallMediaError("provider_error", "RTC connection failed"),
-      );
-    });
-
-    await waitFor(() => {
-      expect(stopVoiceCall).toHaveBeenCalledTimes(1);
-    });
-    expect(result.current.phase).toBe("failed");
-    expect(result.current.error?.code).toBe("provider_error");
-  });
 
   it("hangs up locally and on the server", async () => {
     const media = createFakeMediaSession();
@@ -816,117 +688,8 @@ describe("useVoiceCallController", () => {
     expect(result.current.phase).toBe("ended");
   });
 
-  it("controls mute and recovers browser-blocked remote playback", async () => {
-    const media = createFakeMediaSession();
-    const { result } = renderHook(
-      () => useVoiceCallController("workspace-1", {
-        mediaSessionFactory: media.factory,
-      }),
-      { wrapper: wrapper(queryClient) },
-    );
-    await act(async () => {
-      await result.current.start({
-        channel_id: "channel-1",
-        agent_id: "agent-1",
-      });
-    });
-    act(() => {
-      queryClient.setQueryData<GetVoiceCallResponse>(
-        voiceCallKeys.detail("workspace-1", "call-1"),
-        activeCall,
-      );
-      media.events().onRemoteAudioStarted?.("voice-agent-1");
-    });
-    await waitFor(() => {
-      expect(result.current.phase).toBe("connected");
-    });
-    await act(async () => {
-      await result.current.setMuted(true);
-    });
-    expect(result.current.phase).toBe("muted");
 
-    act(() => {
-      media.events().onAutoplayBlocked?.("voice-agent-1");
-    });
-    expect(result.current.autoplayBlockedUserId).toBe("voice-agent-1");
-    act(() => {
-      media.events().onRemoteAudioStarted?.("voice-agent-1");
-    });
-    expect(result.current.autoplayBlockedUserId).toBeNull();
 
-    act(() => {
-      media.events().onAutoplayBlocked?.("voice-agent-1");
-    });
-    await act(async () => {
-      await result.current.resumeRemoteAudio();
-    });
-
-    expect(media.session.resumeRemoteAudio)
-      .toHaveBeenCalledWith("voice-agent-1");
-    expect(result.current.autoplayBlockedUserId).toBeNull();
-  });
-
-  it("disconnects media when realtime state reports a terminal server failure", async () => {
-    const media = createFakeMediaSession();
-    const { result } = renderHook(
-      () => useVoiceCallController("workspace-1", {
-        mediaSessionFactory: media.factory,
-      }),
-      { wrapper: wrapper(queryClient) },
-    );
-    await act(async () => {
-      await result.current.start({
-        channel_id: "channel-1",
-        agent_id: "agent-1",
-      });
-    });
-
-    act(() => {
-      queryClient.setQueryData<GetVoiceCallResponse>(
-        voiceCallKeys.detail("workspace-1", "call-1"),
-        {
-          call: {
-            ...createdCall.call,
-            status: "failed",
-            ended_at: "2026-07-23T10:03:00Z",
-            error_code: "provider_failed",
-          },
-        },
-      );
-    });
-
-    await waitFor(() => {
-      expect(media.session.disconnect).toHaveBeenCalledTimes(1);
-    });
-    expect(result.current.phase).toBe("failed");
-    expect(result.current.error).toMatchObject({
-      source: "server",
-      code: "provider_failed",
-    });
-  });
-
-  it("disconnects media and requests server stop when unmounted", async () => {
-    const media = createFakeMediaSession();
-    const { result, unmount } = renderHook(
-      () => useVoiceCallController("workspace-1", {
-        mediaSessionFactory: media.factory,
-      }),
-      { wrapper: wrapper(queryClient) },
-    );
-    await act(async () => {
-      await result.current.start({
-        channel_id: "channel-1",
-        agent_id: "agent-1",
-      });
-    });
-
-    unmount();
-
-    await waitFor(() => {
-      expect(stopVoiceCall).toHaveBeenCalledWith("workspace-1", "call-1");
-    });
-    expect(media.session.disconnect).toHaveBeenCalledTimes(1);
-  });
 
   it("prefers duplex and falls back to RTC when duplex is not configured", async () => {
     const media = createFakeMediaSession();

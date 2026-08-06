@@ -7,12 +7,35 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 )
+
+func ensureMemoryRootFixtures(root string) error {
+	files := map[string]string{
+		filepath.Join(root, "memory", "MEMORY.md"):     memoryHeader,
+		filepath.Join(root, "memory", "USER.md"):       userHeader,
+		filepath.Join(root, "memory", "STATE.md"):      stateHeader,
+		filepath.Join(root, "memory", "REVIEW.md"):     reviewHeader,
+		filepath.Join(root, "memory", "SCRATCHPAD.md"): scratchHeader,
+		filepath.Join(root, "notes", "work-log.md"):    "# Work Log\n",
+		filepath.Join(root, "notes", "decisions.md"):   "# Decisions\n",
+	}
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	return os.MkdirAll(filepath.Join(root, "memory", "daily"), 0o755)
+}
 
 func TestLegacyL2KeepsDeterministicCandidatesUntilSensitivityIsExplicit(t *testing.T) {
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
-	if err := ensureMemoryRoot(agentRoot); err != nil {
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
+	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}
 	daily := `# Daily Memory - 2026-07-08
@@ -68,8 +91,8 @@ func TestLegacyL2KeepsDeterministicCandidatesUntilSensitivityIsExplicit(t *testi
 
 func TestRunAllInvokesSelfReviewThenTeamCurationWithDBEvidence(t *testing.T) {
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
-	if err := ensureMemoryRoot(agentRoot); err != nil {
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
+	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(agentRoot, "memory", "REVIEW.md"), []byte("# Memory Review\n\n- pending team fact\n"), 0o644); err != nil {
@@ -122,8 +145,8 @@ func TestRunAllInvokesSelfReviewThenTeamCurationWithDBEvidence(t *testing.T) {
 
 func TestTeamCurationUsesPendingCandidatesNotRawChat(t *testing.T) {
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
-	if err := ensureMemoryRoot(agentRoot); err != nil {
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
+	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(agentRoot, "memory", "MEMORY.md"), []byte("# Agent Memory\n\nStable team-useful fact.\n"), 0o644); err != nil {
@@ -218,8 +241,8 @@ func stageNames(stages []Stage) []string {
 
 func TestL4ExpiresStateAndClosedReviewEntries(t *testing.T) {
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
-	if err := ensureMemoryRoot(agentRoot); err != nil {
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
+	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}
 	state := stateHeader + `
@@ -295,10 +318,51 @@ func TestStageFilesWithScopedIncludesCanonicalScopesOnlyWithinBudget(t *testing.
 	}
 }
 
+func TestEnsureMemoryRootDoesNotSeedEmptyCurationTree(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "agent")
+	if err := ensureMemoryRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("lazy curation root contains placeholder entries: %+v", entries)
+	}
+}
+
+func TestDetectOversizedMemoryFilesUsesCanonicalSoftLimits(t *testing.T) {
+	root := t.TempDir()
+	writes := map[string]int{
+		"memory/MEMORY.md":                int(durableMemorySoftLimit) + 1,
+		"memory/STATE.md":                 int(stateMemorySoftLimit) + 1,
+		"memory/daily/2026-08-05.md":      int(dailyMemorySoftLimit) + 1,
+		"projects/project-1/DECISIONS.md": int(durableMemorySoftLimit) + 1,
+		"notes/large-but-not-memory.md":   int(durableMemorySoftLimit) + 1,
+	}
+	for rel, size := range writes {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(strings.Repeat("x", size)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := detectOversizedMemoryFiles(root)
+	if len(got) != 4 {
+		t.Fatalf("oversized files = %+v, want 4 canonical files", got)
+	}
+	if got[0].Path != "memory/MEMORY.md" || got[0].SoftLimit != durableMemorySoftLimit {
+		t.Fatalf("first oversized file = %+v", got[0])
+	}
+}
+
 func TestL4ExpiresAndDedupesProjectMemory(t *testing.T) {
 	root := t.TempDir()
-	agentRoot := filepath.Join(root, "ws-1", ".multica", "agents", "agent-1")
-	if err := ensureMemoryRoot(agentRoot); err != nil {
+	agentRoot := agentworkspace.Root(root, "ws-1", "agent-1")
+	if err := ensureMemoryRootFixtures(agentRoot); err != nil {
 		t.Fatal(err)
 	}
 	projectRoot := filepath.Join(agentRoot, "projects", "project-1")

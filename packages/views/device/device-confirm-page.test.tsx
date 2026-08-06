@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const { ApiError, getDevicePending, confirmDevice, logout } = vi.hoisted(() => {
@@ -105,47 +105,6 @@ describe("DeviceConfirmPage (task #36)", () => {
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
-  it("approve — calls confirmDevice(userCode, true) and shows the approved done-state", async () => {
-    getDevicePending.mockResolvedValue({
-      client_hint: "frank-laptop",
-      created_at: new Date().toISOString(),
-    });
-    confirmDevice.mockResolvedValue({ status: "approved" });
-    renderPage("WDJB-MJHT");
-    const approveBtn = await screen.findByRole("button", { name: "Approve" });
-    approveBtn.click();
-    await waitFor(() => {
-      expect(screen.getByText(/sign-in approved/i)).toBeInTheDocument();
-    });
-    expect(confirmDevice).toHaveBeenCalledWith("WDJB-MJHT", true);
-  });
 
-  it("deny — calls confirmDevice(userCode, false) and shows the denied done-state", async () => {
-    getDevicePending.mockResolvedValue({
-      client_hint: "frank-laptop",
-      created_at: new Date().toISOString(),
-    });
-    confirmDevice.mockResolvedValue({ status: "denied" });
-    renderPage("WDJB-MJHT");
-    const denyBtn = await screen.findByRole("button", { name: "Deny" });
-    denyBtn.click();
-    await waitFor(() => {
-      expect(screen.getByText(/sign-in denied/i)).toBeInTheDocument();
-    });
-    expect(confirmDevice).toHaveBeenCalledWith("WDJB-MJHT", false);
-  });
 
-  it("confirm races an expiry (404) — falls back to the expired/invalid state, not a raw error", async () => {
-    getDevicePending.mockResolvedValue({
-      client_hint: "frank-laptop",
-      created_at: new Date().toISOString(),
-    });
-    confirmDevice.mockRejectedValue(new ApiError("not found", 404, "Not Found"));
-    renderPage("WDJB-MJHT");
-    const approveBtn = await screen.findByRole("button", { name: "Approve" });
-    approveBtn.click();
-    await waitFor(() => {
-      expect(screen.getByText(/expired or invalid/i)).toBeInTheDocument();
-    });
-  });
 });

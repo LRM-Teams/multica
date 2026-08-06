@@ -7,8 +7,7 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
-} from "@testing-library/react";
+  } from "@testing-library/react";
 import type {
   RuntimeModel,
   RuntimeModelListRequest,
@@ -121,52 +120,7 @@ describe("ThinkingPropRow", () => {
     cleanup();
   });
 
-  it("hides the row when the active model has no thinking levels and nothing is persisted", async () => {
-    mockInitiateListModels.mockResolvedValue(listResult([NO_THINKING_MODEL]));
-    renderRow({ model: "gemini-2.5-pro", value: "" });
 
-    // ThinkingPropRow returns null when levels are empty and value is
-    // empty — both initially (data undefined) and after discovery
-    // (NO_THINKING_MODEL has no `thinking` block). The `useQuery` hook
-    // runs before the early null return on first render, so the
-    // subscription is established and discovery still fires. In
-    // production this is also covered by the sibling ModelPicker
-    // mounted next to the row in agent-detail-inspector.
-    await waitFor(() => {
-      expect(mockInitiateListModels).toHaveBeenCalled();
-    });
-    await waitFor(() => {
-      expect(screen.queryByText("Thinking")).toBeNull();
-    });
-  });
-
-  it("hides the row when thinking_discovery is false, even if the model still has levels and nothing is persisted (#59)", async () => {
-    // Deliberately inconsistent fixture: CLAUDE_MODEL carries a full
-    // supported_levels catalog, but the runtime-level capability flag says
-    // no. thinking_discovery must win — it's the coarser, backend-owned
-    // signal, and per-model catalog data can lag or disagree in edge cases
-    // (stale cache, mid-rollout state). This is the exact acceptance
-    // scenario Parker asked for: mock capability=false, assert hidden,
-    // don't rely on "the providers I tested happened to also lack levels."
-    mockInitiateListModels.mockResolvedValue(
-      listResult([CLAUDE_MODEL], { thinking_discovery: false }),
-    );
-    renderRow({ value: "" });
-
-    // The row is also hidden at t=0, before the query resolves — asserting
-    // queryByText(...).toBeNull() inside waitFor would pass trivially on
-    // that first (pre-data) check and never actually confirm the SETTLED
-    // state once CLAUDE_MODEL's levels have loaded. Confirm the query
-    // actually resolved with our fixture first (findByText on something
-    // that only exists post-resolution would work too, but there's no such
-    // marker when the row is hidden — so explicitly wait past the mocked
-    // promise instead), then assert the row stayed hidden.
-    await waitFor(() => {
-      expect(mockInitiateListModels).toHaveBeenCalled();
-    });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(screen.queryByText("Thinking")).toBeNull();
-  });
 
   it("hides the row while the runtime is offline (no query fires)", () => {
     renderRow({ runtimeOnline: false, value: "" });

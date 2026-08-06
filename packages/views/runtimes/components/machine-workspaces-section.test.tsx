@@ -25,7 +25,7 @@ function makeWs(
   partial: Partial<RuntimeAgentWorkspace> & { dir_name: string },
 ): RuntimeAgentWorkspace {
   return {
-    rel_path: `ws-id/.multica/agents/${partial.dir_name}`,
+    rel_path: `ws-id/agents/${partial.dir_name}`,
     orphan: false,
     ...partial,
   };
@@ -69,7 +69,7 @@ describe("MachineWorkspacesSection (LRM-1148)", () => {
             makeWs({
               dir_name: "546d9101-bd59-4745-8771-48505c1556bf",
               rel_path:
-                "7beafc96-3c51-4fcc-9fe7-8c36ceb482ff/.multica/agents/546d9101-bd59-4745-8771-48505c1556bf",
+                "7beafc96-3c51-4fcc-9fe7-8c36ceb482ff/agents/546d9101-bd59-4745-8771-48505c1556bf",
               agent_id: "546d9101-bd59-4745-8771-48505c1556bf",
               agent_name: "Alice",
               orphan: false,
@@ -77,7 +77,7 @@ describe("MachineWorkspacesSection (LRM-1148)", () => {
             makeWs({
               dir_name: "a91f0c22-dead-beef-cafe-000000000001",
               rel_path:
-                "7beafc96-3c51-4fcc-9fe7-8c36ceb482ff/.multica/agents/a91f0c22-dead-beef-cafe-000000000001",
+                "7beafc96-3c51-4fcc-9fe7-8c36ceb482ff/agents/a91f0c22-dead-beef-cafe-000000000001",
               orphan: true,
             }),
           ],
@@ -96,9 +96,7 @@ describe("MachineWorkspacesSection (LRM-1148)", () => {
       screen.getByTestId("machine-workspace-status-orphaned"),
     ).toHaveTextContent("Orphaned");
     expect(
-      screen.getByText(
-        ".multica/agents/546d9101-bd59-4745-8771-48505c1556bf",
-      ),
+      screen.getByText("agents/546d9101-bd59-4745-8771-48505c1556bf"),
     ).toBeTruthy();
     expect(screen.queryByText(/KB/i)).toBeNull();
     expect(screen.queryByText(/—/)).toBeNull();

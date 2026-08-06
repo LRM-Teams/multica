@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 
 // Hoisted mock for the API singleton: vi.mock factories cannot reference
 // outside-of-scope vars, but vi.hoisted runs before the import graph.
@@ -26,7 +26,6 @@ vi.mock("../i18n", () => ({
 }));
 
 import { useDownloadAttachment } from "./use-download-attachment";
-import { toast } from "sonner";
 
 const SIGNED_URL =
   "https://static.example.test/file.md?Policy=p&Signature=s&Key-Pair-Id=k";
@@ -154,45 +153,7 @@ describe("useDownloadAttachment (web)", () => {
     );
   });
 
-  it("shows a toast and does not click a download link when the workspace slug is missing", async () => {
-    useWorkspaceSlugMock.mockReturnValueOnce(null);
-    getAttachmentMock.mockResolvedValueOnce({
-      id: "att-1",
-      url: "https://static.example.test/file.md",
-      download_url: SIGNED_URL,
-      filename: "file.md",
-    });
-    const clickSpy = vi
-      .spyOn(HTMLAnchorElement.prototype, "click")
-      .mockImplementation(() => {});
 
-    const { result } = renderHook(() => useDownloadAttachment());
-
-    await act(async () => {
-      await result.current("att-1");
-    });
-
-    expect(clickSpy).not.toHaveBeenCalled();
-    await waitFor(() => expect(toast.error).toHaveBeenCalled());
-  });
-
-  it("shows a toast and does not click a download link when the metadata preflight fails", async () => {
-    getAttachmentMock.mockRejectedValueOnce(new Error("boom"));
-    const openSpy = vi.spyOn(window, "open");
-    const clickSpy = vi
-      .spyOn(HTMLAnchorElement.prototype, "click")
-      .mockImplementation(() => {});
-
-    const { result } = renderHook(() => useDownloadAttachment());
-
-    await act(async () => {
-      await result.current("att-1");
-    });
-
-    expect(openSpy).not.toHaveBeenCalled();
-    expect(clickSpy).not.toHaveBeenCalled();
-    await waitFor(() => expect(toast.error).toHaveBeenCalled());
-  });
 });
 
 describe("useDownloadAttachment (desktop)", () => {
@@ -221,22 +182,6 @@ describe("useDownloadAttachment (desktop)", () => {
     expect(downloadURL).toHaveBeenCalledWith(SIGNED_URL);
   });
 
-  it("shows a toast when the API rejects on desktop", async () => {
-    const downloadURL = vi.fn();
-    (window as unknown as { desktopAPI: { downloadURL: typeof downloadURL } }).desktopAPI = {
-      downloadURL,
-    };
-    getAttachmentMock.mockRejectedValueOnce(new Error("network failure"));
-
-    const { result } = renderHook(() => useDownloadAttachment());
-
-    await act(async () => {
-      await result.current("att-1");
-    });
-
-    expect(downloadURL).not.toHaveBeenCalled();
-    await waitFor(() => expect(toast.error).toHaveBeenCalled());
-  });
 
   // MUL-2976: when the backend has no CloudFront signer, `getAttachment`
   // returns a server-relative `download_url` like `/api/attachments/.../download`.

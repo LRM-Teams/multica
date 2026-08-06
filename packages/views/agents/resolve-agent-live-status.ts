@@ -29,12 +29,11 @@ export type AgentLiveStatusView = {
   dotClass: string;
 };
 
-/** Active-task priority: running first, then starting, hold, queued. */
+/** Active-task priority: running first, then starting, queued. */
 const ACTIVE_STATUS_RANK: Record<string, number> = {
   running: 0,
   dispatched: 1,
-  waiting_local_directory: 2,
-  queued: 3,
+  queued: 2,
 };
 
 /**

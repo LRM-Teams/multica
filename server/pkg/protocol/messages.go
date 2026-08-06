@@ -107,6 +107,70 @@ type TaskAvailablePayload struct {
 	TaskID    string `json:"task_id,omitempty"`
 }
 
+// AgentMessageProjection is the canonical Message data the coordinator may
+// hand to a runtime. It deliberately has no delivery or read-state fields.
+type AgentMessageProjection struct {
+	ID      string        `json:"id"`
+	Target  string        `json:"target"`
+	Seq     int64         `json:"seq"`
+	Content string        `json:"content"`
+	Parts   []MessagePart `json:"parts,omitempty"`
+}
+
+// AgentDeliverPayload is an at-least-once transfer attempt to a single local
+// Agent coordinator. DeliveryID identifies the attempt lineage; Message.ID
+// plus its target sequence identify the canonical Message being projected.
+type AgentDeliverPayload struct {
+	AgentID     string                 `json:"agentId"`
+	Target      string                 `json:"target"`
+	Seq         int64                  `json:"seq"`
+	DeliveryID  string                 `json:"deliveryId"`
+	Message     AgentMessageProjection `json:"message"`
+	Traceparent string                 `json:"traceparent,omitempty"`
+}
+
+// AgentDeliverAckPayload confirms only local coordinator acceptance or
+// deduplication. It is intentionally not a read receipt.
+type AgentDeliverAckPayload struct {
+	AgentID     string `json:"agentId"`
+	Seq         int64  `json:"seq"`
+	DeliveryID  string `json:"deliveryId"`
+	Traceparent string `json:"traceparent,omitempty"`
+}
+
+// AgentRecoveryRequest asks the Server for a stateless snapshot page after
+// local target Context Boundaries. Cursor is empty for the first page.
+type AgentRecoveryRequest struct {
+	AgentID    string           `json:"agent_id"`
+	RecoveryID string           `json:"recovery_id"`
+	Boundaries map[string]int64 `json:"boundaries"`
+	SnapshotID string           `json:"snapshot_id,omitempty"`
+	Cursor     string           `json:"cursor,omitempty"`
+	Limit      int              `json:"limit"`
+}
+
+// AgentRecoveryPage is one bounded page under a stable Server fence.
+type AgentRecoveryPage struct {
+	AgentID       string                   `json:"agent_id"`
+	RecoveryID    string                   `json:"recovery_id"`
+	SnapshotID    string                   `json:"snapshot_id"`
+	HighWatermark string                   `json:"high_watermark"`
+	Messages      []AgentMessageProjection `json:"messages"`
+	NextCursor    string                   `json:"next_cursor,omitempty"`
+	HasMore       bool                     `json:"has_more"`
+}
+
+// AgentMessageHandoffPayload is the content-free observation emitted after a
+// concrete batch crosses the runtime input boundary. Message bodies never
+// travel back to the Server through this Activity seam.
+type AgentMessageHandoffPayload struct {
+	AgentID   string   `json:"agent_id"`
+	RuntimeID string   `json:"runtime_id"`
+	HandoffID string   `json:"handoff_id"`
+	Count     int      `json:"count"`
+	Targets   []string `json:"targets"`
+}
+
 // SandboxJobAvailablePayload is sent from server to a shared sandbox node as a
 // wakeup hint. The node still claims work through the HTTP claim endpoint.
 type SandboxJobAvailablePayload struct {

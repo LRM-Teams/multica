@@ -37,16 +37,11 @@ type agentRuntimeTurnRequest struct {
 	MulticaBinary          string
 	Token                  string
 	Environment            map[string]string
-	// SharedWorkdirEnvID, when non-empty, is the shared_sandbox sample env
-	// whose single shared working directory this turn anchors to (research
-	// D5, FR-008). Empty keeps the per-agent workdir root.
-	SharedWorkdirEnvID string
 }
 
 // agentRuntimeTurn is the prepared, single-owner handoff from D1-D3 into the
-// D4 provider pool. It contains no raw token. Close is idempotent, fences
-// current-turn authority by transport generation, and removes only this
-// turn's disposable D2 subtree.
+// D4 provider pool. It contains no raw token. Close is idempotent and fences
+// current-turn authority by transport generation.
 type agentRuntimeTurn struct {
 	SlotKey                agentRuntimeTurnSlotKey
 	AgentID                string
@@ -55,7 +50,6 @@ type agentRuntimeTurn struct {
 	RuntimeStateGeneration int64
 	WorkDir                string
 	Workspace              execenv.AgentWorkspaceLayout
-	Turn                   execenv.AgentTurnLayout
 	StableEnvironment      map[string]string
 	WrapperPath            string
 
@@ -134,28 +128,7 @@ func (c *agentRuntimeTurnCoordinator) Begin(request agentRuntimeTurnRequest) (*a
 	if err != nil {
 		return nil, fmt.Errorf("provision canonical agent workspace: %w", err)
 	}
-	// Shared_sandbox routing (research D5, FR-008): all agents of the sample
-	// anchor to the sample env's single shared workdir. The per-agent
-	// workspace above is untouched — turn subtrees, transport, and memory
-	// stay agent-keyed; only the provider workdir (cwd) moves.
-	turnWorkDir := workspace.WorkDir
-	if envID := strings.TrimSpace(request.SharedWorkdirEnvID); envID != "" {
-		shared, err := execenv.ProvisionSharedEnvWorkspace(c.cfg.WorkspacesRoot, request.WorkspaceID, envID, c.logger)
-		if err != nil {
-			return nil, fmt.Errorf("provision shared env workspace: %w", err)
-		}
-		turnWorkDir = shared.WorkDir
-	}
-	turn, err := execenv.ProvisionAgentTurn(*workspace, request.TurnID)
-	if err != nil {
-		return nil, fmt.Errorf("provision canonical agent turn: %w", err)
-	}
-	cleanupTurn := true
-	defer func() {
-		if cleanupTurn {
-			_ = execenv.CleanupAgentTurn(*workspace, request.TurnID)
-		}
-	}()
+	turnWorkDir := workspace.AgentRoot
 
 	transport, err := prepareStableAgentCLITransport(
 		c.cfg,
@@ -174,7 +147,6 @@ func (c *agentRuntimeTurnCoordinator) Begin(request agentRuntimeTurnRequest) (*a
 	}
 
 	releaseReservation = false
-	cleanupTurn = false
 	return &agentRuntimeTurn{
 		SlotKey:                key,
 		AgentID:                request.AgentID,
@@ -183,7 +155,6 @@ func (c *agentRuntimeTurnCoordinator) Begin(request agentRuntimeTurnRequest) (*a
 		RuntimeStateGeneration: request.RuntimeStateGeneration,
 		WorkDir:                turnWorkDir,
 		Workspace:              *workspace,
-		Turn:                   *turn,
 		StableEnvironment:      cloneEnvironment(stableEnvironment),
 		WrapperPath:            transport.WrapperPath(),
 		coordinator:            c,
@@ -199,9 +170,6 @@ func (t *agentRuntimeTurn) Close() error {
 		var closeErrors []error
 		if _, err := turntransport.Unbind(t.binding); err != nil {
 			closeErrors = append(closeErrors, fmt.Errorf("unbind current agent runtime turn: %w", err))
-		}
-		if err := execenv.CleanupAgentTurn(t.Workspace, t.binding.TurnID); err != nil {
-			closeErrors = append(closeErrors, fmt.Errorf("cleanup canonical agent turn: %w", err))
 		}
 		if t.coordinator != nil {
 			t.coordinator.release(t.SlotKey, t.binding.TurnID)
@@ -240,6 +208,33 @@ func (c *agentRuntimeTurnCoordinator) hasActiveTurn(agentID, runtimeID string) b
 		RuntimeID: strings.TrimSpace(runtimeID),
 	}]
 	return ok
+}
+
+func (c *agentRuntimeTurnCoordinator) hasActiveAgentTurn(agentID, turnID string) bool {
+	_, ok := c.activeAgentTurnRuntime(agentID, turnID)
+	return ok
+}
+
+// activeAgentTurnRuntime resolves the machine-owned runtime for a current
+// Agent turn. Local Credential Proxy callers must not accept a runtime ID from
+// the Agent process when selecting its credential cache.
+func (c *agentRuntimeTurnCoordinator) activeAgentTurnRuntime(agentID, turnID string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	agentID = strings.TrimSpace(agentID)
+	turnID = strings.TrimSpace(turnID)
+	if agentID == "" || turnID == "" {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, activeTurnID := range c.active {
+		if key.AgentID == agentID && activeTurnID == turnID {
+			return key.RuntimeID, true
+		}
+	}
+	return "", false
 }
 
 func validateAgentRuntimeTurnRequest(request agentRuntimeTurnRequest) error {

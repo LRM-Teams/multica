@@ -52,6 +52,36 @@ export const dmMock = async (
   dmListOptions: () => ({ queryKey: ["dm-list"], queryFn: async () => [] }),
 });
 
+/**
+ * LRM-1399 — shared mock for the unified `@multica/core/conversations` module.
+ * The page now reads ONE `GET /api/conversations` query as its single
+ * CHANNELS+DM source, so every `channels-page-*` suite must provide a
+ * `conversationsOptions` that rebuilds the items from its own channel fixture
+ * (the shared `dmMock` keeps DMs empty, so no DM items here). Real split/
+ * flatten helpers are preserved via `...actual`.
+ *
+ * `channelsFn` returns the file's channels array (fixture-dependent).
+ */
+export const conversationsMock = async (
+  importOriginal: ImportOriginal,
+  channelsFn: () => Array<{ id: string; [key: string]: unknown }>,
+) => {
+  const actual =
+    await importOriginal<typeof import("@multica/core/conversations")>();
+  return {
+    ...actual,
+    conversationsOptions: () => ({
+      queryKey: ["conversations", "ws-1", "list"],
+      queryFn: async () => ({
+        items: channelsFn().map((channel) => ({ kind: "channel" as const, channel })),
+        next_cursor: undefined,
+      }),
+      initialPageParam: null as string | null,
+      getNextPageParam: () => undefined,
+    }),
+  };
+};
+
 export const hooksMock = async (
   importOriginal: ImportOriginal,
 ) => ({

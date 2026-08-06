@@ -247,9 +247,8 @@ WHERE status = 'online'
 RETURNING id, workspace_id, owner_id, daemon_id, provider;
 
 -- name: FailTasksForOfflineRuntimes :many
--- Marks dispatched/running/waiting_local_directory tasks as failed when
--- their runtime is offline. This cleans up orphaned tasks after a daemon
--- crash or network partition.
+-- Requeues in-flight tasks when their runtime is offline. This cleans up
+-- orphaned tasks after a daemon crash or network partition.
 UPDATE agent_inbox_event
 SET status = 'pending', last_error = 'runtime went offline',
     failure_reason = 'runtime_offline', claimed_at = NULL,
@@ -443,7 +442,7 @@ WHERE workspace_id = @workspace_id
 ORDER BY created_at ASC;
 
 -- name: CountActiveTasksByRuntimeIDs :one
--- Active (queued/dispatched/running/waiting_local_directory) tasks pinned to
+-- Active tasks pinned to
 -- any of the given runtimes. Used by computer-level bulk delete to refuse
 -- with a structured 4xx when the machine still has live work (LRM-238 /
 -- LRM-438) instead of silently leaving orphaned tasks.

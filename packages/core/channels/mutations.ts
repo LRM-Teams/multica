@@ -18,6 +18,7 @@ import {
   resolveOptimisticSiblings,
 } from "./optimistic-send";
 import { dmKeys } from "../dm/queries";
+import { invalidateConversations } from "../conversations";
 import type { DMItem } from "../dm/types";
 import type { Channel, ChannelNotifyLevel, ChannelThreadMessagesPage, MessagePart } from "../types";
 import { userActivityKeys } from "../user-activity/queries";
@@ -41,7 +42,10 @@ export function useCreateChannel() {
   return useMutation({
     mutationFn: (data: { name: string; description?: string; lark_chat_id?: string; project_id?: string | null }) =>
       api.createChannel(data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      invalidateConversations(qc, wsId);
+    },
   });
 }
 
@@ -76,6 +80,7 @@ export function useDeleteChannel() {
       qc.setQueryData(channelKeys.list(wsId), drop);
       qc.setQueryData(channelKeys.archivedList(wsId), drop);
       qc.invalidateQueries({ queryKey: channelKeys.all(wsId) });
+      invalidateConversations(qc, wsId);
     },
   });
 }
@@ -85,7 +90,10 @@ export function useArchiveChannel() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: (channelId: string) => api.archiveChannel(channelId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.all(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: channelKeys.all(wsId) });
+      invalidateConversations(qc, wsId);
+    },
   });
 }
 
@@ -94,7 +102,10 @@ export function useRestoreChannel() {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: (channelId: string) => api.restoreChannel(channelId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.all(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: channelKeys.all(wsId) });
+      invalidateConversations(qc, wsId);
+    },
   });
 }
 
@@ -104,7 +115,10 @@ export function useSetChannelPin() {
   return useMutation({
     mutationFn: ({ channelId, pinned }: { channelId: string; pinned: boolean }) =>
       pinned ? api.pinChannel(channelId) : api.unpinChannel(channelId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      invalidateConversations(qc, wsId);
+    },
   });
 }
 
@@ -114,7 +128,10 @@ export function useMuteChannel() {
   return useMutation({
     mutationFn: ({ channelId, muted }: { channelId: string; muted: boolean }) =>
       muted ? api.muteChannel(channelId) : api.unmuteChannel(channelId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      invalidateConversations(qc, wsId);
+    },
   });
 }
 
@@ -129,7 +146,10 @@ export function useSetChannelNotifyPreference() {
   return useMutation({
     mutationFn: ({ channelId, level }: { channelId: string; level: ChannelNotifyLevel }) =>
       api.setChannelNotifyPreference(channelId, level),
-    onSuccess: () => qc.invalidateQueries({ queryKey: channelKeys.list(wsId) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+      invalidateConversations(qc, wsId);
+    },
   });
 }
 

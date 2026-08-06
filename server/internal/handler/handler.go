@@ -117,6 +117,7 @@ type Handler struct {
 	Hub                         *realtime.Hub
 	DaemonHub                   *daemonws.Hub
 	ReminderNotifier            daemonws.ReminderNotifier
+	AgentDeliveryNotifier       daemonws.AgentDeliveryNotifier
 	SandboxHub                  *sandboxws.Hub
 	Bus                         *events.Bus
 	TaskService                 *service.TaskService
@@ -144,7 +145,7 @@ type Handler struct {
 	Analytics           analytics.Client
 	WendyComposer       WendyComposer
 	WorkGraph           *workgraph.Store
-	ResearchRun         *researchrun.Engine
+	ResearchRun         researchrun.ResearchRun
 	// Metrics is the shared business-metrics collector built by main.go.
 	// May be nil in tests / self-hosted with the metrics listener disabled;
 	// every Record* method is nil-safe and obsmetrics.RecordEvent treats a
@@ -328,6 +329,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		taskSvc.OnTaskCompleted = h.syncWendyWorkGraphAfterTaskSuccess
 	}
 	taskSvc.PrepareCanonicalChannelMessageCommit = h.prepareCanonicalChannelMessageCommit
+	taskSvc.OnTaskTerminal = h.maybeStartAutomaticSharedDiagnosis
 	h.wireHonorUnlockEvents()
 	h.wireAgentHonorEvents()
 	return h
@@ -753,6 +755,15 @@ func (h *Handler) requireWorkspaceRole(w http.ResponseWriter, r *http.Request, w
 		return db.Member{}, false
 	}
 	return member, true
+}
+
+// requireManageAgents gates a route behind the unified `manageAgents`
+// capability (LRM-2343). Currently that capability is held by workspace
+// owner/admin members; it is never granted to Agent principals. Every human
+// agent-creation surface (Proposal commit and bare manual create) must go
+// through this single gate so UI enable/disable is never the only defense.
+func (h *Handler) requireManageAgents(w http.ResponseWriter, r *http.Request, workspaceID, notFoundMsg string) (db.Member, bool) {
+	return h.requireWorkspaceRole(w, r, workspaceID, notFoundMsg, "owner", "admin")
 }
 
 // isWorkspaceEntity checks whether a user_id belongs to the given workspace,

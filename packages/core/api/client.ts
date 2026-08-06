@@ -85,7 +85,6 @@ import type {
   Reaction,
   IssueReaction,
   Workspace,
-  WorkspaceRepo,
   MemberWithUser,
   MemberPresenceResponse,
   MemberProfile,
@@ -225,6 +224,7 @@ import type {
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { DMItem, CreateOrFindDMBody } from "../dm/types";
+import type { ConversationListResponse } from "../conversations/types";
 import type { RawReminderPage } from "../agents/reminder-view-model";
 import type {
   CloudRuntimeNode,
@@ -314,6 +314,11 @@ import {
   RuntimeUsageByAgentListSchema,
   RuntimeUsageByHourListSchema,
   RuntimeUsageListSchema,
+  WorkspaceSchema,
+  WorkspaceListSchema,
+  EMPTY_WORKSPACE,
+  RuntimeAgentWorkspacesResponseSchema,
+  EMPTY_RUNTIME_AGENT_WORKSPACES_RESPONSE,
   SubscribersListSchema,
   TimelineEntriesSchema,
   UserSchema,
@@ -1690,11 +1695,19 @@ export class ApiClient {
     });
   }
 
-  /** LRM-810 — on-demand scan of `{workspace}/.multica/agents/*` on the machine. */
+  /** On-demand scan of `~/.multica/workspaces/<workspace_id>/agents/<agent_id>` directories. */
   async listRuntimeAgentWorkspaces(
     runtimeId: string,
   ): Promise<RuntimeAgentWorkspacesResponse> {
-    return this.fetch(`/api/runtimes/${runtimeId}/agent-workspaces`);
+    const raw = await this.fetch<unknown>(
+      `/api/runtimes/${runtimeId}/agent-workspaces`,
+    );
+    return parseWithFallback(
+      raw,
+      RuntimeAgentWorkspacesResponseSchema,
+      EMPTY_RUNTIME_AGENT_WORKSPACES_RESPONSE,
+      { endpoint: "GET /api/runtimes/:id/agent-workspaces" },
+    );
   }
 
   async deleteRuntimeAgentWorkspace(
@@ -2271,24 +2284,36 @@ export class ApiClient {
 
   // Workspaces
   async listWorkspaces(): Promise<Workspace[]> {
-    return this.fetch("/api/workspaces");
-  }
-
-  async getWorkspace(id: string): Promise<Workspace> {
-    return this.fetch(`/api/workspaces/${id}`);
-  }
-
-  async createWorkspace(data: { name: string; slug: string; description?: string; context?: string }): Promise<Workspace> {
-    return this.fetch("/api/workspaces", {
-      method: "POST",
-      body: JSON.stringify(data),
+    const raw = await this.fetch<unknown>("/api/workspaces");
+    return parseWithFallback(raw, WorkspaceListSchema, [], {
+      endpoint: "GET /api/workspaces",
     });
   }
 
-  async updateWorkspace(id: string, data: { name?: string; description?: string; context?: string; settings?: Record<string, unknown>; repos?: WorkspaceRepo[]; issue_prefix?: string; avatar_url?: string }): Promise<Workspace> {
-    return this.fetch(`/api/workspaces/${id}`, {
+  async getWorkspace(id: string): Promise<Workspace> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${id}`);
+    return parseWithFallback(raw, WorkspaceSchema, EMPTY_WORKSPACE, {
+      endpoint: "GET /api/workspaces/:id",
+    });
+  }
+
+  async createWorkspace(data: { name: string; slug: string; description?: string; context?: string }): Promise<Workspace> {
+    const raw = await this.fetch<unknown>("/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, WorkspaceSchema, EMPTY_WORKSPACE, {
+      endpoint: "POST /api/workspaces",
+    });
+  }
+
+  async updateWorkspace(id: string, data: { name?: string; description?: string; context?: string; settings?: Record<string, unknown>; issue_prefix?: string; avatar_url?: string }): Promise<Workspace> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, WorkspaceSchema, EMPTY_WORKSPACE, {
+      endpoint: "PATCH /api/workspaces/:id",
     });
   }
 
@@ -3176,6 +3201,22 @@ export class ApiClient {
 
   async listChannels(options?: { archived?: boolean }): Promise<Channel[]> {
     return this.fetch(options?.archived ? "/api/channels?archived=true" : "/api/channels");
+  }
+
+  /**
+   * LRM-1399 — unified active Conversations list (CHANNELS + DIRECT MESSAGES in
+   * one globally-ordered read). Read-only: create/send, detail, membership,
+   * preference, and permission routes remain under /api/channels and /api/dm.
+   */
+  async listConversations(options?: {
+    limit?: number;
+    cursor?: string;
+  }): Promise<ConversationListResponse> {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set("limit", String(options.limit));
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.fetch(`/api/conversations${suffix}`);
   }
 
   async createChannel(data: { name: string; description?: string; lark_chat_id?: string; project_id?: string | null }): Promise<Channel> {

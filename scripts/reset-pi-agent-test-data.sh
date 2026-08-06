@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Reset local Pi agent dirs + DB memory/evolution data, then seed test skills/memory.
+# Reset canonical Agent roots + DB memory/evolution data, then seed test skills/memory.
 set -euo pipefail
 
-WS_ROOT="${MULTICA_WORKSPACES_ROOT:-$HOME/multica_workspaces}"
+WS_ROOT="${MULTICA_WORKSPACES_ROOT:-$HOME/.multica/workspaces}"
 WS_ID="f1b514db-54f1-48ec-b1a7-a5ac6d128977"
 USER_ID="160e59a2-e057-4770-994a-a26a7ffca8f9"
-AGENTS_BASE="$WS_ROOT/$WS_ID/.pi/agents"
+AGENTS_BASE="$WS_ROOT/$WS_ID/agents"
 
 declare -A AGENT_NAMES=(
   ["78e90451-507e-4db9-86c5-a43e7d70d053"]="code_review"
@@ -20,7 +20,6 @@ ensure_agent_root() {
     "$root/memory/daily"
     "$root/memory/audit"
     "$root/skills/drafts"
-    "$root/skills/generated"
     "$root/skills/enabled"
     "$root/inbox/memory"
     "$root/inbox/skills"
@@ -35,7 +34,7 @@ ensure_agent_root() {
   done
 }
 
-echo "==> Cleaning local Pi agent directories under $AGENTS_BASE"
+echo "==> Cleaning local Agent roots under $AGENTS_BASE"
 rm -rf "$AGENTS_BASE"
 mkdir -p "$AGENTS_BASE"
 

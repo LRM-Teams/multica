@@ -1,17 +1,19 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"runtime"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestHealthHandlerReportsCLIVersionAndActiveTaskCount(t *testing.T) {
@@ -177,106 +179,138 @@ func TestShutdownHandlerRejectsNonPost(t *testing.T) {
 	}
 }
 
-func TestHealthHandlerRespondsWhileTaskRepoLookupWaits(t *testing.T) {
-	const workspaceID = "ws-health"
-	const repoURL = "https://github.com/org/repo.git"
-	cache := newBlockingLookupRepoCache("/cache/org/repo.git")
-	d := &Daemon{
-		cfg: Config{CLIVersion: "v1.0.0"},
-		workspaces: map[string]*workspaceState{
-			workspaceID: {
-				workspaceID:     workspaceID,
-				runtimeIDs:      []string{"rt-1"},
-				allowedRepoURLs: map[string]struct{}{repoURL: {}},
-				taskRepoURLs:    map[string]struct{}{},
-			},
-		},
-		repoCache: cache,
-		logger:    slog.Default(),
+func TestCredentialProxyMessageCheckRequiresCurrentTurnAndDrainsCoordinator(t *testing.T) {
+	root := t.TempDir()
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
 	}
-	defer cache.release()
+	completeCoordinatorRecovery(t, coordinator)
+	for i := int64(1); i <= 4; i++ {
+		delivery := testDelivery(fmt.Sprintf("message-%d", i), "channel:one", i, fmt.Sprintf("delivery-%d", i))
+		if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
+			t.Fatalf("Accept: %v", err)
+		}
+	}
+	d := &Daemon{
+		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
+		agentRuntimeTurns:   newAgentRuntimeTurnCoordinator(Config{}, slog.Default()),
+	}
+	key := agentRuntimeTurnSlotKey{AgentID: "agent-1", RuntimeID: "runtime-1"}
+	if !d.agentRuntimeTurns.reserve(key, "task-1") {
+		t.Fatal("reserve active turn")
+	}
+	t.Cleanup(func() { d.agentRuntimeTurns.release(key, "task-1") })
+	handler := d.credentialProxyMessageCheckHandler()
 
-	registerDone := make(chan struct{})
-	go func() {
-		d.registerTaskRepos(workspaceID, []RepoData{{URL: repoURL}})
-		close(registerDone)
-	}()
-	cache.waitForLookup(t)
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"stale-task"}`)))
+	if unauthorized.Code != http.StatusForbidden {
+		t.Fatalf("stale turn status = %d, want 403", unauthorized.Code)
+	}
 
 	rec := httptest.NewRecorder()
-	healthDone := make(chan struct{})
-	go func() {
-		d.healthHandler(time.Now()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
-		close(healthDone)
-	}()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/check", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("message check status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var result MessageCheckResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode message check: %v", err)
+	}
+	if len(result.Messages) != messageCheckDefaultLimit || !result.HasMore || result.Remaining != 1 {
+		t.Fatalf("message check result = %+v", result)
+	}
+}
 
-	select {
-	case <-healthDone:
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200, got %d", rec.Code)
+func TestCredentialProxyMessageReadUsesCachedCredentialAndWritesTargetBoundary(t *testing.T) {
+	root := t.TempDir()
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+
+	var upstreamBody map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/messages/read" {
+			http.NotFound(w, r)
+			return
 		}
-	case <-time.After(time.Second):
-		t.Fatal("/health blocked behind task repo cache lookup")
+		if got := r.Header.Get("Authorization"); got != "Bearer cached-token" {
+			t.Errorf("Authorization = %q, want cached Agent credential", got)
+		}
+		for header, want := range map[string]string{
+			"X-Workspace-ID": "workspace-1", "X-Agent-ID": "agent-1", "X-Task-ID": "task-1",
+		} {
+			if got := r.Header.Get(header); got != want {
+				t.Errorf("%s = %q, want %q", header, got, want)
+			}
+		}
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Errorf("decode upstream request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"action": "message_read", "target": "#one", "context_target": "channel:one",
+			"seenUpToSeq": 7, "messages": []any{}, "limit": 2,
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := Config{WorkspacesRoot: root, ServerBaseURL: upstream.URL}
+	expiresAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := writeCachedAgentCredential(cfg, "workspace-1", "runtime-1", "agent-1", AgentCredentialResponse{
+		ID: "credential-1", AgentID: "agent-1", Prefix: "mac_test", Token: "cached-token", ExpiresAt: &expiresAt,
+	}, time.Now()); err != nil {
+		t.Fatalf("writeCachedAgentCredential: %v", err)
+	}
+	d := &Daemon{
+		cfg:                 cfg,
+		messageCoordinators: map[string]*MessageCoordinator{"agent-1": coordinator},
+		agentRuntimeTurns:   newAgentRuntimeTurnCoordinator(cfg, slog.Default()),
+	}
+	key := agentRuntimeTurnSlotKey{AgentID: "agent-1", RuntimeID: "runtime-1"}
+	if !d.agentRuntimeTurns.reserve(key, "task-1") {
+		t.Fatal("reserve active turn")
+	}
+	t.Cleanup(func() { d.agentRuntimeTurns.release(key, "task-1") })
+	handler := d.credentialProxyMessageReadHandler()
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/read", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"stale-task","workspace_id":"workspace-1","target":"#one"}`)))
+	if unauthorized.Code != http.StatusForbidden {
+		t.Fatalf("stale turn status = %d, want 403", unauthorized.Code)
 	}
 
-	cache.release()
-	select {
-	case <-registerDone:
-	case <-time.After(time.Second):
-		t.Fatal("registerTaskRepos did not unblock after repo lookup finished")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/credential-proxy/messages/read", bytes.NewBufferString(`{"agent_id":"agent-1","task_id":"task-1","workspace_id":"workspace-1","target":"#one","around":"42","limit":2}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("message read status = %d body=%s", rec.Code, rec.Body.String())
 	}
-}
-
-type blockingLookupRepoCache struct {
-	path          string
-	lookupSeen    chan struct{}
-	releaseLookup chan struct{}
-	releaseOnce   sync.Once
-}
-
-func newBlockingLookupRepoCache(path string) *blockingLookupRepoCache {
-	return &blockingLookupRepoCache{
-		path:          path,
-		lookupSeen:    make(chan struct{}),
-		releaseLookup: make(chan struct{}),
+	if upstreamBody["target"] != "#one" || upstreamBody["around"] != "42" || upstreamBody["limit"] != float64(2) {
+		t.Fatalf("upstream request = %+v", upstreamBody)
 	}
-}
-
-func (c *blockingLookupRepoCache) Lookup(_, _ string) string {
-	select {
-	case <-c.lookupSeen:
-	default:
-		close(c.lookupSeen)
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode message read response: %v", err)
 	}
-	<-c.releaseLookup
-	return c.path
-}
-
-func (c *blockingLookupRepoCache) Sync(string, []repocache.RepoInfo) error {
-	return nil
-}
-
-func (c *blockingLookupRepoCache) WithRepoLock(_ string, fn func() error) error {
-	return fn()
-}
-
-func (c *blockingLookupRepoCache) CreateWorktree(repocache.WorktreeParams) (*repocache.WorktreeResult, error) {
-	return nil, nil
-}
-
-func (c *blockingLookupRepoCache) waitForLookup(t *testing.T) {
-	t.Helper()
-	select {
-	case <-c.lookupSeen:
-	case <-time.After(time.Second):
-		t.Fatal("registerTaskRepos did not call repo lookup")
+	if _, found := response["context_target"]; found {
+		t.Fatalf("proxy leaked Context Boundary target: %+v", response)
 	}
-}
-
-func (c *blockingLookupRepoCache) release() {
-	c.releaseOnce.Do(func() {
-		close(c.releaseLookup)
-	})
+	if _, found := response["seenUpToSeq"]; found {
+		t.Fatalf("proxy leaked Context Boundary sequence: %+v", response)
+	}
+	if got, err := d.CredentialProxy().SeenUpToSeq("agent-1", "channel:one"); err != nil || got != 7 {
+		t.Fatalf("seen boundary = %d, %v; want 7, nil", got, err)
+	}
+	boundaries, healthy, err := loadConsumedSeqs(filepath.Join(root, consumedSeqsFileName))
+	if err != nil || !healthy || boundaries["channel:one"] != 7 {
+		t.Fatalf("durable boundaries = %+v healthy=%v err=%v", boundaries, healthy, err)
+	}
 }
 
 func assertActiveTaskCount(t *testing.T, h http.HandlerFunc, want int64) {

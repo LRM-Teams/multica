@@ -483,7 +483,7 @@
       }
     },
     "memory": {
-      "intro": "이 에이전트의 런타임에서 동기화된 메모리입니다. Multica에 저장되므로 에이전트가 다른 런타임으로 이동해도 컨텍스트가 유지됩니다.",
+      "intro": "위에는 런타임의 로컬 파일을 표시하고, 아래에는 Multica에 동기화된 메모리를 유지합니다.",
       "loading": "메모리를 불러오는 중…",
       "empty_title": "동기화된 메모리가 없습니다",
       "empty_hint": "이 에이전트 런타임의 메모리 파일은 다음 동기화 후 여기에 표시됩니다.",
@@ -677,7 +677,6 @@
     "status_failed": "실패함",
     "status_queued": "대기열",
     "status_dispatched": "시작됨",
-    "status_waiting_local_directory": "대기 중",
     "status_cancelled": "취소됨",
     "status_unknown": "처리 중",
     "filter": "필터",

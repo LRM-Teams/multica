@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"path"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/agentworkspace"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -19,7 +19,7 @@ import (
 const runtimeAgentWorkspacesRPCTimeout = 12 * time.Second
 
 // RuntimeAgentWorkspace is one on-disk agent root under
-// `{workspace}/.multica/agents/` on a machine (daemon).
+// `{workspace}/agents/` on a machine (daemon).
 type RuntimeAgentWorkspace struct {
 	// DirName is the directory basename (normally the agent UUID).
 	DirName string `json:"dir_name"`
@@ -42,14 +42,6 @@ type RuntimeAgentWorkspacesResponse struct {
 	Status    string                  `json:"status"` // ok | offline | missing | error
 	Items     []RuntimeAgentWorkspace `json:"items"`
 	Truncated bool                    `json:"truncated,omitempty"`
-}
-
-func agentsRootRelPath(workspaceID string) string {
-	return path.Join(workspaceID, ".multica", "agents")
-}
-
-func agentWorkspaceRelPath(workspaceID, dirName string) string {
-	return path.Join(agentsRootRelPath(workspaceID), dirName)
 }
 
 // topLevelAgentDirs keeps only immediate children that are directories.
@@ -84,7 +76,7 @@ func agentWorkspaceDisplayName(agent db.Agent) string {
 }
 
 // ListRuntimeAgentWorkspaces handles GET /api/runtimes/{runtimeId}/agent-workspaces.
-// On-demand scan of `{workspace}/.multica/agents/*` on the machine behind the
+// On-demand scan of `{workspace}/agents/*` on the machine behind the
 // runtime (including orphan dirs whose agent was deleted/archived).
 func (h *Handler) ListRuntimeAgentWorkspaces(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
@@ -124,7 +116,7 @@ func (h *Handler) ListRuntimeAgentWorkspaces(w http.ResponseWriter, r *http.Requ
 	resp, err := h.DaemonHub.RequestWorkdirFiles(ctx, protocol.ListWorkdirFilesRequestPayload{
 		RequestID:  uuid.NewString(),
 		RuntimeID:  runtimeID,
-		RelPath:    agentsRootRelPath(workspaceID),
+		RelPath:    agentworkspace.AgentsRelPath(workspaceID),
 		MaxDepth:   1,
 		MaxEntries: 500,
 	})
@@ -150,7 +142,7 @@ func (h *Handler) ListRuntimeAgentWorkspaces(w http.ResponseWriter, r *http.Requ
 	for _, d := range dirs {
 		item := RuntimeAgentWorkspace{
 			DirName:   d.Path,
-			RelPath:   agentWorkspaceRelPath(workspaceID, d.Path),
+			RelPath:   agentworkspace.RootRelPath(workspaceID, d.Path),
 			Orphan:    true,
 			SizeBytes: d.Size,
 		}
@@ -210,7 +202,7 @@ func (h *Handler) DeleteRuntimeAgentWorkspace(w http.ResponseWriter, r *http.Req
 	resp, err := h.DaemonHub.RequestDeleteDir(ctx, protocol.DeleteWorkdirDirRequestPayload{
 		RequestID: uuid.NewString(),
 		RuntimeID: runtimeID,
-		RelPath:   agentWorkspaceRelPath(workspaceID, dirName),
+		RelPath:   agentworkspace.RootRelPath(workspaceID, dirName),
 	})
 	if err != nil {
 		if errors.Is(err, daemonws.ErrRuntimeOffline) {

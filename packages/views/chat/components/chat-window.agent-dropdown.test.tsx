@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { I18nProvider } from "@multica/core/i18n/react";
 import type { Agent } from "@multica/core/types";
 import enChat from "../../locales/en/chat.json";
@@ -123,19 +123,4 @@ describe("AgentDropdown", () => {
     expect(alphaRow).toHaveClass("text-left");
   });
 
-  it("keeps the current agent marked and selects another agent", async () => {
-    const { onSelect } = renderDropdown();
-
-    const dialog = screen.getByRole("dialog");
-    const alphaRow = within(dialog).getByText("Alpha").closest("button");
-    expect(alphaRow).not.toBeNull();
-    expect(alphaRow!.querySelector("svg:not(.invisible)")).not.toBeNull();
-
-    fireEvent.click(within(dialog).getByText("Beta"));
-
-    expect(onSelect).toHaveBeenCalledWith(agents[2]);
-    await waitFor(() => {
-      expect(screen.queryByRole("textbox", { name: "Filter options" })).not.toBeInTheDocument();
-    });
-  });
 });

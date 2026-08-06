@@ -2,15 +2,11 @@ package handler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -238,72 +234,6 @@ func (h *Handler) issueDaemonRegisterToken(ctx context.Context, workspaceID pgty
 	return token.raw, token.expiresAt, nil
 }
 
-type daemonWorkspaceReposResponse struct {
-	WorkspaceID  string          `json:"workspace_id"`
-	Repos        []RepoData      `json:"repos"`
-	ReposVersion string          `json:"repos_version"`
-	Settings     json.RawMessage `json:"settings,omitempty"`
-}
-
-func normalizeWorkspaceRepos(repos []RepoData) []RepoData {
-	if len(repos) == 0 {
-		return []RepoData{}
-	}
-
-	normalized := make([]RepoData, 0, len(repos))
-	seen := make(map[string]struct{}, len(repos))
-	for _, repo := range repos {
-		url := strings.TrimSpace(repo.URL)
-		if url == "" {
-			continue
-		}
-		if _, exists := seen[url]; exists {
-			continue
-		}
-		seen[url] = struct{}{}
-		normalized = append(normalized, RepoData{URL: url, Description: repo.Description})
-	}
-	return normalized
-}
-
-func workspaceReposVersion(repos []RepoData) string {
-	urls := make([]string, 0, len(repos))
-	for _, repo := range repos {
-		if repo.URL == "" {
-			continue
-		}
-		urls = append(urls, repo.URL)
-	}
-	sort.Strings(urls)
-	sum := sha256.Sum256([]byte(strings.Join(urls, "\n")))
-	return hex.EncodeToString(sum[:])
-}
-
-func parseWorkspaceRepos(raw []byte) []RepoData {
-	if len(raw) == 0 {
-		return []RepoData{}
-	}
-
-	var repos []RepoData
-	if err := json.Unmarshal(raw, &repos); err != nil {
-		return []RepoData{}
-	}
-	return normalizeWorkspaceRepos(repos)
-}
-
-func workspaceReposResponse(workspaceID string, raw []byte, settingsRaw []byte) daemonWorkspaceReposResponse {
-	repos := parseWorkspaceRepos(raw)
-	resp := daemonWorkspaceReposResponse{
-		WorkspaceID:  workspaceID,
-		Repos:        repos,
-		ReposVersion: workspaceReposVersion(repos),
-	}
-	if len(settingsRaw) > 0 {
-		resp.Settings = json.RawMessage(settingsRaw)
-	}
-	return resp
-}
-
 func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	var req DaemonRegisterRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -518,7 +448,6 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	repoResp := workspaceReposResponse(req.WorkspaceID, ws.Repos, ws.Settings)
 	daemonToken, err := registrationHandler.prepareDaemonRegisterToken(r.Context(), wsUUID, req.DaemonID)
 	if err != nil {
 		slog.Error("daemon register: issue daemon token failed",
@@ -567,9 +496,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"runtimes":                resp,
-		"repos":                   repoResp.Repos,
-		"repos_version":           repoResp.ReposVersion,
-		"settings":                repoResp.Settings,
+		"settings":                json.RawMessage(ws.Settings),
 		"daemon_token":            daemonToken.raw,
 		"daemon_token_expires_at": daemonToken.expiresAt.UTC().Format(time.RFC3339Nano),
 		"server_capabilities":     negotiatedDaemonCapabilities(capabilities),
@@ -724,93 +651,6 @@ func (h *Handler) mergeLegacyRuntimes(r *http.Request, registered db.AgentRuntim
 			)
 		}
 	}
-}
-
-func (h *Handler) GetDaemonWorkspaceRepos(w http.ResponseWriter, r *http.Request) {
-	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceId"))
-	if !h.requireDaemonWorkspaceAccess(w, r, workspaceID) {
-		return
-	}
-
-	ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(workspaceID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "workspace not found")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, workspaceReposResponse(workspaceID, ws.Repos, ws.Settings))
-}
-
-// defaultAgentWorkspaceRetentionDays is the PRD-specified default (task
-// #204/#96): an archived agent's on-disk .multica/agents/<id> workspace is
-// eligible for destruction 30 days after archival. Overridable so ops can
-// tune it without a code change, mirroring the daemon-side *_TTL env vars.
-const defaultAgentWorkspaceRetentionDays = 30
-
-func agentWorkspaceRetentionDays() int {
-	raw := strings.TrimSpace(os.Getenv("MULTICA_AGENT_WORKSPACE_RETENTION_DAYS"))
-	if raw == "" {
-		return defaultAgentWorkspaceRetentionDays
-	}
-	days, err := strconv.Atoi(raw)
-	if err != nil || days <= 0 {
-		slog.Warn("invalid MULTICA_AGENT_WORKSPACE_RETENTION_DAYS, using default", "value", raw, "default", defaultAgentWorkspaceRetentionDays)
-		return defaultAgentWorkspaceRetentionDays
-	}
-	return days
-}
-
-// CheckAgentWorkspaceRetention answers the daemon-side agent-workspace
-// retention job's (task #96) reconciliation question: "of these agent IDs I
-// found a local .multica/agents/<id> directory for, which are archived long
-// enough ago to destroy?"
-//
-// The retention threshold is server-owned (agentWorkspaceRetentionDays), not
-// caller-supplied — a stale or misconfigured daemon must not be able to talk
-// the server into answering against a threshold it picked itself. The daemon
-// is still required to re-validate locally (path safety, and that the ID
-// being deleted was actually in the batch it just reported) before removing
-// anything; this endpoint only answers the "should this be deleted" question,
-// it never touches the filesystem itself.
-func (h *Handler) CheckAgentWorkspaceRetention(w http.ResponseWriter, r *http.Request) {
-	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceId"))
-	if !h.requireDaemonWorkspaceAccess(w, r, workspaceID) {
-		return
-	}
-
-	var req struct {
-		AgentIDs []string `json:"agent_ids"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if len(req.AgentIDs) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"eligible_agent_ids": []string{}})
-		return
-	}
-	agentUUIDs, ok := parseUUIDSliceOrBadRequest(w, req.AgentIDs, "agent_ids")
-	if !ok {
-		return
-	}
-
-	cutoff := time.Now().AddDate(0, 0, -agentWorkspaceRetentionDays())
-	rows, err := h.Queries.ListAgentIDsArchivedBefore(r.Context(), db.ListAgentIDsArchivedBeforeParams{
-		WorkspaceID: parseUUID(workspaceID),
-		AgentIds:    agentUUIDs,
-		Before:      pgtype.Timestamptz{Time: cutoff, Valid: true},
-	})
-	if err != nil {
-		slog.Warn("agent workspace retention check failed", "workspace_id", workspaceID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to check agent workspace retention")
-		return
-	}
-
-	eligible := make([]string, 0, len(rows))
-	for _, row := range rows {
-		eligible = append(eligible, uuidToString(row.ID))
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"eligible_agent_ids": eligible})
 }
 
 // DaemonDeregister marks runtimes as offline when the daemon shuts down.
@@ -1703,47 +1543,6 @@ func (h *Handler) ListPendingTasksByRuntime(w http.ResponseWriter, r *http.Reque
 // ---------------------------------------------------------------------------
 // Task Lifecycle (called by daemon)
 // ---------------------------------------------------------------------------
-
-// StartTask marks a dispatched task as running.
-// TaskWaitLocalDirectoryRequest is the body the daemon POSTs when it parks
-// a freshly-dispatched task on a busy local_directory path.
-type TaskWaitLocalDirectoryRequest struct {
-	// Reason is a short hint surfaced by the UI alongside the status —
-	// typically "<path>" or "<path> (holder: <task short id>)". Small
-	// enough to fit on the issue card. Empty is accepted; the column is
-	// nullable on the server.
-	Reason string `json:"reason"`
-}
-
-// MarkTaskWaitingLocalDirectory transitions a dispatched task to
-// waiting_local_directory. Called by the daemon when, after claiming a task
-// whose project carries a local_directory resource, it discovers another
-// in-flight task already holds the path's mutex.
-func (h *Handler) MarkTaskWaitingLocalDirectory(w http.ResponseWriter, r *http.Request) {
-	taskID := chi.URLParam(r, "taskId")
-
-	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
-	if !ok {
-		return
-	}
-
-	var req TaskWaitLocalDirectoryRequest
-	if r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid request body")
-			return
-		}
-	}
-
-	task, err := h.TaskService.MarkTaskWaitingLocalDirectory(r.Context(), parseUUID(taskID), req.Reason)
-	if err != nil {
-		slog.Warn("mark task waiting_local_directory failed", "task_id", taskID, "error", err)
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
-}
 
 // ReportTaskProgress broadcasts a progress update.
 type TaskProgressRequest struct {
@@ -2731,72 +2530,5 @@ func (h *Handler) GetIssueUsage(w http.ResponseWriter, r *http.Request) {
 		"total_cache_read_tokens":  row.TotalCacheReadTokens,
 		"total_cache_write_tokens": row.TotalCacheWriteTokens,
 		"task_count":               row.TaskCount,
-	})
-}
-
-// GetIssueGCCheck returns minimal issue info needed by the daemon GC loop.
-// Gated on workspace access so a daemon token scoped to workspace A cannot
-// read issue metadata from workspace B via UUID enumeration.
-func (h *Handler) GetIssueGCCheck(w http.ResponseWriter, r *http.Request) {
-	issueID := chi.URLParam(r, "issueId")
-	issueUUID, ok := parseUUIDOrBadRequest(w, issueID, "issue_id")
-	if !ok {
-		return
-	}
-	issue, err := h.Queries.GetIssue(r.Context(), issueUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "issue not found")
-		return
-	}
-	if !h.requireDaemonWorkspaceAccess(w, r, uuidToString(issue.WorkspaceID)) {
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":     issue.Status,
-		"updated_at": issue.UpdatedAt.Time,
-	})
-}
-
-// GetChatSessionGCCheck returns the status and updated_at of a chat session
-// for the daemon GC loop. A 404 here means the session was hard-deleted
-// (DeleteChatSession in chat.go runs a real DELETE), which the daemon treats
-// as an immediate-clean signal — the user's explicit delete is the strongest
-// reclaim authorization we can get.
-//
-// Same anti-enumeration shape as GetIssueGCCheck: workspace mismatch returns
-// the same 404 so a scoped daemon token can't probe other workspaces.
-func (h *Handler) GetChatSessionGCCheck(w http.ResponseWriter, r *http.Request) {
-	sessionID := chi.URLParam(r, "sessionId")
-	sessionUUID, ok := parseUUIDOrBadRequest(w, sessionID, "session_id")
-	if !ok {
-		return
-	}
-	session, err := h.Queries.GetChatSession(r.Context(), sessionUUID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "chat session not found")
-		return
-	}
-	if !h.requireDaemonWorkspaceAccess(w, r, uuidToString(session.WorkspaceID)) {
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":     session.Status,
-		"updated_at": session.UpdatedAt.Time,
-	})
-}
-
-// GetTaskGCCheck returns the agent_inbox_event status for quick-create cleanup.
-// Quick-create tasks have no parent record (no issue_id at WriteGCMeta time,
-// no chat session, no autopilot run) so the daemon keys GC directly on the
-// task row itself.
-func (h *Handler) GetTaskGCCheck(w http.ResponseWriter, r *http.Request) {
-	taskID := chi.URLParam(r, "taskId")
-	task, ok := h.requireDaemonTaskAccess(w, r, taskID)
-	if !ok {
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":       task.Status,
-		"completed_at": task.CompletedAt.Time,
 	})
 }

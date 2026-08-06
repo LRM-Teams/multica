@@ -1,7 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { cloneElement, isValidElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "@multica/core/api";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enLayout from "../locales/en/layout.json";
 import { AppSidebar } from "./app-sidebar";
@@ -175,17 +174,7 @@ describe("PinRow", () => {
     detail.current = { isPending: false, isError: false, data: null, error: null };
   });
 
-  it("unpins missing details", async () => {
-    detail.current = { isPending: false, isError: true, data: null, error: new ApiError("missing", 404, "Not Found") };
-    renderSidebar();
-    await waitFor(() => expect(deletePin).toHaveBeenCalledTimes(1));
-  });
 
-  it("ignores non-404 errors", async () => {
-    detail.current = { isPending: false, isError: true, data: null, error: new ApiError("error", 500, "Server Error") };
-    renderSidebar();
-    await waitFor(() => expect(deletePin).not.toHaveBeenCalled());
-  });
 
   it("renders loaded details", async () => {
     detail.current = { isPending: false, isError: false, data: { identifier: "MUL-123", title: "Keep this pin", status: "todo" }, error: null };

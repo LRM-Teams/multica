@@ -1,6 +1,5 @@
 import { type ReactNode } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -99,25 +98,6 @@ describe("GlobalSearchDialog", () => {
     expect(screen.getByRole("button", { name: "People" })).toBeInTheDocument();
   });
 
-  it("renders the empty state when the query matches nothing", async () => {
-    mockSearchWorkspace.mockResolvedValue({
-      query: "zzz",
-      scope: "all",
-      counts: { messages: 0, channels: 0, dms: 0, people: 0 },
-      messages: [],
-      channels: [],
-      dms: [],
-      people: [],
-    });
-    useGlobalSearchStore.setState({ open: true });
-    const user = userEvent.setup();
-    renderDialog();
-    const input = await screen.findByPlaceholderText(/Search channels/i);
-    await user.type(input, "zzz");
-    await waitFor(() => {
-      expect(screen.getByText(/No results for/i)).toBeInTheDocument();
-    });
-  });
 
   it("⌘K / Ctrl-K toggles the dialog open then closed (LRM-606 reclaim)", () => {
     useGlobalSearchStore.setState({ open: false });

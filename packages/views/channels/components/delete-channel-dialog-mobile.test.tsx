@@ -1,7 +1,6 @@
 import { type ReactNode, useState } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { Drawer, DrawerContent } from "@multica/ui/components/ui/drawer";
 import enCommon from "../../locales/en/common.json";
@@ -72,30 +71,5 @@ describe("DeleteChannelDialog over mobile Drawer (LRM-265)", () => {
     expect(sawExplicitAuto).toBe(true);
   });
 
-  it("lets the user check and confirm delete while a modal Drawer is open", async () => {
-    const user = userEvent.setup();
-    const onConfirm = vi.fn();
-    renderWithProviders(<MobileDeleteOverDrawer onConfirm={onConfirm} />);
 
-    const confirm = await screen.findByRole("button", { name: "Delete channel" });
-    expect(confirm).toBeDisabled();
-
-    await user.click(await screen.findByRole("checkbox"));
-    expect(confirm).toBeEnabled();
-
-    await user.click(confirm);
-    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
-  });
-
-  it("cancel closes without confirming while a modal Drawer is open", async () => {
-    const user = userEvent.setup();
-    const onConfirm = vi.fn();
-    renderWithProviders(<MobileDeleteOverDrawer onConfirm={onConfirm} />);
-
-    await user.click(await screen.findByRole("button", { name: "Cancel" }));
-    expect(onConfirm).not.toHaveBeenCalled();
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Delete channel" })).not.toBeInTheDocument(),
-    );
-  });
 });

@@ -796,3 +796,14 @@ func TestMaybeCleanupEphemeralSandbox_SharedRuntimeLastTerminalWins(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, "offline", rtStatus)
 }
+
+func TestShouldCloseBusinessDAGSegmentExcludesDiagnosisTask(t *testing.T) {
+	business := db.AgentInboxEvent{Context: []byte(`{"model":"composer"}`)}
+	diagnosis := db.AgentInboxEvent{Context: []byte(`{"diagnosis_run_id":"diag-1"}`)}
+	if !shouldCloseBusinessDAGSegment(business) {
+		t.Fatal("ordinary business task must close a DAG segment")
+	}
+	if shouldCloseBusinessDAGSegment(diagnosis) {
+		t.Fatal("internal diagnosis task must be excluded from business DAG")
+	}
+}

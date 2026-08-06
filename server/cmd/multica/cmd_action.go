@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/cli"
-	"github.com/multica-ai/multica/server/internal/turntransport"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +21,7 @@ var actionCmd = &cobra.Command{
 
 var actionPrepareCmd = &cobra.Command{
 	Use:   "prepare",
-	Short: "Prepare an agent:create hire card (and optionally post it)",
+	Short: "Prepare an agent:create hire card (canonical Message when --target is set)",
 	RunE:  runActionPrepare,
 }
 
@@ -30,7 +30,9 @@ func init() {
 	actionPrepareCmd.Flags().String("type", "agent:create", "Action type (only agent:create)")
 	actionPrepareCmd.Flags().String("name", "", "Agent display name seed (required)")
 	actionPrepareCmd.Flags().String("description", "", "Optional short catalog description")
+	actionPrepareCmd.Flags().String("preferred-computer", "", "Optional preferred Computer suggestion (human may change)")
 	actionPrepareCmd.Flags().String("target", "", "Channel/DM/thread to post the card (same as message send)")
+	actionPrepareCmd.Flags().String("client-request-id", "", "Stable idempotency key; reused on retry to return the same message_id")
 	actionPrepareCmd.Flags().String("output", "json", "Output format: json or text")
 	actionPrepareCmd.Flags().String("channel-id", "", "Optional channel_id for the card row")
 }
@@ -48,8 +50,13 @@ func runActionPrepare(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("--name is required")
 	}
 	description := strings.TrimSpace(flagString(cmd, "description"))
+	preferredComputer := strings.TrimSpace(flagString(cmd, "preferred-computer"))
 	target := strings.TrimSpace(flagString(cmd, "target"))
 	channelID := strings.TrimSpace(flagString(cmd, "channel-id"))
+	clientRequestID := strings.TrimSpace(flagString(cmd, "client-request-id"))
+	if clientRequestID == "" {
+		clientRequestID = uuid.NewString()
+	}
 
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -59,14 +66,21 @@ func runActionPrepare(cmd *cobra.Command, _ []string) error {
 	defer cancel()
 
 	body := map[string]any{
-		"action_type": actionType,
-		"name":        name,
+		"action_type":       actionType,
+		"name":              name,
+		"client_request_id": clientRequestID,
 	}
 	if description != "" {
 		body["description"] = description
 	}
+	if preferredComputer != "" {
+		body["preferred_computer"] = preferredComputer
+	}
 	if channelID != "" {
 		body["channel_id"] = channelID
+	}
+	if target != "" {
+		body["target"] = target
 	}
 
 	var prepared map[string]any
@@ -74,41 +88,18 @@ func runActionPrepare(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("action prepare: %w", err)
 	}
 
-	// When --target is set, post structured part like raft action prepare.
-	if target != "" {
-		part, _ := prepared["part"].(map[string]any)
-		if part == nil {
-			return fmt.Errorf("prepare response missing part template")
-		}
-		sendBody := map[string]any{
-			"target": target,
-			"parts":  []any{part},
-		}
-		// Optional short content for clients that only show text.
-		if label, ok := part["label"].(string); ok && strings.TrimSpace(label) != "" {
-			sendBody["content"] = strings.TrimSpace(label)
-		} else {
-			sendBody["content"] = name
-		}
-		if err := turntransport.RecordAttemptFromEnvironment(); err != nil {
-			return err
-		}
-		var sent map[string]any
-		if err := client.PostJSON(ctx, "/api/agent/messages/send", sendBody, &sent); err != nil {
-			return fmt.Errorf("post action card message: %w", err)
-		}
-		prepared["message"] = sent
-	}
-
+	// LRM-2343: prepare returns message_id and already created the canonical
+	// Message (story 2/3). The CLI no longer issues a second message-send.
 	output := strings.ToLower(strings.TrimSpace(flagString(cmd, "output")))
 	switch {
 	case output == "" || output == "json":
 		return cli.PrintJSON(os.Stdout, prepared)
 	case output == "text":
 		id, _ := prepared["id"].(string)
+		messageID, _ := prepared["message_id"].(string)
 		fmt.Fprintf(os.Stdout, "Prepared agent:create card %s\n", id)
-		if target != "" {
-			fmt.Fprintf(os.Stdout, "Posted to %s\n", target)
+		if messageID != "" {
+			fmt.Fprintf(os.Stdout, "Message %s (target %s)\n", messageID, target)
 		}
 		return nil
 	default:

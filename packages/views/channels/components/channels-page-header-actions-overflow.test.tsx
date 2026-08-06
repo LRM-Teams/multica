@@ -230,6 +230,11 @@ vi.mock("@multica/core/dm", async (importOriginal) => {
   return dmMock(importOriginal);
 });
 
+vi.mock("@multica/core/conversations", async (importOriginal) => {
+  const { conversationsMock } = await import("./__fixtures/channels-page-mocks");
+  return conversationsMock(importOriginal, () => [channelFixture]);
+});
+
 vi.mock("@multica/core/workspace/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/workspace/queries")>()),
   memberListOptions: () => ({ queryKey: ["members"], queryFn: async () => [] }),

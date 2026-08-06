@@ -126,7 +126,7 @@ func (h *Handler) createAgentFromActionMessage(ctx context.Context, wsUUID, comm
 	// prepared -> create Agent + #general membership + durable first-start
 	// intent + snapshots in one tx.
 	qtx := h.Queries.WithTx(tx)
-	created, err := h.createAgentWithIdentity(ctx, qtx, createParams, displayName, displayName)
+	created, err := h.createAgentWithIdentityTx(ctx, tx, qtx, createParams, displayName, displayName)
 	if err != nil {
 		return db.Agent{}, err
 	}
@@ -278,7 +278,7 @@ func (h *Handler) createAgentManagedCommit(ctx context.Context, wsUUID pgtype.UU
 		params.DisplayName = firstNonEmpty(params.DisplayName, params.Name)
 		created, err = qtx.CreateAgent(ctx, params)
 	} else {
-		created, err = h.createAgentWithIdentity(ctx, qtx, params, displayName, displayName)
+		created, err = h.createAgentWithIdentityTx(ctx, tx, qtx, params, displayName, displayName)
 	}
 	if err != nil {
 		return db.Agent{}, err

@@ -454,7 +454,7 @@ func (h *Handler) CreateAgentFromTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	applyCreateAgentAvatar(&createParams, avatar)
-	agent, err := h.createAgentWithIdentity(r.Context(), qtx, createParams, nameSeed, firstNonEmpty(displayName, nameSeed))
+	agent, err := h.createAgentWithIdentityTx(r.Context(), tx, qtx, createParams, nameSeed, firstNonEmpty(displayName, nameSeed))
 	if err != nil {
 		slog.Error("agent-template create: failed to create agent",
 			append(logger.RequestAttrs(r),

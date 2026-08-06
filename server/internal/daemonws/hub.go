@@ -820,6 +820,26 @@ func (h *Hub) NotifyWorkspaceRunner(daemonID, workspaceID, eventType string, pay
 	}
 }
 
+// CloseWorkspaceRunner closes only the still-current Runner for the supplied
+// daemon instance. A stale-probe timeout must not disconnect a replacement
+// connection that became ready after the probe was issued.
+func (h *Hub) CloseWorkspaceRunner(daemonID, workspaceID, daemonInstanceID string) bool {
+	if h == nil || strings.TrimSpace(daemonID) == "" || strings.TrimSpace(workspaceID) == "" || strings.TrimSpace(daemonInstanceID) == "" {
+		return false
+	}
+	key := workspaceRunnerKey{daemonID: daemonID, workspaceID: workspaceID}
+	h.mu.RLock()
+	c := h.byRunner[key]
+	current := c != nil && c.runnerDaemonInstanceID == daemonInstanceID
+	h.mu.RUnlock()
+	if !current {
+		return false
+	}
+	h.unregister(c)
+	_ = c.conn.Close()
+	return true
+}
+
 func (h *Hub) register(c *client) {
 	h.mu.Lock()
 	h.clients[c] = true

@@ -216,6 +216,69 @@ func TestWorkspaceRunnerReadyReplacesConnectionAndFencesInboundFrames(t *testing
 	}
 }
 
+func TestCloseWorkspaceRunnerFencesReplacementDaemonInstance(t *testing.T) {
+	hub := NewHub()
+	var readyCount atomic.Int64
+	hub.SetWorkspaceRunnerHandler(func(_ context.Context, _ ClientIdentity, _ string, eventType string, _ json.RawMessage) error {
+		if eventType == protocol.EventWorkspaceRunnerReady {
+			readyCount.Add(1)
+		}
+		return nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.HandleWebSocket(w, r, ClientIdentity{DaemonID: "daemon-1", WorkspaceID: "workspace-1"})
+	}))
+	defer server.Close()
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	dial := func() *websocket.Conn {
+		conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return conn
+	}
+	write := func(conn *websocket.Conn, payload protocol.WorkspaceRunnerReadyPayload) {
+		t.Helper()
+		frame, err := json.Marshal(protocol.Message{Type: protocol.EventWorkspaceRunnerReady, Payload: mustMarshalRaw(payload)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := dial()
+	defer first.Close()
+	write(first, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-1"})
+	waitForRunner(t, hub, "daemon-1", "workspace-1")
+	second := dial()
+	defer second.Close()
+	write(second, protocol.WorkspaceRunnerReadyPayload{WorkspaceID: "workspace-1", DaemonInstanceID: "instance-2"})
+	deadline := time.Now().Add(time.Second)
+	for readyCount.Load() != 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("replacement Runner did not become ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if hub.CloseWorkspaceRunner("daemon-1", "workspace-1", "instance-1") {
+		t.Fatal("stale daemon instance closed the replacement Runner")
+	}
+	if hub.WorkspaceRunnerConnectionCount("daemon-1", "workspace-1") != 1 {
+		t.Fatal("stale close removed the current Runner")
+	}
+	if !hub.CloseWorkspaceRunner("daemon-1", "workspace-1", "instance-2") {
+		t.Fatal("current daemon instance was not closed")
+	}
+	deadline = time.Now().Add(time.Second)
+	for hub.WorkspaceRunnerConnectionCount("daemon-1", "workspace-1") != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("current Runner remained registered after close")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func waitForRunner(t *testing.T, hub *Hub, daemonID, workspaceID string) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

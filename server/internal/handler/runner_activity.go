@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,10 +81,11 @@ func (h *Handler) recordRunnerLaunch(ctx context.Context, identity daemonws.Clie
 			daemon_id = EXCLUDED.daemon_id,
 			daemon_instance_id = EXCLUDED.daemon_instance_id,
 			launch_id = EXCLUDED.launch_id,
-			status = EXCLUDED.status,
-			last_client_sequence = 0,
-			last_producer_fact_id = '',
-			updated_at = now()`, workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, status.LaunchID, status.Status)
+		status = EXCLUDED.status,
+		last_client_sequence = 0,
+		last_producer_fact_id = '',
+		last_activity_fingerprint = '',
+		updated_at = now()`, workspaceID, agentID, runtimeID, identity.DaemonID, daemonInstanceID, status.LaunchID, status.Status)
 	if err != nil {
 		return fmt.Errorf("upsert Runner launch: %w", err)
 	}
@@ -102,14 +104,18 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 	if err != nil {
 		return err
 	}
+	fingerprint, err := runnerActivityFingerprint(activity)
+	if err != nil {
+		return err
+	}
 	command, err := h.DB.Exec(ctx, `
 		UPDATE agent_activity_launch
-		SET last_client_sequence = $6, last_producer_fact_id = $7, updated_at = now()
+		SET last_client_sequence = $6, last_producer_fact_id = $7, last_activity_fingerprint = $8, updated_at = now()
 		WHERE workspace_id = $1 AND agent_id = $2
 		  AND daemon_id = $3 AND daemon_instance_id = $4 AND launch_id = $5
 		  AND status = 'active'
-		  AND (last_client_sequence < $6 OR (last_client_sequence = $6 AND last_producer_fact_id = $7))`,
-		workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ClientSequence, snapshot.ProducerFactID)
+		  AND (last_client_sequence < $6 OR (last_client_sequence = $6 AND last_producer_fact_id = $7 AND last_activity_fingerprint = $8))`,
+		workspaceID, agentID, identity.DaemonID, daemonInstanceID, snapshot.LaunchID, snapshot.ClientSequence, snapshot.ProducerFactID, fingerprint)
 	if err != nil {
 		return fmt.Errorf("advance Runner Activity fence: %w", err)
 	}
@@ -171,6 +177,15 @@ func (h *Handler) recordRunnerActivity(ctx context.Context, identity daemonws.Cl
 		})
 	}
 	return nil
+}
+
+func runnerActivityFingerprint(activity protocol.AgentActivityPayload) (string, error) {
+	encoded, err := json.Marshal(activity)
+	if err != nil {
+		return "", fmt.Errorf("encode Runner Activity fact: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	return fmt.Sprintf("%x", digest[:]), nil
 }
 
 // GetRunnerActivity is the dormant Workspace-authorized presentation API used

@@ -340,7 +340,10 @@ export function ReportReader({
         }
         onClose();
       }}
-      onClose={onClose}
+      // No onClose prop: cancel and click-outside both invoke onClose
+      // explicitly. dialog.close() fires a `close` event in spec-compliant
+      // DOMs (happy-dom, real browsers — jsdom does not), so also wiring
+      // onClose here would double-fire it.
     >
       <div
         role="document"

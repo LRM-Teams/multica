@@ -99,6 +99,22 @@ func TestAgentActivityProducerPublishesManagedMessageHandoff(t *testing.T) {
 	}
 }
 
+func TestTaskRunnerActivityIsSanitizedBeforePublishing(t *testing.T) {
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer(time.Now, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	installActivityProducerAgent(t, producer)
+	d := New(Config{}, nil)
+	d.agentActivityProducers["workspace-1"] = producer
+	d.publishTaskRunnerActivity(Task{ID: "task-1", AgentID: "agent-a", WorkspaceID: "workspace-1"}, protocol.ActivityKindWorking, "running_command", "Running command")
+	if len(sent) != 1 {
+		t.Fatalf("sent = %d, want 1", len(sent))
+	}
+	got := sent[0]
+	if got.Snapshot.ActivityKind != protocol.ActivityKindWorking || got.Snapshot.DetailKind != "running_command" || len(got.Entries) != 1 || string(got.Entries[0].Body) != `{"text":"Running command"}` {
+		t.Fatalf("task Activity = %+v", got)
+	}
+}
+
 func installActivityProducerAgent(t *testing.T, producer *agentActivityProducer) {
 	t.Helper()
 	if err := producer.SetManaged(protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: "launch-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: "launch-a", RuntimeGeneration: 1}); err != nil {

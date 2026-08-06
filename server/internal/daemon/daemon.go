@@ -4242,6 +4242,28 @@ func classifyAgentRunFailureReason(provider, errMsg string, taskLog *slog.Logger
 	return taskfailure.Classify(errMsg).String()
 }
 
+func (d *Daemon) publishTaskRunnerActivity(task Task, activityKind, detailKind, narrative string) {
+	if d == nil || task.AgentID == "" || task.WorkspaceID == "" {
+		return
+	}
+	d.mu.Lock()
+	producer := d.agentActivityProducers[task.WorkspaceID]
+	d.mu.Unlock()
+	if producer == nil {
+		return
+	}
+	var entries []protocol.AgentActivityEntry
+	if narrative != "" {
+		body, err := json.Marshal(map[string]string{"text": narrative})
+		if err == nil {
+			entries = []protocol.AgentActivityEntry{{Kind: "narrative", Position: 0, Body: body}}
+		}
+	}
+	if err := producer.PublishForManagedAgent(task.AgentID, d.runnerInstanceID, activityKind, detailKind, entries); err != nil && d.logger != nil {
+		d.logger.Debug("workspace Runner task Activity publish deferred", "error", err, "agent_id", task.AgentID, "task_id", task.ID)
+	}
+}
+
 func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, task Task) (agent.Result, int32, error) {
 	taskID := task.ID
 	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
@@ -4397,6 +4419,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						pinCancel()
 					}
 				case agent.MessageToolUse:
+					d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "running_command", "Running command")
 					n := toolCount.Add(1)
 					inFlightTools.Add(1)
 					taskLog.Info(fmt.Sprintf("tool #%d: %s", n, msg.Tool))
@@ -4471,12 +4494,18 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 					})
 					mu.Unlock()
 				case agent.MessageThinking:
+					d.publishTaskRunnerActivity(task, protocol.ActivityKindThinking, "", "Thinking")
 					if msg.Content != "" {
 						mu.Lock()
 						trajectory.append("thinking", msg.Content, msg.Lineage, time.Now(), emitTrajectory)
 						mu.Unlock()
 					}
 				case agent.MessageCompactionStarted, agent.MessageCompactionFinished:
+					if msg.Type == agent.MessageCompactionStarted {
+						d.publishTaskRunnerActivity(task, protocol.ActivityKindWorking, "compacting_context", "Compacting context")
+					} else {
+						d.publishTaskRunnerActivity(task, protocol.ActivityKindOnline, "idle", "Context compaction finished")
+					}
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)
 					s := seq.Add(1)
@@ -4494,6 +4523,7 @@ func (d *Daemon) executeAndDrainForTask(ctx context.Context, backend agent.Backe
 						mu.Unlock()
 					}
 				case agent.MessageError:
+					d.publishTaskRunnerActivity(task, protocol.ActivityKindError, "", "Runtime error")
 					taskLog.Error("agent error", "content", msg.Content)
 					mu.Lock()
 					trajectory.flush(time.Now(), true, emitTrajectory)

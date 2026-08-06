@@ -82,6 +82,23 @@ func TestAgentActivityProducerReplacedTransportKeepsNewestRunnerConnected(t *tes
 	}
 }
 
+func TestAgentActivityProducerPublishesManagedMessageHandoff(t *testing.T) {
+	now := time.Date(2026, time.August, 6, 0, 0, 0, 0, time.UTC)
+	var sent []protocol.AgentActivityPayload
+	producer := newAgentActivityProducer(func() time.Time { return now }, func(payload protocol.AgentActivityPayload) { sent = append(sent, payload) })
+	installActivityProducerAgent(t, producer)
+	if err := producer.PublishForManagedAgent("agent-a", "daemon-1", protocol.ActivityKindWorking, "message_received", []protocol.AgentActivityEntry{{Kind: "narrative", Position: 0, Body: []byte(`{"text":"Message received"}`)}}); err != nil {
+		t.Fatalf("PublishForManagedAgent: %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent = %d, want 1", len(sent))
+	}
+	got := sent[0]
+	if got.Snapshot.AgentID != "agent-a" || got.Snapshot.LaunchID != "launch-a" || got.Snapshot.DaemonInstanceID != "daemon-1" || got.Snapshot.ActivityKind != protocol.ActivityKindWorking || got.Snapshot.DetailKind != "message_received" || got.Snapshot.ClientSequence != 1 {
+		t.Fatalf("managed Message Activity = %+v", got.Snapshot)
+	}
+}
+
 func installActivityProducerAgent(t *testing.T, producer *agentActivityProducer) {
 	t.Helper()
 	if err := producer.SetManaged(protocol.AgentStatusPayload{AgentID: "agent-a", LaunchID: "launch-a", Status: protocol.AgentStatusActive}, protocol.AgentSessionPayload{AgentID: "agent-a", LaunchID: "launch-a", RuntimeGeneration: 1}); err != nil {

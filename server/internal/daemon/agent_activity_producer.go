@@ -149,6 +149,38 @@ func (p *agentActivityProducer) Publish(snapshot protocol.AgentActivitySnapshot,
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.publishLocked(snapshot, entries)
+}
+
+// PublishForManagedAgent reports a fact from a local Manager-owned boundary
+// such as concrete canonical Message handoff. The caller supplies no launch
+// identity: the producer takes it only from the currently managed launch.
+func (p *agentActivityProducer) PublishForManagedAgent(agentID, daemonInstanceID, activityKind, detailKind string, entries []protocol.AgentActivityEntry) error {
+	if p == nil || agentID == "" || daemonInstanceID == "" {
+		return errors.New("Activity managed Agent identity is required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var snapshot protocol.AgentActivitySnapshot
+	for key, state := range p.states {
+		if key.agentID == agentID {
+			snapshot = state.snapshot
+			snapshot.AgentID = agentID
+			snapshot.LaunchID = key.launchID
+			break
+		}
+	}
+	if snapshot.LaunchID == "" {
+		return errors.New("Activity is not managed for this Agent")
+	}
+	snapshot.DaemonInstanceID = daemonInstanceID
+	snapshot.ActivityKind = activityKind
+	snapshot.DetailKind = detailKind
+	snapshot.ProbeID = ""
+	return p.publishLocked(snapshot, entries)
+}
+
+func (p *agentActivityProducer) publishLocked(snapshot protocol.AgentActivitySnapshot, entries []protocol.AgentActivityEntry) error {
 	key := agentActivityProducerKey{agentID: snapshot.AgentID, launchID: snapshot.LaunchID}
 	state := p.states[key]
 	if state == nil {

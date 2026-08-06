@@ -41,6 +41,7 @@
     "./research": "./research/index.ts",
     "./research/components": "./research/components/index.ts",
     "./research/v6-common": "./research/v6-common/index.ts",
+    "./research/graph-model": "./research/graph-model/index.ts",
     "./workspace/workspace-avatar": "./workspace/workspace-avatar.tsx",
     "./workspace/create-workspace-form": "./workspace/create-workspace-form.tsx",
     "./workspace/no-access-page": "./workspace/no-access-page.tsx",

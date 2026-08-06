@@ -438,6 +438,15 @@
       "unknown": "未知"
     }
   },
+  "node_card": {
+    "generic_type": "未知类型",
+    "generic_unrecognized": "无法识别的类型",
+    "generic_raw": "原始: ",
+    "generic_owner": "归属: ",
+    "importance_sr": "重要性 {{level}}/3",
+    "row_label_sr": "{{label}}：",
+    "no_progress": "暂无新进展"
+  },
   "logic": {
     "label": "调研逻辑",
     "lr_hint": "左→右 · 非 Git",

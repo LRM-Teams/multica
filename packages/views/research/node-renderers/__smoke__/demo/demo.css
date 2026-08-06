@@ -1,0 +1,8 @@
+/* Dev-only Tailwind + semantic-token entry for the LRM-1475 card demo. */
+@import "tailwindcss";
+@import "@multica/ui/styles/tokens.css";
+@import "@multica/ui/styles/base.css";
+
+@source "../../../../../../packages/ui/**/*.{ts,tsx}";
+@source "../../../../../packages/core/**/*.{ts,tsx}";
+@source "../../../../../packages/views/**/*.{ts,tsx}";

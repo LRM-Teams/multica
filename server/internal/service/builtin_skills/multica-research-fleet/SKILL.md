@@ -1,13 +1,13 @@
 ---
 name: multica-research-fleet
-description: "Use when executing an assigned durable Research Run task or operating the sealed Research Fleet led by 罗纳尔多."
+description: "Use when executing an assigned durable Research Run task or operating the sealed Research Fleet led by Ronaldo."
 user-invocable: false
 allowed-tools: Bash(multica *)
 ---
 
 # Multica Research Fleet
 
-罗纳尔多 leads the sealed Research Fleet. A current Research Run is a durable
+Ronaldo leads the sealed Research Fleet. A current Research Run is a durable
 server-owned task graph, evidence ledger, decision log, delivery gate, and
 recovery loop. Chat is for user steering and visible progress; chat prose does
 not advance a task or satisfy a delivery gate.
@@ -135,8 +135,8 @@ Only the lead may hire, optimize, activate, or archive members. These commands
 remain available for an actual capability gap:
 
 ```bash
-multica research hire --name "专利检索手" --role "patent_scout" \
-  --instructions "..." --reason "缺少专利检索能力，现有来源无法验证权利要求"
+multica research hire --name "Patent Scout" --role "patent_scout" \
+  --instructions "..." --reason "Patent-search capability is needed to verify the claims."
 multica research optimize <member-id> --instructions "..." --activate --reason "..."
 multica research archive <member-id> --reason "..."
 ```

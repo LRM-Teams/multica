@@ -20,12 +20,12 @@ import { EXECUTION_STATUS_ACTION_KEY, type ExecutionStatus } from "../execution-
  */
 
 const LEGACY_TO_OVERLAY: Record<ResearchExecutionStatus, ExecutionStatus> = {
-  queued: "waiting",
+  queued: "queued",
   running: "running",
   done: "done",
   failed: "failed",
   stale: "stale",
-  idle: "waiting",
+  idle: "idle",
 };
 
 function toOverlayRow(agent: ResearchExecutionAgent): ExecutionRow {

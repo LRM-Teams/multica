@@ -40,6 +40,7 @@ import {
   MessageCircle,
   SearchIcon,
   Telescope,
+  NotepadText,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorAvatar } from "../common/actor-avatar";
@@ -121,6 +122,7 @@ type NavKey =
   | "agents"
   | "usage"
   | "evolution"
+  | "notes"
   | "wiki"
   | "planBilling"
   | "computers"
@@ -138,6 +140,7 @@ type NavLabelKey =
   | "agents"
   | "usage"
   | "evolution"
+  | "notes"
   | "knowledge"
   | "plan_billing"
   | "computers"
@@ -159,6 +162,7 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Activity 
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "usage", labelKey: "usage", icon: BarChart3 },
   { key: "evolution", labelKey: "evolution", icon: Sparkles },
+  { key: "notes", labelKey: "notes", icon: NotepadText },
   { key: "wiki", labelKey: "knowledge", icon: BookMarked },
   { key: "planBilling", labelKey: "plan_billing", icon: CreditCard },
 ];

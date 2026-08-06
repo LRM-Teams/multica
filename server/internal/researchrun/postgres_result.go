@@ -146,6 +146,9 @@ func (s *PostgresStore) AcceptResult(ctx context.Context, in AcceptResultInput) 
 	if command.RowsAffected() != 1 {
 		return AcceptResultOutcome{}, fmt.Errorf("%w: attempt changed while accepting result", ErrInvalidTransition)
 	}
+	if err = settleAttemptCircuitSuccessTx(ctx, tx, in.AttemptID); err != nil {
+		return AcceptResultOutcome{}, err
+	}
 	if _, err = tx.Exec(ctx, `
 		UPDATE research_task
 		SET status = 'succeeded', completed_at = now(), terminal_reason = '', updated_at = now()

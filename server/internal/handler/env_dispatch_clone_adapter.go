@@ -70,15 +70,18 @@ INSERT INTO agent (
 )
 SELECT workspace_id, $3, display_name, description, avatar_url, runtime_mode,
        runtime_config, $1, max_concurrent_tasks, owner_id,
-       instructions, custom_env, custom_args, mcp_config, model, thinking_level,
+       instructions, custom_env, custom_args, mcp_config,
+       COALESCE(NULLIF($6, ''), model), thinking_level,
        $2
 FROM agent
 WHERE id::text = $4 AND workspace_id::text = $5
 ON CONFLICT (workspace_id, name) DO UPDATE
-SET runtime_id = EXCLUDED.runtime_id, updated_at = now()
+SET runtime_id = EXCLUDED.runtime_id,
+    model = EXCLUDED.model,
+    updated_at = now()
 WHERE agent.source_agent_id = EXCLUDED.source_agent_id
 RETURNING id::text`,
-		in.RuntimeID, in.SourceAgentID, in.Name, in.SourceAgentID, in.WorkspaceID).Scan(&derivedID)
+		in.RuntimeID, in.SourceAgentID, in.Name, in.SourceAgentID, in.WorkspaceID, in.ExecutionModel).Scan(&derivedID)
 	if err != nil {
 		return "", fmt.Errorf("create derived agent: %w", err)
 	}

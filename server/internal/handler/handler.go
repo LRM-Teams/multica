@@ -156,13 +156,17 @@ type Handler struct {
 	// parallel tests with separate Handler values cannot cross-contaminate.
 	channelUnmentionedMessages  uint64
 	channelUnmentionedFullWakes uint64
-	UploadSessionNow            func() time.Time
-	PATCache                    *auth.PATCache
-	DaemonTokenCache            *auth.DaemonTokenCache
-	MembershipCache             *auth.MembershipCache
-	WebhookRateLimiter          WebhookRateLimiter
-	WebhookIPRateLimiter        WebhookRateLimiter
-	CloudRuntime                cloudRuntimeProxy
+	// SweLegoWarmup overrides the SWE-Lego template warm-up backend used by
+	// MaterializeSourceTaskTemplate. Nil ⇒ lazily constructed from the
+	// production sandbox lifecycle; tests inject a fake.
+	SweLegoWarmup        sweLegoWarmupBackend
+	UploadSessionNow     func() time.Time
+	PATCache             *auth.PATCache
+	DaemonTokenCache     *auth.DaemonTokenCache
+	MembershipCache      *auth.MembershipCache
+	WebhookRateLimiter   WebhookRateLimiter
+	WebhookIPRateLimiter WebhookRateLimiter
+	CloudRuntime         cloudRuntimeProxy
 	// Lark integration. All three are nil when the Lark master key
 	// (MULTICA_LARK_SECRET_KEY) is unset; the corresponding HTTP
 	// handlers return 503 in that case so a misconfigured self-host

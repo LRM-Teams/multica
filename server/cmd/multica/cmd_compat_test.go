@@ -1,11 +1,7 @@
 package main
 
 import (
-	"strings"
 	"testing"
-
-	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 )
@@ -32,23 +28,27 @@ func TestLegacyCompatibilityCommandsRemainAvailable(t *testing.T) {
 		}
 	})
 
-	t.Run("top-level send alias is removed while react alias remains", func(t *testing.T) {
-		if cmd, _, err := rootCmd.Find([]string{"send"}); err == nil && cmd != nil && cmd.Name() == "send" {
-			t.Fatalf("top-level send alias should not exist")
-		}
-		if _, _, err := rootCmd.Find([]string{"react"}); err != nil {
-			t.Fatalf("expected top-level react command to exist: %v", err)
+	t.Run("top-level message compatibility aliases are removed", func(t *testing.T) {
+		for _, name := range []string{"send", "react"} {
+			cmd, _, err := rootCmd.Find([]string{name})
+			if err == nil && cmd != nil && cmd.Name() == name {
+				t.Fatalf("top-level %s alias should not exist", name)
+			}
 		}
 	})
 }
 
-func TestMessageGroupedSendReactCommands(t *testing.T) {
-	t.Run("message send and message react exist", func(t *testing.T) {
-		if _, _, err := messageCmd.Find([]string{"send"}); err != nil {
-			t.Fatalf("expected message send command to exist: %v", err)
+func TestMessageCommandSurface(t *testing.T) {
+	t.Run("only canonical message commands exist", func(t *testing.T) {
+		want := map[string]bool{"send": true, "check": true, "read": true, "search": true, "resolve": true, "react": true}
+		for _, command := range messageCmd.Commands() {
+			if !want[command.Name()] {
+				t.Fatalf("message command %q must not be public", command.Name())
+			}
+			delete(want, command.Name())
 		}
-		if _, _, err := messageCmd.Find([]string{"react"}); err != nil {
-			t.Fatalf("expected message react command to exist: %v", err)
+		for name := range want {
+			t.Fatalf("missing message %s command", name)
 		}
 	})
 
@@ -58,48 +58,19 @@ func TestMessageGroupedSendReactCommands(t *testing.T) {
 				t.Fatalf("message send missing --%s", name)
 			}
 		}
-		for _, name := range []string{"message", "message-stdin", "message-file", "sticker", "voice"} {
+		for _, name := range []string{"message", "message-stdin", "message-file", "seen", "sticker", "voice", "client-message-id", "idempotency-key", "output"} {
 			if messageSendCmd.Flags().Lookup(name) != nil {
 				t.Fatalf("message send must not expose --%s", name)
 			}
 		}
-		if messageSendCmd.Flags().Lookup("client-message-id") != nil {
-			t.Fatal("message send must not expose an Agent-controlled idempotency key")
-		}
 	})
 
-	t.Run("top-level react alias exposes the same flags as the grouped form", func(t *testing.T) {
-		pairs := []struct {
-			name      string
-			canonical *cobra.Command
-			alias     *cobra.Command
-		}{
-			{"react", messageReactCmd, reactCmd},
-		}
-		for _, p := range pairs {
-			canonicalFlags := map[string]bool{}
-			p.canonical.Flags().VisitAll(func(f *pflag.Flag) { canonicalFlags[f.Name] = true })
-			aliasFlags := map[string]bool{}
-			p.alias.Flags().VisitAll(func(f *pflag.Flag) { aliasFlags[f.Name] = true })
-			for name := range canonicalFlags {
-				if !aliasFlags[name] {
-					t.Errorf("%s: alias missing flag --%s", p.name, name)
-				}
+	t.Run("removed commands cannot resolve", func(t *testing.T) {
+		for _, name := range []string{"ask-choice", "a2a-control"} {
+			cmd, _, err := messageCmd.Find([]string{name})
+			if err == nil && cmd != nil && cmd.Name() == name {
+				t.Fatalf("message %s must not resolve", name)
 			}
-			for name := range aliasFlags {
-				if !canonicalFlags[name] {
-					t.Errorf("%s: alias has extra flag --%s", p.name, name)
-				}
-			}
-			if p.canonical.RunE == nil || p.alias.RunE == nil {
-				t.Fatalf("%s: expected RunE on both grouped and alias forms", p.name)
-			}
-		}
-	})
-
-	t.Run("react alias help points at the grouped form", func(t *testing.T) {
-		if !strings.Contains(reactCmd.Short, "multica message react") {
-			t.Errorf("react alias Short should reference `multica message react`, got %q", reactCmd.Short)
 		}
 	})
 }

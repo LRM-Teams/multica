@@ -21,6 +21,12 @@ type envDispatchSandboxConfig struct {
 	// shared sandbox/runtime instead of claiming a per-agent sandbox
 	// (research D3).
 	Shared bool `json:"shared,omitempty"`
+	// SharedRuntime is the aggregate runtime catalog shared by every binding in
+	// one shared rollout. It may contain credentials and is used only for
+	// sandbox provisioning.
+	SharedRuntime json.RawMessage `json:"shared_runtime,omitempty"`
+	// ExecutionModel is this binding's non-secret alias/model selection.
+	ExecutionModel string `json:"execution_model,omitempty"`
 }
 
 // marshalEnvDispatchSandboxConfig serializes a resolved per-agent sandbox policy
@@ -36,7 +42,17 @@ func marshalEnvDispatchSandboxConfig(policy service.ResolvedPerAgentSandboxPolic
 	if template == "" {
 		template = "default"
 	}
-	out, err := json.Marshal(envDispatchSandboxConfig{Template: template, Runtime: runtime, Shared: policy.Shared})
+	executionModel := strings.TrimSpace(policy.ExecutionModel)
+	if executionModel == "" {
+		executionModel = service.ExternalRuntimeExecutionModel(runtime)
+	}
+	out, err := json.Marshal(envDispatchSandboxConfig{
+		Template:       template,
+		Runtime:        runtime,
+		Shared:         policy.Shared,
+		SharedRuntime:  policy.SharedRuntime,
+		ExecutionModel: executionModel,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("encode sandbox config: %w", err)
 	}
@@ -78,7 +94,9 @@ func decodeEnvDispatchSandboxConfig(raw json.RawMessage) (envDispatchSandboxConf
 // responses, errors, or logs.
 func (c envDispatchSandboxConfig) createInput(workspaceID, daemonID string) (service.CreateSandboxInstanceInput, error) {
 	runtimeJSON := json.RawMessage(nil)
-	if c.Runtime != nil {
+	if c.Shared && len(bytes.TrimSpace(c.SharedRuntime)) > 0 {
+		runtimeJSON = append(json.RawMessage(nil), c.SharedRuntime...)
+	} else if c.Runtime != nil {
 		encoded, err := json.Marshal(c.Runtime)
 		if err != nil {
 			return service.CreateSandboxInstanceInput{}, fmt.Errorf("encode sandbox runtime policy: %w", err)

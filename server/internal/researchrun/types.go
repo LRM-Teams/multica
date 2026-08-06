@@ -425,8 +425,16 @@ type CreateDispatchIntentInput struct {
 	TaskID               string
 	AgentID              string
 	Target               ExecutionTarget
+	ProbeTargets         []CircuitTarget
+	ProbeLeaseDuration   time.Duration
 	ExpectedStateVersion int64
 	Request              DispatchRequest
+}
+
+type DispatchOutcome struct {
+	Dispatched     int
+	Waiting        bool
+	NextDispatchAt *time.Time
 }
 
 type DispatchIntent struct {

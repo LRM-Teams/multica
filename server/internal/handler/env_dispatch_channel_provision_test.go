@@ -167,6 +167,18 @@ func TestProvisionEnvDispatchAgentSharedAttachesToSharedRuntime(t *testing.T) {
 	require.Equal(t, fx.runtimeID, sessionRuntime)
 }
 
+func TestProvisionEnvDispatchAgentSharedPersistsExecutionModel(t *testing.T) {
+	fx := setupSharedChannelFixture(t)
+	fx.sharedConfig = json.RawMessage(`{"template":"default","shared":true,"execution_model":"env-peer-2/model-b"}`)
+
+	res, err := testHandler.provisionEnvDispatchAgent(context.Background(), fx.provisionInput(fx.memberAID))
+	require.NoError(t, err)
+	var model string
+	require.NoError(t, testPool.QueryRow(context.Background(),
+		`SELECT model FROM agent WHERE id = $1`, res.AgentID).Scan(&model))
+	require.Equal(t, "env-peer-2/model-b", model)
+}
+
 // TestProvisionEnvDispatchAgentSharedConcurrentFirstMentions covers the T008
 // concurrency case: two squad members first-mentioned at the same time both
 // resolve to the same shared runtime, idempotently — one sandbox, one runtime,

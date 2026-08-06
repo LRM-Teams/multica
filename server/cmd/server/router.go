@@ -874,6 +874,22 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)
 			r.Get("/api/member-profiles/{memberType}/{memberId}", h.GetMemberProfile)
 
+			// Notes
+			r.Route("/api/notes/pages", func(r chi.Router) {
+				r.Get("/", h.ListNotePages)
+				r.Post("/", h.CreateNotePage)
+				r.Get("/trash", h.ListDeletedNotePages)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetNotePage)
+					r.Patch("/", h.UpdateNotePage)
+					r.Delete("/", h.DeleteNotePage)
+					r.Post("/duplicate", h.DuplicateNotePage)
+					r.Delete("/permanent", h.PermanentlyDeleteNotePage)
+					r.Post("/restore", h.RestoreNotePage)
+					r.Put("/shares", h.UpdateNotePageShares)
+				})
+			})
+
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/search", h.SearchIssues)
@@ -1173,6 +1189,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/activity", h.GetRuntimeTaskActivity)
 					r.Get("/agent-workspaces", h.ListRuntimeAgentWorkspaces)
 					r.Delete("/agent-workspaces/{dirName}", h.DeleteRuntimeAgentWorkspace)
+					// Installed clients still use these runtime-scoped paths. They
+					// delegate to the daemon-scoped Machine Upgrade record and must
+					// never recreate a runtime-owned update lineage.
+					r.Post("/update", h.InitiateUpdate)
+					r.Get("/update/{updateId}", h.GetUpdate)
+					r.Delete("/update-intent", h.CancelUpdateIntent)
 					r.Post("/restart", h.InitiateRestart)
 					r.Get("/restart/{restartId}", h.GetRestart)
 					r.Post("/models", h.InitiateListModels)
@@ -1224,6 +1246,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Delete("/api/v1/env/{envID}", h.DeleteEnv)
 			r.Post("/api/v1/source-tasks", h.CreateSourceTask)
 			r.Get("/api/v1/source-tasks/{sourceTaskID}", h.GetSourceTask)
+			// Manual SWE-Lego task-template warm-up: build the materialized Cube
+			// template ahead of the first scratch swe_lego dispatch.
+			r.Post("/api/v1/source-tasks/{sourceTaskID}/materialize", h.MaterializeSourceTaskTemplate)
 			r.Post("/api/v1/env-dispatch", h.EnvDispatch)
 			r.Delete("/api/v1/env-dispatch/{projectID}", h.DeleteEnvDispatchProject)
 			r.Get("/api/v1/env-dispatch/{projectID}/dag", h.GetDag)

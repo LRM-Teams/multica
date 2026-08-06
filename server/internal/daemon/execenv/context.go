@@ -389,7 +389,10 @@ func writeSkillFiles(skillsDir string, skills []SkillContextForEnv, manifest *si
 			if skillpkg.IsReservedContentPath(f.Path) {
 				continue
 			}
-			fpath := filepath.Join(dir, f.Path)
+			fpath, err := safeSkillFilePath(dir, f.Path)
+			if err != nil {
+				return fmt.Errorf("invalid supporting file path %q: %w", f.Path, err)
+			}
 			if err := recordMkdirAll(filepath.Dir(fpath), 0o755, manifest); err != nil {
 				return err
 			}
@@ -401,6 +404,23 @@ func writeSkillFiles(skillsDir string, skills []SkillContextForEnv, manifest *si
 	}
 
 	return nil
+}
+
+func safeSkillFilePath(root, rel string) (string, error) {
+	rel = strings.TrimSpace(filepath.FromSlash(rel))
+	if rel == "" || filepath.IsAbs(rel) {
+		return "", errors.New("path must be relative")
+	}
+	clean := filepath.Clean(rel)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", errors.New("path escapes skill directory")
+	}
+	target := filepath.Join(root, clean)
+	relToRoot, err := filepath.Rel(root, target)
+	if err != nil || relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(filepath.Separator)) {
+		return "", errors.New("path escapes skill directory")
+	}
+	return target, nil
 }
 
 // isChatLikeContext reports conversational wakes that should receive the chat

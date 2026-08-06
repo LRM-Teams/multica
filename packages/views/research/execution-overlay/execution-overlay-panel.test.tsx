@@ -7,7 +7,7 @@ import type { ExecutionRow } from "./execution-adapter";
 
 vi.mock("../../i18n/use-t", () => ({
   useT: () => ({
-    t: (fn: (dict: Record<string, unknown>) => unknown, values?: { location?: string; name?: string; count?: number; time?: string }) =>
+    t: (fn: (dict: Record<string, unknown>) => unknown, values?: { location?: string; name?: string; count?: number; time?: string; anomaly?: number; running?: number; queued?: number; total?: number }) =>
       String(fn({
         panel: {
           execution: {
@@ -32,6 +32,7 @@ vi.mock("../../i18n/use-t", () => ({
             stale_reason: "Stale reason",
             task: "Task",
             attempt: "Attempt",
+            task_objective: "Task",
             waiting_reason: "Enqueued or waiting for a slot; no running signal yet.",
             offline_reason: "No live presence for this member; treat as not at post.",
             unknown_reason: "Cannot resolve an execution state from the projection.",
@@ -48,15 +49,21 @@ vi.mock("../../i18n/use-t", () => ({
             group_waiting: "Waiting",
             group_finished: "Finished",
             group_idle: "Idle",
-            status: { waiting: "Waiting", running: "Running", done: "Done", failed: "Failed", retrying: "Retrying", stale: "Stale", offline: "Offline", unknown: "Unknown" },
-            action: { waiting: "Waiting for the current task to start", working: "Running the current task", recent_done: "Recent task completed", recent_failed: "Recent task failed", retrying: "Retrying the current task", stale: "Execution state is stale", offline: "No live signal; not at post", unknown: "Execution state unknown" },
+            collapse_counts: "{{anomaly}} anomaly · {{running}} running · {{queued}} queued · {{total}} agents",
+            collapsed_hint: "Expand the count bar to browse execution",
+            status: { queued: "Queued", running: "Running", cancelling: "Cancelling", done: "Done", failed: "Failed", retrying: "Retrying", stale: "Stale", idle: "Idle", offline: "Offline", unknown: "Unknown" },
+            action: { waiting: "Waiting for the current task to start", working: "Running the current task", cancelling: "Cancellation requested", recent_done: "Recent task completed", recent_failed: "Recent task failed", retrying: "Retrying the current task", stale: "Execution state is stale", idle: "No small task available", offline: "No live signal; not at post", unknown: "Execution state unknown" },
           },
         },
       }))
         .replace("{{location}}", values?.location ?? "")
         .replace("{{name}}", values?.name ?? "")
         .replace("{{count}}", String(values?.count ?? ""))
-        .replace("{{time}}", values?.time ?? ""),
+        .replace("{{time}}", values?.time ?? "")
+        .replace("{{anomaly}}", String(values?.anomaly ?? ""))
+        .replace("{{running}}", String(values?.running ?? ""))
+        .replace("{{queued}}", String(values?.queued ?? ""))
+        .replace("{{total}}", String(values?.total ?? "")),
   }),
 }));
 
@@ -66,41 +73,43 @@ function row(overrides: Partial<ExecutionRow> & { id: string; name: string }): E
   return {
     role: "worker",
     initials: "AG",
-    status: "waiting",
+    status: "queued",
     actionKey: "waiting",
     updatedAt: T0,
     ...overrides,
   } as ExecutionRow;
 }
 
-const eightStateRows: ExecutionRow[] = [
-  row({ id: "w", name: "Wanda", status: "waiting" }),
+const tenStateRows: ExecutionRow[] = [
+  row({ id: "q", name: "Quinn", status: "queued" }),
   row({ id: "r", name: "Ralph", status: "running", startedAt: T0 - 90_000, elapsedMs: 90_000, updatedAt: T0 - 5_000 }),
+  row({ id: "cc", name: "Cecilia", status: "cancelling" }),
   row({ id: "d", name: "Dana", status: "done" }),
   row({ id: "f", name: "Felix", status: "failed", startedAt: T0 - 300_000, updatedAt: T0 - 200_000 }),
   row({ id: "rt", name: "Rita", status: "retrying", startedAt: T0 - 30_000, elapsedMs: 30_000 }),
   row({ id: "s", name: "Sam", status: "stale" }),
+  row({ id: "i", name: "Iris", status: "idle" }),
   row({ id: "o", name: "Omar", status: "offline" }),
   row({ id: "u", name: "Uma", status: "unknown" }),
 ];
 
-describe("ExecutionOverlayPanel — 8-state + time + result", () => {
-  it("renders eight distinct, distinguishable statuses (icon + label + row data-status)", () => {
-    render(<ExecutionOverlayPanel rows={eightStateRows} />);
+describe("ExecutionOverlayPanel — state matrix + time + result", () => {
+  it("renders distinct, distinguishable statuses (icon + label + row data-status)", () => {
+    render(<ExecutionOverlayPanel rows={tenStateRows} />);
     const rows = screen.getAllByTestId("execution-overlay-row");
-    expect(rows).toHaveLength(8);
+    expect(rows).toHaveLength(10);
     const statuses = new Set(rows.map((r) => r.getAttribute("data-status")));
     expect(statuses).toEqual(new Set([
-      "waiting", "running", "done", "failed", "retrying", "stale", "offline", "unknown",
+      "queued", "running", "cancelling", "done", "failed", "retrying", "stale", "idle", "offline", "unknown",
     ]));
     // Each badge label is visible (icon+color+text three-channel).
-    for (const label of ["Running", "Waiting", "Done", "Failed", "Retrying", "Stale", "Offline", "Unknown"]) {
+    for (const label of ["Queued", "Running", "Cancelling", "Done", "Failed", "Retrying", "Stale", "Idle", "Offline", "Unknown"]) {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
   });
 
   it("shows start time, elapsed duration and last update with tabular-nums", () => {
-    render(<ExecutionOverlayPanel rows={eightStateRows} />);
+    render(<ExecutionOverlayPanel rows={tenStateRows} />);
     // Running row shows Started + Elapsed + Updated.
     const runningRow = withinRow("r");
     expect(runningRow.textContent).toContain("Started");
@@ -121,11 +130,27 @@ describe("ExecutionOverlayPanel — 8-state + time + result", () => {
     expect(withinRow("r").textContent).toContain("Last accepted output");
     expect(withinRow("r").textContent).toContain("Enterprise pricing caps");
   });
+
+  it("shows the task objective line on a running row", () => {
+    const rows: ExecutionRow[] = [
+      row({ id: "r", name: "Ralph", status: "running", taskObjective: "Verify supplier regional terms" }),
+    ];
+    render(<ExecutionOverlayPanel rows={rows} />);
+    expect(withinRow("r").textContent).toContain("Verify supplier regional terms");
+  });
+
+  it("shows deck counts in the collapsed header", () => {
+    render(<ExecutionOverlayPanel rows={tenStateRows} />);
+    // anomaly = failed(1) + cancelling(1) + stale(1) = 3; 1 running, 1 queued, 10 total
+    expect(screen.getByText(/3 anomaly · 1 running · 1 queued · 10 agents/)).toBeTruthy();
+    fireEvent.click(screen.getByTestId("execution-overlay-collapse-toggle"));
+    expect(screen.queryAllByTestId("execution-overlay-row")).toHaveLength(0);
+  });
 });
 
 describe("ExecutionOverlayPanel — bidirectional locate + a11y + motion", () => {
   it("highlights an agent row when its node is selected (node → agent)", () => {
-    render(<ExecutionOverlayPanel rows={eightStateRows} highlightAgentId="s" />);
+    render(<ExecutionOverlayPanel rows={tenStateRows} highlightAgentId="s" />);
     const staleRow = Array.from(screen.getAllByTestId("execution-overlay-row")).find(
       (el) => el.getAttribute("data-status") === "stale",
     );
@@ -139,26 +164,26 @@ describe("ExecutionOverlayPanel — bidirectional locate + a11y + motion", () =>
 
   it("locates agent → node and supports arrow-key navigation", async () => {
     const user = userEvent.setup();
-    const rows = eightStateRows.map((r) => ({ ...r, currentNodeId: `node-${r.id}` }));
+    const rows = tenStateRows.map((r) => ({ ...r, currentNodeId: `node-${r.id}` }));
     render(<ExecutionOverlayPanel rows={rows} onLocate={() => {}} />);
     const running = screen.getByRole("button", { name: "Locate Ralph's current node" });
     running.focus();
-    // Active group order: running (Ralph) then retrying (Rita); ArrowDown moves there.
+    // Deck order: cancelling (Cecilia) before running (Ralph) before queued (Quinn)…
     await user.keyboard("{ArrowDown}");
-    const retrying = screen.getByRole("button", { name: "Locate Rita's current node" });
-    expect(document.activeElement).toBe(retrying);
+    const next = screen.getByRole("button", { name: "Locate Quinn's current node" });
+    expect(document.activeElement).toBe(next);
   });
 
   it("propagates locate through the button", () => {
     const onLocate = vi.fn();
-    const rows = [{ ...eightStateRows[0]!, currentNodeId: "node-w" }];
+    const rows = [{ ...tenStateRows[0]!, currentNodeId: "node-q" }];
     render(<ExecutionOverlayPanel rows={rows} onLocate={onLocate} />);
-    fireEvent.click(screen.getByRole("button", { name: "Locate Wanda's current node" }));
-    expect(onLocate).toHaveBeenCalledWith(expect.objectContaining({ id: "w" }));
+    fireEvent.click(screen.getByRole("button", { name: "Locate Quinn's current node" }));
+    expect(onLocate).toHaveBeenCalledWith(expect.objectContaining({ id: "q" }));
   });
 
   it("keeps reduced-motion guard on the running progress sweep", () => {
-    render(<ExecutionOverlayPanel rows={eightStateRows} />);
+    render(<ExecutionOverlayPanel rows={tenStateRows} />);
     const running = Array.from(screen.getAllByTestId("execution-overlay-row")).find(
       (el) => el.getAttribute("data-status") === "running",
     );
@@ -199,7 +224,8 @@ function withinRow(id: string): HTMLElement {
 
 function idToName(id: string): string {
   const map: Record<string, string> = {
-    w: "Wanda", r: "Ralph", d: "Dana", f: "Felix", rt: "Rita", s: "Sam", o: "Omar", u: "Uma",
+    q: "Quinn", r: "Ralph", cc: "Cecilia", d: "Dana", f: "Felix",
+    rt: "Rita", s: "Sam", i: "Iris", o: "Omar", u: "Uma",
   };
   return map[id] ?? id;
 }

@@ -1,6 +1,7 @@
 import {
   createMemoryRouter,
   Navigate,
+  useParams,
 } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import { IssueDetailPage } from "./pages/issue-detail-page";
@@ -21,6 +22,7 @@ import { ResearchListPage } from "@multica/views/research";
 import { MyIssuesPage } from "@multica/views/my-issues";
 import { SkillsPage } from "@multica/views/skills";
 import { KnowledgeListPage } from "@multica/views/knowledge";
+import { NotesPage } from "@multica/views/notes";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
 import { DesktopAgentsPage } from "./components/desktop-agents-page";
 import { SandboxesPage } from "@multica/views/sandboxes";
@@ -31,6 +33,11 @@ import { InboxPage } from "@multica/views/inbox";
 import { WorkspaceRouteLayout } from "./components/workspace-route-layout";
 import { DesktopRouteErrorPage } from "./components/route-error-page";
 import { PageShell } from "./components/page-shell";
+
+export function NotesPageRoute() {
+  const { id } = useParams();
+  return <NotesPage pageId={id} />;
+}
 
 /**
  * Route definitions shared by all tabs.
@@ -49,6 +56,7 @@ import { PageShell } from "./components/page-shell";
  * rather than 404; App.tsx's bootstrap repoints activeWorkspaceSlug on the
  * next render pass.
  */
+// react-doctor-disable-next-line react-doctor/only-export-components -- route config module intentionally exports React Router data plus component wrappers.
 export const appRoutes: RouteObject[] = [
   {
     element: <PageShell />,
@@ -127,6 +135,8 @@ export const appRoutes: RouteObject[] = [
             element: <SkillDetailPage />,
             handle: { title: "Skill" },
           },
+          { path: "notes", element: <NotesPage />, handle: { title: "Notes" } },
+          { path: "notes/:id", element: <NotesPageRoute />, handle: { title: "Notes" } },
           { path: "wiki", element: <KnowledgeListPage />, handle: { title: "Knowledge" } },
           {
             path: "wiki/:id",
@@ -172,6 +182,7 @@ export const appRoutes: RouteObject[] = [
 ];
 
 /** Create an independent memory router for a tab. */
+// react-doctor-disable-next-line react-doctor/only-export-components -- router factory must stay beside the shared route config.
 export function createTabRouter(initialPath: string) {
   return createMemoryRouter(appRoutes, {
     initialEntries: [initialPath],

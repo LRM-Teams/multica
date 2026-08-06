@@ -91,4 +91,34 @@ export default [
       ],
     },
   },
+  // Dev-only smoke harnesses under __smoke__/ (standalone Vite screenshot
+  // demos, .cjs shot scripts, their vite.config). These are not shipped
+  // browser code: they render hardcoded fixture strings onto a dev-only canvas
+  // for screenshot artifacts (LRM-1475 AC3) and import vite/plugin deps that
+  // live in the app, not in the @multica/views runtime. Grant node globals for
+  // the .cjs/vite tooling and exempt them from the JSX-i18n, phantom-dep and
+  // require-import rules — same reasoning as the scripts/** carve-out above.
+  // This block is intentionally LAST: flat config is last-match-wins, so later
+  // blocks override the JSX-i18n rule that would otherwise flag the demo .tsx.
+  {
+    files: ["**/__smoke__/**/*.{mjs,js,cjs,ts,tsx}"],
+    languageOptions: {
+      globals: {
+        console: "readonly",
+        process: "readonly",
+        URL: "readonly",
+        __dirname: "readonly",
+        __filename: "readonly",
+        require: "readonly",
+        module: "readonly",
+        global: "readonly",
+        setTimeout: "readonly",
+      },
+    },
+    rules: {
+      "i18next/no-literal-string": "off",
+      "import-x/no-extraneous-dependencies": "off",
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
 ];

@@ -50,6 +50,9 @@ export type ExecutionRow = {
   /** Failure reason: only when status is `failed`. */
   failureReasonKey?: string;
 
+  /** Current task objective/title (agent-execution-spec §1 task row). */
+  taskObjective?: string;
+
   /** Absolute start time (unix ms) of the current work, when known. */
   startedAt?: number;
   /** Last update (unix ms). Always present from presence.updatedAt. */
@@ -109,12 +112,10 @@ function attemptsByAgent(run: ResearchRunSnapshot | undefined): AttemptsByAgent 
   return map;
 }
 
-/** True when the lease for a running/queued signal is not yet expired. */
-function isLeaseValid(entry: ResearchPresenceMap[string]): boolean {
-  if (entry.expiresAt == null) return true;
-  return Date.now() < entry.expiresAt;
-}
-
+/**
+ * True when the agent is retrying: a newer in-flight attempt follows a failed
+ * terminal attempt for the same agent (contract §2 — only with ledger facts).
+ */
 function isRetrying(
   presence: ResearchPresenceMap[string] | undefined,
   attempts: ResearchRunAttempt[] | undefined,
@@ -143,6 +144,15 @@ function isRunningLike(phase: string | null | undefined): boolean {
   return phase === "running" || phase === "queued" || phase === "dispatching";
 }
 
+function isCancelling(attempts: ResearchRunAttempt[] | undefined): boolean {
+  // Contract §2: `cancelling` = cancellation requested, not yet terminal.
+  // Only when the attempt ledger carries an in-flight cancellation fact
+  // (status "cancelling" before a terminal failed/lost/cancelled).
+  if (!attempts || attempts.length === 0) return false;
+  const last = attempts[attempts.length - 1]!;
+  return last.status === "cancelling";
+}
+
 function isTerminalFailure(status: string | null | undefined): boolean {
   return status === "failed" || status === "lost" || status === "cancelled";
 }
@@ -157,18 +167,25 @@ function deriveStatus(
   if (!presence) return "offline";
   const phase = presence.phase;
   if (phase === "stale") return "stale";
+  // Cancellation in flight wins over a stale classification only when the
+  // attempt ledger carries the fact; otherwise a cancelled terminal attempt
+  // still reports its preceding presence phase below.
+  if (isCancelling(attempts)) return "cancelling";
   if (phase === "failed") {
     return isRetrying(presence, attempts) ? "retrying" : "failed";
   }
   if (phase === "running" || phase === "queued") {
     // Contract: queued/running past expires_at → stale.
     if (presence.expiresAt != null && now >= presence.expiresAt) return "stale";
-    const active = isRunningLike(phase) && isLeaseValid(presence);
-    // presence running → running; queued → waiting (roster present).
-    return phase === "running" && active ? "running" : "waiting";
+    // presence running → running (unexpired); queued → queued (task assigned,
+    // not yet runtime-started; never fake a running timer).
+    return phase === "running" ? "running" : "queued";
   }
   if (phase === "done") return "done";
-  if (phase === "idle") return "waiting";
+  // Roster present with an active presence entry and no running/queued
+  // evidence → idle (contract §2): never infer offline from absence of
+  // activity, and never fake running.
+  if (phase === "idle") return "idle";
   // Unknown phase value → unknown (never guess).
   return "unknown";
 }
@@ -248,20 +265,20 @@ export function buildExecutionOverlayRows(input: {
         ? nodesById.get(signal.nodeId)
         : attemptNodeByAgent.get(member.agent_id);
       const attempt = attempts.get(member.agent_id)?.at(-1);
+      const task = input.run?.tasks?.find((t) => t.id === (signal?.taskId ?? attempt?.task_id));
       const startedAt =
         toUnixMs(attempt?.started_at) ??
         toUnixMs(signal?.updatedAt) ??
         toUnixMs(signal?.expiresAt);
       const elapsedMs =
-        startedAt != null && (status === "running" || status === "waiting" || status === "retrying")
+        startedAt != null && (status === "running" || status === "queued" || status === "cancelling" || status === "retrying")
           ? Math.max(0, now - startedAt)
           : undefined;
       const failureReason =
         status === "failed" && attempt ? attempt.failure_class : undefined;
       const waitingReason =
-        status === "waiting"
-          ? signal?.staleReason ??
-            (signal?.phase === "idle" ? "idle" : signal?.phase === "queued" ? "queued" : undefined)
+        status === "queued" || status === "idle"
+          ? signal?.staleReason ?? (signal?.phase === "idle" ? "idle" : signal?.phase === "queued" ? "queued" : undefined)
           : undefined;
       const recentResult = lastAcceptedResult(input.run ?? undefined, member.agent_id, attemptNodeByAgent);
 
@@ -280,6 +297,7 @@ export function buildExecutionOverlayRows(input: {
         startedAt,
         updatedAt: toUnixMs(signal?.updatedAt) ?? now,
         elapsedMs,
+        taskObjective: task?.objective ?? task?.expected_result ?? undefined,
         recentResult,
         currentNodeId: node?.id,
         locationLabel: node?.title || undefined,

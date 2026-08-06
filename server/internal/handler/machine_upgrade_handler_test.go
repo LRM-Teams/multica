@@ -580,3 +580,87 @@ func TestMachineUpgrade_AllowsComputerOwnerOrWorkspaceOwnerAdmin(t *testing.T) {
 		t.Fatalf("desktop response = %s err=%v", desktopW.Body.String(), err)
 	}
 }
+
+func TestMachineUpgrade_RuntimeCompatibilityAdaptersShareAndCancelCanonicalOperation(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	firstRuntimeID, secondRuntimeID, daemonID := createMachineUpgradeSiblingRuntimes(t, testUserID)
+
+	createReq := newRequestAsUser(testUserID, http.MethodPost, "/api/runtimes/"+firstRuntimeID+"/update", map[string]string{"target_version": "v9.9.9"})
+	createReq = withURLParam(createReq, "runtimeId", firstRuntimeID)
+	createW := httptest.NewRecorder()
+	testHandler.InitiateUpdate(createW, createReq)
+	if createW.Code != http.StatusOK {
+		t.Fatalf("compatibility create = %d: %s", createW.Code, createW.Body.String())
+	}
+	var created UpdateRequest
+	if err := json.Unmarshal(createW.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || created.RuntimeID != firstRuntimeID || created.Status != UpdateQueued {
+		t.Fatalf("compatibility create response = %+v", created)
+	}
+	if op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID); err != nil || op == nil || op.Phase != MachineUpgradeQueued {
+		t.Fatalf("canonical operation = %+v err=%v", op, err)
+	}
+	var legacyIntentCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM daemon_runtime_update_intent WHERE runtime_id = ANY($1::text[]::uuid[])`,
+		[]string{firstRuntimeID, secondRuntimeID}).Scan(&legacyIntentCount); err != nil {
+		t.Fatal(err)
+	}
+	if legacyIntentCount != 0 {
+		t.Fatalf("compatibility adapter created %d legacy runtime intents", legacyIntentCount)
+	}
+
+	getReq := newRequestAsUser(testUserID, http.MethodGet, "/api/runtimes/"+secondRuntimeID+"/update/"+created.ID, nil)
+	getReq = withURLParams(getReq, "runtimeId", secondRuntimeID, "updateId", created.ID)
+	getW := httptest.NewRecorder()
+	testHandler.GetUpdate(getW, getReq)
+	if getW.Code != http.StatusOK {
+		t.Fatalf("sibling compatibility get = %d: %s", getW.Code, getW.Body.String())
+	}
+	var sibling UpdateRequest
+	if err := json.Unmarshal(getW.Body.Bytes(), &sibling); err != nil {
+		t.Fatal(err)
+	}
+	if sibling.ID != created.ID || sibling.RuntimeID != secondRuntimeID || sibling.Status != UpdateQueued {
+		t.Fatalf("sibling compatibility projection = %+v", sibling)
+	}
+
+	cancelReq := newRequestAsUser(testUserID, http.MethodDelete, "/api/runtimes/"+secondRuntimeID+"/update-intent", nil)
+	cancelReq = withURLParam(cancelReq, "runtimeId", secondRuntimeID)
+	cancelW := httptest.NewRecorder()
+	testHandler.CancelUpdateIntent(cancelW, cancelReq)
+	if cancelW.Code != http.StatusOK {
+		t.Fatalf("compatibility cancel = %d: %s", cancelW.Code, cancelW.Body.String())
+	}
+	if op, err := testHandler.MachineUpgradeStore.Get(context.Background(), daemonID, created.ID); err != nil || op == nil || op.Phase != MachineUpgradeCancelled {
+		t.Fatalf("cancelled canonical operation = %+v err=%v", op, err)
+	}
+
+	plainMemberID := createRuntimeLocalSkillTestMember(t, "member")
+	for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
+		req := newRequestAsUser(plainMemberID, method, "/api/runtimes/"+firstRuntimeID+"/update", map[string]string{"target_version": "v10.0.0"})
+		if method == http.MethodGet {
+			req = newRequestAsUser(plainMemberID, method, "/api/runtimes/"+firstRuntimeID+"/update/"+created.ID, nil)
+		}
+		if method == http.MethodDelete {
+			req = newRequestAsUser(plainMemberID, method, "/api/runtimes/"+firstRuntimeID+"/update-intent", nil)
+		}
+		req = withURLParams(req, "runtimeId", firstRuntimeID, "updateId", created.ID)
+		w := httptest.NewRecorder()
+		switch method {
+		case http.MethodPost:
+			testHandler.InitiateUpdate(w, req)
+		case http.MethodGet:
+			testHandler.GetUpdate(w, req)
+		case http.MethodDelete:
+			testHandler.CancelUpdateIntent(w, req)
+		}
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("compatibility %s by non-owner = %d: %s", method, w.Code, w.Body.String())
+		}
+	}
+}

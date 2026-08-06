@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useCallback, type ReactNode } from "react";
-import { CircleDashed } from "lucide-react";
+import { useMemo, useCallback, useState } from "react";
+import { CircleDashed, ChevronsUpDown } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n/use-t";
 import type { ExecutionRow } from "./execution-adapter";
 import { ExecutionOverlayRow, type ExecutionCopy } from "./execution-overlay-row";
 import { ExecutionOverlaySyncIndicator } from "./execution-overlay-sync-indicator";
+import { EXECUTION_DECK_PRIORITY, type ExecutionStatus } from "./execution-status";
 
 export type ExecutionOverlaySyncState = {
   disconnected?: boolean;
@@ -24,6 +25,33 @@ export type ExecutionOverlaySyncState = {
  * Rendering + ordering is a pure display concern: rows arrive pre-derived from
  * the Projection via `buildExecutionOverlayRows` and are never written back.
  */
+function ExecutionOverlayList({
+  list,
+  makeRowCopy,
+  highlightAgentId,
+  onLocate,
+}: {
+  list: readonly ExecutionRow[];
+  makeRowCopy: (agent: ExecutionRow) => ExecutionCopy;
+  highlightAgentId?: string | null;
+  onLocate?: (agent: ExecutionRow) => void;
+}) {
+  return (
+    <>
+      {list.map((agent) => (
+        <li key={agent.id} className="min-w-0">
+          <ExecutionOverlayRow
+            agent={agent}
+            copy={makeRowCopy(agent)}
+            highlighted={highlightAgentId != null && agent.id === highlightAgentId}
+            onLocate={onLocate}
+          />
+        </li>
+      ))}
+    </>
+  );
+}
+
 export function ExecutionOverlayPanel({
   rows,
   title,
@@ -49,22 +77,26 @@ export function ExecutionOverlayPanel({
   const copy: ExecutionCopy = useMemo(
     () => ({
       status: {
+        queued: t(($) => $.panel.execution.status.queued),
         running: t(($) => $.panel.execution.status.running),
-        waiting: t(($) => $.panel.execution.status.waiting),
+        cancelling: t(($) => $.panel.execution.status.cancelling),
         done: t(($) => $.panel.execution.status.done),
         failed: t(($) => $.panel.execution.status.failed),
         retrying: t(($) => $.panel.execution.status.retrying),
         stale: t(($) => $.panel.execution.status.stale),
+        idle: t(($) => $.panel.execution.status.idle),
         offline: t(($) => $.panel.execution.status.offline),
         unknown: t(($) => $.panel.execution.status.unknown),
       },
       action: {
         waiting: t(($) => $.panel.execution.action.waiting),
         working: t(($) => $.panel.execution.action.working),
+        cancelling: t(($) => $.panel.execution.action.cancelling),
         recent_done: t(($) => $.panel.execution.action.recent_done),
         recent_failed: t(($) => $.panel.execution.action.recent_failed),
         retrying: t(($) => $.panel.execution.action.retrying),
         stale: t(($) => $.panel.execution.action.stale),
+        idle: t(($) => $.panel.execution.action.idle),
         offline: t(($) => $.panel.execution.action.offline),
         unknown: t(($) => $.panel.execution.action.unknown),
       },
@@ -77,6 +109,7 @@ export function ExecutionOverlayPanel({
       staleLabel: t(($) => $.panel.execution.stale_reason),
       taskLabel: t(($) => $.panel.execution.task),
       attemptLabel: t(($) => $.panel.execution.attempt),
+      taskObjectiveLabel: t(($) => $.panel.execution.task_objective),
       failedReason: t(($) => $.panel.execution.failed_reason),
       waitingReason: t(($) => $.panel.execution.waiting_reason),
       offlineReason: t(($) => $.panel.execution.offline_reason),
@@ -96,56 +129,57 @@ export function ExecutionOverlayPanel({
     [t],
   );
 
-  const activeCount = rows.filter(
-    (r) => r.status === "running" || r.status === "retrying",
+  const anomalyCount = rows.filter(
+    (r) => r.status === "failed" || r.status === "cancelling" || r.status === "stale",
   ).length;
+  const runningCount = rows.filter((r) => r.status === "running").length;
+  const queuedCount = rows.filter((r) => r.status === "queued").length;
 
-  const grouped = useMemo(() => {
-    const g = {
-      active: [] as ExecutionRow[],
-      waiting: [] as ExecutionRow[],
-      finished: [] as ExecutionRow[],
-      idle: [] as ExecutionRow[],
-    };
-    for (const row of rows) {
-      if (row.status === "running" || row.status === "retrying") g.active.push(row);
-      else if (row.status === "waiting") g.waiting.push(row);
-      else if (row.status === "done" || row.status === "failed") g.finished.push(row);
-      else g.idle.push(row);
-    }
-    return g;
-  }, [rows]);
-
-  const renderList = (list: readonly ExecutionRow[]) =>
-    list.map((agent) => (
-      <ExecutionOverlayRow
-        key={agent.id}
-        agent={agent}
-        copy={{ ...copy, locatable: t(($) => $.panel.execution.locatable, { location: agent.locationLabel ?? "" }), locate: t(($) => $.panel.execution.locate, { location: agent.locationLabel ?? "" }) }}
-        highlighted={highlightAgentId != null && agent.id === highlightAgentId}
-        onLocate={onLocate}
-      />
-    ));
-
-  // Roving keyboard navigation across the row list (ArrowUp / ArrowDown).
-  const onListKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLElement>) => {
-      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-      const buttons = Array.from(
-        (event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>(
-          '[data-testid="execution-overlay-row"] > button',
-        ),
-      );
-      if (buttons.length === 0) return;
-      const idx = buttons.indexOf(document.activeElement as HTMLButtonElement);
-      if (idx === -1) return;
-      event.preventDefault();
-      const next = event.key === "ArrowDown" ? idx + 1 : idx - 1;
-      const target = buttons[(next + buttons.length) % buttons.length];
-      target?.focus();
-    },
-    [],
+  // Deck ordering (agent-execution-spec §3): blocking failed → cancelling →
+  // running → queued → retrying → stale → idle → done → offline/unknown;
+  // newest first within a status. Sorting is a pure display concern and never
+  // mutates the underlying rows.
+  const sortedRows = useMemo(
+    () =>
+      rows.toSorted((a, b) => {
+        const pa = EXECUTION_DECK_PRIORITY[a.status] ?? 9;
+        const pb = EXECUTION_DECK_PRIORITY[b.status] ?? 9;
+        if (pa !== pb) return pa - pb;
+        return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+      }),
+    [rows],
   );
+
+  // Grouped rows following the same deck priority order; labels are localized.
+  const grouped = useMemo(() => {
+    const buckets = new Map<ExecutionStatus, ExecutionRow[]>();
+    const order: ExecutionStatus[] = [
+      "failed", "cancelling", "running", "queued", "retrying",
+      "stale", "idle", "done", "offline", "unknown",
+    ];
+    for (const row of sortedRows) {
+      const list = buckets.get(row.status) ?? [];
+      list.push(row);
+      buckets.set(row.status, list);
+    }
+    const result: { status: ExecutionStatus; list: ExecutionRow[] }[] = [];
+    for (const status of order) {
+      const list = buckets.get(status) ?? [];
+      if (list.length > 0) result.push({ status, list });
+    }
+    return result;
+  }, [sortedRows]);
+
+  const makeRowCopy = useCallback(
+    (agent: ExecutionRow): ExecutionCopy => ({
+      ...copy,
+      locatable: t(($) => $.panel.execution.locatable, { location: agent.locationLabel ?? "" }),
+      locate: t(($) => $.panel.execution.locate, { location: agent.locationLabel ?? "" }),
+    }),
+    [copy, t],
+  );
+
+  const [collapsed, setCollapsed] = useState(false);
 
   return (
     <section
@@ -158,11 +192,23 @@ export function ExecutionOverlayPanel({
           <CircleDashed className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <h2 className="truncate text-xs font-semibold text-foreground">{resolvedTitle}</h2>
         </div>
-        <p className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-          {activeCount > 0
-            ? t(($) => $.panel.execution.active_count, { count: activeCount })
-            : t(($) => $.panel.execution.no_active)}
-        </p>
+        <button
+          type="button"
+          aria-expanded={!collapsed}
+          data-testid="execution-overlay-collapse-toggle"
+          className="flex min-w-0 shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] tabular-nums text-muted-foreground outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
+          onClick={() => setCollapsed((v) => !v)}
+        >
+          <ChevronsUpDown className="size-3 shrink-0" aria-hidden="true" />
+          <span className="truncate">
+            {t(($) => $.panel.execution.collapse_counts, {
+              anomaly: anomalyCount,
+              running: runningCount,
+              queued: queuedCount,
+              total: rows.length,
+            })}
+          </span>
+        </button>
       </header>
 
       <ExecutionOverlaySyncIndicator
@@ -173,40 +219,42 @@ export function ExecutionOverlayPanel({
         isRetrying={sync?.isRetrying}
       />
 
-      {rows.length === 0 ? (
+      {collapsed ? (
+        <p className="p-3 text-center text-xs text-muted-foreground">
+          {t(($) => $.panel.execution.collapsed_hint)}
+        </p>
+      ) : rows.length === 0 ? (
         <p className="p-4 text-center text-xs text-muted-foreground">
           {t(($) => $.panel.execution.empty)}
         </p>
       ) : !groups ? (
-        <div className="min-w-0" onKeyDown={onListKeyDown}>{renderList(rows)}</div>
+        <ul className="min-w-0 list-none">
+          <ExecutionOverlayList
+            list={sortedRows}
+            makeRowCopy={makeRowCopy}
+            highlightAgentId={highlightAgentId}
+            onLocate={onLocate}
+          />
+        </ul>
       ) : (
-        <div className="min-w-0" onKeyDown={onListKeyDown}>
-          {grouped.active.length > 0 ? (
-            <ExecutionGroupLabel>{t(($) => $.panel.execution.group_active)}</ExecutionGroupLabel>
-          ) : null}
-          {renderList(grouped.active)}
-          {grouped.waiting.length > 0 ? (
-            <ExecutionGroupLabel>{t(($) => $.panel.execution.group_waiting)}</ExecutionGroupLabel>
-          ) : null}
-          {renderList(grouped.waiting)}
-          {grouped.finished.length > 0 ? (
-            <ExecutionGroupLabel>{t(($) => $.panel.execution.group_finished)}</ExecutionGroupLabel>
-          ) : null}
-          {renderList(grouped.finished)}
-          {grouped.idle.length > 0 ? (
-            <ExecutionGroupLabel>{t(($) => $.panel.execution.group_idle)}</ExecutionGroupLabel>
-          ) : null}
-          {renderList(grouped.idle)}
-        </div>
+        <ul className="min-w-0 list-none">
+          {grouped.map(({ status, list }) => (
+            <li key={status} className="min-w-0">
+              <div className="px-3 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {copy.status[status]}
+              </div>
+              <ul className="min-w-0 list-none">
+                <ExecutionOverlayList
+                  list={list}
+                  makeRowCopy={makeRowCopy}
+                  highlightAgentId={highlightAgentId}
+                  onLocate={onLocate}
+                />
+              </ul>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
-  );
-}
-
-function ExecutionGroupLabel({ children }: { children: ReactNode }) {
-  return (
-    <div className="px-3 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-      {children}
-    </div>
   );
 }

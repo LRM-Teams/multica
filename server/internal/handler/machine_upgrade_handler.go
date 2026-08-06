@@ -386,3 +386,40 @@ func (h *Handler) publishMachineUpgradeProjection(r *http.Request, rt db.AgentRu
 		"runtime": h.runtimeToResponse(r.Context(), rt),
 	})
 }
+
+func runtimeUpdateFromMachineUpgrade(op *MachineUpgrade, runtimeID string) *UpdateRequest {
+	if op == nil {
+		return nil
+	}
+	status := UpdateQueued
+	switch op.Phase {
+	case MachineUpgradeStarting, MachineUpgradeStaging, MachineUpgradeVerifying, MachineUpgradeHandoff, MachineUpgradeConverging, MachineUpgradeRollbackPending:
+		status = UpdateRunning
+	case MachineUpgradeCompleted:
+		status = UpdateCompleted
+	case MachineUpgradeFailed, MachineUpgradeRolledBack, MachineUpgradeCancelled:
+		status = UpdateFailed
+	case MachineUpgradeTimeout:
+		status = UpdateTimeout
+	}
+	target := op.RequestedTarget
+	if op.ResolvedTarget != nil && strings.TrimSpace(*op.ResolvedTarget) != "" {
+		target = *op.ResolvedTarget
+	}
+	errMsg := ""
+	if op.ErrorMessage != nil {
+		errMsg = *op.ErrorMessage
+	}
+	if op.Phase == MachineUpgradeCancelled && errMsg == "" {
+		errMsg = "machine upgrade cancelled"
+	}
+	return &UpdateRequest{
+		ID:            op.ID,
+		RuntimeID:     runtimeID,
+		Status:        status,
+		TargetVersion: target,
+		Error:         errMsg,
+		CreatedAt:     op.CreatedAt,
+		UpdatedAt:     op.UpdatedAt,
+	}
+}

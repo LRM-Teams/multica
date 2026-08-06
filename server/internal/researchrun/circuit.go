@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
-var ErrCircuitProbeLeaseLost = errors.New("research execution circuit probe lease lost")
+var (
+	ErrCircuitProbeLeaseLost = errors.New("research execution circuit probe lease lost")
+	ErrCircuitUnavailable    = errors.New("research execution circuit unavailable")
+)
 
 type CircuitState string
 
@@ -18,10 +21,10 @@ const (
 )
 
 type CircuitTarget struct {
-	Scope             CircuitScope
-	Key               string
-	Label             string
-	ConfigFingerprint string
+	Scope             CircuitScope `json:"scope"`
+	Key               string       `json:"key"`
+	Label             string       `json:"label"`
+	ConfigFingerprint string       `json:"config_fingerprint"`
 }
 
 type ExecutionCircuit struct {
@@ -88,6 +91,40 @@ type CircuitProbeLease struct {
 	Token       string
 	Generation  int64
 	ExpiresAt   time.Time
+}
+
+type CircuitBlock struct {
+	CircuitID  string       `json:"circuit_id"`
+	Scope      CircuitScope `json:"scope"`
+	State      CircuitState `json:"state"`
+	Generation int64        `json:"generation"`
+	RetryAt    *time.Time   `json:"retry_at,omitempty"`
+}
+
+type ExecutionTargetHealth struct {
+	AgentID       string          `json:"agent_id"`
+	Dispatchable  bool            `json:"dispatchable"`
+	ProbeTargets  []CircuitTarget `json:"probe_targets,omitempty"`
+	Blocking      []CircuitBlock  `json:"blocking,omitempty"`
+	RetryAt       *time.Time      `json:"retry_at,omitempty"`
+	BlockedReason string          `json:"blocked_reason,omitempty"`
+}
+
+type AttemptCircuitProbe struct {
+	ID             string
+	WorkspaceID    string
+	SessionID      string
+	AttemptID      string
+	CircuitID      string
+	Target         CircuitTarget
+	Token          string
+	Generation     int64
+	LeaseExpiresAt time.Time
+	Status         string
+	FailureClass   FailureClass
+	SourceReason   string
+	Diagnostics    string
+	ResolvedAt     *time.Time
 }
 
 type circuitPolicy struct {

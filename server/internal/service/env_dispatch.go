@@ -96,9 +96,11 @@ type EnvDispatchInput struct {
 	// already configured.
 	DefaultBaseTemplate string
 
-	// TaskTemplateID is the ready, sanitized Cube template produced for a
-	// scratch SWE-Lego issue source. It is internal dispatch state, never a
-	// caller-selected template, and takes precedence for every rollout sandbox.
+	// TaskTemplateID is the ready, sanitized Cube template pre-materialized for
+	// a scratch SWE-Lego issue source via the warm-up endpoint
+	// (POST /api/v1/source-tasks/<id>/materialize). It is internal dispatch
+	// state, never a caller-selected template, and takes precedence for every
+	// rollout sandbox.
 	TaskTemplateID string
 
 	// InstanceBackedBase is resolved by Dispatch after GetEnv: true when the base
@@ -158,6 +160,126 @@ type ResolvedPerAgentSandboxPolicy struct {
 	// instead of claiming per-agent sandboxes (research D3). Persisted on the
 	// binding's sandbox_config as "shared".
 	Shared bool
+	// SharedRuntime is the deterministic aggregate runtime catalog persisted on
+	// every binding in a shared rollout. It may contain credentials and must
+	// never be returned in response DTOs or formatted in errors/logs.
+	SharedRuntime json.RawMessage
+	// ExecutionModel selects this binding's provider alias and model from the
+	// shared catalog. It never contains a URL or credential.
+	ExecutionModel string
+}
+
+type sharedRuntimeProvider struct {
+	Provider string `json:"provider"`
+	APIKey   string `json:"api_key"`
+	BaseURL  string `json:"base_url"`
+	Model    string `json:"model"`
+}
+
+type sharedRuntimeCatalog struct {
+	Providers       []sharedRuntimeProvider `json:"providers"`
+	DefaultProvider string                  `json:"default_provider"`
+	DefaultModel    string                  `json:"default_model"`
+}
+
+// ApplySharedRuntimeCatalog marks every roster binding shared and, when any
+// explicit runtime exists, assigns all bindings the same deterministic runtime
+// catalog. Explicit bindings select their own alias/model; bindings without a
+// runtime inherit the leader/default selection.
+func ApplySharedRuntimeCatalog(roster MessageRoster, policies map[string]ResolvedPerAgentSandboxPolicy) error {
+	orderedAgentIDs := make([]string, 0, len(roster.AgentIDs)+1)
+	seen := make(map[string]struct{}, len(roster.AgentIDs)+1)
+	if roster.LeaderID != "" {
+		orderedAgentIDs = append(orderedAgentIDs, roster.LeaderID)
+		seen[roster.LeaderID] = struct{}{}
+	}
+	for _, agentID := range roster.AgentIDs {
+		if _, exists := seen[agentID]; exists {
+			continue
+		}
+		orderedAgentIDs = append(orderedAgentIDs, agentID)
+		seen[agentID] = struct{}{}
+	}
+
+	catalog := sharedRuntimeCatalog{}
+	selections := make(map[string]string, len(orderedAgentIDs))
+	for ordinal, agentID := range orderedAgentIDs {
+		policy := policies[agentID]
+		policy.Shared = true
+		policies[agentID] = policy
+		if policy.Runtime == nil {
+			continue
+		}
+		runtime, err := NormalizeExternalModelRuntime(policy.Runtime)
+		if err != nil {
+			return fmt.Errorf("normalize shared runtime for agent %s: %w", agentID, err)
+		}
+		alias := sharedRuntimeProviderAlias(agentID, ordinal)
+		catalog.Providers = append(catalog.Providers, sharedRuntimeProvider{
+			Provider: alias,
+			APIKey:   runtime.APIKey,
+			BaseURL:  runtime.BaseURL,
+			Model:    runtime.Model,
+		})
+		selections[agentID] = alias + "/" + runtime.Model
+		policy.Runtime = runtime
+		policies[agentID] = policy
+	}
+	if len(catalog.Providers) == 0 {
+		return nil
+	}
+
+	defaultSelection := selections[roster.LeaderID]
+	if defaultSelection == "" {
+		first := catalog.Providers[0]
+		catalog.DefaultProvider = first.Provider
+		catalog.DefaultModel = first.Model
+		defaultSelection = first.Provider + "/" + first.Model
+	} else {
+		for _, provider := range catalog.Providers {
+			if defaultSelection == provider.Provider+"/"+provider.Model {
+				catalog.DefaultProvider = provider.Provider
+				catalog.DefaultModel = provider.Model
+				break
+			}
+		}
+	}
+	serialized, err := json.Marshal(catalog)
+	if err != nil {
+		return fmt.Errorf("encode shared runtime catalog: %w", err)
+	}
+	for _, agentID := range orderedAgentIDs {
+		policy := policies[agentID]
+		policy.SharedRuntime = serialized
+		policy.ExecutionModel = selections[agentID]
+		if policy.ExecutionModel == "" {
+			policy.ExecutionModel = defaultSelection
+		}
+		policies[agentID] = policy
+	}
+	return nil
+}
+
+func sharedRuntimeProviderAlias(agentID string, ordinal int) string {
+	var sanitized strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(agentID)) {
+		isAlphaNumeric := r >= 'a' && r <= 'z' || r >= '0' && r <= '9'
+		if isAlphaNumeric {
+			sanitized.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if sanitized.Len() > 0 && !lastDash {
+			sanitized.WriteByte('-')
+			lastDash = true
+		}
+	}
+	base := strings.Trim(sanitized.String(), "-")
+	if base == "" {
+		base = "agent"
+	}
+	return fmt.Sprintf("env-%s-%d", base, ordinal+1)
 }
 
 // NormalizeExternalModelRuntime trims whitespace and validates that the
@@ -188,6 +310,17 @@ func NormalizeExternalModelRuntime(in *ExternalModelRuntime) (*ExternalModelRunt
 		return nil, fmt.Errorf("base_url must be an absolute HTTP(S) URL")
 	}
 	return out, nil
+}
+
+// ExternalRuntimeExecutionModel returns the non-secret provider/model selector
+// for a complete external runtime. Incomplete runtimes return an empty override
+// so existing source-model copy behavior remains unchanged.
+func ExternalRuntimeExecutionModel(runtime *ExternalModelRuntime) string {
+	normalized, err := NormalizeExternalModelRuntime(runtime)
+	if err != nil || normalized == nil {
+		return ""
+	}
+	return normalized.Provider + "/" + normalized.Model
 }
 
 type IssueInput struct {
@@ -235,6 +368,7 @@ type AgentSandboxStatus struct {
 	Status            string `json:"status"`
 	SandboxInstanceID string `json:"sandbox_instance_id,omitempty"`
 	RuntimeID         string `json:"runtime_id,omitempty"`
+	DaemonID          string `json:"daemon_id,omitempty"`
 }
 
 // EnvRollout is one element of the response array (spec §6.3).
@@ -535,6 +669,11 @@ type EnvDispatchService struct {
 	// implementation is available. Keeping the dependency optional preserves
 	// the current project-delete behavior until T020 delegates to it.
 	reclaimer EnvDispatchReclaimer
+	// resolver resolves the ready, pre-materialized Cube template for scratch
+	// SWE-Lego issue sources (read-only; building happens exclusively through
+	// the manual warm-up endpoint). Optional: nil keeps TaskTemplateID empty
+	// and preserves the pre-integration sandbox creation behavior.
+	resolver SweLegoTemplateResolver
 }
 
 // EnvDispatchReclamationRequest identifies one env-dispatch-owned scope for
@@ -599,6 +738,18 @@ func (s *EnvDispatchService) WithAuditStorage(storage EnvDispatchAuditStorage) *
 // provides the T018 implementation.
 func (s *EnvDispatchService) WithReclaimer(reclaimer EnvDispatchReclaimer) *EnvDispatchService {
 	s.reclaimer = reclaimer
+	return s
+}
+
+// WithSweLegoTemplateResolver injects the read-only SWE-Lego task-template
+// resolver. When set, a scratch swe_lego dispatch with an issue source task
+// looks up the pre-materialized Cube template (built beforehand via the
+// manual warm-up endpoint) before fan-out and stamps it on TaskTemplateID;
+// a cache that is missing/building/failed fails the dispatch with a
+// validation error. A nil resolver leaves TaskTemplateID empty, preserving
+// today's behavior. Returns the service for chaining.
+func (s *EnvDispatchService) WithSweLegoTemplateResolver(resolver SweLegoTemplateResolver) *EnvDispatchService {
+	s.resolver = resolver
 	return s
 }
 
@@ -733,6 +884,22 @@ func (s *EnvDispatchService) Dispatch(ctx context.Context, in EnvDispatchInput) 
 		} else if ok {
 			return prev, nil
 		}
+	}
+
+	// Scratch SWE-Lego issue sources resolve the pre-materialized task-specific
+	// Cube template once per dispatch, after source resolution and before any
+	// fan-out, so every rollout sandbox boots from it. This path is read-only:
+	// building happens exclusively through the manual warm-up endpoint; a cache
+	// that is missing/building/failed fails the dispatch (validation_failed,
+	// handler → 400). Branch/resume and message sources never resolve. A nil
+	// resolver keeps TaskTemplateID empty.
+	if s.resolver != nil && in.Mode == EnvModeScratch && in.Domain == EnvDomainSweLego &&
+		in.SourceTask != nil && in.SourceTask.Type == SourceTaskIssue && in.TaskTemplateID == "" {
+		templateID, err := s.resolveSweLegoTaskTemplate(ctx, in, env)
+		if err != nil {
+			return EnvDispatchResult{}, err
+		}
+		in.TaskTemplateID = templateID
 	}
 
 	// Audit is intentionally started only after validation and source
@@ -990,6 +1157,50 @@ func materializeScratchSourceTask(in *EnvDispatchInput, source SourceTask) error
 	in.SourceTaskID = source.ID
 	in.SourceTask = &source
 	return nil
+}
+
+// resolveSweLegoTaskTemplate reads the pre-materialized task-specific Cube
+// template for a scratch SWE-Lego issue source from the node-local cache
+// (exactly one cache read; it never builds). The parent template prefers the
+// one recorded on the instance-backed base env's sandbox; the resolver
+// resolves node placement and falls back to the node's default Cube template
+// when this is empty. A cache that is not ready fails the dispatch with an
+// actionable validation error naming the warm-up endpoint.
+func (s *EnvDispatchService) resolveSweLegoTaskTemplate(ctx context.Context, in EnvDispatchInput, env Env) (string, error) {
+	var payload sourceTaskIssuePayload
+	if err := json.Unmarshal(in.SourceTask.Payload, &payload); err != nil {
+		return "", fmt.Errorf("validation_failed: decode swe_lego issue source task payload: %w", err)
+	}
+	if payload.RepoURL == "" || payload.BaseCommit == "" || payload.IssueDate == "" {
+		return "", fmt.Errorf("validation_failed: swe_lego issue source task requires repo_url, base_commit, and issue_date")
+	}
+	parentTemplate := ""
+	if in.InstanceBackedBase && s.lifecycle != nil && len(env.SandboxIDs) > 0 {
+		if ref, err := s.lifecycle.GetSandboxInstanceRef(ctx, in.WorkspaceID, env.SandboxIDs[0]); err == nil && ref.Template != "" && ref.Template != "default" {
+			parentTemplate = ref.Template
+		}
+	}
+	templateID, status, err := s.resolver.LookupReadyTemplate(ctx, SweLegoTemplateRequest{
+		WorkspaceID:      in.WorkspaceID,
+		UserID:           in.UserID,
+		ParentTemplateID: parentTemplate,
+		SourceTaskID:     in.SourceTaskID,
+		RepoURL:          payload.RepoURL,
+		BaseCommit:       payload.BaseCommit,
+		IssueDate:        payload.IssueDate,
+	})
+	if err != nil {
+		return "", fmt.Errorf("resolve swe_lego task template: %w", err)
+	}
+	if templateID == "" {
+		state := status
+		if state == "" {
+			state = "not built"
+		}
+		return "", fmt.Errorf("validation_failed: swe_lego task template not materialized for source task %s (cache %s): POST /api/v1/source-tasks/%s/materialize first",
+			in.SourceTaskID, state, in.SourceTaskID)
+	}
+	return templateID, nil
 }
 
 func validateSourceTaskType(dispatchType EnvDispatchType, source SourceTask) error {
@@ -1308,10 +1519,9 @@ func (s *EnvDispatchService) resetOne(ctx context.Context, in EnvDispatchInput, 
 				bindingSpecs[spec.AgentID] = policy
 			}
 			if in.SharedSandbox {
-				for _, agentID := range roster.AgentIDs {
-					policy := bindingSpecs[agentID]
-					policy.Shared = true
-					bindingSpecs[agentID] = policy
+				if err := ApplySharedRuntimeCatalog(roster, bindingSpecs); err != nil {
+					s.rollbackRollout(ctx, in.WorkspaceID, r)
+					return EnvRollout{}, fmt.Errorf("apply shared runtime catalog: %w", err)
 				}
 			}
 		}
@@ -1705,6 +1915,7 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 			// their first mention.
 			status.SandboxInstanceID = provisioned.SandboxInstanceID
 			status.RuntimeID = provisioned.RuntimeID
+			status.DaemonID = provisioned.DaemonID
 		}
 		r.AgentSandboxes[agentID] = status
 	}
@@ -1712,6 +1923,7 @@ func (s *EnvDispatchService) dispatchScratchChannelMessage(ctx context.Context, 
 		Status:            "ready",
 		SandboxInstanceID: provisioned.SandboxInstanceID,
 		RuntimeID:         provisioned.RuntimeID,
+		DaemonID:          provisioned.DaemonID,
 	}
 
 	messageID, err := s.deps.CreateChannelMessage(ctx, r.ChannelID, in.WorkspaceID, in.UserID, in.Message.Content)
@@ -1872,6 +2084,7 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 			// their first mention.
 			status.SandboxInstanceID = provisioned.SandboxInstanceID
 			status.RuntimeID = provisioned.RuntimeID
+			status.DaemonID = provisioned.DaemonID
 		}
 		r.AgentSandboxes[agentID] = status
 	}
@@ -1879,6 +2092,7 @@ func (s *EnvDispatchService) dispatchBranchChannelMessage(ctx context.Context, i
 		Status:            "ready",
 		SandboxInstanceID: provisioned.SandboxInstanceID,
 		RuntimeID:         provisioned.RuntimeID,
+		DaemonID:          provisioned.DaemonID,
 	}
 }
 

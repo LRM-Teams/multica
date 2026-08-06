@@ -2010,74 +2010,9 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if workspaceID != "" {
-			if eventKind, eventType, message, ok := taskMessageCompactionActivity(msg.Type); ok {
-				targetKind, targetID, targetSlug := h.taskActivityTarget(r.Context(), task)
-				details := map[string]any{"task_message_id": uuidToString(created.ID), "seq": msg.Seq}
-				if msg.Type == "compaction_finished" && strings.TrimSpace(msg.Content) != "" {
-					details["checkpoint_summary"] = msg.Content
-				}
-				// LRM-985: attach active channel goal so compaction can be
-				// audited against the Goal anchor (resume evidence).
-				if task.ChannelID.Valid {
-					if goal, err := h.currentChannelGoal(r.Context(), parseUUID(workspaceID), task.ChannelID); err == nil {
-						if goalCtx := channelGoalContextForClaim(goal); goalCtx != nil {
-							details["goal_id"] = goalCtx.ID
-							details["goal_version"] = goalCtx.Version
-							details["channel_id"] = uuidToString(task.ChannelID)
-						}
-					}
-				}
-				h.recordAgentActivityEvent(r.Context(), h.DB,
-					parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
-					eventKind, eventType, "info",
-					targetKind, targetID, targetSlug,
-					"", message,
-					details,
-				)
-				if msg.Type == "compaction_finished" {
-					if goalID, _ := details["goal_id"].(string); goalID != "" {
-						h.recordAgentActivityEvent(r.Context(), h.DB,
-							parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
-							activityKindCustom, "channel_goal_anchor_after_compaction", "info",
-							targetKind, targetID, targetSlug,
-							"", "Channel goal still anchored after context compaction",
-							map[string]any{
-								"goal_id":         goalID,
-								"goal_version":    details["goal_version"],
-								"channel_id":      details["channel_id"],
-								"compaction_seq":  msg.Seq,
-								"task_message_id": uuidToString(created.ID),
-							},
-						)
-					}
-				}
-				continue
-			}
 			if visibility == "user_facing" {
 				h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID,
 					taskMessageToPayload(created, taskID, uuidToString(task.IssueID)))
-				// Thinking (empty phase or with body) is delivered on the task-message
-				// stream for transcript/status. Do not also fan out as Activity
-				// realtime — Activity has no "Thinking" line product surface.
-				if created.Type != "thinking" {
-					event := h.taskMessageActivityTimelineEvent(r.Context(), workspaceID, task, created)
-					h.publishAgentActivityRealtimeEvent(r.Context(), workspaceID, uuidToString(task.AgentID), uuidToString(created.ID), event, AgentActivityTargetRef{Kind: "none"})
-				}
-			}
-			if msg.Type == "tool_use" && strings.TrimSpace(msg.Tool) != "" && !taskMessageToolIsMapped(msg.Type, msg.Tool, msg.Input) {
-				targetKind, targetID, targetSlug := h.taskActivityTarget(r.Context(), task)
-				h.recordAgentActivityEvent(r.Context(), h.DB,
-					parseUUID(workspaceID), task.AgentID, task.RuntimeID, task.ID,
-					activityKindCustom, "unmapped_tool_name", "warning",
-					targetKind, targetID, targetSlug,
-					"unmapped_tool_name", "Unmapped runtime tool name",
-					map[string]any{
-						"raw_tool":        strings.TrimSpace(msg.Tool),
-						"task_message_id": uuidToString(created.ID),
-						"task_id":         taskID,
-						"seq":             msg.Seq,
-					},
-				)
 			}
 		}
 	}
@@ -2286,15 +2221,6 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))
-
-	// Record a task-cancelled activity event.
-	h.recordAgentActivityEvent(r.Context(), h.DB,
-		issue.WorkspaceID, task.AgentID, task.RuntimeID, task.ID,
-		activityKindBlocked, "task_cancelled", "info",
-		"issue", task.IssueID, "",
-		"", "Task cancelled by user",
-		nil,
-	)
 
 	writeJSON(w, http.StatusOK, taskToResponse(*task, uuidToString(issue.WorkspaceID)))
 }

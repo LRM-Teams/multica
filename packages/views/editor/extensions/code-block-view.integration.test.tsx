@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Editor } from "@tiptap/core";
+import { Editor } from "@tiptap/core";
 import { useEditor, EditorContent } from "@tiptap/react";
+// Side-effect: augments Editor with getMarkdown().
+import "@tiptap/markdown";
 import { createEditorExtensions } from "./index";
 
 vi.mock("../../i18n", () => ({
@@ -40,6 +42,11 @@ vi.mock("../mermaid-diagram", () => ({
   MermaidDiagram: () => <div data-testid="mermaid-diagram">diagram</div>,
 }));
 
+/** Mutable box so TS does not narrow a `let … = null` past the React callback. */
+function editorBox() {
+  return { current: null as Editor | null };
+}
+
 function CodeBlockEditorHarness({
   markdown,
   onEditor,
@@ -68,13 +75,13 @@ afterEach(() => {
 describe("CodeBlockView controls (TipTap integration)", () => {
   it("changes the fenced language when a language menu item is chosen", async () => {
     const user = userEvent.setup();
-    let editor: Editor | null = null;
+    const box = editorBox();
 
     render(
       <CodeBlockEditorHarness
         markdown={"```mermaid\ngraph TD; A-->B;\n```"}
         onEditor={(ed) => {
-          editor = ed;
+          box.current = ed;
         }}
       />,
     );
@@ -89,7 +96,7 @@ describe("CodeBlockView controls (TipTap integration)", () => {
       expect(screen.getByTestId("code-block-language")).toHaveTextContent("Python");
     });
     expect(screen.queryByTestId("mermaid-diagram")).toBeNull();
-    expect(editor?.getMarkdown()).toMatch(/^```python/m);
+    expect(box.current?.getMarkdown()).toMatch(/^```python/m);
   });
 
   it("hides the diagram when mermaid view is set to source-only", async () => {
@@ -112,13 +119,13 @@ describe("CodeBlockView controls (TipTap integration)", () => {
 
   it("persists mermaid diagram-only mode across markdown reload", async () => {
     const user = userEvent.setup();
-    let editor: Editor | null = null;
+    const box = editorBox();
 
     const { unmount } = render(
       <CodeBlockEditorHarness
         markdown={"```mermaid\ngraph TD; A-->B;\n```"}
         onEditor={(ed) => {
-          editor = ed;
+          box.current = ed;
         }}
       />,
     );
@@ -134,7 +141,7 @@ describe("CodeBlockView controls (TipTap integration)", () => {
       );
     });
 
-    const md = editor?.getMarkdown() ?? "";
+    const md = box.current?.getMarkdown() ?? "";
     expect(md).toMatch(/^```mermaid view=diagram\n/m);
 
     unmount();

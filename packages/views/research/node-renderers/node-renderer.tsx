@@ -24,6 +24,10 @@ import { GenericNodeCard } from "./generic-node-card";
 import type { NodeCardState } from "./node-state-matrix";
 import { resolveCardState } from "./node-state-matrix";
 import { nodeCardFacts } from "./node-detail-fields";
+import { importanceToStars } from "./node-importance";
+
+/** Shared stable empty array for the optional diagnostics prop (no re-alloc per render). */
+const NO_DIAGNOSTICS: ResearchV6UnknownKindDiagnostic[] = [];
 
 /** Raw status string → visual state candidates (state matrix feeding). */
 function statesFromStatus(status: string): NodeCardState[] {
@@ -38,14 +42,6 @@ function statesFromStatus(status: string): NodeCardState[] {
   if (s === "pending" || s === "waiting" || s === "queued") signals.push("loading");
   if (signals.length === 0) signals.push("default");
   return signals;
-}
-
-/** Importance value (0..1 or 1..3) → star level 0..3. */
-export function importanceToStars(importance: number | null | undefined): number {
-  const n = Number(importance);
-  if (Number.isNaN(n)) return 0;
-  if (n <= 1) return Math.round(n * 3); // 0..1 → 3-star scale
-  return Math.min(3, Math.max(0, Math.round(n)));
 }
 
 export interface NodeRendererProps {
@@ -67,7 +63,7 @@ export interface NodeRendererProps {
  */
 export function NodeRenderer({
   node,
-  diagnostics = [],
+  diagnostics = NO_DIAGNOSTICS,
   zoom = 1,
   overriddenState,
   onOpen,

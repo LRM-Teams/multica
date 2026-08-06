@@ -28,5 +28,6 @@ export { GenericNodeCard } from "./generic-node-card";
 export type { GenericNodeCardProps } from "./generic-node-card";
 export { nodeCardFacts } from "./node-detail-fields";
 export type { NodeCardFacts } from "./node-detail-fields";
-export { NodeRenderer, V6NodeCard, importanceToStars } from "./node-renderer";
+export { importanceToStars } from "./node-importance";
+export { NodeRenderer, V6NodeCard } from "./node-renderer";
 export type { NodeRendererProps } from "./node-renderer";

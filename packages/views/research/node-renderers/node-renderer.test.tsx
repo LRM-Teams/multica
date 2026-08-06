@@ -92,7 +92,7 @@ describe("NodeRenderer — generic degradation (AC1)", () => {
     expect(container.querySelector('[data-testid="node-card"]')).toBeNull();
   });
 
-  it("generic card is keyboard-activatable (Enter opens inspector)", () => {
+  it("generic card is a keyboard-activatable native button when onOpen is provided", () => {
     const diagnostics: ResearchV6UnknownKindDiagnostic[] = [];
     const onOpen = vi.fn();
     const { container } = render(
@@ -103,8 +103,9 @@ describe("NodeRenderer — generic degradation (AC1)", () => {
       />,
     );
     const generic = container.querySelector('[data-testid="generic-node-card"]') as HTMLElement;
-    expect(generic.getAttribute("role")).toBe("button");
-    fireEvent.keyDown(generic, { key: "Enter" });
+    expect(generic.tagName).toBe("BUTTON");
+    // Native <button> gives free keyboard/SR activation (Enter/Space → click).
+    fireEvent.click(generic);
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });

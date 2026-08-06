@@ -40,11 +40,11 @@ describe("NodeCardShell — base structure", () => {
     }
   });
 
-  it("whole card is a clickable button when onOpen is provided", () => {
+  it("whole card is a clickable native button when onOpen is provided", () => {
     const onOpen = vi.fn();
     const { container } = render(shell({ onOpen }));
     const card = container.querySelector('[data-testid="node-card"]');
-    expect(card?.getAttribute("role")).toBe("button");
+    expect(card?.tagName).toBe("BUTTON");
     fireEvent.click(card as HTMLElement);
     expect(onOpen).toHaveBeenCalledTimes(1);
   });

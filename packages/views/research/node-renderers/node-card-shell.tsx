@@ -11,6 +11,10 @@
  *   │ ┌────────────────────────────────────┐  │
  *   │ │ TITLE (1-2 lines, truncate)        │  │
  *   │ └────────────────────────────────────┘  │
+ *   │ 👤 负责人                                │
+ *   │ ◎ 目标                                  │
+ *   │ ↻ 当前动作                              │
+ *   │ ✓ 已解决 · 新进展 · 风险                │
  *   │ summary (muted, zoom-dependable)        │
  *   │ actor · attempt · evidence · >           │  ← footer (zoom-dependable)
  *   └──────────────────────────────────────────┘
@@ -21,6 +25,10 @@
  *
  * Dot rule (parent goal): round dots only mark ports / status glyphs; the task
  * body is a clickable card, never a bare dot.
+ *
+ * The card is an interactive `<button>` when `onOpen` is provided (native
+ * semantics for keyboard/screen readers) and a plain `<article>` otherwise —
+ * this satisfies react-doctor's non-interactive-element-interactions rule.
  */
 
 import type { ReactNode } from "react";
@@ -37,7 +45,7 @@ export type NodeCardZoom = 0.4 | 1 | 1.6;
 export interface NodeCardShellProps {
   /** Resolved visual family. */
   family: NodeKindFamily;
-  /** Resolved visual state (after conflict priority). */
+  /** Resolved visual state. */
   state: NodeCardState;
   /** Card title. */
   title: string;
@@ -74,13 +82,14 @@ function ImportanceStars({ level }: { level: number }): ReactNode {
   return (
     <span
       className="flex items-center gap-0.5"
-      role="img"
-      aria-label={`重要性 ${level}/3`}
       data-testid="node-importance"
+      title={`重要性 ${level}/3`}
     >
+      <span className="sr-only">重要性 {level}/3</span>
       {[1, 2, 3].map((i) => (
         <Star
           key={i}
+          aria-hidden="true"
           className={cn(
             "h-3 w-3",
             i <= level ? "fill-warning text-warning" : "text-muted-foreground/50",
@@ -124,16 +133,16 @@ function ProgressCountsRow({
   risk: number | null | undefined;
   expanded: boolean;
 }) {
-  const hasAny = resolved !== null && resolved !== undefined || progress !== null && progress !== undefined || risk !== null && risk !== undefined;
+  const hasAny =
+    (resolved !== null && resolved !== undefined) ||
+    (progress !== null && progress !== undefined) ||
+    (risk !== null && risk !== undefined);
   if (!hasAny) return null;
   const chips: Array<{ label: string; value: number }> = [];
   if (resolved !== null && resolved !== undefined) chips.push({ label: "已解决", value: resolved });
   if (progress !== null && progress !== undefined) chips.push({ label: "新进展", value: progress });
   if (risk !== null && risk !== undefined) chips.push({ label: "风险", value: risk });
-  // 0-value chips are real data (0 项) but must not spam noise — show them in
-  // compact form and, when nothing is non-zero, fall back to a single neutral row.
-  const meaningful = chips.filter((c) => c.value > 0);
-  if (meaningful.length === 0) {
+  if (chips.every((c) => c.value === 0)) {
     return (
       <div data-testid="node-progress-none" className="text-[10px] text-muted-foreground">
         暂无新进展
@@ -141,20 +150,23 @@ function ProgressCountsRow({
     );
   }
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pt-0.5" data-testid="node-progress-counts">
+    <div
+      className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pt-0.5"
+      data-testid="node-progress-counts"
+    >
       {chips.map((c) => (
         <span key={c.label} className="flex items-center gap-0.5 text-[10px] text-muted-foreground">
           <span aria-hidden="true">✓</span>
           <span className="sr-only">{c.label}：</span>
           <span>{c.value}</span>
-          <span className={cn(expanded ? "inline" : "hidden")}>{c.label}</span>
+          <span className={cn("tabular-nums", expanded ? "inline" : "hidden")}>{c.label}</span>
         </span>
       ))}
     </div>
   );
 }
 
-/** The shell is intentionally accessible as an interactive card. */
+/** The shell renders a native button when interactive, a plain article otherwise. */
 export function NodeCardShell({
   family,
   state,
@@ -183,7 +195,7 @@ export function NodeCardShell({
   const glyph = stateVisual.statusGlyph;
 
   const base = cn(
-    "group/node relative w-52 overflow-hidden rounded-lg border bg-card",
+    "group/node relative w-52 overflow-hidden rounded-lg border bg-card text-left",
     // zoom-independent: base font adjusts with the global zoom scale
     stateVisual.borderClass,
     stateVisual.shellClass,
@@ -191,29 +203,8 @@ export function NodeCardShell({
     className,
   );
 
-  return (
-    <article
-      data-testid="node-card"
-      data-family={family}
-      data-state={state}
-      data-zoom={zoom}
-      className={base}
-      onClick={onOpen}
-      role={interactive ? "button" : undefined}
-      tabIndex={interactive ? 0 : undefined}
-      onKeyDown={
-        interactive
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onOpen?.();
-              }
-            }
-          : undefined
-      }
-      aria-busy={stateVisual["aria-busy"] ?? undefined}
-      aria-label={`${typeLabel}: ${title}`}
-    >
+  const cardInner = (
+    <>
       {/* accent bar */}
       <div
         data-testid="node-accent-bar"
@@ -267,10 +258,7 @@ export function NodeCardShell({
 
         {/* Summary — hidden at 40%. */}
         {summary && !compact && (
-          <p
-            data-testid="node-summary"
-            className="line-clamp-2 text-xs text-muted-foreground"
-          >
+          <p data-testid="node-summary" className="line-clamp-2 text-xs text-muted-foreground">
             {summary}
           </p>
         )}
@@ -295,9 +283,7 @@ export function NodeCardShell({
 
         {/* State badge */}
         <div className="flex items-center gap-1 pt-0.5">
-          {glyph && glyph !== "none" && (
-            <StatusGlyph glyph={glyph} />
-          )}
+          {glyph && glyph !== "none" && <StatusGlyph glyph={glyph} />}
           <span
             data-testid="node-state-badge"
             className={cn(
@@ -322,7 +308,10 @@ export function NodeCardShell({
               {interactive && (
                 <ChevronRight
                   data-testid="node-chevron"
-                  className={cn("h-3 w-3 text-muted-foreground transition-transform", expanded && "-rotate-90")}
+                  className={cn(
+                    "h-3 w-3 text-muted-foreground transition-transform",
+                    expanded && "-rotate-90",
+                  )}
                 />
               )}
             </span>
@@ -336,24 +325,58 @@ export function NodeCardShell({
           </div>
         )}
       </div>
-    </article>
+    </>
   );
+
+  const commonProps = {
+    "data-testid": "node-card" as const,
+    "data-family": family,
+    "data-state": state,
+    "data-zoom": zoom,
+    className: base,
+    "aria-busy": stateVisual["aria-busy"] ?? undefined,
+    "aria-label": `${typeLabel}: ${title}`,
+  };
+
+  if (interactive) {
+    return (
+      <button type="button" {...commonProps} onClick={onOpen}>
+        {cardInner}
+      </button>
+    );
+  }
+
+  return <article {...commonProps}>{cardInner}</article>;
 }
 
 function expandedSummary(importance: number): string {
   return `重要性 ${importance || "-"}/3`;
 }
 
-function StatusGlyph({ glyph }: { glyph: NonNullable<ReturnType<typeof statusGlyph>> }) {
+function StatusGlyph({
+  glyph,
+}: {
+  glyph: NonNullable<ReturnType<typeof statusGlyph>>;
+}) {
   switch (glyph) {
     case "spinner":
       return (
-        <span data-testid="node-glyph-loading" className="h-2 w-2 animate-spin rounded-full border border-current border-t-transparent" />
+        <span
+          data-testid="node-glyph-loading"
+          className="h-2 w-2 animate-spin rounded-full border border-current border-t-transparent"
+        />
       );
     case "pulse":
       return <span data-testid="node-glyph-running" className="h-2 w-2 animate-pulse rounded-full bg-brand" />;
     case "failure":
-      return <span data-testid="node-glyph-failed" className="flex h-2.5 w-2.5 items-center justify-center rounded-full bg-destructive text-[7px] font-bold text-white">✕</span>;
+      return (
+        <span
+          data-testid="node-glyph-failed"
+          className="flex h-2.5 w-2.5 items-center justify-center rounded-full bg-destructive text-[7px] font-bold text-white"
+        >
+          ✕
+        </span>
+      );
     case "stale-dot":
       return <span data-testid="node-glyph-stale" className="h-2 w-2 rounded-full bg-muted-foreground/60" />;
     case "check":

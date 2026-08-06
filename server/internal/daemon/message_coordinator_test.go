@@ -468,6 +468,48 @@ func TestMessageCoordinatorAcceptsBeforeAckWithoutAdvancingBoundary(t *testing.T
 	}
 }
 
+func TestMessageCoordinatorMarkReadAdvancesOnlyRequestedTarget(t *testing.T) {
+	root := t.TempDir()
+	var handoffs, activities int
+	coordinator, err := NewMessageCoordinator(root, func(context.Context, []protocol.AgentMessageProjection) error {
+		handoffs++
+		return nil
+	}, func([]protocol.AgentMessageProjection) {
+		activities++
+	})
+	if err != nil {
+		t.Fatalf("NewMessageCoordinator: %v", err)
+	}
+	completeCoordinatorRecovery(t, coordinator)
+	for _, delivery := range []protocol.AgentDeliverPayload{
+		testDelivery("one-5", "channel:one", 5, "delivery-one-5"),
+		testDelivery("two-8", "channel:two", 8, "delivery-two-8"),
+	} {
+		if _, err := coordinator.Accept(context.Background(), delivery); err != nil {
+			t.Fatalf("Accept: %v", err)
+		}
+	}
+	if err := coordinator.MarkRead("channel:one", 5); err != nil {
+		t.Fatalf("MarkRead: %v", err)
+	}
+	if got, want := coordinator.Boundaries(), map[string]int64{"channel:one": 5}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("boundaries = %v, want %v", got, want)
+	}
+	if _, found := coordinator.pending["channel:one"]; found {
+		t.Fatalf("read target pending remains: %+v", coordinator.pending)
+	}
+	if got := coordinator.pending["channel:two"][8].ID; got != "two-8" {
+		t.Fatalf("other target pending = %q, want two-8", got)
+	}
+	if handoffs != 0 || activities != 0 {
+		t.Fatalf("MarkRead caused handoffs=%d activities=%d, want neither", handoffs, activities)
+	}
+	boundaries, healthy, err := loadConsumedSeqs(filepath.Join(root, consumedSeqsFileName))
+	if err != nil || !healthy || !reflect.DeepEqual(boundaries, map[string]int64{"channel:one": 5}) {
+		t.Fatalf("durable boundaries = %v healthy=%v err=%v", boundaries, healthy, err)
+	}
+}
+
 func TestMessageCoordinatorFlushesTargetInSequenceAndRecordsOneActivityBatch(t *testing.T) {
 	var handedOff [][]string
 	var activities int

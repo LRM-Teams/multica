@@ -226,10 +226,17 @@ func printMessageCheckResult(w io.Writer, result messageCheckCLIResponse) error 
 func newMessageReadCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "read",
-		Short: "Read recent messages from a targeted chat surface",
-		RunE:  runAgentMessageRead,
+		Short: "Read bounded canonical history from a targeted chat surface",
+		Long: "Read bounded canonical history from a targeted chat surface. " +
+			"Use at most one of --before, --after, or --around with a full message ID, a unique 8+ character ID prefix, or a positive target sequence. " +
+			"A digits-only anchor is interpreted as a target sequence. " +
+			"--before and --after exclude the anchor; --around includes it. Results are returned in ascending sequence order.",
+		RunE: runAgentMessageRead,
 	}
 	cmd.Flags().String("target", "", messageTargetFlagUsage())
+	cmd.Flags().String("before", "", "Read messages before a full id, unique short id, or target sequence")
+	cmd.Flags().String("after", "", "Read messages after a full id, unique short id, or target sequence")
+	cmd.Flags().String("around", "", "Read a window around a full id, unique short id, or target sequence")
 	cmd.Flags().Int("limit", 20, "Maximum messages to return")
 	cmd.Flags().String("output", "json", "Output format: json or text")
 	return cmd
@@ -577,11 +584,71 @@ func runAgentMessageRead(cmd *cobra.Command, _ []string) error {
 		"target": target,
 		"limit":  limit,
 	}
+	for _, name := range []string{"before", "after", "around"} {
+		if value := strings.TrimSpace(flagString(cmd, name)); value != "" {
+			body[name] = value
+		}
+	}
 	var out map[string]any
-	if err := postAgentTransport(cmd, "/api/agent/messages/read", body, &out); err != nil {
+	if err := postAgentMessageReadThroughCredentialProxy(body, &out); err != nil {
 		return fmt.Errorf("read messages: %w", err)
 	}
 	return printAgentTransportOutput(cmd, out, "")
+}
+
+func postAgentMessageReadThroughCredentialProxy(body map[string]any, out any) error {
+	agentID := strings.TrimSpace(os.Getenv("MULTICA_AGENT_ID"))
+	taskID := strings.TrimSpace(os.Getenv("MULTICA_TASK_ID"))
+	workspaceID := strings.TrimSpace(os.Getenv("MULTICA_WORKSPACE_ID"))
+	port := strings.TrimSpace(os.Getenv("MULTICA_DAEMON_PORT"))
+	if agentID == "" || taskID == "" || workspaceID == "" {
+		return errors.New("message read requires an active daemon Agent turn")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return errors.New("message read requires a valid MULTICA_DAEMON_PORT")
+	}
+	requestBody := make(map[string]any, len(body)+6)
+	for key, value := range body {
+		requestBody[key] = value
+	}
+	requestBody["agent_id"] = agentID
+	requestBody["task_id"] = taskID
+	requestBody["workspace_id"] = workspaceID
+	for env, field := range map[string]string{
+		"MULTICA_AGENT_INBOX_EVENT_ID":    "agent_inbox_event_id",
+		"MULTICA_AGENT_INBOX_DELIVERY_ID": "agent_inbox_delivery_id",
+		"MULTICA_AGENT_INBOX_LEASE_TOKEN": "agent_inbox_lease_token",
+	} {
+		if value := strings.TrimSpace(os.Getenv(env)); value != "" {
+			requestBody[field] = value
+		}
+	}
+	raw, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("encode message read request: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.APITimeout())
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/credential-proxy/messages/read", portNumber), bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("prepare message read: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: cli.APITimeout()}).Do(request)
+	if err != nil {
+		return fmt.Errorf("message read through Credential Proxy: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		detail, _ := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+		return fmt.Errorf("message read through Credential Proxy: %s: %s", response.Status, strings.TrimSpace(string(detail)))
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out); err != nil {
+		return fmt.Errorf("decode message read response: %w", err)
+	}
+	return nil
 }
 
 func runAgentMessageSearch(cmd *cobra.Command, args []string) error {

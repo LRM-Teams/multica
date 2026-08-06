@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -95,18 +97,30 @@ type AgentTransportReactResponse struct {
 
 type AgentTransportReadRequest struct {
 	Target string `json:"target"`
+	Before string `json:"before,omitempty"`
+	After  string `json:"after,omitempty"`
+	Around string `json:"around,omitempty"`
 	Limit  int    `json:"limit"`
 }
 
 type AgentTransportReadResponse struct {
-	Action      string                   `json:"action"`
-	Target      string                   `json:"target"`
-	ChannelID   string                   `json:"channel_id"`
-	Messages    []ChannelMessageResponse `json:"messages"`
-	Limit       int                      `json:"limit"`
-	SeenUpToSeq int64                    `json:"seenUpToSeq"`
-	TransportID string                   `json:"transport_id"`
+	Action        string                   `json:"action"`
+	Target        string                   `json:"target"`
+	ChannelID     string                   `json:"channel_id"`
+	ContextTarget string                   `json:"context_target"`
+	Messages      []ChannelMessageResponse `json:"messages"`
+	Limit         int                      `json:"limit"`
+	SeenUpToSeq   int64                    `json:"seenUpToSeq"`
+	TransportID   string                   `json:"transport_id"`
 }
+
+var (
+	errAgentTransportReadAnchorInvalid   = errors.New("invalid read anchor")
+	errAgentTransportReadAnchorNotFound  = errors.New("read anchor not found")
+	errAgentTransportReadAnchorAmbiguous = errors.New("read anchor is ambiguous")
+	decimalAgentMessageSequencePattern   = regexp.MustCompile(`^[0-9]+$`)
+	shortAgentMessageIDPattern           = regexp.MustCompile(`^[0-9a-fA-F]{8,35}$`)
+)
 
 type agentTransportDraft struct {
 	ID              pgtype.UUID
@@ -639,6 +653,11 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	anchorMode, anchorRaw, err := req.anchor()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	limit := clampAgentTransportLimit(req.Limit, 20)
 	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, false)
 	if err != nil {
@@ -649,15 +668,31 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid target")
 		return
 	}
-	messages := h.readAgentTransportMessages(r.Context(), target, limit)
+	messages, err := h.readAgentTransportMessages(r.Context(), target, anchorMode, anchorRaw, limit)
+	if err != nil {
+		switch {
+		case errors.Is(err, errAgentTransportReadAnchorInvalid):
+			writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, errAgentTransportReadAnchorNotFound):
+			writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, errAgentTransportReadAnchorAmbiguous):
+			writeError(w, http.StatusConflict, err.Error())
+		default:
+			slog.Warn("agent transport read failed", "task_id", uuidToString(source.task.ID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to read messages")
+		}
+		return
+	}
 	h.decorateAgentTransportMessages(r.Context(), target.channel.WorkspaceID, messages)
 	messageIDs := channelMessageIDs(messages)
 	seenUpToSeq := maxChannelMessageSeq(messages)
+	contextTarget := agentTransportCanonicalMessageTarget(target)
 	transportID, err := h.recordAgentTransportAudit(r.Context(), source, agentTransportActionRead, target.raw, parseUUID(target.channel.ID), pgtype.UUID{}, "", map[string]any{
 		"channel_id":      target.channel.ID,
 		"message_ids":     messageIDs,
 		"limit":           limit,
 		"seen_up_to_seq":  seenUpToSeq,
+		"context_target":  contextTarget,
 		"thread_root_id":  target.threadRootMessageID,
 		"target_snapshot": target.raw,
 	})
@@ -666,15 +701,17 @@ func (h *Handler) AgentTransportReadMessages(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "failed to record message read")
 		return
 	}
-	writeJSON(w, http.StatusOK, AgentTransportReadResponse{
-		Action:      agentTransportActionRead,
-		Target:      target.raw,
-		ChannelID:   target.channel.ID,
-		Messages:    messages,
-		Limit:       limit,
-		SeenUpToSeq: seenUpToSeq,
-		TransportID: transportID,
-	})
+	response := AgentTransportReadResponse{
+		Action:        agentTransportActionRead,
+		Target:        target.raw,
+		ChannelID:     target.channel.ID,
+		ContextTarget: contextTarget,
+		Messages:      messages,
+		Limit:         limit,
+		SeenUpToSeq:   seenUpToSeq,
+		TransportID:   transportID,
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // enforceAgentTransportVoiceReply preserves the delivery modality selected by
@@ -1918,11 +1955,194 @@ func (h *Handler) createAgentTransportReaction(ctx context.Context, source agent
 	return reaction, transportID, nil
 }
 
-func (h *Handler) readAgentTransportMessages(ctx context.Context, target agentTransportTarget, limit int) []ChannelMessageResponse {
-	if target.threadRootMessageID.Valid {
-		return h.channelThreadContextMessages(ctx, target.channel.WorkspaceID, target.channel.ID, uuidToString(target.threadRootMessageID), limit)
+func (req AgentTransportReadRequest) anchor() (mode, raw string, err error) {
+	anchors := []struct {
+		mode string
+		raw  string
+	}{
+		{mode: "before", raw: strings.TrimSpace(req.Before)},
+		{mode: "after", raw: strings.TrimSpace(req.After)},
+		{mode: "around", raw: strings.TrimSpace(req.Around)},
 	}
-	return h.recentChannelMessages(ctx, target.channel.WorkspaceID, target.channel.ID, limit)
+	for _, candidate := range anchors {
+		if candidate.raw == "" {
+			continue
+		}
+		if mode != "" {
+			return "", "", errors.New("only one of before, after, or around may be set")
+		}
+		mode, raw = candidate.mode, candidate.raw
+	}
+	return mode, raw, nil
+}
+
+func agentTransportCanonicalMessageTarget(target agentTransportTarget) string {
+	if target.threadRootMessageID.Valid {
+		return "thread:" + uuidToString(target.threadRootMessageID)
+	}
+	return "channel:" + target.channel.ID
+}
+
+func (h *Handler) readAgentTransportMessages(ctx context.Context, target agentTransportTarget, mode, rawAnchor string, limit int) ([]ChannelMessageResponse, error) {
+	if mode == "" {
+		return h.readAgentTransportMessageWindow(ctx, target, "recent", 0, limit)
+	}
+	anchor, err := h.resolveAgentTransportReadAnchor(ctx, target, rawAnchor)
+	if err != nil {
+		return nil, err
+	}
+	switch mode {
+	case "before":
+		return h.readAgentTransportMessageWindow(ctx, target, "before", anchor.Seq, limit)
+	case "after":
+		return h.readAgentTransportMessageWindow(ctx, target, "after", anchor.Seq, limit)
+	case "around":
+		beforeLimit := (limit - 1) / 2
+		before, err := h.readAgentTransportMessageWindow(ctx, target, "before", anchor.Seq, beforeLimit)
+		if err != nil {
+			return nil, err
+		}
+		after, err := h.readAgentTransportMessageWindow(ctx, target, "after", anchor.Seq, limit-1-len(before))
+		if err != nil {
+			return nil, err
+		}
+		return append(append(before, anchor), after...), nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported window", errAgentTransportReadAnchorInvalid)
+	}
+}
+
+func (h *Handler) resolveAgentTransportReadAnchor(ctx context.Context, target agentTransportTarget, raw string) (ChannelMessageResponse, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ChannelMessageResponse{}, fmt.Errorf("%w: anchor is required", errAgentTransportReadAnchorInvalid)
+	}
+	if decimalAgentMessageSequencePattern.MatchString(raw) {
+		sequence, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return ChannelMessageResponse{}, fmt.Errorf("%w: sequence is out of range", errAgentTransportReadAnchorInvalid)
+		}
+		if sequence <= 0 {
+			return ChannelMessageResponse{}, fmt.Errorf("%w: sequence must be positive", errAgentTransportReadAnchorInvalid)
+		}
+		messages, err := h.findAgentTransportReadAnchors(ctx, target, `m.seq = $4`, sequence)
+		if err != nil {
+			return ChannelMessageResponse{}, err
+		}
+		return oneAgentTransportReadAnchor(messages)
+	}
+	if id, err := uuid.Parse(raw); err == nil {
+		messages, err := h.findAgentTransportReadAnchors(ctx, target, `m.id = $4`, id)
+		if err != nil {
+			return ChannelMessageResponse{}, err
+		}
+		return oneAgentTransportReadAnchor(messages)
+	}
+	if !shortAgentMessageIDPattern.MatchString(raw) {
+		return ChannelMessageResponse{}, fmt.Errorf("%w: use a full message id, a unique 8+ character short id, or a positive sequence", errAgentTransportReadAnchorInvalid)
+	}
+	messages, err := h.findAgentTransportReadAnchors(ctx, target, `LOWER(m.id::text) LIKE LOWER($4) || '%'`, raw)
+	if err != nil {
+		return ChannelMessageResponse{}, err
+	}
+	return oneAgentTransportReadAnchor(messages)
+}
+
+func (h *Handler) findAgentTransportReadAnchors(ctx context.Context, target agentTransportTarget, predicate string, value any) ([]ChannelMessageResponse, error) {
+	query := `SELECT ` + agentTransportReadMessageColumns + `
+		FROM channel_message m
+		WHERE ` + agentTransportReadTargetPredicate + ` AND ` + predicate + `
+		ORDER BY m.seq ASC
+		LIMIT $5`
+	return h.readAgentTransportMessageRows(ctx, target, query, value, 2)
+}
+
+func oneAgentTransportReadAnchor(messages []ChannelMessageResponse) (ChannelMessageResponse, error) {
+	switch len(messages) {
+	case 0:
+		return ChannelMessageResponse{}, errAgentTransportReadAnchorNotFound
+	case 1:
+		return messages[0], nil
+	default:
+		return ChannelMessageResponse{}, errAgentTransportReadAnchorAmbiguous
+	}
+}
+
+const agentTransportReadMessageColumns = `m.id, m.channel_id, m.workspace_id, m.author_type, m.author_id, m.author_name, m.content, m.parts, m.source, m.external_message_id, m.client_message_id, m.reply_to_message_id, m.quote_message_id, m.quote_snapshot, m.thread_root_message_id, m.thread_id, m.trigger_depth, m.seq, m.created_at, m.edited_at, m.deleted_at`
+
+const agentTransportReadTargetPredicate = `
+		m.channel_id = $1
+		AND m.workspace_id = $2
+		AND m.deleted_at IS NULL
+		AND (
+			($3::uuid IS NULL AND m.thread_root_message_id IS NULL)
+			OR ($3::uuid IS NOT NULL AND (m.id = $3 OR m.thread_root_message_id = $3))
+		)`
+
+func (h *Handler) readAgentTransportMessageWindow(ctx context.Context, target agentTransportTarget, direction string, sequence int64, limit int) ([]ChannelMessageResponse, error) {
+	if limit <= 0 {
+		return []ChannelMessageResponse{}, nil
+	}
+	var query string
+	var args []any
+	switch direction {
+	case "recent":
+		query = `SELECT * FROM (
+			SELECT ` + agentTransportReadMessageColumns + `
+			FROM channel_message m
+			WHERE ` + agentTransportReadTargetPredicate + `
+			ORDER BY m.seq DESC
+			LIMIT $4
+		) recent
+		ORDER BY seq ASC`
+		args = []any{limit}
+	case "before":
+		query = `SELECT * FROM (
+			SELECT ` + agentTransportReadMessageColumns + `
+			FROM channel_message m
+			WHERE ` + agentTransportReadTargetPredicate + ` AND m.seq < $4
+			ORDER BY m.seq DESC
+			LIMIT $5
+		) before_window
+		ORDER BY seq ASC`
+		args = []any{sequence, limit}
+	case "after":
+		query = `SELECT ` + agentTransportReadMessageColumns + `
+			FROM channel_message m
+			WHERE ` + agentTransportReadTargetPredicate + ` AND m.seq > $4
+			ORDER BY m.seq ASC
+			LIMIT $5`
+		args = []any{sequence, limit}
+	default:
+		return nil, fmt.Errorf("unknown read direction %q", direction)
+	}
+	return h.readAgentTransportMessageRows(ctx, target, query, args...)
+}
+
+func (h *Handler) readAgentTransportMessageRows(ctx context.Context, target agentTransportTarget, query string, extra ...any) ([]ChannelMessageResponse, error) {
+	args := []any{
+		parseUUID(target.channel.ID),
+		parseUUID(target.channel.WorkspaceID),
+		nullableUUID(target.threadRootMessageID),
+	}
+	args = append(args, extra...)
+	rows, err := h.DB.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var messages []ChannelMessageResponse
+	for rows.Next() {
+		message, err := scanChannelMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
 }
 
 func (h *Handler) decorateAgentTransportMessages(ctx context.Context, workspaceID string, messages []ChannelMessageResponse) {

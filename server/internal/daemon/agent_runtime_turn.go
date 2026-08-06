@@ -211,22 +211,30 @@ func (c *agentRuntimeTurnCoordinator) hasActiveTurn(agentID, runtimeID string) b
 }
 
 func (c *agentRuntimeTurnCoordinator) hasActiveAgentTurn(agentID, turnID string) bool {
+	_, ok := c.activeAgentTurnRuntime(agentID, turnID)
+	return ok
+}
+
+// activeAgentTurnRuntime resolves the machine-owned runtime for a current
+// Agent turn. Local Credential Proxy callers must not accept a runtime ID from
+// the Agent process when selecting its credential cache.
+func (c *agentRuntimeTurnCoordinator) activeAgentTurnRuntime(agentID, turnID string) (string, bool) {
 	if c == nil {
-		return false
+		return "", false
 	}
 	agentID = strings.TrimSpace(agentID)
 	turnID = strings.TrimSpace(turnID)
 	if agentID == "" || turnID == "" {
-		return false
+		return "", false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for key, activeTurnID := range c.active {
 		if key.AgentID == agentID && activeTurnID == turnID {
-			return true
+			return key.RuntimeID, true
 		}
 	}
-	return false
+	return "", false
 }
 
 func validateAgentRuntimeTurnRequest(request agentRuntimeTurnRequest) error {

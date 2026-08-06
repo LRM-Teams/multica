@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 // HealthResponse is returned by the daemon's local health endpoint.
@@ -126,6 +128,22 @@ type credentialProxyMessageCheckRequest struct {
 	TaskID  string `json:"task_id"`
 }
 
+type credentialProxyMessageReadRequest struct {
+	AgentID string `json:"agent_id"`
+	TaskID  string `json:"task_id"`
+
+	WorkspaceID string `json:"workspace_id"`
+	Target      string `json:"target"`
+	Before      string `json:"before,omitempty"`
+	After       string `json:"after,omitempty"`
+	Around      string `json:"around,omitempty"`
+	Limit       int    `json:"limit"`
+
+	AgentInboxEventID    string `json:"agent_inbox_event_id,omitempty"`
+	AgentInboxDeliveryID string `json:"agent_inbox_delivery_id,omitempty"`
+	AgentInboxLeaseToken string `json:"agent_inbox_lease_token,omitempty"`
+}
+
 func (d *Daemon) credentialProxyMessageCheckHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -165,6 +183,96 @@ func (d *Daemon) credentialProxyMessageCheckHandler() http.HandlerFunc {
 	}
 }
 
+func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var request credentialProxyMessageReadRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		request.AgentID = strings.TrimSpace(request.AgentID)
+		request.TaskID = strings.TrimSpace(request.TaskID)
+		request.WorkspaceID = strings.TrimSpace(request.WorkspaceID)
+		request.Target = strings.TrimSpace(request.Target)
+		if request.AgentID == "" || request.TaskID == "" || request.WorkspaceID == "" || request.Target == "" {
+			http.Error(w, "agent_id, task_id, workspace_id, and target are required", http.StatusBadRequest)
+			return
+		}
+		if d.agentRuntimeTurns == nil {
+			http.Error(w, "current Agent turn is not active", http.StatusForbidden)
+			return
+		}
+		runtimeID, active := d.agentRuntimeTurns.activeAgentTurnRuntime(request.AgentID, request.TaskID)
+		if !active {
+			http.Error(w, "current Agent turn is not active", http.StatusForbidden)
+			return
+		}
+		credential, ok := readCachedAgentCredential(d.cfg, request.WorkspaceID, runtimeID, request.AgentID, time.Now())
+		if !ok {
+			http.Error(w, "Agent credential is unavailable", http.StatusConflict)
+			return
+		}
+
+		client := cli.NewAPIClient(d.cfg.ServerBaseURL, request.WorkspaceID, credential.Token)
+		client.AgentID = request.AgentID
+		client.TaskID = request.TaskID
+		client.AgentInboxEventID = strings.TrimSpace(request.AgentInboxEventID)
+		client.AgentInboxDeliveryID = strings.TrimSpace(request.AgentInboxDeliveryID)
+		client.AgentInboxLeaseToken = strings.TrimSpace(request.AgentInboxLeaseToken)
+		upstreamRequest := map[string]any{
+			"target": request.Target,
+			"limit":  request.Limit,
+		}
+		if request.Before != "" {
+			upstreamRequest["before"] = request.Before
+		}
+		if request.After != "" {
+			upstreamRequest["after"] = request.After
+		}
+		if request.Around != "" {
+			upstreamRequest["around"] = request.Around
+		}
+		ctx, cancel := cli.APIContext(r.Context())
+		defer cancel()
+		var response map[string]any
+		if err := client.PostJSON(ctx, "/api/agent/messages/read", upstreamRequest, &response); err != nil {
+			http.Error(w, "read messages through Credential Proxy: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		contextTarget, _ := response["context_target"].(string)
+		contextTarget = strings.TrimSpace(contextTarget)
+		seenUpToSeq, _ := response["seenUpToSeq"].(float64)
+		if contextTarget == "" || seenUpToSeq < 0 || seenUpToSeq != float64(int64(seenUpToSeq)) {
+			http.Error(w, "invalid read response from server", http.StatusBadGateway)
+			return
+		}
+		if seenUpToSeq > 0 {
+			if err := d.CredentialProxy().RecordMessageRead(request.AgentID, contextTarget, int64(seenUpToSeq)); err != nil {
+				http.Error(w, "persist message read boundary: "+err.Error(), http.StatusConflict)
+				return
+			}
+		}
+		// Context target and sequence are proxy-only facts. A Message command
+		// never exposes a cursor-like read state to the Agent process.
+		delete(response, "context_target")
+		delete(response, "seenUpToSeq")
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil && d.logger != nil {
+			d.logger.Warn("write Credential Proxy message read response", "error", err)
+		}
+	}
+}
+
 // serveHealth runs the health HTTP server on the given listener.
 // Blocks until ctx is cancelled.
 func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt time.Time) {
@@ -172,6 +280,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
 	mux.HandleFunc("/credential-proxy/messages/check", d.credentialProxyMessageCheckHandler())
+	mux.HandleFunc("/credential-proxy/messages/read", d.credentialProxyMessageReadHandler())
 
 	srv := &http.Server{Handler: mux}
 

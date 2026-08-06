@@ -525,6 +525,12 @@ func projectResearchEvent(event researchrun.RunEvent, session db.ResearchSession
 		return "agent_activity", "Agent 开始执行调研任务", valueString(payload, "task_id"), "active"
 	case "task_attempt_cancelling":
 		return "agent_activity", "正在停止超时任务", valueString(payload, "task_id"), "active"
+	case "task_waiting_for_execution_target":
+		summary := valueString(payload, "retry_at")
+		if summary == "" {
+			summary = "等待执行目标解除限制"
+		}
+		return "agent_activity", "等待可用执行目标", summary, "active"
 	case "task_result_accepted":
 		return "finding", "调研结果已入账", valueString(payload, "summary"), "done"
 	case "task_attempt_failed":
@@ -540,6 +546,12 @@ func projectResearchEvent(event researchrun.RunEvent, session db.ResearchSession
 			valueString(payload, "cause"),
 		}, " · ")
 		return "agent_activity", "执行目标健康状态变化", summary, "done"
+	case "target_repair_decided":
+		summary := strings.Join([]string{
+			valueString(payload, "failure_class"),
+			valueString(payload, "repair_kind"),
+		}, " · ")
+		return "agent_activity", "已确定执行失败修复动作", summary, "done"
 	case "task_blocked":
 		return "dead_end", "调研任务因前置失败而阻塞", valueString(payload, "task_id"), "done"
 	case "control_task_created":

@@ -314,7 +314,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	task, origin := source.task, source.origin
+	origin := source.origin
 	var req agentReminderScheduleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -333,7 +333,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 	// preference; default UTC. initiator_user_id is optional audit fill
 	// (anchor human → owner → ws owner when available) and is NOT required
 	// for 201 — agent self-schedule without a human member still succeeds.
-	initiatorUserID, _ := h.agentReminderScheduleInitiatorUserID(r.Context(), origin.workspaceID, task.AgentID, anchorMessageID)
+	initiatorUserID, _ := h.agentReminderScheduleInitiatorUserID(r.Context(), origin.workspaceID, origin.agentID, anchorMessageID)
 	timezone := reminderScheduleTimezone("") // explicit API field can be wired later
 	schedule, err := parseReminderSchedule(time.Now().UTC(), req.DelaySeconds, req.FireAt, req.Repeat, timezone)
 	if err != nil {
@@ -346,7 +346,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err := lockReminderOwnerCapability(r.Context(), tx, origin.workspaceID, task.AgentID); err != nil {
+	if _, err := lockReminderOwnerCapability(r.Context(), tx, origin.workspaceID, origin.agentID); err != nil {
 		writeReminderMutationError(w, "schedule", err)
 		return
 	}
@@ -356,7 +356,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		FROM agent_reminder
 		WHERE workspace_id = $1 AND agent_id = $2
 		  AND origin_kind = 'agent'
-		  AND status IN ('scheduled', 'firing')`, origin.workspaceID, task.AgentID).Scan(&activeCount); err != nil {
+		  AND status IN ('scheduled', 'firing')`, origin.workspaceID, origin.agentID).Scan(&activeCount); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to schedule reminder")
 		return
 	}
@@ -384,7 +384,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING `+reminderSelectColumns(),
-		origin.workspaceID, task.AgentID, initiatorUserID, title, anchorChannelID,
+		origin.workspaceID, origin.agentID, initiatorUserID, title, anchorChannelID,
 		anchorMessageID, nullableUUID(threadRootID), schedule.FireAt, cadence, scheduleTimezone, cadenceNextAt)
 	created, err := scanAgentReminder(row)
 	if err != nil {
@@ -409,7 +409,7 @@ func (h *Handler) AgentTransportScheduleReminder(w http.ResponseWriter, r *http.
 	h.projectReminderUpsert(r.Context(), created)
 	targetKind, targetID, targetSlug := reminderActivityTarget(created, true)
 	h.recordAgentActivityEvent(r.Context(), h.DB,
-		origin.workspaceID, task.AgentID, task.RuntimeID, reminderTransportActivityTaskID(source),
+		origin.workspaceID, origin.agentID, source.runtimeID(), reminderTransportActivityTaskID(source),
 		activityKindCustom, "reminder_scheduled", "info",
 		targetKind, targetID, targetSlug,
 		"", "Agent scheduled a future self-wake",
@@ -423,7 +423,7 @@ func (h *Handler) AgentTransportListReminders(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	task, origin := source.task, source.origin
+	origin := source.origin
 	var req agentReminderListRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -437,11 +437,11 @@ func (h *Handler) AgentTransportListReminders(w http.ResponseWriter, r *http.Req
 	var err error
 	switch status {
 	case "active":
-		rows, err = h.DB.Query(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE workspace_id = $1 AND agent_id = $2 AND status IN ('scheduled', 'firing') ORDER BY fire_at ASC`, origin.workspaceID, task.AgentID)
+		rows, err = h.DB.Query(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE workspace_id = $1 AND agent_id = $2 AND status IN ('scheduled', 'firing') ORDER BY fire_at ASC`, origin.workspaceID, origin.agentID)
 	case "all":
-		rows, err = h.DB.Query(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE workspace_id = $1 AND agent_id = $2 ORDER BY created_at DESC`, origin.workspaceID, task.AgentID)
+		rows, err = h.DB.Query(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE workspace_id = $1 AND agent_id = $2 ORDER BY created_at DESC`, origin.workspaceID, origin.agentID)
 	case "scheduled", "firing", "fired", "cancelled":
-		rows, err = h.DB.Query(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE workspace_id = $1 AND agent_id = $2 AND status = $3 ORDER BY fire_at ASC`, origin.workspaceID, task.AgentID, status)
+		rows, err = h.DB.Query(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE workspace_id = $1 AND agent_id = $2 AND status = $3 ORDER BY fire_at ASC`, origin.workspaceID, origin.agentID, status)
 	default:
 		writeError(w, http.StatusBadRequest, "status must be active, scheduled, firing, fired, cancelled, or all")
 		return
@@ -472,13 +472,13 @@ func (h *Handler) AgentTransportReminderLog(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	task, origin := source.task, source.origin
+	origin := source.origin
 	var req agentReminderIDRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	id, ok := h.resolveReminderID(w, r.Context(), origin.workspaceID, task.AgentID, req.ID)
+	id, ok := h.resolveReminderID(w, r.Context(), origin.workspaceID, origin.agentID, req.ID)
 	if !ok {
 		return
 	}
@@ -488,7 +488,7 @@ func (h *Handler) AgentTransportReminderLog(w http.ResponseWriter, r *http.Reque
 		       timezone_snapshot, resulting_state, reason_code, details, created_at
 		FROM agent_reminder_lifecycle_event
 		WHERE reminder_id = $1 AND workspace_id = $2 AND agent_id = $3
-		ORDER BY created_at ASC, id ASC`, id, origin.workspaceID, task.AgentID)
+		ORDER BY created_at ASC, id ASC`, id, origin.workspaceID, origin.agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load reminder log")
 		return
@@ -527,7 +527,7 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	task, origin := source.task, source.origin
+	origin := source.origin
 	var req agentReminderSnoozeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -539,7 +539,7 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	id, ok := h.resolveReminderID(w, r.Context(), origin.workspaceID, task.AgentID, req.ID)
+	id, ok := h.resolveReminderID(w, r.Context(), origin.workspaceID, origin.agentID, req.ID)
 	if !ok {
 		return
 	}
@@ -549,11 +549,11 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err := lockReminderOwnerCapability(r.Context(), tx, origin.workspaceID, task.AgentID); err != nil {
+	if _, err := lockReminderOwnerCapability(r.Context(), tx, origin.workspaceID, origin.agentID); err != nil {
 		writeReminderMutationError(w, "snooze", err)
 		return
 	}
-	previous, err := scanAgentReminder(tx.QueryRow(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 FOR UPDATE`, id, origin.workspaceID, task.AgentID))
+	previous, err := scanAgentReminder(tx.QueryRow(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 FOR UPDATE`, id, origin.workspaceID, origin.agentID))
 	if err != nil {
 		writeError(w, http.StatusConflict, "reminder cannot be snoozed in its current state")
 		return
@@ -573,7 +573,7 @@ func (h *Handler) AgentTransportSnoozeReminder(w http.ResponseWriter, r *http.Re
 			    version = version + 1, updated_at = now()
 			WHERE id = $1 AND workspace_id = $2 AND agent_id = $3
 			  AND status IN ('scheduled', 'fired')
-			RETURNING `+reminderSelectColumns(), id, origin.workspaceID, task.AgentID, fireAt))
+			RETURNING `+reminderSelectColumns(), id, origin.workspaceID, origin.agentID, fireAt))
 	if err != nil {
 		writeError(w, http.StatusConflict, "reminder cannot be snoozed in its current state")
 		return
@@ -605,7 +605,7 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	task, origin := source.task, source.origin
+	origin := source.origin
 	var req agentReminderUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -680,7 +680,7 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
-	id, ok := h.resolveReminderID(w, r.Context(), origin.workspaceID, task.AgentID, req.ID)
+	id, ok := h.resolveReminderID(w, r.Context(), origin.workspaceID, origin.agentID, req.ID)
 	if !ok {
 		return
 	}
@@ -690,11 +690,11 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err := lockReminderOwnerCapability(r.Context(), tx, origin.workspaceID, task.AgentID); err != nil {
+	if _, err := lockReminderOwnerCapability(r.Context(), tx, origin.workspaceID, origin.agentID); err != nil {
 		writeReminderMutationError(w, "update", err)
 		return
 	}
-	previous, err := scanAgentReminder(tx.QueryRow(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 FOR UPDATE`, id, origin.workspaceID, task.AgentID))
+	previous, err := scanAgentReminder(tx.QueryRow(r.Context(), `SELECT `+reminderSelectColumns()+` FROM agent_reminder WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 FOR UPDATE`, id, origin.workspaceID, origin.agentID))
 	if err != nil || previous.Status != "scheduled" {
 		writeError(w, http.StatusConflict, "reminder cannot be updated in its current state")
 		return
@@ -755,7 +755,7 @@ func (h *Handler) AgentTransportUpdateReminder(w http.ResponseWriter, r *http.Re
 			    cadence_next_at = $8,
 			    version = version + 1, updated_at = now()
 		WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 AND status = 'scheduled'
-		RETURNING `+reminderSelectColumns(), id, origin.workspaceID, task.AgentID,
+		RETURNING `+reminderSelectColumns(), id, origin.workspaceID, origin.agentID,
 		nextTitle, nextFireAt, nextCadence, nextTimezone, nextCadenceAt)
 	updated, err := scanAgentReminder(row)
 	if err != nil {
@@ -789,13 +789,13 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	task, origin := source.task, source.origin
+	origin := source.origin
 	var req agentReminderIDRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	id, ok := h.resolveReminderID(w, r.Context(), origin.workspaceID, task.AgentID, req.ID)
+	id, ok := h.resolveReminderID(w, r.Context(), origin.workspaceID, origin.agentID, req.ID)
 	if !ok {
 		return
 	}
@@ -805,7 +805,7 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 		return
 	}
 	defer tx.Rollback(r.Context())
-	if _, err := lockReminderOwnerCapability(r.Context(), tx, origin.workspaceID, task.AgentID); err != nil {
+	if _, err := lockReminderOwnerCapability(r.Context(), tx, origin.workspaceID, origin.agentID); err != nil {
 		writeReminderMutationError(w, "cancel", err)
 		return
 	}
@@ -813,7 +813,7 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 		SELECT `+reminderSelectColumns()+`
 		FROM agent_reminder
 		WHERE id = $1 AND workspace_id = $2 AND agent_id = $3
-		FOR UPDATE`, id, origin.workspaceID, task.AgentID))
+		FOR UPDATE`, id, origin.workspaceID, origin.agentID))
 	if err != nil || previous.Status != "scheduled" {
 		writeError(w, http.StatusConflict, "reminder cannot be cancelled in its current state")
 		return
@@ -827,7 +827,7 @@ func (h *Handler) AgentTransportCancelReminder(w http.ResponseWriter, r *http.Re
 		SET status = 'cancelled', terminal_reason = $4, current_occurrence_id = NULL,
 		    version = version + 1, updated_at = now()
 		WHERE id = $1 AND workspace_id = $2 AND agent_id = $3 AND status = 'scheduled'
-		RETURNING `+reminderSelectColumns(), id, origin.workspaceID, task.AgentID, terminalReason)
+		RETURNING `+reminderSelectColumns(), id, origin.workspaceID, origin.agentID, terminalReason)
 	cancelled, err := scanAgentReminder(row)
 	if err != nil {
 		writeError(w, http.StatusConflict, "reminder cannot be cancelled in its current state")
@@ -983,13 +983,13 @@ func reminderTransportActivityTaskID(source agentTransportSource) pgtype.UUID {
 	if source.inboxEventID.Valid {
 		return pgtype.UUID{}
 	}
-	return source.task.ID
+	return source.legacyTaskID()
 }
 
 func (h *Handler) recordReminderActivity(ctx context.Context, source agentTransportSource, reminder agentReminder, eventType, message string) {
 	targetKind, targetID, targetSlug := reminderActivityTarget(reminder, true)
 	h.recordAgentActivityEvent(ctx, h.DB,
-		reminder.WorkspaceID, reminder.AgentID, source.task.RuntimeID, reminderTransportActivityTaskID(source),
+		reminder.WorkspaceID, reminder.AgentID, source.runtimeID(), reminderTransportActivityTaskID(source),
 		activityKindCustom, eventType, "info",
 		targetKind, targetID, targetSlug,
 		"", message,

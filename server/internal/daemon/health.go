@@ -185,12 +185,10 @@ func (d *Daemon) localMachineUpgradeHandler() http.HandlerFunc {
 
 type credentialProxyMessageCheckRequest struct {
 	AgentID string `json:"agent_id"`
-	TaskID  string `json:"task_id"`
 }
 
 type credentialProxyMessageReadRequest struct {
 	AgentID string `json:"agent_id"`
-	TaskID  string `json:"task_id"`
 
 	WorkspaceID string `json:"workspace_id"`
 	Target      string `json:"target"`
@@ -198,10 +196,6 @@ type credentialProxyMessageReadRequest struct {
 	After       string `json:"after,omitempty"`
 	Around      string `json:"around,omitempty"`
 	Limit       int    `json:"limit"`
-
-	AgentInboxEventID    string `json:"agent_inbox_event_id,omitempty"`
-	AgentInboxDeliveryID string `json:"agent_inbox_delivery_id,omitempty"`
-	AgentInboxLeaseToken string `json:"agent_inbox_lease_token,omitempty"`
 }
 
 func (d *Daemon) credentialProxyMessageCheckHandler() http.HandlerFunc {
@@ -222,13 +216,8 @@ func (d *Daemon) credentialProxyMessageCheckHandler() http.HandlerFunc {
 			return
 		}
 		request.AgentID = strings.TrimSpace(request.AgentID)
-		request.TaskID = strings.TrimSpace(request.TaskID)
-		if request.AgentID == "" || request.TaskID == "" {
-			http.Error(w, "agent_id and task_id are required", http.StatusBadRequest)
-			return
-		}
-		if d.agentRuntimeTurns == nil || !d.agentRuntimeTurns.hasActiveAgentTurn(request.AgentID, request.TaskID) {
-			http.Error(w, "current Agent turn is not active", http.StatusForbidden)
+		if request.AgentID == "" {
+			http.Error(w, "agent_id is required", http.StatusBadRequest)
 			return
 		}
 		result, err := d.CredentialProxy().CheckMessages(request.AgentID)
@@ -261,23 +250,13 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 			return
 		}
 		request.AgentID = strings.TrimSpace(request.AgentID)
-		request.TaskID = strings.TrimSpace(request.TaskID)
 		request.WorkspaceID = strings.TrimSpace(request.WorkspaceID)
 		request.Target = strings.TrimSpace(request.Target)
-		if request.AgentID == "" || request.TaskID == "" || request.WorkspaceID == "" || request.Target == "" {
-			http.Error(w, "agent_id, task_id, workspace_id, and target are required", http.StatusBadRequest)
+		if request.AgentID == "" || request.WorkspaceID == "" || request.Target == "" {
+			http.Error(w, "agent_id, workspace_id, and target are required", http.StatusBadRequest)
 			return
 		}
-		if d.agentRuntimeTurns == nil {
-			http.Error(w, "current Agent turn is not active", http.StatusForbidden)
-			return
-		}
-		runtimeID, active := d.agentRuntimeTurns.activeAgentTurnRuntime(request.AgentID, request.TaskID)
-		if !active {
-			http.Error(w, "current Agent turn is not active", http.StatusForbidden)
-			return
-		}
-		credential, ok := readCachedAgentCredential(d.cfg, request.WorkspaceID, runtimeID, request.AgentID, time.Now())
+		credential, ok := readCachedAgentCredentialForChat(d.cfg, request.WorkspaceID, request.AgentID, time.Now())
 		if !ok {
 			http.Error(w, "Agent credential is unavailable", http.StatusConflict)
 			return
@@ -285,10 +264,6 @@ func (d *Daemon) credentialProxyMessageReadHandler() http.HandlerFunc {
 
 		client := cli.NewAPIClient(d.cfg.ServerBaseURL, request.WorkspaceID, credential.Token)
 		client.AgentID = request.AgentID
-		client.TaskID = request.TaskID
-		client.AgentInboxEventID = strings.TrimSpace(request.AgentInboxEventID)
-		client.AgentInboxDeliveryID = strings.TrimSpace(request.AgentInboxDeliveryID)
-		client.AgentInboxLeaseToken = strings.TrimSpace(request.AgentInboxLeaseToken)
 		upstreamRequest := map[string]any{
 			"target": request.Target,
 			"limit":  request.Limit,

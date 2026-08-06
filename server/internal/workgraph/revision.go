@@ -61,9 +61,9 @@ func (s *Store) Revise(ctx context.Context, in ReviseInput) (Graph, error) {
 			return Graph{}, ErrInvalidGraph
 		}
 		var nodeID uuid.UUID
+		completion, _ := json.Marshal(spec.CompletionContract)
 		err = tx.QueryRow(ctx, `SELECT id FROM work_graph_node WHERE workspace_id=$1 AND graph_id=$2 AND issue_id=$3`, w, g, issueID).Scan(&nodeID)
 		if err != nil {
-			completion, _ := json.Marshal(spec.CompletionContract)
 			status := "ready"
 			if len(spec.DependsOn) > 0 {
 				status = "queued"
@@ -73,7 +73,9 @@ func (s *Store) Revise(ctx context.Context, in ReviseInput) (Graph, error) {
 				return Graph{}, ErrInvalidGraph
 			}
 		} else {
-			_, err = tx.Exec(ctx, `UPDATE work_graph_node SET role=$4,context_policy=$5,objective=$6,depth=$7,budget=$8,based_on_graph_version=$9,updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3`, w, g, nodeID, spec.Role, spec.ContextPolicy, spec.Objective, dependencyDepth(normalized.Nodes, spec.TempID), spec.Budget, next)
+			// A revision is a new executable plan. Re-admit retained nodes instead of
+			// carrying terminal state across a changed contract or dependency set.
+			_, err = tx.Exec(ctx, `UPDATE work_graph_node SET role=$4,context_policy=$5,objective=$6,completion_contract=$7,depth=$8,budget=$9,based_on_graph_version=$10,execution_status='queued',validity_status='valid',review_status='unreviewed',updated_at=now() WHERE workspace_id=$1 AND graph_id=$2 AND id=$3`, w, g, nodeID, spec.Role, spec.ContextPolicy, spec.Objective, completion, dependencyDepth(normalized.Nodes, spec.TempID), spec.Budget, next)
 			if err != nil {
 				return Graph{}, err
 			}
@@ -104,13 +106,11 @@ func (s *Store) Revise(ctx context.Context, in ReviseInput) (Graph, error) {
 	if _, err = tx.Exec(ctx, `INSERT INTO work_graph_change_event(workspace_id,graph_id,version,event_type,affected_nodes,reason,payload) VALUES($1,$2,$3,'graph_replanned',$4,$5,jsonb_build_object('previous_version',$6::bigint))`, w, g, next, keep, in.Reason, current); err != nil {
 		return Graph{}, err
 	}
-	out, err := loadGraphTx(ctx, tx, w, g)
-	if err != nil {
-		return Graph{}, err
-	}
 	if err = tx.Commit(ctx); err != nil {
 		return Graph{}, err
 	}
-	_, _ = s.ReconcileReady(ctx, in.WorkspaceID, in.GraphID)
-	return out, nil
+	if _, err = s.ReconcileReady(ctx, in.WorkspaceID, in.GraphID); err != nil {
+		return Graph{}, err
+	}
+	return s.Get(ctx, in.WorkspaceID, in.GraphID)
 }

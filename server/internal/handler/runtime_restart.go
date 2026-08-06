@@ -166,7 +166,8 @@ func (s *InMemoryRestartStore) PopPending(_ context.Context, runtimeID string) (
 
 // InitiateRestart creates a new remote restart request for a runtime
 // (protected route, called by frontend). Same permission bar as
-// InitiateUpdate: only the computer owner may restart it (Frank 2026-08-03).
+// Machine upgrades do not change this boundary: only the computer owner may
+// restart it (Frank 2026-08-03).
 func (h *Handler) InitiateRestart(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
 	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")

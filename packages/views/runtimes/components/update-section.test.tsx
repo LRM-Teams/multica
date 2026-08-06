@@ -12,7 +12,7 @@ vi.mock("@multica/core/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multica/core/api")>();
   return {
     ...actual,
-    api: { initiateUpdate: vi.fn(), getUpdateResult: vi.fn() },
+    api: { initiateMachineUpgrade: vi.fn(), getMachineUpgrade: vi.fn() },
   };
 });
 
@@ -30,7 +30,7 @@ function renderSection(props: Partial<React.ComponentProps<typeof UpdateSection>
     <I18nProvider locale="en" resources={{ en: { runtimes: enRuntimes } }}>
       <QueryClientProvider client={qc}>
         <UpdateSection
-          runtimeId="rt-1"
+          daemonId="daemon-1"
           currentVersion="0.3.64"
           targetVersion="0.3.65"
           updateState="idle"
@@ -109,29 +109,20 @@ describe("UpdateSection up-to-date state (2026-08-01)", () => {
   });
 });
 
-// 2026-08-02: InitiateUpdate now records a durable intent instead of
-// delivering immediately — a runtime that's asleep at the moment of the
-// click no longer just misses the request (the 2026-08-01/02 incident this
-// design fixes). While the intent hasn't been materialized into a real
-// attempt yet, a poll returns status "queued". Parker's explicit requirement:
-// this state must be visible, not indistinguishable from "nothing happened" —
-// these tests lock in that it renders and that clicking Update again is
-// disabled while queued (matches the existing pending/running behavior).
+// A daemon-scoped machine upgrade may remain queued until a capable runtime
+// claims it. That state must be visible, not indistinguishable from nothing
+// happening; clicking Update again stays disabled while queued.
 describe("UpdateSection queued state (2026-08-02)", () => {
   it("shows the queued label after clicking Update, before the runtime comes online", async () => {
-    vi.mocked(api.initiateUpdate).mockResolvedValue({
+    vi.mocked(api.initiateMachineUpgrade).mockResolvedValue({
       id: "intent:rt-1",
-      runtime_id: "rt-1",
-      status: "queued",
-      target_version: "latest",
+      daemon_id: "daemon-1", request_id: "req-1", requested_target: "latest", phase: "queued",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
-    vi.mocked(api.getUpdateResult).mockResolvedValue({
+    vi.mocked(api.getMachineUpgrade).mockResolvedValue({
       id: "intent:rt-1",
-      runtime_id: "rt-1",
-      status: "queued",
-      target_version: "latest",
+      daemon_id: "daemon-1", request_id: "req-1", requested_target: "latest", phase: "queued",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -163,20 +154,16 @@ describe("UpdateSection queued state (2026-08-02)", () => {
   // give-up reason — this must render as a real failure, not keep showing
   // "queued" (which would be a UI lie the moment auto-retry actually stops).
   it("shows the give-up reason as a failure once the server stops auto-retrying, not a stale queued label", async () => {
-    vi.mocked(api.initiateUpdate).mockResolvedValue({
+    vi.mocked(api.initiateMachineUpgrade).mockResolvedValue({
       id: "intent:rt-1",
-      runtime_id: "rt-1",
-      status: "queued",
-      target_version: "latest",
+      daemon_id: "daemon-1", request_id: "req-1", requested_target: "latest", phase: "queued",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
-    vi.mocked(api.getUpdateResult).mockResolvedValue({
+    vi.mocked(api.getMachineUpgrade).mockResolvedValue({
       id: "intent:rt-1",
-      runtime_id: "rt-1",
-      status: "failed",
-      target_version: "latest",
-      error:
+      daemon_id: "daemon-1", request_id: "req-1", requested_target: "latest", phase: "failed",
+      error_message:
         "gave up after 8 consecutive failed attempts — cancel and retry manually once the underlying issue is resolved",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -251,7 +238,7 @@ describe("UpdateSection pin enforcement (task #81 b)", () => {
 // this update never started, it isn't a failure of one that did.
 describe("UpdateSection pin-blocked bypass toast (task #81 b follow-up)", () => {
   it("shows a toast (not the persistent failed box) when the server rejects with runtime_pinned", async () => {
-    vi.mocked(api.initiateUpdate).mockRejectedValue(
+    vi.mocked(api.initiateMachineUpgrade).mockRejectedValue(
       new ApiError("this computer is pinned to version 0.3.85", 409, "Conflict", {
         code: "runtime_pinned",
         error: "this computer is pinned to version 0.3.85",
@@ -273,7 +260,7 @@ describe("UpdateSection pin-blocked bypass toast (task #81 b follow-up)", () => 
   });
 
   it("falls through to the generic failed state for a non-pin error (e.g. update_already_in_progress)", async () => {
-    vi.mocked(api.initiateUpdate).mockRejectedValue(
+    vi.mocked(api.initiateMachineUpgrade).mockRejectedValue(
       new ApiError("an update is already in progress", 409, "Conflict", {
         code: "update_already_in_progress",
         error: "an update is already in progress",

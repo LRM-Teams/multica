@@ -122,7 +122,7 @@ func (h *Handler) CreateAgentAttachmentUploadSession(w http.ResponseWriter, r *h
 		writeError(w, http.StatusBadRequest, "invalid client_request_id")
 		return
 	}
-	target, err := h.resolveAgentTransportTarget(r.Context(), source.task, source.origin, req.Target, true)
+	target, err := h.resolveAgentTransportTarget(r.Context(), source.legacyTask, source.origin, req.Target, true)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or ambiguous target")
 		return

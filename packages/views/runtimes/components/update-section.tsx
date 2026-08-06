@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
 import { api, ApiError } from "@multica/core/api";
+import { createSafeId } from "@multica/core/utils";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
 import { deriveUpdateStatus } from "@multica/core/runtimes";
 import {
@@ -64,7 +65,7 @@ const statusConfig: Record<
 };
 
 interface UpdateSectionProps {
-  runtimeId: string;
+  daemonId: string;
   currentVersion: string | null;
   targetVersion: string | null;
   updateState?: RuntimeUpdateState;
@@ -111,7 +112,7 @@ interface UpdateSectionProps {
 }
 
 export function UpdateSection({
-  runtimeId,
+  daemonId,
   currentVersion,
   targetVersion,
   updateState,
@@ -173,29 +174,30 @@ export function UpdateSection({
     setOutput("");
 
     try {
-      const update = await api.initiateUpdate(runtimeId, targetVersion);
+      const update = await api.initiateMachineUpgrade(daemonId, targetVersion, createSafeId());
 
       pollRef.current = setInterval(async () => {
         try {
-          const result = await api.getUpdateResult(runtimeId, update.id);
-          setStatus(result.status as RuntimeUpdateStatus);
+          const result = await api.getMachineUpgrade(daemonId, update.id);
+          const nextStatus: RuntimeUpdateStatus = (() => {
+            switch (result.phase) {
+              case "queued": return "queued";
+              case "completed": return "completed";
+              case "timeout": return "timeout";
+              case "failed": case "rolled_back": case "cancelled": return "failed";
+              default: return "running";
+            }
+          })();
+          setStatus(nextStatus);
 
-          if (result.status === "completed") {
+          if (nextStatus === "completed") {
             markCompleted(
-              result.output ?? t(($) => $.update.status.completed),
+              t(($) => $.update.status.completed),
             );
-          } else if (result.status === "ready_to_apply") {
-            setOutput(result.output ?? t(($) => $.update.status.ready_to_apply));
-            setUpdating(false);
-            cleanup();
-            refreshRuntimes();
-          } else if (
-            result.status === "failed" ||
-            result.status === "timeout"
-          ) {
+          } else if (nextStatus === "failed" || nextStatus === "timeout") {
             setError(
               formatRuntimeUpdateError({
-                rawError: result.error,
+                rawError: result.error_message,
                 currentVersion,
                 targetVersion,
                 t,

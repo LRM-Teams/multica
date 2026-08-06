@@ -85,6 +85,34 @@ func TestAgentMemoryDeliveryRequiresBoundProject(t *testing.T) {
 	if _, _, _, ok := agentMemoryDeliveryForExecution(projectConfig, MemoryExecutionScope{ProjectID: "project-a"}); !ok {
 		t.Fatal("project-scoped memory should load when ProjectID is bound")
 	}
+	if _, _, _, ok := agentMemoryDeliveryForExecution(projectConfig, MemoryExecutionScope{ProjectID: "project-b"}); ok {
+		t.Fatal("project-a memory leaked into project-b")
+	}
+}
+
+func TestAgentMemoryDeliveryFailsClosedForMalformedOrUnknownConfig(t *testing.T) {
+	tests := [][]byte{
+		[]byte(`{"scope":"user","subject":`),
+		[]byte(`{"scope":{"unexpected":true}}`),
+		[]byte(`{"scope":"unknown"}`),
+		[]byte(`{"scope":"user","subject":{"type":"member"}}`),
+		[]byte(`null`),
+	}
+	for _, config := range tests {
+		if _, _, _, ok := agentMemoryDeliveryForExecution(config, MemoryExecutionScope{InitiatorType: "member", InitiatorID: "user-frank"}); ok {
+			t.Fatalf("invalid config was delivered: %s", config)
+		}
+	}
+}
+
+func TestAgentMemoryDeliveryScopesChannelsBySubject(t *testing.T) {
+	config := []byte(`{"scope":"channel","subject":{"type":"channel","id":"channel-a"}}`)
+	if _, _, _, ok := agentMemoryDeliveryForExecution(config, MemoryExecutionScope{ChannelID: "channel-a"}); !ok {
+		t.Fatal("channel-a memory was not delivered to channel-a")
+	}
+	if _, _, _, ok := agentMemoryDeliveryForExecution(config, MemoryExecutionScope{ChannelID: "channel-b"}); ok {
+		t.Fatal("channel-a memory leaked into channel-b")
+	}
 }
 
 func TestTeamKnowledgeMemoryDataIsWorkspaceScoped(t *testing.T) {

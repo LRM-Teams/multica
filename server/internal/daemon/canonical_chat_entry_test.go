@@ -45,38 +45,37 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 
 	baseEnv := func(turnID string) map[string]string {
 		return map[string]string{
-			"MULTICA_SERVER_URL":              "https://example.test",
-			"MULTICA_WORKSPACE_ID":            workspaceID,
-			"MULTICA_AGENT_ID":                agentID,
-			"MULTICA_AGENT_NAME":              "agent-a",
-			"MULTICA_TASK_ID":                 turnID,
-			"MULTICA_RUN_ID":                  turnID,
-			"MULTICA_AGENT_INBOX_LEASE_TOKEN": "lease-a",
-			"PATH":                            "/usr/bin",
+			"MULTICA_SERVER_URL":   "https://example.test",
+			"MULTICA_WORKSPACE_ID": workspaceID,
+			"MULTICA_AGENT_ID":     agentID,
+			"MULTICA_AGENT_NAME":   "agent-a",
+			"MULTICA_EXECUTION_ID": turnID,
+			"MULTICA_RUN_ID":       turnID,
+			"PATH":                 "/usr/bin",
 		}
 	}
 
-	// Same ChatSessionID across turns → resident reuse. Different task workdirs
-	// must not enter fingerprint. issueMarker is task-scoped residual proof.
+	// Channel/DM deliveries reuse one resident runtime. Different execution
+	// workdirs must not enter the fingerprint.
 	sharedChat := uuid.NewString()
-	runTurn := func(turnID, taskWorkDir, chatSessionID, issueMarker, priorSession string, directed bool) (backend agent.Backend, release func(bool), workDir string) {
+	runTurn := func(turnID, taskWorkDir, chatSessionID, priorSession string, directed bool) (backend agent.Backend, release func(bool), workDir string) {
 		t.Helper()
 		task := Task{
 			ID:                     turnID,
 			WorkspaceID:            workspaceID,
 			RuntimeID:              runtimeID,
 			ChatSessionID:          chatSessionID,
+			ChannelID:              "channel-shared",
 			ChatMessage:            "investigate the issue",
 			TriggerCommentID:       "comment-" + turnID,
 			TriggerCommentContent:  "Please investigate.",
-			IssueID:                issueMarker,
 			PriorSessionID:         priorSession,
 			RuntimeStateGeneration: 3,
 			AuthToken:              "token-a",
 		}
 		prompt := BuildPrompt(task, "grok", "")
-		if !strings.Contains(prompt, "Your assigned issue ID is: "+issueMarker) || strings.Contains(prompt, "You are running as a chat assistant") {
-			t.Fatalf("chat-backed canonical turn did not select issue semantics:\n%s", prompt)
+		if !isChatLikeTask(task) || !strings.Contains(prompt, "You are running as a chat assistant") || strings.Contains(prompt, "Your assigned issue ID is:") {
+			t.Fatalf("canonical delivery did not select chat semantics:\n%s", prompt)
 		}
 		execOpts := agent.ExecOptions{
 			Cwd:           taskWorkDir,
@@ -88,7 +87,6 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 			AgentName:     "agent-a",
 			ChatSessionID: chatSessionID,
 			ChannelID:     "channel-shared",
-			IssueID:       issueMarker,
 			Directed:      directed,
 		}
 		backend, release, turn, used, err := d.tryCanonicalChatBackend(
@@ -126,12 +124,10 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 		if !strings.Contains(string(raw), "BEGIN MULTICA-RUNTIME") {
 			t.Fatalf("AGENTS.md missing Multica runtime block:\n%s", raw)
 		}
-		_ = issueMarker // per-turn issue facts live in prompt, not disk residual under option A
 		return backend, release, turn.WorkDir
 	}
 
-	issueA := "issue-marker-task-A-" + uuid.NewString()
-	backendA, releaseA, stableWorkDir := runTurn(uuid.NewString(), taskWorkDirA, sharedChat, issueA, "provider-session-shared", true)
+	backendA, releaseA, stableWorkDir := runTurn(uuid.NewString(), taskWorkDirA, sharedChat, "provider-session-shared", true)
 	userSibling := filepath.Join(stableWorkDir, "user_notes.md")
 	if err := os.WriteFile(userSibling, []byte("USER_OWNED_NOTES"), 0o644); err != nil {
 		t.Fatal(err)
@@ -150,8 +146,7 @@ func TestTryCanonicalChatBackendReusesResidentSlotAcrossTaskWorkdirs(t *testing.
 		t.Fatal(err)
 	}
 
-	issueB := "issue-marker-task-B-" + uuid.NewString()
-	backendB, releaseB, stableWorkDirB := runTurn(uuid.NewString(), taskWorkDirB, sharedChat, issueB, "provider-session-shared", true)
+	backendB, releaseB, stableWorkDirB := runTurn(uuid.NewString(), taskWorkDirB, sharedChat, "provider-session-shared", true)
 	defer releaseB(true)
 
 	if stableWorkDirB != stableWorkDir {
@@ -204,14 +199,13 @@ func TestTryCanonicalChatBackendRotatesFreshSessionAcrossChatSessions(t *testing
 	}
 	baseEnv := func(turnID string) map[string]string {
 		return map[string]string{
-			"MULTICA_SERVER_URL":              "https://example.test",
-			"MULTICA_WORKSPACE_ID":            workspaceID,
-			"MULTICA_AGENT_ID":                agentID,
-			"MULTICA_AGENT_NAME":              "agent-a",
-			"MULTICA_TASK_ID":                 turnID,
-			"MULTICA_RUN_ID":                  turnID,
-			"MULTICA_AGENT_INBOX_LEASE_TOKEN": "lease-a",
-			"PATH":                            "/usr/bin",
+			"MULTICA_SERVER_URL":   "https://example.test",
+			"MULTICA_WORKSPACE_ID": workspaceID,
+			"MULTICA_AGENT_ID":     agentID,
+			"MULTICA_AGENT_NAME":   "agent-a",
+			"MULTICA_EXECUTION_ID": turnID,
+			"MULTICA_RUN_ID":       turnID,
+			"PATH":                 "/usr/bin",
 		}
 	}
 	run := func(chatID, prior string) (agent.Backend, func(bool)) {
@@ -221,13 +215,15 @@ func TestTryCanonicalChatBackendRotatesFreshSessionAcrossChatSessions(t *testing
 			WorkspaceID:            workspaceID,
 			RuntimeID:              runtimeID,
 			ChatSessionID:          chatID,
+			ChannelID:              "channel-shared",
+			ChatMessage:            "hello",
 			PriorSessionID:         prior,
 			RuntimeStateGeneration: 3,
 			AuthToken:              "token-a",
 		}
 		execOpts := agent.ExecOptions{Cwd: filepath.Join(root, "task-work"), Model: "model-a", ThinkingLevel: "low"}
 		taskCtx := execenv.TaskContextForEnv{
-			AgentID: agentID, AgentName: "agent-a", ChatSessionID: chatID, Directed: true,
+			AgentID: agentID, AgentName: "agent-a", ChannelID: "channel-shared", ChatSessionID: chatID, Directed: true,
 		}
 		backend, release, _, used, err := d.tryCanonicalChatBackend(
 			task, "grok", executionProfileFull, agentID, "token-a", bin, baseEnv(task.ID),
@@ -273,7 +269,7 @@ func TestTryCanonicalChatBackendRejectsMissingGeneration(t *testing.T) {
 	}
 	execOpts := agent.ExecOptions{Cwd: "/tmp/task"}
 	_, _, _, used, err := d.tryCanonicalChatBackend(
-		Task{ChatSessionID: uuid.NewString(), RuntimeStateGeneration: 0, ID: uuid.NewString(), RuntimeID: uuid.NewString()},
+		Task{ChannelID: "channel-1", ChatMessage: "hello", RuntimeStateGeneration: 0, ID: uuid.NewString(), RuntimeID: uuid.NewString()},
 		"grok",
 		executionProfileFull,
 		uuid.NewString(),

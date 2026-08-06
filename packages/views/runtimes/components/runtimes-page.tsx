@@ -744,10 +744,15 @@ function MachineDetailView({
   const ownerMember = ownerId
     ? members.find((m) => m.user_id === ownerId) ?? null
     : null;
-  // Frank/Parker 2026-08-03: only the Computer owner may start a daemon
-  // upgrade — workspace admin is not enough (task #29).
+  const currentMember = user
+    ? members.find((member) => member.user_id === user.id) ?? null
+    : null;
+  const isWorkspaceUpgradeAdmin =
+    currentMember?.role === "owner" || currentMember?.role === "admin";
   const canUpdate =
     !!user && !!daemonUpgradeRuntime && daemonUpgradeRuntime.owner_id === user.id;
+  const canUpgrade =
+    !!daemonUpgradeRuntime && (canUpdate || isWorkspaceUpgradeAdmin);
   const { data: workspacesData, isFetching: workspacesLoading } =
     useRuntimeAgentWorkspaces(primaryRuntimeId, workspacesEnabled);
   const deleteWorkspace = useDeleteRuntimeAgentWorkspace(primaryRuntimeId ?? "");
@@ -1000,7 +1005,7 @@ function MachineDetailView({
                     updateTargetVersion={machine.updateTargetVersion}
                     updateError={machine.updateError}
                     isOnline={machine.health === "online"}
-                    canUpdate={canUpdate}
+                    canUpdate={canUpgrade}
                   />
                 </InfoRow>
               ) : null}

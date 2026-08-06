@@ -115,3 +115,19 @@ func TestMirrorBoundSkillsToAgentEnabled_EmptySkillsClearsMirrors(t *testing.T) 
 		t.Fatalf("expected clear, err=%v", err)
 	}
 }
+
+func TestMirrorBoundSkillsToAgentEnabled_RejectsEscapingSupportingFile(t *testing.T) {
+	t.Parallel()
+	agentRoot := t.TempDir()
+	err := mirrorBoundSkillsToAgentEnabled(agentRoot, []SkillContextForEnv{{
+		Name:    "unsafe",
+		Content: "# Unsafe\n",
+		Files:   []SkillFileContextForEnv{{Path: "../escaped.md", Content: "escaped"}},
+	}})
+	if err == nil {
+		t.Fatal("expected escaping supporting file path to fail")
+	}
+	if _, statErr := os.Stat(filepath.Join(agentRoot, "skills", "enabled", "escaped.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("escaping file was written, err=%v", statErr)
+	}
+}

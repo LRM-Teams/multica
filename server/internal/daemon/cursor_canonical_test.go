@@ -7,13 +7,13 @@ import (
 )
 
 func TestUsesCanonicalResidentChatRuntimeIncludesCursorFullChat(t *testing.T) {
-	chatTask := Task{ChatSessionID: "chat-1"}
-	issueTask := Task{ChatSessionID: ""}
+	chatTask := Task{ChannelID: "channel-1", ChatMessage: "hello"}
+	issueTask := Task{IssueID: "issue-1", ChannelID: "channel-1", ChatMessage: "hello"}
 	if !usesCanonicalResidentChatRuntime("cursor", chatTask) {
 		t.Fatal("cursor full chat should enter canonical resident path")
 	}
 	if usesCanonicalResidentChatRuntime("cursor", issueTask) {
-		t.Fatal("cursor without ChatSessionID must stay one-shot")
+		t.Fatal("issue execution must stay one-shot")
 	}
 	if !usesCanonicalResidentChatRuntime("grok", chatTask) {
 		t.Fatal("grok full chat should enter canonical path")
@@ -28,13 +28,13 @@ func TestUsesCanonicalResidentChatRuntimeIncludesCursorFullChat(t *testing.T) {
 		t.Fatal("codex full chat should enter canonical resident path")
 	}
 	if usesCanonicalResidentChatRuntime("codex", issueTask) {
-		t.Fatal("codex without ChatSessionID must stay one-shot")
+		t.Fatal("issue execution must stay one-shot")
 	}
 	if !usesCanonicalResidentChatRuntime("claude", chatTask) {
 		t.Fatal("claude full chat should enter canonical resident path")
 	}
 	if usesCanonicalResidentChatRuntime("claude", issueTask) {
-		t.Fatal("claude without ChatSessionID must stay one-shot")
+		t.Fatal("issue execution must stay one-shot")
 	}
 }
 
@@ -45,7 +45,7 @@ func TestUsesCanonicalResidentChatRuntimeIncludesCursorFullChat(t *testing.T) {
 // "canonical chat entry required for opencode full chat" instead of ever
 // reaching a backend. Both functions must agree on the same provider set.
 func TestCanonicalResidentProviderListsStayInSync(t *testing.T) {
-	chatTask := Task{ChatSessionID: "chat-1"}
+	chatTask := Task{ChannelID: "channel-1", ChatMessage: "hello"}
 	providers := []string{"grok", "pi", "cursor", "opencode", "kiro", "codex", "claude"}
 	for _, provider := range providers {
 		if !usesCanonicalResidentChatRuntime(provider, chatTask) {

@@ -30,6 +30,17 @@ func agentCredentialCachePath(cfg Config, workspaceID, agentID string) string {
 }
 
 func readCachedAgentCredential(cfg Config, workspaceID, runtimeID, agentID string, now time.Time) (cachedAgentCredential, bool) {
+	return readCachedAgentCredentialFor(cfg, workspaceID, runtimeID, agentID, now, true)
+}
+
+// readCachedAgentCredentialForChat resolves the durable credential owned by a
+// local workspace-agent root. Chat transport has no task, lease, or current
+// turn identity; runtime binding is checked when the credential is issued.
+func readCachedAgentCredentialForChat(cfg Config, workspaceID, agentID string, now time.Time) (cachedAgentCredential, bool) {
+	return readCachedAgentCredentialFor(cfg, workspaceID, "", agentID, now, false)
+}
+
+func readCachedAgentCredentialFor(cfg Config, workspaceID, runtimeID, agentID string, now time.Time, requireRuntime bool) (cachedAgentCredential, bool) {
 	path := agentCredentialCachePath(cfg, workspaceID, agentID)
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -39,7 +50,7 @@ func readCachedAgentCredential(cfg Config, workspaceID, runtimeID, agentID strin
 	if err := json.Unmarshal(raw, &cached); err != nil {
 		return cachedAgentCredential{}, false
 	}
-	if !cached.validFor(cfg, workspaceID, runtimeID, agentID, now) {
+	if !cached.validFor(cfg, workspaceID, runtimeID, agentID, now, requireRuntime) {
 		return cachedAgentCredential{}, false
 	}
 	return cached, true
@@ -119,11 +130,14 @@ func removeCachedAgentCredential(cfg Config, workspaceID, agentID string) error 
 	return nil
 }
 
-func (c cachedAgentCredential) validFor(cfg Config, workspaceID, runtimeID, agentID string, now time.Time) bool {
+func (c cachedAgentCredential) validFor(cfg Config, workspaceID, runtimeID, agentID string, now time.Time, requireRuntime bool) bool {
 	if strings.TrimSpace(c.Token) == "" {
 		return false
 	}
-	if c.ServerURL != cfg.ServerBaseURL || c.WorkspaceID != workspaceID || c.RuntimeID != runtimeID || c.AgentID != agentID {
+	if c.ServerURL != cfg.ServerBaseURL || c.WorkspaceID != workspaceID || c.AgentID != agentID {
+		return false
+	}
+	if requireRuntime && c.RuntimeID != runtimeID {
 		return false
 	}
 	if strings.TrimSpace(c.ExpiresAt) == "" {

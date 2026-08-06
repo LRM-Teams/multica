@@ -224,7 +224,7 @@ func (d *Daemon) evictPersistentChatRuntime(task Task) {
 }
 
 func usesPersistentGrokChatRuntime(provider string, task Task) bool {
-	return provider == "grok" && task.ChatSessionID != ""
+	return provider == "grok" && isChatLikeTask(task)
 }
 
 // acquireGrokChatACPBackend binds the lease invariant to a retained Grok chat

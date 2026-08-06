@@ -39,6 +39,7 @@ const (
 )
 
 var turnEnvironmentKeys = map[string]struct{}{
+	"MULTICA_EXECUTION_ID":                   {},
 	"MULTICA_TASK_ID":                        {},
 	"MULTICA_RUN_ID":                         {},
 	"MULTICA_TASK_SLOT":                      {},
@@ -64,6 +65,13 @@ var stableMulticaEnvironmentKeys = map[string]struct{}{
 	"MULTICA_AGENT_NAME":   {},
 	"MULTICA_AGENT_ID":     {},
 	"MULTICA_AGENT_ROOT":   {},
+}
+
+func turnEnvironmentID(environment map[string]string) string {
+	if executionID := strings.TrimSpace(environment["MULTICA_EXECUTION_ID"]); executionID != "" {
+		return executionID
+	}
+	return strings.TrimSpace(environment["MULTICA_TASK_ID"])
 }
 
 var transportLocks sync.Map // absolute transport root -> *sync.Mutex
@@ -169,8 +177,8 @@ func (t *Transport) Bind(turnID, token string, environment map[string]string) (B
 	if err != nil {
 		return Binding{}, err
 	}
-	if turnEnv["MULTICA_TASK_ID"] != turnID {
-		return Binding{}, fmt.Errorf("current-turn MULTICA_TASK_ID must match turn_id")
+	if turnEnvironmentID(turnEnv) != turnID {
+		return Binding{}, fmt.Errorf("current-turn execution identity must match turn_id")
 	}
 
 	unlock := lockRoot(t.root)
@@ -367,8 +375,8 @@ func ApplyFromEnvironment() error {
 	if err != nil {
 		return err
 	}
-	if turnEnv["MULTICA_TASK_ID"] != current.TurnID {
-		return fmt.Errorf("current-turn MULTICA_TASK_ID does not match turn_id")
+	if turnEnvironmentID(turnEnv) != current.TurnID {
+		return fmt.Errorf("current-turn execution identity does not match turn_id")
 	}
 
 	for key := range turnEnvironmentKeys {

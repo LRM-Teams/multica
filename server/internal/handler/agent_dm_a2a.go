@@ -98,9 +98,16 @@ func (h *Handler) reserveAgentDMSendTx(ctx context.Context, exec db.DBTX, source
 
 	matterID := source.inboxEventID
 	if !matterID.Valid {
-		matterID = source.task.ID
+		matterID = source.legacyTaskID()
 	}
-	exchangeID := source.task.AgentDmExchangeID
+	exchangeID := pgtype.UUID{}
+	sourceChannelID := pgtype.UUID{}
+	sourceMessageID := pgtype.UUID{}
+	if source.legacyTask != nil {
+		exchangeID = source.legacyTask.AgentDmExchangeID
+		sourceChannelID = source.legacyTask.ChannelID
+		sourceMessageID = source.legacyTask.SourceMessageID
+	}
 	if exchangeID.Valid {
 		var exchangeLowID, exchangeHighID, exchangeChannelID pgtype.UUID
 		if err := exec.QueryRow(ctx, `
@@ -126,7 +133,7 @@ func (h *Handler) reserveAgentDMSendTx(ctx context.Context, exec db.DBTX, source
 			ON CONFLICT (workspace_id, agent_low_id, agent_high_id, matter_id)
 			DO NOTHING`,
 			workspaceID, channelID, lowID, highID, matterID,
-			nullableUUID(source.task.ChannelID), nullableUUID(source.task.SourceMessageID),
+			nullableUUID(sourceChannelID), nullableUUID(sourceMessageID),
 			agentDMDefaultRoundLimit,
 		); err != nil {
 			return agentDMSendReservation{}, fmt.Errorf("create agent dm exchange: %w", err)

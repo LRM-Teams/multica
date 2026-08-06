@@ -19,17 +19,12 @@ import (
 // seen cursor: both are machine-local Draft state.
 type credentialProxyMessageSendRequest struct {
 	AgentID       string   `json:"agent_id"`
-	TaskID        string   `json:"task_id"`
 	WorkspaceID   string   `json:"workspace_id"`
 	Target        string   `json:"target"`
 	Content       string   `json:"content"`
 	AttachmentIDs []string `json:"attachment_ids"`
 	SendDraft     bool     `json:"send_draft,omitempty"`
 	Anyway        bool     `json:"anyway,omitempty"`
-
-	AgentInboxEventID    string `json:"agent_inbox_event_id,omitempty"`
-	AgentInboxDeliveryID string `json:"agent_inbox_delivery_id,omitempty"`
-	AgentInboxLeaseToken string `json:"agent_inbox_lease_token,omitempty"`
 }
 
 type credentialProxyMessageTargetResponse struct {
@@ -58,16 +53,7 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if d.agentRuntimeTurns == nil {
-			http.Error(w, "current Agent turn is not active", http.StatusForbidden)
-			return
-		}
-		runtimeID, active := d.agentRuntimeTurns.activeAgentTurnRuntime(request.AgentID, request.TaskID)
-		if !active {
-			http.Error(w, "current Agent turn is not active", http.StatusForbidden)
-			return
-		}
-		credential, ok := readCachedAgentCredential(d.cfg, request.WorkspaceID, runtimeID, request.AgentID, time.Now())
+		credential, ok := readCachedAgentCredentialForChat(d.cfg, request.WorkspaceID, request.AgentID, time.Now())
 		if !ok {
 			http.Error(w, "Agent credential is unavailable", http.StatusConflict)
 			return
@@ -155,11 +141,10 @@ func (d *Daemon) credentialProxyMessageSendHandler() http.HandlerFunc {
 
 func (request *credentialProxyMessageSendRequest) validate() error {
 	request.AgentID = strings.TrimSpace(request.AgentID)
-	request.TaskID = strings.TrimSpace(request.TaskID)
 	request.WorkspaceID = strings.TrimSpace(request.WorkspaceID)
 	request.Target = strings.TrimSpace(request.Target)
-	if request.AgentID == "" || request.TaskID == "" || request.WorkspaceID == "" || request.Target == "" {
-		return errors.New("agent_id, task_id, workspace_id, and target are required")
+	if request.AgentID == "" || request.WorkspaceID == "" || request.Target == "" {
+		return errors.New("agent_id, workspace_id, and target are required")
 	}
 	if request.Anyway && !request.SendDraft {
 		return errors.New("--anyway is only valid with --send-draft")
@@ -246,10 +231,6 @@ func (d *Daemon) resolveMessageSendTarget(ctx context.Context, token string, req
 func (d *Daemon) agentCredentialClient(token string, request credentialProxyMessageSendRequest) *cli.APIClient {
 	client := cli.NewAPIClient(d.cfg.ServerBaseURL, request.WorkspaceID, token)
 	client.AgentID = request.AgentID
-	client.TaskID = request.TaskID
-	client.AgentInboxEventID = strings.TrimSpace(request.AgentInboxEventID)
-	client.AgentInboxDeliveryID = strings.TrimSpace(request.AgentInboxDeliveryID)
-	client.AgentInboxLeaseToken = strings.TrimSpace(request.AgentInboxLeaseToken)
 	return client
 }
 

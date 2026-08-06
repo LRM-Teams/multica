@@ -494,6 +494,9 @@ func (s *PostgresStore) CompleteCancellations(ctx context.Context, sessionID str
 	events := make([]RunEvent, 0, len(items))
 	for _, item := range items {
 		if item.status == string(AttemptStatusCancelled) {
+			if err = abandonAttemptCircuitProbesTx(ctx, tx, item.id); err != nil {
+				return nil, err
+			}
 			command, updateErr := tx.Exec(ctx, `
 				UPDATE research_task_attempt
 				SET cancellation_completed_at = now(), updated_at = now()

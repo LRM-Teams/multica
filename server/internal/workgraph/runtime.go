@@ -444,7 +444,7 @@ func (s *Store) ReconcileReady(ctx context.Context, workspaceID, graphID string)
 	return ids, nil
 }
 
-func (s *Store) InvalidateFrom(ctx context.Context, workspaceID, nodeID, reason string) ([]string, error) {
+func (s *Store) InvalidateFrom(ctx context.Context, workspaceID, graphID, nodeID, reason string) ([]string, error) {
 	w, err := uuid.Parse(workspaceID)
 	if err != nil {
 		return nil, ErrInvalidGraph
@@ -453,7 +453,11 @@ func (s *Store) InvalidateFrom(ctx context.Context, workspaceID, nodeID, reason 
 	if err != nil {
 		return nil, ErrInvalidGraph
 	}
-	rows, err := s.pool.Query(ctx, `WITH RECURSIVE affected(id) AS (SELECT $2::uuid UNION SELECT e.to_node_id FROM work_graph_edge e JOIN affected a ON e.from_node_id=a.id WHERE e.workspace_id=$1 AND e.retired_version IS NULL AND e.edge_type IN ('depends_on','synthesizes','verifies','replicates')) UPDATE work_graph_node n SET validity_status=CASE WHEN n.id=$2 THEN 'invalidated' ELSE 'stale' END,updated_at=now() FROM affected a WHERE n.id=a.id AND n.workspace_id=$1 RETURNING n.id::text`, w, n)
+	g, err := uuid.Parse(graphID)
+	if err != nil {
+		return nil, ErrInvalidGraph
+	}
+	rows, err := s.pool.Query(ctx, `WITH RECURSIVE affected(id) AS (SELECT id FROM work_graph_node WHERE workspace_id=$1 AND graph_id=$2 AND id=$3 UNION SELECT e.to_node_id FROM work_graph_edge e JOIN affected a ON e.from_node_id=a.id WHERE e.workspace_id=$1 AND e.graph_id=$2 AND e.retired_version IS NULL AND e.edge_type IN ('depends_on','synthesizes','verifies','replicates')) UPDATE work_graph_node n SET validity_status=CASE WHEN n.id=$3 THEN 'invalidated' ELSE 'stale' END,updated_at=now() FROM affected a WHERE n.id=a.id AND n.workspace_id=$1 AND n.graph_id=$2 RETURNING n.id::text`, w, g, n)
 	if err != nil {
 		return nil, err
 	}
@@ -465,6 +469,12 @@ func (s *Store) InvalidateFrom(ctx context.Context, workspaceID, nodeID, reason 
 			return nil, err
 		}
 		ids = append(ids, id)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, ErrInvalidGraph
 	}
 	if len(ids) > 0 {
 		affected := make([]uuid.UUID, 0, len(ids))
@@ -478,5 +488,5 @@ func (s *Store) InvalidateFrom(ctx context.Context, workspaceID, nodeID, reason 
 		_, _ = s.pool.Exec(ctx, `UPDATE work_verification_attempt SET stale_at=now() WHERE stale_at IS NULL AND subject_artifact_revision_id IN (SELECT a.id FROM work_artifact_revision a JOIN work_graph_node n ON n.id=a.producer_node_id WHERE n.id=ANY($1::uuid[]))`, affected)
 	}
 	_ = reason
-	return ids, rows.Err()
+	return ids, nil
 }

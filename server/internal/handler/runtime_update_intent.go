@@ -87,8 +87,8 @@ func (i *UpdateIntent) Live() bool {
 }
 
 type UpdateIntentStore interface {
-	// Create replaces any existing intent for runtimeID (last-write-wins —
-	// mirrors InitiateUpdate's existing single-active-request semantics).
+	// Create replaces any existing intent for runtimeID (last-write-wins) so
+	// historical rows can be repaired without inheriting stale backoff state.
 	// Resets any prior failure/backoff bookkeeping — a fresh request deserves
 	// an immediate attempt, not to inherit a previous request's penalty box.
 	Create(ctx context.Context, runtimeID, createdBy string, ttl time.Duration) (*UpdateIntent, error)

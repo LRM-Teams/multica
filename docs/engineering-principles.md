@@ -159,8 +159,8 @@
 - **权限与完成门槛**：普通 executor 只能 checkpoint；manager 可维护 agent 自建目标，但不能改写 human-authored intent。完成必须同时满足全部 criteria 已确认且至少有一条 evidence；所有写入用 `expected_version` CAS，过期写返回 409。
 - **物**：完整产品/API/UI 契约见 [`docs/superpowers/specs/2026-07-31-adaptive-channel-goal-mode.md`](superpowers/specs/2026-07-31-adaptive-channel-goal-mode.md)；数据库约束 `257_adaptive_channel_goal`；handler/runtime/UI/locale parity 回归覆盖创建权限、每轮注入、checkpoint、证据完成门槛和 stale write。
 
-### 4.0.a Goal × Work Graph 权责边界 — `仅文档`（Phase 0 Prompt 有回归，通用图内核待实现）
-- **分层真相源**：Goal 管 objective、success criteria、人工范围和生命周期；Work Graph 管当前执行方案、节点、依赖、角色、预算、调度、产物有效性和核验。Issue/Run Node 是可审计工作单元，Agent Job/Runtime 是执行容器。Goal version 与 graph revision 不得混用。
+### 4.0.a Goal × Work Graph 权责边界 — `可执行`
+- **分层真相源**：Goal 管 objective、success criteria、人工范围和生命周期；Work Graph 管当前执行方案、节点、依赖、角色、预算、调度、产物有效性和核验。Issue/Run Node 是可审计工作单元，Agent Job/Runtime 是执行容器。Goal version 与 graph revision 不得混用。新 graph revision 必须重新准入保留节点并以新 completion contract、依赖和 review 状态调度；Artifact、Verification 和失效传播必须与同一 workspace/graph 内的节点绑定，禁止跨图引用。
 - **按需准入**：有 Goal 不等于必须建图。一个上下文能连贯完成的工作保持 `DIRECT`；存在独立交付边界、并行收益、独立权限/等待/核验需求才用 `GRAPH`；明显扩大成本、权限或范围时用 `PROPOSE_GRAPH` 请求确认。
 - **完成关系**：Graph 可交付只产生 Goal 完成候选，不得绕过 Goal 的 criteria、Evidence、开放工作和人工/发布 Gate。Goal intent 变化应使受影响节点和旧 PASS 失效，而不是覆盖历史。
 - **Subgoal 收敛方向**：现有 `channel_goal_subgoal` 不发展成第二套 DAG；通用图内核落地后，Goal 子目标 UI 应成为 Work Graph Node 投影或被明确迁移，禁止长期双向同步两套执行真相。
@@ -326,6 +326,8 @@
 - Research 自主行为评测必须验证可观察事实，不能只匹配最终文案：动作至少保留 actor/kind/target/outcome，图至少保留稳定 Node/Edge 和 V6 注册类型，节点详情必须实际提供用途、小目标、进入条件、方法、输入、动作、执行者、结果、证据、决定、失败、恢复及上下游字段，投影必须提供重建 hash、节点身份、分页规模和缺口恢复读数。固定正例 Executor 只验证 grader 和 Corpus 本身；只有真实生产 Adapter 通过同一隐藏 Oracle 才能声明对应能力完成，不得为生产另写放宽版 grader。
 - 每个交付必须有当前 Contract/Plan 的 Divergence Pass。该 Pass 使用隔离上下文和有界 exploration reserve 提出异质视角 probe；推测只能创建 Question/Hypothesis/Branch/Task，不能直接成为 Claim。
 - 生产 Strategy 不得在线自改。Episode 只能产生候选；候选经过固定评测集、历史回放、安全不变量、非退化检查和 Promotion Decision 后，才对新 Run 生效。已有 Run 固定旧版本，且保留 previous version 回退。
+- 执行失败的修复决定必须是按目标幂等的持久记录，不能每次重算都开一条新补救路径。`research_target_repair` 以 `UNIQUE (workspace_id, repair_key)` 把"这个 Task 在这个状态版本上对这个确切失败已决定的修复动作"变成唯一行；`repair_key` 含 session、task、goal/plan version、`failure_fingerprint` 和 repair kind，`failure_fingerprint` 含 failure class、source reason 和冻结的 target config fingerprint。相同 canonical failure 只推进 `occurrence_count` 与最近观测；状态版本、目标配置或失败类别改变才允许新记录。允许动作矩阵是不可变数据库判定 `research_repair_action_allowed` 并以 CHECK 约束执行，Go 侧矩阵只做写前拒绝；`research_negative`、`method_invalid` 和 `internal_invariant` 在矩阵中没有条目，因此不可能为研究结果或不变量破坏记录自动修复。修复决定 append-only（Trigger 拒绝原地改写动作、失败身份和状态版本，`occurrence_count` 单调），写入点是唯一失败结算函数 `failAttemptTx`，投影 Event 幂等键即 repair key。
+  - **物**：migration `299_research_target_repair`；`server/internal/researchrun/repair.go`、`postgres_repair.go`；`TestFailureDispositionOnlyChoosesAllowedRepairActions`、`TestEveryDurableInboxFailureReasonResolvesToAllowedRepair`、`TestClassesWithoutLicensedRepairRecordNothing`、`TestRepairKeyIsStableAndMovesWithCanonicalIdentity`、`TestTargetRepairIsIdempotentPerCanonicalFailure`、`TestTargetRepairSplitsOnTargetConfigurationChange`、`TestRepairActionMatrixIsEnforcedByDatabaseAndMatchesExecutor`、`TestConcurrentWorkersConvergeOnOneTargetRepair`、`TestMigration299DownUpRestoresTargetRepairSchema`。
 - 本条在 schema、状态机、迁移、回放、故障注入和系统评测均见红并通过前保持 `仅文档`；实施 PR 必须逐项把约束升级为类型、唯一约束、事务或测试，并在本条记录具体装置。
 
 ## 5. 验证方法论 — `仅文档`（诚实标注：拦不住人，只能让"猜"显式化）

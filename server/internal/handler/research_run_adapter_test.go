@@ -140,3 +140,15 @@ func TestProjectResearchCircuitTransitionPreservesStateChange(t *testing.T) {
 		t.Fatalf("projected circuit transition=(%q, %q, %q, %q)", nodeType, title, summary, status)
 	}
 }
+
+func TestProjectResearchTargetWaitPreservesRetryTime(t *testing.T) {
+	nodeType, title, summary, status := projectResearchEvent(
+		researchrun.RunEvent{Type: "task_waiting_for_execution_target"},
+		db.ResearchSession{},
+		map[string]any{"retry_at": "2026-08-06T15:03:00Z"},
+	)
+	if nodeType != "agent_activity" || title != "等待可用执行目标" ||
+		summary != "2026-08-06T15:03:00Z" || status != "active" {
+		t.Fatalf("projected target wait=(%q, %q, %q, %q)", nodeType, title, summary, status)
+	}
+}

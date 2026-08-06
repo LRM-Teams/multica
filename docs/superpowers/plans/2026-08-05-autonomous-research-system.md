@@ -900,7 +900,7 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [x] 删除巨型 `Store` Interface；Engine 只接受具体 `PostgresStore`，PostgreSQL 事务保留在 `researchrun` 内部，各业务 Module 只声明自己的窄持久化输入，没有新建同规模组合接口。
 - [x] 固定外部 `ResearchRun` Interface，禁止 Handler 直接写子实体状态；`NewEngine` 只返回该接口，内部 `Start` 和单 Run reconcile 不对 Handler 暴露。
 - [x] 保持 V1–V5 字节级 Prompt/Result 兼容和行为回放一致。
-  - [x] B9：保留原有五版本完整 Prompt SHA-256 与 Plan Result canonical hash；新增 25 个固定 Result contract golden，逐版本覆盖 Plan、Evidence、Report、Quality Evaluation 和 Citation Audit，并验证旧版本拒绝未来 `hypotheses` 字段。相同 fixture 连续运行两次一致；真实 PostgreSQL 全包、race 和 vet 通过。
+  - [x] B9：保留原有五版本完整 Prompt SHA-256 与 Plan Result canonical hash；新增 25 个固定 Result contract golden，逐版本覆盖 Plan、Evidence、Report、Quality Evaluation 和 Citation Audit，并验证旧版本拒绝未来 `hypotheses` 字段。相同 fixture 连续运行两次一致；真实 PostgreSQL 全包、race 和 vet 通过。PR [#2388](https://github.com/LRM-Teams/multica/pull/2388)。
 
 退出条件：行为无变化；每个不变量只有一个 Implementation；新增研究状态不再要求修改一个千行 Engine 和一个全能 Store。
 
@@ -1089,7 +1089,7 @@ A5 边界：七个场景已经冻结隐藏 Oracle 和可观察 Artifact 契约�
 - [x] B6 把交付 Gate 评估、finding 优先级、最小补救动作、question 绑定、控制任务创建、并发目标变化、等待用户确认和确认时复检迁入 `deliveryGateModule`。Module 只创建一个可寻址补救 Task 并把执行交回 `executionModule`；`ErrControlTargetChanged` 不失败 Run，而是在投影并等待一秒后用新状态重算。模块测试覆盖通过、目标补救、并发变化、预算转交、失败计划防循环和确认复检；真实 PostgreSQL 全流程、补救路由、V1–V5 golden 与竞态测试通过。`engine.go` 已不包含 Prompt 文本、Dispatcher/Attempt 状态组合、Result 接纳规则、失败转换、Gate 路由或 Projection outbox 算法。
 - [x] B7 删除 `researchrun.Store` 的 44 方法全能接口。`NewEngine` 和 `Engine` 明确接受具体 `*PostgresStore`；`projectionEventStore`、`resultAcceptanceStore`、`executionStore`、`failureStore`、`deliveryGateStore` 分别声明各 Module 所需的最小方法集，并由编译期断言验证 `PostgresStore` 实现。没有创建包含这些接口的全能组合接口，模块测试继续使用最小替身，Engine 全流程只用真实 PostgreSQL 验证。
 - [x] B8 新增固定 `ResearchRun` 外部用例接口，只暴露 Create/Snapshot/Fleet read、运行级生命周期命令、Steer/NodeCommand、task-scoped SubmitResult 和 scheduler ReconcileDue。`NewEngine` 返回该接口，Handler 字段不再持有 `*Engine`；内部 `Start`、`ReconcileSession`、Module、Store 和子实体写方法不在接口中。反射回归锁定 12 个方法，Handler 纯编译、`go vet`、真实 PostgreSQL 全包和竞态测试通过。
-- [x] B9 新增 `legacy_result_contracts.json` 和统一 golden runner，固定 V1–V5 的 Plan、Evidence、Report、Quality Evaluation、Citation Audit 五类 canonical Result hash，并逐例拒绝未属于旧 schema 的未来字段。原有 Prompt hash、Plan hash、六类行为 golden、canonical state/重放和生产回归继续通过；没有修改生产 Prompt、Result schema、迁移或运行状态机。
+- [x] B9 新增 `legacy_result_contracts.json` 和统一 golden runner，固定 V1–V5 的 Plan、Evidence、Report、Quality Evaluation、Citation Audit 五类 canonical Result hash，并逐例拒绝未属于旧 schema 的未来字段。原有 Prompt hash、Plan hash、六类行为 golden、canonical state/重放和生产回归继续通过；没有修改生产 Prompt、Result schema、迁移或运行状态机。PR [#2388](https://github.com/LRM-Teams/multica/pull/2388)。
 - [x] 计划外诊断更正：共享 Handler 测试库出现 migration 257 已执行而 204/223 ledger 缺失。Git 历史证明 204、223 分别在 7 月 21/24 日进入仓库，257 在 7 月 31 日进入；正常迁移器会先执行 204/223。该状态只能由 ledger 损坏、手工挑拣迁移或长期残缺的开发库产生，不按真实正常部署 Bug 修改历史迁移；为此产生的未提交迁移和测试改动已全部撤销。若生产库出现同一状态，应先审计并修复该库迁移历史，不能用历史 migration 兼容损坏 ledger。
 - [x] 定义运行健康、质量评测、Episode 和 Strategy 升级协议。
 - [x] 定义依赖有序的实现路径、完成条件和 PR 验收格式。

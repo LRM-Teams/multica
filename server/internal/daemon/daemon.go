@@ -3239,6 +3239,10 @@ func (d *Daemon) watchInboxLease(ctx context.Context, lease AgentInboxLease, int
 }
 
 func (d *Daemon) reportTaskFailure(ctx context.Context, task Task, errMsg, sessionID, workDir, failureReason string, taskLog *slog.Logger) {
+	// The Runner, rather than the legacy Activity API, is the only execution
+	// observation channel. Keep this narrative deliberately generic: detailed
+	// failures remain in the authorized task result, never in Activity.
+	d.publishTaskRunnerActivity(task, protocol.ActivityKindError, "task_failed", "Agent execution failed")
 	if !task.isInboxTask() {
 		taskLog.Error("failed task is missing its canonical inbox lease")
 		return

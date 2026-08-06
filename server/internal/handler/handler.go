@@ -272,26 +272,6 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 
 	taskSvc := service.NewTaskService(queries, txStarter, hub, bus, daemonHub)
 	taskSvc.Analytics = analyticsClient
-	// Wire the subagent-lifecycle callback so retry child tasks get an
-	// activity event record. Uses the shared executor (pool), not the
-	// Handler, to avoid a circular init dependency.
-	taskSvc.OnChildTaskCreated = func(ctx context.Context, parent, child db.AgentInboxEvent) {
-		// Resolve workspace_id from the agent (task row doesn't carry it).
-		var wsID pgtype.UUID
-		_ = executor.QueryRow(ctx, `SELECT workspace_id FROM agent WHERE id = $1`, parent.AgentID).Scan(&wsID)
-		insertAgentActivityEvent(ctx, executor,
-			wsID, parent.AgentID, parent.RuntimeID, child.ID,
-			activityKindCustom, "subagent_started", "info",
-			"agent", parent.AgentID, "",
-			"auto_retry", "Subagent spawned for retry",
-			map[string]any{
-				"parent_task_id": uuidToString(parent.ID),
-				"child_task_id":  uuidToString(child.ID),
-				"attempt":        child.Attempt,
-				"max_attempts":   child.MaxAttempts,
-			},
-		)
-	}
 	agentFleetRankService := service.NewAgentFleetRankService(queries)
 	h := &Handler{
 		Queries:                     queries,

@@ -2375,99 +2375,15 @@ func (h *Handler) listInboxEventTaskMessagesByUser(ctx context.Context, eventID 
 }
 
 func (h *Handler) projectInboxEventTaskMessages(ctx context.Context, eventID pgtype.UUID, taskID string, workspaceUUID pgtype.UUID, sinceStr string) ([]protocol.TaskMessagePayload, error) {
-	var sinceArg any
 	if sinceStr != "" {
-		sinceSeq, err := strconv.Atoi(sinceStr)
-		if err != nil {
+		if _, err := strconv.Atoi(sinceStr); err != nil {
 			return nil, errInvalidTaskMessageSince
 		}
-		sinceArg = sinceSeq
 	}
-
-	rows, err := h.DB.Query(ctx, `
-		WITH activity AS (
-			SELECT
-				aae.id,
-				aae.event_kind,
-				aae.message,
-				aae.details,
-				aae.visibility,
-				aae.created_at,
-				CASE
-					WHEN COALESCE(aae.details->>'seq', '') ~ '^[0-9]+$'
-						THEN (aae.details->>'seq')::int
-					ELSE NULL
-				END AS reported_seq
-			FROM agent_activity_event aae
-			WHERE aae.workspace_id = $2
-			  AND aae.details->>'inbox_event_id' = $1::text
-			  AND aae.event_kind IN ('thinking', 'text', 'tool_call', 'error')
-			  AND COALESCE(NULLIF(aae.visibility, ''), 'user_facing') = 'user_facing'
-		),
-		numbered AS (
-			SELECT
-				COALESCE(
-					reported_seq,
-					ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC)::int
-				)::int AS seq,
-				event_kind,
-				message,
-				details,
-				visibility,
-				created_at,
-				id
-			FROM activity
-		)
-		SELECT
-			seq,
-			CASE
-				WHEN event_kind = 'tool_call' THEN 'tool_use'
-				WHEN event_kind = 'error' THEN 'error'
-				WHEN event_kind = 'thinking' THEN 'thinking'
-				ELSE 'text'
-			END AS type,
-			COALESCE(details->>'tool', '') AS tool,
-			CASE
-				WHEN event_kind IN ('thinking', 'text', 'error') THEN COALESCE(message, '')
-				ELSE ''
-			END AS content,
-			CASE
-				WHEN jsonb_typeof(details->'input') = 'object' THEN details->'input'
-				ELSE NULL
-			END AS input,
-			''::text AS output,
-			COALESCE(NULLIF(visibility, ''), 'user_facing') AS visibility,
-			created_at
-		FROM numbered
-		WHERE ($3::int IS NULL OR seq > $3::int)
-		ORDER BY seq ASC, created_at ASC, id ASC
-	`, eventID, workspaceUUID, sinceArg)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	payloads := []protocol.TaskMessagePayload{}
-	for rows.Next() {
-		var row inboxEventTaskMessageRow
-		if err := rows.Scan(
-			&row.Seq,
-			&row.Type,
-			&row.Tool,
-			&row.Content,
-			&row.Input,
-			&row.Output,
-			&row.Visibility,
-			&row.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		payloads = append(payloads, inboxEventTaskMessageToPayload(row, taskID))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return payloads, nil
+	// The legacy table-backed projection is intentionally gone. Runner
+	// snapshots and entries are the Activity history; task transcripts retain
+	// only their dedicated task-message storage.
+	return []protocol.TaskMessagePayload{}, nil
 }
 
 // GetIssueUsage returns aggregated token usage for all tasks belonging to an issue.

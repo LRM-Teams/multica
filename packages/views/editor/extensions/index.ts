@@ -43,8 +43,13 @@ import { IssueReferenceExtension } from "./issue-reference";
 import { ChannelReferenceExtension } from "./channel-reference";
 import { createChannelReferenceSuggestion } from "./channel-reference-suggestion";
 import { SlashCommandExtension } from "./slash-command-extension";
-import { createSlashCommandSuggestion, createBuiltinCommandSuggestion } from "./slash-command-suggestion";
+import { createSlashCommandSuggestion, createBuiltinCommandSuggestion, createBlockCommandSuggestion } from "./slash-command-suggestion";
 import { CodeBlockView } from "./code-block-view";
+import {
+  normalizeMermaidView,
+  parseCodeFenceInfo,
+  serializeCodeFenceInfo,
+} from "./code-block-fence";
 import { PatchedListItem, PatchedTaskItem } from "./list-item";
 import { createMarkdownPasteExtension } from "./markdown-paste";
 import { createMarkdownCopyExtension } from "./markdown-copy";
@@ -181,8 +186,9 @@ export interface EditorExtensionsOptions {
    * Which `/` menu to attach when enableSlashCommands is true:
    * - "skill" (default) — the chat picker listing the active agent's skills.
    * - "command" — the fixed built-in command menu (issue comments), e.g. /note.
+   * - "block" — Notion-style content blocks for editors such as Notes.
    */
-  slashCommandMode?: "skill" | "command";
+  slashCommandMode?: "skill" | "command" | "block";
 }
 
 export function createEditorExtensions(
@@ -210,8 +216,63 @@ export function createEditorExtensions(
     TaskList,
     PatchedTaskItem,
     CodeBlockLowlight.extend({
+      addAttributes() {
+        return {
+          ...this.parent?.(),
+          // Persisted via the fence info string (`mermaid view=diagram`), not
+          // as an HTML attribute — see parseMarkdown / renderMarkdown below.
+          mermaidView: {
+            default: "both",
+            rendered: false,
+          },
+        };
+      },
+      parseMarkdown: (token, helpers) => {
+        // Mirror @tiptap/extension-code-block's gate: only fenced / indented
+        // code tokens become codeBlock nodes (inline `code` uses a mark).
+        if (
+          token.raw?.startsWith("```") === false &&
+          token.raw?.startsWith("~~~") === false &&
+          token.codeBlockStyle !== "indented"
+        ) {
+          return [];
+        }
+        const { language, mermaidView } = parseCodeFenceInfo(token.lang);
+        return helpers.createNode(
+          "codeBlock",
+          {
+            language: language || null,
+            mermaidView,
+          },
+          token.text ? [helpers.createTextNode(token.text)] : [],
+        );
+      },
+      renderMarkdown: (node, helpers) => {
+        const language = node.attrs?.language || "";
+        const mermaidView = normalizeMermaidView(node.attrs?.mermaidView);
+        const fence = serializeCodeFenceInfo(language, mermaidView);
+        if (!node.content) {
+          return `\`\`\`${fence}\n\n\`\`\``;
+        }
+        return [
+          `\`\`\`${fence}`,
+          helpers.renderChildren(node.content),
+          "```",
+        ].join("\n");
+      },
       addNodeView() {
-        return ReactNodeViewRenderer(CodeBlockView);
+        return ReactNodeViewRenderer(CodeBlockView, {
+          // Keep toolbar / menu pointer events out of ProseMirror so language
+          // and view-mode menus can commit without the editor stealing focus.
+          stopEvent: ({ event }) => {
+            const target = event.target as HTMLElement | null;
+            if (!target) return false;
+            return Boolean(
+              target.closest("[data-testid='code-block-toolbar']") ||
+                target.closest("[data-slot='dropdown-menu-content']"),
+            );
+          },
+        });
       },
     }).configure({ lowlight }),
     // ⚠️ Link MUST appear before markdownPaste in this array.
@@ -258,7 +319,9 @@ export function createEditorExtensions(
         ? { char: "/", allow: () => false }
         : options.slashCommandMode === "command"
           ? createBuiltinCommandSuggestion()
-          : options.queryClient
+          : options.slashCommandMode === "block"
+            ? createBlockCommandSuggestion()
+            : options.queryClient
             ? createSlashCommandSuggestion(options.queryClient)
             : { char: "/", allow: () => false },
     }),

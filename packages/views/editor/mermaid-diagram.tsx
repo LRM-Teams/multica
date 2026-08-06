@@ -15,10 +15,37 @@
  * the page.
  */
 
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
-import { createPortal } from "react-dom";
+import {
+  forwardRef,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { Maximize2 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+} from "@multica/ui/components/ui/dialog";
 import { useT } from "../i18n";
+
+export type MermaidDiagramHandle = {
+  openFullscreen: () => void;
+  downloadSvg: () => void;
+};
+
+function downloadSvgFile(svg: string, filename: string) {
+  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
 
 type MermaidAPI = typeof import("mermaid").default;
 
@@ -176,7 +203,7 @@ function buildSandboxedMermaidDocument(svg: string, host: HTMLElement | null): s
 function buildExpandedMermaidDocument(svg: string, host: HTMLElement | null): string {
   const cssVariables = getSandboxCssVariables(host);
 
-  return `<!doctype html><html><head><style>:root { ${cssVariables} } html, body { width: 100%; height: 100%; } body { margin: 0; display: flex; align-items: center; justify-content: center; background: transparent; } svg { max-width: 100%; max-height: 100%; width: auto; height: auto; }</style></head><body>${svg}</body></html>`;
+  return `<!doctype html><html><head><style>:root { ${cssVariables} } html, body { width: 100%; height: 100%; } body { margin: 0; display: flex; align-items: center; justify-content: center; background: var(--muted, #f4f4f5); } svg { max-width: 100%; max-height: 100%; width: auto; height: auto; }</style></head><body>${svg}</body></html>`;
 }
 
 function useThemeVersion() {
@@ -208,42 +235,10 @@ function useThemeVersion() {
   return themeVersion;
 }
 
-function MermaidLightbox({
-  srcDoc,
-  onClose,
-}: {
-  srcDoc: string;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
-
-  return createPortal(
-    <div
-      className="mermaid-diagram-lightbox"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Mermaid diagram fullscreen view"
-      onClick={onClose}
-    >
-      <iframe
-        className="mermaid-diagram-lightbox-frame"
-        sandbox=""
-        srcDoc={srcDoc}
-        title="Mermaid diagram fullscreen"
-        onClick={(e) => e.stopPropagation()}
-      />
-    </div>,
-    document.body,
-  );
-}
-
-export function MermaidDiagram({ chart }: { chart: string }) {
+export const MermaidDiagram = forwardRef<
+  MermaidDiagramHandle,
+  { chart: string; showToolbar?: boolean }
+>(function MermaidDiagram({ chart, showToolbar = true }, ref) {
   const { t } = useT("editor");
   const reactId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -252,6 +247,7 @@ export function MermaidDiagram({ chart }: { chart: string }) {
     [reactId],
   );
   const themeVersion = useThemeVersion();
+  const [svg, setSvg] = useState<string | null>(null);
   const [sandboxedDocument, setSandboxedDocument] = useState<string | null>(null);
   const [expandedDocument, setExpandedDocument] = useState<string | null>(null);
   // Lazy initial value: if we've rendered this exact chart already in the
@@ -262,12 +258,24 @@ export function MermaidDiagram({ chart }: { chart: string }) {
   const [error, setError] = useState<string | null>(null);
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      openFullscreen: () => setLightboxOpen(true),
+      downloadSvg: () => {
+        if (svg) downloadSvgFile(svg, "mermaid-diagram.svg");
+      },
+    }),
+    [svg],
+  );
+
   useEffect(() => {
     let cancelled = false;
 
     async function renderDiagram() {
       try {
         setError(null);
+        setSvg(null);
         setSandboxedDocument(null);
         setExpandedDocument(null);
         // Seed layout from cache (if any) so the skeleton sizes correctly
@@ -286,6 +294,7 @@ export function MermaidDiagram({ chart }: { chart: string }) {
           const measured = getMermaidLayout(renderedSvg);
           setLayout(measured);
           writeCachedLayout(chart, measured);
+          setSvg(renderedSvg);
           setSandboxedDocument(
             buildSandboxedMermaidDocument(renderedSvg, containerRef.current),
           );
@@ -345,26 +354,37 @@ export function MermaidDiagram({ chart }: { chart: string }) {
             }}
             title="Mermaid diagram"
           />
-          <div className="mermaid-diagram-toolbar">
-            <button
-              type="button"
-              onClick={() => setLightboxOpen(true)}
-              title="Open fullscreen"
-              aria-label="Open Mermaid diagram fullscreen"
-            >
-              <Maximize2 className="size-3.5" />
-            </button>
-          </div>
-          {lightboxOpen && expandedDocument && (
-            <MermaidLightbox
-              srcDoc={expandedDocument}
-              onClose={() => setLightboxOpen(false)}
-            />
+          {showToolbar && (
+            <div className="mermaid-diagram-toolbar">
+              <button
+                type="button"
+                onClick={() => setLightboxOpen(true)}
+                title={t(($) => $.code_block.fullscreen)}
+                aria-label={t(($) => $.code_block.fullscreen)}
+              >
+                <Maximize2 className="size-3.5" />
+              </button>
+            </div>
           )}
+          <Dialog open={lightboxOpen} onOpenChange={setLightboxOpen}>
+            <DialogContent
+              className="!max-w-6xl !h-[min(90vh,calc(100vh-2rem))] w-full p-0 gap-0 overflow-hidden bg-muted"
+              aria-label={t(($) => $.code_block.fullscreen)}
+            >
+              {expandedDocument ? (
+                <iframe
+                  className="mermaid-diagram-lightbox-frame h-full w-full rounded-none border-0 bg-muted"
+                  sandbox=""
+                  srcDoc={expandedDocument}
+                  title="Mermaid diagram fullscreen"
+                />
+              ) : null}
+            </DialogContent>
+          </Dialog>
         </>
       ) : (
         <div className="mermaid-diagram-loading">{t(($) => $.mermaid.rendering)}</div>
       )}
     </div>
   );
-}
+});

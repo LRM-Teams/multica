@@ -99,13 +99,25 @@
     "no_skills_configured": "No skills configured",
     "no_results": "No matching skills",
     "commands": {
-      "note": "Add a note — won't trigger any agents"
+      "note": "Add a note — won't trigger any agents",
+      "code": "Plain code block",
+      "mermaid": "Mermaid diagram — renders as a chart",
+      "python": "Python code block",
+      "javascript": "JavaScript code block"
     }
   },
   "code_block": {
     "copy_code": "Copy code",
+    "menu": "Code block menu",
+    "language": "Code language",
     "show_preview": "Show preview",
     "show_source": "Show source",
+    "mermaid_view": "Diagram view",
+    "mermaid_both": "Show diagram and source",
+    "mermaid_diagram": "Show diagram only",
+    "mermaid_source": "Show source only",
+    "download_diagram": "Download diagram",
+    "delete": "Delete",
     "fullscreen": "Fullscreen"
   },
   "file_card": {

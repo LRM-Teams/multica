@@ -99,13 +99,25 @@
     "no_skills_configured": "暂无配置的技能",
     "no_results": "没有匹配的技能",
     "commands": {
-      "note": "添加备注 — 不触发任何 Agent"
+      "note": "添加备注 — 不触发任何 Agent",
+      "code": "普通代码块",
+      "mermaid": "Mermaid 图表 — 自动渲染成图",
+      "python": "Python 代码块",
+      "javascript": "JavaScript 代码块"
     }
   },
   "code_block": {
     "copy_code": "复制代码",
+    "menu": "代码块菜单",
+    "language": "代码语言",
     "show_preview": "显示预览",
     "show_source": "显示源码",
+    "mermaid_view": "图表显示方式",
+    "mermaid_both": "显示图和源码",
+    "mermaid_diagram": "只显示图",
+    "mermaid_source": "只显示源码",
+    "download_diagram": "下载图表",
+    "delete": "删除",
     "fullscreen": "放大"
   },
   "file_card": {

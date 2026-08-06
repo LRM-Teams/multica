@@ -187,7 +187,24 @@
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
     "save": "저장",
     "cancel": "취소",
-    "save_failed": "저장하지 못했습니다"
+    "save_failed": "저장하지 못했습니다",
+    "section_workspace_role": "워크스페이스 역할",
+    "prop_workspace_role": "워크스페이스 역할",
+    "role_member": "멤버",
+    "role_admin": "관리자",
+    "workspace_role": {
+      "make_admin_trigger": "워크스페이스 관리자로 설정",
+      "remove_admin_trigger": "워크스페이스 관리자 해제",
+      "make_admin_confirm_title": "이 에이전트를 워크스페이스 관리자로 설정하시겠습니까?",
+      "make_admin_confirm_desc": "이 에이전트는 이 워크스페이스에서 관리자 권한(채널, 초대, 에이전트, 컴퓨터 및 설정 관리)을 갖게 됩니다. 소유자가 될 수는 없습니다.",
+      "remove_admin_confirm_title": "이 에이전트의 워크스페이스 관리자 권한을 해제하시겠습니까?",
+      "remove_admin_confirm_desc": "이 에이전트는 멤버로 돌아가며 관리자 권한을 잃게 됩니다.",
+      "confirm": "확인",
+      "cancel": "취소",
+      "role_updated_toast": "워크스페이스 역할을 업데이트했습니다",
+      "role_update_failed_toast": "워크스페이스 역할을 업데이트하지 못했습니다",
+      "role_readonly_hint": "워크스페이스 소유자와 관리자만 에이전트의 워크스페이스 역할을 변경할 수 있습니다."
+    }
   },
   "skill_attach": {
     "trigger_aria": "워크스페이스 스킬 연결",

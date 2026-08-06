@@ -174,7 +174,24 @@
     "description_placeholder": "このエージェントは何をしますか？",
     "save": "保存",
     "cancel": "キャンセル",
-    "save_failed": "保存に失敗しました"
+    "save_failed": "保存に失敗しました",
+    "section_workspace_role": "ワークスペースロール",
+    "prop_workspace_role": "ワークスペースロール",
+    "role_member": "メンバー",
+    "role_admin": "管理者",
+    "workspace_role": {
+      "make_admin_trigger": "ワークスペース管理者に設定",
+      "remove_admin_trigger": "ワークスペース管理者を解除",
+      "make_admin_confirm_title": "このエージェントをワークスペース管理者に設定しますか？",
+      "make_admin_confirm_desc": "このエージェントには、このワークスペースでの管理者権限（チャンネル、招待、エージェント、コンピューター、設定の管理）が付与されます。オーナーになることはできません。",
+      "remove_admin_confirm_title": "このエージェントのワークスペース管理者権限を解除しますか？",
+      "remove_admin_confirm_desc": "このエージェントはメンバーに戻り、管理者権限を失います。",
+      "confirm": "確認",
+      "cancel": "キャンセル",
+      "role_updated_toast": "ワークスペースロールを更新しました",
+      "role_update_failed_toast": "ワークスペースロールを更新できませんでした",
+      "role_readonly_hint": "エージェントのワークスペースロールを変更できるのは、ワークスペースのオーナーと管理者のみです。"
+    }
   },
   "skill_attach": {
     "trigger_aria": "ワークスペースのスキルを追加",

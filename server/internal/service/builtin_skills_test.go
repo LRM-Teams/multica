@@ -88,6 +88,15 @@ func TestBuiltinSkillsForAgent_ExcludesHiringFromOrdinaryAgents(t *testing.T) {
 	for _, skill := range onboarding {
 		if skill.Name == hiringBuiltinSkillName {
 			found = true
+			for _, want := range []string{
+				"Only a Human-authored staffing request",
+				"requester is an Agent",
+				"do not call `multica action prepare`",
+			} {
+				if !strings.Contains(skill.Content, want) {
+					t.Fatalf("Onboarding Agent hiring skill missing confused-deputy rule %q", want)
+				}
+			}
 		}
 	}
 	if !found {

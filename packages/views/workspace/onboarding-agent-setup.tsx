@@ -8,9 +8,9 @@ import { deriveRuntimeHealth, runtimeListOptions } from "@multica/core/runtimes"
 import type { Workspace } from "@multica/core/types";
 import { memberListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
-import { Input } from "@multica/ui/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@multica/ui/components/ui/card";
 import { showErrorToast } from "@multica/ui/lib/error-toast";
+import { ModelDropdown } from "../agents/components/model-dropdown";
 import { useT } from "../i18n";
 
 export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
@@ -81,10 +81,14 @@ export function OnboardingAgentSetup({ workspace }: { workspace: Workspace }) {
               ))}
             </select>
           </label>
-          <label className="block space-y-1.5 text-sm font-medium">
-            {t(($) => $.windy.setup_model)}
-            <Input value={model} onChange={(event) => setModel(event.target.value)} placeholder={t(($) => $.windy.setup_model_placeholder)} />
-          </label>
+          <ModelDropdown
+            runtimeId={runtimeId || null}
+            runtimeOnline={Boolean(runtimeId)}
+            value={model}
+            onChange={setModel}
+            disabled={!runtimeId}
+            required
+          />
           {onlineRuntimes.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t(($) => $.windy.setup_runtime_offline)}</p>
           ) : null}

@@ -270,3 +270,48 @@ describe("Scaling fixture (10k protection)", () => {
     expect(duplicates).toBe(0);
   });
 });
+
+describe("Scaling fixture perf (LRM-1465 AC2: no long main-thread slice)", () => {
+  it("a 10k slice request and a full cursor walk complete in bounded time", async () => {
+    const graph = buildScalingFixture({ sessionId: "s10k-perf", totalNodes: 10_000, branches: 40 });
+    const gw = createProjectionSliceFixture(graph);
+    // Single bounded slice: the hot path runs in one render frame's budget.
+    const start = performance.now();
+    const single = await collect(gw, {
+      root: "root",
+      direction: "out",
+      maxDepth: 1000,
+      limit: 500,
+      importanceFloor: 0,
+    });
+    const singleMs = performance.now() - start;
+    expect(single.nodes.length).toBeLessThanOrEqual(500);
+    // Even on a slow CI box a single O(n) bounded slice stays well under a frame
+    // budget; this guards against an accidental O(n²) regression.
+    expect(singleMs).toBeLessThan(250);
+
+    // Full cursor walk over all 10k nodes stays interactive (< 2s) and bounded
+    // per page — evidence there is no main-thread stall rebuilding the graph.
+    const walkStart = performance.now();
+    let req: ProjectionSliceRequest = {
+      root: "root",
+      direction: "out",
+      maxDepth: 1000,
+      limit: 500,
+      importanceFloor: 0,
+    };
+    let pages = 0;
+    let guard = 0;
+    do {
+      const res = await collect(gw, req);
+      pages += 1;
+      if (!res.hasMore) break;
+      req = { ...req, cursor: res.nextCursor ?? undefined };
+      guard += 1;
+      if (guard > 200) throw new Error("infinite pagination");
+    } while (true);
+    const walkMs = performance.now() - walkStart;
+    expect(pages).toBe(20); // 10_000 / 500
+    expect(walkMs).toBeLessThan(2000);
+  });
+});

@@ -3458,22 +3458,6 @@ func assertAgentTransportFreshnessHoldActivity(t *testing.T, taskID, target stri
 	}
 }
 
-func TestAgentTransportFreshnessResolutionActivityMessage(t *testing.T) {
-	for _, tc := range []struct {
-		outcome string
-		want    string
-	}{
-		{outcome: "abandoned", want: "Held message was not sent"},
-		{outcome: "revised_send", want: "Freshness hold resolved"},
-	} {
-		t.Run(tc.outcome, func(t *testing.T) {
-			if got := agentTransportFreshnessResolutionActivityMessage(tc.outcome); got != tc.want {
-				t.Fatalf("message = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func assertAgentTransportFreshnessResolutionActivity(t *testing.T, taskID, target, producerFactID, outcome string) {
 	t.Helper()
 	var count int

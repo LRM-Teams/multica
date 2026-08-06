@@ -34,6 +34,7 @@ const WORKSPACE_ROUTE_SEGMENTS = new Set([
   "skills",
   "settings",
   "wiki",
+  "notes",
 ]);
 
 /**

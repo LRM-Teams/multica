@@ -177,9 +177,9 @@ func TestUsesPersistentGrokChatRuntime(t *testing.T) {
 		task     Task
 		want     bool
 	}{
-		{name: "grok chat", provider: "grok", task: Task{ChatSessionID: "chat-1"}, want: true},
-		{name: "grok issue", provider: "grok", task: Task{IssueID: "issue-1"}, want: false},
-		{name: "other provider chat", provider: "pi", task: Task{ChatSessionID: "chat-1"}, want: false},
+		{name: "grok chat", provider: "grok", task: Task{ChatMessage: "hello"}, want: true},
+		{name: "grok issue", provider: "grok", task: Task{IssueID: "issue-1", ChatMessage: "hello"}, want: false},
+		{name: "other provider chat", provider: "pi", task: Task{ChatMessage: "hello"}, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := usesPersistentGrokChatRuntime(tc.provider, tc.task); got != tc.want {

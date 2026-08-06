@@ -184,14 +184,13 @@ func TestRunTask_ChatTransportSetupErrorsFailBeforeAgentExecution(t *testing.T) 
 			}
 
 			result, err := d.runTask(context.Background(), canonicalInboxTaskForTest(Task{
-				ID:            "task-chat-transport-setup",
-				WorkspaceID:   workdirRaceWorkspaceID,
-				RuntimeID:     "rt-1",
-				IssueID:       "issue-chat-transport-setup",
-				ChatSessionID: "chat-1",
-				AuthToken:     "task-token",
-				AgentID:       workdirRaceAgentID,
-				Agent:         &AgentData{ID: workdirRaceAgentID, Name: "test-agent"},
+				ID:          "task-chat-transport-setup",
+				WorkspaceID: workdirRaceWorkspaceID,
+				RuntimeID:   "rt-1",
+				ChatMessage: "hello",
+				AuthToken:   "task-token",
+				AgentID:     workdirRaceAgentID,
+				Agent:       &AgentData{ID: workdirRaceAgentID, Name: "test-agent"},
 			}), "claude", 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if err != nil {
 				t.Fatalf("runTask error = %v, want fail-closed TaskResult", err)

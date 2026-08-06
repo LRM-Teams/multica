@@ -43,6 +43,8 @@ Follow the current delivery contract. Delivery depends only on `ChannelID`.
 The final assistant output is delivered back to the current session
 automatically. Do not run `multica message send`.
 Do not search for a DM/channel target.
+An agent task is not a channel task: without `ChannelID` there is no channel
+transport target.
 
 Sticker only (for example user says "hi"):
 
